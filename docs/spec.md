@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | Draft v0.1 |
+| Status | Draft v0.2 |
 | Date | 2026-10-21 |
 | Owner | David Morgan |
 | Scope | Version 1 (single household) with a roadmap for later phases |
@@ -59,8 +59,8 @@ Measure these 30 days after the household starts using Dinnerbell for dinner.
 
 | Role | Who | Can do |
 |---|---|---|
-| Admin | David | Everything a member can, plus: invite and deactivate members, edit the schedule and settings, override or reassign a coordinator, lock or cancel a decision, manage tags, connect Slack. |
-| Member | Each household adult | Respond to calls, make offers, claim roles, propose and vote, maintain the catalog, set their own preferences, invite guests, log meals, view history and badges. |
+| Admin | David | Everything a member can, plus: invite and deactivate members, edit household settings other than the meal schedule, override or reassign a coordinator, lock or cancel a decision, manage tags, connect Slack. |
+| Member | Each household adult | Respond to calls, make offers, change the meal schedule, claim roles, propose and vote, maintain the catalog, set their own preferences, invite guests, log meals, give feedback on meals, view history and badges. |
 | Guest | A partner or friend at a meal | Has no account. A member adds guests to their own response with a head count and optional dietary needs. |
 
 Each member declares capability flags: can cook, can pick up, can order. The flags are defaults. A member can still volunteer for a role on a given day, and the flags drive who gets asked.
@@ -86,6 +86,7 @@ Each member declares capability flags: can cook, can pick up, can order. The fla
 | Meal log | The record of what the household ate, whether or not Dinnerbell coordinated it. Feeds variety and history. |
 | Contribution | A counted act: cooked, picked up, ordered, coordinated, added a catalog item, responded on time, hosted guests, participated. |
 | Badge | A named award earned by reaching a contribution milestone. |
+| Feedback | A member's reaction to a meal they ate, on up to three subjects: the food, the place (restaurants), and the cook (home meals). |
 
 ## 5. How it works
 
@@ -129,6 +130,22 @@ Anyone can record what the household ate when there was no call or offer, with `
 
 The admin can, from Slack or the web app: assign or replace the coordinator, extend or shorten a window, lock a decision, cancel an event, re-run a call, and correct an assignment after the fact.
 
+### 5.8 Changing the schedule
+
+Calls run at the same times every day by default. Any member can change a slot's standing schedule, such as moving the dinner call from 15:00 to 14:00, from the web app or `/dinnerbell schedule`. The bot posts the change in the channel with who made it, and the change applies from the next call. Moving only today's call is an admin override.
+
+### 5.9 Feedback after meals
+
+When an event is done, the decision message gains a **How was it?** button, and the meal shows on the member's App Home and History page as awaiting feedback. Feedback is three quick taps, each optional:
+
+- **Food**: loved it, fine, or not again.
+- **Place** (restaurants only): loved it, fine, or not again, with optional chips such as "late," "wrong order," or "cold."
+- **Cook** (home meals only): a thank-you, with an optional short note.
+
+There's no nudge by default. A member who wants one turns on a feedback reminder in Preferences and gets one direct message per meal. Feedback stays open for 7 days after the meal.
+
+In version 1, feedback is collected and displayed but doesn't affect ranking. After at least 8 weeks of data, a later milestone decides how feedback should influence proposals.
+
 ## 6. Functional requirements
 
 Requirements use "must" for version 1 and "should" for items that can slip to a later milestone without blocking launch.
@@ -137,7 +154,7 @@ Requirements use "must" for version 1 and "should" for items that can slip to a 
 
 | ID | Requirement |
 |---|---|
-| FR-1 | Each slot has: call enabled or disabled, call time, response window length, vote window length, reminder lead time, and default fulfillment modes. Dinner defaults: enabled, 15:00, 90 minutes, 45 minutes, 15 minutes, pickup and delivery. Lunch defaults: disabled, 10:30, 60, 30, 15, pickup. |
+| FR-1 | Each slot has: call enabled or disabled, call time, response window length, vote window length, reminder lead time, and default fulfillment modes. Dinner defaults: enabled, 15:00, 90 minutes, 45 minutes, 15 minutes, pickup and delivery. Lunch defaults: disabled, 10:30, 60, 30, 15, pickup. The schedule is the same every day of the week. |
 | FR-2 | The scheduler must post a call for each enabled slot once per day at the configured time, in the household time zone, and must not double-post after a restart. |
 | FR-3 | Any member must be able to start an ad-hoc call for a slot and date from Slack or the web app. |
 | FR-4 | Any member must be able to post an offer with item, fulfillment mode, time, and capacity. |
@@ -173,7 +190,7 @@ Requirements use "must" for version 1 and "should" for items that can slip to a 
 | FR-19 | Meal time defaults to the latest "earliest" across participants' eat windows, rounded up to the quarter hour. The coordinator can change it. |
 | FR-20 | Each assignee receives a direct message with the decision, their role, meal time, item link, head count, and dietary notes. |
 | FR-21 | Events become done at meal time plus 2 hours, or when any participant marks them done. Contributions are recorded on done. |
-| FR-22 | Any participant should be able to give a thumbs up or down on the meal after it is done. Ratings are stored and shown on the item; they do not change preferences automatically in version 1. |
+| FR-22 | Done events open feedback for their participants, as specified in section 6.10. |
 
 ### 6.5 Catalog
 
@@ -215,7 +232,17 @@ Requirements use "must" for version 1 and "should" for items that can slip to a 
 | FR-36 | Pages: Today, Catalog, Preferences, History, Stats and badges, Admin. See section 11. |
 | FR-37 | Every Slack message about an event links to that event's page. |
 
-### 6.10 Metrics and badges
+### 6.10 Feedback
+
+| ID | Requirement |
+|---|---|
+| FR-45 | Any participant in a done event, or a member named on a logged meal, can give feedback for up to 7 days after the meal. Each member gives at most one feedback per meal and can edit it within the window. Feedback does not affect ranking in version 1. All feedback is stored with the item, mode, cook, and participants at the time, so a later milestone can use it. |
+| FR-46 | Feedback has up to three subjects, each optional. Food: loved it, fine, or not again. Place, restaurants only: loved it, fine, or not again, plus optional issue chips (late, wrong order, cold, other). Cook, home meals only: a thank-you plus an optional note up to 200 characters. |
+| FR-47 | Feedback is available from a button on the decision or offer message, from App Home, and from the History page. Feedback is never required. |
+| FR-48 | Each member has a feedback reminder setting, default off. When on, the member gets one direct message per done meal they participated in. |
+| FR-49 | Food and place feedback is shown on the catalog item as counts. Cook thank-yous and notes are shown to the cook. Other members see only the thank-you count. No one sees who chose "not again." |
+
+### 6.11 Metrics and badges
 
 | ID | Requirement |
 |---|---|
@@ -223,15 +250,16 @@ Requirements use "must" for version 1 and "should" for items that can slip to a 
 | FR-39 | Badges in section 12 are awarded when thresholds are met, announced once in the channel, and shown on the member's Stats page and App Home. |
 | FR-40 | A monthly recap posts on the first day of the month: meals coordinated, cuisines tried, new catalog items, badges earned. It never ranks members from worst to best. |
 
-### 6.11 Administration
+### 6.12 Administration
 
 | ID | Requirement |
 |---|---|
 | FR-41 | The admin invites a member by email. The member's first sign-in with that email activates the account and links the identity. Unknown emails are refused with a message to ask the admin. |
 | FR-42 | The admin maps or confirms each member's Slack user ID. Default mapping is by email match. |
-| FR-43 | The admin edits slot schedules, time zone, variety window, ranking weights, and badge thresholds in the web app. |
+| FR-43 | The admin edits time zone, variety window, ranking weights, and badge thresholds in the web app. |
+| FR-44 | Any member can edit the standing schedule for a slot: call enabled, call time, and window lengths. Each change is announced in the channel with the member's name, written to the audit log, and applies from the next call. |
 
-### 6.12 Later phases
+### 6.13 Later phases
 
 | ID | Requirement | Phase |
 |---|---|---|
@@ -240,6 +268,7 @@ Requirements use "must" for version 1 and "should" for items that can slip to a 
 | FR-52 | A Discord adapter implements the channel interface. | Channels |
 | FR-53 | Web push for Home Screen web apps as an optional additional channel. | Channels |
 | FR-54 | Multiple households per deployment. | Multi-tenant |
+| FR-55 | Feedback influences ranking, for example a "not again" from a participant acting as a soft penalty for that item. The design is decided from at least 8 weeks of collected data and recorded in an ADR. | Feedback-informed ranking |
 
 ## 7. Ranking
 
@@ -265,7 +294,7 @@ Ranking is deterministic and explainable. Given a Call with participants P (in a
 4. **Order** by score descending. Break ties by fewest days since last eaten (ascending novelty), then by name.
 5. **Explain.** Each proposal carries the top two positive components and any penalty as a sentence: "Suggested by Alex. Nobody has had Ethiopian in 3 weeks."
 
-Weights are household settings. The engine is a pure function over a snapshot, so it is unit-testable without a database.
+Feedback is not an input in version 1; FR-55 adds it once there is enough data. Weights are household settings. The engine is a pure function over a snapshot, so it is unit-testable without a database.
 
 ## 8. Event lifecycle
 
@@ -305,6 +334,8 @@ Transitions are driven by two sources: user actions through a channel or the web
 | Badge earned | Everyone | Channel post |
 | Monthly recap | Everyone | Channel post |
 | Event cancelled by admin | Participants | Channel post, threaded |
+| Schedule changed | Everyone | Channel post |
+| Feedback reminder | Participants who turned the reminder on | Direct message, once per meal |
 
 Each member can mute direct-message reminders in their preferences. Channel posts are never suppressed per member.
 
@@ -322,13 +353,13 @@ Each member can mute direct-message reminders in their preferences. Channel post
 
 **Proposals message.** One section per proposal: name, mode, reason, vote count, **Vote** button. The coordinator and admin also see **Lock**. An **Add proposal** button opens a modal.
 
-**Decision message.** Item, mode, meal time, head count, assignments with mentions, item link, event link. **Mark done** button.
+**Decision message.** Item, mode, meal time, head count, assignments with mentions, item link, event link. **Mark done** button. After the event is done, a **How was it?** button opens the feedback modal.
 
 **Offer message.** Offerer, item, mode, time, spare servings, roster. **Count me in** and **+1 guest** buttons, disabled when full.
 
-**App Home.** Today's events with the member's status, quick buttons to offer or start a call, badges earned, link to preferences on the web.
+**App Home.** Today's events with the member's status, quick buttons to offer or start a call, meals awaiting the member's feedback, badges earned, link to preferences on the web.
 
-**Slash command.** `/dinnerbell` with subcommands `offer`, `call`, `log`, `prefs`, `help`. Each opens a modal or returns a link.
+**Slash command.** `/dinnerbell` with subcommands `offer`, `call`, `log`, `schedule`, `prefs`, `help`. Each opens a modal or returns a link.
 
 **Identity.** The bot acts only for Slack users mapped to active members. Unmapped users get an ephemeral message asking them to contact the admin.
 
@@ -339,9 +370,9 @@ Mobile-first server-rendered pages with HTMX for in-place updates. No JavaScript
 | Page | Content |
 |---|---|
 | Today | Open events with roster, proposals, votes, and the same actions Slack offers. Start a call or post an offer. |
-| Catalog | Search and filter items by tag, kind, mode. Add and edit items. See last eaten and rating. |
-| Preferences | Tags and items with veto and −2 to +2 controls. Capability flags. Mute reminders. Calendar URL (later phase). |
-| History | Meals by week. Cuisines in the current variety window. |
+| Catalog | Search and filter items by tag, kind, mode. Add and edit items. See last eaten and feedback counts. |
+| Preferences | Tags and items with veto and −2 to +2 controls. Capability flags. Mute reminders. Feedback reminder on or off. Calendar URL (later phase). |
+| History | Meals by week. Cuisines in the current variety window. Give or edit feedback on recent meals. |
 | Stats | Contribution counts, badges with progress to the next tier, household recap. |
 | Admin | Members and invitations, Slack mapping, slot schedules, time zone, ranking weights, badge thresholds, tag management, seed import, backup status. |
 
@@ -360,6 +391,7 @@ Mobile-first server-rendered pages with HTMX for in-place updates. No JavaScript
 | suggested | Made a suggestion that became the decision |
 | added_item | Created a catalog item that was later chosen at least once |
 | hosted | Brought one or more guests to a done event |
+| gave_feedback | Gave feedback on a meal within the window |
 
 ### Badges
 
@@ -376,6 +408,7 @@ Badges have tiers at 1, 10, and 50 unless noted. Thresholds are settings.
 | Explorer | suggested an item or cuisine the household had never eaten, and it was chosen, ×1 / ×5 / ×15 |
 | Good Host | hosted ×1 / ×5 / ×20 |
 | Full Table | participated ×10 / ×50 / ×200 |
+| Food Critic | gave_feedback ×5 / ×25 / ×100 |
 | On a Roll | cooked, picked_up, or ordered in each of 3 / 8 / 20 consecutive weeks |
 
 Rules: badges announce once in the channel when earned. The Stats page shows progress toward the next tier. Nothing in the app ranks members against each other or names who did the least.
@@ -426,7 +459,7 @@ Every table carries `household_id`. Timestamps are UTC; the household time zone 
 | Table | Key fields |
 |---|---|
 | household | name, timezone, settings (JSON: slots, weights, variety window, badge thresholds, slack channel) |
-| member | display name, email, oidc_subject, slack_user_id, role (admin, member), can_cook, can_pickup, can_order, mute_dm_reminders, active |
+| member | display name, email, oidc_subject, slack_user_id, role (admin, member), can_cook, can_pickup, can_order, mute_dm_reminders, feedback_reminder, active |
 | tag | kind (cuisine, protein, dietary, other), name |
 | catalog_item | kind (home, restaurant), name, notes, url, modes (cook, pickup, delivery), default_servings, created_by, active |
 | catalog_item_tag | item, tag |
@@ -439,7 +472,7 @@ Every table carries `household_id`. Timestamps are UTC; the household time zone 
 | vote | proposal, member |
 | assignment | event, member, role (cook, pickup, order, coordinator) |
 | meal_log | date, slot, item, cuisine_tags snapshot, participants snapshot, event (nullable), logged_by |
-| rating | meal_log, member, value (+1, −1) |
+| feedback | meal_log, member, food (loved, fine, not_again, null), place (same, null), place_issues (JSON), cook_member (nullable), cook_thanks (bool), cook_note, created_at, updated_at |
 | contribution | member, kind, event, created_at |
 | badge_award | member, badge_key, tier, event, awarded_at |
 | outbox | notification type, payload (JSON), idempotency_key, delivered_at, attempts, last_error |
@@ -558,10 +591,11 @@ dinnerbell/
 | M0 Scaffold | Repository, CI, container, config, migrations, `/healthz`, OIDC sign-in with member allowlist | The admin signs in on a phone through Pangolin |
 | M1 Catalog and preferences | Tags, catalog, preferences, manual meal log, seed import, History page | The family's catalog is loaded and each member has set vetoes |
 | M2 Dinner call | Scheduler, Slack adapter, call lifecycle through decision, ranking, assignments, reminders, abandon path, admin overrides | A week of dinners decided through Slack |
-| M3 Offers and guests | Offers with capacity, cooking offers replacing the call, guests with dietary needs, lunch defaults, ad-hoc calls, ratings | Lunch offers and guest dinners work without workarounds |
+| M3 Offers and guests | Offers with capacity, cooking offers replacing the call, guests with dietary needs, lunch defaults, ad-hoc calls, schedule changes by any member, feedback collection | Lunch offers and guest dinners work without workarounds |
 | M4 Contributions and badges | Contribution counting, badges, channel announcements, Stats page, monthly recap | First badges awarded |
 | M5 Calendar hints | Secret iCal URL polling, busy hints on the roster | Hints show for members who opted in |
 | M6 Assistant | Natural-language proposals and discovery through the domain API | "Find us something new" produces valid, filtered proposals |
+| M7 Feedback-informed ranking | An ADR on how feedback affects ranking, then the implementation. Starts after 8 weeks of feedback data and can move ahead of M5 or M6. | Proposals reflect "not again" and "loved it" with reasons that say so |
 | Backlog | Discord adapter, web push, multi-household, recipes | |
 
 M0 through M2 are the minimum for the household to switch over. M3 and M4 follow within weeks. Each milestone is a set of pull requests with review before merge.
@@ -570,13 +604,14 @@ M0 through M2 are the minimum for the household to switch over. M3 and M4 follow
 
 | # | Question | Default until answered |
 |---|---|---|
-| 1 | Exact call and deadline times for dinner on weekdays versus weekends | Same times every day |
+| 1 | ~~Exact call and deadline times for weekdays versus weekends~~ | Resolved: same times every day; any member can change the standing schedule (FR-44) |
 | 2 | Should votes be anonymous? | Visible, per FR-14 |
 | 3 | When two members both offer to cook, who decides? | Coordinator; otherwise ranking prefers the item whose cook list matches |
 | 4 | Should a "maybe" at the deadline be nudged once more before converting to out? | No; one reminder total |
 | 5 | Should the Slack workspace be new or an existing one? | New workspace named for the household, one channel |
 | 6 | Seed list of cuisines and dietary tags | Ship a `seed/example.yaml`; the admin edits before import |
-| 7 | Should ratings adjust soft preferences automatically? | No in version 1; revisit after a month of data |
+| 7 | ~~Should feedback adjust ranking automatically?~~ | Resolved: collect only in version 1; decide in M7 after 8 weeks of data |
+| 8 | Should cook notes be visible to the whole household or only the cook? | Only the cook; others see the thank-you count (FR-49) |
 
 ## 16. Decision records
 
