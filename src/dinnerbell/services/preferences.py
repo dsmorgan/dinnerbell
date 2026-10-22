@@ -52,6 +52,25 @@ async def my_preferences(db: AsyncSession, actor: Member) -> MyPreferences:
     return MyPreferences(tags=await repo.tags(actor.household_id), items=items, stances=stances)
 
 
+async def my_stance(
+    db: AsyncSession, actor: Member, target_type: TargetType, target_id: int
+) -> tuple[str, Stance] | None:
+    """The actor's stored stance on one tag or item, with its name, or None if it's gone."""
+    repo = CatalogRepository(db)
+    target = (
+        await repo.tag(actor.household_id, target_id)
+        if target_type is TargetType.TAG
+        else await repo.item(actor.household_id, target_id)
+    )
+    if target is None:
+        return None
+    stances = {
+        (p.target_type, p.target_id): p.stance
+        for p in await PreferenceRepository(db).for_member(actor.household_id, actor.id)
+    }
+    return target.name, stances.get((target_type, target_id), NEUTRAL)
+
+
 async def set_my_preference(
     db: AsyncSession, actor: Member, target_type: TargetType, target_id: int, stance: Stance, *, now: datetime
 ) -> str:

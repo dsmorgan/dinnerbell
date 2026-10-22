@@ -12,7 +12,7 @@ from dinnerbell.config import Settings
 from dinnerbell.db.models import AuditRow, MemberRow, PreferenceRow, TagRow
 from dinnerbell.domain.preferences import MINUS
 from dinnerbell.logs import JsonFormatter
-from tests.conftest import invite, page, sign_in
+from tests.conftest import csrf_from, invite, page, sign_in
 from tests.support.fake_oidc import FakeProvider
 from tests.support.web import add_item, htmx, submit
 from tests.test_admin import sign_in_as
@@ -92,12 +92,15 @@ def test_bad_stances_are_refused(client: TestClient, provider: FakeProvider, mig
     sign_in(client, provider)
     add_item(client, "Siam Garden")
     target = f"tag:{thai(migrated)}"
-    assert htmx(client, "/preferences/stance", {"target": target, "level": "5"}).status_code == 400
+    bad_level = htmx(client, "/preferences/stance", {"target": target, "level": "5"})
+    assert bad_level.status_code == 200 and "Not saved." in bad_level.text  # the row, with the error
     assert submit(client, "/preferences/stance", {"target": target, "level": "5"}).status_code == 400
     assert htmx(client, "/preferences/stance", {"target": "member:1", "level": "1"}).status_code == 400
     assert htmx(client, "/preferences/stance", {"target": "tag:abc", "level": "1"}).status_code == 400
-    assert htmx(client, "/preferences/stance", {"target": "tag:999", "level": "1"}).status_code == 404
-    assert htmx(client, "/preferences/stance", {"target": "item:999", "level": "1"}).status_code == 404
+    for missing in ("tag:999", "item:999"):
+        response = htmx(client, "/preferences/stance", {"target": missing, "level": "1"})
+        assert response.status_code == 200 and "removed from the catalog" in response.text
+        assert submit(client, "/preferences/stance", {"target": missing, "level": "1"}).status_code == 404
     assert rows(migrated, PreferenceRow) == []
 
 
@@ -199,3 +202,59 @@ def test_preferences_are_not_audited_or_logged(
         htmx(client, "/preferences/stance", {"target": f"tag:{thai(migrated)}", "level": "veto"})
     formatted = "\n".join(JsonFormatter().format(r) for r in caplog.records)
     assert "veto" not in formatted
+
+
+# Failed saves are never silent (HTMX) --------------------------------------------------------
+
+
+def test_invalid_level_rerenders_the_row_with_the_stored_stance(
+    client: TestClient, provider: FakeProvider, migrated: Settings
+) -> None:
+    sign_in(client, provider)
+    add_item(client, "Siam Garden")
+    target = f"tag:{thai(migrated)}"
+    htmx(client, "/preferences/stance", {"target": target, "level": "-1"})
+    response = htmx(client, "/preferences/stance", {"target": target, "level": "7"})
+    assert response.status_code == 200  # HTMX swaps only successful responses
+    assert response.text.lstrip().startswith("<li")
+    assert checked_level(response.text, target) == "-1"
+    assert 'role="alert"' in response.text and "Not saved." in page(response)
+    assert "Saved" not in response.text.replace("Not saved", "")
+
+
+def test_removed_target_rerenders_the_row_with_an_error(
+    client: TestClient, provider: FakeProvider, migrated: Settings
+) -> None:
+    sign_in(client, provider)
+    add_item(client, "Siam Garden", cuisines="Thai, Siamese")
+    siamese = next(t.id for t in rows(migrated, TagRow) if t.name == "Siamese")
+    submit(client, f"/catalog/tags/{siamese}/merge", {"into": str(thai(migrated)), "confirm": "on"})
+    response = htmx(client, "/preferences/stance", {"target": f"tag:{siamese}", "level": "veto"})
+    assert response.status_code == 200
+    assert f'id="pref-tag-{siamese}"' in response.text
+    assert "Not saved. It was removed from the catalog; reload the page." in page(response)
+    assert rows(migrated, PreferenceRow) == []
+
+
+def test_expired_session_sends_htmx_to_sign_in(client: TestClient, provider: FakeProvider, migrated: Settings) -> None:
+    sign_in(client, provider)
+    add_item(client, "Siam Garden")
+    token = csrf_from(client)
+    client.cookies.clear()
+    response = client.post(
+        "/preferences/stance",
+        data={"target": f"tag:{thai(migrated)}", "level": "veto"},
+        headers={"HX-Request": "true", "X-CSRF-Token": token},
+    )
+    assert response.status_code == 401
+    assert response.headers["HX-Redirect"] == "/"
+
+
+def test_pages_load_the_save_error_banner(client: TestClient, provider: FakeProvider) -> None:
+    sign_in(client, provider)
+    html = client.get("/preferences").text
+    assert '<script src="/static/app.js' in html
+    assert 'id="save-error"' in html and "hidden" in html.split('id="save-error"', 1)[1].split(">", 1)[0]
+    script = client.get("/static/app.js").text
+    assert "htmx:responseError" in script and "htmx:sendError" in script
+    assert "Not saved. Reload the page." in script

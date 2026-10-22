@@ -13,6 +13,7 @@
   <title>{% block title %}Dinnerbell{% endblock %} · {{ household_name }}</title>
   <link rel="stylesheet" href="/static/app.css?v={{ version }}">
   <script src="/static/{{ htmx_file }}" defer></script>
+  <script src="/static/app.js?v={{ version }}" defer></script>
 </head>
 <body{% if csrf_token %} hx-headers='{{ {"X-CSRF-Token": csrf_token}|tojson }}'{% endif %}>
   <header class="topbar">
@@ -37,6 +38,7 @@
     </nav>
     {% endif %}
   </header>
+  <div id="save-error" class="alert error save-banner" role="alert" hidden></div>
   <main class="page">
     {% block content %}{% endblock %}
   </main>

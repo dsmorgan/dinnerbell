@@ -15,9 +15,10 @@ from starlette.responses import Response
 
 from dinnerbell.domain.catalog import ItemKind, tags_by_kind
 from dinnerbell.domain.members import Capabilities
-from dinnerbell.domain.preferences import LEVEL_LABELS, LEVELS, InvalidPreference, Stance, TargetType
+from dinnerbell.domain.preferences import LEVEL_LABELS, LEVELS, NEUTRAL, InvalidPreference, Stance, TargetType
 from dinnerbell.services import preferences as preference_service
-from dinnerbell.web.auth import Context, CSRFChecked, Database, SignedIn
+from dinnerbell.services.errors import NotFound
+from dinnerbell.web.auth import Context, CSRFChecked, Database, Principal, SignedIn
 from dinnerbell.web.forms import checked, choice, parse_id
 from dinnerbell.web.render import is_htmx, render
 
@@ -50,6 +51,21 @@ async def preferences_page(request: Request, principal: SignedIn, db: Database, 
     )
 
 
+async def _failed_row(
+    request: Request, db: Database, principal: Principal, target_type: TargetType, target_id: int, error: str
+) -> Response:
+    current = await preference_service.my_stance(db, principal.member, target_type, target_id)
+    name, stance = current if current is not None else ("Removed", NEUTRAL)
+    context = {
+        "target": f"{target_type.value}:{target_id}",
+        "name": name,
+        "stance": stance,
+        "levels": _levels(),
+        "error": error,
+    }
+    return await render(request, "_preference_row.html", context)
+
+
 @router.post("/settings")
 async def save_settings(
     principal: CSRFChecked,
@@ -79,21 +95,40 @@ async def save_stance(
     target: Annotated[str, Form(max_length=40)] = "",
     level: Annotated[str, Form(max_length=8)] = "",
 ) -> Response:
-    """Set one stance. ``target`` reads ``tag:12`` or ``item:7``. HTMX gets the row back."""
+    """Set one stance. ``target`` reads ``tag:12`` or ``item:7``.
+
+    HTMX gets the row back. When saving fails, it still gets the row, with status 200 so HTMX
+    swaps it in, showing the stance that is actually stored and why the new one wasn't saved.
+    A failure HTMX can't swap, such as an expired session, shows the page's save-error banner.
+    """
     kind, _, raw_id = target.partition(":")
     target_type = choice(TargetType, kind)
+    target_id = parse_id(raw_id)
+    if target_type is None or target_id is None:
+        message = "Reload the page and try again."
+        if is_htmx(request):
+            return Response(message, status_code=400)
+        return await render(request, "error.html", {"title": "Not saved", "message": message}, status_code=400)
     try:
-        target_id = parse_id(raw_id)
-        if target_type is None or target_id is None:
-            raise InvalidPreference("Reload the page and try again.")
         stance = Stance.parse(level)
         name = await preference_service.set_my_preference(
             db, principal.member, target_type, target_id, stance, now=context.clock()
         )
     except InvalidPreference as exc:
-        if is_htmx(request):
-            return Response(str(exc), status_code=400)
-        return await render(request, "error.html", {"title": "Not saved", "message": str(exc)}, status_code=400)
+        if not is_htmx(request):
+            return await render(request, "error.html", {"title": "Not saved", "message": str(exc)}, status_code=400)
+        return await _failed_row(request, db, principal, target_type, target_id, f"Not saved. {exc}")
+    except NotFound:
+        if not is_htmx(request):
+            raise
+        return await _failed_row(
+            request,
+            db,
+            principal,
+            target_type,
+            target_id,
+            "Not saved. It was removed from the catalog; reload the page.",
+        )
     if is_htmx(request):
         return await render(
             request,
