@@ -4,8 +4,9 @@
 from __future__ import annotations
 
 import sqlite3
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from pathlib import Path
+from typing import Any
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -113,28 +114,48 @@ async def test_purge_sessions_job(job_context: runner.JobContext) -> None:
     await runner.purge_sessions(job_context)  # nothing to purge; must not fail
 
 
-def test_build_scheduler_schedules_jobs(job_context: runner.JobContext) -> None:
+async def _started_jobs(scheduler: Any) -> dict[str, Any]:
+    """Start paused so job defaults and next run times are filled in, then stop."""
+    scheduler.start(paused=True)
+    try:
+        return {job.id: job for job in scheduler.get_jobs()}
+    finally:
+        scheduler.shutdown(wait=False)
+
+
+@pytest.mark.anyio
+async def test_build_scheduler_schedules_jobs(job_context: runner.JobContext) -> None:
+    from datetime import UTC
+
     scheduler = runner.build_scheduler(job_context)
-    ids = {job.id for job in scheduler.get_jobs()}
-    assert ids == {"heartbeat", "nightly_backup", "purge_sessions", "catch_up_backup"}
-    backup = scheduler.get_job("nightly_backup")
+    jobs = await _started_jobs(scheduler)
+    # Regression: catch-up used to be a second job that could overlap the nightly one and
+    # delete its .partial file. Now there is one backup job, moved to run now.
+    assert set(jobs) == {"heartbeat", "nightly_backup", "purge_sessions"}
+    backup = jobs["nightly_backup"]
     assert "hour='3'" in str(backup.trigger) and "minute='30'" in str(backup.trigger)
+    assert backup.max_instances == 1
+    assert backup.next_run_time - datetime.now(UTC) < timedelta(minutes=1)
 
 
-def test_no_catch_up_when_recent_backup_exists(job_context: runner.JobContext, clock: FakeClock) -> None:
+@pytest.mark.anyio
+async def test_no_catch_up_when_recent_backup_exists(job_context: runner.JobContext, clock: FakeClock) -> None:
     import os
+    from datetime import UTC
 
     path = make_backup(job_context.backup_dir, clock.now.date())
     os.utime(path, (clock.now.timestamp(), clock.now.timestamp()))
-    scheduler = runner.build_scheduler(job_context)
-    assert scheduler.get_job("catch_up_backup") is None
+    jobs = await _started_jobs(runner.build_scheduler(job_context))
+    nightly = jobs["nightly_backup"].next_run_time.astimezone(job_context.zone)
+    assert (nightly.hour, nightly.minute) == (3, 30)
+    assert nightly > datetime.now(UTC)
 
 
 @pytest.mark.anyio
 async def test_stop_waits_for_cancelled_jobs_to_clean_up(job_context: runner.JobContext) -> None:
     """Regression: shutdown used to dispose the engine while a cancelled job was still unwinding."""
     import asyncio
-    from datetime import UTC, datetime
+    from datetime import UTC
 
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
 

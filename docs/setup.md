@@ -295,9 +295,12 @@ These backups live in the same volume as the database, so copy them off the host
 The files are readable only by their owner, uid 10001 inside the container, because they contain member emails. Under rootful podman or Docker, run your backup routine as root. Under rootless podman, uid 10001 maps to one of your subordinate IDs, so your own user can't read the files directly. Copy them out through the user namespace instead:
 
 ```sh
-podman unshare cp -r "$(podman volume inspect <volume> --format '{{.Mountpoint}}')/backups" ~/dinnerbell-backups
+mkdir -p ~/dinnerbell-backups
+podman unshare cp -a "$(podman volume inspect <volume> --format '{{.Mountpoint}}')/backups/." ~/dinnerbell-backups/
 podman unshare chown -R 0:0 ~/dinnerbell-backups
 ```
+
+The trailing `/.` copies the directory's contents, so running the same commands again refreshes the copy instead of nesting a second `backups` directory inside it.
 
 Inside `podman unshare`, your user is root, so the copy works, and the `chown` hands the copies back to your own user.
 

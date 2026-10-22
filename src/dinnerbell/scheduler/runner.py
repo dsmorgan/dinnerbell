@@ -109,16 +109,18 @@ def build_scheduler(ctx: JobContext) -> AsyncIOScheduler:
         id="heartbeat",
         next_run_time=start,
     )
+    # A catch-up backup at start runs as the nightly job itself (its first run is moved to now),
+    # not as a second job, so max_instances=1 keeps two backups from ever overlapping.
+    ctx.state.last_backup = backups.last_backup_time(ctx.backup_dir)
+    catch_up = ctx.state.last_backup is None or ctx.clock() - ctx.state.last_backup > BACKUP_CATCH_UP_AFTER
     scheduler.add_job(
         _tracked(nightly_backup),
         CronTrigger(hour=BACKUP_HOUR, minute=BACKUP_MINUTE, timezone=ctx.zone),
         args=[ctx],
         id="nightly_backup",
+        **({"next_run_time": start} if catch_up else {}),
     )
     scheduler.add_job(
         _tracked(purge_sessions), IntervalTrigger(hours=1), args=[ctx], id="purge_sessions", next_run_time=start
     )
-    ctx.state.last_backup = backups.last_backup_time(ctx.backup_dir)
-    if ctx.state.last_backup is None or ctx.clock() - ctx.state.last_backup > BACKUP_CATCH_UP_AFTER:
-        scheduler.add_job(_tracked(nightly_backup), args=[ctx], id="catch_up_backup", next_run_time=start)
     return scheduler
