@@ -1,0 +1,128 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+"""Nightly backups and scheduler jobs with a fake clock."""
+
+from __future__ import annotations
+
+import sqlite3
+from datetime import date, timedelta
+from pathlib import Path
+
+import pytest
+
+from dinnerbell.config import Settings
+from dinnerbell.db.engine import create_app_engine, create_sessionmaker
+from dinnerbell.scheduler import runner
+from dinnerbell.services import backups
+from tests.support.clock import FakeClock
+
+
+def make_backup(directory: Path, day: date) -> Path:
+    directory.mkdir(parents=True, exist_ok=True)
+    path = backups.backup_path(directory, day)
+    path.write_bytes(b"")
+    return path
+
+
+def test_backup_is_a_consistent_copy(migrated: Settings) -> None:
+    result = backups.run_backup(migrated.database_path, migrated.backup_dir, date(2026, 10, 22))
+    assert result.created
+    assert result.path == migrated.backup_dir / "dinnerbell-2026-10-22.db"
+    with sqlite3.connect(result.path) as copy:
+        tables = {row[0] for row in copy.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert {"household", "member", "session", "audit"} <= tables
+    assert not list(migrated.backup_dir.glob("*.partial"))
+
+
+def test_backup_is_idempotent_per_day(migrated: Settings) -> None:
+    first = backups.run_backup(migrated.database_path, migrated.backup_dir, date(2026, 10, 22))
+    mtime = first.path.stat().st_mtime_ns
+    second = backups.run_backup(migrated.database_path, migrated.backup_dir, date(2026, 10, 22))
+    assert not second.created
+    assert second.path.stat().st_mtime_ns == mtime
+
+
+def test_backup_prunes_by_retention(migrated: Settings) -> None:
+    today = date(2026, 10, 22)
+    for i in range(1, 60):
+        make_backup(migrated.backup_dir, today - timedelta(days=i))
+    stranger = migrated.backup_dir / "notes.txt"
+    stranger.write_text("not ours")
+    result = backups.run_backup(migrated.database_path, migrated.backup_dir, today)
+    remaining = backups.existing_backups(migrated.backup_dir)
+    assert len(remaining) == 14 + 5  # see test_domain.TestBackupRetention
+    assert today in remaining
+    assert len(result.deleted) == 60 - len(remaining)
+    assert stranger.exists()
+
+
+def test_last_backup_time(tmp_path: Path) -> None:
+    assert backups.last_backup_time(tmp_path / "none") is None
+    make_backup(tmp_path, date(2026, 1, 1))
+    assert backups.last_backup_time(tmp_path) is not None
+
+
+@pytest.fixture
+def job_context(migrated: Settings, clock: FakeClock) -> runner.JobContext:
+    engine = create_app_engine(migrated.async_database_url)
+    return runner.JobContext(
+        state=runner.SchedulerState(),
+        clock=clock,
+        zone=migrated.zone,
+        database_path=migrated.database_path,
+        backup_dir=migrated.backup_dir,
+        sessionmaker=create_sessionmaker(engine),
+    )
+
+
+@pytest.mark.anyio
+async def test_heartbeat_records_tick(job_context: runner.JobContext, clock: FakeClock) -> None:
+    await runner.heartbeat(job_context)
+    assert job_context.state.last_tick == clock.now
+    assert job_context.state.tick_is_fresh(clock.now + timedelta(seconds=89))
+    assert not job_context.state.tick_is_fresh(clock.now + timedelta(seconds=91))
+
+
+@pytest.mark.anyio
+async def test_nightly_backup_uses_household_date(job_context: runner.JobContext, clock: FakeClock) -> None:
+    # 2026-10-22 18:00 UTC, then 04:00 UTC the next day, which is still 2026-10-22 in Chicago.
+    clock.advance(timedelta(hours=10))
+    await runner.nightly_backup(job_context)
+    assert list(backups.existing_backups(job_context.backup_dir)) == [date(2026, 10, 22)]
+    assert job_context.state.last_backup is not None
+    await runner.nightly_backup(job_context)  # same day again: nothing new
+    assert len(backups.existing_backups(job_context.backup_dir)) == 1
+
+
+@pytest.mark.anyio
+async def test_backup_failure_is_logged_not_raised(
+    job_context: runner.JobContext, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    def explode(*_args: object) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(backups, "run_backup", explode)
+    await runner.nightly_backup(job_context)
+    assert job_context.state.last_backup is None
+    assert "database backup failed" in caplog.text
+
+
+@pytest.mark.anyio
+async def test_purge_sessions_job(job_context: runner.JobContext) -> None:
+    await runner.purge_sessions(job_context)  # nothing to purge; must not fail
+
+
+def test_build_scheduler_schedules_jobs(job_context: runner.JobContext) -> None:
+    scheduler = runner.build_scheduler(job_context)
+    ids = {job.id for job in scheduler.get_jobs()}
+    assert ids == {"heartbeat", "nightly_backup", "purge_sessions", "catch_up_backup"}
+    backup = scheduler.get_job("nightly_backup")
+    assert "hour='3'" in str(backup.trigger) and "minute='30'" in str(backup.trigger)
+
+
+def test_no_catch_up_when_recent_backup_exists(job_context: runner.JobContext, clock: FakeClock) -> None:
+    import os
+
+    path = make_backup(job_context.backup_dir, clock.now.date())
+    os.utime(path, (clock.now.timestamp(), clock.now.timestamp()))
+    scheduler = runner.build_scheduler(job_context)
+    assert scheduler.get_job("catch_up_backup") is None

@@ -1,0 +1,74 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+"""GET /healthz."""
+
+from __future__ import annotations
+
+from datetime import timedelta
+from pathlib import Path
+
+from fastapi.testclient import TestClient
+
+from dinnerbell.db.engine import create_app_engine, create_sessionmaker
+from tests.support.clock import FakeClock
+
+
+def wait_for_tick(client: TestClient) -> dict[str, object]:
+    import time
+
+    for _ in range(100):
+        body: dict[str, object] = client.get("/healthz").json()
+        if body["scheduler"]["last_tick"] is not None:  # type: ignore[index]
+            return body
+        time.sleep(0.02)
+    raise AssertionError("scheduler never ticked")
+
+
+def test_healthz_shape(client: TestClient, clock: FakeClock) -> None:
+    body = wait_for_tick(client)
+    response = client.get("/healthz")
+    assert response.status_code == 200
+    assert response.headers["content-type"] == "application/json"
+    assert set(body) == {"status", "database", "scheduler", "slack", "backup"}
+    assert body["status"] == "ok"
+    assert body["database"] == "ok"
+    assert body["slack"] == "not_configured"
+    assert body["scheduler"] == {"status": "ok", "last_tick": clock.now.isoformat()}
+    assert set(body["backup"]) == {"last_success"}  # type: ignore[arg-type]
+    text = response.text
+    assert "@" not in text
+    assert "secret" not in text.lower()
+
+
+def test_healthz_needs_no_session_and_is_not_rate_limited(client: TestClient) -> None:
+    for _ in range(40):
+        assert client.get("/healthz").status_code == 200
+
+
+def test_healthz_reports_startup_backup(client: TestClient) -> None:
+    import time
+
+    for _ in range(100):
+        body = client.get("/healthz").json()
+        if body["backup"]["last_success"]:
+            break
+        time.sleep(0.02)
+    assert body["backup"]["last_success"] is not None
+
+
+def test_stale_scheduler_is_degraded_not_down(client: TestClient, clock: FakeClock) -> None:
+    wait_for_tick(client)
+    clock.advance(timedelta(minutes=5))
+    response = client.get("/healthz")
+    assert response.status_code == 200
+    assert response.json()["status"] == "degraded"
+    assert response.json()["scheduler"]["status"] == "stale"
+
+
+def test_unreachable_database_returns_503(client: TestClient, tmp_path: Path) -> None:
+    context = client.app.state.dinnerbell  # type: ignore[attr-defined]
+    broken = create_app_engine(f"sqlite+aiosqlite:///{tmp_path}/missing-dir/nope.db")
+    object.__setattr__(context, "sessionmaker", create_sessionmaker(broken))
+    response = client.get("/healthz")
+    assert response.status_code == 503
+    assert response.json()["status"] == "error"
+    assert response.json()["database"] == "unreachable"
