@@ -8,7 +8,8 @@ services:
       dockerfile: Containerfile
     env_file: .env
     ports:
-      - "8000:8000"
+      # Publish only on the interface your reverse proxy (Newt) reaches. Set DINNERBELL_BIND in .env.
+      - "${DINNERBELL_BIND:-127.0.0.1}:8000:8000"
     volumes:
       - dinnerbell-data:/data
     read_only: true

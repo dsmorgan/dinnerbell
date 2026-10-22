@@ -518,6 +518,7 @@ All configuration comes from environment variables with a `DINNERBELL_` prefix, 
 | `DINNERBELL_TIMEZONE` | Seeds the household time zone on first start, default `UTC`. Afterward the household row is authoritative and is edited in Admin |
 | `DINNERBELL_SEED_FILE` | Optional YAML of tags and catalog items to import on first start |
 | `DINNERBELL_LOG_LEVEL` | Default `INFO` |
+| `DINNERBELL_BIND` | Compose only, not read by the app: host address that `compose.yaml` publishes port 8000 on, default `127.0.0.1`. Set it to the interface the reverse proxy reaches |
 | `DINNERBELL_TRUSTED_PROXIES` | Optional comma-separated IPs or CIDRs whose `X-Forwarded-For` is trusted for client IPs, such as the reverse proxy's address |
 
 Household-level settings that change over time (slot schedule, weights, thresholds) live in the database and are edited in Admin, not in environment variables.

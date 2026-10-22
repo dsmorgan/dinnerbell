@@ -97,7 +97,13 @@ Dinnerbell does its own sign-in. A second login in front of it breaks the OIDC r
 
 With authentication off, `/healthz` is public. It shows only coarse status.
 
-If Newt reaches Dinnerbell over a local network, publish port 8000 only on the interface Newt uses, not on all interfaces.
+`compose.yaml` publishes port 8000 on the address in `DINNERBELL_BIND`, which defaults to `127.0.0.1`. That default only works when Newt runs on the same host and not inside a container network. Otherwise, set `DINNERBELL_BIND` in `.env` to the host's address on the interface Newt reaches, for example its LAN address:
+
+```sh
+DINNERBELL_BIND=192.168.1.20
+```
+
+Avoid `0.0.0.0` unless a firewall limits who can reach the port.
 
 ## 9. Run Dinnerbell
 
@@ -143,7 +149,9 @@ If Newt reaches Dinnerbell over a local network, publish port 8000 only on the i
    # DINNERBELL_TRUSTED_PROXIES=
    ```
 
-   `DINNERBELL_ADMIN_EMAIL` must match the email on your Slack account.
+   `DINNERBELL_ADMIN_EMAIL` must match the email on your Slack account. If you change it later, Dinnerbell invites the new address as another admin on the next start.
+
+   `DINNERBELL_BASE_URL` must exactly match the URL people type: the same host, `https://`, and no explicit `:443` or path. Dinnerbell derives the sign-in redirect URL from it, and checks every form submission against it. With any other host, a LAN IP, an explicit `:443`, or plain `http://`, every form fails with "Cross-origin request refused". Plain `http://` also breaks sign-in, because the browser never stores the `Secure` session cookie over http.
 
    `DINNERBELL_HOUSEHOLD_NAME` and `DINNERBELL_TIMEZONE` take effect on first start only. After that, Dinnerbell reads them from its database, so set them correctly before you start it the first time.
 
@@ -190,7 +198,7 @@ If Newt reaches Dinnerbell over a local network, publish port 8000 only on the i
     curl https://dinnerbell.example.com/healthz
     ```
 
-    The response reports database reachability, the Slack socket state, and the last backup time.
+    The response reports database reachability, the scheduler's last tick, the Slack state (`not_configured` until M2), and the last backup time.
 
 ### Set the trusted proxy
 
@@ -214,7 +222,9 @@ Rate limiting needs the real client IP. Dinnerbell reads `X-Forwarded-For` only 
 
    With Docker: `docker compose logs dinnerbell`
 
-5. Find the peer IP. It is the address the proxy connects from. With a Newt site, it is the address of the host or container that runs Newt. With a plain WireGuard site, it is the Pangolin server's tunnel address.
+5. Find the peer IP. It is the address the proxy connects from. With a Newt site, it is usually the address of the host or container that runs Newt. With a plain WireGuard site, it is the Pangolin server's tunnel address.
+
+   Check the peer IP from a second client too, such as `curl` from another machine on your LAN. Under Docker Desktop, and with rootless podman's port forwarding, every connection to a published port can arrive from the same gateway address, such as `10.0.2.2` or the bridge gateway. If the second client shows the same peer IP as Newt, trusting that address lets any client that can reach the published port forge `X-Forwarded-For`. Trust it only if nothing but Newt can reach the port, for example because `DINNERBELL_BIND` and your firewall restrict it. Otherwise leave `DINNERBELL_TRUSTED_PROXIES` empty: rate limiting then treats all clients as one, which is safe but stricter.
 6. Set the single peer address in `.env`, and remove the `DINNERBELL_LOG_LEVEL` line or set it back to `INFO`.
 
    ```sh
@@ -233,12 +243,12 @@ Set only the one address the proxy connects from. Never use `0.0.0.0/0`, or a LA
 
 1. Open your public URL in a browser.
 2. Select **Sign in with Slack** and approve the request.
-3. Open **Admin > Members**.
+3. Open **Members**.
 4. Add each household member by the email address you will invite to Slack. Sign-in is invite-only, and the email must match the one on their Slack account.
 
 ## 11. Onboard family members
 
-Invite each person to the Slack workspace from Slack (**Invite people**), using the same email address you added on **Admin > Members**. Then forward them the following message.
+Invite each person to the Slack workspace from Slack (**Invite people**), using the same email address you added on **Members**. Then forward them the following message.
 
 > **Set up Dinnerbell on your phone**
 >
@@ -262,7 +272,7 @@ The catalog is your list of restaurants and home meals. [catalog-format.md](cata
 
 ## Back up
 
-Dinnerbell runs an online backup of its SQLite database every night into `/data/backups/`. It keeps 14 daily and 8 weekly copies. The Admin page and `/healthz` show the last successful backup.
+Dinnerbell runs an online backup of its SQLite database every night at 03:30 household time into `/data/backups/`, and once at start if the newest backup is more than a day old. It keeps the 14 newest daily copies plus the newest copy from each of the last 8 weeks. In M0, only `/healthz` shows the last successful backup; the Admin page gains it later.
 
 These backups live in the same volume as the database, so copy them off the host with your own backup routine. Copy `/data/backups/` only. Never copy the live `dinnerbell.db` or its WAL file, because a copy taken mid-write can be corrupt.
 
@@ -281,6 +291,15 @@ These backups live in the same volume as the database, so copy them off the host
    With Docker, use `docker volume ls` and `docker volume inspect <volume> --format '{{.Mountpoint}}'`.
 
 3. Point your backup routine at the `backups` directory inside that path.
+
+The files are readable only by their owner, uid 10001 inside the container, because they contain member emails. Under rootful podman or Docker, run your backup routine as root. Under rootless podman, uid 10001 maps to one of your subordinate IDs, so your own user can't read the files directly. Copy them out through the user namespace instead:
+
+```sh
+podman unshare cp -r "$(podman volume inspect <volume> --format '{{.Mountpoint}}')/backups" ~/dinnerbell-backups
+podman unshare chown -R 0:0 ~/dinnerbell-backups
+```
+
+Inside `podman unshare`, your user is root, so the copy works, and the `chown` hands the copies back to your own user.
 
 ## Upgrade
 
@@ -319,15 +338,37 @@ The web app works with any OpenID Connect provider that publishes a discovery do
 
 Invite members by the email on their Google account. In version 1, Slack is still required for notifications, so you still complete sections 1 through 4, the channel ID in section 6, and section 7.
 
+### Switch providers on an existing install
+
+Each member is linked to the account they first signed in with. After you switch providers, everyone, including you, sees "That email is already linked" until those links are cleared. To clear them:
+
+1. Stop the service.
+
+   ```sh
+   podman-compose down
+   ```
+
+2. Clear every member's link. Members keep their emails, roles, and history.
+
+   ```sh
+   podman-compose run --rm --entrypoint python dinnerbell -c "import sqlite3; db = sqlite3.connect('/data/dinnerbell.db'); db.execute('UPDATE member SET oidc_subject = NULL'); db.commit()"
+   ```
+
+   With Docker: `docker compose run --rm --entrypoint python dinnerbell -c "..."` with the same command.
+
+3. Start the service again. Each member's next sign-in with a verified matching email links the new account.
+
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
 |---|---|---|
 | Slack shows "redirect_uri did not match" or similar after you select Sign in | The redirect URL in the Slack app differs from `https://<host>/auth/callback`, for example because you pasted the manifest without editing the hostname. | Under **OAuth & Permissions > Redirect URLs**, set the exact URL and save. Also check that `DINNERBELL_BASE_URL` matches. |
 | Sign-in returns to a Pangolin login page or loops | Pangolin resource authentication is still on. | Turn off **Use Platform SSO**, and leave password, PIN, email OTP, and header auth off. |
-| Sign-in completes but Dinnerbell says you are not invited | The email on the Slack account differs from the invited email, or the email is not verified. | Compare the emails on **Admin > Members** and in your Slack profile. Fix the member's email, or use `DINNERBELL_ADMIN_EMAIL` for the admin. |
+| Sign-in completes but Dinnerbell says you are not invited | The email on the Slack account differs from the invited email, or the email is not verified. | Compare the emails on **Members** and in your Slack profile. Fix the member's email, or use `DINNERBELL_ADMIN_EMAIL` for the admin. |
 | Sign-in refused for a person you invited | They signed in with a different Slack workspace, and `DINNERBELL_SLACK_TEAM_ID` blocks it. | Ask them to sign in to your household workspace. |
 | `/healthz` reports Slack not connected | The app token is wrong or missing, Socket Mode is off, or the host cannot reach Slack. | Until M2, `not_configured` is expected. Afterward, check the logs. Confirm Socket Mode is on in the app settings and that the host can make outbound HTTPS connections. |
+| Every form fails with "Cross-origin request refused", or sign-in loops back to the start page | `DINNERBELL_BASE_URL` doesn't exactly match the URL in the browser: another host, a LAN IP, an explicit `:443`, or `http://`. | Set `DINNERBELL_BASE_URL` to exactly the URL people type, `https://` and no port, then recreate the service. Open Dinnerbell only at that URL. |
+| Sign-in says "That email is already linked" for everyone | You switched sign-in providers, so members are linked to accounts at the old provider. | Follow "Switch providers on an existing install". |
 | Startup error: `DINNERBELL_SLACK_TEAM_ID is required` | The issuer is Slack and the team ID is empty. | Set `DINNERBELL_SLACK_TEAM_ID` as described in step 6, then recreate the service. |
 | Startup error about a token prefix | The tokens are swapped or copied from the wrong page. | `DINNERBELL_SLACK_APP_TOKEN` starts with `xapp-` (Basic Information > App-Level Tokens). `DINNERBELL_SLACK_BOT_TOKEN` starts with `xoxb-` (Install App). |
 | Rate limiting blocks everyone at once | Dinnerbell sees the proxy's address for every request. | Set `DINNERBELL_TRUSTED_PROXIES` to the proxy's single address, then recreate with `podman-compose down && podman-compose up -d`. A restart doesn't re-read `.env`. |
