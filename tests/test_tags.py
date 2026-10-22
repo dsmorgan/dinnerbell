@@ -3,12 +3,14 @@
 
 from __future__ import annotations
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
 
 from dinnerbell.config import Settings
 from dinnerbell.db.models import AuditRow, CatalogItemTagRow, MealLogRow, PreferenceRow, TagRow
 from tests.conftest import csrf_from, invite, page, sign_in
+from tests.support.clock import FakeClock
 from tests.support.fake_oidc import FakeProvider
 from tests.support.web import add_item, htmx, submit
 from tests.test_admin import sign_in_as
@@ -234,3 +236,40 @@ def test_boosted_merge_errors_are_swapped_in(client: TestClient, provider: FakeP
     assert "Merge a cuisine only into another cuisine" in page(response)
     plain = submit(client, f"/catalog/tags/{thai}/merge", {"into": str(spicy), "confirm": "on"})
     assert plain.status_code == 400
+
+
+@pytest.mark.anyio
+async def test_services_refuse_members_rename_and_merge(migrated: Settings, clock: FakeClock) -> None:
+    """The web layer checks for an admin, and so does the service, in case a route forgets."""
+    from dinnerbell.db.repositories import MemberRepository
+    from dinnerbell.domain.catalog import TagKind
+    from dinnerbell.domain.members import Capabilities, Role
+    from dinnerbell.services import catalog as catalog_service
+    from dinnerbell.services.bootstrap import bootstrap
+    from dinnerbell.services.database import open_database
+    from dinnerbell.services.errors import Forbidden
+
+    database = open_database(migrated.async_database_url)
+    try:
+        async with database.sessionmaker() as db:
+            household = await bootstrap(
+                db, household_name="H", timezone="UTC", admin_email="a@example.com", now=clock()
+            )
+            sam = await MemberRepository(db).add(
+                household_id=household.id,
+                display_name="Sam",
+                email="sam@example.com",
+                role=Role.MEMBER,
+                capabilities=Capabilities(),
+                now=clock(),
+            )
+            await db.commit()
+            thai = await catalog_service.create_tag(db, sam, TagKind.CUISINE, "Thai", now=clock())
+            lao = await catalog_service.create_tag(db, sam, TagKind.CUISINE, "Lao", now=clock())
+            with pytest.raises(Forbidden):
+                await catalog_service.rename_tag(db, sam, thai.id, "Thailand", now=clock())
+            with pytest.raises(Forbidden):
+                await catalog_service.merge_tags(db, sam, lao.id, thai.id, now=clock())
+    finally:
+        await database.close()
+    assert {t.name for t in rows(migrated, TagRow)} == {"Thai", "Lao"}

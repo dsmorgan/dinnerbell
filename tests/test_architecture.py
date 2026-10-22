@@ -158,3 +158,13 @@ def test_fake_provider_is_not_in_the_package() -> None:
 def test_containerignore_excludes_tests() -> None:
     ignore = (ROOT / ".containerignore").read_text().splitlines()
     assert "tests" in ignore or "tests/" in ignore
+
+
+def test_tag_rename_and_merge_require_an_admin_in_the_web_layer(client: TestClient) -> None:
+    """Admin-only actions outside /admin need the same web-layer check (spec 3, FR-25)."""
+    api, _ = audit_routes(client.app.routes)  # type: ignore[attr-defined]
+    admin_only = {"/catalog/tags/{tag_id}/rename", "/catalog/tags/{tag_id}/merge"}
+    found = {route.path: route for route in api if route.path in admin_only}
+    assert set(found) == admin_only
+    for route in found.values():
+        assert require_admin_csrf in {dep.call for dep in route.dependant.dependencies}, route.path
