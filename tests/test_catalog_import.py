@@ -326,3 +326,18 @@ def test_upload_size_is_checked_in_the_browser(client: TestClient, provider: Fak
     script = client.get("/static/app.js").text
     assert "Catalog files can be up to 1 MB." in script
     assert "data-max-bytes" in script and "textContent" in script and "innerHTML" not in script
+
+
+@pytest.mark.anyio
+async def test_other_integrity_errors_are_not_read_as_a_changed_catalog(
+    db: AsyncSession, migrated: Settings, clock: FakeClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from sqlalchemy.exc import IntegrityError
+
+    async def broken(self: CatalogRepository, *args: object, **kwargs: object) -> object:
+        raise IntegrityError("INSERT", {}, Exception("FOREIGN KEY constraint failed"))
+
+    monkeypatch.setattr(CatalogRepository, "add_item", broken)
+    with pytest.raises(IntegrityError, match="FOREIGN KEY"):
+        await catalog_service.apply_import(db, 1, None, SMALL, now=clock())
+    assert rows(migrated, CatalogItemRow) == [] and rows(migrated, TagRow) == []

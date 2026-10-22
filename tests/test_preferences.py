@@ -302,3 +302,25 @@ def test_vetoes_are_summarized_at_the_top(client: TestClient, provider: FakeProv
     assert f'href="#pref-item-{item.id}">Siam Garden</a>' in summary
     assert "Thai" not in summary
     assert html.index('id="vetoes"') < html.index("<h2>Cuisine</h2>")
+
+
+def test_only_unique_violations_are_retried(
+    client: TestClient, provider: FakeProvider, migrated: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from sqlalchemy.exc import IntegrityError
+
+    from dinnerbell.db.preferences import PreferenceRepository
+
+    sign_in(client, provider)
+    add_item(client, "Siam Garden")
+    calls = 0
+
+    async def broken(self: PreferenceRepository, *args: object, **kwargs: object) -> None:
+        nonlocal calls
+        calls += 1
+        raise IntegrityError("INSERT", {}, Exception("FOREIGN KEY constraint failed"))
+
+    monkeypatch.setattr(PreferenceRepository, "set", broken)
+    response = htmx(client, "/preferences/stance", {"target": f"tag:{thai(migrated)}", "level": "veto"})
+    assert response.status_code == 500
+    assert calls == 1  # a real fault is not retried

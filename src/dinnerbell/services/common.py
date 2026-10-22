@@ -6,11 +6,18 @@ from __future__ import annotations
 from collections.abc import Mapping
 from datetime import datetime
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dinnerbell.db.repositories import AuditRepository
 from dinnerbell.domain.members import Member
 from dinnerbell.services.errors import Forbidden
+
+
+def is_unique_violation(exc: IntegrityError) -> bool:
+    """True when ``exc`` is a lost race on a unique constraint, which callers may treat as an
+    expected conflict. Any other integrity error, such as a broken foreign key, is a bug."""
+    return "UNIQUE constraint failed" in str(exc.orig)
 
 
 def require_admin(actor: Member, message: str) -> None:

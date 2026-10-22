@@ -20,6 +20,7 @@ from dinnerbell.db.repositories import MemberRepository
 from dinnerbell.domain.catalog import CatalogItem, Tag
 from dinnerbell.domain.members import Capabilities, Member
 from dinnerbell.domain.preferences import NEUTRAL, Stance, TargetType
+from dinnerbell.services.common import is_unique_violation
 from dinnerbell.services.errors import NotFound
 
 
@@ -95,10 +96,10 @@ async def set_my_preference(
             await PreferenceRepository(db).set(actor.household_id, actor.id, target_type, target_id, stance, now)
             await db.commit()
             break
-        except IntegrityError:
+        except IntegrityError as exc:
             # A double tap can race to insert the same row; the retry finds it and updates it.
             await db.rollback()
-            if attempt:
+            if attempt or not is_unique_violation(exc):
                 raise
     return target.name
 

@@ -42,7 +42,7 @@ from dinnerbell.domain.catalog_import import CatalogSnapshot, ImportPlan, ItemSt
 from dinnerbell.domain.household import Household
 from dinnerbell.domain.members import Member
 from dinnerbell.domain.preferences import merged_stance
-from dinnerbell.services.common import audit, require_admin
+from dinnerbell.services.common import audit, is_unique_violation, require_admin
 from dinnerbell.services.errors import NotFound
 
 log = logging.getLogger(__name__)
@@ -80,7 +80,7 @@ async def _unique(db: AsyncSession, message: str) -> AsyncIterator[None]:
         yield
     except IntegrityError as exc:
         await db.rollback()
-        if "UNIQUE constraint failed" not in str(exc.orig):
+        if not is_unique_violation(exc):
             raise
         raise CatalogRuleViolation(message) from None
 
@@ -346,8 +346,10 @@ async def apply_import(
         }
         await audit(db, household_id, actor, action, f"household:{household_id}", payload, now)
         await db.commit()
-    except IntegrityError:
+    except IntegrityError as exc:
         await db.rollback()
+        if not is_unique_violation(exc):
+            raise
         raise ImportChanged(await preview_import(db, household_id, source)) from None
     except BaseException:
         await db.rollback()
