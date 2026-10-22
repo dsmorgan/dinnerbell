@@ -302,8 +302,8 @@ class BodyLimitMiddleware:
     FastAPI parses form bodies before any dependency runs, so without this an anonymous client
     could make the app read, and spool to /tmp, a body of any size. A declared Content-Length
     over the limit gets 413 without reading a byte; a chunked or undeclared body is cut off as
-    soon as it passes the limit. It is the outermost user middleware, so it sets the security
-    headers on its own 413.
+    soon as it passes the limit. It sits just inside RequestContextMiddleware and outside the
+    security-headers middleware, so it sets the security headers on its own 413.
     """
 
     def __init__(self, app: ASGIApp, default_limit: int, path_limits: Sequence[tuple[str, int]] = ()) -> None:

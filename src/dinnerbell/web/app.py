@@ -80,10 +80,12 @@ def build_app(settings: Settings, lifespan: Lifespan) -> FastAPI:
         session_cookie=cookies.session,
     )
     app.add_middleware(SecurityHeadersMiddleware)
-    app.add_middleware(RequestContextMiddleware, trusted_proxies=settings.trusted_proxies)
+    # Just inside the request context, so a 413 gets a request ID and an access-log line, and
+    # outside everything that might read the body. It sets the security headers on its own 413.
     app.add_middleware(
         BodyLimitMiddleware, default_limit=DEFAULT_BODY_LIMIT, path_limits=[(IMPORT_PATH_PREFIX, IMPORT_BODY_LIMIT)]
     )
+    app.add_middleware(RequestContextMiddleware, trusted_proxies=settings.trusted_proxies)
     return app
 
 

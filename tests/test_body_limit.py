@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 
@@ -212,3 +213,35 @@ def test_import_form_is_read_with_its_limits_whatever_the_parameter_order() -> N
         if isinstance(route, APIRoute) and route.path.startswith("/catalog/import/") and "POST" in route.methods:
             first = route.dependant.dependencies[0].call
             assert first is import_post, route.path  # route-level, so it runs before any parameter
+
+
+def test_413s_get_a_request_id_and_an_access_log_line(
+    migrated: Settings, clock: FakeClock, provider: FakeProvider
+) -> None:
+    from dinnerbell.logs import request_id_var
+
+    seen: list[tuple[str, str | None, object]] = []
+
+    class Capture(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:  # the request ID lives in a context variable
+            seen.append((record.getMessage(), request_id_var.get(), getattr(record, "status", None)))
+
+    access = logging.getLogger("dinnerbell.web.access")
+    handler, level = Capture(), access.level
+    access.addHandler(handler)
+    access.setLevel(logging.INFO)
+    try:
+        app = app_for(migrated, clock, provider)
+        body = b"a=" + b"x" * (DEFAULT_BODY_LIMIT + 10)
+        declared = drive(app, "/admin/members", [body], content_length=len(body))
+        cut_off = drive(app, "/admin/members", [body[:40_000], body[40_000:]], content_length=None)
+    finally:
+        access.removeHandler(handler)
+        access.setLevel(level)
+    for result in (declared, cut_off):
+        assert result.status == 413
+        assert len(result.headers["x-request-id"]) == 32
+        assert "frame-ancestors 'none'" in result.headers["content-security-policy"]
+    ids = [declared.headers["x-request-id"], cut_off.headers["x-request-id"]]
+    assert [(rid, status) for msg, rid, status in seen if msg == "request"] == [(ids[0], 413), (ids[1], 413)]
+    assert [rid for msg, rid, _ in seen if msg == "request body too large"] == ids
