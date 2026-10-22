@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The ``dinnerbell`` command: ``serve`` and ``migrate``."""
+"""The ``dinnerbell`` command: ``serve``, ``migrate``, and ``catalog``."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import os
 import sys
 from collections.abc import Sequence
 
-from dinnerbell import __version__
+from dinnerbell import __version__, catalog_cli
 from dinnerbell.config import ConfigError, Settings, load_settings
 from dinnerbell.db.migrate import SchemaTooNewError, run_migrations
 from dinnerbell.logs import configure_logging
@@ -28,6 +28,7 @@ def _parser() -> argparse.ArgumentParser:
     serve.add_argument("--host", default="0.0.0.0", help="address to listen on (default: 0.0.0.0)")  # noqa: S104 container
     serve.add_argument("--port", type=int, default=DEFAULT_PORT, help=f"port (default: {DEFAULT_PORT})")
     commands.add_parser("migrate", help="upgrade the database schema and exit")
+    catalog_cli.add_parser(commands)
     return parser
 
 
@@ -58,6 +59,8 @@ def _serve(settings: Settings, host: str, port: int) -> None:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    if args.command == "catalog":
+        return catalog_cli.run(args)
     try:
         settings = load_settings()
     except ConfigError as exc:
