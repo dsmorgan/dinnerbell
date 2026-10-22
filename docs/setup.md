@@ -359,6 +359,8 @@ Each member is linked to the account they first signed in with. After you switch
 
    With Docker: `docker compose run --rm --entrypoint python dinnerbell -c "..."` with the same command.
 
+   The command assumes the default `DINNERBELL_DATABASE_URL`, which puts the database at `/data/dinnerbell.db`. If you changed it, use your database's path in the command instead.
+
 3. Start the service again. Each member's next sign-in with a verified matching email links the new account.
 
 ## Troubleshooting
