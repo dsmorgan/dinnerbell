@@ -23,7 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from dinnerbell.db.catalog import CatalogRepository, ItemValues
 from dinnerbell.db.meals import MealLogRepository
 from dinnerbell.db.preferences import PreferenceRepository
-from dinnerbell.db.repositories import AuditRepository, MemberRepository
+from dinnerbell.db.repositories import MemberRepository
 from dinnerbell.domain.catalog import (
     CatalogItem,
     CatalogRuleViolation,
@@ -42,7 +42,8 @@ from dinnerbell.domain.catalog_import import CatalogSnapshot, ImportPlan, ItemSt
 from dinnerbell.domain.household import Household
 from dinnerbell.domain.members import Member
 from dinnerbell.domain.preferences import merged_stance
-from dinnerbell.services.errors import Forbidden, NotFound
+from dinnerbell.services.common import audit, require_admin
+from dinnerbell.services.errors import NotFound
 
 log = logging.getLogger(__name__)
 
@@ -69,30 +70,6 @@ class CatalogData:
     tags: list[Tag]
     members: list[Member]
     last_eaten: dict[int, date]
-
-
-def _require_admin(actor: Member, what: str) -> None:
-    if not (actor.active and actor.is_admin):
-        raise Forbidden(f"Only the household admin can {what}.")
-
-
-async def _audit(
-    db: AsyncSession,
-    household_id: int,
-    actor: Member | None,
-    action: str,
-    target: str,
-    payload: dict[str, Any],
-    now: datetime,
-) -> None:
-    await AuditRepository(db).record(
-        household_id=household_id,
-        actor_member_id=actor.id if actor else None,
-        action=action,
-        target=target,
-        payload=payload,
-        now=now,
-    )
 
 
 @asynccontextmanager
@@ -197,7 +174,7 @@ async def create_item(db: AsyncSession, actor: Member, data: ItemInput, *, now: 
         item = await repo.add_item(actor.household_id, _values(clean, tag_ids, True), created_by=actor.id, now=now)
         names = {t.id: t.name for t in await repo.tags(actor.household_id)}
         payload = _describe(item, names) | {"tags_created": [t.name for t in created]}
-        await _audit(db, actor.household_id, actor, "catalog.item_created", f"item:{item.id}", payload, now)
+        await audit(db, actor.household_id, actor, "catalog.item_created", f"item:{item.id}", payload, now)
         await db.commit()
     log.info("catalog item created", extra={"item_id": item.id})
     return item
@@ -221,7 +198,7 @@ async def update_item(db: AsyncSession, actor: Member, item_id: int, data: ItemI
         old, new = _describe(before, names), _describe(item, names)
         changes = {key: value for key, value in new.items() if old[key] != value}
         payload = changes | {"tags_created": [t.name for t in created]}
-        await _audit(db, actor.household_id, actor, "catalog.item_updated", f"item:{item.id}", payload, now)
+        await audit(db, actor.household_id, actor, "catalog.item_updated", f"item:{item.id}", payload, now)
         await db.commit()
     return item
 
@@ -232,7 +209,7 @@ async def set_item_active(db: AsyncSession, actor: Member, item_id: int, active:
         return item
     await CatalogRepository(db).set_active(actor.household_id, item_id, active, now)
     action = "catalog.item_reactivated" if active else "catalog.item_deactivated"
-    await _audit(db, actor.household_id, actor, action, f"item:{item_id}", {"name": item.name}, now)
+    await audit(db, actor.household_id, actor, action, f"item:{item_id}", {"name": item.name}, now)
     await db.commit()
     return await get_item(db, actor, item_id)
 
@@ -256,13 +233,13 @@ async def create_tag(db: AsyncSession, actor: Member, kind: TagKind, name: str, 
     async with _unique(db, f'There\'s already a tag named "{clean}".'):
         tag = await repo.add_tag(actor.household_id, kind, clean, now)
         payload = {"kind": kind.value, "name": clean}
-        await _audit(db, actor.household_id, actor, "catalog.tag_created", f"tag:{tag.id}", payload, now)
+        await audit(db, actor.household_id, actor, "catalog.tag_created", f"tag:{tag.id}", payload, now)
         await db.commit()
     return tag
 
 
 async def rename_tag(db: AsyncSession, actor: Member, tag_id: int, name: str, *, now: datetime) -> Tag:
-    _require_admin(actor, "rename tags")
+    require_admin(actor, "Only the household admin can rename tags.")
     tag = await _tag(db, actor, tag_id)
     clean = normalize_tag_name(name)
     if clean == tag.name:
@@ -274,7 +251,7 @@ async def rename_tag(db: AsyncSession, actor: Member, tag_id: int, name: str, *,
     async with _unique(db, f'There\'s already a tag named "{clean}".'):
         renamed = await repo.rename_tag(actor.household_id, tag_id, clean)
         payload = {"from": tag.name, "to": clean}
-        await _audit(db, actor.household_id, actor, "catalog.tag_renamed", f"tag:{tag_id}", payload, now)
+        await audit(db, actor.household_id, actor, "catalog.tag_renamed", f"tag:{tag_id}", payload, now)
         await db.commit()
     return renamed
 
@@ -282,7 +259,7 @@ async def rename_tag(db: AsyncSession, actor: Member, tag_id: int, name: str, *,
 async def merge_tags(db: AsyncSession, actor: Member, source_id: int, target_id: int, *, now: datetime) -> Tag:
     """Merge ``source`` into ``target``: items, preferences, and meal-log snapshots that named
     the source now name the target, and the source tag is removed."""
-    _require_admin(actor, "merge tags")
+    require_admin(actor, "Only the household admin can merge tags.")
     source = await _tag(db, actor, source_id)
     target = await _tag(db, actor, target_id)
     check_merge(source, target)
@@ -298,7 +275,7 @@ async def merge_tags(db: AsyncSession, actor: Member, source_id: int, target_id:
         "items_retagged": items,
         "meals_repointed": meals,
     }
-    await _audit(db, household, actor, "catalog.tags_merged", f"tag:{target.id}", payload, now)
+    await audit(db, household, actor, "catalog.tags_merged", f"tag:{target.id}", payload, now)
     await db.commit()
     log.info("tags merged", extra={"source_tag_id": source.id, "target_tag_id": target.id})
     return target
@@ -364,7 +341,7 @@ async def apply_import(
             "created": [c.state.name for c in plan.items_to_create],
             "updated": [u.state.name for u in plan.items_to_update],
         }
-        await _audit(db, household_id, actor, action, f"household:{household_id}", payload, now)
+        await audit(db, household_id, actor, action, f"household:{household_id}", payload, now)
         await db.commit()
     except IntegrityError:
         await db.rollback()

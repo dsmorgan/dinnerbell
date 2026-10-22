@@ -11,7 +11,7 @@ from datetime import datetime
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from dinnerbell.db.repositories import AuditRepository, MemberRepository, SessionRepository
+from dinnerbell.db.repositories import MemberRepository, SessionRepository
 from dinnerbell.domain.members import (
     Capabilities,
     Member,
@@ -23,7 +23,10 @@ from dinnerbell.domain.members import (
     normalize_display_name,
     normalize_email,
 )
-from dinnerbell.services.errors import Forbidden, NotFound
+from dinnerbell.services.common import audit, require_admin
+from dinnerbell.services.errors import NotFound
+
+MANAGE_MEMBERS = "Only admins can manage members."
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,11 +39,6 @@ class MemberInput:
     capabilities: Capabilities
 
 
-def _require_admin(actor: Member) -> None:
-    if not (actor.active and actor.is_admin):
-        raise Forbidden("Only admins can manage members.")
-
-
 def _clean(data: MemberInput) -> MemberInput:
     return MemberInput(
         display_name=normalize_display_name(data.display_name),
@@ -51,12 +49,12 @@ def _clean(data: MemberInput) -> MemberInput:
 
 
 async def list_members(db: AsyncSession, actor: Member) -> list[Member]:
-    _require_admin(actor)
+    require_admin(actor, MANAGE_MEMBERS)
     return await MemberRepository(db).list(actor.household_id)
 
 
 async def get_member(db: AsyncSession, actor: Member, member_id: int) -> Member:
-    _require_admin(actor)
+    require_admin(actor, MANAGE_MEMBERS)
     member = await MemberRepository(db).get(actor.household_id, member_id)
     if member is None:
         raise NotFound("No such member.")
@@ -64,7 +62,7 @@ async def get_member(db: AsyncSession, actor: Member, member_id: int) -> Member:
 
 
 async def invite_member(db: AsyncSession, actor: Member, data: MemberInput, *, now: datetime) -> Member:
-    _require_admin(actor)
+    require_admin(actor, MANAGE_MEMBERS)
     clean = _clean(data)
     members = MemberRepository(db)
     if await members.by_email(actor.household_id, clean.email) is not None:
@@ -78,13 +76,13 @@ async def invite_member(db: AsyncSession, actor: Member, data: MemberInput, *, n
             capabilities=clean.capabilities,
             now=now,
         )
-        await _audit(db, actor, "member.invited", member, _describe(member), now)
+        await audit(db, actor.household_id, actor, "member.invited", f"member:{member.id}", _describe(member), now)
         await db.commit()
     return member
 
 
 async def update_member(db: AsyncSession, actor: Member, member_id: int, data: MemberInput, *, now: datetime) -> Member:
-    _require_admin(actor)
+    require_admin(actor, MANAGE_MEMBERS)
     clean = _clean(data)
     members = MemberRepository(db)
     target = await get_member(db, actor, member_id)
@@ -108,13 +106,13 @@ async def update_member(db: AsyncSession, actor: Member, member_id: int, data: M
         await _ensure_an_admin_remains(db, actor.household_id)
         before = _describe(target)
         changes = {key: value for key, value in _describe(updated).items() if before[key] != value}
-        await _audit(db, actor, "member.updated", updated, changes, now)
+        await audit(db, actor.household_id, actor, "member.updated", f"member:{updated.id}", changes, now)
         await db.commit()
     return updated
 
 
 async def set_member_active(db: AsyncSession, actor: Member, member_id: int, active: bool, *, now: datetime) -> Member:
-    _require_admin(actor)
+    require_admin(actor, MANAGE_MEMBERS)
     members = MemberRepository(db)
     target = await get_member(db, actor, member_id)
     if target.active == active:
@@ -126,7 +124,7 @@ async def set_member_active(db: AsyncSession, actor: Member, member_id: int, act
     if not active:
         await SessionRepository(db).delete_for_member(target.id)
     action = "member.reactivated" if active else "member.deactivated"
-    await _audit(db, actor, action, updated, {}, now)
+    await audit(db, actor.household_id, actor, action, f"member:{updated.id}", {}, now)
     await db.commit()
     return updated
 
@@ -153,19 +151,6 @@ def _describe(member: Member) -> dict[str, object]:
         "can_pickup": member.capabilities.can_pickup,
         "can_order": member.capabilities.can_order,
     }
-
-
-async def _audit(
-    db: AsyncSession, actor: Member, action: str, target: Member, payload: dict[str, object], now: datetime
-) -> None:
-    await AuditRepository(db).record(
-        household_id=actor.household_id,
-        actor_member_id=actor.id,
-        action=action,
-        target=f"member:{target.id}",
-        payload=payload,
-        now=now,
-    )
 
 
 @asynccontextmanager

@@ -204,7 +204,7 @@ def test_web_admin_guard_holds_without_the_service_guard(
     sign_in(client, provider)
     invite(client, "sam@example.com", "Sam")
     sign_in_as(client, provider, "subject-sam", "sam@example.com")
-    monkeypatch.setattr(member_service, "_require_admin", lambda _actor: None)
+    monkeypatch.setattr(member_service, "require_admin", lambda _actor, _message: None)
     assert client.get("/admin/members").status_code == 403
     response = post(client, "/admin/members", {"display_name": "Eve", "email": "eve@example.com"})
     assert response.status_code == 403

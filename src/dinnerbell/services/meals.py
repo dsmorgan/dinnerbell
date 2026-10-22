@@ -15,10 +15,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from dinnerbell.db.catalog import CatalogRepository
 from dinnerbell.db.meals import MealLogRepository
-from dinnerbell.db.repositories import AuditRepository, MemberRepository
+from dinnerbell.db.repositories import MemberRepository
 from dinnerbell.domain.catalog import TagKind
 from dinnerbell.domain.meals import MealInput, MealLog, MemberRef, TagRef, by_week, can_change, check_meal, week_start
 from dinnerbell.domain.members import Member
+from dinnerbell.services.common import audit
 from dinnerbell.services.errors import Forbidden, NotFound
 
 WEEKS_PER_PAGE = 8
@@ -95,7 +96,7 @@ async def log_meal(db: AsyncSession, actor: Member, data: MealInput, *, today: d
         logged_by=actor.id,
         now=now,
     )
-    await _audit(db, actor, "meal.logged", meal_id, _payload(data), now)
+    await audit(db, actor.household_id, actor, "meal.logged", f"meal:{meal_id}", _payload(data), now)
     await db.commit()
     return await get_meal(db, actor, meal_id)
 
@@ -122,7 +123,7 @@ async def update_meal(
         participants=participants,
         now=now,
     )
-    await _audit(db, actor, "meal.updated", meal_id, _payload(data), now)
+    await audit(db, actor.household_id, actor, "meal.updated", f"meal:{meal_id}", _payload(data), now)
     await db.commit()
     return await get_meal(db, actor, meal_id)
 
@@ -136,7 +137,7 @@ async def delete_meal(db: AsyncSession, actor: Member, meal_id: int, *, now: dat
         "item_id": meal.item_id,
         "logged_by": meal.logged_by,
     }
-    await _audit(db, actor, "meal.deleted", meal_id, payload, now)
+    await audit(db, actor.household_id, actor, "meal.deleted", f"meal:{meal_id}", payload, now)
     await db.commit()
 
 
@@ -149,16 +150,3 @@ async def history(db: AsyncSession, actor: Member, *, today: date, page: int = 0
     meals = await repo.between(actor.household_id, start, end)
     earliest = await repo.earliest(actor.household_id)
     return History(weeks=by_week(meals), page=page, has_older=earliest is not None and earliest < start)
-
-
-async def _audit(
-    db: AsyncSession, actor: Member, action: str, meal_id: int, payload: dict[str, object], now: datetime
-) -> None:
-    await AuditRepository(db).record(
-        household_id=actor.household_id,
-        actor_member_id=actor.id,
-        action=action,
-        target=f"meal:{meal_id}",
-        payload=payload,
-        now=now,
-    )
