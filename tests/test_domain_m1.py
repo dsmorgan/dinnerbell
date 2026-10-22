@@ -37,7 +37,7 @@ from dinnerbell.domain.meals import (
     week_start,
 )
 from dinnerbell.domain.members import Capabilities, Member, Role
-from dinnerbell.domain.preferences import NEUTRAL, InvalidPreference, Stance, merged_stance
+from dinnerbell.domain.preferences import MINUS, NEUTRAL, InvalidPreference, Stance, merged_stance
 from dinnerbell.domain.variety import summarize, variety_window_days, window_start
 
 THAI = Tag(1, 1, TagKind.CUISINE, "Thai")
@@ -204,7 +204,7 @@ def test_item_filter() -> None:
     [
         ("veto", Stance(veto=True)),
         ("-2", Stance(score=-2)),
-        ("−1", Stance(score=-1)),
+        (f"{MINUS}1", Stance(score=-1)),
         ("+2", Stance(score=2)),
         ("0", NEUTRAL),
     ],

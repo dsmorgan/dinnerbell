@@ -4,14 +4,18 @@
 from __future__ import annotations
 
 import json
+import time
 from pathlib import Path
 
 import pytest
 
 from dinnerbell.domain.catalog import ItemKind
 from dinnerbell.domain.catalog_file import (
+    MAX_DEPTH,
     MAX_FILE_BYTES,
+    MAX_NODES,
     CatalogFile,
+    FileError,
     HomeMealEntry,
     ParsedCatalog,
     RestaurantEntry,
@@ -124,10 +128,50 @@ def test_aliases_are_refused() -> None:
     assert "aliases" in message
 
 
+def quickly(source: str | bytes) -> FileError:
+    """Parse ``source`` and return its single error, failing if parsing takes over a second."""
+    started = time.perf_counter()
+    found = parse_catalog(source).errors
+    assert time.perf_counter() - started < 1.0
+    assert len(found) == 1, found
+    return found[0]
+
+
 def test_billion_laughs_is_refused_quickly() -> None:
-    lines = ['a0: &a0 ["x","x","x","x","x","x","x","x","x"]']
+    lines = ["version: 1", 'a0: &a0 ["x","x","x","x","x","x","x","x","x"]']
     lines += [f"a{i}: &a{i} [*a{i - 1},*a{i - 1},*a{i - 1},*a{i - 1},*a{i - 1}]" for i in range(1, 10)]
-    assert "aliases" in one_error("\n".join(lines))
+    error = quickly("\n".join(lines))
+    assert error.location == "line 3"
+    assert "aliases" in error.message
+
+
+def test_deep_nesting_is_refused_quickly() -> None:
+    depth = 200_000  # far past the interpreter's recursion limit, well under 1 MB
+    error = quickly("version: 1\nrestaurants: " + "[" * depth + "]" * depth + "\n")
+    assert error.location == "line 2"
+    assert error.message == f"values are nested more than {MAX_DEPTH} levels deep"
+
+
+def test_nesting_at_the_limit_is_still_parsed() -> None:
+    nested = "[" * (MAX_DEPTH - 1) + "]" * (MAX_DEPTH - 1)
+    assert errors(f"version: 1\nrestaurants: {nested}\n") != []  # invalid content, but no depth error
+    assert all("nested" not in e for e in errors(f"version: 1\nrestaurants: {nested}\n"))
+
+
+def test_recursion_error_never_escapes(monkeypatch: pytest.MonkeyPatch) -> None:
+    import dinnerbell.domain.catalog_file as catalog_file
+
+    def explode(text: str) -> object:
+        raise RecursionError
+
+    monkeypatch.setattr(catalog_file, "_load_yaml", explode)
+    assert "nested more than" in one_error("version: 1\n")
+
+
+def test_too_many_values_are_refused() -> None:
+    error = quickly("version: 1\ntags:\n  other: [" + ",".join(["x"] * (MAX_NODES + 1)) + "]\n")
+    assert error.location == "line 3"
+    assert "more than 50,000 values" in error.message
 
 
 def test_python_tags_are_refused() -> None:

@@ -34,6 +34,9 @@ from dinnerbell.domain.members import InvalidMemberInput, normalize_email
 
 FORMAT_VERSION = 1
 MAX_FILE_BYTES = 1_000_000
+MAX_DEPTH = 20
+"""Real catalog files nest about 5 levels deep."""
+MAX_NODES = 50_000
 SCHEMA_TITLE = "Dinnerbell catalog file, version 1"
 URL_PATTERN = r"^[Hh][Tt][Tt][Pp][Ss]?://\S+$"
 SECTIONS = {"restaurants": ItemKind.RESTAURANT, "home_meals": ItemKind.HOME}
@@ -185,6 +188,8 @@ def parse_catalog(source: str | bytes) -> ParsedCatalog:
         return _failed(FileError(location, exc.problem or exc.context or "the file isn't valid YAML"))
     except yaml.YAMLError as exc:
         return _failed(FileError("", f"The file isn't valid YAML: {exc}"))
+    except RecursionError:  # a backstop; MAX_DEPTH stops nesting long before the stack runs out
+        return _failed(FileError("", f"Values are nested more than {MAX_DEPTH} levels deep."))
     if raw is None:
         return _failed(FileError("", "The file is empty. Start it with version: 1."))
     if not isinstance(raw, dict):
@@ -204,16 +209,36 @@ def _decode(source: str | bytes) -> str | FileError:
 
 
 class _Loader(yaml.SafeLoader):
-    """``yaml.SafeLoader`` without aliases (they can expand exponentially) or duplicate keys
-    (YAML would silently keep the last one, dropping entries)."""
+    """``yaml.SafeLoader`` hardened for untrusted input.
+
+    - No aliases: they can expand a small file exponentially ("billion laughs").
+    - At most ``MAX_DEPTH`` levels of nesting, so deeply nested input can't exhaust the stack.
+    - At most ``MAX_NODES`` values in total.
+    - No duplicate keys: YAML would silently keep the last one, dropping entries.
+    """
+
+    def __init__(self, stream: str) -> None:
+        super().__init__(stream)
+        self._depth = 0
+        self._nodes = 0
+
+    def _refuse(self, problem: str) -> yaml.composer.ComposerError:
+        mark = self.peek_event().start_mark  # type: ignore[no-untyped-call]
+        return yaml.composer.ComposerError(None, None, problem, mark)
 
     def compose_node(self, parent: yaml.Node | None, index: int) -> yaml.Node | None:
         if self.check_event(yaml.AliasEvent):
-            event = self.peek_event()  # type: ignore[no-untyped-call]
-            raise yaml.composer.ComposerError(
-                None, None, "anchors and aliases (*name) are not supported", event.start_mark
-            )
-        return super().compose_node(parent, index)
+            raise self._refuse("anchors and aliases (*name) are not supported")
+        self._nodes += 1
+        if self._nodes > MAX_NODES:
+            raise self._refuse(f"the file has more than {MAX_NODES:,} values")
+        if self._depth >= MAX_DEPTH:
+            raise self._refuse(f"values are nested more than {MAX_DEPTH} levels deep")
+        self._depth += 1
+        try:
+            return super().compose_node(parent, index)
+        finally:
+            self._depth -= 1
 
     def construct_mapping(self, node: yaml.MappingNode, deep: bool = False) -> dict[Hashable, Any]:
         seen: set[Hashable] = set()
