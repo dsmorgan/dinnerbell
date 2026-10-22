@@ -48,7 +48,7 @@ def _cook_email(value: str) -> str:
     try:
         return normalize_email(value)
     except InvalidMemberInput:
-        raise ValueError(f'"{value}" is not an email address') from None
+        raise ValueError(f'"{_shown(value)}" is not an email address') from None
 
 
 TagName = Annotated[

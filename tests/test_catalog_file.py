@@ -404,3 +404,9 @@ def test_schema_is_valid_json_with_metadata() -> None:
     schema = json.loads(render_schema())
     assert schema["$schema"] == "https://json-schema.org/draft/2020-12/schema"
     assert schema["title"] == "Dinnerbell catalog file, version 1"
+
+
+def test_long_bad_cook_email_is_shortened_in_the_message() -> None:
+    message = one_error(home(f"    cooks: [{'x' * 300}]\n"))
+    assert message.startswith('home_meals[0].cooks[0]: "xxx') and '..." is not an email address' in message
+    assert len(message) < 120

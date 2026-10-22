@@ -298,3 +298,35 @@ def test_merge_keeps_the_target_name_in_meal_snapshots(
     submit(client, f"/catalog/tags/{source}/merge", {"into": str(target), "confirm": "on"})
     [meal] = rows(migrated, MealLogRow)
     assert meal.cuisine_tags == [{"id": target, "name": "Thai"}]
+
+
+@pytest.mark.anyio
+async def test_only_unique_violations_read_as_duplicate_names(migrated: Settings, clock: FakeClock) -> None:
+    """Any other integrity error is a bug and must surface, not pose as "already exists"."""
+    from sqlalchemy.exc import IntegrityError
+
+    from dinnerbell.domain.catalog import TagKind
+    from dinnerbell.domain.members import Capabilities, Member, Role
+    from dinnerbell.services import catalog as catalog_service
+    from dinnerbell.services.bootstrap import bootstrap
+    from dinnerbell.services.database import open_database
+
+    database = open_database(migrated.async_database_url)
+    try:
+        async with database.sessionmaker() as db:
+            household = await bootstrap(
+                db, household_name="H", timezone="UTC", admin_email="a@example.com", now=clock()
+            )
+            ghost = Member(
+                id=999,  # no such member row, so the audit row's foreign key fails
+                household_id=household.id,
+                display_name="Ghost",
+                email="ghost@example.com",
+                role=Role.MEMBER,
+                capabilities=Capabilities(),
+                active=True,
+            )
+            with pytest.raises(IntegrityError):
+                await catalog_service.create_tag(db, ghost, TagKind.CUISINE, "Thai", now=clock())
+    finally:
+        await database.close()

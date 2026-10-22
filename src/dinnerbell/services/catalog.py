@@ -74,11 +74,14 @@ class CatalogData:
 
 @asynccontextmanager
 async def _unique(db: AsyncSession, message: str) -> AsyncIterator[None]:
-    """Turn a lost race on a unique name into a friendly rule violation."""
+    """Turn a lost race on a unique name into a friendly rule violation. Any other integrity
+    error, such as a broken foreign key, is a bug and propagates unchanged."""
     try:
         yield
-    except IntegrityError:
+    except IntegrityError as exc:
         await db.rollback()
+        if "UNIQUE constraint failed" not in str(exc.orig):
+            raise
         raise CatalogRuleViolation(message) from None
 
 
