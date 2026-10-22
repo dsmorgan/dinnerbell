@@ -40,6 +40,16 @@ class TestClientIp:
     def test_ipv6(self) -> None:
         assert resolve_client_ip("fd00::1", "2001:db8::5", PROXIES) == "2001:db8::5"
 
+    def test_ipv4_inside_ipv6_is_unwrapped(self) -> None:
+        trusted = (ipaddress.ip_network("10.0.0.2/32"),)
+        # A dual-stack listener reports IPv4 peers as IPv4-mapped IPv6.
+        assert resolve_client_ip("::ffff:10.0.0.2", "::ffff:198.51.100.7", trusted) == "198.51.100.7"
+        assert resolve_client_ip("::ffff:203.0.113.9", None, ()) == "203.0.113.9"
+        assert resolve_client_ip("2002:c633:6407::1", None, ()) == "198.51.100.7"  # 6to4
+        teredo = "2001:0:4136:e378:8000:63bf:3fff:fdd2"  # RFC 4380 example, client 192.0.2.45
+        assert resolve_client_ip(teredo, None, ()) == "192.0.2.45"
+        assert resolve_client_ip("fe80::1%eth0", None, ()) == "fe80::1"
+
     def test_missing_or_odd_peer(self) -> None:
         assert resolve_client_ip(None, "1.2.3.4", PROXIES) == "unknown"
         assert resolve_client_ip("testclient", None, PROXIES) == "testclient"
@@ -86,6 +96,21 @@ class TestRateLimiter:
         assert client_key("2001:db8:1:2:aaaa::1") == client_key("2001:db8:1:2:bbbb::9") == "ip:2001:db8:1:2::/64"
         assert client_key("2001:db8:1:3::1") != client_key("2001:db8:1:2::1")
         assert client_key("testclient") == "ip:testclient"
+
+    def test_ipv4_mapped_clients_get_their_own_buckets(self) -> None:
+        """Regression: every ::ffff:a.b.c.d address shares one /64, so one IPv4 client behind a
+        dual-stack listener could exhaust the limit for all of them."""
+        from dinnerbell.web.ratelimit import client_key
+
+        assert client_key("::ffff:198.51.100.7") != client_key("::ffff:203.0.113.9")
+        assert client_key("::ffff:198.51.100.7") == client_key("198.51.100.7") == "ip:198.51.100.7"
+        assert client_key("2002:c633:6407::1") == "ip:198.51.100.7"
+        assert client_key("fe80::1%eth0") == client_key("fe80::2") == "ip:fe80::/64"
+
+        limiter = SlidingWindowLimiter(1, 60, monotonic=lambda: 0.0)
+        assert limiter.hit(client_key("::ffff:198.51.100.7")) is None
+        assert limiter.hit(client_key("::ffff:203.0.113.9")) is None
+        assert limiter.hit(client_key("198.51.100.7")) is not None
 
 
 class TestSigning:

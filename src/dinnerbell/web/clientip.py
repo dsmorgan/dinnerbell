@@ -12,17 +12,38 @@ import ipaddress
 from collections.abc import Sequence
 
 IPNetwork = ipaddress.IPv4Network | ipaddress.IPv6Network
+IPAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
 UNKNOWN = "unknown"
 
 
-def _parse(value: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
+def normalize(address: IPAddress) -> IPAddress:
+    """Reduce an address to the host it identifies.
+
+    IPv4-mapped (``::ffff:a.b.c.d``), 6to4, and Teredo addresses carry an IPv4 client; use it,
+    so a dual-stack listener doesn't lump every IPv4 client into one IPv6 /64. Zone IDs
+    (``fe80::1%eth0``) are dropped.
+    """
+    if isinstance(address, ipaddress.IPv4Address):
+        return address
+    if address.ipv4_mapped is not None:
+        return address.ipv4_mapped
+    if address.sixtofour is not None:
+        return address.sixtofour
+    if address.teredo is not None:
+        return address.teredo[1]
+    if address.scope_id is not None:
+        return ipaddress.IPv6Address(str(address).split("%", 1)[0])
+    return address
+
+
+def _parse(value: str) -> IPAddress | None:
     try:
-        return ipaddress.ip_address(value.strip())
+        return normalize(ipaddress.ip_address(value.strip()))
     except ValueError:
         return None
 
 
-def _trusted(address: ipaddress.IPv4Address | ipaddress.IPv6Address, proxies: Sequence[IPNetwork]) -> bool:
+def _trusted(address: IPAddress, proxies: Sequence[IPNetwork]) -> bool:
     return any(address.version == net.version and address in net for net in proxies)
 
 

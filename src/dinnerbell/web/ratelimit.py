@@ -8,6 +8,8 @@ import time
 from collections import OrderedDict, deque
 from collections.abc import Callable
 
+from dinnerbell.web.clientip import normalize
+
 MAX_TRACKED_KEYS = 10_000
 IPV6_PREFIX = 64
 
@@ -49,7 +51,7 @@ class SlidingWindowLimiter:
 def client_key(client_ip: str) -> str:
     """Rate-limit key for a client address. IPv6 clients share their /64, which one host controls."""
     try:
-        address = ipaddress.ip_address(client_ip)
+        address = normalize(ipaddress.ip_address(client_ip))
     except ValueError:
         return f"ip:{client_ip}"
     if address.version == 6:
