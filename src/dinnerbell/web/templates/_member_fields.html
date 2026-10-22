@@ -1,5 +1,5 @@
 {#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
-{#- Expects: values (object with display_name, email, role, capabilities or can_* flags), roles, email_locked -#}
+{#- Expects: values (display_name, email, role, can_cook, can_pickup, can_order), roles, email_locked -#}
 <label class="field">
   <span>Display name</span>
   <input name="display_name" required maxlength="80" autocomplete="off" value="{{ values.display_name if values else '' }}">

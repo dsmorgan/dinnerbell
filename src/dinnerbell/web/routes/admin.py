@@ -8,7 +8,6 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import RedirectResponse
-from pydantic import BaseModel, ConfigDict, Field
 from starlette.responses import Response
 
 from dinnerbell.domain.members import Capabilities, InvalidMemberInput, Member, MemberRuleViolation, Role
@@ -27,33 +26,16 @@ NOTICES = {
 }
 
 
-class MemberForm(BaseModel):
-    """Form fields as posted. Domain normalization runs in the service (SEC-4)."""
+FIELD_LIMIT = 320
+"""Upper bound on any posted text field. The domain enforces the real limits (SEC-4)."""
 
-    model_config = ConfigDict(str_strip_whitespace=True)
-
-    display_name: str = Field(max_length=200)
-    email: str = Field(max_length=320)
-    role: Role = Role.MEMBER
-    can_cook: bool = False
-    can_pickup: bool = False
-    can_order: bool = False
-
-    def to_input(self) -> member_service.MemberInput:
-        return member_service.MemberInput(
-            display_name=self.display_name,
-            email=self.email,
-            role=self.role,
-            capabilities=Capabilities(self.can_cook, self.can_pickup, self.can_order),
-        )
-
-
-Checkbox = Annotated[str | None, Form()]
+Text = Annotated[str, Form(max_length=FIELD_LIMIT)]
+Checkbox = Annotated[str | None, Form(max_length=FIELD_LIMIT)]
 
 
 @dataclass(frozen=True, slots=True)
 class PostedMember:
-    """The member form exactly as posted, kept so the page can redisplay it after an error."""
+    """The member form as posted. Kept as typed so the page can redisplay it after an error."""
 
     display_name: str
     email: str
@@ -62,24 +44,20 @@ class PostedMember:
     can_pickup: bool
     can_order: bool
 
-    def validated(self) -> MemberForm | str:
+    def to_input(self) -> member_service.MemberInput:
+        """Convert for the service, which normalizes and validates. Raises InvalidMemberInput."""
         try:
-            return MemberForm(
-                display_name=self.display_name,
-                email=self.email,
-                role=Role(self.role),
-                can_cook=self.can_cook,
-                can_pickup=self.can_pickup,
-                can_order=self.can_order,
-            )
+            role = Role(self.role)
         except ValueError:
-            return "Check the form: one of the values isn't valid."
+            raise InvalidMemberInput("Choose a role from the list.") from None
+        capabilities = Capabilities(self.can_cook, self.can_pickup, self.can_order)
+        return member_service.MemberInput(self.display_name, self.email, role, capabilities)
 
 
 def posted_member(
-    display_name: Annotated[str, Form(max_length=200)] = "",
-    email: Annotated[str, Form(max_length=320)] = "",
-    role: Annotated[str, Form(max_length=16)] = Role.MEMBER.value,
+    display_name: Text = "",
+    email: Text = "",
+    role: Text = Role.MEMBER.value,
     can_cook: Checkbox = None,
     can_pickup: Checkbox = None,
     can_order: Checkbox = None,
@@ -88,6 +66,13 @@ def posted_member(
 
 
 Posted = Annotated[PostedMember, Depends(posted_member)]
+
+
+def _stored(member: Member) -> PostedMember:
+    caps = member.capabilities
+    return PostedMember(
+        member.display_name, member.email, member.role.value, caps.can_cook, caps.can_pickup, caps.can_order
+    )
 
 
 def _list_context(principal: Principal, members: list[Member], **extra: Any) -> dict[str, Any]:
@@ -112,14 +97,11 @@ async def invite(
     db: Database,
     posted: Posted,
 ) -> Response:
-    form = posted.validated()
-    error = form if isinstance(form, str) else None
-    if isinstance(form, MemberForm):
-        try:
-            await member_service.invite_member(db, principal.member, form.to_input(), now=context.clock())
-            return RedirectResponse("/admin/members?notice=invited", status_code=303)
-        except (InvalidMemberInput, MemberRuleViolation) as exc:
-            error = str(exc)
+    try:
+        await member_service.invite_member(db, principal.member, posted.to_input(), now=context.clock())
+        return RedirectResponse("/admin/members?notice=invited", status_code=303)
+    except (InvalidMemberInput, MemberRuleViolation) as exc:
+        error = str(exc)
     members = await member_service.list_members(db, principal.member)
     return await render(
         request, "admin_members.html", _list_context(principal, members, error=error, draft=posted), status_code=400
@@ -129,7 +111,8 @@ async def invite(
 @router.get("/members/{member_id}")
 async def edit_page(request: Request, principal: AdminPrincipal, db: Database, member_id: int) -> Response:
     member = await member_service.get_member(db, principal.member, member_id)
-    return await render(request, "admin_member_edit.html", {"member": member, "roles": list(Role)})
+    context = {"member": member, "values": _stored(member), "roles": list(Role)}
+    return await render(request, "admin_member_edit.html", context)
 
 
 @router.post("/members/{member_id}")
@@ -144,17 +127,14 @@ async def update(
     member = await member_service.get_member(db, principal.member, member_id)
     if member.is_linked and not posted.email:
         posted = replace(posted, email=member.email)  # the field is read-only once linked
-    form = posted.validated()
-    error = form if isinstance(form, str) else None
-    if isinstance(form, MemberForm):
-        try:
-            await member_service.update_member(db, principal.member, member_id, form.to_input(), now=context.clock())
-            return RedirectResponse("/admin/members?notice=updated", status_code=303)
-        except (InvalidMemberInput, MemberRuleViolation) as exc:
-            error = str(exc)
-    return await render(
-        request, "admin_member_edit.html", {"member": member, "roles": list(Role), "error": error}, status_code=400
-    )
+    try:
+        await member_service.update_member(db, principal.member, member_id, posted.to_input(), now=context.clock())
+        return RedirectResponse("/admin/members?notice=updated", status_code=303)
+    except (InvalidMemberInput, MemberRuleViolation) as exc:
+        error = str(exc)
+    # Redisplay what the admin typed, not the stored values, so nothing they changed is lost.
+    page = {"member": member, "values": posted, "roles": list(Role), "error": error}
+    return await render(request, "admin_member_edit.html", page, status_code=400)
 
 
 @router.post("/members/{member_id}/deactivate")

@@ -188,7 +188,7 @@ def test_validation_errors_render_pages_without_echoing_input(client: TestClient
     response = client.get("/admin/members/not-a-number")
     assert response.status_code == 404
     assert "text/html" in response.headers["content-type"]
-    marker = "ECHO-MARKER-" + "x" * 300
+    marker = "ECHO-MARKER-" + "x" * 400  # over the form field limit
     response = client.post(
         "/admin/members",
         data={"display_name": marker, "email": "a@example.com", "csrf_token": csrf_from(client)},

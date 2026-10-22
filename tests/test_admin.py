@@ -232,3 +232,31 @@ def test_htmx_rule_violation_returns_row_with_error(
     )
     assert response.status_code == 409
     assert 'role="alert"' in response.text
+
+
+def test_edit_error_keeps_what_the_admin_typed(client: TestClient, provider: FakeProvider, migrated: Settings) -> None:
+    sign_in(client, provider)
+    invite(client, "sam@example.com", "Sam")
+    invite(client, "taken@example.com", "Taken")
+    sam = member(migrated, "sam@example.com")
+    data = {"display_name": "Samantha Q", "email": "taken@example.com", "role": "member", "can_order": "on"}
+    response = post(client, f"/admin/members/{sam.id}", data)
+    assert response.status_code == 400
+    assert "already exists" in page(response)
+    assert 'value="Samantha Q"' in response.text
+    assert 'value="taken@example.com"' in response.text
+    assert 'name="can_order" checked' in response.text
+    assert member(migrated, "sam@example.com").display_name == "Sam"
+
+
+def test_invalid_role_on_edit_is_a_friendly_error(
+    client: TestClient, provider: FakeProvider, migrated: Settings
+) -> None:
+    sign_in(client, provider)
+    invite(client, "sam@example.com", "Sam")
+    sam = member(migrated, "sam@example.com")
+    response = post(
+        client, f"/admin/members/{sam.id}", {"display_name": "Sam", "email": "sam@example.com", "role": "owner"}
+    )
+    assert response.status_code == 400
+    assert "Choose a role" in page(response)
