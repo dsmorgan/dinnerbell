@@ -43,7 +43,7 @@ def _migrate(settings: Settings) -> bool:
 def _serve(settings: Settings, host: str, port: int) -> None:
     import uvicorn
 
-    from dinnerbell.web.app import create_app
+    from dinnerbell.app_factory import create_app
 
     uvicorn.run(
         create_app(settings),

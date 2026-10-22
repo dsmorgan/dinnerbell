@@ -22,25 +22,14 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from dinnerbell.services import auth, backups
 from dinnerbell.services.clock import Clock
+from dinnerbell.services.health import HEARTBEAT_INTERVAL, SchedulerState
 
 log = logging.getLogger(__name__)
 
-HEARTBEAT_INTERVAL = timedelta(seconds=30)
 BACKUP_HOUR = 3
 BACKUP_MINUTE = 30
 BACKUP_CATCH_UP_AFTER = timedelta(hours=24)
 SHUTDOWN_GRACE_SECONDS = 10.0
-
-
-@dataclass
-class SchedulerState:
-    """What /healthz reports about background work."""
-
-    last_tick: datetime | None = None
-    last_backup: datetime | None = None
-
-    def tick_is_fresh(self, now: datetime) -> bool:
-        return self.last_tick is not None and now - self.last_tick <= HEARTBEAT_INTERVAL * 3
 
 
 @dataclass(frozen=True)

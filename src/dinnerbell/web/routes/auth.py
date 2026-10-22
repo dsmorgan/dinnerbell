@@ -6,7 +6,6 @@ from __future__ import annotations
 import hmac
 import logging
 import secrets
-from datetime import timedelta
 
 from fastapi import APIRouter, Request
 from fastapi.responses import RedirectResponse
@@ -23,14 +22,13 @@ from dinnerbell.web.auth import (
     cookie_attributes,
     session_cookie_header,
 )
-from dinnerbell.web.context import AppContext
+from dinnerbell.web.context import LOGIN_STATE_LIFETIME, AppContext
 from dinnerbell.web.oidc import OIDCError
 from dinnerbell.web.render import error_page, render
 
 router = APIRouter(prefix="/auth")
 log = logging.getLogger(__name__)
 
-LOGIN_STATE_LIFETIME = timedelta(minutes=10)
 TRY_AGAIN = "Go back to the start page and sign in again."
 
 REFUSAL_MESSAGES = {

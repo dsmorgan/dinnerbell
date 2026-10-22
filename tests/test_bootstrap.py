@@ -10,11 +10,11 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 
+from dinnerbell.app_factory import create_app
 from dinnerbell.config import Settings
 from dinnerbell.db.engine import create_app_engine, create_sessionmaker
 from dinnerbell.db.models import AuditRow, HouseholdRow, MemberRow
 from dinnerbell.services.bootstrap import bootstrap
-from dinnerbell.web.app import create_app
 from tests.conftest import BASE_URL, make_settings
 from tests.support.clock import FakeClock
 from tests.support.fake_oidc import FakeProvider, generate_key

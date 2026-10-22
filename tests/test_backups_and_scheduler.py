@@ -14,6 +14,7 @@ from dinnerbell.config import Settings
 from dinnerbell.db.engine import create_app_engine, create_sessionmaker
 from dinnerbell.scheduler import runner
 from dinnerbell.services import backups
+from dinnerbell.services.health import SchedulerState
 from tests.support.clock import FakeClock
 
 
@@ -66,7 +67,7 @@ def test_last_backup_time(tmp_path: Path) -> None:
 def job_context(migrated: Settings, clock: FakeClock) -> runner.JobContext:
     engine = create_app_engine(migrated.async_database_url)
     return runner.JobContext(
-        state=runner.SchedulerState(),
+        state=SchedulerState(),
         clock=clock,
         zone=ZoneInfo(migrated.timezone),
         database_path=migrated.database_path,

@@ -16,15 +16,17 @@ ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = ROOT / "src" / "dinnerbell"
 SPDX = "SPDX-License-Identifier: AGPL-3.0-or-later"
 
-# layer -> layers it may import (spec section 13.2). Top-level modules (config, logs) are shared.
+# layer -> layers it may import (spec section 13.2). config and logs are shared by all layers;
+# app_factory (the composition root) and main sit above every layer and nothing imports them.
 ALLOWED = {
     "domain": set(),
     "db": {"domain"},
     "services": {"domain", "db"},
     "channels": {"domain", "services"},
-    "web": {"domain", "services", "scheduler"},
+    "web": {"domain", "services"},
     "scheduler": {"domain", "services"},
 }
+TOP_LEVEL = {"app_factory", "main"}
 LAYERS = set(ALLOWED)
 
 
@@ -44,6 +46,9 @@ def test_layer_imports(layer: str) -> None:
     for path in (PACKAGE / layer).rglob("*.py"):
         for module in imports(path):
             parts = module.split(".")
+            assert not (len(parts) > 1 and parts[0] == "dinnerbell" and parts[1] in TOP_LEVEL), (
+                f"{path.relative_to(ROOT)} imports the composition root {module}"
+            )
             if parts[0] != "dinnerbell" or len(parts) < 2 or parts[1] not in LAYERS or parts[1] == layer:
                 continue
             assert parts[1] in ALLOWED[layer], f"{path.relative_to(ROOT)} imports {module}"

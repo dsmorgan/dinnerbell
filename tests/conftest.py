@@ -14,9 +14,9 @@ import pytest
 from fastapi.testclient import TestClient
 from joserfc.jwk import RSAKey
 
+from dinnerbell.app_factory import create_app
 from dinnerbell.config import Settings
 from dinnerbell.db.migrate import run_migrations
-from dinnerbell.web.app import create_app
 from tests.support.clock import FakeClock
 from tests.support.fake_oidc import CLIENT_ID, CLIENT_SECRET, ISSUER, FakeProvider, generate_key
 

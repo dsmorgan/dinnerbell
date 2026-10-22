@@ -25,9 +25,9 @@ docker build -f Containerfile -t dinnerbell .
 | `services` | `domain`, `db` | Use cases. The only layer that writes; each use case commits its own transaction. |
 | `channels` | `domain`, `services` | `Channel` protocol now; Slack adapter in M2. |
 | `scheduler` | `domain`, `services` | Jobs must be idempotent. |
-| `web` | `domain`, `services`, `scheduler` | FastAPI routes, templates, auth. Never imports `db`. |
+| `web` | `domain`, `services` | FastAPI routes, templates, auth. Never imports `db` or `scheduler`. |
 
-`config.py`, `logs.py`, and `main.py` sit at the top and are shared.
+`config.py` and `logs.py` are shared by every layer. `app_factory.py` is the composition root: the only module that wires `web` and `scheduler` together (they share state through `services`, such as `services.health.SchedulerState`). `main.py` is the CLI. No layer imports `app_factory` or `main`.
 
 ## Conventions
 

@@ -1,16 +1,13 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The FastAPI application factory."""
+"""Assemble the FastAPI app: routes, middleware, and error pages."""
 
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
-from datetime import timedelta
+from collections.abc import Callable
+from contextlib import AbstractAsyncContextManager
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
-import httpx
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import RedirectResponse
@@ -20,13 +17,9 @@ from starlette.responses import Response
 from starlette.types import Scope
 
 from dinnerbell.config import Settings
-from dinnerbell.scheduler.runner import JobContext, SchedulerState, build_scheduler, stop_scheduler
-from dinnerbell.services.bootstrap import bootstrap
-from dinnerbell.services.clock import Clock, utc_now
-from dinnerbell.services.database import open_database
 from dinnerbell.services.errors import Forbidden, NotFound
 from dinnerbell.web.auth import AccessDenied, CSRFRejected, NotSignedIn, session_cookie_writer
-from dinnerbell.web.context import AppContext, CookieNames
+from dinnerbell.web.context import CookieNames
 from dinnerbell.web.middleware import (
     ErrorPageMiddleware,
     OriginCheckMiddleware,
@@ -35,74 +28,22 @@ from dinnerbell.web.middleware import (
     SecurityHeadersMiddleware,
     SessionCookieMiddleware,
 )
-from dinnerbell.web.oidc import OIDCClient
 from dinnerbell.web.ratelimit import SlidingWindowLimiter
 from dinnerbell.web.render import error_page, is_htmx
 from dinnerbell.web.routes import admin, auth, health, pages
-from dinnerbell.web.signing import SignedPayload, derive_key
 
 log = logging.getLogger(__name__)
 
 STATIC_DIR = Path(__file__).parent / "static"
 AUTH_RATE_LIMIT = 20
 AUTH_RATE_WINDOW_SECONDS = 60.0
-OIDC_TIMEOUT_SECONDS = 10.0
-LOGIN_STATE_MAX_AGE = timedelta(minutes=10)
+Lifespan = Callable[[FastAPI], AbstractAsyncContextManager[None]]
 
 
-def create_app(
-    settings: Settings,
-    *,
-    clock: Clock = utc_now,
-    oidc_transport: httpx.AsyncBaseTransport | None = None,
-) -> FastAPI:
-    """Build the app. ``oidc_transport`` lets tests route provider calls to a fake in-process."""
+def build_app(settings: Settings, lifespan: Lifespan) -> FastAPI:
+    """Assemble routes, middleware, and error handling. The caller supplies the lifespan that
+    puts an ``AppContext`` on ``app.state.dinnerbell``; see ``dinnerbell.app_factory``."""
     cookies = CookieNames.for_settings(settings)
-
-    @asynccontextmanager
-    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        database = open_database(settings.async_database_url)
-        sessionmaker = database.sessionmaker
-        async with sessionmaker() as db:
-            household = await bootstrap(
-                db,
-                household_name=settings.household_name,
-                timezone=settings.timezone,
-                admin_email=settings.admin_email,
-                now=clock(),
-            )
-        http = httpx.AsyncClient(transport=oidc_transport, timeout=OIDC_TIMEOUT_SECONDS, follow_redirects=False)
-        secret = settings.secret_key.get_secret_value()
-        state = SchedulerState()
-        app.state.dinnerbell = AppContext(
-            settings=settings,
-            clock=clock,
-            cookies=cookies,
-            csrf_key=derive_key(secret, "csrf"),
-            login_state=SignedPayload(derive_key(secret, "login-state"), LOGIN_STATE_MAX_AGE, clock),
-            sessionmaker=sessionmaker,
-            oidc=_oidc_client(settings, http, clock),
-            scheduler_state=state,
-        )
-        jobs = JobContext(
-            state=state,
-            clock=clock,
-            zone=ZoneInfo(household.timezone),  # the household row, not the env var, is authoritative
-            database_path=settings.database_path,
-            backup_dir=settings.backup_dir,
-            sessionmaker=sessionmaker,
-        )
-        app.state.jobs = jobs
-        scheduler = build_scheduler(jobs)
-        scheduler.start()
-        log.info("dinnerbell started")
-        try:
-            yield
-        finally:
-            await stop_scheduler(scheduler, jobs)
-            await http.aclose()
-            await database.close()
-
     app = FastAPI(
         lifespan=lifespan,
         docs_url=None,
@@ -127,21 +68,6 @@ def create_app(
     app.add_middleware(SecurityHeadersMiddleware)
     app.add_middleware(RequestContextMiddleware, trusted_proxies=settings.trusted_proxies)
     return app
-
-
-def _oidc_client(settings: Settings, http: httpx.AsyncClient, clock: Clock) -> OIDCClient:
-    # Slack's `team` parameter skips the workspace picker. Other providers ignore unknown parameters.
-    extra = {"team": settings.slack_team_id} if settings.slack_team_id else {}
-    return OIDCClient(
-        issuer=settings.oidc_issuer,
-        client_id=settings.oidc_client_id,
-        client_secret=settings.oidc_client_secret.get_secret_value(),
-        scopes=settings.oidc_scopes,
-        redirect_uri=f"{settings.base_url}/auth/callback",
-        http=http,
-        clock=clock,
-        extra_auth_params=extra,
-    )
 
 
 def _add_exception_handlers(app: FastAPI) -> None:

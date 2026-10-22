@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import timedelta
 from pathlib import Path
 
 from fastapi import Request
@@ -11,10 +12,13 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from dinnerbell.config import Settings
-from dinnerbell.scheduler.runner import SchedulerState
 from dinnerbell.services.clock import Clock
+from dinnerbell.services.health import SchedulerState
 from dinnerbell.web.oidc import OIDCClient
 from dinnerbell.web.signing import SignedPayload
+
+LOGIN_STATE_LIFETIME = timedelta(minutes=10)
+"""How long a sign-in may take between /auth/login and /auth/callback."""
 
 TEMPLATES = Jinja2Templates(directory=Path(__file__).parent / "templates")
 
