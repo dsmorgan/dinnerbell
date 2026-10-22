@@ -9,8 +9,11 @@ from typing import Any
 
 import pytest
 from fastapi.routing import APIRoute
+from fastapi.staticfiles import StaticFiles
+from fastapi.testclient import TestClient
+from starlette.routing import Mount, Route
 
-from dinnerbell.web.auth import csrf_if_signed_in, require_csrf
+from dinnerbell.web.auth import csrf_if_signed_in, require_admin, require_admin_csrf, require_csrf
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = ROOT / "src" / "dinnerbell"
@@ -82,29 +85,63 @@ def test_every_source_file_has_spdx_header() -> None:
     assert missing == []
 
 
-def api_routes(routes: list[Any]) -> list[APIRoute]:
-    """Flatten included routers (FastAPI includes them lazily)."""
-    found: list[APIRoute] = []
+SAFE = {"GET", "HEAD", "OPTIONS"}
+CSRF_CHECKS = {require_csrf, require_admin_csrf, csrf_if_signed_in}
+ADMIN_CHECKS = {require_admin, require_admin_csrf}
+
+
+def audit_routes(routes: list[Any]) -> tuple[list[APIRoute], list[str]]:
+    """Flatten the app's routes. Anything the CSRF audit can't see into is reported as a problem:
+    routes added with add_route, unknown mounted sub-apps, and websockets."""
+    api: list[APIRoute] = []
+    problems: list[str] = []
     for route in routes:
         if isinstance(route, APIRoute):
-            found.append(route)
-        elif hasattr(route, "original_router"):
-            found.extend(api_routes(route.original_router.routes))
-    return found
-
-
-def test_every_state_changing_route_checks_csrf(client: object) -> None:
-    from fastapi import FastAPI
-
-    app: FastAPI = client.app  # type: ignore[attr-defined]
-    checked = 0
-    for route in api_routes(app.routes):
-        if route.methods <= {"GET", "HEAD", "OPTIONS"}:
+            api.append(route)
+        elif hasattr(route, "original_router"):  # FastAPI includes routers lazily
+            nested, nested_problems = audit_routes(route.original_router.routes)
+            api += nested
+            problems += nested_problems
+        elif isinstance(route, Mount) and route.path == "/static" and isinstance(route.app, StaticFiles):
+            continue  # serves files only; StaticFiles answers GET and HEAD
+        elif isinstance(route, Route) and route.methods is not None and route.methods <= SAFE:
             continue
+        else:
+            problems.append(f"{type(route).__name__} {getattr(route, 'path', '?')} can't be audited for CSRF")
+    return api, problems
+
+
+def test_every_state_changing_route_checks_csrf(client: TestClient) -> None:
+    api, problems = audit_routes(client.app.routes)  # type: ignore[attr-defined]
+    assert problems == []
+    unsafe = [route for route in api if not route.methods <= SAFE]
+    for route in unsafe:
         calls = {dep.call for dep in route.dependant.dependencies}
-        assert calls & {require_csrf, csrf_if_signed_in}, f"{route.path} has no CSRF check"
-        checked += 1
-    assert checked >= 5
+        assert calls & CSRF_CHECKS, f"{route.path} has no CSRF check"
+    assert len(unsafe) >= 5
+
+
+def test_every_admin_route_requires_an_admin_in_the_web_layer(client: TestClient) -> None:
+    api, _ = audit_routes(client.app.routes)  # type: ignore[attr-defined]
+    admin = [route for route in api if route.path.startswith("/admin")]
+    assert admin
+    for route in admin:
+        calls = {dep.call for dep in route.dependant.dependencies}
+        assert calls & ADMIN_CHECKS, f"{route.path} relies on the service layer alone"
+
+
+def test_route_audit_flags_what_it_cannot_see(client: TestClient) -> None:
+    from starlette.applications import Starlette
+
+    async def raw(_request: Any) -> Any:
+        return None
+
+    app = client.app  # type: ignore[attr-defined]
+    app.add_route("/raw-post", raw, methods=["POST"])
+    app.mount("/sub", Starlette())
+    _, problems = audit_routes(app.routes)
+    assert any("/raw-post" in problem for problem in problems)
+    assert any("/sub" in problem for problem in problems)
 
 
 def test_fake_provider_is_not_in_the_package() -> None:
