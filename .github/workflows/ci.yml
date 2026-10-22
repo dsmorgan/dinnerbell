@@ -1,0 +1,71 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Lint, type-check, test, audit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: "0.12.23"
+          python-version: "3.12"
+          enable-cache: true
+      - name: Install
+        run: uv sync --locked
+      - name: Ruff lint
+        run: uv run ruff check .
+      - name: Ruff format
+        run: uv run ruff format --check .
+      - name: Mypy (strict)
+        run: uv run mypy
+      - name: Pytest with coverage
+        run: uv run pytest --cov --cov-report=term
+      - name: pip-audit
+        run: |
+          uv export --frozen --all-groups --format requirements-txt --no-emit-project -o "$RUNNER_TEMP/requirements.txt"
+          uv run pip-audit --strict --require-hashes --disable-pip -r "$RUNNER_TEMP/requirements.txt"
+
+  container:
+    name: Container build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build
+        run: docker build --file Containerfile --tag dinnerbell:ci .
+      - name: Smoke test
+        run: |
+          docker run --detach --name smoke --read-only --tmpfs /tmp --cap-drop ALL \
+            --security-opt no-new-privileges:true --publish 8000:8000 \
+            --env DINNERBELL_BASE_URL=http://localhost:8000 \
+            --env DINNERBELL_SECRET_KEY=ci-only-secret-key-not-used-anywhere-else \
+            --env DINNERBELL_ADMIN_EMAIL=admin@example.com \
+            --env DINNERBELL_OIDC_ISSUER=https://idp.example.com \
+            --env DINNERBELL_OIDC_CLIENT_ID=ci \
+            --env DINNERBELL_OIDC_CLIENT_SECRET=ci \
+            dinnerbell:ci
+          for attempt in $(seq 1 30); do
+            if curl --silent --fail http://localhost:8000/healthz; then exit 0; fi
+            sleep 1
+          done
+          docker logs smoke
+          exit 1
