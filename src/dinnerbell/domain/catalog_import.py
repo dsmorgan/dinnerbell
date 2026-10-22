@@ -388,7 +388,9 @@ def _list(values: Iterable[str]) -> str:
     return ", ".join(values) or "none"
 
 
-_ENTRY = re.compile(r"(restaurants|home_meals)\[(\d+)\]")
+_ENTRY = re.compile(r"(restaurants|home_meals)\[([0-9]{1,9})\]", re.ASCII)
+"""An entry location. ASCII digits only, and few enough that int() can never fail; anything
+else is an unknown key."""
 
 
 def _error_order(parsed: ParsedCatalog) -> Any:

@@ -142,3 +142,23 @@ def test_mutated_example_never_raises() -> None:
             else:
                 chars[position] = rng.choice(" :-[]{}\n'\"&*!#|>")
         plan("".join(chars))
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "restaurants[" + "9" * 5000 + "]",  # past Python's 4,300-digit int() limit
+        "restaurants[" + chr(0x0660) + "]",  # an Arabic-Indic zero, which a plain \\d matches
+        "home_meals[" + chr(0x0661) + "]",
+        "restaurants[1234567890]",  # longer than any real list position
+    ],
+)
+def test_huge_or_non_ascii_positions_are_unknown_keys(key: str) -> None:
+    # An explicit "? key" lets the key run past YAML's 1,024-character limit for plain keys.
+    source = (
+        f"version: 1\n? '{key}'\n: 1\nrestaurants:\n"
+        "  - {name: A, cuisine: [Thai]}\n  - {name: B, cuisine: [Thai], modes: [x]}\n"
+    )
+    result = plan_import(parse_catalog(source), CatalogSnapshot.empty())
+    assert [e.location for e in result.errors] == ["restaurants[1].modes[0]", key]  # unknown keys sort last
+    assert result.errors[-1].message == "unknown field"
