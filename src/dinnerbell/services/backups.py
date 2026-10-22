@@ -16,6 +16,7 @@ from dinnerbell.domain.backups import backups_to_delete
 log = logging.getLogger(__name__)
 PREFIX = "dinnerbell-"
 SUFFIX = ".db"
+PARTIAL = ".partial"
 _NAME = re.compile(r"^dinnerbell-(\d{4}-\d{2}-\d{2})\.db$")
 
 
@@ -52,6 +53,7 @@ def last_backup_time(backup_dir: Path) -> datetime | None:
 def run_backup(database_path: Path, backup_dir: Path, today: date) -> BackupResult:
     """Back up ``database_path`` for ``today`` and prune old copies. Idempotent per day."""
     backup_dir.mkdir(parents=True, exist_ok=True)
+    _remove_partials(backup_dir)
     target = backup_path(backup_dir, today)
     created = False
     if not target.exists():
@@ -71,9 +73,17 @@ def prune(backup_dir: Path) -> tuple[Path, ...]:
     return doomed
 
 
+def _remove_partials(backup_dir: Path) -> None:
+    """Delete copies left half-written by a crash or restart mid-backup."""
+    for path in backup_dir.glob(f"{PREFIX}*{PARTIAL}"):
+        path.unlink(missing_ok=True)
+        log.warning("removed incomplete backup", extra={"backup": path.name})
+
+
 def _copy_online(database_path: Path, target: Path) -> None:
-    partial = target.with_suffix(".partial")
-    source = sqlite3.connect(database_path)
+    partial = target.with_suffix(PARTIAL)
+    # Read-only: a backup must never be able to change the live database.
+    source = sqlite3.connect(f"{database_path.resolve().as_uri()}?mode=ro", uri=True)
     try:
         destination = sqlite3.connect(partial)
         try:

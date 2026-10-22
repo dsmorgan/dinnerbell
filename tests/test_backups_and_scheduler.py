@@ -158,3 +158,26 @@ async def test_stop_waits_for_cancelled_jobs_to_clean_up(job_context: runner.Job
     await runner.stop_scheduler(scheduler, job_context)
     assert cleaned_up == [True]
     assert job_context.running == set()
+
+
+def test_stale_partial_backups_are_removed(migrated: Settings) -> None:
+    migrated.backup_dir.mkdir(parents=True)
+    stale = migrated.backup_dir / "dinnerbell-2026-10-01.partial"
+    stale.write_bytes(b"half a database")
+    backups.run_backup(migrated.database_path, migrated.backup_dir, date(2026, 10, 22))
+    assert not stale.exists()
+
+
+def test_backup_opens_the_live_database_read_only(migrated: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    opened: list[tuple[str, bool]] = []
+    real_connect = sqlite3.connect
+
+    def recording_connect(database: object, *args: object, **kwargs: object) -> sqlite3.Connection:
+        opened.append((str(database), bool(kwargs.get("uri"))))
+        return real_connect(database, *args, **kwargs)  # type: ignore[call-overload,no-any-return]
+
+    monkeypatch.setattr(backups.sqlite3, "connect", recording_connect)
+    backups.run_backup(migrated.database_path, migrated.backup_dir, date(2026, 10, 22))
+    source = opened[0]
+    assert source[0].startswith("file:///") and source[0].endswith("dinnerbell.db?mode=ro")
+    assert source[1] is True
