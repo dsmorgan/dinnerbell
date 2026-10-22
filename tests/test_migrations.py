@@ -16,6 +16,8 @@ from dinnerbell.db.migrate import SchemaTooNewError, head_revision, run_migratio
 from dinnerbell.db.models import Base
 
 M0_TABLES = {"household", "member", "session", "audit"}
+M1_TABLES = {"tag", "catalog_item", "catalog_item_tag", "catalog_item_cook", "preference", "meal_log"}
+M2_TABLES = {"event", "response", "suggestion", "proposal", "vote", "assignment"}
 
 
 def test_migrates_an_empty_database(settings: Settings) -> None:
@@ -24,8 +26,8 @@ def test_migrates_an_empty_database(settings: Settings) -> None:
     engine = create_engine(settings.sync_database_url)
     try:
         inspector = inspect(engine)
-        assert set(inspector.get_table_names()) == M0_TABLES | {"alembic_version"}
-        for table in M0_TABLES - {"household"}:
+        assert set(inspector.get_table_names()) == M0_TABLES | M1_TABLES | {"alembic_version"}
+        for table in (M0_TABLES | M1_TABLES) - {"household"}:
             assert "household_id" in {c["name"] for c in inspector.get_columns(table)}, table
         member_columns = {c["name"] for c in inspector.get_columns("member")}
         assert {"feedback_reminder", "mute_dm_reminders", "oidc_subject", "slack_user_id"} <= member_columns
@@ -124,3 +126,51 @@ def test_database_errors_hide_bound_parameters(migrated: Settings) -> None:
     message = asyncio.run(run_async())
     assert "no_such_table" in message
     assert "leak@example.com" not in message
+
+
+def test_meal_log_event_has_no_foreign_key_until_m2(migrated: Settings) -> None:
+    engine = create_engine(migrated.sync_database_url)
+    try:
+        inspector = inspect(engine)
+        assert not set(inspector.get_table_names()) & M2_TABLES
+        event = next(c for c in inspector.get_columns("meal_log") if c["name"] == "event_id")
+        assert event["nullable"]
+        assert all("event_id" not in fk["constrained_columns"] for fk in inspector.get_foreign_keys("meal_log"))
+    finally:
+        engine.dispose()
+
+
+def test_upgrade_backfills_variety_window(settings: Settings) -> None:
+    import json
+
+    from alembic import command
+
+    from dinnerbell.db.migrate import _alembic_config
+
+    settings.database_path.parent.mkdir(parents=True, exist_ok=True)
+    engine = create_sync_engine(settings.sync_database_url)
+    try:
+        with engine.begin() as connection:
+            command.upgrade(_alembic_config(connection), "0001_initial")
+            connection.execute(
+                text(
+                    "INSERT INTO household (name, timezone, settings, created_at) "
+                    "VALUES ('Home', 'UTC', '{\"slack\": 1}', '2026-10-22 00:00:00'),"
+                    " ('Other', 'UTC', '{\"variety_window_days\": 10}', '2026-10-22 00:00:00')"
+                )
+            )
+        run_migrations(settings.sync_database_url, settings.database_path)
+        with engine.connect() as connection:
+            stored = [
+                json.loads(row[0]) for row in connection.execute(text("SELECT settings FROM household ORDER BY id"))
+            ]
+        assert stored == [{"slack": 1, "variety_window_days": 7}, {"variety_window_days": 10}]
+        with engine.begin() as connection:
+            command.downgrade(_alembic_config(connection), "0001_initial")
+        with engine.connect() as connection:
+            stored = [
+                json.loads(row[0]) for row in connection.execute(text("SELECT settings FROM household ORDER BY id"))
+            ]
+        assert stored == [{"slack": 1}, {}]
+    finally:
+        engine.dispose()
