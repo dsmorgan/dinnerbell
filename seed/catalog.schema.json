@@ -1,0 +1,369 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Dinnerbell catalog file, version 1",
+  "$defs": {
+    "HomeMealEntry": {
+      "additionalProperties": false,
+      "description": "A meal someone in the household makes.",
+      "properties": {
+        "name": {
+          "description": "What's being made. Unique among home meals, ignoring case.",
+          "maxLength": 100,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "cuisine": {
+          "description": "One or more cuisine tags.",
+          "items": {
+            "maxLength": 40,
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Cuisine",
+          "type": "array"
+        },
+        "tags": {
+          "anyOf": [
+            {
+              "items": {
+                "maxLength": 40,
+                "minLength": 1,
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Any other tags.",
+          "title": "Tags"
+        },
+        "servings": {
+          "anyOf": [
+            {
+              "maximum": 99,
+              "minimum": 1,
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Typical number of servings one batch makes.",
+          "title": "Servings"
+        },
+        "cooks": {
+          "anyOf": [
+            {
+              "items": {
+                "format": "email",
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Email addresses of members who can make it. Unknown emails are skipped.",
+          "title": "Cooks"
+        },
+        "url": {
+          "anyOf": [
+            {
+              "format": "uri",
+              "maxLength": 2000,
+              "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://\\S+$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Recipe link.",
+          "title": "Url"
+        },
+        "notes": {
+          "anyOf": [
+            {
+              "maxLength": 500,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Free text up to 500 characters.",
+          "title": "Notes"
+        },
+        "active": {
+          "default": true,
+          "description": "false hides the item from proposals without deleting its history.",
+          "title": "Active",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "cuisine"
+      ],
+      "title": "HomeMealEntry",
+      "type": "object"
+    },
+    "RestaurantEntry": {
+      "additionalProperties": false,
+      "description": "A place the household orders from or picks up at.",
+      "properties": {
+        "name": {
+          "description": "Display name. Unique among restaurants, ignoring case.",
+          "maxLength": 100,
+          "minLength": 1,
+          "title": "Name",
+          "type": "string"
+        },
+        "cuisine": {
+          "description": "One or more cuisine tags. Variety tracking uses these.",
+          "items": {
+            "maxLength": 40,
+            "minLength": 1,
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Cuisine",
+          "type": "array"
+        },
+        "tags": {
+          "anyOf": [
+            {
+              "items": {
+                "maxLength": 40,
+                "minLength": 1,
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Any other tags: protein, dietary, or other.",
+          "title": "Tags"
+        },
+        "modes": {
+          "default": [
+            "pickup"
+          ],
+          "description": "pickup, delivery, or both.",
+          "items": {
+            "enum": [
+              "pickup",
+              "delivery"
+            ],
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Modes",
+          "type": "array"
+        },
+        "url": {
+          "anyOf": [
+            {
+              "format": "uri",
+              "maxLength": 2000,
+              "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://\\S+$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Menu or website link.",
+          "title": "Url"
+        },
+        "order_url": {
+          "anyOf": [
+            {
+              "format": "uri",
+              "maxLength": 2000,
+              "pattern": "^[Hh][Tt][Tt][Pp][Ss]?://\\S+$",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Link to order online, such as a delivery app page.",
+          "title": "Order Url"
+        },
+        "notes": {
+          "anyOf": [
+            {
+              "maxLength": 500,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Free text up to 500 characters.",
+          "title": "Notes"
+        },
+        "active": {
+          "default": true,
+          "description": "false hides the item from proposals without deleting its history.",
+          "title": "Active",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name",
+        "cuisine"
+      ],
+      "title": "RestaurantEntry",
+      "type": "object"
+    },
+    "TagSection": {
+      "additionalProperties": false,
+      "description": "Tags to create, grouped by kind. Tag names are unique across kinds, ignoring case.",
+      "properties": {
+        "cuisine": {
+          "anyOf": [
+            {
+              "items": {
+                "maxLength": 40,
+                "minLength": 1,
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Cuisine"
+        },
+        "protein": {
+          "anyOf": [
+            {
+              "items": {
+                "maxLength": 40,
+                "minLength": 1,
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Protein"
+        },
+        "dietary": {
+          "anyOf": [
+            {
+              "items": {
+                "maxLength": 40,
+                "minLength": 1,
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Dietary"
+        },
+        "other": {
+          "anyOf": [
+            {
+              "items": {
+                "maxLength": 40,
+                "minLength": 1,
+                "type": "string"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Other"
+        }
+      },
+      "title": "TagSection",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Tags, restaurants, and home meals to import into Dinnerbell. See docs/catalog-format.md.",
+  "properties": {
+    "version": {
+      "const": 1,
+      "description": "Format version. Always 1 for this format.",
+      "title": "Version",
+      "type": "integer"
+    },
+    "tags": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TagSection"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null
+    },
+    "restaurants": {
+      "anyOf": [
+        {
+          "items": {
+            "$ref": "#/$defs/RestaurantEntry"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Restaurants"
+    },
+    "home_meals": {
+      "anyOf": [
+        {
+          "items": {
+            "$ref": "#/$defs/HomeMealEntry"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Home Meals"
+    }
+  },
+  "required": [
+    "version"
+  ],
+  "type": "object"
+}
