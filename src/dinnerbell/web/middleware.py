@@ -13,6 +13,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from starlette.datastructures import Headers, MutableHeaders
+from starlette.requests import ClientDisconnect
 from starlette.responses import PlainTextResponse, Response
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
@@ -248,10 +249,15 @@ class ErrorPageMiddleware:
 
         try:
             await self.app(scope, receive, tracking_send)
-        except Exception:
-            log.exception("unhandled error", extra={"path": scope["path"]})
+        except ClientDisconnect:
+            # The browser went away mid-request. Nothing failed and nobody is left to answer.
+            log.debug("client disconnected", extra={"path": scope["path"]})
             if started:
                 raise
+        except Exception:
+            if started:
+                raise  # too late for an error page; the server logs the exception itself
+            log.exception("unhandled error", extra={"path": scope["path"]})
             response = await self._error_response(scope)
             await response(scope, receive, send)
 

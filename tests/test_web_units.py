@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import ipaddress
+import logging
 from datetime import timedelta
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -241,3 +243,66 @@ async def test_every_forwarded_for_line_is_read() -> None:
     }
     await middleware(scope, None, None)  # type: ignore[arg-type]
     assert seen["client_ip"] == "198.51.100.7"
+
+
+class TestErrorPageMiddleware:
+    """Logging rules for unhandled errors."""
+
+    @staticmethod
+    async def run(app: Any) -> tuple[list[dict[str, Any]], BaseException | None]:
+        from starlette.responses import PlainTextResponse
+
+        from dinnerbell.web.middleware import ErrorPageMiddleware
+
+        async def render(_scope: Any) -> Any:
+            return PlainTextResponse("error page", status_code=500)
+
+        sent: list[dict[str, Any]] = []
+
+        async def send(message: dict[str, Any]) -> None:
+            sent.append(message)
+
+        async def receive() -> dict[str, Any]:
+            return {"type": "http.disconnect"}
+
+        scope = {"type": "http", "method": "GET", "path": "/x", "headers": []}
+        try:
+            await ErrorPageMiddleware(app, render)(scope, receive, send)
+        except BaseException as exc:
+            return sent, exc
+        return sent, None
+
+    @pytest.mark.anyio
+    async def test_error_before_response_is_logged_and_answered(self, caplog: pytest.LogCaptureFixture) -> None:
+        async def app(scope: Any, receive: Any, send: Any) -> None:
+            raise RuntimeError("boom")
+
+        sent, raised = await self.run(app)
+        assert raised is None
+        assert sent[0]["status"] == 500
+        assert [r.getMessage() for r in caplog.records].count("unhandled error") == 1
+
+    @pytest.mark.anyio
+    async def test_error_after_response_started_is_not_logged_twice(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Regression: it logged, then re-raised for uvicorn to log the same error again."""
+
+        async def app(scope: Any, receive: Any, send: Any) -> None:
+            await send({"type": "http.response.start", "status": 200, "headers": []})
+            raise RuntimeError("boom mid-stream")
+
+        _, raised = await self.run(app)
+        assert isinstance(raised, RuntimeError)
+        assert "unhandled error" not in [r.getMessage() for r in caplog.records]
+
+    @pytest.mark.anyio
+    async def test_client_disconnect_is_not_an_error(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Regression: a browser closing the connection was logged as an unhandled error."""
+        from starlette.requests import ClientDisconnect
+
+        async def app(scope: Any, receive: Any, send: Any) -> None:
+            raise ClientDisconnect
+
+        sent, raised = await self.run(app)
+        assert raised is None
+        assert sent == []
+        assert all(r.levelno < logging.WARNING for r in caplog.records)
