@@ -96,7 +96,11 @@ class CatalogRepository:
                 )
             )
         )
-        await self._session.execute(delete(CatalogItemTagRow).where(CatalogItemTagRow.tag_id == source_id))
+        await self._session.execute(
+            delete(CatalogItemTagRow).where(
+                CatalogItemTagRow.household_id == household_id, CatalogItemTagRow.tag_id == source_id
+            )
+        )
         gained = tagged_source - tagged_target
         self._session.add_all(
             CatalogItemTagRow(household_id=household_id, item_id=item_id, tag_id=target_id) for item_id in gained
@@ -229,8 +233,16 @@ class CatalogRepository:
     async def _set_links(
         self, household_id: int, item_id: int, tag_ids: Iterable[int], cook_ids: Iterable[int]
     ) -> None:
-        await self._session.execute(delete(CatalogItemTagRow).where(CatalogItemTagRow.item_id == item_id))
-        await self._session.execute(delete(CatalogItemCookRow).where(CatalogItemCookRow.item_id == item_id))
+        await self._session.execute(
+            delete(CatalogItemTagRow).where(
+                CatalogItemTagRow.household_id == household_id, CatalogItemTagRow.item_id == item_id
+            )
+        )
+        await self._session.execute(
+            delete(CatalogItemCookRow).where(
+                CatalogItemCookRow.household_id == household_id, CatalogItemCookRow.item_id == item_id
+            )
+        )
         self._session.add_all(
             CatalogItemTagRow(household_id=household_id, item_id=item_id, tag_id=tag_id) for tag_id in set(tag_ids)
         )

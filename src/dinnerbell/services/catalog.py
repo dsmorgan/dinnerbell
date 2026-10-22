@@ -136,10 +136,16 @@ async def tag_usage(db: AsyncSession, actor: Member) -> dict[int, int]:
 # Items --------------------------------------------------------------------------------------------
 
 
-async def _clean(db: AsyncSession, actor: Member, data: ItemInput) -> tuple[CleanItem, list[Tag]]:
+async def _clean(
+    db: AsyncSession, actor: Member, data: ItemInput, current: CatalogItem | None = None
+) -> tuple[CleanItem, list[Tag]]:
+    """Validate an item. Cooks must be active members, except that an edit may keep cooks the
+    item already has, so deactivating someone doesn't make their dishes uneditable."""
     existing_tags = await CatalogRepository(db).tags(actor.household_id)
-    member_ids = [m.id for m in await MemberRepository(db).list(actor.household_id)]
-    return clean_item(data, existing_tags, member_ids), existing_tags
+    cooks = {m.id for m in await MemberRepository(db).list(actor.household_id) if m.active}
+    if current is not None:
+        cooks |= current.cook_ids
+    return clean_item(data, existing_tags, cooks), existing_tags
 
 
 async def _create_tags(
@@ -201,7 +207,7 @@ async def update_item(db: AsyncSession, actor: Member, item_id: int, data: ItemI
     before = await get_item(db, actor, item_id)
     if data.kind is not before.kind:
         raise InvalidCatalogInput("An item's kind can't change. Add a new item instead.")
-    clean, _ = await _clean(db, actor, data)
+    clean, _ = await _clean(db, actor, data, current=before)
     repo = CatalogRepository(db)
     duplicate = f"A {clean.kind.label.lower()} named {clean.name} already exists."
     same_name = await repo.item_by_name(actor.household_id, clean.kind, clean.name)

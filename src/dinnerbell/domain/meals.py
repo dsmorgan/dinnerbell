@@ -10,6 +10,9 @@ from enum import StrEnum
 
 from dinnerbell.domain.members import Member
 
+MAX_MEAL_AGE = timedelta(days=730)
+"""How far back a meal can be logged: enough to backfill, not enough to typo a century."""
+
 
 class Slot(StrEnum):
     LUNCH = "lunch"
@@ -62,6 +65,8 @@ def check_meal(data: MealInput, *, today: date, active_member_ids: Iterable[int]
     """Raise InvalidMeal unless the meal can be logged. ``today`` is in the household time zone."""
     if data.day > today:
         raise InvalidMeal("You can log meals for today or earlier, not the future.")
+    if data.day < today - MAX_MEAL_AGE:
+        raise InvalidMeal("You can log meals from the last two years.")
     if not item_exists:
         raise InvalidMeal("Pick something from the catalog.")
     if not data.participant_ids:

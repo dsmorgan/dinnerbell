@@ -273,3 +273,30 @@ async def test_services_refuse_members_rename_and_merge(migrated: Settings, cloc
     finally:
         await database.close()
     assert {t.name for t in rows(migrated, TagRow)} == {"Thai", "Lao"}
+
+
+def test_merge_keeps_the_target_name_in_meal_snapshots(
+    client: TestClient, provider: FakeProvider, migrated: Settings
+) -> None:
+    sign_in(client, provider)
+    admin = member(migrated, "admin@example.com")
+    add_item(client, "Both", cuisines="Siamese, Thai")
+    item = item_row(migrated, "Both")
+    submit(
+        client,
+        "/history/meals",
+        {"day": "2026-10-21", "slot": "dinner", "item_id": str(item.id), "participant_ids": [str(admin.id)]},
+    )
+    source, target = tag_id(migrated, "Siamese"), tag_id(migrated, "Thai")
+    engine = create_engine(migrated.sync_database_url)
+    try:
+        with engine.begin() as connection:  # the source first, so a naive dedupe keeps its name
+            snapshot = [{"id": source, "name": "Siamese"}, {"id": target, "name": "Thai"}]
+            import json
+
+            connection.execute(text("UPDATE meal_log SET cuisine_tags = :c"), {"c": json.dumps(snapshot)})
+    finally:
+        engine.dispose()
+    submit(client, f"/catalog/tags/{source}/merge", {"into": str(target), "confirm": "on"})
+    [meal] = rows(migrated, MealLogRow)
+    assert meal.cuisine_tags == [{"id": target, "name": "Thai"}]

@@ -402,3 +402,11 @@ def test_repeated_tags_in_an_entry_count_once() -> None:
     assert result.ok
     assert created_tags(result) == [("cuisine", "Lao"), ("other", "x"), ("other", "Tofu")]
     assert result.items_to_create[0].state.tag_keys == frozenset({"lao", "x", "tofu"})
+
+
+def test_deactivated_members_are_not_cooks() -> None:
+    retired = Member(**{**{s: getattr(SAM, s) for s in Member.__slots__}, "active": False})  # type: ignore[attr-defined]
+    snapshot = CatalogSnapshot(tags=SNAPSHOT.tags, items=SNAPSHOT.items, members=(DAVID, retired))
+    result = plan("version: 1\nhome_meals:\n  - {name: Pie, cuisine: [American], cooks: [sam@example.com]}\n", snapshot)
+    assert [u.email for u in result.unknown_cooks] == ["sam@example.com"]
+    assert result.items_to_create[0].state.cook_ids == frozenset()

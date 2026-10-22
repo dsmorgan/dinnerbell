@@ -234,7 +234,8 @@ class CleanItem:
 
 
 def clean_item(data: ItemInput, tags: Iterable[Tag], member_ids: Iterable[int]) -> CleanItem:
-    """Validate form input against the household's tags and members.
+    """Validate form input against the household's tags and the members who may cook it:
+    active members, plus, when editing, cooks the item already has.
 
     Typed tag names match existing tags ignoring case. Fields that don't apply to the kind,
     such as an order link on a home meal, are dropped rather than rejected, because the form
@@ -274,7 +275,7 @@ def clean_item(data: ItemInput, tags: Iterable[Tag], member_ids: Iterable[int]) 
     members = set(member_ids)
     cook_ids = frozenset(data.cook_ids) if is_home else frozenset()
     if not cook_ids <= members:
-        raise InvalidCatalogInput("One of the chosen cooks isn't a member. Reload the page and try again.")
+        raise InvalidCatalogInput("One of the chosen cooks isn't an active member. Reload the page and try again.")
     return CleanItem(
         kind=data.kind,
         name=name,

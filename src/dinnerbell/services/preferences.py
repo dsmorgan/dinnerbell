@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dinnerbell.db.catalog import CatalogRepository
@@ -83,8 +84,16 @@ async def set_my_preference(
     )
     if target is None:
         raise NotFound(f"No such {target_type.value}.")
-    await PreferenceRepository(db).set(actor.household_id, actor.id, target_type, target_id, stance, now)
-    await db.commit()
+    for attempt in range(2):
+        try:
+            await PreferenceRepository(db).set(actor.household_id, actor.id, target_type, target_id, stance, now)
+            await db.commit()
+            break
+        except IntegrityError:
+            # A double tap can race to insert the same row; the retry finds it and updates it.
+            await db.rollback()
+            if attempt:
+                raise
     return target.name
 
 

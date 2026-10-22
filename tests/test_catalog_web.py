@@ -291,3 +291,32 @@ def test_last_eaten_labels() -> None:
     assert last_eaten_label(date(2026, 10, 12), today) == "Eaten 10 days ago"
     assert last_eaten_label(date(2026, 9, 1), today) == "Last eaten Sep 1"
     assert last_eaten_label(date(2025, 9, 1), today) == "Last eaten Sep 1, 2025"
+
+
+def test_cooks_must_be_active_but_existing_cooks_stay(
+    client: TestClient, provider: FakeProvider, migrated: Settings
+) -> None:
+    from dinnerbell.db.models import CatalogItemCookRow
+
+    sign_in(client, provider)
+    invite(client, "sam@example.com", "Sam")
+    invite(client, "kim@example.com", "Kim")
+    sam, kim = member(migrated, "sam@example.com").id, member(migrated, "kim@example.com").id
+    add_item(client, "Pie", kind="home", cuisines="American", cook_ids=[str(sam)])
+    pie = item_row(migrated, "Pie")
+    for who in (sam, kim):
+        submit(client, f"/admin/members/{who}/deactivate")
+    form = client.get(f"/catalog/items/{pie.id}").text
+    assert f'name="cook_ids" value="{sam}" checked' in form  # an existing cook stays listed
+    assert f'name="cook_ids" value="{kim}"' not in form
+    keep = submit(
+        client, f"/catalog/items/{pie.id}", {"name": "Pie", "new_cuisines": "American", "cook_ids": [str(sam)]}
+    )
+    assert keep.status_code == 303
+    add = submit(
+        client, f"/catalog/items/{pie.id}", {"name": "Pie", "new_cuisines": "American", "cook_ids": [str(kim)]}
+    )
+    assert add.status_code == 400 and "isn't an active member" in page(add)
+    new = add_item(client, "Cake", kind="home", cuisines="American", cook_ids=[str(sam)])
+    assert new.status_code == 400
+    assert {c.member_id for c in rows(migrated, CatalogItemCookRow)} == {sam}

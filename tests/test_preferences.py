@@ -258,3 +258,30 @@ def test_pages_load_the_save_error_banner(client: TestClient, provider: FakeProv
     script = client.get("/static/app.js").text
     assert "htmx:responseError" in script and "htmx:sendError" in script
     assert "Not saved. Reload the page." in script
+
+
+def test_double_submit_retries_once(
+    client: TestClient, provider: FakeProvider, migrated: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two taps racing can both try to insert the row; the loser retries and updates it instead."""
+    from sqlalchemy.exc import IntegrityError
+
+    from dinnerbell.db.preferences import PreferenceRepository
+
+    sign_in(client, provider)
+    add_item(client, "Siam Garden")
+    original = PreferenceRepository.set
+    calls = 0
+
+    async def racing(self: PreferenceRepository, *args: object, **kwargs: object) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise IntegrityError("INSERT", {}, Exception("UNIQUE constraint failed"))
+        await original(self, *args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(PreferenceRepository, "set", racing)
+    response = htmx(client, "/preferences/stance", {"target": f"tag:{thai(migrated)}", "level": "veto"})
+    assert response.status_code == 200 and "Saved" in response.text
+    assert calls == 2
+    assert stances(migrated, "admin@example.com") == {("tag", thai(migrated)): (True, 0)}

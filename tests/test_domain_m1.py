@@ -96,7 +96,7 @@ def test_new_other_tags_take_the_chosen_kind() -> None:
 def test_unknown_tag_or_cook_ids_are_refused() -> None:
     with pytest.raises(InvalidCatalogInput, match="no longer exists"):
         clean_item(item_input(tag_ids=frozenset({99})), TAGS, [])
-    with pytest.raises(InvalidCatalogInput, match="isn't a member"):
+    with pytest.raises(InvalidCatalogInput, match="isn't an active member"):
         clean_item(item_input(kind=ItemKind.HOME, cook_ids=frozenset({99})), TAGS, [10])
 
 
@@ -352,3 +352,26 @@ def test_summarize_counts_repeat_items() -> None:
     window = summarize(meals, today=TODAY, days=7)
     [item] = window.items
     assert (item.times, item.last_eaten) == (2, TODAY)
+
+
+def test_meal_dates_are_bounded() -> None:
+    from datetime import timedelta
+
+    people = frozenset({1})
+    check_meal(
+        MealInput(TODAY - timedelta(days=730), Slot.DINNER, 1, people),
+        today=TODAY,
+        active_member_ids=[1],
+        item_exists=True,
+    )
+    with pytest.raises(InvalidMeal, match="last two years"):
+        check_meal(
+            MealInput(TODAY - timedelta(days=731), Slot.DINNER, 1, people),
+            today=TODAY,
+            active_member_ids=[1],
+            item_exists=True,
+        )
+    with pytest.raises(InvalidMeal, match="last two years"):
+        check_meal(
+            MealInput(date(1, 1, 1), Slot.DINNER, 1, people), today=TODAY, active_member_ids=[1], item_exists=True
+        )

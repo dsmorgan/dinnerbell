@@ -146,11 +146,14 @@ class MealLogRepository:
         for row in await self._session.scalars(select(MealLogRow).where(MealLogRow.household_id == household_id)):
             if not any(int(tag["id"]) == source_id for tag in row.cuisine_tags):
                 continue
+            has_target = any(int(tag["id"]) == target_id for tag in row.cuisine_tags)
             kept: list[dict[str, Any]] = []
             for tag in row.cuisine_tags:
-                tag_id = target_id if int(tag["id"]) == source_id else int(tag["id"])
-                if all(int(k["id"]) != tag_id for k in kept):
-                    kept.append({"id": tag_id, "name": tag["name"]})
+                if int(tag["id"]) == source_id:
+                    if has_target:
+                        continue  # the target's own entry, with its name, stays
+                    tag = {"id": target_id, "name": tag["name"]}
+                kept.append({"id": int(tag["id"]), "name": tag["name"]})
             row.cuisine_tags = kept
             changed += 1
         await self._session.flush()

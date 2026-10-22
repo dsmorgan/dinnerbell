@@ -188,7 +188,8 @@ class _Planner:
         self.tags = {tag.key: _KnownTag(tag.kind, tag.name) for tag in self.snapshot.tags}
         self.tag_keys_by_id = {tag.id: tag.key for tag in self.snapshot.tags}
         self.items = {(item.kind, item.key): item for item in self.snapshot.items}
-        self.members_by_email = {member.email: member for member in self.snapshot.members}
+        # Only active members can cook; an inactive member's email is reported like an unknown one.
+        self.members_by_email = {m.email: m for m in self.snapshot.members if m.active}
         self.member_names = {member.id: member.display_name for member in self.snapshot.members}
 
     def plan(self, parsed: ParsedCatalog) -> ImportPlan:
