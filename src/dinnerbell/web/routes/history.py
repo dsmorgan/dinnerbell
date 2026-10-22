@@ -80,13 +80,14 @@ def _today(context: AppContext, principal: Principal) -> date:
     return household_today(principal.household, context.clock())
 
 
-async def _choices(db: Database, principal: Principal, keep_item: int | None = None) -> dict[str, Any]:
+async def _choices(db: Database, principal: Principal, editing: MealLog | None = None) -> dict[str, Any]:
     data = await catalog_service.catalog(db, principal.member)
+    keep_item = editing.item_id if editing is not None else None
     usable = [i for i in data.items if i.active or i.id == keep_item]
     return {
         "restaurants": [i for i in usable if i.kind is ItemKind.RESTAURANT],
         "home_meals": [i for i in usable if i.kind is ItemKind.HOME],
-        "people": [m for m in data.members if m.active],
+        "people": await meal_service.participant_choices(db, principal.member, editing),
         "member_names": {m.id: m.display_name for m in data.members},
         "slots": list(Slot),
     }
@@ -161,7 +162,7 @@ async def _edit_page(
         request,
         "meal_edit.html",
         {"meal": meal, "form": form, "error": error, "today": _today(context, principal)}
-        | await _choices(db, principal, keep_item=meal.item_id),
+        | await _choices(db, principal, editing=meal),
         status_code=status_code,
     )
 

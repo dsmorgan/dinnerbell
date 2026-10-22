@@ -274,3 +274,27 @@ async def test_variety_service_for_ranking(db: AsyncSession, migrated: Settings)
     assert await variety.last_eaten(db, 1) == {}
     set_window(migrated, 14)
     assert await variety.window_days(db, 1) == 14
+
+
+def test_editing_keeps_deactivated_participants(
+    client: TestClient, household: dict[str, int], migrated: Settings
+) -> None:
+    log(client, household["siam"], [household["admin"], household["sam"]])
+    [meal] = rows(migrated, MealLogRow)
+    assert submit(client, f"/admin/members/{household['sam']}/deactivate").status_code == 303
+    form = client.get(f"/history/meals/{meal.id}").text
+    assert f'name="participant_ids" value="{household["sam"]}" checked' in form  # still offered, still ticked
+    assert "Sam" in form
+    edit = {
+        "day": "2026-10-21",
+        "slot": "dinner",
+        "item_id": str(household["siam"]),
+        "participant_ids": [str(household["admin"]), str(household["sam"])],
+    }
+    assert submit(client, f"/history/meals/{meal.id}", edit).status_code == 303
+    [meal] = rows(migrated, MealLogRow)
+    assert meal.participants == [{"id": household["admin"], "name": "admin"}, {"id": household["sam"], "name": "Sam"}]
+    # A new meal still can't name someone who is deactivated.
+    new = log(client, household["siam"], [household["sam"]])
+    assert new.status_code == 400 and "isn't an active member" in page(new)
+    assert f'name="participant_ids" value="{household["sam"]}"' not in client.get("/history").text

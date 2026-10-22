@@ -29,6 +29,6 @@
 <fieldset class="field">
   <legend>Who ate</legend>
   {% for m in people %}
-  <label class="check"><input type="checkbox" name="participant_ids" value="{{ m.id }}"{% if m.id in form.participant_ids %} checked{% endif %}> {{ m.display_name }}</label>
+  <label class="check"><input type="checkbox" name="participant_ids" value="{{ m.id }}"{% if m.id in form.participant_ids %} checked{% endif %}> {{ m.name }}</label>
   {% endfor %}
 </fieldset>

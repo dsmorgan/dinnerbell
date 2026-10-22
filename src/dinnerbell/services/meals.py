@@ -38,13 +38,28 @@ async def get_meal(db: AsyncSession, actor: Member, meal_id: int) -> MealLog:
     return meal
 
 
+async def participant_choices(db: AsyncSession, actor: Member, meal: MealLog | None = None) -> list[MemberRef]:
+    """Who can be ticked as having eaten: active members, plus, when editing, everyone already
+    on the meal, under the name they had then. Without the second group, editing a meal would
+    silently drop a member who has since been deactivated."""
+    return sorted(
+        (MemberRef(i, name) for i, name in (await _eligible(db, actor, meal)).items()), key=lambda m: m.name.casefold()
+    )
+
+
+async def _eligible(db: AsyncSession, actor: Member, meal: MealLog | None) -> dict[int, str]:
+    kept = {ref.id: ref.name for ref in meal.participants} if meal is not None else {}
+    active = {m.id: m.display_name for m in await MemberRepository(db).list(actor.household_id) if m.active}
+    return kept | active  # active members appear under their current name
+
+
 async def _snapshots(
-    db: AsyncSession, actor: Member, data: MealInput, today: date
+    db: AsyncSession, actor: Member, data: MealInput, today: date, editing: MealLog | None = None
 ) -> tuple[tuple[TagRef, ...], tuple[MemberRef, ...]]:
     catalog = CatalogRepository(db)
     item = await catalog.item(actor.household_id, data.item_id)
-    members = {m.id: m for m in await MemberRepository(db).list(actor.household_id) if m.active}
-    check_meal(data, today=today, active_member_ids=members, item_exists=item is not None)
+    eligible = await _eligible(db, actor, editing)
+    check_meal(data, today=today, active_member_ids=eligible, item_exists=item is not None)
     tag_ids = item.tag_ids if item is not None else frozenset()
     cuisines = tuple(
         TagRef(tag.id, tag.name)
@@ -52,9 +67,9 @@ async def _snapshots(
         if tag.id in tag_ids and tag.kind is TagKind.CUISINE
     )
     participants = tuple(
-        MemberRef(m.id, m.display_name)
-        for m in sorted(members.values(), key=lambda m: m.display_name.casefold())
-        if m.id in data.participant_ids
+        MemberRef(i, name)
+        for i, name in sorted(eligible.items(), key=lambda pair: pair[1].casefold())
+        if i in data.participant_ids
     )
     return cuisines, participants
 
@@ -95,8 +110,8 @@ async def _changeable(db: AsyncSession, actor: Member, meal_id: int) -> MealLog:
 async def update_meal(
     db: AsyncSession, actor: Member, meal_id: int, data: MealInput, *, today: date, now: datetime
 ) -> MealLog:
-    await _changeable(db, actor, meal_id)
-    cuisines, participants = await _snapshots(db, actor, data, today)
+    existing = await _changeable(db, actor, meal_id)
+    cuisines, participants = await _snapshots(db, actor, data, today, editing=existing)
     await MealLogRepository(db).update(
         actor.household_id,
         meal_id,
