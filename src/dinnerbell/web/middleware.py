@@ -18,7 +18,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from dinnerbell.logs import member_id_var, request_id_var
 from dinnerbell.web.clientip import IPNetwork, resolve_client_ip
-from dinnerbell.web.ratelimit import SlidingWindowLimiter
+from dinnerbell.web.ratelimit import SlidingWindowLimiter, client_key
 
 log = logging.getLogger("dinnerbell.web.access")
 
@@ -195,12 +195,13 @@ class RateLimitMiddleware:
         await self.app(scope, receive, send)
 
     def _check(self, scope: Scope) -> float | None:
-        keys = [f"ip:{_state(scope).get('client_ip', 'unknown')}"]
+        # The IP key is checked first and alone when it is over the limit, so a client can't
+        # mint new session-cookie keys once its address is limited.
+        retry_after = self.limiter.hit(client_key(_state(scope).get("client_ip", "unknown")))
+        if retry_after is not None:
+            return retry_after
         cookie = _cookie(scope, self.session_cookie)
-        if cookie:
-            keys.append(f"session:{cookie[:16]}")
-        waits = [wait for key in keys if (wait := self.limiter.hit(key)) is not None]
-        return max(waits) if waits else None
+        return self.limiter.hit(f"session:{cookie[:16]}") if cookie else None
 
 
 def _cookie(scope: Scope, name: str) -> str | None:

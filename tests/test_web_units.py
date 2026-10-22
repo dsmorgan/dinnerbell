@@ -57,20 +57,35 @@ class TestRateLimiter:
         now[0] = 60
         assert limiter.hit("a") is None
 
-    def test_eviction_bounds_memory(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_memory_is_bounded_by_lru_eviction(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from dinnerbell.web import ratelimit
 
         monkeypatch.setattr(ratelimit, "MAX_TRACKED_KEYS", 3)
-        now = [0.0]
-        limiter = SlidingWindowLimiter(1, 10, monotonic=lambda: now[0])
-        for key in "abc":
+        limiter = SlidingWindowLimiter(5, 60, monotonic=lambda: 0.0)
+        for key in "abcdefg":
             limiter.hit(key)
-        now[0] = 20
-        assert limiter.hit("d") is None
-        assert len(limiter._hits) == 1  # stale keys evicted
-        for key in "efg":
-            limiter.hit(key)
-        assert len(limiter._hits) <= 3
+        assert len(limiter) == 3
+
+    def test_flooding_other_keys_does_not_reset_a_limited_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Regression: overflowing the table used to clear it, resetting every limit."""
+        from dinnerbell.web import ratelimit
+
+        monkeypatch.setattr(ratelimit, "MAX_TRACKED_KEYS", 10)
+        limiter = SlidingWindowLimiter(2, 60, monotonic=lambda: 0.0)
+        limiter.hit("ip:attacker")
+        limiter.hit("ip:attacker")
+        for i in range(50):
+            assert limiter.hit("ip:attacker") is not None
+            limiter.hit(f"session:{i}")
+        assert limiter.hit("ip:attacker") is not None
+
+    def test_client_keys(self) -> None:
+        from dinnerbell.web.ratelimit import client_key
+
+        assert client_key("198.51.100.7") == "ip:198.51.100.7"
+        assert client_key("2001:db8:1:2:aaaa::1") == client_key("2001:db8:1:2:bbbb::9") == "ip:2001:db8:1:2::/64"
+        assert client_key("2001:db8:1:3::1") != client_key("2001:db8:1:2::1")
+        assert client_key("testclient") == "ip:testclient"
 
 
 class TestSigning:
@@ -123,6 +138,21 @@ def test_auth_routes_are_rate_limited_per_ip(client: TestClient) -> None:
     limited = client.get("/auth/login")
     assert int(limited.headers["retry-after"]) >= 1
     assert client.get("/").status_code == 200  # other routes are not limited
+
+
+def test_session_cookie_flood_from_one_ip_stays_limited(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression: random session cookies from one IP filled the table and reset its limit."""
+    import secrets
+
+    from dinnerbell.web import ratelimit
+
+    monkeypatch.setattr(ratelimit, "MAX_TRACKED_KEYS", 25)
+    statuses = []
+    for _ in range(200):
+        client.cookies.set("__Host-dinnerbell_session", secrets.token_urlsafe(16), domain="dinnerbell.test")
+        statuses.append(client.get("/auth/login").status_code)
+    assert statuses[:20] == [302] * 20
+    assert set(statuses[20:]) == {429}
 
 
 def test_debug_logs_show_peer_and_client_ip(client: TestClient, caplog: pytest.LogCaptureFixture) -> None:
