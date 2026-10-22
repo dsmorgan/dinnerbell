@@ -12,6 +12,8 @@ htmlcov/
 # Local config and data
 .env
 .env.*
+!.env.example
+migrations-scratch.db
 /data/
 *.db
 *.db-wal
