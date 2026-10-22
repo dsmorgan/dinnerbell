@@ -36,7 +36,7 @@ docker build -f Containerfile -t dinnerbell .
 - Times are UTC-aware `datetime`s everywhere; `UTCDateTime` handles SQLite. Get "now" from the injected clock.
 - Log member IDs, never emails, tokens, or secrets (SEC-5). Secrets are `SecretStr`.
 - Pages: no inline `<script>`, `style=`, or `on*=` attributes; the CSP forbids them. HTMX is vendored at `web/static/htmx-2.0.11.min.js` (npm `htmx.org@2.0.11`, sha256 `d6fdc75f204e6bdefa99b69bf1e6d4ac69b8a364f77929f45c13476b4000f717`).
-- Every state-changing route depends on `require_csrf` (or `csrf_if_signed_in` for sign-out). A test fails if one doesn't.
+- Every state-changing route depends on `require_csrf`, `require_admin_csrf` (admin routes), or `csrf_if_signed_in` (sign-out). Every `/admin` route checks for an admin in the web layer too, not only in the service. Add routes with routers, never `add_route` or `mount`; `tests/test_architecture.py` fails on anything it can't audit.
 - Every admin action writes an audit row (SEC-9).
 
 ## Migrations
