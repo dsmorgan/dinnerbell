@@ -128,11 +128,11 @@ def test_aliases_are_refused() -> None:
     assert "aliases" in message
 
 
-def quickly(source: str | bytes) -> FileError:
-    """Parse ``source`` and return its single error, failing if parsing takes over a second."""
+def quickly(source: str | bytes, seconds: float = 1.0) -> FileError:
+    """Parse ``source`` and return its single error, failing if parsing takes too long."""
     started = time.perf_counter()
     found = parse_catalog(source).errors
-    assert time.perf_counter() - started < 1.0
+    assert time.perf_counter() - started < seconds
     assert len(found) == 1, found
     return found[0]
 
@@ -169,7 +169,8 @@ def test_recursion_error_never_escapes(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_too_many_values_are_refused() -> None:
-    error = quickly("version: 1\ntags:\n  other: [" + ",".join(["x"] * (MAX_NODES + 1)) + "]\n")
+    # Refusing takes composing every value up to the cap: about 0.4 s, several times that under coverage.
+    error = quickly("version: 1\ntags:\n  other: [" + ",".join(["x"] * (MAX_NODES + 1)) + "]\n", seconds=5.0)
     assert error.location == "line 3"
     assert "more than 50,000 values" in error.message
 
