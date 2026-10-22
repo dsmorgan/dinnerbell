@@ -105,14 +105,16 @@ async def test_local_http_issuer_allows_http_endpoints(clock: FakeClock) -> None
 @pytest.mark.parametrize(
     ("response", "reason", "unavailable"),
     [
-        (httpx.Response(400, json={"error": "invalid_grant"}), "invalid_grant", False),
-        (httpx.Response(200, json={"ok": False, "error": "invalid_code"}), "invalid_code", False),
+        (httpx.Response(400, json={"error": "invalid_grant"}), "HTTP 400, error=invalid_grant", False),
+        (httpx.Response(401, json={"error": "invalid_client"}), "HTTP 401, error=invalid_client", False),
+        (httpx.Response(200, json={"ok": False, "error": "invalid_code"}), "HTTP 200, error=invalid_code", False),
         (httpx.Response(200, json={"access_token": "x"}), "no id_token", False),
-        (httpx.Response(200, text="not json"), "invalid JSON", True),
-        (httpx.Response(200, json=["list"]), "non-object", True),
+        (httpx.Response(200, text="not json"), "HTTP 200: provider returned invalid JSON", True),
+        (httpx.Response(200, json=["list"]), "HTTP 200: provider returned a non-object", True),
         (httpx.Response(502, text="<html>Bad gateway</html>"), "HTTP 502", True),
         (httpx.Response(503, json={"error": "temporarily_unavailable"}), "HTTP 503", True),
-        (httpx.Response(400, text="Bad Request"), "invalid JSON", True),
+        (httpx.Response(400, text="Bad Request"), "HTTP 400, body is not JSON", False),
+        (httpx.Response(403, text="<html>denied</html>"), "HTTP 403, body is not JSON", False),
     ],
 )
 async def test_token_endpoint_failures(

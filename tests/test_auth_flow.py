@@ -399,3 +399,18 @@ def test_token_endpoint_outage_shows_provider_page(client: TestClient, provider:
     response = client.get("/auth/callback", params={"code": code, "state": params["state"]})
     assert response.status_code == 502
     assert "sign-in provider" in page(response)
+
+
+def test_wrong_client_secret_is_diagnosable(
+    client: TestClient, provider: FakeProvider, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A 4xx from the token endpoint is a refusal, not an outage, and the log names it."""
+    import logging
+
+    provider.client_secret = "rotated-at-the-provider"
+    with caplog.at_level(logging.WARNING):
+        response = sign_in(client, provider)
+    assert response.status_code == 400
+    assert "couldn't be verified" in page(response)
+    reasons = [getattr(r, "reason", "") for r in caplog.records if r.getMessage() == "sign-in verification failed"]
+    assert reasons == ["token endpoint refused the request: HTTP 401, error=invalid_client"]

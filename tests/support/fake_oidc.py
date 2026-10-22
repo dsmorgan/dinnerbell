@@ -54,6 +54,7 @@ class FakeProvider:
     jwks_fetches: int = 0
     extra_keys: list[RSAKey] = field(default_factory=list)
     token_outage: int | None = None  # set to an HTTP status to make the token endpoint fail
+    client_secret: str = CLIENT_SECRET  # the secret the provider expects
 
     # Endpoints ---------------------------------------------------------------------------
 
@@ -115,8 +116,8 @@ class FakeProvider:
     def _client_authenticated(self, form: dict[str, Any], authorization: str | None) -> bool:
         if authorization and authorization.startswith("Basic "):
             client_id, _, secret = base64.b64decode(authorization[6:]).decode().partition(":")
-            return unquote(client_id) == CLIENT_ID and unquote(secret) == CLIENT_SECRET
-        return form.get("client_id") == CLIENT_ID and form.get("client_secret") == CLIENT_SECRET
+            return unquote(client_id) == CLIENT_ID and unquote(secret) == self.client_secret
+        return form.get("client_id") == CLIENT_ID and form.get("client_secret") == self.client_secret
 
     # The user's side ---------------------------------------------------------------------
 

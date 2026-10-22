@@ -207,16 +207,30 @@ class OIDCClient:
             response = await self._http.post(metadata.token_endpoint, data=form, headers=headers)
         except httpx.HTTPError as exc:
             raise OIDCError(f"token request failed: {type(exc).__name__}", provider_unavailable=True) from None
-        if response.status_code >= 500:
-            raise OIDCError(f"token endpoint returned HTTP {response.status_code}", provider_unavailable=True)
-        body = self._json_object(response)
-        if response.status_code != 200 or "error" in body:
-            error = body.get("error")
-            raise OIDCError(f"token endpoint refused the code: HTTP {response.status_code} {error!s:.64}")
+        body = self._token_response(response)
         id_token = body.get("id_token")
         if not isinstance(id_token, str) or not id_token:
             raise OIDCError("token response has no id_token")
         return id_token
+
+    def _token_response(self, response: httpx.Response) -> dict[str, Any]:
+        """Classify a token endpoint reply. Every reason names the HTTP status, so a log line is
+        enough to tell a provider outage from a refused code or a wrong client secret."""
+        status = response.status_code
+        if status >= 500:
+            raise OIDCError(f"token endpoint returned HTTP {status}", provider_unavailable=True)
+        try:
+            body = self._json_object(response)
+        except OIDCError as exc:
+            if 200 <= status < 300:
+                raise OIDCError(
+                    f"token endpoint returned HTTP {status}: {exc.reason}", provider_unavailable=True
+                ) from None
+            raise OIDCError(f"token endpoint refused the request: HTTP {status}, body is not JSON") from None
+        if not 200 <= status < 300 or "error" in body:
+            error = body.get("error")
+            raise OIDCError(f"token endpoint refused the request: HTTP {status}, error={error!s:.64}")
+        return body
 
     def _basic_auth(self) -> str:
         pair = f"{quote(self._client_id, safe='')}:{quote(self._client_secret, safe='')}"
