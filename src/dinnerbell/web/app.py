@@ -17,7 +17,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.responses import Response
 
 from dinnerbell.config import Settings
-from dinnerbell.scheduler.runner import JobContext, SchedulerState, build_scheduler
+from dinnerbell.scheduler.runner import JobContext, SchedulerState, build_scheduler, stop_scheduler
 from dinnerbell.services.bootstrap import bootstrap
 from dinnerbell.services.clock import Clock, utc_now
 from dinnerbell.services.database import open_database
@@ -80,22 +80,21 @@ def create_app(
             oidc=_oidc_client(settings, http, clock),
             scheduler_state=state,
         )
-        scheduler = build_scheduler(
-            JobContext(
-                state=state,
-                clock=clock,
-                zone=settings.zone,
-                database_path=settings.database_path,
-                backup_dir=settings.backup_dir,
-                sessionmaker=sessionmaker,
-            )
+        jobs = JobContext(
+            state=state,
+            clock=clock,
+            zone=settings.zone,
+            database_path=settings.database_path,
+            backup_dir=settings.backup_dir,
+            sessionmaker=sessionmaker,
         )
+        scheduler = build_scheduler(jobs)
         scheduler.start()
         log.info("dinnerbell started")
         try:
             yield
         finally:
-            scheduler.shutdown(wait=False)
+            await stop_scheduler(scheduler, jobs)
             await http.aclose()
             await database.close()
 

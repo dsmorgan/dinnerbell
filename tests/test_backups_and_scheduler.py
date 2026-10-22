@@ -126,3 +126,33 @@ def test_no_catch_up_when_recent_backup_exists(job_context: runner.JobContext, c
     os.utime(path, (clock.now.timestamp(), clock.now.timestamp()))
     scheduler = runner.build_scheduler(job_context)
     assert scheduler.get_job("catch_up_backup") is None
+
+
+@pytest.mark.anyio
+async def test_stop_waits_for_cancelled_jobs_to_clean_up(job_context: runner.JobContext) -> None:
+    """Regression: shutdown used to dispose the engine while a cancelled job was still unwinding."""
+    import asyncio
+    from datetime import UTC, datetime
+
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+    started = asyncio.Event()
+    cleaned_up: list[bool] = []
+
+    async def slow_job(_ctx: runner.JobContext) -> None:
+        started.set()
+        try:
+            await asyncio.sleep(3600)
+        finally:
+            await asyncio.sleep(0.05)  # async cleanup, like a session rollback
+            cleaned_up.append(True)
+
+    scheduler = AsyncIOScheduler()
+    scheduler.add_job(runner._tracked(slow_job), args=[job_context], next_run_time=datetime.now(UTC))
+    scheduler.start()
+    await asyncio.wait_for(started.wait(), timeout=5)
+    assert len(job_context.running) == 1
+
+    await runner.stop_scheduler(scheduler, job_context)
+    assert cleaned_up == [True]
+    assert job_context.running == set()

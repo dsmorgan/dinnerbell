@@ -7,8 +7,10 @@ Every job is idempotent: running it twice, or after a missed run, leaves the sam
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
-from dataclasses import dataclass
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -27,6 +29,7 @@ HEARTBEAT_INTERVAL = timedelta(seconds=30)
 BACKUP_HOUR = 3
 BACKUP_MINUTE = 30
 BACKUP_CATCH_UP_AFTER = timedelta(hours=24)
+SHUTDOWN_GRACE_SECONDS = 10.0
 
 
 @dataclass
@@ -48,6 +51,27 @@ class JobContext:
     database_path: Path
     backup_dir: Path
     sessionmaker: async_sessionmaker[AsyncSession]
+    running: set[asyncio.Task[object]] = field(default_factory=set)
+
+
+Job = Callable[[JobContext], Awaitable[None]]
+
+
+def _tracked(job: Job) -> Job:
+    """Record the job's task so shutdown can wait for it to unwind before the database closes."""
+
+    @functools.wraps(job)
+    async def run(ctx: JobContext) -> None:
+        task = asyncio.current_task()
+        if task is not None:
+            ctx.running.add(task)
+        try:
+            await job(ctx)
+        finally:
+            if task is not None:
+                ctx.running.discard(task)
+
+    return run
 
 
 async def heartbeat(ctx: JobContext) -> None:
@@ -71,6 +95,17 @@ async def purge_sessions(ctx: JobContext) -> None:
         log.info("expired sessions removed", extra={"count": removed})
 
 
+async def stop_scheduler(scheduler: AsyncIOScheduler, ctx: JobContext) -> None:
+    """Stop scheduling, cancel running jobs, and wait for them to finish cleaning up.
+
+    APScheduler cancels asyncio jobs on shutdown but does not wait for them. Without the wait,
+    a cancelled job can still be rolling back its database session when the engine is disposed.
+    """
+    scheduler.shutdown(wait=False)
+    if ctx.running:
+        await asyncio.wait(set(ctx.running), timeout=SHUTDOWN_GRACE_SECONDS)
+
+
 def build_scheduler(ctx: JobContext) -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler(
         timezone=ctx.zone,
@@ -79,20 +114,22 @@ def build_scheduler(ctx: JobContext) -> AsyncIOScheduler:
     # APScheduler times jobs by the wall clock; ctx.clock only stamps what the jobs record.
     start = datetime.now(UTC)
     scheduler.add_job(
-        heartbeat,
+        _tracked(heartbeat),
         IntervalTrigger(seconds=HEARTBEAT_INTERVAL.total_seconds()),
         args=[ctx],
         id="heartbeat",
         next_run_time=start,
     )
     scheduler.add_job(
-        nightly_backup,
+        _tracked(nightly_backup),
         CronTrigger(hour=BACKUP_HOUR, minute=BACKUP_MINUTE, timezone=ctx.zone),
         args=[ctx],
         id="nightly_backup",
     )
-    scheduler.add_job(purge_sessions, IntervalTrigger(hours=1), args=[ctx], id="purge_sessions", next_run_time=start)
+    scheduler.add_job(
+        _tracked(purge_sessions), IntervalTrigger(hours=1), args=[ctx], id="purge_sessions", next_run_time=start
+    )
     ctx.state.last_backup = backups.last_backup_time(ctx.backup_dir)
     if ctx.state.last_backup is None or ctx.clock() - ctx.state.last_backup > BACKUP_CATCH_UP_AFTER:
-        scheduler.add_job(nightly_backup, args=[ctx], id="catch_up_backup", next_run_time=start)
+        scheduler.add_job(_tracked(nightly_backup), args=[ctx], id="catch_up_backup", next_run_time=start)
     return scheduler
