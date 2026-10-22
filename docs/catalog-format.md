@@ -83,7 +83,7 @@ A complete starter file is in [seed/example.yaml](../seed/example.yaml).
 | `cuisine` | Yes | One or more cuisine tags. |
 | `tags` | No | Any other tags. |
 | `servings` | No | Typical number of servings one batch makes. Used to warn before over-inviting. |
-| `cooks` | No | Email addresses of members who can make it. Emails that don't match a member are reported in the preview and skipped. |
+| `cooks` | No | Email addresses of active members who can make it. Emails that don't match an active member are reported in the preview and skipped. |
 | `url` | No | Recipe link. |
 | `notes` | No | Free text up to 500 characters. |
 | `active` | No | Same as for restaurants. |
