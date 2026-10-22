@@ -59,7 +59,7 @@ Measure these 30 days after the household starts using Dinnerbell for dinner.
 
 | Role | Who | Can do |
 |---|---|---|
-| Admin | David | Everything a member can, plus: invite and deactivate members, edit household settings other than the meal schedule, override or reassign a coordinator, lock or cancel a decision, manage tags, connect Slack. |
+| Admin | David | Everything a member can, plus: invite and deactivate members, edit household settings other than the meal schedule, override or reassign a coordinator, lock or cancel a decision, rename and merge tags, connect Slack. |
 | Member | Each household adult | Respond to calls, make offers, change the meal schedule, claim roles, propose and vote, maintain the catalog, set their own preferences, invite guests, log meals, give feedback on meals, view history and badges. |
 | Guest | A partner or friend at a meal | Has no account. A member adds guests to their own response with a head count and optional dietary needs. |
 
@@ -198,7 +198,7 @@ Requirements use "must" for version 1 and "should" for items that can slip to a 
 |---|---|
 | FR-23 | Any member can add, edit, and deactivate catalog items. Deactivation hides an item without deleting history. |
 | FR-24 | A catalog item has: kind (home meal or restaurant), name, tags, supported fulfillment modes, optional URL (menu or recipe link), optional order URL (restaurants), optional notes, optional default servings (home meals), optional list of members who can cook it (home meals). |
-| FR-25 | Tags are shared across the household. Any member can add a tag; the admin can merge and rename tags. Tag kinds: cuisine, protein, dietary, other. |
+| FR-25 | Tags are shared across the household. Any member can add a tag; the admin can merge and rename tags. Tag kinds: cuisine, protein, dietary, other. A cuisine tag merges only into another cuisine tag, so every item keeps a cuisine. Merging moves the tag's items, preferences, and meal-log references to the surviving tag; when a member has a stance on both, a veto wins, otherwise the lower score. |
 | FR-26 | Any member can bulk-import tags and catalog items from a file in the format defined in [catalog-format.md](catalog-format.md), by paste or upload, with a validated preview before anything is saved. The same file can seed the catalog at first run. Imports never delete. |
 
 ### 6.6 Preferences
@@ -370,11 +370,11 @@ Mobile-first server-rendered pages with HTMX for in-place updates. No JavaScript
 | Page | Content |
 |---|---|
 | Today | Open events with roster, proposals, votes, and the same actions Slack offers. Start a call or post an offer. |
-| Catalog | Search and filter items by tag, kind, mode. Add and edit items. See last eaten and feedback counts. |
+| Catalog | Search and filter items by tag, kind, mode. Add and edit items. See last eaten and feedback counts. Tag management: any member adds tags; the admin renames and merges them. Import a catalog file with a preview (FR-26). |
 | Preferences | Tags and items with veto and −2 to +2 controls. Capability flags. Mute reminders. Feedback reminder on or off. Calendar URL (later phase). |
 | History | Meals by week. Cuisines in the current variety window. Give or edit feedback on recent meals. |
 | Stats | Contribution counts, badges with progress to the next tier, household recap. |
-| Admin | Members and invitations, Slack mapping, slot schedules, time zone, ranking weights, badge thresholds, tag management, seed import, backup status. |
+| Admin | Members and invitations, Slack mapping, slot schedules, time zone, ranking weights, badge thresholds, backup status. |
 
 ## 12. Metrics and badges
 
@@ -464,7 +464,7 @@ Every table carries `household_id`. Timestamps are UTC; the household time zone 
 | catalog_item | kind (home, restaurant), name, notes, url, order_url, modes (cook, pickup, delivery), default_servings, created_by, active |
 | catalog_item_tag | item, tag |
 | catalog_item_cook | item, member |
-| preference | member, target_type (tag, item), target_id, level (veto or −2 to +2) |
+| preference | member, tag (nullable), item (nullable), veto, score (−2 to +2). Exactly one of tag and item is set (check constraint); both are foreign keys. A veto has score 0, and neutral stances aren't stored. |
 | event | slot, date, kind (call, offer), state, created_by, coordinator, respond_deadline, vote_deadline, capacity, offer_item, offer_mode, offer_time, decided_item, decided_mode, meal_time, decided_at, slack_channel_id, slack_message_ts |
 | response | event, member, status (in, out, maybe), guests, guest_needs (tags), eat_from, eat_until, offers_cook, offers_pickup, offers_order, offers_coordinate, note |
 | suggestion | event, member, item (nullable), free_text |

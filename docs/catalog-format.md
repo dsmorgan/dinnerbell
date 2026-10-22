@@ -92,9 +92,14 @@ A complete starter file is in [seed/example.yaml](../seed/example.yaml).
 
 - **Tags match by name, ignoring case.** `thai` and `Thai` are the same tag. The first spelling Dinnerbell sees is kept.
 - **Tag names are unique across kinds.** You can't have a cuisine and a protein both named `vegetarian`.
+- **Lists hold the right kind of tag.** Every tag in a `cuisine` list must be a cuisine tag, and no tag in a `tags` list may be one. Listing `vegetarian` under `cuisine`, or `Thai` under `tags`, is an error.
 - **Undeclared tags are created.** A tag used in an entry but missing from `tags` is created with kind `cuisine` if it appears in a `cuisine` list, otherwise `other`. The preview lists every tag it will create so you can catch typos.
+- **Names are unique within a file.** Two restaurants, or two home meals, whose names match ignoring case are an error.
+- **Unknown fields are errors.** A misspelled field such as `mode:`, or a field that belongs to the other kind, such as `servings` on a restaurant, is reported rather than ignored.
 - **Imports never delete.** An entry whose name matches an existing item of the same kind updates it: fields present in the file replace the stored values, and fields left out stay as they are. Items missing from the file are left alone. To retire an item, set `active: false`.
-- **Imports are all or nothing.** If any entry fails validation, nothing is saved and the preview lists every error with its location, such as `restaurants[3].modes: "drive-thru" is not one of pickup, delivery`.
+- **An explicit empty value clears a field.** On an update, `notes: null`, `url: ""`, or `tags: []` removes the stored value, while leaving the field out keeps it.
+- **Imports are all or nothing.** If any entry fails validation, nothing is saved and the preview lists every error with its location, such as `restaurants[3].modes[0]: "drive-thru" is not one of pickup, delivery`. List positions count from 0, so `restaurants[3]` is the fourth restaurant.
+- **Plain YAML only.** Anchors and aliases (`&name`, `*name`), repeated keys in one mapping, nesting deeper than 20 levels, and more than 50,000 values are refused, as are files over 1 MB.
 - **Preferences aren't part of the file.** Each person sets their own vetoes and likes in the app, and other members never see them.
 
 ## Validating a file
@@ -110,3 +115,5 @@ From a checkout, validate without importing:
 ```
 uv run dinnerbell catalog validate path/to/catalog.yaml
 ```
+
+The schema is generated from the format's models. After changing them, regenerate it with `uv run dinnerbell catalog schema > seed/catalog.schema.json`; a test fails while it's stale.
