@@ -5,6 +5,9 @@ from __future__ import annotations
 
 from datetime import date
 from enum import StrEnum
+from typing import Annotated
+
+from fastapi import Path
 
 
 class BadFormValue(ValueError):
@@ -44,3 +47,20 @@ def iso_date(value: str | None, message: str) -> date:
         return date.fromisoformat((value or "").strip())
     except ValueError:
         raise BadFormValue(message) from None
+
+
+MAX_ID = 2**63 - 1
+"""The largest row ID SQLite stores; anything bigger can't name a row and overflows the driver."""
+
+
+def parse_id(value: str | None) -> int | None:
+    """A positive row ID typed as ASCII digits, or None. ``str.isdigit`` alone also accepts
+    digits such as "²" that ``int()`` rejects."""
+    if not value or not (value.isascii() and value.isdigit()):
+        return None
+    number = int(value)
+    return number if 1 <= number <= MAX_ID else None
+
+
+RowId = Annotated[int, Path(ge=1, le=MAX_ID)]
+"""A row ID in a URL path. Anything else, such as 0 or a 25-digit number, is a 404."""

@@ -19,11 +19,13 @@ from dinnerbell.services.errors import Forbidden
 from dinnerbell.services.variety import household_today, variety_window
 from dinnerbell.web.auth import Context, CSRFChecked, Database, Principal, SignedIn
 from dinnerbell.web.context import AppContext
-from dinnerbell.web.forms import BadFormValue, choice, iso_date
+from dinnerbell.web.forms import BadFormValue, RowId, choice, iso_date, parse_id
 from dinnerbell.web.render import render
 
 router = APIRouter(prefix="/history")
 
+MAX_PAGE = 520
+"""Ten years of eight-week pages."""
 NOTICES = {"logged": "Meal logged.", "updated": "Meal updated.", "deleted": "Meal deleted."}
 FormText = Annotated[str, Form(max_length=40)]
 
@@ -50,12 +52,13 @@ class MealForm:
         slot = choice(Slot, self.slot)
         if slot is None:
             raise BadFormValue("Pick lunch or dinner.")
-        if not self.item_id.isdigit():
+        item_id = parse_id(self.item_id)
+        if item_id is None:
             raise BadFormValue("Pick something from the catalog.")
         return MealInput(
             day=iso_date(self.day, "Enter the date as YYYY-MM-DD."),
             slot=slot,
-            item_id=int(self.item_id),
+            item_id=item_id,
             participant_ids=frozenset(self.participant_ids),
         )
 
@@ -66,7 +69,7 @@ def posted_meal(
     item_id: FormText = "",
     participant_ids: Annotated[list[str] | None, Form()] = None,
 ) -> MealForm:
-    ids = {int(v) for v in participant_ids or [] if v.isdigit()}
+    ids = {i for v in participant_ids or [] if (i := parse_id(v)) is not None}
     return MealForm(day=day, slot=slot, item_id=item_id, participant_ids=ids)
 
 
@@ -126,6 +129,7 @@ async def _history_page(
 async def history_page(
     request: Request, principal: SignedIn, context: Context, db: Database, page: int = 0, notice: str = ""
 ) -> Response:
+    page = min(max(page, 0), MAX_PAGE)
     return await _history_page(request, principal, context, db, page=page, notice=NOTICES.get(notice))
 
 
@@ -164,7 +168,7 @@ async def _edit_page(
 
 @router.get("/meals/{meal_id}")
 async def edit_meal_page(
-    request: Request, principal: SignedIn, context: Context, db: Database, meal_id: int
+    request: Request, principal: SignedIn, context: Context, db: Database, meal_id: RowId
 ) -> Response:
     meal = await meal_service.get_meal(db, principal.member, meal_id)
     if not can_change(principal.member, meal):
@@ -174,7 +178,7 @@ async def edit_meal_page(
 
 @router.post("/meals/{meal_id}")
 async def update_meal(
-    request: Request, principal: CSRFChecked, context: Context, db: Database, meal_id: int, form: PostedMeal
+    request: Request, principal: CSRFChecked, context: Context, db: Database, meal_id: RowId, form: PostedMeal
 ) -> Response:
     try:
         await meal_service.update_meal(
@@ -187,6 +191,6 @@ async def update_meal(
 
 
 @router.post("/meals/{meal_id}/delete")
-async def delete_meal(principal: CSRFChecked, context: Context, db: Database, meal_id: int) -> Response:
+async def delete_meal(principal: CSRFChecked, context: Context, db: Database, meal_id: RowId) -> Response:
     await meal_service.delete_meal(db, principal.member, meal_id, now=context.clock())
     return RedirectResponse("/history?notice=deleted", status_code=303)

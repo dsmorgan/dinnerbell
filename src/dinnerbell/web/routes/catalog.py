@@ -32,7 +32,7 @@ from dinnerbell.services import catalog as catalog_service
 from dinnerbell.services.variety import household_today
 from dinnerbell.web.auth import AdminCSRFChecked, Context, CSRFChecked, Database, Principal, SignedIn
 from dinnerbell.web.context import AppContext
-from dinnerbell.web.forms import BadFormValue, choice, optional_int, split_names
+from dinnerbell.web.forms import BadFormValue, RowId, choice, optional_int, parse_id, split_names
 from dinnerbell.web.render import render
 from dinnerbell.web.signing import SignedPayload, derive_key
 
@@ -85,7 +85,7 @@ async def catalog_page(
     tags_created: int = 0,
 ) -> Response:
     data = await catalog_service.catalog(db, principal.member)
-    tag_id = int(tag) if tag.isdigit() else None
+    tag_id = parse_id(tag)
     search = ItemFilter(
         query=q[:100],
         kind=choice(ItemKind, kind),
@@ -172,7 +172,7 @@ class ItemForm:
 
 
 def _ids(values: list[str] | None) -> set[int]:
-    return {int(v) for v in values or [] if v.isdigit()}
+    return {i for v in values or [] if (i := parse_id(v)) is not None}
 
 
 def posted_item(
@@ -263,7 +263,7 @@ async def create_item(
 
 @router.get("/items/{item_id}")
 async def edit_item_page(
-    request: Request, principal: SignedIn, db: Database, item_id: int, notice: str = ""
+    request: Request, principal: SignedIn, db: Database, item_id: RowId, notice: str = ""
 ) -> Response:
     item = await catalog_service.get_item(db, principal.member, item_id)
     form = ItemForm.from_item(item)
@@ -272,7 +272,7 @@ async def edit_item_page(
 
 @router.post("/items/{item_id}")
 async def update_item(
-    request: Request, principal: CSRFChecked, context: Context, db: Database, item_id: int, form: PostedItem
+    request: Request, principal: CSRFChecked, context: Context, db: Database, item_id: RowId, form: PostedItem
 ) -> Response:
     item = await catalog_service.get_item(db, principal.member, item_id)
     try:
@@ -285,13 +285,13 @@ async def update_item(
 
 
 @router.post("/items/{item_id}/deactivate")
-async def deactivate_item(principal: CSRFChecked, context: Context, db: Database, item_id: int) -> Response:
+async def deactivate_item(principal: CSRFChecked, context: Context, db: Database, item_id: RowId) -> Response:
     await catalog_service.set_item_active(db, principal.member, item_id, False, now=context.clock())
     return RedirectResponse(f"/catalog/items/{item_id}?notice=deactivated", status_code=303)
 
 
 @router.post("/items/{item_id}/reactivate")
-async def reactivate_item(principal: CSRFChecked, context: Context, db: Database, item_id: int) -> Response:
+async def reactivate_item(principal: CSRFChecked, context: Context, db: Database, item_id: RowId) -> Response:
     await catalog_service.set_item_active(db, principal.member, item_id, True, now=context.clock())
     return RedirectResponse(f"/catalog/items/{item_id}?notice=reactivated", status_code=303)
 
@@ -350,7 +350,7 @@ async def create_tag(
 
 @router.post("/tags/{tag_id}/rename")
 async def rename_tag(
-    request: Request, principal: AdminCSRFChecked, context: Context, db: Database, tag_id: int, name: FormText = ""
+    request: Request, principal: AdminCSRFChecked, context: Context, db: Database, tag_id: RowId, name: FormText = ""
 ) -> Response:
     try:
         await catalog_service.rename_tag(db, principal.member, tag_id, name, now=context.clock())
@@ -361,12 +361,13 @@ async def rename_tag(
 
 @router.post("/tags/{tag_id}/merge")
 async def merge_tag(
-    request: Request, principal: AdminCSRFChecked, context: Context, db: Database, tag_id: int, into: FormText = ""
+    request: Request, principal: AdminCSRFChecked, context: Context, db: Database, tag_id: RowId, into: FormText = ""
 ) -> Response:
     try:
-        if not into.isdigit():
+        target = parse_id(into)
+        if target is None:
             raise BadFormValue("Pick a tag to merge into.")
-        await catalog_service.merge_tags(db, principal.member, tag_id, int(into), now=context.clock())
+        await catalog_service.merge_tags(db, principal.member, tag_id, target, now=context.clock())
     except (CatalogRuleViolation, BadFormValue) as exc:
         return await _tags_page(request, principal, db, error=str(exc), status_code=400)
     return RedirectResponse("/catalog/tags?notice=tags_merged", status_code=303)

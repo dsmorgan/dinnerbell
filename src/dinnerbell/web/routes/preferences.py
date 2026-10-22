@@ -18,7 +18,7 @@ from dinnerbell.domain.members import Capabilities
 from dinnerbell.domain.preferences import LEVEL_LABELS, LEVELS, InvalidPreference, Stance, TargetType
 from dinnerbell.services import preferences as preference_service
 from dinnerbell.web.auth import Context, CSRFChecked, Database, SignedIn
-from dinnerbell.web.forms import checked, choice
+from dinnerbell.web.forms import checked, choice, parse_id
 from dinnerbell.web.render import is_htmx, render
 
 router = APIRouter(prefix="/preferences")
@@ -83,11 +83,12 @@ async def save_stance(
     kind, _, raw_id = target.partition(":")
     target_type = choice(TargetType, kind)
     try:
-        if target_type is None or not raw_id.isdigit():
+        target_id = parse_id(raw_id)
+        if target_type is None or target_id is None:
             raise InvalidPreference("Reload the page and try again.")
         stance = Stance.parse(level)
         name = await preference_service.set_my_preference(
-            db, principal.member, target_type, int(raw_id), stance, now=context.clock()
+            db, principal.member, target_type, target_id, stance, now=context.clock()
         )
     except InvalidPreference as exc:
         if is_htmx(request):
@@ -99,4 +100,4 @@ async def save_stance(
             "_preference_row.html",
             {"target": target, "name": name, "stance": stance, "levels": _levels(), "saved": True},
         )
-    return RedirectResponse(f"/preferences?notice=saved#pref-{target_type.value}-{raw_id}", status_code=303)
+    return RedirectResponse(f"/preferences?notice=saved#pref-{target_type.value}-{target_id}", status_code=303)

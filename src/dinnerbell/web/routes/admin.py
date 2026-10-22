@@ -14,6 +14,7 @@ from dinnerbell.domain.members import Capabilities, InvalidMemberInput, Member, 
 from dinnerbell.services import members as member_service
 from dinnerbell.services.clock import Clock
 from dinnerbell.web.auth import AdminCSRFChecked, AdminPrincipal, Context, Database, Principal
+from dinnerbell.web.forms import RowId
 from dinnerbell.web.render import is_htmx, render
 
 router = APIRouter(prefix="/admin")
@@ -109,7 +110,7 @@ async def invite(
 
 
 @router.get("/members/{member_id}")
-async def edit_page(request: Request, principal: AdminPrincipal, db: Database, member_id: int) -> Response:
+async def edit_page(request: Request, principal: AdminPrincipal, db: Database, member_id: RowId) -> Response:
     member = await member_service.get_member(db, principal.member, member_id)
     context = {"member": member, "values": _stored(member), "roles": list(Role)}
     return await render(request, "admin_member_edit.html", context)
@@ -121,7 +122,7 @@ async def update(
     principal: AdminCSRFChecked,
     context: Context,
     db: Database,
-    member_id: int,
+    member_id: RowId,
     posted: Posted,
 ) -> Response:
     member = await member_service.get_member(db, principal.member, member_id)
@@ -139,20 +140,20 @@ async def update(
 
 @router.post("/members/{member_id}/deactivate")
 async def deactivate(
-    request: Request, principal: AdminCSRFChecked, context: Context, db: Database, member_id: int
+    request: Request, principal: AdminCSRFChecked, context: Context, db: Database, member_id: RowId
 ) -> Response:
     return await _set_active(request, principal, context.clock, db, member_id, active=False)
 
 
 @router.post("/members/{member_id}/reactivate")
 async def reactivate(
-    request: Request, principal: AdminCSRFChecked, context: Context, db: Database, member_id: int
+    request: Request, principal: AdminCSRFChecked, context: Context, db: Database, member_id: RowId
 ) -> Response:
     return await _set_active(request, principal, context.clock, db, member_id, active=True)
 
 
 async def _set_active(
-    request: Request, principal: Principal, clock: Clock, db: Database, member_id: int, *, active: bool
+    request: Request, principal: Principal, clock: Clock, db: Database, member_id: RowId, *, active: bool
 ) -> Response:
     try:
         member = await member_service.set_member_active(db, principal.member, member_id, active, now=clock())
