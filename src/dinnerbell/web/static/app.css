@@ -391,3 +391,5 @@ ins { color: var(--ok); text-decoration: none; }
 .save-error { color: var(--danger); margin: 0 0 0.35rem; }
 .save-banner { position: sticky; top: 0; z-index: 2; margin: 0; border-radius: 0; text-align: center; }
 .save-banner[hidden] { display: none; }
+.chip.veto { background: var(--danger-soft); border-color: transparent; color: var(--danger); }
+.pref:target { background: var(--accent-soft); border-radius: 10px; }

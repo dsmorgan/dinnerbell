@@ -32,6 +32,12 @@ class MyPreferences:
     def stance(self, target_type: TargetType, target_id: int) -> Stance:
         return self.stances.get((target_type, target_id), NEUTRAL)
 
+    def vetoes(self) -> list[tuple[TargetType, int, str]]:
+        """Vetoed tags, then vetoed items, as (type, ID, name), each sorted by name."""
+        tags = [(TargetType.TAG, t.id, t.name) for t in self.tags if self.stance(TargetType.TAG, t.id).veto]
+        items = [(TargetType.ITEM, i.id, i.name) for i in self.items if self.stance(TargetType.ITEM, i.id).veto]
+        return sorted(tags, key=lambda v: v[2].casefold()) + sorted(items, key=lambda v: v[2].casefold())
+
 
 @dataclass(frozen=True, slots=True)
 class MySettings:

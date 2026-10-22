@@ -285,3 +285,20 @@ def test_double_submit_retries_once(
     assert response.status_code == 200 and "Saved" in response.text
     assert calls == 2
     assert stances(migrated, "admin@example.com") == {("tag", thai(migrated)): (True, 0)}
+
+
+def test_vetoes_are_summarized_at_the_top(client: TestClient, provider: FakeProvider, migrated: Settings) -> None:
+    sign_in(client, provider)
+    add_item(client, "Siam Garden", new_tags="spicy")
+    item = item_row(migrated, "Siam Garden")
+    spicy = next(t.id for t in rows(migrated, TagRow) if t.name == "spicy")
+    assert "You haven't vetoed anything." in page(client.get("/preferences"))
+    htmx(client, "/preferences/stance", {"target": f"tag:{spicy}", "level": "veto"})
+    htmx(client, "/preferences/stance", {"target": f"item:{item.id}", "level": "veto"})
+    htmx(client, "/preferences/stance", {"target": f"tag:{thai(migrated)}", "level": "-2"})  # not a veto
+    html = client.get("/preferences").text
+    summary = html.split('id="vetoes"', 1)[1].split("</section>", 1)[0]
+    assert f'href="#pref-tag-{spicy}">spicy</a>' in summary
+    assert f'href="#pref-item-{item.id}">Siam Garden</a>' in summary
+    assert "Thai" not in summary
+    assert html.index('id="vetoes"') < html.index("<h2>Cuisine</h2>")

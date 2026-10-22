@@ -9,6 +9,19 @@
 <p class="muted">Only you can see these. Proposals respect them without saying who vetoed what.</p>
 {% if notice %}<p class="alert ok" role="status">{{ notice }}</p>{% endif %}
 
+<section class="card" id="vetoes" aria-labelledby="vetoes-heading">
+  <h2 id="vetoes-heading">Your vetoes</h2>
+  {% set vetoes = mine.vetoes() %}
+  {% if vetoes %}
+  <p class="small muted">Never proposed while you're eating. Tap one to change it.</p>
+  <ul class="chips">
+    {% for target_type, target_id, name in vetoes %}<li><a class="chip veto" href="#pref-{{ target_type.value }}-{{ target_id }}">{{ name }}</a></li>{% endfor %}
+  </ul>
+  {% else %}
+  <p class="small muted">You haven't vetoed anything.</p>
+  {% endif %}
+</section>
+
 <form method="post" action="/preferences/settings" class="card stack">
   <h2>You</h2>
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
