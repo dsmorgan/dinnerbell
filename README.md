@@ -8,15 +8,23 @@ It runs as one container on your own hardware. The household's catalog, preferen
 
 ## Status
 
-Pre-alpha. The requirements and architecture are written; the code is not yet. Start with the [spec](docs/spec.md) and the [decision records](docs/adr/).
+Pre-alpha. Milestone M0 is in place: the container, configuration, database migrations, nightly backups, `/healthz`, and sign-in with an invited-members list. Slack calls arrive in M2. Start with the [spec](docs/spec.md) and the [decision records](docs/adr/).
+
+## Run it
+
+Dinnerbell runs as one container behind a reverse proxy such as Pangolin. Copy `.env.example` to `.env`, fill it in, and start it with `podman-compose up -d --build` or `docker compose up -d --build`. The full walkthrough, including the Slack sign-in app and Pangolin, is in [docs/setup.md](docs/setup.md).
 
 ## Why
 
 Four adults, four schedules, one kitchen. The daily "what are we eating?" lands at the moment of hunger, takes too long, converges on the same cuisines, and lands on the same person. Dinnerbell moves the question earlier, makes the choice fit the people eating, and makes the decision stick.
 
-## Planned stack
+## Stack
 
 Python, FastAPI, HTMX, SQLite, Slack Bolt in Socket Mode, one container. See [ADR 0004](docs/adr/0004-stack.md).
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Commits need a DCO sign-off.
 
 ## License
 
