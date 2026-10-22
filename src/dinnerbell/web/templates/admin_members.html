@@ -1,0 +1,20 @@
+{#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
+{% extends "base.html" %}
+{% block title %}Members{% endblock %}
+{% block content %}
+<h1>Members</h1>
+{% if notice %}<p class="alert ok" role="status">{{ notice }}</p>{% endif %}
+{% if error %}<p class="alert error" role="alert">{{ error }}</p>{% endif %}
+<ul class="members">
+  {% for m in members %}{% include "_member_row.html" %}{% endfor %}
+</ul>
+<details class="card"{% if draft or members|length < 2 %} open{% endif %}>
+  <summary><h2>Invite someone</h2></summary>
+  <p class="muted small">They sign in with this email. After their first sign-in, their account is linked and the email is locked.</p>
+  <form method="post" action="/admin/members" class="stack">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    {% with values=draft, email_locked=false %}{% include "_member_fields.html" %}{% endwith %}
+    <button type="submit" class="button primary block">Invite</button>
+  </form>
+</details>
+{% endblock %}

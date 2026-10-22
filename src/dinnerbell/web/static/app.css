@@ -1,0 +1,220 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+/* Dinnerbell: mobile-first, light and dark, no build step. */
+
+:root {
+  --bg: #fbf7f2;
+  --surface: #ffffff;
+  --text: #2a2420;
+  --muted: #6f655d;
+  --line: #e7ded4;
+  --accent: #c2410c;
+  --accent-text: #ffffff;
+  --accent-soft: #fdebdf;
+  --ok: #166534;
+  --ok-soft: #dcf3e3;
+  --danger: #b91c1c;
+  --danger-soft: #fde4e4;
+  --radius: 14px;
+  --shadow: 0 1px 2px rgb(0 0 0 / 0.05), 0 4px 16px rgb(0 0 0 / 0.04);
+  --gutter: max(16px, env(safe-area-inset-left));
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1b1714;
+    --surface: #26201c;
+    --text: #f3ece6;
+    --muted: #b3a79d;
+    --line: #3a322c;
+    --accent: #fb923c;
+    --accent-text: #1b1714;
+    --accent-soft: #43281a;
+    --ok: #86efac;
+    --ok-soft: #173322;
+    --danger: #fca5a5;
+    --danger-soft: #3f1d1d;
+    --shadow: none;
+  }
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 17px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+a { color: var(--accent); }
+
+h1 { font-size: 1.6rem; line-height: 1.2; margin: 0.5rem 0 1rem; }
+h2 { font-size: 1.15rem; margin: 0 0 0.5rem; }
+p { margin: 0 0 0.75rem; }
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem 1rem;
+  padding: calc(env(safe-area-inset-top) + 10px) var(--gutter) 10px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--line);
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  color: var(--text);
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.bell { width: 22px; height: 22px; fill: var(--accent); }
+
+.nav { display: flex; align-items: center; gap: 0.25rem; }
+
+.nav a, .nav .link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  padding: 0 0.6rem;
+  border-radius: 10px;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.95rem;
+  text-decoration: none;
+}
+
+.nav a[aria-current="page"] { color: var(--text); background: var(--accent-soft); }
+
+.page {
+  max-width: 40rem;
+  margin: 0 auto;
+  padding: 1rem var(--gutter) 3rem;
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  padding: 1.1rem;
+  margin-bottom: 1rem;
+}
+
+.hero { margin-top: 12vh; text-align: center; }
+.hero h1 { margin-top: 0; }
+.lede { font-size: 1.1rem; color: var(--muted); margin-bottom: 1.5rem; }
+
+.muted { color: var(--muted); }
+.small { font-size: 0.875rem; }
+
+.inline { display: inline; margin: 0; }
+
+.button, button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  padding: 0 1rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+.button.danger { color: var(--danger); }
+.button.small { min-height: 40px; padding: 0 0.8rem; font-size: 0.9rem; }
+.button.block { width: 100%; margin: 0.5rem 0 1rem; }
+
+button.link { border: 0; background: none; font-weight: 400; padding: 0 0.6rem; }
+
+:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+
+.stack > * + * { margin-top: 0.9rem; }
+
+.field { display: block; border: 0; padding: 0; margin-left: 0; margin-right: 0; }
+.field > span, .field > legend { display: block; font-weight: 600; margin-bottom: 0.3rem; padding: 0; }
+
+input:not([type="checkbox"]), select {
+  width: 100%;
+  min-height: 44px;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 16px; /* 16px or more stops iOS Safari zooming on focus */
+}
+
+input:disabled { opacity: 0.7; }
+
+.check { display: flex; align-items: center; gap: 0.6rem; min-height: 44px; }
+.check input { width: 22px; height: 22px; accent-color: var(--accent); }
+
+.alert { padding: 0.7rem 0.9rem; border-radius: 10px; margin-bottom: 1rem; }
+.alert.ok { background: var(--ok-soft); color: var(--ok); }
+.alert.error { background: var(--danger-soft); color: var(--danger); }
+
+.members { list-style: none; padding: 0; margin: 0 0 1.25rem; }
+
+.member {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 0.9rem 1rem;
+  margin-bottom: 0.6rem;
+}
+
+.member.inactive .member-main { opacity: 0.6; }
+.member-main { flex: 1 1 14rem; min-width: 0; }
+.member-name { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; }
+.member-email { overflow-wrap: anywhere; }
+.member-actions { display: flex; gap: 0.5rem; }
+.member .alert { margin: 0.5rem 0 0; }
+
+.badge, .chip {
+  display: inline-block;
+  padding: 0.05rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  border: 1px solid var(--line);
+  color: var(--muted);
+}
+
+.badge.accent { background: var(--accent-soft); border-color: transparent; color: var(--accent); }
+.badge.status-active { background: var(--ok-soft); border-color: transparent; color: var(--ok); }
+.chips { display: flex; flex-wrap: wrap; gap: 0.3rem; margin-top: 0.35rem; }
+.chips:empty { display: none; }
+
+details > summary { list-style: none; cursor: pointer; }
+details > summary::-webkit-details-marker { display: none; }
+details > summary h2 { display: inline; }
+details > summary h2::after { content: " +"; color: var(--muted); }
+details[open] > summary h2::after { content: " −"; }
+details[open] > summary { margin-bottom: 0.5rem; }
+
+.htmx-request button { opacity: 0.6; }

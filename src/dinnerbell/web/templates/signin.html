@@ -1,0 +1,11 @@
+{#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
+{% extends "base.html" %}
+{% block title %}Sign in{% endblock %}
+{% block content %}
+<section class="card hero">
+  <h1>{{ household_name }}</h1>
+  <p class="lede">Who's eating, what we're eating, and who's getting it.</p>
+  <a class="button primary block" href="/auth/login">{% if provider_is_slack %}Sign in with Slack{% else %}Sign in{% endif %}</a>
+  <p class="muted small">Only people the household admin has invited can sign in.</p>
+</section>
+{% endblock %}

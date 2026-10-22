@@ -1,0 +1,26 @@
+{#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
+{#- Expects: values (object with display_name, email, role, capabilities or can_* flags), roles, email_locked -#}
+<label class="field">
+  <span>Display name</span>
+  <input name="display_name" required maxlength="80" autocomplete="off" value="{{ values.display_name if values else '' }}">
+</label>
+<label class="field">
+  <span>Email</span>
+  <input name="email" type="email" required maxlength="254" autocomplete="off" autocapitalize="none" spellcheck="false"
+         value="{{ values.email if values else '' }}"{% if email_locked %} disabled{% endif %}>
+  {% if email_locked %}<small class="muted">Locked after the first sign-in.</small>{% endif %}
+</label>
+<label class="field">
+  <span>Role</span>
+  <select name="role">
+    {% for role in roles %}
+    <option value="{{ role.value }}"{% if values and (values.role == role or values.role == role.value) %} selected{% endif %}>{{ role.value|capitalize }}</option>
+    {% endfor %}
+  </select>
+</label>
+<fieldset class="field">
+  <legend>Can usually</legend>
+  <label class="check"><input type="checkbox" name="can_cook"{% if values and values.can_cook %} checked{% endif %}> Cook</label>
+  <label class="check"><input type="checkbox" name="can_pickup"{% if values and values.can_pickup %} checked{% endif %}> Pick up</label>
+  <label class="check"><input type="checkbox" name="can_order"{% if values and values.can_order %} checked{% endif %}> Order delivery</label>
+</fieldset>

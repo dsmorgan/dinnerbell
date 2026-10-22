@@ -1,0 +1,18 @@
+{#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
+{% extends "base.html" %}
+{% block title %}Today{% endblock %}
+{% block content %}
+<h1>Hi, {{ principal.member.display_name }}</h1>
+<section class="card">
+  <h2>Today</h2>
+  <p>Nothing to decide yet. Dinner calls arrive here and in Slack starting with milestone M2.</p>
+  <p class="muted small">You're signed in to {{ principal.household.name }}.</p>
+</section>
+{% if principal.member.is_admin %}
+<section class="card">
+  <h2>Set up the household</h2>
+  <p>Invite everyone who eats here so they can sign in.</p>
+  <a class="button" href="/admin/members">Manage members</a>
+</section>
+{% endif %}
+{% endblock %}

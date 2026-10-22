@@ -1,0 +1,29 @@
+{#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
+<li class="member{% if not m.active %} inactive{% endif %}" id="member-{{ m.id }}">
+  <div class="member-main">
+    <div class="member-name">
+      <strong>{{ m.display_name }}</strong>
+      {% if m.is_admin %}<span class="badge accent">Admin</span>{% endif %}
+      <span class="badge status-{{ m.status.value }}">{{ m.status.value|capitalize }}</span>
+    </div>
+    <div class="muted small member-email">{{ m.email }}</div>
+    <div class="chips">
+      {% if m.capabilities.can_cook %}<span class="chip">Cooks</span>{% endif %}
+      {% if m.capabilities.can_pickup %}<span class="chip">Picks up</span>{% endif %}
+      {% if m.capabilities.can_order %}<span class="chip">Orders</span>{% endif %}
+    </div>
+    {% if row_error %}<p class="alert error small" role="alert">{{ row_error }}</p>{% endif %}
+  </div>
+  <div class="member-actions">
+    <a class="button small" href="/admin/members/{{ m.id }}">Edit</a>
+    {% if m.id != me.id %}
+    {% set action = "reactivate" if not m.active else "deactivate" %}
+    <form method="post" action="/admin/members/{{ m.id }}/{{ action }}"
+          hx-post="/admin/members/{{ m.id }}/{{ action }}" hx-target="#member-{{ m.id }}" hx-swap="outerHTML"
+          {% if m.active %}hx-confirm="Deactivate {{ m.display_name }}? They'll be signed out everywhere."{% endif %}>
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button type="submit" class="button small{% if m.active %} danger{% endif %}">{{ action|capitalize }}</button>
+    </form>
+    {% endif %}
+  </div>
+</li>
