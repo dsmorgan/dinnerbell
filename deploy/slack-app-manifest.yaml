@@ -1,0 +1,60 @@
+# Dinnerbell Slack app manifest.
+#
+# Paste this file into api.slack.com/apps > Create New App > From a manifest.
+# Before you paste it, replace dinnerbell.example.com in redirect_urls with
+# the public hostname you serve Dinnerbell on. The path must stay
+# /auth/callback. See docs/setup.md.
+
+display_information:
+  name: Dinnerbell
+  description: Household meal coordination. Calls, votes, and decisions for who eats what, when.
+  background_color: "#8a4b1f"
+
+features:
+  # The App Home tab shows each member's dashboard. The Messages tab lets
+  # members send the bot direct messages and receive private notifications.
+  app_home:
+    home_tab_enabled: true
+    messages_tab_enabled: true
+    messages_tab_read_only_enabled: false
+  bot_user:
+    display_name: Dinnerbell
+    always_online: true
+  slash_commands:
+    # Socket Mode delivers commands over the WebSocket, so no url field is
+    # needed. Slack's manifest reference lists url as optional.
+    - command: /dinnerbell
+      description: Offer a meal, start a call, log a meal, or open your preferences
+      usage_hint: "[offer | call | log | schedule | prefs | help]"
+      should_escape: false
+
+oauth_config:
+  redirect_urls:
+    # Used by Sign in with Slack. Edit the hostname before you paste.
+    - https://dinnerbell.example.com/auth/callback
+  scopes:
+    bot:
+      - chat:write          # post calls, proposals, decisions, and recaps
+      - channels:read       # resolve the household channel
+      - channels:history    # resolve threads
+      - im:write            # open direct messages with members
+      - users:read          # map Slack users to members
+      - users:read.email    # match members by email
+      - commands            # the /dinnerbell slash command
+    user:
+      # Sign in with Slack (OpenID Connect) for the web app.
+      - openid
+      - email
+      - profile
+
+settings:
+  event_subscriptions:
+    # No request_url: Socket Mode delivers events over the WebSocket.
+    bot_events:
+      - app_home_opened
+  # Enables buttons, menus, modals, and shortcuts. No request_url in Socket Mode.
+  interactivity:
+    is_enabled: true
+  org_deploy_enabled: false
+  socket_mode_enabled: true
+  token_rotation_enabled: false
