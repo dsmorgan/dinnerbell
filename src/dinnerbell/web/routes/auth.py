@@ -66,7 +66,7 @@ async def login(request: Request, context: Context, principal: MaybePrincipal) -
         auth_request = await context.oidc.authorization_request(state=state, nonce=nonce)
     except OIDCError as exc:
         log.error("could not start sign-in", extra={"reason": exc.reason})
-        return _provider_problem(request)
+        return await _provider_problem(request)
     response = RedirectResponse(auth_request.url, status_code=302)
     cookie = context.login_state.dumps({"state": state, "nonce": nonce, "verifier": auth_request.code_verifier})
     max_age = int(LOGIN_STATE_LIFETIME.total_seconds())
@@ -102,24 +102,26 @@ async def _complete(
 ) -> Response:
     if error is not None:
         log.info("provider returned an error", extra={"error": error[:64]})
-        return error_page(request, 400, "Sign-in didn't finish", f"The sign-in was cancelled or failed. {TRY_AGAIN}")
+        return await error_page(
+            request, 400, "Sign-in didn't finish", f"The sign-in was cancelled or failed. {TRY_AGAIN}"
+        )
     expected_state = login_state.get("state") if login_state else None
     nonce = login_state.get("nonce") if login_state else None
     if not expected_state or not nonce or not state or not hmac.compare_digest(expected_state, state):
         log.warning("sign-in state missing or mismatched")
-        return error_page(
+        return await error_page(
             request, 400, "Sign-in expired", f"The sign-in took too long or started elsewhere. {TRY_AGAIN}"
         )
     if not code:
-        return error_page(request, 400, "Sign-in didn't finish", TRY_AGAIN)
+        return await error_page(request, 400, "Sign-in didn't finish", TRY_AGAIN)
     try:
         id_token = await context.oidc.exchange_code(code, login_state.get("verifier") if login_state else None)
         claims = await context.oidc.verify_id_token(id_token, nonce=nonce)
     except OIDCError as exc:
         log.warning("sign-in verification failed", extra={"reason": exc.reason})
         if exc.provider_unavailable:
-            return _provider_problem(request)
-        return error_page(request, 400, "Sign-in couldn't be verified", TRY_AGAIN)
+            return await _provider_problem(request)
+        return await error_page(request, 400, "Sign-in couldn't be verified", TRY_AGAIN)
     outcome = await auth_service.sign_in(
         db,
         claims,
@@ -129,14 +131,14 @@ async def _complete(
     )
     if isinstance(outcome, Refuse):
         title, message = REFUSAL_MESSAGES[outcome.reason]
-        return render(request, "refused.html", {"title": title, "message": message}, status_code=403)
+        return await render(request, "refused.html", {"title": title, "message": message}, status_code=403)
     response = RedirectResponse("/", status_code=303)
     response.headers.append("Set-Cookie", session_cookie_header(context.cookies, context.settings, outcome.token))
     return response
 
 
-def _provider_problem(request: Request) -> Response:
-    return error_page(
+async def _provider_problem(request: Request) -> Response:
+    return await error_page(
         request, 502, "Can't reach the sign-in provider", "The sign-in provider didn't respond. Try again in a minute."
     )
 

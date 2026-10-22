@@ -6,6 +6,7 @@ from __future__ import annotations
 import sqlite3
 from datetime import date, timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -67,7 +68,7 @@ def job_context(migrated: Settings, clock: FakeClock) -> runner.JobContext:
     return runner.JobContext(
         state=runner.SchedulerState(),
         clock=clock,
-        zone=migrated.zone,
+        zone=ZoneInfo(migrated.timezone),
         database_path=migrated.database_path,
         backup_dir=migrated.backup_dir,
         sessionmaker=create_sessionmaker(engine),

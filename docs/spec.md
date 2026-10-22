@@ -509,13 +509,13 @@ All configuration comes from environment variables with a `DINNERBELL_` prefix, 
 | `DINNERBELL_BASE_URL` | Public HTTPS URL as exposed by Pangolin |
 | `DINNERBELL_SECRET_KEY` | Signing key for cookies and CSRF tokens |
 | `DINNERBELL_ADMIN_EMAIL` | Bootstrap admin; created as a member on first start if missing |
-| `DINNERBELL_HOUSEHOLD_NAME` | Household display name on first start, default `Home` |
+| `DINNERBELL_HOUSEHOLD_NAME` | Seeds the household name on first start, default `Home`. Afterward the household row is authoritative |
 | `DINNERBELL_OIDC_ISSUER`, `_CLIENT_ID`, `_CLIENT_SECRET` | OIDC provider; issuer must publish discovery |
 | `DINNERBELL_OIDC_SCOPES` | Requested scopes, default `openid email profile` |
 | `DINNERBELL_SLACK_TEAM_ID` | Required when the OIDC issuer is `https://slack.com`; Dinnerbell refuses to start without it. Sign-in requires the ID token's Slack team to match, which blocks accounts from other workspaces. Unused with other providers |
 | `DINNERBELL_SLACK_BOT_TOKEN`, `_SLACK_APP_TOKEN` | Bot token (`xoxb-`) and Socket Mode app token (`xapp-`) |
 | `DINNERBELL_SLACK_CHANNEL` | Channel ID for household posts |
-| `DINNERBELL_TIMEZONE` | Default household time zone, overridable in Admin |
+| `DINNERBELL_TIMEZONE` | Seeds the household time zone on first start, default `UTC`. Afterward the household row is authoritative and is edited in Admin |
 | `DINNERBELL_SEED_FILE` | Optional YAML of tags and catalog items to import on first start |
 | `DINNERBELL_LOG_LEVEL` | Default `INFO` |
 | `DINNERBELL_TRUSTED_PROXIES` | Optional comma-separated IPs or CIDRs whose `X-Forwarded-For` is trusted for client IPs, such as the reverse proxy's address |

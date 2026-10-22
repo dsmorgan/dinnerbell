@@ -99,7 +99,9 @@ async def members_page(
     request: Request, principal: AdminPrincipal, db: Database, notice: str | None = None
 ) -> Response:
     members = await member_service.list_members(db, principal.member)
-    return render(request, "admin_members.html", _list_context(principal, members, notice=NOTICES.get(notice or "")))
+    return await render(
+        request, "admin_members.html", _list_context(principal, members, notice=NOTICES.get(notice or ""))
+    )
 
 
 @router.post("/members")
@@ -119,7 +121,7 @@ async def invite(
         except (InvalidMemberInput, MemberRuleViolation) as exc:
             error = str(exc)
     members = await member_service.list_members(db, principal.member)
-    return render(
+    return await render(
         request, "admin_members.html", _list_context(principal, members, error=error, draft=posted), status_code=400
     )
 
@@ -127,7 +129,7 @@ async def invite(
 @router.get("/members/{member_id}")
 async def edit_page(request: Request, principal: AdminPrincipal, db: Database, member_id: int) -> Response:
     member = await member_service.get_member(db, principal.member, member_id)
-    return render(request, "admin_member_edit.html", {"member": member, "roles": list(Role)})
+    return await render(request, "admin_member_edit.html", {"member": member, "roles": list(Role)})
 
 
 @router.post("/members/{member_id}")
@@ -150,7 +152,7 @@ async def update(
             return RedirectResponse("/admin/members?notice=updated", status_code=303)
         except (InvalidMemberInput, MemberRuleViolation) as exc:
             error = str(exc)
-    return render(
+    return await render(
         request, "admin_member_edit.html", {"member": member, "roles": list(Role), "error": error}, status_code=400
     )
 
@@ -177,14 +179,16 @@ async def _set_active(
     except MemberRuleViolation as exc:
         target = await member_service.get_member(db, principal.member, member_id)
         if is_htmx(request):
-            return render(
+            return await render(
                 request,
                 "_member_row.html",
                 {"m": target, "me": principal.member, "row_error": str(exc)},
                 status_code=409,
             )
         members = await member_service.list_members(db, principal.member)
-        return render(request, "admin_members.html", _list_context(principal, members, error=str(exc)), status_code=409)
+        return await render(
+            request, "admin_members.html", _list_context(principal, members, error=str(exc)), status_code=409
+        )
     if is_htmx(request):
-        return render(request, "_member_row.html", {"m": member, "me": principal.member})
+        return await render(request, "_member_row.html", {"m": member, "me": principal.member})
     return RedirectResponse(f"/admin/members?notice={'reactivated' if active else 'deactivated'}", status_code=303)

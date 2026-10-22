@@ -15,5 +15,5 @@ router = APIRouter()
 @router.get("/")
 async def today(request: Request, principal: MaybePrincipal) -> Response:
     if principal is None:
-        return render(request, "signin.html")
-    return render(request, "today.html")
+        return await render(request, "signin.html")
+    return await render(request, "today.html")

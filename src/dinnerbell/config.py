@@ -194,10 +194,6 @@ class Settings(BaseSettings):
     def cookie_secure(self) -> bool:
         return urlsplit(self.base_url).scheme == "https"
 
-    @cached_property
-    def zone(self) -> ZoneInfo:
-        return ZoneInfo(self.timezone)
-
 
 class ConfigError(Exception):
     """Configuration is missing or invalid. The message is safe to print."""

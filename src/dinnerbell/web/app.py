@@ -8,6 +8,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import httpx
 from fastapi import FastAPI, Request
@@ -63,7 +64,7 @@ def create_app(
         database = open_database(settings.async_database_url)
         sessionmaker = database.sessionmaker
         async with sessionmaker() as db:
-            await bootstrap(
+            household = await bootstrap(
                 db,
                 household_name=settings.household_name,
                 timezone=settings.timezone,
@@ -86,11 +87,12 @@ def create_app(
         jobs = JobContext(
             state=state,
             clock=clock,
-            zone=settings.zone,
+            zone=ZoneInfo(household.timezone),  # the household row, not the env var, is authoritative
             database_path=settings.database_path,
             backup_dir=settings.backup_dir,
             sessionmaker=sessionmaker,
         )
+        app.state.jobs = jobs
         scheduler = build_scheduler(jobs)
         scheduler.start()
         log.info("dinnerbell started")
@@ -149,28 +151,28 @@ def _add_exception_handlers(app: FastAPI) -> None:
         return RedirectResponse("/", status_code=303)
 
     async def denied(request: Request, exc: Exception) -> Response:
-        return error_page(request, 403, "Not allowed", str(exc))
+        return await error_page(request, 403, "Not allowed", str(exc))
 
     async def csrf_rejected(request: Request, _exc: Exception) -> Response:
         log.warning("CSRF token missing or wrong", extra={"path": request.url.path})
-        return error_page(request, 403, "Request refused", "This form expired. Reload the page and try again.")
+        return await error_page(request, 403, "Request refused", "This form expired. Reload the page and try again.")
 
     async def not_found(request: Request, exc: Exception) -> Response:
-        return error_page(request, 404, "Not found", str(exc) or "That page doesn't exist.")
+        return await error_page(request, 404, "Not found", str(exc) or "That page doesn't exist.")
 
     async def http_error(request: Request, exc: Exception) -> Response:
         status = exc.status_code if isinstance(exc, StarletteHTTPException) else 500
         if status == 404:
-            return error_page(request, 404, "Not found", "That page doesn't exist.")
+            return await error_page(request, 404, "Not found", "That page doesn't exist.")
         title = "Request refused" if status < 500 else "Something went wrong"
-        return error_page(request, status, title, "Go back and try again.")
+        return await error_page(request, status, title, "Go back and try again.")
 
     async def invalid_request(request: Request, exc: Exception) -> Response:
         # Never echo the submitted values back; FastAPI's default 422 JSON does.
         errors = exc.errors() if isinstance(exc, RequestValidationError) else []
         if any(error.get("loc", ("",))[0] == "path" for error in errors):
-            return error_page(request, 404, "Not found", "That page doesn't exist.")
-        return error_page(
+            return await error_page(request, 404, "Not found", "That page doesn't exist.")
+        return await error_page(
             request, 400, "Request refused", "Something in that request wasn't valid. Go back and try again."
         )
 
@@ -183,5 +185,5 @@ def _add_exception_handlers(app: FastAPI) -> None:
     app.add_exception_handler(RequestValidationError, invalid_request)
 
 
-def _server_error_page(scope: Scope) -> Response:
-    return error_page(Request(scope), 500, "Something went wrong", "The error was logged. Try again in a moment.")
+async def _server_error_page(scope: Scope) -> Response:
+    return await error_page(Request(scope), 500, "Something went wrong", "The error was logged. Try again in a moment.")

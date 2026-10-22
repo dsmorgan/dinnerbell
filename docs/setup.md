@@ -145,6 +145,8 @@ If Newt reaches Dinnerbell over a local network, publish port 8000 only on the i
 
    `DINNERBELL_ADMIN_EMAIL` must match the email on your Slack account.
 
+   `DINNERBELL_HOUSEHOLD_NAME` and `DINNERBELL_TIMEZONE` take effect on first start only. After that, Dinnerbell reads them from its database, so set them correctly before you start it the first time.
+
 5. Optional, M1 and later: load a starter catalog on first start. Copy `seed/example.yaml` to `seed/my-catalog.yaml` and edit it. The format is in [catalog-format.md](catalog-format.md).
 
    ```sh

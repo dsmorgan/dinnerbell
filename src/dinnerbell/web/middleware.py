@@ -7,7 +7,7 @@ from __future__ import annotations
 import logging
 import time
 import uuid
-from collections.abc import Callable, Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from http.cookies import SimpleCookie
 from typing import Any
 from urllib.parse import urlsplit
@@ -217,7 +217,7 @@ def _cookie(scope: Scope, name: str) -> str | None:
     return morsel.value if morsel else None
 
 
-ErrorRenderer = Callable[[Scope], Response]
+ErrorRenderer = Callable[[Scope], Awaitable[Response]]
 
 
 class ErrorPageMiddleware:
@@ -250,11 +250,12 @@ class ErrorPageMiddleware:
             log.exception("unhandled error", extra={"path": scope["path"]})
             if started:
                 raise
-            await self._error_response(scope)(scope, receive, send)
+            response = await self._error_response(scope)
+            await response(scope, receive, send)
 
-    def _error_response(self, scope: Scope) -> Response:
+    async def _error_response(self, scope: Scope) -> Response:
         try:
-            return self.render(scope)
+            return await self.render(scope)
         except Exception:
             log.exception("error page failed to render")
             return PlainTextResponse("Something went wrong.", status_code=500)
