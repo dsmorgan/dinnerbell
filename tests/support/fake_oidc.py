@@ -19,7 +19,7 @@ from joserfc import jwt
 from joserfc.jwk import KeySet, RSAKey
 from starlette.applications import Starlette
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, PlainTextResponse
 from starlette.routing import Route
 
 from dinnerbell.services.clock import Clock
@@ -53,6 +53,7 @@ class FakeProvider:
     token_requests: list[dict[str, Any]] = field(default_factory=list)
     jwks_fetches: int = 0
     extra_keys: list[RSAKey] = field(default_factory=list)
+    token_outage: int | None = None  # set to an HTTP status to make the token endpoint fail
 
     # Endpoints ---------------------------------------------------------------------------
 
@@ -95,6 +96,8 @@ class FakeProvider:
     async def _token(self, request: Request) -> JSONResponse:
         form = dict(await request.form())
         self.token_requests.append({"form": form, "authorization": request.headers.get("authorization")})
+        if self.token_outage is not None:
+            return PlainTextResponse("upstream trouble", status_code=self.token_outage)  # type: ignore[return-value]
         if not self._client_authenticated(form, request.headers.get("authorization")):
             return JSONResponse({"error": "invalid_client"}, status_code=401)
         pending = self.codes.pop(str(form.get("code")), None)

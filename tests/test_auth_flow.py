@@ -390,3 +390,12 @@ def test_signed_in_user_visiting_login_goes_home(client: TestClient, provider: F
     response = client.get("/auth/login")
     assert response.status_code == 303
     assert response.headers["location"] == "/"
+
+
+def test_token_endpoint_outage_shows_provider_page(client: TestClient, provider: FakeProvider) -> None:
+    params = start_login(client)
+    code = provider.authorize(params)
+    provider.token_outage = 504
+    response = client.get("/auth/callback", params={"code": code, "state": params["state"]})
+    assert response.status_code == 502
+    assert "sign-in provider" in page(response)

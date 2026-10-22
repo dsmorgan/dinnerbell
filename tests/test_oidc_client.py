@@ -59,6 +59,8 @@ def serving(doc: dict[str, Any], token: httpx.Response | None = None) -> Any:
         (discovery(id_token_signing_alg_values_supported=["HS256", "none"]), "no acceptable"),
         (discovery(token_endpoint_auth_methods_supported=["private_key_jwt"]), "neither client_secret_post"),
         (discovery(token_endpoint_auth_methods_supported="client_secret_post"), "malformed"),
+        (discovery(id_token_signing_alg_values_supported="RS256 HS256"), "malformed"),
+        (discovery(code_challenge_methods_supported="S256"), "malformed"),
     ],
 )
 async def test_bad_discovery_documents(clock: FakeClock, doc: dict[str, Any], reason: str) -> None:
@@ -101,19 +103,26 @@ async def test_local_http_issuer_allows_http_endpoints(clock: FakeClock) -> None
 
 
 @pytest.mark.parametrize(
-    ("response", "reason"),
+    ("response", "reason", "unavailable"),
     [
-        (httpx.Response(400, json={"error": "invalid_grant"}), "invalid_grant"),
-        (httpx.Response(200, json={"ok": False, "error": "invalid_code"}), "invalid_code"),
-        (httpx.Response(200, json={"access_token": "x"}), "no id_token"),
-        (httpx.Response(200, text="not json"), "invalid JSON"),
-        (httpx.Response(200, json=["list"]), "non-object"),
+        (httpx.Response(400, json={"error": "invalid_grant"}), "invalid_grant", False),
+        (httpx.Response(200, json={"ok": False, "error": "invalid_code"}), "invalid_code", False),
+        (httpx.Response(200, json={"access_token": "x"}), "no id_token", False),
+        (httpx.Response(200, text="not json"), "invalid JSON", True),
+        (httpx.Response(200, json=["list"]), "non-object", True),
+        (httpx.Response(502, text="<html>Bad gateway</html>"), "HTTP 502", True),
+        (httpx.Response(503, json={"error": "temporarily_unavailable"}), "HTTP 503", True),
+        (httpx.Response(400, text="Bad Request"), "invalid JSON", True),
     ],
 )
-async def test_token_endpoint_failures(clock: FakeClock, response: httpx.Response, reason: str) -> None:
+async def test_token_endpoint_failures(
+    clock: FakeClock, response: httpx.Response, reason: str, unavailable: bool
+) -> None:
+    """A provider outage (5xx, non-JSON) shows the 502 page; a refused code shows the 400 page."""
     oidc = client_for(serving(discovery(), token=response), clock)
-    with pytest.raises(OIDCError, match=reason):
+    with pytest.raises(OIDCError, match=reason) as caught:
         await oidc.exchange_code("code", None)
+    assert caught.value.provider_unavailable is unavailable
 
 
 async def test_network_failures_are_provider_unavailable(clock: FakeClock) -> None:

@@ -112,7 +112,7 @@ class OIDCClient:
         issuer = self._string(doc, "issuer")
         if not _same_issuer(issuer, self._issuer):
             raise OIDCError("discovery issuer does not match the configured issuer")
-        offered = doc.get("id_token_signing_alg_values_supported") or list(SAFE_ALGORITHMS)
+        offered = _string_list(doc, "id_token_signing_alg_values_supported", default=list(SAFE_ALGORITHMS))
         algorithms = tuple(alg for alg in SAFE_ALGORITHMS if alg in offered)
         if not algorithms:
             raise OIDCError("provider offers no acceptable ID token signing algorithm")
@@ -121,7 +121,7 @@ class OIDCClient:
             authorization_endpoint=self._endpoint(doc, "authorization_endpoint"),
             token_endpoint=self._endpoint(doc, "token_endpoint"),
             jwks_uri=self._endpoint(doc, "jwks_uri"),
-            supports_pkce="S256" in (doc.get("code_challenge_methods_supported") or []),
+            supports_pkce="S256" in _string_list(doc, "code_challenge_methods_supported", default=[]),
             algorithms=algorithms,
             client_auth=self._client_auth(doc.get("token_endpoint_auth_methods_supported")),
         )
@@ -162,12 +162,14 @@ class OIDCClient:
 
     @staticmethod
     def _json_object(response: httpx.Response) -> dict[str, Any]:
+        # A provider that answers with something other than a JSON object is broken or down,
+        # not refusing this user, so show the "can't reach the provider" page.
         try:
             body = response.json()
         except ValueError:
-            raise OIDCError("provider returned invalid JSON") from None
+            raise OIDCError("provider returned invalid JSON", provider_unavailable=True) from None
         if not isinstance(body, dict):
-            raise OIDCError("provider returned a non-object JSON body")
+            raise OIDCError("provider returned a non-object JSON body", provider_unavailable=True)
         return body
 
     # Authorization -------------------------------------------------------------------------
@@ -205,7 +207,9 @@ class OIDCClient:
             response = await self._http.post(metadata.token_endpoint, data=form, headers=headers)
         except httpx.HTTPError as exc:
             raise OIDCError(f"token request failed: {type(exc).__name__}", provider_unavailable=True) from None
-        body = self._json_object(response) if response.content else {}
+        if response.status_code >= 500:
+            raise OIDCError(f"token endpoint returned HTTP {response.status_code}", provider_unavailable=True)
+        body = self._json_object(response)
         if response.status_code != 200 or "error" in body:
             error = body.get("error")
             raise OIDCError(f"token endpoint refused the code: HTTP {response.status_code} {error!s:.64}")
@@ -300,3 +304,14 @@ class OIDCClient:
 
 def _optional_string(value: object) -> str | None:
     return value if isinstance(value, str) and value else None
+
+
+def _string_list(doc: dict[str, Any], key: str, *, default: list[str]) -> list[str]:
+    """A discovery field that must be a list of strings. A bare string is malformed, not a list
+    to substring-match against."""
+    value = doc.get(key)
+    if value is None:
+        return default
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise OIDCError(f"discovery field {key} is malformed")
+    return value
