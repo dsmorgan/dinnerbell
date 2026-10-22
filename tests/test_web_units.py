@@ -187,6 +187,23 @@ def test_session_cookie_flood_from_one_ip_stays_limited(client: TestClient, monk
     assert set(statuses[20:]) == {429}
 
 
+def test_limited_ip_cannot_mint_session_keys(client: TestClient) -> None:
+    """Regression: without the early return in RateLimitMiddleware._check, a limited IP still
+    added one limiter key per random session cookie. LRU eviction hid that from the flood test."""
+    import secrets
+
+    from dinnerbell.web.app import AUTH_RATE_LIMIT
+    from dinnerbell.web.middleware import RateLimitMiddleware
+
+    [entry] = [m for m in client.app.user_middleware if m.cls is RateLimitMiddleware]  # type: ignore[attr-defined]
+    limiter = entry.kwargs["limiter"]
+    for _ in range(AUTH_RATE_LIMIT + 500):
+        client.cookies.set("__Host-dinnerbell_session", secrets.token_urlsafe(16), domain="dinnerbell.test")
+        client.get("/auth/login")
+    # One key for the IP, plus one per session cookie sent before the IP was limited.
+    assert len(limiter) <= AUTH_RATE_LIMIT + 1
+
+
 def test_debug_logs_show_peer_and_client_ip(client: TestClient, caplog: pytest.LogCaptureFixture) -> None:
     import logging
 
