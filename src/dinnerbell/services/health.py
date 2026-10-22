@@ -25,6 +25,7 @@ class SchedulerState:
     """What the scheduler's jobs record and /healthz reports. The composition root shares one
     instance between them, so neither layer imports the other."""
 
+    started_at: datetime | None = None
     last_tick: datetime | None = None
     last_backup: datetime | None = None
 
@@ -32,8 +33,14 @@ class SchedulerState:
         return self.last_tick is not None and now - self.last_tick <= STALE_AFTER
 
     def scheduler_status(self, now: datetime) -> str:
-        """ "starting" before the first tick, then "ok", "stale", or "stopped" by tick age."""
+        """ "starting" before the first tick, then "ok", "stale", or "stopped" by tick age.
+
+        A scheduler that never ticks counts as stopped once it has had longer than the stale
+        threshold to start, so /healthz can't sit at "starting" forever.
+        """
         if self.last_tick is None:
+            if self.started_at is not None and now - self.started_at > STALE_AFTER:
+                return "stopped"
             return "starting"
         age = now - self.last_tick
         if age <= STALE_AFTER:

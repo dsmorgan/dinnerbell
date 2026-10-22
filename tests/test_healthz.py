@@ -84,10 +84,25 @@ def test_head_requests(client: TestClient) -> None:
 
 
 def test_scheduler_status_before_first_tick() -> None:
-    from dinnerbell.services.health import SchedulerState
+    from dinnerbell.services.health import STALE_AFTER, SchedulerState
 
-    assert SchedulerState().scheduler_status(clock_now := FakeClock().now) == "starting"
-    assert not SchedulerState().tick_is_fresh(clock_now)
+    now = FakeClock().now
+    assert SchedulerState().scheduler_status(now) == "starting"
+    assert not SchedulerState().tick_is_fresh(now)
+    started = SchedulerState(started_at=now)
+    assert started.scheduler_status(now + STALE_AFTER) == "starting"
+    assert started.scheduler_status(now + STALE_AFTER + timedelta(seconds=1)) == "stopped"
+
+
+def test_scheduler_that_never_ticks_returns_503(client: TestClient, clock: FakeClock) -> None:
+    """Regression: with no tick at all, /healthz stayed at "starting" with 200 forever."""
+    state = client.app.state.dinnerbell.scheduler_state  # type: ignore[attr-defined]
+    wait_for_tick(client)
+    state.last_tick = None  # as if the heartbeat never ran
+    clock.advance(timedelta(minutes=2))
+    response = client.get("/healthz")
+    assert response.status_code == 503
+    assert response.json()["scheduler"] == {"status": "stopped", "last_tick": None}
 
 
 def test_unreachable_database_returns_503(client: TestClient, tmp_path: Path) -> None:

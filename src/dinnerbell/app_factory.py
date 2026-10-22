@@ -51,7 +51,7 @@ def create_app(
             )
         http = httpx.AsyncClient(transport=oidc_transport, timeout=OIDC_TIMEOUT_SECONDS, follow_redirects=False)
         secret = settings.secret_key.get_secret_value()
-        state = SchedulerState()
+        state = SchedulerState(started_at=clock())
         app.state.dinnerbell = AppContext(
             settings=settings,
             clock=clock,
