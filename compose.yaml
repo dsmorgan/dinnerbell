@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Run with: podman-compose up -d --build   (or: docker compose up -d --build)
+services:
+  dinnerbell:
+    image: dinnerbell
+    build:
+      context: .
+      dockerfile: Containerfile
+    env_file: .env
+    ports:
+      - "8000:8000"
+    volumes:
+      - dinnerbell-data:/data
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    # Podman ignores an image HEALTHCHECK when it builds in OCI format, so declare it here too.
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=4).status == 200 else 1)"
+      interval: 30s
+      timeout: 5s
+      start_period: 20s
+      retries: 3
+
+volumes:
+  dinnerbell-data:
