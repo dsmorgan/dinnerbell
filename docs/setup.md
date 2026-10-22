@@ -4,17 +4,17 @@ This guide takes you from nothing to a working Dinnerbell install: a Slack works
 
 ## Status
 
-Dinnerbell is under construction. Milestone M0 ships these parts, and this guide covers them fully:
+Dinnerbell is under construction. Milestones M0 and M1 ship these parts, and this guide covers them fully:
 
 - Sign in with Slack, and the members admin page
 - `/healthz`
 - The scheduler
 - Nightly backups
+- The catalog, catalog file import, `DINNERBELL_SEED_FILE`, preferences, and meal history
 
 These parts are not built yet:
 
 - **The Slack bot** does not connect until milestone M2. Until then, `/healthz` reports Slack as `not_configured`, and the bot posts nothing. Steps 3 and 4 still apply, so your tokens are ready.
-- **The catalog, catalog import, and `DINNERBELL_SEED_FILE`** arrive in milestone M1.
 
 ## Prerequisites
 
@@ -155,13 +155,13 @@ Avoid `0.0.0.0` unless a firewall limits who can reach the port.
 
    `DINNERBELL_HOUSEHOLD_NAME` and `DINNERBELL_TIMEZONE` take effect on first start only. After that, Dinnerbell reads them from its database, so set them correctly before you start it the first time.
 
-5. Optional, M1 and later: load a starter catalog on first start. Copy `seed/example.yaml` to `seed/my-catalog.yaml` and edit it. The format is in [catalog-format.md](catalog-format.md).
+5. Optional: load a starter catalog on first start. Copy `seed/example.yaml` to `seed/my-catalog.yaml` and edit it. The format is in [catalog-format.md](catalog-format.md).
 
    ```sh
    cp seed/example.yaml seed/my-catalog.yaml
    ```
 
-6. Optional, M1 and later: mount the catalog file read-only. Create `compose.override.yaml` next to `compose.yaml` with this content. Both compose tools read it automatically.
+6. Optional: mount the catalog file read-only. Create `compose.override.yaml` next to `compose.yaml` with this content. Both compose tools read it automatically.
 
    ```yaml
    services:
@@ -170,7 +170,7 @@ Avoid `0.0.0.0` unless a firewall limits who can reach the port.
          - ./seed/my-catalog.yaml:/seed/catalog.yaml:ro
    ```
 
-7. Optional, M1 and later: point Dinnerbell at the mounted file by adding this line to `.env`. Dinnerbell imports the file on first start. You can also import a file later from the Catalog page.
+7. Optional: point Dinnerbell at the mounted file by adding this line to `.env`. Dinnerbell imports the file on first start, while the catalog is still empty. You can also import a file later from the Catalog page.
 
    ```sh
    DINNERBELL_SEED_FILE=/seed/catalog.yaml
@@ -267,8 +267,10 @@ Invite each person to the Slack workspace from Slack (**Invite people**), using 
 
 The catalog is your list of restaurants and home meals. [catalog-format.md](catalog-format.md) describes the file format, and [seed/example.yaml](../seed/example.yaml) is a starter file.
 
-- **On first start:** mount a catalog file and set `DINNERBELL_SEED_FILE`, as described in step 9 (M1 and later).
-- **After first start:** paste or upload the file on the Catalog page (M1 and later).
+- **On first start:** mount a catalog file and set `DINNERBELL_SEED_FILE`, as described in steps 5 to 7 of section 9.
+- **After first start:** paste or upload the file on the Catalog page.
+
+On first start, only the admin is a member yet, so the seed skips every other cook email. After you invite everyone (section 11), import the same file again from the Catalog page to fill in the cooks. Fields in the file replace what's stored, so do this before you edit those items in the app.
 
 ## Back up
 

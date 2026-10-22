@@ -176,6 +176,9 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # Removing variety_window_days is safe: before 0002 nothing wrote it (M0 has no settings
+    # editor, and bootstrap stores {}), so any value here came from 0002 or later M1 code that
+    # revision 0001 doesn't read. Downgrading drops a custom window; upgrading again sets 7.
     op.execute(sa.text("UPDATE household SET settings = json_remove(settings, '$.variety_window_days')"))
     op.drop_index(op.f("ix_preference_tag_id"), table_name="preference")
     op.drop_index(op.f("ix_preference_member_id"), table_name="preference")

@@ -6,7 +6,7 @@ The catalog is the household's list of things to eat: restaurants and home meals
 
 - **In the app.** The Catalog page has an add form for one item at a time. Any member can use it.
 - **Bulk import.** Paste or upload a catalog file on the Catalog page. Dinnerbell validates it, shows a preview of what will be created and changed, and applies it only after you confirm. Any member can import.
-- **First run.** If `DINNERBELL_SEED_FILE` points to a catalog file, Dinnerbell imports it on first start.
+- **First run.** If `DINNERBELL_SEED_FILE` points to a catalog file, Dinnerbell imports it on first start, while the catalog is still empty. At that point only the admin is a member, so other cooks are skipped. After inviting everyone, import the same file again from the Catalog page to fill in the cooks, before editing those items in the app.
 - **With a chatbot, today.** Give any chatbot this page plus your notes ("we get Thai from Siam Garden on Main, pickup or DoorDash") and ask for a catalog file. Import the result; the preview catches mistakes.
 - **With the built-in assistant, later.** Milestone M6 adds an assistant that drafts entries in this format from a description or a menu link. Its drafts go through the same preview before anything is saved.
 
