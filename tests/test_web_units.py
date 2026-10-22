@@ -45,10 +45,16 @@ class TestClientIp:
         # A dual-stack listener reports IPv4 peers as IPv4-mapped IPv6.
         assert resolve_client_ip("::ffff:10.0.0.2", "::ffff:198.51.100.7", trusted) == "198.51.100.7"
         assert resolve_client_ip("::ffff:203.0.113.9", None, ()) == "203.0.113.9"
-        assert resolve_client_ip("2002:c633:6407::1", None, ()) == "198.51.100.7"  # 6to4
-        teredo = "2001:0:4136:e378:8000:63bf:3fff:fdd2"  # RFC 4380 example, client 192.0.2.45
-        assert resolve_client_ip(teredo, None, ()) == "192.0.2.45"
         assert resolve_client_ip("fe80::1%eth0", None, ()) == "fe80::1"
+
+    def test_client_chosen_ipv4_embeddings_are_not_unwrapped(self) -> None:
+        """Regression: 6to4 and Teredo embed an IPv4 address the client picks. A 6to4 peer
+        embedding the proxy's IPv4 must not be trusted to set X-Forwarded-For."""
+        trusted = (ipaddress.ip_network("198.51.100.7/32"),)
+        sixtofour = "2002:c633:6407::1"  # embeds 198.51.100.7
+        assert resolve_client_ip(sixtofour, "203.0.113.50", trusted) == sixtofour
+        teredo = "2001:0:4136:e378:8000:63bf:3fff:fdd2"  # RFC 4380 example, embeds 192.0.2.45
+        assert resolve_client_ip(teredo, None, ()) == teredo
 
     def test_missing_or_odd_peer(self) -> None:
         assert resolve_client_ip(None, "1.2.3.4", PROXIES) == "unknown"
@@ -104,7 +110,8 @@ class TestRateLimiter:
 
         assert client_key("::ffff:198.51.100.7") != client_key("::ffff:203.0.113.9")
         assert client_key("::ffff:198.51.100.7") == client_key("198.51.100.7") == "ip:198.51.100.7"
-        assert client_key("2002:c633:6407::1") == "ip:198.51.100.7"
+        assert client_key("2002:c633:6407::1") == "ip:2002:c633:6407::/64"
+        assert client_key("2001:0:4136:e378:8000:63bf:3fff:fdd2") == "ip:2001:0:4136:e378::/64"
         assert client_key("fe80::1%eth0") == client_key("fe80::2") == "ip:fe80::/64"
 
         limiter = SlidingWindowLimiter(1, 60, monotonic=lambda: 0.0)
