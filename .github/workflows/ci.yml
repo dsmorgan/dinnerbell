@@ -54,7 +54,7 @@ jobs:
         run: docker build --file Containerfile --tag dinnerbell:ci .
       - name: Smoke test
         run: |
-          docker run --detach --name smoke --read-only --tmpfs /tmp --cap-drop ALL \
+          docker run --detach --name smoke --read-only --tmpfs /tmp:size=16m --cap-drop ALL \
             --security-opt no-new-privileges:true --publish 8000:8000 \
             --env DINNERBELL_BASE_URL=http://localhost:8000 \
             --env DINNERBELL_SECRET_KEY=ci-only-secret-key-not-used-anywhere-else \

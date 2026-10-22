@@ -3,12 +3,14 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Form, Request, UploadFile
+from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import RedirectResponse
+from starlette.datastructures import UploadFile as StarletteUploadFile
 from starlette.responses import Response
 
 from dinnerbell.domain.catalog import (
@@ -421,32 +423,56 @@ async def import_page(request: Request, principal: SignedIn, context: Context) -
     return await _import_page(request, context, principal)
 
 
-async def _uploaded(upload: UploadFile | None) -> bytes | None:
-    if upload is None or not upload.filename:
-        return None
-    return await upload.read(MAX_FILE_BYTES + 1)
+IMPORT_PART_BYTES = 2_100_000
+"""A pasted 1 MB file can grow when the browser turns each line break into CRLF."""
+
+
+@dataclass(frozen=True, slots=True)
+class ImportPost:
+    content: str
+    upload: bytes | None
+    token: str
+
+
+async def import_post(request: Request, principal: SignedIn) -> AsyncIterator[ImportPost]:
+    """Read the import form, but only for a signed-in member.
+
+    The import routes declare no ``Form`` parameters, because FastAPI would parse those before
+    any dependency ran. Depending on ``SignedIn`` first means an anonymous body is never read,
+    and the larger part limit lets a pasted file grow by CRLF line breaks and still reach the
+    domain's friendly size check instead of a bare 400.
+    """
+    form = await request.form(max_files=1, max_fields=8, max_part_size=IMPORT_PART_BYTES)
+    try:
+        content, token, upload = form.get("content"), form.get("token"), form.get("upload")
+        data = None
+        if isinstance(upload, StarletteUploadFile) and upload.filename:
+            data = await upload.read(MAX_FILE_BYTES + 1)
+        yield ImportPost(
+            content=_normalized(content) if isinstance(content, str) else "",
+            upload=data,
+            token=token if isinstance(token, str) and len(token) <= 1000 else "",
+        )
+    finally:
+        await form.close()
+
+
+ImportForm = Annotated[ImportPost, Depends(import_post)]
 
 
 @router.post("/import/preview")
 async def preview_import(
-    request: Request,
-    principal: CSRFChecked,
-    context: Context,
-    db: Database,
-    content: Annotated[str, Form()] = "",
-    upload: UploadFile | None = None,
+    request: Request, form: ImportForm, principal: CSRFChecked, context: Context, db: Database
 ) -> Response:
-    data = await _uploaded(upload)
-    source: str | bytes = _normalized(content)
-    if data is not None:
-        source = data
+    source: str | bytes = form.content
+    content = form.content
+    if form.upload is not None:
+        source = form.upload
         try:
-            content = _normalized(data.decode("utf-8-sig")) if len(data) <= MAX_FILE_BYTES else ""
+            content = _normalized(form.upload.decode("utf-8-sig")) if len(form.upload) <= MAX_FILE_BYTES else ""
         except UnicodeDecodeError:
             content = ""
-    else:
-        content = _normalized(content)
-    if data is None and not content.strip():
+    elif not content.strip():
         return await _import_page(request, context, principal, notice="Paste a catalog file or choose one to upload.")
     plan = await catalog_service.preview_import(db, principal.household.id, source)
     return await _import_page(
@@ -456,18 +482,13 @@ async def preview_import(
 
 @router.post("/import/apply")
 async def apply_import(
-    request: Request,
-    principal: CSRFChecked,
-    context: Context,
-    db: Database,
-    content: Annotated[str, Form()] = "",
-    token: Annotated[str, Form(max_length=1000)] = "",
+    request: Request, form: ImportForm, principal: CSRFChecked, context: Context, db: Database
 ) -> Response:
     """Apply what the person previewed. The browser re-sends the file; the signed token proves
     which file and plan they saw. The import is re-planned against the current catalog and
     refused if the outcome would differ from the preview."""
-    content = _normalized(content)
-    signed = _preview_signer(context).loads(token)
+    content = form.content
+    signed = _preview_signer(context).loads(form.token)
     seen = (
         signed is not None
         and signed.get("member") == str(principal.member.id)

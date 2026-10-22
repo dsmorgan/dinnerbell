@@ -294,3 +294,87 @@ class SessionCookieMiddleware:
             await send(message)
 
         await self.app(scope, receive, send_with_cookie)
+
+
+class BodyLimitMiddleware:
+    """Refuse request bodies over a size limit before anything reads them.
+
+    FastAPI parses form bodies before any dependency runs, so without this an anonymous client
+    could make the app read, and spool to /tmp, a body of any size. A declared Content-Length
+    over the limit gets 413 without reading a byte; a chunked or undeclared body is cut off as
+    soon as it passes the limit. It is the outermost user middleware, so it sets the security
+    headers on its own 413.
+    """
+
+    def __init__(self, app: ASGIApp, default_limit: int, path_limits: Sequence[tuple[str, int]] = ()) -> None:
+        self.app = app
+        self.default_limit = default_limit
+        self.path_limits = tuple(path_limits)
+
+    def limit_for(self, path: str) -> int:
+        return next((limit for prefix, limit in self.path_limits if path.startswith(prefix)), self.default_limit)
+
+    @staticmethod
+    def declared_length(headers: Sequence[tuple[bytes, bytes]]) -> int | str | None:
+        """The Content-Length as an int, None if absent, or "invalid"."""
+        for name, value in headers:
+            if name.lower() == b"content-length":
+                text = value.decode("latin-1")
+                return int(text) if text.isascii() and text.isdigit() else "invalid"
+        return None
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        limit = self.limit_for(scope["path"])
+        declared = self.declared_length(scope.get("headers") or [])
+        if declared == "invalid":
+            await _plain(400, "Bad request.")(scope, receive, send)
+            return
+        if isinstance(declared, int) and declared > limit:
+            log.warning("request body too large", extra={"path": scope["path"], "declared": declared})
+            await _too_large()(scope, receive, send)
+            return
+        received = 0
+        exceeded = False
+        started = False
+
+        async def limited_receive() -> Message:
+            nonlocal received, exceeded
+            if exceeded:
+                return {"type": "http.disconnect"}
+            message = await receive()
+            if message["type"] == "http.request":
+                received += len(message.get("body", b""))
+                if received > limit:
+                    exceeded = True
+                    log.warning("request body too large", extra={"path": scope["path"], "received": received})
+                    # To the app this looks like the client went away, which it already handles.
+                    return {"type": "http.disconnect"}
+            return message
+
+        async def guarded_send(message: Message) -> None:
+            nonlocal started
+            if exceeded and not started:
+                return  # the 413 below replaces whatever the app tries to say
+            if message["type"] == "http.response.start":
+                started = True
+            await send(message)
+
+        try:
+            await self.app(scope, limited_receive, guarded_send)
+        except Exception:
+            if not exceeded or started:
+                raise
+        if exceeded and not started:
+            await _too_large()(scope, receive, send)
+
+
+def _plain(status: int, text: str) -> PlainTextResponse:
+    headers = SECURITY_HEADERS | {"Cache-Control": "no-store", "Connection": "close"}
+    return PlainTextResponse(text, status_code=status, headers=headers)
+
+
+def _too_large() -> PlainTextResponse:
+    return _plain(413, "That request is too large. Catalog files can be up to 1 MB.")

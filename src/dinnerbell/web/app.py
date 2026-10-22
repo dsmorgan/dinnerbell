@@ -21,6 +21,7 @@ from dinnerbell.services.errors import Forbidden, NotFound
 from dinnerbell.web.auth import AccessDenied, CSRFRejected, NotSignedIn, session_cookie_writer
 from dinnerbell.web.context import CookieNames
 from dinnerbell.web.middleware import (
+    BodyLimitMiddleware,
     ErrorPageMiddleware,
     OriginCheckMiddleware,
     RateLimitMiddleware,
@@ -37,6 +38,11 @@ log = logging.getLogger(__name__)
 STATIC_DIR = Path(__file__).parent / "static"
 AUTH_RATE_LIMIT = 20
 AUTH_RATE_WINDOW_SECONDS = 60.0
+DEFAULT_BODY_LIMIT = 64 * 1024
+IMPORT_BODY_LIMIT = 2_200_000
+"""A 1 MB catalog file can arrive twice in one import form (the textarea and an upload), plus
+multipart overhead."""
+IMPORT_PATH_PREFIX = "/catalog/import/"
 Lifespan = Callable[[FastAPI], AbstractAsyncContextManager[None]]
 
 
@@ -75,6 +81,9 @@ def build_app(settings: Settings, lifespan: Lifespan) -> FastAPI:
     )
     app.add_middleware(SecurityHeadersMiddleware)
     app.add_middleware(RequestContextMiddleware, trusted_proxies=settings.trusted_proxies)
+    app.add_middleware(
+        BodyLimitMiddleware, default_limit=DEFAULT_BODY_LIMIT, path_limits=[(IMPORT_PATH_PREFIX, IMPORT_BODY_LIMIT)]
+    )
     return app
 
 

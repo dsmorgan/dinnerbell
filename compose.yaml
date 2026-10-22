@@ -13,8 +13,10 @@ services:
     volumes:
       - dinnerbell-data:/data
     read_only: true
+    # Uploads spool to /tmp. The app caps request bodies at about 2 MB; the size cap here bounds
+    # what concurrent uploads can take from memory.
     tmpfs:
-      - /tmp
+      - /tmp:size=16m
     cap_drop:
       - ALL
     security_opt:
