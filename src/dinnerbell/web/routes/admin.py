@@ -13,7 +13,7 @@ from starlette.responses import Response
 from dinnerbell.domain.members import Capabilities, InvalidMemberInput, Member, MemberRuleViolation, Role
 from dinnerbell.services import members as member_service
 from dinnerbell.services.clock import Clock
-from dinnerbell.web.auth import AdminPrincipal, Context, CSRFChecked, Database, Principal
+from dinnerbell.web.auth import AdminCSRFChecked, AdminPrincipal, Context, Database, Principal
 from dinnerbell.web.render import is_htmx, render
 
 router = APIRouter(prefix="/admin")
@@ -92,7 +92,7 @@ async def members_page(
 @router.post("/members")
 async def invite(
     request: Request,
-    principal: CSRFChecked,
+    principal: AdminCSRFChecked,
     context: Context,
     db: Database,
     posted: Posted,
@@ -118,7 +118,7 @@ async def edit_page(request: Request, principal: AdminPrincipal, db: Database, m
 @router.post("/members/{member_id}")
 async def update(
     request: Request,
-    principal: CSRFChecked,
+    principal: AdminCSRFChecked,
     context: Context,
     db: Database,
     member_id: int,
@@ -139,14 +139,14 @@ async def update(
 
 @router.post("/members/{member_id}/deactivate")
 async def deactivate(
-    request: Request, principal: CSRFChecked, context: Context, db: Database, member_id: int
+    request: Request, principal: AdminCSRFChecked, context: Context, db: Database, member_id: int
 ) -> Response:
     return await _set_active(request, principal, context.clock, db, member_id, active=False)
 
 
 @router.post("/members/{member_id}/reactivate")
 async def reactivate(
-    request: Request, principal: CSRFChecked, context: Context, db: Database, member_id: int
+    request: Request, principal: AdminCSRFChecked, context: Context, db: Database, member_id: int
 ) -> Response:
     return await _set_active(request, principal, context.clock, db, member_id, active=True)
 

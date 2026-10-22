@@ -123,6 +123,13 @@ async def require_csrf(request: Request, principal: SignedIn) -> Principal:
     return principal
 
 
+async def require_admin_csrf(request: Request, principal: AdminPrincipal) -> Principal:
+    """For state-changing admin routes: an admin, and a valid CSRF token."""
+    if not tokens_match(principal.csrf_token, await _supplied_csrf(request)):
+        raise CSRFRejected
+    return principal
+
+
 async def csrf_if_signed_in(request: Request, principal: MaybePrincipal) -> Principal | None:
     if principal is not None and not tokens_match(principal.csrf_token, await _supplied_csrf(request)):
         raise CSRFRejected
@@ -130,6 +137,7 @@ async def csrf_if_signed_in(request: Request, principal: MaybePrincipal) -> Prin
 
 
 CSRFChecked = Annotated[Principal, Depends(require_csrf)]
+AdminCSRFChecked = Annotated[Principal, Depends(require_admin_csrf)]
 CSRFCheckedIfSignedIn = Annotated[Principal | None, Depends(csrf_if_signed_in)]
 
 

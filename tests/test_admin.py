@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import httpx
+import pytest
 from fastapi.testclient import TestClient
 
 from dinnerbell.config import Settings
@@ -164,9 +165,50 @@ def test_deactivation_ends_existing_sessions(client: TestClient, provider: FakeP
         sign_in(sam_browser, provider, claims={"sub": "subject-sam", "email": "sam@example.com"})
         assert "Hi, Sam" in page(sam_browser.get("/"))
         sam = member(migrated, "sam@example.com")
+        assert any(s.member_id == sam.id for s in rows(migrated, SessionRow))
         post(client, f"/admin/members/{sam.id}/deactivate")
+        # The service deletes the rows itself; this is checked before Sam's next request, which
+        # would also drop the session through the inactive-member check.
+        assert all(s.member_id != sam.id for s in rows(migrated, SessionRow))
         assert 'href="/auth/login"' in sam_browser.get("/").text
-    assert all(s.member_id != sam.id for s in rows(migrated, SessionRow))
+
+
+def test_session_of_member_deactivated_outside_the_app_is_refused(
+    client: TestClient, provider: FakeProvider, migrated: Settings
+) -> None:
+    """The per-request guard: a session whose member is inactive is refused even if its row
+    survived (for example, a member deactivated directly in the database)."""
+    from sqlalchemy import create_engine, update
+    from sqlalchemy.orm import Session
+
+    sign_in(client, provider)
+    engine = create_engine(migrated.sync_database_url)
+    try:
+        with Session(engine) as db:
+            db.execute(update(MemberRow).where(MemberRow.email == "admin@example.com").values(active=False))
+            db.commit()
+    finally:
+        engine.dispose()
+    assert len(rows(migrated, SessionRow)) == 1
+    assert client.get("/admin/members").status_code == 303
+    assert 'href="/auth/login"' in client.get("/").text
+    assert rows(migrated, SessionRow) == []
+
+
+def test_web_admin_guard_holds_without_the_service_guard(
+    client: TestClient, provider: FakeProvider, migrated: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The web layer's require_admin must refuse members on its own, not lean on the service."""
+    from dinnerbell.services import members as member_service
+
+    sign_in(client, provider)
+    invite(client, "sam@example.com", "Sam")
+    sign_in_as(client, provider, "subject-sam", "sam@example.com")
+    monkeypatch.setattr(member_service, "_require_admin", lambda _actor: None)
+    assert client.get("/admin/members").status_code == 403
+    response = post(client, "/admin/members", {"display_name": "Eve", "email": "eve@example.com"})
+    assert response.status_code == 403
+    assert all(m.email != "eve@example.com" for m in rows(migrated, MemberRow))
 
 
 def test_htmx_deactivate_returns_row_fragment(client: TestClient, provider: FakeProvider, migrated: Settings) -> None:
