@@ -110,8 +110,14 @@ class TestRateLimiter:
 
         assert client_key("::ffff:198.51.100.7") != client_key("::ffff:203.0.113.9")
         assert client_key("::ffff:198.51.100.7") == client_key("198.51.100.7") == "ip:198.51.100.7"
-        assert client_key("2002:c633:6407::1") == "ip:2002:c633:6407::/64"
-        assert client_key("2001:0:4136:e378:8000:63bf:3fff:fdd2") == "ip:2001:0:4136:e378::/64"
+        # 6to4: the whole /48 belongs to one IPv4 site.
+        assert client_key("2002:c633:6407::1") == client_key("2002:c633:6407:ffff::1") == "ip:2002:c633:6407::/48"
+        assert client_key("2002:c633:6408::1") != client_key("2002:c633:6407::1")
+        # Teredo: the /64 is the relay plus flags, shared by unrelated clients, so use the address.
+        teredo_a = "2001:0:4136:e378:8000:63bf:3fff:fdd2"
+        teredo_b = "2001:0:4136:e378:8000:63bf:3fff:fdd3"
+        assert client_key(teredo_a) == f"ip:{teredo_a}"
+        assert client_key(teredo_a) != client_key(teredo_b)
         assert client_key("fe80::1%eth0") == client_key("fe80::2") == "ip:fe80::/64"
 
         limiter = SlidingWindowLimiter(1, 60, monotonic=lambda: 0.0)

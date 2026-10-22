@@ -12,6 +12,7 @@ from dinnerbell.web.clientip import normalize
 
 MAX_TRACKED_KEYS = 10_000
 IPV6_PREFIX = 64
+SIXTOFOUR_PREFIX = 48
 
 
 class SlidingWindowLimiter:
@@ -49,12 +50,20 @@ class SlidingWindowLimiter:
 
 
 def client_key(client_ip: str) -> str:
-    """Rate-limit key for a client address. IPv6 clients share their /64, which one host controls."""
+    """Rate-limit key for a client address.
+
+    Native IPv6 clients share their /64, which one site controls. A 6to4 site owns a whole /48
+    (2002:aabb:ccdd::/48 for IPv4 a.b.c.d), so it is keyed by that. Teredo addresses pack the
+    relay, flags, and client port into what would be the /64, so many unrelated clients share
+    one; they are keyed by the full address.
+    """
     try:
         address = normalize(ipaddress.ip_address(client_ip))
     except ValueError:
         return f"ip:{client_ip}"
-    if address.version == 6:
-        network = ipaddress.ip_network(f"{address}/{IPV6_PREFIX}", strict=False)
-        return f"ip:{network}"
-    return f"ip:{address}"
+    if isinstance(address, ipaddress.IPv4Address):
+        return f"ip:{address}"
+    if address.teredo is not None:
+        return f"ip:{address}"
+    prefix = SIXTOFOUR_PREFIX if address.sixtofour is not None else IPV6_PREFIX
+    return f"ip:{ipaddress.ip_network(f'{address}/{prefix}', strict=False)}"
