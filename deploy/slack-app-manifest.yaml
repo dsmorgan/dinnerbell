@@ -11,14 +11,14 @@ display_information:
   background_color: "#8a4b1f"
 
 features:
-  # The App Home tab shows each member's dashboard. The Messages tab lets
-  # members send the bot direct messages and receive private notifications.
+  # The Home tab shows each member's dashboard. The Messages tab shows
+  # private notifications; members can't reply there.
   app_home:
     home_tab_enabled: true
     messages_tab_enabled: true
-    messages_tab_read_only_enabled: false
+    messages_tab_read_only_enabled: true
   bot_user:
-    display_name: Dinnerbell
+    display_name: dinnerbell
     always_online: true
   slash_commands:
     # Socket Mode delivers commands over the WebSocket, so no url field is
@@ -52,7 +52,7 @@ settings:
     # No request_url: Socket Mode delivers events over the WebSocket.
     bot_events:
       - app_home_opened
-  # Enables buttons, menus, modals, and shortcuts. No request_url in Socket Mode.
+  # Enables buttons, menus, and modals. No request_url in Socket Mode.
   interactivity:
     is_enabled: true
   org_deploy_enabled: false

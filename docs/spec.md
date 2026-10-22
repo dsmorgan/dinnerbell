@@ -581,8 +581,10 @@ dinnerbell/
     spec.md
     adr/
   seed/            example tags and catalog YAML
+  deploy/          Slack app manifest
   Containerfile
   compose.yaml
+  .env.example
   pyproject.toml
   uv.lock
   README.md  LICENSE  SECURITY.md  CONTRIBUTING.md
