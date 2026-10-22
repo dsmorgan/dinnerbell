@@ -230,25 +230,29 @@ details[open] > summary { margin-bottom: 0.5rem; }
   white-space: nowrap;
 }
 
-/* Brand and sign-out share the first row on phones; the page links get a full-width row that
-   scrolls sideways instead of wrapping when a narrow screen can't fit them. */
+/* Brand and sign-out share the first row on phones; the page links take a full-width second
+   row. Five links fit at 360 px; if a wider font doesn't, they wrap rather than scroll. */
 .topbar .signout { margin-left: auto; }
 .signout .link { min-height: 44px; color: var(--muted); font-size: 0.95rem; }
 .topbar .nav {
   order: 3;
   flex: 1 0 100%;
-  gap: 0.1rem;
-  overflow-x: auto;
-  scrollbar-width: none;
-  margin: 0 calc(-1 * var(--gutter));
-  padding: 0 var(--gutter);
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 0 0.25rem;
+  min-width: 0;
 }
-.topbar .nav::-webkit-scrollbar { display: none; }
-.nav a { white-space: nowrap; flex: none; }
-@media (max-width: 26rem) { .topbar .nav a { padding: 0 0.42rem; font-size: 0.92rem; } }
+.nav a { white-space: nowrap; }
+@media (max-width: 26rem) {
+  .topbar .nav a { padding: 0 0.3rem; font-size: 0.875rem; }
+}
+@media (max-width: 23rem) {
+  .topbar .nav { gap: 0; }
+  .topbar .nav a { padding: 0 0.22rem; font-size: 0.84rem; }
+}
 
 @media (min-width: 46rem) {
-  .topbar .nav { order: 1; flex: 0 1 auto; margin: 0 0 0 auto; padding: 0; }
+  .topbar .nav { order: 1; flex: 0 1 auto; justify-content: flex-end; margin-left: auto; }
   .topbar .signout { order: 2; margin-left: 0; }
 }
 
