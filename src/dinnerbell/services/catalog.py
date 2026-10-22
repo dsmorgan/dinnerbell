@@ -288,14 +288,14 @@ async def merge_tags(db: AsyncSession, actor: Member, source_id: int, target_id:
     check_merge(source, target)
     household = actor.household_id
     items = await CatalogRepository(db).move_tag_links(household, source.id, target.id)
-    preferences = await PreferenceRepository(db).move_tag(household, source.id, target.id, merged_stance, now)
+    # Not counted in the audit row: even a count would tell the admin whether anyone rated the tag (FR-29).
+    await PreferenceRepository(db).move_tag(household, source.id, target.id, merged_stance, now)
     meals = await MealLogRepository(db).repoint_cuisine(household, source.id, target.id)
     await CatalogRepository(db).delete_tag(household, source.id)
     payload = {
         "source": {"id": source.id, "kind": source.kind.value, "name": source.name},
         "target": {"id": target.id, "kind": target.kind.value, "name": target.name},
         "items_retagged": items,
-        "preferences_moved": preferences,
         "meals_repointed": meals,
     }
     await _audit(db, household, actor, "catalog.tags_merged", f"tag:{target.id}", payload, now)

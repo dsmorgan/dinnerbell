@@ -124,11 +124,9 @@ def test_admin_merges_tags(client: TestClient, provider: FakeProvider, migrated:
     assert meal.cuisine_tags == [{"id": target, "name": "Thai food"}]  # identity moves; logged name stays
     [audit] = [a for a in rows(migrated, AuditRow) if a.action == "catalog.tags_merged"]
     assert audit.payload["source"]["name"] == "Thai food" and audit.payload["target"]["id"] == target
-    assert (audit.payload["items_retagged"], audit.payload["preferences_moved"], audit.payload["meals_repointed"]) == (
-        1,
-        2,
-        1,
-    )
+    assert (audit.payload["items_retagged"], audit.payload["meals_repointed"]) == (1, 1)
+    # FR-29: even a count would tell the admin whether anyone rated the tag.
+    assert not any("pref" in key for key in audit.payload)
 
 
 def test_merge_keeps_the_lower_score(client: TestClient, provider: FakeProvider, migrated: Settings) -> None:
