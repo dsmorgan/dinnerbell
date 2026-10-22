@@ -14,6 +14,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 log = logging.getLogger(__name__)
 
 HEARTBEAT_INTERVAL = timedelta(seconds=30)
+STALE_AFTER = HEARTBEAT_INTERVAL * 3
+"""A tick older than this makes /healthz report "degraded"."""
+STOPPED_AFTER = timedelta(minutes=5)
+"""A tick older than this means the scheduler is dead: /healthz returns 503."""
 
 
 @dataclass
@@ -25,7 +29,16 @@ class SchedulerState:
     last_backup: datetime | None = None
 
     def tick_is_fresh(self, now: datetime) -> bool:
-        return self.last_tick is not None and now - self.last_tick <= HEARTBEAT_INTERVAL * 3
+        return self.last_tick is not None and now - self.last_tick <= STALE_AFTER
+
+    def scheduler_status(self, now: datetime) -> str:
+        """ "starting" before the first tick, then "ok", "stale", or "stopped" by tick age."""
+        if self.last_tick is None:
+            return "starting"
+        age = now - self.last_tick
+        if age <= STALE_AFTER:
+            return "ok"
+        return "stale" if age <= STOPPED_AFTER else "stopped"
 
 
 async def database_reachable(sessionmaker: async_sessionmaker[AsyncSession]) -> bool:

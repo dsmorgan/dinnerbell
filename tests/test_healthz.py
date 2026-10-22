@@ -64,6 +64,32 @@ def test_stale_scheduler_is_degraded_not_down(client: TestClient, clock: FakeClo
     assert response.json()["scheduler"]["status"] == "stale"
 
 
+def test_stopped_scheduler_returns_503(client: TestClient, clock: FakeClock) -> None:
+    """Regression: a dead scheduler only showed as "degraded" with 200, which the container
+    health check treats as healthy."""
+    wait_for_tick(client)
+    clock.advance(timedelta(minutes=5, seconds=1))
+    response = client.get("/healthz")
+    assert response.status_code == 503
+    assert response.json()["status"] == "error"
+    assert response.json()["scheduler"]["status"] == "stopped"
+
+
+def test_head_requests(client: TestClient) -> None:
+    for path in ("/", "/healthz"):
+        response = client.head(path)
+        assert response.status_code == 200, path
+        assert response.content == b""
+        assert "frame-ancestors" in response.headers["content-security-policy"]
+
+
+def test_scheduler_status_before_first_tick() -> None:
+    from dinnerbell.services.health import SchedulerState
+
+    assert SchedulerState().scheduler_status(clock_now := FakeClock().now) == "starting"
+    assert not SchedulerState().tick_is_fresh(clock_now)
+
+
 def test_unreachable_database_returns_503(client: TestClient, tmp_path: Path) -> None:
     context = client.app.state.dinnerbell  # type: ignore[attr-defined]
     broken = create_app_engine(f"sqlite+aiosqlite:///{tmp_path}/missing-dir/nope.db")

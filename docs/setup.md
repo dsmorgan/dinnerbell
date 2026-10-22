@@ -198,7 +198,7 @@ Avoid `0.0.0.0` unless a firewall limits who can reach the port.
     curl https://dinnerbell.example.com/healthz
     ```
 
-    The response reports database reachability, the scheduler's last tick, the Slack state (`not_configured` until M2), and the last backup time.
+    The response reports database reachability, the scheduler's last tick, the Slack state (`not_configured` until M2), and the last backup time. It returns HTTP 503 when the database is unreachable or the scheduler has not ticked for 5 minutes, so the container health check and Uptime Kuma catch both.
 
 ### Set the trusted proxy
 

@@ -12,7 +12,7 @@ from dinnerbell.web.render import render
 router = APIRouter()
 
 
-@router.get("/")
+@router.api_route("/", methods=["GET", "HEAD"])
 async def today(request: Request, principal: MaybePrincipal) -> Response:
     if principal is None:
         return await render(request, "signin.html")

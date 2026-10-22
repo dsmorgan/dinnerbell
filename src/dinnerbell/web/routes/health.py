@@ -18,17 +18,25 @@ def _iso(value: Any) -> str | None:
     return None if value is None else value.isoformat()
 
 
-@router.get("/healthz")
+@router.api_route("/healthz", methods=["GET", "HEAD"])
 async def healthz(context: Context) -> JSONResponse:
+    """503 when the database is unreachable or the scheduler has stopped ticking, so the
+    container health check and Uptime Kuma both catch a dead scheduler."""
     database_ok = await database_reachable(context.sessionmaker)
     state = context.scheduler_state
-    scheduler_ok = state.tick_is_fresh(context.clock())
-    status = "ok" if database_ok and scheduler_ok else ("degraded" if database_ok else "error")
+    scheduler = state.scheduler_status(context.clock())
+    healthy = database_ok and scheduler != "stopped"
+    if not healthy:
+        status = "error"
+    elif scheduler == "ok":
+        status = "ok"
+    else:
+        status = "degraded"
     body = {
         "status": status,
         "database": "ok" if database_ok else "unreachable",
-        "scheduler": {"status": "ok" if scheduler_ok else "stale", "last_tick": _iso(state.last_tick)},
+        "scheduler": {"status": scheduler, "last_tick": _iso(state.last_tick)},
         "slack": "not_configured",
         "backup": {"last_success": _iso(state.last_backup)},
     }
-    return JSONResponse(body, status_code=200 if database_ok else 503)
+    return JSONResponse(body, status_code=200 if healthy else 503)
