@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from typing import Any
@@ -24,7 +25,14 @@ from dinnerbell.domain.catalog import (
     name_key,
     sorted_modes,
 )
-from dinnerbell.domain.catalog_file import FileError, HomeMealEntry, LocatedEntry, ParsedCatalog, RestaurantEntry
+from dinnerbell.domain.catalog_file import (
+    SECTIONS,
+    FileError,
+    HomeMealEntry,
+    LocatedEntry,
+    ParsedCatalog,
+    RestaurantEntry,
+)
 from dinnerbell.domain.members import Member
 
 SECTION_NOUNS = {ItemKind.RESTAURANT: "restaurants", ItemKind.HOME: "home meals"}
@@ -380,19 +388,27 @@ def _list(values: Iterable[str]) -> str:
     return ", ".join(values) or "none"
 
 
+_ENTRY = re.compile(r"(restaurants|home_meals)\[(\d+)\]")
+
+
 def _error_order(parsed: ParsedCatalog) -> Any:
-    """Sort errors by where they are in the file: tags first, then entries in file order."""
-    entry_order = {located.location: i for i, located in enumerate(parsed.entries)}
-    section_order = {"version": 0, "tags": 1}
+    """Sort errors by where they are in the file: version, tags, then entries in file order,
+    then anything else (YAML syntax errors, unknown top-level keys)."""
+    section_rank: dict[str, int] = {}
+    for located in parsed.entries:
+        section_rank.setdefault(located.location.split("[", 1)[0], len(section_rank))
 
     def key(error: FileError) -> tuple[int, int, int, str]:
         head = error.location.split(".", 1)[0]
-        section = head.split("[", 1)[0]
-        if head in entry_order:
-            return (2, 0, entry_order[head], error.location)
-        if section in {"restaurants", "home_meals"} and "[" in head:
-            index = int(head.split("[", 1)[1].rstrip("]"))
-            return (2, 1 if section == "home_meals" else 0, index, error.location)
-        return (section_order.get(section, 3), 0, 0, error.location)
+        if head == "version":
+            return (0, 0, 0, error.location)
+        if head == "tags":
+            return (1, 0, 0, error.location)
+        entry = _ENTRY.fullmatch(head)
+        if entry is not None or head in SECTIONS:
+            section = entry.group(1) if entry else head
+            rank = section_rank.get(section, 0 if section == "restaurants" else 1)
+            return (2, rank, int(entry.group(2)) if entry else -1, error.location)
+        return (3, 0, 0, error.location)
 
     return key

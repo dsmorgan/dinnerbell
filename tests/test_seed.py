@@ -112,3 +112,24 @@ def test_seed_log_never_contains_emails(
     formatted = "\n".join(JsonFormatter().format(r) for r in caplog.records if r.name.startswith("dinnerbell"))
     assert "stranger@example.com" not in formatted
     assert "home_meals[0].cooks[0]" in formatted
+
+
+def test_unexpected_seed_failure_never_stops_startup(
+    tmp_path: Path,
+    clock: FakeClock,
+    provider: FakeProvider,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dinnerbell.services import catalog as catalog_service
+
+    def broken(*_args: object, **_kwargs: object) -> object:
+        raise RuntimeError("parser bug")
+
+    monkeypatch.setattr(catalog_service, "parse_catalog", broken)
+    settings = seeded(tmp_path, EXAMPLE)
+    with caplog.at_level(logging.INFO, logger="dinnerbell"):
+        start(settings, clock, provider)
+    assert rows(settings, CatalogItemRow) == []
+    [record] = [r for r in caplog.records if r.getMessage() == "seed import failed; nothing was imported"]
+    assert record.levelno == logging.ERROR and record.exc_info is not None

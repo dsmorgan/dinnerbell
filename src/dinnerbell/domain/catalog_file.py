@@ -41,6 +41,7 @@ SCHEMA_TITLE = "Dinnerbell catalog file, version 1"
 URL_PATTERN = r"^[Hh][Tt][Tt][Pp][Ss]?://\S+$"
 SECTIONS = {"restaurants": ItemKind.RESTAURANT, "home_meals": ItemKind.HOME}
 TOP_LEVEL_FIELDS = ("version", "tags", *SECTIONS)
+MERGE_TAG = "tag:yaml.org,2002:merge"
 
 
 def _cook_email(value: str) -> str:
@@ -241,12 +242,18 @@ class _Loader(yaml.SafeLoader):
             self._depth -= 1
 
     def construct_mapping(self, node: yaml.MappingNode, deep: bool = False) -> dict[Hashable, Any]:
-        seen: set[Hashable] = set()
+        seen: set[str] = set()
         for key_node, _ in node.value:
-            key = self.construct_object(key_node, deep=deep)
-            if isinstance(key, Hashable) and key in seen:
+            if key_node.tag == MERGE_TAG:
                 raise yaml.constructor.ConstructorError(
-                    None, None, f'"{key}" appears more than once in the same mapping', key_node.start_mark
+                    None, None, "merge keys (<<) aren't supported", key_node.start_mark
+                )
+            key = self.construct_object(key_node, deep=deep)
+            if not isinstance(key, str):
+                raise yaml.constructor.ConstructorError(None, None, "keys must be plain text", key_node.start_mark)
+            if key in seen:
+                raise yaml.constructor.ConstructorError(
+                    None, None, f'"{_shown(key)}" appears more than once in the same mapping', key_node.start_mark
                 )
             seen.add(key)
         return super().construct_mapping(node, deep)

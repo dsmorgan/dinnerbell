@@ -411,6 +411,10 @@ async def seed_from_file(
             extra={"path": str(path), "errors": [str(e) for e in exc.plan.errors]},
         )
         return None
+    except Exception:
+        # A seed is a convenience; a bug in it must never keep the app from starting.
+        log.exception("seed import failed; nothing was imported", extra={"path": str(path)})
+        return None
     log.info(
         "catalog seeded",
         extra={"path": str(path), **plan.summary(), "unknown_cooks": [u.location for u in plan.unknown_cooks]},
