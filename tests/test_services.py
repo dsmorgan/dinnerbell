@@ -147,3 +147,68 @@ async def test_channel_protocol_is_structural() -> None:
     channel: Channel = Recorder()
     result = await channel.deliver(Notification("key-1"))
     assert result.ref == MessageRef("C1", "1.0")
+
+
+async def _two_admins(migrated: Settings, clock: FakeClock) -> tuple[members.Member, members.Member]:
+    database = open_database(migrated.async_database_url)
+    try:
+        async with database.sessionmaker() as session:
+            await bootstrap(session, household_name="Home", timezone="UTC", admin_email="a@example.com", now=clock())
+            first = await admin(session)
+            second = await members.invite_member(
+                session, first, members.MemberInput("B", "b@example.com", Role.ADMIN, Capabilities()), now=clock()
+            )
+    finally:
+        await database.close()
+    return first, second
+
+
+@pytest.mark.parametrize("action", ["demote", "deactivate"])
+async def test_concurrent_admin_removal_keeps_one_admin(
+    migrated: Settings, clock: FakeClock, monkeypatch: pytest.MonkeyPatch, action: str
+) -> None:
+    """Regression: two admins removing each other at once could both pass the checks."""
+    import asyncio
+
+    a, b = await _two_admins(migrated, clock)
+    checked = asyncio.Event()
+    first_done = asyncio.Event()
+    original = members.MemberRepository.update
+
+    async def interleaved(
+        self: members.MemberRepository, household_id: int, member_id: int, now: datetime, **values: object
+    ) -> members.Member:
+        # Both callers have already read two active admins. A's write goes first; B's waits.
+        if member_id == b.id:
+            await checked.wait()
+        else:
+            checked.set()
+            await first_done.wait()
+        return await original(self, household_id, member_id, now, **values)
+
+    monkeypatch.setattr(members.MemberRepository, "update", interleaved)
+
+    async def remove(actor: members.Member, target: members.Member) -> None:
+        database = open_database(migrated.async_database_url)
+        try:
+            async with database.sessionmaker() as session:
+                if action == "demote":
+                    data = members.MemberInput(target.display_name, target.email, Role.MEMBER, Capabilities())
+                    await members.update_member(session, actor, target.id, data, now=clock())
+                else:
+                    await members.set_member_active(session, actor, target.id, False, now=clock())
+        finally:
+            if actor.id == a.id:
+                first_done.set()
+            await database.close()
+
+    results = await asyncio.gather(remove(a, b), remove(b, a), return_exceptions=True)
+    assert results[0] is None
+    assert isinstance(results[1], MemberRuleViolation)
+
+    database = open_database(migrated.async_database_url)
+    try:
+        async with database.sessionmaker() as session:
+            assert await members.MemberRepository(session).count_active_admins(a.household_id) == 1
+    finally:
+        await database.close()

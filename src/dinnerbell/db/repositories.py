@@ -95,6 +95,14 @@ class MemberRepository:
         )
         return None if row is None else to_member(row)
 
+    async def count_active_admins(self, household_id: int) -> int:
+        count = await self._session.scalar(
+            select(func.count())
+            .select_from(MemberRow)
+            .where(MemberRow.household_id == household_id, MemberRow.active.is_(True), MemberRow.role == "admin")
+        )
+        return int(count or 0)
+
     async def add(
         self,
         *,

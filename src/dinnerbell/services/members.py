@@ -105,6 +105,7 @@ async def update_member(db: AsyncSession, actor: Member, member_id: int, data: M
             can_pickup=clean.capabilities.can_pickup,
             can_order=clean.capabilities.can_order,
         )
+        await _ensure_an_admin_remains(db, actor.household_id)
         before = _describe(target)
         changes = {key: value for key, value in _describe(updated).items() if before[key] != value}
         await _audit(db, actor, "member.updated", updated, changes, now)
@@ -120,12 +121,26 @@ async def set_member_active(db: AsyncSession, actor: Member, member_id: int, act
         return target
     if not active:
         check_deactivation(actor, target, await members.list(actor.household_id))
-        await SessionRepository(db).delete_for_member(target.id)
     updated = await members.update(actor.household_id, member_id, now, active=active)
+    await _ensure_an_admin_remains(db, actor.household_id)
+    if not active:
+        await SessionRepository(db).delete_for_member(target.id)
     action = "member.reactivated" if active else "member.deactivated"
     await _audit(db, actor, action, updated, {}, now)
     await db.commit()
     return updated
+
+
+async def _ensure_an_admin_remains(db: AsyncSession, household_id: int) -> None:
+    """Re-check inside the write transaction, after the change.
+
+    The domain checks run on a read taken before the write. Two admins demoting or deactivating
+    each other at the same moment would both pass them; this count sees the other's committed
+    change, because the write transaction starts at the UPDATE.
+    """
+    if await MemberRepository(db).count_active_admins(household_id) == 0:
+        await db.rollback()
+        raise MemberRuleViolation("You can't remove the last active admin.")
 
 
 def _describe(member: Member) -> dict[str, object]:
