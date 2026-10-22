@@ -13,7 +13,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from starlette.datastructures import Headers, MutableHeaders
-from starlette.responses import PlainTextResponse
+from starlette.responses import PlainTextResponse, Response
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from dinnerbell.logs import member_id_var, request_id_var
@@ -214,6 +214,49 @@ def _cookie(scope: Scope, name: str) -> str | None:
         return None
     morsel = parsed.get(name)
     return morsel.value if morsel else None
+
+
+ErrorRenderer = Callable[[Scope], Response]
+
+
+class ErrorPageMiddleware:
+    """Turn unhandled exceptions into the friendly 500 page.
+
+    It sits inside the other middleware so the 500 page still gets security headers, the
+    request ID, and an access-log line. Starlette's own handler for ``Exception`` runs in
+    ServerErrorMiddleware, outside all user middleware, so it would get none of those.
+    """
+
+    def __init__(self, app: ASGIApp, render: ErrorRenderer) -> None:
+        self.app = app
+        self.render = render
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        started = False
+
+        async def tracking_send(message: Message) -> None:
+            nonlocal started
+            if message["type"] == "http.response.start":
+                started = True
+            await send(message)
+
+        try:
+            await self.app(scope, receive, tracking_send)
+        except Exception:
+            log.exception("unhandled error", extra={"path": scope["path"]})
+            if started:
+                raise
+            await self._error_response(scope)(scope, receive, send)
+
+    def _error_response(self, scope: Scope) -> Response:
+        try:
+            return self.render(scope)
+        except Exception:
+            log.exception("error page failed to render")
+            return PlainTextResponse("Something went wrong.", status_code=500)
 
 
 CookieWriter = Callable[[MutableHeaders, Scope], None]

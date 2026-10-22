@@ -36,15 +36,15 @@ def _restore_umask() -> Iterator[None]:
 
 
 def test_json_formatter_includes_context_and_extras() -> None:
-    record = logging.LogRecord("dinnerbell.x", logging.INFO, __file__, 1, "hello %s", ("world",), None)
-    record.status = 200
     request_token = request_id_var.set("req-1")
     member_token = member_id_var.set(7)
     try:
-        entry = json.loads(JsonFormatter().format(record))
+        record = logging.getLogRecordFactory()("dinnerbell.x", logging.INFO, __file__, 1, "hello %s", ("world",), None)
     finally:
         request_id_var.reset(request_token)
         member_id_var.reset(member_token)
+    record.status = 200
+    entry = json.loads(JsonFormatter().format(record))  # formatted after the context is gone
     assert entry["msg"] == "hello world"
     assert entry["level"] == "INFO"
     assert entry["request_id"] == "req-1"

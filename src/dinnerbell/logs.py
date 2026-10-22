@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import logging
 import sys
+from collections.abc import Callable
 from contextvars import ContextVar
 from datetime import UTC, datetime
 from typing import Any
@@ -24,6 +25,24 @@ _STANDARD_ATTRS = frozenset(vars(logging.LogRecord("", 0, "", 0, "", None, None)
 }
 
 
+def _stamp_context(factory: Callable[..., logging.LogRecord]) -> Callable[..., logging.LogRecord]:
+    """Copy the request and member IDs onto each record when it is created, so they survive
+    handlers that format later (queues, test capture) after the request context is gone."""
+
+    def make(*args: Any, **kwargs: Any) -> logging.LogRecord:
+        record = factory(*args, **kwargs)
+        record._request_id = request_id_var.get()
+        record._member_id = member_id_var.get()
+        return record
+
+    make.dinnerbell_context = True  # type: ignore[attr-defined]
+    return make
+
+
+if not getattr(logging.getLogRecordFactory(), "dinnerbell_context", False):
+    logging.setLogRecordFactory(_stamp_context(logging.getLogRecordFactory()))
+
+
 class JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         entry: dict[str, Any] = {
@@ -32,9 +51,9 @@ class JsonFormatter(logging.Formatter):
             "logger": record.name,
             "msg": record.getMessage(),
         }
-        if (request_id := request_id_var.get()) is not None:
+        if (request_id := getattr(record, "_request_id", None)) is not None:
             entry["request_id"] = request_id
-        if (member_id := member_id_var.get()) is not None:
+        if (member_id := getattr(record, "_member_id", None)) is not None:
             entry["member_id"] = member_id
         for key, value in vars(record).items():
             if key not in _STANDARD_ATTRS and not key.startswith("_"):

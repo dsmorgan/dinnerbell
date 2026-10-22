@@ -11,10 +11,12 @@ from pathlib import Path
 
 import httpx
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.responses import Response
+from starlette.types import Scope
 
 from dinnerbell.config import Settings
 from dinnerbell.scheduler.runner import JobContext, SchedulerState, build_scheduler, stop_scheduler
@@ -25,6 +27,7 @@ from dinnerbell.services.errors import Forbidden, NotFound
 from dinnerbell.web.auth import AccessDenied, CSRFRejected, NotSignedIn, session_cookie_writer
 from dinnerbell.web.context import AppContext, CookieNames
 from dinnerbell.web.middleware import (
+    ErrorPageMiddleware,
     OriginCheckMiddleware,
     RateLimitMiddleware,
     RequestContextMiddleware,
@@ -111,6 +114,7 @@ def create_app(
     _add_exception_handlers(app)
 
     # Starlette runs the last-added middleware first, so this list reads innermost to outermost.
+    app.add_middleware(ErrorPageMiddleware, render=_server_error_page)
     app.add_middleware(SessionCookieMiddleware, writer=session_cookie_writer(cookies, settings))
     app.add_middleware(OriginCheckMiddleware, base_url=settings.base_url)
     app.add_middleware(
@@ -161,9 +165,14 @@ def _add_exception_handlers(app: FastAPI) -> None:
         title = "Request refused" if status < 500 else "Something went wrong"
         return error_page(request, status, title, "Go back and try again.")
 
-    async def unexpected(request: Request, _exc: Exception) -> Response:
-        log.exception("unhandled error")
-        return error_page(request, 500, "Something went wrong", "The error was logged. Try again in a moment.")
+    async def invalid_request(request: Request, exc: Exception) -> Response:
+        # Never echo the submitted values back; FastAPI's default 422 JSON does.
+        errors = exc.errors() if isinstance(exc, RequestValidationError) else []
+        if any(error.get("loc", ("",))[0] == "path" for error in errors):
+            return error_page(request, 404, "Not found", "That page doesn't exist.")
+        return error_page(
+            request, 400, "Request refused", "Something in that request wasn't valid. Go back and try again."
+        )
 
     app.add_exception_handler(NotSignedIn, not_signed_in)
     app.add_exception_handler(AccessDenied, denied)
@@ -171,4 +180,8 @@ def _add_exception_handlers(app: FastAPI) -> None:
     app.add_exception_handler(CSRFRejected, csrf_rejected)
     app.add_exception_handler(NotFound, not_found)
     app.add_exception_handler(StarletteHTTPException, http_error)
-    app.add_exception_handler(Exception, unexpected)
+    app.add_exception_handler(RequestValidationError, invalid_request)
+
+
+def _server_error_page(scope: Scope) -> Response:
+    return error_page(Request(scope), 500, "Something went wrong", "The error was logged. Try again in a moment.")
