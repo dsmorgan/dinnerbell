@@ -195,3 +195,26 @@ def test_debug_logs_show_peer_and_client_ip(client: TestClient, caplog: pytest.L
     record = next(r for r in caplog.records if r.getMessage() == "client address")
     assert record.peer_ip == "testclient"  # type: ignore[attr-defined]
     assert record.client_ip == "testclient"  # type: ignore[attr-defined]
+
+
+@pytest.mark.anyio
+async def test_every_forwarded_for_line_is_read() -> None:
+    """Regression: only the first X-Forwarded-For line was read, so a client could put a fake
+    address there while the proxy appended the real one in a second line."""
+    from dinnerbell.web.middleware import RequestContextMiddleware
+
+    seen: dict[str, str] = {}
+
+    async def app(scope: dict[str, object], receive: object, send: object) -> None:
+        seen["client_ip"] = scope["state"]["client_ip"]  # type: ignore[index]
+
+    middleware = RequestContextMiddleware(app, trusted_proxies=PROXIES)  # type: ignore[arg-type]
+    scope = {
+        "type": "http",
+        "method": "GET",
+        "path": "/",
+        "client": ("10.0.0.2", 5000),
+        "headers": [(b"x-forwarded-for", b"6.6.6.6"), (b"x-forwarded-for", b"198.51.100.7")],
+    }
+    await middleware(scope, None, None)  # type: ignore[arg-type]
+    assert seen["client_ip"] == "198.51.100.7"

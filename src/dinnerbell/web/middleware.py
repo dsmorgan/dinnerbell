@@ -65,7 +65,9 @@ class RequestContextMiddleware:
             return
         request_id = uuid.uuid4().hex
         peer = scope["client"][0] if scope.get("client") else None
-        client_ip = resolve_client_ip(peer, Headers(scope=scope).get("x-forwarded-for"), self.trusted_proxies)
+        # A proxy chain may send several X-Forwarded-For lines; together they form one list.
+        forwarded = ", ".join(Headers(scope=scope).getlist("x-forwarded-for")) or None
+        client_ip = resolve_client_ip(peer, forwarded, self.trusted_proxies)
         _state(scope).update(request_id=request_id, client_ip=client_ip)
         request_token = request_id_var.set(request_id)
         member_token = member_id_var.set(None)
