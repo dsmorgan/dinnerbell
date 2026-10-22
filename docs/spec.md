@@ -343,7 +343,7 @@ Each member can mute direct-message reminders in their preferences. Channel post
 
 **Connection.** The app uses Socket Mode, so Slack never calls an inbound URL. Only the web app is exposed through Pangolin.
 
-**Bot scopes.** `chat:write`, `channels:read`, `channels:history` (to resolve threads), `im:write`, `users:read`, `users:read.email`, `commands`. Events: `app_home_opened`. Interactivity: block actions, view submissions, shortcuts.
+**Bot scopes.** `chat:write`, `channels:read`, `channels:history` (to resolve threads), `im:write`, `users:read`, `users:read.email`, `commands`. Events: `app_home_opened`. Interactivity: block actions and view submissions. The channel must be public; a private channel would also need `groups:read` and `groups:history`. The full configuration is [deploy/slack-app-manifest.yaml](../deploy/slack-app-manifest.yaml).
 
 **Sign in with Slack.** User scopes `openid`, `email`, `profile`. Slack publishes an OpenID Connect discovery document, so the generic OIDC client in the web app works unchanged.
 
@@ -509,12 +509,16 @@ All configuration comes from environment variables with a `DINNERBELL_` prefix, 
 | `DINNERBELL_BASE_URL` | Public HTTPS URL as exposed by Pangolin |
 | `DINNERBELL_SECRET_KEY` | Signing key for cookies and CSRF tokens |
 | `DINNERBELL_ADMIN_EMAIL` | Bootstrap admin; created as a member on first start if missing |
+| `DINNERBELL_HOUSEHOLD_NAME` | Household display name on first start, default `Home` |
 | `DINNERBELL_OIDC_ISSUER`, `_CLIENT_ID`, `_CLIENT_SECRET` | OIDC provider; issuer must publish discovery |
+| `DINNERBELL_OIDC_SCOPES` | Requested scopes, default `openid email profile` |
+| `DINNERBELL_SLACK_TEAM_ID` | Optional. When set, sign-in requires the ID token's Slack team to match, which blocks accounts from other workspaces |
 | `DINNERBELL_SLACK_BOT_TOKEN`, `_SLACK_APP_TOKEN` | Bot token (`xoxb-`) and Socket Mode app token (`xapp-`) |
 | `DINNERBELL_SLACK_CHANNEL` | Channel ID for household posts |
 | `DINNERBELL_TIMEZONE` | Default household time zone, overridable in Admin |
 | `DINNERBELL_SEED_FILE` | Optional YAML of tags and catalog items to import on first start |
 | `DINNERBELL_LOG_LEVEL` | Default `INFO` |
+| `DINNERBELL_TRUSTED_PROXIES` | Optional comma-separated IPs or CIDRs whose `X-Forwarded-For` is trusted for client IPs, such as the reverse proxy's address |
 
 Household-level settings that change over time (slot schedule, weights, thresholds) live in the database and are edited in Admin, not in environment variables.
 
