@@ -313,3 +313,16 @@ async def test_example_imports_cleanly(db: AsyncSession, migrated: Settings, clo
     assert again.ok and not again.has_changes
     kinds = {t.name: t.kind for t in rows(migrated, TagRow)}
     assert kinds["Thai"] == "cuisine" and kinds["gluten-free option"] == "dietary" and kinds["beef"] == "protein"
+
+
+def test_upload_size_is_checked_in_the_browser(client: TestClient, provider: FakeProvider) -> None:
+    """Oversized uploads usually end in a TCP reset, so the browser would never show the 413;
+    app.js checks the chosen file's size before sending it."""
+    sign_in(client, provider)
+    html = client.get("/catalog/import").text
+    field = html.split('name="upload"', 1)[1].split(">", 1)[0]
+    assert f'data-max-bytes="{MAX_FILE_BYTES}"' in field and 'data-size-error="upload-error"' in field
+    assert '<p id="upload-error" class="save-error small" role="alert" hidden></p>' in html
+    script = client.get("/static/app.js").text
+    assert "Catalog files can be up to 1 MB." in script
+    assert "data-max-bytes" in script and "textContent" in script and "innerHTML" not in script

@@ -424,6 +424,7 @@ async def _import_page(
             "notice": notice,
             "sorted_modes": sorted_modes,
             "max_megabytes": MAX_FILE_BYTES // 1_000_000,
+            "max_file_bytes": MAX_FILE_BYTES,
         },
         status_code=status_code,
     )

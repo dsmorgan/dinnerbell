@@ -83,7 +83,9 @@
   </label>
   <label class="field">
     <span>Or upload it</span>
-    <input type="file" name="upload" accept=".yaml,.yml,text/yaml,application/yaml,text/plain">
+    <input type="file" name="upload" accept=".yaml,.yml,text/yaml,application/yaml,text/plain"
+           data-max-bytes="{{ max_file_bytes }}" data-size-error="upload-error">
+    <p id="upload-error" class="save-error small" role="alert" hidden></p>
     <small class="muted">YAML, up to {{ max_megabytes }} MB. An uploaded file replaces the pasted text.</small>
   </label>
   <div class="button-row">
