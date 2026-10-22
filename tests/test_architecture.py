@@ -105,7 +105,9 @@ def audit_routes(routes: list[Any]) -> tuple[list[APIRoute], list[str]]:
         elif isinstance(route, Mount) and route.path == "/static" and isinstance(route.app, StaticFiles):
             continue  # serves files only; StaticFiles answers GET and HEAD
         elif isinstance(route, Route) and route.methods is not None and route.methods <= SAFE:
-            continue
+            if route.path.startswith("/admin"):
+                # Even a GET-only admin page must be an APIRoute, or the admin check can't be seen.
+                problems.append(f"Route {route.path} is an admin route the audit can't inspect")
         else:
             problems.append(f"{type(route).__name__} {getattr(route, 'path', '?')} can't be audited for CSRF")
     return api, problems
@@ -122,7 +124,8 @@ def test_every_state_changing_route_checks_csrf(client: TestClient) -> None:
 
 
 def test_every_admin_route_requires_an_admin_in_the_web_layer(client: TestClient) -> None:
-    api, _ = audit_routes(client.app.routes)  # type: ignore[attr-defined]
+    api, problems = audit_routes(client.app.routes)  # type: ignore[attr-defined]
+    assert problems == []
     admin = [route for route in api if route.path.startswith("/admin")]
     assert admin
     for route in admin:
@@ -138,9 +141,11 @@ def test_route_audit_flags_what_it_cannot_see(client: TestClient) -> None:
 
     app = client.app  # type: ignore[attr-defined]
     app.add_route("/raw-post", raw, methods=["POST"])
+    app.add_route("/admin/raw-page", raw, methods=["GET"])
     app.mount("/sub", Starlette())
     _, problems = audit_routes(app.routes)
     assert any("/raw-post" in problem for problem in problems)
+    assert any("/admin/raw-page" in problem for problem in problems)
     assert any("/sub" in problem for problem in problems)
 
 
