@@ -307,3 +307,25 @@ def test_delete_asks_for_confirmation(client: TestClient, household: dict[str, i
         html = client.get(path).text
         form = html.split(f'action="/history/meals/{meal.id}/delete"', 1)[1].split(">", 1)[0]
         assert 'hx-boost="true"' in form and 'hx-confirm="Delete this meal' in form, path
+
+
+def test_old_meals_stay_editable(client: TestClient, household: dict[str, int], migrated: Settings) -> None:
+    log(client, household["siam"], [household["admin"]])
+    engine = create_engine(migrated.sync_database_url)
+    try:
+        with engine.begin() as connection:  # logged before the two-year window, say by an import
+            connection.execute(text("UPDATE meal_log SET date = '2023-05-01'"))
+    finally:
+        engine.dispose()
+    [meal] = rows(migrated, MealLogRow)
+    edit = {
+        "day": "2023-05-01",
+        "slot": "lunch",
+        "item_id": str(household["tacos"]),
+        "participant_ids": [str(household["admin"])],
+    }
+    assert submit(client, f"/history/meals/{meal.id}", edit).status_code == 303
+    [meal] = rows(migrated, MealLogRow)
+    assert (meal.date, meal.slot, meal.item_id) == (date(2023, 5, 1), "lunch", household["tacos"])
+    moved = submit(client, f"/history/meals/{meal.id}", edit | {"day": "2023-05-02"})
+    assert moved.status_code == 400 and "last two years" in page(moved)

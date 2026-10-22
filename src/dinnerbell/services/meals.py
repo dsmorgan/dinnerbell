@@ -60,7 +60,13 @@ async def _snapshots(
     catalog = CatalogRepository(db)
     item = await catalog.item(actor.household_id, data.item_id)
     eligible = await _eligible(db, actor, editing)
-    check_meal(data, today=today, active_member_ids=eligible, item_exists=item is not None)
+    check_meal(
+        data,
+        today=today,
+        active_member_ids=eligible,
+        item_exists=item is not None,
+        original_day=editing.day if editing is not None else None,
+    )
     tag_ids = item.tag_ids if item is not None else frozenset()
     cuisines = tuple(
         TagRef(tag.id, tag.name)

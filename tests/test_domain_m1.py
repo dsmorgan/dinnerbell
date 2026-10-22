@@ -375,3 +375,19 @@ def test_meal_dates_are_bounded() -> None:
         check_meal(
             MealInput(date(1, 1, 1), Slot.DINNER, 1, people), today=TODAY, active_member_ids=[1], item_exists=True
         )
+
+
+def test_editing_an_old_meal_keeps_its_date_allowed() -> None:
+    old = date(2023, 5, 1)
+    people = frozenset({1})
+    check_meal(
+        MealInput(old, Slot.LUNCH, 1, people), today=TODAY, active_member_ids=[1], item_exists=True, original_day=old
+    )
+    with pytest.raises(InvalidMeal, match="last two years"):
+        check_meal(
+            MealInput(date(2023, 5, 2), Slot.LUNCH, 1, people),
+            today=TODAY,
+            active_member_ids=[1],
+            item_exists=True,
+            original_day=old,
+        )

@@ -61,11 +61,22 @@ class MealInput:
     participant_ids: frozenset[int]
 
 
-def check_meal(data: MealInput, *, today: date, active_member_ids: Iterable[int], item_exists: bool) -> None:
-    """Raise InvalidMeal unless the meal can be logged. ``today`` is in the household time zone."""
+def check_meal(
+    data: MealInput,
+    *,
+    today: date,
+    active_member_ids: Iterable[int],
+    item_exists: bool,
+    original_day: date | None = None,
+) -> None:
+    """Raise InvalidMeal unless the meal can be logged. ``today`` is in the household time zone.
+
+    ``original_day`` is the stored date when editing: a meal already older than the two-year
+    floor stays editable as long as its date doesn't change.
+    """
     if data.day > today:
         raise InvalidMeal("You can log meals for today or earlier, not the future.")
-    if data.day < today - MAX_MEAL_AGE:
+    if data.day < today - MAX_MEAL_AGE and data.day != original_day:
         raise InvalidMeal("You can log meals from the last two years.")
     if not item_exists:
         raise InvalidMeal("Pick something from the catalog.")
