@@ -334,7 +334,7 @@ class BodyLimitMiddleware:
             return
         if isinstance(declared, int) and declared > limit:
             log.warning("request body too large", extra={"path": scope["path"], "declared": declared})
-            await _too_large()(scope, receive, send)
+            await too_large(scope["path"])(scope, receive, send)
             return
         received = 0
         exceeded = False
@@ -368,7 +368,7 @@ class BodyLimitMiddleware:
             if not exceeded or started:
                 raise
         if exceeded and not started:
-            await _too_large()(scope, receive, send)
+            await too_large(scope["path"])(scope, receive, send)
 
 
 def _plain(status: int, text: str) -> PlainTextResponse:
@@ -376,5 +376,6 @@ def _plain(status: int, text: str) -> PlainTextResponse:
     return PlainTextResponse(text, status_code=status, headers=headers)
 
 
-def _too_large() -> PlainTextResponse:
-    return _plain(413, "That request is too large. Catalog files can be up to 1 MB.")
+def too_large(path: str) -> PlainTextResponse:
+    hint = " Catalog files can be up to 1 MB." if path.startswith("/catalog/import/") else ""
+    return _plain(413, f"That request is too large.{hint}")

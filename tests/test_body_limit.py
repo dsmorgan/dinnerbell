@@ -174,3 +174,10 @@ def test_pasted_file_that_grows_with_crlf_gets_the_friendly_message(client: Test
     )
     assert response.status_code == 400
     assert "larger than 1 MB" in page(response)
+
+
+def test_too_large_message_fits_the_route(migrated: Settings, clock: FakeClock, provider: FakeProvider) -> None:
+    from dinnerbell.web.middleware import too_large
+
+    assert "Catalog files can be up to 1 MB" in too_large("/catalog/import/preview").body.decode()
+    assert "Catalog" not in too_large("/admin/members").body.decode()
