@@ -181,3 +181,34 @@ def test_too_large_message_fits_the_route(migrated: Settings, clock: FakeClock, 
 
     assert "Catalog files can be up to 1 MB" in too_large("/catalog/import/preview").body.decode()
     assert "Catalog" not in too_large("/admin/members").body.decode()
+
+
+def test_browser_style_import_with_csrf_field_gets_the_friendly_message(
+    client: TestClient, provider: FakeProvider
+) -> None:
+    """Browsers send the CSRF token as a multipart field, not a header, so the CSRF check reads the
+    form too. Whichever reads it first, the import's larger part limit must apply."""
+    sign_in(client, provider)
+    token = csrf_from(client)
+    pasted = ("version: 1\n" + "# x\n" * 300_000).replace("\n", "\r\n")  # 1.5 MB on the wire
+    response = client.post(
+        "/catalog/import/preview", files={"csrf_token": (None, token.encode()), "content": (None, pasted.encode())}
+    )
+    assert response.status_code == 400
+    assert "larger than 1 MB" in page(response)
+    small = "version: 1\r\nrestaurants:\r\n  - {name: A, cuisine: [Thai]}\r\n"
+    ok = client.post(
+        "/catalog/import/preview", files={"csrf_token": (None, token.encode()), "content": (None, small.encode())}
+    )
+    assert ok.status_code == 200 and 'name="token"' in ok.text
+
+
+def test_import_form_is_read_with_its_limits_whatever_the_parameter_order() -> None:
+    from fastapi.routing import APIRoute
+
+    from dinnerbell.web.routes.catalog import import_post, router
+
+    for route in router.routes:
+        if isinstance(route, APIRoute) and route.path.startswith("/catalog/import/") and "POST" in route.methods:
+            first = route.dependant.dependencies[0].call
+            assert first is import_post, route.path  # route-level, so it runs before any parameter

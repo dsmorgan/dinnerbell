@@ -469,11 +469,16 @@ async def import_post(request: Request, principal: SignedIn) -> AsyncIterator[Im
 
 
 ImportForm = Annotated[ImportPost, Depends(import_post)]
+IMPORT_FORM_FIRST = Depends(import_post)
+"""Declared on the route, so FastAPI runs it before every parameter dependency. The CSRF check
+also reads the form (browsers send the token as a field), and Starlette caches whichever read
+comes first; this makes sure that read is the bounded one, whatever the parameter order. The
+``form`` parameter then reuses the cached result."""
 
 
-@router.post("/import/preview")
+@router.post("/import/preview", dependencies=[IMPORT_FORM_FIRST])
 async def preview_import(
-    request: Request, form: ImportForm, principal: CSRFChecked, context: Context, db: Database
+    request: Request, principal: CSRFChecked, form: ImportForm, context: Context, db: Database
 ) -> Response:
     source: str | bytes = form.content
     content = form.content
@@ -491,9 +496,9 @@ async def preview_import(
     )
 
 
-@router.post("/import/apply")
+@router.post("/import/apply", dependencies=[IMPORT_FORM_FIRST])
 async def apply_import(
-    request: Request, form: ImportForm, principal: CSRFChecked, context: Context, db: Database
+    request: Request, principal: CSRFChecked, form: ImportForm, context: Context, db: Database
 ) -> Response:
     """Apply what the person previewed. The browser re-sends the file; the signed token proves
     which file and plan they saw. The import is re-planned against the current catalog and
