@@ -91,3 +91,36 @@ def test_downgrade_then_upgrade(migrated: Settings) -> None:
     finally:
         engine.dispose()
     run_migrations(migrated.sync_database_url, migrated.database_path)
+
+
+def test_database_errors_hide_bound_parameters(migrated: Settings) -> None:
+    """SEC-5: an SQL error message must not carry the email or token it was called with."""
+    import asyncio
+
+    from sqlalchemy.exc import OperationalError
+
+    from dinnerbell.db.engine import create_app_engine
+
+    statement = text("SELECT * FROM no_such_table WHERE email = :email")
+    engine = create_sync_engine(migrated.sync_database_url)
+    try:
+        with engine.connect() as connection, pytest.raises(OperationalError) as caught:
+            connection.execute(statement, {"email": "leak@example.com"})
+    finally:
+        engine.dispose()
+    assert "leak@example.com" not in str(caught.value)
+
+    async def run_async() -> str:
+        async_engine = create_app_engine(migrated.async_database_url)
+        try:
+            async with async_engine.connect() as connection:
+                await connection.execute(statement, {"email": "leak@example.com"})
+        except OperationalError as exc:
+            return str(exc)
+        finally:
+            await async_engine.dispose()
+        return ""
+
+    message = asyncio.run(run_async())
+    assert "no_such_table" in message
+    assert "leak@example.com" not in message

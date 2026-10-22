@@ -23,13 +23,14 @@ def _apply_pragmas(dbapi_connection: Any, _record: Any) -> None:
 
 
 def create_sync_engine(url: str) -> Engine:
-    engine = create_engine(url)
+    # hide_parameters keeps bound values (emails, tokens) out of error messages and logs (SEC-5).
+    engine = create_engine(url, hide_parameters=True)
     event.listen(engine, "connect", _apply_pragmas)
     return engine
 
 
 def create_app_engine(url: str) -> AsyncEngine:
-    engine = create_async_engine(url)
+    engine = create_async_engine(url, hide_parameters=True)
     event.listen(engine.sync_engine, "connect", _apply_pragmas)
     return engine
 
