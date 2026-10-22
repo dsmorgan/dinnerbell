@@ -1,0 +1,85 @@
+# yaml-language-server: $schema=./catalog.schema.json
+#
+# Starter catalog for Dinnerbell. Replace the examples with your household's
+# places and meals, then import it from the Catalog page or set
+# DINNERBELL_SEED_FILE to this path before first start.
+# Format: docs/catalog-format.md
+
+version: 1
+
+tags:
+  cuisine:
+    - American
+    - Chinese
+    - Greek
+    - Indian
+    - Italian
+    - Japanese
+    - Korean
+    - Mediterranean
+    - Mexican
+    - Middle Eastern
+    - Thai
+    - Vietnamese
+  protein:
+    - beef
+    - chicken
+    - pork
+    - seafood
+    - vegetarian
+    - vegan
+  dietary:
+    - gluten-free option
+    - dairy-free option
+    - nut-free
+  other:
+    - comfort
+    - healthy
+    - quick
+    - spicy
+
+restaurants:
+  - name: Example Thai Kitchen
+    cuisine: [Thai]
+    tags: [spicy, vegetarian, gluten-free option]
+    modes: [pickup, delivery]
+    url: https://example.com/thai/menu
+    order_url: https://example.com/thai/order
+    notes: Medium spice is the household standard.
+
+  - name: Example Pizzeria
+    cuisine: [Italian]
+    tags: [comfort, vegetarian]
+    modes: [pickup, delivery]
+
+  - name: Example Taqueria
+    cuisine: [Mexican]
+    tags: [chicken, beef, gluten-free option]
+    modes: [pickup]
+
+  - name: Example Pho House
+    cuisine: [Vietnamese]
+    tags: [beef, healthy]
+    modes: [pickup]
+
+home_meals:
+  - name: Chicken tacos
+    cuisine: [Mexican]
+    tags: [chicken, quick, gluten-free option]
+    servings: 6
+    notes: Corn tortillas for the gluten-free option.
+
+  - name: Spaghetti and meatballs
+    cuisine: [Italian]
+    tags: [beef, comfort]
+    servings: 6
+
+  - name: Sheet-pan chicken shawarma
+    cuisine: [Middle Eastern]
+    tags: [chicken, healthy]
+    servings: 4
+
+  - name: Vegetable stir-fry
+    cuisine: [Chinese]
+    tags: [vegetarian, quick, dairy-free option]
+    servings: 4

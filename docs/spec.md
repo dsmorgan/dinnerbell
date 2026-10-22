@@ -197,9 +197,9 @@ Requirements use "must" for version 1 and "should" for items that can slip to a 
 | ID | Requirement |
 |---|---|
 | FR-23 | Any member can add, edit, and deactivate catalog items. Deactivation hides an item without deleting history. |
-| FR-24 | A catalog item has: kind (home meal or restaurant), name, tags, supported fulfillment modes, optional URL (menu or ordering link), optional notes, optional default servings (home meals), optional list of members who can cook it (home meals). |
+| FR-24 | A catalog item has: kind (home meal or restaurant), name, tags, supported fulfillment modes, optional URL (menu or recipe link), optional order URL (restaurants), optional notes, optional default servings (home meals), optional list of members who can cook it (home meals). |
 | FR-25 | Tags are shared across the household. Any member can add a tag; the admin can merge and rename tags. Tag kinds: cuisine, protein, dietary, other. |
-| FR-26 | The admin can seed the catalog and tags from a YAML file at first run. |
+| FR-26 | Any member can bulk-import tags and catalog items from a file in the format defined in [catalog-format.md](catalog-format.md), by paste or upload, with a validated preview before anything is saved. The same file can seed the catalog at first run. Imports never delete. |
 
 ### 6.6 Preferences
 
@@ -461,7 +461,7 @@ Every table carries `household_id`. Timestamps are UTC; the household time zone 
 | household | name, timezone, settings (JSON: slots, weights, variety window, badge thresholds, slack channel) |
 | member | display name, email, oidc_subject, slack_user_id, role (admin, member), can_cook, can_pickup, can_order, mute_dm_reminders, feedback_reminder, active |
 | tag | kind (cuisine, protein, dietary, other), name |
-| catalog_item | kind (home, restaurant), name, notes, url, modes (cook, pickup, delivery), default_servings, created_by, active |
+| catalog_item | kind (home, restaurant), name, notes, url, order_url, modes (cook, pickup, delivery), default_servings, created_by, active |
 | catalog_item_tag | item, tag |
 | catalog_item_cook | item, member |
 | preference | member, target_type (tag, item), target_id, level (veto or −2 to +2) |
@@ -589,12 +589,12 @@ dinnerbell/
 | Milestone | Delivers | Done when |
 |---|---|---|
 | M0 Scaffold | Repository, CI, container, config, migrations, `/healthz`, OIDC sign-in with member allowlist | The admin signs in on a phone through Pangolin |
-| M1 Catalog and preferences | Tags, catalog, preferences, manual meal log, seed import, History page | The family's catalog is loaded and each member has set vetoes |
+| M1 Catalog and preferences | Tags, catalog, preferences, manual meal log, catalog import with preview, History page | The family's catalog is loaded and each member has set vetoes |
 | M2 Dinner call | Scheduler, Slack adapter, call lifecycle through decision, ranking, assignments, reminders, abandon path, admin overrides | A week of dinners decided through Slack |
 | M3 Offers and guests | Offers with capacity, cooking offers replacing the call, guests with dietary needs, lunch defaults, ad-hoc calls, schedule changes by any member, feedback collection | Lunch offers and guest dinners work without workarounds |
 | M4 Contributions and badges | Contribution counting, badges, channel announcements, Stats page, monthly recap | First badges awarded |
 | M5 Calendar hints | Secret iCal URL polling, busy hints on the roster | Hints show for members who opted in |
-| M6 Assistant | Natural-language proposals and discovery through the domain API | "Find us something new" produces valid, filtered proposals |
+| M6 Assistant | Natural-language proposals and discovery through the domain API; drafting catalog entries from a description or menu link, through the import preview | "Find us something new" produces valid, filtered proposals |
 | M7 Feedback-informed ranking | An ADR on how feedback affects ranking, then the implementation. Starts after 8 weeks of feedback data and can move ahead of M5 or M6. | Proposals reflect "not again" and "loved it" with reasons that say so |
 | Backlog | Discord adapter, web push, multi-household, recipes | |
 
@@ -609,7 +609,7 @@ M0 through M2 are the minimum for the household to switch over. M3 and M4 follow
 | 3 | When two members both offer to cook, who decides? | Coordinator; otherwise ranking prefers the item whose cook list matches |
 | 4 | Should a "maybe" at the deadline be nudged once more before converting to out? | No; one reminder total |
 | 5 | Should the Slack workspace be new or an existing one? | New workspace named for the household, one channel |
-| 6 | Seed list of cuisines and dietary tags | Ship a `seed/example.yaml`; the admin edits before import |
+| 6 | ~~Seed list of cuisines and dietary tags~~ | Resolved: `seed/example.yaml` in the format from catalog-format.md |
 | 7 | ~~Should feedback adjust ranking automatically?~~ | Resolved: collect only in version 1; decide in M7 after 8 weeks of data |
 | 8 | Should cook notes be visible to the whole household or only the cook? | Only the cook; others see the thank-you count (FR-49) |
 

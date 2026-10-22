@@ -35,3 +35,7 @@ The app connects with Socket Mode, so Slack never calls an inbound URL and only 
 - Members need a Slack account and the Slack app. The admin creates one workspace with one channel.
 - Socket Mode is available only for apps installed in a single workspace, which is exactly this case. A future App Directory listing would need an HTTP events endpoint.
 - Web push for Home Screen web apps stays on the backlog as an optional extra channel, not a replacement.
+
+## Amendments
+
+- 2026-10-22: David confirmed Slack as the household's channel. A Discord adapter is built only if someone asks for it.
