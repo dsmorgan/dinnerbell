@@ -11,7 +11,8 @@
   <p class="small muted">Saving takes a new snapshot of the item's cuisines and the people who ate.</p>
   <button type="submit" class="button primary block">Save</button>
 </form>
-<form method="post" action="/history/meals/{{ meal.id }}/delete" class="card">
+<form method="post" action="/history/meals/{{ meal.id }}/delete" class="card" hx-boost="true"
+      hx-confirm="Delete this meal from history? This can't be undone.">
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   <button type="submit" class="button danger">Delete this meal</button>
 </form>

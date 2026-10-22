@@ -45,13 +45,15 @@
             <input name="name" required maxlength="40" autocomplete="off" value="{{ t.name }}"></label>
           <button type="submit" class="button small">Rename</button>
         </form>
-        <form method="post" action="/catalog/tags/{{ t.id }}/merge" class="inline-form">
+        <form method="post" action="/catalog/tags/{{ t.id }}/merge" class="inline-form" hx-boost="true"
+              hx-confirm="Merge {{ t.name }} into the chosen tag? This can't be undone.">
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <label class="field compact"><span class="small muted">Merge into</span>
             <select name="into" required>
               <option value="">Choose a tag</option>
               {% for other in all_tags if other.id != t.id %}<option value="{{ other.id }}">{{ other.name }} ({{ other.kind.value }})</option>{% endfor %}
             </select></label>
+          <label class="check small"><input type="checkbox" name="confirm" required> Merge {{ t.name }} for good. This can't be undone.</label>
           <button type="submit" class="button small danger">Merge</button>
         </form>
         <p class="muted small">Merging moves its items, everyone's preferences, and meal history to the other tag, then removes this one.</p>

@@ -298,3 +298,12 @@ def test_editing_keeps_deactivated_participants(
     new = log(client, household["siam"], [household["sam"]])
     assert new.status_code == 400 and "isn't an active member" in page(new)
     assert f'name="participant_ids" value="{household["sam"]}"' not in client.get("/history").text
+
+
+def test_delete_asks_for_confirmation(client: TestClient, household: dict[str, int], migrated: Settings) -> None:
+    log(client, household["siam"], [household["admin"]])
+    [meal] = rows(migrated, MealLogRow)
+    for path in ("/history", f"/history/meals/{meal.id}"):
+        html = client.get(path).text
+        form = html.split(f'action="/history/meals/{meal.id}/delete"', 1)[1].split(">", 1)[0]
+        assert 'hx-boost="true"' in form and 'hx-confirm="Delete this meal' in form, path

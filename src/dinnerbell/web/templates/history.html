@@ -47,7 +47,8 @@
       {% if can_change(meal) %}
       <div class="item-actions">
         <a class="button small" href="/history/meals/{{ meal.id }}">Edit</a>
-        <form method="post" action="/history/meals/{{ meal.id }}/delete" class="inline">
+        <form method="post" action="/history/meals/{{ meal.id }}/delete" class="inline" hx-boost="true"
+              hx-confirm="Delete this meal from history? This can't be undone.">
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <button type="submit" class="button small danger">Delete</button>
         </form>

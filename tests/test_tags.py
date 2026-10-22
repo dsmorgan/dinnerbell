@@ -8,7 +8,7 @@ from sqlalchemy import create_engine, text
 
 from dinnerbell.config import Settings
 from dinnerbell.db.models import AuditRow, CatalogItemTagRow, MealLogRow, PreferenceRow, TagRow
-from tests.conftest import invite, page, sign_in
+from tests.conftest import csrf_from, invite, page, sign_in
 from tests.support.fake_oidc import FakeProvider
 from tests.support.web import add_item, htmx, submit
 from tests.test_admin import sign_in_as
@@ -65,7 +65,7 @@ def test_members_cannot_rename_or_merge(client: TestClient, provider: FakeProvid
     assert "Rename or merge" not in page(client.get("/catalog/tags"))
     thai, lao = tag_id(migrated, "Thai"), tag_id(migrated, "Lao")
     assert submit(client, f"/catalog/tags/{thai}/rename", {"name": "Thailand"}).status_code == 403
-    assert submit(client, f"/catalog/tags/{thai}/merge", {"into": str(lao)}).status_code == 403
+    assert submit(client, f"/catalog/tags/{thai}/merge", {"into": str(lao), "confirm": "on"}).status_code == 403
     assert {t.name for t in rows(migrated, TagRow)} == {"Thai", "Lao"}
     assert not [a for a in rows(migrated, AuditRow) if a.action in {"catalog.tag_renamed", "catalog.tags_merged"}]
 
@@ -108,7 +108,7 @@ def test_admin_merges_tags(client: TestClient, provider: FakeProvider, migrated:
     htmx(client, "/preferences/stance", {"target": f"tag:{source}", "level": "-1"})
     sign_in_as(client, provider, "subject-admin", "admin@example.com")
 
-    response = submit(client, f"/catalog/tags/{source}/merge", {"into": str(target)})
+    response = submit(client, f"/catalog/tags/{source}/merge", {"into": str(target), "confirm": "on"})
     assert response.status_code == 303
     assert "Tags merged." in page(client.get(response.headers["location"]))
     assert {t.name for t in rows(migrated, TagRow)} == {"Thai"}
@@ -135,7 +135,7 @@ def test_merge_keeps_the_lower_score(client: TestClient, provider: FakeProvider,
     source, target = tag_id(migrated, "Siamese"), tag_id(migrated, "Thai")
     htmx(client, "/preferences/stance", {"target": f"tag:{source}", "level": "-2"})
     htmx(client, "/preferences/stance", {"target": f"tag:{target}", "level": "1"})
-    submit(client, f"/catalog/tags/{source}/merge", {"into": str(target)})
+    submit(client, f"/catalog/tags/{source}/merge", {"into": str(target), "confirm": "on"})
     [pref] = rows(migrated, PreferenceRow)
     assert (pref.tag_id, pref.veto, pref.score) == (target, False, -2)
 
@@ -150,10 +150,12 @@ def test_merge_rules(client: TestClient, provider: FakeProvider, migrated: Setti
         (thai, "", "Pick a tag to merge into."),
     ]
     for source, into, message in cases:
-        response = submit(client, f"/catalog/tags/{source}/merge", {"into": into})
+        response = submit(client, f"/catalog/tags/{source}/merge", {"into": into, "confirm": "on"})
         assert response.status_code == 400 and message in page(response)
-    assert submit(client, f"/catalog/tags/{thai}/merge", {"into": "999"}).status_code == 404
-    assert submit(client, f"/catalog/tags/{spicy}/merge", {"into": str(thai)}).status_code == 303  # other → cuisine
+    assert submit(client, f"/catalog/tags/{thai}/merge", {"into": "999", "confirm": "on"}).status_code == 404
+    assert (
+        submit(client, f"/catalog/tags/{spicy}/merge", {"into": str(thai), "confirm": "on"}).status_code == 303
+    )  # other → cuisine
     assert item_tags(migrated, "One") == {"Thai"}
 
 
@@ -172,7 +174,7 @@ def test_merge_survives_a_meal_without_the_source(
             {"day": "2026-10-21", "slot": "dinner", "item_id": str(item.id), "participant_ids": [str(admin.id)]},
         )
     source, target = tag_id(migrated, "Siamese"), tag_id(migrated, "Thai")
-    submit(client, f"/catalog/tags/{source}/merge", {"into": str(target)})
+    submit(client, f"/catalog/tags/{source}/merge", {"into": str(target), "confirm": "on"})
     snapshots = [m.cuisine_tags for m in rows(migrated, MealLogRow)]
     assert all(len(s) == 1 and s[0]["id"] == target for s in snapshots)
 
@@ -200,3 +202,35 @@ def test_tag_names_are_unique_in_the_database(migrated: Settings) -> None:
             connection.execute(insert, {"kind": "other", "name": "THAI", "key": "thai"})
     finally:
         engine.dispose()
+
+
+def test_merge_needs_confirmation(client: TestClient, provider: FakeProvider, migrated: Settings) -> None:
+    sign_in(client, provider)
+    add_item(client, "One", cuisines="Thai, Siamese")
+    source, target = tag_id(migrated, "Siamese"), tag_id(migrated, "Thai")
+    html = client.get("/catalog/tags").text
+    merge_form = html.split(f'action="/catalog/tags/{source}/merge"', 1)[1].split("</form>", 1)[0]
+    assert "hx-confirm=" in merge_form and 'hx-boost="true"' in merge_form
+    assert 'type="checkbox" name="confirm" required' in merge_form
+    response = submit(client, f"/catalog/tags/{source}/merge", {"into": str(target)})
+    assert response.status_code == 400
+    assert "Tick the box to confirm the merge." in page(response)
+    assert {t.name for t in rows(migrated, TagRow)} == {"Thai", "Siamese"}
+    assert submit(client, f"/catalog/tags/{source}/merge", {"into": str(target), "confirm": "on"}).status_code == 303
+    assert {t.name for t in rows(migrated, TagRow)} == {"Thai"}
+
+
+def test_boosted_merge_errors_are_swapped_in(client: TestClient, provider: FakeProvider, migrated: Settings) -> None:
+    """HTMX swaps only successful responses, so a boosted merge shows its error with status 200."""
+    sign_in(client, provider)
+    add_item(client, "One", cuisines="Thai", new_tags="spicy")
+    thai, spicy = tag_id(migrated, "Thai"), tag_id(migrated, "spicy")
+    response = client.post(
+        f"/catalog/tags/{thai}/merge",
+        data={"into": str(spicy), "confirm": "on"},
+        headers={"HX-Request": "true", "HX-Boosted": "true", "X-CSRF-Token": csrf_from(client)},
+    )
+    assert response.status_code == 200
+    assert "Merge a cuisine only into another cuisine" in page(response)
+    plain = submit(client, f"/catalog/tags/{thai}/merge", {"into": str(spicy), "confirm": "on"})
+    assert plain.status_code == 400

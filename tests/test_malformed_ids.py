@@ -73,7 +73,10 @@ def test_form_ids_are_ignored_or_refused(lenient: TestClient, migrated: Settings
         ).status_code
         == 400
     )
-    assert lenient.post("/catalog/tags/1/merge", data={"into": bad, "csrf_token": token}).status_code == 400
+    assert (
+        lenient.post("/catalog/tags/1/merge", data={"into": bad, "confirm": "on", "csrf_token": token}).status_code
+        == 400
+    )
     created = lenient.post(
         "/catalog/items",
         data={

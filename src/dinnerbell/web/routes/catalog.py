@@ -361,15 +361,25 @@ async def rename_tag(
 
 @router.post("/tags/{tag_id}/merge")
 async def merge_tag(
-    request: Request, principal: AdminCSRFChecked, context: Context, db: Database, tag_id: RowId, into: FormText = ""
+    request: Request,
+    principal: AdminCSRFChecked,
+    context: Context,
+    db: Database,
+    tag_id: RowId,
+    into: FormText = "",
+    confirm: FormText = "",
 ) -> Response:
     try:
+        if not confirm:
+            raise BadFormValue("Tick the box to confirm the merge. Merging can't be undone.")
         target = parse_id(into)
         if target is None:
             raise BadFormValue("Pick a tag to merge into.")
         await catalog_service.merge_tags(db, principal.member, tag_id, target, now=context.clock())
     except (CatalogRuleViolation, BadFormValue) as exc:
-        return await _tags_page(request, principal, db, error=str(exc), status_code=400)
+        # The merge form is boosted for its confirm prompt; HTMX swaps only 2xx responses.
+        status = 200 if request.headers.get("HX-Boosted") == "true" else 400
+        return await _tags_page(request, principal, db, error=str(exc), status_code=status)
     return RedirectResponse("/catalog/tags?notice=tags_merged", status_code=303)
 
 
