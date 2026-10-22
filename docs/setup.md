@@ -75,7 +75,7 @@ Socket Mode lets the app connect out to Slack, so Slack never calls your host. T
 ## 6. Find the team ID and channel ID
 
 1. Open your workspace in a browser. The address looks like `https://app.slack.com/client/T0123ABCDEF/...`.
-2. Copy the part that starts with `T`. This is `DINNERBELL_SLACK_TEAM_ID`. When you set it, Dinnerbell refuses sign-ins from any other Slack workspace.
+2. Copy the part that starts with `T`. This is `DINNERBELL_SLACK_TEAM_ID`. It is required with Slack sign-in, and Dinnerbell refuses to start without it. It makes Dinnerbell refuse sign-ins from any other Slack workspace; without it, someone in another workspace whose Slack email matches an invitation could claim it.
 3. In the `#dinnerbell` channel, select the channel name at the top to open the channel details.
 4. Copy the channel ID at the bottom of the **About** tab. It starts with `C`. This is `DINNERBELL_SLACK_CHANNEL`. If you don't see it there, copy it from the address bar when you open the channel in a browser.
 
@@ -326,6 +326,7 @@ Invite members by the email on their Google account. In version 1, Slack is stil
 | Sign-in completes but Dinnerbell says you are not invited | The email on the Slack account differs from the invited email, or the email is not verified. | Compare the emails on **Admin > Members** and in your Slack profile. Fix the member's email, or use `DINNERBELL_ADMIN_EMAIL` for the admin. |
 | Sign-in refused for a person you invited | They signed in with a different Slack workspace, and `DINNERBELL_SLACK_TEAM_ID` blocks it. | Ask them to sign in to your household workspace. |
 | `/healthz` reports Slack not connected | The app token is wrong or missing, Socket Mode is off, or the host cannot reach Slack. | Until M2, `not_configured` is expected. Afterward, check the logs. Confirm Socket Mode is on in the app settings and that the host can make outbound HTTPS connections. |
+| Startup error: `DINNERBELL_SLACK_TEAM_ID is required` | The issuer is Slack and the team ID is empty. | Set `DINNERBELL_SLACK_TEAM_ID` as described in step 6, then recreate the service. |
 | Startup error about a token prefix | The tokens are swapped or copied from the wrong page. | `DINNERBELL_SLACK_APP_TOKEN` starts with `xapp-` (Basic Information > App-Level Tokens). `DINNERBELL_SLACK_BOT_TOKEN` starts with `xoxb-` (Install App). |
 | Rate limiting blocks everyone at once | Dinnerbell sees the proxy's address for every request. | Set `DINNERBELL_TRUSTED_PROXIES` to the proxy's single address, then recreate with `podman-compose down && podman-compose up -d`. A restart doesn't re-read `.env`. |
 | Bot does not see the channel | The bot is not a member of the channel. | Run `/invite @Dinnerbell` in the channel. |

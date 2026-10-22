@@ -19,6 +19,7 @@ REQUIRED = {
     "DINNERBELL_OIDC_ISSUER": "https://slack.com",
     "DINNERBELL_OIDC_CLIENT_ID": "123.456",
     "DINNERBELL_OIDC_CLIENT_SECRET": "very-secret-client-secret",
+    "DINNERBELL_SLACK_TEAM_ID": "T0123ABCD",
 }
 
 
@@ -47,7 +48,7 @@ def test_loads_from_environment_with_defaults(monkeypatch: pytest.MonkeyPatch) -
     assert settings.log_level == "INFO"
     assert settings.timezone == "UTC"
     assert settings.trusted_proxies == ()
-    assert settings.slack_team_id is None
+    assert settings.slack_team_id == "T0123ABCD"
     assert settings.cookie_secure
 
 
@@ -55,15 +56,15 @@ def test_missing_required_settings_are_listed(monkeypatch: pytest.MonkeyPatch) -
     with pytest.raises(ConfigError) as caught:
         load_settings()
     message = str(caught.value)
-    for name in REQUIRED:
+    for name in set(REQUIRED) - {"DINNERBELL_SLACK_TEAM_ID"}:
         assert f"{name} is required" in message
     assert ".env.example" in message
 
 
 def test_empty_values_count_as_missing(monkeypatch: pytest.MonkeyPatch) -> None:
-    message = error_for(monkeypatch, DINNERBELL_SECRET_KEY="", DINNERBELL_SLACK_TEAM_ID="")
+    message = error_for(monkeypatch, DINNERBELL_SECRET_KEY="", DINNERBELL_SLACK_CHANNEL="")
     assert "DINNERBELL_SECRET_KEY is required" in message
-    assert "SLACK_TEAM_ID" not in message
+    assert "SLACK_CHANNEL" not in message
 
 
 def test_errors_never_echo_values(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -124,6 +125,18 @@ def test_local_http_base_url_turns_off_secure_cookies(tmp_path: Path, url: str) 
 )
 def test_invalid_values(monkeypatch: pytest.MonkeyPatch, name: str, value: str, fragment: str) -> None:
     assert fragment in error_for(monkeypatch, **{name: value})
+
+
+@pytest.mark.parametrize("issuer", ["https://slack.com", "https://slack.com/"])
+def test_slack_issuer_requires_team_id(monkeypatch: pytest.MonkeyPatch, issuer: str) -> None:
+    """Regression: without a team ID, any Slack workspace's account could claim an invitation."""
+    message = error_for(monkeypatch, DINNERBELL_OIDC_ISSUER=issuer, DINNERBELL_SLACK_TEAM_ID="")
+    assert "  - DINNERBELL_SLACK_TEAM_ID is required when DINNERBELL_OIDC_ISSUER is https://slack.com" in message
+
+
+def test_other_issuers_do_not_need_a_team_id(monkeypatch: pytest.MonkeyPatch) -> None:
+    set_env(monkeypatch, DINNERBELL_OIDC_ISSUER="https://accounts.google.com", DINNERBELL_SLACK_TEAM_ID="")
+    assert load_settings().slack_team_id is None
 
 
 def test_trusted_proxies_and_log_level_parse(monkeypatch: pytest.MonkeyPatch) -> None:

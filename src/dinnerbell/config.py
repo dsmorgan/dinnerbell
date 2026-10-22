@@ -10,7 +10,7 @@ from typing import Annotated, Literal
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import Field, SecretStr, ValidationError, field_validator
+from pydantic import Field, SecretStr, ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 from sqlalchemy.engine import make_url
 
@@ -20,6 +20,7 @@ ENV_PREFIX = "DINNERBELL_"
 SECRETS_DIR = Path("/run/secrets")
 MIN_SECRET_KEY_LENGTH = 32
 LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1"})
+SLACK_ISSUER = "https://slack.com"
 
 IPNetwork = ipaddress.IPv4Network | ipaddress.IPv6Network
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR"]
@@ -161,6 +162,18 @@ class Settings(BaseSettings):
         except ValueError:
             raise ValueError("must be a comma-separated list of IP addresses or CIDR ranges") from None
 
+    @model_validator(mode="after")
+    def _require_team_for_slack(self) -> Settings:
+        # Slack is one issuer for every workspace. Without a team check, an account in any
+        # workspace whose verified email matches an unlinked invite could claim it.
+        if self.oidc_issuer.rstrip("/") == SLACK_ISSUER and not self.slack_team_id:
+            raise ValueError(
+                f"{ENV_PREFIX}SLACK_TEAM_ID is required when {ENV_PREFIX}OIDC_ISSUER is {SLACK_ISSUER}. "
+                "Set it to your workspace's team ID (it starts with T); without it, an account in any "
+                "Slack workspace could claim an invitation."
+            )
+        return self
+
     @cached_property
     def database_path(self) -> Path:
         return Path(make_url(self.database_url).database or "")
@@ -194,12 +207,14 @@ def format_validation_error(error: ValidationError) -> str:
     """Render a settings error without echoing any submitted value."""
     lines = ["Dinnerbell cannot start because its configuration is incomplete or invalid:"]
     for item in error.errors(include_input=False, include_url=False):
-        field = str(item["loc"][0]) if item["loc"] else "settings"
-        name = f"{ENV_PREFIX}{field.upper()}"
+        message = str(item["msg"]).removeprefix("Value error, ")
+        if not item["loc"]:
+            lines.append(f"  - {message}")
+            continue
+        name = f"{ENV_PREFIX}{str(item['loc'][0]).upper()}"
         if item["type"] == "missing":
             lines.append(f"  - {name} is required but not set.")
         else:
-            message = str(item["msg"]).removeprefix("Value error, ")
             lines.append(f"  - {name}: {message}")
     lines.append("See .env.example for every variable and what it does.")
     return "\n".join(lines)

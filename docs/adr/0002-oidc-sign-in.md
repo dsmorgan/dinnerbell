@@ -32,3 +32,7 @@ Calendar access in the later phase uses each member's Google Calendar secret iCa
 - The app is the only barrier on a public hostname, so the security requirements in the spec (sessions, CSRF, rate limits, headers, audit) are mandatory, not optional.
 - If the household later wants Pangolin's login as a second layer, it can be enabled on the resource at the cost of a second sign-in per device. The app does not depend on Pangolin headers either way.
 - Magic-link email was rejected because sending mail reliably from a homelab is its own project.
+
+## Amendments
+
+- 2026-10-22: With Slack as the provider, `DINNERBELL_SLACK_TEAM_ID` is required, because Slack is one issuer for every workspace and an account in any workspace could otherwise claim an unlinked invitation by email.
