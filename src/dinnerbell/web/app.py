@@ -30,7 +30,7 @@ from dinnerbell.web.middleware import (
 )
 from dinnerbell.web.ratelimit import SlidingWindowLimiter
 from dinnerbell.web.render import error_page, is_htmx
-from dinnerbell.web.routes import admin, auth, health, pages
+from dinnerbell.web.routes import admin, auth, catalog, health, history, pages, preferences
 
 log = logging.getLogger(__name__)
 
@@ -52,7 +52,15 @@ def build_app(settings: Settings, lifespan: Lifespan) -> FastAPI:
         telemetry={"tracing": False, "metrics": False, "logs": False},
     )
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
-    for router in (health.router, pages.router, auth.router, admin.router):
+    for router in (
+        health.router,
+        pages.router,
+        auth.router,
+        admin.router,
+        catalog.router,
+        preferences.router,
+        history.router,
+    ):
         app.include_router(router)
     _add_exception_handlers(app)
 

@@ -1,0 +1,55 @@
+{#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
+{% extends "base.html" %}
+{% block title %}Preferences{% endblock %}
+{% macro row(target_type, target_id, name) -%}
+{% with target=target_type.value ~ ":" ~ target_id, stance=mine.stance(target_type, target_id), saved=false %}{% include "_preference_row.html" %}{% endwith %}
+{%- endmacro %}
+{% block content %}
+<h1>Preferences</h1>
+<p class="muted">Only you can see these. Proposals respect them without saying who vetoed what.</p>
+{% if notice %}<p class="alert ok" role="status">{{ notice }}</p>{% endif %}
+
+<form method="post" action="/preferences/settings" class="card stack">
+  <h2>You</h2>
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <fieldset class="field">
+    <legend>I can usually</legend>
+    <label class="check"><input type="checkbox" name="can_cook"{% if me.capabilities.can_cook %} checked{% endif %}> Cook</label>
+    <label class="check"><input type="checkbox" name="can_pickup"{% if me.capabilities.can_pickup %} checked{% endif %}> Pick up</label>
+    <label class="check"><input type="checkbox" name="can_order"{% if me.capabilities.can_order %} checked{% endif %}> Order delivery</label>
+  </fieldset>
+  <fieldset class="field">
+    <legend>Reminders</legend>
+    <label class="check"><input type="checkbox" name="mute_dm_reminders"{% if me.mute_dm_reminders %} checked{% endif %}> Mute direct-message reminders</label>
+    <label class="check"><input type="checkbox" name="feedback_reminder"{% if me.feedback_reminder %} checked{% endif %}> Remind me to give feedback after meals</label>
+  </fieldset>
+  <button type="submit" class="button primary">Save</button>
+</form>
+
+<section class="card">
+  <h2>How it works</h2>
+  <p class="small"><strong>Veto</strong> means never propose it when you're eating. <strong>−2</strong> to <strong>+2</strong> nudges proposals away from or toward it. <strong>0</strong> is neutral.</p>
+</section>
+
+{% for kind, group in tag_groups.items() if group %}
+<section class="card">
+  <h2>{{ kind.value|capitalize }}</h2>
+  <ul class="prefs">{% for t in group %}{{ row(TargetType.TAG, t.id, t.name) }}{% endfor %}</ul>
+</section>
+{% endfor %}
+{% if restaurants %}
+<section class="card">
+  <h2>Restaurants</h2>
+  <ul class="prefs">{% for i in restaurants %}{{ row(TargetType.ITEM, i.id, i.name) }}{% endfor %}</ul>
+</section>
+{% endif %}
+{% if home_meals %}
+<section class="card">
+  <h2>Home meals</h2>
+  <ul class="prefs">{% for i in home_meals %}{{ row(TargetType.ITEM, i.id, i.name) }}{% endfor %}</ul>
+</section>
+{% endif %}
+{% if not mine.tags and not mine.items %}
+<section class="card"><p>The catalog is empty, so there's nothing to rate yet. <a href="/catalog">Add to the catalog</a>.</p></section>
+{% endif %}
+{% endblock %}

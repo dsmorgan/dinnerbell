@@ -1,0 +1,115 @@
+{#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
+{#- Expects: content, plan (None before a preview), token (set when the plan can be applied), notice. -#}
+{% extends "base.html" %}
+{% block title %}Import a catalog{% endblock %}
+{% block content %}
+<p><a href="/catalog">← Catalog</a></p>
+<h1>Import a catalog file</h1>
+{% if notice %}<p class="alert" role="status">{{ notice }}</p>{% endif %}
+
+{% if plan %}
+<section class="card preview" aria-labelledby="preview-heading">
+  <h2 id="preview-heading">Preview</h2>
+  {% if plan.errors %}
+  <p class="alert error" role="alert">The file has {{ plan.errors|length }} problem{{ "" if plan.errors|length == 1 else "s" }}. Nothing will be saved until the file is fixed.</p>
+  <ul class="problems">
+    {% for e in plan.errors %}<li><code>{{ e.location or "file" }}</code> {{ e.message }}{% if e.entry %} <span class="muted">({{ e.entry }})</span>{% endif %}</li>{% endfor %}
+  </ul>
+  {% elif not plan.has_changes %}
+  <p class="alert ok" role="status">The catalog already matches this file. There's nothing to import.</p>
+  {% else %}
+  <p>Applying this file will:</p>
+  <ul class="summary">
+    {% if plan.tags_to_create %}<li>Add {{ plan.tags_to_create|length }} tag{{ "" if plan.tags_to_create|length == 1 else "s" }}</li>{% endif %}
+    {% if plan.items_to_create %}<li>Add {{ plan.items_to_create|length }} item{{ "" if plan.items_to_create|length == 1 else "s" }}</li>{% endif %}
+    {% if plan.items_to_update %}<li>Update {{ plan.items_to_update|length }} item{{ "" if plan.items_to_update|length == 1 else "s" }}</li>{% endif %}
+    {% if plan.unchanged %}<li>Leave {{ plan.unchanged|length }} matching item{{ "" if plan.unchanged|length == 1 else "s" }} as they are</li>{% endif %}
+  </ul>
+  {% endif %}
+
+  {% if plan.unknown_cooks %}
+  <h3>Cooks that will be skipped</h3>
+  <p class="small muted">These emails don't match a member. Invite them first, or fix the email.</p>
+  <ul class="problems">{% for u in plan.unknown_cooks %}<li><code>{{ u.location }}</code> {{ u.email }}</li>{% endfor %}</ul>
+  {% endif %}
+
+  {% if plan.tags_to_create %}
+  <h3>New tags</h3>
+  <p class="small muted">Check for typos: a misspelled tag becomes a new one.</p>
+  <ul class="chips">
+    {% for t in plan.tags_to_create %}<li class="chip tag-{{ t.kind.value }}">{{ t.name }} · {{ t.kind.value }}{% if not t.declared %} · not in tags{% endif %}</li>{% endfor %}
+  </ul>
+  {% endif %}
+
+  {% if plan.items_to_create %}
+  <h3>New items</h3>
+  <ul class="plan-list">
+    {% for c in plan.items_to_create %}
+    <li><strong>{{ c.state.name }}</strong> <span class="badge">{{ c.state.kind.label }}</span>{% if not c.state.active %} <span class="badge">Inactive</span>{% endif %}
+      <span class="muted small">{{ sorted_modes(c.state.modes)|map(attribute="label")|join(", ") }}</span></li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+
+  {% if plan.items_to_update %}
+  <h3>Changed items</h3>
+  <ul class="plan-list">
+    {% for u in plan.items_to_update %}
+    <li><strong>{{ u.state.name }}</strong> <span class="badge">{{ u.state.kind.label }}</span>
+      <dl class="changes small">
+        {% for ch in u.changes %}<dt>{{ ch.field }}</dt><dd><del>{{ ch.before }}</del> → <ins>{{ ch.after }}</ins></dd>{% endfor %}
+      </dl>
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+
+  {% if plan.unchanged %}
+  <details>
+    <summary class="small">{{ plan.unchanged|length }} unchanged</summary>
+    <ul class="plan-list small">{% for u in plan.unchanged %}<li>{{ u.name }} <span class="muted">({{ u.kind.label }})</span></li>{% endfor %}</ul>
+  </details>
+  {% endif %}
+</section>
+{% endif %}
+
+<form method="post" action="/catalog/import/preview" enctype="multipart/form-data" class="card stack">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  {% if token %}<input type="hidden" name="token" value="{{ token }}">{% endif %}
+  <label class="field">
+    <span>Paste the file</span>
+    <textarea name="content" rows="14" class="code" spellcheck="false" autocapitalize="none" autocomplete="off">
+{{ content }}</textarea>
+  </label>
+  <label class="field">
+    <span>Or upload it</span>
+    <input type="file" name="upload" accept=".yaml,.yml,text/yaml,application/yaml,text/plain">
+    <small class="muted">YAML, up to {{ max_megabytes }} MB. An uploaded file replaces the pasted text.</small>
+  </label>
+  <div class="button-row">
+    <button type="submit" class="button{% if not token %} primary{% endif %}">{% if plan %}Preview again{% else %}Preview{% endif %}</button>
+    {% if token %}<button type="submit" class="button primary" formaction="/catalog/import/apply">Apply</button>{% endif %}
+  </div>
+  <p class="small muted">Imports never delete. Items that match by name are updated; everything else stays as it is. If any entry has a problem, nothing is saved.</p>
+</form>
+
+<details class="card">
+  <summary><h2>File format</h2></summary>
+  <p class="small">The format is described in <code>docs/catalog-format.md</code> in the Dinnerbell source. A short example:</p>
+  <pre class="code small">version: 1
+tags:
+  cuisine: [Thai, Mexican]
+  other: [spicy]
+restaurants:
+  - name: Siam Garden
+    cuisine: [Thai]
+    tags: [spicy]
+    modes: [pickup, delivery]
+    url: https://example.com/menu
+home_meals:
+  - name: Chicken tacos
+    cuisine: [Mexican]
+    servings: 6
+    cooks: [you@example.com]</pre>
+</details>
+{% endblock %}

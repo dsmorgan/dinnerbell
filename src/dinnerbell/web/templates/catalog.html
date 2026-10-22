@@ -1,0 +1,86 @@
+{#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
+{% extends "base.html" %}
+{% block title %}Catalog{% endblock %}
+{% block content %}
+<h1>Catalog</h1>
+{% if notice %}<p class="alert ok" role="status">{{ notice }}</p>{% endif %}
+<div class="button-row">
+  <a class="button primary" href="/catalog/new?kind=restaurant">Add restaurant</a>
+  <a class="button" href="/catalog/new?kind=home">Add home meal</a>
+</div>
+<form method="get" action="/catalog" class="card filters" role="search"
+      hx-get="/catalog" hx-trigger="input changed delay:300ms from:input[name=q], change"
+      hx-target="#results" hx-select="#results" hx-swap="outerHTML" hx-push-url="true">
+  <label class="field">
+    <span class="visually-hidden">Search</span>
+    <input type="search" name="q" value="{{ search.query }}" placeholder="Search names, notes, tags" maxlength="100" autocomplete="off">
+  </label>
+  <div class="filter-grid">
+    <label class="field"><span class="small muted">Kind</span>
+      <select name="kind">
+        <option value="">All kinds</option>
+        {% for k in kinds %}<option value="{{ k.value }}"{% if search.kind == k %} selected{% endif %}>{{ k.label }}s</option>{% endfor %}
+      </select>
+    </label>
+    <label class="field"><span class="small muted">Way</span>
+      <select name="mode">
+        <option value="">Any way</option>
+        {% for m in modes %}<option value="{{ m.value }}"{% if search.mode == m %} selected{% endif %}>{{ m.label }}</option>{% endfor %}
+      </select>
+    </label>
+    <label class="field"><span class="small muted">Tag</span>
+      <select name="tag">
+        <option value="">Any tag</option>
+        {% for kind, group in tag_groups.items() if group %}
+        <optgroup label="{{ kind.value|capitalize }}">
+          {% for t in group %}<option value="{{ t.id }}"{% if search.tag_id == t.id %} selected{% endif %}>{{ t.name }}</option>{% endfor %}
+        </optgroup>
+        {% endfor %}
+      </select>
+    </label>
+    <label class="field"><span class="small muted">Show</span>
+      <select name="status">
+        {% for s in statuses %}<option value="{{ s.value }}"{% if search.status == s %} selected{% endif %}>{{ s.value|capitalize }}</option>{% endfor %}
+      </select>
+    </label>
+  </div>
+  <button type="submit" class="button small">Filter</button>
+</form>
+<div id="results">
+  <p class="muted small">
+    {% if search.is_default %}{{ total }} active item{{ "" if total == 1 else "s" }}{% else %}{{ items|length }} match{{ "" if items|length == 1 else "es" }} · <a href="/catalog">Clear filters</a>{% endif %}
+  </p>
+  {% if not items %}
+  <section class="card">
+    {% if total == 0 and search.is_default %}
+    <p>The catalog is empty. Add a restaurant or home meal, or <a href="/catalog/import">import a catalog file</a>.</p>
+    {% else %}
+    <p>Nothing matches. Try fewer filters.</p>
+    {% endif %}
+  </section>
+  {% endif %}
+  <ul class="items">
+    {% for item in items %}
+    <li class="item{% if not item.active %} inactive{% endif %}" id="item-{{ item.id }}">
+      <div class="item-head">
+        <strong class="item-name">{{ item.name }}</strong>
+        <span class="badge">{{ item.kind.label }}</span>
+        {% if not item.active %}<span class="badge">Inactive</span>{% endif %}
+      </div>
+      <div class="chips">
+        {% for m in sorted_modes(item.modes) %}<span class="chip mode">{{ m.label }}</span>{% endfor %}
+        {% for tag_id in item.tag_ids|sort %}{% set t = tags[tag_id] %}<a class="chip tag-{{ t.kind.value }}" href="/catalog?tag={{ t.id }}">{{ t.name }}</a>{% endfor %}
+      </div>
+      <p class="muted small item-meta">{{ eaten[item.id] }}{% if item.default_servings %} · Serves {{ item.default_servings }}{% endif %}{% if item.cook_ids %} · Cooks: {% for c in item.cook_ids|sort %}{{ members[c].display_name if c in members else "?" }}{{ ", " if not loop.last }}{% endfor %}{% endif %}</p>
+      {% if item.notes %}<p class="item-notes small">{{ item.notes }}</p>{% endif %}
+      <div class="item-actions">
+        {% if item.url %}<a class="button small" href="{{ item.url }}" rel="noopener noreferrer external" target="_blank">{{ "Menu" if item.kind.value == "restaurant" else "Recipe" }}</a>{% endif %}
+        {% if item.order_url %}<a class="button small" href="{{ item.order_url }}" rel="noopener noreferrer external" target="_blank">Order online</a>{% endif %}
+        <a class="button small" href="/catalog/items/{{ item.id }}">Edit</a>
+      </div>
+    </li>
+    {% endfor %}
+  </ul>
+</div>
+<p class="footer-links small"><a href="/catalog/tags">Manage tags</a> · <a href="/catalog/import">Import a catalog file</a></p>
+{% endblock %}

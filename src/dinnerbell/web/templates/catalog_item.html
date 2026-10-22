@@ -1,0 +1,105 @@
+{#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
+{#- Add or edit one catalog item. Expects: kind, form, item (None when adding), tag_groups, tag_kinds, cooks. -#}
+{% extends "base.html" %}
+{% set is_home = kind.value == "home" %}
+{% block title %}{% if item %}Edit {{ item.name }}{% else %}Add {{ kind.label|lower }}{% endif %}{% endblock %}
+{% block content %}
+<p><a href="/catalog">← Catalog</a></p>
+<h1>{% if item %}{{ item.name }}{% else %}Add a {{ kind.label|lower }}{% endif %}</h1>
+{% if notice %}<p class="alert ok" role="status">{{ notice }}</p>{% endif %}
+{% if error %}<p class="alert error" role="alert">{{ error }}</p>{% endif %}
+{% if item and not item.active %}<p class="alert">This item is inactive, so it's hidden from proposals. Its history stays.</p>{% endif %}
+<datalist id="tag-names">
+  {% for kind_, group in tag_groups.items() %}{% for t in group %}<option value="{{ t.name }}">{% endfor %}{% endfor %}
+</datalist>
+<form method="post" action="{% if item %}/catalog/items/{{ item.id }}{% else %}/catalog/items{% endif %}" class="card stack">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <input type="hidden" name="kind" value="{{ kind.value }}">
+  <label class="field">
+    <span>Name</span>
+    <input name="name" required maxlength="100" autocomplete="off" value="{{ form.name }}">
+  </label>
+
+  <fieldset class="field">
+    <legend>Cuisine</legend>
+    <div class="chip-picker">
+      {% for t in tag_groups[tag_kinds[0]] %}
+      <label class="chip-toggle"><input type="checkbox" name="tag_ids" value="{{ t.id }}"{% if t.id in form.tag_ids %} checked{% endif %}><span>{{ t.name }}</span></label>
+      {% endfor %}
+    </div>
+    <label class="field compact">
+      <span class="small muted">New cuisine (separate several with commas)</span>
+      <input name="new_cuisines" maxlength="200" list="tag-names" autocomplete="off" value="{{ form.new_cuisines }}">
+    </label>
+  </fieldset>
+
+  <fieldset class="field">
+    <legend>Other tags</legend>
+    {% for k in tag_kinds[1:] %}{% if tag_groups[k] %}
+    <p class="small muted picker-label">{{ k.value|capitalize }}</p>
+    <div class="chip-picker">
+      {% for t in tag_groups[k] %}
+      <label class="chip-toggle"><input type="checkbox" name="tag_ids" value="{{ t.id }}"{% if t.id in form.tag_ids %} checked{% endif %}><span>{{ t.name }}</span></label>
+      {% endfor %}
+    </div>
+    {% endif %}{% endfor %}
+    <div class="new-tags">
+      <label class="field compact">
+        <span class="small muted">New tags (commas between)</span>
+        <input name="new_tags" maxlength="200" list="tag-names" autocomplete="off" value="{{ form.new_tags }}">
+      </label>
+      <label class="field compact">
+        <span class="small muted">Kind</span>
+        <select name="new_tags_kind">
+          {% for k in tag_kinds[1:] %}<option value="{{ k.value }}"{% if form.new_tags_kind == k.value %} selected{% endif %}>{{ k.value|capitalize }}</option>{% endfor %}
+        </select>
+      </label>
+    </div>
+  </fieldset>
+
+  {% if is_home %}
+  <label class="field">
+    <span>Servings per batch</span>
+    <input name="servings" type="number" inputmode="numeric" min="1" max="99" value="{{ form.servings }}">
+  </label>
+  <fieldset class="field">
+    <legend>Who can cook it</legend>
+    {% for m in cooks %}
+    <label class="check"><input type="checkbox" name="cook_ids" value="{{ m.id }}"{% if m.id in form.cook_ids %} checked{% endif %}> {{ m.display_name }}</label>
+    {% endfor %}
+  </fieldset>
+  <label class="field">
+    <span>Recipe link</span>
+    <input name="url" type="url" inputmode="url" maxlength="2000" autocomplete="off" placeholder="https://" value="{{ form.url }}">
+  </label>
+  {% else %}
+  <fieldset class="field">
+    <legend>How we get it</legend>
+    {% for m in restaurant_modes %}
+    <label class="check"><input type="checkbox" name="modes" value="{{ m.value }}"{% if m.value in form.modes %} checked{% endif %}> {{ m.label }}</label>
+    {% endfor %}
+  </fieldset>
+  <label class="field">
+    <span>Menu or website</span>
+    <input name="url" type="url" inputmode="url" maxlength="2000" autocomplete="off" placeholder="https://" value="{{ form.url }}">
+  </label>
+  <label class="field">
+    <span>Order online</span>
+    <input name="order_url" type="url" inputmode="url" maxlength="2000" autocomplete="off" placeholder="https://" value="{{ form.order_url }}">
+  </label>
+  {% endif %}
+  <label class="field">
+    <span>Notes</span>
+    <textarea name="notes" rows="3" maxlength="500">{{ form.notes }}</textarea>
+  </label>
+  <button type="submit" class="button primary block">{% if item %}Save{% else %}Add to catalog{% endif %}</button>
+</form>
+{% if item %}
+{% set action = "deactivate" if item.active else "reactivate" %}
+<form method="post" action="/catalog/items/{{ item.id }}/{{ action }}" class="card">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <p class="small muted">{% if item.active %}Deactivate to hide it from proposals without losing its history.{% else %}Reactivate to offer it in proposals again.{% endif %}</p>
+  <button type="submit" class="button{% if item.active %} danger{% endif %}">{{ action|capitalize }}</button>
+</form>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,293 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+"""The Catalog page: browse, search, add, edit, and deactivate items (FR-23, FR-24)."""
+
+from __future__ import annotations
+
+from datetime import date
+
+from fastapi.testclient import TestClient
+
+from dinnerbell.config import Settings
+from dinnerbell.db.models import AuditRow, CatalogItemRow, TagRow
+from dinnerbell.web.routes.catalog import last_eaten_label
+from tests.conftest import invite, page, sign_in
+from tests.support.fake_oidc import FakeProvider
+from tests.support.web import add_item, submit
+from tests.test_admin import sign_in_as
+from tests.test_auth_flow import member, rows
+
+
+def item_row(settings: Settings, name: str) -> CatalogItemRow:
+    return next(i for i in rows(settings, CatalogItemRow) if i.name == name)
+
+
+def tag_names(settings: Settings) -> dict[int, str]:
+    return {t.id: t.name for t in rows(settings, TagRow)}
+
+
+def item_tags(settings: Settings, name: str) -> set[str]:
+    from dinnerbell.db.models import CatalogItemTagRow
+
+    item = item_row(settings, name)
+    names = tag_names(settings)
+    return {names[link.tag_id] for link in rows(settings, CatalogItemTagRow) if link.item_id == item.id}
+
+
+def actions(settings: Settings) -> list[str]:
+    return [a.action for a in rows(settings, AuditRow)]
+
+
+def test_signed_out_visitors_are_sent_to_sign_in(client: TestClient) -> None:
+    for path in ("/catalog", "/catalog/new", "/catalog/tags", "/catalog/import", "/preferences", "/history"):
+        response = client.get(path)
+        assert response.status_code == 303, path
+        assert response.headers["location"] == "/"
+
+
+def test_navigation_links_every_page(client: TestClient, provider: FakeProvider) -> None:
+    sign_in(client, provider)
+    header = client.get("/catalog").text.split("<main")[0]
+    for path in ("/catalog", "/preferences", "/history", "/admin/members"):
+        assert f'href="{path}"' in header
+    assert 'href="/catalog" aria-current="page"' in header
+
+
+def test_empty_catalog(client: TestClient, provider: FakeProvider) -> None:
+    sign_in(client, provider)
+    text = page(client.get("/catalog"))
+    assert "The catalog is empty" in text
+    assert 'href="/catalog/import"' in text
+
+
+def test_add_restaurant(client: TestClient, provider: FakeProvider, migrated: Settings) -> None:
+    sign_in(client, provider)
+    assert "Add a restaurant" in page(client.get("/catalog/new?kind=restaurant"))
+    response = add_item(
+        client,
+        " Siam   Garden ",
+        cuisines="Thai, Lao",
+        modes=["pickup", "delivery"],
+        new_tags="spicy",
+        url="https://example.com/menu",
+        order_url="https://order.example.com/siam",
+        notes="Medium spice.",
+    )
+    assert response.status_code == 303, page(response)
+    siam = item_row(migrated, "Siam Garden")
+    assert (siam.kind, sorted(siam.modes), siam.active) == ("restaurant", ["delivery", "pickup"], True)
+    assert siam.created_by == member(migrated, "admin@example.com").id
+    assert item_tags(migrated, "Siam Garden") == {"Thai", "Lao", "spicy"}
+    kinds = {t.name: t.kind for t in rows(migrated, TagRow)}
+    assert kinds == {"Thai": "cuisine", "Lao": "cuisine", "spicy": "other"}
+    [audit] = [a for a in rows(migrated, AuditRow) if a.action == "catalog.item_created"]
+    assert audit.target == f"item:{siam.id}"
+    assert sorted(audit.payload["tags_created"]) == ["Lao", "Thai", "spicy"]
+
+    listing = client.get(response.headers["location"])
+    text = page(listing)
+    assert "Saved to the catalog." in text
+    assert "Siam Garden" in text and "Never eaten" in text
+    assert 'href="https://example.com/menu" rel="noopener noreferrer external" target="_blank">Menu' in listing.text
+    assert 'href="https://order.example.com/siam"' in listing.text and "Order online" in text
+
+
+def test_add_home_meal_with_cooks(client: TestClient, provider: FakeProvider, migrated: Settings) -> None:
+    sign_in(client, provider)
+    invite(client, "sam@example.com", "Sam")
+    sam = member(migrated, "sam@example.com")
+    form = page(client.get("/catalog/new?kind=home"))
+    assert "Who can cook it" in form and "Sam" in form and "Order online" not in form
+    response = add_item(
+        client,
+        "Chicken tacos",
+        kind="home",
+        cuisines="Mexican",
+        servings="6",
+        cook_ids=[str(sam.id)],
+        order_url="https://ignored.example.com",
+        modes=["delivery"],
+    )
+    assert response.status_code == 303, page(response)
+    tacos = item_row(migrated, "Chicken tacos")
+    assert (tacos.kind, tacos.modes, tacos.default_servings, tacos.order_url) == ("home", ["cook"], 6, None)
+    text = page(client.get("/catalog"))
+    assert "Serves 6" in text and "Cooks: Sam" in text and "Recipe" not in text
+
+
+def test_existing_tags_are_reused_ignoring_case(client: TestClient, provider: FakeProvider, migrated: Settings) -> None:
+    sign_in(client, provider)
+    add_item(client, "One", cuisines="Thai")
+    thai = next(t for t in rows(migrated, TagRow) if t.name == "Thai")
+    response = add_item(client, "Two", cuisines="THAI", tag_ids=[str(thai.id)])
+    assert response.status_code == 303
+    assert len(rows(migrated, TagRow)) == 1
+    assert item_tags(migrated, "Two") == {"Thai"}
+
+
+def test_add_item_validation_keeps_the_form(client: TestClient, provider: FakeProvider, migrated: Settings) -> None:
+    sign_in(client, provider)
+    cases = [
+        ({"cuisines": ""}, "Pick at least one cuisine."),
+        ({"url": "javascript:alert(1)"}, "A link must start with http:// or https://."),
+        ({"modes": []}, "Pick at least one way to get it"),
+        ({"modes": ["teleport"]}, "Pick pickup, delivery, or both."),
+        ({"notes": "x" * 501}, "Notes are at most 500 characters."),
+    ]
+    for fields, message in cases:
+        response = add_item(client, "Draft Place", **fields)
+        assert response.status_code == 400, fields
+        text = page(response)
+        assert message in text, fields
+        assert 'value="Draft Place"' in text
+    home = add_item(client, "Pie", kind="home", servings="lots")
+    assert home.status_code == 400 and "Servings must be a whole number." in page(home)
+    assert rows(migrated, CatalogItemRow) == []
+
+
+def test_duplicate_names_are_refused_per_kind(client: TestClient, provider: FakeProvider, migrated: Settings) -> None:
+    sign_in(client, provider)
+    add_item(client, "Tacos")
+    response = add_item(client, "TACOS")
+    assert response.status_code == 400
+    assert "A restaurant named TACOS already exists." in page(response)
+    assert add_item(client, "tacos", kind="home").status_code == 303  # a home meal may share the name
+    assert len(rows(migrated, CatalogItemRow)) == 2
+
+
+def test_tag_kind_conflict_in_form(client: TestClient, provider: FakeProvider) -> None:
+    sign_in(client, provider)
+    add_item(client, "One", new_tags="vegetarian", new_tags_kind="protein")
+    response = add_item(client, "Two", cuisines="Vegetarian")
+    assert response.status_code == 400
+    assert '"vegetarian" is already a protein tag' in page(response)
+
+
+def test_edit_item(client: TestClient, provider: FakeProvider, migrated: Settings) -> None:
+    sign_in(client, provider)
+    add_item(client, "Siam Garden", new_tags="spicy", notes="Old note")
+    siam = item_row(migrated, "Siam Garden")
+    form = page(client.get(f"/catalog/items/{siam.id}"))
+    assert 'value="Siam Garden"' in form and "Old note" in form and "Deactivate" in form
+    thai = next(t for t in rows(migrated, TagRow) if t.name == "Thai")
+    response = submit(
+        client,
+        f"/catalog/items/{siam.id}",
+        {"kind": "home", "name": "Siam Garden Thai", "tag_ids": [str(thai.id)], "modes": ["delivery"], "notes": ""},
+    )
+    assert response.status_code == 303, page(response)
+    updated = item_row(migrated, "Siam Garden Thai")
+    assert (updated.kind, updated.modes, updated.notes) == ("restaurant", ["delivery"], None)  # kind can't change
+    assert item_tags(migrated, "Siam Garden Thai") == {"Thai"}
+    [audit] = [a for a in rows(migrated, AuditRow) if a.action == "catalog.item_updated"]
+    assert set(audit.payload) == {"name", "modes", "tags", "notes", "tags_created"}
+    assert audit.payload["tags"] == ["Thai"]
+
+
+def test_edit_validation_and_duplicates(client: TestClient, provider: FakeProvider, migrated: Settings) -> None:
+    sign_in(client, provider)
+    add_item(client, "One")
+    add_item(client, "Two")
+    one = item_row(migrated, "One")
+    response = submit(client, f"/catalog/items/{one.id}", {"name": "two", "new_cuisines": "Thai", "modes": ["pickup"]})
+    assert response.status_code == 400 and "already exists" in page(response)
+    response = submit(client, f"/catalog/items/{one.id}", {"name": "", "new_cuisines": "Thai", "modes": ["pickup"]})
+    assert response.status_code == 400 and "Enter a name." in page(response)
+    same = submit(client, f"/catalog/items/{one.id}", {"name": "ONE", "new_cuisines": "Thai", "modes": ["pickup"]})
+    assert same.status_code == 303  # renaming to a different case of itself is fine
+    assert item_row(migrated, "ONE").id == one.id
+
+
+def test_deactivate_and_reactivate(client: TestClient, provider: FakeProvider, migrated: Settings) -> None:
+    sign_in(client, provider)
+    add_item(client, "Old Place")
+    item = item_row(migrated, "Old Place")
+    response = submit(client, f"/catalog/items/{item.id}/deactivate")
+    assert response.status_code == 303
+    assert not item_row(migrated, "Old Place").active
+    assert "hidden from proposals" in page(client.get(response.headers["location"]))
+    assert "Old Place" not in page(client.get("/catalog"))
+    inactive = page(client.get("/catalog?status=inactive"))
+    assert "Old Place" in inactive and "Inactive" in inactive
+    assert submit(client, f"/catalog/items/{item.id}/deactivate").status_code == 303  # idempotent
+    assert submit(client, f"/catalog/items/{item.id}/reactivate").status_code == 303
+    assert item_row(migrated, "Old Place").active
+    assert actions(migrated).count("catalog.item_deactivated") == 1
+    assert actions(migrated).count("catalog.item_reactivated") == 1
+
+
+def test_any_member_maintains_the_catalog(client: TestClient, provider: FakeProvider, migrated: Settings) -> None:
+    sign_in(client, provider)
+    invite(client, "sam@example.com", "Sam")
+    sign_in_as(client, provider, "subject-sam", "sam@example.com")
+    assert add_item(client, "Sam's Pick").status_code == 303
+    item = item_row(migrated, "Sam's Pick")
+    assert item.created_by == member(migrated, "sam@example.com").id
+    edit = submit(
+        client, f"/catalog/items/{item.id}", {"name": "Sam's Pick", "new_cuisines": "Greek", "modes": ["pickup"]}
+    )
+    assert edit.status_code == 303
+    assert submit(client, f"/catalog/items/{item.id}/deactivate").status_code == 303
+
+
+def test_unknown_item_is_404(client: TestClient, provider: FakeProvider) -> None:
+    sign_in(client, provider)
+    assert client.get("/catalog/items/999").status_code == 404
+    assert submit(client, "/catalog/items/999/deactivate").status_code == 404
+    response = submit(client, "/catalog/items/999", {"name": "x", "new_cuisines": "Thai"})
+    assert response.status_code == 404
+
+
+def test_search_and_filters(client: TestClient, provider: FakeProvider, migrated: Settings) -> None:
+    sign_in(client, provider)
+    add_item(client, "Siam Garden", cuisines="Thai", modes=["pickup", "delivery"], notes="pad see ew")
+    add_item(client, "Luigi's", cuisines="Italian")
+    add_item(client, "Chicken tacos", kind="home", cuisines="Mexican", new_tags="chicken", new_tags_kind="protein")
+    chicken = next(t for t in rows(migrated, TagRow) if t.name == "chicken")
+
+    def found(query: str) -> set[str]:
+        text = page(client.get(f"/catalog?{query}"))
+        return {name for name in ("Siam Garden", "Luigi's", "Chicken tacos") if name in text}
+
+    assert found("") == {"Siam Garden", "Luigi's", "Chicken tacos"}
+    assert found("q=SEE+EW") == {"Siam Garden"}
+    assert found("q=italian") == {"Luigi's"}
+    assert found("kind=home") == {"Chicken tacos"}
+    assert found("mode=delivery") == {"Siam Garden"}
+    assert found("mode=cook") == {"Chicken tacos"}
+    assert found(f"tag={chicken.id}") == {"Chicken tacos"}
+    assert found("kind=bogus&mode=bogus&tag=x&status=bogus") == {"Siam Garden", "Luigi's", "Chicken tacos"}
+    filtered = page(client.get("/catalog?kind=restaurant"))
+    assert "2 matches" in filtered and "Clear filters" in filtered
+    assert "Nothing matches" in page(client.get("/catalog?q=sushi"))
+
+
+def test_filter_works_over_htmx(client: TestClient, provider: FakeProvider) -> None:
+    sign_in(client, provider)
+    add_item(client, "Siam Garden")
+    response = client.get("/catalog?q=siam", headers={"HX-Request": "true"})
+    assert response.status_code == 200
+    assert 'id="results"' in response.text and "Siam Garden" in response.text
+
+
+def test_catalog_shows_last_eaten(client: TestClient, provider: FakeProvider, migrated: Settings) -> None:
+    sign_in(client, provider)
+    add_item(client, "Siam Garden")
+    item = item_row(migrated, "Siam Garden")
+    admin = member(migrated, "admin@example.com")
+    logged = submit(
+        client,
+        "/history/meals",
+        {"day": "2026-10-20", "slot": "dinner", "item_id": str(item.id), "participant_ids": [str(admin.id)]},
+    )
+    assert logged.status_code == 303, page(logged)
+    assert "Eaten 2 days ago" in page(client.get("/catalog"))
+
+
+def test_last_eaten_labels() -> None:
+    today = date(2026, 10, 22)
+    assert last_eaten_label(None, today) == "Never eaten"
+    assert last_eaten_label(today, today) == "Eaten today"
+    assert last_eaten_label(date(2026, 10, 21), today) == "Eaten yesterday"
+    assert last_eaten_label(date(2026, 10, 12), today) == "Eaten 10 days ago"
+    assert last_eaten_label(date(2026, 9, 1), today) == "Last eaten Sep 1"
+    assert last_eaten_label(date(2025, 9, 1), today) == "Last eaten Sep 1, 2025"

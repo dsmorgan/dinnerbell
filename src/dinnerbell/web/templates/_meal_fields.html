@@ -1,0 +1,34 @@
+{#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
+{#- Expects: form, today, slots, restaurants, home_meals, people. -#}
+<div class="new-tags">
+  <label class="field compact">
+    <span>Date</span>
+    <input type="date" name="day" required max="{{ today.isoformat() }}" value="{{ form.day }}">
+  </label>
+  <fieldset class="field compact">
+    <legend>Meal</legend>
+    <div class="segments two">
+      {% for s in slots %}
+      <label class="segment"><input type="radio" name="slot" value="{{ s.value }}"{% if form.slot == s.value %} checked{% endif %}><span>{{ s.value|capitalize }}</span></label>
+      {% endfor %}
+    </div>
+  </fieldset>
+</div>
+<label class="field">
+  <span>What we ate</span>
+  <select name="item_id" required>
+    <option value="">Choose from the catalog</option>
+    {% if restaurants %}<optgroup label="Restaurants">
+      {% for i in restaurants %}<option value="{{ i.id }}"{% if form.item_id == i.id|string %} selected{% endif %}>{{ i.name }}</option>{% endfor %}
+    </optgroup>{% endif %}
+    {% if home_meals %}<optgroup label="Home meals">
+      {% for i in home_meals %}<option value="{{ i.id }}"{% if form.item_id == i.id|string %} selected{% endif %}>{{ i.name }}</option>{% endfor %}
+    </optgroup>{% endif %}
+  </select>
+</label>
+<fieldset class="field">
+  <legend>Who ate</legend>
+  {% for m in people %}
+  <label class="check"><input type="checkbox" name="participant_ids" value="{{ m.id }}"{% if m.id in form.participant_ids %} checked{% endif %}> {{ m.display_name }}</label>
+  {% endfor %}
+</fieldset>

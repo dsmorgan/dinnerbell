@@ -21,15 +21,19 @@
       <span>Dinnerbell</span>
     </a>
     {% if principal %}
+    <form method="post" action="/auth/logout" class="inline signout">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button type="submit" class="link">Sign out</button>
+    </form>
+    {% set path = request.url.path %}
     <nav class="nav" aria-label="Main">
-      <a href="/"{% if request.url.path == "/" %} aria-current="page"{% endif %}>Today</a>
+      <a href="/"{% if path == "/" %} aria-current="page"{% endif %}>Today</a>
+      <a href="/catalog"{% if path.startswith("/catalog") %} aria-current="page"{% endif %}>Catalog</a>
+      <a href="/preferences"{% if path.startswith("/preferences") %} aria-current="page"{% endif %}>Preferences</a>
+      <a href="/history"{% if path.startswith("/history") %} aria-current="page"{% endif %}>History</a>
       {% if principal.member.is_admin %}
-      <a href="/admin/members"{% if request.url.path.startswith("/admin") %} aria-current="page"{% endif %}>Members</a>
+      <a href="/admin/members"{% if path.startswith("/admin") %} aria-current="page"{% endif %}>Members</a>
       {% endif %}
-      <form method="post" action="/auth/logout" class="inline">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <button type="submit" class="link">Sign out</button>
-      </form>
     </nav>
     {% endif %}
   </header>

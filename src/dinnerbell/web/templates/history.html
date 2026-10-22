@@ -1,0 +1,67 @@
+{#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
+{% extends "base.html" %}
+{% block title %}History{% endblock %}
+{% block content %}
+<h1>History</h1>
+{% if notice %}<p class="alert ok" role="status">{{ notice }}</p>{% endif %}
+{% if error %}<p class="alert error" role="alert">{{ error }}</p>{% endif %}
+
+<section class="card" aria-labelledby="variety-heading">
+  <h2 id="variety-heading">Cuisines in the last {{ window.days }} day{{ "" if window.days == 1 else "s" }}</h2>
+  {% if window.cuisines %}
+  <ul class="chips">
+    {% for c in window.cuisines %}
+    <li class="chip tag-cuisine">{{ c.name }} · {% if c.days_since == 0 %}today{% elif c.days_since == 1 %}yesterday{% else %}{{ c.days_since }} days ago{% endif %}{% if c.times > 1 %} · {{ c.times }}×{% endif %}</li>
+    {% endfor %}
+  </ul>
+  <p class="small muted">Proposals favor cuisines you haven't had lately.</p>
+  {% else %}
+  <p class="muted">Nothing logged since {{ window.start.strftime("%b") }} {{ window.start.day }}.</p>
+  {% endif %}
+</section>
+
+<details class="card"{% if error or not history.weeks %} open{% endif %}>
+  <summary><h2>Log a meal</h2></summary>
+  <p class="small muted">For meals Dinnerbell didn't coordinate. Logged meals count toward variety.</p>
+  {% if restaurants or home_meals %}
+  <form method="post" action="/history/meals" class="stack">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    {% include "_meal_fields.html" %}
+    <button type="submit" class="button primary block">Log it</button>
+  </form>
+  {% else %}
+  <p>Add something to the <a href="/catalog">catalog</a> first.</p>
+  {% endif %}
+</details>
+
+{% for week, meals in history.weeks %}
+<section class="week">
+  <h2>Week of {{ week.strftime("%b") }} {{ week.day }}</h2>
+  <ul class="meals">
+    {% for meal in meals %}
+    <li class="meal" id="meal-{{ meal.id }}">
+      <div class="meal-when small muted">{{ meal.day.strftime("%a %b") }} {{ meal.day.day }} · {{ meal.slot.value|capitalize }}</div>
+      <strong>{{ meal.item_name }}</strong>
+      {% if meal.cuisines %}<div class="chips">{% for c in meal.cuisines %}<span class="chip tag-cuisine">{{ c.name }}</span>{% endfor %}</div>{% endif %}
+      <p class="small muted">{% for p in meal.participants %}{{ p.name }}{{ ", " if not loop.last }}{% endfor %}{% if meal.logged_by %} · logged by {{ member_names.get(meal.logged_by, "a former member") }}{% endif %}</p>
+      {% if can_change(meal) %}
+      <div class="item-actions">
+        <a class="button small" href="/history/meals/{{ meal.id }}">Edit</a>
+        <form method="post" action="/history/meals/{{ meal.id }}/delete" class="inline">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <button type="submit" class="button small danger">Delete</button>
+        </form>
+      </div>
+      {% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+</section>
+{% else %}
+<p class="muted">No meals logged {% if history.page %}in these weeks{% else %}yet{% endif %}.</p>
+{% endfor %}
+<nav class="button-row pager" aria-label="Older and newer meals">
+  {% if history.page > 0 %}<a class="button small" href="/history?page={{ history.page - 1 }}">Newer</a>{% endif %}
+  {% if history.has_older %}<a class="button small" href="/history?page={{ history.page + 1 }}">Older</a>{% endif %}
+</nav>
+{% endblock %}

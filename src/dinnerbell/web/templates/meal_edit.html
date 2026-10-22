@@ -1,0 +1,18 @@
+{#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
+{% extends "base.html" %}
+{% block title %}Edit meal{% endblock %}
+{% block content %}
+<p><a href="/history">← History</a></p>
+<h1>Edit meal</h1>
+{% if error %}<p class="alert error" role="alert">{{ error }}</p>{% endif %}
+<form method="post" action="/history/meals/{{ meal.id }}" class="card stack">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  {% include "_meal_fields.html" %}
+  <p class="small muted">Saving takes a new snapshot of the item's cuisines and the people who ate.</p>
+  <button type="submit" class="button primary block">Save</button>
+</form>
+<form method="post" action="/history/meals/{{ meal.id }}/delete" class="card">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <button type="submit" class="button danger">Delete this meal</button>
+</form>
+{% endblock %}

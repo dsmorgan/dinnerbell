@@ -1,0 +1,22 @@
+{#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
+{#- One preference control. Expects: target ("tag:12"), name, stance, levels, saved. -#}
+{% set row_id = "pref-" ~ target|replace(":", "-") %}
+<li class="pref" id="{{ row_id }}">
+  <form method="post" action="/preferences/stance" hx-post="/preferences/stance" hx-trigger="change"
+        hx-target="#{{ row_id }}" hx-swap="outerHTML">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="target" value="{{ target }}">
+    <fieldset class="levels">
+      <legend class="pref-name">{{ name }}{% if saved %} <span class="saved small" role="status">Saved</span>{% endif %}</legend>
+      <div class="segments">
+        {% for value, label in levels %}
+        <label class="segment level-{{ "veto" if value == "veto" else ("neg" if value.startswith("-") else ("pos" if value != "0" else "zero")) }}">
+          <input type="radio" name="level" value="{{ value }}"{% if stance.level == value %} checked{% endif %}>
+          <span>{{ label }}</span>
+        </label>
+        {% endfor %}
+      </div>
+    </fieldset>
+    <noscript><button type="submit" class="button small">Save</button></noscript>
+  </form>
+</li>
