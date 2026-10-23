@@ -8,8 +8,8 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ### Added
 
-- Prebuilt container images on GitHub Container Registry at `ghcr.io/dsmorgan/dinnerbell`. Each release publishes `X.Y.Z`, `X.Y`, and `latest`, and every push to `main` publishes `main`. Images carry build provenance and SBOM attestations; verify one with `gh attestation verify`.
-- The footer shows the running version, such as `0.2.0`, or `0.2.0+abc1234` for a build from `main`.
+- Prebuilt container images on GitHub Container Registry at `ghcr.io/dsmorgan/dinnerbell`. Each release publishes `X.Y.Z`, `X.Y`, and `latest`, and every push to `main` publishes `main` and the short commit SHA. Images carry build provenance and SBOM attestations; [docs/setup.md](docs/setup.md#verify-an-image) shows how to verify one.
+- The footer and `/healthz` show the running version, such as `0.2.0`, or `0.2.0+abc1234` for a build from `main`.
 - Test instance support ([ADR 0006](docs/adr/0006-test-instance.md)): run a second copy with its own database, Slack app, and hostname.
   - `DINNERBELL_INSTANCE_LABEL` shows a marker such as `TEST` on the web, in Slack posts, on App Home, and in `/healthz`. While it's set, Dinnerbell mentions and messages only members of the configured channel.
   - `DINNERBELL_SLACK_COMMAND` names the slash command. Default: `/dinnerbell`.

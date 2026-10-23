@@ -49,7 +49,7 @@ If you change `compose.yaml`, `deploy/dinnerbell-test`, or an env example, also 
 
 ## Release
 
-Releases follow [Semantic Versioning](https://semver.org/), and [CHANGELOG.md](CHANGELOG.md) lists every change. A merge to `main` publishes the `main` image; only a `vX.Y.Z` tag publishes a release. Cut a patch release when the nightly image scan fails, and at least monthly otherwise.
+Releases follow [Semantic Versioning](https://semver.org/), and [CHANGELOG.md](CHANGELOG.md) lists every change. A merge to `main` publishes the `main` and short-SHA image tags. Only a plain `vX.Y.Z` tag publishes a release, as `X.Y.Z`, `X.Y`, and `latest`; there are no pre-release tags. Cut a patch release when the nightly image scan fails, and at least monthly otherwise.
 
 1. On a branch, open a release pull request titled "Release X.Y.Z" that changes only these:
    - `__version__` in `src/dinnerbell/__init__.py`.
@@ -66,11 +66,16 @@ Releases follow [Semantic Versioning](https://semver.org/), and [CHANGELOG.md](C
    gh run watch "$(gh run list --branch vX.Y.Z --limit 1 --json databaseId --jq '.[0].databaseId')"
    ```
 
-4. Verify the published image, and note its digest. The command prints it as `sha256:...`.
+4. Verify the published image. Copy its digest (`sha256:...`) from the `publish` job summary of the tag's CI run.
 
    ```sh
-   gh attestation verify oci://ghcr.io/dsmorgan/dinnerbell:X.Y.Z --repo dsmorgan/dinnerbell
+   gh attestation verify oci://ghcr.io/dsmorgan/dinnerbell:X.Y.Z \
+     --repo dsmorgan/dinnerbell \
+     --signer-workflow dsmorgan/dinnerbell/.github/workflows/ci.yml \
+     --source-ref refs/tags/vX.Y.Z
    ```
+
+   A release's digest never changes. Never re-run a release's workflow or move its tag; if something is wrong, cut X.Y.Z+1.
 
 5. Create the GitHub release from the changelog section, with the digest appended.
 
