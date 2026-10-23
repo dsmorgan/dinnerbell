@@ -5,13 +5,14 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import Any
 
 from alembic import command
 from alembic.config import Config
 from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
 from alembic.util.exc import CommandError
-from sqlalchemy import Connection
+from sqlalchemy import Connection, Engine, event
 
 from dinnerbell.db.engine import create_sync_engine
 
@@ -65,24 +66,45 @@ def _check_references(connection: Connection) -> None:
 
 
 def run_migrations(sync_url: str, database_path: Path) -> None:
-    """Upgrade the database at ``sync_url`` to the newest revision.
+    """Upgrade the database at ``sync_url`` to the newest revision, all in one transaction.
 
     Foreign keys are off while migrating: SQLite rebuilds a table to change it (Alembic's batch
     mode), and dropping the old copy with foreign keys on would cascade-delete or null out the
     rows that refer to it. Every reference is checked before committing instead, and any broken
-    one rolls the whole upgrade back. Connections the app opens keep foreign keys on.
+    one rolls the whole upgrade back, schema changes included (see ``_migration_engine``).
+    Connections the app opens keep foreign keys on.
     """
     database_path.parent.mkdir(parents=True, exist_ok=True)
-    engine = create_sync_engine(sync_url)
+    engine = _migration_engine(sync_url)
     try:
-        with engine.connect() as connection:
-            connection.exec_driver_sql("PRAGMA foreign_keys=OFF")  # takes effect only outside a transaction
-            connection.commit()
-            with connection.begin():
-                config = _alembic_config(connection)
-                _check_known(connection, ScriptDirectory.from_config(config))
-                command.upgrade(config, "head")
-                _check_references(connection)
+        with engine.begin() as connection:
+            config = _alembic_config(connection)
+            _check_known(connection, ScriptDirectory.from_config(config))
+            command.upgrade(config, "head")
+            _check_references(connection)
     finally:
         engine.dispose()
     log.info("database schema is current", extra={"revision": head_revision()})
+
+
+def _migration_engine(sync_url: str) -> Engine:
+    """An engine whose transactions really contain DDL.
+
+    pysqlite's default (legacy) transaction handling emits BEGIN only before INSERT, UPDATE, and
+    DELETE, so each CREATE TABLE commits as it runs and a failed upgrade would leave half its
+    tables behind. Here pysqlite is in autocommit mode and SQLAlchemy's ``begin`` emits a real
+    BEGIN, so a rollback undoes everything. Foreign keys are switched off on connect, outside any
+    transaction, where SQLite honors the PRAGMA.
+    """
+    engine = create_sync_engine(sync_url)
+
+    @event.listens_for(engine, "connect")
+    def _autocommit_without_foreign_keys(dbapi_connection: Any, _record: Any) -> None:
+        dbapi_connection.isolation_level = None
+        dbapi_connection.execute("PRAGMA foreign_keys=OFF")
+
+    @event.listens_for(engine, "begin")
+    def _begin(connection: Connection) -> None:
+        connection.exec_driver_sql("BEGIN")
+
+    return engine
