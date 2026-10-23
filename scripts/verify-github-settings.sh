@@ -22,10 +22,17 @@ get() {
   gh api --method GET "repos/$repo${1:+/$1}" 2>/dev/null
 }
 
-# Apply a jq filter to JSON, printing "error" when the JSON is missing or the filter fails.
+# Like get, but follows every page and prints one array of the pages.
+get_all() {
+  gh api --method GET --paginate --slurp "repos/$repo/$1" 2>/dev/null
+}
+
+# q JSON [JQ_OPTIONS...] FILTER: apply a jq filter to JSON, printing "error" when the JSON is
+# missing or the filter fails.
 q() {
-  local out
-  if [ -n "$1" ] && out=$(jq -r "$2" <<<"$1" 2>/dev/null); then
+  local json=$1 out
+  shift
+  if [ -n "$json" ] && out=$(jq -r "$@" <<<"$json" 2>/dev/null); then
     echo "$out"
   else
     echo "error"
@@ -62,13 +69,17 @@ pass_if() { "$@" && echo pass || echo fail; }
 repo_json=$(get "") || { echo "Can't read $repo. Check gh auth status." >&2; exit 2; }
 default_branch=$(q "$repo_json" .default_branch)
 
-# Workflow state and whether it has ever succeeded.
+# Workflow state and whether it has ever succeeded. A workflow that only ran from a PR branch
+# also shows up as active, so the file must exist on the default branch too.
 workflow_rows() {
-  local item=$1 file=$2 runs=${3:-} wf state count
-  wf=$(get "actions/workflows/$file")
-  state=$(q "$wf" '.state // "missing"')
-  [ "$state" = error ] && state=missing
-  row "$item" "\`$file\` workflow" active "$state"
+  local item=$1 file=$2 runs=${3:-} state count
+  if get "contents/.github/workflows/$file?ref=$default_branch" >/dev/null; then
+    state=$(q "$(get "actions/workflows/$file")" '.state // "missing"')
+    [ "$state" = error ] && state=missing
+  else
+    state="not on $default_branch"
+  fi
+  row "$item" "\`$file\` workflow on $default_branch" active "$state"
   if [ -n "$runs" ]; then
     count=$(q "$(get "actions/workflows/$file/runs?status=success&branch=$default_branch&per_page=1")" '.total_count')
     if [[ "$count" =~ ^[0-9]+$ ]] && [ "$count" -gt 0 ]; then
@@ -95,6 +106,17 @@ row 2 "Required approvals" 0 "$(q "$rules" '[.[] | select(.type == "pull_request
 expected_checks="check, dco, dependency-review, image"
 checks=$(q "$rules" '[.[] | select(.type == "required_status_checks") | .parameters.required_status_checks[].context] | unique | if length == 0 then "none" else join(", ") end')
 row 2 "Required status checks" "$expected_checks" "$checks" "$(pass_if subset "$expected_checks" "$checks")"
+# Bind each required check to the GitHub Actions app (integration 15368), so a status posted by
+# anything else with the same name can't satisfy it.
+if [ "$(q "$rules" 'any(.[]; .type == "required_status_checks")')" = true ]; then
+  # shellcheck disable=SC2016 # $want and $names are jq variables.
+  unbound=$(q "$rules" --arg want "$expected_checks" '
+    ($want | split(", ")) as $names
+    | [.[] | select(.type == "required_status_checks") | .parameters.required_status_checks[]
+       | select((.context | IN($names[])) and .integration_id != 15368) | .context]
+    | unique | if length == 0 then "none" else join(", ") end')
+  row 2 "Required checks not bound to GitHub Actions (15368)" none "$unbound"
+fi
 codeql=$(q "$rules" '
   if any(.[]; .type == "code_scanning" and any(.parameters.code_scanning_tools[]?; .tool == "CodeQL")) then "code_scanning rule"
   elif any(.[]; .type == "required_status_checks" and any(.parameters.required_status_checks[]?; .context == "CodeQL")) then "status check"
@@ -129,15 +151,22 @@ else
 fi
 row 3 "Immutable releases" true "$(q "$(get immutable-releases)" .enabled)"
 
-# 4. CodeQL default setup.
+# 4. CodeQL default setup. When it isn't configured, the API still lists the languages it would
+# scan, so the language and alert rows count only once it's configured.
 setup=$(get code-scanning/default-setup)
-row 4 "CodeQL default setup" configured "$(q "$setup" .state)"
-languages=$(q "$setup" '.languages | sort | join(", ")')
-row 4 "CodeQL languages" "actions, javascript-typescript, python" "$languages" \
-  "$(pass_if subset "actions, javascript-typescript, python" "$languages")"
-htmx=$(q "$(get 'code-scanning/alerts?state=open&per_page=100')" '[.[] | select(.most_recent_instance.location.path | test("htmx"))] | length')
-[ "$htmx" = error ] && htmx="no analysis"
-row 4 "Open CodeQL alerts on vendored htmx" 0 "$htmx"
+state=$(q "$setup" .state)
+row 4 "CodeQL default setup" configured "$state"
+if [ "$state" = configured ]; then
+  languages=$(q "$setup" '.languages | sort | join(", ")')
+  row 4 "CodeQL languages" "actions, javascript-typescript, python" "$languages" \
+    "$(pass_if subset "actions, javascript-typescript, python" "$languages")"
+  htmx=$(q "$(get_all 'code-scanning/alerts?tool_name=CodeQL&state=open&per_page=100')" \
+    '[.[][] | select(.most_recent_instance.location.path // "" | test("htmx"))] | length')
+  row 4 "Open CodeQL alerts on vendored htmx" 0 "$htmx"
+else
+  row 4 "CodeQL languages" "actions, javascript-typescript, python" "not configured"
+  row 4 "Open CodeQL alerts on vendored htmx" 0 "not configured"
+fi
 
 # 5, 6, 8. Workflows from this issue.
 workflow_rows 5 scan-release.yml runs
@@ -161,17 +190,21 @@ row 9 "Dependabot security updates" true "$(q "$(get automated-security-fixes)" 
 row 9 "Auto-merge allowed" false "$(q "$repo_json" .allow_auto_merge)"
 workflow_rows 9 pip-audit.yml
 
-# 10. Secret scanning. Non-provider patterns and validity checks need GitHub Secret Protection,
-# which a personal public repository can't buy, so a disabled value there is N/A, not FAIL.
+# 10. Secret scanning.
 row 10 "Secret scanning" enabled "$(q "$repo_json" '.security_and_analysis.secret_scanning.status')"
 row 10 "Push protection" enabled "$(q "$repo_json" '.security_and_analysis.secret_scanning_push_protection.status')"
-protection=$(q "$repo_json" '.security_and_analysis.secret_protection.status // .security_and_analysis.advanced_security.status // "unavailable"')
+# Non-provider patterns and validity checks need GitHub Secret Protection. On 2026-10-23 the API
+# accepted PATCH security_and_analysis enabling secret_scanning_non_provider_patterns and
+# secret_scanning_validity_checks for this repository, but left both disabled: a personal
+# public repository can't get Secret Protection. Set this to 0 if that changes, so a disabled
+# value FAILs again.
+secret_protection_unavailable=1
 for extra in non_provider_patterns validity_checks; do
   status=$(q "$repo_json" ".security_and_analysis.secret_scanning_$extra.status")
   if [ "$status" = enabled ]; then
     row 10 "Secret scanning: ${extra//_/ }" enabled enabled
-  elif [ "$protection" != enabled ]; then
-    row 10 "Secret scanning: ${extra//_/ }" enabled "$status (needs Secret Protection)" na
+  elif [ "$secret_protection_unavailable" = 1 ] && [ "$status" = disabled ]; then
+    row 10 "Secret scanning: ${extra//_/ }" enabled "disabled (needs GitHub Secret Protection; the API left it disabled on 2026-10-23)" na
   else
     row 10 "Secret scanning: ${extra//_/ }" enabled "$status"
   fi
