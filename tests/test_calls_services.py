@@ -1019,3 +1019,25 @@ async def test_proposals_are_capped_per_call_and_per_member(house: House) -> Non
     assert len((await house.context(event_id)).proposals) == 10
     with pytest.raises(EventRuleViolation, match="already has 10 proposals"):
         await propose("Alex", "Eleventh")
+
+
+async def test_toggles_flip_the_actors_own_state(house: House) -> None:
+    """Shared Slack buttons can't know who tapped them, so the service reads and flips."""
+    event_id = await open_dinner(house)
+    assert await act(house, calls.toggle_role, house["Sam"], event_id, RoleOffer.COOK) is True
+    mine = (await house.context(event_id)).response_of(house["Sam"].id)
+    assert mine is not None and mine.status is Status.IN and mine.offers == {RoleOffer.COOK}
+    assert await act(house, calls.toggle_role, house["Sam"], event_id, RoleOffer.COOK) is False
+    assert (await house.context(event_id)).response_of(house["Sam"].id).offers == frozenset()  # type: ignore[union-attr]
+    await act(house, calls.offer_role, house["Alex"], event_id, RoleOffer.PICKUP, True)
+    house.clock.now = RESPOND_BY
+    await house.tick()
+    ids = await proposal_ids(house, event_id)
+    assert await act(house, calls.toggle_vote, house["Sam"], event_id, ids["Taqueria"]) is True
+    assert await act(house, calls.toggle_vote, house["Alex"], event_id, ids["Taqueria"]) is True
+    assert await act(house, calls.toggle_vote, house["Sam"], event_id, ids["Taqueria"]) is False
+    assert (await house.context(event_id)).votes == {ids["Taqueria"]: [house["Alex"].id]}
+    with pytest.raises(EventRuleViolation, match="Only people who are in"):
+        await act(house, calls.toggle_vote, house["Kim"], event_id, ids["Taqueria"])
+    with pytest.raises(EventRuleViolation, match="closed"):
+        await act(house, calls.toggle_role, house["Kim"], event_id, RoleOffer.COOK)
