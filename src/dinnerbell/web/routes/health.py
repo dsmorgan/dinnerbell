@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """GET /healthz for Uptime Kuma and the container health check. No secrets, emails, or member
-data; the only counts are the outbox's. A labelled instance adds its label, never a channel ID."""
+data; the only counts are the outbox's and, on a labeled instance, dropped direct messages. A
+labeled instance adds its label, never a channel ID."""
 
 from __future__ import annotations
 
@@ -39,7 +40,7 @@ async def healthz(context: Context) -> JSONResponse:
         status = "ok"
     else:
         status = "degraded"
-    body = {
+    body: dict[str, Any] = {
         "status": status,
         "database": "ok" if database_ok else "unreachable",
         "scheduler": {"status": scheduler, "last_tick": _iso(state.last_tick)},
@@ -49,4 +50,7 @@ async def healthz(context: Context) -> JSONResponse:
     }
     if context.settings.instance_label:
         body["instance"] = context.settings.instance_label
+    dropped = context.slack_state.dms_dropped
+    if dropped is not None:  # only while the notification guard is on, so production's body is unchanged
+        body["slack_dms_dropped"] = dropped
     return JSONResponse(body, status_code=200 if healthy else 503)
