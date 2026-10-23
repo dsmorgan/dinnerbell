@@ -30,6 +30,8 @@ MAX_PROPOSALS = 10
 """Proposals per call, ranked and added together: enough choice, and a Slack message that fits."""
 MAX_ADDED_PER_MEMBER = 3
 QUARTER_HOUR = timedelta(minutes=15)
+LATEST_EAT_TIME = time(23, 45)
+"""The latest eat time: later ones round the meal time up past midnight, off the call's day."""
 
 
 class EventState(StrEnum):
@@ -285,6 +287,8 @@ def check_details(details: Details, *, dietary_tag_ids: Iterable[int], active_it
         raise InvalidResponse(f"Guests run from 0 to {MAX_GUESTS}.")
     if not details.guest_needs <= set(dietary_tag_ids):
         raise InvalidResponse("Guest needs must be dietary tags. Reload the page and try again.")
+    if any(t is not None and t > LATEST_EAT_TIME for t in (details.eat_from, details.eat_until)):
+        raise InvalidResponse("Pick eating times by 11:45 PM.")
     if details.eat_from and details.eat_until and details.eat_until < details.eat_from:
         raise InvalidResponse("The latest time to eat can't be before the earliest.")
     if not set(details.suggestion_item_ids) <= set(active_item_ids):
@@ -563,14 +567,18 @@ def check_rerun(event: Event, today: date, *, now: datetime, too_late_after: dat
         raise EventRuleViolation("It's too late to re-run today's call. Start one for tomorrow instead.")
 
 
-def shifted_deadline(current: datetime, minutes: int | None, now: datetime) -> datetime:
+def shifted_deadline(current: datetime, minutes: int | None, now: datetime, *, latest: datetime) -> datetime:
     """A window's new deadline: ``minutes`` later (negative is earlier), or now when None.
-    Never earlier than now, so shortening past the present closes the window."""
+    Never earlier than now, so shortening past the present closes the window, and never past
+    ``latest``, midnight after the call's day, when the call would expire unfinished."""
     if minutes is None:
         return now
     if not -MAX_DEADLINE_SHIFT_MINUTES <= minutes <= MAX_DEADLINE_SHIFT_MINUTES:
         raise EventRuleViolation(f"Move a deadline by at most {MAX_DEADLINE_SHIFT_MINUTES} minutes at a time.")
-    return max(current + timedelta(minutes=minutes), now)
+    moved = max(current + timedelta(minutes=minutes), now)
+    if moved > latest:
+        raise EventRuleViolation("That would run past midnight, when the call ends.")
+    return moved
 
 
 def check_window_change(event: Event, window: Window) -> datetime:

@@ -414,11 +414,11 @@ def test_ad_hoc_days_and_reruns() -> None:
 
 
 def test_window_changes() -> None:
-    assert ev.shifted_deadline(NOW, 15, NOW) == NOW + timedelta(minutes=15)
-    assert ev.shifted_deadline(NOW + timedelta(minutes=10), -15, NOW) == NOW  # never before now
-    assert ev.shifted_deadline(NOW + timedelta(hours=1), None, NOW) == NOW
+    assert ev.shifted_deadline(NOW, 15, NOW, latest=FAR) == NOW + timedelta(minutes=15)
+    assert ev.shifted_deadline(NOW + timedelta(minutes=10), -15, NOW, latest=FAR) == NOW  # never before now
+    assert ev.shifted_deadline(NOW + timedelta(hours=1), None, NOW, latest=FAR) == NOW
     with pytest.raises(EventRuleViolation, match="240"):
-        ev.shifted_deadline(NOW, 241, NOW)
+        ev.shifted_deadline(NOW, 241, NOW, latest=FAR)
     collecting = event()
     assert ev.check_window_change(collecting, ev.Window.RESPOND) == collecting.respond_deadline
     voting = event(EventState.VOTING, vote_deadline=NOW)
@@ -602,3 +602,30 @@ def test_windows_count_elapsed_time_across_a_daylight_saving_change() -> None:
 def test_details_drop_guest_needs_without_guests() -> None:
     clean = ev.check_details(Details(guests=0, guest_needs=frozenset({9})), dietary_tag_ids=[9], active_item_ids=[])
     assert clean.guest_needs == frozenset()
+
+
+def test_eat_windows_end_by_a_quarter_to_midnight() -> None:
+    """Regression: an eat time of 23:46 rounded the meal to 00:00 and expired a normal call."""
+    ok = ev.check_details(
+        Details(eat_from=time(23, 45), eat_until=time(23, 45)), dietary_tag_ids=[], active_item_ids=[]
+    )
+    assert ok.eat_from == time(23, 45)
+    for details in (Details(eat_from=time(23, 46)), Details(eat_until=time(23, 59))):
+        with pytest.raises(InvalidResponse, match="11:45 PM"):
+            ev.check_details(details, dietary_tag_ids=[], active_item_ids=[])
+
+
+def test_schedules_stay_within_the_day() -> None:
+    dinner = sched.DEFAULT_SLOTS[Slot.DINNER]
+    sched.check_schedule(replace(dinner, call_time=time(21, 45), response_minutes=90, vote_minutes=45))  # ends 24:00
+    with pytest.raises(sched.InvalidSchedule, match="past midnight"):
+        sched.check_schedule(replace(dinner, call_time=time(22, 0), response_minutes=90, vote_minutes=45))
+    with pytest.raises(sched.InvalidSchedule, match="11:45 PM"):
+        sched.check_schedule(replace(dinner, meal_time=time(23, 50)))
+
+
+def test_deadlines_never_move_past_midnight() -> None:
+    midnight = NOW + timedelta(hours=5)
+    assert ev.shifted_deadline(NOW, 240, NOW, latest=midnight) == NOW + timedelta(hours=4)
+    with pytest.raises(EventRuleViolation, match="past midnight"):
+        ev.shifted_deadline(NOW + timedelta(hours=4), 90, NOW, latest=midnight)

@@ -7,7 +7,7 @@ can do them too. Every override is audited (SEC-9).
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import datetime
+from datetime import UTC, datetime, time, timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -48,7 +48,9 @@ async def move_deadline(
     require_admin(actor, ADMINS_ONLY)
     async with locked_event(db, actor.household_id, event_id, now) as event:
         current = check_window_change(event, window)
-        moved = shifted_deadline(current, minutes, now)
+        zone = (await load(db, event)).zone
+        midnight = datetime.combine(event.day + timedelta(days=1), time(0), tzinfo=zone).astimezone(UTC)
+        moved = shifted_deadline(current, minutes, now, latest=midnight)
         changes = {"respond_deadline": moved} if window is Window.RESPOND else {"vote_deadline": moved}
         event = await EventRepository(db).save(replace(event, **changes), now)  # type: ignore[arg-type]
         ctx = await load(db, event)
