@@ -19,7 +19,7 @@ from dinnerbell.config import Settings
 from dinnerbell.db.migrate import run_migrations
 from tests.support.clock import FakeClock
 from tests.support.fake_oidc import CLIENT_ID, CLIENT_SECRET, ISSUER, FakeProvider, generate_key
-from tests.support.flags import features_for, item_problems
+from tests.support.flags import disagreements, features_for, item_problems
 
 BASE_URL = "https://dinnerbell.test"
 ADMIN_EMAIL = "admin@example.com"
@@ -89,15 +89,16 @@ def settings_overrides() -> dict[str, Any]:
 
 
 @pytest.fixture
-def features(request: pytest.FixtureRequest) -> frozenset[str] | None:
-    """The flags this test's ``@pytest.mark.flag`` marks turn on, or None without marks."""
-    return features_for(request.node.iter_markers("flag"))
-
-
-@pytest.fixture
-def settings(tmp_path: Path, settings_overrides: dict[str, Any], features: frozenset[str] | None) -> Settings:
+def settings(request: pytest.FixtureRequest, tmp_path: Path, settings_overrides: dict[str, Any]) -> Settings:
+    """Settings for one test. ``@pytest.mark.flag`` marks set the feature flags, and the test
+    fails if anything else changed them (tests/support/flags.py)."""
+    marks = list(request.node.iter_markers("flag"))
+    features = features_for(marks)
     flagged = {} if features is None else {"features": features}
-    return make_settings(tmp_path, **(flagged | settings_overrides))
+    settings = make_settings(tmp_path, **(flagged | settings_overrides))
+    if problems := disagreements(marks, settings.features):
+        pytest.fail("; ".join(problems), pytrace=False)
+    return settings
 
 
 @pytest.fixture

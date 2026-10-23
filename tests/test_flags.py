@@ -16,7 +16,15 @@ from dinnerbell.config import Settings
 from dinnerbell.domain import flags
 from dinnerbell.domain.flags import Flag, UnknownFlag, enabled
 from tests import conftest
-from tests.support.flags import BadFlagMark, features_for, flag_tests, item_problems, marks_in, missing_flag_tests
+from tests.support.flags import (
+    BadFlagMark,
+    disagreements,
+    features_for,
+    flag_tests,
+    item_problems,
+    marks_in,
+    missing_flag_tests,
+)
 
 DEMO = Flag("demo", "A flag that exists only in these tests.", "0.0.0")
 
@@ -30,12 +38,13 @@ def test_every_registered_flag_has_tests_on_and_off() -> None:
     assert missing_flag_tests(flags.FLAGS, flag_tests()) == []
 
 
-def test_the_scan_reads_every_other_test_file(tmp_path: Path) -> None:
+def test_the_scan_reads_every_test_file_but_this_one(tmp_path: Path) -> None:
     (tmp_path / "test_a.py").write_text(SOURCE)
-    (tmp_path / "test_flags.py").write_text(SOURCE)  # this file builds marks as data; skipped
     assert flag_tests(tmp_path) == {("demo", True), ("demo", False)}
     (tmp_path / "test_a.py").write_text("x = 1\n")
-    assert flag_tests(tmp_path) == set()
+    (tmp_path / "test_flags.py").write_text(SOURCE)  # only tests/test_flags.py itself is skipped
+    assert flag_tests(tmp_path) == {("demo", True), ("demo", False)}
+    assert ("demo", True) not in flag_tests()  # this file marks "demo" below, and doesn't count
 
 
 def test_registered_flags_are_well_formed() -> None:
@@ -64,13 +73,35 @@ def test_enabled_reads_settings_or_a_set(tmp_path: Path) -> None:
 
 
 @pytest.mark.usefixtures("demo_registry")
-@pytest.mark.parametrize("features", [frozenset({"demo"})])
-def test_the_settings_fixture_applies_the_marks_features(
-    request: pytest.FixtureRequest, features: frozenset[str]
-) -> None:
-    # ``features`` stands in for what the marks give (features_for, below), without a real mark.
-    settings: Settings = request.getfixturevalue("settings")
+@pytest.mark.flag("demo", on=True)
+def test_a_mark_on_turns_the_flag_on(settings: Settings) -> None:
     assert settings.features == frozenset({"demo"})
+    assert enabled(settings, "demo")
+
+
+@pytest.mark.usefixtures("demo_registry")
+@pytest.mark.flag("demo", on=False)
+def test_a_mark_off_leaves_the_flag_off(settings: Settings) -> None:
+    assert settings.features == frozenset()
+    assert not enabled(settings, "demo")
+
+
+@pytest.mark.usefixtures("demo_registry")
+@pytest.mark.parametrize("settings_overrides", [{"features": frozenset()}])
+def test_settings_fail_when_overrides_undo_a_mark(request: pytest.FixtureRequest, settings_overrides: Any) -> None:
+    # Marked at run time, after collection's checks, to reach the settings fixture's own check.
+    request.applymarker(pytest.mark.flag("demo", on=True))
+    with pytest.raises(pytest.fail.Exception, match="'demo' is marked on=True, but the settings have it"):
+        request.getfixturevalue("settings")
+
+
+def test_disagreements() -> None:
+    on, off = pytest.mark.flag("a", on=True).mark, pytest.mark.flag("b", on=False).mark
+    assert disagreements([on, off], {"a"}) == []
+    assert disagreements([on, off], {"b"}) == [
+        "flag 'a' is marked on=True, but the settings have it the other way",
+        "flag 'b' is marked on=False, but the settings have it the other way",
+    ]
 
 
 def test_features_for_marks() -> None:
@@ -104,6 +135,7 @@ class FakeItem:
     fixturenames: list[str] = field(default_factory=lambda: ["settings"])
     module: Any = None
     nodeid: str = "tests/test_x.py::test_x"
+    callspec: Any = None
 
     def iter_markers(self, name: str) -> list[pytest.Mark]:
         return [m.mark for m in self.marks if m.mark.name == name]
@@ -138,6 +170,15 @@ def test_module_and_param_marks_are_refused() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    "params", [{"features": frozenset({"demo"})}, {"settings_overrides": {"features": frozenset()}}]
+)
+def test_a_marked_test_that_parametrizes_features_is_refused(params: dict[str, Any]) -> None:
+    (problem,) = item_problems(FakeItem([ON], callspec=SimpleNamespace(params=params)))
+    assert problem.endswith("can't parametrize its features; the marks set them")
+    assert item_problems(FakeItem([ON], callspec=SimpleNamespace(params={"settings_overrides": {}}))) == []
+
+
 def test_bad_marks_stop_the_run() -> None:
     conftest.pytest_collection_modifyitems([FakeItem([ON])])  # type: ignore[list-item]
     with pytest.raises(pytest.UsageError, match="settings fixture"):
@@ -170,6 +211,13 @@ def test_the_source_scan_finds_marks_on_functions_and_methods() -> None:
         marks_in("import pytest\nNAME = 'demo'\n@pytest.mark.flag(NAME, on=True)\ndef test_x(): ...\n")
     with pytest.raises(BadFlagMark):
         marks_in("import pytest\n@pytest.mark.flag('demo', on=1)\ndef test_x(): ...\n")
+    with pytest.raises(BadFlagMark, match=r"only a Test\* class"):
+        marks_in("import pytest\n@pytest.mark.flag('demo', on=True)\nclass Helpers:\n    def test_x(self): ...\n")
+    # pytest doesn't collect a class not named Test*, so nothing in it counts.
+    assert (
+        marks_in("import pytest\nclass Helpers:\n    @pytest.mark.flag('demo', on=True)\n    def test_x(self): ...\n")
+        == set()
+    )
 
 
 def test_the_coverage_check_catches_a_missing_state_and_a_stale_mark() -> None:
