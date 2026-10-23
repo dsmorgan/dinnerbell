@@ -168,11 +168,25 @@ def test_recursion_error_never_escapes(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "nested more than" in one_error("version: 1\n")
 
 
-def test_too_many_values_are_refused() -> None:
-    # Refusing takes composing every value up to the cap: about 0.4 s, several times that under coverage.
-    error = quickly("version: 1\ntags:\n  other: [" + ",".join(["x"] * (MAX_NODES + 1)) + "]\n", seconds=5.0)
-    assert error.location == "line 3"
-    assert "more than 50,000 values" in error.message
+def test_too_many_values_are_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Count composed values instead of timing the parse, so a slow CI runner can't make this flaky.
+    # The file has twice the cap; composing must stop just past the cap, not run to the end.
+    import dinnerbell.domain.catalog_file as catalog_file
+
+    composed = 0
+    original = catalog_file._Loader.compose_node
+
+    def counting(self: catalog_file._Loader, parent: object, index: object) -> object:
+        nonlocal composed
+        composed += 1
+        return original(self, parent, index)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(catalog_file._Loader, "compose_node", counting)
+    found = parse_catalog("version: 1\ntags:\n  other: [" + ",".join(["x"] * (2 * MAX_NODES)) + "]\n").errors
+    assert len(found) == 1, found
+    assert found[0].location == "line 3"
+    assert "more than 50,000 values" in found[0].message
+    assert composed <= MAX_NODES + 10
 
 
 def test_python_tags_are_refused() -> None:
