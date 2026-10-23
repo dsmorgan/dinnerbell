@@ -391,17 +391,6 @@ ins { color: var(--ok); text-decoration: none; }
 .save-error { color: var(--danger); margin: 0 0 0.35rem; }
 .save-banner { position: sticky; top: 0; z-index: 2; margin: 0; border-radius: 0; text-align: center; }
 .save-banner[hidden] { display: none; }
-
-/* A labelled instance, such as test (DINNERBELL_INSTANCE_LABEL) */
-.instance-banner {
-  padding: 0.3rem var(--gutter);
-  background: var(--accent);
-  color: var(--accent-text);
-  font-weight: 700;
-  font-size: 0.85rem;
-  letter-spacing: 0.04em;
-  text-align: center;
-}
 .chip.veto { background: var(--danger-soft); border-color: transparent; color: var(--danger); }
 .pref:target { background: var(--accent-soft); border-radius: 10px; }
 
@@ -445,3 +434,19 @@ fieldset.card > legend h2 { margin: 0; }
 .tabs { display: flex; gap: 0.25rem; margin: 0.25rem 0 0.5rem; }
 .tabs a { display: inline-flex; align-items: center; min-height: 40px; padding: 0 0.8rem; border-radius: 10px; color: var(--muted); text-decoration: none; }
 .tabs a[aria-current="page"] { color: var(--text); background: var(--accent-soft); }
+
+/* ---- Test instance (DINNERBELL_INSTANCE_LABEL) --------------------------------------------- */
+
+/* A full-width strip at the top of the sticky top bar, so it stays in view on scroll. */
+.instance-banner {
+  flex: 1 0 100%;
+  order: -1;
+  margin: calc(-10px - env(safe-area-inset-top)) calc(-1 * var(--gutter)) 0;
+  padding: calc(env(safe-area-inset-top) + 0.3rem) var(--gutter) 0.3rem;
+  background: var(--accent);
+  color: var(--accent-text);
+  font-weight: 700;
+  font-size: 0.85rem;
+  letter-spacing: 0.04em;
+  text-align: center;
+}

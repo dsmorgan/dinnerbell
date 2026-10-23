@@ -56,8 +56,6 @@ class JsonFormatter(logging.Formatter):
             "logger": record.name,
             "msg": record.getMessage(),
         }
-        if self.instance:
-            entry["instance"] = self.instance
         if (request_id := getattr(record, "_request_id", None)) is not None:
             entry["request_id"] = request_id
         if (member_id := getattr(record, "_member_id", None)) is not None:
@@ -65,6 +63,8 @@ class JsonFormatter(logging.Formatter):
         for key, value in vars(record).items():
             if key not in _STANDARD_ATTRS and not key.startswith("_"):
                 entry[key] = value
+        if self.instance:
+            entry["instance"] = self.instance  # after the extras, so none can replace it
         if record.exc_info:
             entry["exc"] = self.formatException(record.exc_info)
         return json.dumps(entry, default=str)

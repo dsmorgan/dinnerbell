@@ -239,6 +239,7 @@ class Interactions:
                     return
                 except SLACK_ERRORS:
                     pass  # not in that channel, for example; fall back to a direct message
+            # Unlabelled, like ephemerals: it answers something the person just did in this app.
             await self.api.post(source.user_id, {"text": safe})
         except SLACK_ERRORS as exc:
             log.warning("slack reply failed", extra={"error": str(exc)})

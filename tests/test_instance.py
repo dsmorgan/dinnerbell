@@ -151,18 +151,27 @@ async def test_the_home_tab_shows_the_label(test_slack: Slack, plain_slack: Slac
 
 @pytest.mark.parametrize("settings_overrides", [{"instance_label": LABEL}])
 def test_pages_show_a_banner(client: TestClient, provider: FakeProvider) -> None:
-    banner = '}\'>\n  <div class="instance-banner" role="note">TEST instance</div>\n  <header class="topbar">'
+    # Inside the sticky top bar, so it stays in view on scroll.
+    banner = (
+        '<header class="topbar">\n'
+        '    <div class="instance-banner" role="note">TEST instance</div>\n'
+        '    <a class="brand"'
+    )
     signed_out = client.get("/")
-    assert signed_out.status_code == 200 and banner.removeprefix("}'") in signed_out.text
+    assert signed_out.status_code == 200
     sign_in(client, provider)
-    assert banner in client.get("/").text
+    for text in (signed_out.text, client.get("/").text):
+        assert banner in text
+        assert "<title>TEST · " in text
 
 
 def test_without_a_label_pages_have_no_banner(client: TestClient, provider: FakeProvider) -> None:
     sign_in(client, provider)
     text = client.get("/").text
     assert "instance" not in text
-    assert '}\'>\n  <header class="topbar">' in text  # the template's output is unchanged
+    # The template's output is unchanged around both insertions.
+    assert '}\'>\n  <header class="topbar">\n    <a class="brand" href="/">' in text
+    assert "<title>Today · " in text
 
 
 @pytest.mark.parametrize("settings_overrides", [{"instance_label": LABEL, "slack_channel": "C0SECRETCH"}])
@@ -181,6 +190,8 @@ def test_log_entries_carry_the_label() -> None:
     record = logging.LogRecord("x", logging.INFO, __file__, 1, "hello", None, None)
     assert json.loads(JsonFormatter(LABEL).format(record))["instance"] == LABEL
     assert "instance" not in json.loads(JsonFormatter().format(record))
+    record.instance = "PROD"  # an extra by the same name can't replace the label
+    assert json.loads(JsonFormatter(LABEL).format(record))["instance"] == LABEL
 
 
 def test_the_cli_configures_logs_with_the_label(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -88,6 +88,8 @@ def render(notification: note.Notification, ctx: RenderContext) -> Message:
     message = _render(notification, ctx)
     if not ctx.label:
         return message
+    # The largest message, the picks, is 23 blocks, so the label never pushes the footer past
+    # Slack's limit (test_more_proposals_than_the_cap_are_listed_on_the_web checks).
     blocks = [instance_banner(ctx.label), *message.blocks]
     return Message(message.text, blocks[:MAX_MESSAGE_BLOCKS])
 
