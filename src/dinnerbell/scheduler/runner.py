@@ -100,7 +100,10 @@ async def call_tick(ctx: JobContext) -> None:
         await lifecycle.tick(ctx.sessionmaker, ctx.clock())
     except Exception:
         log.exception("call tick failed")
-    await drain_outbox(ctx)
+    # Never wait behind a drain that's already running: a hung channel call would otherwise
+    # stall every later tick (reminders, deadlines, decisions). The 5-second drain job catches up.
+    if not ctx.drain_lock.locked():
+        await drain_outbox(ctx)
 
 
 async def drain_outbox(ctx: JobContext) -> None:

@@ -293,3 +293,25 @@ async def test_one_households_failing_lookup_does_not_stop_the_tick(
     async with house.sessionmaker() as db:
         assert await EventRepository(db).call_for(other.id, Slot.DINNER, OPENS.date()) is not None
     assert "could not list calls" in caplog.text
+
+
+async def test_the_tick_does_not_wait_behind_a_running_drain(house: House, migrated: Settings) -> None:
+    """A hung channel call holds the drain lock; the tick must still finish its lifecycle work
+    instead of queuing behind it, or every later tick would be skipped."""
+    import asyncio
+
+    ctx = runner.JobContext(
+        state=SchedulerState(),
+        clock=house.clock,
+        zone=ZoneInfo("America/Chicago"),
+        database_path=migrated.database_path,
+        backup_dir=migrated.backup_dir,
+        sessionmaker=house.sessionmaker,
+        channel=RecordingChannel(),
+    )
+    house.clock.now = OPENS
+    async with ctx.drain_lock:  # stands in for a drain stuck in a channel call
+        await asyncio.wait_for(runner.call_tick(ctx), timeout=2)
+    async with house.sessionmaker() as db:
+        event = await EventRepository(db).get(house.household.id, await dinner_id(house))
+        assert event is not None  # the tick still opened the call
