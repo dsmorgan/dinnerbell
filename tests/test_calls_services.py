@@ -1176,3 +1176,44 @@ async def test_rerun_a_later_days_call_from_any_rerunnable_state(house: House, s
     await act(house, call_admin.rerun, house["Alex"], event.id)
     rerun = await house.event(event.id)
     assert (rerun.state, rerun.run, rerun.opens_at) == (EventState.SCHEDULED, 2, local(23, 15))
+
+
+async def test_one_direct_message_per_assignee_lists_all_their_roles(house: House) -> None:
+    event_id = await to_voting(house)  # Alex is in and picks up
+    await act(house, calls.claim_coordinator, house["Alex"], event_id)
+    siam = (await proposal_ids(house, event_id))["Siam Garden"]
+    await act(house, calls.lock, house["Alex"], event_id, siam)
+    ctx = await house.context(event_id)
+    alex = house["Alex"].id
+    assert {(a.role, a.member_id) for a in ctx.assignments} == {
+        (AssignmentRole.PICKUP, alex),
+        (AssignmentRole.COORDINATOR, alex),
+    }
+    (dm,) = [e for e in await house.outbox() if e.kind == "assignment_made"]
+    first = min(a.id for a in ctx.assignments)
+    assert dm.idempotency_key == f"event:{event_id}:run1:assignment_made:member{alex}:{first}"
+    assert dm.payload["roles"] == ["pickup", "coordinator"]
+    assert dm.payload["assignment_id"] == first
+
+
+async def test_who_locked_survives_edits_and_clears_on_a_rerun(house: House) -> None:
+    event_id = await to_voting(house)
+    siam = (await proposal_ids(house, event_id))["Siam Garden"]
+    await act(house, calls.lock, house["Alex"], event_id, siam)
+    assert (await house.event(event_id)).locked_by == house["Alex"].id
+    await act(house, calls.set_meal_time, house["Alex"], event_id, time(19, 0))
+    entries = await house.outbox()
+    made, updated = ([e for e in entries if e.kind == kind][-1] for kind in ("decision_made", "decision_updated"))
+    assert made.payload["locked_by"] == updated.payload["locked_by"] == {"id": house["Alex"].id, "name": "Alex"}
+    await act(house, call_admin.rerun, house["Alex"], event_id)
+    assert (await house.event(event_id)).locked_by is None
+
+
+async def test_a_decision_by_vote_has_no_locker(house: House) -> None:
+    event_id = await to_voting(house)
+    house.clock.now = VOTE_BY
+    await house.tick()
+    event = await house.event(event_id)
+    assert event.state is EventState.DECIDED and event.locked_by is None
+    (made,) = [e for e in await house.outbox() if e.kind == "decision_made"]
+    assert made.payload["locked_by"] is None

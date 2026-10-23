@@ -253,30 +253,35 @@ class DecisionMade(_Notification):
 
 @dataclass(frozen=True, slots=True)
 class DecisionUpdated(_Notification):
-    """The decision message's new state: meal time, assignments, or done."""
+    """The decision message's new state: meal time, assignments, or done. ``locked_by`` is who
+    locked it, as on ``DecisionMade``, so every edit can still say so."""
 
     kind: ClassVar[str] = "decision_updated"
     is_update: ClassVar[bool] = True
     message_suffix: ClassVar[str | None] = "decision"
     event: EventInfo
     decision: DecisionInfo
+    locked_by: PersonInfo | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class AssignmentMade(_Notification):
-    """Assignment: a direct message to the assignee (FR-20). ``assignment_id`` is unique per
-    assignment, so a corrected assignment messages its new assignee."""
+    """Assignment: one direct message to an assignee listing all their ``roles`` (FR-20), such
+    as cooking and coordinating. ``assignment_id`` is the assignment that prompted it: at the
+    decision, the member's first; later, the new one. The key names the member and that
+    assignment, so a retried transition stores it once and a corrected assignment messages its
+    new assignee."""
 
     kind: ClassVar[str] = "assignment_made"
     event: EventInfo
     assignment_id: int
-    role: AssignmentRole
     member: PersonInfo
+    roles: tuple[AssignmentRole, ...]
     decision: DecisionInfo
 
     @property
     def idempotency_key(self) -> str:
-        return f"{self.event.key}:{self.kind}:{self.assignment_id}"
+        return f"{self.event.key}:{self.kind}:member{self.member.id}:{self.assignment_id}"
 
     @property
     def recipient_id(self) -> int | None:

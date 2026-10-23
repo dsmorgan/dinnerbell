@@ -32,6 +32,7 @@ from dinnerbell.channels.slack.blocks import (
     plain,
     section,
 )
+from dinnerbell.channels.slack.messages import mark_done_button
 from dinnerbell.domain.catalog import CatalogItem, ItemKind, Mode, Tag
 from dinnerbell.domain.events import (
     MAX_GUESTS,
@@ -310,7 +311,7 @@ def _event_card(v: EventView, links: HomeLinks) -> list[Block]:
             button("Details", ids.DETAILS, value),
         ]
     if v.can.mark_done:
-        buttons.append(button("Mark done", ids.MARK_DONE, value))
+        buttons.append(mark_done_button(v.info))
     buttons.append(button("Open", f"{ids.LINK_PREFIX}event", url=links.url(v.event.path)))
     return [section("\n".join(lines), block_id=f"event-{v.id}"), actions(*buttons, block_id=f"event-actions-{v.id}")]
 

@@ -112,9 +112,11 @@ async def test_a_dinner_decided_in_slack(slack: Slack) -> None:
     assert (await house.event(event_id)).state is EventState.DONE
 
     call, thread = (CHANNEL, "1.000100"), "1.000100"
-    picks_ts, decision_ts = "5.000100", "7.000100"  # the fake numbers every post and ephemeral
+    picks_ts, decision_ts = "4.000100", "5.000100"
     assert [summary(c) for c in slack.fake.calls] == [
         ("post", CHANNEL, None, "Dinner call · Thursday, Oct 22: Who's in"),
+        ("ephemeral", CHANNEL, "U01ALEX", "Thanks! You're offering to pick up. Tap again to take it back."),
+        ("ephemeral", CHANNEL, "U02SAM", "Thanks! You're offering to cook. Tap again to take it back."),
         ("modal", ids.DETAILS_VIEW),
         ("update", *call, "Dinner call · Thursday, Oct 22: Who's in"),
         ("post", "U04LEE", None, "Are you in for dinner on Thursday, Oct 2"),
@@ -124,12 +126,13 @@ async def test_a_dinner_decided_in_slack(slack: Slack) -> None:
         ("post", "U03KIM", None, "You're counted out for dinner on Thursda"),
         ("post", CHANNEL, thread, "Picks for dinner on Thursday, Oct 22: Sa"),
         ("update", *call, "Dinner call · Thursday, Oct 22: Thanks f"),
+        ("ephemeral", CHANNEL, "U01ALEX", "Vote counted. Tap Vote again to take it back."),
+        ("ephemeral", CHANNEL, "U02SAM", "Vote counted. Tap Vote again to take it back."),
         ("ephemeral", CHANNEL, "U02SAM", "Only the coordinator or an admin can lock a proposal."),
         ("update", CHANNEL, picks_ts, "Picks for dinner on Thursday, Oct 22: Sa"),
         ("update", *call, "Dinner call · Thursday, Oct 22: Thanks f"),
         ("post", CHANNEL, thread, "Dinner on Thursday, Oct 22: Sam's Tacos "),
-        ("post", "U02SAM", None, "You're cooking for dinner at 6:45 PM: Sa"),
-        ("post", "U02SAM", None, "You're coordinating for dinner at 6:45 P"),
+        ("post", "U02SAM", None, "You're cooking and coordinating for dinn"),  # one DM, both roles
         ("update", CHANNEL, picks_ts, "Picks for dinner on Thursday, Oct 22: Sa"),
         ("update", *call, "Dinner call · Thursday, Oct 22: It's dec"),
         ("ephemeral", CHANNEL, "U01ALEX", "Marked done. Thanks!"),
@@ -151,3 +154,4 @@ async def test_a_dinner_decided_in_slack(slack: Slack) -> None:
     assert "*Cooking:* <@U02SAM>" in block_text(decision, 2)
     assert decision.args["blocks"][1]["fields"][0]["text"] == "*When*\n6:45 PM"
     assert "is done. Thanks to everyone who pitched in!" in block_text(updates[-2], 0)
+    assert "Locked in by <@U02SAM>." in block_text(updates[-2], 0)  # still there after the edit

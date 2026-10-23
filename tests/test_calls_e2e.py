@@ -143,7 +143,7 @@ async def test_a_full_call_from_open_to_done(house: House, clock: FakeClock) -> 
         ("call_updated", f"{key}:call_updated:2"),
         ("proposals_updated", f"{key}:proposals_updated:1"),  # two votes, coalesced
         ("decision_made", f"{key}:decision_made"),
-        ("assignment_made", f"{key}:assignment_made:{ctx.assignments[0].id}"),
+        ("assignment_made", f"{key}:assignment_made:member{house['Sam'].id}:{ctx.assignments[0].id}"),
         ("proposals_updated", f"{key}:proposals_updated:2"),
         ("call_updated", f"{key}:call_updated:3"),
         ("decision_updated", f"{key}:decision_updated:1"),

@@ -172,6 +172,8 @@ class Event:
     decided_at: datetime | None = None
     done_at: datetime | None = None
     end_reason: EndReason | None = None
+    locked_by: int | None = None
+    """Who locked the decision (FR-15), or None when the vote decided it."""
 
     @property
     def remind_at(self) -> datetime:

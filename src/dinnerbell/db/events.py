@@ -59,6 +59,7 @@ def _event(row: EventRow) -> Event:
         decided_at=row.decided_at,
         done_at=row.done_at,
         end_reason=EndReason(row.end_reason) if row.end_reason else None,
+        locked_by=row.locked_by,
     )
 
 
@@ -181,6 +182,7 @@ class EventRepository:
         row.decided_at = event.decided_at
         row.done_at = event.done_at
         row.end_reason = event.end_reason.value if event.end_reason else None
+        row.locked_by = event.locked_by
         row.updated_at = now
         await self._session.flush()
         return _event(row)

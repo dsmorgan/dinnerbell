@@ -115,6 +115,10 @@ DELIVERY = replace(
     assignments=(note.AssignmentInfo(AssignmentRole.ORDER, LEE),),
     dietary_notes=(),
 )
+TWO_ROLES = replace(
+    DECISION,
+    assignments=(note.AssignmentInfo(AssignmentRole.COOK, SAM), note.AssignmentInfo(AssignmentRole.COORDINATOR, SAM)),
+)
 WAITING = (KIM, LEE)
 VOTING = event(EventState.VOTING, coordinator=ALEX)
 DECIDED = event(EventState.DECIDED, coordinator=ALEX)
@@ -126,6 +130,9 @@ NOTIFICATIONS: dict[str, Callable[[], note.Notification]] = {
     "call_updated_decided": lambda: note.CallUpdated(DECIDED, ROSTER, (), head_count=3),
     "call_updated_done": lambda: note.CallUpdated(event(EventState.DONE, coordinator=ALEX), ROSTER, (), 3),
     "call_updated_abandoned": lambda: note.CallUpdated(event(EventState.ABANDONED), ROSTER[2:], (LEE,), 0),
+    "call_updated_missed": lambda: note.CallUpdated(
+        replace(event(EventState.ABANDONED), end_reason=EndReason.MISSED), ROSTER, (LEE,), 3
+    ),
     "call_updated_cancelled": lambda: note.CallUpdated(event(EventState.CANCELLED), ROSTER, (LEE,), 3),
     "response_reminder": lambda: note.ResponseReminder(event(), KIM),
     "maybe_resolved": lambda: note.MaybeResolved(VOTING, KIM),
@@ -134,10 +141,13 @@ NOTIFICATIONS: dict[str, Callable[[], note.Notification]] = {
     "proposals_updated_closed": lambda: note.ProposalsUpdated(DECIDED, PROPOSALS, 3),
     "decision_made": lambda: note.DecisionMade(DECIDED, DECISION, locked_by=ALEX),
     "decision_made_by_vote": lambda: note.DecisionMade(DECIDED, DELIVERY),
-    "decision_updated": lambda: note.DecisionUpdated(DECIDED, DECISION),
+    "decision_updated": lambda: note.DecisionUpdated(DECIDED, DECISION, locked_by=ALEX),
     "decision_updated_done": lambda: note.DecisionUpdated(event(EventState.DONE, coordinator=ALEX), DECISION),
-    "assignment_made": lambda: note.AssignmentMade(DECIDED, 31, AssignmentRole.COOK, SAM, DECISION),
-    "assignment_made_order": lambda: note.AssignmentMade(DECIDED, 32, AssignmentRole.ORDER, LEE, DELIVERY),
+    "assignment_made": lambda: note.AssignmentMade(DECIDED, 31, SAM, (AssignmentRole.COOK,), DECISION),
+    "assignment_made_two_roles": lambda: note.AssignmentMade(
+        DECIDED, 33, SAM, (AssignmentRole.COOK, AssignmentRole.COORDINATOR), TWO_ROLES
+    ),
+    "assignment_made_order": lambda: note.AssignmentMade(DECIDED, 32, LEE, (AssignmentRole.ORDER,), DELIVERY),
     "call_abandoned": lambda: note.CallAbandoned(event(EventState.ABANDONED), EndReason.TOO_FEW, head_count=1),
     "call_abandoned_no_coverage": lambda: note.CallAbandoned(event(EventState.ABANDONED), EndReason.NO_COVERAGE, 3),
     "event_cancelled": lambda: note.EventCancelled(event(EventState.CANCELLED), (ALEX, SAM), cancelled_by=ALEX),

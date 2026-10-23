@@ -66,10 +66,10 @@ EXAMPLES: list[tuple[n.Notification, str, str | None, str | None, int | None]] =
         "event:7:run2:call",
         None,
     ),
-    (n.DecisionUpdated(EVENT, DECISION), "event:7:run2:decision_updated", "event:7:run2:decision", None, None),
+    (n.DecisionUpdated(EVENT, DECISION, ALEX), "event:7:run2:decision_updated", "event:7:run2:decision", None, None),
     (
-        n.AssignmentMade(EVENT, 11, AssignmentRole.PICKUP, SAM, DECISION),
-        "event:7:run2:assignment_made:11",
+        n.AssignmentMade(EVENT, 11, SAM, (AssignmentRole.PICKUP, AssignmentRole.COORDINATOR), DECISION),
+        f"event:7:run2:assignment_made:member{SAM.id}:11",
         None,
         None,
         2,

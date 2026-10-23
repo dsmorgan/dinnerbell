@@ -56,6 +56,7 @@ class FakeSlack(AsyncWebClient):
         self.users_by_email: dict[str, dict[str, Any]] = {}
         self.channel: dict[str, Any] = {"id": CHANNEL, "is_member": True, "is_archived": False}
         self._ts = itertools.count(1)
+        self._ephemeral_ts = itertools.count(1)
 
     # Setup ---------------------------------------------------------------------------------------
 
@@ -124,7 +125,7 @@ class FakeSlack(AsyncWebClient):
                 check_message(args)
                 return {"channel": args["channel"], "ts": args["ts"]}
             case "chat.postEphemeral":
-                return {"message_ts": f"{next(self._ts)}.000200"}
+                return {"message_ts": f"{next(self._ephemeral_ts)}.000200"}
             case "views.open" | "views.publish":
                 check_view(args["view"] if isinstance(args["view"], dict) else {})
                 return {"view": {"id": "V1"}}

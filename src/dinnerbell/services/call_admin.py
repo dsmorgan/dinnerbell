@@ -112,6 +112,7 @@ async def rerun(db: AsyncSession, actor: Member, event_id: int, *, now: datetime
             meal_time=None,
             decided_at=None,
             end_reason=None,
+            locked_by=None,
         )
         fresh = await EventRepository(db).save(fresh, now)
         if not later:  # a later day's call is posted when the tick opens it
