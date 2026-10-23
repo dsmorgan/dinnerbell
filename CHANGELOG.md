@@ -16,23 +16,26 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
   - `DINNERBELL_FEATURES` turns on feature flags. Unknown names stop startup.
   - `dinnerbell scrub-test --keep EMAIL [--keep EMAIL ...] [--yes]` makes a restored production backup safe to use in test. It shows what it will change and asks you to confirm.
   - `deploy/dinnerbell-test` runs every test command with the test project, volume, env file, tag, and port, and refuses unsafe combinations. `deploy/slack-app-manifest.test.yaml` and `.env.test.example` set up the rest.
-- `compose.yaml` reads `DINNERBELL_TAG`, `DINNERBELL_ENV_FILE`, and `DINNERBELL_PORT`.
+- `compose.yaml` reads `DINNERBELL_TAG`, `DINNERBELL_ENV_FILE`, and `DINNERBELL_PORT`, which only `deploy/dinnerbell-test` sets. Never set them in `.env` or `export` them: an exported `DINNERBELL_ENV_FILE=.env.test` makes production's own compose commands run with test's settings on production's database.
 
 ### Changed
 
 - `compose.yaml` pulls the release image instead of building from source. To build from source, add `-f compose.build.yaml`.
+- Production's clone follows release tags: to upgrade, check out the new `vX.Y.Z` tag instead of running `git pull` on `main`.
 
 ### Upgrade notes
 
-You switch from building the image to pulling it. Follow "Switch a source-built install to the prebuilt image" in [docs/setup.md](docs/setup.md). In short:
+You switch from building the image to pulling it. Follow "Switch a source-built install to the prebuilt image" in [docs/setup.md](docs/setup.md), which also has undo steps. In short:
 
-1. Back up the database.
-2. Run `git pull`, then `podman-compose pull`.
+1. Note the commit you run now, and back up the database.
+2. Run `git fetch --tags && git checkout v0.2.0`, then `podman-compose pull`.
 3. Recreate the service: `podman-compose down && podman-compose up -d`.
 
-Your data volume keeps its name, so the database carries over. If your install predates M2, its migrations run on start.
+Run these as the same user and from the same directory as your install. Your data volume keeps its name, so the database carries over. If your install predates M2, its migrations run on start.
 
-## 0.1.0
+podman-compose 1.0.6 or later is required.
+
+## [0.1.0] - 2026-10-23
 
 The source-built version, never published as an image. It covers milestones M0 through M2.
 
@@ -43,3 +46,4 @@ The source-built version, never published as an image. It covers milestones M0 t
 - **M2:** dinner calls in Slack: the scheduled call, reminders, ranked proposals and votes, the decision, assignments, the abandon path, admin overrides, App Home, and `/dinnerbell call`.
 
 [Unreleased]: https://github.com/dsmorgan/dinnerbell/commits/main
+[0.1.0]: https://github.com/dsmorgan/dinnerbell/tree/c179898

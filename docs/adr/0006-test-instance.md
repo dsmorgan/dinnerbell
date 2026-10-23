@@ -20,9 +20,9 @@ The owner leaned toward one instance because it looked simpler to run.
 
 Run test as a **second instance of the same image**.
 
-- Production pins a release tag, such as `ghcr.io/dsmorgan/dinnerbell:0.5.0`. Test runs `:main`, or a release candidate before you promote it. To promote, you change the production tag, pull and restart.
+- Production pins a release tag, such as `ghcr.io/dsmorgan/dinnerbell:0.5.0`. Test runs `:main`, or a release before you promote it. To promote, you check out the new release, pull and restart.
 - Test has its own Slack app ("Dinnerbell Test", command `/dinnerbell-test`), volume, `DINNERBELL_SECRET_KEY`, OIDC client and hostname. The hostname sits behind Pangolin authentication. The container is stopped when you aren't using it.
-- Two new settings. `DINNERBELL_SLACK_COMMAND` names the slash command. `DINNERBELL_INSTANCE_LABEL` puts a visible `TEST` marker on the web header, channel posts, App Home and `/healthz`.
+- `DINNERBELL_SLACK_COMMAND` names the slash command. `DINNERBELL_INSTANCE_LABEL` puts a visible `TEST` marker on the web header, channel posts, App Home and `/healthz`.
 - Feature flags come from `DINNERBELL_FEATURES` and are checked against a registry in the code. An unknown name stops startup. Use a flag only when a feature must ship to production turned off.
 - A `scrub-test` command makes a restored production backup safe to use in test. It refuses to run unless an instance label is set.
 - While an instance label is set, the Slack adapter mentions and DMs only members of the configured channel.
@@ -36,9 +36,9 @@ Run test as a **second instance of the same image**.
 - **Least risk to fresh M2 code.** Four small configuration changes compare with a migration that widens the call-uniqueness constraint and edits the outbox, interactions, lifecycle and health code. M2 merged days ago and hasn't yet carried a week of real dinners.
 - **It fits other self-hosters.** A second compose project with its own env file is a pattern operators already know.
 
-**Ideas taken from the one-instance design:** a code registry for flags, with on and off tests for each flag; limiting notifications to channel members; keeping channel IDs out of `/healthz`; and rehearsing a full call on the candidate image as the promotion check.
+**Ideas taken from the one-instance design:** a code registry for flags, with on and off tests for each flag; limiting notifications to channel members; keeping channel IDs out of `/healthz`; and rehearsing a full call on the release image as the promotion check.
 
-**What this costs:** a one-time setup (Slack app, Pangolin resource, monitor, env file) of about half an hour with the docs. It also adds a second set of secrets on the host, and test data drifts from production until you refresh it. The one-instance design avoids these, but swaps a one-time cost for a permanent one.
+**What this costs:** a one-time setup (Slack app, Pangolin resource, env file) of about half an hour with the docs. It also adds a second set of secrets on the host, and test data drifts from production until you refresh it. The one-instance design avoids these, but swaps a one-time cost for a permanent one.
 
 ## Consequences
 

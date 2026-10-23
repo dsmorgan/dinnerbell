@@ -43,7 +43,7 @@ uv run pytest --cov
 docker build -f Containerfile -t dinnerbell .
 ```
 
-If you change `compose.yaml`, `deploy/dinnerbell-test`, or an env example, also run the checks in the `compose` CI job.
+If you change `compose.yaml`, `deploy/`, or an env example, also run `scripts/check-compose.sh` (it needs Docker and jq, and checks podman-compose too when it's installed) and `shellcheck deploy/dinnerbell-test scripts/check-compose.sh`.
 
 [CLAUDE.md](CLAUDE.md) lists the project conventions: layers and import rules, license headers, and the migration workflow. They apply to people and agents alike.
 
@@ -54,7 +54,7 @@ Releases follow [Semantic Versioning](https://semver.org/), and [CHANGELOG.md](C
 1. On a branch, open a release pull request titled "Release X.Y.Z" that changes only these:
    - `__version__` in `src/dinnerbell/__init__.py`.
    - `version` in `pyproject.toml`, then run `uv lock` to update the version recorded in `uv.lock`.
-   - The default tag in `compose.yaml`: `${DINNERBELL_TAG:-X.Y.Z}`. This moves production to the release on `git pull`.
+   - The default tag in `compose.yaml`: `${DINNERBELL_TAG:-X.Y.Z}`. Production checks out the release tag, so its `compose.yaml` always names the matching image.
    - `CHANGELOG.md`: retitle `[Unreleased]` to `[X.Y.Z] - YYYY-MM-DD`, check that it has **Upgrade notes**, add a new empty `[Unreleased]` section above it, add the link `[X.Y.Z]: https://github.com/dsmorgan/dinnerbell/releases/tag/vX.Y.Z` at the bottom, and point `[Unreleased]` at `https://github.com/dsmorgan/dinnerbell/compare/vX.Y.Z...HEAD`.
 2. Merge it once CI passes.
 3. Tag the release commit on `main`, and push the tag. Check that `git log -1` shows the release commit before you tag. CI builds, scans, publishes, and attests the image.
@@ -75,7 +75,7 @@ Releases follow [Semantic Versioning](https://semver.org/), and [CHANGELOG.md](C
      --source-ref refs/tags/vX.Y.Z
    ```
 
-   A release's digest never changes. Never re-run a release's workflow or move its tag; if something is wrong, cut X.Y.Z+1.
+   A release's digest never changes. Never re-run a release's workflow or move its tag; `publish` refuses to replace a published release. If the tag's run fails, or something is wrong with the release, cut X.Y.Z+1. The `scan-published` job is an alarm, not a gate: it scans the image after it's pushed, and a finding there also calls for X.Y.Z+1.
 
 5. Create the GitHub release from the changelog section, with the digest appended.
 
