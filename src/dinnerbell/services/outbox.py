@@ -139,9 +139,12 @@ async def _deliver(
         ref, skipped = await _send(repo, channel, entry, notification)
     except HeldDelivery as exc:
         until = clock() + max(asked_wait(exc), MIN_HOLD)
-        await repo.release(entry.id, token, until=until, note=f"{type(exc).__name__}: {exc}")
+        released = await repo.release(entry.id, token, until=until, note=f"{type(exc).__name__}: {exc}")
         await db.commit()
-        result.held += 1
+        if released:
+            result.held += 1
+        else:
+            log.warning("outbox claim expired during delivery", extra={"outbox_id": entry.id, "kind": entry.kind})
         return False
     except Exception as exc:
         result.stopped = isinstance(exc, ChannelUnavailable)

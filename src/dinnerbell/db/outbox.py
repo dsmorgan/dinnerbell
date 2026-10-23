@@ -109,22 +109,21 @@ class OutboxRepository:
     async def _coalesce(
         self, household_id: int, notification: Notification, payload: dict[str, Any], now: datetime
     ) -> bool:
-        waiting = await self._session.scalar(
-            select(OutboxRow.id)
-            .where(
+        # Only the newest row for this message may take on the new state. An older untried row
+        # can exist (a held row is given back untried), and merging into it would let a newer
+        # row, with older state, supersede it. If the newest has been tried, queue a new row.
+        newest = await self._session.scalar(
+            select(func.max(OutboxRow.id)).where(
                 OutboxRow.household_id == household_id,
                 OutboxRow.message_key == notification.message_key,
                 OutboxRow.kind == notification.kind,
-                *_untried(),
             )
-            .order_by(OutboxRow.id)
-            .limit(1)
         )
-        if waiting is None:
+        if newest is None:
             return False
         result = await self._session.execute(
             update(OutboxRow)
-            .where(OutboxRow.id == waiting, *_untried())
+            .where(OutboxRow.id == newest, *_untried())
             .values(payload=payload, updated_at=now)
             .execution_options(synchronize_session=False)
         )

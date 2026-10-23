@@ -509,3 +509,63 @@ async def test_an_unavailable_channel_ends_the_pass(database: Database, clock: F
     clock.advance(timedelta(minutes=1))
     assert (await outbox.drain(database.sessionmaker, other, clock)).stopped is False
     assert other.calls == 2  # any other failure tries every row
+
+
+@dataclass
+class HoldsFirstEdit(Edits):
+    """Holds the first edit, after a newer change lands while the channel has it."""
+
+    database: Database | None = None
+    tripped: bool = False
+
+    async def update(self, ref: n.MessageRef, notification: n.Notification) -> None:
+        if not self.tripped:
+            self.tripped = True
+            assert self.database is not None
+            await enqueue(self.database, updated(1, 3))
+            raise n.HeldDelivery("setup", retry_after=60)
+        await super().update(ref, notification)
+
+
+async def test_a_held_update_never_takes_on_newer_state(database: Database, clock: FakeClock) -> None:
+    """Regression (re-review B1): a held update went back to untried, a later update merged
+    into it, and a newer row with older state then superseded it: the message ended at 3 when
+    the latest state was 4. Only the newest row for a message may take on new state."""
+    await posted_call(database, clock)
+    await enqueue(database, updated(1, 2))
+    channel = HoldsFirstEdit(database=database)
+    await outbox.drain(database.sessionmaker, channel, clock)
+    await enqueue(database, updated(1, 4))  # the newest state, while the first row is held
+    heads = [e.payload["head_count"] for e in await entries(database) if e.kind == "call_updated"]
+    assert heads == [2, 4]  # 4 joined the newest row, not the held one
+    for _ in range(2):
+        clock.advance(timedelta(minutes=2))
+        await outbox.drain(database.sessionmaker, channel, clock)
+    assert channel.edits[-1] == 4
+
+
+async def test_a_hold_after_the_claim_expired_is_not_counted(
+    database: Database, clock: FakeClock, caplog: pytest.LogCaptureFixture
+) -> None:
+    """If another drainer took the row over after this one's lease ran out, giving the claim
+    back must fail, and the drain neither counts it as held nor touches the row."""
+    await enqueue(database, opened(1))
+
+    @dataclass
+    class SlowHold(RecordingChannel):
+        async def deliver(
+            self, notification: n.Notification, *, thread: n.MessageRef | None = None
+        ) -> n.DeliveryResult:
+            clock.advance(outbox.LEASE + timedelta(seconds=1))
+            async with database.sessionmaker() as db:
+                (row,) = await OutboxRepository(db).for_household(1)
+                assert await OutboxRepository(db).claim(row.id, "other", now=clock(), until=clock() + outbox.LEASE)
+                await db.commit()
+            raise n.HeldDelivery("not ready", retry_after=60)
+
+    result = await outbox.drain(database.sessionmaker, SlowHold(), clock)
+    assert (result.held, result.retrying, result.failed) == (0, 0, 0)
+    assert any(r.message == "outbox claim expired during delivery" for r in caplog.records)
+    async with database.sessionmaker() as db:
+        token, attempts = (await db.execute(text("SELECT claim_token, attempts FROM outbox"))).one()
+    assert (token, attempts) == ("other", 2)  # the other drainer's claim stands
