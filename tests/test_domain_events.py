@@ -1,0 +1,538 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+"""The call lifecycle rules in domain/events.py and domain/schedule.py, without a database."""
+
+from __future__ import annotations
+
+import importlib.util
+import itertools
+from dataclasses import replace
+from datetime import UTC, date, datetime, time, timedelta
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+import pytest
+
+from dinnerbell.domain import events as ev
+from dinnerbell.domain import schedule as sched
+from dinnerbell.domain.catalog import Mode
+from dinnerbell.domain.events import (
+    AssignmentRole,
+    Coverage,
+    Details,
+    Event,
+    EventRuleViolation,
+    EventState,
+    IllegalTransition,
+    InvalidResponse,
+    ProposalTally,
+    Response,
+    RoleOffer,
+    Status,
+    Step,
+)
+from dinnerbell.domain.meals import Slot
+from dinnerbell.domain.members import Capabilities, Member, Role
+
+NOW = datetime(2026, 10, 22, 20, 0, tzinfo=UTC)
+CHICAGO = ZoneInfo("America/Chicago")
+
+
+def member(member_id: int, *, admin: bool = False, active: bool = True, **caps: bool) -> Member:
+    return Member(
+        id=member_id,
+        household_id=1,
+        display_name=f"M{member_id}",
+        email=f"m{member_id}@example.com",
+        role=Role.ADMIN if admin else Role.MEMBER,
+        capabilities=Capabilities(**caps),
+        active=active,
+    )
+
+
+def event(state: EventState = EventState.COLLECTING, **changes: object) -> Event:
+    base = Event(
+        id=7,
+        household_id=1,
+        kind=ev.EventKind.CALL,
+        slot=Slot.DINNER,
+        day=date(2026, 10, 22),
+        state=state,
+        run=1,
+        opens_at=NOW,
+        respond_deadline=NOW + timedelta(minutes=90),
+        reminder_minutes=15,
+        vote_minutes=45,
+    )
+    return replace(base, **changes)  # type: ignore[arg-type]
+
+
+# State machine ----------------------------------------------------------------------------------
+
+
+ALLOWED = {
+    (EventState.SCHEDULED, EventState.COLLECTING),
+    (EventState.SCHEDULED, EventState.CANCELLED),
+    (EventState.COLLECTING, EventState.VOTING),
+    (EventState.COLLECTING, EventState.ABANDONED),
+    (EventState.COLLECTING, EventState.CANCELLED),
+    (EventState.VOTING, EventState.DECIDED),
+    (EventState.VOTING, EventState.ABANDONED),
+    (EventState.VOTING, EventState.CANCELLED),
+    (EventState.VOTING, EventState.COLLECTING),
+    (EventState.DECIDED, EventState.DONE),
+    (EventState.DECIDED, EventState.CANCELLED),
+    (EventState.DECIDED, EventState.COLLECTING),
+    (EventState.ABANDONED, EventState.COLLECTING),
+    (EventState.CANCELLED, EventState.COLLECTING),
+}
+
+
+@pytest.mark.parametrize(("current", "target"), list(itertools.product(EventState, EventState)))
+def test_transitions_are_exactly_the_allowed_ones(current: EventState, target: EventState) -> None:
+    if (current, target) in ALLOWED:
+        assert ev.transition(current, target) is target
+    else:
+        with pytest.raises(IllegalTransition, match=f"from {current.value} to {target.value}"):
+            ev.transition(current, target)
+
+
+def test_done_is_final_and_open_states() -> None:
+    assert ev.TRANSITIONS[EventState.DONE] == frozenset()
+    assert {s for s in EventState if s.is_open} == {
+        EventState.SCHEDULED,
+        EventState.COLLECTING,
+        EventState.VOTING,
+        EventState.DECIDED,
+    }
+    assert all(s.label for s in EventState)
+
+
+# Responses ------------------------------------------------------------------------------------
+
+
+def test_status_out_withdraws_offers_and_offers_count_you_in() -> None:
+    first = ev.with_offer(None, 3, RoleOffer.COOK, True, NOW)
+    assert first is not None
+    assert (first.status, first.offers, first.responded_at) == (Status.IN, {RoleOffer.COOK}, NOW)
+    out = ev.with_status(first, 3, Status.OUT, NOW + timedelta(minutes=1))
+    assert (out.status, out.offers, out.responded_at) == (Status.OUT, frozenset(), NOW)
+    back = ev.with_offer(out, 3, RoleOffer.PICKUP, True, NOW)
+    assert back is not None and back.status is Status.IN and back.offers == {RoleOffer.PICKUP}
+
+
+def test_a_maybe_who_offers_stays_maybe_and_withdrawing_needs_a_response() -> None:
+    maybe = ev.with_status(None, 3, Status.MAYBE, NOW)
+    offered = ev.with_offer(maybe, 3, RoleOffer.ORDER, True, NOW)
+    assert offered is not None and offered.status is Status.MAYBE and offered.offers == {RoleOffer.ORDER}
+    withdrawn = ev.with_offer(offered, 3, RoleOffer.ORDER, False, NOW)
+    assert withdrawn is not None and withdrawn.offers == frozenset()
+    assert ev.with_offer(None, 3, RoleOffer.ORDER, False, NOW) is None
+
+
+def test_details_count_you_in_and_keep_status() -> None:
+    details = Details(guests=2, guest_needs=frozenset({9}), eat_from=time(18), note="hi")
+    fresh = ev.with_details(None, 3, details, NOW)
+    assert (fresh.status, fresh.guests, fresh.head_count) == (Status.IN, 2, 3)
+    maybe = ev.with_details(ev.with_status(None, 3, Status.MAYBE, NOW), 3, details, NOW)
+    assert maybe.status is Status.MAYBE and maybe.head_count == 0
+
+
+def test_check_details_normalizes_and_rejects() -> None:
+    ok = ev.check_details(
+        Details(guests=1, suggestion_item_ids=(4, 4), suggestion_texts=("  Tacos  please ", " "), note="  a  b "),
+        dietary_tag_ids=[9],
+        active_item_ids=[4],
+    )
+    assert (ok.suggestion_item_ids, ok.suggestion_texts, ok.note) == ((4,), ("Tacos please",), "a b")
+    bad = [
+        (Details(guests=21), "Guests"),
+        (Details(guests=-1), "Guests"),
+        (Details(guest_needs=frozenset({8})), "dietary"),
+        (Details(eat_from=time(19), eat_until=time(18)), "latest"),
+        (Details(suggestion_item_ids=(5,)), "catalog"),
+        (Details(suggestion_texts=("x" * 101,)), "at most 100"),
+        (Details(suggestion_texts=("a\u0000b",)), "control"),
+        (Details(suggestion_item_ids=(4,), suggestion_texts=("a", "b", "c")), "up to 3"),
+        (Details(note="n" * 201), "at most 200"),
+    ]
+    for details, message in bad:
+        with pytest.raises(InvalidResponse, match=message):
+            ev.check_details(details, dietary_tag_ids=[9], active_item_ids=[4])
+
+
+def test_resolve_maybes_turns_only_maybes_out() -> None:
+    responses = [
+        Response(1, Status.IN),
+        Response(2, Status.MAYBE, guests=2, offers=frozenset({RoleOffer.COOK})),
+        Response(3, Status.OUT),
+    ]
+    changed = ev.resolve_maybes(responses)
+    assert [(r.member_id, r.status, r.offers, r.maybe_at_deadline, r.guests) for r in changed] == [
+        (2, Status.OUT, frozenset(), True, 2)
+    ]
+    after = [responses[0], changed[0], responses[2]]
+    assert ev.head_count(after) == 1
+    assert ev.veto_participants(after) == {1, 2}  # the resolved maybe's vetoes still apply
+    assert ev.veto_participants(responses) == {1, 2}
+
+
+def test_head_count_counts_guests_of_members_who_are_in() -> None:
+    assert ev.head_count([Response(1, Status.IN, guests=2), Response(2, Status.MAYBE, guests=5)]) == 3
+
+
+def test_reminders_go_to_active_unanswered_unmuted_members() -> None:
+    assert ev.needs_reminder(member(1), None)
+    assert not ev.needs_reminder(member(1), Response(1, Status.MAYBE))
+    assert not ev.needs_reminder(member(1, active=False), None)
+    assert not ev.needs_reminder(replace(member(1), mute_dm_reminders=True), None)
+
+
+def test_respond_only_while_collecting_and_active() -> None:
+    ev.check_can_respond(event(), member(1))
+    with pytest.raises(EventRuleViolation, match="closed"):
+        ev.check_can_respond(event(EventState.VOTING), member(1))
+    with pytest.raises(EventRuleViolation, match="active"):
+        ev.check_can_respond(event(), member(1, active=False))
+
+
+# Coverage (FR-17) -------------------------------------------------------------------------------
+
+
+def test_coverage_counts_active_members_who_are_in_in_answer_order() -> None:
+    members = {i: member(i) for i in range(1, 6)} | {6: member(6, active=False), 7: member(7, can_order=True)}
+    later = NOW + timedelta(minutes=5)
+    responses = [
+        Response(2, Status.IN, offers=frozenset({RoleOffer.COOK, RoleOffer.ORDER}), responded_at=later),
+        Response(1, Status.IN, offers=frozenset({RoleOffer.COOK, RoleOffer.PICKUP}), responded_at=NOW),
+        Response(3, Status.MAYBE, offers=frozenset({RoleOffer.PICKUP})),
+        Response(6, Status.IN, offers=frozenset({RoleOffer.PICKUP})),
+        Response(7, Status.IN),
+        Response(9, Status.IN, offers=frozenset({RoleOffer.COOK})),  # not a member any more
+    ]
+    covered = ev.coverage(responses, members)
+    assert covered == Coverage(cooks=(1, 2), pickups=(1,), orderers=(2, 7))
+
+
+def test_cooking_needs_a_volunteer_on_the_cook_list_when_there_is_one() -> None:
+    covered = Coverage(cooks=(1, 2))
+    assert covered.volunteers(Mode.COOK, frozenset()) == (1, 2)
+    assert covered.volunteers(Mode.COOK, frozenset({2, 5})) == (2,)
+    assert not covered.covers(Mode.COOK, frozenset({5}))
+    assert not covered.covers(Mode.PICKUP, frozenset())
+    assert Coverage(orderers=(4,)).covers(Mode.DELIVERY, frozenset())
+
+
+# Decisions (FR-16) ------------------------------------------------------------------------------
+
+
+def tally(proposal_id: int, rank: int, *voters: int, covered: bool = True) -> ProposalTally:
+    return ProposalTally(proposal_id, rank, covered, frozenset(voters))
+
+
+def test_most_votes_win() -> None:
+    winner = ev.choose_winner([tally(1, 1, 5), tally(2, 2, 5, 6)], coordinator_id=None, admin_ids=frozenset())
+    assert winner is not None and winner.id == 2
+
+
+def test_the_coordinator_breaks_ties() -> None:
+    tallies = [tally(1, 1, 5), tally(2, 2, 9)]
+    assert ev.choose_winner(tallies, coordinator_id=9, admin_ids=frozenset({5})).id == 2  # type: ignore[union-attr]
+
+
+def test_the_admin_breaks_ties_without_a_coordinator() -> None:
+    tallies = [tally(1, 1, 6), tally(2, 2, 5)]
+    assert ev.choose_winner(tallies, coordinator_id=None, admin_ids=frozenset({5})).id == 2  # type: ignore[union-attr]
+    # With a coordinator who didn't vote either way, the admin's vote doesn't count extra.
+    assert ev.choose_winner(tallies, coordinator_id=8, admin_ids=frozenset({5})).id == 1  # type: ignore[union-attr]
+
+
+def test_ranking_order_breaks_remaining_ties_and_no_votes_means_top_ranked() -> None:
+    assert ev.choose_winner([tally(1, 2), tally(2, 1)], coordinator_id=None, admin_ids=frozenset()).id == 2  # type: ignore[union-attr]
+
+
+def test_uncovered_proposals_never_win() -> None:
+    tallies = [tally(1, 1, 5, 6, covered=False), tally(2, 2)]
+    assert ev.choose_winner(tallies, coordinator_id=None, admin_ids=frozenset()).id == 2  # type: ignore[union-attr]
+    assert ev.choose_winner([tally(1, 1, covered=False)], coordinator_id=None, admin_ids=frozenset()) is None
+
+
+def test_assign_roles() -> None:
+    assert ev.assign_roles(Mode.COOK, (4, 5), 9) == {AssignmentRole.COOK: 4, AssignmentRole.COORDINATOR: 9}
+    assert ev.assign_roles(Mode.DELIVERY, (4,), None) == {AssignmentRole.ORDER: 4}
+    assert ev.assign_roles(Mode.PICKUP, (), None) == {}
+
+
+# Meal time (FR-19) ------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("moment", "expected"),
+    [
+        (datetime(2026, 10, 22, 18, 0, tzinfo=UTC), datetime(2026, 10, 22, 18, 0, tzinfo=UTC)),
+        (datetime(2026, 10, 22, 18, 0, 1, tzinfo=UTC), datetime(2026, 10, 22, 18, 15, tzinfo=UTC)),
+        (datetime(2026, 10, 22, 18, 44, tzinfo=UTC), datetime(2026, 10, 22, 18, 45, tzinfo=UTC)),
+        (datetime(2026, 10, 22, 23, 50, tzinfo=UTC), datetime(2026, 10, 23, 0, 0, tzinfo=UTC)),
+    ],
+)
+def test_round_up_to_quarter(moment: datetime, expected: datetime) -> None:
+    assert ev.round_up_to_quarter(moment) == expected
+
+
+def test_meal_time_is_the_latest_earliest_rounded_up() -> None:
+    responses = [
+        Response(1, Status.IN, eat_from=time(17, 40)),
+        Response(2, Status.IN, eat_from=time(18, 5)),
+        Response(3, Status.OUT, eat_from=time(21, 0)),  # out: doesn't count
+        Response(4, Status.IN),
+    ]
+    decided = datetime(2026, 10, 22, 22, 15, tzinfo=UTC)  # 17:15 in Chicago
+    got = ev.meal_time(responses, day=date(2026, 10, 22), zone=CHICAGO, default=time(18, 30), not_before=decided)
+    assert got.astimezone(CHICAGO).time() == time(18, 15)
+
+
+def test_meal_time_falls_back_to_the_slot_and_never_precedes_the_decision() -> None:
+    day = date(2026, 10, 22)
+    decided = datetime(2026, 10, 22, 22, 15, tzinfo=UTC)
+    fallback = ev.meal_time([], day=day, zone=CHICAGO, default=time(18, 30), not_before=decided)
+    assert fallback.astimezone(CHICAGO).time() == time(18, 30)
+    late = datetime(2026, 10, 23, 0, 7, tzinfo=UTC)  # 19:07 in Chicago, after the usual time
+    assert ev.meal_time([], day=day, zone=CHICAGO, default=time(18, 30), not_before=late) == datetime(
+        2026, 10, 23, 0, 15, tzinfo=UTC
+    )
+
+
+# Permissions ----------------------------------------------------------------------------------
+
+
+def test_coordinator_claim_and_handoff() -> None:
+    ev.check_claim_coordinator(event(), member(1))
+    ev.check_claim_coordinator(event(EventState.VOTING), member(1))
+    with pytest.raises(EventRuleViolation, match="already"):
+        ev.check_claim_coordinator(event(coordinator_id=2), member(1))
+    with pytest.raises(EventRuleViolation, match="open"):
+        ev.check_claim_coordinator(event(EventState.DECIDED), member(1))
+    with pytest.raises(EventRuleViolation, match="active"):
+        ev.check_claim_coordinator(event(), member(1, active=False))
+    led = event(coordinator_id=1)
+    ev.check_handoff(led, member(1), member(2))
+    ev.check_handoff(replace(led, state=EventState.DECIDED), member(1), member(2))
+    with pytest.raises(EventRuleViolation, match="Only the coordinator"):
+        ev.check_handoff(led, member(2), member(3))
+    with pytest.raises(EventRuleViolation, match="another"):
+        ev.check_handoff(led, member(1), member(1))
+    with pytest.raises(EventRuleViolation, match="another"):
+        ev.check_handoff(led, member(1), member(2, active=False))
+    with pytest.raises(EventRuleViolation, match="over"):
+        ev.check_handoff(replace(led, state=EventState.DONE), member(1), member(2))
+
+
+def test_voting_permissions() -> None:
+    voting = event(EventState.VOTING, coordinator_id=9)
+    ev.check_can_vote(voting, member(1), Response(1, Status.IN))
+    ev.check_can_vote(voting, member(9), None)  # the coordinator votes even when not eating
+    with pytest.raises(EventRuleViolation, match="Only people who are in"):
+        ev.check_can_vote(voting, member(1), Response(1, Status.OUT, maybe_at_deadline=True))
+    with pytest.raises(EventRuleViolation, match="Only people who are in"):
+        ev.check_can_vote(voting, member(1, active=False), Response(1, Status.IN))
+    with pytest.raises(EventRuleViolation, match="closed"):
+        ev.check_can_vote(event(), member(1), Response(1, Status.IN))
+    ev.check_can_propose(voting, member(1))
+    with pytest.raises(EventRuleViolation, match="only while voting"):
+        ev.check_can_propose(event(), member(1))
+    with pytest.raises(EventRuleViolation, match="active"):
+        ev.check_can_propose(voting, member(1, active=False))
+
+
+def test_only_the_coordinator_or_an_admin_locks() -> None:
+    voting = event(EventState.VOTING, coordinator_id=9)
+    ev.check_can_lock(voting, member(9))
+    ev.check_can_lock(voting, member(1, admin=True))
+    with pytest.raises(EventRuleViolation, match="coordinator or an admin"):
+        ev.check_can_lock(voting, member(1))
+    with pytest.raises(EventRuleViolation, match="coordinator or an admin"):
+        ev.check_can_lock(voting, member(9, active=False))
+    with pytest.raises(EventRuleViolation, match="closed"):
+        ev.check_can_lock(event(EventState.DECIDED, coordinator_id=9), member(9))
+
+
+def test_managing_a_decision() -> None:
+    decided = event(EventState.DECIDED, coordinator_id=9)
+    ev.check_can_manage_decision(decided, member(9))
+    ev.check_can_manage_decision(replace(decided, state=EventState.DONE), member(1, admin=True))
+    with pytest.raises(EventRuleViolation, match="no decision"):
+        ev.check_can_manage_decision(replace(decided, state=EventState.DONE), member(9))
+    with pytest.raises(EventRuleViolation, match="coordinator or an admin"):
+        ev.check_can_manage_decision(decided, member(1))
+    with pytest.raises(EventRuleViolation, match="active"):
+        ev.check_can_manage_decision(decided, member(9, active=False))
+
+
+def test_marking_done() -> None:
+    decided = event(EventState.DECIDED, coordinator_id=9)
+    ev.check_can_mark_done(decided, member(1), Response(1, Status.IN))
+    ev.check_can_mark_done(decided, member(9), None)
+    ev.check_can_mark_done(decided, member(2, admin=True), None)
+    with pytest.raises(EventRuleViolation, match="someone at the meal"):
+        ev.check_can_mark_done(decided, member(1), Response(1, Status.OUT))
+    with pytest.raises(EventRuleViolation, match="decided"):
+        ev.check_can_mark_done(event(EventState.VOTING), member(1), Response(1, Status.IN))
+
+
+def test_ad_hoc_days_and_reruns() -> None:
+    today = date(2026, 10, 22)
+    ev.check_ad_hoc_day(today, today)
+    ev.check_ad_hoc_day(today + timedelta(days=7), today)
+    with pytest.raises(EventRuleViolation, match="today or a later"):
+        ev.check_ad_hoc_day(today - timedelta(days=1), today)
+    with pytest.raises(EventRuleViolation, match="7 days"):
+        ev.check_ad_hoc_day(today + timedelta(days=8), today)
+    for state in (EventState.VOTING, EventState.DECIDED, EventState.ABANDONED, EventState.CANCELLED):
+        ev.check_rerun(event(state), today)
+    for state in (EventState.SCHEDULED, EventState.COLLECTING, EventState.DONE):
+        with pytest.raises(EventRuleViolation, match="re-run"):
+            ev.check_rerun(event(state), today)
+    with pytest.raises(EventRuleViolation, match="today's"):
+        ev.check_rerun(event(EventState.ABANDONED), today + timedelta(days=1))
+
+
+def test_window_changes() -> None:
+    assert ev.shifted_deadline(NOW, 15, NOW) == NOW + timedelta(minutes=15)
+    assert ev.shifted_deadline(NOW + timedelta(minutes=10), -15, NOW) == NOW  # never before now
+    assert ev.shifted_deadline(NOW + timedelta(hours=1), None, NOW) == NOW
+    with pytest.raises(EventRuleViolation, match="240"):
+        ev.shifted_deadline(NOW, 241, NOW)
+    collecting = event()
+    assert ev.check_window_change(collecting, ev.Window.RESPOND) == collecting.respond_deadline
+    voting = event(EventState.VOTING, vote_deadline=NOW)
+    assert ev.check_window_change(voting, ev.Window.VOTE) == NOW
+    for state_event, window in [(collecting, ev.Window.VOTE), (voting, ev.Window.RESPOND)]:
+        with pytest.raises(EventRuleViolation, match="isn't open"):
+            ev.check_window_change(state_event, window)
+
+
+# Scheduler steps ------------------------------------------------------------------------------
+
+
+def test_due_steps_walk_an_event_through_missed_deadlines() -> None:
+    scheduled = event(EventState.SCHEDULED, opens_at=NOW + timedelta(minutes=1))
+    assert ev.due_step(scheduled, NOW) is None
+    assert ev.due_step(scheduled, NOW + timedelta(minutes=1)) is Step.OPEN
+    collecting = event()
+    assert ev.due_step(collecting, NOW + timedelta(minutes=74)) is None
+    assert ev.due_step(collecting, NOW + timedelta(minutes=75)) is Step.REMIND
+    reminded = replace(collecting, reminder_sent_at=NOW)
+    assert ev.due_step(reminded, NOW + timedelta(minutes=89)) is None
+    assert ev.due_step(reminded, NOW + timedelta(minutes=90)) is Step.CLOSE_RESPONSES
+    # After downtime past the deadline, the reminder is skipped, not sent late.
+    assert ev.due_step(collecting, NOW + timedelta(hours=5)) is Step.CLOSE_RESPONSES
+    voting = event(EventState.VOTING, vote_deadline=NOW)
+    assert ev.due_step(voting, NOW - timedelta(seconds=1)) is None
+    assert ev.due_step(voting, NOW) is Step.CLOSE_VOTING
+    decided = event(EventState.DECIDED, meal_time=NOW)
+    assert ev.due_step(decided, NOW + timedelta(hours=2) - timedelta(seconds=1)) is None
+    assert ev.due_step(decided, NOW + timedelta(hours=2)) is Step.MARK_DONE
+    for state in (EventState.DONE, EventState.ABANDONED, EventState.CANCELLED):
+        assert ev.due_step(event(state), NOW + timedelta(days=1)) is None
+
+
+def test_should_open_today() -> None:
+    opens, deadline = NOW, NOW + timedelta(minutes=90)
+    kwargs = {"opens_at": opens, "respond_deadline": deadline}
+    assert ev.should_open_today(enabled=True, now=NOW, exists=False, **kwargs)
+    assert not ev.should_open_today(enabled=True, now=NOW - timedelta(seconds=1), exists=False, **kwargs)
+    assert not ev.should_open_today(enabled=True, now=deadline, exists=False, **kwargs)
+    assert not ev.should_open_today(enabled=True, now=NOW, exists=True, **kwargs)
+    assert not ev.should_open_today(enabled=False, now=NOW, exists=False, **kwargs)
+
+
+def test_event_keys_and_paths() -> None:
+    assert event().key == "event:7:run1"
+    assert event(run=2).path == "/events/7"
+    assert event().remind_at == NOW + timedelta(minutes=75)
+
+
+# Schedule settings ----------------------------------------------------------------------------
+
+
+def test_default_slots_match_the_settled_schedule() -> None:
+    slots = sched.slot_schedules({})
+    dinner, lunch = slots[Slot.DINNER], slots[Slot.LUNCH]
+    assert (dinner.enabled, dinner.call_time, dinner.response_minutes, dinner.vote_minutes) == (
+        True,
+        time(15),
+        90,
+        45,
+    )
+    assert dinner.reminder_minutes == 15 and dinner.modes == {Mode.PICKUP, Mode.DELIVERY}
+    assert (lunch.enabled, lunch.call_time, lunch.response_minutes, lunch.vote_minutes) == (
+        False,
+        time(10, 30),
+        60,
+        30,
+    )
+    assert lunch.reminder_minutes == 15 and lunch.modes == {Mode.PICKUP}
+    assert dinner.opens_at(date(2026, 10, 22), CHICAGO) == datetime(2026, 10, 22, 20, 0, tzinfo=UTC)
+    assert dinner.response_window == timedelta(minutes=90) and dinner.vote_window == timedelta(minutes=45)
+
+
+def test_settings_round_trip_and_bad_values_fall_back() -> None:
+    assert sched.slot_schedules(sched.default_settings()) == sched.DEFAULT_SLOTS
+    assert sched.weights(sched.default_settings()) == sched.Weights()
+    assert sched.proposal_count(sched.default_settings()) == 3
+    garbage = {
+        "slots": {
+            "dinner": {
+                "enabled": "yes",
+                "call_time": "25:00",
+                "response_minutes": True,
+                "vote_minutes": 9999,
+                "reminder_minutes": -1,
+                "modes": ["teleport"],
+                "meal_time": "1830",
+            },
+            "lunch": "nope",
+        },
+        "ranking_weights": {"novelty": "lots", "suggested": 11, "soft_preference": True, "cuisine_variety": 2},
+        "proposal_count": 9,
+    }
+    assert sched.slot_schedules(garbage) == sched.DEFAULT_SLOTS
+    assert sched.weights(garbage) == sched.Weights(cuisine_variety=2.0)
+    assert sched.proposal_count(garbage) == 3
+    assert sched.slot_schedules({"slots": []}) == sched.DEFAULT_SLOTS
+    assert sched.slot_schedules({"slots": {"dinner": {"modes": "pickup"}}}) == sched.DEFAULT_SLOTS
+    assert sched.weights({"ranking_weights": 3}) == sched.Weights()
+    custom = {"slots": {"lunch": {"enabled": True, "call_time": "11:05", "modes": ["cook"], "meal_time": "12:00"}}}
+    lunch = sched.slot_schedule(custom, Slot.LUNCH)
+    assert (lunch.enabled, lunch.call_time, lunch.modes, lunch.meal_time) == (True, time(11, 5), {Mode.COOK}, time(12))
+
+
+def test_check_schedule_and_weights() -> None:
+    dinner = sched.DEFAULT_SLOTS[Slot.DINNER]
+    assert sched.check_schedule(dinner) is dinner
+    for changes, message in [
+        ({"response_minutes": 4}, "response window"),
+        ({"vote_minutes": 361}, "vote window"),
+        ({"reminder_minutes": 90}, "reminder"),
+        ({"modes": frozenset()}, "default way"),
+    ]:
+        with pytest.raises(sched.InvalidSchedule, match=message):
+            sched.check_schedule(replace(dinner, **changes))  # type: ignore[arg-type]
+    assert sched.check_weights(sched.Weights(), 3) == (sched.Weights(), 3)
+    with pytest.raises(sched.InvalidSchedule, match="Weights"):
+        sched.check_weights(sched.Weights(novelty=10.5), 3)
+    with pytest.raises(sched.InvalidSchedule, match="proposals"):
+        sched.check_weights(sched.Weights(), 6)
+    assert sched.parse_hhmm(" 07:05 ", "call time") == time(7, 5)
+    for bad in ("7:05", "ab:cd", "24:00", "12:60", "\uff11\uff12:\uff10\uff10"):
+        with pytest.raises(sched.InvalidSchedule, match="HH:MM"):
+            sched.parse_hhmm(bad, "call time")
+
+
+def test_migration_writes_the_same_defaults_as_the_domain() -> None:
+    """Migration 0003 carries its own copy of the defaults; it must match the domain's."""
+    path = Path(__file__).parents[1] / "src/dinnerbell/db/alembic/versions/0003_dinner_calls.py"
+    spec = importlib.util.spec_from_file_location("migration_0003", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert sched.default_settings() == module.DEFAULT_SETTINGS
