@@ -515,7 +515,7 @@ All configuration comes from environment variables with a `DINNERBELL_` prefix, 
 | `DINNERBELL_SLACK_TEAM_ID` | Required when the OIDC issuer is `https://slack.com`; Dinnerbell refuses to start without it. Sign-in requires the ID token's Slack team to match, which blocks accounts from other workspaces. Unused with other providers |
 | `DINNERBELL_SLACK_BOT_TOKEN`, `_SLACK_APP_TOKEN` | Bot token (`xoxb-`) and Socket Mode app token (`xapp-`) |
 | `DINNERBELL_SLACK_CHANNEL` | Channel ID for household posts |
-| `DINNERBELL_TIMEZONE` | Seeds the household time zone on first start, default `UTC`. Afterward the household row is authoritative and is edited in Admin |
+| `DINNERBELL_TIMEZONE` | Seeds the household time zone on first start, default `America/New_York`. Afterward the household row is authoritative and is edited in Admin |
 | `DINNERBELL_SEED_FILE` | Optional YAML of tags and catalog items to import on first start |
 | `DINNERBELL_LOG_LEVEL` | Default `INFO` |
 | `DINNERBELL_BIND` | Compose only, not read by the app: host address that `compose.yaml` publishes port 8013 on, default `127.0.0.1`. Set it to the interface the reverse proxy reaches |
