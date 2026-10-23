@@ -539,6 +539,10 @@ async def test_marking_done_logs_the_meal_once(house: House) -> None:
     event_id = await decided(house)
     with pytest.raises(EventRuleViolation, match="someone at the meal"):
         await act(house, calls.mark_done, house["Kim"], event_id)
+    with pytest.raises(EventRuleViolation, match="once it's meal time"):
+        await act(house, calls.mark_done, house["Sam"], event_id)
+    view = await act(house, event_views.event_view, house["Sam"], event_id)
+    assert not view.can.mark_done
     await act(house, calls.mark_done, house["Alex"], event_id)
     with pytest.raises(EventRuleViolation, match="decided"):
         await act(house, calls.mark_done, house["Sam"], event_id)

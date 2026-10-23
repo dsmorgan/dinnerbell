@@ -157,6 +157,7 @@ def test_vote_lock_and_mark_done(admin: TestClient, clock: FakeClock, migrated: 
     assert htmx(admin, f"/events/{event_id}/meal-time", {"at": ""}).status_code == 409
     assert htmx(admin, f"/events/{event_id}/assignments", {"role": "chef"}).status_code == 409
     assert htmx(admin, f"/events/{event_id}/assignments", {"role": "pickup", "member_id": ""}).status_code == 200
+    assert 'hx-confirm="Mark this meal done?' in admin.get(f"/events/{event_id}").text
     done = htmx(admin, f"/events/{event_id}/done", {})
     assert done.status_code == 200 and "Done" in done.text
     assert htmx(admin, f"/events/{event_id}/done", {}).status_code == 409  # already done: shown, not a 500

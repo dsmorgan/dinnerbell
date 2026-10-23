@@ -162,7 +162,7 @@
     <ul class="chips assignments">
       {% for a in d.assignments %}<li class="chip role">{{ {"cook": "Cooking", "pickup": "Picking up", "order": "Ordering", "coordinator": "Coordinating"}[a.role.value] }}: {{ a.member.name }}</li>{% endfor %}
     </ul>
-    {% if v.can.mark_done %}<div class="button-row">{{ act(e.id, base ~ "/done", "Mark done", "button small primary") }}</div>{% endif %}
+    {% if v.can.mark_done %}<div class="button-row">{{ act(e.id, base ~ "/done", "Mark done", "button small", confirm="Mark this meal done? It goes into the history.") }}</div>{% endif %}
     {% if v.can.manage %}
     <details class="details-form">
       <summary class="small">Change the time or who does what</summary>

@@ -103,7 +103,7 @@ def permissions(ctx: CallContext, actor: Member, today: date, now: datetime) -> 
         propose=_allowed(lambda: rules.check_can_propose(event, actor)),
         lock=_allowed(lambda: rules.check_can_lock(event, actor)),
         manage=_allowed(lambda: rules.check_can_manage_decision(event, actor)),
-        mark_done=_allowed(lambda: rules.check_can_mark_done(event, actor, mine)),
+        mark_done=_allowed(lambda: rules.check_can_mark_done(event, actor, mine, now=now)),
         admin=admin,
         rerun=admin
         and _allowed(lambda: rules.check_rerun(event, today, now=now, too_late_after=ctx.too_late_for(today))),
