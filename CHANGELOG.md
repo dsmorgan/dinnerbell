@@ -14,7 +14,7 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
   - `DINNERBELL_INSTANCE_LABEL` shows a marker such as `TEST` on the web, in Slack posts, on App Home, and in `/healthz`. While it's set, Dinnerbell mentions and messages only members of the configured channel.
   - `DINNERBELL_SLACK_COMMAND` names the slash command. Default: `/dinnerbell`.
   - `DINNERBELL_FEATURES` turns on feature flags. Unknown names stop startup.
-  - `dinnerbell scrub-test --keep EMAIL ...` makes a restored production backup safe to use in test.
+  - `dinnerbell scrub-test --keep EMAIL [--keep EMAIL ...] [--yes]` makes a restored production backup safe to use in test. It shows what it will change and asks you to confirm.
   - `deploy/dinnerbell-test` runs every test command with the test project, volume, env file, tag, and port, and refuses unsafe combinations. `deploy/slack-app-manifest.test.yaml` and `.env.test.example` set up the rest.
 - `compose.yaml` reads `DINNERBELL_TAG`, `DINNERBELL_ENV_FILE`, and `DINNERBELL_PORT`.
 

@@ -3,7 +3,7 @@
 # Run compose for the Dinnerbell test instance (ADR 0006). Pass any compose subcommand:
 #   deploy/dinnerbell-test pull
 #   deploy/dinnerbell-test up -d
-#   deploy/dinnerbell-test run --rm dinnerbell scrub-test --keep you@example.com --yes
+#   deploy/dinnerbell-test run --rm dinnerbell scrub-test --keep you@example.com
 #   deploy/dinnerbell-test down
 #   DINNERBELL_TAG=0.3.0 deploy/dinnerbell-test up -d     # rehearse a release
 #
