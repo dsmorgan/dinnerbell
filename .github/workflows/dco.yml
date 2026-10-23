@@ -20,40 +20,57 @@ jobs:
     permissions:
       contents: read # list the PR's commits
     steps:
-      # Bot commits are exempt only when GitHub verified their signature, so a commit that merely
-      # claims a bot's email still needs a sign-off. The API lists at most 250 commits per PR.
+      # Every commit counts, merge commits included. The one exemption is a Dependabot PR's own
+      # commits: the PR was opened by dependabot[bot], GitHub (web-flow) committed and signed the
+      # commit, and the author is Dependabot. GitHub verifies the committer, not the author, so
+      # the author email alone proves nothing.
       - name: Check sign-offs
         env:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_COMMITS: ${{ github.event.pull_request.commits }}
+          PR_AUTHOR: ${{ github.event.pull_request.user.login }}
         run: |
+          # The commits API returns at most 250 commits, so a longer PR can't be checked.
+          if [ "$PR_COMMITS" -gt 250 ]; then
+            echo "::error::This PR has $PR_COMMITS commits; the DCO check can read only 250. Split it or squash it."
+            exit 1
+          fi
+          gh api --paginate --slurp "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/commits" > commits.json
           # shellcheck disable=SC2016 # $author and friends are jq variables.
-          gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/commits" --jq '
-            .[]
+          jq -r --arg pr_author "$PR_AUTHOR" '
+            .[][]
             | (.commit.author.email // "" | ascii_downcase) as $author
             | ([.commit.message | split("\n")[]
                 | select(test("^Signed-off-by:.*<[^<>]+>\\s*$"; "i"))
                 | capture("<(?<email>[^<>]+)>\\s*$").email
                 | ascii_downcase]) as $signers
-            | (if ($author == "49699333+dependabot[bot]@users.noreply.github.com"
-                   or $author == "41898282+github-actions[bot]@users.noreply.github.com")
-                  and .commit.verification.verified then "exempt"
+            | (if $pr_author == "dependabot[bot]"
+                  and .committer.login == "web-flow"
+                  and .commit.verification.reason == "valid"
+                  and $author == "49699333+dependabot[bot]@users.noreply.github.com" then "exempt"
                elif any($signers[]; . == $author) then "ok"
                else "missing" end) as $status
             | "\($status) \(.sha[0:12])"
-          ' > dco.txt
+          ' commits.json > dco.txt
+          checked=0
           missing=0
           while read -r status sha; do
+            checked=$((checked + 1))
             case "$status" in
               ok) echo "ok       $sha" ;;
-              exempt) echo "exempt   $sha (bot)" ;;
+              exempt) echo "exempt   $sha (Dependabot)" ;;
               *)
                 echo "missing  $sha: no Signed-off-by trailer for the author's email"
                 missing=$((missing + 1))
                 ;;
             esac
           done < dco.txt
+          if [ "$checked" -ne "$PR_COMMITS" ]; then
+            echo "::error::Checked $checked commits, but the PR has $PR_COMMITS. Rerun the job."
+            exit 1
+          fi
           if [ "$missing" -gt 0 ]; then
-            echo "::error::$missing commit(s) lack a Signed-off-by trailer matching the commit author's email. Run 'git rebase --signoff origin/main' and force-push. See CONTRIBUTING.md."
+            echo "::error::$missing commit(s) lack a Signed-off-by trailer matching the commit author's email. Merge commits need one too. Run 'git rebase --signoff origin/main' and push with --force-with-lease. See CONTRIBUTING.md."
             exit 1
           fi

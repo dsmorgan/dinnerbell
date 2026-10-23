@@ -18,7 +18,9 @@ The line uses your configured `user.name` and `user.email`:
 Signed-off-by: Your Name <you@example.com>
 ```
 
-To sign off commits you already made on a branch, run `git rebase --signoff main`.
+Merge commits need the line too. To sign off commits you already made on a branch, run `git rebase --signoff origin/main`, then push with `--force-with-lease`. The rebase also drops merge commits, which `main` doesn't accept anyway, because it requires linear history.
+
+The `dco` check fails a pull request with any commit that lacks a `Signed-off-by` line for its author's email.
 
 ## Set up
 
