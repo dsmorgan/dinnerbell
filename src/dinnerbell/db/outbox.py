@@ -141,6 +141,12 @@ class OutboxRepository:
         )
         return [_entry(row) for row in rows]
 
+    async def get(self, entry_id: int) -> OutboxEntry | None:
+        row = await self._session.scalar(
+            select(OutboxRow).where(OutboxRow.id == entry_id).execution_options(populate_existing=True)
+        )
+        return None if row is None else _entry(row)
+
     async def claim(self, entry_id: int, token: str, *, now: datetime, until: datetime) -> bool:
         """Claim a row for delivery. Only one caller can win: the UPDATE matches only a row
         that is pending, due, and not claimed by anyone whose claim is still live."""

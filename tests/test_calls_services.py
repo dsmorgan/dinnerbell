@@ -861,3 +861,55 @@ async def test_event_views_offer_only_what_the_rules_allow(house: House) -> None
     assert [p.info.item.name for p in views["Sam"].proposals] == ["Siam Garden", "Taqueria"]
     today = await act(house, event_views.today_view, house["Kim"])
     assert [e.id for e in today.events] == [event_id] and today.today == date(2026, 10, 22)
+
+
+async def test_free_text_naming_a_switched_off_item_is_checked_as_that_item(house: House) -> None:
+    """Regression: free text matching an inactive item skipped its tag and item vetoes."""
+    event_id = await to_voting(house)
+    await house.add_item("Old Spot", Mode.PICKUP, cuisine="Thai")
+    async with house.sessionmaker() as db:
+        await db.execute(text("UPDATE catalog_item SET active = 0 WHERE name = 'Old Spot'"))
+        await db.commit()
+    with pytest.raises(EventRuleViolation, match="isn't in the catalog"):
+        await act(house, calls.add_proposal, house["Sam"], event_id, Mode.PICKUP, free_text="old spot", cuisine_id=1)
+
+
+async def test_a_free_text_winner_is_checked_as_the_catalog_item_it_names(house: House) -> None:
+    """Regression: an item added mid-vote under the free text's name could carry a vetoed tag."""
+    event_id = await to_voting(house)
+    vietnamese = await house.tag("Vietnamese")
+    pho = await act(
+        house, calls.add_proposal, house["Sam"], event_id, Mode.PICKUP, free_text="Pho Place", cuisine_id=vietnamese.id
+    )
+    await act(house, calls.vote, house["Sam"], event_id, pho.id)
+    await act(house, calls.vote, house["Alex"], event_id, pho.id)
+    await house.add_item("Pho Place", Mode.PICKUP, cuisine="Mexican")
+    await act(house, set_my_preference, house["Sam"], TargetType.TAG, house.tags["Mexican"].id, Stance(veto=True))
+    with pytest.raises(EventRuleViolation, match="doesn't work for everyone"):
+        await act(house, calls.lock, house["Alex"], event_id, pho.id)
+    house.clock.now = VOTE_BY
+    await house.tick()
+    ctx = await house.context(event_id)
+    assert ctx.items[ctx.event.decided_item_id or 0].name == "Siam Garden"  # the vetoed winner was skipped
+
+
+async def test_guest_needs_without_guests_are_ignored(house: House) -> None:
+    """Regression: needs left ticked after guests went back to 0 still filtered every item."""
+    vegan = await house.tag("Vegan", TagKind.DIETARY)
+    event_id = await open_dinner(house)
+    await act(house, calls.offer_role, house["Alex"], event_id, RoleOffer.PICKUP, True)
+    await act(house, calls.save_details, house["Sam"], event_id, Details(guests=0, guest_needs=frozenset({vegan.id})))
+    assert (await house.context(event_id)).response_of(house["Sam"].id).guest_needs == frozenset()  # type: ignore[union-attr]
+    async with house.sessionmaker() as db:  # a row saved before the fix
+        await db.execute(text("UPDATE response SET guest_needs = :needs"), {"needs": f"[{vegan.id}]"})
+        await db.commit()
+    house.clock.now = RESPOND_BY
+    await house.tick()
+    assert sorted(await proposal_ids(house, event_id)) == ["Siam Garden", "Taqueria"]
+
+
+async def test_the_meal_time_cannot_precede_the_decision(house: House) -> None:
+    event_id = await decided(house)
+    with pytest.raises(EventRuleViolation, match="after the decision"):
+        await act(house, calls.set_meal_time, house["Sam"], event_id, time(6, 30))  # meant 18:30
+    assert (await house.event(event_id)).state is EventState.DECIDED

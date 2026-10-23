@@ -10,7 +10,7 @@ response; no function takes another member's response.
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import date, datetime, time
+from datetime import UTC, date, datetime, time
 from zoneinfo import ZoneInfo
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -256,13 +256,13 @@ async def _proposed_item(
 ) -> CatalogItem | None:
     """The catalog item proposed, including free text that names one. None for new free text."""
     if item_id is not None:
-        item = ctx.items.get(item_id)
-        if item is None or not item.active:
+        if item_id not in ctx.items:
             raise EventRuleViolation("That isn't in the catalog anymore. Reload the page and try again.")
-        return item
+        return ctx.items[item_id]
     kind = ItemKind.HOME if mode is Mode.COOK else ItemKind.RESTAURANT
-    found = await CatalogRepository(db).item_by_name(ctx.event.household_id, kind, _free_name(free_text))
-    return found if found is not None and found.active else None
+    # A match counts even when inactive, so its tags and item vetoes are checked (and an inactive
+    # item is refused) rather than slipping through as new free text.
+    return await CatalogRepository(db).item_by_name(ctx.event.household_id, kind, _free_name(free_text))
 
 
 def _free_name(free_text: str | None) -> str:
@@ -347,7 +347,9 @@ async def set_meal_time(db: AsyncSession, actor: Member, event_id: int, at: time
         if event.state is not EventState.DECIDED:
             raise EventRuleViolation("This meal is already done.")
         ctx = await load(db, event)
-        meal = datetime.combine(event.day, at, tzinfo=ctx.zone)
+        meal = datetime.combine(event.day, at, tzinfo=ctx.zone).astimezone(UTC)
+        if event.decided_at is not None and meal < event.decided_at:
+            raise EventRuleViolation("Pick a meal time after the decision. Check AM and PM.")
         event = await EventRepository(db).save(replace(event, meal_time=meal), now)
         ctx = await load(db, event)
         await publish(db, ctx, *cc.decision_updated(ctx), now=now)

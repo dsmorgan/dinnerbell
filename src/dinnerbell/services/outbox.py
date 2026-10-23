@@ -60,8 +60,11 @@ async def drain(
             token = secrets.token_hex(16)
             now = clock()
             claimed = await repo.claim(entry.id, token, now=now, until=now + LEASE)
+            # Deliver the row as claimed, not as listed: an update may have coalesced into it
+            # since. Once claimed, nothing changes it, so this read is final.
+            current = await repo.get(entry.id) if claimed else None
             await db.commit()
-            delivered = claimed and await _deliver(db, channel, entry, token, clock, result)
+            delivered = current is not None and await _deliver(db, channel, current, token, clock, result)
             if not delivered and entry.event_id is not None:
                 blocked.add(entry.event_id)
     return result
@@ -81,7 +84,7 @@ async def _deliver(
     try:
         ref, skipped = await _send(repo, channel, entry, notification)
     except Exception as exc:
-        final = entry.attempts + 1 >= MAX_ATTEMPTS
+        final = entry.attempts >= MAX_ATTEMPTS  # the claim already counted this attempt
         await _record_failure(db, entry, token, f"{type(exc).__name__}: {exc}", clock, result, final=final)
         return final
     if not await repo.delivered(entry.id, token, now=clock(), ref=ref, note=NO_MESSAGE if skipped else None):
@@ -110,7 +113,7 @@ async def _record_failure(
     db: AsyncSession, entry: OutboxEntry, token: str, error: str, clock: Clock, result: DrainResult, *, final: bool
 ) -> None:
     now = clock()
-    attempts = entry.attempts + 1
+    attempts = entry.attempts
     retry_at: datetime | None = None if final else now + retry_delay(attempts)
     await OutboxRepository(db).failed(entry.id, token, error=error, retry_at=retry_at, now=now)
     await db.commit()

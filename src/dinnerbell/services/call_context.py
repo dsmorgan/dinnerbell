@@ -255,7 +255,7 @@ def decision_info(ctx: CallContext) -> note.DecisionInfo | None:
     winner, meal_time = ctx.winner, ctx.event.meal_time
     if winner is None or meal_time is None:
         return None
-    needs = {tag for r in ctx.participants for tag in r.guest_needs}
+    needs = {tag for r in ctx.participants if r.guests for tag in r.guest_needs}
     return note.DecisionInfo(
         proposal=proposal_info(ctx, winner),
         meal_time=meal_time,

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, fields
-from datetime import date, datetime, time, timedelta, tzinfo
+from datetime import UTC, date, datetime, time, timedelta, tzinfo
 from typing import Any
 
 from dinnerbell.domain.catalog import Mode, sorted_modes
@@ -50,8 +50,9 @@ class SlotSchedule:
     meal_time: time
 
     def opens_at(self, day: date, zone: tzinfo) -> datetime:
-        """When this slot's call opens on ``day``, as an aware datetime in ``zone``."""
-        return datetime.combine(day, self.call_time, tzinfo=zone)
+        """When this slot's call opens on ``day`` in ``zone``, in UTC. UTC, so adding a window
+        to it counts elapsed time even across a daylight saving change."""
+        return datetime.combine(day, self.call_time, tzinfo=zone).astimezone(UTC)
 
     @property
     def response_window(self) -> timedelta:
