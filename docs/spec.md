@@ -291,7 +291,7 @@ Ranking is deterministic and explainable. Given a Call with participants P (in a
 | Default mode | +0.5 if the mode is one of the slot's default fulfillment modes | 1.0 |
 | Volunteer fit | +0.5 if the mode is cook and the volunteer cook is on the item's cook list | 1.0 |
 
-4. **Order** by score descending. Break ties by fewest days since last eaten (ascending novelty), then by name.
+4. **Order** by score descending. Break ties by the item eaten longest ago, with never-eaten items first, then by name.
 5. **Explain.** Each proposal carries the top two positive components and any penalty as a sentence: "Suggested by Alex. Nobody has had Ethiopian in 3 weeks."
 
 Feedback is not an input in version 1; FR-55 adds it once there is enough data. Weights are household settings. The engine is a pure function over a snapshot, so it is unit-testable without a database.
