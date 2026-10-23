@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The ``dinnerbell`` command: ``serve``, ``migrate``, ``catalog``, and ``slack``."""
+"""The ``dinnerbell`` command: ``serve``, ``migrate``, ``catalog``, ``slack``, and ``scrub-test``."""
 
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import logging
 import os
@@ -29,6 +30,19 @@ def _parser() -> argparse.ArgumentParser:
     serve.add_argument("--host", default="0.0.0.0", help="address to listen on (default: 0.0.0.0)")  # noqa: S104 container
     serve.add_argument("--port", type=int, default=DEFAULT_PORT, help=f"port (default: {DEFAULT_PORT})")
     commands.add_parser("migrate", help="upgrade the database schema and exit")
+    scrub = commands.add_parser(
+        "scrub-test",
+        help="make a restored production backup safe for a test instance",
+        description="On a labeled instance (DINNERBELL_INSTANCE_LABEL), deactivate and unlink every member "
+        "not kept, turn off every slot, end open calls quietly, and empty the outbox. Stop the instance first.",
+    )
+    scrub.add_argument(
+        "--keep",
+        action="append",
+        required=True,
+        metavar="EMAIL",
+        help="a member to keep linked and active; repeat for each. At least one must be an active admin.",
+    )
     catalog_cli.add_parser(commands)
     slack = commands.add_parser("slack", help="Slack tools that need no workspace")
     slack_commands = slack.add_subparsers(dest="slack_command", required=True, metavar="COMMAND")
@@ -65,6 +79,30 @@ def _migrate(settings: Settings) -> bool:
     return True
 
 
+def _scrub_test(settings: Settings, keep: list[str]) -> int:
+    from dinnerbell.services.clock import utc_now
+    from dinnerbell.services.database import open_database
+    from dinnerbell.services.scrub import ScrubRefused, scrub_test
+
+    async def scrub() -> list[str]:
+        database = open_database(settings.async_database_url)
+        try:
+            async with database.sessionmaker() as db:
+                summary = await scrub_test(db, instance_label=settings.instance_label, keep=keep, now=utc_now())
+        finally:
+            await database.close()
+        return summary.lines()
+
+    try:
+        lines = asyncio.run(scrub())
+    except ScrubRefused as exc:
+        print(exc, file=sys.stderr)
+        return 1
+    print("Scrubbed for test.")
+    print("\n".join(f"  {line}" for line in lines))
+    return 0
+
+
 def _serve(settings: Settings, host: str, port: int) -> None:
     import uvicorn
 
@@ -92,12 +130,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     except ConfigError as exc:
         print(exc, file=sys.stderr)
         return 2
+    if args.command == "scrub-test" and not settings.instance_label:
+        from dinnerbell.services.scrub import NOT_LABELED
+
+        print(NOT_LABELED, file=sys.stderr)
+        return 1  # before migrating: never touch a database that may be production's
     configure_logging(settings.log_level, settings.instance_label)
     os.umask(PRIVATE_UMASK)
     if not _migrate(settings):
         return 1
     if args.command == "serve":
         _serve(settings, args.host, args.port)
+    if args.command == "scrub-test":
+        return _scrub_test(settings, args.keep)
     return 0
 
 
