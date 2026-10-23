@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from dinnerbell.channels.slack import ids
 from dinnerbell.channels.slack.api import SlackApi, SlackUnavailable
+from dinnerbell.channels.slack.blocks import day_label, escape
 from dinnerbell.channels.slack.views import (
     FormError,
     HomeLinks,
@@ -61,9 +62,10 @@ OUT_OF_DATE = "That button is out of date. Try the latest message, or use the we
 WRONG_PLACE = "That button only works in the Dinnerbell channel."
 WRONG_WORKSPACE = "This Dinnerbell belongs to another Slack workspace."
 CONFIRM = {
-    "respond_in": "Got it: you're in. Thanks!",
-    "respond_maybe": "Got it: you're a maybe.",
-    "respond_out": "Got it: you're out this time.",
+    "respond_in": "You're in for {slot}. Thanks!",
+    "respond_maybe": "Got it: you're a maybe for {slot}.",
+    "respond_out": "Got it: you're out for {slot} this time.",
+    ids.COORDINATE: "You're coordinating {slot}. Thanks for steering!",
 }
 OFFERED = {
     RoleOffer.COOK: "Thanks! You're offering to cook. Tap again to take it back.",
@@ -157,6 +159,14 @@ class Interactions:
         while self.tasks and loop.time() < deadline:
             await asyncio.wait(set(self.tasks), timeout=deadline - loop.time())
 
+    async def cancel_pending(self) -> None:
+        """Cancel work still running after ``settle`` gave up, at shutdown."""
+        pending = set(self.tasks)
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.wait(pending, timeout=1.0)
+
     # Checks ------------------------------------------------------------------------------------
 
     def _team_ok(self, team_id: object) -> bool:
@@ -216,13 +226,14 @@ class Interactions:
             if source.home:
                 await self.publish_home(source.user_id, member, notice=text)
                 return
+            safe = escape(text)  # service messages can quote what people typed
             if source.channel_id is not None:
                 try:
-                    await self.api.ephemeral(source.channel_id, source.user_id, text)
+                    await self.api.ephemeral(source.channel_id, source.user_id, safe)
                     return
                 except SLACK_ERRORS:
                     pass  # not in that channel, for example; fall back to a direct message
-            await self.api.post(source.user_id, {"text": text})
+            await self.api.post(source.user_id, {"text": safe})
         except SLACK_ERRORS as exc:
             log.warning("slack reply failed", extra={"error": str(exc)})
 
@@ -230,7 +241,7 @@ class Interactions:
         if member is None:
             view: dict[str, Any] = {
                 "type": "home",
-                "blocks": [{"type": "section", "text": {"type": "mrkdwn", "text": notice or UNKNOWN_USER}}],
+                "blocks": [{"type": "section", "text": {"type": "mrkdwn", "text": escape(notice or UNKNOWN_USER)}}],
             }
         else:
             async with self.sessionmaker() as db:
@@ -294,16 +305,17 @@ class Interactions:
         now = self.clock()
         async with self.sessionmaker() as db:
             if action_id in ids.RESPOND:
-                await calls.respond(db, member, ids.parse_event(value), ids.RESPOND[action_id], now=now)
-                dm = source.channel_id is not None and source.channel_id.startswith("D")
-                return CONFIRM[action_id] if dm else None
+                event_id = ids.parse_event(value)
+                await calls.respond(db, member, event_id, ids.RESPOND[action_id], now=now)
+                return await self._confirm(db, member, event_id, action_id)
             if action_id in ids.OFFER:
                 role = ids.OFFER[action_id]
                 offered = await calls.toggle_role(db, member, ids.parse_event(value), role, now=now)
                 return (OFFERED if offered else WITHDRAWN)[role]
             if action_id == ids.COORDINATE:
-                await calls.claim_coordinator(db, member, ids.parse_event(value), now=now)
-                return None
+                event_id = ids.parse_event(value)
+                await calls.claim_coordinator(db, member, event_id, now=now)
+                return await self._confirm(db, member, event_id, action_id)
             if action_id == ids.VOTE:
                 event_id, proposal_id = ids.parse_proposal(value)
                 voted = await calls.toggle_vote(db, member, event_id, proposal_id, now=now)
@@ -319,10 +331,14 @@ class Interactions:
                 slot = ids.parse_slot(value)
                 day = await slack_members.today(db, member, now=now)
                 await calls.start_call(db, member, slot, day, now=now)
-                return f"Started the {slot.value} call. It's posted in <#{self.channel_id}>."
+                return f"Started the {slot.value} call. It's posted in the Dinnerbell channel."
             if action_id in {ids.DETAILS, ids.ADD_PROPOSAL}:
                 return await self._open_modal(db, member, source, action_id, ids.parse_event(value), trigger)
         raise ids.BadValue("unknown action")
+
+    async def _confirm(self, db: AsyncSession, member: Member, event_id: int, action_id: str) -> str:
+        view = await event_views.event_view(db, member, event_id, now=self.clock())
+        return CONFIRM[action_id].format(slot=view.event.slot.value)
 
     async def _open_modal(
         self, db: AsyncSession, member: Member, source: Source, action_id: str, event_id: int, trigger: object
@@ -330,7 +346,7 @@ class Interactions:
         if not isinstance(trigger, str) or not trigger:
             raise ids.BadValue("no trigger")
         view = await event_views.event_view(db, member, event_id, now=self.clock())
-        origin = ids.ViewOrigin(event_id, source.channel_id)
+        origin = ids.ViewOrigin(event_id, source.channel_id, home=source.home)
         if action_id == ids.DETAILS:
             if not view.can.respond:
                 return "Responses are closed for this call."
@@ -363,7 +379,7 @@ class Interactions:
             await ack()
             return
         await ack()
-        source = Source(user, channel_id=origin.channel_id)
+        source = Source(user, channel_id=origin.channel_id, home=origin.home)
         self._spawn(self._save(source, origin.event_id, kind, form))
 
     async def _save(self, source: Source, event_id: int, kind: str, form: Any) -> None:
@@ -451,8 +467,8 @@ class Interactions:
                 today = await slack_members.today(db, member, now=self.clock())
                 slot, day = parse_call_args(args, today)
                 await calls.start_call(db, member, slot, day, now=self.clock())
-            when = "today" if day == today else f"for {day.isoformat()}"
-            return f"Started the {slot.value} call {when}. It's posted in <#{self.channel_id}>."
+            when = "today" if day == today else f"for {day_label(day)}"
+            return f"Started the {slot.value} call {when}. It's posted in the Dinnerbell channel."
 
         await self._run(source, member, work)
 

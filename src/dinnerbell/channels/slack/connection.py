@@ -8,12 +8,15 @@ holds up the web app. Each pass:
    ``DINNERBELL_SLACK_TEAM_ID`` when that is set, the app-level token, and that the bot is a
    member of ``DINNERBELL_SLACK_CHANNEL`` (``conversations.info``'s ``is_member``).
 2. Connects Socket Mode once the tokens and workspace check out. The SDK's client pings Slack
-   and reconnects by itself after a drop.
+   and reconnects by itself after a drop. If it stays down for two minutes, the app-level token
+   is checked again, so a revoked ``xapp-`` token shows as an error.
 3. Links active members who have no Slack user yet by email (``users.lookupByEmail``, FR-42).
 
-A failed check is logged once with what to do and shown in /healthz as ``error``; the next pass
-checks again, so inviting the bot fixes it without a restart. Slack being unreachable shows as
-``disconnected``.
+A failed check is logged once with what to do, shown in /healthz as ``error``, and holds
+deliveries (see ``channel.Hold``); the next pass checks again, so inviting the bot fixes it
+without a restart. A token Slack refuses during a delivery or an interaction does the same at
+once and wakes the supervisor. Slack being unreachable shows as ``disconnected`` and keeps any
+problem already known.
 """
 
 from __future__ import annotations
@@ -21,6 +24,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import re
+import time
 from collections.abc import Callable
 from typing import Any, Protocol
 
@@ -31,7 +36,7 @@ from slack_sdk.web.async_client import AsyncWebClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from dinnerbell.channels.slack.api import SlackApi, SlackAuthError, SlackUnavailable
-from dinnerbell.channels.slack.channel import SlackChannel
+from dinnerbell.channels.slack.channel import HOLD_RETRY_SECONDS, Hold, HoldScope, SlackChannel
 from dinnerbell.channels.slack.interactions import Interactions
 from dinnerbell.domain.members import SLACK_USER_ID_PATTERN
 from dinnerbell.domain.notifications import PermanentDeliveryError
@@ -43,13 +48,38 @@ log = logging.getLogger(__name__)
 
 WEB_TIMEOUT_SECONDS = 15
 PING_INTERVAL_SECONDS = 10.0
-CHECK_AGAIN_AFTER_FAILURE = 60.0
+CHECK_AGAIN_AFTER_FAILURE = HOLD_RETRY_SECONDS
 CHECK_AGAIN_AFTER_SUCCESS = 3600.0
 """Hourly: re-check the setup and link newly invited members by email."""
-STOP_TIMEOUT_SECONDS = 10.0
+RECHECK_APP_TOKEN_AFTER = 120.0
+"""Seconds the socket may stay down before the app-level token is checked again."""
+SOCKET_CLOSE_SECONDS = 4.0
+SETTLE_SECONDS = 3.0
+"""Shutdown waits at most this long for each, inside podman's 10-second stop timeout."""
 REFUSED_FLAGS = ("deleted", "is_bot", "is_app_user", "is_restricted", "is_ultra_restricted", "is_stranger")
 """User flags that stop an email match from linking. Slack may leave a flag out when it's false
 (docs.slack.dev/reference/objects/user-object), so any value but a missing or false one refuses."""
+
+
+class _QuietSocketLogs(logging.Filter):
+    """The SDK's Socket Mode client logs a full traceback when a connect fails, and its errors
+    can include the one-time WebSocket URL, which carries a connection ticket. Keep its records
+    at WARNING or below, drop tracebacks, and redact URLs."""
+
+    URL = re.compile(r"wss?://\S+")
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        message = self.URL.sub("wss://(redacted)", record.getMessage())
+        record.msg, record.args = message, None
+        record.exc_info, record.exc_text, record.stack_info = None, None, None
+        if record.levelno > logging.WARNING:
+            record.levelno, record.levelname = logging.WARNING, "WARNING"
+        return True
+
+
+SOCKET_LOG = logging.getLogger("dinnerbell.channels.slack.socket")
+SOCKET_LOG.setLevel(logging.INFO)  # its DEBUG records include every payload
+SOCKET_LOG.addFilter(_QuietSocketLogs())
 
 
 class Socket(Protocol):
@@ -68,7 +98,7 @@ class BoltSocket:
     and reconnects on its own after a drop or a stale connection."""
 
     def __init__(self, app: AsyncApp, app_token: str) -> None:
-        self.handler = AsyncSocketModeHandler(app, app_token, ping_interval=PING_INTERVAL_SECONDS)
+        self.handler = AsyncSocketModeHandler(app, app_token, logger=SOCKET_LOG, ping_interval=PING_INTERVAL_SECONDS)
 
     async def connect(self) -> None:
         await self.handler.connect_async()  # type: ignore[no-untyped-call]
@@ -84,7 +114,18 @@ SocketFactory = Callable[[AsyncApp, str], Socket]
 
 
 class SetupProblem(Exception):
-    """A startup check failed. The message says what to fix and never includes a secret."""
+    """A startup check failed. The message says what to fix and never includes a secret.
+    ``hold`` is what to hold back until it's fixed."""
+
+    def __init__(self, message: str, *, hold: HoldScope) -> None:
+        super().__init__(message)
+        self.hold = hold
+
+
+BOT_REFUSED = (
+    "Slack refused DINNERBELL_SLACK_BOT_TOKEN ({error}). Copy the Bot User OAuth Token (xoxb-) "
+    "again from the app's Install App page, then restart Dinnerbell."
+)
 
 
 class SlackConnection:
@@ -104,17 +145,24 @@ class SlackConnection:
     ) -> None:
         client = web_client or AsyncWebClient(token=bot_token, timeout=WEB_TIMEOUT_SECONDS)
         self.api = SlackApi(client)
+        self.api.on_auth_error = self._token_refused
         self.app_token = app_token
         self.channel_id = channel_id
         self.required_team = team_id
         self.sessionmaker = sessionmaker
         self.clock = clock
         self.state = state
+        self.hold = Hold()
         self.socket_factory = socket_factory
         self.socket: Socket | None = None
         self.team_id: str | None = None
+        self.monotonic: Callable[[], float] = time.monotonic
+        self._down_since: float | None = None
+        self._checking = False
+        self._wake = asyncio.Event()
+        self._connect_task: asyncio.Task[None] | None = None
         self.channel = SlackChannel(
-            self.api, channel_id=channel_id, base_url=base_url, sessionmaker=sessionmaker, state=state
+            self.api, channel_id=channel_id, base_url=base_url, sessionmaker=sessionmaker, hold=self.hold
         )
         self.interactions = Interactions(
             self.api, sessionmaker=sessionmaker, clock=clock, base_url=base_url, channel_id=channel_id
@@ -147,50 +195,69 @@ class SlackConnection:
         self._task = asyncio.get_running_loop().create_task(self._supervise())
 
     async def stop(self) -> None:
-        if self._task is not None:
-            self._task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await self._task
+        for task in (self._task, self._connect_task):
+            if task is not None:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await task
         if self.socket is not None:
             try:
-                await asyncio.wait_for(self.socket.close(), STOP_TIMEOUT_SECONDS)
+                await asyncio.wait_for(self.socket.close(), SOCKET_CLOSE_SECONDS)
             except Exception:
                 log.warning("slack socket did not close cleanly", exc_info=True)
-        await self.interactions.settle(STOP_TIMEOUT_SECONDS)
+        await self.interactions.settle(SETTLE_SECONDS)
+        await self.interactions.cancel_pending()
 
     async def _supervise(self) -> None:
         while True:
             healthy = await self.run_once()
-            await asyncio.sleep(CHECK_AGAIN_AFTER_SUCCESS if healthy else CHECK_AGAIN_AFTER_FAILURE)
+            settled = healthy and self._down_since is None
+            self._wake.clear()
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(
+                    self._wake.wait(), CHECK_AGAIN_AFTER_SUCCESS if settled else CHECK_AGAIN_AFTER_FAILURE
+                )
 
     async def run_once(self) -> bool:
         """One supervisor pass. True when every check passed."""
+        self._checking = True
         try:
             await self.check()
         except SetupProblem as exc:
-            self._report(str(exc))
+            self._report(str(exc), exc.hold)
             return False
         except SlackUnavailable as exc:
-            self._report(None)
+            # Unreachable says nothing about the setup: keep any problem, and its hold, as is.
             log.warning("slack unreachable; will retry", extra={"error": str(exc)})
             return False
         except Exception:
             log.exception("slack startup check failed")
             return False
-        self._report(None)
+        finally:
+            self._checking = False
+        self._report(None, HoldScope.NONE)
         try:
             await self.link_members()
         except Exception:
             log.exception("linking slack users failed")
         return True
 
-    def _report(self, problem: str | None) -> None:
+    def _report(self, problem: str | None, hold: HoldScope) -> None:
         if problem != self.state.problem:
             if problem is None:
                 log.info("slack checks passed")
             else:
                 log.error("slack setup problem: %s", problem)
         self.state.problem = problem
+        self.hold.scope = hold
+
+    def _token_refused(self, error: SlackAuthError) -> None:
+        """Slack refused the bot token during a delivery or an interaction: hold everything,
+        show the error now, and have the supervisor check again right away."""
+        if self._checking or self.hold.scope is HoldScope.ALL:
+            return  # the check reports it itself; or it's already known
+        self._report(BOT_REFUSED.format(error=error), HoldScope.ALL)
+        self._wake.set()
 
     # Checks ------------------------------------------------------------------------------------
 
@@ -200,33 +267,48 @@ class SlackConnection:
         try:
             identity = await self.api.identity()
         except (SlackAuthError, PermanentDeliveryError) as exc:
-            raise SetupProblem(
-                f"Slack refused DINNERBELL_SLACK_BOT_TOKEN ({exc}). Copy the Bot User OAuth Token "
-                "(xoxb-) again from the app's Install App page, then restart Dinnerbell."
-            ) from None
+            raise SetupProblem(BOT_REFUSED.format(error=exc), hold=HoldScope.ALL) from None
         if self.required_team and identity.team_id != self.required_team:
             raise SetupProblem(
                 f"The bot token belongs to Slack workspace {identity.team_id}, but DINNERBELL_SLACK_TEAM_ID "
-                f"is {self.required_team}. Install the app in the household workspace, or fix the team ID."
+                f"is {self.required_team}. Install the app in the household workspace, or fix the team ID.",
+                hold=HoldScope.ALL,
             )
         self.team_id = identity.team_id
         self.interactions.team_id = identity.team_id
         if self.socket is None:
-            await self._connect()
+            await self._check_app_token()
+            self._connect()
         await self._check_channel()
+        await self._check_socket()
 
-    async def _connect(self) -> None:
+    async def _check_app_token(self) -> None:
         try:
             await self.api.check_app_token(self.app_token)
         except (SlackAuthError, PermanentDeliveryError) as exc:
             raise SetupProblem(
                 f"Slack refused DINNERBELL_SLACK_APP_TOKEN ({exc}). Create an app-level token (xapp-) "
-                "with the connections:write scope under Basic Information, and check that Socket Mode is on."
+                "with the connections:write scope under Basic Information, and check that Socket Mode is on.",
+                hold=HoldScope.NONE,  # deliveries use the bot token and still work
             ) from None
+
+    def _connect(self) -> None:
         self.socket = self.socket_factory(self.app, self.app_token)
-        # The SDK retries a failed connect forever, so never wait for it here.
-        connect = asyncio.get_running_loop().create_task(self.socket.connect())
-        connect.add_done_callback(_log_connect_failure)
+        # The SDK retries a failed connect forever, so never wait for it here. Keep the task, so
+        # it isn't garbage-collected mid-connect, and so stop() can cancel it.
+        self._connect_task = asyncio.get_running_loop().create_task(self.socket.connect())
+        self._connect_task.add_done_callback(_log_connect_failure)
+
+    async def _check_socket(self) -> None:
+        """If the socket has been down a while, check that the app-level token still works."""
+        if await self.is_connected():
+            self._down_since = None
+            return
+        now = self.monotonic()
+        if self._down_since is None:
+            self._down_since = now
+        elif now - self._down_since > RECHECK_APP_TOKEN_AFTER:
+            await self._check_app_token()
 
     async def _check_channel(self) -> None:
         channel = self.channel_id
@@ -235,13 +317,17 @@ class SlackConnection:
         except PermanentDeliveryError:
             raise SetupProblem(
                 f"Slack can't find the channel {channel}. Set DINNERBELL_SLACK_CHANNEL to the channel's ID "
-                "(it starts with C), and use a public channel."
+                "(it starts with C), and use a public channel.",
+                hold=HoldScope.CHANNEL,
             ) from None
         if info.get("is_archived"):
-            raise SetupProblem(f"The channel {channel} is archived. Unarchive it or pick another channel.")
+            raise SetupProblem(
+                f"The channel {channel} is archived. Unarchive it or pick another channel.", hold=HoldScope.CHANNEL
+            )
         if not info.get("is_member"):
             raise SetupProblem(
-                f"The bot isn't a member of the channel {channel}. In that channel, send /invite @Dinnerbell."
+                f"The bot isn't a member of the channel {channel}. In that channel, send /invite @Dinnerbell.",
+                hold=HoldScope.CHANNEL,
             )
 
     # Linking members (FR-42) -------------------------------------------------------------------
@@ -282,4 +368,4 @@ class SlackConnection:
 
 def _log_connect_failure(task: asyncio.Task[None]) -> None:
     if not task.cancelled() and task.exception() is not None:
-        log.error("slack socket connect failed", extra={"error": type(task.exception()).__name__})
+        log.warning("slack socket connect failed", extra={"error": type(task.exception()).__name__})

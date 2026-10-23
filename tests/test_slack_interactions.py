@@ -92,14 +92,18 @@ async def test_in_maybe_out_answer_for_the_person_who_tapped(slack: Slack, house
         assert response.status == 200
         assert await status_of(house, event_id, "Kim") is status
     assert await status_of(house, event_id, "Sam") is None
-    assert slack.ephemerals("Kim") == []  # the call message itself updates; no extra noise
+    assert slack.ephemerals("Kim") == [
+        "Got it: you're a maybe for dinner.",
+        "Got it: you're out for dinner this time.",
+        "You're in for dinner. Thanks!",
+    ]
 
 
 async def test_answering_from_the_reminder_dm_confirms_privately(slack: Slack, house: House) -> None:
     event_id = await open_call(house)
     await slack.click("Lee", "respond_in", str(event_id), channel="D04LEE")
     assert await status_of(house, event_id, "Lee") is Status.IN
-    assert slack.ephemerals("Lee") == [CONFIRM["respond_in"]]
+    assert slack.ephemerals("Lee") == [CONFIRM["respond_in"].format(slot="dinner")]
     assert slack.fake.of("chat.postEphemeral")[0].args["channel"] == "D04LEE"
 
 
@@ -237,7 +241,7 @@ async def test_vote_toggles_and_lock_needs_the_coordinator(slack: Slack, house: 
     assert (await house.context(event_id)).votes.get(first, []) == []
 
     await slack.click("Sam", "lock", value)
-    assert slack.ephemerals("Sam") == [VOTED, UNVOTED, "Only the coordinator or an admin can lock a proposal."]
+    assert slack.ephemerals("Sam")[-3:] == [VOTED, UNVOTED, "Only the coordinator or an admin can lock a proposal."]
     await slack.click("Alex", "lock", value)  # Alex is the admin
     event = await house.event(event_id)
     assert event.state is EventState.DECIDED and event.decided_item_id == ctx.proposals[0].item_id
@@ -424,7 +428,7 @@ async def test_slash_call_starts_a_call(slack: Slack, house: House) -> None:
     assert response.status == 200 and body(response) == {}
     event_id = await dinner_id(house)
     assert (await house.event(event_id)).state is EventState.COLLECTING
-    assert slack.ephemerals("Kim") == ["Started the dinner call today. It's posted in <#C0DINNER>."]
+    assert slack.ephemerals("Kim") == ["Started the dinner call today. It's posted in the Dinnerbell channel."]
     await slack.command("Kim", "call")
     assert "already" in slack.ephemerals("Kim")[-1].lower()
 
@@ -432,7 +436,9 @@ async def test_slash_call_starts_a_call(slack: Slack, house: House) -> None:
 async def test_slash_call_with_a_slot_and_day(slack: Slack, house: House) -> None:
     house.clock.now = OPENS
     await slack.command("Kim", "call lunch 2026-10-24")
-    assert slack.ephemerals("Kim") == ["Started the lunch call for 2026-10-24. It's posted in <#C0DINNER>."]
+    assert slack.ephemerals("Kim") == [
+        "Started the lunch call for Saturday, Oct 24. It's posted in the Dinnerbell channel."
+    ]
     await slack.command("Kim", "call dinner soonish")
     assert slack.ephemerals("Kim")[-1].startswith("Try `/dinnerbell call`")
 

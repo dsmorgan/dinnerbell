@@ -126,7 +126,17 @@ async def test_rate_limits_carry_retry_after() -> None:
 
 @pytest.mark.parametrize(
     "code",
-    ["channel_not_found", "not_in_channel", "user_not_found", "account_inactive", "invalid_blocks", "msg_too_long"],
+    [
+        "channel_not_found",
+        "not_in_channel",
+        "user_not_found",
+        "user_not_visible",
+        "messages_tab_disabled",
+        "invalid_blocks",
+        "msg_too_long",
+        "invalid_json",
+        "missing_post_type",
+    ],
 )
 async def test_permanent_errors(code: str) -> None:
     error = await post_fails(Failure(code))
@@ -140,6 +150,7 @@ async def test_permanent_errors(code: str) -> None:
         (Failure("internal_error", status=500), SlackUnavailable, "Slack chat.postMessage failed: internal_error"),
         (Failure(None, status=502), SlackUnavailable, "Slack chat.postMessage failed: http_502"),
         (Failure("invalid_auth"), SlackAuthError, "Slack chat.postMessage failed: invalid_auth"),
+        (Failure("account_inactive"), SlackAuthError, "Slack chat.postMessage failed: account_inactive"),
         (Failure(raises=TimeoutError()), SlackUnavailable, "Slack chat.postMessage timed out"),
         (
             Failure(raises=aiohttp.ClientConnectionError(f"boom {BOT_TOKEN}")),
@@ -582,16 +593,19 @@ async def test_channel_posts_wait_while_the_setup_is_broken(house: House) -> Non
     house.clock.now = OPENS
     await house.tick()
     fake.clear()
-    drained = await outbox.drain(house.sessionmaker, conn.channel, house.clock)
-    assert (drained.retrying, fake.calls) == (1, [])  # held back, not lost to not_in_channel
+    for _ in range(outbox.MAX_ATTEMPTS + 2):  # however long it takes, a hold never uses up attempts
+        drained = await outbox.drain(house.sessionmaker, conn.channel, house.clock)
+        assert (drained.held, drained.retrying, fake.calls) == (1, 0, [])  # not lost to not_in_channel
+        (row,) = await house.outbox()
+        assert (row.attempts, row.available_at) == (0, house.clock() + timedelta(seconds=60))
+        house.clock.now = row.available_at
     event = replace_household(info(), house.household.id)
     reminder = note.ResponseReminder(event, note.PersonInfo(house["Kim"].id, "Kim"))
     await conn.channel.deliver(reminder)  # direct messages still go
-    with pytest.raises(SlackUnavailable, match="setup problem"):
+    with pytest.raises(note.HeldDelivery, match="setup problem"):
         await conn.channel.update(note.MessageRef(CHANNEL, "1.0"), note.CallUpdated(event))
 
     fake.channel["is_member"] = True  # the admin invites the bot
     assert await conn.run_once()
-    house.clock.advance(timedelta(seconds=30))
     assert (await outbox.drain(house.sessionmaker, conn.channel, house.clock)).delivered == 1
     await conn.stop()

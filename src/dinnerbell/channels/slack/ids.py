@@ -95,9 +95,12 @@ class ViewOrigin:
 
     event_id: int
     channel_id: str | None = None
+    home: bool = False
+    """Opened from the Home tab: answer there, not in a direct message (spec 10)."""
 
     def encode(self) -> str:
-        return json.dumps({"event": self.event_id, "channel": self.channel_id}, separators=(",", ":"))
+        data = {"event": self.event_id, "channel": self.channel_id, "home": self.home}
+        return json.dumps(data, separators=(",", ":"))
 
     @classmethod
     def decode(cls, text: object) -> ViewOrigin:
@@ -107,11 +110,13 @@ class ViewOrigin:
             data = json.loads(text)
         except ValueError:
             raise BadValue("bad metadata") from None
-        if not isinstance(data, dict) or set(data) != {"event", "channel"}:
+        if not isinstance(data, dict) or set(data) != {"event", "channel", "home"}:
             raise BadValue("bad metadata")
-        event, channel = data["event"], data["channel"]
+        event, channel, home = data["event"], data["channel"], data["home"]
+        if not isinstance(home, bool):
+            raise BadValue("bad metadata")
         if not isinstance(event, int) or isinstance(event, bool) or not 1 <= event <= MAX_ID:
             raise BadValue("bad metadata")
         if channel is not None and not is_channel_id(channel):
             raise BadValue("bad metadata")
-        return cls(event, channel)
+        return cls(event, channel, home)

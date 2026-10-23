@@ -20,13 +20,13 @@ import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import Any
+from typing import Any, NoReturn
 
 import aiohttp
 from slack_sdk.errors import SlackApiError, SlackClientError
 from slack_sdk.web.async_client import AsyncWebClient
 
-from dinnerbell.domain.notifications import MessageRef, PermanentDeliveryError
+from dinnerbell.domain.notifications import ChannelUnavailable, MessageRef, PermanentDeliveryError
 
 log = logging.getLogger(__name__)
 
@@ -41,7 +41,9 @@ PERMANENT = frozenset(
         "user_not_found",
         "users_not_found",
         "user_disabled",
-        "account_inactive",
+        "user_not_visible",
+        "messages_tab_disabled",
+        "is_inactive",
         "cannot_dm_bot",
         "restricted_action",
         "restricted_action_read_only_channel",
@@ -60,18 +62,35 @@ PERMANENT = frozenset(
         "cant_update_message",
         "edit_window_closed",
         "too_many_attachments",
+        # The request itself is malformed; it would fail the same way again.
+        "invalid_arg_name",
+        "invalid_form_data",
+        "invalid_json",
+        "invalid_array_arg",
+        "invalid_charset",
+        "invalid_post_type",
+        "missing_post_type",
     }
 )
 RATE_LIMITED = frozenset({"ratelimited", "rate_limited"})
 AUTH = frozenset(
-    {"invalid_auth", "not_authed", "token_revoked", "token_expired", "missing_scope", "not_allowed_token_type"}
+    {
+        "invalid_auth",
+        "not_authed",
+        "token_revoked",
+        "token_expired",
+        "account_inactive",
+        "missing_scope",
+        "not_allowed_token_type",
+    }
 )
-"""Token problems. Deliveries retry them, because fixing the token and restarting lets the
-outbox catch up; the startup check reports them as an error."""
+"""Token problems. They stop every delivery until the token is fixed (see ``SlackApi``), so
+fixing it and restarting lets the outbox catch up; /healthz reports them as an error."""
 
 
-class SlackUnavailable(Exception):
-    """A Slack call failed in a way that may work later. Safe to log."""
+class SlackUnavailable(ChannelUnavailable):
+    """A Slack call failed in a way that may work later. Safe to log. The drainer ends its pass
+    on it, so an outage costs one timeout per drain, not one per row."""
 
 
 class SlackAuthError(SlackUnavailable):
@@ -143,16 +162,28 @@ class Identity:
 
 
 class SlackApi:
-    """The handful of Web API methods Dinnerbell uses. All failures raise the exceptions above."""
+    """The handful of Web API methods Dinnerbell uses. All failures raise the exceptions above.
+
+    ``on_auth_error`` is called whenever Slack refuses a token, from any call: a delivery, an
+    interaction, or a check. The connection uses it to hold deliveries and report the error
+    at once, instead of at its next hourly check.
+    """
 
     def __init__(self, client: AsyncWebClient) -> None:
         self.client = client
+        self.on_auth_error: Callable[[SlackAuthError], None] | None = None
+
+    def _raise(self, method: str, exc: BaseException) -> NoReturn:
+        error = translate(method, exc)
+        if isinstance(error, SlackAuthError) and self.on_auth_error is not None:
+            self.on_auth_error(error)
+        raise error from None
 
     async def _call(self, method: str, call: Callable[[], Awaitable[Any]]) -> Any:
         try:
             return await call()
         except TRANSPORT_ERRORS as exc:
-            raise translate(method, exc) from None
+            self._raise(method, exc)
 
     async def post(self, channel: str, message: dict[str, Any], *, thread_ts: str | None = None) -> MessageRef:
         response = await self._call(
@@ -216,8 +247,8 @@ class SlackApi:
         except SlackApiError as exc:
             if error_code(exc) == "users_not_found":
                 return None
-            raise translate("users.lookupByEmail", exc) from None
+            self._raise("users.lookupByEmail", exc)
         except TRANSPORT_ERRORS as exc:
-            raise translate("users.lookupByEmail", exc) from None
+            self._raise("users.lookupByEmail", exc)
         user: dict[str, Any] = response["user"]
         return user

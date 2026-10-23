@@ -265,7 +265,9 @@ async def test_tokens_never_reach_logs_errors_or_the_outbox(house: House, caplog
         errors = [e for (e,) in (await db.execute(text("SELECT last_error FROM outbox"))).all() if e]
     assert errors
     everything = "\n".join([*errors, caplog.text, *(str(r.__dict__) for r in caplog.records)])
-    assert "slack setup problem" in everything and "SlackUnavailable" in everything
+    # The texts that could carry a token were all captured: Slack's refusals, and the errors.
+    assert "Slack refused DINNERBELL_SLACK_BOT_TOKEN" in caplog.text
+    assert any(e.startswith(("SlackUnavailable", "HeldDelivery")) for e in errors)
     for secret in (BOT_TOKEN, APP_TOKEN, BOT_TOKEN.split("-", 1)[1], APP_TOKEN.split("-", 1)[1]):
         assert secret not in everything
     await slack.conn.stop()
@@ -295,7 +297,7 @@ async def test_payloads_without_a_user_are_dropped(slack: Slack, house: House) -
     await slack._send("slash_commands", command)
     assert slack.fake.calls == []
     assert await responses(house, event_id) == 0
-    assert ids.ViewOrigin.decode('{"event": 1, "channel": null}') == ids.ViewOrigin(1)
+    assert ids.ViewOrigin.decode('{"event": 1, "channel": null, "home": true}') == ids.ViewOrigin(1, home=True)
     with pytest.raises(ids.BadValue):
         ids.ViewOrigin.decode(None)
 

@@ -2,7 +2,7 @@
   "blocks": [
     {
       "text": {
-        "text": "*Sam's Tacos* is done. Thanks to everyone who pitched in!",
+        "text": "*Dinner is done: Sam's Tacos.* Thanks to everyone who pitched in!",
         "type": "mrkdwn"
       },
       "type": "section"
