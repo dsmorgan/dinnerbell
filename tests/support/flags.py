@@ -7,11 +7,14 @@ instead of from collection, so the coverage check in tests/test_flags.py gives t
 however many tests a run selects. Both sides follow the same rules, so a mark can't count as
 coverage without running the test in that state:
 
-- A mark decorates a test function or a test class, and nothing else: no module ``pytestmark``
-  and no ``pytest.param(marks=...)``.
+- A mark decorates a ``test*`` function or a ``Test*`` class, and nothing else: no other
+  class, no module ``pytestmark``, and no ``pytest.param(marks=...)``.
 - A test's marks for one flag, its own and its classes', all agree.
-- A marked test uses the ``settings`` fixture, which applies the marks, and is never skipped
-  or expected to fail by a mark.
+- A marked test uses the ``settings`` fixture, which applies the marks and fails the test if
+  the flags it ends up with disagree with them. It can't parametrize ``features`` or a
+  ``settings_overrides`` with ``features`` in it.
+- A marked test is never skipped or expected to fail by a mark. A ``pytest.skip()`` call in
+  the test's body can't be caught; don't write one.
 """
 
 from __future__ import annotations
@@ -24,7 +27,7 @@ from typing import Any
 import pytest
 
 TESTS = Path(__file__).resolve().parents[1]
-SELF_TEST = "test_flags.py"
+SELF_TEST = TESTS / "test_flags.py"
 """Builds flag marks as data to test these rules, so the scan skips it. Nothing in it counts."""
 SKIPPING = ("skip", "skipif", "xfail")
 
@@ -49,6 +52,17 @@ def features_for(marks: Iterable[pytest.Mark]) -> frozenset[str] | None:
     return frozenset(name for name, on in states.items() if on)
 
 
+def disagreements(marks: Iterable[pytest.Mark], features: Iterable[str]) -> list[str]:
+    """Each mark the test's settings don't honor: the flag is on when marked off, or off when
+    marked on."""
+    on = set(features)
+    return [
+        f"flag {m.args[0]!r} is marked on={m.kwargs['on']}, but the settings have it the other way"
+        for m in marks
+        if (m.args[0] in on) != m.kwargs["on"]
+    ]
+
+
 def _module_marks(module: object) -> list[pytest.Mark]:
     marks = getattr(module, "pytestmark", [])
     marks = marks if isinstance(marks, list) else [marks]
@@ -70,6 +84,10 @@ def item_problems(item: Any) -> list[str]:
         problems.append(f"{where}: mark the test or its class with flag, not the module's pytestmark")
     if "settings" not in item.fixturenames:
         problems.append(f"{where}: a flag-marked test must use the settings fixture, which applies the mark")
+    params = getattr(getattr(item, "callspec", None), "params", {})
+    overrides = params.get("settings_overrides")
+    if "features" in params or (isinstance(overrides, dict) and "features" in overrides):
+        problems.append(f"{where}: a flag-marked test can't parametrize its features; the marks set them")
     for name in SKIPPING:
         if any(True for _ in item.iter_markers(name)):
             problems.append(f"{where}: a flag-marked test must run, so it can't be marked {name}")
@@ -109,6 +127,10 @@ def _tests(
     for node in nodes:
         if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
             continue
+        if isinstance(node, ast.ClassDef) and not node.name.startswith("Test"):
+            if any(_flag_call(d) for d in node.decorator_list):
+                raise BadFlagMark(f"{filename}:{node.lineno}: only a Test* class's flag marks reach its tests")
+            continue  # pytest doesn't collect it
         states = dict(inherited)
         for decorator in node.decorator_list:
             call = _flag_call(decorator)
@@ -143,7 +165,7 @@ def flag_tests(root: Path = TESTS) -> set[tuple[str, bool]]:
     """Every ``(name, on)`` state some test under ``root`` runs a flag in."""
     found: set[tuple[str, bool]] = set()
     for path in sorted(root.rglob("test_*.py")):
-        if path.name == SELF_TEST:
+        if path == SELF_TEST:
             continue
         found |= marks_in(path.read_text(), str(path))
     return found
