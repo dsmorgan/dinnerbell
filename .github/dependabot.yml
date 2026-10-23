@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# One grouped PR per ecosystem each Monday, and a separate grouped PR for security fixes.
+# One grouped PR per ecosystem each Monday, and a separate grouped PR for security fixes
+# to Python packages and actions.
 # Cooldown skips releases younger than a week; GitHub never applies it to security updates.
 # Nothing auto-merges: every Dependabot PR goes through review and the required checks.
 version: 2
@@ -42,10 +43,9 @@ updates:
       day: monday
     cooldown:
       default-days: 7
+    # No security group: GitHub publishes no advisories for container images, so Dependabot
+    # never opens a security update here. Grype in CI and the nightly scan cover the image.
     groups:
-      docker-security:
-        applies-to: security-updates
-        patterns: ["*"]
       docker:
         applies-to: version-updates
         patterns: ["*"]

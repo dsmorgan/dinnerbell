@@ -23,38 +23,69 @@ jobs:
       contents: read # list releases; checkout
       security-events: write # upload SARIF
     env:
-      IMAGE: ghcr.io/${{ github.repository }}:latest
+      IMAGE: ghcr.io/${{ github.repository }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      # Before the first release there is no :latest, and the run says so instead of failing.
-      # After it, a missing or unreadable :latest is an error.
+      # Find the newest release, then check that :latest is that release's image, by its
+      # org.opencontainers.image.version label. Before the first release there's nothing to scan,
+      # and the run says so. After it, a missing, unreadable or stale :latest is an error.
+      # The registry is read anonymously, so the GHCR package must be public.
       - name: Resolve the image digest
         id: image
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          releases=$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=1" --jq 'length')
-          if manifest=$(docker buildx imagetools inspect "$IMAGE" --format '{{json .Manifest}}' 2>inspect.err); then
-            digest=$(jq -r .digest <<<"$manifest")
-            if ! [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
-              echo "::error::Can't read the digest of $IMAGE."
-              exit 1
+          if ! tag=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq .tag_name 2>release.err); then
+            if grep -q "HTTP 404" release.err; then
+              echo "found=false" >> "$GITHUB_OUTPUT"
+              echo "::notice::No release yet, so there's no $IMAGE:latest to scan."
+              echo "No release yet, so there's no \`$IMAGE:latest\` to scan." >> "$GITHUB_STEP_SUMMARY"
+              exit 0
             fi
-            echo "ref=${IMAGE%:latest}@$digest" >> "$GITHUB_OUTPUT"
-            echo "found=true" >> "$GITHUB_OUTPUT"
-            echo "Scanning \`$IMAGE\` at \`$digest\`." >> "$GITHUB_STEP_SUMMARY"
-          elif [ "$releases" = "0" ]; then
-            echo "found=false" >> "$GITHUB_OUTPUT"
-            echo "::notice::No release yet, so $IMAGE doesn't exist. Nothing to scan."
-            echo "No release yet, so \`$IMAGE\` doesn't exist. Nothing to scan." >> "$GITHUB_STEP_SUMMARY"
-          else
-            cat inspect.err
-            echo "::error::A release exists, but $IMAGE can't be read anonymously. Check that the GHCR package is public and that the release workflow pushed :latest."
+            cat release.err
             exit 1
           fi
+
+          name=${IMAGE#ghcr.io/}
+          token=$(curl -fsS --retry 3 "https://ghcr.io/token?scope=repository:$name:pull" | jq -r '.token // empty') || token=""
+          if [ -z "$token" ]; then
+            echo "::error::Release $tag exists, but $IMAGE can't be read anonymously: the GHCR package is private or doesn't exist."
+            exit 1
+          fi
+          accept="application/vnd.oci.image.index.v1+json,application/vnd.docker.distribution.manifest.list.v2+json,application/vnd.oci.image.manifest.v1+json,application/vnd.docker.distribution.manifest.v2+json"
+          registry() {
+            curl -fsSL --retry 3 -H "Authorization: Bearer $token" -H "Accept: $accept" "$@"
+          }
+          if ! registry -D headers.txt -o index.json "https://ghcr.io/v2/$name/manifests/latest"; then
+            echo "::error::Release $tag exists, but $IMAGE:latest doesn't. Check that the release's publish job pushed it."
+            exit 1
+          fi
+          digest=$(tr -d '\r' < headers.txt | awk 'tolower($1) == "docker-content-digest:" { print $2 }' | tail -n 1)
+          if ! [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::Can't read the digest of $IMAGE:latest."
+            exit 1
+          fi
+
+          # An index lists one manifest per platform plus attestations; the image is linux/amd64.
+          manifest=$(jq -r 'if .manifests then (.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64") | .digest) else empty end' index.json | head -n 1)
+          if [ -n "$manifest" ]; then
+            registry -o manifest.json "https://ghcr.io/v2/$name/manifests/$manifest"
+          else
+            cp index.json manifest.json
+          fi
+          config=$(jq -r .config.digest manifest.json)
+          version=$(registry "https://ghcr.io/v2/$name/blobs/$config" | jq -r '.config.Labels["org.opencontainers.image.version"] // ""')
+          if [ "$version" != "${tag#v}" ]; then
+            echo "::error::$IMAGE:latest is version '$version', but the newest release is $tag. Check that the release's publish job pushed :latest."
+            exit 1
+          fi
+
+          echo "ref=$IMAGE@$digest" >> "$GITHUB_OUTPUT"
+          echo "found=true" >> "$GITHUB_OUTPUT"
+          echo "Scanning \`$IMAGE:latest\` ($tag) at \`$digest\`." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Scan
         id: scan
