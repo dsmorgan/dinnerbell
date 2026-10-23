@@ -365,6 +365,14 @@ async def decide(
     """FR-15 and FR-16: decide the call, by ``locked`` or by the vote, and assign roles.
     Abandons the call when no proposal can be covered (spec 5.4)."""
     ctx = await load(db, event)
+    # First, before anything is written: a meal that would land after the call's day can't be
+    # decided. A lock says so; the vote deadline ends the call quietly instead.
+    meal = meal_time(ctx.responses, day=event.day, zone=ctx.zone, default=ctx.schedule.meal_time, not_before=now)
+    if meal.astimezone(ctx.zone).date() != event.day:
+        if locked is not None:
+            raise EventRuleViolation("It's too late to decide: the meal would be after midnight.")
+        await expire(db, event, now)
+        return
     group = await group_preferences(db, event.household_id, veto_participants(ctx.responses))
     # Check free text as the catalog item it will become, if one by that name exists by now.
     checked = {p.id: await _as_catalog_item(db, ctx, p) for p in ctx.proposals}
@@ -386,10 +394,6 @@ async def decide(
             return
         winner = found
     item = ctx.items[winner.item_id] if winner.item_id is not None else await _catalog_free_text(db, ctx, winner, now)
-    meal = meal_time(ctx.responses, day=event.day, zone=ctx.zone, default=ctx.schedule.meal_time, not_before=now)
-    if meal.astimezone(ctx.zone).date() != event.day:  # too late to eat on the call's own day
-        await expire(db, event, now)
-        return
     decided = replace(
         event,
         state=transition(event.state, EventState.DECIDED),
