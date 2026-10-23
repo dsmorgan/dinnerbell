@@ -59,11 +59,15 @@ class SlackState:
     ``problem`` is set when a startup check fails (bad token, wrong workspace, bot not in the
     channel). ``connected`` asks the live socket. The status is one of ``not_configured``,
     ``connected``, ``disconnected`` (reconnecting, or Slack unreachable), or ``error``.
+
+    ``dms_dropped`` counts direct messages a labeled instance dropped because the recipient
+    isn't in the channel (ADR 0006). It is None while that guard is off.
     """
 
     configured: bool = False
     problem: str | None = None
     connected: Callable[[], Awaitable[bool]] | None = None
+    dms_dropped: int | None = None
 
     async def status(self) -> str:
         if not self.configured:

@@ -13,7 +13,8 @@ every delivery, direct messages too.
 
 On a labeled instance, such as test (ADR 0006), ``Audience`` limits who the bot may reach to
 the members of the configured channel: a direct message to anyone else is dropped, and a
-mention of anyone else shows as their plain name. On an unlabeled instance it changes nothing.
+mention of anyone else shows as their plain name. Until the members are known, direct messages
+are held and every mention shows as a name. On an unlabeled instance it changes nothing.
 """
 
 from __future__ import annotations
@@ -35,6 +36,7 @@ from dinnerbell.domain.notifications import (
     PermanentDeliveryError,
 )
 from dinnerbell.services import slack_members
+from dinnerbell.services.health import SlackState
 
 log = logging.getLogger(__name__)
 
@@ -67,15 +69,29 @@ class Audience:
 
     Unlimited unless ``limited``, which is set on a labeled instance. While limited, only Slack
     users in ``members`` (the configured channel's members, read at each supervisor check) are
-    allowed. ``members`` is None until the first read succeeds and after a read fails, which
-    allows nobody: it fails closed.
+    allowed. ``members`` is None while they're unknown: before the first read, and after a read
+    or check that says the old list can't be trusted. Unknown allows nobody, but isn't "not in
+    the channel": direct messages wait for the members instead of being dropped.
     """
 
     limited: bool = False
     members: frozenset[str] | None = None
 
+    @property
+    def known(self) -> bool:
+        return not self.limited or self.members is not None
+
     def allows(self, slack_user: str) -> bool:
         return not self.limited or (self.members is not None and slack_user in self.members)
+
+    def check_direct(self, slack_user: str) -> bool:
+        """Whether a direct message to ``slack_user`` may go. Raises HeldDelivery while the
+        members are unknown, so the message waits instead of being lost."""
+        if not self.known:
+            raise HeldDelivery(
+                "channel members not known yet; direct messages wait for them", retry_after=HOLD_RETRY_SECONDS
+            )
+        return self.allows(slack_user)
 
     def directory(self, directory: Directory) -> Directory:
         """``directory`` without the Slack users this audience doesn't allow, so they render as
@@ -96,10 +112,12 @@ class SlackChannel:
         hold: Hold,
         instance_label: str = "",
         audience: Audience | None = None,
+        state: SlackState | None = None,
     ) -> None:
         self.api = api
         self.hold = hold
         self.audience = audience or Audience()
+        self.state = state
         self.channel_id = channel_id
         self.base_url = base_url
         self.sessionmaker = sessionmaker
@@ -121,12 +139,14 @@ class SlackChannel:
             slack_user = directory.slack_ids.get(recipient)
             if slack_user is None:
                 raise PermanentDeliveryError(f"member {recipient} has no Slack user")
-            if not self.audience.allows(slack_user):
+            if not self.audience.check_direct(slack_user):
                 # Done, not failed: the row closes as delivered and is never retried.
                 log.info(
                     "slack direct message dropped: recipient isn't in the channel",
                     extra={"kind": notification.kind, "event_id": notification.event.id, "recipient_id": recipient},
                 )
+                if self.state is not None and self.state.dms_dropped is not None:
+                    self.state.dms_dropped += 1
                 return DeliveryResult(None)
         message = render(notification, self._context(directory)).payload()
         if slack_user is not None:

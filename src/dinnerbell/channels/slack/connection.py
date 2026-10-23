@@ -20,11 +20,13 @@ without a restart. A token Slack refuses during a delivery or an interaction doe
 once and wakes the supervisor. Slack being unreachable shows as ``disconnected`` and keeps any
 problem already known.
 
-On a labeled instance, the channel's members are read again on every pass, so inviting someone
-to the channel takes effect within the hour. A failed read (``missing_scope`` gets a hint in the
-log) or a failed check allows nobody: direct messages are dropped and mentions show as plain
-names until a later pass reads the members, which comes within a minute. Channel posts still go
-out. Slack being unreachable keeps the members already read, like any problem already known.
+On a labeled instance, the channel's members are read again on every pass, even when only the
+app-level token is wrong, so inviting someone to the channel takes effect within the hour. Until
+the first read, and after Slack refuses the read (``missing_scope`` gets a hint in the log) or a
+check finds a problem that holds deliveries, the members are unknown: direct messages wait
+(``HeldDelivery``) and mentions show as plain names until a later pass, within a minute, reads
+them. Channel posts still go out. A read that times out, or Slack being unreachable, keeps the
+members already read, like any problem already known.
 """
 
 from __future__ import annotations
@@ -72,7 +74,7 @@ MAX_MEMBER_PAGES = 10
 """Read at most this many pages (2,000 people) per check. A household channel is far smaller;
 past the cap, the people not read are treated as outside the channel."""
 MEMBERS_SCOPE_HINT = (
-    "Slack refused conversations.members (missing_scope), so this labeled instance sends no direct "
+    "Slack refused conversations.members (missing_scope), so this labeled instance holds direct "
     "messages and mentions nobody. Add the channels:read scope (groups:read for a private channel) "
     "to the Slack app, then reinstall it."
 )
@@ -197,6 +199,8 @@ class SlackConnection:
         self.hold = Hold()
         self.audience = Audience(limited=bool(instance_label))
         self._audience_error: str | None = None
+        if self.audience.limited:
+            state.dms_dropped = 0
         self.socket_factory = socket_factory
         self.socket: Socket | None = None
         self.team_id: str | None = None
@@ -213,6 +217,7 @@ class SlackConnection:
             hold=self.hold,
             instance_label=instance_label,
             audience=self.audience,
+            state=state,
         )
         self.interactions = Interactions(
             self.api,
@@ -278,7 +283,7 @@ class SlackConnection:
             self._wake.clear()  # before the pass, so a wake during it isn't lost
             started = self.monotonic()
             healthy = await self.run_once()
-            settled = healthy and self._down_since is None and self._audience_known()
+            settled = healthy and self._down_since is None and self.audience.known
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(
                     self._wake.wait(), CHECK_AGAIN_AFTER_SUCCESS if settled else CHECK_AGAIN_AFTER_FAILURE
@@ -293,7 +298,8 @@ class SlackConnection:
             await self.check()
         except SetupProblem as exc:
             self._report(str(exc), exc.hold)
-            self.audience.members = None  # who's in the channel is unknown until it's fixed
+            if exc.hold is not HoldScope.NONE:
+                self.audience.members = None  # the channel or token is wrong: trust no old list
             return False
         except SlackUnavailable as exc:
             # Unreachable says nothing about the setup: keep any problem, and its hold, as is.
@@ -310,11 +316,6 @@ class SlackConnection:
         except Exception:
             log.exception("linking slack users failed")
         return True
-
-    def _audience_known(self) -> bool:
-        """False while a labeled instance couldn't read the channel's members, so the
-        supervisor tries again within a minute instead of an hour."""
-        return not self.audience.limited or self.audience.members is not None
 
     def _report(self, problem: str | None, hold: HoldScope) -> None:
         if problem != self.state.problem:
@@ -358,7 +359,14 @@ class SlackConnection:
         self.team_id = identity.team_id
         self.interactions.team_id = identity.team_id
         if self.socket is None:
-            await self._check_app_token()
+            try:
+                await self._check_app_token()
+            except SetupProblem:
+                if self.audience.limited:
+                    # Deliveries use the bot token and still go, so keep their audience current.
+                    with contextlib.suppress(SetupProblem, SlackUnavailable):
+                        await self._check_channel()
+                raise
             self._connect()
         await self._check_channel()
         await self._check_socket()
@@ -414,21 +422,15 @@ class SlackConnection:
             await self._read_audience()
 
     async def _read_audience(self) -> None:
-        """Refresh who a labeled instance may DM or mention. Never raises: a failed read
-        allows nobody until a later check succeeds, and channel posts still go out."""
+        """Refresh who a labeled instance may DM or mention. Never raises. When Slack refuses
+        the read, the members become unknown; when it's only unreachable, the members already
+        read stay. Either way channel posts still go out."""
         try:
             members, complete = await self.api.channel_members(
                 self.channel_id, page_size=MEMBERS_PAGE_SIZE, max_pages=MAX_MEMBER_PAGES
             )
-        except (SlackUnavailable, PermanentDeliveryError) as exc:
-            self.audience.members = None
-            error = str(exc)
-            if error != self._audience_error:  # once per failure, not on every retry a minute apart
-                if isinstance(exc, SlackAuthError) and exc.code == "missing_scope":
-                    log.error(MEMBERS_SCOPE_HINT)
-                else:
-                    log.warning("reading the channel's members failed; no DMs or mentions", extra={"error": error})
-            self._audience_error = error
+        except Exception as exc:
+            self._audience_failed(exc)
             return
         if self._audience_error is not None:
             log.info("read the channel's members again; DMs and mentions resume")
@@ -436,6 +438,27 @@ class SlackConnection:
         if not complete:
             log.warning("the channel has more members than Dinnerbell reads; the rest get no DMs or mentions")
         self.audience.members = members
+
+    def _audience_failed(self, exc: Exception) -> None:
+        """Slack refusing the read (auth, scope, a missing channel), or a bug, makes the members
+        unknown. A timeout, rate limit, or outage keeps the last list. Each failure logs once,
+        not on every retry a minute apart."""
+        unreachable = isinstance(exc, SlackUnavailable) and not isinstance(exc, SlackAuthError)
+        if not unreachable:
+            self.audience.members = None
+        error = str(exc) if isinstance(exc, SlackUnavailable | PermanentDeliveryError) else type(exc).__name__
+        if error == self._audience_error:
+            return
+        self._audience_error = error
+        if isinstance(exc, SlackAuthError) and exc.code == "missing_scope":
+            log.error(MEMBERS_SCOPE_HINT)
+        elif unreachable:
+            log.warning("reading the channel's members failed; keeping the last list", extra={"error": error})
+        else:
+            log.warning(
+                "reading the channel's members failed; members unknown, so DMs wait and nobody is mentioned",
+                extra={"error": error},
+            )
 
     # Linking members (FR-42) -------------------------------------------------------------------
 

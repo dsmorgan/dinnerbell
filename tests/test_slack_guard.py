@@ -7,11 +7,13 @@ from __future__ import annotations
 import logging
 from collections.abc import AsyncIterator
 from dataclasses import replace
+from datetime import timedelta
 from typing import Any
 
 import pytest
 
 from dinnerbell.channels.slack import connection as connection_module
+from dinnerbell.channels.slack.channel import HOLD_RETRY_SECONDS
 from dinnerbell.channels.slack.connection import SlackConnection
 from dinnerbell.config import Settings
 from dinnerbell.db.outbox import OutboxRepository
@@ -103,6 +105,31 @@ async def test_mentions_of_people_outside_the_channel_become_names(house: House)
     assert SLACK_IDS["Lee"] not in str(update.args["blocks"])
 
 
+async def test_mentions_in_a_thread_reply_and_a_dm_body_are_filtered(house: House) -> None:
+    from dinnerbell.channels.slack import preview
+
+    fake = FakeSlack()
+    conn = await checked(house, fake, limited=True)
+    kim, sam = person(house, "Kim"), person(house, "Sam")
+    decision = replace(
+        preview.DECISION,
+        assignments=(
+            note.AssignmentInfo(note.AssignmentRole.COOK, sam),
+            note.AssignmentInfo(note.AssignmentRole.COORDINATOR, kim),
+        ),
+    )
+    decided = replace(event(house), state=preview.DECIDED.state)
+    thread = note.MessageRef(CHANNEL, "1.000100")
+    await conn.channel.deliver(note.DecisionMade(decided, decision, locked_by=kim), thread=thread)
+    await conn.channel.deliver(note.AssignmentMade(decided, 1, sam, (note.AssignmentRole.COOK,), decision))
+    (reply, dm) = fake.of("chat.postMessage")
+    assert reply.args["thread_ts"] == "1.000100"
+    assert f"<@{SLACK_IDS['Sam']}>" in str(reply.args["blocks"])
+    for call in (reply, dm):
+        assert SLACK_IDS["Kim"] not in str(call.args) and "Kim" in str(call.args["blocks"])
+    assert dm.args["channel"] == SLACK_IDS["Sam"]
+
+
 async def test_a_reminder_round_reaches_only_the_channel(house: House) -> None:
     """End to end: a call opens, and the reminder DMs only people in the channel. The dropped
     ones close as delivered: nothing retries, holds, or fails."""
@@ -117,6 +144,7 @@ async def test_a_reminder_round_reaches_only_the_channel(house: House) -> None:
     drained = await outbox.drain(house.sessionmaker, conn.channel, house.clock)
     assert {channel for channel, _ in posted(fake)} == {SLACK_IDS["Alex"], SLACK_IDS["Sam"]}
     assert (drained.delivered, drained.retrying, drained.held, drained.failed) == (4, 0, 0, 0)
+    assert conn.state.dms_dropped == 2
     async with house.sessionmaker() as db:
         assert await OutboxRepository(db).backlog() == (0, 0)  # nothing waits to retry
 
@@ -159,33 +187,114 @@ async def test_reading_stops_at_the_page_cap(
 ) -> None:
     monkeypatch.setattr(connection_module, "MEMBERS_PAGE_SIZE", 1)
     monkeypatch.setattr(connection_module, "MAX_MEMBER_PAGES", 2)
+    caplog.set_level(logging.WARNING, logger="dinnerbell.channels.slack")
     fake = FakeSlack()
-    await checked(house, fake, limited=True)
+    fake.channel_members = list(IN_CHANNEL)
     conn = connection(house, fake, instance_label=LABEL)
     assert await conn.run_once()
-    assert len(fake.of("conversations.members")) == 2
+    assert [c.args.get("cursor") for c in fake.of("conversations.members")] == [None, "1"]
     assert conn.audience.members == frozenset(IN_CHANNEL[:2])  # the rest count as outside
     assert any("more members than Dinnerbell reads" in r.getMessage() for r in caplog.records)
 
 
-@pytest.mark.parametrize("failure", [Failure("internal_error"), Failure(raises=TimeoutError())])
-async def test_a_failed_read_fails_closed(house: House, failure: Failure) -> None:
+@pytest.mark.parametrize("failure", [Failure("internal_error"), Failure(raises=TimeoutError()), Failure("ratelimited")])
+async def test_an_unreachable_read_keeps_the_last_list(house: House, failure: Failure) -> None:
     fake = FakeSlack()
     conn = await checked(house, fake, limited=True)
     fake.fail("conversations.members", failure)
-    assert await conn.run_once()  # the setup is fine; posts still go
-    assert conn.audience.members is None
-    assert not conn._audience_known()  # so the supervisor reads again within a minute
+    assert await conn.run_once()
+    assert conn.audience.members == frozenset(IN_CHANNEL)
+    await conn.channel.deliver(note.ResponseReminder(event(house), person(house, "Alex")))
+    assert [channel for channel, _ in posted(fake)] == [SLACK_IDS["Alex"]]  # nothing lost to a blip
 
-    assert await conn.channel.deliver(note.ResponseReminder(event(house), person(house, "Alex"))) == (
-        note.DeliveryResult(None)
-    )
+
+async def refused_read(house: House, fake: FakeSlack) -> SlackConnection:
+    """A connection whose members are unknown because Slack refused the read."""
+    conn = await checked(house, fake, limited=True)
+    fake.fail("conversations.members", Failure("channel_not_found"))
+    assert await conn.run_once()  # the setup is fine; posts still go
+    assert conn.audience.members is None and not conn.audience.known
+    fake.clear()
+    return conn
+
+
+async def test_unknown_members_hold_dms_and_mention_nobody(house: House) -> None:
+    fake = FakeSlack()
+    conn = await refused_read(house, fake)
+    with pytest.raises(note.HeldDelivery, match="channel members not known"):
+        await conn.channel.deliver(note.ResponseReminder(event(house), person(house, "Alex")))
     await conn.channel.deliver(note.CallOpened(event(house), (person(house, "Alex"),)))
     ((channel, blocks),) = posted(fake)
     assert channel == CHANNEL and "<@" not in blocks
+    assert conn.state.dms_dropped == 0  # held, not dropped
+
+    assert await conn.run_once()  # the next pass reads them, and DMs go again
+    await conn.channel.deliver(note.ResponseReminder(event(house), person(house, "Alex")))
+    assert posted(fake)[-1][0] == SLACK_IDS["Alex"]
+
+
+async def test_an_unexpected_error_while_reading_never_breaks_the_check(
+    house: House, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = FakeSlack()
+    conn = await checked(house, fake, limited=True)
+
+    async def broken(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("bug")
+
+    monkeypatch.setattr(conn.api, "channel_members", broken)
+    assert await conn.run_once()
+    assert conn.audience.members is None
+
+
+async def test_a_bad_app_token_still_reads_the_members(house: House) -> None:
+    """The app-level token only serves Socket Mode; deliveries use the bot token and still go,
+    so a DM to someone in the channel must not be held or dropped meanwhile."""
+    fake = FakeSlack()
+    fake.channel_members = list(IN_CHANNEL)
+    fake.fail("apps.connections.open", Failure("invalid_auth"))
+    conn = connection(house, fake, instance_label=LABEL)
+    assert not await conn.run_once()
+    assert conn.state.problem is not None and "APP_TOKEN" in conn.state.problem
+    assert conn.audience.members == frozenset(IN_CHANNEL)
+    fake.clear()
+    await conn.channel.deliver(note.ResponseReminder(event(house), person(house, "Alex")))
+    assert [channel for channel, _ in posted(fake)] == [SLACK_IDS["Alex"]]
+
+    fake.fail("apps.connections.open", Failure("invalid_auth"))
+    fake.fail("conversations.info", Failure(raises=TimeoutError()))
+    assert not await conn.run_once()  # an unreachable channel check doesn't hide the token problem
+    assert "APP_TOKEN" in (conn.state.problem or "")
+
+
+async def test_an_unlabeled_instance_with_a_bad_app_token_checks_nothing_more(house: House) -> None:
+    fake = FakeSlack()
+    fake.fail("apps.connections.open", Failure("invalid_auth"))
+    assert not await connection(house, fake).run_once()
+    assert fake.methods == ["auth.test", "apps.connections.open"]
+
+
+async def test_dms_wait_for_the_first_read_after_startup(house: House) -> None:
+    """Before the supervisor's first pass, reminders are held, not lost; once the members are
+    read, they reach the people in the channel and the rest are dropped and counted."""
+    fake = FakeSlack()
+    fake.channel_members = list(IN_CHANNEL)
+    conn = connection(house, fake, instance_label=LABEL)
+    house.clock.now = OPENS
+    await house.tick()
+    house.clock.now = REMIND
+    await house.tick()
+    drained = await outbox.drain(house.sessionmaker, conn.channel, house.clock)
+    assert drained.held == 4  # the four reminders; the call message went out
+    assert [channel for channel, _ in posted(fake)] == [CHANNEL]
 
     assert await conn.run_once()
-    assert conn.audience.allows(SLACK_IDS["Alex"])
+    fake.clear()
+    house.clock.now += timedelta(seconds=HOLD_RETRY_SECONDS)
+    drained = await outbox.drain(house.sessionmaker, conn.channel, house.clock)
+    assert (drained.delivered, drained.held, drained.failed) == (4, 0, 0)
+    assert {channel for channel, _ in posted(fake)} == {SLACK_IDS["Alex"], SLACK_IDS["Sam"]}
+    assert conn.state.dms_dropped == 2
 
 
 async def test_a_missing_scope_fails_closed_with_a_hint(house: House, caplog: pytest.LogCaptureFixture) -> None:
@@ -209,7 +318,7 @@ async def test_a_missing_scope_fails_closed_with_a_hint(house: House, caplog: py
     assert any("DMs and mentions resume" in r.getMessage() for r in caplog.records)
 
 
-async def test_a_setup_problem_forgets_the_members(house: House) -> None:
+async def test_a_channel_problem_forgets_the_members(house: House) -> None:
     fake = FakeSlack()
     conn = await checked(house, fake, limited=True)
     fake.channel["is_member"] = False
@@ -238,4 +347,7 @@ def test_the_label_turns_the_guard_on(
     with slack_client(tmp_path, clock, provider, fake, instance_label=label) as client:
         wait_for_slack(client, "connected")
         assert client.app.state.slack.audience.limited is limited  # type: ignore[attr-defined]
+        body = client.get("/healthz").json()
+        assert body.get("slack_dms_dropped") == (0 if limited else None)
+        assert ("slack_dms_dropped" in body) is limited  # production's body is unchanged
     assert ("conversations.members" in fake.methods) is limited
