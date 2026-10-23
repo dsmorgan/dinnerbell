@@ -615,13 +615,15 @@ A copy of production's data tests migrations and new features against real histo
 
    With Docker, use `docker run` with the same arguments. Production's volume is mounted read-only, so the copy can't change it.
 
-4. Scrub the copy. List at least one active admin to keep, usually yourself. Repeat `--keep` for each person who tests with you.
+4. Scrub the copy, with the test instance still stopped. Keep at least one active admin, usually yourself, and repeat `--keep` for each person who tests with you.
 
    ```sh
-   deploy/dinnerbell-test run --rm dinnerbell scrub-test --keep you@example.com --yes
+   deploy/dinnerbell-test run --rm dinnerbell scrub-test --keep you@example.com
    ```
 
-   Run `scrub-test` with the same tag you start next: it migrates the database first, and an older release refuses a database that a newer one migrated. It then deactivates and unlinks from Slack every member you didn't keep, turns off every schedule slot, ends open calls without notifying anyone, and empties the outbox. It leaves the meal log, catalog, and preferences alone. It refuses to run, and changes nothing, unless `DINNERBELL_INSTANCE_LABEL` is set. It prints the household name and how many members, slots, calls, and notifications it changes. Check them: the household is production's, because this is a copy, and the members kept should be only the people you listed. Running it again changes nothing.
+   Before it changes anything, `scrub-test` prints the database path, the household name, and counts of active members, enabled slots, open events, and unsent notifications. Check that the household and counts match the copy you restored, then type `scrub` to confirm. If it refuses because there's no terminal to ask on, check the same numbers in its output, and run the command again with `--yes` added.
+
+   `scrub-test` deactivates and unlinks from Slack every member you didn't keep, turns off every slot, ends open calls without notifying anyone, and empties the outbox. It leaves the meal log, catalog, and preferences alone. It refuses to run, and changes nothing, unless `DINNERBELL_INSTANCE_LABEL` is set. It migrates the database first, so run it with the same tag you start next: an older release refuses a database that a newer one migrated. Running it again changes nothing.
 
 5. Start the test instance.
 
@@ -641,12 +643,12 @@ Use this checklist for every release. It runs the exact release image on a fresh
 
    ```sh
    DINNERBELL_TAG=X.Y.Z deploy/dinnerbell-test pull
-   DINNERBELL_TAG=X.Y.Z deploy/dinnerbell-test run --rm dinnerbell scrub-test --keep you@example.com --yes
+   DINNERBELL_TAG=X.Y.Z deploy/dinnerbell-test run --rm dinnerbell scrub-test --keep you@example.com
    DINNERBELL_TAG=X.Y.Z deploy/dinnerbell-test up -d
    ```
 
 4. Check that the page shows the TEST banner and `X.Y.Z` in the footer, and that `/healthz` reports `"status":"ok"`.
-5. Rehearse a call: run `/dinnerbell-test call` in `#dinnerbell-test`, respond, vote, and let it reach a decision. Check that nobody outside the test channel was notified.
+5. Rehearse a call: run `/dinnerbell-test call` in `#dinnerbell-test`, respond, vote, and let it reach a decision. Check that nobody outside the test channel was notified. While the label is set, `/healthz` reports `slack_dms_dropped`, the number of direct messages withheld from people outside the channel.
 6. In production, [back up now](#back-up-now), and copy the backup off the host.
 7. [Upgrade](#upgrade) production: `git pull`, `podman-compose pull`, then `podman-compose down && podman-compose up -d`.
 8. Check production's footer and `/healthz`.
@@ -716,6 +718,6 @@ Each member is linked to the account they first signed in with. After you switch
 | Sign-in says "That email is already linked" for everyone | You switched sign-in providers, so members are linked to accounts at the old provider. | Follow "Switch providers on an existing install". |
 | Startup error: `DINNERBELL_SLACK_TEAM_ID is required` | The issuer is Slack and the team ID is empty. | Set `DINNERBELL_SLACK_TEAM_ID` as described in step 6, then recreate the service. |
 | Startup error about a token prefix | The tokens are swapped or copied from the wrong page. | `DINNERBELL_SLACK_APP_TOKEN` starts with `xapp-` (Basic Information > App-Level Tokens). `DINNERBELL_SLACK_BOT_TOKEN` starts with `xoxb-` (Install App). |
-| The test instance posts in its channel but sends no direct messages or mentions to someone | While `DINNERBELL_INSTANCE_LABEL` is set, Dinnerbell notifies only members of the test channel. If the log mentions a missing scope, it can't read the channel's members and notifies no one. | Invite the person to the test channel. For a missing scope, paste `deploy/slack-app-manifest.test.yaml` again under **App Manifest** and reinstall the app. |
+| The test instance posts in its channel but sends no direct messages or mentions to someone | While `DINNERBELL_INSTANCE_LABEL` is set, Dinnerbell notifies only members of the test channel, and `/healthz` counts the withheld messages in `slack_dms_dropped`. If the log mentions a missing scope, it can't read the channel's members and notifies no one. | Invite the person to the test channel. For a missing scope, paste `deploy/slack-app-manifest.test.yaml` again under **App Manifest** and reinstall the app. |
 | Production starts with an empty database after a `git pull` | Compose created a new volume, because you ran it from a different directory or project name. | See "Switch a source-built install to the prebuilt image". Your data is still in the old volume. |
 | Rate limiting blocks everyone at once | Dinnerbell sees the proxy's address for every request. | Set `DINNERBELL_TRUSTED_PROXIES` to the proxy's single address, then recreate with `podman-compose down && podman-compose up -d`. A restart doesn't re-read `.env`. |
