@@ -187,3 +187,12 @@ def test_time_filters() -> None:
     assert (filters.hhmm(time(7, 5)), filters.hhmm(None)) == ("07:05", "")
     assert (filters.local_hhmm(moment, "America/Chicago"), filters.local_hhmm(None, "UTC")) == ("16:30", "")
     assert filters.day(moment.date()) == "Thu Oct 22"
+
+
+async def test_a_new_household_stores_the_default_schedule(house: House) -> None:
+    from dinnerbell.db.meals import household_settings
+    from dinnerbell.domain.schedule import default_settings
+
+    async with house.sessionmaker() as db:
+        stored = await household_settings(db, house.household.id)
+    assert stored == default_settings()
