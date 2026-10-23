@@ -237,6 +237,7 @@ async def test_the_supervisor_rechecks_soon_while_the_socket_is_down(
     house: House, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(connection_module, "CHECK_AGAIN_AFTER_FAILURE", 0.01)
+    monkeypatch.setattr(connection_module, "MIN_CHECK_GAP", 0.0)
     monkeypatch.setattr(connection_module, "CHECK_AGAIN_AFTER_SUCCESS", 3600)
     fake = FakeSlack()
     conn = connection(house, fake)
@@ -259,15 +260,17 @@ def test_socket_logs_drop_tracebacks_and_ticket_urls(caplog: pytest.LogCaptureFi
             "Failed to connect (error: 403 url='wss://wss-primary.slack.com/link/?ticket=abc123'); Retrying..."
         )
     SOCKET_LOG.debug("Received message (data: {'secret': 'payload'})")
-    (record,) = [r for r in caplog.records if r.name == SOCKET_LOG.name]
-    assert (record.levelname, record.exc_info) == ("WARNING", None)
-    assert "ticket=" not in record.getMessage() and "wss://(redacted)" in record.getMessage()
+    records = [r for r in caplog.records if r.name == SOCKET_LOG.name]
+    assert records  # pytest also captures at the non-propagating logger, so it may see each twice
+    for record in records:
+        assert (record.levelname, record.exc_info) == ("WARNING", None)
+        assert "ticket=" not in record.getMessage() and "wss://(redacted)" in record.getMessage()
     assert "payload" not in caplog.text
 
 
 async def test_the_real_socket_logs_through_the_quiet_logger(house: House) -> None:
     conn = connection(house, FakeSlack())
-    socket = BoltSocket(conn.app, APP_TOKEN)
+    socket = BoltSocket(conn.app, APP_TOKEN, lambda: None)
     assert socket.handler.client.logger is SOCKET_LOG
     await socket.close()
 
@@ -389,3 +392,142 @@ async def test_an_email_lookup_outage_is_retryable() -> None:
     fake.fail("users.lookupByEmail", Failure(raises=TimeoutError()))
     with pytest.raises(SlackUnavailable, match="timed out"):
         await SlackApi(fake).user_by_email("sam@example.com")
+
+
+# Re-review: scope errors, waking, drops, shutdown, conflicts, and log forms -----------------------
+
+
+@pytest.mark.parametrize("code", ["missing_scope", "not_allowed_token_type"])
+async def test_a_method_level_refusal_holds_nothing(house: House, code: str) -> None:
+    """Regression (re-review S1): missing_scope from the hourly email match held every delivery."""
+    state_ = SlackState()
+    fake = FakeSlack()
+    fake.fail("users.lookupByEmail", *[Failure(code) for _ in range(10)])
+    conn = connection(house, fake, state=state_)
+    assert await conn.run_once()
+    assert (conn.hold.scope, state_.problem, conn._wake.is_set()) == (HoldScope.NONE, None, False)
+    assert await state_.status() == "connected"
+
+
+async def test_the_supervisor_with_a_missing_scope_stays_calm(house: House, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(connection_module, "CHECK_AGAIN_AFTER_SUCCESS", 3600)
+    fake = FakeSlack()
+    fake.fail("users.lookupByEmail", *[Failure("missing_scope") for _ in range(50)])
+    conn = connection(house, fake)
+    await conn.start()
+    await asyncio.sleep(0.3)
+    await conn.stop()
+    assert (fake.methods.count("auth.test"), conn.hold.scope) == (1, HoldScope.NONE)
+
+
+async def test_a_wake_during_a_pass_is_not_lost(house: House, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(connection_module, "CHECK_AGAIN_AFTER_SUCCESS", 3600)
+    monkeypatch.setattr(connection_module, "MIN_CHECK_GAP", 0.0)
+    conn = connection(house, FakeSlack())
+    passes = 0
+
+    async def run_once() -> bool:
+        nonlocal passes
+        passes += 1
+        if passes == 1:
+            conn._wake.set()  # something wakes it while the first pass runs
+        return True
+
+    monkeypatch.setattr(conn, "run_once", run_once)
+    await conn.start()
+    await asyncio.sleep(0.05)
+    await conn.stop()
+    assert passes == 2
+
+
+async def test_wakes_never_check_slack_nonstop(house: House, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(connection_module, "MIN_CHECK_GAP", 0.2)
+    conn = connection(house, FakeSlack())
+    passes = 0
+
+    async def run_once() -> bool:
+        nonlocal passes
+        passes += 1
+        conn._wake.set()  # woken on every pass
+        await asyncio.sleep(0)
+        return False
+
+    monkeypatch.setattr(conn, "run_once", run_once)
+    await conn.start()
+    await asyncio.sleep(0.5)
+    await conn.stop()
+    assert passes <= 3
+
+
+async def test_a_drop_after_connecting_starts_the_app_token_clock(house: House) -> None:
+    now = [0.0]
+    fake = FakeSlack()
+    conn = connection(house, fake)
+    conn.monotonic = lambda: now[0]
+    assert await conn.run_once()
+    socket = conn.socket
+    assert isinstance(socket, FakeSocket) and socket.connected
+    conn._wake.clear()
+    socket.drop()
+    assert conn._wake.is_set() and conn._down_since == 0.0
+    now[0] += 121
+    fake.fail("apps.connections.open", Failure("invalid_auth"))
+    assert not await conn.run_once()
+    assert "Slack refused DINNERBELL_SLACK_APP_TOKEN" in (conn.state.problem or "")
+    await conn.stop()
+
+
+async def test_stop_keeps_to_the_shared_deadline(house: House) -> None:
+    conn = connection(house, FakeSlack())
+    assert await conn.run_once()
+
+    async def hang() -> None:
+        await asyncio.Event().wait()
+
+    conn.socket.close = hang  # type: ignore[union-attr, method-assign]
+    loop = asyncio.get_running_loop()
+    started = loop.time()
+    await conn.stop(deadline=started + 0.1)
+    assert loop.time() - started < 1.5
+
+
+def test_the_app_shuts_down_within_podman_s_timeout() -> None:
+    from dinnerbell import app_factory
+
+    assert app_factory.SHUTDOWN_SECONDS <= 8
+
+
+async def test_a_slack_conflict_is_audited_once(house: House) -> None:
+    async with house.sessionmaker() as db:
+        await members.set_slack_user(db, house["Alex"], house["Sam"].id, "U03KIM", now=house.clock())
+    claims = IdentityClaims(
+        subject="kim-sub", email="kim@example.com", email_verified=True, slack_team_id=TEAM, slack_user_id="U03KIM"
+    )
+    for _ in range(3):
+        async with house.sessionmaker() as db:
+            await auth.sign_in(db, claims, required_team_id=TEAM, now=house.clock())
+    async with house.sessionmaker() as db:
+        rows = list(await db.scalars(select(AuditRow).where(AuditRow.action == "member.slack_user_conflict")))
+    assert len(rows) == 1
+
+
+def test_every_form_of_socket_log_is_quiet(caplog: pytest.LogCaptureFixture) -> None:
+    """Regression (re-review N5): mixed case, https with a query, and child loggers."""
+    caplog.set_level(logging.DEBUG)
+    SOCKET_LOG.warning("url %s", "wss://x.slack.com/link/?ticket=SECRET1")
+    SOCKET_LOG.warning("dict %(u)s", {"u": "wss://x.slack.com/link/?ticket=SECRET2"})
+    try:
+        raise OSError("wss://x.slack.com/link/?ticket=SECRET3")
+    except OSError:
+        SOCKET_LOG.error("failed", exc_info=True)
+        SOCKET_LOG.error("failed %s", "x", stack_info=True)
+    SOCKET_LOG.warning("quoted 'wss://x.slack.com/link/?ticket=SECRET4'")
+    SOCKET_LOG.warning("https https://x.slack.com/link/?ticket=SECRET5")
+    SOCKET_LOG.warning("WSS://X.SLACK.COM/link/?ticket=SECRET6")
+    SOCKET_LOG.warning("ws url=wss://x.slack.com/link/?ticket=SECRET7,next")
+    logging.getLogger(f"{SOCKET_LOG.name}.child").error("child wss://x.slack.com/link/?ticket=SECRET8")
+    logging.getLogger(f"{SOCKET_LOG.name}.child").debug("child payload")
+    records = [r for r in caplog.records if r.name.startswith(SOCKET_LOG.name)]
+    assert {r.name for r in records} == {SOCKET_LOG.name, f"{SOCKET_LOG.name}.child"}
+    assert all(r.levelno <= logging.WARNING and r.exc_info is None and r.stack_info is None for r in records)
+    assert "SECRET" not in caplog.text and "Traceback" not in caplog.text and "child payload" not in caplog.text

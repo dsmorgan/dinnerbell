@@ -7,6 +7,7 @@ each other (spec 13.2).
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -33,6 +34,8 @@ from dinnerbell.web.signing import SignedPayload, derive_key
 
 log = logging.getLogger(__name__)
 OIDC_TIMEOUT_SECONDS = 10.0
+SHUTDOWN_SECONDS = 8.0
+"""How long shutdown waits for running work in all, under podman's 10-second stop timeout."""
 
 
 def create_app(
@@ -94,9 +97,12 @@ def create_app(
         try:
             yield
         finally:
-            await stop_scheduler(scheduler, jobs)
+            # One deadline for both, inside podman's 10-second stop timeout: the scheduler's jobs
+            # first (a drain may be mid-delivery), then Slack, with whatever time is left.
+            deadline = asyncio.get_running_loop().time() + SHUTDOWN_SECONDS
+            await stop_scheduler(scheduler, jobs, grace=SHUTDOWN_SECONDS)
             if slack is not None:
-                await slack.stop()
+                await slack.stop(deadline)
             await http.aclose()
             await database.close()
 

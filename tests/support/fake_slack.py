@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import itertools
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, ClassVar
 
@@ -143,8 +144,9 @@ class FakeSocket:
 
     instances: ClassVar[list[FakeSocket]] = []
 
-    def __init__(self, app: AsyncApp, app_token: str) -> None:
+    def __init__(self, app: AsyncApp, app_token: str, on_drop: Callable[[], None]) -> None:
         self.app = app
+        self.on_drop = on_drop
         self.connected = False
         self.closed = False
         FakeSocket.instances.append(self)
@@ -158,6 +160,11 @@ class FakeSocket:
 
     async def is_connected(self) -> bool:
         return self.connected
+
+    def drop(self) -> None:
+        """The connection closes, as when Slack restarts the socket."""
+        self.connected = False
+        self.on_drop()
 
 
 # Socket Mode requests ----------------------------------------------------------------------------

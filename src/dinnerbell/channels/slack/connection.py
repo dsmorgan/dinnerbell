@@ -51,39 +51,52 @@ PING_INTERVAL_SECONDS = 10.0
 CHECK_AGAIN_AFTER_FAILURE = HOLD_RETRY_SECONDS
 CHECK_AGAIN_AFTER_SUCCESS = 3600.0
 """Hourly: re-check the setup and link newly invited members by email."""
+MIN_CHECK_GAP = 5.0
+"""The least time between two supervisor passes, however often it's woken."""
 RECHECK_APP_TOKEN_AFTER = 120.0
 """Seconds the socket may stay down before the app-level token is checked again."""
 SOCKET_CLOSE_SECONDS = 4.0
 SETTLE_SECONDS = 3.0
-"""Shutdown waits at most this long for each, inside podman's 10-second stop timeout."""
+"""Shutdown waits at most this long for each, and never past the deadline ``stop`` is given."""
 REFUSED_FLAGS = ("deleted", "is_bot", "is_app_user", "is_restricted", "is_ultra_restricted", "is_stranger")
 """User flags that stop an email match from linking. Slack may leave a flag out when it's false
 (docs.slack.dev/reference/objects/user-object), so any value but a missing or false one refuses."""
 
 
-class _QuietSocketLogs(logging.Filter):
+_SOCKET_URL = re.compile(r"\bwss?://[^\s'\"]+", re.IGNORECASE)
+_QUERY_URL = re.compile(r"\bhttps?://[^\s'\"?]*\?[^\s'\"]*", re.IGNORECASE)
+
+
+def quiet(record: logging.LogRecord) -> logging.LogRecord:
     """The SDK's Socket Mode client logs a full traceback when a connect fails, and its errors
-    can include the one-time WebSocket URL, which carries a connection ticket. Keep its records
-    at WARNING or below, drop tracebacks, and redact URLs."""
+    can include the one-time WebSocket URL, which carries a connection ticket. Keep the record
+    at WARNING or below, drop tracebacks and stacks, and redact WebSocket URLs and any URL with
+    a query string."""
+    message = _QUERY_URL.sub("https://(redacted)", _SOCKET_URL.sub("wss://(redacted)", record.getMessage()))
+    record.msg, record.args = message, None
+    record.exc_info, record.exc_text, record.stack_info = None, None, None
+    if record.levelno > logging.WARNING:
+        record.levelno, record.levelname = logging.WARNING, "WARNING"
+    return record
 
-    URL = re.compile(r"wss?://\S+")
 
-    def filter(self, record: logging.LogRecord) -> bool:
-        message = self.URL.sub("wss://(redacted)", record.getMessage())
-        record.msg, record.args = message, None
-        record.exc_info, record.exc_text, record.stack_info = None, None, None
-        if record.levelno > logging.WARNING:
-            record.levelno, record.levelname = logging.WARNING, "WARNING"
-        return True
+class _QuietForwarder(logging.Handler):
+    """Passes the socket logger's records, and its children's, on to the parent logger after
+    ``quiet``. A filter on a logger misses records from its children; this handler doesn't."""
+
+    def emit(self, record: logging.LogRecord) -> None:
+        logging.getLogger("dinnerbell.channels.slack").handle(quiet(record))
 
 
 SOCKET_LOG = logging.getLogger("dinnerbell.channels.slack.socket")
 SOCKET_LOG.setLevel(logging.INFO)  # its DEBUG records include every payload
-SOCKET_LOG.addFilter(_QuietSocketLogs())
+SOCKET_LOG.propagate = False  # everything goes through the forwarder instead
+SOCKET_LOG.addHandler(_QuietForwarder())
 
 
 class Socket(Protocol):
-    """The Socket Mode connection, so tests can swap in a fake."""
+    """The Socket Mode connection, so tests can swap in a fake. A socket calls ``on_drop``,
+    given to its factory, when a connection it had closes."""
 
     async def connect(self) -> None: ...
 
@@ -97,8 +110,13 @@ class BoltSocket:
     uses, so Socket Mode adds no dependency. Its client pings every ``PING_INTERVAL_SECONDS``
     and reconnects on its own after a drop or a stale connection."""
 
-    def __init__(self, app: AsyncApp, app_token: str) -> None:
+    def __init__(self, app: AsyncApp, app_token: str, on_drop: Callable[[], None]) -> None:
         self.handler = AsyncSocketModeHandler(app, app_token, logger=SOCKET_LOG, ping_interval=PING_INTERVAL_SECONDS)
+
+        async def dropped(message: object) -> None:
+            on_drop()
+
+        self.handler.client.on_close_listeners.append(dropped)
 
     async def connect(self) -> None:
         await self.handler.connect_async()  # type: ignore[no-untyped-call]
@@ -110,7 +128,7 @@ class BoltSocket:
         return bool(await self.handler.client.is_connected())
 
 
-SocketFactory = Callable[[AsyncApp, str], Socket]
+SocketFactory = Callable[[AsyncApp, str, Callable[[], None]], Socket]
 
 
 class SetupProblem(Exception):
@@ -194,7 +212,14 @@ class SlackConnection:
     async def start(self) -> None:
         self._task = asyncio.get_running_loop().create_task(self._supervise())
 
-    async def stop(self) -> None:
+    async def stop(self, deadline: float | None = None) -> None:
+        """Shut down by ``deadline`` (the event loop's clock), or within the default waits."""
+        loop = asyncio.get_running_loop()
+        end = deadline if deadline is not None else loop.time() + SOCKET_CLOSE_SECONDS + SETTLE_SECONDS
+
+        def left(most: float) -> float:
+            return max(0.0, min(most, end - loop.time()))
+
         for task in (self._task, self._connect_task):
             if task is not None:
                 task.cancel()
@@ -202,21 +227,24 @@ class SlackConnection:
                     await task
         if self.socket is not None:
             try:
-                await asyncio.wait_for(self.socket.close(), SOCKET_CLOSE_SECONDS)
+                await asyncio.wait_for(self.socket.close(), left(SOCKET_CLOSE_SECONDS))
             except Exception:
                 log.warning("slack socket did not close cleanly", exc_info=True)
-        await self.interactions.settle(SETTLE_SECONDS)
+        await self.interactions.settle(left(SETTLE_SECONDS))
         await self.interactions.cancel_pending()
 
     async def _supervise(self) -> None:
         while True:
+            self._wake.clear()  # before the pass, so a wake during it isn't lost
+            started = self.monotonic()
             healthy = await self.run_once()
             settled = healthy and self._down_since is None
-            self._wake.clear()
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(
                     self._wake.wait(), CHECK_AGAIN_AFTER_SUCCESS if settled else CHECK_AGAIN_AFTER_FAILURE
                 )
+            # However often something wakes it, never check Slack more than every few seconds.
+            await asyncio.sleep(max(0.0, MIN_CHECK_GAP - (self.monotonic() - started)))
 
     async def run_once(self) -> bool:
         """One supervisor pass. True when every check passed."""
@@ -250,6 +278,13 @@ class SlackConnection:
                 log.error("slack setup problem: %s", problem)
         self.state.problem = problem
         self.hold.scope = hold
+
+    def _socket_dropped(self) -> None:
+        """The socket lost a connection it had. The SDK reconnects by itself; the supervisor
+        starts timing the outage now, so the app-token check comes two minutes after a drop."""
+        if self._down_since is None:
+            self._down_since = self.monotonic()
+        self._wake.set()
 
     def _token_refused(self, error: SlackAuthError) -> None:
         """Slack refused the bot token during a delivery or an interaction: hold everything,
@@ -293,7 +328,7 @@ class SlackConnection:
             ) from None
 
     def _connect(self) -> None:
-        self.socket = self.socket_factory(self.app, self.app_token)
+        self.socket = self.socket_factory(self.app, self.app_token, self._socket_dropped)
         # The SDK retries a failed connect forever, so never wait for it here. Keep the task, so
         # it isn't garbage-collected mid-connect, and so stop() can cancel it.
         self._connect_task = asyncio.get_running_loop().create_task(self.socket.connect())

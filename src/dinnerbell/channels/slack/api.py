@@ -84,8 +84,11 @@ AUTH = frozenset(
         "not_allowed_token_type",
     }
 )
-"""Token problems. They stop every delivery until the token is fixed (see ``SlackApi``), so
-fixing it and restarting lets the outbox catch up; /healthz reports them as an error."""
+"""Slack refused the call's token or its permissions. Deliveries retry them."""
+TOKEN_REFUSED = frozenset({"invalid_auth", "not_authed", "token_revoked", "token_expired", "account_inactive"})
+"""The token itself is no good, whatever the method. These stop every delivery until it's fixed
+(see ``SlackApi.on_auth_error``). ``missing_scope`` and ``not_allowed_token_type`` concern one
+method only, so they don't."""
 
 
 class SlackUnavailable(ChannelUnavailable):
@@ -164,9 +167,9 @@ class Identity:
 class SlackApi:
     """The handful of Web API methods Dinnerbell uses. All failures raise the exceptions above.
 
-    ``on_auth_error`` is called whenever Slack refuses a token, from any call: a delivery, an
-    interaction, or a check. The connection uses it to hold deliveries and report the error
-    at once, instead of at its next hourly check.
+    ``on_auth_error`` is called whenever Slack refuses the token itself (``TOKEN_REFUSED``), from
+    any call: a delivery, an interaction, or a check. The connection uses it to hold deliveries
+    and report the error at once, instead of at its next hourly check.
     """
 
     def __init__(self, client: AsyncWebClient) -> None:
@@ -175,7 +178,7 @@ class SlackApi:
 
     def _raise(self, method: str, exc: BaseException) -> NoReturn:
         error = translate(method, exc)
-        if isinstance(error, SlackAuthError) and self.on_auth_error is not None:
+        if isinstance(error, SlackAuthError) and error.code in TOKEN_REFUSED and self.on_auth_error is not None:
             self.on_auth_error(error)
         raise error from None
 
