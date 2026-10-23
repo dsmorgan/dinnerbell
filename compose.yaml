@@ -7,7 +7,8 @@
 # Compose reads ${...} values from the shell and from .env in this directory, not from env_file.
 services:
   dinnerbell:
-    # Each release bumps the default tag, so `git pull` moves production to the new release.
+    # Each release commit sets this default to its own version, so checking out tag vX.Y.Z runs
+    # image X.Y.Z. Production never sets DINNERBELL_TAG; deploy/dinnerbell-test does.
     image: ghcr.io/dsmorgan/dinnerbell:${DINNERBELL_TAG:-0.2.0}
     env_file: ${DINNERBELL_ENV_FILE:-.env}
     ports:
@@ -40,4 +41,6 @@ services:
       retries: 3
 
 volumes:
-  dinnerbell-data:
+  # {} rather than an empty value: podman-compose 1.5.0 and older can't merge an empty value with
+  # deploy/compose.test.yaml's name.
+  dinnerbell-data: {}
