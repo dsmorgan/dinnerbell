@@ -2,12 +2,17 @@
 """Draining the notification outbox through a channel (spec 8, FR-34). docs/channels.md has
 the contract an adapter implements.
 
-Delivery is in outbox order per event: while an event's earlier notification is undelivered
-(waiting to retry, or claimed by another drainer), its later ones wait too, so an update never
-reaches a channel before the post it edits. A failed update is the exception: it retries
-without holding anything back. A row is claimed and committed before the channel
-is called, and no transaction is held open during the call, so two drainers never deliver the
-same row and a slow channel never blocks writers.
+Delivery is in outbox order per event, with two kinds of holding back:
+
+- A post that creates a message (it has a message_key) holds back its event's later rows until
+  it lands, so an update or a threaded reply never reaches a channel before its message.
+  Direct messages and updates hold nothing back.
+- Updates to one message never overtake each other: a newer update waits while an older one is
+  in a channel's hands, and an older one is closed as superseded, unsent, once a newer exists.
+
+A row is claimed and committed before the channel is called, and no transaction is held open
+during the call, so two drainers never deliver the same row and a slow channel never blocks
+writers.
 """
 
 from __future__ import annotations
@@ -39,6 +44,7 @@ MAX_ATTEMPTS = 8
 FIRST_RETRY = timedelta(seconds=30)
 LONGEST_RETRY = timedelta(hours=1)
 NO_MESSAGE = "no message to update"
+SUPERSEDED = "superseded by a newer update"
 
 
 def retry_delay(attempts: int) -> timedelta:
@@ -52,24 +58,21 @@ class DrainResult:
     delivered: int = 0
     retrying: int = 0
     failed: int = 0
+    superseded: int = 0
 
 
 async def drain(
     sessionmaker: async_sessionmaker[AsyncSession], channel: Channel, clock: Clock, *, limit: int = BATCH
 ) -> DrainResult:
-    """Deliver what's due, oldest first. Safe to run concurrently with itself."""
+    """Deliver what's due, oldest first. Safe to run concurrently with itself, in this process
+    or another, though the scheduler also serializes its own drains (``scheduler.runner``)."""
     result = DrainResult()
     async with sessionmaker() as db:
         repo = OutboxRepository(db)
         blocked: set[int] = set()
         for entry in await repo.due(limit, clock()):
-            if entry.event_id is not None:
-                if entry.event_id in blocked:
-                    continue
-                first = await repo.first_pending_post(entry.household_id, entry.event_id)
-                if first is not None and first < entry.id:  # an earlier post is waiting or out
-                    blocked.add(entry.event_id)
-                    continue
+            if not await _may_send(repo, entry, blocked, clock()):
+                continue
             token = secrets.token_hex(16)
             now = clock()
             claimed = await repo.claim(entry.id, token, now=now, until=now + LEASE)
@@ -77,22 +80,42 @@ async def drain(
             # since. Once claimed, nothing changes it, so this read is final.
             current = await repo.get(entry.id) if claimed else None
             await db.commit()
-            delivered = current is not None and await _deliver(db, channel, current, token, clock, result)
-            if not delivered and entry.event_id is not None:
+            settled = current is not None and await _deliver(db, channel, current, token, clock, result)
+            if not settled and entry.creates_message and entry.event_id is not None:
                 blocked.add(entry.event_id)
     return result
+
+
+async def _may_send(repo: OutboxRepository, entry: OutboxEntry, blocked: set[int], now: datetime) -> bool:
+    """Whether ``entry`` may go now. A post that creates a message holds back its event's later
+    rows until it lands; direct messages and other posts hold nothing back. An update also waits
+    while an earlier update to the same message is in a channel's hands."""
+    if entry.event_id is not None:
+        if entry.event_id in blocked:
+            return False
+        first = await repo.first_pending_post(entry.household_id, entry.event_id)
+        if first is not None and first < entry.id:  # an earlier message post is waiting or out
+            blocked.add(entry.event_id)
+            return False
+    return not (entry.is_update and await repo.older_update_in_flight(entry, now))
 
 
 async def _deliver(
     db: AsyncSession, channel: Channel, entry: OutboxEntry, token: str, clock: Clock, result: DrainResult
 ) -> bool:
-    """Deliver one claimed row. True when later rows for the same event may go next."""
+    """Deliver one claimed row. True once it's settled: delivered, superseded, or given up."""
     repo = OutboxRepository(db)
     try:
         notification = from_payload(entry.kind, entry.payload)
     except PayloadError as exc:
         log.error("undeliverable notification", extra={"outbox_id": entry.id, "kind": entry.kind})
         await _record_failure(db, entry, token, str(exc), clock, result, final=True)
+        return True
+    if entry.is_update and await repo.newer_update_exists(entry):
+        # A later update carries newer state; sending this one could only overwrite it.
+        await repo.delivered(entry.id, token, now=clock(), ref=None, note=SUPERSEDED)
+        await db.commit()
+        result.superseded += 1
         return True
     try:
         ref, skipped = await _send(repo, channel, entry, notification)
@@ -101,9 +124,7 @@ async def _deliver(
         # attempt; the claim already counted this one.
         final = isinstance(exc, PermanentDeliveryError) or entry.attempts >= MAX_ATTEMPTS
         await _record_failure(db, entry, token, f"{type(exc).__name__}: {exc}", clock, result, final=final)
-        # A failed update doesn't hold back later rows: the next update carries the latest state,
-        # and a newer one coalesces into this row while it waits to retry.
-        return final or notification.is_update
+        return final
     if not await repo.delivered(entry.id, token, now=clock(), ref=ref, note=NO_MESSAGE if skipped else None):
         log.warning("outbox claim expired during delivery", extra={"outbox_id": entry.id, "kind": entry.kind})
     await db.commit()

@@ -48,6 +48,8 @@ class JobContext:
     sessionmaker: async_sessionmaker[AsyncSession]
     channel: Channel
     running: set[asyncio.Task[object]] = field(default_factory=set)
+    drain_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    """One drain at a time in this process; the outbox's row claims cover other processes."""
 
 
 Job = Callable[[JobContext], Awaitable[None]]
@@ -102,10 +104,13 @@ async def call_tick(ctx: JobContext) -> None:
 
 
 async def drain_outbox(ctx: JobContext) -> None:
-    try:
-        await outbox.drain(ctx.sessionmaker, ctx.channel, ctx.clock)
-    except Exception:
-        log.exception("outbox drain failed")
+    """Deliver due notifications. The tick and the drain job both come here, and the lock keeps
+    them from draining at the same time, so updates to a message reach the channel in order."""
+    async with ctx.drain_lock:
+        try:
+            await outbox.drain(ctx.sessionmaker, ctx.channel, ctx.clock)
+        except Exception:
+            log.exception("outbox drain failed")
 
 
 async def stop_scheduler(scheduler: AsyncIOScheduler, ctx: JobContext) -> None:

@@ -315,3 +315,113 @@ async def test_rows_backing_off_never_starve_newer_events(database: Database, cl
     channel = RecordingChannel()
     assert (await outbox.drain(database.sessionmaker, channel, clock)).delivered == 1
     assert [s.key for s in channel.sent] == ["event:2:run1:call_opened"]
+
+
+async def test_a_failing_direct_message_does_not_hold_back_channel_posts(database: Database, clock: FakeClock) -> None:
+    """Regression: a reminder DM that kept failing (say, a member who left Slack) delayed the
+    event's proposals post until it gave up. Only posts that create a message hold others back."""
+    await enqueue(database, opened(1))
+    await outbox.drain(database.sessionmaker, RecordingChannel(), clock)
+    await enqueue(database, n.ResponseReminder(info(1), n.PersonInfo(4, "Lee")), n.ProposalsReady(info(1), ()))
+    channel = RecordingChannel(fail=1)  # the DM fails
+    result = await outbox.drain(database.sessionmaker, channel, clock)
+    assert (result.retrying, result.delivered) == (1, 1)
+    assert [s.kind for s in channel.sent] == ["proposals_ready"]
+    clock.advance(timedelta(seconds=30))
+    await enqueue(database, n.MaybeResolved(info(1), n.PersonInfo(4, "Lee")))
+    assert (await outbox.drain(database.sessionmaker, channel, clock)).delivered == 2  # the retry, then the next DM
+
+
+@dataclass
+class Edits(RecordingChannel):
+    """Records each edit's head count; can hold an edit in flight or fail the next ones."""
+
+    edits: list[int] = field(default_factory=list)
+    hold: asyncio.Event | None = None
+    holding: asyncio.Event = field(default_factory=asyncio.Event)
+    fail_updates: int = 0
+
+    async def update(self, ref: n.MessageRef, notification: n.Notification) -> None:
+        if self.hold is not None:
+            hold, self.hold = self.hold, None
+            self.holding.set()
+            await hold.wait()
+        if self.fail_updates:
+            self.fail_updates -= 1
+            raise ConnectionError("rate limited")
+        self.edits.append(getattr(notification, "head_count", -1))
+
+
+async def posted_call(database: Database, clock: FakeClock) -> None:
+    """Event 1's call message, delivered, so updates have a message to edit."""
+    await enqueue(database, opened(1))
+    await outbox.drain(database.sessionmaker, RecordingChannel(), clock)
+
+
+async def test_an_update_in_flight_is_never_overtaken_by_a_newer_one(database: Database, clock: FakeClock) -> None:
+    """Regression: a newer update queued while an older one was being sent could go out
+    first, and the older one then landed on top, leaving the message showing stale state."""
+    await posted_call(database, clock)
+    await enqueue(database, updated(1, 2))
+    hold = asyncio.Event()
+    channel = Edits(hold=hold)
+    first = asyncio.create_task(outbox.drain(database.sessionmaker, channel, clock))
+    await channel.holding.wait()  # the edit showing 2 is in flight
+    await enqueue(database, updated(1, 3))
+    await outbox.drain(database.sessionmaker, channel, clock)  # another drainer meanwhile
+    assert channel.edits == []  # it waited rather than send 3 beneath the edit in flight
+    hold.set()
+    await first
+    await outbox.drain(database.sessionmaker, channel, clock)
+    assert channel.edits == [2, 3]
+
+
+async def test_a_failed_update_never_lands_after_a_newer_one(database: Database, clock: FakeClock) -> None:
+    """Regression: the reviewer's case. The older edit failed after the newer one was queued,
+    the newer one went out, and the older one's retry overwrote it: edits [3, 2]."""
+    await posted_call(database, clock)
+    await enqueue(database, updated(1, 2))
+    hold = asyncio.Event()
+    channel = Edits(hold=hold, fail_updates=1)
+    first = asyncio.create_task(outbox.drain(database.sessionmaker, channel, clock))
+    await channel.holding.wait()
+    await enqueue(database, updated(1, 3))
+    hold.set()
+    await first  # the edit showing 2 failed and waits to retry
+    await outbox.drain(database.sessionmaker, channel, clock)
+    clock.advance(timedelta(minutes=5))
+    await outbox.drain(database.sessionmaker, channel, clock)
+    assert channel.edits == [3]
+    async with database.sessionmaker() as db:
+        notes = (await db.execute(text("SELECT last_error FROM outbox WHERE kind = 'call_updated' ORDER BY id"))).all()
+    assert notes == [(outbox.SUPERSEDED,), (None,)]
+
+
+async def test_a_tried_update_never_absorbs_newer_state(database: Database, clock: FakeClock) -> None:
+    await posted_call(database, clock)
+    await enqueue(database, updated(1, 2))
+    await outbox.drain(database.sessionmaker, Edits(fail_updates=1), clock)
+    await enqueue(database, updated(1, 3))
+    keys = [e.idempotency_key for e in await entries(database) if e.kind == "call_updated"]
+    assert keys == ["event:1:run1:call_updated:1", "event:1:run1:call_updated:2"]
+
+
+@dataclass
+class SlowEdits(Edits):
+    async def update(self, ref: n.MessageRef, notification: n.Notification) -> None:
+        await asyncio.sleep(0.002)
+        await super().update(ref, notification)
+
+
+async def test_concurrent_drains_end_on_the_latest_state(database: Database, clock: FakeClock) -> None:
+    await posted_call(database, clock)
+    channel = SlowEdits(fail_updates=3)
+    for count in range(1, 13):
+        await enqueue(database, updated(1, count))
+        await asyncio.gather(*(outbox.drain(database.sessionmaker, channel, clock) for _ in range(3)))
+        clock.advance(timedelta(seconds=7))
+    for _ in range(6):  # let every retry come due
+        clock.advance(timedelta(minutes=10))
+        await outbox.drain(database.sessionmaker, channel, clock)
+    assert channel.edits[-1] == 12
+    assert channel.edits == sorted(channel.edits)  # never an older state after a newer one
