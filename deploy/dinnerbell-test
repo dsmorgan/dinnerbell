@@ -33,6 +33,13 @@ assignments() {
     grep -E "^[[:space:]]*(export[[:space:]]+)?$2[[:space:]]*=" "$1" || true
 }
 
+# A file's inode number, following symlinks, to tell whether two paths are the same file.
+# Only the first field is read, so odd file names can't confuse it.
+inode() {
+    # shellcheck disable=SC2012
+    ls -iLd -- "$1" | awk '{ print $1 }'
+}
+
 # Compose project names are lowercase letters, digits, "-" and "_".
 normalize() {
     printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9_-'
@@ -40,8 +47,9 @@ normalize() {
 
 [ ! -L "$0" ] || fail "run the script from your clone (deploy/dinnerbell-test), not through a symlink."
 CDPATH='' cd -- "$(dirname -- "$0")/.."
-[ -f compose.yaml ] && [ -f deploy/compose.test.yaml ] ||
+if [ ! -f compose.yaml ] || [ ! -f deploy/compose.test.yaml ]; then
     fail "can't find compose.yaml and deploy/compose.test.yaml next to this script."
+fi
 
 # Global options such as -p or -f would undo the separation this script sets up.
 case "${1:-}" in
@@ -55,7 +63,7 @@ export DINNERBELL_TAG DINNERBELL_ENV_FILE DINNERBELL_PORT
 
 [ -f "$DINNERBELL_ENV_FILE" ] ||
     fail "$DINNERBELL_ENV_FILE not found. Copy .env.test.example to .env.test and fill it in."
-if [ -e .env ] && [ "$DINNERBELL_ENV_FILE" -ef .env ]; then
+if [ -e .env ] && [ "$(inode "$DINNERBELL_ENV_FILE")" = "$(inode .env)" ]; then
     fail "refusing to use production's .env. Test needs its own env file, Slack app, and secret key."
 fi
 
