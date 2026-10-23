@@ -1,0 +1,65 @@
+# Dinnerbell Test Slack app manifest, for the test instance (ADR 0006).
+#
+# Create this as a second app in the same workspace as production. The two
+# apps must never share tokens: Socket Mode delivers each event to only one
+# connection, so a shared app token would split button taps between instances.
+#
+# Paste this file into api.slack.com/apps > Create New App > From a manifest.
+# Don't edit this file in your clone. After you paste it, change
+# dinnerbell-test.example.com in redirect_urls to your test hostname in Slack's
+# manifest editor, before you select Next. The path must stay /auth/callback.
+# To keep a copy with your hostname, write it to a *.local.yaml file, which git
+# ignores. See "Test instance" in docs/setup.md.
+
+display_information:
+  name: Dinnerbell Test
+  description: Test instance of Dinnerbell. Runs unreleased builds against test data.
+  background_color: "#4a4a4a"
+
+features:
+  app_home:
+    home_tab_enabled: true
+    messages_tab_enabled: true
+    messages_tab_read_only_enabled: true
+  bot_user:
+    display_name: dinnerbell-test
+    always_online: false
+  slash_commands:
+    # Must match DINNERBELL_SLACK_COMMAND in .env.test. A workspace can't have
+    # two apps with the same command, so test can't use /dinnerbell.
+    - command: /dinnerbell-test
+      description: Start a test call, or open your preferences, the catalog, or history
+      usage_hint: "[call | prefs | catalog | history | help]"
+      should_escape: false
+
+oauth_config:
+  redirect_urls:
+    # Used by Sign in with Slack. Edit the hostname before you paste.
+    - https://dinnerbell-test.example.com/auth/callback
+  scopes:
+    bot:
+      - chat:write          # post calls, proposals, decisions, and recaps
+      - channels:read       # check the bot is in the channel; list its members for the notification guard
+      - groups:read         # the same for a private test channel
+      - channels:history    # reserved for reading threads; unused in version 1
+      - im:write            # direct messages; also checks a DM button came from the member's own DM
+      - users:read          # needed by users:read.email
+      - users:read.email    # link members by email (users.lookupByEmail)
+      - commands            # the /dinnerbell-test slash command
+    user:
+      # Sign in with Slack (OpenID Connect) for the web app.
+      - openid
+      - email
+      - profile
+
+settings:
+  event_subscriptions:
+    # No request_url: Socket Mode delivers events over the WebSocket.
+    bot_events:
+      - app_home_opened
+  # Enables buttons, menus, and modals. No request_url in Socket Mode.
+  interactivity:
+    is_enabled: true
+  org_deploy_enabled: false
+  socket_mode_enabled: true
+  token_rotation_enabled: false

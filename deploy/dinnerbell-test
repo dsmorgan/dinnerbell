@@ -1,0 +1,46 @@
+#!/bin/sh
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Run compose for the Dinnerbell test instance (ADR 0006). Pass any compose subcommand:
+#   deploy/dinnerbell-test pull
+#   deploy/dinnerbell-test up -d
+#   deploy/dinnerbell-test down
+#   DINNERBELL_TAG=0.3.0 deploy/dinnerbell-test up -d     # rehearse a release candidate
+#
+# Compose reads ${...} values in compose.yaml from the shell first, then from .env, which belongs
+# to production. This script sets the test values in the shell so they win. The project name
+# keeps test's container, network, and volume (dinnerbell-test_dinnerbell-data) apart from
+# production's. DINNERBELL_BIND isn't set here: test publishes on the same interface as
+# production, read from .env, unless you set DINNERBELL_BIND in the shell.
+#
+# Overrides: DINNERBELL_TAG (default main), DINNERBELL_ENV_FILE (default .env.test),
+# DINNERBELL_PORT (default 8014), DINNERBELL_COMPOSE (default podman-compose; for Docker use
+# DINNERBELL_COMPOSE="docker compose").
+set -eu
+
+cd "$(dirname "$0")/.."
+
+DINNERBELL_TAG="${DINNERBELL_TAG:-main}"
+DINNERBELL_ENV_FILE="${DINNERBELL_ENV_FILE:-.env.test}"
+DINNERBELL_PORT="${DINNERBELL_PORT:-8014}"
+export DINNERBELL_TAG DINNERBELL_ENV_FILE DINNERBELL_PORT
+
+case "$DINNERBELL_ENV_FILE" in
+    .env | ./.env | */.env)
+        echo "dinnerbell-test: refusing to use production's $DINNERBELL_ENV_FILE." >&2
+        echo "The test instance needs its own env file with its own Slack app and secret key." >&2
+        exit 1
+        ;;
+esac
+if [ ! -f "$DINNERBELL_ENV_FILE" ]; then
+    echo "dinnerbell-test: $DINNERBELL_ENV_FILE not found. Copy .env.test.example to .env.test and fill it in." >&2
+    exit 1
+fi
+# Without a label, the test instance looks like production and can notify anyone in the workspace.
+if ! grep -Eq "^DINNERBELL_INSTANCE_LABEL=[\"']?[A-Za-z0-9]" "$DINNERBELL_ENV_FILE"; then
+    echo "dinnerbell-test: set DINNERBELL_INSTANCE_LABEL in $DINNERBELL_ENV_FILE, for example TEST." >&2
+    exit 1
+fi
+
+# DINNERBELL_COMPOSE may hold two words ("docker compose"), so it's split on purpose.
+# shellcheck disable=SC2086
+exec ${DINNERBELL_COMPOSE:-podman-compose} -p dinnerbell-test "$@"

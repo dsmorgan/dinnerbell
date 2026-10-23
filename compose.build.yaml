@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Build the image from this checkout instead of pulling a release:
+#   podman-compose -f compose.yaml -f compose.build.yaml up -d --build
+#   (or: docker compose -f compose.yaml -f compose.build.yaml up -d --build)
+# The local name keeps a source build from being mistaken for a published image.
+services:
+  dinnerbell:
+    image: localhost/dinnerbell:dev
+    build:
+      context: .
+      dockerfile: Containerfile

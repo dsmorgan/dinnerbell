@@ -12,7 +12,7 @@ Pre-alpha. Milestones M0 through M2 are in place: the container, configuration, 
 
 ## Run it
 
-Dinnerbell runs as one container behind a reverse proxy such as Pangolin. Copy `.env.example` to `.env`, fill it in, and start it with `podman-compose up -d --build` or `docker compose up -d --build`. The full walkthrough, including the Slack sign-in app and Pangolin, is in [docs/setup.md](docs/setup.md).
+Dinnerbell runs as one container behind a reverse proxy such as Pangolin. Each release is a prebuilt, attested image on GitHub Container Registry. Clone the repository for `compose.yaml`, copy `.env.example` to `.env`, fill it in, then run `podman-compose pull` and `podman-compose up -d` (or the `docker compose` equivalents). The full walkthrough, including the Slack sign-in app, Pangolin, upgrades, and an optional test instance, is in [docs/setup.md](docs/setup.md). Changes are listed in [CHANGELOG.md](CHANGELOG.md).
 
 ## Why
 

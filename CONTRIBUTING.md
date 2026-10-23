@@ -43,7 +43,45 @@ uv run pytest --cov
 docker build -f Containerfile -t dinnerbell .
 ```
 
+If you change `compose.yaml`, `deploy/dinnerbell-test`, or an env example, also run the checks in the `compose` CI job.
+
 [CLAUDE.md](CLAUDE.md) lists the project conventions: layers and import rules, license headers, and the migration workflow. They apply to people and agents alike.
+
+## Release
+
+Releases follow [Semantic Versioning](https://semver.org/), and [CHANGELOG.md](CHANGELOG.md) lists every change. A merge to `main` publishes the `main` image; only a `vX.Y.Z` tag publishes a release. Cut a patch release when the nightly image scan fails, and at least monthly otherwise.
+
+1. On a branch, open a release pull request titled "Release X.Y.Z" that changes only these:
+   - `__version__` in `src/dinnerbell/__init__.py`.
+   - `version` in `pyproject.toml`, then run `uv lock` to update the version recorded in `uv.lock`.
+   - The default tag in `compose.yaml`: `${DINNERBELL_TAG:-X.Y.Z}`. This moves production to the release on `git pull`.
+   - `CHANGELOG.md`: retitle `[Unreleased]` to `[X.Y.Z] - YYYY-MM-DD`, check that it has **Upgrade notes**, add a new empty `[Unreleased]` section above it, add the link `[X.Y.Z]: https://github.com/dsmorgan/dinnerbell/releases/tag/vX.Y.Z` at the bottom, and point `[Unreleased]` at `https://github.com/dsmorgan/dinnerbell/compare/vX.Y.Z...HEAD`.
+2. Merge it once CI passes.
+3. Tag the release commit on `main`, and push the tag. Check that `git log -1` shows the release commit before you tag. CI builds, scans, publishes, and attests the image.
+
+   ```sh
+   git switch main && git pull
+   git tag -a vX.Y.Z -m "Dinnerbell X.Y.Z"
+   git push origin vX.Y.Z
+   gh run watch "$(gh run list --branch vX.Y.Z --limit 1 --json databaseId --jq '.[0].databaseId')"
+   ```
+
+4. Verify the published image, and note its digest. The command prints it as `sha256:...`.
+
+   ```sh
+   gh attestation verify oci://ghcr.io/dsmorgan/dinnerbell:X.Y.Z --repo dsmorgan/dinnerbell
+   ```
+
+5. Create the GitHub release from the changelog section, with the digest appended.
+
+   ```sh
+   notes="${TMPDIR:-/tmp}/dinnerbell-X.Y.Z.md"
+   awk '/^## \[X.Y.Z\]/{f=1; next} /^## /{f=0} f' CHANGELOG.md > "$notes"
+   printf '\n### Image\n\n`ghcr.io/dsmorgan/dinnerbell:X.Y.Z@sha256:...`\n' >> "$notes"
+   gh release create vX.Y.Z --title "X.Y.Z" --notes-file "$notes"
+   ```
+
+6. Promote the release to production with the checklist in [docs/setup.md](docs/setup.md#promote-a-release).
 
 ## Report a security problem
 

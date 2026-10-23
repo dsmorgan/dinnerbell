@@ -374,3 +374,33 @@ jobs:
         with:
           sarif_file: ${{ steps.scan.outputs.sarif }}
           category: grype-published
+
+  compose:
+    name: Compose config
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Render both instances from the example env files, so a broken ${...} in compose.yaml or an
+      # env file compose can't parse fails here instead of on the host.
+      - name: Production
+        run: |
+          cp .env.example .env
+          docker compose config --quiet
+          docker compose -f compose.yaml -f compose.build.yaml config --quiet
+          # Renaming the volume would start existing installs on an empty database.
+          docker compose -p dinnerbell config --format json \
+            | jq -e '.volumes["dinnerbell-data"].name == "dinnerbell_dinnerbell-data"'
+      - name: Test instance
+        env:
+          DINNERBELL_COMPOSE: docker compose
+        run: |
+          cp .env.test.example .env.test
+          deploy/dinnerbell-test config --quiet
+          deploy/dinnerbell-test config --format json \
+            | jq -e '.volumes["dinnerbell-data"].name == "dinnerbell-test_dinnerbell-data"
+              and .services.dinnerbell.ports[0].published == "8014"
+              and (.services.dinnerbell.image | endswith(":main"))
+              and .services.dinnerbell.environment.DINNERBELL_INSTANCE_LABEL == "TEST"'

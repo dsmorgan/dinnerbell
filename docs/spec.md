@@ -518,7 +518,7 @@ class Channel(Protocol):
 - **CSRF**: every state-changing request carries a per-session token, sent by HTMX via the `hx-headers` attribute, and the server also checks `Origin`.
 - **Slack identity**: interactions are trusted because Socket Mode authenticates the connection with the app-level token. The adapter resolves `slack_user_id` to a member and refuses unknown users.
 - **Authorization** is role-based: admin or member, plus ownership checks (members edit only their own preferences and responses; the coordinator and admin may lock).
-- **Pangolin** is configured with resource authentication off for this resource, because stacking Pangolin's login in front of the app's login would mean two sign-ins per device and would break OIDC redirects. Pangolin still provides TLS, the public hostname, and its connection-level protections.
+- **Pangolin** is configured with resource authentication off for the production resource, because stacking Pangolin's login in front of the app's login would mean two sign-ins per device and would break OIDC redirects. Pangolin still provides TLS, the public hostname, and its connection-level protections.
 
 ### 13.6 Configuration
 
@@ -539,19 +539,26 @@ All configuration comes from environment variables with a `DINNERBELL_` prefix, 
 | `DINNERBELL_TIMEZONE` | Seeds the household time zone on first start, default `America/New_York`. Afterward the household row is authoritative and is edited in Admin |
 | `DINNERBELL_SEED_FILE` | Optional YAML of tags and catalog items to import on first start |
 | `DINNERBELL_LOG_LEVEL` | Default `INFO` |
+| `DINNERBELL_SLACK_COMMAND` | Slash command the app registers and names in replies, default `/dinnerbell`. Must match the Slack app manifest. The test instance uses `/dinnerbell-test` |
+| `DINNERBELL_INSTANCE_LABEL` | Empty in production. When set (at most 16 characters from `A-Z`, `a-z`, `0-9`, space, and hyphen), shows a marker such as `TEST` on the web, in Slack posts, on App Home, in `/healthz`, and in logs; limits mentions and direct messages to members of `DINNERBELL_SLACK_CHANNEL`; and allows `dinnerbell scrub-test`. See ADR 0006 |
+| `DINNERBELL_FEATURES` | Comma-separated feature flags to turn on. Unknown names stop startup. Flags exist only for features that must ship turned off, and each is removed one release after it turns on in production |
 | `DINNERBELL_BUILD` | Set by the image, not the operator: the short commit hash of a `main` build, shown after the version in the footer and `/healthz` (`0.2.0+abc1234`). Empty on release images |
-| `DINNERBELL_BIND` | Compose only, not read by the app: host address that `compose.yaml` publishes port 8013 on, default `127.0.0.1`. Set it to the interface the reverse proxy reaches |
+| `DINNERBELL_TAG` | Compose only, not read by the app: image tag. Defaults to the release the checkout is on; release commits bump it |
+| `DINNERBELL_ENV_FILE` | Compose only: env file the container reads, default `.env`. The test instance uses `.env.test` |
+| `DINNERBELL_PORT` | Compose only: host port, default `8013`. The test instance uses `8014` |
+| `DINNERBELL_BIND` | Compose only, not read by the app: host address that `compose.yaml` publishes the port on, default `127.0.0.1`. Set it to the interface the reverse proxy reaches |
 | `DINNERBELL_TRUSTED_PROXIES` | Optional comma-separated IPs or CIDRs whose `X-Forwarded-For` is trusted for client IPs, such as the reverse proxy's address |
 
 Household-level settings that change over time (slot schedule, weights, thresholds) live in the database and are edited in Admin, not in environment variables.
 
 ### 13.7 Deployment
 
-- **Image**: multi-stage `Containerfile`, Python 3.12 slim, non-root user, dependencies installed from `uv.lock`, read-only root filesystem with `/data` as the only writable volume.
-- **Run**: `compose.yaml` for podman-compose with one service, one named volume, `restart: unless-stopped`, and a health check on `/healthz`.
+- **Image**: multi-stage `Containerfile`, Python 3.12 slim, non-root user, dependencies installed from `uv.lock`, read-only root filesystem with `/data` as the only writable volume. CI publishes it to `ghcr.io/dsmorgan/dinnerbell` only after the checks and the image scan pass: `main` and the short commit SHA on every push to `main`, and `X.Y.Z`, `X.Y`, and `latest` on each release tag. Images carry build provenance and SBOM attestations, checked with `gh attestation verify`.
+- **Run**: `compose.yaml` for podman-compose with one service, one named volume, `restart: unless-stopped`, and a health check on `/healthz`. It pulls the release tag pinned in the file; `compose.build.yaml` builds from source instead. Production never runs `latest` or `main`.
 - **Expose**: one Pangolin resource pointing at the container's port 8013 with resource authentication off.
+- **Test instance** (ADR 0006): a second compose project, `dinnerbell-test`, from the same `compose.yaml`, started with `deploy/dinnerbell-test`. It runs `main` or a release candidate on port 8014 with its own volume, `.env.test`, Slack app (`deploy/slack-app-manifest.test.yaml`), channel, and hostname. Its Pangolin resource keeps resource authentication **on**, because only the owner uses it and it runs unreleased code. It is stopped when not in use. `dinnerbell scrub-test` makes a restored production backup safe to use there.
 - **Backups**: a nightly scheduler job runs SQLite's online backup into `/data/backups/`, keeps 14 daily and 8 weekly copies, and exposes the last success time in Admin and `/healthz`. Copying `/data` off the host is the operator's existing backup routine.
-- **Upgrades**: pull the new image, restart. Alembic migrations run at startup and refuse to start on an unknown schema version.
+- **Upgrades**: back up, `git pull` to move the pinned tag, pull the new image, and recreate the container. Alembic migrations run at startup and refuse to start on an unknown schema version, so a rollback restores the pre-upgrade backup with the previous tag. With a test instance, each release is rehearsed there on a scrubbed copy of production data first.
 
 ### 13.8 Security requirements
 
@@ -604,10 +611,11 @@ dinnerbell/
     spec.md
     adr/
   seed/            example tags and catalog YAML
-  deploy/          Slack app manifest
+  deploy/          Slack app manifests, test-instance wrapper
   Containerfile
-  compose.yaml
-  .env.example
+  compose.yaml     compose.build.yaml
+  .env.example     .env.test.example
+  CHANGELOG.md
   pyproject.toml
   uv.lock
   README.md  LICENSE  SECURITY.md  CONTRIBUTING.md
@@ -637,7 +645,7 @@ M0 through M2 are the minimum for the household to switch over. M3 and M4 follow
 | 2 | ~~Should votes be anonymous?~~ | Resolved: visible, per FR-14 |
 | 3 | ~~When two members both offer to cook, who decides?~~ | Resolved: the coordinator; with no coordinator, ranking's volunteer-fit bonus decides |
 | 4 | ~~Should a "maybe" at the deadline be nudged once more before converting to out?~~ | Resolved: no; one reminder total, and maybes become out at the deadline |
-| 5 | Should the Slack workspace be new or an existing one? | New workspace named for the household, one channel |
+| 5 | ~~Should the Slack workspace be new or an existing one?~~ | Resolved: one workspace named for the household. The test instance uses the same workspace with its own Slack app and channel (ADR 0006) |
 | 6 | ~~Seed list of cuisines and dietary tags~~ | Resolved: `seed/example.yaml` in the format from catalog-format.md |
 | 7 | ~~Should feedback adjust ranking automatically?~~ | Resolved: collect only in version 1; decide in M7 after 8 weeks of data |
 | 8 | Should cook notes be visible to the whole household or only the cook? | Only the cook; others see the thank-you count (FR-49) |
@@ -651,3 +659,4 @@ M0 through M2 are the minimum for the household to switch over. M3 and M4 follow
 | [0003](adr/0003-agpl-license.md) | AGPL-3.0 license |
 | [0004](adr/0004-stack.md) | Python, FastAPI, HTMX, SQLite, one container |
 | [0005](adr/0005-deterministic-ranking-first.md) | Deterministic, explainable ranking before any LLM |
+| [0006](adr/0006-test-instance.md) | Test in a second instance of the same image, not a second channel |

@@ -9,10 +9,11 @@ __pycache__/
 .coverage
 htmlcov/
 
-# Local config and data
+# Local config and data. .env and .env.test hold secrets; only the examples are committed.
 .env
 .env.*
 !.env.example
+!.env.test.example
 migrations-scratch.db
 /data/
 *.db
