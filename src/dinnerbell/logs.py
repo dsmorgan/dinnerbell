@@ -78,7 +78,20 @@ def configure_logging(level: str) -> None:
 
 # Libraries that log SQL parameters, URLs, or other request data at INFO or DEBUG. Keeping them
 # at WARNING even when DINNERBELL_LOG_LEVEL=DEBUG keeps emails and tokens out of logs (SEC-5).
-QUIET_LOGGERS = ("sqlalchemy", "aiosqlite", "httpx", "httpcore", "apscheduler", "alembic", "multipart")
+QUIET_LOGGERS = (
+    "sqlalchemy",
+    "aiosqlite",
+    "httpx",
+    "httpcore",
+    "apscheduler",
+    "alembic",
+    "multipart",
+    # Slack's SDK logs request parameters and payloads (member names, emails from lookups) at
+    # DEBUG, and Socket Mode traffic at INFO.
+    "slack_sdk",
+    "slack_bolt",
+    "aiohttp",
+)
 
 
 def quiet_third_party_loggers() -> None:

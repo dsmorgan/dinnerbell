@@ -1,0 +1,21 @@
+{
+  "blocks": [
+    {
+      "text": {
+        "text": "Alex cancelled the dinner call for Thursday, Oct 22.\nHeads up <@U01ALEX>, <@U02SAM>: no group dinner this time.",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "elements": [
+        {
+          "text": "<https://dinnerbell.example.com/events/7|Open the call on the web>",
+          "type": "mrkdwn"
+        }
+      ],
+      "type": "context"
+    }
+  ],
+  "text": "Alex cancelled the dinner call for Thursday, Oct 22."
+}

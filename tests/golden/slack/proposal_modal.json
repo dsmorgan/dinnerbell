@@ -1,0 +1,173 @@
+{
+  "blocks": [
+    {
+      "elements": [
+        {
+          "text": "*Dinner · Thursday, Oct 22*",
+          "type": "mrkdwn"
+        }
+      ],
+      "type": "context"
+    },
+    {
+      "block_id": "mode",
+      "element": {
+        "action_id": "value",
+        "options": [
+          {
+            "text": {
+              "emoji": true,
+              "text": "Cook",
+              "type": "plain_text"
+            },
+            "value": "cook"
+          },
+          {
+            "text": {
+              "emoji": true,
+              "text": "Pickup",
+              "type": "plain_text"
+            },
+            "value": "pickup"
+          },
+          {
+            "text": {
+              "emoji": true,
+              "text": "Delivery",
+              "type": "plain_text"
+            },
+            "value": "delivery"
+          }
+        ],
+        "type": "static_select"
+      },
+      "label": {
+        "emoji": true,
+        "text": "How",
+        "type": "plain_text"
+      },
+      "optional": false,
+      "type": "input"
+    },
+    {
+      "block_id": "item",
+      "element": {
+        "action_id": "value",
+        "option_groups": [
+          {
+            "label": {
+              "emoji": true,
+              "text": "Home meals",
+              "type": "plain_text"
+            },
+            "options": [
+              {
+                "text": {
+                  "emoji": true,
+                  "text": "Sam's Tacos",
+                  "type": "plain_text"
+                },
+                "value": "11"
+              }
+            ]
+          },
+          {
+            "label": {
+              "emoji": true,
+              "text": "Restaurants",
+              "type": "plain_text"
+            },
+            "options": [
+              {
+                "text": {
+                  "emoji": true,
+                  "text": "Siam Garden",
+                  "type": "plain_text"
+                },
+                "value": "12"
+              }
+            ]
+          }
+        ],
+        "type": "static_select"
+      },
+      "label": {
+        "emoji": true,
+        "text": "From the catalog",
+        "type": "plain_text"
+      },
+      "optional": true,
+      "type": "input"
+    },
+    {
+      "block_id": "free_text",
+      "element": {
+        "action_id": "value",
+        "max_length": 100,
+        "type": "plain_text_input"
+      },
+      "label": {
+        "emoji": true,
+        "text": "Or something new",
+        "type": "plain_text"
+      },
+      "optional": true,
+      "type": "input"
+    },
+    {
+      "block_id": "cuisine",
+      "element": {
+        "action_id": "value",
+        "options": [
+          {
+            "text": {
+              "emoji": true,
+              "text": "Mexican",
+              "type": "plain_text"
+            },
+            "value": "43"
+          },
+          {
+            "text": {
+              "emoji": true,
+              "text": "Thai",
+              "type": "plain_text"
+            },
+            "value": "44"
+          }
+        ],
+        "type": "static_select"
+      },
+      "hint": {
+        "emoji": true,
+        "text": "Needed for something new, so variety and vetoes still work.",
+        "type": "plain_text"
+      },
+      "label": {
+        "emoji": true,
+        "text": "Cuisine",
+        "type": "plain_text"
+      },
+      "optional": true,
+      "type": "input"
+    }
+  ],
+  "callback_id": "proposal_modal",
+  "close": {
+    "emoji": true,
+    "text": "Cancel",
+    "type": "plain_text"
+  },
+  "private_metadata": "{\"event\":7,\"channel\":\"C0DINNER\"}",
+  "submit": {
+    "emoji": true,
+    "text": "Add",
+    "type": "plain_text"
+  },
+  "title": {
+    "emoji": true,
+    "text": "Add a pick",
+    "type": "plain_text"
+  },
+  "type": "modal"
+}

@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The ``dinnerbell`` command: ``serve``, ``migrate``, and ``catalog``."""
+"""The ``dinnerbell`` command: ``serve``, ``migrate``, ``catalog``, and ``slack``."""
 
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import sys
@@ -29,7 +30,30 @@ def _parser() -> argparse.ArgumentParser:
     serve.add_argument("--port", type=int, default=DEFAULT_PORT, help=f"port (default: {DEFAULT_PORT})")
     commands.add_parser("migrate", help="upgrade the database schema and exit")
     catalog_cli.add_parser(commands)
+    slack = commands.add_parser("slack", help="Slack tools that need no workspace")
+    slack_commands = slack.add_subparsers(dest="slack_command", required=True, metavar="COMMAND")
+    preview = slack_commands.add_parser(
+        "preview",
+        help="print a sample message's Block Kit JSON, for Slack's Block Kit Builder",
+        description="Print Block Kit JSON for a sample message, modal, or Home tab. Paste it into "
+        "https://app.slack.com/block-kit-builder to see it. With no KIND, list the kinds.",
+    )
+    preview.add_argument("kind", nargs="?", metavar="KIND", help="what to preview; omit to list the kinds")
+    preview.add_argument("--base-url", default="https://dinnerbell.example.com", help="web app URL for links")
     return parser
+
+
+def _slack_preview(kind: str | None, base_url: str) -> int:
+    from dinnerbell.channels.slack.preview import KINDS, preview
+
+    if kind is None:
+        print("\n".join(KINDS))
+        return 0
+    if kind not in KINDS:
+        print(f"Unknown kind {kind!r}. Choose one of: {', '.join(KINDS)}", file=sys.stderr)
+        return 2
+    print(json.dumps(preview(kind, base_url.rstrip("/")), indent=2, ensure_ascii=False))
+    return 0
 
 
 def _migrate(settings: Settings) -> bool:
@@ -61,6 +85,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.command == "catalog":
         return catalog_cli.run(args)
+    if args.command == "slack":
+        return _slack_preview(args.kind, args.base_url)
     try:
         settings = load_settings()
     except ConfigError as exc:

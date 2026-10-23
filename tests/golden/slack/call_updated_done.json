@@ -1,0 +1,43 @@
+{
+  "blocks": [
+    {
+      "text": {
+        "emoji": true,
+        "text": "Dinner call · Thursday, Oct 22",
+        "type": "plain_text"
+      },
+      "type": "header"
+    },
+    {
+      "text": {
+        "text": "All done. Thanks, everyone!",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "text": {
+        "text": "*In* · 3 people eating\n• <@U01ALEX> · can pick up\n• <@U02SAM> · +1 guest (Vegetarian) · can cook · eats after 6:40 PM · suggests Sam's Tacos\n    “Home late, but I'll cook if it's easy.”\n*Maybe:* <@U03KIM>\n*Coordinator:* <@U01ALEX>",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "block_id": "more",
+      "elements": [
+        {
+          "action_id": "link_event",
+          "text": {
+            "emoji": true,
+            "text": "View on web",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "url": "https://dinnerbell.example.com/events/7"
+        }
+      ],
+      "type": "actions"
+    }
+  ],
+  "text": "Dinner call · Thursday, Oct 22: All done. Thanks, everyone!"
+}

@@ -1,0 +1,82 @@
+{
+  "blocks": [
+    {
+      "text": {
+        "emoji": true,
+        "text": "Today · Thursday, Oct 22",
+        "type": "plain_text"
+      },
+      "type": "header"
+    },
+    {
+      "text": {
+        "text": "*Marked done. Thanks!*",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "block_id": "event-7",
+      "text": {
+        "text": "*Dinner* · Decided\nYou're in. You offered to cook.\nThe plan: *Sam's Tacos*",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "block_id": "event-actions-7",
+      "elements": [
+        {
+          "action_id": "mark_done",
+          "text": {
+            "emoji": true,
+            "text": "Mark done",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "7"
+        },
+        {
+          "action_id": "link_event",
+          "text": {
+            "emoji": true,
+            "text": "Open",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "url": "https://dinnerbell.example.com/events/7"
+        }
+      ],
+      "type": "actions"
+    },
+    {
+      "block_id": "start",
+      "elements": [
+        {
+          "action_id": "start_call_lunch",
+          "text": {
+            "emoji": true,
+            "text": "Start a lunch call",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "lunch"
+        }
+      ],
+      "type": "actions"
+    },
+    {
+      "type": "divider"
+    },
+    {
+      "elements": [
+        {
+          "text": "<https://dinnerbell.example.com/preferences|Your preferences> · <https://dinnerbell.example.com/catalog|Catalog> · <https://dinnerbell.example.com/history|History> · <https://dinnerbell.example.com/|Today on the web>",
+          "type": "mrkdwn"
+        }
+      ],
+      "type": "context"
+    }
+  ],
+  "type": "home"
+}

@@ -1,0 +1,21 @@
+{
+  "blocks": [
+    {
+      "text": {
+        "text": "Nobody was free to cook or fetch any of the picks for dinner on Thursday, Oct 22, so everyone's on their own this time. Thanks for answering, and see you at the next one!",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "elements": [
+        {
+          "text": "<https://dinnerbell.example.com/events/7|Open the call on the web>",
+          "type": "mrkdwn"
+        }
+      ],
+      "type": "context"
+    }
+  ],
+  "text": "Nobody was free to cook or fetch any of the picks for dinner on Thursday, Oct 22, so everyone's on their own this time."
+}
