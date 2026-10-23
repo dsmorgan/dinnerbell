@@ -242,3 +242,46 @@ async def test_an_update_coalesced_after_listing_is_delivered_as_latest(
 
     await outbox.drain(database.sessionmaker, Capturing(), clock)
     assert [getattr(s, "head_count", None) for s in seen] == [3]
+
+
+@dataclass
+class FailingUpdates(RecordingChannel):
+    """Fails every update; optionally fails one post for good."""
+
+    permanent_for: str | None = None
+
+    async def update(self, ref: n.MessageRef, notification: n.Notification) -> None:
+        raise ConnectionError("message is locked")
+
+    async def deliver(self, notification: n.Notification, *, thread: n.MessageRef | None = None) -> n.DeliveryResult:
+        if notification.kind == self.permanent_for:
+            raise n.PermanentDeliveryError("channel_not_found")
+        return await super().deliver(notification, thread=thread)
+
+
+async def test_a_failed_update_does_not_hold_back_its_event(database: Database, clock: FakeClock) -> None:
+    """Regression: a failing message edit blocked the event's later posts while it backed off;
+    the next update carries the latest state anyway."""
+    await enqueue(database, opened(1), updated(1, 2), n.CallAbandoned(info(1), EndReason.TOO_FEW))
+    channel = FailingUpdates()
+    result = await outbox.drain(database.sessionmaker, channel, clock)
+    assert (result.delivered, result.retrying) == (2, 1)
+    assert [s.kind for s in channel.sent] == ["call_opened", "call_abandoned"]
+    update = next(e for e in await entries(database) if e.kind == "call_updated")
+    assert update.available_at == clock() + timedelta(seconds=30)  # still retried, just not blocking
+
+
+async def test_a_permanent_delivery_error_gives_up_at_once(database: Database, clock: FakeClock) -> None:
+    await enqueue(database, n.ProposalsReady(info(1), ()), n.CallAbandoned(info(1), EndReason.TOO_FEW))
+    channel = FailingUpdates(permanent_for="proposals_ready")
+    result = await outbox.drain(database.sessionmaker, channel, clock)
+    assert (result.failed, result.retrying, result.delivered) == (1, 0, 1)
+    first = (await entries(database))[0]
+    assert first.attempts == 1
+    async with database.sessionmaker() as db:
+        failed = (
+            await db.execute(
+                text("SELECT failed_at IS NOT NULL, last_error FROM outbox WHERE id = :i"), {"i": first.id}
+            )
+        ).one()
+    assert failed == (1, "PermanentDeliveryError: channel_not_found")

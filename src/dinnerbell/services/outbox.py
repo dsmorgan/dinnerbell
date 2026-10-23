@@ -4,7 +4,8 @@ the contract an adapter implements.
 
 Delivery is in outbox order per event: while an event's earlier notification is undelivered
 (waiting to retry, or claimed by another drainer), its later ones wait too, so an update never
-reaches a channel before the post it edits. A row is claimed and committed before the channel
+reaches a channel before the post it edits. A failed update is the exception: it retries
+without holding anything back. A row is claimed and committed before the channel
 is called, and no transaction is held open during the call, so two drainers never deliver the
 same row and a slow channel never blocks writers.
 """
@@ -19,7 +20,14 @@ from datetime import datetime, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from dinnerbell.db.outbox import OutboxEntry, OutboxRepository
-from dinnerbell.domain.notifications import Channel, MessageRef, Notification, PayloadError, from_payload
+from dinnerbell.domain.notifications import (
+    Channel,
+    MessageRef,
+    Notification,
+    PayloadError,
+    PermanentDeliveryError,
+    from_payload,
+)
 from dinnerbell.services.clock import Clock
 
 log = logging.getLogger(__name__)
@@ -84,9 +92,13 @@ async def _deliver(
     try:
         ref, skipped = await _send(repo, channel, entry, notification)
     except Exception as exc:
-        final = entry.attempts >= MAX_ATTEMPTS  # the claim already counted this attempt
+        # A permanent error won't get better with retries. Otherwise retry until the last
+        # attempt; the claim already counted this one.
+        final = isinstance(exc, PermanentDeliveryError) or entry.attempts >= MAX_ATTEMPTS
         await _record_failure(db, entry, token, f"{type(exc).__name__}: {exc}", clock, result, final=final)
-        return final
+        # A failed update doesn't hold back later rows: the next update carries the latest state,
+        # and a newer one coalesces into this row while it waits to retry.
+        return final or notification.is_update
     if not await repo.delivered(entry.id, token, now=clock(), ref=ref, note=NO_MESSAGE if skipped else None):
         log.warning("outbox claim expired during delivery", extra={"outbox_id": entry.id, "kind": entry.kind})
     await db.commit()
