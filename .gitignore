@@ -19,6 +19,14 @@ migrations-scratch.db
 *.db-wal
 *.db-shm
 
+# Household-specific files that must never be committed: your compose override, local
+# copies of templates (such as a Slack manifest with your hostname), and your catalog.
+compose.override.yaml
+*.local.yaml
+/seed/*
+!/seed/example.yaml
+!/seed/catalog.schema.json
+
 # Editors and OS
 .vscode/
 .idea/
