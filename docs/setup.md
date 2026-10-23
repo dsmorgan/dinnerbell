@@ -19,7 +19,7 @@ These parts are not built yet:
 ## Prerequisites
 
 - A Linux host with podman and podman-compose, or Docker with the compose plugin.
-- A public HTTPS hostname that a reverse proxy forwards to the host's port 8000. The reference setup uses Pangolin.
+- A public HTTPS hostname that a reverse proxy forwards to the host's port 8013. The reference setup uses Pangolin.
 - A Slack account. You use its email address as the admin email.
 
 ## 0. Clone the repository
@@ -86,10 +86,10 @@ Socket Mode lets the app connect out to Slack, so Slack never calls your host. T
 
 ## 8. Expose Dinnerbell through your reverse proxy
 
-Point your hostname at the host's port 8000. With Pangolin:
+Point your hostname at the host's port 8013. With Pangolin:
 
 1. Create a public HTTP resource for your hostname.
-2. Set the target to the host running Dinnerbell, port 8000.
+2. Set the target to the host running Dinnerbell, port 8013.
 3. Open the resource's authentication settings and turn off **Use Platform SSO**. Pangolin turns it on by default for public resources.
 4. Leave password, PIN, email OTP, and header auth off too.
 
@@ -97,7 +97,7 @@ Dinnerbell does its own sign-in. A second login in front of it breaks the OIDC r
 
 With authentication off, `/healthz` is public. It shows only coarse status.
 
-`compose.yaml` publishes port 8000 on the address in `DINNERBELL_BIND`, which defaults to `127.0.0.1`. That default only works when Newt runs on the same host and not inside a container network. Otherwise, set `DINNERBELL_BIND` in `.env` to the host's address on the interface Newt reaches, for example its LAN address:
+`compose.yaml` publishes port 8013 on the address in `DINNERBELL_BIND`, which defaults to `127.0.0.1`. That default only works when Newt runs on the same host and not inside a container network. Otherwise, set `DINNERBELL_BIND` in `.env` to the host's address on the interface Newt reaches, for example its LAN address:
 
 ```sh
 DINNERBELL_BIND=192.168.1.20

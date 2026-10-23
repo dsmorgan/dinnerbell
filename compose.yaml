@@ -9,7 +9,7 @@ services:
     env_file: .env
     ports:
       # Publish only on the interface your reverse proxy (Newt) reaches. Set DINNERBELL_BIND in .env.
-      - "${DINNERBELL_BIND:-127.0.0.1}:8000:8000"
+      - "${DINNERBELL_BIND:-127.0.0.1}:8013:8013"
     volumes:
       - dinnerbell-data:/data
     read_only: true
@@ -28,7 +28,7 @@ services:
         - CMD
         - python
         - -c
-        - "import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=4).status == 200 else 1)"
+        - "import sys, urllib.request; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8013/healthz', timeout=4).status == 200 else 1)"
       interval: 30s
       timeout: 5s
       start_period: 20s

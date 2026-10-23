@@ -518,7 +518,7 @@ All configuration comes from environment variables with a `DINNERBELL_` prefix, 
 | `DINNERBELL_TIMEZONE` | Seeds the household time zone on first start, default `UTC`. Afterward the household row is authoritative and is edited in Admin |
 | `DINNERBELL_SEED_FILE` | Optional YAML of tags and catalog items to import on first start |
 | `DINNERBELL_LOG_LEVEL` | Default `INFO` |
-| `DINNERBELL_BIND` | Compose only, not read by the app: host address that `compose.yaml` publishes port 8000 on, default `127.0.0.1`. Set it to the interface the reverse proxy reaches |
+| `DINNERBELL_BIND` | Compose only, not read by the app: host address that `compose.yaml` publishes port 8013 on, default `127.0.0.1`. Set it to the interface the reverse proxy reaches |
 | `DINNERBELL_TRUSTED_PROXIES` | Optional comma-separated IPs or CIDRs whose `X-Forwarded-For` is trusted for client IPs, such as the reverse proxy's address |
 
 Household-level settings that change over time (slot schedule, weights, thresholds) live in the database and are edited in Admin, not in environment variables.
@@ -527,7 +527,7 @@ Household-level settings that change over time (slot schedule, weights, threshol
 
 - **Image**: multi-stage `Containerfile`, Python 3.12 slim, non-root user, dependencies installed from `uv.lock`, read-only root filesystem with `/data` as the only writable volume.
 - **Run**: `compose.yaml` for podman-compose with one service, one named volume, `restart: unless-stopped`, and a health check on `/healthz`.
-- **Expose**: one Pangolin resource pointing at the container's port 8000 with resource authentication off.
+- **Expose**: one Pangolin resource pointing at the container's port 8013 with resource authentication off.
 - **Backups**: a nightly scheduler job runs SQLite's online backup into `/data/backups/`, keeps 14 daily and 8 weekly copies, and exposes the last success time in Admin and `/healthz`. Copying `/data` off the host is the operator's existing backup routine.
 - **Upgrades**: pull the new image, restart. Alembic migrations run at startup and refuse to start on an unknown schema version.
 
