@@ -30,6 +30,8 @@ from tests.support.calls import (
     ZONE,
     House,
     RecordingChannel,
+    dinner_id,
+    furnish,
     make_house,
 )
 from tests.support.clock import FakeClock
@@ -44,26 +46,9 @@ async def database(migrated: Settings) -> AsyncIterator[Database]:
     await database.close()
 
 
-async def furnish(house: House) -> House:
-    await house.add_member("Sam", can_cook=True)
-    await house.add_member("Kim")
-    await house.add_member("Lee", can_order=True)
-    await house.add_item("Siam Garden", Mode.PICKUP, Mode.DELIVERY, cuisine="Thai", url="https://siam.example")
-    await house.add_item("Taqueria", Mode.PICKUP, cuisine="Mexican")
-    await house.add_item("Sam's Tacos", Mode.COOK, cuisine="Mexican", cooks=("Sam",))
-    return house
-
-
 @pytest.fixture
 async def house(database: Database, clock: FakeClock, migrated: Settings) -> House:
     return await furnish(await make_house(database.sessionmaker, clock, migrated.admin_email))
-
-
-async def dinner_id(house: House) -> int:
-    async with house.sessionmaker() as db:
-        event = await EventRepository(db).call_for(house.household.id, Slot.DINNER, date(2026, 10, 22))
-    assert event is not None
-    return event.id
 
 
 async def answer(house: House, event_id: int) -> None:
