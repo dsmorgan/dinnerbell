@@ -19,7 +19,7 @@ from dinnerbell.config import Settings
 from dinnerbell.db.migrate import run_migrations
 from tests.support.clock import FakeClock
 from tests.support.fake_oidc import CLIENT_ID, CLIENT_SECRET, ISSUER, FakeProvider, generate_key
-from tests.support.flags import features_for
+from tests.support.flags import features_for, item_problems
 
 BASE_URL = "https://dinnerbell.test"
 ADMIN_EMAIL = "admin@example.com"
@@ -39,6 +39,14 @@ def make_settings(tmp_path: Path, **overrides: Any) -> Settings:
     }
     values.update(overrides)
     return Settings(**values)
+
+
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    """Refuse to run when a ``flag`` mark could count as coverage without the test running in
+    that state (tests/support/flags.py)."""
+    problems = [problem for item in items for problem in item_problems(item)]
+    if problems:
+        raise pytest.UsageError("Bad feature flag marks:\n" + "\n".join(problems))
 
 
 @pytest.fixture(autouse=True)
