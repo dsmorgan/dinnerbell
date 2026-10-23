@@ -296,7 +296,7 @@ def proposals_message(notification: note.ProposalsReady | note.ProposalsUpdated,
             blocks.append(
                 actions(
                     button("Vote", ids.VOTE, value, style="primary"),
-                    button("Lock", ids.LOCK, value, confirm=lock),
+                    button("Lock this", ids.LOCK, value, confirm=lock),
                     block_id=f"proposal-actions-{proposal.id}",
                 )
             )
