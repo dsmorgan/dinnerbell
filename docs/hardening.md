@@ -35,7 +35,7 @@ Add two monitors in Uptime Kuma, or any monitor that can match a keyword:
 
 | Monitor | Target | Alerts when |
 |---|---|---|
-| HTTP | `https://<your hostname>/healthz` | The response isn't 200. Dinnerbell returns 503 when the database is unreachable or the scheduler stalls. |
+| HTTP | `https://<your hostname>/healthz` | The response isn't 200. Dinnerbell returns 503 when the database is unreachable or the scheduler hasn't ticked for 5 minutes. A tick that's late by less than that reports `degraded` with HTTP 200. |
 | HTTP keyword | `https://<your hostname>/healthz`, keyword `"slack":"connected"` | Slack disconnects or a startup check fails. A Slack problem alone keeps HTTP 200, so the first monitor doesn't catch it. |
 
 ## What CI enforces
@@ -47,13 +47,17 @@ The `main` ruleset requires a pull request and these checks before a merge. An a
 | `check` | `ci.yml` | Ruff, strict mypy, pytest with at least 90% coverage, and `pip-audit` on the locked dependencies. | Yes |
 | `image` | `ci.yml` | Builds the image, runs a smoke test against `/healthz`, and scans it with Grype. | Yes |
 | `dependency-review` | `dependency-review.yml` | Fails a PR that adds a dependency with a known vulnerability of moderate severity or worse. | Yes |
-| `dco` | `dco.yml` | Fails a PR with a commit that lacks a `Signed-off-by` trailer for its author's email. Verified Dependabot and GitHub Actions commits are exempt. See [CONTRIBUTING.md](../CONTRIBUTING.md). | Yes |
+| `dco` | `dco.yml` | Fails a PR with a commit that lacks a `Signed-off-by` trailer for its author's email. Merge commits count too. Only Dependabot's own commits in Dependabot's own PRs are exempt. See [CONTRIBUTING.md](../CONTRIBUTING.md). | Yes |
 | CodeQL | Default setup | Scans Python, JavaScript, and the workflows themselves. | Yes |
 | Release scan | `scan-release.yml` | Scans the image tagged `latest` with Grype every night. A fixable HIGH or CRITICAL finding fails the run: cut a patch release. | No (scheduled) |
 | `pip-audit` | `pip-audit.yml` | Audits the locked Python dependencies every Monday, so a new advisory surfaces without a push. | No (scheduled) |
 | Scorecard | `scorecard.yml` | Rates the repository's supply-chain practices every Monday and on each push to `main`. Treat the score as a checklist, not a target. | No (scheduled) |
-| Dependabot | `.github/dependabot.yml` | Opens grouped update PRs for Python, GitHub Actions, and base images every Monday, and separate PRs for security fixes. Version updates wait 7 days after a release. Nothing auto-merges. | Its PRs pass the same checks |
+| Dependabot | `.github/dependabot.yml` | Opens grouped update PRs for Python, GitHub Actions, and base images every Monday, and separate PRs for security fixes to Python packages and actions. GitHub publishes no advisories for base images, so Grype covers those. Version updates wait 7 days after a release. Nothing auto-merges. | Its PRs pass the same checks |
 
-Every workflow pins its actions by commit SHA, starts with no token permissions, and grants each job only what it needs. The repository allows only GitHub-owned actions plus `astral-sh`, `docker`, `anchore`, and `ossf` actions, and requires SHA pins.
+Every workflow pins its actions by commit SHA, sets no or read-only token permissions at the top, and grants each job only what it needs. The repository allows only GitHub-owned actions plus `astral-sh`, `docker`, `anchore`, and `ossf` actions, and requires SHA pins.
 
-To compare the repository's GitHub settings with what the lockdown expects, run `scripts/verify-github-settings.sh`. It only reads settings, and exits non-zero if any of them is wrong.
+A pull request runs the workflows from its own branch, so a PR can change what its checks do. Two things guard against that: the repository holds every outside contributor's workflow runs until you approve them, and you read any diff under `.github/` before you approve a run or merge.
+
+GitHub disables a public repository's scheduled workflows after 60 days without repository activity. A quiet stretch can then stop the nightly scan without ever turning a run red. To check, run `scripts/verify-github-settings.sh`: a disabled workflow FAILs its row. To turn one back on, run `gh workflow enable scan-release.yml`, or select the workflow on the **Actions** tab and select **Enable workflow**.
+
+To compare all the repository's GitHub settings with what the lockdown expects, run `scripts/verify-github-settings.sh`. It only reads settings, and exits non-zero if any of them is wrong.
