@@ -28,6 +28,7 @@ from dinnerbell.channels.slack.connection import BoltSocket
 from dinnerbell.config import Settings
 from dinnerbell.db.models import AuditRow
 from dinnerbell.domain import notifications as note
+from dinnerbell.services import outbox
 from dinnerbell.services.database import Database, open_database
 from dinnerbell.services.health import SlackState
 from tests.conftest import BASE_URL, make_settings
@@ -564,3 +565,28 @@ async def test_a_lost_race_for_a_slack_id_is_a_friendly_error(house: House, monk
         with pytest.raises(MemberRuleViolation, match="already linked"):
             await members.set_slack_user(db, house["Alex"], house["Kim"].id, "U02SAM", now=house.clock())
     assert (await house.refresh("Kim")).slack_user_id is None
+
+
+async def test_channel_posts_wait_while_the_setup_is_broken(house: House) -> None:
+    state = SlackState()
+    fake = FakeSlack()
+    fake.channel["is_member"] = False
+    conn = connection(house, fake, state=state)
+    assert not await conn.run_once()
+    await link(house, "Kim", "U03KIM")
+    house.clock.now = OPENS
+    await house.tick()
+    fake.clear()
+    drained = await outbox.drain(house.sessionmaker, conn.channel, house.clock)
+    assert (drained.retrying, fake.calls) == (1, [])  # held back, not lost to not_in_channel
+    event = replace_household(info(), house.household.id)
+    reminder = note.ResponseReminder(event, note.PersonInfo(house["Kim"].id, "Kim"))
+    await conn.channel.deliver(reminder)  # direct messages still go
+    with pytest.raises(SlackUnavailable, match="setup problem"):
+        await conn.channel.update(note.MessageRef(CHANNEL, "1.0"), note.CallUpdated(event))
+
+    fake.channel["is_member"] = True  # the admin invites the bot
+    assert await conn.run_once()
+    house.clock.advance(timedelta(seconds=30))
+    assert (await outbox.drain(house.sessionmaker, conn.channel, house.clock)).delivered == 1
+    await conn.stop()

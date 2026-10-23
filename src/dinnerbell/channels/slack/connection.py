@@ -113,7 +113,9 @@ class SlackConnection:
         self.socket_factory = socket_factory
         self.socket: Socket | None = None
         self.team_id: str | None = None
-        self.channel = SlackChannel(self.api, channel_id=channel_id, base_url=base_url, sessionmaker=sessionmaker)
+        self.channel = SlackChannel(
+            self.api, channel_id=channel_id, base_url=base_url, sessionmaker=sessionmaker, state=state
+        )
         self.interactions = Interactions(
             self.api, sessionmaker=sessionmaker, clock=clock, base_url=base_url, channel_id=channel_id
         )
