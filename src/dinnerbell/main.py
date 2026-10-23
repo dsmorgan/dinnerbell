@@ -43,6 +43,11 @@ def _parser() -> argparse.ArgumentParser:
         metavar="EMAIL",
         help="a member to keep linked and active; repeat for each. At least one must be an active admin.",
     )
+    scrub.add_argument(
+        "--yes",
+        action="store_true",
+        help="skip the typed confirmation, after checking the database it names; needed without a terminal",
+    )
     catalog_cli.add_parser(commands)
     slack = commands.add_parser("slack", help="Slack tools that need no workspace")
     slack_commands = slack.add_subparsers(dest="slack_command", required=True, metavar="COMMAND")
@@ -75,6 +80,57 @@ def _migrate(settings: Settings) -> bool:
         run_migrations(settings.sync_database_url, settings.database_path)
     except (SchemaTooNewError, IntegrityCheckFailed) as exc:
         log.critical(str(exc))
+        return False
+    return True
+
+
+CONFIRM_WORD = "scrub"
+
+
+def _confirm_scrub(settings: Settings, yes: bool) -> bool:
+    """Show which database the scrub would change and what's in it, and ask for a typed
+    confirmation, before anything (even a migration) writes to it. ``--yes`` skips the question;
+    without a terminal to ask on, it's required."""
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from dinnerbell.services.database import open_database
+    from dinnerbell.services.scrub import preview
+
+    path = settings.database_path
+    if not path.exists():
+        print(f"No database at {path}. Nothing changed.", file=sys.stderr)
+        return False
+
+    async def read() -> list[str] | None:
+        database = open_database(settings.async_database_url)
+        try:
+            async with database.sessionmaker() as db:
+                found = await preview(db)
+        finally:
+            await database.close()
+        return None if found is None else found.lines()
+
+    try:
+        lines = asyncio.run(read())
+    except SQLAlchemyError as exc:
+        print(f"Can't read the database at {path} ({type(exc).__name__}). Nothing changed.", file=sys.stderr)
+        return False
+    if lines is None:
+        print(f"The database at {path} has no household yet, so there's nothing to scrub.", file=sys.stderr)
+        return False
+    print("scrub-test will change this database:")
+    print("\n".join(f"  {line}" for line in [f"Database: {path}", *lines]))
+    if yes:
+        return True
+    if not sys.stdin.isatty():
+        print("No terminal to confirm on. Check the database above, then run again with --yes.", file=sys.stderr)
+        return False
+    try:
+        answer = input(f'Type "{CONFIRM_WORD}" to scrub it: ')
+    except EOFError:
+        answer = ""
+    if answer.strip() != CONFIRM_WORD:
+        print("Not scrubbed. Nothing changed.", file=sys.stderr)
         return False
     return True
 
@@ -137,6 +193,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 1  # before migrating: never touch a database that may be production's
     configure_logging(settings.log_level, settings.instance_label)
     os.umask(PRIVATE_UMASK)
+    if args.command == "scrub-test" and not _confirm_scrub(settings, args.yes):
+        return 1
     if not _migrate(settings):
         return 1
     if args.command == "serve":

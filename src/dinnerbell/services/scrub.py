@@ -18,17 +18,19 @@ it again changes nothing but writes another audit row.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime
 
+from sqlalchemy import TextClause, bindparam, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dinnerbell.db.events import EventRepository
 from dinnerbell.db.meals import household_settings
 from dinnerbell.db.outbox import OutboxRepository
 from dinnerbell.db.repositories import HouseholdRepository, MemberRepository, SessionRepository
-from dinnerbell.domain.events import EndReason, EventState, transition
+from dinnerbell.domain.events import OPEN_STATES, EndReason, EventState, transition
 from dinnerbell.domain.members import InvalidMemberInput, normalize_email
 from dinnerbell.domain.schedule import SLOTS_KEY, slot_schedules, slot_to_json
 from dinnerbell.services.common import audit
@@ -38,6 +40,56 @@ NOT_LABELED = (
     "scrub-test runs only on a labeled instance. Set DINNERBELL_INSTANCE_LABEL (such as TEST) in the test "
     "instance's env file; never run it against production. Nothing changed."
 )
+
+
+@dataclass(frozen=True, slots=True)
+class ScrubPreview:
+    """What a scrub would act on, for the operator to check before confirming."""
+
+    household_name: str
+    active_members: int
+    enabled_slots: int
+    open_events: int
+    pending_outbox: int
+
+    def lines(self) -> list[str]:
+        return [
+            f"Household: {self.household_name}",
+            f"Active members: {self.active_members}",
+            f"Enabled slots: {self.enabled_slots}",
+            f"Open events: {self.open_events}",
+            f"Notifications not yet sent: {self.pending_outbox}",
+        ]
+
+
+async def preview(db: AsyncSession) -> ScrubPreview | None:
+    """What the scrub would act on, or None when there's no household. It reads with plain SQL
+    on columns every schema version has, so it works on a restored backup before migrating."""
+    household = (await db.execute(text("SELECT id, name, settings FROM household ORDER BY id LIMIT 1"))).first()
+    if household is None:
+        return None
+    household_id, name, raw = household
+    stored = raw if isinstance(raw, dict) else json.loads(raw or "{}")
+    slots = slot_schedules(stored if isinstance(stored, dict) else {})
+
+    async def count(sql: TextClause, **params: object) -> int:
+        return int(await db.scalar(sql, {"household": household_id, **params}) or 0)
+
+    open_events = text("SELECT count(*) FROM event WHERE household_id = :household AND state IN :states")
+    return ScrubPreview(
+        household_name=str(name),
+        active_members=await count(text("SELECT count(*) FROM member WHERE household_id = :household AND active")),
+        enabled_slots=sum(1 for schedule in slots.values() if schedule.enabled),
+        open_events=await count(
+            open_events.bindparams(bindparam("states", expanding=True)), states=[s.value for s in OPEN_STATES]
+        ),
+        pending_outbox=await count(
+            text(
+                "SELECT count(*) FROM outbox WHERE household_id = :household "
+                "AND delivered_at IS NULL AND failed_at IS NULL"
+            )
+        ),
+    )
 
 
 class ScrubRefused(Exception):
@@ -113,8 +165,7 @@ async def scrub_test(db: AsyncSession, *, instance_label: str, keep: Iterable[st
             changes["slack_link_locked"] = True
         if changes:
             await members_repo.update(household.id, member.id, now, **changes)
-        if member.active:
-            await sessions.delete_for_member(member.id)
+        await sessions.delete_for_member(member.id)
 
     stored = await household_settings(db, household.id)
     slots = slot_schedules(stored)
@@ -131,11 +182,15 @@ async def scrub_test(db: AsyncSession, *, instance_label: str, keep: Iterable[st
             continue
         if event.state is EventState.DECIDED:
             ended = replace(event, state=transition(event.state, EventState.CANCELLED))
+            action = "event.cancelled"
             cancelled += 1
         else:
             ended = replace(event, state=transition(event.state, EventState.ABANDONED), end_reason=EndReason.MISSED)
+            action = "event.abandoned"
             abandoned += 1
         await events.save(ended, now)
+        payload = {"reason": "scrub", "from": event.state.value}
+        await audit(db, household.id, None, action, f"event:{event.id}", payload, now)
 
     pending, rows = await OutboxRepository(db).clear(household.id)
 
@@ -149,7 +204,8 @@ async def scrub_test(db: AsyncSession, *, instance_label: str, keep: Iterable[st
         outbox_pending_deleted=pending,
         outbox_rows_deleted=rows,
     )
-    payload = {"kept_member_ids": sorted(kept_ids), "instance_label": instance_label} | asdict(summary)
-    await audit(db, household.id, None, "instance.scrubbed", f"household:{household.id}", payload, now)
+    summary_payload = {"kept_member_ids": sorted(kept_ids), "instance_label": instance_label} | asdict(summary)
+    target = f"household:{household.id}"
+    await audit(db, household.id, None, "instance.scrubbed", target, summary_payload, now)
     await db.commit()
     return summary
