@@ -4,77 +4,147 @@ on (or off), and records that the flag has a test in that state.
 
 The ``settings`` fixture applies the marks. ``flag_tests`` reads them from the test sources
 instead of from collection, so the coverage check in tests/test_flags.py gives the same answer
-however many tests a run selects.
+however many tests a run selects. Both sides follow the same rules, so a mark can't count as
+coverage without running the test in that state:
+
+- A mark decorates a test function or a test class, and nothing else: no module ``pytestmark``
+  and no ``pytest.param(marks=...)``.
+- A test's marks for one flag, its own and its classes', all agree.
+- A marked test uses the ``settings`` fixture, which applies the marks, and is never skipped
+  or expected to fail by a mark.
 """
 
 from __future__ import annotations
 
 import ast
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 TESTS = Path(__file__).resolve().parents[1]
+SELF_TEST = "test_flags.py"
+"""Builds flag marks as data to test these rules, so the scan skips it. Nothing in it counts."""
+SKIPPING = ("skip", "skipif", "xfail")
 
 
 class BadFlagMark(Exception):
-    """A ``flag`` mark this module can't read: the name and ``on`` must be literals."""
+    """A ``flag`` mark that breaks the rules above."""
 
 
 def features_for(marks: Iterable[pytest.Mark]) -> frozenset[str] | None:
-    """The flags a test's ``flag`` marks turn on, or None when it has no marks."""
+    """The flags a test's ``flag`` marks turn on, or None when it has no marks. Raises
+    ``BadFlagMark`` for a malformed mark, or for marks that disagree about one flag."""
     marks = list(marks)
     if not marks:
         return None
-    on: set[str] = set()
+    states: dict[str, bool] = {}
     for mark in marks:
         if len(mark.args) != 1 or set(mark.kwargs) != {"on"} or not isinstance(mark.kwargs["on"], bool):
             raise BadFlagMark(f"use @pytest.mark.flag('name', on=True|False), not {mark}")
-        if mark.kwargs["on"]:
-            on.add(str(mark.args[0]))
-    return frozenset(on)
+        name, on = str(mark.args[0]), mark.kwargs["on"]
+        if states.setdefault(name, on) != on:
+            raise BadFlagMark(f"flag {name!r} is marked both on and off for one test")
+    return frozenset(name for name, on in states.items() if on)
 
 
-def _flag_call(decorator: ast.expr) -> ast.Call | None:
+def _module_marks(module: object) -> list[pytest.Mark]:
+    marks = getattr(module, "pytestmark", [])
+    marks = marks if isinstance(marks, list) else [marks]
+    return [getattr(m, "mark", m) for m in marks]
+
+
+def item_problems(item: Any) -> list[str]:
+    """Why a collected test's ``flag`` marks can't be trusted, if they can't."""
+    marks = list(item.iter_markers("flag"))
+    if not marks:
+        return []
+    where = item.nodeid
+    problems: list[str] = []
+    try:
+        features_for(marks)
+    except BadFlagMark as exc:
+        problems.append(f"{where}: {exc}")
+    if any(m.name == "flag" for m in _module_marks(getattr(item, "module", None))):
+        problems.append(f"{where}: mark the test or its class with flag, not the module's pytestmark")
+    if "settings" not in item.fixturenames:
+        problems.append(f"{where}: a flag-marked test must use the settings fixture, which applies the mark")
+    for name in SKIPPING:
+        if any(True for _ in item.iter_markers(name)):
+            problems.append(f"{where}: a flag-marked test must run, so it can't be marked {name}")
+    return problems
+
+
+def _flag_call(node: ast.AST) -> ast.Call | None:
     if (
-        isinstance(decorator, ast.Call)
-        and isinstance(decorator.func, ast.Attribute)
-        and decorator.func.attr == "flag"
-        and isinstance(decorator.func.value, ast.Attribute)
-        and decorator.func.value.attr == "mark"
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "flag"
+        and isinstance(node.func.value, ast.Attribute)
+        and node.func.value.attr == "mark"
     ):
-        return decorator
+        return node
     return None
 
 
-def marks_in(source: str, filename: str = "<test>") -> set[tuple[str, bool]]:
-    """Every ``(name, on)`` pair that a ``flag`` mark on a test function or class declares."""
-    found: set[tuple[str, bool]] = set()
-    for node in ast.walk(ast.parse(source, filename)):
+def _literal(call: ast.Call, filename: str) -> tuple[str, bool]:
+    on = {k.arg: k.value for k in call.keywords}.get("on")
+    name = call.args[0] if len(call.args) == 1 else None
+    if not (
+        isinstance(name, ast.Constant)
+        and isinstance(name.value, str)
+        and isinstance(on, ast.Constant)
+        and isinstance(on.value, bool)
+        and len(call.keywords) == 1
+    ):
+        raise BadFlagMark(f"{filename}:{call.lineno}: a flag mark needs a literal name and on=True or on=False")
+    return name.value, on.value
+
+
+def _tests(
+    nodes: Iterable[ast.stmt], inherited: dict[str, bool], filename: str
+) -> Iterator[tuple[str, dict[str, bool]]]:
+    """Each test function under ``nodes`` with the flag states its marks and its classes' set."""
+    for node in nodes:
         if not isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
             continue
+        states = dict(inherited)
         for decorator in node.decorator_list:
             call = _flag_call(decorator)
             if call is None:
                 continue
-            on = {k.arg: k.value for k in call.keywords}.get("on")
-            name = call.args[0] if len(call.args) == 1 else None
-            if not (
-                isinstance(name, ast.Constant)
-                and isinstance(name.value, str)
-                and isinstance(on, ast.Constant)
-                and isinstance(on.value, bool)
-            ):
-                raise BadFlagMark(f"{filename}:{call.lineno}: a flag mark needs a literal name and on=True or on=False")
-            found.add((name.value, on.value))
-    return found
+            name, on = _literal(call, filename)
+            if states.setdefault(name, on) != on:
+                raise BadFlagMark(f"{filename}:{call.lineno}: flag {name!r} is marked both on and off for one test")
+        if isinstance(node, ast.ClassDef):
+            yield from _tests(node.body, states, filename)
+        elif node.name.startswith("test"):
+            yield node.name, states
+
+
+def marks_in(source: str, filename: str = "<test>") -> set[tuple[str, bool]]:
+    """Every ``(name, on)`` state some test function in ``source`` runs a flag in."""
+    tree = ast.parse(source, filename)
+    decorators = {
+        id(d)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef)
+        for d in node.decorator_list
+    }
+    for node in ast.walk(tree):
+        call = _flag_call(node)
+        if call is not None and id(call) not in decorators:
+            raise BadFlagMark(f"{filename}:{call.lineno}: a flag mark must decorate a test function or class")
+    return {(name, on) for _, states in _tests(tree.body, {}, filename) for name, on in states.items()}
 
 
 def flag_tests(root: Path = TESTS) -> set[tuple[str, bool]]:
-    """Every ``(name, on)`` pair marked anywhere under ``root``."""
+    """Every ``(name, on)`` state some test under ``root`` runs a flag in."""
     found: set[tuple[str, bool]] = set()
     for path in sorted(root.rglob("test_*.py")):
+        if path.name == SELF_TEST:
+            continue
         found |= marks_in(path.read_text(), str(path))
     return found
 
