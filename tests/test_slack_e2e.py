@@ -115,13 +115,15 @@ async def test_a_dinner_decided_in_slack(slack: Slack) -> None:
     picks_ts, decision_ts = "4.000100", "5.000100"
     assert [summary(c) for c in slack.fake.calls] == [
         ("post", CHANNEL, None, "Dinner call · Thursday, Oct 22: Who's in"),
+        ("ephemeral", CHANNEL, "U01ALEX", "You're in for dinner. Thanks!"),
         ("ephemeral", CHANNEL, "U01ALEX", "Thanks! You're offering to pick up. Tap again to take it back."),
         ("ephemeral", CHANNEL, "U02SAM", "Thanks! You're offering to cook. Tap again to take it back."),
         ("modal", ids.DETAILS_VIEW),
+        ("ephemeral", CHANNEL, "U03KIM", "Got it: you're a maybe for dinner."),
         ("update", *call, "Dinner call · Thursday, Oct 22: Who's in"),
         ("post", "U04LEE", None, "Are you in for dinner on Thursday, Oct 2"),
         ("conversations.open",),  # is D04LEE really Lee's DM with the bot?
-        ("ephemeral", "D04LEE", "U04LEE", "Got it: you're out this time."),
+        ("ephemeral", "D04LEE", "U04LEE", "Got it: you're out for dinner this time."),
         ("update", *call, "Dinner call · Thursday, Oct 22: Who's in"),
         ("post", "U03KIM", None, "You're counted out for dinner on Thursda"),
         ("post", CHANNEL, thread, "Picks for dinner on Thursday, Oct 22: Sa"),
@@ -129,6 +131,7 @@ async def test_a_dinner_decided_in_slack(slack: Slack) -> None:
         ("ephemeral", CHANNEL, "U01ALEX", "Vote counted. Tap Vote again to take it back."),
         ("ephemeral", CHANNEL, "U02SAM", "Vote counted. Tap Vote again to take it back."),
         ("ephemeral", CHANNEL, "U02SAM", "Only the coordinator or an admin can lock a proposal."),
+        ("ephemeral", CHANNEL, "U02SAM", "You're coordinating dinner. Thanks for steering!"),
         ("update", CHANNEL, picks_ts, "Picks for dinner on Thursday, Oct 22: Sa"),
         ("update", *call, "Dinner call · Thursday, Oct 22: Thanks f"),
         ("post", CHANNEL, thread, "Dinner on Thursday, Oct 22: Sam's Tacos "),
@@ -137,7 +140,7 @@ async def test_a_dinner_decided_in_slack(slack: Slack) -> None:
         ("update", *call, "Dinner call · Thursday, Oct 22: It's dec"),
         ("ephemeral", CHANNEL, "U01ALEX", "Marked done. Thanks!"),
         ("update", CHANNEL, decision_ts, "Dinner on Thursday, Oct 22: Sam's Tacos "),
-        ("update", *call, "Dinner call · Thursday, Oct 22: All done"),
+        ("update", *call, "Dinner call · Thursday, Oct 22: Dinner i"),
     ]
 
     posts = slack.fake.of("chat.postMessage")
@@ -153,5 +156,5 @@ async def test_a_dinner_decided_in_slack(slack: Slack) -> None:
     assert "Locked in by <@U02SAM>." in block_text(decision, 0)
     assert "*Cooking:* <@U02SAM>" in block_text(decision, 2)
     assert decision.args["blocks"][1]["fields"][0]["text"] == "*When*\n6:45 PM"
-    assert "is done. Thanks to everyone who pitched in!" in block_text(updates[-2], 0)
+    assert "*Dinner is done: Sam's Tacos.* Thanks to everyone who pitched in!" in block_text(updates[-2], 0)
     assert "Locked in by <@U02SAM>." in block_text(updates[-2], 0)  # still there after the edit

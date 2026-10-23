@@ -10,7 +10,7 @@
     },
     {
       "text": {
-        "text": "All done. Thanks, everyone!",
+        "text": "Dinner is done. Thanks, everyone!",
         "type": "mrkdwn"
       },
       "type": "section"
@@ -39,5 +39,5 @@
       "type": "actions"
     }
   ],
-  "text": "Dinner call · Thursday, Oct 22: All done. Thanks, everyone!"
+  "text": "Dinner call · Thursday, Oct 22: Dinner is done. Thanks, everyone!"
 }

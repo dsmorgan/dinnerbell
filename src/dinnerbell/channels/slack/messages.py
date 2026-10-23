@@ -193,7 +193,7 @@ def _call_status(event: note.EventInfo) -> str:
         case EventState.DECIDED:
             return "It's decided! The plan is in the thread."
         case EventState.DONE:
-            return "All done. Thanks, everyone!"
+            return f"{slot.capitalize()} is done. Thanks, everyone!"
         case EventState.ABANDONED if event.end_reason is EndReason.MISSED:
             return "This call ended without a decision."
         case EventState.ABANDONED:
@@ -344,7 +344,7 @@ def decision_message(
     proposal = decision.proposal
     item = _item_name(proposal.item)
     if event.state is EventState.DONE:
-        top = f"*{item}* is done. Thanks to everyone who pitched in!"
+        top = f"*{_slot(event).capitalize()} is done: {item}.* Thanks to everyone who pitched in!"
     elif event.state is EventState.CANCELLED:
         top = f"~{item}~ This {_slot(event)} was cancelled."
     else:
@@ -390,7 +390,7 @@ def reminder_message(notification: note.ResponseReminder, ctx: RenderContext) ->
     closes = local_clock(event.respond_deadline, event.timezone)
     text = (
         f"Hi {escape(notification.member.name)}! The {_slot(event)} call for {day_label(event.day)} "
-        f"closes at *{closes}*. Are you in? A quick tap helps whoever's cooking plan."
+        f"closes at *{closes}*. Are you in? A quick tap helps whoever's cooking plan ahead."
     )
     value = ids.event_value(event.id)
     blocks = [
@@ -462,9 +462,9 @@ def abandoned_message(notification: note.CallAbandoned, ctx: RenderContext) -> M
 
 def cancelled_message(notification: note.EventCancelled, ctx: RenderContext) -> Message:
     event = notification.event
-    who = escape(notification.cancelled_by.name) if notification.cancelled_by else "An admin"
-    text = f"{who} cancelled the {_slot(event)} call for {day_label(event.day)}."
-    lines = [text]
+    who = notification.cancelled_by.name if notification.cancelled_by else "An admin"
+    text = f"{who} cancelled the {_slot(event)} call for {day_label(event.day)}."  # _finish escapes it
+    lines = [escape(text)]
     if notification.participants:
         lines.append(
             f"Heads up {ctx.directory.mentions(notification.participants)}: no group {_slot(event)} this time."

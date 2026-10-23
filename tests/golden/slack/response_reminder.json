@@ -2,7 +2,7 @@
   "blocks": [
     {
       "text": {
-        "text": "Hi Kim! The dinner call for Thursday, Oct 22 closes at *4:30 PM*. Are you in? A quick tap helps whoever's cooking plan.",
+        "text": "Hi Kim! The dinner call for Thursday, Oct 22 closes at *4:30 PM*. Are you in? A quick tap helps whoever's cooking plan ahead.",
         "type": "mrkdwn"
       },
       "type": "section"
