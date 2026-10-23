@@ -27,6 +27,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from dinnerbell.db.outbox import OutboxEntry, OutboxRepository
 from dinnerbell.domain.notifications import (
     Channel,
+    ChannelUnavailable,
+    HeldDelivery,
     MessageRef,
     Notification,
     PayloadError,
@@ -44,6 +46,8 @@ MAX_ATTEMPTS = 8
 FIRST_RETRY = timedelta(seconds=30)
 LONGEST_RETRY = timedelta(hours=1)
 NO_MESSAGE = "no message to update"
+MIN_HOLD = timedelta(seconds=5)
+"""The shortest a held row waits, even if the channel asks for less."""
 SUPERSEDED = "superseded by a newer update"
 
 
@@ -68,6 +72,9 @@ class DrainResult:
     retrying: int = 0
     failed: int = 0
     superseded: int = 0
+    held: int = 0
+    stopped: bool = False
+    """The channel was unavailable, so the pass ended early."""
 
 
 async def drain(
@@ -90,6 +97,8 @@ async def drain(
             current = await repo.get(entry.id) if claimed else None
             await db.commit()
             settled = current is not None and await _deliver(db, channel, current, token, clock, result)
+            if result.stopped:
+                break
             if not settled and entry.creates_message and entry.event_id is not None:
                 blocked.add(entry.event_id)
     return result
@@ -128,7 +137,14 @@ async def _deliver(
         return True
     try:
         ref, skipped = await _send(repo, channel, entry, notification)
+    except HeldDelivery as exc:
+        until = clock() + max(asked_wait(exc), MIN_HOLD)
+        await repo.release(entry.id, token, until=until, note=f"{type(exc).__name__}: {exc}")
+        await db.commit()
+        result.held += 1
+        return False
     except Exception as exc:
+        result.stopped = isinstance(exc, ChannelUnavailable)
         # A permanent error won't get better with retries. Otherwise retry until the last
         # attempt; the claim already counted this one.
         final = isinstance(exc, PermanentDeliveryError) or entry.attempts >= MAX_ATTEMPTS

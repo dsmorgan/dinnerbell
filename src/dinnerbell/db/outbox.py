@@ -231,6 +231,22 @@ class OutboxRepository:
         )
         return _rowcount(result) == 1
 
+    async def release(self, entry_id: int, token: str, *, until: datetime, note: str) -> bool:
+        """Give back a claim without counting the attempt: the channel held the row."""
+        result = await self._session.execute(
+            update(OutboxRow)
+            .where(OutboxRow.id == entry_id, OutboxRow.claim_token == token)
+            .values(
+                claim_token=None,
+                claimed_until=None,
+                available_at=until,
+                attempts=OutboxRow.attempts - 1,
+                last_error=note[:500],
+            )
+            .execution_options(synchronize_session=False)
+        )
+        return _rowcount(result) == 1
+
     async def newer_update_exists(self, entry: OutboxEntry) -> bool:
         """Whether a later update to the same message is queued or sent, making ``entry`` stale."""
         newer = await self._session.scalar(
