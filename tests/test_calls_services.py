@@ -1110,3 +1110,21 @@ async def test_assignments_fit_the_decision_and_repeat_quietly(house: House) -> 
     assert await house.outbox() == before
     after = next(a for a in (await house.context(event_id)).assignments if a.role is AssignmentRole.PICKUP)
     assert after.id == pickup.id
+
+
+async def test_suggestion_credit_counts_members_not_names(house: House) -> None:
+    """Regression: two members with the same display name were credited as one suggester."""
+    twin = await house.add_member("Sam Two")
+    async with house.sessionmaker() as db:
+        await db.execute(text("UPDATE member SET display_name = 'Sam' WHERE id = :id"), {"id": twin.id})
+        await db.commit()
+    event_id = await open_dinner(house)
+    taqueria = house.items["Taqueria"].id
+    for member in (house["Sam"], twin):
+        await act(house, calls.save_details, member, event_id, Details(suggestion_item_ids=(taqueria,)))
+    await act(house, calls.offer_role, house["Alex"], event_id, RoleOffer.PICKUP, True)
+    house.clock.now = RESPOND_BY
+    await house.tick()
+    ctx = await house.context(event_id)
+    assert ctx.proposals[0].item_id == taqueria
+    assert ctx.proposals[0].reasons[0] == "Suggested by Sam and Sam."
