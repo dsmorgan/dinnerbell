@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Production: podman-compose pull && podman-compose up -d   (or: docker compose ...)
 # Test instance: deploy/dinnerbell-test pull && deploy/dinnerbell-test up -d
+#   (always through that script, never with -p or DINNERBELL_ENV_FILE by hand)
 # Build from source: add -f compose.yaml -f compose.build.yaml. See docs/setup.md.
 #
 # Compose reads ${...} values from the shell and from .env in this directory, not from env_file.

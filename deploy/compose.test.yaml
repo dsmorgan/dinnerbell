@@ -1,0 +1,8 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Test-instance override, applied only by deploy/dinnerbell-test. Don't use it by hand.
+# It names the test volume explicitly, so test data can never land in production's volume,
+# whatever the project name. Production's compose.yaml leaves its volume name to compose
+# (<project>_dinnerbell-data) so existing installs keep their data.
+volumes:
+  dinnerbell-data:
+    name: dinnerbell-test_dinnerbell-data
