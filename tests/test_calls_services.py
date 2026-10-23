@@ -995,3 +995,23 @@ async def test_rerun_is_refused_late_in_the_evening_and_keeps_a_later_days_timin
     assert await house.kinds() == before  # posted when it opens, not now
     house.clock.now = local(23, 15)
     assert await house.tick() == [Step.OPEN]
+
+
+async def test_proposals_are_capped_per_call_and_per_member(house: House) -> None:
+    """Regression: nothing stopped one member, or everyone, from flooding a call with proposals."""
+    event_id = await to_voting(house)  # two ranked proposals
+    thai = house.tags["Thai"].id
+
+    async def propose(name: str, text: str) -> Any:
+        return await act(house, calls.add_proposal, house[name], event_id, Mode.PICKUP, free_text=text, cuisine_id=thai)
+
+    for n in range(3):
+        await propose("Kim", f"Kim's {n}")
+    with pytest.raises(EventRuleViolation, match="You've added 3"):
+        await propose("Kim", "One more")
+    for name in ("Sam", "Lee"):
+        for n in range(3 if name == "Sam" else 2):
+            await propose(name, f"{name}'s {n}")
+    assert len((await house.context(event_id)).proposals) == 10
+    with pytest.raises(EventRuleViolation, match="already has 10 proposals"):
+        await propose("Alex", "Eleventh")
