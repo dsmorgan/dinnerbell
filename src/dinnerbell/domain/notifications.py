@@ -111,7 +111,7 @@ class AssignmentInfo:
 
 @dataclass(frozen=True, slots=True)
 class DecisionInfo:
-    """FR-18: what was decided. ``locked_by`` is None when the vote decided."""
+    """FR-18: what was decided, with the head count and guests' dietary needs (FR-20)."""
 
     proposal: ProposalInfo
     meal_time: datetime
@@ -119,7 +119,6 @@ class DecisionInfo:
     participants: tuple[ParticipantInfo, ...]
     assignments: tuple[AssignmentInfo, ...]
     dietary_notes: tuple[str, ...] = ()
-    locked_by: PersonInfo | None = None
 
 
 # Notifications --------------------------------------------------------------------------------
@@ -240,13 +239,15 @@ class ProposalsUpdated(_Notification):
 
 @dataclass(frozen=True, slots=True)
 class DecisionMade(_Notification):
-    """Decision made: a post threaded under the call."""
+    """Decision made: a post threaded under the call. ``locked_by`` is who locked it (FR-15),
+    or None when the vote decided."""
 
     kind: ClassVar[str] = "decision_made"
     message_suffix: ClassVar[str | None] = "decision"
     thread_suffix: ClassVar[str | None] = "call"
     event: EventInfo
     decision: DecisionInfo
+    locked_by: PersonInfo | None = None
 
 
 @dataclass(frozen=True, slots=True)

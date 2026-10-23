@@ -11,6 +11,7 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
+from dinnerbell.channels.base import NullChannel
 from dinnerbell.config import Settings
 from dinnerbell.db.engine import create_app_engine, create_sessionmaker
 from dinnerbell.scheduler import runner
@@ -74,6 +75,7 @@ def job_context(migrated: Settings, clock: FakeClock) -> runner.JobContext:
         database_path=migrated.database_path,
         backup_dir=migrated.backup_dir,
         sessionmaker=create_sessionmaker(engine),
+        channel=NullChannel(),
     )
 
 
@@ -131,7 +133,11 @@ async def test_build_scheduler_schedules_jobs(job_context: runner.JobContext) ->
     jobs = await _started_jobs(scheduler)
     # Regression: catch-up used to be a second job that could overlap the nightly one and
     # delete its .partial file. Now there is one backup job, moved to run now.
-    assert set(jobs) == {"heartbeat", "nightly_backup", "purge_sessions"}
+    assert set(jobs) == {"heartbeat", "nightly_backup", "purge_sessions", "call_tick", "drain_outbox"}
+    for name, seconds in (("call_tick", 30), ("drain_outbox", 5)):
+        assert jobs[name].trigger.interval == timedelta(seconds=seconds)
+        assert jobs[name].max_instances == 1  # a slow tick never overlaps the next one
+        assert jobs[name].next_run_time - datetime.now(UTC) < timedelta(minutes=1)  # catch up at start
     backup = jobs["nightly_backup"]
     assert "hour='3'" in str(backup.trigger) and "minute='30'" in str(backup.trigger)
     assert backup.max_instances == 1

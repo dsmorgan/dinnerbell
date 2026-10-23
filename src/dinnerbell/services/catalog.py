@@ -21,6 +21,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dinnerbell.db.catalog import CatalogRepository, ItemValues
+from dinnerbell.db.events import ProposalRepository, ResponseRepository
 from dinnerbell.db.meals import MealLogRepository
 from dinnerbell.db.preferences import PreferenceRepository
 from dinnerbell.db.repositories import MemberRepository
@@ -260,8 +261,8 @@ async def rename_tag(db: AsyncSession, actor: Member, tag_id: int, name: str, *,
 
 
 async def merge_tags(db: AsyncSession, actor: Member, source_id: int, target_id: int, *, now: datetime) -> Tag:
-    """Merge ``source`` into ``target``: items, preferences, and meal-log snapshots that named
-    the source now name the target, and the source tag is removed."""
+    """Merge ``source`` into ``target``: items, preferences, meal-log snapshots, guest needs, and
+    free-text proposals that named the source now name the target, and the source tag is removed."""
     require_admin(actor, "Only the household admin can merge tags.")
     source = await _tag(db, actor, source_id)
     target = await _tag(db, actor, target_id)
@@ -271,6 +272,9 @@ async def merge_tags(db: AsyncSession, actor: Member, source_id: int, target_id:
     # Not counted in the audit row: even a count would tell the admin whether anyone rated the tag (FR-29).
     await PreferenceRepository(db).move_tag(household, source.id, target.id, merged_stance, now)
     meals = await MealLogRepository(db).repoint_cuisine(household, source.id, target.id)
+    # Guest needs and free-text proposals name tags too; without this the delete would drop them.
+    await ResponseRepository(db).repoint_guest_need(household, source.id, target.id)
+    await ProposalRepository(db).repoint_cuisine(household, source.id, target.id)
     await CatalogRepository(db).delete_tag(household, source.id)
     payload = {
         "source": {"id": source.id, "kind": source.kind.value, "name": source.name},

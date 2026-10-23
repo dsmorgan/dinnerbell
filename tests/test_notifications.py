@@ -44,7 +44,6 @@ DECISION = n.DecisionInfo(
     participants=(n.ParticipantInfo(ALEX, 2), n.ParticipantInfo(SAM)),
     assignments=(n.AssignmentInfo(AssignmentRole.PICKUP, SAM), n.AssignmentInfo(AssignmentRole.COORDINATOR, ALEX)),
     dietary_notes=("Vegan",),
-    locked_by=ALEX,
 )
 
 EXAMPLES: list[tuple[n.Notification, str, str | None, str | None, int | None]] = [
@@ -60,7 +59,13 @@ EXAMPLES: list[tuple[n.Notification, str, str | None, str | None, int | None]] =
         None,
     ),
     (n.ProposalsUpdated(EVENT, (PROPOSAL,), 3), "event:7:run2:proposals_updated", "event:7:run2:proposals", None, None),
-    (n.DecisionMade(EVENT, DECISION), "event:7:run2:decision_made", "event:7:run2:decision", "event:7:run2:call", None),
+    (
+        n.DecisionMade(EVENT, DECISION, ALEX),
+        "event:7:run2:decision_made",
+        "event:7:run2:decision",
+        "event:7:run2:call",
+        None,
+    ),
     (n.DecisionUpdated(EVENT, DECISION), "event:7:run2:decision_updated", "event:7:run2:decision", None, None),
     (
         n.AssignmentMade(EVENT, 11, AssignmentRole.PICKUP, SAM, DECISION),
