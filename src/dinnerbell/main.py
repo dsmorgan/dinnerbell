@@ -11,7 +11,7 @@ from collections.abc import Sequence
 
 from dinnerbell import __version__, catalog_cli
 from dinnerbell.config import ConfigError, Settings, load_settings
-from dinnerbell.db.migrate import SchemaTooNewError, run_migrations
+from dinnerbell.db.migrate import IntegrityCheckFailed, SchemaTooNewError, run_migrations
 from dinnerbell.logs import configure_logging
 
 log = logging.getLogger("dinnerbell")
@@ -35,7 +35,7 @@ def _parser() -> argparse.ArgumentParser:
 def _migrate(settings: Settings) -> bool:
     try:
         run_migrations(settings.sync_database_url, settings.database_path)
-    except SchemaTooNewError as exc:
+    except (SchemaTooNewError, IntegrityCheckFailed) as exc:
         log.critical(str(exc))
         return False
     return True
