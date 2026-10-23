@@ -199,12 +199,10 @@ async def ranking_snapshot(db: AsyncSession, ctx: CallContext, group: GroupPrefe
     household_id, day = ctx.event.household_id, ctx.event.day
     window = await variety_window(db, household_id, day)
     who = veto_participants(ctx.responses)
-    suggesters: dict[int, list[str]] = {}
+    suggesters: dict[int, dict[int, str]] = {}  # item -> {member ID: name}, credited once per member
     for suggestion in ctx.suggestions:
         if suggestion.item_id is not None and suggestion.member_id in who:
-            names = suggesters.setdefault(suggestion.item_id, [])
-            if ctx.name(suggestion.member_id) not in names:
-                names.append(ctx.name(suggestion.member_id))
+            suggesters.setdefault(suggestion.item_id, {})[suggestion.member_id] = ctx.name(suggestion.member_id)
     return RankingSnapshot(
         items=tuple(rank_item(ctx, item) for item in ctx.items.values() if item.active),
         preferences=group,
@@ -216,7 +214,7 @@ async def ranking_snapshot(db: AsyncSession, ctx: CallContext, group: GroupPrefe
         recent_items={i.item_id: i.days_since for i in window.items},
         recent_cuisines={c.tag_id: c.days_since for c in window.cuisines},
         last_eaten_days={i: max((day - d).days, 0) for i, d in (await last_eaten(db, household_id)).items()},
-        suggesters={i: tuple(names) for i, names in suggesters.items()},
+        suggesters={i: tuple(by_member.values()) for i, by_member in suggesters.items()},
         member_names={m.id: m.display_name for m in ctx.members.values()},
         cuisine_names={t.id: t.name for t in ctx.tags.values()},
         limit=proposal_count(ctx.settings),
