@@ -11,9 +11,9 @@
   {#- No eval, no inline styles, no script tags in swapped content, no history snapshots in localStorage. #}
   <meta name="htmx-config" content='{"includeIndicatorStyles":false,"allowEval":false,"allowScriptTags":false,"historyCacheSize":0,"selfRequestsOnly":true,"responseHandling":[{"code":"204","swap":false},{"code":"[23]..","swap":true},{"code":"409","swap":true,"error":false},{"code":"[45]..","swap":false,"error":true}]}'>
   <title>{% if instance_label %}{{ instance_label }} · {% endif %}{% block title %}Dinnerbell{% endblock %} · {{ household_name }}</title>
-  <link rel="stylesheet" href="/static/app.css?v={{ version }}">
+  <link rel="stylesheet" href="/static/app.css?v={{ version|urlencode }}">
   <script src="/static/{{ htmx_file }}" defer></script>
-  <script src="/static/app.js?v={{ version }}" defer></script>
+  <script src="/static/app.js?v={{ version|urlencode }}" defer></script>
 </head>
 <body{% if csrf_token %} hx-headers='{{ {"X-CSRF-Token": csrf_token}|tojson }}'{% endif %}>
   <header class="topbar">{% if instance_label %}
@@ -43,5 +43,6 @@
   <main class="page">
     {% block content %}{% endblock %}
   </main>
+  <footer class="site-footer small muted">Dinnerbell {{ version }}</footer>
 </body>
 </html>

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import ipaddress
+import re
 from functools import cached_property
 from pathlib import Path
 from typing import Annotated, Literal
@@ -14,6 +15,7 @@ from pydantic import Field, SecretStr, ValidationError, field_validator, model_v
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 from sqlalchemy.engine import make_url
 
+from dinnerbell import __version__
 from dinnerbell.domain import flags
 from dinnerbell.domain.members import InvalidMemberInput, normalize_email
 
@@ -21,6 +23,7 @@ ENV_PREFIX = "DINNERBELL_"
 SECRETS_DIR = Path("/run/secrets")
 MIN_SECRET_KEY_LENGTH = 32
 LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1"})
+BUILD_PATTERN = re.compile(r"[0-9a-f]{7,40}")
 SLACK_ISSUER = "https://slack.com"
 
 IPNetwork = ipaddress.IPv4Network | ipaddress.IPv6Network
@@ -75,6 +78,7 @@ class Settings(BaseSettings):
     timezone: str = "America/New_York"
     seed_file: Path | None = None
     log_level: LogLevel = "INFO"
+    build: str = ""
     trusted_proxies: Annotated[tuple[IPNetwork, ...], NoDecode] = ()
 
     @field_validator("database_url")
@@ -156,6 +160,13 @@ class Settings(BaseSettings):
     def _upper_log_level(cls, value: object) -> object:
         return value.upper() if isinstance(value, str) else value
 
+    @field_validator("build")
+    @classmethod
+    def _check_build(cls, value: str) -> str:
+        if value and not BUILD_PATTERN.fullmatch(value):
+            raise ValueError("must be empty or a git commit hash of 7 to 40 lowercase hex characters")
+        return value
+
     @field_validator("trusted_proxies", mode="before")
     @classmethod
     def _parse_proxies(cls, value: object) -> object:
@@ -214,6 +225,11 @@ class Settings(BaseSettings):
     @cached_property
     def backup_dir(self) -> Path:
         return self.database_path.parent / "backups"
+
+    @cached_property
+    def version_label(self) -> str:
+        """The version people see: 0.2.0 on a release image, 0.2.0+abc1234 on a main build."""
+        return f"{__version__}+{self.build}" if self.build else __version__
 
     @cached_property
     def cookie_secure(self) -> bool:

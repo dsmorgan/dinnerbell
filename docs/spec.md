@@ -539,6 +539,7 @@ All configuration comes from environment variables with a `DINNERBELL_` prefix, 
 | `DINNERBELL_TIMEZONE` | Seeds the household time zone on first start, default `America/New_York`. Afterward the household row is authoritative and is edited in Admin |
 | `DINNERBELL_SEED_FILE` | Optional YAML of tags and catalog items to import on first start |
 | `DINNERBELL_LOG_LEVEL` | Default `INFO` |
+| `DINNERBELL_BUILD` | Set by the image, not the operator: the short commit hash of a `main` build, shown after the version in the footer and `/healthz` (`0.2.0+abc1234`). Empty on release images |
 | `DINNERBELL_BIND` | Compose only, not read by the app: host address that `compose.yaml` publishes port 8013 on, default `127.0.0.1`. Set it to the interface the reverse proxy reaches |
 | `DINNERBELL_TRUSTED_PROXIES` | Optional comma-separated IPs or CIDRs whose `X-Forwarded-For` is trusted for client IPs, such as the reverse proxy's address |
 
@@ -569,7 +570,7 @@ Household-level settings that change over time (slot schedule, weights, threshol
 
 ### 13.9 Observability
 
-- `/healthz` returns database reachability, scheduler last tick, Slack socket connection state, outbox backlog, and last backup time. Uptime Kuma polls it.
+- `/healthz` returns the version (with the build stamp on `main` builds), database reachability, scheduler last tick, Slack socket connection state, outbox backlog, and last backup time. Uptime Kuma polls it.
 - Structured JSON logs to stdout with request ID, member ID, and event ID fields.
 - Optional `/metrics` in Prometheus format behind an admin-only flag.
 

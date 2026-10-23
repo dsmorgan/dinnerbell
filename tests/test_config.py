@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 
+from dinnerbell import __version__
 from dinnerbell.config import ConfigError, Settings, load_settings
 from tests.conftest import make_settings
 
@@ -46,6 +47,8 @@ def test_loads_from_environment_with_defaults(monkeypatch: pytest.MonkeyPatch) -
     assert settings.oidc_scopes == "openid email profile"
     assert settings.admin_email == "admin@example.com"
     assert settings.log_level == "INFO"
+    assert settings.build == ""
+    assert settings.version_label == __version__
     assert settings.timezone == "America/New_York"
     assert settings.trusted_proxies == ()
     assert settings.slack_team_id == "T0123ABCD"
@@ -124,6 +127,10 @@ def test_local_http_base_url_turns_off_secure_cookies(tmp_path: Path, url: str) 
         ("DINNERBELL_TRUSTED_PROXIES", "10.0.0.1, not-an-ip", "comma-separated list"),
         ("DINNERBELL_LOG_LEVEL", "chatty", "DINNERBELL_LOG_LEVEL"),
         ("DINNERBELL_HOUSEHOLD_NAME", "x" * 81, "DINNERBELL_HOUSEHOLD_NAME"),
+        ("DINNERBELL_BUILD", "abc123", "7 to 40 lowercase hex"),
+        ("DINNERBELL_BUILD", "ABC1234", "7 to 40 lowercase hex"),
+        ("DINNERBELL_BUILD", "a" * 41, "7 to 40 lowercase hex"),
+        ("DINNERBELL_BUILD", "abc1234<script>", "7 to 40 lowercase hex"),
     ],
 )
 def test_invalid_values(monkeypatch: pytest.MonkeyPatch, name: str, value: str, fragment: str) -> None:
@@ -183,10 +190,33 @@ def test_secret_files_are_read(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) 
     assert settings.secret_key.get_secret_value() == "from-a-secret-file-and-long-enough-to-pass"
 
 
+@pytest.mark.parametrize("build", ["abc1234", "0123456789abcdef0123456789abcdef01234567"])
+def test_build_stamp_follows_the_version(monkeypatch: pytest.MonkeyPatch, build: str) -> None:
+    set_env(monkeypatch, DINNERBELL_BUILD=build)
+    settings = load_settings()
+    assert settings.build == build
+    assert settings.version_label == f"{__version__}+{build}"
+
+
+def test_empty_build_stamp_shows_the_bare_version(monkeypatch: pytest.MonkeyPatch) -> None:
+    set_env(monkeypatch, DINNERBELL_BUILD="")
+    assert load_settings().version_label == __version__
+
+
+# The image sets these. An uncommented line in .env, even an empty one, would replace the
+# image's value, so .env.example documents them only as comments.
+SET_BY_IMAGE = {"build"}
+
+
 def test_env_example_documents_every_setting() -> None:
     text = (Path(__file__).resolve().parents[1] / ".env.example").read_text()
     for field in Settings.model_fields:
-        assert f"\nDINNERBELL_{field.upper()}=" in text, field
+        line = f"\nDINNERBELL_{field.upper()}="
+        if field in SET_BY_IMAGE:
+            assert line not in text, field
+            assert f"\n# DINNERBELL_{field.upper()}=" in text, field
+        else:
+            assert line in text, field
 
 
 # Test instance settings (ADR 0006) ----------------------------------------------------------------

@@ -6,8 +6,10 @@ from __future__ import annotations
 from datetime import timedelta
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
+from dinnerbell import __version__
 from dinnerbell.db.engine import create_app_engine, create_sessionmaker
 from tests.support.clock import FakeClock
 
@@ -28,7 +30,8 @@ def test_healthz_shape(client: TestClient, clock: FakeClock) -> None:
     response = client.get("/healthz")
     assert response.status_code == 200
     assert response.headers["content-type"] == "application/json"
-    assert set(body) == {"status", "database", "scheduler", "slack", "backup", "outbox"}
+    assert set(body) == {"status", "version", "database", "scheduler", "slack", "backup", "outbox"}
+    assert body["version"] == __version__
     assert body["outbox"] == {"backlog": 0, "failed": 0}
     assert body["status"] == "ok"
     assert body["database"] == "ok"
@@ -38,6 +41,11 @@ def test_healthz_shape(client: TestClient, clock: FakeClock) -> None:
     text = response.text
     assert "@" not in text
     assert "secret" not in text.lower()
+
+
+@pytest.mark.parametrize("settings_overrides", [{"build": "abc1234"}])
+def test_healthz_reports_the_build_stamp(client: TestClient) -> None:
+    assert client.get("/healthz").json()["version"] == f"{__version__}+abc1234"
 
 
 def test_healthz_needs_no_session_and_is_not_rate_limited(client: TestClient) -> None:

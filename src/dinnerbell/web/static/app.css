@@ -103,6 +103,13 @@ p { margin: 0 0 0.75rem; }
   padding: 1rem var(--gutter) 3rem;
 }
 
+.site-footer {
+  max-width: 40rem;
+  margin: 0 auto;
+  padding: 0 var(--gutter) 2rem;
+  text-align: center;
+}
+
 .card {
   background: var(--surface);
   border: 1px solid var(--line);

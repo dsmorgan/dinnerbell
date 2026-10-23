@@ -42,6 +42,7 @@ async def healthz(context: Context) -> JSONResponse:
         status = "degraded"
     body: dict[str, Any] = {
         "status": status,
+        "version": context.settings.version_label,
         "database": "ok" if database_ok else "unreachable",
         "scheduler": {"status": scheduler, "last_tick": _iso(state.last_tick)},
         "slack": slack,
