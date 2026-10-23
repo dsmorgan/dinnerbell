@@ -21,10 +21,13 @@ import pytest
 from dinnerbell.channels.slack import blocks as bk
 from dinnerbell.channels.slack import preview as samples
 from dinnerbell.channels.slack.messages import MAX_PROPOSALS, RenderContext, render
+from dinnerbell.channels.slack.views import HomeLinks, home_view
 from dinnerbell.domain import notifications as note
 from dinnerbell.domain.catalog import ItemKind, Mode
 from dinnerbell.domain.events import EventState, ProposalSource, RoleOffer, Status
+from dinnerbell.domain.meals import Slot
 from dinnerbell.main import main
+from dinnerbell.services.event_views import TodayView
 from tests.support.blockkit import check_message, check_view
 
 GOLDEN = Path(__file__).parent / "golden" / "slack"
@@ -51,11 +54,43 @@ def test_golden(kind: str) -> None:
     assert path.read_text() == as_json(payload), f"{kind} changed; review, then DINNERBELL_UPDATE_GOLDEN=1"
 
 
+LABELLED = ("call_opened", "proposals_ready", "decision_made", "response_reminder", "home", "home_empty")
+
+
+def labelled(kind: str) -> dict[str, object]:
+    """Sample ``kind`` from an instance labelled TEST (ADR 0006)."""
+    if kind in samples.VIEWS:
+        today = TodayView(samples.DAY, [samples.COLLECTING_VIEW] if kind == "home" else [], tuple(Slot))
+        return home_view(today, HomeLinks(samples.BASE_URL), label="TEST")
+    return render(samples.NOTIFICATIONS[kind](), replace(CTX, label="TEST")).payload()
+
+
+@pytest.mark.parametrize("kind", LABELLED)
+def test_labelled_golden(kind: str) -> None:
+    payload = labelled(kind)
+    if kind in samples.VIEWS:
+        check_view(payload)
+    else:
+        check_message(payload)
+    path = GOLDEN / "labelled" / f"{kind}.json"
+    if UPDATE:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(as_json(payload))
+    assert path.exists(), f"no labelled golden file for {kind}; run with DINNERBELL_UPDATE_GOLDEN=1"
+    assert path.read_text() == as_json(payload), f"labelled {kind} changed; review, then DINNERBELL_UPDATE_GOLDEN=1"
+    unlabelled = samples.preview(kind)
+    if kind in samples.VIEWS:
+        assert payload["blocks"][1:] == unlabelled["blocks"][1:]  # only the header differs
+    else:
+        assert payload == {**unlabelled, "blocks": [bk.instance_banner("TEST"), *unlabelled["blocks"]]}
+
+
 def test_every_notification_kind_has_a_sample_and_no_stale_goldens() -> None:
     sampled = {samples.NOTIFICATIONS[k]().kind for k in samples.NOTIFICATIONS}
     assert sampled == set(note.NOTIFICATION_TYPES)
     stale = {p.stem for p in GOLDEN.glob("*.json")} - set(samples.KINDS)
     assert stale == set()
+    assert {p.stem for p in (GOLDEN / "labelled").glob("*.json")} == set(LABELLED)
 
 
 def test_direct_messages_and_channel_posts_differ_where_they_should() -> None:

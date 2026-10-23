@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """GET /healthz for Uptime Kuma and the container health check. No secrets, emails, or member
-data; the only counts are the outbox's."""
+data; the only counts are the outbox's. A labelled instance adds its label, never a channel ID."""
 
 from __future__ import annotations
 
@@ -47,4 +47,6 @@ async def healthz(context: Context) -> JSONResponse:
         "outbox": None if backlog is None else {"backlog": backlog[0], "failed": backlog[1]},
         "backup": {"last_success": _iso(state.last_backup)},
     }
+    if context.settings.instance_label:
+        body["instance"] = context.settings.instance_label
     return JSONResponse(body, status_code=200 if healthy else 503)

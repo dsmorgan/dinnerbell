@@ -92,7 +92,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     except ConfigError as exc:
         print(exc, file=sys.stderr)
         return 2
-    configure_logging(settings.log_level)
+    configure_logging(settings.log_level, settings.instance_label)
     os.umask(PRIVATE_UMASK)
     if not _migrate(settings):
         return 1

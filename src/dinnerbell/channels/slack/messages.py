@@ -29,6 +29,7 @@ from dinnerbell.channels.slack.blocks import (
     escape,
     fields_section,
     header,
+    instance_banner,
     join_lines,
     link,
     local_clock,
@@ -75,12 +76,23 @@ class Message:
 class RenderContext:
     base_url: str
     directory: Directory
+    label: str = ""
+    """The instance label (``DINNERBELL_INSTANCE_LABEL``). Set, it heads every message."""
 
     def url(self, path: str) -> str:
         return f"{self.base_url}{path}"
 
 
 def render(notification: note.Notification, ctx: RenderContext) -> Message:
+    """Every notification the Slack adapter sends, posts and direct messages alike."""
+    message = _render(notification, ctx)
+    if not ctx.label:
+        return message
+    blocks = [instance_banner(ctx.label), *message.blocks]
+    return Message(message.text, blocks[:MAX_MESSAGE_BLOCKS])
+
+
+def _render(notification: note.Notification, ctx: RenderContext) -> Message:
     match notification:
         case note.CallOpened():
             return call_message(notification, ctx, mentions=notification.mentions)

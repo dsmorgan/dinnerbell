@@ -316,8 +316,10 @@ def _event_card(v: EventView, links: HomeLinks) -> list[Block]:
     return [section("\n".join(lines), block_id=f"event-{v.id}"), actions(*buttons, block_id=f"event-actions-{v.id}")]
 
 
-def home_view(today: TodayView, links: HomeLinks, notice: str | None = None) -> dict[str, Any]:
-    blocks: list[Block] = [header(f"Today · {day_label(today.today)}")]
+def home_view(today: TodayView, links: HomeLinks, notice: str | None = None, *, label: str = "") -> dict[str, Any]:
+    """Each member's Home tab. ``label``, the instance label, prefixes the header when set."""
+    title = f"Today · {day_label(today.today)}"
+    blocks: list[Block] = [header(f"{label} · {title}" if label else title)]
     if notice:
         blocks.append(section(f"*{escape(clip(notice, 500))}*"))
     for v in today.events:

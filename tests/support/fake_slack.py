@@ -239,7 +239,9 @@ def view_submission(
     }
 
 
-def slash(user: str, text: str, *, team: str = TEAM, channel: str = CHANNEL) -> dict[str, Any]:
+def slash(
+    user: str, text: str, *, team: str = TEAM, channel: str = CHANNEL, command: str = "/dinnerbell"
+) -> dict[str, Any]:
     return {
         "token": "legacy-verification-token",
         "team_id": team,
@@ -248,7 +250,7 @@ def slash(user: str, text: str, *, team: str = TEAM, channel: str = CHANNEL) -> 
         "channel_name": "dinnerbell",
         "user_id": user,
         "user_name": "someone",
-        "command": "/dinnerbell",
+        "command": command,
         "text": text,
         "api_app_id": "A0DINNER",
         "response_url": "https://hooks.slack.invalid/commands/1",
