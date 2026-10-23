@@ -9,7 +9,6 @@ from typing import Any
 from fastapi import Request
 from starlette.responses import Response
 
-from dinnerbell import __version__
 from dinnerbell.services.household import current_household
 from dinnerbell.web import filters
 from dinnerbell.web.context import TEMPLATES, app_context
@@ -47,7 +46,7 @@ async def render(
         "principal": principal,
         "csrf_token": principal.csrf_token if principal else None,
         "household_name": await _household_name(request),
-        "version": __version__,
+        "version": settings.version_label,
         "htmx_file": HTMX_FILE,
         "provider_is_slack": settings.oidc_issuer.rstrip("/") == "https://slack.com",
         "instance_label": settings.instance_label,

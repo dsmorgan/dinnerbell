@@ -1,34 +1,68 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
+# One workflow on purpose: `needs:` works only inside a workflow, and a red build must never
+# publish. `check` and `image` run everywhere; `publish` runs only after both pass, on a push to
+# main, a v* tag, or a manual run on main.
 name: CI
 
 on:
   pull_request:
   push:
     branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+# One run at a time per ref, in push order, so :main always ends at the newest commit. Only pull
+# requests cancel a run in progress. Tags never share a group. GitHub keeps one pending run per
+# group, so if a third push lands on main while one run is in progress and another is waiting, the
+# waiting run is dropped and its <sha7> tag is never published.
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  IMAGE: ghcr.io/dsmorgan/dinnerbell
 
 jobs:
   check:
-    name: Lint, type-check, test, audit
+    name: check
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # The Containerfile's uv image is the one source for the uv version. Dependabot's docker
+      # updater bumps its tag and digest together, and CI follows without a second pin to drift.
+      - name: Read the uv version from the Containerfile
+        id: uv
+        run: |
+          version=$(sed -n 's|^FROM ghcr\.io/astral-sh/uv:\([0-9][0-9.]*\)@sha256:.*|\1|p' Containerfile)
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error file=Containerfile::Can't read the uv version from the FROM ghcr.io/astral-sh/uv line."
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
       - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
         with:
-          version: "0.12.23"
+          version: ${{ steps.uv.outputs.version }}
           python-version: "3.12"
-          enable-cache: true
+          # auto: cache everywhere except tag pushes, so a release never restores a cache.
+          enable-cache: auto
       - name: Install
         run: uv sync --locked
+      - name: Check the tag matches the package version
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=$(uv run python -c 'import dinnerbell; print(dinnerbell.__version__)')
+          if [[ "$TAG" != "v$version" ]]; then
+            echo "::error::Tag $TAG doesn't match dinnerbell.__version__ ($version). Bump the version first."
+            exit 1
+          fi
       - name: Ruff lint
         run: uv run ruff check .
       - name: Ruff format
@@ -42,16 +76,44 @@ jobs:
           uv export --frozen --all-groups --format requirements-txt --no-emit-project -o "$RUNNER_TEMP/requirements.txt"
           uv run pip-audit --strict --require-hashes --disable-pip -r "$RUNNER_TEMP/requirements.txt"
 
-  container:
-    name: Container build
+  image:
+    name: image
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      security-events: write # upload the Grype SARIF to Code scanning
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Choose the build stamp
+        id: stamp
+        env:
+          REF: ${{ github.ref }}
+          SHA: ${{ github.sha }}
+        run: |
+          # Release images show the bare version; every other build shows version+<sha7>.
+          if [[ "$REF" == refs/tags/v* ]]; then build=""; else build="${SHA:0:7}"; fi
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      # Tag builds start from scratch. Other builds share the GitHub Actions cache with `publish`,
+      # so a main build publishes the same layers this job smoke-tested and scanned.
       - name: Build
-        run: docker build --file Containerfile --tag dinnerbell:ci .
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: Containerfile
+          platforms: linux/amd64
+          build-args: DINNERBELL_BUILD=${{ steps.stamp.outputs.build }}
+          tags: dinnerbell:ci
+          load: true
+          push: false
+          provenance: false
+          sbom: false
+          no-cache: ${{ startsWith(github.ref, 'refs/tags/') }}
+          cache-from: ${{ !startsWith(github.ref, 'refs/tags/') && 'type=gha' || '' }}
+          cache-to: ${{ !startsWith(github.ref, 'refs/tags/') && 'type=gha,mode=max' || '' }}
       - name: Smoke test
         run: |
           docker run --detach --name smoke --read-only --tmpfs /tmp:size=16m --cap-drop ALL \
@@ -63,9 +125,161 @@ jobs:
             --env DINNERBELL_OIDC_CLIENT_ID=ci \
             --env DINNERBELL_OIDC_CLIENT_SECRET=ci \
             dinnerbell:ci
-          for attempt in $(seq 1 30); do
+          for _ in $(seq 1 30); do
             if curl --silent --fail http://localhost:8013/healthz; then exit 0; fi
             sleep 1
           done
           docker logs smoke
           exit 1
+      - name: Check the build stamp
+        env:
+          BUILD: ${{ steps.stamp.outputs.build }}
+        run: |
+          version=$(curl --silent --fail http://localhost:8013/healthz | jq --raw-output .version)
+          echo "The image reports version $version"
+          if [[ -n "$BUILD" && "$version" != *"+$BUILD" ]] || [[ -z "$BUILD" && "$version" == *+* ]]; then
+            echo "::error::Expected the build stamp '$BUILD', but /healthz reports version '$version'."
+            exit 1
+          fi
+      - name: Scan with Grype
+        id: scan
+        uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
+        with:
+          image: dinnerbell:ci
+          only-fixed: true
+          severity-cutoff: high
+          fail-build: true
+          output-format: sarif
+      # Upload even when the scan fails, so the findings show under Code scanning. A pull request
+      # from a fork gets a read-only token and can't upload; its scan result still gates the job.
+      - name: Upload the scan to Code scanning
+        if: >-
+          ${{ !cancelled() && steps.scan.outputs.sarif != '' &&
+          (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+        uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        with:
+          sarif_file: ${{ steps.scan.outputs.sarif }}
+          category: grype
+
+  publish:
+    name: publish
+    needs: [check, image]
+    # Never on pull requests or forks. A manual run publishes only from main: rebuilding a release
+    # tag would replace an X.Y.Z image that people already pinned and verified.
+    if: >-
+      github.repository == 'dsmorgan/dinnerbell' &&
+      (github.event_name == 'push' ||
+       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'))
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write # push to GHCR
+      id-token: write # Sigstore signing certificate for the attestations
+      attestations: write # store the attestations
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Choose the build stamp
+        id: stamp
+        env:
+          REF: ${{ github.ref }}
+          SHA: ${{ github.sha }}
+        run: |
+          if [[ "$REF" == refs/tags/v* ]]; then build=""; else build="${SHA:0:7}"; fi
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # main publishes `main` and `<sha7>`. vX.Y.Z publishes `X.Y.Z`, `X.Y`, `<sha7>` and `latest`.
+      # A pre-release tag such as v0.3.0-rc.1 publishes only `0.3.0-rc.1` and `<sha7>`.
+      - name: Image tags and labels
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        env:
+          DOCKER_METADATA_ANNOTATIONS_LEVELS: manifest,index
+        with:
+          images: ${{ env.IMAGE }}
+          flavor: latest=false
+          tags: |
+            type=raw,value=main,enable=${{ github.ref == 'refs/heads/main' }}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix=,format=short
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') }}
+          # Keep the Containerfile's values; the repository metadata would say AGPL-3.0.
+          labels: |
+            org.opencontainers.image.title=Dinnerbell
+            org.opencontainers.image.description=Household meal coordination
+            org.opencontainers.image.licenses=AGPL-3.0-or-later
+          annotations: |
+            org.opencontainers.image.title=Dinnerbell
+            org.opencontainers.image.description=Household meal coordination
+            org.opencontainers.image.licenses=AGPL-3.0-or-later
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          file: Containerfile
+          platforms: linux/amd64
+          build-args: DINNERBELL_BUILD=${{ steps.stamp.outputs.build }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          annotations: ${{ steps.meta.outputs.annotations }}
+          push: true
+          provenance: mode=max
+          sbom: true
+          no-cache: ${{ startsWith(github.ref, 'refs/tags/') }}
+          cache-from: ${{ !startsWith(github.ref, 'refs/tags/') && 'type=gha' || '' }}
+      # BuildKit's SBOM sits in the image index unsigned. Syft writes one more from the pushed
+      # image so actions/attest can sign it into a verifiable SBOM attestation.
+      - name: Generate the SBOM
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          image: ${{ env.IMAGE }}@${{ steps.build.outputs.digest }}
+          format: spdx-json
+          output-file: ${{ runner.temp }}/sbom.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+      # actions/attest replaces actions/attest-build-provenance and actions/attest-sbom, which
+      # are now thin wrappers around it. No storage record, so no artifact-metadata permission.
+      - name: Attest build provenance
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+          create-storage-record: false
+      - name: Attest the SBOM
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          sbom-path: ${{ runner.temp }}/sbom.spdx.json
+          push-to-registry: true
+          create-storage-record: false
+      - name: Record the digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          {
+            echo "### Published ${IMAGE}"
+            echo
+            echo "Digest: \`${DIGEST}\`"
+            echo
+            echo "Tags:"
+            echo
+            while read -r tag; do [[ -n "$tag" ]] && echo "- \`${tag}\`"; done <<< "$TAGS"
+            echo
+            echo "Verify with:"
+            echo
+            echo "\`\`\`sh"
+            echo "gh attestation verify oci://${IMAGE}@${DIGEST} --repo dsmorgan/dinnerbell"
+            echo "\`\`\`"
+          } >> "$GITHUB_STEP_SUMMARY"

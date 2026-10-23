@@ -23,13 +23,18 @@ RUN uv sync --locked --no-dev --no-editable
 FROM python:3.12-slim@sha256:cb33f7f771ecec2ef1225cf39b159591a040391bd73e4c01f00fdfc4c47611d2
 LABEL org.opencontainers.image.title="Dinnerbell" \
       org.opencontainers.image.description="Household meal coordination" \
-      org.opencontainers.image.licenses="AGPL-3.0-or-later"
+      org.opencontainers.image.licenses="AGPL-3.0-or-later" \
+      org.opencontainers.image.source="https://github.com/dsmorgan/dinnerbell"
 RUN groupadd --system --gid 10001 dinnerbell \
  && useradd --system --uid 10001 --gid dinnerbell --no-create-home --home-dir /nonexistent dinnerbell \
  && mkdir -p /data/backups \
  && chown -R dinnerbell:dinnerbell /data
 COPY --from=build /app/.venv /app/.venv
-ENV PATH=/app/.venv/bin:$PATH \
+# The short commit hash of a main-branch build, shown as 0.2.0+abc1234. Release builds leave it
+# empty. Declared after the venv copy so changing it rebuilds only the layers below.
+ARG DINNERBELL_BUILD=""
+ENV DINNERBELL_BUILD=$DINNERBELL_BUILD \
+    PATH=/app/.venv/bin:$PATH \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     DINNERBELL_DATABASE_URL=sqlite:////data/dinnerbell.db
