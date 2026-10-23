@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime, time
+from datetime import UTC, datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -17,7 +17,7 @@ from dinnerbell.db.events import EventRepository
 from dinnerbell.db.models import CatalogItemRow, OutboxRow
 from dinnerbell.domain import notifications as n
 from dinnerbell.domain.catalog import Mode
-from dinnerbell.domain.events import RoleOffer, Status
+from dinnerbell.domain.events import RoleOffer, Status, Step
 from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.preferences import Stance, TargetType
 from dinnerbell.scheduler import runner
@@ -196,3 +196,22 @@ async def test_a_new_household_stores_the_default_schedule(house: House) -> None
     async with house.sessionmaker() as db:
         stored = await household_settings(db, house.household.id)
     assert stored == default_settings()
+
+
+async def test_a_failed_step_is_rolled_back_not_committed_by_the_next(
+    house: House, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: the tick logged a failure but kept the session's half-done writes, and the
+    next call's step committed them."""
+    house.clock.now = OPENS
+    await house.tick()  # an open call for the next step to commit through
+
+    async def half_done(db: Any, *args: Any) -> list[Any]:
+        await db.execute(text("UPDATE household SET name = 'half-done'"))
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(lifecycle, "open_due_calls", half_done)
+    house.clock.now = OPENS + timedelta(minutes=75)  # the reminder is due
+    assert await house.tick() == [Step.REMIND]
+    async with house.sessionmaker() as db:
+        assert await db.scalar(text("SELECT name FROM household")) == "Home"
