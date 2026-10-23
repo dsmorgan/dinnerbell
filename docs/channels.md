@@ -21,16 +21,16 @@ class Channel(Protocol):
 - `deliver` posts a new message: to the household channel, or as a direct message to `notification.recipient_id` when that isn't `None`. Return `DeliveryResult(MessageRef(channel_id, message_id))` (for Slack, the channel ID and `ts`) for any post that has a `message_key`, because later updates and threads need it. For other posts the ref is optional.
 - `thread` is the message to thread the post under. The drainer passes it when the notification has a `thread_key` and that message was delivered; otherwise it's `None` and you post at the top level.
 - `update` edits the message at `ref` to show the notification's state.
-- Time out every channel call well under the 5-minute claim lease (`LEASE`). Slack calls should give up within about 30 seconds. A call that hangs past the lease can let a newer update overtake it from another process, and inside one process it holds the drain lock, so no other notification goes out until it returns.
+- Time out every channel call well under the 5-minute claim lease (`LEASE`). Slack calls should give up within about 30 seconds; the Slack adapter's Web API client times out after 15. A call that hangs past the lease can let a newer update overtake it from another process, and inside one process it holds the drain lock, so no other notification goes out until it returns.
 - Raise on failure. The drainer records `"<ExceptionType>: <message>"` in `outbox.last_error`, so never put a token in an exception message.
-- Raise `domain.notifications.PermanentDeliveryError` when retrying can't help, such as a deleted channel or a member who left the workspace. The row is marked failed at once, after one attempt, and stops holding back the event's later rows. Raise anything else for failures worth retrying, such as timeouts or rate limits.
+- Raise `domain.notifications.PermanentDeliveryError` when retrying can't help, such as a deleted channel or a member who left the workspace. The row is marked failed at once, after one attempt, and stops holding back the event's later rows. Raise anything else for failures worth retrying, such as timeouts or rate limits. To ask for a longer wait, as Slack's `Retry-After` does, give the exception a numeric `retry_after` attribute in seconds; the Slack adapter's `SlackRateLimited` does.
 
 ## Delivery guarantees
 
 - **Order.** Rows are delivered oldest first per event. A post that creates a message (it has a `message_key`: the call, proposals, and decision posts) holds back its event's later rows while it waits to retry or is claimed by another drainer, so an update or threaded reply never arrives before its message. Nothing else holds rows back: a direct message or a failed update retries on its own schedule. Different events don't block each other.
 - **Updates to one message never go backward.** A newer update waits while an older update to the same message is in a channel's hands. An older update that hasn't gone out by the time a newer one exists is closed with `last_error = "superseded by a newer update"` and never sent, even on retry. So the last edit `update` receives for a message always carries the latest state, as long as channel calls finish within `LEASE`. If the newest update then fails for good, the message keeps its last delivered state until the next change, because any older state would have hit the same failure.
 - **Once.** A row is claimed with a conditional `UPDATE` before the channel is called, so concurrent drainers never deliver the same row. The claim lasts 5 minutes (`LEASE`). If the process dies mid-delivery, another drainer can redeliver after that, so treat `idempotency_key` as a dedupe key if a duplicate post would matter.
-- **Retries.** A failure is retried after 30 seconds, doubling up to an hour. After 8 attempts (`MAX_ATTEMPTS`), or at once for `PermanentDeliveryError`, the row is marked `failed_at` and stops holding back later rows. `/healthz` reports `outbox.backlog` (waiting) and `outbox.failed`.
+- **Retries.** A failure is retried after 30 seconds, doubling up to an hour. When the exception has a numeric `retry_after` (seconds), the next attempt waits for the longer of that and the backoff, at most an hour. After 8 attempts (`MAX_ATTEMPTS`), or at once for `PermanentDeliveryError`, the row is marked `failed_at` and stops holding back later rows. `/healthz` reports `outbox.backlog` (waiting) and `outbox.failed`.
 - **Updates without a message.** If the post an update edits never landed (it failed for good, or the channel returned no ref), the update is closed out with `last_error = "no message to update"` instead of being sent.
 - **Messages `NullChannel` pretended to post.** `NullChannel` returns refs whose channel ID is `NULL_CHANNEL_ID` (`"null"`, in `domain/notifications.py`). The outbox never passes such a ref to a channel, as `ref` or `thread`. So for a call that opened before Slack was configured, Slack gets no edits for the old call message (they close out as above), and its later posts go to the top level instead of a thread. Never return `"null"` as a real channel ID.
 
@@ -59,8 +59,8 @@ All types are frozen dataclasses in `domain/notifications.py` with an `event: Ev
 | `proposals_ready` | `ProposalsReady` | Channel | `…:proposals` | `…:call` | Responses close and voting opens. |
 | `proposals_updated` | `ProposalsUpdated` | Update | `…:proposals` | | Votes, an added proposal, or voting closes. |
 | `decision_made` | `DecisionMade` | Channel | `…:decision` | `…:call` | Locked (`locked_by` set) or decided by the vote (`locked_by` is `None`). |
-| `decision_updated` | `DecisionUpdated` | Update | `…:decision` | | Meal time, assignments, coordinator, or done. |
-| `assignment_made` | `AssignmentMade` | DM `member` | | | Each assignment at the decision, and each later reassignment while decided (FR-20). |
+| `decision_updated` | `DecisionUpdated` | Update | `…:decision` | | Meal time, assignments, coordinator, or done. Carries `locked_by` like `DecisionMade`, so every edit can still say who locked it. |
+| `assignment_made` | `AssignmentMade` | DM `member` | | | At the decision, one message per assignee listing all their `roles` (coordinating and cooking, say); later, one for each reassignment while decided, listing the member's roles then (FR-20). `assignment_id` is the assignment that prompted it, and the key, `…:assignment_made:member{id}:{assignment_id}`, is stable per member and run. |
 | `call_abandoned` | `CallAbandoned` | Channel | | | Too few people (`reason = too_few`) or nothing covered (`no_coverage`). Never sent for `missed`. |
 | `event_cancelled` | `EventCancelled` | Channel; for `participants` | | `…:call` | An admin cancels. |
 
@@ -70,7 +70,7 @@ Building blocks: `PersonInfo(id, name)`, `RosterEntry` (status, guests, guests' 
 
 Notifications never say who vetoed what. Proposal reasons come from combined preferences only.
 
-Members are identified by ID. Resolve IDs to Slack users from `member.slack_user_id`. A lookup by Slack user ID doesn't exist yet; add one to `MemberRepository` with a service function for it, because `channels` may not import `db`.
+Members are identified by ID. Resolve IDs to Slack users from `member.slack_user_id`. `services.slack_members` has the lookups the adapter needs, because `channels` may not import `db`: the member behind a Slack user ID (`member_for_slack_user`), member IDs to Slack user IDs (`slack_directory`), and linking members found by email.
 
 ## Interactions
 
@@ -88,7 +88,7 @@ Channel messages are shared, so a button can't show whether the person tapping i
 | In, Out, Maybe | `calls.respond(db, actor, event_id, Status.IN / OUT / MAYBE, now=)` |
 | I can cook, I can pick up, I'll order | `calls.toggle_role(db, actor, event_id, RoleOffer.COOK / PICKUP / ORDER, now=)`, which returns whether the member now offers it |
 | I'll coordinate | `calls.claim_coordinator(db, actor, event_id, now=)` |
-| Details modal | `calls.save_details(db, actor, event_id, Details(guests=, guest_needs=, eat_from=, eat_until=, suggestion_item_ids=, suggestion_texts=, note=), now=)` |
+| Details modal (a suggestion needs no cuisine; only proposals do) | `calls.save_details(db, actor, event_id, Details(guests=, guest_needs=, eat_from=, eat_until=, suggestion_item_ids=, suggestion_texts=, note=), now=)` |
 | Vote, or vote again to remove | `calls.toggle_vote(db, actor, event_id, proposal_id, now=)`, which returns whether the member now votes for it |
 | Lock (coordinator or admin) | `calls.lock(db, actor, event_id, proposal_id, now=)` |
 | Add proposal modal | `calls.add_proposal(db, actor, event_id, mode, item_id=, free_text=, cuisine_id=, now=)` |
