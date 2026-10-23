@@ -55,7 +55,7 @@
           },
           "text": {
             "emoji": true,
-            "text": "Lock",
+            "text": "Lock this",
             "type": "plain_text"
           },
           "type": "button",
@@ -112,7 +112,7 @@
           },
           "text": {
             "emoji": true,
-            "text": "Lock",
+            "text": "Lock this",
             "type": "plain_text"
           },
           "type": "button",
@@ -169,7 +169,7 @@
           },
           "text": {
             "emoji": true,
-            "text": "Lock",
+            "text": "Lock this",
             "type": "plain_text"
           },
           "type": "button",
