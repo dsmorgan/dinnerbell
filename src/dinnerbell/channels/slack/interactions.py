@@ -1,0 +1,482 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+"""Slack interactions: buttons, modals, the App Home, and ``/dinnerbell`` (spec section 10,
+docs/channels.md "Interactions").
+
+Every handler acknowledges Slack first, inside its 3-second window, and does the work in a
+tracked task. Before acting it checks the payload's workspace, where a button was pressed,
+and that the Slack user is an active member (spec 13.5). Each action calls one service. The
+services check every rule and scope every ID to the member's household, so a tampered value
+can only name something the member could act on anyway.
+
+Errors the services raise for people are shown back as ephemeral messages (or on the Home tab
+when the button was there). Anything else is a bug: it's logged, and the member is told to try
+again. Logs carry member and event IDs only (SEC-5).
+"""
+
+from __future__ import annotations
+
+import asyncio
+import logging
+import re
+from collections.abc import Awaitable, Callable, Coroutine
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta
+from typing import Any
+
+from slack_bolt.async_app import AsyncApp
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from dinnerbell.channels.slack import ids
+from dinnerbell.channels.slack.api import SlackApi, SlackUnavailable
+from dinnerbell.channels.slack.views import (
+    FormError,
+    HomeLinks,
+    details_modal,
+    home_view,
+    parse_details,
+    parse_proposal,
+    proposal_modal,
+)
+from dinnerbell.domain.events import EventRuleViolation, IllegalTransition, InvalidResponse, RoleOffer
+from dinnerbell.domain.meals import Slot
+from dinnerbell.domain.members import Member
+from dinnerbell.domain.notifications import PermanentDeliveryError
+from dinnerbell.services import calls, event_views, slack_members
+from dinnerbell.services.clock import Clock
+from dinnerbell.services.errors import Forbidden, NotFound
+
+log = logging.getLogger(__name__)
+
+COMMAND = "/dinnerbell"
+SHOWN_ERRORS = (EventRuleViolation, InvalidResponse, NotFound, Forbidden)
+SLACK_ERRORS = (SlackUnavailable, PermanentDeliveryError)
+UNKNOWN_USER = (
+    "I don't know your Slack account yet. Sign in to Dinnerbell on the web with Slack once, "
+    "or ask the admin to link you on the Members page."
+)
+INACTIVE = "Your Dinnerbell account is turned off. Ask the admin if that's a mistake."
+STALE = "That can't happen anymore."
+BROKEN = "That didn't work. Try again in a moment, or use the web."
+OUT_OF_DATE = "That button is out of date. Try the latest message, or use the web."
+WRONG_PLACE = "That button only works in the Dinnerbell channel."
+WRONG_WORKSPACE = "This Dinnerbell belongs to another Slack workspace."
+CONFIRM = {
+    "respond_in": "Got it: you're in. Thanks!",
+    "respond_maybe": "Got it: you're a maybe.",
+    "respond_out": "Got it: you're out this time.",
+}
+SETTLE_TIMEOUT_SECONDS = 10.0
+Ack = Callable[..., Awaitable[None]]
+
+
+@dataclass(frozen=True, slots=True)
+class Source:
+    """Who pressed something, and where: a channel or DM message, the Home tab, or a modal."""
+
+    user_id: str
+    channel_id: str | None = None
+    home: bool = False
+
+
+class Interactions:
+    def __init__(
+        self,
+        api: SlackApi,
+        *,
+        sessionmaker: async_sessionmaker[AsyncSession],
+        clock: Clock,
+        base_url: str,
+        channel_id: str,
+    ) -> None:
+        self.api = api
+        self.sessionmaker = sessionmaker
+        self.clock = clock
+        self.links = HomeLinks(base_url)
+        self.channel_id = channel_id
+        self.team_id: str | None = None
+        """The workspace whose payloads are accepted. Until it's known, nothing is."""
+        self.tasks: set[asyncio.Task[None]] = set()
+
+    # Wiring ------------------------------------------------------------------------------------
+
+    def register(self, app: AsyncApp) -> None:
+        """Route Slack's requests here. Bolt passes arguments by parameter name and can't call
+        bound methods, so each route is a plain function."""
+
+        async def link(ack: Ack) -> None:
+            await ack()  # a link button opened the browser; there's nothing to do
+
+        async def action(ack: Ack, body: dict[str, Any]) -> None:
+            await ack()
+            self._spawn(self._action(body))
+
+        async def details(ack: Ack, body: dict[str, Any]) -> None:
+            await self._submission(ack, body, "details")
+
+        async def proposal(ack: Ack, body: dict[str, Any]) -> None:
+            await self._submission(ack, body, "proposal")
+
+        async def command(ack: Ack, body: dict[str, Any]) -> None:
+            await self._command(ack, body)
+
+        async def home_opened(body: dict[str, Any], event: dict[str, Any]) -> None:
+            if event.get("tab") == "home" and self._team_ok(body.get("team_id")) and isinstance(event.get("user"), str):
+                self._spawn(self._home(event["user"]))
+
+        app.action(ids.LINK_PATTERN)(link)
+        app.action(re.compile(r"^[a-z_]{1,40}$"))(action)
+        app.view(ids.DETAILS_VIEW)(details)
+        app.view(ids.PROPOSAL_VIEW)(proposal)
+        app.command(COMMAND)(command)
+        app.event("app_home_opened")(home_opened)
+
+    def _spawn(self, work: Coroutine[Any, Any, None]) -> None:
+        task = asyncio.get_running_loop().create_task(work)
+        self.tasks.add(task)
+        task.add_done_callback(self.tasks.discard)
+
+    async def settle(self, limit: float = SETTLE_TIMEOUT_SECONDS) -> None:
+        """Wait for work already acknowledged (and work it starts), for shutdown and tests.
+        Gives up after ``limit`` seconds."""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + limit
+        while self.tasks and loop.time() < deadline:
+            await asyncio.wait(set(self.tasks), timeout=deadline - loop.time())
+
+    # Checks ------------------------------------------------------------------------------------
+
+    def _team_ok(self, team_id: object) -> bool:
+        ok = self.team_id is not None and team_id == self.team_id
+        if not ok:
+            log.warning("slack payload from another workspace refused")
+        return ok
+
+    async def _member(self, source: Source) -> Member | None:
+        """The active member behind ``source``, or None after telling them why not."""
+        async with self.sessionmaker() as db:
+            member = await slack_members.member_for_slack_user(db, source.user_id)
+        if member is None or not member.active:
+            log.info("slack user refused", extra={"member_id": member.id if member else None})
+            await self.tell(source, UNKNOWN_USER if member is None else INACTIVE, member=None)
+            return None
+        return member
+
+    def _message_source(self, body: dict[str, Any]) -> Source | None:
+        """Where a block action came from, or None if from somewhere it shouldn't be."""
+        user = _get(body, "user", "id")
+        if not isinstance(user, str):
+            return None
+        container = body.get("container") or {}
+        if container.get("type") == "view":
+            if _get(body, "view", "type") == "home":
+                return Source(user, home=True)
+            return None
+        channel = container.get("channel_id") or _get(body, "channel", "id")
+        if channel == self.channel_id or (ids.is_channel_id(channel) and str(channel).startswith("D")):
+            return Source(user, channel_id=str(channel))
+        log.warning("slack action from an unexpected channel refused")
+        return Source(user, channel_id=None)
+
+    # Replies -----------------------------------------------------------------------------------
+
+    async def tell(self, source: Source, text: str, *, member: Member | None) -> None:
+        """Say something only ``source.user_id`` sees: on their Home tab if they were there,
+        else an ephemeral message where they acted, else a direct message."""
+        try:
+            if source.home:
+                await self.publish_home(source.user_id, member, notice=text)
+                return
+            if source.channel_id is not None:
+                try:
+                    await self.api.ephemeral(source.channel_id, source.user_id, text)
+                    return
+                except SLACK_ERRORS:
+                    pass  # not in that channel, for example; fall back to a direct message
+            await self.api.post(source.user_id, {"text": text})
+        except SLACK_ERRORS as exc:
+            log.warning("slack reply failed", extra={"error": str(exc)})
+
+    async def publish_home(self, user_id: str, member: Member | None, notice: str | None = None) -> None:
+        if member is None:
+            view: dict[str, Any] = {
+                "type": "home",
+                "blocks": [{"type": "section", "text": {"type": "mrkdwn", "text": notice or UNKNOWN_USER}}],
+            }
+        else:
+            async with self.sessionmaker() as db:
+                today = await event_views.today_view(db, member, now=self.clock())
+            view = home_view(today, self.links, notice)
+        await self.api.publish_home(user_id, view)
+
+    async def _run(self, source: Source, member: Member, work: Callable[[], Awaitable[str | None]]) -> None:
+        """Run one action and report how it went. ``work`` returns a confirmation or None."""
+        notice: str | None = None
+        try:
+            notice = await work()
+        except SHOWN_ERRORS as exc:
+            notice = str(exc)
+        except IllegalTransition:
+            notice = STALE
+        except ids.BadValue:
+            log.warning("slack action with a value this app didn't write", extra={"member_id": member.id})
+            notice = OUT_OF_DATE
+        except Exception:
+            log.exception("slack action failed", extra={"member_id": member.id})
+            notice = BROKEN
+        if source.home:
+            try:
+                await self.publish_home(source.user_id, member, notice)
+            except Exception:
+                log.exception("slack home publish failed", extra={"member_id": member.id})
+        elif notice:
+            await self.tell(source, notice, member=member)
+
+    # Buttons -----------------------------------------------------------------------------------
+
+    async def _action(self, body: dict[str, Any]) -> None:
+        if not self._team_ok(_get(body, "team", "id")):
+            return
+        source = self._message_source(body)
+        acts = body.get("actions")
+        if source is None or not isinstance(acts, list) or len(acts) != 1 or not isinstance(acts[0], dict):
+            log.warning("slack action payload refused")
+            return
+        if source.channel_id is None and not source.home:
+            await self.tell(source, WRONG_PLACE, member=None)
+            return
+        member = await self._member(source)
+        if member is None:
+            return
+        action_id, value = acts[0].get("action_id"), acts[0].get("value")
+        trigger = body.get("trigger_id")
+        log.info("slack action", extra={"member_id": member.id, "action": str(action_id)[:40]})
+
+        async def work() -> str | None:
+            return await self._dispatch(member, source, str(action_id), value, trigger)
+
+        await self._run(source, member, work)
+
+    async def _dispatch(
+        self, member: Member, source: Source, action_id: str, value: object, trigger: object
+    ) -> str | None:
+        now = self.clock()
+        async with self.sessionmaker() as db:
+            if action_id in ids.RESPOND:
+                await calls.respond(db, member, ids.parse_event(value), ids.RESPOND[action_id], now=now)
+                dm = source.channel_id is not None and source.channel_id.startswith("D")
+                return CONFIRM[action_id] if dm else None
+            if action_id in ids.OFFER:
+                await toggle_role(db, member, ids.parse_event(value), ids.OFFER[action_id], now=now)
+                return None
+            if action_id == ids.COORDINATE:
+                await calls.claim_coordinator(db, member, ids.parse_event(value), now=now)
+                return None
+            if action_id == ids.VOTE:
+                event_id, proposal_id = ids.parse_proposal(value)
+                await toggle_vote(db, member, event_id, proposal_id, now=now)
+                return None
+            if action_id == ids.LOCK:
+                event_id, proposal_id = ids.parse_proposal(value)
+                await calls.lock(db, member, event_id, proposal_id, now=now)
+                return None
+            if action_id == ids.MARK_DONE:
+                await calls.mark_done(db, member, ids.parse_event(value), now=now)
+                return "Marked done. Thanks!"
+            if action_id in ids.START_CALL:
+                slot = ids.parse_slot(value)
+                day = await slack_members.today(db, member, now=now)
+                await calls.start_call(db, member, slot, day, now=now)
+                return f"Started the {slot.value} call. It's posted in <#{self.channel_id}>."
+            if action_id in {ids.DETAILS, ids.ADD_PROPOSAL}:
+                return await self._open_modal(db, member, source, action_id, ids.parse_event(value), trigger)
+        raise ids.BadValue("unknown action")
+
+    async def _open_modal(
+        self, db: AsyncSession, member: Member, source: Source, action_id: str, event_id: int, trigger: object
+    ) -> str | None:
+        if not isinstance(trigger, str) or not trigger:
+            raise ids.BadValue("no trigger")
+        view = await event_views.event_view(db, member, event_id, now=self.clock())
+        origin = ids.ViewOrigin(event_id, source.channel_id)
+        if action_id == ids.DETAILS:
+            if not view.can.respond:
+                return "Responses are closed for this call."
+            await self.api.open_view(trigger, details_modal(view, origin))
+        else:
+            if not view.can.propose:
+                return "You can add proposals only while voting is open."
+            await self.api.open_view(trigger, proposal_modal(view, origin))
+        return None
+
+    # Modals ------------------------------------------------------------------------------------
+
+    async def _submission(self, ack: Callable[..., Awaitable[None]], body: dict[str, Any], kind: str) -> None:
+        """Check the form's own fields before closing the modal, so mistakes show next to the
+        field. Rules that need the database run after; their errors come as a message."""
+        user = _get(body, "user", "id")
+        if not self._team_ok(_get(body, "team", "id")) or not isinstance(user, str):
+            await ack()
+            return
+        view = body.get("view") or {}
+        values = _get(view, "state", "values")
+        try:
+            origin = ids.ViewOrigin.decode(view.get("private_metadata"))
+            form: Any = parse_details(values) if kind == "details" else parse_proposal(values)
+        except FormError as exc:
+            await ack(response_action="errors", errors={exc.block_id: str(exc)})
+            return
+        except ids.BadValue:
+            log.warning("slack modal with values this app didn't write")
+            await ack()
+            return
+        await ack()
+        source = Source(user, channel_id=origin.channel_id)
+        self._spawn(self._save(source, origin.event_id, kind, form))
+
+    async def _save(self, source: Source, event_id: int, kind: str, form: Any) -> None:
+        member = await self._member(source)
+        if member is None:
+            return
+
+        async def work() -> str | None:
+            async with self.sessionmaker() as db:
+                if kind == "details":
+                    await calls.save_details(db, member, event_id, form, now=self.clock())
+                    return None
+                await calls.add_proposal(
+                    db,
+                    member,
+                    event_id,
+                    form.mode,
+                    item_id=form.item_id,
+                    free_text=form.free_text,
+                    cuisine_id=form.cuisine_id,
+                    now=self.clock(),
+                )
+                return None
+
+        await self._run(source, member, work)
+
+    # App Home ----------------------------------------------------------------------------------
+
+    async def _home(self, user: str) -> None:
+        async with self.sessionmaker() as db:
+            member = await slack_members.member_for_slack_user(db, user)
+        try:
+            if member is None or not member.active:
+                await self.publish_home(user, None, UNKNOWN_USER if member is None else INACTIVE)
+            else:
+                await self.publish_home(user, member)
+        except SLACK_ERRORS as exc:
+            log.warning("slack home publish failed", extra={"error": str(exc)})
+
+    # /dinnerbell -------------------------------------------------------------------------------
+
+    async def _command(self, ack: Callable[..., Awaitable[None]], body: dict[str, Any]) -> None:
+        if not self._team_ok(body.get("team_id")):
+            await ack(response_type="ephemeral", text=WRONG_WORKSPACE)
+            return
+        words = str(body.get("text") or "").lower().split()
+        sub, args = (words[0], words[1:]) if words else ("help", [])
+        if sub != "call":
+            await ack(response_type="ephemeral", text=self.command_reply(sub))
+            return
+        user, channel = body.get("user_id"), body.get("channel_id")
+        await ack()
+        if isinstance(user, str):
+            source = Source(user, channel_id=channel if ids.is_channel_id(channel) else None)
+            self._spawn(self._call(source, args))
+
+    def command_reply(self, sub: str) -> str:
+        url = self.links.url
+        match sub:
+            case "prefs" | "preferences":
+                return f"Set what you like and what you'd rather skip: <{url('/preferences')}|your preferences>."
+            case "catalog":
+                return f"Browse and add meals and restaurants: <{url('/catalog')}|the catalog>."
+            case "history":
+                return f"See what the household ate lately: <{url('/history')}|history>."
+            case "log":
+                return f"Logging a meal from Slack is coming soon. For now, log it on <{url('/history')}|History>."
+            case "offer":
+                return "Offers are coming soon. Until then, start a call with `/dinnerbell call`."
+            case "schedule":
+                return (
+                    "Changing the schedule from Slack is coming soon. For now, the admin can change it "
+                    f"on the web: <{url('/admin/schedule')}|Schedule>."
+                )
+            case _:
+                return HELP.format(today=url("/"))
+
+    async def _call(self, source: Source, args: list[str]) -> None:
+        member = await self._member(source)
+        if member is None:
+            return
+
+        async def work() -> str | None:
+            async with self.sessionmaker() as db:
+                today = await slack_members.today(db, member, now=self.clock())
+                slot, day = parse_call_args(args, today)
+                await calls.start_call(db, member, slot, day, now=self.clock())
+            when = "today" if day == today else f"for {day.isoformat()}"
+            return f"Started the {slot.value} call {when}. It's posted in <#{self.channel_id}>."
+
+        await self._run(source, member, work)
+
+
+async def toggle_role(db: AsyncSession, member: Member, event_id: int, role: RoleOffer, *, now: datetime) -> None:
+    """The shared role button: offer the role, or withdraw it if already offered.
+
+    Stand-in for ``calls.toggle_role``, which the m2-calls review adds; switch to it on rebase.
+    """
+    view = await event_views.event_view(db, member, event_id, now=now)
+    offered = view.mine is None or role not in view.mine.offers
+    await calls.offer_role(db, member, event_id, role, offered, now=now)
+
+
+async def toggle_vote(db: AsyncSession, member: Member, event_id: int, proposal_id: int, *, now: datetime) -> None:
+    """The shared Vote button: vote, or take the vote back if already given.
+
+    Stand-in for ``calls.toggle_vote``, which the m2-calls review adds; switch to it on rebase.
+    """
+    view = await event_views.event_view(db, member, event_id, now=now)
+    voted = any(p.info.id == proposal_id and p.voted for p in view.proposals)
+    await (calls.unvote if voted else calls.vote)(db, member, event_id, proposal_id, now=now)
+
+
+HELP = (
+    "*Dinnerbell* helps the household decide what to eat.\n"
+    "• `/dinnerbell call` starts a dinner call for today. Add `lunch`, `tomorrow`, or a date "
+    "like `2026-10-24`.\n"
+    "• `/dinnerbell prefs` links to your preferences.\n"
+    "• `/dinnerbell catalog` and `/dinnerbell history` link to the catalog and meal history.\n"
+    "• `offer`, `log`, and `schedule` are coming soon.\n"
+    "Open the Dinnerbell app's Home tab for today's calls, or <{today}|the web app>."
+)
+CALL_USAGE = "Try `/dinnerbell call`, `/dinnerbell call lunch tomorrow`, or `/dinnerbell call dinner 2026-10-24`."
+
+
+def parse_call_args(args: list[str], today: date) -> tuple[Slot, date]:
+    """``call [lunch|dinner] [today|tomorrow|YYYY-MM-DD]``, in any order. Dinner today by default."""
+    slot, day = Slot.DINNER, today
+    for word in args:
+        if word in {s.value for s in Slot}:
+            slot = Slot(word)
+        elif word == "today":
+            day = today
+        elif word == "tomorrow":
+            day = today + timedelta(days=1)
+        else:
+            try:
+                day = date.fromisoformat(word)
+            except ValueError:
+                raise EventRuleViolation(CALL_USAGE) from None
+    return slot, day
+
+
+def _get(data: object, *path: str) -> object:
+    for key in path:
+        if not isinstance(data, dict):
+            return None
+        data = data.get(key)
+    return data

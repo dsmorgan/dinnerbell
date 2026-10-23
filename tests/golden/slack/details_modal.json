@@ -1,0 +1,222 @@
+{
+  "blocks": [
+    {
+      "elements": [
+        {
+          "text": "*Dinner · Thursday, Oct 22*",
+          "type": "mrkdwn"
+        }
+      ],
+      "type": "context"
+    },
+    {
+      "block_id": "guests",
+      "element": {
+        "action_id": "value",
+        "initial_value": "1",
+        "is_decimal_allowed": false,
+        "max_value": "20",
+        "min_value": "0",
+        "type": "number_input"
+      },
+      "label": {
+        "emoji": true,
+        "text": "Guests you're bringing",
+        "type": "plain_text"
+      },
+      "optional": true,
+      "type": "input"
+    },
+    {
+      "block_id": "guest_needs",
+      "element": {
+        "action_id": "value",
+        "initial_options": [
+          {
+            "text": {
+              "emoji": true,
+              "text": "Vegetarian",
+              "type": "plain_text"
+            },
+            "value": "41"
+          }
+        ],
+        "options": [
+          {
+            "text": {
+              "emoji": true,
+              "text": "Vegetarian",
+              "type": "plain_text"
+            },
+            "value": "41"
+          },
+          {
+            "text": {
+              "emoji": true,
+              "text": "Gluten-free",
+              "type": "plain_text"
+            },
+            "value": "42"
+          }
+        ],
+        "type": "multi_static_select"
+      },
+      "label": {
+        "emoji": true,
+        "text": "Guests' dietary needs",
+        "type": "plain_text"
+      },
+      "optional": true,
+      "type": "input"
+    },
+    {
+      "block_id": "eat_from",
+      "element": {
+        "action_id": "value",
+        "initial_time": "18:40",
+        "type": "timepicker"
+      },
+      "label": {
+        "emoji": true,
+        "text": "Earliest you can eat",
+        "type": "plain_text"
+      },
+      "optional": true,
+      "type": "input"
+    },
+    {
+      "block_id": "eat_until",
+      "element": {
+        "action_id": "value",
+        "initial_time": "19:30",
+        "type": "timepicker"
+      },
+      "label": {
+        "emoji": true,
+        "text": "Latest you can eat",
+        "type": "plain_text"
+      },
+      "optional": true,
+      "type": "input"
+    },
+    {
+      "block_id": "suggest_item",
+      "element": {
+        "action_id": "value",
+        "initial_option": {
+          "text": {
+            "emoji": true,
+            "text": "Sam's Tacos",
+            "type": "plain_text"
+          },
+          "value": "11"
+        },
+        "option_groups": [
+          {
+            "label": {
+              "emoji": true,
+              "text": "Home meals",
+              "type": "plain_text"
+            },
+            "options": [
+              {
+                "text": {
+                  "emoji": true,
+                  "text": "Sam's Tacos",
+                  "type": "plain_text"
+                },
+                "value": "11"
+              }
+            ]
+          },
+          {
+            "label": {
+              "emoji": true,
+              "text": "Restaurants",
+              "type": "plain_text"
+            },
+            "options": [
+              {
+                "text": {
+                  "emoji": true,
+                  "text": "Siam Garden",
+                  "type": "plain_text"
+                },
+                "value": "12"
+              }
+            ]
+          }
+        ],
+        "placeholder": {
+          "emoji": true,
+          "text": "Pick from the catalog",
+          "type": "plain_text"
+        },
+        "type": "static_select"
+      },
+      "label": {
+        "emoji": true,
+        "text": "Suggest something",
+        "type": "plain_text"
+      },
+      "optional": true,
+      "type": "input"
+    },
+    {
+      "block_id": "suggest_text",
+      "element": {
+        "action_id": "value",
+        "initial_value": "Pho",
+        "max_length": 100,
+        "type": "plain_text_input"
+      },
+      "hint": {
+        "emoji": true,
+        "text": "An idea that isn't in the catalog.",
+        "type": "plain_text"
+      },
+      "label": {
+        "emoji": true,
+        "text": "Or suggest something new",
+        "type": "plain_text"
+      },
+      "optional": true,
+      "type": "input"
+    },
+    {
+      "block_id": "note",
+      "element": {
+        "action_id": "value",
+        "initial_value": "Home late.",
+        "max_length": 200,
+        "multiline": true,
+        "type": "plain_text_input"
+      },
+      "label": {
+        "emoji": true,
+        "text": "Note",
+        "type": "plain_text"
+      },
+      "optional": true,
+      "type": "input"
+    }
+  ],
+  "callback_id": "details_modal",
+  "close": {
+    "emoji": true,
+    "text": "Cancel",
+    "type": "plain_text"
+  },
+  "private_metadata": "{\"event\":7,\"channel\":\"C0DINNER\"}",
+  "submit": {
+    "emoji": true,
+    "text": "Save",
+    "type": "plain_text"
+  },
+  "title": {
+    "emoji": true,
+    "text": "Your details",
+    "type": "plain_text"
+  },
+  "type": "modal"
+}

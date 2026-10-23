@@ -1,0 +1,48 @@
+{
+  "blocks": [
+    {
+      "text": {
+        "text": "Thanks for pitching in, Lee! You're *ordering* for dinner on Thursday, Oct 22: *<https://siam.example/menu|Siam Garden>* · Delivery · Thai.\n*When:* 6:45 PM · *Eating:* 3 people (1 guest)",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "block_id": "more",
+      "elements": [
+        {
+          "action_id": "link_item",
+          "text": {
+            "emoji": true,
+            "text": "Website",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "url": "https://siam.example/menu"
+        },
+        {
+          "action_id": "link_order",
+          "text": {
+            "emoji": true,
+            "text": "Order online",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "url": "https://siam.example/order"
+        },
+        {
+          "action_id": "link_event",
+          "text": {
+            "emoji": true,
+            "text": "View on web",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "url": "https://dinnerbell.example.com/events/7"
+        }
+      ],
+      "type": "actions"
+    }
+  ],
+  "text": "You're ordering for dinner at 6:45 PM: Siam Garden."
+}
