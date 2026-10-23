@@ -8,7 +8,7 @@ It runs as one container on your own hardware. The household's catalog, preferen
 
 ## Status
 
-Pre-alpha. Milestone M0 is in place: the container, configuration, database migrations, nightly backups, `/healthz`, and sign-in with an invited-members list. Slack calls arrive in M2. Start with the [spec](docs/spec.md) and the [decision records](docs/adr/).
+Pre-alpha. Milestones M0 through M2 are in place: the container, configuration, migrations, nightly backups, `/healthz`, sign-in with an invited-members list, the catalog, preferences, meal history, and dinner calls in Slack. Offers and guests arrive in M3. Start with the [spec](docs/spec.md) and the [decision records](docs/adr/).
 
 ## Run it
 
