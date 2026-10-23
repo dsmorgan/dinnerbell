@@ -12,4 +12,22 @@
   {% endwith %}
   <button type="submit" class="button primary block">Save</button>
 </form>
+<form method="post" action="/admin/members/{{ member.id }}/slack" class="card stack" id="slack">
+  <h2>Slack</h2>
+  {% if slack_error %}<p class="alert error" role="alert">{{ slack_error }}</p>{% endif %}
+  <p class="muted small">
+    {% if member.slack_user_id %}Linked to Slack member <code>{{ member.slack_user_id }}</code>.
+    {% else %}Not linked yet.{% endif %}
+    Dinnerbell links members by email every hour, and when they sign in with Slack. To link someone by hand,
+    open their Slack profile, select the three dots, then <strong>Copy member ID</strong>.
+    Clear the field to unlink; a matching email links them again.
+  </p>
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <label class="field">
+    <span>Slack member ID</span>
+    <input name="slack_user_id" maxlength="32" autocomplete="off" autocapitalize="characters" spellcheck="false"
+           placeholder="U0123ABCDEF" value="{{ slack_value if slack_value is defined else (member.slack_user_id or '') }}">
+  </label>
+  <button type="submit" class="button block">Save Slack link</button>
+</form>
 {% endblock %}
