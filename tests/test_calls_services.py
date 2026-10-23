@@ -969,19 +969,45 @@ async def test_a_scheduled_call_whose_window_passed_never_posts(house: House) ->
     assert "call_opened" not in await house.kinds()
 
 
-async def test_a_decision_that_would_land_after_midnight_expires(house: House) -> None:
+async def late_vote(house: House) -> int:
+    """A 22:00 ad-hoc call, voting from 22:10."""
     house.clock.now = local(22, 22)
     event = await act(house, calls.start_call, house["Alex"], Slot.DINNER, date(2026, 10, 22))
     await act(house, calls.respond, house["Sam"], event.id, Status.IN)
     await act(house, calls.offer_role, house["Alex"], event.id, RoleOffer.PICKUP, True)
     house.clock.now = local(22, 22, 10)
     await act(house, call_admin.move_deadline, house["Alex"], event.id, Window.RESPOND, None)
-    ids = await proposal_ids(house, event.id)
+    return int(event.id)
+
+
+async def test_a_lock_that_would_put_the_meal_after_midnight_is_refused(house: House) -> None:
+    """Regression: the lock silently expired the call instead of saying why."""
+    event_id = await late_vote(house)
+    ids = await proposal_ids(house, event_id)
     house.clock.now = local(22, 23, 53)  # rounds up to 00:00, which isn't the call's day
-    await act(house, calls.lock, house["Alex"], event.id, ids["Siam Garden"])
-    stored = await house.event(event.id)
+    with pytest.raises(EventRuleViolation, match="after midnight"):
+        await act(house, calls.lock, house["Alex"], event_id, ids["Siam Garden"])
+    assert (await house.event(event_id)).state is EventState.VOTING
+
+
+async def test_a_vote_that_would_put_the_meal_after_midnight_expires_without_side_effects(house: House) -> None:
+    """Regression: a free-text winner was added to the catalog (and audited) before the decision
+    turned out too late to make."""
+    event_id = await late_vote(house)
+    thai = house.tags["Thai"].id
+    pho = await act(
+        house, calls.add_proposal, house["Sam"], event_id, Mode.PICKUP, free_text="Late Pho", cuisine_id=thai
+    )
+    await act(house, calls.vote, house["Sam"], event_id, pho.id)
+    await act(house, call_admin.move_deadline, house["Alex"], event_id, Window.VOTE, 58)  # 23:53
+    house.clock.now = local(22, 23, 53)
+    assert await house.tick() == [Step.CLOSE_VOTING]
+    stored = await house.event(event_id)
     assert (stored.state, stored.end_reason, stored.decided_item_id) == (EventState.ABANDONED, EndReason.MISSED, None)
     assert "decision_made" not in await house.kinds()
+    async with house.sessionmaker() as db:
+        assert await db.scalar(select(CatalogItemRow).where(CatalogItemRow.name == "Late Pho")) is None
+    assert "catalog.item_created" not in [a.action for a in await house.audits("catalog.")]
 
 
 async def test_rerun_is_refused_late_in_the_evening_and_keeps_a_later_days_timing(house: House) -> None:
