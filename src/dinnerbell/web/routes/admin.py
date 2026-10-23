@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Admin > Members: invite, edit, deactivate, reactivate."""
+"""Admin > Members: invite, edit, deactivate, reactivate, and link Slack users (FR-42)."""
 
 from __future__ import annotations
 
@@ -24,6 +24,8 @@ NOTICES = {
     "updated": "Member updated.",
     "deactivated": "Member deactivated and signed out everywhere.",
     "reactivated": "Member reactivated.",
+    "slack_set": "Slack link saved.",
+    "slack_cleared": "Slack link removed.",
 }
 
 
@@ -136,6 +138,29 @@ async def update(
     # Redisplay what the admin typed, not the stored values, so nothing they changed is lost.
     page = {"member": member, "values": posted, "roles": list(Role), "error": error}
     return await render(request, "admin_member_edit.html", page, status_code=400)
+
+
+@router.post("/members/{member_id}/slack")
+async def set_slack(
+    request: Request,
+    principal: AdminCSRFChecked,
+    context: Context,
+    db: Database,
+    member_id: RowId,
+    slack_user_id: Text = "",
+) -> Response:
+    """FR-42: link a member to a Slack user ID, or unlink them with a blank value."""
+    try:
+        updated = await member_service.set_slack_user(
+            db, principal.member, member_id, slack_user_id, now=context.clock()
+        )
+    except (InvalidMemberInput, MemberRuleViolation) as exc:
+        member = await member_service.get_member(db, principal.member, member_id)
+        page = {"member": member, "values": _stored(member), "roles": list(Role), "slack_error": str(exc)}
+        page["slack_value"] = slack_user_id
+        return await render(request, "admin_member_edit.html", page, status_code=400)
+    notice = "slack_set" if updated.slack_user_id else "slack_cleared"
+    return RedirectResponse(f"/admin/members?notice={notice}", status_code=303)
 
 
 @router.post("/members/{member_id}/deactivate")
