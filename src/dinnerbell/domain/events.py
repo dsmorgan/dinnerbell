@@ -11,7 +11,7 @@ import math
 import unicodedata
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field, replace
-from datetime import date, datetime, time, timedelta, tzinfo
+from datetime import UTC, date, datetime, time, timedelta, tzinfo
 from enum import StrEnum
 
 from dinnerbell.domain.catalog import Mode
@@ -288,7 +288,7 @@ def check_details(details: Details, *, dietary_tag_ids: Iterable[int], active_it
         raise InvalidResponse(f"Suggest up to {MAX_SUGGESTIONS} things.")
     return Details(
         guests=details.guests,
-        guest_needs=details.guest_needs,
+        guest_needs=details.guest_needs if details.guests else frozenset(),  # no guests, no guest needs
         eat_from=details.eat_from,
         eat_until=details.eat_until,
         suggestion_item_ids=tuple(dict.fromkeys(details.suggestion_item_ids)),
@@ -452,8 +452,8 @@ def meal_time(
     (the decision), so a decision can't land in the past."""
     earliest = [r.eat_from for r in responses if r.is_in and r.eat_from is not None]
     wall = max(earliest) if earliest else default
-    candidate = datetime.combine(day, wall, tzinfo=zone)
-    return round_up_to_quarter(max(candidate, not_before))
+    candidate = datetime.combine(day, wall, tzinfo=zone).astimezone(UTC)
+    return round_up_to_quarter(max(candidate, not_before.astimezone(UTC)))
 
 
 # Who may do what ------------------------------------------------------------------------------

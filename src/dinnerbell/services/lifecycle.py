@@ -190,9 +190,10 @@ def rank_item(ctx: CallContext, item: CatalogItem) -> RankItem:
 
 
 def guest_needs(ctx: CallContext) -> frozenset[int]:
-    """Dietary needs of guests of everyone who might be eating (in, or maybe)."""
+    """Dietary needs of guests of everyone who might be eating (in, or maybe). Needs left on a
+    response with no guests don't count."""
     who = veto_participants(ctx.responses)
-    return frozenset(tag for r in ctx.responses if r.member_id in who for tag in r.guest_needs)
+    return frozenset(tag for r in ctx.responses if r.member_id in who and r.guests for tag in r.guest_needs)
 
 
 async def ranking_snapshot(db: AsyncSession, ctx: CallContext, group: GroupPreferences) -> RankingSnapshot:
@@ -292,7 +293,7 @@ def misfit(ctx: CallContext, proposal: Proposal, group: GroupPreferences) -> str
     needs = guest_needs(ctx)
     if proposal.item_id is not None:
         item = ctx.items.get(proposal.item_id)
-        if item is None:
+        if item is None or not item.active:
             return "That isn't in the catalog anymore."
         if group.vetoes(rank_item(ctx, item)) or not needs <= item.tag_ids:
             return DOESNT_FIT
@@ -307,6 +308,16 @@ def misfit(ctx: CallContext, proposal: Proposal, group: GroupPreferences) -> str
     if not ctx.coverage.covers(proposal.mode, cooks):
         return f"Nobody who's in offered to {MODE_ROLE[proposal.mode].value} for that."
     return None
+
+
+async def _as_catalog_item(db: AsyncSession, ctx: CallContext, proposal: Proposal) -> Proposal:
+    """A free-text proposal as the catalog item of the same name, when one exists, so its tags
+    and item vetoes are checked before it can win; otherwise the proposal unchanged."""
+    if proposal.item_id is not None:
+        return proposal
+    kind = ItemKind.HOME if proposal.mode is Mode.COOK else ItemKind.RESTAURANT
+    item = await CatalogRepository(db).item_by_name(ctx.event.household_id, kind, proposal.free_text or "")
+    return proposal if item is None else replace(proposal, item_id=item.id)
 
 
 async def _catalog_free_text(db: AsyncSession, ctx: CallContext, proposal: Proposal, now: datetime) -> CatalogItem:
@@ -345,14 +356,16 @@ async def decide(
     Abandons the call when no proposal can be covered (spec 5.4)."""
     ctx = await load(db, event)
     group = await group_preferences(db, event.household_id, veto_participants(ctx.responses))
+    # Check free text as the catalog item it will become, if one by that name exists by now.
+    checked = {p.id: await _as_catalog_item(db, ctx, p) for p in ctx.proposals}
     if locked is not None:
-        problem = misfit(ctx, locked, group)
+        problem = misfit(ctx, checked.get(locked.id, locked), group)
         if problem is not None:
             raise EventRuleViolation(problem)
         winner = locked
     else:
         tallies = [
-            ProposalTally(p.id, p.rank, misfit(ctx, p, group) is None, frozenset(ctx.votes.get(p.id, [])))
+            ProposalTally(p.id, p.rank, misfit(ctx, checked[p.id], group) is None, frozenset(ctx.votes.get(p.id, [])))
             for p in ctx.proposals
         ]
         admins = frozenset(m.id for m in ctx.active_members if m.is_admin)

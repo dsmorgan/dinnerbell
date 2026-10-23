@@ -536,3 +536,18 @@ def test_migration_writes_the_same_defaults_as_the_domain() -> None:
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     assert sched.default_settings() == module.DEFAULT_SETTINGS
+
+
+def test_windows_count_elapsed_time_across_a_daylight_saving_change() -> None:
+    """Regression: wall-clock arithmetic gave a 01:30 call 30 real minutes on spring-forward day."""
+    early = replace(sched.DEFAULT_SLOTS[Slot.DINNER], call_time=time(1, 30))
+    opens = early.opens_at(date(2026, 3, 8), CHICAGO)  # US clocks jump from 02:00 to 03:00
+    assert opens.tzinfo is UTC
+    deadline = opens + early.response_window
+    assert deadline - opens == timedelta(minutes=90)
+    assert deadline.astimezone(CHICAGO).time() == time(4, 0)  # 01:30 CST + 90 elapsed minutes
+
+
+def test_details_drop_guest_needs_without_guests() -> None:
+    clean = ev.check_details(Details(guests=0, guest_needs=frozenset({9})), dietary_tag_ids=[9], active_item_ids=[])
+    assert clean.guest_needs == frozenset()

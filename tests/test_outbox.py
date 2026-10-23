@@ -216,3 +216,29 @@ async def test_health_reports_the_backlog(database: Database, migrated: Settings
         assert await outbox_backlog(broken.sessionmaker) is None
     finally:
         await broken.close()
+
+
+async def test_an_update_coalesced_after_listing_is_delivered_as_latest(
+    database: Database, clock: FakeClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: the drainer delivered the payload it listed, not the one it claimed, so an
+    update coalesced in between was lost."""
+    await enqueue(database, opened(1))
+    await outbox.drain(database.sessionmaker, RecordingChannel(), clock)
+    await enqueue(database, updated(1, 2))
+    listed = OutboxRepository.pending
+
+    async def list_then_vote(self: OutboxRepository, limit: int) -> list[OutboxEntry]:
+        rows = await listed(self, limit)
+        await enqueue(database, updated(1, 3))  # a vote lands after the listing, before the claim
+        return rows
+
+    monkeypatch.setattr(OutboxRepository, "pending", list_then_vote)
+    seen: list[n.Notification] = []
+
+    class Capturing(RecordingChannel):
+        async def update(self, ref: n.MessageRef, notification: n.Notification) -> None:
+            seen.append(notification)
+
+    await outbox.drain(database.sessionmaker, Capturing(), clock)
+    assert [getattr(s, "head_count", None) for s in seen] == [3]
