@@ -31,7 +31,7 @@ from dinnerbell.web.middleware import (
 )
 from dinnerbell.web.ratelimit import SlidingWindowLimiter
 from dinnerbell.web.render import error_page, is_htmx
-from dinnerbell.web.routes import admin, auth, catalog, health, history, pages, preferences
+from dinnerbell.web.routes import admin, auth, catalog, events, health, history, pages, preferences, schedule
 
 log = logging.getLogger(__name__)
 
@@ -66,6 +66,8 @@ def build_app(settings: Settings, lifespan: Lifespan) -> FastAPI:
         catalog.router,
         preferences.router,
         history.router,
+        events.router,
+        schedule.router,
     ):
         app.include_router(router)
     _add_exception_handlers(app)

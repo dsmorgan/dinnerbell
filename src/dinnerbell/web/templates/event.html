@@ -1,0 +1,7 @@
+{#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
+{% extends "base.html" %}
+{% block title %}{{ v.event.slot.value|capitalize }} {{ v.event.day|day }}{% endblock %}
+{% block content %}
+<p class="small"><a href="/">Today</a></p>
+{% include "_event.html" %}
+{% endblock %}

@@ -2,6 +2,7 @@
 {% extends "base.html" %}
 {% block title %}Members{% endblock %}
 {% block content %}
+{% include "_admin_tabs.html" %}
 <h1>Members</h1>
 {% if notice %}<p class="alert ok" role="status">{{ notice }}</p>{% endif %}
 {% if error %}<p class="alert error" role="alert">{{ error }}</p>{% endif %}
