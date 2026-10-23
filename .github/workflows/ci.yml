@@ -376,31 +376,22 @@ jobs:
           category: grype-published
 
   compose:
-    name: Compose config
+    name: compose
     runs-on: ubuntu-24.04
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      # Render both instances from the example env files, so a broken ${...} in compose.yaml or an
-      # env file compose can't parse fails here instead of on the host.
-      - name: Production
+      # Ubuntu 24.04 ships podman-compose 1.0.6, the oldest version the docs support. Its merge
+      # and .env rules differ from Docker's, so the checks run against both.
+      - name: Install podman-compose
         run: |
-          cp .env.example .env
-          docker compose config --quiet
-          docker compose -f compose.yaml -f compose.build.yaml config --quiet
-          # Renaming the volume would start existing installs on an empty database.
-          docker compose -p dinnerbell config --format json \
-            | jq -e '.volumes["dinnerbell-data"].name == "dinnerbell_dinnerbell-data"'
-      - name: Test instance
-        env:
-          DINNERBELL_COMPOSE: docker compose
-        run: |
-          cp .env.test.example .env.test
-          deploy/dinnerbell-test config --quiet
-          deploy/dinnerbell-test config --format json \
-            | jq -e '.volumes["dinnerbell-data"].name == "dinnerbell-test_dinnerbell-data"
-              and .services.dinnerbell.ports[0].published == "8014"
-              and (.services.dinnerbell.image | endswith(":main"))
-              and .services.dinnerbell.environment.DINNERBELL_INSTANCE_LABEL == "TEST"'
+          sudo apt-get update -q
+          sudo apt-get install -y -q podman-compose
+      - name: Shellcheck
+        run: shellcheck deploy/dinnerbell-test scripts/check-compose.sh
+      # Renders both instances from the example env files, checks volume names, tags, and ports,
+      # and checks that the test wrapper refuses unsafe setups.
+      - name: Check compose files
+        run: scripts/check-compose.sh
