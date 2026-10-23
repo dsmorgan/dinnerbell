@@ -120,7 +120,7 @@ def _parse(posted: dict[str, Any]) -> ScheduleSettings:
 def _page(values: dict[str, Any], **extra: Any) -> dict[str, Any]:
     return {
         "values": values,
-        "slots": list(Slot),
+        "slots": [Slot.DINNER, Slot.LUNCH],
         "modes": list(MODE_ORDER),
         "minute_fields": MINUTE_FIELDS,
         "weights": [(name, WEIGHT_LABELS[name]) for name in WEIGHT_NAMES],

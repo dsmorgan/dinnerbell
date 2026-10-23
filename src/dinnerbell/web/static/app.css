@@ -409,6 +409,7 @@ ins { color: var(--ok); text-decoration: none; }
 .roster .chip { margin-left: 0.2rem; }
 .roster .status-out { opacity: 0.65; }
 .roster .note { white-space: pre-line; }
+.roster .time { white-space: nowrap; }
 .proposal { border: 1px solid var(--line); border-radius: 12px; padding: 0.7rem 0.8rem; margin-bottom: 0.5rem; }
 .proposal p { margin: 0.3rem 0; }
 .proposal .button-row { margin: 0.4rem 0 0; }
@@ -422,7 +423,8 @@ ins { color: var(--ok); text-decoration: none; }
 .pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.5rem; }
 .pair .field { margin-top: 0; }
 .admin-controls { border-top: 1px dashed var(--line); padding-top: 0.3rem; }
-.weights { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.5rem; }
+.weights, fieldset.card .pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.5rem; align-items: end; }
+fieldset.card { min-width: 0; }
 fieldset.card > legend { padding: 0; }
 fieldset.card > legend h2 { margin: 0; }
 .tabs { display: flex; gap: 0.25rem; margin: 0.25rem 0 0.5rem; }

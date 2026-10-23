@@ -89,7 +89,7 @@
       <span class="chip status">{{ r.status.value|capitalize }}</span>
       {% if r.guests %}<span class="chip">+{{ r.guests }} guest{{ "" if r.guests == 1 else "s" }}{% if r.guest_needs %}: {{ r.guest_needs|join(", ") }}{% endif %}</span>{% endif %}
       {% for o in r.offers %}<span class="chip role">{{ {"cook": "Cooks", "pickup": "Picks up", "order": "Orders"}[o.value] }}</span>{% endfor %}
-      {% if r.eat_from or r.eat_until %}<span class="small muted">{{ r.eat_from|wall }}{% if r.eat_until %}–{{ r.eat_until|wall }}{% endif %}</span>{% endif %}
+      {% if r.eat_from or r.eat_until %}<span class="small muted time">{{ r.eat_from|wall }}{% if r.eat_until %}–{{ r.eat_until|wall }}{% endif %}</span>{% endif %}
       {% if r.suggestions %}<div class="small">Suggests {{ r.suggestions|join(", ") }}</div>{% endif %}
       {% if r.note %}<div class="small muted note">{{ r.note }}</div>{% endif %}
     </li>
@@ -157,7 +157,7 @@
   {% set d = v.decision %}
   <div class="decision">
     <h3>{% if d.proposal.item.url %}<a href="{{ d.proposal.item.url }}" rel="noopener noreferrer" target="_blank">{{ d.proposal.item.name }}</a>{% else %}{{ d.proposal.item.name }}{% endif %} <span class="chip mode">{{ d.proposal.mode.label }}</span></h3>
-    <p class="small">{{ d.head_count }} eating: {{ d.participants|map(attribute="member.name")|join(", ") }}{% if d.dietary_notes %}. Guests need: {{ d.dietary_notes|join(", ") }}{% endif %}.</p>
+    <p class="small">{{ d.head_count }} eating: {% for p in d.participants %}{{ p.member.name }}{% if p.guests %} +{{ p.guests }}{% endif %}{{ ", " if not loop.last }}{% endfor %}{% if d.dietary_notes %}. Guests need: {{ d.dietary_notes|join(", ") }}{% endif %}.</p>
     <ul class="chips assignments">
       {% for a in d.assignments %}<li class="chip role">{{ {"cook": "Cooking", "pickup": "Picking up", "order": "Ordering", "coordinator": "Coordinating"}[a.role.value] }}: {{ a.member.name }}</li>{% endfor %}
     </ul>
