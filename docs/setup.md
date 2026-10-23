@@ -39,15 +39,24 @@ The free plan limits history to 90 days and the number of apps to 10. Neither ma
 
 ## 2. Create the Slack app
 
-1. Open `deploy/slack-app-manifest.yaml` in the repository you cloned.
-2. Replace `dinnerbell.example.com` in `redirect_urls` with your public hostname. Keep the path `/auth/callback`.
-3. Go to [api.slack.com/apps](https://api.slack.com/apps) and select **Create New App**.
-4. Select **From a manifest**.
-5. Select your household workspace.
-6. Paste the edited manifest as YAML.
+Don't edit files in your clone, including the manifest. Local edits block `git pull` when you upgrade, and they put your hostname one `git add` away from a commit. You set the hostname in Slack instead.
+
+1. Open `deploy/slack-app-manifest.yaml` in the repository you cloned, and copy its contents.
+2. Go to [api.slack.com/apps](https://api.slack.com/apps) and select **Create New App**.
+3. Select **From a manifest**.
+4. Select your household workspace.
+5. Paste the manifest as YAML.
+6. In the pasted text, replace `dinnerbell.example.com` in `redirect_urls` with your public hostname. Keep the path `/auth/callback`.
 7. Select **Next**, then **Create**.
 
-If you change your hostname later, edit the redirect URL under **OAuth & Permissions**.
+To keep a copy of the manifest with your hostname, write it to a file ending in `.local.yaml`, which git ignores:
+
+```
+sed 's#dinnerbell.example.com#dinnerbell.your-domain.example#' \
+  deploy/slack-app-manifest.yaml > deploy/slack-app-manifest.local.yaml
+```
+
+If you change your hostname later, edit the redirect URL under **OAuth & Permissions**. When an upgrade changes the manifest, paste the new version under **App Manifest** in the app settings and set your hostname there again.
 
 ## 3. Create the app-level token
 
@@ -157,13 +166,13 @@ Avoid `0.0.0.0` unless a firewall limits who can reach the port.
 
    `DINNERBELL_HOUSEHOLD_NAME` and `DINNERBELL_TIMEZONE` take effect on first start only. After that, Dinnerbell reads them from its database, so set them correctly before you start it the first time.
 
-5. Optional: load a starter catalog on first start. Copy `seed/example.yaml` to `seed/my-catalog.yaml` and edit it. The format is in [catalog-format.md](catalog-format.md).
+5. Optional: load a starter catalog on first start. Copy `seed/example.yaml` to `seed/my-catalog.yaml` and edit it. Git ignores every file in `seed/` except the example and the schema, so your catalog stays out of the repository. The format is in [catalog-format.md](catalog-format.md).
 
    ```sh
    cp seed/example.yaml seed/my-catalog.yaml
    ```
 
-6. Optional: mount the catalog file read-only. Create `compose.override.yaml` next to `compose.yaml` with this content. Both compose tools read it automatically.
+6. Optional: mount the catalog file read-only. Create `compose.override.yaml` next to `compose.yaml` with this content. Both compose tools read it automatically, and git ignores it.
 
    ```yaml
    services:

@@ -1,9 +1,11 @@
 # Dinnerbell Slack app manifest.
 #
 # Paste this file into api.slack.com/apps > Create New App > From a manifest.
-# Before you paste it, replace dinnerbell.example.com in redirect_urls with
-# the public hostname you serve Dinnerbell on. The path must stay
-# /auth/callback. See docs/setup.md.
+# Don't edit this file in your clone. After you paste it, change
+# dinnerbell.example.com in redirect_urls to your public hostname in Slack's
+# manifest editor, before you select Next. The path must stay /auth/callback.
+# To keep a copy with your hostname, write it to a *.local.yaml file, which git
+# ignores. See docs/setup.md.
 
 display_information:
   name: Dinnerbell
