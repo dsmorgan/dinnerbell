@@ -72,12 +72,20 @@ jobs:
           # An index lists one manifest per platform plus attestations; the image is linux/amd64.
           manifest=$(jq -r 'if .manifests then (.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64") | .digest) else empty end' index.json | head -n 1)
           if [ -n "$manifest" ]; then
+            if ! [[ "$manifest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "::error::$IMAGE:latest lists an unexpected amd64 manifest digest."
+              exit 1
+            fi
             registry -o manifest.json "https://ghcr.io/v2/$name/manifests/$manifest"
           else
             cp index.json manifest.json
           fi
           config=$(jq -r .config.digest manifest.json)
-          version=$(registry "https://ghcr.io/v2/$name/blobs/$config" | jq -r '.config.Labels["org.opencontainers.image.version"] // ""')
+          if ! [[ "$config" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+            echo "::error::$IMAGE:latest has an unexpected config digest."
+            exit 1
+          fi
+          version=$(registry "https://ghcr.io/v2/$name/blobs/$config" | jq -r '.config.Labels["org.opencontainers.image.version"] // ""' | tr -cd '0-9A-Za-z.+-')
           if [ "$version" != "${tag#v}" ]; then
             echo "::error::$IMAGE:latest is version '$version', but the newest release is $tag. Check that the release's publish job pushed :latest."
             exit 1
