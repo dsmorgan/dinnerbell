@@ -90,36 +90,43 @@ async def _link(db: AsyncSession, decision: Allow, claims: IdentityClaims, now: 
         changes["oidc_subject"] = claims.subject
     # A link the admin set or cleared by hand stays as the admin left it (FR-42).
     slack_id = claims.slack_user_id
+    holder = None
     if slack_id and slack_id != member.slack_user_id and not member.slack_link_locked:
         holder = await MemberRepository(db).by_slack_user_id(member.household_id, slack_id)
         if holder is None:
             changes["slack_user_id"] = slack_id
-        else:
-            # Another member has this Slack user, most likely by an admin's mistake. Sign-in
-            # still works; the link stays where it is until the admin sorts it out.
-            log.warning(
-                "slack user already linked to another member", extra={"member_id": member.id, "holder_id": holder.id}
-            )
-            await AuditRepository(db).record(
-                household_id=member.household_id,
-                actor_member_id=member.id,
-                action="member.slack_user_conflict",
-                target=f"member:{member.id}",
-                payload={"slack_user_id": slack_id, "held_by": holder.id},
-                now=now,
-            )
-    if not changes:
-        return member
-    updated = await MemberRepository(db).update(member.household_id, member.id, now, **changes)
-    await AuditRepository(db).record(
-        household_id=member.household_id,
-        actor_member_id=member.id,
-        action="member.linked" if decision.link_subject else "member.slack_user_updated",
-        target=f"member:{member.id}",
-        payload=changes,
-        now=now,
-    )
+    updated = member
+    if changes:
+        updated = await MemberRepository(db).update(member.household_id, member.id, now, **changes)
+        await AuditRepository(db).record(
+            household_id=member.household_id,
+            actor_member_id=member.id,
+            action="member.linked" if decision.link_subject else "member.slack_user_updated",
+            target=f"member:{member.id}",
+            payload=changes,
+            now=now,
+        )
+    if holder is not None and slack_id:
+        await _slack_conflict(db, member, slack_id, holder, now)
     return updated
+
+
+async def _slack_conflict(db: AsyncSession, member: Member, slack_id: str, holder: Member, now: datetime) -> None:
+    """Another member has this member's Slack user, most likely by an admin's mistake. Sign-in
+    still works; the link stays where it is until the admin sorts it out. Audited once per
+    clash, not on every sign-in."""
+    log.warning("slack user already linked to another member", extra={"member_id": member.id, "holder_id": holder.id})
+    audits, target = AuditRepository(db), f"member:{member.id}"
+    conflict = {"slack_user_id": slack_id, "held_by": holder.id}
+    if await audits.latest(member.household_id, target) != ("member.slack_user_conflict", conflict):
+        await audits.record(
+            household_id=member.household_id,
+            actor_member_id=member.id,
+            action="member.slack_user_conflict",
+            target=target,
+            payload=conflict,
+            now=now,
+        )
 
 
 async def _record_refusal(
