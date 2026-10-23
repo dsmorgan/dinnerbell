@@ -4,7 +4,8 @@
 # test instance, with the volume names, tags, and ports the docs promise, and that the wrapper
 # refuses unsafe setups. CI runs it; run it locally after changing compose files, the wrapper,
 # or an env example. It needs docker compose and jq. It also checks podman-compose when that's
-# installed (CI installs Ubuntu 24.04's 1.0.6, the oldest version the docs support).
+# installed (CI installs Ubuntu 24.04's 1.0.6, the oldest version the docs support; 1.1.0, 1.5.0,
+# and 1.6.0 were checked by hand).
 #
 # It writes .env and .env.test from the examples and deletes them afterward, so it refuses to
 # run when either file already exists.
@@ -30,16 +31,33 @@ expect() {
     if "$@" >/dev/null 2>&1; then pass "$description"; else fail "$description"; fi
 }
 
-# refuses DESCRIPTION [VAR=value ...] [ARG ...]: the wrapper refuses `config --quiet`.
+# refuses DESCRIPTION [VAR=value ...] [ARG ...]: the wrapper itself refuses `config --quiet`. A
+# failure without the wrapper's "dinnerbell-test:" message, such as a compose error, doesn't count.
 refuses() {
     description=$1
     shift
-    if env "$@" config --quiet >/dev/null 2>&1; then fail "wrapper accepted: $description"; else pass "wrapper refused: $description"; fi
+    if errors=$(env "$@" config --quiet 2>&1 >/dev/null); then
+        fail "wrapper accepted: $description"
+    elif printf '%s' "$errors" | grep -q '^dinnerbell-test: ' &&
+        ! printf '%s' "$errors" | grep -q '^dinnerbell-test: project '; then
+        pass "wrapper refused: $description"
+    else
+        fail "wrapper failed without refusing: $description"
+    fi
 }
 
-# contains DESCRIPTION TEXT NEEDLE
+# contains DESCRIPTION TEXT NEEDLE...: TEXT contains any of the needles.
 contains() {
-    if printf '%s' "$2" | grep -qF -- "$3"; then pass "$1"; else fail "$1"; fi
+    description=$1
+    text=$2
+    shift 2
+    for needle in "$@"; do
+        if printf '%s' "$text" | grep -qF -- "$needle"; then
+            pass "$description"
+            return
+        fi
+    done
+    fail "$description"
 }
 
 echo "== docker compose"
@@ -70,7 +88,7 @@ refuses "DINNERBELL_ENV_FILE=<absolute path to .env>" DINNERBELL_ENV_FILE="$PWD/
 refuses "COMPOSE_PROJECT_NAME=Dinnerbell-Test in the shell" COMPOSE_PROJECT_NAME=Dinnerbell-Test deploy/dinnerbell-test
 refuses "a leading compose option" deploy/dinnerbell-test -p dinnerbell
 for line in DINNERBELL_TAG=0.2.0 "export DINNERBELL_PORT=8013" DINNERBELL_ENV_FILE=.env.test \
-    COMPOSE_PROJECT_NAME=dinnerbell-test; do
+    COMPOSE_PROJECT_NAME=dinnerbell-test 'COMPOSE_PROJECT_NAME="dinnerbell-test"  # production'; do
     printf '%s\n' "$line" >>.env
     refuses "$line in .env" deploy/dinnerbell-test
     cp .env.example .env
@@ -92,9 +110,12 @@ if command -v podman-compose >/dev/null 2>&1; then
     if podman-compose --help 2>&1 | grep -q -- '--verbose'; then pc="podman-compose --verbose"; fi
     production=$($pc --dry-run -p dinnerbell up -d 2>&1) || true
     test_instance=$(DINNERBELL_COMPOSE="$pc --dry-run" deploy/dinnerbell-test up -d 2>&1) || true
-    contains "production: volume dinnerbell_dinnerbell-data" "$production" "dinnerbell_dinnerbell-data:/data"
+    # podman-compose 1.6.0 and later mount with --mount instead of -v.
+    contains "production: volume dinnerbell_dinnerbell-data" "$production" \
+        "dinnerbell_dinnerbell-data:/data" "source=dinnerbell_dinnerbell-data,destination=/data"
     contains "production: port 8013" "$production" "127.0.0.1:8013:8013"
-    contains "test: volume dinnerbell-test_dinnerbell-data" "$test_instance" "dinnerbell-test_dinnerbell-data:/data"
+    contains "test: volume dinnerbell-test_dinnerbell-data" "$test_instance" \
+        "dinnerbell-test_dinnerbell-data:/data" "source=dinnerbell-test_dinnerbell-data,destination=/data"
     contains "test: port 8014" "$test_instance" "127.0.0.1:8014:8013"
     contains "test: image :main" "$test_instance" "ghcr.io/dsmorgan/dinnerbell:main"
     if printf '%s' "$test_instance" | grep -qF "dinnerbell_dinnerbell-data"; then
