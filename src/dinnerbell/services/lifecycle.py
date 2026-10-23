@@ -130,33 +130,31 @@ async def open_call(db: AsyncSession, event: Event, now: datetime, *, actor: Mem
 
 
 async def open_due_calls(db: AsyncSession, household: Household, now: datetime) -> list[Event]:
-    """FR-2: post each enabled slot's standing call once its time has come (household time).
-
-    Yesterday is checked too, so a call whose window crosses midnight still opens after a late
-    restart. The unique index on (household, slot, date) makes a double post impossible even
-    if two ticks race.
+    """FR-2: post each enabled slot's standing call for today once its time has come
+    (household time). Only today: a call is stale at midnight after its day, so opening
+    yesterday's would post it only to expire it. The unique index on (household, slot, date)
+    makes a double post impossible even if two ticks race.
     """
     zone = ZoneInfo(household.timezone)
     today = household_today(household, now)
     opened: list[Event] = []
     for slot, schedule in slot_schedules(await household_settings(db, household.id)).items():
-        for day in (today - timedelta(days=1), today):
-            opens_at = schedule.opens_at(day, zone)
-            exists = await EventRepository(db).call_for(household.id, slot, day) is not None
-            due = should_open_today(
-                enabled=schedule.enabled,
-                opens_at=opens_at,
-                respond_deadline=opens_at + schedule.response_window,
-                now=now,
-                exists=exists,
-            )
-            if not due:
-                continue
-            try:
-                opened.append(await create_call(db, household, slot, day, opens_at=opens_at, actor=None, now=now))
-                await db.commit()
-            except CallExists:
-                await db.rollback()
+        opens_at = schedule.opens_at(today, zone)
+        exists = await EventRepository(db).call_for(household.id, slot, today) is not None
+        due = should_open_today(
+            enabled=schedule.enabled,
+            opens_at=opens_at,
+            respond_deadline=opens_at + schedule.response_window,
+            now=now,
+            exists=exists,
+        )
+        if not due:
+            continue
+        try:
+            opened.append(await create_call(db, household, slot, today, opens_at=opens_at, actor=None, now=now))
+            await db.commit()
+        except CallExists:
+            await db.rollback()
     return opened
 
 
