@@ -68,7 +68,7 @@ class Settings(BaseSettings):
     slack_bot_token: SecretStr | None = None
     slack_app_token: SecretStr | None = None
     slack_channel: str | None = None
-    timezone: str = "UTC"
+    timezone: str = "America/New_York"
     seed_file: Path | None = None
     log_level: LogLevel = "INFO"
     trusted_proxies: Annotated[tuple[IPNetwork, ...], NoDecode] = ()

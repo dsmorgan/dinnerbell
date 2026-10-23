@@ -134,7 +134,7 @@ Avoid `0.0.0.0` unless a firewall limits who can reach the port.
    DINNERBELL_SECRET_KEY=<generated key>
    DINNERBELL_ADMIN_EMAIL=you@example.com
    DINNERBELL_HOUSEHOLD_NAME=Home
-   DINNERBELL_TIMEZONE=America/Chicago
+   DINNERBELL_TIMEZONE=America/New_York
 
    DINNERBELL_OIDC_ISSUER=https://slack.com
    DINNERBELL_OIDC_CLIENT_ID=<client ID>

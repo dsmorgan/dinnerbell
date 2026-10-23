@@ -46,7 +46,7 @@ def test_loads_from_environment_with_defaults(monkeypatch: pytest.MonkeyPatch) -
     assert settings.oidc_scopes == "openid email profile"
     assert settings.admin_email == "admin@example.com"
     assert settings.log_level == "INFO"
-    assert settings.timezone == "UTC"
+    assert settings.timezone == "America/New_York"
     assert settings.trusted_proxies == ()
     assert settings.slack_team_id == "T0123ABCD"
     assert settings.cookie_secure
