@@ -178,7 +178,7 @@ def test_without_a_label_pages_have_no_banner(client: TestClient, provider: Fake
 def test_healthz_names_the_instance_but_never_the_channel(client: TestClient) -> None:
     body = wait_for_tick(client)
     assert body["instance"] == LABEL
-    assert set(body) == {"status", "database", "scheduler", "slack", "backup", "outbox", "instance"}
+    assert set(body) == {"status", "version", "database", "scheduler", "slack", "backup", "outbox", "instance"}
     assert "C0SECRETCH" not in client.get("/healthz").text
 
 
