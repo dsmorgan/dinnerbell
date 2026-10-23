@@ -89,8 +89,25 @@ async def _link(db: AsyncSession, decision: Allow, claims: IdentityClaims, now: 
     if decision.link_subject:
         changes["oidc_subject"] = claims.subject
     # A link the admin set or cleared by hand stays as the admin left it (FR-42).
-    if claims.slack_user_id and claims.slack_user_id != member.slack_user_id and not member.slack_link_locked:
-        changes["slack_user_id"] = claims.slack_user_id
+    slack_id = claims.slack_user_id
+    if slack_id and slack_id != member.slack_user_id and not member.slack_link_locked:
+        holder = await MemberRepository(db).by_slack_user_id(member.household_id, slack_id)
+        if holder is None:
+            changes["slack_user_id"] = slack_id
+        else:
+            # Another member has this Slack user, most likely by an admin's mistake. Sign-in
+            # still works; the link stays where it is until the admin sorts it out.
+            log.warning(
+                "slack user already linked to another member", extra={"member_id": member.id, "holder_id": holder.id}
+            )
+            await AuditRepository(db).record(
+                household_id=member.household_id,
+                actor_member_id=member.id,
+                action="member.slack_user_conflict",
+                target=f"member:{member.id}",
+                payload={"slack_user_id": slack_id, "held_by": holder.id},
+                now=now,
+            )
     if not changes:
         return member
     updated = await MemberRepository(db).update(member.household_id, member.id, now, **changes)
