@@ -6,7 +6,11 @@
 (function () {
   "use strict";
 
-  function showSaveError() {
+  function showSaveError(event) {
+    var config = event && event.detail && event.detail.requestConfig;
+    if (config && config.verb === "get") {
+      return; // a background refresh failed; nothing the person did went unsaved
+    }
     var banner = document.getElementById("save-error");
     if (!banner) {
       return;
@@ -51,4 +55,22 @@
       }
     }
   });
+
+  // Calls that are collecting or voting carry data-poll, the URL of their card. Refresh them
+  // now and then, so a page left open shows voting start and the decision. Skip a card while
+  // someone is using it (an open form, or focus inside), and skip hidden tabs.
+  var POLL_MS = 45000;
+  window.setInterval(function () {
+    if (document.hidden || !window.htmx) {
+      return;
+    }
+    var cards = document.querySelectorAll("[data-poll]");
+    for (var i = 0; i < cards.length; i += 1) {
+      var card = cards[i];
+      if (card.querySelector("details[open]") || card.contains(document.activeElement)) {
+        continue;
+      }
+      window.htmx.ajax("GET", card.getAttribute("data-poll"), { target: card, swap: "outerHTML" });
+    }
+  }, POLL_MS);
 })();

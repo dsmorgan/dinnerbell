@@ -444,3 +444,28 @@ def test_htmx_errors_swap_in_place(admin: TestClient) -> None:
     )
     assert response.status_code == 409 and "Pick in, out, or maybe." in page(response)
     assert isinstance(response, httpx.Response)
+
+
+def test_open_cards_refresh_themselves(admin: TestClient, clock: FakeClock, migrated: Settings) -> None:
+    """A Today page left open shows voting start and the decision without a reload."""
+    event_id = start(admin)
+    today = admin.get("/").text
+    assert f'data-poll="/events/{event_id}/card?from=today"' in today
+    card = admin.get(f"/events/{event_id}/card?from=today", headers={"HX-Request": "true"})
+    assert card.status_code == 200 and "<html" not in card.text and f'id="event-{event_id}"' in card.text
+    assert 'name="from" value="today"' in card.text
+    sneaky = admin.get(f"/events/{event_id}/card?from=//evil").text
+    assert 'name="from" value="event"' in sneaky  # anything else is the event page
+    to_voting(admin, clock, event_id)
+    assert "data-poll" in admin.get("/").text
+    first = proposal_ids(migrated)[0]
+    submit(admin, f"/events/{event_id}/proposals/{first}/lock")
+    assert "data-poll" not in admin.get("/").text  # decided: nothing left to wait for
+    assert admin.get("/events/999/card").status_code == 404
+    script = admin.get("/static/app.js").text
+    assert "data-poll" in script and "details[open]" in script and "document.hidden" in script
+
+
+def test_another_households_card_is_not_found(admin: TestClient, migrated: Settings) -> None:
+    theirs = other_call(migrated, other_household(migrated))
+    assert admin.get(f"/events/{theirs['event']}/card").status_code == 404

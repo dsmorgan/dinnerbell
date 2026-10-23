@@ -12,7 +12,7 @@ from collections.abc import Awaitable, Callable
 from datetime import time
 from typing import Annotated
 
-from fastapi import APIRouter, Form, Request
+from fastapi import APIRouter, Form, Query, Request
 from fastapi.responses import RedirectResponse
 from starlette.responses import Response
 
@@ -99,6 +99,21 @@ async def event_page(
 ) -> Response:
     view = await event_views.event_view(db, principal.member, event_id, now=context.clock())
     return await render(request, "event.html", {"v": view, "from_page": "event"})
+
+
+@router.get("/events/{event_id}/card")
+async def event_card(
+    request: Request,
+    principal: SignedIn,
+    context: Context,
+    db: Database,
+    event_id: RowId,
+    came_from: Annotated[str, Query(alias="from", max_length=10)] = "",
+) -> Response:
+    """The event's card alone, for pages that refresh open calls in place (see app.js)."""
+    view = await event_views.event_view(db, principal.member, event_id, now=context.clock())
+    page = {"v": view, "from_page": "today" if came_from == "today" else "event"}
+    return await render(request, "_event.html", page)
 
 
 @router.post("/events")
