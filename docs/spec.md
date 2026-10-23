@@ -207,7 +207,7 @@ Requirements use "must" for version 1 and "should" for items that can slip to a 
 |---|---|
 | FR-27 | Each member sets, for any tag or item: veto, or a soft score of −2, −1, 0, +1, +2. Default is 0. |
 | FR-28 | A veto on a tag excludes every item carrying that tag whenever that member is in or maybe. A veto on an item excludes that item. |
-| FR-29 | Members see and edit only their own preferences. The coordinator sees an aggregated "won't work for" list per proposal, not who vetoed what. |
+| FR-29 | Members see and edit only their own preferences. The coordinator sees an aggregated "won't work for" list per proposal, not who vetoed what. In version 1 that list is empty by construction, so it isn't shown: every proposal, ranked or added, must pass the combined vetoes of everyone in or maybe before it exists, and a decision rechecks them. A non-empty list could only come from relaxing that guarantee. |
 
 ### 6.7 Variety and history
 
@@ -347,7 +347,7 @@ Catch-up stops where it would be too late to matter. An undecided call (schedule
 | Badge earned | Everyone | Channel post |
 | Monthly recap | Everyone | Channel post |
 | Event cancelled by admin | Participants | Channel post, threaded |
-| Schedule changed | Everyone | Channel post |
+| Schedule changed | Everyone | Channel post. Deferred to M3 with FR-44: in M2 only the admin changes the schedule, from Admin > Schedule, and the change is audited |
 | Feedback reminder | Participants who turned the reminder on | Direct message, once per meal |
 
 Each member can mute direct-message reminders in their preferences. Channel posts are never suppressed per member. The call, proposals, and decision messages are also edited in place as they change; see [docs/channels.md](channels.md).
