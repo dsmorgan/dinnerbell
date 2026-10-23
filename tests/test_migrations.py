@@ -335,5 +335,14 @@ def test_migrations_run_without_cascades_and_refuse_dangling_references(settings
             assert MigrationContext.configure(c).get_current_heads() == ("0002_catalog",)  # rolled back
             assert c.execute(text("SELECT event_id FROM meal_log")).all() == [(999,)]
             assert c.execute(text("PRAGMA foreign_keys")).scalar() == 1  # app connections keep them on
+            # Regression: pysqlite committed each CREATE TABLE as it ran, so the refused upgrade
+            # left 0003's tables behind and the next start failed with "table event already exists".
+            tables = {row[0] for row in c.execute(text("SELECT name FROM sqlite_master WHERE type = 'table'"))}
+            assert tables == M0_TABLES | M1_TABLES | {"alembic_version"}
+        with engine.begin() as c:
+            c.execute(text("UPDATE meal_log SET event_id = NULL"))
+        run_migrations(settings.sync_database_url, settings.database_path)  # fixed: now it upgrades
+        with engine.connect() as c:
+            assert MigrationContext.configure(c).get_current_heads() == (head_revision(),)
     finally:
         engine.dispose()
