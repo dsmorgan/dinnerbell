@@ -56,9 +56,11 @@
     }
   });
 
-  // Calls that are collecting or voting carry data-poll, the URL of their card. Refresh them
-  // now and then, so a page left open shows voting start and the decision. Skip a card while
-  // someone is using it (an open form, or focus inside), and skip hidden tabs.
+  // Calls still in progress (scheduled, collecting, voting, or decided) carry data-poll, the URL
+  // of their card. Refresh them now and then, so a page left open shows the call opening,
+  // voting, the decision, and Mark done at meal time. Skip a card while someone is using it: an
+  // open form, focus inside, or a request in flight (Safari doesn't focus a tapped button).
+  // Skip hidden tabs.
   var POLL_MS = 45000;
   window.setInterval(function () {
     if (document.hidden || !window.htmx) {
@@ -67,7 +69,8 @@
     var cards = document.querySelectorAll("[data-poll]");
     for (var i = 0; i < cards.length; i += 1) {
       var card = cards[i];
-      if (card.querySelector("details[open]") || card.contains(document.activeElement)) {
+      var busy = card.classList.contains("htmx-request") || card.querySelector(".htmx-request");
+      if (busy || card.querySelector("details[open]") || card.contains(document.activeElement)) {
         continue;
       }
       window.htmx.ajax("GET", card.getAttribute("data-poll"), { target: card, swap: "outerHTML" });
