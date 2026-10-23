@@ -4,17 +4,15 @@ This guide takes you from nothing to a working Dinnerbell install: a Slack works
 
 ## Status
 
-Dinnerbell is under construction. Milestones M0 and M1 ship these parts, and this guide covers them fully:
+Dinnerbell is under construction. Milestones M0 through M2 ship these parts, and this guide covers them fully:
 
 - Sign in with Slack, and the members admin page
 - `/healthz`
-- The scheduler
-- Nightly backups
+- The scheduler and nightly backups
 - The catalog, catalog file import, `DINNERBELL_SEED_FILE`, preferences, and meal history
+- Dinner calls in Slack: the call, reminders, proposals and votes, the decision, and assignments, plus the App Home and `/dinnerbell call`
 
-These parts are not built yet:
-
-- **The Slack bot** does not connect until milestone M2. Until then, `/healthz` reports Slack as `not_configured`, and the bot posts nothing. Steps 3 and 4 still apply, so your tokens are ready.
+As of M2, the Slack bot connects when `DINNERBELL_SLACK_BOT_TOKEN`, `DINNERBELL_SLACK_APP_TOKEN`, and `DINNERBELL_SLACK_CHANNEL` are all set. Offers, `/dinnerbell offer`, `log`, and `schedule` come in M3.
 
 ## Prerequisites
 
@@ -81,8 +79,12 @@ Socket Mode lets the app connect out to Slack, so Slack never calls your host. T
 
 ## 7. Invite the bot to the channel
 
+The bot posts only in channels it belongs to.
+
 1. In `#dinnerbell`, type `/invite @Dinnerbell` and send it.
 2. Select **Add to Channel** if Slack asks you to confirm.
+
+If you start Dinnerbell before you invite the bot, `/healthz` reports Slack as `error` until you do. Dinnerbell checks again every minute, so you don't need to restart it.
 
 ## 8. Expose Dinnerbell through your reverse proxy
 
@@ -198,7 +200,28 @@ Avoid `0.0.0.0` unless a firewall limits who can reach the port.
     curl https://dinnerbell.example.com/healthz
     ```
 
-    The response reports database reachability, the scheduler's last tick, the Slack state (`not_configured` until the Slack adapter is configured), the outbox (`backlog`: notifications waiting to be sent; `failed`: notifications that gave up after 8 attempts), and the last backup time. It returns HTTP 503 when the database is unreachable or the scheduler has not ticked for 5 minutes, so the container health check and Uptime Kuma catch both.
+    The response reports database reachability, the scheduler's last tick, the Slack state, the outbox (`backlog`: notifications waiting to be sent; `failed`: notifications that gave up), and the last backup time. It returns HTTP 503 when the database is unreachable or the scheduler has not ticked for 5 minutes, so the container health check and Uptime Kuma catch both.
+
+11. Confirm that Slack is connected. Within a few seconds of starting, the response includes `"slack": "connected"` and `"status": "ok"`.
+
+    ```sh
+    curl -s https://dinnerbell.example.com/healthz | grep -o '"slack":"[a-z_]*"'
+    ```
+
+    | `slack` | Meaning |
+    |---|---|
+    | `connected` | The startup checks passed and the Socket Mode connection is up. |
+    | `disconnected` | Dinnerbell can't reach Slack right now, or is reconnecting after a drop. It retries on its own. |
+    | `error` | A startup check failed. The logs say which one and how to fix it; see Troubleshooting. |
+    | `not_configured` | One or more of the three Slack variables is missing. The bot posts nothing. |
+
+    A Slack problem alone sets `"status": "degraded"` but keeps HTTP 200, so the container keeps running and you can still sign in to fix it. Notifications wait in the outbox until Slack is back. To have Uptime Kuma alert on Slack too, use an HTTP keyword monitor for `"slack":"connected"`.
+
+    The logs show what happened:
+
+    ```sh
+    podman-compose logs dinnerbell | grep -i slack
+    ```
 
 ### Set the trusted proxy
 
@@ -262,6 +285,16 @@ Invite each person to the Slack workspace from Slack (**Invite people**), using 
 > 8. Open Dinnerbell and tap **Sign in with Slack**.
 > 9. Slack asks you to sign in again in Safari. Enter your email, type the code Slack emails you, then tap **Allow**.
 > 10. If the Home Screen icon asks you to sign in, sign in once more.
+
+### Link everyone's Slack account
+
+Dinnerbell needs each member's Slack user to mention them, send them direct messages, and accept their button taps. It links a member in any of these ways:
+
+- When they sign in to the web app with Slack.
+- By email, at start and every hour, for active members whose Dinnerbell email matches their Slack email.
+- By hand: on **Members**, select **Edit**, then enter their Slack member ID. In Slack, open their profile, select the three dots, then **Copy member ID**.
+
+The **Members** page shows who is linked. Someone who isn't linked gets a private "I don't know your Slack account yet" message when they tap a button.
 
 ## 12. Load the catalog
 
@@ -373,10 +406,18 @@ Each member is linked to the account they first signed in with. After you switch
 | Sign-in returns to a Pangolin login page or loops | Pangolin resource authentication is still on. | Turn off **Use Platform SSO**, and leave password, PIN, email OTP, and header auth off. |
 | Sign-in completes but Dinnerbell says you are not invited | The email on the Slack account differs from the invited email, or the email is not verified. | Compare the emails on **Members** and in your Slack profile. Fix the member's email, or use `DINNERBELL_ADMIN_EMAIL` for the admin. |
 | Sign-in refused for a person you invited | They signed in with a different Slack workspace, and `DINNERBELL_SLACK_TEAM_ID` blocks it. | Ask them to sign in to your household workspace. |
-| `/healthz` reports Slack not connected | The app token is wrong or missing, Socket Mode is off, or the host cannot reach Slack. | Until M2, `not_configured` is expected. Afterward, check the logs. Confirm Socket Mode is on in the app settings and that the host can make outbound HTTPS connections. |
+| `/healthz` reports `"slack": "not_configured"` | One of `DINNERBELL_SLACK_BOT_TOKEN`, `DINNERBELL_SLACK_APP_TOKEN`, or `DINNERBELL_SLACK_CHANNEL` is missing. The logs say so at start. | Set all three, then recreate the service with `podman-compose down && podman-compose up -d`. |
+| `/healthz` reports `"slack": "disconnected"` for more than a minute | The host can't reach Slack. | Check that the host can make outbound HTTPS and WebSocket connections to `slack.com` and `wss-primary.slack.com`. |
+| `/healthz` reports `"slack": "error"`; the log says `Slack refused DINNERBELL_SLACK_BOT_TOKEN` | The bot token is wrong, revoked, or from another app. | Copy the **Bot User OAuth Token** (`xoxb-`) again from **Install App**, then recreate the service. |
+| The log says `Slack refused DINNERBELL_SLACK_APP_TOKEN` | The app-level token is wrong, lacks `connections:write`, or Socket Mode is off. | Create the token again as in step 3, check that **Socket Mode** is on, then recreate the service. |
+| The log says `The bot token belongs to Slack workspace T…, but DINNERBELL_SLACK_TEAM_ID is T…` | The app is installed in a different workspace than the team ID names. | Install the app in your household workspace, or correct `DINNERBELL_SLACK_TEAM_ID`. |
+| The log says `Slack can't find the channel` | `DINNERBELL_SLACK_CHANNEL` isn't a channel ID, or the channel is private. | Copy the ID that starts with `C` as in step 6. Use a public channel. |
+| The log says `The bot isn't a member of the channel` | The bot hasn't been invited. | Run `/invite @Dinnerbell` in the channel. Dinnerbell notices within a minute. |
+| The log says `The channel … is archived` | The channel was archived. | Unarchive it in Slack, or point `DINNERBELL_SLACK_CHANNEL` at another channel. |
+| A member taps a button and Slack says "I don't know your Slack account yet" | Their Slack user isn't linked to a member, often because their emails differ. | Ask them to sign in to the web app with Slack once, or link them on **Members**. |
+| `/healthz` shows `outbox.failed` above 0 | Slack refused some notifications for good, such as a direct message to someone with no Slack link. | Look for `notification delivery gave up` in the logs, then fix the link or the channel. Later notifications still go out. |
 | Every form fails with "Cross-origin request refused", or sign-in loops back to the start page | `DINNERBELL_BASE_URL` doesn't exactly match the URL in the browser: another host, a LAN IP, an explicit `:443`, or `http://`. | Set `DINNERBELL_BASE_URL` to exactly the URL people type, `https://` and no port, then recreate the service. Open Dinnerbell only at that URL. |
 | Sign-in says "That email is already linked" for everyone | You switched sign-in providers, so members are linked to accounts at the old provider. | Follow "Switch providers on an existing install". |
 | Startup error: `DINNERBELL_SLACK_TEAM_ID is required` | The issuer is Slack and the team ID is empty. | Set `DINNERBELL_SLACK_TEAM_ID` as described in step 6, then recreate the service. |
 | Startup error about a token prefix | The tokens are swapped or copied from the wrong page. | `DINNERBELL_SLACK_APP_TOKEN` starts with `xapp-` (Basic Information > App-Level Tokens). `DINNERBELL_SLACK_BOT_TOKEN` starts with `xoxb-` (Install App). |
 | Rate limiting blocks everyone at once | Dinnerbell sees the proxy's address for every request. | Set `DINNERBELL_TRUSTED_PROXIES` to the proxy's single address, then recreate with `podman-compose down && podman-compose up -d`. A restart doesn't re-read `.env`. |
-| Bot does not see the channel | The bot is not a member of the channel. | Run `/invite @Dinnerbell` in the channel. |

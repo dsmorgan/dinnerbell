@@ -24,8 +24,8 @@ features:
     # Socket Mode delivers commands over the WebSocket, so no url field is
     # needed. Slack's manifest reference lists url as optional.
     - command: /dinnerbell
-      description: Offer a meal, start a call, log a meal, or open your preferences
-      usage_hint: "[offer | call | log | schedule | prefs | help]"
+      description: Start a call, or open your preferences, the catalog, or history
+      usage_hint: "[call | prefs | catalog | history | help]"
       should_escape: false
 
 oauth_config:
@@ -35,11 +35,11 @@ oauth_config:
   scopes:
     bot:
       - chat:write          # post calls, proposals, decisions, and recaps
-      - channels:read       # resolve the household channel
-      - channels:history    # resolve threads
+      - channels:read       # check the bot is in the household channel (conversations.info)
+      - channels:history    # reserved for reading threads; unused in version 1
       - im:write            # open direct messages with members
-      - users:read          # map Slack users to members
-      - users:read.email    # match members by email
+      - users:read          # needed by users:read.email
+      - users:read.email    # link members by email (users.lookupByEmail)
       - commands            # the /dinnerbell slash command
     user:
       # Sign in with Slack (OpenID Connect) for the web app.

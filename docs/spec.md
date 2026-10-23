@@ -356,27 +356,33 @@ Each member can mute direct-message reminders in their preferences. Channel post
 
 ## 10. Slack design
 
-**Connection.** The app uses Socket Mode, so Slack never calls an inbound URL. Only the web app is exposed through Pangolin.
+The adapter lives in `src/dinnerbell/channels/slack/`. `dinnerbell slack preview KIND` prints any message, modal, or Home tab as Block Kit JSON for Slack's [Block Kit Builder](https://app.slack.com/block-kit-builder).
 
-**Bot scopes.** `chat:write`, `channels:read`, `channels:history` (to resolve threads), `im:write`, `users:read`, `users:read.email`, `commands`. Events: `app_home_opened`. Interactivity: block actions and view submissions. The channel must be public; a private channel would also need `groups:read` and `groups:history`. The full configuration is [deploy/slack-app-manifest.yaml](../deploy/slack-app-manifest.yaml).
+**Connection.** The app uses Socket Mode, so Slack never calls an inbound URL. Only the web app is exposed through Pangolin. Dinnerbell connects when `DINNERBELL_SLACK_BOT_TOKEN`, `DINNERBELL_SLACK_APP_TOKEN`, and `DINNERBELL_SLACK_CHANNEL` are all set. In the background it checks the bot token (`auth.test`), that the token's workspace matches `DINNERBELL_SLACK_TEAM_ID` when that is set, the app-level token, and that the bot is a member of the channel. A failed check is logged once with the fix and shown in `/healthz` as `error`; Dinnerbell checks again every minute until it passes, then hourly. The web app stays up either way. The Socket Mode client pings Slack and reconnects by itself after a drop, shown as `disconnected` meanwhile.
+
+**Bot scopes.** `chat:write`, `channels:read`, `channels:history` (to resolve threads), `im:write`, `users:read`, `users:read.email`, `commands`. Events: `app_home_opened`. Interactivity: block actions and view submissions. The channel must be public; a private channel would also need `groups:read` and `groups:history`. The full configuration is [deploy/slack-app-manifest.yaml](../deploy/slack-app-manifest.yaml). Version 1 doesn't read history yet, so `channels:history` is unused.
 
 **Sign in with Slack.** User scopes `openid`, `email`, `profile`. Slack publishes an OpenID Connect discovery document, so the generic OIDC client in the web app works unchanged.
 
-**Channel.** One configured channel, default `#dinnerbell`. The bot posts calls, proposals, decisions, offers, badges, and recaps there. Proposals and decisions thread under their call so the channel stays readable.
+**Channel.** One configured channel, default `#dinnerbell`. The bot posts calls, proposals, decisions, offers, badges, and recaps there. Proposals and decisions thread under their call so the channel stays readable. Messages are short and encouraging: they thank people for pitching in and never scold anyone for not answering. Times show in the household's time zone, such as "5:15 PM". Every message links to its event page (FR-37).
 
-**Call message.** Header with slot and date. Roster section updated in place. Two button rows: participation (In, Out, Maybe) and roles (I can cook, I can pick up, I'll order, I'll coordinate). A **Details** button opens a modal with guest count, guest dietary needs, eat window pickers, suggestion select with free-text fallback, and note. A link to the event page.
+**Call message.** Header with slot and date, and a status line: who's in and the response deadline, then voting, decided, done, on your own, or cancelled. The roster section updates in place: who's in with guests, guests' dietary needs, roles offered, eat windows, suggestions, and notes; maybes and outs; who hasn't answered yet (by name, never a mention); and the coordinator. While responses are open, three button rows: participation (**In**, **Maybe**, **Out**), roles (**I can cook**, **I can pick up**, **I'll order**, each tapped again to withdraw, and **I'll coordinate** while nobody coordinates), and **Details** with **View on web**. **Details** opens a modal with guest count, guest dietary needs, an eat window, a catalog suggestion or a new idea, and a note, prefilled with the member's response. The opening post mentions every active member.
 
-**Proposals message.** One section per proposal: name, mode, reason, vote count, **Vote** button. The coordinator and admin also see **Lock**. An **Add proposal** button opens a modal.
+**Proposals message.** One section per proposal, at most 10: name (linked when it has a URL), mode, cuisine, reason, vote count, and voters. Each has **Vote** (tap again to take the vote back) and **Lock this** with a confirmation. Slack shows everyone the same message, so everyone sees **Lock**; the service refuses anyone but the coordinator and the admin. An **Add proposal** button opens a modal: how (cook, pickup, delivery), a catalog item or something new, and a cuisine for something new.
 
-**Decision message.** Item, mode, meal time, head count, assignments with mentions, item link, event link. **Mark done** button. After the event is done, a **How was it?** button opens the feedback modal.
+**Decision message.** Item, mode, meal time, head count with guests, assignments with mentions, guests' dietary needs, item and order links, event link. **Mark done** button. After the event is done, a **How was it?** button opens the feedback modal (M3).
+
+**Direct messages.** The reminder has **In**, **Maybe**, and **Out** buttons and confirms a tap privately. A maybe turned out at the deadline is told so, kindly. Each assignee gets their role, the item, the meal time, the head count, guests' dietary needs, and links.
 
 **Offer message.** Offerer, item, mode, time, spare servings, roster. **Count me in** and **+1 guest** buttons, disabled when full.
 
-**App Home.** Today's events with the member's status, quick buttons to offer or start a call, meals awaiting the member's feedback, badges earned, link to preferences on the web.
+**App Home.** Today's events with the member's status and quick buttons (**In**, **Maybe**, **Out**, **Details**, **Mark done**, **Open**), **Start a dinner call** or **Start a lunch call** for any slot without a call today, and links to preferences, the catalog, and history on the web. It's published when the member opens it and after each tap there, with the result as a notice at the top. Offers, meals awaiting feedback, and badges come with M3 and M4.
 
-**Slash command.** `/dinnerbell` with subcommands `offer`, `call`, `log`, `schedule`, `prefs`, `help`. Each opens a modal or returns a link.
+**Slash command.** `/dinnerbell` with subcommands `call`, `prefs`, `catalog`, `history`, and `help`. `call` starts a dinner call today; add `lunch`, `tomorrow`, or a date such as `2026-10-24`. The others reply with links. `offer`, `log`, and `schedule` say they're coming soon (M3) and link to the web where it can do the job. Replies are ephemeral.
 
-**Identity.** The bot acts only for Slack users mapped to active members. Unmapped users get an ephemeral message asking them to contact the admin.
+**Identity.** The bot acts only for Slack users linked to active members, and only on payloads from the configured workspace. Message buttons work only in the configured channel and the bot's direct messages. Unlinked users get an ephemeral message asking them to sign in on the web once or ask the admin. Members are linked by the `https://slack.com/user_id` claim when they sign in with Slack, by email every hour (`users.lookupByEmail`), or by hand on Admin > Members (FR-42).
+
+**Errors.** Every interaction is acknowledged within Slack's 3 seconds before any work. Rule violations come back as ephemeral messages, or as a notice on the Home tab when the tap was there. Modal fields that are wrong on their face (a negative guest count, an eat window backwards, something new without a cuisine) are flagged next to the field before the modal closes. Rate limits and outages are retried by the outbox; errors no retry can fix, such as a member with no Slack account, close the notification at once.
 
 ## 11. Web app
 
