@@ -154,12 +154,12 @@ Requirements use "must" for version 1 and "should" for items that can slip to a 
 
 | ID | Requirement |
 |---|---|
-| FR-1 | Each slot has: call enabled or disabled, call time, response window length, vote window length, reminder lead time, and default fulfillment modes. Dinner defaults: enabled, 15:00, 90 minutes, 45 minutes, 15 minutes, pickup and delivery. Lunch defaults: disabled, 10:30, 60, 30, 15, pickup. The schedule is the same every day of the week. |
-| FR-2 | The scheduler must post a call for each enabled slot once per day at the configured time, in the household time zone, and must not double-post after a restart. |
-| FR-3 | Any member must be able to start an ad-hoc call for a slot and date from Slack or the web app. |
+| FR-1 | Each slot has: call enabled or disabled, call time, response window length, vote window length, reminder lead time, default fulfillment modes, and a usual meal time for when nobody gives an eat window (FR-19). Dinner defaults: enabled, 15:00, 90 minutes, 45 minutes, 15 minutes, pickup and delivery, 18:30. Lunch defaults: disabled, 10:30, 60, 30, 15, pickup, 12:30. The schedule is the same every day of the week. In M2 only the admin edits it (FR-44 is M3). |
+| FR-2 | The scheduler must post a call for each enabled slot once per day at the configured time, in the household time zone, and must not double-post after a restart. A call whose response window ended while the server was down is not posted. |
+| FR-3 | Any member must be able to start an ad-hoc call for a slot and date from Slack or the web app. A call for today opens at once; a call for a later day, up to 7 days ahead, opens at the slot's call time. A slot has at most one call per date. |
 | FR-4 | Any member must be able to post an offer with item, fulfillment mode, time, and capacity. |
 | FR-5 | An offer for a slot that already has an open call must attach to it as a proposal; a cooking offer posted before the call must replace that day's call. |
-| FR-6 | The admin must be able to extend, shorten, lock, cancel, and re-run events. |
+| FR-6 | The admin must be able to extend, shorten, lock, cancel, and re-run events. Re-running a voting, decided, abandoned, or cancelled call for today or later reopens it for responses with fresh windows; responses stay, and proposals, votes, the decision, and assignments are cleared. |
 
 ### 6.2 Responses
 
@@ -168,7 +168,7 @@ Requirements use "must" for version 1 and "should" for items that can slip to a 
 | FR-7 | A member responds in, out, or maybe, and can change the response until the response window closes. |
 | FR-8 | A response may include guest count, guest dietary needs, an eat window (earliest and latest), roles offered (cook, pickup, order, coordinate), one or more suggestions, and a free-text note. |
 | FR-9 | "Maybe" counts toward hard-veto filtering and not toward capacity. Unresolved maybes become out at the deadline and the member is told. |
-| FR-10 | The first member to claim coordinate becomes coordinator. The coordinator can hand off. The admin can reassign. |
+| FR-10 | The first member to claim coordinate becomes coordinator. The coordinator can hand off. The admin can reassign. Offering to cook, pick up, or order counts a member in unless they said maybe; saying out withdraws their offers. |
 | FR-11 | Non-responders receive exactly one direct-message reminder per call at the configured lead time. |
 
 ### 6.3 Proposals, ranking, and voting
@@ -176,18 +176,18 @@ Requirements use "must" for version 1 and "should" for items that can slip to a 
 | ID | Requirement |
 |---|---|
 | FR-12 | At the response deadline the ranking engine produces the top N proposals (default 3) from the catalog, filtered and scored as described in section 7, each with a human-readable reason. |
-| FR-13 | The coordinator and any member can add a proposal from the catalog or as free text during the vote window. Free-text proposals create a catalog item on decision. |
+| FR-13 | The coordinator and any member can add a proposal from the catalog or as free text during the vote window. A free-text proposal needs a cuisine, and creates a catalog item on decision. Added proposals pass the same vetoes, guest needs, and coverage checks as ranked ones; a refusal for a veto or a guest need always reads "That doesn't work for everyone who's in tonight." so it can't reveal whose stance it was (FR-29). |
 | FR-14 | Each member casts at most one vote per proposal and can change it until the vote closes. Votes are visible. |
 | FR-15 | The coordinator can lock any proposal at any time during the vote window. |
-| FR-16 | At the vote deadline the system decides: highest votes, coordinator breaks ties, admin breaks ties when there is no coordinator, ranking order breaks ties otherwise. |
-| FR-17 | A proposal is only eligible if its fulfillment mode is covered: cook requires a member who offered to cook and can cook the item, pickup requires a member who offered to pick up, delivery requires any participating member who can order. |
+| FR-16 | At the vote deadline the system decides: highest votes, coordinator breaks ties, admin breaks ties when there is no coordinator, ranking order breaks ties otherwise. At the deadline, "breaks ties" means the tied proposal the coordinator (or, with no coordinator, an admin) voted for wins; either can also lock a proposal before then. |
+| FR-17 | A proposal is only eligible if its fulfillment mode is covered: cook requires a member who offered to cook and can cook the item, pickup requires a member who offered to pick up, delivery requires any participating member who can order. Only active members who are in count. A member can cook an item when it has no cook list or they are on it. The first volunteer is assigned; the coordinator or admin can change it. |
 
 ### 6.4 Decisions and assignments
 
 | ID | Requirement |
 |---|---|
 | FR-18 | A decision records item, fulfillment mode, meal time, participants with guest counts, and assignments. |
-| FR-19 | Meal time defaults to the latest "earliest" across participants' eat windows, rounded up to the quarter hour. The coordinator can change it. |
+| FR-19 | Meal time defaults to the latest "earliest" across participants' eat windows, rounded up to the quarter hour, or the slot's usual meal time when nobody gave one, and never earlier than the decision. The coordinator can change it. |
 | FR-20 | Each assignee receives a direct message with the decision, their role, meal time, item link, head count, and dietary notes. |
 | FR-21 | Events become done at meal time plus 2 hours, or when any participant marks them done. Contributions are recorded on done. |
 | FR-22 | Done events open feedback for their participants, as specified in section 6.10. |
@@ -274,9 +274,9 @@ Requirements use "must" for version 1 and "should" for items that can slip to a 
 
 Ranking is deterministic and explainable. Given a Call with participants P (in and maybe), roles offered R, and guest needs G:
 
-1. **Candidate set.** All active catalog items, expanded into (item, mode) pairs for each mode the item supports and the slot allows.
+1. **Candidate set.** All active catalog items, expanded into (item, mode) pairs for each mode the item supports. In version 1 every slot allows every mode; the slot's default modes earn the default-mode bonus.
 2. **Hard filters.** Drop a pair if:
-   - Any member in P vetoes the item or any of its tags.
+   - Any member in P vetoes the item or any of its tags. P counts maybes, so ranking runs before the deadline turns them out.
    - Guest needs in G include a dietary tag the item lacks.
    - The mode is not covered by R (FR-17).
    - The item was eaten within the variety window, unless that empties the set.
@@ -307,9 +307,14 @@ stateDiagram-v2
     voting --> decided: lock or vote deadline with coverage
     voting --> abandoned: deadline, no coverage
     decided --> done: meal time + 2h or marked done
+    scheduled --> cancelled: admin
     collecting --> cancelled: admin
     voting --> cancelled: admin
     decided --> cancelled: admin
+    voting --> collecting: admin re-run
+    decided --> collecting: admin re-run
+    abandoned --> collecting: admin re-run
+    cancelled --> collecting: admin re-run
     done --> [*]
     abandoned --> [*]
     cancelled --> [*]
@@ -319,12 +324,15 @@ Offers use a shorter chain: open, then full or closed at the stated time, then d
 
 Transitions are driven by two sources: user actions through a channel or the web, and scheduler ticks. Every transition is a single transaction that updates state, writes the notification outbox, and records the audit row. The outbox is drained by the channel adapter so a Slack outage never loses a state change.
 
+The scheduler doesn't keep a job per deadline. One tick every 30 seconds opens each household's due calls and walks every open event through each step it owes, in order, so downtime past several deadlines is caught up on the next tick. A reminder whose response deadline has already passed is skipped. [docs/channels.md](channels.md) is the outbox and adapter contract.
+
 ## 9. Notifications
 
 | Trigger | Audience | Where |
 |---|---|---|
 | Call opens | All active members | Channel post with mentions |
 | Response window closing | Non-responders | Direct message, once |
+| Maybe turned out at the deadline | That member | Direct message (FR-9) |
 | Proposals ready | All participants | Channel post, threaded under the call |
 | Decision made | All participants | Channel post, threaded under the call |
 | Assignment | Each assignee | Direct message |
@@ -337,7 +345,7 @@ Transitions are driven by two sources: user actions through a channel or the web
 | Schedule changed | Everyone | Channel post |
 | Feedback reminder | Participants who turned the reminder on | Direct message, once per meal |
 
-Each member can mute direct-message reminders in their preferences. Channel posts are never suppressed per member.
+Each member can mute direct-message reminders in their preferences. Channel posts are never suppressed per member. The call, proposals, and decision messages are also edited in place as they change; see [docs/channels.md](channels.md).
 
 ## 10. Slack design
 
@@ -465,17 +473,17 @@ Every table carries `household_id`. Timestamps are UTC; the household time zone 
 | catalog_item_tag | item, tag |
 | catalog_item_cook | item, member |
 | preference | member, tag (nullable), item (nullable), veto, score (−2 to +2). Exactly one of tag and item is set (check constraint); both are foreign keys. A veto has score 0, and neutral stances aren't stored. |
-| event | slot, date, kind (call, offer), state, created_by, coordinator, respond_deadline, vote_deadline, capacity, offer_item, offer_mode, offer_time, decided_item, decided_mode, meal_time, decided_at, slack_channel_id, slack_message_ts |
-| response | event, member, status (in, out, maybe), guests, guest_needs (tags), eat_from, eat_until, offers_cook, offers_pickup, offers_order, offers_coordinate, note |
+| event | slot, date, kind (call, offer), state, run (admin re-runs), version (the write lock), created_by, coordinator, opens_at, respond_deadline, vote_deadline, reminder and vote window lengths copied from the schedule, reminder_sent_at, decided_item, decided_mode, meal_time, decided_at, done_at, end_reason. One call per household, slot, and date. Offer fields arrive with M3; Slack message references live in the Slack adapter's own table or in the outbox, not here |
+| response | event, member, status (in, out, maybe), guests, guest_needs (tags), eat_from, eat_until, offers_cook, offers_pickup, offers_order, note, maybe_at_deadline. Coordinating is event.coordinator, not a response field |
 | suggestion | event, member, item (nullable), free_text |
-| proposal | event, item, mode, rank, score, reasons (JSON), source (system, coordinator, member) |
+| proposal | event, item (nullable), free_text and its cuisine (until it wins), mode, rank, score, reasons (JSON), source (system, coordinator, member), proposed_by |
 | vote | proposal, member |
 | assignment | event, member, role (cook, pickup, order, coordinator) |
-| meal_log | date, slot, item, cuisine_tags snapshot, participants snapshot, event (nullable), logged_by |
+| meal_log | date, slot, item, cuisine_tags snapshot, participants snapshot, event (nullable, unique), logged_by |
 | feedback | meal_log, member, food (loved, fine, not_again, null), place (same, null), place_issues (JSON), cook_member (nullable), cook_thanks (bool), cook_note, created_at, updated_at |
 | contribution | member, kind, event, created_at |
 | badge_award | member, badge_key, tier, event, awarded_at |
-| outbox | notification type, payload (JSON), idempotency_key, delivered_at, attempts, last_error |
+| outbox | event, notification type, payload (JSON), idempotency_key, message_key, thread_key, available_at, claim_token, claimed_until, attempts, last_error, delivered_at, failed_at, and the delivered message's reference |
 | session | id, member, created_at, expires_at, last_seen |
 | audit | actor, action, target, payload, created_at |
 
@@ -483,11 +491,11 @@ Every table carries `household_id`. Timestamps are UTC; the household time zone 
 
 ```python
 class Channel(Protocol):
-    async def deliver(self, notification: Notification) -> DeliveryResult: ...
+    async def deliver(self, notification: Notification, *, thread: MessageRef | None = None) -> DeliveryResult: ...
     async def update(self, ref: MessageRef, notification: Notification) -> None: ...
 ```
 
-`Notification` is a tagged union over the triggers in section 9, carrying only domain data. The Slack adapter owns Block Kit rendering and the mapping from button payloads to service calls. A Discord adapter implements the same protocol. Nothing in `domain` or `services` imports from `channels`.
+`Notification` is a tagged union over the triggers in section 9, carrying only domain data. The protocol lives in `domain/notifications.py` so services can name it; `channels/base.py` re-exports it with `NullChannel`. [docs/channels.md](channels.md) has the full contract. The Slack adapter owns Block Kit rendering and the mapping from button payloads to service calls. A Discord adapter implements the same protocol. Nothing in `domain` or `services` imports from `channels`.
 
 ### 13.5 Authentication and authorization
 
@@ -612,9 +620,9 @@ M0 through M2 are the minimum for the household to switch over. M3 and M4 follow
 | # | Question | Default until answered |
 |---|---|---|
 | 1 | ~~Exact call and deadline times for weekdays versus weekends~~ | Resolved: same times every day; any member can change the standing schedule (FR-44) |
-| 2 | Should votes be anonymous? | Visible, per FR-14 |
-| 3 | When two members both offer to cook, who decides? | Coordinator; otherwise ranking prefers the item whose cook list matches |
-| 4 | Should a "maybe" at the deadline be nudged once more before converting to out? | No; one reminder total |
+| 2 | ~~Should votes be anonymous?~~ | Resolved: visible, per FR-14 |
+| 3 | ~~When two members both offer to cook, who decides?~~ | Resolved: the coordinator; with no coordinator, ranking's volunteer-fit bonus decides |
+| 4 | ~~Should a "maybe" at the deadline be nudged once more before converting to out?~~ | Resolved: no; one reminder total, and maybes become out at the deadline |
 | 5 | Should the Slack workspace be new or an existing one? | New workspace named for the household, one channel |
 | 6 | ~~Seed list of cuisines and dietary tags~~ | Resolved: `seed/example.yaml` in the format from catalog-format.md |
 | 7 | ~~Should feedback adjust ranking automatically?~~ | Resolved: collect only in version 1; decide in M7 after 8 weeks of data |

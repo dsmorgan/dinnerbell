@@ -33,3 +33,7 @@ The owner will not write code and has no stack preference. The requirements are:
 - The domain layer is pure Python with no I/O, which is what makes the ranking and lifecycle unit-testable without a database.
 - SQLite means a single writer. The async stack must serialize writes, which SQLAlchemy and WAL mode handle at this scale. Long-running read transactions must not be held open across awaits.
 - Single household in version 1. Every table carries `household_id` from the first migration so adding tenancy later is a routing change, not a schema rewrite.
+
+## Amendments
+
+- 2026-10-23: The scheduler uses no database job store. One idempotent tick every 30 seconds reads each household's calls from the database and applies every step they owe, so the event rows are the schedule and a restart or downtime catches up on the next tick without per-deadline jobs to persist or reconcile.
