@@ -15,7 +15,7 @@ from dinnerbell.db.migrate import SchemaTooNewError, run_migrations
 from dinnerbell.logs import configure_logging
 
 log = logging.getLogger("dinnerbell")
-DEFAULT_PORT = 8000
+DEFAULT_PORT = 8013
 PRIVATE_UMASK = 0o077
 """The database, its WAL files, and backups hold member emails; keep them owner-only."""
 

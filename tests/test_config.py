@@ -102,7 +102,7 @@ def test_base_url_validation(monkeypatch: pytest.MonkeyPatch, url: str, fragment
     assert fragment in error_for(monkeypatch, DINNERBELL_BASE_URL=url)
 
 
-@pytest.mark.parametrize("url", ["http://localhost:8000", "http://127.0.0.1:8000/"])
+@pytest.mark.parametrize("url", ["http://localhost:8013", "http://127.0.0.1:8013/"])
 def test_local_http_base_url_turns_off_secure_cookies(tmp_path: Path, url: str) -> None:
     settings = make_settings(tmp_path, base_url=url)
     assert not settings.cookie_secure
