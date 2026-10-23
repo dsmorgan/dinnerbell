@@ -37,7 +37,7 @@ oauth_config:
       - chat:write          # post calls, proposals, decisions, and recaps
       - channels:read       # check the bot is in the household channel (conversations.info)
       - channels:history    # reserved for reading threads; unused in version 1
-      - im:write            # open direct messages with members
+      - im:write            # direct messages; also checks a DM button came from the member's own DM
       - users:read          # needed by users:read.email
       - users:read.email    # link members by email (users.lookupByEmail)
       - commands            # the /dinnerbell slash command

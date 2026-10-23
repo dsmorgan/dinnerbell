@@ -118,6 +118,7 @@ async def test_a_dinner_decided_in_slack(slack: Slack) -> None:
         ("modal", ids.DETAILS_VIEW),
         ("update", *call, "Dinner call · Thursday, Oct 22: Who's in"),
         ("post", "U04LEE", None, "Are you in for dinner on Thursday, Oct 2"),
+        ("conversations.open",),  # is D04LEE really Lee's DM with the bot?
         ("ephemeral", "D04LEE", "U04LEE", "Got it: you're out this time."),
         ("update", *call, "Dinner call · Thursday, Oct 22: Who's in"),
         ("post", "U03KIM", None, "You're counted out for dinner on Thursda"),

@@ -117,6 +117,9 @@ class FakeSlack(AsyncWebClient):
                 channel = args["channel"]
                 posted_in = "D" + channel[1:] if channel.startswith(("U", "W")) else channel
                 return {"channel": posted_in, "ts": f"{next(self._ts)}.000100"}
+            case "conversations.open":
+                user = args["users"]
+                return {"channel": {"id": "D" + user[1:]}}
             case "chat.update":
                 check_message(args)
                 return {"channel": args["channel"], "ts": args["ts"]}

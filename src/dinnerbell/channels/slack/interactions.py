@@ -96,6 +96,8 @@ class Interactions:
         self.team_id: str | None = None
         """The workspace whose payloads are accepted. Until it's known, nothing is."""
         self.tasks: set[asyncio.Task[None]] = set()
+        self.dm_channels: dict[str, str] = {}
+        """Slack user ID to the bot's DM with them, as conversations.open reported it."""
 
     # Wiring ------------------------------------------------------------------------------------
 
@@ -161,8 +163,25 @@ class Interactions:
             return None
         return member
 
+    async def _is_their_dm(self, source: Source) -> bool:
+        """True when ``source.channel_id`` is the bot's direct message with ``source.user_id``.
+        Asks Slack once per user; any trouble asking counts as no."""
+        user, channel = source.user_id, source.channel_id
+        if user not in self.dm_channels:
+            try:
+                found = await self.api.dm_channel(user)
+            except SLACK_ERRORS as exc:
+                log.warning("slack dm check failed", extra={"error": str(exc)})
+                return False
+            if found is None:
+                return False
+            self.dm_channels[user] = found
+        return self.dm_channels[user] == channel
+
     def _message_source(self, body: dict[str, Any]) -> Source | None:
-        """Where a block action came from, or None if from somewhere it shouldn't be."""
+        """Where a block action came from, or None if from somewhere it shouldn't be. A
+        message's channel must be the household channel or look like a direct message; the
+        caller then checks that a direct message is the bot's own with this user."""
         user = _get(body, "user", "id")
         if not isinstance(user, str):
             return None
@@ -174,7 +193,6 @@ class Interactions:
         channel = container.get("channel_id") or _get(body, "channel", "id")
         if channel == self.channel_id or (ids.is_channel_id(channel) and str(channel).startswith("D")):
             return Source(user, channel_id=str(channel))
-        log.warning("slack action from an unexpected channel refused")
         return Source(user, channel_id=None)
 
     # Replies -----------------------------------------------------------------------------------
@@ -241,8 +259,10 @@ class Interactions:
         if source is None or not isinstance(acts, list) or len(acts) != 1 or not isinstance(acts[0], dict):
             log.warning("slack action payload refused")
             return
-        if source.channel_id is None and not source.home:
-            await self.tell(source, WRONG_PLACE, member=None)
+        in_dm = source.channel_id is not None and source.channel_id != self.channel_id
+        if (source.channel_id is None and not source.home) or (in_dm and not await self._is_their_dm(source)):
+            log.warning("slack action from an unexpected channel refused")
+            await self.tell(Source(source.user_id), WRONG_PLACE, member=None)
             return
         member = await self._member(source)
         if member is None:
