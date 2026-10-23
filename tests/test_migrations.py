@@ -299,3 +299,41 @@ def test_upgrade_backfills_variety_window(settings: Settings) -> None:
         assert stored == [{"slack": 1}, {}]
     finally:
         engine.dispose()
+
+
+def test_migrations_run_without_cascades_and_refuse_dangling_references(settings: Settings) -> None:
+    """Migrations run with foreign keys off, so a batch rebuild can't cascade-delete rows, then
+    check every reference and roll back if any is broken. Regression: a dangling event_id made
+    0003's rebuild of meal_log fail with a raw integrity error."""
+    from dinnerbell.db.migrate import IntegrityCheckFailed
+
+    _upgrade_to(settings, "0002_catalog")
+    engine = create_sync_engine(settings.sync_database_url)
+    try:
+        with engine.begin() as c:
+            c.execute(
+                text("INSERT INTO household (name, timezone, settings, created_at) VALUES ('H', 'UTC', '{}', :t)"),
+                {"t": STAMP},
+            )
+            c.execute(
+                text(
+                    "INSERT INTO catalog_item (household_id, kind, name, name_key, modes, active, created_at, "
+                    "updated_at) VALUES (1, 'restaurant', 'X', 'x', '[\"pickup\"]', 1, :t, :t)"
+                ),
+                {"t": STAMP},
+            )
+            c.execute(
+                text(
+                    "INSERT INTO meal_log (household_id, date, slot, item_id, cuisine_tags, participants, event_id, "
+                    "created_at, updated_at) VALUES (1, '2026-10-22', 'dinner', 1, '[]', '[]', 999, :t, :t)"
+                ),
+                {"t": STAMP},
+            )
+        with pytest.raises(IntegrityCheckFailed, match="meal_log"):
+            run_migrations(settings.sync_database_url, settings.database_path)
+        with engine.connect() as c:
+            assert MigrationContext.configure(c).get_current_heads() == ("0002_catalog",)  # rolled back
+            assert c.execute(text("SELECT event_id FROM meal_log")).all() == [(999,)]
+            assert c.execute(text("PRAGMA foreign_keys")).scalar() == 1  # app connections keep them on
+    finally:
+        engine.dispose()

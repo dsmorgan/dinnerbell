@@ -127,6 +127,14 @@ def test_cli_migrate(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         with sqlite3.connect(database) as db:
             db.execute("UPDATE alembic_version SET version_num = 'future'")
         assert cli.main(["migrate"]) == 1
+
+        from dinnerbell.db.migrate import IntegrityCheckFailed
+
+        def broken(*_args: object) -> None:
+            raise IntegrityCheckFailed("rows in meal_log refer to rows that don't exist")
+
+        monkeypatch.setattr(cli, "run_migrations", broken)
+        assert cli.main(["migrate"]) == 1  # a clean refusal, not a traceback
     finally:
         root.handlers[:], level = saved
         root.setLevel(level)
