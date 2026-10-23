@@ -1,20 +1,51 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
+# One grouped PR per ecosystem each Monday, and a separate grouped PR for security fixes.
+# Cooldown skips releases younger than a week; GitHub never applies it to security updates.
+# Nothing auto-merges: every Dependabot PR goes through review and the required checks.
 version: 2
 updates:
   - package-ecosystem: uv
     directory: /
     schedule:
       interval: weekly
+      day: monday
+    cooldown:
+      default-days: 7
     groups:
+      python-security:
+        applies-to: security-updates
+        patterns: ["*"]
       python:
+        applies-to: version-updates
         patterns: ["*"]
 
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+      day: monday
+    cooldown:
+      default-days: 7
+    groups:
+      actions-security:
+        applies-to: security-updates
+        patterns: ["*"]
+      actions:
+        applies-to: version-updates
+        patterns: ["*"]
 
+  # Bumps the Containerfile's base images, including the uv image that sets CI's uv version.
   - package-ecosystem: docker
     directory: /
     schedule:
       interval: weekly
+      day: monday
+    cooldown:
+      default-days: 7
+    groups:
+      docker-security:
+        applies-to: security-updates
+        patterns: ["*"]
+      docker:
+        applies-to: version-updates
+        patterns: ["*"]

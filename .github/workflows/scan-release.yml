@@ -1,0 +1,75 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Scan the released image every night. A fixable HIGH or CRITICAL finding turns the run red,
+# which is the signal to cut a patch release (docs/hardening.md).
+name: Scan release image
+
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: scan-release
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    name: Grype scan of :latest
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read # list releases; checkout
+      security-events: write # upload SARIF
+    env:
+      IMAGE: ghcr.io/${{ github.repository }}:latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Before the first release there is no :latest, and the run says so instead of failing.
+      # After it, a missing or unreadable :latest is an error.
+      - name: Resolve the image digest
+        id: image
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          releases=$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=1" --jq 'length')
+          if manifest=$(docker buildx imagetools inspect "$IMAGE" --format '{{json .Manifest}}' 2>inspect.err); then
+            digest=$(jq -r .digest <<<"$manifest")
+            if ! [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]]; then
+              echo "::error::Can't read the digest of $IMAGE."
+              exit 1
+            fi
+            echo "ref=${IMAGE%:latest}@$digest" >> "$GITHUB_OUTPUT"
+            echo "found=true" >> "$GITHUB_OUTPUT"
+            echo "Scanning \`$IMAGE\` at \`$digest\`." >> "$GITHUB_STEP_SUMMARY"
+          elif [ "$releases" = "0" ]; then
+            echo "found=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::No release yet, so $IMAGE doesn't exist. Nothing to scan."
+            echo "No release yet, so \`$IMAGE\` doesn't exist. Nothing to scan." >> "$GITHUB_STEP_SUMMARY"
+          else
+            cat inspect.err
+            echo "::error::A release exists, but $IMAGE can't be read anonymously. Check that the GHCR package is public and that the release workflow pushed :latest."
+            exit 1
+          fi
+
+      - name: Scan
+        id: scan
+        if: steps.image.outputs.found == 'true'
+        uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
+        with:
+          image: ${{ steps.image.outputs.ref }}
+          only-fixed: true
+          severity-cutoff: high
+          fail-build: true
+          output-format: sarif
+
+      - name: Upload SARIF
+        if: ${{ !cancelled() && steps.image.outputs.found == 'true' && steps.scan.outputs.sarif != '' }}
+        uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        with:
+          sarif_file: ${{ steps.scan.outputs.sarif }}
+          category: grype-release

@@ -1,0 +1,52 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Audit the locked dependencies weekly, so a new advisory surfaces even when nobody pushes.
+# The command matches the pip-audit step in ci.yml.
+name: pip-audit
+
+on:
+  schedule:
+    - cron: "23 8 * * 1"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: pip-audit
+  cancel-in-progress: true
+
+jobs:
+  pip-audit:
+    name: pip-audit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read # checkout
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The Containerfile's uv image is the single source of the uv version, as in ci.yml.
+      - name: Read the uv version from the Containerfile
+        id: uv
+        run: |
+          version=$(sed -n 's|^FROM ghcr\.io/astral-sh/uv:\([0-9][0-9.]*\)@sha256:.*|\1|p' Containerfile)
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error file=Containerfile::Can't read the uv version from the FROM ghcr.io/astral-sh/uv line."
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: ${{ steps.uv.outputs.version }}
+          python-version: "3.12"
+          enable-cache: false
+
+      - name: Install
+        run: uv sync --locked
+
+      - name: pip-audit
+        run: |
+          uv export --frozen --all-groups --format requirements-txt --no-emit-project -o "$RUNNER_TEMP/requirements.txt"
+          uv run pip-audit --strict --require-hashes --disable-pip -r "$RUNNER_TEMP/requirements.txt"
