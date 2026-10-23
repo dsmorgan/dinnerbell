@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # One workflow on purpose: `needs:` works only inside a workflow, and a red build must never
 # publish. `check` and `image` run everywhere; `publish` runs only after both pass, on a push to
-# main, a v* tag, or a manual run on main.
+# main, a vX.Y.Z tag, or a manual run on main; `scan-published` then scans the pushed digest.
 name: CI
 
 on:
@@ -177,26 +177,73 @@ jobs:
       packages: write # push to GHCR
       id-token: write # Sigstore signing certificate for the attestations
       attestations: write # store the attestations
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Choose the build stamp
-        id: stamp
+          fetch-depth: 0 # the release check needs main's history
+      # A release must be vX.Y.Z on a commit that is already on main. A main build moves `main`
+      # only while its commit is still main's head, so re-running an old run can't roll it back.
+      - name: Check what this run may publish
+        id: guard
         env:
           REF: ${{ github.ref }}
+          REF_NAME: ${{ github.ref_name }}
           SHA: ${{ github.sha }}
         run: |
-          if [[ "$REF" == refs/tags/v* ]]; then build=""; else build="${SHA:0:7}"; fi
-          echo "build=$build" >> "$GITHUB_OUTPUT"
+          if [[ "$REF" == refs/tags/* ]]; then
+            if ! [[ "$REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::error::Release tags must be vX.Y.Z with no suffix; $REF_NAME isn't."
+              exit 1
+            fi
+            if ! git merge-base --is-ancestor "$SHA" origin/main; then
+              echo "::error::$REF_NAME points at $SHA, which isn't on main. Tag a commit on main."
+              exit 1
+            fi
+            {
+              echo "version=${REF_NAME#v}"
+              echo "build="
+              echo "newest-main=false"
+            } >> "$GITHUB_OUTPUT"
+          else
+            head=$(git ls-remote origin refs/heads/main | cut -f1)
+            if ! [[ "$head" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "::error::Can't read main's current commit."
+              exit 1
+            fi
+            newest=false
+            if [[ "$head" == "$SHA" ]]; then newest=true; else
+              echo "::notice::main has moved on to $head, so this run publishes only ${SHA:0:7}, not main."
+            fi
+            {
+              echo "version="
+              echo "build=${SHA:0:7}"
+              echo "newest-main=$newest"
+            } >> "$GITHUB_OUTPUT"
+          fi
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      # main publishes `main` and `<sha7>`. vX.Y.Z publishes `X.Y.Z`, `X.Y`, `<sha7>` and `latest`.
-      # A pre-release tag such as v0.3.0-rc.1 publishes only `0.3.0-rc.1` and `<sha7>`.
+      # Release digests never change: what people verified and pinned stays what they pull.
+      - name: Refuse to replace a published release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          VERSION: ${{ steps.guard.outputs.version }}
+        run: |
+          if out=$(docker buildx imagetools inspect "$IMAGE:$VERSION" 2>&1); then
+            echo "::error::$IMAGE:$VERSION already exists, and a release digest must never change. Release a new patch version instead."
+            exit 1
+          fi
+          if [[ "$out" != *": not found"* ]]; then
+            echo "::error::Can't confirm that $IMAGE:$VERSION is unpublished: $out"
+            exit 1
+          fi
+      # main publishes `main` and `<sha7>`; vX.Y.Z publishes `X.Y.Z`, `X.Y` and `latest`.
       - name: Image tags and labels
         id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
@@ -206,10 +253,10 @@ jobs:
           images: ${{ env.IMAGE }}
           flavor: latest=false
           tags: |
-            type=raw,value=main,enable=${{ github.ref == 'refs/heads/main' }}
+            type=raw,value=main,enable=${{ github.ref == 'refs/heads/main' && steps.guard.outputs.newest-main == 'true' }}
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-            type=sha,prefix=,format=short
+            type=sha,prefix=,format=short,enable=${{ !startsWith(github.ref, 'refs/tags/') }}
             type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') && !contains(github.ref_name, '-') }}
           # Keep the Containerfile's values; the repository metadata would say AGPL-3.0.
           labels: |
@@ -227,7 +274,7 @@ jobs:
           context: .
           file: Containerfile
           platforms: linux/amd64
-          build-args: DINNERBELL_BUILD=${{ steps.stamp.outputs.build }}
+          build-args: DINNERBELL_BUILD=${{ steps.guard.outputs.build }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           annotations: ${{ steps.meta.outputs.annotations }}
@@ -236,16 +283,21 @@ jobs:
           sbom: true
           no-cache: ${{ startsWith(github.ref, 'refs/tags/') }}
           cache-from: ${{ !startsWith(github.ref, 'refs/tags/') && 'type=gha' || '' }}
-      # BuildKit's SBOM sits in the image index unsigned. Syft writes one more from the pushed
-      # image so actions/attest can sign it into a verifiable SBOM attestation.
-      - name: Generate the SBOM
-        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
-        with:
-          image: ${{ env.IMAGE }}@${{ steps.build.outputs.digest }}
-          format: spdx-json
-          output-file: ${{ runner.temp }}/sbom.spdx.json
-          upload-artifact: false
-          upload-release-assets: false
+      # BuildKit's SBOM sits in the image index unsigned. Sign that same document, rather than
+      # running another tool in this job with its write tokens.
+      - name: Extract BuildKit's SBOM
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          docker buildx imagetools inspect "$IMAGE@$DIGEST" --format '{{ json .SBOM }}' > "$RUNNER_TEMP/sbom-index.json"
+          # A single-platform index has the SBOM at .SPDX; a multi-platform one keys it by platform.
+          jq 'if has("SPDX") then .SPDX else .["linux/amd64"].SPDX end' \
+            "$RUNNER_TEMP/sbom-index.json" > "$RUNNER_TEMP/sbom.spdx.json"
+          if ! jq --exit-status '(.spdxVersion | startswith("SPDX-")) and (.packages | length > 0)' \
+            "$RUNNER_TEMP/sbom.spdx.json" > /dev/null; then
+            echo "::error::The pushed image has no linux/amd64 SPDX SBOM."
+            exit 1
+          fi
       # actions/attest replaces actions/attest-build-provenance and actions/attest-sbom, which
       # are now thin wrappers around it. No storage record, so no artifact-metadata permission.
       - name: Attest build provenance
@@ -267,7 +319,9 @@ jobs:
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
           TAGS: ${{ steps.meta.outputs.tags }}
+          VERSION: ${{ steps.guard.outputs.version }}
         run: |
+          if [[ -n "$VERSION" ]]; then subject="${IMAGE}:${VERSION}"; else subject="${IMAGE}@${DIGEST}"; fi
           {
             echo "### Published ${IMAGE}"
             echo
@@ -280,6 +334,43 @@ jobs:
             echo "Verify with:"
             echo
             echo "\`\`\`sh"
-            echo "gh attestation verify oci://${IMAGE}@${DIGEST} --repo dsmorgan/dinnerbell"
+            echo "gh attestation verify oci://${subject} --repo dsmorgan/dinnerbell \\"
+            echo "  --signer-workflow dsmorgan/dinnerbell/.github/workflows/ci.yml --source-ref ${GITHUB_REF}"
             echo "\`\`\`"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # Scans the exact pushed digest. It runs apart from publish so the scanner never holds the
+  # tokens that can push images or sign attestations.
+  scan-published:
+    name: scan-published
+    needs: publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      packages: read # pull the image while the package is private
+      security-events: write # upload the Grype SARIF to Code scanning
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Scan the pushed image with Grype
+        id: scan
+        uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
+        with:
+          image: ${{ env.IMAGE }}@${{ needs.publish.outputs.digest }}
+          only-fixed: true
+          severity-cutoff: high
+          fail-build: true
+          output-format: sarif
+      - name: Upload the scan to Code scanning
+        if: ${{ !cancelled() && steps.scan.outputs.sarif != '' }}
+        uses: github/codeql-action/upload-sarif@24c54180a607b1449ed407dd24f251e4e9147c8d # v4.38.3
+        with:
+          sarif_file: ${{ steps.scan.outputs.sarif }}
+          category: grype-published
