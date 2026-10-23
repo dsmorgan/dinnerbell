@@ -6,6 +6,8 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-23
+
 ### Added
 
 - Prebuilt container images on GitHub Container Registry at `ghcr.io/dsmorgan/dinnerbell`. Each release publishes `X.Y.Z`, `X.Y`, and `latest`, and every push to `main` publishes `main` and the short commit SHA. Images carry build provenance and SBOM attestations; [docs/setup.md](docs/setup.md#verify-an-image) shows how to verify one.
@@ -45,5 +47,6 @@ The source-built version, never published as an image. It covers milestones M0 t
 - **M1:** the catalog with file import, preferences and vetoes, meal history, and the members admin page.
 - **M2:** dinner calls in Slack: the scheduled call, reminders, ranked proposals and votes, the decision, assignments, the abandon path, admin overrides, App Home, and `/dinnerbell call`.
 
-[Unreleased]: https://github.com/dsmorgan/dinnerbell/commits/main
+[Unreleased]: https://github.com/dsmorgan/dinnerbell/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/dsmorgan/dinnerbell/releases/tag/v0.2.0
 [0.1.0]: https://github.com/dsmorgan/dinnerbell/tree/c179898
