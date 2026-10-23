@@ -137,6 +137,8 @@ def _slack(
         state=state,
         web_client=client,
         socket_factory=socket,
+        command=settings.slack_command,
+        instance_label=settings.instance_label,
     )
 
 

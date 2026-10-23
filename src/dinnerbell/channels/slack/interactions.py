@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Slack interactions: buttons, modals, the App Home, and ``/dinnerbell`` (spec section 10,
-docs/channels.md "Interactions").
+"""Slack interactions: buttons, modals, the App Home, and the slash command (spec section 10,
+docs/channels.md "Interactions"). The command is ``/dinnerbell`` unless
+``DINNERBELL_SLACK_COMMAND`` names another, such as ``/dinnerbell-test`` on a test instance.
 
 Every handler acknowledges Slack first, inside its 3-second window, and does the work in a
 tracked task. Before acting it checks the payload's workspace, where a button was pressed,
@@ -28,7 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from dinnerbell.channels.slack import ids
 from dinnerbell.channels.slack.api import SlackApi, SlackUnavailable
-from dinnerbell.channels.slack.blocks import day_label, escape
+from dinnerbell.channels.slack.blocks import day_label, escape, instance_banner
 from dinnerbell.channels.slack.views import (
     FormError,
     HomeLinks,
@@ -48,7 +49,7 @@ from dinnerbell.services.errors import Forbidden, NotFound
 
 log = logging.getLogger(__name__)
 
-COMMAND = "/dinnerbell"
+DEFAULT_COMMAND = "/dinnerbell"
 SHOWN_ERRORS = (EventRuleViolation, InvalidResponse, NotFound, Forbidden)
 SLACK_ERRORS = (SlackUnavailable, PermanentDeliveryError)
 UNKNOWN_USER = (
@@ -101,12 +102,17 @@ class Interactions:
         clock: Clock,
         base_url: str,
         channel_id: str,
+        command: str = DEFAULT_COMMAND,
+        instance_label: str = "",
     ) -> None:
         self.api = api
         self.sessionmaker = sessionmaker
         self.clock = clock
         self.links = HomeLinks(base_url)
         self.channel_id = channel_id
+        self.command = command
+        """The slash command, as registered with Slack and named in replies."""
+        self.instance_label = instance_label
         self.team_id: str | None = None
         """The workspace whose payloads are accepted. Until it's known, nothing is."""
         self.tasks: set[asyncio.Task[None]] = set()
@@ -143,7 +149,7 @@ class Interactions:
         app.action(re.compile(r"^[a-z_]{1,40}$"))(action)
         app.view(ids.DETAILS_VIEW)(details)
         app.view(ids.PROPOSAL_VIEW)(proposal)
-        app.command(COMMAND)(command)
+        app.command(self.command)(command)
         app.event("app_home_opened")(home_opened)
 
     def _spawn(self, work: Coroutine[Any, Any, None]) -> None:
@@ -243,10 +249,12 @@ class Interactions:
                 "type": "home",
                 "blocks": [{"type": "section", "text": {"type": "mrkdwn", "text": escape(notice or UNKNOWN_USER)}}],
             }
+            if self.instance_label:
+                view["blocks"].insert(0, instance_banner(self.instance_label))
         else:
             async with self.sessionmaker() as db:
                 today = await event_views.today_view(db, member, now=self.clock())
-            view = home_view(today, self.links, notice)
+            view = home_view(today, self.links, notice, label=self.instance_label)
         await self.api.publish_home(user_id, view)
 
     async def _run(self, source: Source, member: Member, work: Callable[[], Awaitable[str | None]]) -> None:
@@ -419,7 +427,7 @@ class Interactions:
         except SLACK_ERRORS as exc:
             log.warning("slack home publish failed", extra={"error": str(exc)})
 
-    # /dinnerbell -------------------------------------------------------------------------------
+    # The slash command -------------------------------------------------------------------------
 
     async def _command(self, ack: Callable[..., Awaitable[None]], body: dict[str, Any]) -> None:
         if not self._team_ok(body.get("team_id")):
@@ -448,14 +456,14 @@ class Interactions:
             case "log":
                 return f"Logging a meal from Slack is coming soon. For now, log it on <{url('/history')}|History>."
             case "offer":
-                return "Offers are coming soon. Until then, start a call with `/dinnerbell call`."
+                return f"Offers are coming soon. Until then, start a call with `{self.command} call`."
             case "schedule":
                 return (
                     "Changing the schedule from Slack is coming soon. For now, the admin can change it "
                     f"on the web: <{url('/admin/schedule')}|Schedule>."
                 )
             case _:
-                return HELP.format(today=url("/"))
+                return HELP.format(command=self.command, today=url("/"))
 
     async def _call(self, source: Source, args: list[str]) -> None:
         member = await self._member(source)
@@ -465,7 +473,7 @@ class Interactions:
         async def work() -> str | None:
             async with self.sessionmaker() as db:
                 today = await slack_members.today(db, member, now=self.clock())
-                slot, day = parse_call_args(args, today)
+                slot, day = parse_call_args(args, today, command=self.command)
                 await calls.start_call(db, member, slot, day, now=self.clock())
             when = "today" if day == today else f"for {day_label(day)}"
             return f"Started the {slot.value} call {when}. It's posted in the Dinnerbell channel."
@@ -475,17 +483,17 @@ class Interactions:
 
 HELP = (
     "*Dinnerbell* helps the household decide what to eat.\n"
-    "• `/dinnerbell call` starts a dinner call for today. Add `lunch`, `tomorrow`, or a date "
+    "• `{command} call` starts a dinner call for today. Add `lunch`, `tomorrow`, or a date "
     "like `2026-10-24`.\n"
-    "• `/dinnerbell prefs` links to your preferences.\n"
-    "• `/dinnerbell catalog` and `/dinnerbell history` link to the catalog and meal history.\n"
+    "• `{command} prefs` links to your preferences.\n"
+    "• `{command} catalog` and `{command} history` link to the catalog and meal history.\n"
     "• `offer`, `log`, and `schedule` are coming soon.\n"
     "Open the Dinnerbell app's Home tab for today's calls, or <{today}|the web app>."
 )
-CALL_USAGE = "Try `/dinnerbell call`, `/dinnerbell call lunch tomorrow`, or `/dinnerbell call dinner 2026-10-24`."
+CALL_USAGE = "Try `{command} call`, `{command} call lunch tomorrow`, or `{command} call dinner 2026-10-24`."
 
 
-def parse_call_args(args: list[str], today: date) -> tuple[Slot, date]:
+def parse_call_args(args: list[str], today: date, *, command: str = DEFAULT_COMMAND) -> tuple[Slot, date]:
     """``call [lunch|dinner] [today|tomorrow|YYYY-MM-DD]``, in any order. Dinner today by default."""
     slot, day = Slot.DINNER, today
     for word in args:
@@ -499,7 +507,7 @@ def parse_call_args(args: list[str], today: date) -> tuple[Slot, date]:
             try:
                 day = date.fromisoformat(word)
             except ValueError:
-                raise EventRuleViolation(CALL_USAGE) from None
+                raise EventRuleViolation(CALL_USAGE.format(command=command)) from None
     return slot, day
 
 

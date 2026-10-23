@@ -14,6 +14,7 @@ from pydantic import Field, SecretStr, ValidationError, field_validator, model_v
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 from sqlalchemy.engine import make_url
 
+from dinnerbell.domain import flags
 from dinnerbell.domain.members import InvalidMemberInput, normalize_email
 
 ENV_PREFIX = "DINNERBELL_"
@@ -68,6 +69,9 @@ class Settings(BaseSettings):
     slack_bot_token: SecretStr | None = None
     slack_app_token: SecretStr | None = None
     slack_channel: str | None = None
+    slack_command: str = Field(default="/dinnerbell", pattern=r"^/[a-z0-9_-]{1,31}$")
+    instance_label: str = Field(default="", max_length=16, pattern=r"^[A-Za-z0-9 -]*$")
+    features: Annotated[frozenset[str], NoDecode] = frozenset()
     timezone: str = "America/New_York"
     seed_file: Path | None = None
     log_level: LogLevel = "INFO"
@@ -161,6 +165,27 @@ class Settings(BaseSettings):
             return tuple(ipaddress.ip_network(part.strip()) for part in value.split(",") if part.strip())
         except ValueError:
             raise ValueError("must be a comma-separated list of IP addresses or CIDR ranges") from None
+
+    @field_validator("features", mode="before")
+    @classmethod
+    def _parse_features(cls, value: object) -> object:
+        if isinstance(value, str):
+            return frozenset(part.strip() for part in value.split(",") if part.strip())
+        return value
+
+    @field_validator("features")
+    @classmethod
+    def _check_features(cls, value: frozenset[str]) -> frozenset[str]:
+        try:
+            return flags.check(value)
+        except flags.UnknownFlag as exc:
+            raise ValueError(f"{exc}; src/dinnerbell/domain/flags.py lists the known flags") from None
+
+    @field_validator("instance_label")
+    @classmethod
+    def _trim_label(cls, value: str) -> str:
+        # "TEST " and "TEST" are the same label; an all-space label is no label.
+        return value.strip()
 
     @model_validator(mode="after")
     def _require_team_for_slack(self) -> Settings:

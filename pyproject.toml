@@ -73,6 +73,9 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra --strict-markers"
+markers = [
+    "flag(name, on): run with feature flag NAME on or off; every registered flag needs both (tests/test_flags.py)",
+]
 filterwarnings = [
     "error",
     "ignore::DeprecationWarning:apscheduler.*",

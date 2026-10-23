@@ -42,8 +42,9 @@ async def link(house: House, name: str, slack_id: str | None) -> None:
 
 
 def connection(
-    house: House, fake: FakeSlack, *, team_id: str | None = TEAM, state: SlackState | None = None
+    house: House, fake: FakeSlack, *, team_id: str | None = TEAM, state: SlackState | None = None, **options: Any
 ) -> SlackConnection:
+    """``options`` go to ``SlackConnection``, such as ``command`` and ``instance_label``."""
     return SlackConnection(
         bot_token=BOT_TOKEN,
         app_token=APP_TOKEN,
@@ -55,6 +56,7 @@ def connection(
         state=state or SlackState(),
         web_client=fake,
         socket_factory=FakeSocket,
+        **options,
     )
 
 
@@ -102,11 +104,11 @@ class Slack:
         return view
 
 
-async def wire(house: House, *, linked: tuple[str, ...] = ("Alex", "Sam", "Kim", "Lee")) -> Slack:
+async def wire(house: House, *, linked: tuple[str, ...] = ("Alex", "Sam", "Kim", "Lee"), **options: Any) -> Slack:
     for name in linked:
         await link(house, name, SLACK_IDS[name])
     fake = FakeSlack()
-    conn = connection(house, fake)
+    conn = connection(house, fake, **options)
     assert await conn.run_once()
     fake.clear()
     return Slack(house, fake, conn)

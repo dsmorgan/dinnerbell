@@ -443,6 +443,21 @@ async def test_slash_call_with_a_slot_and_day(slack: Slack, house: House) -> Non
     assert slack.ephemerals("Kim")[-1].startswith("Try `/dinnerbell call`")
 
 
+async def test_slack_requests_leave_dinnerbell_log_levels_alone(slack: Slack) -> None:
+    """Regression: Bolt copied the root level onto a logger named after the app, "dinnerbell",
+    on every request, which hid INFO records from every Dinnerbell module."""
+    import logging
+
+    ours = logging.getLogger("dinnerbell")
+    saved = ours.level
+    ours.setLevel(logging.INFO)
+    try:
+        await slack.command("Kim", "help")
+        assert ours.level == logging.INFO
+    finally:
+        ours.setLevel(saved)
+
+
 def test_parse_call_args() -> None:
     from datetime import date
 

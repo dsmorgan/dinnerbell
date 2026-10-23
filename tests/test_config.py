@@ -50,6 +50,9 @@ def test_loads_from_environment_with_defaults(monkeypatch: pytest.MonkeyPatch) -
     assert settings.trusted_proxies == ()
     assert settings.slack_team_id == "T0123ABCD"
     assert settings.cookie_secure
+    assert settings.slack_command == "/dinnerbell"
+    assert settings.instance_label == ""
+    assert settings.features == frozenset()
 
 
 def test_missing_required_settings_are_listed(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -184,3 +187,55 @@ def test_env_example_documents_every_setting() -> None:
     text = (Path(__file__).resolve().parents[1] / ".env.example").read_text()
     for field in Settings.model_fields:
         assert f"\nDINNERBELL_{field.upper()}=" in text, field
+
+
+# Test instance settings (ADR 0006) ----------------------------------------------------------------
+
+
+def test_test_instance_settings_load(monkeypatch: pytest.MonkeyPatch) -> None:
+    set_env(monkeypatch, DINNERBELL_SLACK_COMMAND="/dinnerbell-test", DINNERBELL_INSTANCE_LABEL=" TEST ")
+    settings = load_settings()
+    assert settings.slack_command == "/dinnerbell-test"
+    assert settings.instance_label == "TEST"
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["dinnerbell", "/", "/Dinnerbell", "/dinner bell", "/dinnerbell;rm", "/" + "a" * 32, "/dinnerbell\n"],
+)
+def test_bad_slash_commands_are_refused(monkeypatch: pytest.MonkeyPatch, command: str) -> None:
+    message = error_for(monkeypatch, DINNERBELL_SLACK_COMMAND=command)
+    assert "DINNERBELL_SLACK_COMMAND" in message
+
+
+def test_the_longest_slash_command_slack_allows_is_accepted(tmp_path: Path) -> None:
+    command = "/" + "a" * 31
+    assert make_settings(tmp_path, slack_command=command).slack_command == command
+
+
+@pytest.mark.parametrize("label", ["T" * 17, "TEST<b>", "TEST:", "TÉST", "TEST\nprod", "TEST_1"])
+def test_bad_instance_labels_are_refused(monkeypatch: pytest.MonkeyPatch, label: str) -> None:
+    message = error_for(monkeypatch, DINNERBELL_INSTANCE_LABEL=label)
+    assert "DINNERBELL_INSTANCE_LABEL" in message
+
+
+def test_a_blank_label_is_no_label(tmp_path: Path) -> None:
+    assert make_settings(tmp_path, instance_label="   ").instance_label == ""
+    assert make_settings(tmp_path, instance_label="Test 2-b").instance_label == "Test 2-b"
+
+
+def test_an_unknown_flag_stops_startup(monkeypatch: pytest.MonkeyPatch) -> None:
+    message = error_for(monkeypatch, DINNERBELL_FEATURES="no_such_flag")
+    assert "  - DINNERBELL_FEATURES: unknown feature flag 'no_such_flag'" in message
+
+
+def test_features_parse_a_comma_separated_list(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from dinnerbell.domain import flags
+
+    known = {name: flags.Flag(name, "test", "0.0.0") for name in ("alpha", "beta")}
+    monkeypatch.setattr(flags, "FLAGS", known)
+    set_env(monkeypatch, DINNERBELL_FEATURES=" alpha, ,beta,alpha ")
+    assert load_settings().features == frozenset({"alpha", "beta"})
+    assert "unknown feature flag 'gamma'" in error_for(monkeypatch, DINNERBELL_FEATURES="alpha,gamma")
+    with pytest.raises(ValueError, match="unknown feature flag 'gamma'"):
+        make_settings(tmp_path, features=frozenset({"gamma"}))

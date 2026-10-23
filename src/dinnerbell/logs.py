@@ -44,6 +44,11 @@ if not getattr(logging.getLogRecordFactory(), "dinnerbell_context", False):
 
 
 class JsonFormatter(logging.Formatter):
+    def __init__(self, instance: str = "") -> None:
+        super().__init__()
+        self.instance = instance
+        """The instance label, on every entry when set, so test and production logs can't mix."""
+
     def format(self, record: logging.LogRecord) -> str:
         entry: dict[str, Any] = {
             "ts": datetime.fromtimestamp(record.created, UTC).isoformat(timespec="milliseconds"),
@@ -51,6 +56,8 @@ class JsonFormatter(logging.Formatter):
             "logger": record.name,
             "msg": record.getMessage(),
         }
+        if self.instance:
+            entry["instance"] = self.instance
         if (request_id := getattr(record, "_request_id", None)) is not None:
             entry["request_id"] = request_id
         if (member_id := getattr(record, "_member_id", None)) is not None:
@@ -63,9 +70,9 @@ class JsonFormatter(logging.Formatter):
         return json.dumps(entry, default=str)
 
 
-def configure_logging(level: str) -> None:
+def configure_logging(level: str, instance: str = "") -> None:
     handler = logging.StreamHandler(sys.stdout)
-    handler.setFormatter(JsonFormatter())
+    handler.setFormatter(JsonFormatter(instance))
     root = logging.getLogger()
     root.handlers[:] = [handler]
     root.setLevel(level)

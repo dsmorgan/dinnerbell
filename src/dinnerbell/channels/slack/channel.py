@@ -66,17 +66,19 @@ class SlackChannel:
         base_url: str,
         sessionmaker: async_sessionmaker[AsyncSession],
         hold: Hold,
+        instance_label: str = "",
     ) -> None:
         self.api = api
         self.hold = hold
         self.channel_id = channel_id
         self.base_url = base_url
         self.sessionmaker = sessionmaker
+        self.instance_label = instance_label
 
     async def _context(self, household_id: int) -> RenderContext:
         async with self.sessionmaker() as db:
             directory = Directory(await slack_members.slack_directory(db, household_id))
-        return RenderContext(self.base_url, directory)
+        return RenderContext(self.base_url, directory, self.instance_label)
 
     async def deliver(self, notification: Notification, *, thread: MessageRef | None = None) -> DeliveryResult:
         self.hold.check(direct=notification.recipient_id is not None)

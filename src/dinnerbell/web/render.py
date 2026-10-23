@@ -50,6 +50,7 @@ async def render(
         "version": __version__,
         "htmx_file": HTMX_FILE,
         "provider_is_slack": settings.oidc_issuer.rstrip("/") == "https://slack.com",
+        "instance_label": settings.instance_label,
     }
     return TEMPLATES.TemplateResponse(request, template, base | (context or {}), status_code=status_code)
 

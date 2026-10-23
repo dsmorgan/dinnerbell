@@ -37,7 +37,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from dinnerbell.channels.slack.api import SlackApi, SlackAuthError, SlackUnavailable
 from dinnerbell.channels.slack.channel import HOLD_RETRY_SECONDS, Hold, HoldScope, SlackChannel
-from dinnerbell.channels.slack.interactions import Interactions
+from dinnerbell.channels.slack.interactions import DEFAULT_COMMAND, Interactions
 from dinnerbell.domain.members import SLACK_USER_ID_PATTERN
 from dinnerbell.domain.notifications import PermanentDeliveryError
 from dinnerbell.services import slack_members
@@ -89,6 +89,8 @@ class _QuietForwarder(logging.Handler):
 
 
 SOCKET_LOG = logging.getLogger("dinnerbell.channels.slack.socket")
+BOLT_APP_LOGGER = "dinnerbell.channels.slack.bolt"
+"""The Bolt app's name, which Bolt also uses as a logger name. Keep it a leaf logger."""
 SOCKET_LOG.setLevel(logging.INFO)  # its DEBUG records include every payload
 SOCKET_LOG.propagate = False  # everything goes through the forwarder instead
 SOCKET_LOG.addHandler(_QuietForwarder())
@@ -160,6 +162,8 @@ class SlackConnection:
         state: SlackState,
         web_client: AsyncWebClient | None = None,
         socket_factory: SocketFactory = BoltSocket,
+        command: str = DEFAULT_COMMAND,
+        instance_label: str = "",
     ) -> None:
         client = web_client or AsyncWebClient(token=bot_token, timeout=WEB_TIMEOUT_SECONDS)
         self.api = SlackApi(client)
@@ -180,10 +184,21 @@ class SlackConnection:
         self._wake = asyncio.Event()
         self._connect_task: asyncio.Task[None] | None = None
         self.channel = SlackChannel(
-            self.api, channel_id=channel_id, base_url=base_url, sessionmaker=sessionmaker, hold=self.hold
+            self.api,
+            channel_id=channel_id,
+            base_url=base_url,
+            sessionmaker=sessionmaker,
+            hold=self.hold,
+            instance_label=instance_label,
         )
         self.interactions = Interactions(
-            self.api, sessionmaker=sessionmaker, clock=clock, base_url=base_url, channel_id=channel_id
+            self.api,
+            sessionmaker=sessionmaker,
+            clock=clock,
+            base_url=base_url,
+            channel_id=channel_id,
+            command=command,
+            instance_label=instance_label,
         )
 
         async def authorize(team_id: str | None) -> AuthorizeResult:
@@ -193,10 +208,12 @@ class SlackConnection:
         # Bolt gets an authorize function instead of the token: with a token it would call
         # auth.test itself on the first request. Every Web API call goes through ``self.api``;
         # the tokenless client here only serves the socket's apps.connections.open.
+        # Bolt names a logger after the app and copies the root logger's level onto it on every
+        # request. Named "dinnerbell", that reset the level of every Dinnerbell logger.
         self.app = AsyncApp(
             client=AsyncWebClient(timeout=WEB_TIMEOUT_SECONDS),
             authorize=authorize,
-            name="dinnerbell",
+            name=BOLT_APP_LOGGER,
             raise_error_for_unhandled_request=False,
         )
         self.interactions.register(self.app)

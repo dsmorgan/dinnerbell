@@ -15,7 +15,8 @@
   <script src="/static/{{ htmx_file }}" defer></script>
   <script src="/static/app.js?v={{ version }}" defer></script>
 </head>
-<body{% if csrf_token %} hx-headers='{{ {"X-CSRF-Token": csrf_token}|tojson }}'{% endif %}>
+<body{% if csrf_token %} hx-headers='{{ {"X-CSRF-Token": csrf_token}|tojson }}'{% endif %}>{% if instance_label %}
+  <div class="instance-banner" role="note">{{ instance_label }} instance</div>{% endif %}
   <header class="topbar">
     <a class="brand" href="/">
       <svg class="bell" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3a1.5 1.5 0 0 1 1.5 1.5v.6A6.5 6.5 0 0 1 18.5 11.5V16l1.5 2H4l1.5-2v-4.5A6.5 6.5 0 0 1 10.5 5.1v-.6A1.5 1.5 0 0 1 12 3Zm-2 17h4a2 2 0 0 1-4 0Z"/></svg>

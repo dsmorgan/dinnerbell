@@ -174,6 +174,11 @@ def context(*texts: str) -> Block:
     return {"type": "context", "elements": [mrkdwn(t) for t in texts[:MAX_CONTEXT_ELEMENTS]]}
 
 
+def instance_banner(label: str) -> Block:
+    """The marker on every message and Home tab from a labelled instance, such as a test one."""
+    return context(f"*{escape(label)}* instance")
+
+
 def divider() -> Block:
     return {"type": "divider"}
 
