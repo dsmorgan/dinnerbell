@@ -1,0 +1,59 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Enforce the Developer Certificate of Origin (CONTRIBUTING.md): every commit in a PR carries a
+# Signed-off-by trailer with its author's email. The main ruleset requires the `dco` check.
+name: DCO
+
+on:
+  pull_request:
+
+permissions: {}
+
+concurrency:
+  group: dco-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  dco:
+    name: dco
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read # list the PR's commits
+    steps:
+      # Bot commits are exempt only when GitHub verified their signature, so a commit that merely
+      # claims a bot's email still needs a sign-off. The API lists at most 250 commits per PR.
+      - name: Check sign-offs
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          # shellcheck disable=SC2016 # $author and friends are jq variables.
+          gh api --paginate "repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER/commits" --jq '
+            .[]
+            | (.commit.author.email // "" | ascii_downcase) as $author
+            | ([.commit.message | split("\n")[]
+                | select(test("^Signed-off-by:.*<[^<>]+>\\s*$"; "i"))
+                | capture("<(?<email>[^<>]+)>\\s*$").email
+                | ascii_downcase]) as $signers
+            | (if ($author == "49699333+dependabot[bot]@users.noreply.github.com"
+                   or $author == "41898282+github-actions[bot]@users.noreply.github.com")
+                  and .commit.verification.verified then "exempt"
+               elif any($signers[]; . == $author) then "ok"
+               else "missing" end) as $status
+            | "\($status) \(.sha[0:12])"
+          ' > dco.txt
+          missing=0
+          while read -r status sha; do
+            case "$status" in
+              ok) echo "ok       $sha" ;;
+              exempt) echo "exempt   $sha (bot)" ;;
+              *)
+                echo "missing  $sha: no Signed-off-by trailer for the author's email"
+                missing=$((missing + 1))
+                ;;
+            esac
+          done < dco.txt
+          if [ "$missing" -gt 0 ]; then
+            echo "::error::$missing commit(s) lack a Signed-off-by trailer matching the commit author's email. Run 'git rebase --signoff origin/main' and force-push. See CONTRIBUTING.md."
+            exit 1
+          fi
