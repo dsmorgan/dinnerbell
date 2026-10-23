@@ -7,7 +7,7 @@ and the 18:30 default meal time is 23:30."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 
 from sqlalchemy import select
@@ -21,6 +21,7 @@ from dinnerbell.db.repositories import MemberRepository, to_member
 from dinnerbell.domain.catalog import CatalogItem, ItemKind, Mode, Tag, TagKind
 from dinnerbell.domain.events import Event
 from dinnerbell.domain.household import Household
+from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.members import Capabilities, Member, Role
 from dinnerbell.domain.notifications import DeliveryResult, MessageRef, Notification
 from dinnerbell.services import lifecycle, outbox
@@ -195,3 +196,21 @@ async def make_house(sessionmaker: async_sessionmaker[AsyncSession], clock: Fake
     house = House(sessionmaker, clock, household)
     house.people["Alex"] = admin
     return house
+
+
+async def furnish(house: House) -> House:
+    """Sam cooks and is on the tacos' cook list; Lee can order; Kim has no flags."""
+    await house.add_member("Sam", can_cook=True)
+    await house.add_member("Kim")
+    await house.add_member("Lee", can_order=True)
+    await house.add_item("Siam Garden", Mode.PICKUP, Mode.DELIVERY, cuisine="Thai", url="https://siam.example")
+    await house.add_item("Taqueria", Mode.PICKUP, cuisine="Mexican")
+    await house.add_item("Sam's Tacos", Mode.COOK, cuisine="Mexican", cooks=("Sam",))
+    return house
+
+
+async def dinner_id(house: House, day: date = date(2026, 10, 22)) -> int:
+    async with house.sessionmaker() as db:
+        event = await EventRepository(db).call_for(house.household.id, Slot.DINNER, day)
+    assert event is not None
+    return event.id
