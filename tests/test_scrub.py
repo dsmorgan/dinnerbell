@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
 from collections.abc import AsyncIterator, Iterator
 from datetime import date, timedelta
@@ -17,8 +18,9 @@ from dinnerbell import main as cli
 from dinnerbell.config import Settings
 from dinnerbell.db.events import EventRepository
 from dinnerbell.db.meals import MealLogRepository, household_settings
-from dinnerbell.db.models import AuditRow, EventRow, HouseholdRow, MemberRow, OutboxRow, SessionRow
-from dinnerbell.db.repositories import SessionRepository
+from dinnerbell.db.models import AuditRow, EventRow, MemberRow, OutboxRow, SessionRow
+from dinnerbell.db.outbox import OutboxRepository
+from dinnerbell.db.repositories import MemberRepository, SessionRepository
 from dinnerbell.domain.events import EndReason, EventState
 from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.schedule import slot_schedules
@@ -33,6 +35,7 @@ from tests.test_config import REQUIRED
 pytestmark = pytest.mark.anyio
 
 LABEL = "TEST"
+DAYS = {"open": date(2026, 10, 22), "decided": date(2026, 10, 23)}
 KEEP = ("admin@example.com", " SAM@Example.com ")
 """Alex (the admin, bootstrapped as admin@example.com) and Sam, written the way people type."""
 
@@ -46,15 +49,17 @@ async def database(migrated: Settings) -> AsyncIterator[Database]:
 
 @pytest.fixture
 async def house(database: Database, clock: FakeClock, migrated: Settings) -> House:
-    """Production-like data: everyone linked and signed in, an open dinner call with delivered
-    and pending notifications, a decided lunch tomorrow, and a finished dinner in the meal log."""
+    """Production-like data: everyone linked, Alex and Kim signed in, Lee deactivated earlier but
+    with a session left over, an open dinner call with delivered and pending notifications, a
+    decided lunch tomorrow, and a finished dinner in the meal log."""
     house = await furnish(await make_house(database.sessionmaker, clock, migrated.admin_email))
     for name, slack_id in SLACK_IDS.items():
         await link(house, name, slack_id)
     async with house.sessionmaker() as db:
         sessions = SessionRepository(db)
-        for name in ("Alex", "Kim"):
+        for name in ("Alex", "Kim", "Lee"):
             await sessions.add(token_hash=name * 8, member=house[name], now=clock(), expires_at=clock() + timedelta(1))
+        await MemberRepository(db).update(house.household.id, house["Lee"].id, clock(), active=False)
         events = EventRepository(db)
         common = {"reminder_minutes": 15, "vote_minutes": 45, "created_by": None, "now": clock()}
         await events.add(
@@ -120,21 +125,26 @@ async def snapshot(house: House) -> dict[str, Any]:
 
 async def test_scrub_leaves_only_kept_members_and_sends_nothing(house: House) -> None:
     before = await snapshot(house)
-    assert any(kind == "response_reminder" for _, kind in before["outbox"])  # pending rows exist
+    async with house.sessionmaker() as db:
+        pending, _ = await OutboxRepository(db).backlog()
+    assert 0 < pending < len(before["outbox"])  # some sent (with refs), some waiting
+    async with house.sessionmaker() as db:
+        event_ids = {
+            name: await db.scalar(select(EventRow.id).where(EventRow.date == day)) for name, day in DAYS.items()
+        }
 
     summary = await scrub(house)
 
     assert summary == ScrubSummary(
         members_kept=2,
-        members_deactivated=2,
+        members_deactivated=1,  # Lee was already inactive
         slack_links_removed=2,
         slots_turned_off=1,
         events_abandoned=1,
         events_cancelled=1,
-        outbox_pending_deleted=summary.outbox_pending_deleted,
+        outbox_pending_deleted=pending,
         outbox_rows_deleted=len(before["outbox"]),
     )
-    assert 0 < summary.outbox_pending_deleted < summary.outbox_rows_deleted
     for name in ("Alex", "Sam"):
         member = await house.refresh(name)
         assert (member.active, member.slack_user_id) == (True, SLACK_IDS[name])
@@ -143,7 +153,7 @@ async def test_scrub_leaves_only_kept_members_and_sends_nothing(house: House) ->
         assert (member.active, member.slack_user_id, member.slack_link_locked) == (False, None, True)
 
     after = await snapshot(house)
-    assert after["sessions"] == [house["Alex"].id]  # Kim was signed out
+    assert after["sessions"] == [house["Alex"].id]  # Kim signed out, and Lee's stale session gone
     assert not any(s.enabled for s in slot_schedules(after["settings"]).values())
     assert after["outbox"] == []  # emptied, and abandoning wrote no notifications
     assert after["meals"] == before["meals"]
@@ -158,11 +168,16 @@ async def test_scrub_leaves_only_kept_members_and_sends_nothing(house: House) ->
     done = next(e for e in before["events"] if e[1] == "done")
     assert done in after["events"]  # not even touched
 
+    ended = [(r.action, r.target, r.actor_member_id, r.payload) for r in await house.audits("event.")]
+    assert sorted(ended[-2:], key=lambda row: row[0]) == [
+        ("event.abandoned", f"event:{event_ids['open']}", None, {"reason": "scrub", "from": "collecting"}),
+        ("event.cancelled", f"event:{event_ids['decided']}", None, {"reason": "scrub", "from": "decided"}),
+    ]
     (row,) = await house.audits("instance.")
     target = f"household:{house.household.id}"
     assert (row.action, row.actor_member_id, row.target) == ("instance.scrubbed", None, target)
     assert row.payload["kept_member_ids"] == sorted([house["Alex"].id, house["Sam"].id])
-    assert row.payload["members_deactivated"] == 2 and row.payload["instance_label"] == LABEL
+    assert row.payload["members_deactivated"] == 1 and row.payload["instance_label"] == LABEL
     assert "@" not in str(row.payload)  # no emails in the audit log
 
 
@@ -174,6 +189,7 @@ async def test_a_second_run_changes_nothing(house: House) -> None:
     assert summary == ScrubSummary(2, 0, 0, 0, 0, 0, 0, 0)
     assert await snapshot(house) == before
     assert len(await house.audits("instance.")) == 2  # every run is audited
+    assert len([r for r in await house.audits("event.") if r.payload.get("reason") == "scrub"]) == 2
 
 
 async def test_a_scheduled_call_is_abandoned_quietly(house: House) -> None:
@@ -254,9 +270,16 @@ def test_the_command_needs_a_keep(cli_env: Path) -> None:
         cli.main(["scrub-test"])
 
 
-def test_the_command_scrubs_and_prints_a_summary(
-    cli_env: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
-) -> None:
+class Terminal(io.StringIO):
+    """Stands in for an interactive stdin, answering ``input()`` with what it was given."""
+
+    def isatty(self) -> bool:
+        return True
+
+
+@pytest.fixture
+def labeled(cli_env: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """A labeled instance whose database holds a household with one admin."""
     monkeypatch.setenv("DINNERBELL_INSTANCE_LABEL", LABEL)
     assert cli.main(["migrate"]) == 0
 
@@ -268,20 +291,78 @@ def test_the_command_scrubs_and_prints_a_summary(
         await database.close()
 
     asyncio.run(seed())
-    assert cli.main(["scrub-test", "--keep", "Admin@Example.com"]) == 0
-    out = capsys.readouterr().out
-    assert "Scrubbed for test." in out and "Slots turned off: 1" in out and "Members kept: 1" in out
+    return cli_env
 
-    assert cli.main(["scrub-test", "--keep", "admim@example.com"]) == 1
-    err = capsys.readouterr().err
-    assert "No member has the email given as --keep number 1" in err and "admim" not in err
 
-    async def audits() -> list[str]:
-        database = open_database(f"sqlite+aiosqlite:///{cli_env}")
+def scrub_audits(path: Path) -> list[str]:
+    async def read() -> list[str]:
+        database = open_database(f"sqlite+aiosqlite:///{path}")
         async with database.sessionmaker() as db:
             rows = list(await db.scalars(select(AuditRow.action).where(AuditRow.action == "instance.scrubbed")))
-            assert await db.scalar(select(HouseholdRow.id)) is not None
         await database.close()
         return rows
 
-    assert asyncio.run(audits()) == ["instance.scrubbed"]
+    return asyncio.run(read())
+
+
+def test_the_command_shows_the_database_then_scrubs_with_yes(labeled: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    assert cli.main(["scrub-test", "--keep", "Admin@Example.com", "--yes"]) == 0
+    out = capsys.readouterr().out
+    assert f"Database: {labeled}" in out and "Household: Home" in out
+    assert "Active members: 1" in out and "Enabled slots: 1" in out and "Open events: 0" in out
+    assert "Notifications not yet sent: 0" in out
+    assert "Scrubbed for test." in out and "Slots turned off: 1" in out and "Members kept: 1" in out
+    assert scrub_audits(labeled) == ["instance.scrubbed"]
+
+    assert cli.main(["scrub-test", "--keep", "admim@example.com", "--yes"]) == 1
+    err = capsys.readouterr().err
+    assert "No member has the email given as --keep number 1" in err and "admim" not in err
+    assert scrub_audits(labeled) == ["instance.scrubbed"]
+
+
+def test_a_typed_confirmation_at_a_terminal_scrubs(
+    labeled: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr("sys.stdin", Terminal("scrub\n"))
+    assert cli.main(["scrub-test", "--keep", "admin@example.com"]) == 0
+    assert 'Type "scrub" to scrub it' in capsys.readouterr().out
+    assert scrub_audits(labeled) == ["instance.scrubbed"]
+
+
+@pytest.mark.parametrize(
+    ("stdin", "message"),
+    [
+        (Terminal("yes\n"), "Not scrubbed"),
+        (Terminal(""), "Not scrubbed"),
+        (io.StringIO("scrub\n"), "No terminal to confirm on"),
+    ],
+)
+def test_no_confirmation_changes_nothing(
+    labeled: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], stdin: io.StringIO, message: str
+) -> None:
+    """A wrong word, end of input, or no terminal (and no --yes) refuses before migrating."""
+    migrations: list[object] = []
+    monkeypatch.setattr(cli, "run_migrations", lambda *args: migrations.append(args))
+    monkeypatch.setattr("sys.stdin", stdin)
+    assert cli.main(["scrub-test", "--keep", "admin@example.com"]) == 1
+    assert message in capsys.readouterr().err
+    assert migrations == [] and scrub_audits(labeled) == []
+
+
+def test_the_command_refuses_a_missing_or_unreadable_database(
+    cli_env: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv("DINNERBELL_INSTANCE_LABEL", LABEL)
+    assert cli.main(["scrub-test", "--keep", "admin@example.com", "--yes"]) == 1
+    assert "No database at" in capsys.readouterr().err
+    assert not cli_env.exists()  # not created by asking
+
+    cli_env.parent.mkdir(parents=True)
+    cli_env.write_bytes(b"not a database, just some bytes " * 64)
+    assert cli.main(["scrub-test", "--keep", "admin@example.com", "--yes"]) == 1
+    assert "Can't read the database" in capsys.readouterr().err
+
+    cli_env.unlink()
+    assert cli.main(["migrate"]) == 0  # a schema, but no household yet
+    assert cli.main(["scrub-test", "--keep", "admin@example.com", "--yes"]) == 1
+    assert "no household yet" in capsys.readouterr().err
