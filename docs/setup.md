@@ -294,6 +294,8 @@ Dinnerbell needs each member's Slack user to mention them, send them direct mess
 - By email, at start and every hour, for active members whose Dinnerbell email matches their Slack email.
 - By hand: on **Members**, select **Edit**, then enter their Slack member ID. In Slack, open their profile, select the three dots, then **Copy member ID**.
 
+The email match links only full members of your workspace, never guests or people from other organizations. A link you set or clear by hand stays that way: the hourly match and sign-in leave it alone.
+
 The **Members** page shows who is linked. Someone who isn't linked gets a private "I don't know your Slack account yet" message when they tap a button.
 
 ## 12. Load the catalog

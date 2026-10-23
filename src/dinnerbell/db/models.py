@@ -25,6 +25,7 @@ from sqlalchemy import (
     String,
     Time,
     UniqueConstraint,
+    false,
     text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
@@ -69,6 +70,7 @@ class MemberRow(Base):
     email: Mapped[str] = mapped_column(String(254))
     oidc_subject: Mapped[str | None] = mapped_column(String(255))
     slack_user_id: Mapped[str | None] = mapped_column(String(32))
+    slack_link_locked: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     role: Mapped[str] = mapped_column(String(16))
     can_cook: Mapped[bool] = mapped_column(Boolean, default=False)
     can_pickup: Mapped[bool] = mapped_column(Boolean, default=False)

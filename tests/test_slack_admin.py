@@ -27,13 +27,14 @@ def test_admin_links_and_unlinks_a_member(client: TestClient, provider: FakeProv
     assert (response.status_code, response.headers["location"]) == (303, "/admin/members?notice=slack_set")
     assert member(migrated, "sam@example.com").slack_user_id == "U02SAM"
     listing = page(client.get("/admin/members?notice=slack_set"))
-    assert "Slack link saved." in listing and "linked as <code>U02SAM</code>" in listing
+    assert "Slack link saved." in listing and "linked as <code>U02SAM</code> (set by hand)" in listing
     assert "U02SAM" in page(client.get(f"/admin/members/{sam.id}"))
 
     post(client, f"/admin/members/{sam.id}/slack", {"slack_user_id": "U02SAM"})  # unchanged: no audit row
     response = post(client, f"/admin/members/{sam.id}/slack", {"slack_user_id": ""})
     assert response.headers["location"] == "/admin/members?notice=slack_cleared"
     assert member(migrated, "sam@example.com").slack_user_id is None
+    assert "Slack: unlinked (set by hand)" in page(client.get("/admin/members"))
     admin_id = member(migrated, "admin@example.com").id
     assert slack_audits(migrated) == [
         ("member.slack_user_set", {"from": None, "to": "U02SAM"}),

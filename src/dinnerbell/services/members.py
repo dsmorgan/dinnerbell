@@ -134,19 +134,19 @@ async def set_slack_user(
     db: AsyncSession, actor: Member, member_id: int, slack_user_id: str, *, now: datetime
 ) -> Member:
     """FR-42: the admin links a member to a Slack user ID, or unlinks them with a blank value.
-    Audited. Dinnerbell links unlinked members by email every hour, so an unlinked member whose
-    email matches a Slack account is linked again."""
+    Either way the link is locked: neither the hourly email match nor sign-in changes it
+    afterward. Audited."""
     require_admin(actor, MANAGE_MEMBERS)
     target = await get_member(db, actor, member_id)
     value = normalize_slack_user_id(slack_user_id)
-    if value == target.slack_user_id:
+    if value == target.slack_user_id and target.slack_link_locked:
         return target
     members = MemberRepository(db)
     holder = await members.by_slack_user_id(actor.household_id, value) if value else None
     if holder is not None:
         raise MemberRuleViolation(f"{holder.display_name} is already linked to that Slack user.")
     try:
-        updated = await members.update(actor.household_id, member_id, now, slack_user_id=value)
+        updated = await members.update(actor.household_id, member_id, now, slack_user_id=value, slack_link_locked=True)
         action = "member.slack_user_set" if value else "member.slack_user_cleared"
         payload = {"from": target.slack_user_id, "to": value}
         await audit(db, actor.household_id, actor, action, f"member:{member_id}", payload, now)
