@@ -88,7 +88,8 @@ async def _link(db: AsyncSession, decision: Allow, claims: IdentityClaims, now: 
     changes: dict[str, str] = {}
     if decision.link_subject:
         changes["oidc_subject"] = claims.subject
-    if claims.slack_user_id and claims.slack_user_id != member.slack_user_id:
+    # A link the admin set or cleared by hand stays as the admin left it (FR-42).
+    if claims.slack_user_id and claims.slack_user_id != member.slack_user_id and not member.slack_link_locked:
         changes["slack_user_id"] = claims.slack_user_id
     if not changes:
         return member

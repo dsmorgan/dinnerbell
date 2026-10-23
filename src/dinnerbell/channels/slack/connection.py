@@ -47,6 +47,9 @@ CHECK_AGAIN_AFTER_FAILURE = 60.0
 CHECK_AGAIN_AFTER_SUCCESS = 3600.0
 """Hourly: re-check the setup and link newly invited members by email."""
 STOP_TIMEOUT_SECONDS = 10.0
+REFUSED_FLAGS = ("deleted", "is_bot", "is_app_user", "is_restricted", "is_ultra_restricted", "is_stranger")
+"""User flags that stop an email match from linking. Slack may leave a flag out when it's false
+(docs.slack.dev/reference/objects/user-object), so any value but a missing or false one refuses."""
 
 
 class Socket(Protocol):
@@ -264,10 +267,12 @@ class SlackConnection:
         return linked
 
     def _usable(self, user: dict[str, Any] | None) -> str | None:
-        if not user or user.get("deleted") or user.get("is_bot"):
+        """The user's ID if they're a full, active person in this workspace. Fails closed: a
+        missing team, a guest, a bot, an external (Slack Connect) user, or a deactivated
+        account never links."""
+        if not user or self.team_id is None or user.get("team_id") != self.team_id:
             return None
-        team = user.get("team_id")
-        if team is not None and team != self.team_id:
+        if any(user.get(flag, False) is not False for flag in REFUSED_FLAGS):
             return None
         slack_id = user.get("id")
         return slack_id if isinstance(slack_id, str) and SLACK_USER_ID_PATTERN.match(slack_id) else None

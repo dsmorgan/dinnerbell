@@ -62,24 +62,27 @@ class Unlinked:
 
 
 async def unlinked_members(db: AsyncSession) -> tuple[int, list[Unlinked]]:
-    """The household's ID and its active members without a Slack user ID."""
+    """The household's ID and its active members without a Slack user ID, except members whose
+    link the admin set or cleared by hand."""
     household = await _household(db)
     members = await MemberRepository(db).list(household.id)
-    return household.id, [Unlinked(m.id, m.email) for m in members if m.active and not m.slack_user_id]
+    unlinked = [m for m in members if m.active and not m.slack_user_id and not m.slack_link_locked]
+    return household.id, [Unlinked(m.id, m.email) for m in unlinked]
 
 
 async def link_slack_users(
     db: AsyncSession, household_id: int, found: Mapping[int, str], *, now: datetime
 ) -> list[int]:
-    """Store Slack user IDs found by email. Skips members who got one meanwhile and IDs another
-    member already has. Each link is audited as a system action. Returns the linked member IDs."""
+    """Store Slack user IDs found by email. Skips members who got one meanwhile, members whose
+    link the admin locked, and IDs another member already has. Each link is audited as a system
+    action. Returns the linked member IDs."""
     repo = MemberRepository(db)
     members = {m.id: m for m in await repo.list(household_id)}
     taken = {m.slack_user_id for m in members.values() if m.slack_user_id}
     linked: list[int] = []
     for member_id, slack_user_id in found.items():
         member = members.get(member_id)
-        if member is None or member.slack_user_id or not member.active:
+        if member is None or member.slack_user_id or member.slack_link_locked or not member.active:
             continue
         if slack_user_id in taken:
             log.warning("slack user already linked to another member", extra={"member_id": member_id})

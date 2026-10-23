@@ -352,15 +352,63 @@ async def test_unlinked_members_are_linked_by_email(house: House, caplog: pytest
     assert not any("@example.com" in r.getMessage() or "@example.com" in str(r.__dict__) for r in caplog.records)
 
 
-async def test_bots_other_workspaces_and_bad_ids_are_not_linked(house: House) -> None:
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {"team_id": None},
+        {"team_id": OTHER_TEAM},
+        {"is_restricted": True},
+        {"is_ultra_restricted": True},
+        {"is_bot": True},
+        {"is_app_user": True},
+        {"is_stranger": True},
+        {"deleted": True},
+        {"deleted": None},
+        {"id": "not-an-id"},
+    ],
+)
+async def test_only_full_members_of_this_workspace_are_linked(house: House, extra: dict[str, Any]) -> None:
     fake = FakeSlack()
-    fake.add_user("sam@example.com", "U02SAM", is_bot=True)
-    fake.add_user("kim@example.com", "U03KIM", team_id=OTHER_TEAM)
-    fake.add_user("lee@example.com", "not-an-id")
+    fake.add_user("sam@example.com", "U02SAM", **extra)
+    if extra == {"team_id": None}:
+        del fake.users_by_email["sam@example.com"]["team_id"]
     conn = connection(house, fake)
     assert await conn.run_once()
-    for name in ("Sam", "Kim", "Lee"):
-        assert (await house.refresh(name)).slack_user_id is None
+    assert (await house.refresh("Sam")).slack_user_id is None
+
+
+async def test_links_set_or_cleared_by_the_admin_stay_put(house: House) -> None:
+    from dinnerbell.domain.identity import IdentityClaims
+    from dinnerbell.services import auth, members
+
+    async with house.sessionmaker() as db:
+        await members.set_slack_user(db, house["Alex"], house["Sam"].id, "", now=house.clock())  # cleared
+        await members.set_slack_user(db, house["Alex"], house["Kim"].id, "U03KIM", now=house.clock())  # set
+    assert (await house.refresh("Sam")).slack_link_locked and (await house.refresh("Kim")).slack_link_locked
+    fake = FakeSlack()
+    fake.add_user("sam@example.com", "U02SAM")
+    fake.add_user("lee@example.com", "U04LEE")
+    conn = connection(house, fake)
+    assert await conn.run_once()  # the hourly pass
+    assert (await house.refresh("Sam")).slack_user_id is None
+    assert (await house.refresh("Lee")).slack_user_id == "U04LEE"  # not locked: linked by email
+    assert sorted(c.args["email"] for c in fake.of("users.lookupByEmail")) == ["admin@example.com", "lee@example.com"]
+    async with house.sessionmaker() as db:
+        assert await slack_members_link(db, house, {house["Sam"].id: "U02SAM"}) == []
+
+    # Sign-in with Slack doesn't override the admin either.
+    claims = IdentityClaims(
+        subject="kim-sub", email="kim@example.com", email_verified=True, slack_team_id=TEAM, slack_user_id="U9OTHER"
+    )
+    async with house.sessionmaker() as db:
+        await auth.sign_in(db, claims, required_team_id=TEAM, now=house.clock())
+    assert (await house.refresh("Kim")).slack_user_id == "U03KIM"
+
+
+async def slack_members_link(db: Any, house: House, found: dict[int, str]) -> list[int]:
+    from dinnerbell.services import slack_members
+
+    return await slack_members.link_slack_users(db, house.household.id, found, now=house.clock())
 
 
 async def test_lookup_trouble_stops_the_round_quietly(house: House, caplog: pytest.LogCaptureFixture) -> None:

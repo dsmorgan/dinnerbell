@@ -42,6 +42,7 @@ def to_member(row: MemberRow) -> Member:
         active=row.active,
         oidc_subject=row.oidc_subject,
         slack_user_id=row.slack_user_id,
+        slack_link_locked=row.slack_link_locked,
         mute_dm_reminders=row.mute_dm_reminders,
         feedback_reminder=row.feedback_reminder,
     )

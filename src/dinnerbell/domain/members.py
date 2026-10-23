@@ -50,6 +50,8 @@ class Member:
     active: bool
     oidc_subject: str | None = None
     slack_user_id: str | None = None
+    slack_link_locked: bool = False
+    """The admin set or cleared ``slack_user_id`` by hand; nothing automatic changes it."""
     mute_dm_reminders: bool = False
     feedback_reminder: bool = False
 

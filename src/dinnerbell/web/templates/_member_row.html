@@ -7,7 +7,7 @@
       <span class="badge status-{{ m.status.value }}">{{ m.status.value|capitalize }}</span>
     </div>
     <div class="muted small member-email">{{ m.email }}</div>
-    <div class="muted small">{% if m.slack_user_id %}Slack: linked as <code>{{ m.slack_user_id }}</code>{% else %}Slack: not linked yet{% endif %}</div>
+    <div class="muted small">{% if m.slack_user_id %}Slack: linked as <code>{{ m.slack_user_id }}</code>{% elif m.slack_link_locked %}Slack: unlinked{% else %}Slack: not linked yet{% endif %}{% if m.slack_link_locked %} (set by hand){% endif %}</div>
     <div class="chips">
       {% if m.capabilities.can_cook %}<span class="chip">Cooks</span>{% endif %}
       {% if m.capabilities.can_pickup %}<span class="chip">Picks up</span>{% endif %}
