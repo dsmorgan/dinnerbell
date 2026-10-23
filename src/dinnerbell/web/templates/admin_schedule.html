@@ -1,0 +1,46 @@
+{#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
+{% extends "base.html" %}
+{% block title %}Schedule{% endblock %}
+{% block content %}
+{% include "_admin_tabs.html" %}
+<h1>Schedule</h1>
+{% if notice %}<p class="alert ok" role="status">{{ notice }}</p>{% endif %}
+{% if error %}<p class="alert error" role="alert">{{ error }}</p>{% endif %}
+<form method="post" action="/admin/schedule" class="stack">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  {% for slot in slots %}{% set p = slot.value %}
+  <fieldset class="card field">
+    <legend><h2>{{ p|capitalize }}</h2></legend>
+    <label class="check"><input type="checkbox" name="{{ p }}_enabled"{% if values[p ~ "_enabled"] %} checked{% endif %}> Post a {{ p }} call every day</label>
+    <div class="pair">
+      <label class="field"><span>Call time</span><input type="time" name="{{ p }}_call_time" value="{{ values[p ~ '_call_time'] }}" required></label>
+      <label class="field"><span>Usual meal time</span><input type="time" name="{{ p }}_meal_time" value="{{ values[p ~ '_meal_time'] }}" required></label>
+    </div>
+    {% for name, label in minute_fields %}
+    <label class="field"><span>{{ label }}</span><input type="number" inputmode="numeric" name="{{ p }}_{{ name }}" min="0" max="360" value="{{ values[p ~ '_' ~ name] }}" required></label>
+    {% endfor %}
+    <fieldset class="field"><legend>Usual ways to get it</legend>
+      <div class="chip-picker">
+        {% for mode in modes %}
+        <label class="chip-toggle"><input type="checkbox" name="{{ p }}_modes" value="{{ mode.value }}"{% if mode.value in values[p ~ "_modes"] %} checked{% endif %}><span>{{ mode.label }}</span></label>
+        {% endfor %}
+      </div>
+    </fieldset>
+  </fieldset>
+  {% endfor %}
+  <fieldset class="card field">
+    <legend><h2>Ranking</h2></legend>
+    <p class="small muted">How much each reason counts when Dinnerbell picks proposals. 0 turns a reason off.</p>
+    <div class="weights">
+      {% for name, label in weights %}
+      <label class="field"><span>{{ label }}</span><input type="number" inputmode="decimal" step="0.5" min="0" max="10" name="weight_{{ name }}" value="{{ values['weight_' ~ name] }}" required></label>
+      {% endfor %}
+    </div>
+    <div class="pair">
+      <label class="field"><span>Proposals per call</span><input type="number" inputmode="numeric" min="1" max="5" name="proposal_count" value="{{ values['proposal_count'] }}" required></label>
+      <label class="field"><span>Variety window (days)</span><input type="number" inputmode="numeric" min="1" max="60" name="variety_window_days" value="{{ values['variety_window_days'] }}" required></label>
+    </div>
+  </fieldset>
+  <button type="submit" class="button primary block">Save schedule</button>
+</form>
+{% endblock %}

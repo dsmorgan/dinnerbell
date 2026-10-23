@@ -3,16 +3,36 @@
 {% block title %}Today{% endblock %}
 {% block content %}
 <h1>Hi, {{ principal.member.display_name }}</h1>
+{% for v in today.events %}
+{% include "_event.html" %}
+{% else %}
 <section class="card">
   <h2>Today</h2>
-  <p>Nothing to decide yet. Dinner calls arrive here and in Slack starting with milestone M2.</p>
-  <p class="muted small">You're signed in to {{ principal.household.name }}.</p>
+  <p>No calls yet today. The dinner call arrives here and in Slack at its usual time, or start one now.</p>
 </section>
+{% endfor %}
+<details class="card"{% if start_error %} open{% endif %}>
+  <summary><h2>Start a call</h2></summary>
+  {% if start_error %}<p class="alert error" role="alert">{{ start_error }}</p>{% endif %}
+  <form method="post" action="/events" class="stack">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="pair">
+      <label class="field"><span>Meal</span>
+        <select name="slot">{% for slot in today.slots %}<option value="{{ slot.value }}"{% if slot.value == "dinner" %} selected{% endif %}>{{ slot.value|capitalize }}</option>{% endfor %}</select>
+      </label>
+      <label class="field"><span>Day</span><input type="date" name="day" value="{{ today.today.isoformat() }}" min="{{ today.today.isoformat() }}" required></label>
+    </div>
+    <button type="submit" class="button primary block">Start the call</button>
+  </form>
+</details>
 {% if principal.member.is_admin %}
 <section class="card">
   <h2>Set up the household</h2>
-  <p>Invite everyone who eats here so they can sign in.</p>
-  <a class="button" href="/admin/members">Manage members</a>
+  <p>Invite everyone who eats here, and set when calls go out.</p>
+  <div class="button-row">
+    <a class="button" href="/admin/members">Manage members</a>
+    <a class="button" href="/admin/schedule">Schedule</a>
+  </div>
 </section>
 {% endif %}
 {% endblock %}

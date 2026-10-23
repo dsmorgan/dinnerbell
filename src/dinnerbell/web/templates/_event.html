@@ -1,0 +1,215 @@
+{#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
+{#- One event's card. Expects v (an EventView), from_page ("today" or "event"), and optionally
+    error. Every action is a small form that HTMX posts, swapping this card in place. -#}
+{% macro act(eid, path, label, cls="button small", fields={}, confirm=None, pressed=None) -%}
+<form method="post" action="{{ path }}" class="inline" hx-post="{{ path }}" hx-target="#event-{{ eid }}" hx-swap="outerHTML"{% if confirm %} hx-confirm="{{ confirm }}"{% endif %}>
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <input type="hidden" name="from" value="{{ from_page }}">
+  {%- for name, value in fields.items() %}
+  <input type="hidden" name="{{ name }}" value="{{ value }}">
+  {%- endfor %}
+  <button type="submit" class="{{ cls }}"{% if pressed is not none %} aria-pressed="{{ 'true' if pressed else 'false' }}"{% endif %}>{{ label }}</button>
+</form>
+{%- endmacro %}
+{% macro hidden() -%}
+<input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+<input type="hidden" name="from" value="{{ from_page }}">
+{%- endmacro %}
+{% set e = v.event %}{% set tz = v.info.timezone %}{% set base = "/events/" ~ e.id %}
+{% set swap = 'hx-target="#event-' ~ e.id ~ '" hx-swap="outerHTML"' %}
+<section class="card event state-{{ e.state.value }}" id="event-{{ e.id }}" aria-labelledby="event-{{ e.id }}-title">
+  <div class="event-head">
+    <h2 id="event-{{ e.id }}-title"><a href="{{ base }}">{{ e.slot.value|capitalize }}</a> <span class="muted small">{{ e.day|day }}</span></h2>
+    <span class="badge state state-{{ e.state.value }}">{{ e.state.label }}</span>
+  </div>
+  {% if error %}<p class="alert error small" role="alert">{{ error }}</p>{% endif %}
+
+  <p class="event-when small">
+    {%- if e.state.value == "scheduled" %}Opens at {{ e.opens_at|clock(tz) }}.
+    {%- elif e.state.value == "collecting" %}Answer by <strong>{{ e.respond_deadline|clock(tz) }}</strong>.
+    {%- elif e.state.value == "voting" %}Vote by <strong>{{ e.vote_deadline|clock(tz) }}</strong>.
+    {%- elif e.state.value in ("decided", "done") and e.meal_time %}Eating at <strong>{{ e.meal_time|clock(tz) }}</strong>.
+    {%- elif e.state.value == "abandoned" %}Everyone's on their own{% if e.end_reason and e.end_reason.value == "no_coverage" %}: nothing worked for everyone who could make it{% endif %}.
+    {%- elif e.state.value == "cancelled" %}Cancelled by an admin.
+    {%- endif %}
+    {% if v.info.coordinator %}Coordinator: {{ v.info.coordinator.name }}.{% elif e.state.is_open %}No coordinator yet.{% endif %}
+  </p>
+
+  {% if v.can.respond %}
+  {% set mine = v.mine %}
+  <div class="button-row respond" role="group" aria-label="Are you in?">
+    {% for status, label in (("in", "In"), ("out", "Out"), ("maybe", "Maybe")) %}
+    {{ act(e.id, base ~ "/respond", label, "button small choice", {"status": status}, pressed=(mine is not none and mine.status.value == status)) }}
+    {% endfor %}
+  </div>
+  <div class="button-row roles" role="group" aria-label="What can you do?">
+    {% for role, label in (("cook", "I can cook"), ("pickup", "I can pick up"), ("order", "I'll order")) %}
+    {% set offered = mine is not none and role in mine.offers|map(attribute="value")|list %}
+    {{ act(e.id, base ~ "/offer", label, "button small choice", {"role": role, "offered": "0" if offered else "1"}, pressed=offered) }}
+    {% endfor %}
+    {% if v.can.claim %}{{ act(e.id, base ~ "/coordinate", "I'll coordinate", "button small choice") }}{% endif %}
+  </div>
+  <details class="details-form">
+    <summary class="small">Guests, times, a suggestion, or a note</summary>
+    <form method="post" action="{{ base }}/details" hx-post="{{ base }}/details" {{ swap|safe }} class="stack">
+      {{ hidden() }}
+      <label class="field"><span>Guests</span><input type="number" name="guests" min="0" max="20" inputmode="numeric" value="{{ mine.guests if mine else 0 }}"></label>
+      {% if v.dietary_tags %}
+      <fieldset class="field"><legend>Guests' dietary needs</legend>
+        <div class="chip-picker">
+          {% for tag in v.dietary_tags %}
+          <label class="chip-toggle"><input type="checkbox" name="guest_needs" value="{{ tag.id }}"{% if mine and tag.id in mine.guest_needs %} checked{% endif %}><span>{{ tag.name }}</span></label>
+          {% endfor %}
+        </div>
+      </fieldset>
+      {% endif %}
+      <div class="pair">
+        <label class="field"><span>Earliest</span><input type="time" name="eat_from" value="{{ mine.eat_from|hhmm if mine else '' }}"></label>
+        <label class="field"><span>Latest</span><input type="time" name="eat_until" value="{{ mine.eat_until|hhmm if mine else '' }}"></label>
+      </div>
+      <label class="field"><span>Suggest from the catalog</span>
+        <select name="suggestion_item">
+          <option value="">Nothing</option>
+          {% for item in v.items %}<option value="{{ item.id }}"{% if item.id in v.my_suggestion_ids %} selected{% endif %}>{{ item.name }}</option>{% endfor %}
+        </select>
+      </label>
+      <label class="field"><span>Or suggest something new</span><input type="text" name="suggestion_text" maxlength="100" value="{{ v.my_suggestion_texts|first if v.my_suggestion_texts else '' }}"></label>
+      <label class="field"><span>Note</span><input type="text" name="note" maxlength="200" value="{{ mine.note or '' if mine else '' }}"></label>
+      <button type="submit" class="button primary">Save details</button>
+    </form>
+  </details>
+  {% endif %}
+
+  {% if v.roster or v.waiting_on %}
+  <h3>Who's in <span class="muted small">· {{ v.head_count }} eating</span></h3>
+  <ul class="roster">
+    {% for r in v.roster %}
+    <li class="status-{{ r.status.value }}">
+      <strong>{{ r.member.name }}</strong>
+      <span class="chip status">{{ r.status.value|capitalize }}</span>
+      {% if r.guests %}<span class="chip">+{{ r.guests }} guest{{ "" if r.guests == 1 else "s" }}{% if r.guest_needs %}: {{ r.guest_needs|join(", ") }}{% endif %}</span>{% endif %}
+      {% for o in r.offers %}<span class="chip role">{{ {"cook": "Cooks", "pickup": "Picks up", "order": "Orders"}[o.value] }}</span>{% endfor %}
+      {% if r.eat_from or r.eat_until %}<span class="small muted">{{ r.eat_from|wall }}{% if r.eat_until %}–{{ r.eat_until|wall }}{% endif %}</span>{% endif %}
+      {% if r.suggestions %}<div class="small">Suggests {{ r.suggestions|join(", ") }}</div>{% endif %}
+      {% if r.note %}<div class="small muted note">{{ r.note }}</div>{% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+  {% if v.waiting_on and e.state.value == "collecting" %}<p class="small muted">Waiting on {{ v.waiting_on|map(attribute="name")|join(", ") }}.</p>{% endif %}
+  {% endif %}
+
+  {% if v.can.hand_off %}
+  <form method="post" action="{{ base }}/hand-off" hx-post="{{ base }}/hand-off" {{ swap|safe }} class="inline-form">
+    {{ hidden() }}
+    <label class="field compact"><span>Hand off coordinating</span>
+      <select name="member_id">{% for m in v.members if m.id != principal.member.id %}<option value="{{ m.id }}">{{ m.name }}</option>{% endfor %}</select>
+    </label>
+    <button type="submit" class="button small">Hand off</button>
+  </form>
+  {% endif %}
+
+  {% if v.proposals and e.state.value == "voting" %}
+  <h3>Proposals</h3>
+  <ol class="proposals">
+    {% for p in v.proposals %}
+    <li class="proposal">
+      <div class="item-head">
+        <strong>{% if p.info.item.url %}<a href="{{ p.info.item.url }}" rel="noopener noreferrer" target="_blank">{{ p.info.item.name }}</a>{% else %}{{ p.info.item.name }}{% endif %}</strong>
+        <span class="chip mode">{{ p.info.mode.label }}</span>
+        {% for c in p.info.item.cuisines %}<span class="chip tag-cuisine">{{ c }}</span>{% endfor %}
+      </div>
+      <p class="small reasons">{{ p.info.reasons|join(" ") }}</p>
+      <p class="small votes">{{ p.info.votes }} vote{{ "" if p.info.votes == 1 else "s" }}{% if p.info.voters %}: {{ p.info.voters|map(attribute="name")|join(", ") }}{% endif %}</p>
+      <div class="button-row">
+        {% if v.can.vote %}
+        {% if p.voted %}{{ act(e.id, base ~ "/proposals/" ~ p.info.id ~ "/unvote", "Voted", "button small choice", pressed=true) }}
+        {% else %}{{ act(e.id, base ~ "/proposals/" ~ p.info.id ~ "/vote", "Vote", "button small choice", pressed=false) }}{% endif %}
+        {% endif %}
+        {% if v.can.lock %}{{ act(e.id, base ~ "/proposals/" ~ p.info.id ~ "/lock", "Lock this", "button small primary", confirm="Decide on " ~ p.info.item.name ~ " now?") }}{% endif %}
+      </div>
+    </li>
+    {% endfor %}
+  </ol>
+  {% if v.can.propose %}
+  <details class="details-form">
+    <summary class="small">Add a proposal</summary>
+    <form method="post" action="{{ base }}/proposals" hx-post="{{ base }}/proposals" {{ swap|safe }} class="stack">
+      {{ hidden() }}
+      <label class="field"><span>How</span>
+        <select name="mode"><option value="pickup">Pickup</option><option value="delivery">Delivery</option><option value="cook">Cook</option></select>
+      </label>
+      <label class="field"><span>From the catalog</span>
+        <select name="item_id"><option value="">Something new instead</option>{% for item in v.items %}<option value="{{ item.id }}">{{ item.name }}</option>{% endfor %}</select>
+      </label>
+      <div class="pair">
+        <label class="field"><span>New place or dish</span><input type="text" name="free_text" maxlength="100"></label>
+        <label class="field"><span>Cuisine</span>
+          <select name="cuisine_id"><option value="">Pick one</option>{% for tag in v.cuisine_tags %}<option value="{{ tag.id }}">{{ tag.name }}</option>{% endfor %}</select>
+        </label>
+      </div>
+      <button type="submit" class="button primary">Propose</button>
+    </form>
+  </details>
+  {% endif %}
+  {% endif %}
+
+  {% if v.decision %}
+  {% set d = v.decision %}
+  <div class="decision">
+    <h3>{% if d.proposal.item.url %}<a href="{{ d.proposal.item.url }}" rel="noopener noreferrer" target="_blank">{{ d.proposal.item.name }}</a>{% else %}{{ d.proposal.item.name }}{% endif %} <span class="chip mode">{{ d.proposal.mode.label }}</span></h3>
+    <p class="small">{{ d.head_count }} eating: {{ d.participants|map(attribute="member.name")|join(", ") }}{% if d.dietary_notes %}. Guests need: {{ d.dietary_notes|join(", ") }}{% endif %}.</p>
+    <ul class="chips assignments">
+      {% for a in d.assignments %}<li class="chip role">{{ {"cook": "Cooking", "pickup": "Picking up", "order": "Ordering", "coordinator": "Coordinating"}[a.role.value] }}: {{ a.member.name }}</li>{% endfor %}
+    </ul>
+    {% if v.can.mark_done %}<div class="button-row">{{ act(e.id, base ~ "/done", "Mark done", "button small primary") }}</div>{% endif %}
+    {% if v.can.manage %}
+    <details class="details-form">
+      <summary class="small">Change the time or who does what</summary>
+      {% if e.state.value == "decided" %}
+      <form method="post" action="{{ base }}/meal-time" hx-post="{{ base }}/meal-time" {{ swap|safe }} class="inline-form">
+        {{ hidden() }}
+        <label class="field compact"><span>Meal time</span><input type="time" name="at" value="{{ e.meal_time|local_hhmm(tz) }}"></label>
+        <button type="submit" class="button small">Save time</button>
+      </form>
+      {% endif %}
+      <form method="post" action="{{ base }}/assignments" hx-post="{{ base }}/assignments" {{ swap|safe }} class="inline-form">
+        {{ hidden() }}
+        <label class="field compact"><span>Role</span>
+          <select name="role"><option value="cook">Cook</option><option value="pickup">Pickup</option><option value="order">Order</option></select>
+        </label>
+        <label class="field compact"><span>Who</span>
+          <select name="member_id"><option value="">Nobody</option>{% for m in v.members %}<option value="{{ m.id }}">{{ m.name }}</option>{% endfor %}</select>
+        </label>
+        <button type="submit" class="button small">Assign</button>
+      </form>
+    </details>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  {% if v.can.admin and (e.state.is_open or v.can.rerun) %}
+  <details class="details-form admin-controls">
+    <summary class="small">Admin</summary>
+    {% if v.can.move_window %}
+    <div class="button-row" role="group" aria-label="Move the {{ 'response' if v.can.move_window.value == 'respond' else 'vote' }} deadline">
+      {% for shift, label in (("plus15", "+15 min"), ("plus30", "+30 min"), ("minus15", "−15 min"), ("close", "Close now")) %}
+      {{ act(e.id, base ~ "/admin/deadline", label, "button small", {"window": v.can.move_window.value, "shift": shift}) }}
+      {% endfor %}
+    </div>
+    {% endif %}
+    {% if e.state.is_open and e.state.value != "scheduled" %}
+    <form method="post" action="{{ base }}/admin/coordinator" hx-post="{{ base }}/admin/coordinator" {{ swap|safe }} class="inline-form">
+      {{ hidden() }}
+      <label class="field compact"><span>Coordinator</span>
+        <select name="member_id"><option value="">Nobody</option>{% for m in v.members %}<option value="{{ m.id }}"{% if v.info.coordinator and v.info.coordinator.id == m.id %} selected{% endif %}>{{ m.name }}</option>{% endfor %}</select>
+      </label>
+      <button type="submit" class="button small">Assign</button>
+    </form>
+    {% endif %}
+    <div class="button-row">
+      {% if e.state.is_open %}{{ act(e.id, base ~ "/admin/cancel", "Cancel this call", "button small danger", confirm="Cancel this call for everyone?") }}{% endif %}
+      {% if v.can.rerun %}{{ act(e.id, base ~ "/admin/rerun", "Re-run", "button small", confirm="Start this call over? Proposals, votes, and any decision are cleared.") }}{% endif %}
+    </div>
+  </details>
+  {% endif %}
+</section>

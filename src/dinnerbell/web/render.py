@@ -11,11 +11,13 @@ from starlette.responses import Response
 
 from dinnerbell import __version__
 from dinnerbell.services.household import current_household
+from dinnerbell.web import filters
 from dinnerbell.web.context import TEMPLATES, app_context
 
 HTMX_FILE = "htmx-2.0.11.min.js"
 FALLBACK_NAME = "Dinnerbell"
 log = logging.getLogger(__name__)
+filters.register(TEMPLATES.env)
 
 
 def is_htmx(request: Request) -> bool:

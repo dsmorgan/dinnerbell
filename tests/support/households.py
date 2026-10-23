@@ -52,3 +52,31 @@ def other_household(settings: Settings) -> dict[str, int]:
     finally:
         engine.dispose()
     return {"household": household, "tag": tag, "item": item, "meal": meal}
+
+
+def other_call(settings: Settings, ids: dict[str, int]) -> dict[str, int]:
+    """Give the other household a voting dinner call with one proposal, from ``other_household``."""
+    engine = create_engine(settings.sync_database_url)
+    try:
+        with engine.begin() as c:
+            c.execute(
+                text(
+                    "INSERT INTO event (household_id, kind, slot, date, state, run, version, opens_at, "
+                    "respond_deadline, vote_deadline, reminder_minutes, vote_minutes, created_at, updated_at) "
+                    "VALUES (:h, 'call', 'dinner', '2026-10-22', 'voting', 1, 1, :t, :t, '2099-01-01 00:00:00', "
+                    "15, 45, :t, :t)"
+                ),
+                {"h": ids["household"], "t": STAMP},
+            )
+            event = c.execute(text("SELECT max(id) FROM event")).scalar_one()
+            c.execute(
+                text(
+                    "INSERT INTO proposal (household_id, event_id, item_id, mode, rank, reasons, source, created_at) "
+                    "VALUES (:h, :e, :i, 'pickup', 1, '[]', 'system', :t)"
+                ),
+                {"h": ids["household"], "e": event, "i": ids["item"], "t": STAMP},
+            )
+            proposal = c.execute(text("SELECT max(id) FROM proposal")).scalar_one()
+    finally:
+        engine.dispose()
+    return {"event": event, "proposal": proposal}
