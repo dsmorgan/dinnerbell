@@ -60,15 +60,17 @@ STATE_LABELS = {
 }
 
 TRANSITIONS: Mapping[EventState, frozenset[EventState]] = {
-    EventState.SCHEDULED: frozenset({EventState.COLLECTING, EventState.CANCELLED}),
+    # Scheduled to abandoned: its whole window passed while the server was down (missed).
+    EventState.SCHEDULED: frozenset({EventState.COLLECTING, EventState.CANCELLED, EventState.ABANDONED}),
     EventState.COLLECTING: frozenset({EventState.VOTING, EventState.ABANDONED, EventState.CANCELLED}),
     # Back to collecting is the admin's re-run (FR-6).
     EventState.VOTING: frozenset(
         {EventState.DECIDED, EventState.ABANDONED, EventState.CANCELLED, EventState.COLLECTING}
     ),
     EventState.DECIDED: frozenset({EventState.DONE, EventState.CANCELLED, EventState.COLLECTING}),
-    EventState.ABANDONED: frozenset({EventState.COLLECTING}),
-    EventState.CANCELLED: frozenset({EventState.COLLECTING}),
+    # Re-runs: to collecting for today, to scheduled for a later day (FR-3 timing).
+    EventState.ABANDONED: frozenset({EventState.COLLECTING, EventState.SCHEDULED}),
+    EventState.CANCELLED: frozenset({EventState.COLLECTING, EventState.SCHEDULED}),
     EventState.DONE: frozenset(),
 }
 
@@ -103,6 +105,8 @@ class EventKind(StrEnum):
 class EndReason(StrEnum):
     TOO_FEW = "too_few"
     NO_COVERAGE = "no_coverage"
+    MISSED = "missed"
+    """The server was down until it was too late to decide for that day; ended quietly."""
 
 
 class Status(StrEnum):
@@ -532,11 +536,15 @@ def check_ad_hoc_day(day: date, today: date) -> None:
         raise EventRuleViolation(f"You can start a call up to {AD_HOC_DAYS_AHEAD} days ahead.")
 
 
-def check_rerun(event: Event, today: date) -> None:
+def check_rerun(event: Event, today: date, *, now: datetime, too_late_after: datetime) -> None:
+    """``too_late_after`` is the usual meal time plus two hours on ``today``: past it, a re-run
+    of today's call would only be expired again."""
     if event.state not in {EventState.VOTING, EventState.DECIDED, EventState.ABANDONED, EventState.CANCELLED}:
         raise EventRuleViolation("Only a call that's voting, decided, abandoned, or cancelled can be re-run.")
     if event.day < today:
         raise EventRuleViolation("Only today's or a later call can be re-run.")
+    if event.day == today and now >= too_late_after:
+        raise EventRuleViolation("It's too late to re-run today's call. Start one for tomorrow instead.")
 
 
 def shifted_deadline(current: datetime, minutes: int | None, now: datetime) -> datetime:
@@ -562,6 +570,7 @@ def check_window_change(event: Event, window: Window) -> datetime:
 
 
 class Step(StrEnum):
+    EXPIRE = "expire"
     OPEN = "open"
     REMIND = "remind"
     CLOSE_RESPONSES = "close_responses"
@@ -569,14 +578,34 @@ class Step(StrEnum):
     MARK_DONE = "mark_done"
 
 
-def due_step(event: Event, now: datetime) -> Step | None:
+UNDECIDED = frozenset({EventState.SCHEDULED, EventState.COLLECTING, EventState.VOTING})
+
+
+def stale_after(event: Event, *, usual_meal: time, zone: tzinfo) -> datetime:
+    """When an undecided call is too old to finish: the later of the slot's usual meal time
+    plus two hours and the call's own vote deadline plus two hours, but never past midnight
+    after its day. A late ad-hoc call keeps its evening; a call nobody could reach after a long
+    outage doesn't decide dinner at 22:00 or on Saturday."""
+    midnight = datetime.combine(event.day + timedelta(days=1), time(0), tzinfo=zone).astimezone(UTC)
+    usual = datetime.combine(event.day, usual_meal, tzinfo=zone).astimezone(UTC) + DONE_AFTER_MEAL
+    natural_end = event.vote_deadline or event.respond_deadline + timedelta(minutes=event.vote_minutes)
+    return min(midnight, max(usual, natural_end + DONE_AFTER_MEAL))
+
+
+def due_step(event: Event, now: datetime, *, stale_after: datetime) -> Step | None:
     """The next thing the scheduler owes ``event`` at ``now``, if anything.
 
     After downtime, calling this repeatedly walks an event through every missed step. A
-    reminder whose deadline has already passed is skipped: it would only arrive too late.
+    reminder whose deadline has already passed is skipped: it would only arrive too late. An
+    undecided call past ``stale_after``, or a scheduled call whose response window already
+    passed, expires instead of being caught up (FR-2).
     """
-    if event.state is EventState.SCHEDULED and now >= event.opens_at:
-        return Step.OPEN
+    if event.state in UNDECIDED and now >= stale_after:
+        return Step.EXPIRE
+    if event.state is EventState.SCHEDULED:
+        if now >= event.respond_deadline:
+            return Step.EXPIRE
+        return Step.OPEN if now >= event.opens_at else None
     if event.state is EventState.COLLECTING:
         if now >= event.respond_deadline:
             return Step.CLOSE_RESPONSES

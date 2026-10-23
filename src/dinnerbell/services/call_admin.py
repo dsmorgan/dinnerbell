@@ -75,7 +75,9 @@ async def cancel(db: AsyncSession, actor: Member, event_id: int, *, now: datetim
 
 
 async def rerun(db: AsyncSession, actor: Member, event_id: int, *, now: datetime) -> None:
-    """Start the call again from collecting, with fresh windows from the current schedule.
+    """Start the call again with fresh windows from the current schedule: now, for today's
+    call, or at the slot's call time for a later day (FR-3 timing). Refused for today's call
+    once it's past the usual meal time plus two hours.
 
     Responses stay; maybes the deadline turned out are maybes again. Proposals, votes, the
     decision, and assignments are cleared. The run number goes up, so the channel posts a new
@@ -84,18 +86,21 @@ async def rerun(db: AsyncSession, actor: Member, event_id: int, *, now: datetime
     require_admin(actor, ADMINS_ONLY)
     async with locked_event(db, actor.household_id, event_id, now) as event:
         ctx = await load(db, event)
-        check_rerun(event, household_today(ctx.household, now))
+        today = household_today(ctx.household, now)
+        check_rerun(event, today, now=now, too_late_after=ctx.too_late_for(today))
         household_id = actor.household_id
         await ProposalRepository(db).clear(household_id, event.id)
         await AssignmentRepository(db).clear(household_id, event.id)
         await ResponseRepository(db).restore_maybes(household_id, event.id, now)
         schedule = ctx.schedule
+        later = event.day > today
+        opens_at = schedule.opens_at(event.day, ctx.zone) if later else now
         fresh = replace(
             event,
-            state=transition(event.state, EventState.COLLECTING),
+            state=transition(event.state, EventState.SCHEDULED if later else EventState.COLLECTING),
             run=event.run + 1,
-            opens_at=now,
-            respond_deadline=now + schedule.response_window,
+            opens_at=opens_at,
+            respond_deadline=opens_at + schedule.response_window,
             reminder_minutes=schedule.reminder_minutes,
             vote_minutes=schedule.vote_minutes,
             vote_deadline=None,
@@ -107,8 +112,9 @@ async def rerun(db: AsyncSession, actor: Member, event_id: int, *, now: datetime
             end_reason=None,
         )
         fresh = await EventRepository(db).save(fresh, now)
-        ctx = await load(db, fresh)
-        await publish(db, ctx, cc.call_opened(ctx), now=now)
+        if not later:  # a later day's call is posted when the tick opens it
+            ctx = await load(db, fresh)
+            await publish(db, ctx, cc.call_opened(ctx), now=now)
         payload = {"from": event.state.value, "run": fresh.run, "respond_by": fresh.respond_deadline.isoformat()}
         await audit(db, household_id, actor, "event.rerun", _target(event), payload, now)
 

@@ -92,7 +92,7 @@ def _window(event: Event) -> Window | None:
     return Window.VOTE if event.state is EventState.VOTING else None
 
 
-def permissions(ctx: CallContext, actor: Member, today: date) -> Permissions:
+def permissions(ctx: CallContext, actor: Member, today: date, now: datetime) -> Permissions:
     event, mine = ctx.event, ctx.response_of(actor.id)
     admin = actor.active and actor.is_admin
     return Permissions(
@@ -105,12 +105,13 @@ def permissions(ctx: CallContext, actor: Member, today: date) -> Permissions:
         manage=_allowed(lambda: rules.check_can_manage_decision(event, actor)),
         mark_done=_allowed(lambda: rules.check_can_mark_done(event, actor, mine)),
         admin=admin,
-        rerun=admin and _allowed(lambda: rules.check_rerun(event, today)),
+        rerun=admin
+        and _allowed(lambda: rules.check_rerun(event, today, now=now, too_late_after=ctx.too_late_for(today))),
         move_window=_window(event) if admin else None,
     )
 
 
-def view(ctx: CallContext, actor: Member, today: date) -> EventView:
+def view(ctx: CallContext, actor: Member, today: date, now: datetime) -> EventView:
     by_name = sorted(ctx.active_members, key=lambda m: m.display_name.casefold())
     mine = [s for s in ctx.suggestions if s.member_id == actor.id]
     tags = sorted(ctx.tags.values(), key=lambda t: t.key)
@@ -127,7 +128,7 @@ def view(ctx: CallContext, actor: Member, today: date) -> EventView:
             ProposalView(cc.proposal_info(ctx, p), actor.id in ctx.votes.get(p.id, [])) for p in ctx.proposals
         ),
         decision=cc.decision_info(ctx),
-        can=permissions(ctx, actor, today),
+        can=permissions(ctx, actor, today, now),
         members=tuple(ctx.person(m.id) for m in by_name),
         dietary_tags=tuple(t for t in tags if t.kind is TagKind.DIETARY),
         cuisine_tags=tuple(t for t in tags if t.kind is TagKind.CUISINE),
@@ -146,7 +147,7 @@ async def event_view(db: AsyncSession, actor: Member, event_id: int, *, now: dat
     event = await EventRepository(db).get(actor.household_id, event_id)
     if event is None:
         raise NotFound(cc.NO_SUCH_CALL)
-    return view(await load(db, event), actor, await _today(db, actor, now))
+    return view(await load(db, event), actor, await _today(db, actor, now), now)
 
 
 async def today_view(db: AsyncSession, actor: Member, *, now: datetime) -> TodayView:
@@ -154,6 +155,6 @@ async def today_view(db: AsyncSession, actor: Member, *, now: datetime) -> Today
     events = await EventRepository(db).for_today(actor.household_id, today)
     return TodayView(
         today=today,
-        events=[view(await load(db, event), actor, today) for event in events],
+        events=[view(await load(db, event), actor, today, now) for event in events],
         slots=tuple(Slot),
     )

@@ -159,7 +159,7 @@ Requirements use "must" for version 1 and "should" for items that can slip to a 
 | FR-3 | Any member must be able to start an ad-hoc call for a slot and date from Slack or the web app. A call for today opens at once; a call for a later day, up to 7 days ahead, opens at the slot's call time. A slot has at most one call per date. |
 | FR-4 | Any member must be able to post an offer with item, fulfillment mode, time, and capacity. |
 | FR-5 | An offer for a slot that already has an open call must attach to it as a proposal; a cooking offer posted before the call must replace that day's call. |
-| FR-6 | The admin must be able to extend, shorten, lock, cancel, and re-run events. Re-running a voting, decided, abandoned, or cancelled call for today or later reopens it for responses with fresh windows; responses stay, and proposals, votes, the decision, and assignments are cleared. |
+| FR-6 | The admin must be able to extend, shorten, lock, cancel, and re-run events. Re-running a voting, decided, abandoned, or cancelled call reopens it with fresh windows: now for today's call (not after the usual meal time plus two hours), or at the slot's call time for a later day. Responses stay; proposals, votes, the decision, and assignments are cleared. |
 
 ### 6.2 Responses
 
@@ -308,6 +308,7 @@ stateDiagram-v2
     voting --> abandoned: deadline, no coverage
     decided --> done: meal time + 2h or marked done
     scheduled --> cancelled: admin
+    scheduled --> abandoned: window passed during downtime
     collecting --> cancelled: admin
     voting --> cancelled: admin
     decided --> cancelled: admin
@@ -315,6 +316,8 @@ stateDiagram-v2
     decided --> collecting: admin re-run
     abandoned --> collecting: admin re-run
     cancelled --> collecting: admin re-run
+    abandoned --> scheduled: admin re-run, later day
+    cancelled --> scheduled: admin re-run, later day
     done --> [*]
     abandoned --> [*]
     cancelled --> [*]
@@ -324,7 +327,9 @@ Offers use a shorter chain: open, then full or closed at the stated time, then d
 
 Transitions are driven by two sources: user actions through a channel or the web, and scheduler ticks. Every transition is a single transaction that updates state, writes the notification outbox, and records the audit row. The outbox is drained by the channel adapter so a Slack outage never loses a state change.
 
-The scheduler doesn't keep a job per deadline. One tick every 30 seconds opens each household's due calls and walks every open event through each step it owes, in order, so downtime past several deadlines is caught up on the next tick. A reminder whose response deadline has already passed is skipped. [docs/channels.md](channels.md) is the outbox and adapter contract.
+The scheduler doesn't keep a job per deadline. One tick every 30 seconds opens each household's due calls and walks every open event through each step it owes, in order, so downtime past several deadlines is caught up on the next tick. A reminder whose response deadline has already passed is skipped.
+
+Catch-up stops where it would be too late to matter. An undecided call (scheduled, collecting, or voting) expires once it passes the later of the slot's usual meal time plus two hours and its own vote deadline plus two hours, and always at midnight after its day; a scheduled call whose response window passed while the server was down expires without being posted (FR-2); and a decision whose meal time would fall after its day expires instead. An expired call is abandoned with the reason "missed", quietly: no new channel post and no direct messages, only its existing messages updated. [docs/channels.md](channels.md) is the outbox and adapter contract.
 
 ## 9. Notifications
 

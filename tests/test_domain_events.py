@@ -72,6 +72,7 @@ def event(state: EventState = EventState.COLLECTING, **changes: object) -> Event
 ALLOWED = {
     (EventState.SCHEDULED, EventState.COLLECTING),
     (EventState.SCHEDULED, EventState.CANCELLED),
+    (EventState.SCHEDULED, EventState.ABANDONED),
     (EventState.COLLECTING, EventState.VOTING),
     (EventState.COLLECTING, EventState.ABANDONED),
     (EventState.COLLECTING, EventState.CANCELLED),
@@ -84,6 +85,8 @@ ALLOWED = {
     (EventState.DECIDED, EventState.COLLECTING),
     (EventState.ABANDONED, EventState.COLLECTING),
     (EventState.CANCELLED, EventState.COLLECTING),
+    (EventState.ABANDONED, EventState.SCHEDULED),
+    (EventState.CANCELLED, EventState.SCHEDULED),
 }
 
 
@@ -386,13 +389,18 @@ def test_ad_hoc_days_and_reruns() -> None:
         ev.check_ad_hoc_day(today - timedelta(days=1), today)
     with pytest.raises(EventRuleViolation, match="7 days"):
         ev.check_ad_hoc_day(today + timedelta(days=8), today)
+    late = NOW + timedelta(hours=4)
     for state in (EventState.VOTING, EventState.DECIDED, EventState.ABANDONED, EventState.CANCELLED):
-        ev.check_rerun(event(state), today)
+        ev.check_rerun(event(state), today, now=NOW, too_late_after=late)
     for state in (EventState.SCHEDULED, EventState.COLLECTING, EventState.DONE):
         with pytest.raises(EventRuleViolation, match="re-run"):
-            ev.check_rerun(event(state), today)
+            ev.check_rerun(event(state), today, now=NOW, too_late_after=late)
     with pytest.raises(EventRuleViolation, match="today's"):
-        ev.check_rerun(event(EventState.ABANDONED), today + timedelta(days=1))
+        ev.check_rerun(event(EventState.ABANDONED), today + timedelta(days=1), now=NOW, too_late_after=late)
+    with pytest.raises(EventRuleViolation, match="too late to re-run"):
+        ev.check_rerun(event(EventState.ABANDONED), today, now=late, too_late_after=late)
+    tomorrow = event(EventState.CANCELLED, day=today + timedelta(days=1))
+    ev.check_rerun(tomorrow, today, now=late, too_late_after=late)  # a later day keeps its own timing
 
 
 def test_window_changes() -> None:
@@ -413,26 +421,59 @@ def test_window_changes() -> None:
 # Scheduler steps ------------------------------------------------------------------------------
 
 
+FAR = NOW + timedelta(days=30)
+
+
 def test_due_steps_walk_an_event_through_missed_deadlines() -> None:
     scheduled = event(EventState.SCHEDULED, opens_at=NOW + timedelta(minutes=1))
-    assert ev.due_step(scheduled, NOW) is None
-    assert ev.due_step(scheduled, NOW + timedelta(minutes=1)) is Step.OPEN
+    assert ev.due_step(scheduled, NOW, stale_after=FAR) is None
+    assert ev.due_step(scheduled, NOW + timedelta(minutes=1), stale_after=FAR) is Step.OPEN
     collecting = event()
-    assert ev.due_step(collecting, NOW + timedelta(minutes=74)) is None
-    assert ev.due_step(collecting, NOW + timedelta(minutes=75)) is Step.REMIND
+    assert ev.due_step(collecting, NOW + timedelta(minutes=74), stale_after=FAR) is None
+    assert ev.due_step(collecting, NOW + timedelta(minutes=75), stale_after=FAR) is Step.REMIND
     reminded = replace(collecting, reminder_sent_at=NOW)
-    assert ev.due_step(reminded, NOW + timedelta(minutes=89)) is None
-    assert ev.due_step(reminded, NOW + timedelta(minutes=90)) is Step.CLOSE_RESPONSES
+    assert ev.due_step(reminded, NOW + timedelta(minutes=89), stale_after=FAR) is None
+    assert ev.due_step(reminded, NOW + timedelta(minutes=90), stale_after=FAR) is Step.CLOSE_RESPONSES
     # After downtime past the deadline, the reminder is skipped, not sent late.
-    assert ev.due_step(collecting, NOW + timedelta(hours=5)) is Step.CLOSE_RESPONSES
+    assert ev.due_step(collecting, NOW + timedelta(hours=5), stale_after=FAR) is Step.CLOSE_RESPONSES
     voting = event(EventState.VOTING, vote_deadline=NOW)
-    assert ev.due_step(voting, NOW - timedelta(seconds=1)) is None
-    assert ev.due_step(voting, NOW) is Step.CLOSE_VOTING
+    assert ev.due_step(voting, NOW - timedelta(seconds=1), stale_after=FAR) is None
+    assert ev.due_step(voting, NOW, stale_after=FAR) is Step.CLOSE_VOTING
     decided = event(EventState.DECIDED, meal_time=NOW)
-    assert ev.due_step(decided, NOW + timedelta(hours=2) - timedelta(seconds=1)) is None
-    assert ev.due_step(decided, NOW + timedelta(hours=2)) is Step.MARK_DONE
+    assert ev.due_step(decided, NOW + timedelta(hours=2) - timedelta(seconds=1), stale_after=FAR) is None
+    assert ev.due_step(decided, NOW + timedelta(hours=2), stale_after=FAR) is Step.MARK_DONE
     for state in (EventState.DONE, EventState.ABANDONED, EventState.CANCELLED):
-        assert ev.due_step(event(state), NOW + timedelta(days=1)) is None
+        assert ev.due_step(event(state), NOW + timedelta(days=1), stale_after=NOW) is None
+
+
+def test_stale_undecided_calls_expire_instead_of_catching_up() -> None:
+    """Regression: after a long outage the tick decided old calls and sent messages days late."""
+    stale = NOW + timedelta(hours=3)
+    for state in (EventState.SCHEDULED, EventState.COLLECTING, EventState.VOTING):
+        undecided = event(state, vote_deadline=NOW if state is EventState.VOTING else None)
+        assert ev.due_step(undecided, stale, stale_after=stale) is Step.EXPIRE
+    decided = event(EventState.DECIDED, meal_time=NOW)  # a decided meal still gets marked done
+    assert ev.due_step(decided, stale, stale_after=stale) is Step.MARK_DONE
+
+
+def test_a_scheduled_call_whose_window_passed_expires_without_opening() -> None:
+    """Regression: it opened and was abandoned at once, a post FR-2 says not to make."""
+    scheduled = event(EventState.SCHEDULED, opens_at=NOW)
+    assert ev.due_step(scheduled, NOW + timedelta(minutes=89), stale_after=FAR) is Step.OPEN
+    assert ev.due_step(scheduled, NOW + timedelta(minutes=90), stale_after=FAR) is Step.EXPIRE
+
+
+def test_stale_after() -> None:
+    day = date(2026, 10, 22)
+    standing = event(day=day, opens_at=NOW, respond_deadline=NOW + timedelta(minutes=90))  # 15:00 Chicago
+    # The usual 18:30 meal plus two hours is later than the call's own end (17:15 + 2 h).
+    assert ev.stale_after(standing, usual_meal=time(18, 30), zone=CHICAGO) == datetime(2026, 10, 23, 1, 30, tzinfo=UTC)
+    late_opens = datetime(2026, 10, 23, 2, 0, tzinfo=UTC)  # an ad-hoc call at 21:00 Chicago
+    late = event(day=day, opens_at=late_opens, respond_deadline=late_opens + timedelta(minutes=90))
+    # Its own end, 23:15 + 2 h, is past midnight, so midnight is the cutoff.
+    assert ev.stale_after(late, usual_meal=time(18, 30), zone=CHICAGO) == datetime(2026, 10, 23, 5, 0, tzinfo=UTC)
+    voting = replace(late, vote_deadline=late_opens + timedelta(minutes=10))
+    assert ev.stale_after(voting, usual_meal=time(18, 30), zone=CHICAGO) == datetime(2026, 10, 23, 4, 10, tzinfo=UTC)
 
 
 def test_should_open_today() -> None:

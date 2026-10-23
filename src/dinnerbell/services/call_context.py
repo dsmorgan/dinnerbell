@@ -18,7 +18,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator, Iterable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, date, datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -39,6 +39,7 @@ from dinnerbell.db.repositories import HouseholdRepository, MemberRepository
 from dinnerbell.domain import notifications as note
 from dinnerbell.domain.catalog import CatalogItem, ItemKind, Mode, Tag, TagKind
 from dinnerbell.domain.events import (
+    DONE_AFTER_MEAL,
     Assignment,
     Coverage,
     Event,
@@ -47,6 +48,7 @@ from dinnerbell.domain.events import (
     Suggestion,
     coverage,
     head_count,
+    stale_after,
 )
 from dinnerbell.domain.household import Household
 from dinnerbell.domain.members import Member
@@ -98,6 +100,10 @@ class CallContext:
     @property
     def schedule(self) -> SlotSchedule:
         return slot_schedule(self.settings, self.event.slot)
+
+    def too_late_for(self, day: date) -> datetime:
+        """The slot's usual meal time on ``day`` plus two hours: after it, that day's call is over."""
+        return datetime.combine(day, self.schedule.meal_time, tzinfo=self.zone).astimezone(UTC) + DONE_AFTER_MEAL
 
     def response_of(self, member_id: int) -> Response | None:
         return next((r for r in self.responses if r.member_id == member_id), None)
@@ -178,6 +184,7 @@ def event_info(ctx: CallContext) -> note.EventInfo:
         respond_deadline=event.respond_deadline,
         vote_deadline=event.vote_deadline,
         coordinator=ctx.person(event.coordinator_id) if event.coordinator_id is not None else None,
+        end_reason=event.end_reason,
     )
 
 
@@ -293,3 +300,12 @@ async def publish(db: AsyncSession, ctx: CallContext, *notifications: note.Notif
     outbox = OutboxRepository(db)
     for notification in notifications:
         await outbox.enqueue(ctx.event.household_id, ctx.event.id, notification, now)
+
+
+async def stale_cutoff(db: AsyncSession, event: Event) -> datetime:
+    """``domain.events.stale_after`` for ``event``, from its household's zone and schedule."""
+    household = await HouseholdRepository(db).get(event.household_id)
+    if household is None:  # pragma: no cover - events cascade with their household
+        raise NotFound(NO_SUCH_CALL)
+    schedule = slot_schedule(await household_settings(db, event.household_id), event.slot)
+    return stale_after(event, usual_meal=schedule.meal_time, zone=ZoneInfo(household.timezone))
