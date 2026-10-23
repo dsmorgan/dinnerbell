@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from dinnerbell.db.repositories import AuditRepository, HouseholdRepository, MemberRepository
 from dinnerbell.domain.household import Household
 from dinnerbell.domain.members import Capabilities, Role, default_display_name
+from dinnerbell.domain.schedule import default_settings
 
 log = logging.getLogger(__name__)
 
@@ -25,7 +26,9 @@ async def bootstrap(
 
     household = await households.first()
     if household is None:
-        household = await households.create(household_name, timezone, now)
+        # The schedule and ranking defaults are stored, not implied, so Admin > Schedule and the
+        # database agree from the first start (FR-1).
+        household = await households.create(household_name, timezone, now, default_settings())
         await audit.record(
             household_id=household.id,
             actor_member_id=None,

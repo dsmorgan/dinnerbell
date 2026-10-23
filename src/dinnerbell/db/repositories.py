@@ -72,8 +72,10 @@ class HouseholdRepository:
             .execution_options(synchronize_session=False)
         )
 
-    async def create(self, name: str, timezone: str, now: datetime) -> Household:
-        row = HouseholdRow(name=name, timezone=timezone, settings={}, created_at=now)
+    async def create(
+        self, name: str, timezone: str, now: datetime, settings: dict[str, Any] | None = None
+    ) -> Household:
+        row = HouseholdRow(name=name, timezone=timezone, settings=dict(settings or {}), created_at=now)
         self._session.add(row)
         await self._session.flush()
         return _household(row)
