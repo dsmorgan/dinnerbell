@@ -1041,3 +1041,55 @@ async def test_toggles_flip_the_actors_own_state(house: House) -> None:
         await act(house, calls.toggle_vote, house["Kim"], event_id, ids["Taqueria"])
     with pytest.raises(EventRuleViolation, match="closed"):
         await act(house, calls.toggle_role, house["Kim"], event_id, RoleOffer.COOK)
+
+
+async def test_a_free_text_proposal_in_a_vetoed_cuisine_is_refused(house: House) -> None:
+    event_id = await to_voting(house)
+    mexican = house.tags["Mexican"].id
+    await act(house, set_my_preference, house["Sam"], TargetType.TAG, mexican, Stance(veto=True))
+    with pytest.raises(EventRuleViolation, match="doesn't work for everyone"):
+        await act(
+            house, calls.add_proposal, house["Alex"], event_id, Mode.PICKUP, free_text="Tortas", cuisine_id=mexican
+        )
+    added = await act(
+        house,
+        calls.add_proposal,
+        house["Alex"],
+        event_id,
+        Mode.PICKUP,
+        free_text="Tortas",
+        cuisine_id=house.tags["Thai"].id,
+    )
+    assert added.free_text == "Tortas"
+
+
+async def test_no_call_is_posted_for_a_day_that_has_ended(house: House) -> None:
+    """A 23:30 call is stale at midnight (it can't finish on its day), so a restart at 00:10
+    must not post it only to expire it in the same tick (FR-2)."""
+    async with house.sessionmaker() as db:
+        await db.execute(
+            text("UPDATE household SET settings = json_set(settings, '$.slots.dinner.call_time', '23:30')")
+        )
+        await db.commit()
+    house.clock.now = local(23, 0, 10)  # 00:10 on Friday, 40 minutes into Thursday's window
+    await house.tick()
+    assert await house.outbox() == []
+    house.clock.now = local(23, 23, 30)  # Friday's own call still opens on time
+    await house.tick()
+    assert await house.kinds() == ["call_opened"]
+
+
+async def test_suggestions_from_people_who_are_out_earn_nothing(house: House) -> None:
+    event_id = await open_dinner(house)
+    taqueria = house.items["Taqueria"].id
+    await act(house, calls.save_details, house["Kim"], event_id, Details(suggestion_item_ids=(taqueria,)))
+    await act(house, calls.respond, house["Kim"], event_id, Status.OUT)
+    for name in ("Alex", "Sam"):
+        await act(house, calls.respond, house[name], event_id, Status.IN)
+    await act(house, calls.offer_role, house["Alex"], event_id, RoleOffer.PICKUP, True)
+    house.clock.now = RESPOND_BY
+    await house.tick()
+    ctx = await house.context(event_id)
+    reasons = {ctx.items[p.item_id or 0].name: p.reasons for p in ctx.proposals}
+    assert not any("Kim" in r for r in reasons["Taqueria"])
+    assert ctx.proposals[0].item_id == house.items["Siam Garden"].id  # no suggestion bonus for Taqueria
