@@ -316,6 +316,8 @@ stateDiagram-v2
     decided --> collecting: admin re-run
     abandoned --> collecting: admin re-run
     cancelled --> collecting: admin re-run
+    voting --> scheduled: admin re-run, later day
+    decided --> scheduled: admin re-run, later day
     abandoned --> scheduled: admin re-run, later day
     cancelled --> scheduled: admin re-run, later day
     done --> [*]

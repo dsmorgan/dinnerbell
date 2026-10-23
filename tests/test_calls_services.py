@@ -1162,3 +1162,17 @@ async def test_a_window_cannot_be_moved_past_midnight(house: House) -> None:
         await act(house, call_admin.move_deadline, house["Alex"], event_id, Window.VOTE, 90)
     await act(house, call_admin.move_deadline, house["Alex"], event_id, Window.VOTE, 60)
     assert (await house.event(event_id)).vote_deadline == local(22, 23, 55)
+
+
+@pytest.mark.parametrize("state", ["voting", "decided"])
+async def test_rerun_a_later_days_call_from_any_rerunnable_state(house: House, state: str) -> None:
+    """Regression: re-running a later day's call that was voting or decided raised an illegal
+    transition instead of scheduling it."""
+    house.clock.now = OPENS - timedelta(hours=3)
+    event = await act(house, calls.start_call, house["Kim"], Slot.DINNER, date(2026, 10, 23))
+    async with house.sessionmaker() as db:  # however it got there, say an admin closed it early
+        await db.execute(text("UPDATE event SET state = :s WHERE id = :id"), {"s": state, "id": event.id})
+        await db.commit()
+    await act(house, call_admin.rerun, house["Alex"], event.id)
+    rerun = await house.event(event.id)
+    assert (rerun.state, rerun.run, rerun.opens_at) == (EventState.SCHEDULED, 2, local(23, 15))
