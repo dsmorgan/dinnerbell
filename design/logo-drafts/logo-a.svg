@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="t">
+  <title id="t">Dinnerbone the hamster</title>
+  <defs>
+    <clipPath id="disc"><circle cx="256" cy="256" r="244"/></clipPath>
+    <radialGradient id="fur" cx="0.5" cy="0.35" r="0.7">
+      <stop offset="0" stop-color="#E7A458"/>
+      <stop offset="1" stop-color="#D18A3C"/>
+    </radialGradient>
+  </defs>
+  <!-- backdrop -->
+  <circle cx="256" cy="256" r="252" fill="#FFF3E0"/>
+  <circle cx="256" cy="256" r="244" fill="#2E6B6F"/>
+  <g clip-path="url(#disc)">
+    <circle cx="256" cy="256" r="196" fill="#367A7E"/>
+    <!-- shoulders -->
+    <ellipse cx="256" cy="520" rx="210" ry="150" fill="#B9712F"/>
+    <ellipse cx="256" cy="530" rx="110" ry="120" fill="#F7DDB6"/>
+  </g>
+  <!-- ears -->
+  <circle cx="150" cy="134" r="44" fill="#C27A34"/>
+  <circle cx="362" cy="134" r="44" fill="#C27A34"/>
+  <circle cx="153" cy="138" r="26" fill="#F2A3A6"/>
+  <circle cx="359" cy="138" r="26" fill="#F2A3A6"/>
+  <!-- head with cheek pouches -->
+  <ellipse cx="146" cy="292" rx="78" ry="78" fill="#D18A3C"/>
+  <ellipse cx="366" cy="292" rx="78" ry="78" fill="#D18A3C"/>
+  <ellipse cx="256" cy="238" rx="164" ry="140" fill="url(#fur)"/>
+  <!-- cream lower face -->
+  <path d="M86 300 C90 250 150 240 200 262 Q256 248 312 262 C362 240 422 250 426 300 C428 360 360 392 256 392 C152 392 84 360 86 300 Z" fill="#FBE8CC"/>
+  <!-- blush -->
+  <ellipse cx="150" cy="296" rx="30" ry="17" fill="#F4A0A0" opacity="0.6"/>
+  <ellipse cx="362" cy="296" rx="30" ry="17" fill="#F4A0A0" opacity="0.6"/>
+  <!-- eyes -->
+  <circle cx="190" cy="226" r="26" fill="#2A1810"/>
+  <circle cx="322" cy="226" r="26" fill="#2A1810"/>
+  <circle cx="181" cy="216" r="9" fill="#FFFFFF"/>
+  <circle cx="313" cy="216" r="9" fill="#FFFFFF"/>
+  <circle cx="198" cy="236" r="4" fill="#FFFFFF" opacity="0.8"/>
+  <circle cx="330" cy="236" r="4" fill="#FFFFFF" opacity="0.8"/>
+  <!-- nose and mouth -->
+  <path d="M240 268 Q256 260 272 268 Q268 284 256 288 Q244 284 240 268 Z" fill="#E97C8A"/>
+  <rect x="246.5" y="305" width="19" height="15" rx="4" fill="#FFFFFF" stroke="#7A4A2A" stroke-width="3"/>
+  <path d="M256 307 L256 319" stroke="#7A4A2A" stroke-width="2.5"/>
+  <path d="M256 288 L256 302 M256 302 Q246 316 234 306 M256 302 Q266 316 278 306" fill="none" stroke="#7A4A2A" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- whiskers -->
+  <g stroke="#7A4A2A" stroke-width="3.5" stroke-linecap="round" fill="none" opacity="0.75">
+    <path d="M214 292 Q172 280 128 284"/>
+    <path d="M214 304 Q172 304 132 316"/>
+    <path d="M298 292 Q340 280 384 284"/>
+    <path d="M298 304 Q340 304 380 316"/>
+  </g>
+  <!-- collar -->
+  <path d="M120 352 Q256 422 392 352 L398 380 Q256 458 114 380 Z" fill="#D2433A"/>
+  <path d="M120 352 Q256 422 392 352" fill="none" stroke="#A8302A" stroke-width="4"/>
+  <!-- tag ring -->
+  <circle cx="256" cy="420" r="11" fill="none" stroke="#E0A92E" stroke-width="6"/>
+  <!-- bone-shaped name tag -->
+  <g fill="#F5C64B">
+    <rect x="154" y="428" width="204" height="42" rx="10"/>
+    <circle cx="154" cy="436" r="16"/>
+    <circle cx="154" cy="462" r="16"/>
+    <circle cx="358" cy="436" r="16"/>
+    <circle cx="358" cy="462" r="16"/>
+  </g>
+  <text x="256" y="458" text-anchor="middle" font-family="system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="24" font-weight="800" letter-spacing="1.5" fill="#6B3E1E">DINNERBONE</text>
+</svg>

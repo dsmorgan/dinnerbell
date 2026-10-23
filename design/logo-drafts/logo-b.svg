@@ -1,0 +1,111 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 512 512" width="512" height="512" role="img" aria-labelledby="t">
+  <title id="t">Dinnerbone the hamster</title>
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="42%" r="60%">
+      <stop offset="0" stop-color="#FFF8EC"/>
+      <stop offset="1" stop-color="#FBE2BE"/>
+    </radialGradient>
+    <radialGradient id="fur" cx="50%" cy="30%" r="70%">
+      <stop offset="0" stop-color="#EDB06A"/>
+      <stop offset="0.65" stop-color="#D8914B"/>
+      <stop offset="1" stop-color="#C47B37"/>
+    </radialGradient>
+    <radialGradient id="cream" cx="50%" cy="35%" r="65%">
+      <stop offset="0" stop-color="#FFF7EA"/>
+      <stop offset="1" stop-color="#FBE6C8"/>
+    </radialGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FBD86E"/>
+      <stop offset="1" stop-color="#EDB43F"/>
+    </linearGradient>
+    <clipPath id="disc"><circle cx="256" cy="256" r="243"/></clipPath>
+    <g id="head">
+      <ellipse cx="256" cy="222" rx="150" ry="126"/>
+      <ellipse cx="160" cy="276" rx="84" ry="74"/>
+      <ellipse cx="352" cy="276" rx="84" ry="74"/>
+      <ellipse cx="256" cy="300" rx="122" ry="78"/>
+    </g>
+    <g id="ears">
+      <circle cx="146" cy="128" r="50"/>
+      <circle cx="366" cy="128" r="50"/>
+    </g>
+  </defs>
+
+  <!-- backdrop -->
+  <circle cx="256" cy="256" r="246" fill="url(#bg)" stroke="#E3B27A" stroke-width="8"/>
+
+  <g clip-path="url(#disc)">
+    <!-- shoulders / body -->
+    <ellipse cx="256" cy="470" rx="182" ry="128" fill="url(#fur)" stroke="#7A4524" stroke-width="7"/>
+    <ellipse cx="256" cy="492" rx="96" ry="84" fill="url(#cream)"/>
+  </g>
+
+  <!-- collar -->
+  <path d="M132 322 Q256 490 380 322" fill="none" stroke="#7A2A24" stroke-width="36" stroke-linecap="round"/>
+  <path d="M132 322 Q256 490 380 322" fill="none" stroke="#D94B3F" stroke-width="24" stroke-linecap="round"/>
+
+  <!-- ears -->
+  <use xlink:href="#ears" href="#ears" fill="#7A4524" stroke="#7A4524" stroke-width="14"/>
+  <use xlink:href="#ears" href="#ears" fill="#D8914B"/>
+  <circle cx="148" cy="132" r="30" fill="#F4A3A8"/>
+  <circle cx="364" cy="132" r="30" fill="#F4A3A8"/>
+
+  <!-- head: outline pass then fill pass so the lobes merge -->
+  <use xlink:href="#head" href="#head" fill="#7A4524" stroke="#7A4524" stroke-width="14"/>
+  <use xlink:href="#head" href="#head" fill="url(#fur)"/>
+
+  <!-- cream cheeks + muzzle -->
+  <g fill="url(#cream)">
+    <ellipse cx="168" cy="292" rx="66" ry="54"/>
+    <ellipse cx="344" cy="292" rx="66" ry="54"/>
+    <ellipse cx="256" cy="300" rx="70" ry="58"/>
+    <ellipse cx="256" cy="336" rx="88" ry="40"/>
+  </g>
+
+  <!-- blush -->
+  <ellipse cx="160" cy="300" rx="30" ry="17" fill="#F49AA0" opacity="0.55"/>
+  <ellipse cx="352" cy="300" rx="30" ry="17" fill="#F49AA0" opacity="0.55"/>
+
+  <!-- eyes -->
+  <ellipse cx="200" cy="236" rx="23" ry="26" fill="#2B1A12"/>
+  <ellipse cx="312" cy="236" rx="23" ry="26" fill="#2B1A12"/>
+  <circle cx="192" cy="226" r="8.5" fill="#fff"/>
+  <circle cx="304" cy="226" r="8.5" fill="#fff"/>
+  <circle cx="208" cy="247" r="3.5" fill="#fff" opacity="0.85"/>
+  <circle cx="320" cy="247" r="3.5" fill="#fff" opacity="0.85"/>
+
+  <!-- whiskers -->
+  <g stroke="#8A5530" stroke-width="3" stroke-linecap="round" fill="none" opacity="0.75">
+    <path d="M206 294 Q160 282 116 280"/>
+    <path d="M206 304 Q160 306 112 314"/>
+    <path d="M208 314 Q166 326 126 346"/>
+    <path d="M306 294 Q352 282 396 280"/>
+    <path d="M306 304 Q352 306 400 314"/>
+    <path d="M304 314 Q346 326 386 346"/>
+  </g>
+
+  <!-- nose + mouth + teeth -->
+  <path d="M241 280 Q256 270 271 280 Q268 294 256 298 Q244 294 241 280 Z" fill="#F07F8B" stroke="#7A4524" stroke-width="3" stroke-linejoin="round"/>
+  <ellipse cx="251" cy="279" rx="5" ry="3" fill="#fff" opacity="0.6"/>
+  <rect x="249" y="309" width="14" height="13" rx="3" fill="#fff" stroke="#7A4524" stroke-width="2.5"/>
+  <path d="M256 309 V321" stroke="#7A4524" stroke-width="2"/>
+  <path d="M256 298 V308 M256 308 Q246 318 234 310 M256 308 Q266 318 278 310" fill="none" stroke="#7A4524" stroke-width="3.5" stroke-linecap="round"/>
+
+  <!-- tag ring -->
+  <circle cx="256" cy="417" r="10" fill="none" stroke="#B8862B" stroke-width="5"/>
+
+  <!-- bone-shaped name tag -->
+  <g transform="translate(256 446)">
+    <g fill="#9C6B1E">
+      <circle cx="-88" cy="-13" r="19"/><circle cx="-88" cy="13" r="19"/>
+      <circle cx="88" cy="-13" r="19"/><circle cx="88" cy="13" r="19"/>
+      <rect x="-90" y="-24" width="180" height="48" rx="10"/>
+    </g>
+    <g fill="url(#gold)">
+      <circle cx="-88" cy="-13" r="15"/><circle cx="-88" cy="13" r="15"/>
+      <circle cx="88" cy="-13" r="15"/><circle cx="88" cy="13" r="15"/>
+      <rect x="-90" y="-20" width="180" height="40" rx="8"/>
+    </g>
+    <text x="0" y="8" text-anchor="middle" font-family="system-ui, -apple-system, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif" font-size="22" font-weight="800" letter-spacing="1.2" fill="#5C3414">DINNERBONE</text>
+  </g>
+</svg>
