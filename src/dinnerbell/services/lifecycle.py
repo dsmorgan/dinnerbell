@@ -514,7 +514,11 @@ async def advance(db: AsyncSession, household_id: int, event_id: int, now: datet
 
 
 async def tick(sessionmaker: async_sessionmaker[AsyncSession], now: datetime) -> list[Step]:
-    """One scheduler tick for every household. Safe to run twice, late, or concurrently."""
+    """One scheduler tick for every household. Safe to run twice, late, or concurrently.
+
+    A failure is logged and rolled back, so the next step's commit can't carry its half-done
+    writes, and one household or call failing never stops the others.
+    """
     async with sessionmaker() as db:
         households = await HouseholdRepository(db).all()
     applied: list[Step] = []
@@ -522,11 +526,15 @@ async def tick(sessionmaker: async_sessionmaker[AsyncSession], now: datetime) ->
         async with sessionmaker() as db:
             try:
                 await open_due_calls(db, household, now)
+                event_ids = await EventRepository(db).open_ids(household.id)
             except Exception:
+                await db.rollback()
                 log.exception("could not open calls", extra={"household_id": household.id})
-            for event_id in await EventRepository(db).open_ids(household.id):
+                event_ids = await EventRepository(db).open_ids(household.id)
+            for event_id in event_ids:
                 try:
                     applied += await advance(db, household.id, event_id, now)
                 except Exception:
+                    await db.rollback()
                     log.exception("could not advance call", extra={"event_id": event_id})
     return applied
