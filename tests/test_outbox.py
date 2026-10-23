@@ -425,3 +425,87 @@ async def test_concurrent_drains_end_on_the_latest_state(database: Database, clo
         await outbox.drain(database.sessionmaker, channel, clock)
     assert channel.edits[-1] == 12
     assert channel.edits == sorted(channel.edits)  # never an older state after a newer one
+
+
+@dataclass
+class HintingChannel:
+    """Raises a chosen exception on every delivery."""
+
+    error: Exception
+    calls: int = 0
+
+    async def deliver(self, notification: n.Notification, *, thread: n.MessageRef | None = None) -> n.DeliveryResult:
+        self.calls += 1
+        raise self.error
+
+    async def update(self, ref: n.MessageRef, notification: n.Notification) -> None:
+        raise AssertionError("no update expected")
+
+
+class SlowDown(Exception):
+    def __init__(self, retry_after: object) -> None:
+        super().__init__("slow down")
+        self.retry_after = retry_after
+
+
+@pytest.mark.parametrize(
+    ("retry_after", "wait"),
+    [
+        (180, timedelta(minutes=3)),  # longer than the first 30-second backoff: it wins
+        (2.5, timedelta(seconds=30)),  # shorter: the backoff wins
+        (86_400, timedelta(hours=1)),  # capped at an hour
+        (float("inf"), timedelta(hours=1)),
+        ("180", timedelta(seconds=30)),  # not a number: ignored
+        (True, timedelta(seconds=30)),
+        (-5, timedelta(seconds=30)),
+        (float("nan"), timedelta(seconds=30)),
+    ],
+)
+async def test_a_channel_can_ask_for_a_longer_wait(
+    database: Database, clock: FakeClock, retry_after: object, wait: timedelta
+) -> None:
+    await enqueue(database, opened(1))
+    assert (await outbox.drain(database.sessionmaker, HintingChannel(SlowDown(retry_after)), clock)).retrying == 1
+    (row,) = await entries(database)
+    assert row.available_at == clock() + wait
+
+
+async def test_a_later_backoff_still_beats_a_short_ask(database: Database, clock: FakeClock) -> None:
+    await enqueue(database, opened(1))
+    channel = HintingChannel(SlowDown(45))
+    await outbox.drain(database.sessionmaker, channel, clock)
+    clock.now = (await entries(database))[0].available_at
+    await outbox.drain(database.sessionmaker, channel, clock)
+    (row,) = await entries(database)
+    assert row.available_at == clock() + timedelta(minutes=1)  # the second backoff, not 45 s
+
+
+async def test_a_held_delivery_is_not_an_attempt(database: Database, clock: FakeClock) -> None:
+    await enqueue(database, opened(1), updated(1, 2))
+    channel = HintingChannel(n.HeldDelivery("not ready", retry_after=60))
+    for _ in range(outbox.MAX_ATTEMPTS + 3):
+        result = await outbox.drain(database.sessionmaker, channel, clock)
+        assert (result.held, result.failed, result.delivered) == (1, 0, 0)  # the update waits behind it
+        first = (await entries(database))[0]
+        assert (first.attempts, first.available_at) == (0, clock() + timedelta(seconds=60))
+        clock.now = first.available_at
+    async with database.sessionmaker() as db:
+        error = (await db.execute(text("SELECT last_error FROM outbox ORDER BY id LIMIT 1"))).scalar_one()
+    assert error == "HeldDelivery: not ready"
+
+
+async def test_a_hold_waits_at_least_a_few_seconds(database: Database, clock: FakeClock) -> None:
+    await enqueue(database, opened(1))
+    await outbox.drain(database.sessionmaker, HintingChannel(n.HeldDelivery("soon", retry_after=0)), clock)
+    assert (await entries(database))[0].available_at == clock() + outbox.MIN_HOLD
+
+
+async def test_an_unavailable_channel_ends_the_pass(database: Database, clock: FakeClock) -> None:
+    await enqueue(database, opened(1), opened(2))
+    channel = HintingChannel(n.ChannelUnavailable("slack is down"))
+    result = await outbox.drain(database.sessionmaker, channel, clock)
+    assert (channel.calls, result.retrying, result.stopped) == (1, 1, True)  # event 2 waits for the next pass
+    other = HintingChannel(ConnectionError("one row's trouble"))
+    clock.advance(timedelta(minutes=1))
+    assert (await outbox.drain(database.sessionmaker, other, clock)).stopped is False
+    assert other.calls == 2  # any other failure tries every row

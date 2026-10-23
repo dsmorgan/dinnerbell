@@ -16,7 +16,7 @@ they describe. Three keys steer delivery:
 from __future__ import annotations
 
 import types
-from dataclasses import dataclass, fields, is_dataclass
+from dataclasses import MISSING, dataclass, fields, is_dataclass
 from datetime import date, datetime, time
 from enum import Enum
 from typing import Any, ClassVar, Protocol, Union, get_args, get_origin, get_type_hints
@@ -368,6 +368,22 @@ class PermanentDeliveryError(Exception):
     left the workspace. The outbox gives up on the row at once instead of retrying."""
 
 
+class ChannelUnavailable(Exception):
+    """The channel can't be reached right now: an outage, a timeout, or a rate limit. The
+    drainer retries the row with backoff, like any failure, and ends its pass at once, so an
+    outage can't tie up a drain for minutes with one timeout per row."""
+
+
+class HeldDelivery(Exception):
+    """The channel isn't ready for this notification yet, such as while its setup is broken.
+    The drainer puts the row back without counting the attempt, and tries it again after
+    ``retry_after`` seconds."""
+
+    def __init__(self, message: str, *, retry_after: float) -> None:
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
 class PayloadError(ValueError):
     """An outbox payload that doesn't decode to its notification type."""
 
@@ -408,6 +424,10 @@ _SCALARS: dict[Any, Any] = {
 }
 
 
+def _optional(field: Any) -> bool:
+    return field.default is not MISSING or field.default_factory is not MISSING
+
+
 def _decode(tp: Any, data: Any) -> Any:
     origin = get_origin(tp)
     if origin in (Union, types.UnionType):
@@ -416,8 +436,15 @@ def _decode(tp: Any, data: Any) -> Any:
     if origin is tuple:
         return tuple(_decode(get_args(tp)[0], item) for item in data)
     if isinstance(tp, type) and is_dataclass(tp):
+        if not isinstance(data, dict):
+            raise TypeError(f"expected an object for {tp.__name__}")
         hints = get_type_hints(tp)
-        return tp(**{f.name: _decode(hints[f.name], data[f.name]) for f in fields(tp)})
+        # A field added later has a default, so rows written before it still decode; a field
+        # without one must be there (KeyError, so the row fails safe).
+        values = {
+            f.name: _decode(hints[f.name], data[f.name]) for f in fields(tp) if f.name in data or not _optional(f)
+        }
+        return tp(**values)
     if isinstance(tp, type) and issubclass(tp, Enum):
         return tp(data)
     if tp in _SCALARS:
