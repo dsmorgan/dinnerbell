@@ -1,6 +1,6 @@
 # Set up Dinnerbell
 
-This guide takes you from nothing to a working Dinnerbell install: a Slack workspace and app, a container on your host, a public HTTPS hostname, and your family signed in.
+This guide takes you from nothing to a working Dinnerbell install: a Slack workspace and app, a container on your host, a public HTTPS hostname, and your family signed in. When it works, harden it with [hardening.md](hardening.md).
 
 ## Status
 
@@ -454,7 +454,7 @@ podman image inspect ghcr.io/dsmorgan/dinnerbell:0.2.0 --format '{{.Digest}}'
 
 With Docker: `docker image inspect ghcr.io/dsmorgan/dinnerbell:0.2.0 --format '{{index .RepoDigests 0}}'`.
 
-Don't use `podman auto-update` or a tool such as Watchtower. They follow moving tags, which defeats pinning a release.
+Don't use `podman auto-update` or a tool such as Watchtower. They follow moving tags, which defeats pinning a release. [hardening.md](hardening.md) lists the other host and GitHub settings that protect your install.
 
 ## Build from source
 
@@ -510,7 +510,7 @@ A test instance is a second copy of Dinnerbell on the same host. It runs builds 
 |---|---|---|
 | Image tag | The release in `compose.yaml` | `main`, or the release you're rehearsing |
 | Compose project | `dinnerbell` | `dinnerbell-test` |
-| Data volume | `dinnerbell_dinnerbell-data` | `dinnerbell-test_dinnerbell-data` |
+| Data volume | `dinnerbell_dinnerbell-data` (named by compose) | `dinnerbell-test_dinnerbell-data` (named in `deploy/compose.test.yaml`) |
 | Env file | `.env` | `.env.test` |
 | Host port | 8013 | 8014 |
 | Slack app and command | Dinnerbell, `/dinnerbell` | Dinnerbell Test, `/dinnerbell-test` |
@@ -565,7 +565,13 @@ deploy/dinnerbell-test down
 
 To pick up a newer `main`, run `pull`, then `down` and `up -d`. To check it, run `curl -s http://<DINNERBELL_BIND>:8014/healthz` and look for `"instance":"TEST"`, or look for the TEST banner in the browser. Test is usually stopped, so don't give it an always-on Uptime Kuma monitor.
 
-The script refuses to run when `.env.test` is missing, when it would use `.env`, or when `DINNERBELL_INSTANCE_LABEL` is empty. It exists because compose fills in `${...}` values in `compose.yaml` from the shell and from `.env`, which is production's file, and never from the env file. A `compose.override.yaml` can't do the same job: podman-compose adds an override's `ports` to the base list instead of replacing it.
+Run every test command through `deploy/dinnerbell-test`, never through `podman-compose` directly. The script sets the project name, the volume, the env file, the tag, and the port together. Setting only some of them by hand mixes the instances: for example, `.env.test` without `-p dinnerbell-test` runs test's label and Slack app on production's database, where `scrub-test` would then run. The script refuses to run when:
+
+- `.env.test` is missing, or doesn't set `DINNERBELL_INSTANCE_LABEL`.
+- The env file is production's `.env`.
+- Production's compose project is also named `dinnerbell-test`, from the clone's directory name or `COMPOSE_PROJECT_NAME`.
+
+The script exists because compose fills in `${...}` values in `compose.yaml` from the shell and from `.env`, which is production's file, and never from the env file. A `compose.override.yaml` can't do the same job: podman-compose adds an override's `ports` to the base list instead of replacing it. Test doesn't read your `compose.override.yaml`.
 
 Set these in front of the command to change what it uses:
 
@@ -612,10 +618,10 @@ A copy of production's data tests migrations and new features against real histo
 4. Scrub the copy. List at least one active admin to keep, usually yourself. Repeat `--keep` for each person who tests with you.
 
    ```sh
-   deploy/dinnerbell-test run --rm dinnerbell scrub-test --keep you@example.com
+   deploy/dinnerbell-test run --rm dinnerbell scrub-test --keep you@example.com --yes
    ```
 
-   Run `scrub-test` with the same tag you start next: it migrates the database first, and an older release refuses a database that a newer one migrated. It then deactivates and unlinks from Slack every member you didn't keep, turns off every schedule slot, ends open calls without notifying anyone, and empties the outbox. It leaves the meal log, catalog, and preferences alone. It refuses to run, and changes nothing, unless `DINNERBELL_INSTANCE_LABEL` is set, so it can't run against production. It prints what it changed. Running it again changes nothing.
+   Run `scrub-test` with the same tag you start next: it migrates the database first, and an older release refuses a database that a newer one migrated. It then deactivates and unlinks from Slack every member you didn't keep, turns off every schedule slot, ends open calls without notifying anyone, and empties the outbox. It leaves the meal log, catalog, and preferences alone. It refuses to run, and changes nothing, unless `DINNERBELL_INSTANCE_LABEL` is set. It prints the household name and how many members, slots, calls, and notifications it changes. Check them: the household is production's, because this is a copy, and the members kept should be only the people you listed. Running it again changes nothing.
 
 5. Start the test instance.
 
@@ -635,7 +641,7 @@ Use this checklist for every release. It runs the exact release image on a fresh
 
    ```sh
    DINNERBELL_TAG=X.Y.Z deploy/dinnerbell-test pull
-   DINNERBELL_TAG=X.Y.Z deploy/dinnerbell-test run --rm dinnerbell scrub-test --keep you@example.com
+   DINNERBELL_TAG=X.Y.Z deploy/dinnerbell-test run --rm dinnerbell scrub-test --keep you@example.com --yes
    DINNERBELL_TAG=X.Y.Z deploy/dinnerbell-test up -d
    ```
 

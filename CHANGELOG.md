@@ -15,7 +15,7 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
   - `DINNERBELL_SLACK_COMMAND` names the slash command. Default: `/dinnerbell`.
   - `DINNERBELL_FEATURES` turns on feature flags. Unknown names stop startup.
   - `dinnerbell scrub-test --keep EMAIL ...` makes a restored production backup safe to use in test.
-  - `deploy/dinnerbell-test`, `deploy/slack-app-manifest.test.yaml`, and `.env.test.example`.
+  - `deploy/dinnerbell-test` runs every test command with the test project, volume, env file, tag, and port, and refuses unsafe combinations. `deploy/slack-app-manifest.test.yaml` and `.env.test.example` set up the rest.
 - `compose.yaml` reads `DINNERBELL_TAG`, `DINNERBELL_ENV_FILE`, and `DINNERBELL_PORT`.
 
 ### Changed
