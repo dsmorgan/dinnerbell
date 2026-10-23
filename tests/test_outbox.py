@@ -226,14 +226,14 @@ async def test_an_update_coalesced_after_listing_is_delivered_as_latest(
     await enqueue(database, opened(1))
     await outbox.drain(database.sessionmaker, RecordingChannel(), clock)
     await enqueue(database, updated(1, 2))
-    listed = OutboxRepository.pending
+    listed = OutboxRepository.due
 
-    async def list_then_vote(self: OutboxRepository, limit: int) -> list[OutboxEntry]:
-        rows = await listed(self, limit)
+    async def list_then_vote(self: OutboxRepository, limit: int, now: datetime) -> list[OutboxEntry]:
+        rows = await listed(self, limit, now)
         await enqueue(database, updated(1, 3))  # a vote lands after the listing, before the claim
         return rows
 
-    monkeypatch.setattr(OutboxRepository, "pending", list_then_vote)
+    monkeypatch.setattr(OutboxRepository, "due", list_then_vote)
     seen: list[n.Notification] = []
 
     class Capturing(RecordingChannel):
@@ -301,3 +301,17 @@ async def test_null_channel_refs_are_not_real_messages(database: Database, clock
     async with database.sessionmaker() as db:
         note = await db.scalar(text("SELECT last_error FROM outbox WHERE kind = 'call_updated'"))
     assert note == outbox.NO_MESSAGE
+
+
+async def test_rows_backing_off_never_starve_newer_events(database: Database, clock: FakeClock) -> None:
+    """Regression: the drainer listed the oldest 100 pending rows whether due or not, so more
+    than 100 rows waiting to retry hid every newer event's notifications."""
+    reminders = [n.ResponseReminder(info(1), n.PersonInfo(m, "M")) for m in range(1, outbox.BATCH + 21)]
+    await enqueue(database, *reminders)
+    async with database.sessionmaker() as db:
+        await db.execute(text("UPDATE outbox SET available_at = '2099-01-01 00:00:00', attempts = 3"))
+        await db.commit()
+    await enqueue(database, opened(2))
+    channel = RecordingChannel()
+    assert (await outbox.drain(database.sessionmaker, channel, clock)).delivered == 1
+    assert [s.key for s in channel.sent] == ["event:2:run1:call_opened"]

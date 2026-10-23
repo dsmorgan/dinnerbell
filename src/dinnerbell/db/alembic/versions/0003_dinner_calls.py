@@ -284,6 +284,7 @@ def upgrade() -> None:
     )
     op.create_index("ix_outbox_message_key", "outbox", ["household_id", "message_key"], unique=False)
     op.create_index("ix_outbox_pending", "outbox", ["delivered_at", "failed_at", "id"], unique=False)
+    op.create_index("ix_outbox_event", "outbox", ["event_id", "id"], unique=False)
     with op.batch_alter_table("meal_log") as batch_op:
         batch_op.create_unique_constraint(batch_op.f("uq_meal_log_event_id"), ["event_id"])
         batch_op.create_foreign_key(
@@ -306,6 +307,7 @@ def downgrade() -> None:
     with op.batch_alter_table("meal_log") as batch_op:
         batch_op.drop_constraint(batch_op.f("fk_meal_log_event_id_event"), type_="foreignkey")
         batch_op.drop_constraint(batch_op.f("uq_meal_log_event_id"), type_="unique")
+    op.drop_index("ix_outbox_event", table_name="outbox")
     op.drop_index("ix_outbox_pending", table_name="outbox")
     op.drop_index("ix_outbox_message_key", table_name="outbox")
     op.drop_table("outbox")

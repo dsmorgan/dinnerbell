@@ -62,9 +62,14 @@ async def drain(
     async with sessionmaker() as db:
         repo = OutboxRepository(db)
         blocked: set[int] = set()
-        for entry in await repo.pending(limit):
-            if entry.event_id is not None and entry.event_id in blocked:
-                continue
+        for entry in await repo.due(limit, clock()):
+            if entry.event_id is not None:
+                if entry.event_id in blocked:
+                    continue
+                first = await repo.first_pending_post(entry.household_id, entry.event_id)
+                if first is not None and first < entry.id:  # an earlier post is waiting or out
+                    blocked.add(entry.event_id)
+                    continue
             token = secrets.token_hex(16)
             now = clock()
             claimed = await repo.claim(entry.id, token, now=now, until=now + LEASE)

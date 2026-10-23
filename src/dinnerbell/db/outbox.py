@@ -130,16 +130,34 @@ class OutboxRepository:
 
     # Draining ---------------------------------------------------------------------------------
 
-    async def pending(self, limit: int) -> list[OutboxEntry]:
-        """Undelivered rows that haven't failed for good, oldest first, across households."""
+    async def due(self, limit: int, now: datetime) -> list[OutboxEntry]:
+        """Rows ready to deliver now, oldest first, across households: pending, past any retry
+        delay, and not claimed by a live drainer. Rows waiting to retry are left out, so any
+        number of them can't crowd out newer events' rows."""
         rows = await self._session.scalars(
             select(OutboxRow)
-            .where(_pending())
+            .where(
+                _pending(),
+                OutboxRow.available_at <= now,
+                OutboxRow.claimed_until.is_(None) | (OutboxRow.claimed_until <= now),
+            )
             .order_by(OutboxRow.id)
             .limit(limit)
             .execution_options(populate_existing=True)
         )
         return [_entry(row) for row in rows]
+
+    async def first_pending_post(self, household_id: int, event_id: int) -> int | None:
+        """The oldest undelivered post (not an update) for an event. Rows after it wait for it."""
+        first: int | None = await self._session.scalar(
+            select(func.min(OutboxRow.id)).where(
+                OutboxRow.household_id == household_id,
+                OutboxRow.event_id == event_id,
+                OutboxRow.kind.not_in(UPDATE_KINDS),
+                _pending(),
+            )
+        )
+        return first
 
     async def get(self, entry_id: int) -> OutboxEntry | None:
         row = await self._session.scalar(

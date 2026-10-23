@@ -392,6 +392,7 @@ class OutboxRow(Base):
         UniqueConstraint("household_id", "idempotency_key"),
         Index("ix_outbox_pending", "delivered_at", "failed_at", "id"),
         Index("ix_outbox_message_key", "household_id", "message_key"),
+        Index("ix_outbox_event", "event_id", "id"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
