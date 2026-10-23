@@ -184,6 +184,10 @@ def test_more_proposals_than_the_cap_are_listed_on_the_web() -> None:
     sections = [b for b in message.blocks if b.get("block_id", "").startswith("proposal-") and b["type"] == "section"]
     assert len(sections) == MAX_PROPOSALS
     assert any("4 more picks" in json.dumps(b) for b in message.blocks)
+    # The label's block fits too: the biggest message leaves room for it, so the footer stays.
+    assert len(message.blocks) < bk.MAX_MESSAGE_BLOCKS
+    labelled = render(note.ProposalsUpdated(samples.VOTING, proposals, 3), replace(CTX, label="TEST"))
+    assert labelled.blocks == [bk.instance_banner("TEST"), *message.blocks]
 
 
 def test_a_cancelled_decision_strikes_the_item() -> None:
