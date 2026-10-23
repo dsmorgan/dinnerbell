@@ -17,7 +17,8 @@
 {%- endmacro %}
 {% set e = v.event %}{% set tz = v.info.timezone %}{% set base = "/events/" ~ e.id %}
 {% set swap = 'hx-target="#event-' ~ e.id ~ '" hx-swap="outerHTML"' %}
-<section class="card event state-{{ e.state.value }}" id="event-{{ e.id }}" aria-labelledby="event-{{ e.id }}-title">
+<section class="card event state-{{ e.state.value }}" id="event-{{ e.id }}" aria-labelledby="event-{{ e.id }}-title"
+  {%- if e.state.value in ("collecting", "voting") %} data-poll="{{ base }}/card?from={{ from_page }}"{% endif %}>
   <div class="event-head">
     <h2 id="event-{{ e.id }}-title"><a href="{{ base }}">{{ e.slot.value|capitalize }}</a> <span class="muted small">{{ e.day|day }}</span></h2>
     <span class="badge state state-{{ e.state.value }}">{{ e.state.label }}</span>
