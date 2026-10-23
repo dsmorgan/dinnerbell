@@ -75,3 +75,24 @@ def test_only_an_admin_with_a_csrf_token_can_link(
     assert response.status_code == 403
     assert member(migrated, "sam@example.com").slack_user_id is None
     assert slack_audits(migrated) == []
+
+
+def test_back_to_automatic_unlocks_the_link(client: TestClient, provider: FakeProvider, migrated: Settings) -> None:
+    sign_in(client, provider)
+    invite(client, "sam@example.com", "Sam")
+    sam = member(migrated, "sam@example.com")
+    assert "Back to automatic" not in page(client.get(f"/admin/members/{sam.id}"))
+    post(client, f"/admin/members/{sam.id}/slack", {"slack_user_id": "U02SAM"})
+    assert "Back to automatic" in page(client.get(f"/admin/members/{sam.id}"))
+    assert client.post(f"/admin/members/{sam.id}/slack/automatic").status_code == 403  # no CSRF token
+    response = post(client, f"/admin/members/{sam.id}/slack/automatic")
+    assert response.headers["location"] == "/admin/members?notice=slack_automatic"
+    unlocked = member(migrated, "sam@example.com")
+    assert (unlocked.slack_user_id, unlocked.slack_link_locked) == ("U02SAM", False)
+    assert slack_audits(migrated)[-1] == ("member.slack_link_unlocked", {"slack_user_id": "U02SAM"})
+    post(client, f"/admin/members/{sam.id}/slack/automatic")  # already automatic: nothing more
+    assert len(slack_audits(migrated)) == 2
+
+    sign_in_as(client, provider, "subject-sam", "sam@example.com")
+    response = client.post(f"/admin/members/{sam.id}/slack/automatic", data={"csrf_token": csrf_from(client)})
+    assert response.status_code == 403

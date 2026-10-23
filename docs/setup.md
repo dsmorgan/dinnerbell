@@ -294,7 +294,7 @@ Dinnerbell needs each member's Slack user to mention them, send them direct mess
 - By email, at start and every hour, for active members whose Dinnerbell email matches their Slack email.
 - By hand: on **Members**, select **Edit**, then enter their Slack member ID. In Slack, open their profile, select the three dots, then **Copy member ID**.
 
-The email match links only full members of your workspace, never guests or people from other organizations. A link you set or clear by hand stays that way: the hourly match and sign-in leave it alone.
+The email match links only full members of your workspace, never guests or people from other organizations. A link you set or clear by hand stays that way: the hourly match and sign-in leave it alone. To hand a member back to automatic linking, select **Back to automatic** on their edit page.
 
 The **Members** page shows who is linked. Someone who isn't linked gets a private "I don't know your Slack account yet" message when they tap a button.
 
@@ -410,7 +410,7 @@ Each member is linked to the account they first signed in with. After you switch
 | Sign-in refused for a person you invited | They signed in with a different Slack workspace, and `DINNERBELL_SLACK_TEAM_ID` blocks it. | Ask them to sign in to your household workspace. |
 | `/healthz` reports `"slack": "not_configured"` | One of `DINNERBELL_SLACK_BOT_TOKEN`, `DINNERBELL_SLACK_APP_TOKEN`, or `DINNERBELL_SLACK_CHANNEL` is missing. The logs say so at start. | Set all three, then recreate the service with `podman-compose down && podman-compose up -d`. |
 | `/healthz` reports `"slack": "disconnected"` for more than a minute | The host can't reach Slack. | Check that the host can make outbound HTTPS and WebSocket connections to `slack.com` and `wss-primary.slack.com`. |
-| `/healthz` reports `"slack": "error"`; the log says `Slack refused DINNERBELL_SLACK_BOT_TOKEN` | The bot token is wrong, revoked, or from another app. | Copy the **Bot User OAuth Token** (`xoxb-`) again from **Install App**, then recreate the service. |
+| `/healthz` reports `"slack": "error"`; the log says `Slack refused DINNERBELL_SLACK_BOT_TOKEN` | The bot token is wrong, revoked, or from another app. Dinnerbell notices at start, and as soon as Slack refuses it later, and holds every notification until it's fixed. | Copy the **Bot User OAuth Token** (`xoxb-`) again from **Install App**, then recreate the service. |
 | The log says `Slack refused DINNERBELL_SLACK_APP_TOKEN` | The app-level token is wrong, lacks `connections:write`, or Socket Mode is off. | Create the token again as in step 3, check that **Socket Mode** is on, then recreate the service. |
 | The log says `The bot token belongs to Slack workspace T…, but DINNERBELL_SLACK_TEAM_ID is T…` | The app is installed in a different workspace than the team ID names. | Install the app in your household workspace, or correct `DINNERBELL_SLACK_TEAM_ID`. |
 | The log says `Slack can't find the channel` | `DINNERBELL_SLACK_CHANNEL` isn't a channel ID, or the channel is private. | Copy the ID that starts with `C` as in step 6. Use a public channel. |
