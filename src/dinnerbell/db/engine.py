@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from sqlalchemy import Engine, create_engine, event
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
@@ -33,6 +35,13 @@ def create_app_engine(url: str) -> AsyncEngine:
     engine = create_async_engine(url, hide_parameters=True)
     event.listen(engine.sync_engine, "connect", _apply_pragmas)
     return engine
+
+
+def create_readonly_engine(path: Path) -> AsyncEngine:
+    """A read-only engine on the SQLite file at ``path`` (``mode=ro``). It sets no pragmas, so
+    it never changes the journal mode, and SQLite can't create the file or write to it."""
+    uri = f"file:{quote(str(path.resolve()))}?mode=ro"
+    return create_async_engine(f"sqlite+aiosqlite:///{uri}&uri=true", hide_parameters=True)
 
 
 def create_sessionmaker(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:

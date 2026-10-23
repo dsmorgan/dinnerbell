@@ -93,7 +93,8 @@ def _confirm_scrub(settings: Settings, yes: bool) -> bool:
     without a terminal to ask on, it's required."""
     from sqlalchemy.exc import SQLAlchemyError
 
-    from dinnerbell.services.database import open_database
+    from dinnerbell.services.clock import utc_now
+    from dinnerbell.services.database import open_readonly_database
     from dinnerbell.services.scrub import preview
 
     path = settings.database_path
@@ -102,13 +103,13 @@ def _confirm_scrub(settings: Settings, yes: bool) -> bool:
         return False
 
     async def read() -> list[str] | None:
-        database = open_database(settings.async_database_url)
+        database = open_readonly_database(path)  # read-only: no journal-mode change, no -wal or -shm files
         try:
             async with database.sessionmaker() as db:
                 found = await preview(db)
         finally:
             await database.close()
-        return None if found is None else found.lines()
+        return None if found is None else found.lines(utc_now())
 
     try:
         lines = asyncio.run(read())

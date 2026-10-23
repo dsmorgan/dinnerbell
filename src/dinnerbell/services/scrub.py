@@ -30,6 +30,7 @@ from dinnerbell.db.events import EventRepository
 from dinnerbell.db.meals import household_settings
 from dinnerbell.db.outbox import OutboxRepository
 from dinnerbell.db.repositories import HouseholdRepository, MemberRepository, SessionRepository
+from dinnerbell.db.types import UTCDateTime
 from dinnerbell.domain.events import OPEN_STATES, EndReason, EventState, transition
 from dinnerbell.domain.members import InvalidMemberInput, normalize_email
 from dinnerbell.domain.schedule import SLOTS_KEY, slot_schedules, slot_to_json
@@ -44,17 +45,20 @@ NOT_LABELED = (
 
 @dataclass(frozen=True, slots=True)
 class ScrubPreview:
-    """What a scrub would act on, for the operator to check before confirming."""
+    """What a scrub would act on, for the operator to check before confirming. ``last_activity``
+    is the newest audit row: minutes ago suggests a live database, not a restored backup."""
 
     household_name: str
     active_members: int
     enabled_slots: int
     open_events: int
     pending_outbox: int
+    last_activity: datetime | None
 
-    def lines(self) -> list[str]:
+    def lines(self, now: datetime) -> list[str]:
         return [
             f"Household: {self.household_name}",
+            f"Last activity: {_when(self.last_activity, now)}",
             f"Active members: {self.active_members}",
             f"Enabled slots: {self.enabled_slots}",
             f"Open events: {self.open_events}",
@@ -62,9 +66,26 @@ class ScrubPreview:
         ]
 
 
+def _when(at: datetime | None, now: datetime) -> str:
+    if at is None:
+        return "none recorded"
+    minutes = max(0, int((now - at).total_seconds() // 60))
+    if minutes < 120:
+        ago = f"{minutes} minute{'' if minutes == 1 else 's'} ago"
+    elif minutes < 48 * 60:
+        ago = f"{minutes // 60} hours ago"
+    else:
+        ago = f"{minutes // (24 * 60)} days ago"
+    return f"{at:%Y-%m-%d %H:%M} UTC ({ago})"
+
+
 async def preview(db: AsyncSession) -> ScrubPreview | None:
-    """What the scrub would act on, or None when there's no household. It reads with plain SQL
-    on columns every schema version has, so it works on a restored backup before migrating."""
+    """What the scrub would act on, or None when there's no household. It reads with plain SQL,
+    and counts 0 for tables a schema doesn't have yet (``event`` and ``outbox`` arrive in M2), so
+    it works on a restored backup of any version before migrating."""
+    tables = set(await db.scalars(text("SELECT name FROM sqlite_master WHERE type = 'table'")))
+    if "household" not in tables:
+        return None
     household = (await db.execute(text("SELECT id, name, settings FROM household ORDER BY id LIMIT 1"))).first()
     if household is None:
         return None
@@ -72,23 +93,32 @@ async def preview(db: AsyncSession) -> ScrubPreview | None:
     stored = raw if isinstance(raw, dict) else json.loads(raw or "{}")
     slots = slot_schedules(stored if isinstance(stored, dict) else {})
 
-    async def count(sql: TextClause, **params: object) -> int:
+    async def count(table: str, sql: TextClause, **params: object) -> int:
+        if table not in tables:
+            return 0
         return int(await db.scalar(sql, {"household": household_id, **params}) or 0)
 
     open_events = text("SELECT count(*) FROM event WHERE household_id = :household AND state IN :states")
+    newest = text("SELECT max(created_at) AS at FROM audit WHERE household_id = :household").columns(at=UTCDateTime())
     return ScrubPreview(
         household_name=str(name),
-        active_members=await count(text("SELECT count(*) FROM member WHERE household_id = :household AND active")),
+        active_members=await count(
+            "member", text("SELECT count(*) FROM member WHERE household_id = :household AND active")
+        ),
         enabled_slots=sum(1 for schedule in slots.values() if schedule.enabled),
         open_events=await count(
-            open_events.bindparams(bindparam("states", expanding=True)), states=[s.value for s in OPEN_STATES]
+            "event",
+            open_events.bindparams(bindparam("states", expanding=True)),
+            states=[s.value for s in OPEN_STATES],
         ),
         pending_outbox=await count(
+            "outbox",
             text(
                 "SELECT count(*) FROM outbox WHERE household_id = :household "
                 "AND delivered_at IS NULL AND failed_at IS NULL"
-            )
+            ),
         ),
+        last_activity=await db.scalar(newest, {"household": household_id}) if "audit" in tables else None,
     )
 
 
