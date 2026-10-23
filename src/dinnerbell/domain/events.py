@@ -68,11 +68,11 @@ TRANSITIONS: Mapping[EventState, frozenset[EventState]] = {
     # Scheduled to abandoned: its whole window passed while the server was down (missed).
     EventState.SCHEDULED: frozenset({EventState.COLLECTING, EventState.CANCELLED, EventState.ABANDONED}),
     EventState.COLLECTING: frozenset({EventState.VOTING, EventState.ABANDONED, EventState.CANCELLED}),
-    # Back to collecting is the admin's re-run (FR-6).
+    # Back to collecting (today) or scheduled (a later day) is the admin's re-run (FR-6).
     EventState.VOTING: frozenset(
-        {EventState.DECIDED, EventState.ABANDONED, EventState.CANCELLED, EventState.COLLECTING}
+        {EventState.DECIDED, EventState.ABANDONED, EventState.CANCELLED, EventState.COLLECTING, EventState.SCHEDULED}
     ),
-    EventState.DECIDED: frozenset({EventState.DONE, EventState.CANCELLED, EventState.COLLECTING}),
+    EventState.DECIDED: frozenset({EventState.DONE, EventState.CANCELLED, EventState.COLLECTING, EventState.SCHEDULED}),
     # Re-runs: to collecting for today, to scheduled for a later day (FR-3 timing).
     EventState.ABANDONED: frozenset({EventState.COLLECTING, EventState.SCHEDULED}),
     EventState.CANCELLED: frozenset({EventState.COLLECTING, EventState.SCHEDULED}),

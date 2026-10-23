@@ -86,6 +86,8 @@ ALLOWED = {
     (EventState.ABANDONED, EventState.COLLECTING),
     (EventState.CANCELLED, EventState.COLLECTING),
     (EventState.ABANDONED, EventState.SCHEDULED),
+    (EventState.VOTING, EventState.SCHEDULED),
+    (EventState.DECIDED, EventState.SCHEDULED),
     (EventState.CANCELLED, EventState.SCHEDULED),
 }
 
