@@ -357,12 +357,18 @@ class VoteRow(Base):
 
 
 class AssignmentRow(Base):
-    """Who does which role for a decided call. One member per role."""
+    """Who does which role for a decided call. One member per role.
+
+    AUTOINCREMENT, because a reassignment deletes a row and inserts one, and SQLite would
+    otherwise reuse the deleted ID. The assignment's notification key includes its ID, so a
+    reused ID would silently drop the new assignee's message.
+    """
 
     __tablename__ = "assignment"
     __table_args__ = (
         UniqueConstraint("event_id", "role"),
         CheckConstraint("role IN ('cook', 'pickup', 'order', 'coordinator')", name="role"),
+        {"sqlite_autoincrement": True},
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

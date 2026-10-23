@@ -253,6 +253,7 @@ def upgrade() -> None:
         ),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_assignment")),
         sa.UniqueConstraint("event_id", "role", name=op.f("uq_assignment_event_id_role")),
+        sqlite_autoincrement=True,  # assignment IDs key notifications; never reuse one
     )
     op.create_index(op.f("ix_assignment_member_id"), "assignment", ["member_id"], unique=False)
     op.create_table(

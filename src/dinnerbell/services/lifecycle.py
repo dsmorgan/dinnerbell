@@ -277,31 +277,34 @@ async def abandon(db: AsyncSession, event: Event, reason: EndReason, now: dateti
 # Deciding ---------------------------------------------------------------------------------------
 
 
+DOESNT_FIT = "That doesn't work for everyone who's in tonight."
+"""The one message for any veto or guest dietary need. It never names the tag, the item's
+vetoed attribute, or how many people object, so a proposer can't probe proposal by proposal to
+learn who vetoed what (FR-29)."""
+
+
 def misfit(ctx: CallContext, proposal: Proposal, group: GroupPreferences) -> str | None:
     """Why ``proposal`` can't be decided for this call (FR-17, FR-28), or None if it can.
 
-    The veto message never says whose veto it is.
+    Private reasons (vetoes and guests' dietary needs) all give ``DOESNT_FIT``. Coverage and
+    availability reasons stay specific, because they reveal nothing private.
     """
     needs = guest_needs(ctx)
-    coverage = ctx.coverage
     if proposal.item_id is not None:
         item = ctx.items.get(proposal.item_id)
         if item is None:
             return "That isn't in the catalog anymore."
-        if group.vetoes(rank_item(ctx, item)):
-            return "That won't work for someone who's in."
-        if not needs <= item.tag_ids:
-            return "That doesn't meet a guest's dietary needs."
+        if group.vetoes(rank_item(ctx, item)) or not needs <= item.tag_ids:
+            return DOESNT_FIT
         if proposal.mode not in item.modes:
             return f"{item.name} isn't available by {proposal.mode.label.lower()}."
         cooks = item.cook_ids
     else:
-        if proposal.free_cuisine_id in group.vetoed_tags:
-            return "That won't work for someone who's in."
-        if needs:
-            return "A guest has dietary needs, so pick something from the catalog whose tags show them."
+        # A new item's only known tag is its cuisine, so it can't show it meets a dietary need.
+        if proposal.free_cuisine_id in group.vetoed_tags or needs:
+            return DOESNT_FIT
         cooks = frozenset()
-    if not coverage.covers(proposal.mode, cooks):
+    if not ctx.coverage.covers(proposal.mode, cooks):
         return f"Nobody who's in offered to {MODE_ROLE[proposal.mode].value} for that."
     return None
 
