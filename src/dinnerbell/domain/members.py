@@ -93,6 +93,22 @@ def normalize_display_name(value: str) -> str:
     return name
 
 
+SLACK_USER_ID_PATTERN = re.compile(r"^[UW][A-Z0-9]{2,31}$")
+
+
+def normalize_slack_user_id(value: str) -> str | None:
+    """A Slack user ID such as U0123ABCD (W for Enterprise Grid), or None for a blank value."""
+    text = value.strip().upper()
+    if not text:
+        return None
+    if not SLACK_USER_ID_PATTERN.match(text):
+        raise InvalidMemberInput(
+            "Enter a Slack member ID: it starts with U and has only letters and digits. "
+            "In Slack, open the person's profile, select the three dots, then Copy member ID."
+        )
+    return text
+
+
 def default_display_name(email: str) -> str:
     """A starting display name for a bootstrapped admin: the email's local part."""
     local = email.split("@", 1)[0]

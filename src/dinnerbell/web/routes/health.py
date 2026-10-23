@@ -22,15 +22,20 @@ def _iso(value: Any) -> str | None:
 @router.api_route("/healthz", methods=["GET", "HEAD"])
 async def healthz(context: Context) -> JSONResponse:
     """503 when the database is unreachable or the scheduler has stopped ticking, so the
-    container health check and Uptime Kuma both catch a dead scheduler."""
+    container health check and Uptime Kuma both catch a dead scheduler.
+
+    Slack problems alone report "degraded" with a 200. Restarting the container can't invite
+    the bot or fix a token, the outbox keeps every notification until Slack is back, and the
+    web app must stay up so the admin can sign in and fix things."""
     database_ok = await database_reachable(context.sessionmaker)
     backlog = await outbox_backlog(context.sessionmaker) if database_ok else None
     state = context.scheduler_state
     scheduler = state.scheduler_status(context.clock())
+    slack = await context.slack_state.status()
     healthy = database_ok and scheduler != "stopped"
     if not healthy:
         status = "error"
-    elif scheduler == "ok":
+    elif scheduler == "ok" and slack in {"connected", "not_configured"}:
         status = "ok"
     else:
         status = "degraded"
@@ -38,7 +43,7 @@ async def healthz(context: Context) -> JSONResponse:
         "status": status,
         "database": "ok" if database_ok else "unreachable",
         "scheduler": {"status": scheduler, "last_tick": _iso(state.last_tick)},
-        "slack": "not_configured",
+        "slack": slack,
         "outbox": None if backlog is None else {"backlog": backlog[0], "failed": backlog[1]},
         "backup": {"last_success": _iso(state.last_backup)},
     }

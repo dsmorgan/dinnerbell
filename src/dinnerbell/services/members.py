@@ -22,6 +22,7 @@ from dinnerbell.domain.members import (
     check_role_change,
     normalize_display_name,
     normalize_email,
+    normalize_slack_user_id,
 )
 from dinnerbell.services.common import audit, require_admin
 from dinnerbell.services.errors import NotFound
@@ -126,6 +127,33 @@ async def set_member_active(db: AsyncSession, actor: Member, member_id: int, act
     action = "member.reactivated" if active else "member.deactivated"
     await audit(db, actor.household_id, actor, action, f"member:{updated.id}", {}, now)
     await db.commit()
+    return updated
+
+
+async def set_slack_user(
+    db: AsyncSession, actor: Member, member_id: int, slack_user_id: str, *, now: datetime
+) -> Member:
+    """FR-42: the admin links a member to a Slack user ID, or unlinks them with a blank value.
+    Audited. Dinnerbell links unlinked members by email every hour, so an unlinked member whose
+    email matches a Slack account is linked again."""
+    require_admin(actor, MANAGE_MEMBERS)
+    target = await get_member(db, actor, member_id)
+    value = normalize_slack_user_id(slack_user_id)
+    if value == target.slack_user_id:
+        return target
+    members = MemberRepository(db)
+    holder = await members.by_slack_user_id(actor.household_id, value) if value else None
+    if holder is not None:
+        raise MemberRuleViolation(f"{holder.display_name} is already linked to that Slack user.")
+    try:
+        updated = await members.update(actor.household_id, member_id, now, slack_user_id=value)
+        action = "member.slack_user_set" if value else "member.slack_user_cleared"
+        payload = {"from": target.slack_user_id, "to": value}
+        await audit(db, actor.household_id, actor, action, f"member:{member_id}", payload, now)
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise MemberRuleViolation("Another member is already linked to that Slack user.") from None
     return updated
 
 

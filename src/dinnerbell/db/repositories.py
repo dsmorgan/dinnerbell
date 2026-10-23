@@ -114,6 +114,12 @@ class MemberRepository:
         )
         return None if row is None else to_member(row)
 
+    async def by_slack_user_id(self, household_id: int, slack_user_id: str) -> Member | None:
+        row = await self._session.scalar(
+            select(MemberRow).where(MemberRow.household_id == household_id, MemberRow.slack_user_id == slack_user_id)
+        )
+        return None if row is None else to_member(row)
+
     async def count_active_admins(self, household_id: int) -> int:
         count = await self._session.scalar(
             select(func.count())

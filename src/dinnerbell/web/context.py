@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import timedelta
 from pathlib import Path
 
@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from dinnerbell.config import Settings
 from dinnerbell.services.clock import Clock
-from dinnerbell.services.health import SchedulerState
+from dinnerbell.services.health import SchedulerState, SlackState
 from dinnerbell.web.oidc import OIDCClient
 from dinnerbell.web.signing import SignedPayload
 
@@ -45,6 +45,7 @@ class AppContext:
     sessionmaker: async_sessionmaker[AsyncSession]
     oidc: OIDCClient
     scheduler_state: SchedulerState
+    slack_state: SlackState = field(default_factory=SlackState)
 
 
 def app_context(request: Request) -> AppContext:
