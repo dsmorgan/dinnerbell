@@ -114,14 +114,14 @@ async def post_fails(failure: Failure) -> BaseException:
 
 async def test_rate_limits_carry_retry_after() -> None:
     error = await post_fails(Failure("ratelimited", status=429, headers={"Retry-After": "7"}))
-    assert isinstance(error, SlackRateLimited) and error.retry_after == timedelta(seconds=7)
+    assert isinstance(error, SlackRateLimited) and error.retry_after == 7
     assert str(error) == "Slack rate-limited chat.postMessage; retry after 7s"
     error = await post_fails(Failure(None, status=429))
-    assert isinstance(error, SlackRateLimited) and error.retry_after == DEFAULT_RETRY_AFTER
+    assert isinstance(error, SlackRateLimited) and error.retry_after == DEFAULT_RETRY_AFTER.total_seconds()
     error = await post_fails(Failure("ratelimited", headers={"retry-after": "soon"}))
-    assert isinstance(error, SlackRateLimited) and error.retry_after == DEFAULT_RETRY_AFTER
+    assert isinstance(error, SlackRateLimited) and error.retry_after == DEFAULT_RETRY_AFTER.total_seconds()
     error = await post_fails(Failure("ratelimited", headers={"Retry-After": "86400"}))
-    assert isinstance(error, SlackRateLimited) and error.retry_after == timedelta(hours=1)
+    assert isinstance(error, SlackRateLimited) and error.retry_after == 3600
 
 
 @pytest.mark.parametrize(
@@ -160,12 +160,17 @@ async def test_the_drainer_retries_rate_limits_and_closes_permanent_failures(hou
     slack.fake.fail("chat.postMessage", Failure("ratelimited", status=429, headers={"Retry-After": "3"}))
     assert (await slack.drain()).retrying == 1
     (row,) = await house.outbox()
-    assert row.available_at == house.clock() + timedelta(seconds=30)
+    assert row.available_at == house.clock() + timedelta(seconds=30)  # the backoff is longer than 3 s
+    house.clock.now = row.available_at
+    slack.fake.fail("chat.postMessage", Failure("ratelimited", status=429, headers={"Retry-After": "120"}))
+    assert (await slack.drain()).retrying == 1
+    (row,) = await house.outbox()
+    assert row.available_at == house.clock() + timedelta(seconds=120)  # Slack's wait is longer: it wins
     async with house.sessionmaker() as db:
         error = (await db.execute(text("SELECT last_error FROM outbox"))).scalar_one()
-    assert error == "SlackRateLimited: Slack rate-limited chat.postMessage; retry after 3s"
+    assert error == "SlackRateLimited: Slack rate-limited chat.postMessage; retry after 120s"
 
-    house.clock.advance(timedelta(seconds=30))
+    house.clock.advance(timedelta(seconds=120))
     slack.fake.fail("chat.postMessage", Failure("not_in_channel"))
     assert (await slack.drain()).failed == 1
     async with house.sessionmaker() as db:

@@ -53,6 +53,15 @@ def retry_delay(attempts: int) -> timedelta:
     return min(delay, LONGEST_RETRY)
 
 
+def asked_wait(exc: BaseException) -> timedelta:
+    """How long the channel asked to wait, from a numeric ``retry_after`` (seconds) on the
+    exception, such as Slack's Retry-After. Zero when it didn't ask; at most an hour."""
+    seconds = getattr(exc, "retry_after", None)
+    if isinstance(seconds, bool) or not isinstance(seconds, int | float) or not seconds > 0:
+        return timedelta(0)
+    return timedelta(seconds=min(float(seconds), LONGEST_RETRY.total_seconds()))
+
+
 @dataclass
 class DrainResult:
     delivered: int = 0
@@ -123,7 +132,8 @@ async def _deliver(
         # A permanent error won't get better with retries. Otherwise retry until the last
         # attempt; the claim already counted this one.
         final = isinstance(exc, PermanentDeliveryError) or entry.attempts >= MAX_ATTEMPTS
-        await _record_failure(db, entry, token, f"{type(exc).__name__}: {exc}", clock, result, final=final)
+        error = f"{type(exc).__name__}: {exc}"
+        await _record_failure(db, entry, token, error, clock, result, final=final, at_least=asked_wait(exc))
         return final
     if not await repo.delivered(entry.id, token, now=clock(), ref=ref, note=NO_MESSAGE if skipped else None):
         log.warning("outbox claim expired during delivery", extra={"outbox_id": entry.id, "kind": entry.kind})
@@ -148,11 +158,20 @@ async def _send(
 
 
 async def _record_failure(
-    db: AsyncSession, entry: OutboxEntry, token: str, error: str, clock: Clock, result: DrainResult, *, final: bool
+    db: AsyncSession,
+    entry: OutboxEntry,
+    token: str,
+    error: str,
+    clock: Clock,
+    result: DrainResult,
+    *,
+    final: bool,
+    at_least: timedelta = timedelta(0),
 ) -> None:
     now = clock()
     attempts = entry.attempts
-    retry_at: datetime | None = None if final else now + retry_delay(attempts)
+    wait = min(max(retry_delay(attempts), at_least), LONGEST_RETRY)
+    retry_at: datetime | None = None if final else now + wait
     await OutboxRepository(db).failed(entry.id, token, error=error, retry_at=retry_at, now=now)
     await db.commit()
     if final:
