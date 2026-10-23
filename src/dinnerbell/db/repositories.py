@@ -245,3 +245,13 @@ class AuditRepository:
             )
         )
         await self._session.flush()
+
+    async def latest(self, household_id: int, target: str) -> tuple[str, dict[str, Any]] | None:
+        """The newest audit row about ``target``, as (action, payload), or None."""
+        row = await self._session.scalar(
+            select(AuditRow)
+            .where(AuditRow.household_id == household_id, AuditRow.target == target)
+            .order_by(AuditRow.id.desc())
+            .limit(1)
+        )
+        return None if row is None else (row.action, dict(row.payload))
