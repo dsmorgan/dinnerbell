@@ -5,8 +5,10 @@ paths, ties, locking, proposals, every admin override, authorization, and househ
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Awaitable, Callable
-from datetime import date, time, timedelta
+from dataclasses import replace
+from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import pytest
 from sqlalchemy import select, text
@@ -780,6 +782,8 @@ async def other_household_event(database: Database, clock: FakeClock) -> tuple[M
             created_by=admin.id,
             now=clock(),
         )
+        # Voting until late evening, so the tick in this test has nothing to do to it.
+        event = await EventRepository(db).save(replace(event, vote_deadline=clock() + timedelta(hours=5)), clock())
         item = CatalogItemRow(
             household_id=household.id,
             kind="restaurant",
@@ -913,3 +917,81 @@ async def test_the_meal_time_cannot_precede_the_decision(house: House) -> None:
     with pytest.raises(EventRuleViolation, match="after the decision"):
         await act(house, calls.set_meal_time, house["Sam"], event_id, time(6, 30))  # meant 18:30
     assert (await house.event(event_id)).state is EventState.DECIDED
+
+
+# Stale calls after an outage ---------------------------------------------------------------------
+
+LOCAL = ZoneInfo("America/Chicago")
+
+
+def local(day: int, hour: int, minute: int = 0) -> datetime:
+    return datetime(2026, 10, day, hour, minute, tzinfo=LOCAL).astimezone(UTC)
+
+
+async def test_a_call_stuck_through_the_evening_expires_quietly(house: House) -> None:
+    """Regression: after a long outage the tick decided the call and messaged everyone hours late."""
+    event_id = await open_dinner(house)
+    await act(house, calls.respond, house["Alex"], event_id, Status.IN)
+    await act(house, calls.respond, house["Kim"], event_id, Status.MAYBE)
+    house.clock.now = local(24, 9)  # down from 15:10 until Saturday morning
+    assert await house.tick() == [Step.EXPIRE]
+    event = await house.event(event_id)
+    assert (event.state, event.end_reason) == (EventState.ABANDONED, EndReason.MISSED)
+    entries = await house.outbox()
+    assert [e.kind for e in entries] == ["call_opened", "call_updated"]  # no reminder, maybe, or decision
+    assert entries[-1].payload["event"]["end_reason"] == "missed"
+    assert (await house.audits())[-1].payload == {"reason": "missed", "from": "collecting"}
+    assert await house.tick() == []
+
+
+async def test_voting_left_past_the_evening_expires_without_a_decision(house: House) -> None:
+    event_id = await to_voting(house)
+    house.clock.now = local(22, 20, 31)  # past the usual 18:30 meal plus two hours
+    assert await house.tick() == [Step.EXPIRE]
+    assert (await house.event(event_id)).end_reason is EndReason.MISSED
+    kinds = await house.kinds()
+    assert "decision_made" not in kinds and "assignment_made" not in kinds and "call_abandoned" not in kinds
+    assert kinds[-1] == "proposals_updated"
+
+
+async def test_a_scheduled_call_whose_window_passed_never_posts(house: House) -> None:
+    """Regression: FR-2. It was posted and abandoned in the same tick."""
+    house.clock.now = OPENS - timedelta(hours=3)
+    event = await act(house, calls.start_call, house["Kim"], Slot.DINNER, date(2026, 10, 23))
+    house.clock.now = local(23, 16, 31)  # down from Thursday until after Friday's response window
+    assert await house.tick() == [Step.EXPIRE]
+    stored = await house.event(event.id)
+    assert (stored.state, stored.end_reason) == (EventState.ABANDONED, EndReason.MISSED)
+    assert "call_opened" not in await house.kinds()
+
+
+async def test_a_decision_that_would_land_after_midnight_expires(house: House) -> None:
+    house.clock.now = local(22, 22)
+    event = await act(house, calls.start_call, house["Alex"], Slot.DINNER, date(2026, 10, 22))
+    await act(house, calls.respond, house["Sam"], event.id, Status.IN)
+    await act(house, calls.offer_role, house["Alex"], event.id, RoleOffer.PICKUP, True)
+    house.clock.now = local(22, 22, 10)
+    await act(house, call_admin.move_deadline, house["Alex"], event.id, Window.RESPOND, None)
+    ids = await proposal_ids(house, event.id)
+    house.clock.now = local(22, 23, 53)  # rounds up to 00:00, which isn't the call's day
+    await act(house, calls.lock, house["Alex"], event.id, ids["Siam Garden"])
+    stored = await house.event(event.id)
+    assert (stored.state, stored.end_reason, stored.decided_item_id) == (EventState.ABANDONED, EndReason.MISSED, None)
+    assert "decision_made" not in await house.kinds()
+
+
+async def test_rerun_is_refused_late_in_the_evening_and_keeps_a_later_days_timing(house: House) -> None:
+    event_id = await open_dinner(house)
+    await act(house, call_admin.cancel, house["Alex"], event_id)
+    house.clock.now = local(22, 20, 31)
+    with pytest.raises(EventRuleViolation, match="too late to re-run"):
+        await act(house, call_admin.rerun, house["Alex"], event_id)
+    tomorrow = await act(house, calls.start_call, house["Kim"], Slot.DINNER, date(2026, 10, 23))
+    await act(house, call_admin.cancel, house["Alex"], tomorrow.id)
+    before = await house.kinds()
+    await act(house, call_admin.rerun, house["Alex"], tomorrow.id)
+    rerun = await house.event(tomorrow.id)
+    assert (rerun.state, rerun.run, rerun.opens_at) == (EventState.SCHEDULED, 2, local(23, 15))
+    assert await house.kinds() == before  # posted when it opens, not now
+    house.clock.now = local(23, 15)
+    assert await house.tick() == [Step.OPEN]

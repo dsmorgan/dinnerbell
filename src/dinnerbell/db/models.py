@@ -242,7 +242,7 @@ class EventRow(Base):
             name="state",
         ),
         CheckConstraint("decided_mode IS NULL OR decided_mode IN ('cook', 'pickup', 'delivery')", name="mode"),
-        CheckConstraint("end_reason IS NULL OR end_reason IN ('too_few', 'no_coverage')", name="end_reason"),
+        CheckConstraint("end_reason IS NULL OR end_reason IN ('too_few', 'no_coverage', 'missed')", name="end_reason"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

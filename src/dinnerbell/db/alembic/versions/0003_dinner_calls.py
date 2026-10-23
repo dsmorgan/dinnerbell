@@ -109,7 +109,7 @@ def upgrade() -> None:
             "decided_mode IS NULL OR decided_mode IN ('cook', 'pickup', 'delivery')", name=op.f("ck_event_mode")
         ),
         sa.CheckConstraint(
-            "end_reason IS NULL OR end_reason IN ('too_few', 'no_coverage')", name=op.f("ck_event_end_reason")
+            "end_reason IS NULL OR end_reason IN ('too_few', 'no_coverage', 'missed')", name=op.f("ck_event_end_reason")
         ),
         sa.CheckConstraint("kind IN ('call', 'offer')", name=op.f("ck_event_kind")),
         sa.CheckConstraint("slot IN ('lunch', 'dinner')", name=op.f("ck_event_slot")),

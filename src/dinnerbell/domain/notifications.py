@@ -50,6 +50,7 @@ class EventInfo:
     respond_deadline: datetime
     vote_deadline: datetime | None = None
     coordinator: PersonInfo | None = None
+    end_reason: EndReason | None = None
 
     @property
     def key(self) -> str:

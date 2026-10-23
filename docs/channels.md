@@ -44,7 +44,7 @@ Updates coalesce: while an update to a message is waiting and unclaimed, a newer
 
 ## Notifications
 
-All types are frozen dataclasses in `domain/notifications.py` with an `event: EventInfo`. They carry only domain data: IDs, display names, UTC times plus the household's `timezone`, items with URLs, and the event page's `path` (join it to `DINNERBELL_BASE_URL` for links, per FR-37). Rows store them as JSON; `from_payload(kind, payload)` rebuilds them. The drainer hands adapters the dataclass.
+All types are frozen dataclasses in `domain/notifications.py` with an `event: EventInfo`. They carry only domain data: IDs, display names, the event's state and `end_reason`, UTC times plus the household's `timezone`, items with URLs, and the event page's `path` (join it to `DINNERBELL_BASE_URL` for links, per FR-37). Rows store them as JSON; `from_payload(kind, payload)` rebuilds them. The drainer hands adapters the dataclass.
 
 | `kind` | Class | Audience | `message_key` | `thread_key` | Sent when |
 |---|---|---|---|---|---|
@@ -57,8 +57,10 @@ All types are frozen dataclasses in `domain/notifications.py` with an `event: Ev
 | `decision_made` | `DecisionMade` | Channel | `…:decision` | `…:call` | Locked (`locked_by` set) or decided by the vote (`locked_by` is `None`). |
 | `decision_updated` | `DecisionUpdated` | Update | `…:decision` | | Meal time, assignments, coordinator, or done. |
 | `assignment_made` | `AssignmentMade` | DM `member` | | | Each assignment at the decision, and each later reassignment while decided (FR-20). |
-| `call_abandoned` | `CallAbandoned` | Channel | | | Too few people (`reason = too_few`) or nothing covered (`no_coverage`). |
+| `call_abandoned` | `CallAbandoned` | Channel | | | Too few people (`reason = too_few`) or nothing covered (`no_coverage`). Never sent for `missed`. |
 | `event_cancelled` | `EventCancelled` | Channel; for `participants` | | `…:call` | An admin cancels. |
+
+A call that got too late to finish after an outage ends with `EventInfo.state = abandoned` and `EventInfo.end_reason = missed`, quietly: Dinnerbell sends no `call_abandoned` post and no direct messages, only `call_updated` (and `proposals_updated` if it was voting) so its existing messages show that it ended. A scheduled call that expires this way was never posted and sends nothing. Render `missed` as a quiet "too late to decide" state, not as a new announcement.
 
 Building blocks: `PersonInfo(id, name)`, `RosterEntry` (status, guests, guests' dietary needs, eat window, offered roles, suggestions, note), `ProposalInfo` (rank, `ItemInfo`, mode, reasons, source, proposer, voters; votes are visible, per FR-14), `DecisionInfo` (proposal, meal time, head count, participants with guests, assignments, guests' dietary notes), and `AssignmentInfo(role, member)`.
 

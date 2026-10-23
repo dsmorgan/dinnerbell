@@ -29,6 +29,7 @@
     {%- elif e.state.value == "collecting" %}Answer by <strong>{{ e.respond_deadline|clock(tz) }}</strong>.
     {%- elif e.state.value == "voting" %}Vote by <strong>{{ e.vote_deadline|clock(tz) }}</strong>.
     {%- elif e.state.value in ("decided", "done") and e.meal_time %}Eating at <strong>{{ e.meal_time|clock(tz) }}</strong>.
+    {%- elif e.state.value == "abandoned" and e.end_reason and e.end_reason.value == "missed" %}Missed: it got too late to decide this one.
     {%- elif e.state.value == "abandoned" %}Everyone's on their own{% if e.end_reason and e.end_reason.value == "no_coverage" %}: nothing worked for everyone who could make it{% endif %}.
     {%- elif e.state.value == "cancelled" %}Cancelled by an admin.
     {%- endif %}

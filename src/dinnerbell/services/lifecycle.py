@@ -265,6 +265,20 @@ async def _close_responses(db: AsyncSession, event: Event, now: datetime) -> Non
     await audit(db, event.household_id, None, "event.voting", _target(event), payload, now)
 
 
+async def expire(db: AsyncSession, event: Event, now: datetime) -> None:
+    """End a call it's too late to finish (``EndReason.MISSED``), quietly: no new channel post
+    and no direct messages. A call that was posted gets its messages updated to show it ended;
+    a scheduled call that never opened sends nothing (FR-2)."""
+    posted = event.state is not EventState.SCHEDULED
+    ended = replace(event, state=transition(event.state, EventState.ABANDONED), end_reason=EndReason.MISSED)
+    ended = await EventRepository(db).save(ended, now)
+    if posted:
+        ctx = await load(db, ended)
+        await publish(db, ctx, cc.call_updated(ctx), *([cc.proposals_updated(ctx)] if ctx.proposals else []), now=now)
+    payload = {"reason": EndReason.MISSED.value, "from": event.state.value}
+    await audit(db, event.household_id, None, "event.abandoned", _target(event), payload, now)
+
+
 async def abandon(db: AsyncSession, event: Event, reason: EndReason, now: datetime) -> None:
     """Spec 5.4: the on-your-own message. Nothing is assigned or logged."""
     ended = replace(event, state=transition(event.state, EventState.ABANDONED), end_reason=reason)
@@ -377,6 +391,9 @@ async def decide(
         winner = found
     item = ctx.items[winner.item_id] if winner.item_id is not None else await _catalog_free_text(db, ctx, winner, now)
     meal = meal_time(ctx.responses, day=event.day, zone=ctx.zone, default=ctx.schedule.meal_time, not_before=now)
+    if meal.astimezone(ctx.zone).date() != event.day:  # too late to eat on the call's own day
+        await expire(db, event, now)
+        return
     decided = replace(
         event,
         state=transition(event.state, EventState.DECIDED),
@@ -469,6 +486,7 @@ async def _mark_done(db: AsyncSession, event: Event, now: datetime) -> None:
 
 
 HANDLERS: dict[Step, Handler] = {
+    Step.EXPIRE: expire,
     Step.OPEN: open_call,
     Step.REMIND: _remind,
     Step.CLOSE_RESPONSES: _close_responses,
@@ -485,10 +503,10 @@ async def advance(db: AsyncSession, household_id: int, event_id: int, now: datet
     applied: list[Step] = []
     for _ in range(MAX_STEPS):
         current = await EventRepository(db).get(household_id, event_id)
-        if current is None or due_step(current, now) is None:
+        if current is None or due_step(current, now, stale_after=await cc.stale_cutoff(db, current)) is None:
             break
         async with locked_event(db, household_id, event_id, now) as event:
-            step = due_step(event, now)
+            step = due_step(event, now, stale_after=await cc.stale_cutoff(db, event))
             if step is not None:
                 await HANDLERS[step](db, event, now)
         if step is None:  # pragma: no cover - another worker took the step between the read and the lock
