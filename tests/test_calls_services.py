@@ -1154,3 +1154,11 @@ async def test_suggestion_credit_counts_members_not_names(house: House) -> None:
     ctx = await house.context(event_id)
     assert ctx.proposals[0].item_id == taqueria
     assert ctx.proposals[0].reasons[0] == "Suggested by Sam and Sam."
+
+
+async def test_a_window_cannot_be_moved_past_midnight(house: House) -> None:
+    event_id = await late_vote(house)  # voting until 22:55
+    with pytest.raises(EventRuleViolation, match="past midnight"):
+        await act(house, call_admin.move_deadline, house["Alex"], event_id, Window.VOTE, 90)
+    await act(house, call_admin.move_deadline, house["Alex"], event_id, Window.VOTE, 60)
+    assert (await house.event(event_id)).vote_deadline == local(22, 23, 55)

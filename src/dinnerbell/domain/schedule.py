@@ -29,6 +29,9 @@ MAX_REMINDER_MINUTES = 3 * 60
 MIN_WEIGHT = 0.0
 MAX_WEIGHT = 10.0
 DEFAULT_PROPOSAL_COUNT = 3
+MINUTES_PER_DAY = 24 * 60
+LATEST_MEAL_TIME = time(23, 45)
+"""A call ends at midnight after its day, so its windows and meal must fit in that day."""
 MAX_PROPOSAL_COUNT = 5
 
 
@@ -187,6 +190,11 @@ def check_schedule(schedule: SlotSchedule) -> SlotSchedule:
         raise InvalidSchedule("The reminder must come before the response window closes.")
     if not schedule.modes:
         raise InvalidSchedule("Pick at least one default way to get the meal.")
+    start = schedule.call_time.hour * 60 + schedule.call_time.minute
+    if start + schedule.response_minutes + schedule.vote_minutes > MINUTES_PER_DAY:
+        raise InvalidSchedule("The call's windows run past midnight. Move the call earlier or shorten them.")
+    if schedule.meal_time > LATEST_MEAL_TIME:
+        raise InvalidSchedule("Set the usual meal time by 11:45 PM.")
     return schedule
 
 
