@@ -26,6 +26,7 @@ NOTICES = {
     "reactivated": "Member reactivated.",
     "slack_set": "Slack link saved.",
     "slack_cleared": "Slack link removed.",
+    "slack_automatic": "Dinnerbell will link this member automatically again.",
 }
 
 
@@ -161,6 +162,13 @@ async def set_slack(
         return await render(request, "admin_member_edit.html", page, status_code=400)
     notice = "slack_set" if updated.slack_user_id else "slack_cleared"
     return RedirectResponse(f"/admin/members?notice={notice}", status_code=303)
+
+
+@router.post("/members/{member_id}/slack/automatic")
+async def slack_automatic(principal: AdminCSRFChecked, context: Context, db: Database, member_id: RowId) -> Response:
+    """FR-42: unlock a Slack link the admin set or cleared, so sign-in and email matching apply."""
+    await member_service.unlock_slack_link(db, principal.member, member_id, now=context.clock())
+    return RedirectResponse("/admin/members?notice=slack_automatic", status_code=303)
 
 
 @router.post("/members/{member_id}/deactivate")

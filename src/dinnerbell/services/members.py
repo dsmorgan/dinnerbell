@@ -157,6 +157,20 @@ async def set_slack_user(
     return updated
 
 
+async def unlock_slack_link(db: AsyncSession, actor: Member, member_id: int, *, now: datetime) -> Member:
+    """FR-42: hand a member's Slack link back to Dinnerbell. The link stays as it is; from now
+    on sign-in and the hourly email match may change it again. Audited."""
+    require_admin(actor, MANAGE_MEMBERS)
+    target = await get_member(db, actor, member_id)
+    if not target.slack_link_locked:
+        return target
+    updated = await MemberRepository(db).update(actor.household_id, member_id, now, slack_link_locked=False)
+    payload = {"slack_user_id": target.slack_user_id}
+    await audit(db, actor.household_id, actor, "member.slack_link_unlocked", f"member:{member_id}", payload, now)
+    await db.commit()
+    return updated
+
+
 async def _ensure_an_admin_remains(db: AsyncSession, household_id: int) -> None:
     """Re-check inside the write transaction, after the change.
 

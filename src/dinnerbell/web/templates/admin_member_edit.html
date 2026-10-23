@@ -31,4 +31,11 @@
   </label>
   <button type="submit" class="button block">Save Slack link</button>
 </form>
+{% if member.slack_link_locked %}
+<form method="post" action="/admin/members/{{ member.id }}/slack/automatic" class="card stack">
+  <p class="muted small">Let Dinnerbell link this member again when they sign in with Slack, and by email every hour.</p>
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <button type="submit" class="button block">Back to automatic</button>
+</form>
+{% endif %}
 {% endblock %}
