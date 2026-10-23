@@ -11,17 +11,18 @@ from __future__ import annotations
 import logging
 import uuid
 
-from dinnerbell.domain.notifications import Channel, DeliveryResult, MessageRef, Notification
+from dinnerbell.domain.notifications import NULL_CHANNEL_ID, Channel, DeliveryResult, MessageRef, Notification
 
-__all__ = ["Channel", "DeliveryResult", "MessageRef", "Notification", "NullChannel"]
+__all__ = ["NULL_CHANNEL_ID", "Channel", "DeliveryResult", "MessageRef", "Notification", "NullChannel"]
 
 log = logging.getLogger(__name__)
-NULL_CHANNEL_ID = "null"
 
 
 class NullChannel:
     """Delivers nowhere. It logs each notification and reports it delivered, with a made-up
-    message reference so updates and threads follow the same path a real channel takes.
+    message reference in ``NULL_CHANNEL_ID``. The outbox never hands such a reference back to
+    a channel, so once a real channel replaces this one, updates to messages it "posted" close
+    out instead of editing messages that don't exist.
 
     It is the channel until a Slack adapter is configured. Logs carry IDs only (SEC-5).
     """
