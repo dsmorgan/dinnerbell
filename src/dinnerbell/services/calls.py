@@ -37,6 +37,7 @@ from dinnerbell.domain.catalog import (
     normalize_item_name,
 )
 from dinnerbell.domain.events import (
+    MODE_ROLE,
     AssignmentRole,
     Details,
     Event,
@@ -193,7 +194,9 @@ async def hand_off(db: AsyncSession, actor: Member, event_id: int, member_id: in
 
 async def set_coordinator(db: AsyncSession, event: Event, member_id: int | None, *, now: datetime) -> None:
     """Change the coordinator, and the coordinator assignment once decided. The caller checks
-    who may, and audits."""
+    who may, and audits. The same coordinator again changes nothing and sends nothing."""
+    if member_id == event.coordinator_id:
+        return
     event = await EventRepository(db).save(replace(event, coordinator_id=member_id), now)
     assignments = AssignmentRepository(db)
     new_assignment = None
@@ -399,12 +402,22 @@ async def change_assignment(
     db: AsyncSession, actor: Member, event_id: int, role: AssignmentRole, member_id: int | None, *, now: datetime
 ) -> None:
     """Who cooks, picks up, or orders: the coordinator picks while decided (two volunteer cooks,
-    for example); the admin can also correct it after the meal (spec 5.7). Audited."""
+    for example); the admin can also correct it after the meal (spec 5.7). Only the decided
+    mode's role, and only someone who's in. Giving a role to whoever has it already changes
+    nothing and sends nothing. Audited."""
     if role not in ROLE_CHANGES:
         raise EventRuleViolation("Change the coordinator with hand off instead.")
     async with locked_event(db, actor.household_id, event_id, now) as event:
         check_can_manage_decision(event, actor)
         ctx = await load(db, event)
+        mode = event.decided_mode
+        if mode is None:  # pragma: no cover - a decided or done call always has a mode
+            raise EventRuleViolation("There's no decision to change.")
+        if role is not MODE_ROLE[mode]:
+            raise EventRuleViolation(f"This meal is {mode.label.lower()}, so only {MODE_ROLE[mode].value} is assigned.")
+        current = next((a.member_id for a in ctx.assignments if a.role is role), None)
+        if member_id == current:
+            return
         repo = AssignmentRepository(db)
         if member_id is None:
             await repo.unassign(actor.household_id, event.id, role)
@@ -413,6 +426,9 @@ async def change_assignment(
             target = ctx.members.get(member_id)
             if target is None or not target.active:
                 raise NotFound(NO_SUCH_MEMBER)
+            response = ctx.response_of(member_id)
+            if response is None or not response.is_in:
+                raise EventRuleViolation("Pick someone who's in.")
             assigned = await repo.assign(actor.household_id, event.id, role, member_id, now)
         ctx = await load(db, event)
         decision = cc.decision_info(ctx)

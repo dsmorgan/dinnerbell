@@ -389,7 +389,7 @@ async def assignment(
         chosen = choice(AssignmentRole, role)
         if chosen is None:
             raise BadFormValue("Pick a role.")
-        who = parse_id(member_id) if member_id else None
+        who = _member_id(member_id) if member_id else None
         await calls.change_assignment(db, principal.member, event_id, chosen, who, now=context.clock())
 
     return await _run(request, principal, context, db, event_id, came_from, action)

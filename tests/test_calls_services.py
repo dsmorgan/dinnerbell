@@ -521,14 +521,14 @@ async def test_meal_time_and_assignment_changes(house: House) -> None:
     assert event.meal_time is not None and event.meal_time.hour == 0 and event.meal_time.minute == 10  # 19:10 CDT
     with pytest.raises(EventRuleViolation, match="coordinator or an admin"):
         await act(house, calls.set_meal_time, house["Kim"], event_id, time(20))
-    await act(house, calls.change_assignment, house["Sam"], event_id, AssignmentRole.PICKUP, house["Kim"].id)
+    await act(house, calls.change_assignment, house["Sam"], event_id, AssignmentRole.PICKUP, house["Sam"].id)
     with pytest.raises(NotFound, match="member"):
         await act(house, calls.change_assignment, house["Sam"], event_id, AssignmentRole.PICKUP, 999_999)
     with pytest.raises(EventRuleViolation, match="hand off"):
-        await act(house, calls.change_assignment, house["Sam"], event_id, AssignmentRole.COORDINATOR, house["Kim"].id)
+        await act(house, calls.change_assignment, house["Sam"], event_id, AssignmentRole.COORDINATOR, house["Sam"].id)
     ctx = await house.context(event_id)
-    assert (AssignmentRole.PICKUP, house["Kim"].id) in {(a.role, a.member_id) for a in ctx.assignments}
-    assert (await house.outbox())[-1].payload["member"]["name"] == "Kim"  # the new assignee's message
+    assert (AssignmentRole.PICKUP, house["Sam"].id) in {(a.role, a.member_id) for a in ctx.assignments}
+    assert (await house.outbox())[-1].payload["member"]["name"] == "Sam"  # the new assignee's message
     await act(house, calls.change_assignment, house["Sam"], event_id, AssignmentRole.PICKUP, None)
     assert AssignmentRole.PICKUP not in {a.role for a in (await house.context(event_id)).assignments}
     actions = [a.action for a in await house.audits()]
@@ -556,8 +556,8 @@ async def test_marking_done_logs_the_meal_once(house: House) -> None:
     assert await house.tick() == []
     # The admin corrects an assignment after the fact; the coordinator no longer can.
     with pytest.raises(EventRuleViolation, match="no decision"):
-        await act(house, calls.change_assignment, house["Sam"], event_id, AssignmentRole.PICKUP, house["Kim"].id)
-    await act(house, calls.change_assignment, house["Alex"], event_id, AssignmentRole.PICKUP, house["Kim"].id)
+        await act(house, calls.change_assignment, house["Sam"], event_id, AssignmentRole.PICKUP, house["Sam"].id)
+    await act(house, calls.change_assignment, house["Alex"], event_id, AssignmentRole.PICKUP, house["Sam"].id)
     assert (await house.outbox())[-1].kind == "decision_updated"  # no assignment message for a past meal
 
 
@@ -1093,3 +1093,20 @@ async def test_suggestions_from_people_who_are_out_earn_nothing(house: House) ->
     reasons = {ctx.items[p.item_id or 0].name: p.reasons for p in ctx.proposals}
     assert not any("Kim" in r for r in reasons["Taqueria"])
     assert ctx.proposals[0].item_id == house.items["Siam Garden"].id  # no suggestion bonus for Taqueria
+
+
+async def test_assignments_fit_the_decision_and_repeat_quietly(house: House) -> None:
+    """Regression: any role could be given to anyone, and reassigning the same person sent
+    them a second assignment message."""
+    event_id = await decided(house)  # Siam Garden by pickup, picked up by Alex
+    with pytest.raises(EventRuleViolation, match="This meal is pickup"):
+        await act(house, calls.change_assignment, house["Sam"], event_id, AssignmentRole.COOK, house["Sam"].id)
+    with pytest.raises(EventRuleViolation, match="someone who's in"):
+        await act(house, calls.change_assignment, house["Sam"], event_id, AssignmentRole.PICKUP, house["Kim"].id)
+    before = await house.outbox()
+    pickup = next(a for a in (await house.context(event_id)).assignments if a.role is AssignmentRole.PICKUP)
+    await act(house, calls.change_assignment, house["Sam"], event_id, AssignmentRole.PICKUP, house["Alex"].id)
+    await act(house, call_admin.assign_coordinator, house["Alex"], event_id, house["Sam"].id)  # already Sam
+    assert await house.outbox() == before
+    after = next(a for a in (await house.context(event_id)).assignments if a.role is AssignmentRole.PICKUP)
+    assert after.id == pickup.id
