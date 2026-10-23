@@ -26,6 +26,9 @@ MIN_HEAD_COUNT = 2
 DONE_AFTER_MEAL = timedelta(hours=2)
 MAX_DEADLINE_SHIFT_MINUTES = 240
 AD_HOC_DAYS_AHEAD = 7
+MAX_PROPOSALS = 10
+"""Proposals per call, ranked and added together: enough choice, and a Slack message that fits."""
+MAX_ADDED_PER_MEMBER = 3
 QUARTER_HOUR = timedelta(minutes=15)
 
 
@@ -497,6 +500,15 @@ def check_can_propose(event: Event, actor: Member) -> None:
         raise EventRuleViolation("You can add proposals only while voting is open.")
     if not actor.active:
         raise EventRuleViolation("Only active members can add proposals.")
+
+
+def check_proposal_room(proposals: Iterable[Proposal], actor: Member) -> None:
+    """FR-13 within limits: at most ``MAX_PROPOSALS`` per call, ``MAX_ADDED_PER_MEMBER`` from one member."""
+    existing = list(proposals)
+    if len(existing) >= MAX_PROPOSALS:
+        raise EventRuleViolation(f"This call already has {MAX_PROPOSALS} proposals. Vote for one of them.")
+    if sum(1 for p in existing if p.proposed_by == actor.id) >= MAX_ADDED_PER_MEMBER:
+        raise EventRuleViolation(f"You've added {MAX_ADDED_PER_MEMBER} proposals to this call already.")
 
 
 def check_can_lock(event: Event, actor: Member) -> None:

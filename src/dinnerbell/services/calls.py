@@ -56,6 +56,7 @@ from dinnerbell.domain.events import (
     check_claim_coordinator,
     check_details,
     check_handoff,
+    check_proposal_room,
     is_coordinator,
     veto_participants,
     with_details,
@@ -226,6 +227,7 @@ async def add_proposal(
     async with locked_event(db, actor.household_id, event_id, now) as event:
         check_can_propose(event, actor)
         ctx = await load(db, event)
+        check_proposal_room(ctx.proposals, actor)
         item = await _proposed_item(db, ctx, mode, item_id, free_text)
         candidate = _candidate(ctx, actor, mode, item, free_text, cuisine_id)
         _check_not_proposed(ctx, candidate)
