@@ -17,7 +17,7 @@ from dinnerbell.db.models import Base
 
 M0_TABLES = {"household", "member", "session", "audit"}
 M1_TABLES = {"tag", "catalog_item", "catalog_item_tag", "catalog_item_cook", "preference", "meal_log"}
-M2_TABLES = {"event", "response", "suggestion", "proposal", "vote", "assignment"}
+M2_TABLES = {"event", "response", "suggestion", "proposal", "vote", "assignment", "outbox"}
 
 
 def test_migrates_an_empty_database(settings: Settings) -> None:
@@ -26,8 +26,8 @@ def test_migrates_an_empty_database(settings: Settings) -> None:
     engine = create_engine(settings.sync_database_url)
     try:
         inspector = inspect(engine)
-        assert set(inspector.get_table_names()) == M0_TABLES | M1_TABLES | {"alembic_version"}
-        for table in (M0_TABLES | M1_TABLES) - {"household"}:
+        assert set(inspector.get_table_names()) == M0_TABLES | M1_TABLES | M2_TABLES | {"alembic_version"}
+        for table in (M0_TABLES | M1_TABLES | M2_TABLES) - {"household"}:
             assert "household_id" in {c["name"] for c in inspector.get_columns(table)}, table
         member_columns = {c["name"] for c in inspector.get_columns("member")}
         assert {"feedback_reminder", "mute_dm_reminders", "oidc_subject", "slack_user_id"} <= member_columns
@@ -128,8 +128,36 @@ def test_database_errors_hide_bound_parameters(migrated: Settings) -> None:
     assert "leak@example.com" not in message
 
 
-def test_meal_log_event_has_no_foreign_key_until_m2(migrated: Settings) -> None:
-    engine = create_engine(migrated.sync_database_url)
+def _upgrade_to(settings: Settings, revision: str) -> None:
+    from alembic import command
+
+    from dinnerbell.db.migrate import _alembic_config
+
+    settings.database_path.parent.mkdir(parents=True, exist_ok=True)
+    engine = create_sync_engine(settings.sync_database_url)
+    try:
+        with engine.begin() as connection:
+            command.upgrade(_alembic_config(connection), revision)
+    finally:
+        engine.dispose()
+
+
+def _downgrade_to(settings: Settings, revision: str) -> None:
+    from alembic import command
+
+    from dinnerbell.db.migrate import _alembic_config
+
+    engine = create_sync_engine(settings.sync_database_url)
+    try:
+        with engine.begin() as connection:
+            command.downgrade(_alembic_config(connection), revision)
+    finally:
+        engine.dispose()
+
+
+def test_meal_log_event_has_no_foreign_key_until_m2(settings: Settings) -> None:
+    _upgrade_to(settings, "0002_catalog")
+    engine = create_engine(settings.sync_database_url)
     try:
         inspector = inspect(engine)
         assert not set(inspector.get_table_names()) & M2_TABLES
@@ -138,6 +166,103 @@ def test_meal_log_event_has_no_foreign_key_until_m2(migrated: Settings) -> None:
         assert all("event_id" not in fk["constrained_columns"] for fk in inspector.get_foreign_keys("meal_log"))
     finally:
         engine.dispose()
+
+
+def test_m2_links_meal_log_to_event_once(migrated: Settings) -> None:
+    engine = create_engine(migrated.sync_database_url)
+    try:
+        inspector = inspect(engine)
+        fks = [fk for fk in inspector.get_foreign_keys("meal_log") if fk["constrained_columns"] == ["event_id"]]
+        assert [(fk["referred_table"], fk["options"].get("ondelete")) for fk in fks] == [("event", "SET NULL")]
+        assert {"column_names": ["event_id"], "name": "uq_meal_log_event_id"} in [
+            {"column_names": u["column_names"], "name": u["name"]} for u in inspector.get_unique_constraints("meal_log")
+        ]
+        calls = next(i for i in inspector.get_indexes("event") if i["name"] == "uq_event_call_per_slot")
+        assert calls["unique"] and calls["column_names"] == ["household_id", "slot", "date"]
+    finally:
+        engine.dispose()
+
+
+EVENT_INSERT = (
+    "INSERT INTO event (household_id, kind, slot, date, state, run, version, opens_at, respond_deadline, "
+    "reminder_minutes, vote_minutes, created_at, updated_at) VALUES (1, :kind, 'dinner', '2026-10-22', "
+    "'collecting', 1, 1, :t, :t, 15, 45, :t, :t)"
+)
+STAMP = "2026-10-22 00:00:00"
+
+
+def test_one_call_per_household_slot_and_date(migrated: Settings) -> None:
+    from sqlalchemy.exc import IntegrityError
+
+    engine = create_sync_engine(migrated.sync_database_url)
+    try:
+        with engine.begin() as c:
+            c.execute(
+                text("INSERT INTO household (name, timezone, settings, created_at) VALUES ('H', 'UTC', '{}', :t)"),
+                {"t": STAMP},
+            )
+            c.execute(text(EVENT_INSERT), {"kind": "call", "t": STAMP})
+            c.execute(text(EVENT_INSERT), {"kind": "offer", "t": STAMP})  # offers (M3) don't count
+        with pytest.raises(IntegrityError, match="UNIQUE"), engine.begin() as c:
+            c.execute(text(EVENT_INSERT), {"kind": "call", "t": STAMP})
+    finally:
+        engine.dispose()
+
+
+def test_upgrade_backfills_schedule_and_downgrade_removes_it(settings: Settings) -> None:
+    import json
+
+    _upgrade_to(settings, "0002_catalog")
+    engine = create_sync_engine(settings.sync_database_url)
+    try:
+        with engine.begin() as c:
+            c.execute(
+                text(
+                    "INSERT INTO household (name, timezone, settings, created_at) VALUES "
+                    "('Home', 'UTC', '{\"variety_window_days\": 9}', :t), "
+                    "('Custom', 'UTC', '{\"proposal_count\": 5}', :t)"
+                ),
+                {"t": STAMP},
+            )
+        run_migrations(settings.sync_database_url, settings.database_path)
+        with engine.connect() as c:
+            stored = [json.loads(row[0]) for row in c.execute(text("SELECT settings FROM household ORDER BY id"))]
+        assert stored[0]["variety_window_days"] == 9
+        assert stored[0]["slots"]["dinner"]["call_time"] == "15:00"
+        assert stored[0]["slots"]["lunch"]["enabled"] is False
+        assert stored[0]["ranking_weights"]["cuisine_variety"] == 3.0
+        assert stored[0]["proposal_count"] == 3
+        assert stored[1]["proposal_count"] == 5  # an existing value is kept
+        with engine.begin() as c:
+            c.execute(text(EVENT_INSERT), {"kind": "call", "t": STAMP})
+            item = c.execute(
+                text(
+                    "INSERT INTO catalog_item (household_id, kind, name, name_key, modes, active, created_at, "
+                    "updated_at) VALUES (1, 'restaurant', 'X', 'x', '[\"pickup\"]', 1, :t, :t) RETURNING id"
+                ),
+                {"t": STAMP},
+            ).scalar_one()
+            c.execute(
+                text(
+                    "INSERT INTO meal_log (household_id, date, slot, item_id, cuisine_tags, participants, event_id, "
+                    "created_at, updated_at) VALUES (1, '2026-10-22', 'dinner', :i, '[]', '[]', 1, :t, :t)"
+                ),
+                {"i": item, "t": STAMP},
+            )
+    finally:
+        engine.dispose()
+    _downgrade_to(settings, "0002_catalog")
+    engine = create_sync_engine(settings.sync_database_url)
+    try:
+        with engine.connect() as c:
+            stored = [json.loads(row[0]) for row in c.execute(text("SELECT settings FROM household ORDER BY id"))]
+            meals = c.execute(text("SELECT event_id FROM meal_log")).all()
+        assert stored == [{"variety_window_days": 9}, {}]
+        assert meals == [(None,)]  # the meal stays; its link to the dropped event doesn't
+        assert not set(inspect(engine).get_table_names()) & M2_TABLES
+    finally:
+        engine.dispose()
+    run_migrations(settings.sync_database_url, settings.database_path)
 
 
 def test_upgrade_backfills_variety_window(settings: Settings) -> None:
@@ -159,7 +284,7 @@ def test_upgrade_backfills_variety_window(settings: Settings) -> None:
                     " ('Other', 'UTC', '{\"variety_window_days\": 10}', '2026-10-22 00:00:00')"
                 )
             )
-        run_migrations(settings.sync_database_url, settings.database_path)
+            command.upgrade(_alembic_config(connection), "0002_catalog")
         with engine.connect() as connection:
             stored = [
                 json.loads(row[0]) for row in connection.execute(text("SELECT settings FROM household ORDER BY id"))
