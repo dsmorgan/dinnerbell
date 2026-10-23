@@ -215,3 +215,49 @@ async def test_a_failed_step_is_rolled_back_not_committed_by_the_next(
     assert await house.tick() == [Step.REMIND]
     async with house.sessionmaker() as db:
         assert await db.scalar(text("SELECT name FROM household")) == "Home"
+
+
+async def test_the_scheduler_never_drains_twice_at_once(house: House, migrated: Settings) -> None:
+    """The tick's drain and the 5-second drain job share one lock, so in one process a channel
+    is only ever handling one notification at a time; the database claim covers other processes."""
+    import asyncio
+
+    in_flight, peak = 0, 0
+
+    class Counting(RecordingChannel):
+        async def deliver(
+            self, notification: n.Notification, *, thread: n.MessageRef | None = None
+        ) -> n.DeliveryResult:
+            nonlocal in_flight, peak
+            in_flight += 1
+            peak = max(peak, in_flight)
+            await asyncio.sleep(0.005)
+            in_flight -= 1
+            return await super().deliver(notification, thread=thread)
+
+    ctx = runner.JobContext(
+        state=SchedulerState(),
+        clock=house.clock,
+        zone=ZoneInfo("America/Chicago"),
+        database_path=migrated.database_path,
+        backup_dir=migrated.backup_dir,
+        sessionmaker=house.sessionmaker,
+        channel=Counting(),
+    )
+    house.clock.now = OPENS
+    await house.tick()
+    await house.drain(RecordingChannel())  # the call post is out, so the reminders are free to race
+    async with house.sessionmaker() as db:
+        from dinnerbell.db.outbox import OutboxRepository
+
+        event = await EventRepository(db).get(house.household.id, await dinner_id(house))
+        assert event is not None
+        info = n.EventInfo(
+            event.id, 1, Slot.DINNER, event.day, event.state, 1, event.path, "UTC", event.respond_deadline
+        )
+        for member in range(1, 9):
+            await OutboxRepository(db).enqueue(1, event.id, n.ResponseReminder(info, n.PersonInfo(member, "M")), OPENS)
+        await db.commit()
+    await asyncio.gather(runner.drain_outbox(ctx), runner.drain_outbox(ctx), runner.call_tick(ctx))
+    assert peak == 1
+    assert all(e.attempts == 1 for e in await house.outbox())

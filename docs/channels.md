@@ -5,7 +5,7 @@ This is the contract between Dinnerbell's core and a channel adapter such as Sla
 ## How notifications flow
 
 1. A use case in `services` changes a call and, in the same transaction, writes one outbox row per notification (`db/outbox.py`, table `outbox`). A Slack outage never loses a change.
-2. The drainer, `services.outbox.drain`, runs every 5 seconds and after every 30-second scheduler tick. It lists rows that are due (past any retry delay and unclaimed), claims each, commits the claim, calls the channel with no transaction open, and records the outcome. Rows waiting to retry aren't listed, so however many there are, they can't crowd out newer events.
+2. The drainer, `services.outbox.drain`, runs every 5 seconds and after every 30-second scheduler tick; within one process the two never drain at once (`JobContext.drain_lock`). It lists rows that are due (past any retry delay and unclaimed), claims each, commits the claim, calls the channel with no transaction open, and records the outcome. Rows waiting to retry aren't listed, so however many there are, they can't crowd out newer events.
 3. The channel is wired once in `app_factory.py` as `JobContext.channel`. It is `channels.base.NullChannel` until Slack replaces it. `NullChannel` logs each notification, reports it delivered, and returns made-up message references, so updates and threads run the same path a real channel takes.
 
 ## The interface
@@ -26,7 +26,8 @@ class Channel(Protocol):
 
 ## Delivery guarantees
 
-- **Order.** Rows are delivered oldest first per event. While an event's earlier post is waiting to retry or is claimed by another drainer, its later rows wait too, so an update never arrives before the post it edits. A failed update is the exception: it retries on its own schedule without holding back later rows, because the next update carries the latest state anyway, and any newer update to that message coalesces into it while it waits. Different events don't block each other.
+- **Order.** Rows are delivered oldest first per event. A post that creates a message (it has a `message_key`: the call, proposals, and decision posts) holds back its event's later rows while it waits to retry or is claimed by another drainer, so an update or threaded reply never arrives before its message. Nothing else holds rows back: a direct message or a failed update retries on its own schedule. Different events don't block each other.
+- **Updates to one message never go backward.** A newer update waits while an older update to the same message is in a channel's hands. An older update that hasn't gone out by the time a newer one exists is closed with `last_error = "superseded by a newer update"` and never sent, even on retry. So the last edit `update` receives for a message always carries the latest state.
 - **Once.** A row is claimed with a conditional `UPDATE` before the channel is called, so concurrent drainers never deliver the same row. The claim lasts 5 minutes (`LEASE`). If the process dies mid-delivery, another drainer can redeliver after that, so treat `idempotency_key` as a dedupe key if a duplicate post would matter.
 - **Retries.** A failure is retried after 30 seconds, doubling up to an hour. After 8 attempts (`MAX_ATTEMPTS`), or at once for `PermanentDeliveryError`, the row is marked `failed_at` and stops holding back later rows. `/healthz` reports `outbox.backlog` (waiting) and `outbox.failed`.
 - **Updates without a message.** If the post an update edits never landed (it failed for good, or the channel returned no ref), the update is closed out with `last_error = "no message to update"` instead of being sent.
@@ -42,7 +43,7 @@ Every key starts with the event and its run: `event:{event_id}:run{run}`. An adm
 | `message_key` | Names a message that later notifications edit. Posts with one create it; updates (`is_update`) edit it. Dinnerbell stores the ref the post returned (`outbox.ref_channel`, `outbox.ref_message`), so the adapter needs no table for message refs. |
 | `thread_key` | The `message_key` of the message to thread under. |
 
-Updates coalesce: while an update to a message is waiting and unclaimed, a newer update to the same message replaces its payload instead of queueing behind it. Ten quick votes become one edit with the latest counts. Each update row's `idempotency_key` is the class key plus a sequence number, such as `event:7:run1:call_updated:3`.
+Updates coalesce: while an update to a message is waiting and nobody has tried it yet, a newer update to the same message replaces its payload instead of queueing behind it. Once an update has been tried, a newer one gets its own row. Ten quick votes become one edit with the latest counts. Each update row's `idempotency_key` is the class key plus a sequence number, such as `event:7:run1:call_updated:3`.
 
 ## Notifications
 

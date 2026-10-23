@@ -29,6 +29,15 @@ class OutboxEntry:
     claimed_until: datetime | None
     attempts: int
 
+    @property
+    def is_update(self) -> bool:
+        return self.kind in UPDATE_KINDS
+
+    @property
+    def creates_message(self) -> bool:
+        """A post others edit or thread under. Only these hold back their event's later rows."""
+        return self.message_key is not None and not self.is_update
+
 
 def _entry(row: OutboxRow) -> OutboxEntry:
     return OutboxEntry(
@@ -52,6 +61,12 @@ def _rowcount(result: Any) -> int:
 
 def _pending() -> Any:
     return OutboxRow.delivered_at.is_(None) & OutboxRow.failed_at.is_(None)
+
+
+def _untried() -> tuple[Any, ...]:
+    """Rows nobody has claimed yet. Only these absorb a newer update: a row that was tried may
+    be in a channel's hands, and its retry must not carry state newer than what follows it."""
+    return (OutboxRow.claimed_until.is_(None), OutboxRow.attempts == 0, _pending())
 
 
 class OutboxRepository:
@@ -100,8 +115,7 @@ class OutboxRepository:
                 OutboxRow.household_id == household_id,
                 OutboxRow.message_key == notification.message_key,
                 OutboxRow.kind == notification.kind,
-                OutboxRow.claimed_until.is_(None),
-                _pending(),
+                *_untried(),
             )
             .order_by(OutboxRow.id)
             .limit(1)
@@ -110,7 +124,7 @@ class OutboxRepository:
             return False
         result = await self._session.execute(
             update(OutboxRow)
-            .where(OutboxRow.id == waiting, OutboxRow.claimed_until.is_(None), _pending())
+            .where(OutboxRow.id == waiting, *_untried())
             .values(payload=payload, updated_at=now)
             .execution_options(synchronize_session=False)
         )
@@ -148,11 +162,14 @@ class OutboxRepository:
         return [_entry(row) for row in rows]
 
     async def first_pending_post(self, household_id: int, event_id: int) -> int | None:
-        """The oldest undelivered post (not an update) for an event. Rows after it wait for it."""
+        """The oldest undelivered post that creates a message (it has a ``message_key``) for an
+        event. Rows after it wait for it, because they may edit or thread under that message.
+        Direct messages and updates hold nothing back."""
         first: int | None = await self._session.scalar(
             select(func.min(OutboxRow.id)).where(
                 OutboxRow.household_id == household_id,
                 OutboxRow.event_id == event_id,
+                OutboxRow.message_key.is_not(None),
                 OutboxRow.kind.not_in(UPDATE_KINDS),
                 _pending(),
             )
@@ -213,6 +230,38 @@ class OutboxRepository:
             .execution_options(synchronize_session=False)
         )
         return _rowcount(result) == 1
+
+    async def newer_update_exists(self, entry: OutboxEntry) -> bool:
+        """Whether a later update to the same message is queued or sent, making ``entry`` stale."""
+        newer = await self._session.scalar(
+            select(OutboxRow.id)
+            .where(
+                OutboxRow.household_id == entry.household_id,
+                OutboxRow.message_key == entry.message_key,
+                OutboxRow.kind == entry.kind,
+                OutboxRow.id > entry.id,
+                OutboxRow.failed_at.is_(None),
+            )
+            .limit(1)
+        )
+        return newer is not None
+
+    async def older_update_in_flight(self, entry: OutboxEntry, now: datetime) -> bool:
+        """Whether an earlier update to the same message is claimed by a live drainer. Sending
+        ``entry`` now could land before that one does and then be overwritten by it."""
+        older = await self._session.scalar(
+            select(OutboxRow.id)
+            .where(
+                OutboxRow.household_id == entry.household_id,
+                OutboxRow.message_key == entry.message_key,
+                OutboxRow.kind == entry.kind,
+                OutboxRow.id < entry.id,
+                OutboxRow.claimed_until > now,
+                _pending(),
+            )
+            .limit(1)
+        )
+        return older is not None
 
     async def message_ref(self, household_id: int, message_key: str) -> MessageRef | None:
         """Where the post that created ``message_key`` landed, once it's delivered."""
