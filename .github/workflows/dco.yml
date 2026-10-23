@@ -31,6 +31,10 @@ jobs:
           PR_COMMITS: ${{ github.event.pull_request.commits }}
           PR_AUTHOR: ${{ github.event.pull_request.user.login }}
         run: |
+          if ! [[ "$PR_COMMITS" =~ ^[0-9]+$ ]]; then
+            echo "::error::Can't read the PR's commit count."
+            exit 1
+          fi
           # The commits API returns at most 250 commits, so a longer PR can't be checked.
           if [ "$PR_COMMITS" -gt 250 ]; then
             echo "::error::This PR has $PR_COMMITS commits; the DCO check can read only 250. Split it or squash it."
