@@ -108,7 +108,7 @@ Point your hostname at the host's port 8013. With Pangolin:
 
 Dinnerbell does its own sign-in. A second login in front of it breaks the OIDC redirect back from Slack and makes every device sign in twice. Pangolin still provides TLS, the hostname, and connection-level protections.
 
-With authentication off, `/healthz` is public. It shows only coarse status.
+With authentication off, `/healthz` is public. It shows only coarse status and the running version, such as `0.2.0`, which the page footer also shows.
 
 `compose.yaml` publishes port 8013 on the address in `DINNERBELL_BIND`, which defaults to `127.0.0.1`. That default only works when Newt runs on the same host and not inside a container network. Otherwise, set `DINNERBELL_BIND` in `.env` to the host's address on the interface Newt reaches, for example its LAN address:
 
@@ -443,8 +443,13 @@ When a fixed release ships, return to the main branch with `git checkout main`, 
 Every release image carries build provenance and SBOM attestations signed through GitHub. To check that an image was built from this repository by its release workflow, run this on any machine with the [GitHub CLI](https://cli.github.com/):
 
 ```sh
-gh attestation verify oci://ghcr.io/dsmorgan/dinnerbell:0.2.0 --repo dsmorgan/dinnerbell
+gh attestation verify oci://ghcr.io/dsmorgan/dinnerbell:0.2.0 \
+  --repo dsmorgan/dinnerbell \
+  --signer-workflow dsmorgan/dinnerbell/.github/workflows/ci.yml \
+  --source-ref refs/tags/v0.2.0
 ```
+
+The last two flags check that `ci.yml` built the image from the `v0.2.0` tag. A release's digest never changes, so the digest you verify today stays valid.
 
 The release notes on GitHub list each release's digest. To compare it with the image your host pulled:
 

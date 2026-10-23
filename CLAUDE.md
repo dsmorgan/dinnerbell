@@ -16,7 +16,7 @@ docker build -f Containerfile -t dinnerbell .
 
 ## Releases and repository settings
 
-- The release recipe is in [CONTRIBUTING.md](CONTRIBUTING.md#release). A release pull request bumps `__version__` in `src/dinnerbell/__init__.py`, `version` in `pyproject.toml` (then `uv lock`), and the default tag in `compose.yaml`, and retitles `[Unreleased]` in `CHANGELOG.md`. Every release has **Upgrade notes**. Push a `vX.Y.Z` tag only when the owner says to release, and record the image digest in the release notes.
+- The release recipe is in [CONTRIBUTING.md](CONTRIBUTING.md#release). A release pull request bumps `__version__` in `src/dinnerbell/__init__.py`, `version` in `pyproject.toml` (then `uv lock`), and the default tag in `compose.yaml`, and retitles `[Unreleased]` in `CHANGELOG.md`. Every release has **Upgrade notes**. Push a `vX.Y.Z` tag only when the owner says to release. Verify with `gh attestation verify oci://ghcr.io/dsmorgan/dinnerbell:X.Y.Z --repo dsmorgan/dinnerbell --signer-workflow dsmorgan/dinnerbell/.github/workflows/ci.yml --source-ref refs/tags/vX.Y.Z`, and record the digest from the `publish` job summary in the release notes. Never re-run a release's workflow or move its tag; cut X.Y.Z+1 instead.
 - Changes under `[Unreleased]` in `CHANGELOG.md` go in the same pull request as the change.
 - Agents never pass `--admin` to `gh` (for example, `gh pr merge --admin`), and never change repository settings without the owner's approval: rulesets, branch protection, Actions policy, security settings, secrets, or package settings.
 
