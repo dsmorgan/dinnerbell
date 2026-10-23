@@ -4,6 +4,10 @@
 Channel posts go to the configured channel, threaded when the drainer passes a thread. Direct
 messages go to the member's Slack user ID with ``chat.postMessage``, which opens the DM. Every
 post returns a ``MessageRef`` of Slack's channel ID and message ``ts``.
+
+While a startup check fails (the bot isn't in the channel yet, say), channel posts and updates
+fail as retryable instead of reaching Slack, where ``not_in_channel`` would close them for good.
+They go out once the admin fixes the setup, within the outbox's retries.
 """
 
 from __future__ import annotations
@@ -12,23 +16,35 @@ import logging
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from dinnerbell.channels.slack.api import SlackApi
+from dinnerbell.channels.slack.api import SlackApi, SlackUnavailable
 from dinnerbell.channels.slack.blocks import Directory
 from dinnerbell.channels.slack.messages import RenderContext, render
 from dinnerbell.domain.notifications import DeliveryResult, MessageRef, Notification, PermanentDeliveryError
 from dinnerbell.services import slack_members
+from dinnerbell.services.health import SlackState
 
 log = logging.getLogger(__name__)
 
 
 class SlackChannel:
     def __init__(
-        self, api: SlackApi, *, channel_id: str, base_url: str, sessionmaker: async_sessionmaker[AsyncSession]
+        self,
+        api: SlackApi,
+        *,
+        channel_id: str,
+        base_url: str,
+        sessionmaker: async_sessionmaker[AsyncSession],
+        state: SlackState,
     ) -> None:
         self.api = api
+        self.state = state
         self.channel_id = channel_id
         self.base_url = base_url
         self.sessionmaker = sessionmaker
+
+    def _hold_for_setup(self) -> None:
+        if self.state.problem is not None:
+            raise SlackUnavailable("Slack setup problem; see /healthz and the logs")
 
     async def _context(self, household_id: int) -> RenderContext:
         async with self.sessionmaker() as db:
@@ -45,8 +61,10 @@ class SlackChannel:
                 raise PermanentDeliveryError(f"member {recipient} has no Slack user")
             ref = await self.api.post(slack_user, message)
         elif thread is not None:
+            self._hold_for_setup()
             ref = await self.api.post(thread.channel_id, message, thread_ts=thread.message_id)
         else:
+            self._hold_for_setup()
             ref = await self.api.post(self.channel_id, message)
         log.info(
             "slack message posted",
@@ -55,5 +73,6 @@ class SlackChannel:
         return DeliveryResult(ref)
 
     async def update(self, ref: MessageRef, notification: Notification) -> None:
+        self._hold_for_setup()
         ctx = await self._context(notification.event.household_id)
         await self.api.update(ref, render(notification, ctx).payload())
