@@ -194,6 +194,16 @@ class SlackApi:
         info: dict[str, Any] = response["channel"]
         return info
 
+    async def dm_channel(self, user: str) -> str | None:
+        """The ID of the bot's existing direct message with ``user``, or None. Never opens one."""
+        response = await self._call(
+            "conversations.open",
+            lambda: self.client.conversations_open(users=user, prevent_creation=True),
+        )
+        channel = response.get("channel")
+        found = channel.get("id") if isinstance(channel, dict) else None
+        return found if isinstance(found, str) else None
+
     async def check_app_token(self, app_token: str) -> None:
         """Ask for a Socket Mode URL with the app-level token, to check it before connecting."""
         await self._call("apps.connections.open", lambda: self.client.apps_connections_open(app_token=app_token))

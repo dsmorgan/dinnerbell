@@ -120,6 +120,7 @@ async def test_buttons_from_other_channels_are_refused(slack: Slack, house: Hous
         await slack.click("Sam", "respond_in", str(event_id), channel=channel)
     assert await responses(house, event_id) == 0
     assert [c.args["text"] for c in slack.fake.of("chat.postMessage")] == [WRONG_PLACE] * 3
+    assert slack.fake.of("conversations.open") == []  # refused on sight, before asking Slack about DMs
 
 
 async def test_a_modal_payload_without_a_view_type_is_dropped(slack: Slack, house: House) -> None:
@@ -297,3 +298,37 @@ async def test_payloads_without_a_user_are_dropped(slack: Slack, house: House) -
     assert ids.ViewOrigin.decode('{"event": 1, "channel": null}') == ids.ViewOrigin(1)
     with pytest.raises(ids.BadValue):
         ids.ViewOrigin.decode(None)
+
+
+async def test_a_dm_button_only_works_in_that_members_own_dm(slack: Slack, house: House) -> None:
+    event_id = await open_call(house)
+    await slack.click("Sam", "respond_in", str(event_id), channel="D04LEE")  # Lee's DM, not Sam's
+    assert await responses(house, event_id) == 0
+    assert [c.args["text"] for c in slack.fake.of("chat.postMessage")] == [WRONG_PLACE]
+    opened = slack.fake.of("conversations.open")
+    assert [c.args for c in opened] == [{"users": "U02SAM", "prevent_creation": "1"}]
+
+    await slack.click("Sam", "respond_in", str(event_id), channel="D02SAM")  # Sam's own DM
+    assert await responses(house, event_id) == 1
+    assert len(slack.fake.of("conversations.open")) == 1  # remembered
+
+
+@pytest.mark.parametrize("failure", [Failure("internal_error", status=500), Failure(raises=TimeoutError())])
+async def test_a_dm_that_cant_be_checked_is_refused(slack: Slack, house: House, failure: Failure) -> None:
+    event_id = await open_call(house)
+    slack.fake.fail("conversations.open", failure)
+    await slack.click("Lee", "respond_in", str(event_id), channel="D04LEE")
+    assert await responses(house, event_id) == 0
+
+
+async def test_a_dm_slack_says_doesnt_exist_is_refused(
+    slack: Slack, house: House, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    event_id = await open_call(house)
+
+    async def none(user: str) -> None:
+        return None
+
+    monkeypatch.setattr(slack.conn.api, "dm_channel", none)
+    await slack.click("Lee", "respond_in", str(event_id), channel="D04LEE")
+    assert await responses(house, event_id) == 0
