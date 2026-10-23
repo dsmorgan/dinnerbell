@@ -144,12 +144,13 @@ def components(item: RankItem, mode: Mode, snapshot: RankingSnapshot) -> dict[Co
 def _order_key(
     item: RankItem, mode: Mode, score: float, snapshot: RankingSnapshot
 ) -> tuple[float, float, str, int, int]:
-    """Step 4: score descending, then fewest days since last eaten, then name. Mode order and
-    item ID only make the order total, so equal inputs always give equal output."""
+    """Step 4: score descending, then the item eaten longest ago (never eaten first), then
+    name. Mode order and item ID only make the order total, so equal inputs always give equal
+    output."""
     since = snapshot.last_eaten_days.get(item.id)
     return (
         -round(score, SCORE_PLACES),
-        float("inf") if since is None else since,
+        float("-inf") if since is None else -since,
         item.name.casefold(),
         MODE_ORDER.index(mode),
         item.id,

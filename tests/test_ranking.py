@@ -135,10 +135,10 @@ def test_reasons_cover_every_component() -> None:
 
 
 def test_ordering_and_tie_breaks() -> None:
-    # Equal scores: fewest days since last eaten first, then name; never-eaten items last.
+    # Equal scores: never-eaten items first, then the one eaten longest ago, then name.
     a, b, c, d = item(1, "Bravo"), item(2, "alpha"), item(3, "Charlie"), item(4, "Delta")
     snap = snapshot(a, b, c, d, weights=Weights(novelty=0), last_eaten_days={1: 20, 2: 20, 3: 10}, limit=4)
-    assert [r.item_id for r in rank(snap)] == [3, 2, 1, 4]
+    assert [r.item_id for r in rank(snap)] == [4, 2, 1, 3]
     higher = replace(snap, preferences=GroupPreferences(item_scores={4: 1}))
     assert rank(higher)[0].item_id == 4
     assert len(rank(replace(snap, limit=2))) == 2
