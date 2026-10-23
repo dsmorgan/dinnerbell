@@ -11,6 +11,8 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from dinnerbell.db.outbox import OutboxRepository
+
 log = logging.getLogger(__name__)
 
 HEARTBEAT_INTERVAL = timedelta(seconds=30)
@@ -46,6 +48,16 @@ class SchedulerState:
         if age <= STALE_AFTER:
             return "ok"
         return "stale" if age <= STOPPED_AFTER else "stopped"
+
+
+async def outbox_backlog(sessionmaker: async_sessionmaker[AsyncSession]) -> tuple[int, int] | None:
+    """(notifications waiting, notifications that failed for good), or None if unreadable."""
+    try:
+        async with sessionmaker() as db:
+            return await OutboxRepository(db).backlog()
+    except (SQLAlchemyError, OSError):
+        log.warning("outbox backlog check failed", exc_info=True)
+        return None
 
 
 async def database_reachable(sessionmaker: async_sessionmaker[AsyncSession]) -> bool:

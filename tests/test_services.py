@@ -130,23 +130,34 @@ def test_utc_datetime_type() -> None:
 
 
 async def test_channel_protocol_is_structural() -> None:
-    from dinnerbell.channels.base import Channel
-    from dinnerbell.domain.notifications import DeliveryResult, MessageRef, Notification
+    """Any class with deliver and update is a Channel; adapters don't subclass anything."""
+    from datetime import date
+
+    from dinnerbell.channels.base import Channel, NullChannel
+    from dinnerbell.domain.events import EndReason, EventState
+    from dinnerbell.domain.meals import Slot
+    from dinnerbell.domain.notifications import CallAbandoned, DeliveryResult, EventInfo, MessageRef, Notification
 
     class Recorder:
         def __init__(self) -> None:
             self.sent: list[Notification] = []
 
-        async def deliver(self, notification: Notification) -> DeliveryResult:
+        async def deliver(self, notification: Notification, *, thread: MessageRef | None = None) -> DeliveryResult:
             self.sent.append(notification)
             return DeliveryResult(MessageRef("C1", "1.0"))
 
         async def update(self, ref: MessageRef, notification: Notification) -> None:
             self.sent.append(notification)
 
-    channel: Channel = Recorder()
-    result = await channel.deliver(Notification("key-1"))
-    assert result.ref == MessageRef("C1", "1.0")
+    info = EventInfo(
+        1, 1, Slot.DINNER, date(2026, 10, 22), EventState.ABANDONED, 1, "/events/1", "UTC", datetime.now(UTC)
+    )
+    notification = CallAbandoned(info, EndReason.TOO_FEW)
+    for channel in (Recorder(), NullChannel()):
+        typed: Channel = channel
+        result = await typed.deliver(notification)
+        assert result.ref is not None
+        await typed.update(result.ref, notification)
 
 
 async def _two_admins(migrated: Settings, clock: FakeClock) -> tuple[members.Member, members.Member]:

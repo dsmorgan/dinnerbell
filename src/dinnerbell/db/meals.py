@@ -67,6 +67,13 @@ class MealLogRepository:
         rows = await self._session.execute(query.order_by(MealLogRow.date.desc(), MealLogRow.id.desc()))
         return [_meal(row, name) for row, name in rows]
 
+    async def for_event(self, household_id: int, event_id: int) -> int | None:
+        """The ID of the meal a call logged, if it has logged one."""
+        meal_id: int | None = await self._session.scalar(
+            select(MealLogRow.id).where(MealLogRow.household_id == household_id, MealLogRow.event_id == event_id)
+        )
+        return meal_id
+
     async def earliest(self, household_id: int) -> date | None:
         value: date | None = await self._session.scalar(
             select(func.min(MealLogRow.date)).where(MealLogRow.household_id == household_id)
@@ -92,6 +99,7 @@ class MealLogRepository:
         participants: tuple[MemberRef, ...],
         logged_by: int | None,
         now: datetime,
+        event_id: int | None = None,
     ) -> int:
         row = MealLogRow(
             household_id=household_id,
@@ -100,7 +108,7 @@ class MealLogRepository:
             item_id=item_id,
             cuisine_tags=_snapshot(cuisines),
             participants=_snapshot(participants),
-            event_id=None,
+            event_id=event_id,
             logged_by=logged_by,
             created_at=now,
             updated_at=now,

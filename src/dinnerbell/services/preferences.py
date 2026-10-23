@@ -1,9 +1,13 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """A member's own preferences and settings (FR-27 to FR-29).
 
-Every function here acts on ``actor`` and takes no other member's ID. That is the privacy
-rule: no one, admins included, can read or write another member's preferences. Preferences
-are deliberately not audited, because the audit log is visible to the admin.
+Every function here that returns stances acts on ``actor`` and takes no other member's ID.
+That is the privacy rule: no one, admins included, can read or write another member's
+preferences. Preferences are deliberately not audited, because the audit log is visible to the
+admin.
+
+The one exception, ``group_preferences``, is for ranking. It returns the combined vetoes and
+summed scores of a group, never a breakdown by member, so its result can't say who vetoed what.
 """
 
 from __future__ import annotations
@@ -20,6 +24,7 @@ from dinnerbell.db.repositories import MemberRepository
 from dinnerbell.domain.catalog import CatalogItem, Tag
 from dinnerbell.domain.members import Capabilities, Member
 from dinnerbell.domain.preferences import NEUTRAL, Stance, TargetType
+from dinnerbell.domain.ranking import GroupPreferences
 from dinnerbell.services.common import is_unique_violation
 from dinnerbell.services.errors import NotFound
 
@@ -117,3 +122,14 @@ async def update_my_settings(db: AsyncSession, actor: Member, settings: MySettin
     )
     await db.commit()
     return updated
+
+
+async def group_preferences(db: AsyncSession, household_id: int, member_ids: frozenset[int]) -> GroupPreferences:
+    """Everyone in ``member_ids`` at once: the union of their vetoes and the sum of their scores."""
+    combined = await PreferenceRepository(db).group_preferences(household_id, member_ids)
+    return GroupPreferences(
+        vetoed_tags=combined.vetoed_tags,
+        vetoed_items=combined.vetoed_items,
+        tag_scores=combined.tag_scores,
+        item_scores=combined.item_scores,
+    )

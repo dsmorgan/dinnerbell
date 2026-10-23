@@ -201,6 +201,37 @@ class Response:
 
 
 @dataclass(frozen=True, slots=True)
+class Suggestion:
+    member_id: int
+    item_id: int | None = None
+    free_text: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class Proposal:
+    """A candidate for a call: a catalog item, or free text with a cuisine (FR-13)."""
+
+    id: int
+    event_id: int
+    mode: Mode
+    rank: int
+    source: ProposalSource
+    item_id: int | None = None
+    free_text: str | None = None
+    free_cuisine_id: int | None = None
+    score: float | None = None
+    reasons: tuple[str, ...] = ()
+    proposed_by: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class Assignment:
+    id: int
+    member_id: int
+    role: AssignmentRole
+
+
+@dataclass(frozen=True, slots=True)
 class Details:
     """The Details form (FR-8), already parsed. Validated by ``check_details``."""
 

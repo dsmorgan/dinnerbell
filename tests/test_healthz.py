@@ -28,7 +28,8 @@ def test_healthz_shape(client: TestClient, clock: FakeClock) -> None:
     response = client.get("/healthz")
     assert response.status_code == 200
     assert response.headers["content-type"] == "application/json"
-    assert set(body) == {"status", "database", "scheduler", "slack", "backup"}
+    assert set(body) == {"status", "database", "scheduler", "slack", "backup", "outbox"}
+    assert body["outbox"] == {"backlog": 0, "failed": 0}
     assert body["status"] == "ok"
     assert body["database"] == "ok"
     assert body["slack"] == "not_configured"

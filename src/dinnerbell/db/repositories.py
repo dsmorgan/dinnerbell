@@ -55,6 +55,23 @@ class HouseholdRepository:
         row = await self._session.scalar(select(HouseholdRow).order_by(HouseholdRow.id).limit(1))
         return None if row is None else _household(row)
 
+    async def get(self, household_id: int) -> Household | None:
+        row = await self._session.get(HouseholdRow, household_id)
+        return None if row is None else _household(row)
+
+    async def all(self) -> list[Household]:
+        rows = await self._session.scalars(select(HouseholdRow).order_by(HouseholdRow.id))
+        return [_household(row) for row in rows]
+
+    async def update_settings(self, household_id: int, settings: dict[str, Any]) -> None:
+        """Replace the settings JSON. Callers merge their keys into the current settings first."""
+        await self._session.execute(
+            update(HouseholdRow)
+            .where(HouseholdRow.id == household_id)
+            .values(settings=settings)
+            .execution_options(synchronize_session=False)
+        )
+
     async def create(self, name: str, timezone: str, now: datetime) -> Household:
         row = HouseholdRow(name=name, timezone=timezone, settings={}, created_at=now)
         self._session.add(row)

@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo
 import httpx
 from fastapi import FastAPI
 
+from dinnerbell.channels.base import NullChannel
 from dinnerbell.config import Settings
 from dinnerbell.scheduler.runner import JobContext, build_scheduler, stop_scheduler
 from dinnerbell.services import catalog as catalog_service
@@ -71,6 +72,7 @@ def create_app(
             database_path=settings.database_path,
             backup_dir=settings.backup_dir,
             sessionmaker=database.sessionmaker,
+            channel=NullChannel(),  # the Slack adapter replaces this when it's configured
         )
         app.state.jobs = jobs
         scheduler = build_scheduler(jobs)

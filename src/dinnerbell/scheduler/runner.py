@@ -20,7 +20,8 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from dinnerbell.services import auth, backups
+from dinnerbell.domain.notifications import Channel
+from dinnerbell.services import auth, backups, lifecycle, outbox
 from dinnerbell.services.clock import Clock
 from dinnerbell.services.health import HEARTBEAT_INTERVAL, SchedulerState
 
@@ -30,6 +31,11 @@ BACKUP_HOUR = 3
 BACKUP_MINUTE = 30
 BACKUP_CATCH_UP_AFTER = timedelta(hours=24)
 SHUTDOWN_GRACE_SECONDS = 10.0
+CALL_TICK_INTERVAL = timedelta(seconds=30)
+"""How often calls are opened and advanced. One idempotent job, not one job per deadline: the
+database is the schedule, so a restart or downtime catches up on the next tick."""
+DRAIN_INTERVAL = timedelta(seconds=5)
+"""How often the outbox is drained between ticks, so a tap in Slack shows up within seconds."""
 
 
 @dataclass(frozen=True)
@@ -40,6 +46,7 @@ class JobContext:
     database_path: Path
     backup_dir: Path
     sessionmaker: async_sessionmaker[AsyncSession]
+    channel: Channel
     running: set[asyncio.Task[object]] = field(default_factory=set)
 
 
@@ -84,6 +91,23 @@ async def purge_sessions(ctx: JobContext) -> None:
         log.info("expired sessions removed", extra={"count": removed})
 
 
+async def call_tick(ctx: JobContext) -> None:
+    """Open due calls and walk every open call through the steps it owes, in each household's
+    time zone, then deliver what that produced. Replaces one job per deadline (ADR 0004)."""
+    try:
+        await lifecycle.tick(ctx.sessionmaker, ctx.clock())
+    except Exception:
+        log.exception("call tick failed")
+    await drain_outbox(ctx)
+
+
+async def drain_outbox(ctx: JobContext) -> None:
+    try:
+        await outbox.drain(ctx.sessionmaker, ctx.channel, ctx.clock)
+    except Exception:
+        log.exception("outbox drain failed")
+
+
 async def stop_scheduler(scheduler: AsyncIOScheduler, ctx: JobContext) -> None:
     """Stop scheduling, cancel running jobs, and wait for them to finish cleaning up.
 
@@ -122,5 +146,19 @@ def build_scheduler(ctx: JobContext) -> AsyncIOScheduler:
     )
     scheduler.add_job(
         _tracked(purge_sessions), IntervalTrigger(hours=1), args=[ctx], id="purge_sessions", next_run_time=start
+    )
+    scheduler.add_job(
+        _tracked(call_tick),
+        IntervalTrigger(seconds=CALL_TICK_INTERVAL.total_seconds()),
+        args=[ctx],
+        id="call_tick",
+        next_run_time=start,
+    )
+    scheduler.add_job(
+        _tracked(drain_outbox),
+        IntervalTrigger(seconds=DRAIN_INTERVAL.total_seconds()),
+        args=[ctx],
+        id="drain_outbox",
+        next_run_time=start,
     )
     return scheduler

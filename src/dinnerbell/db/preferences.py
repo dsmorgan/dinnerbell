@@ -1,12 +1,18 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Preference data access. Every query is scoped to one member; there is no "all members" read."""
+"""Preference data access.
+
+Every query that returns stances is scoped to one member. The one cross-member read,
+``group_preferences``, returns only combined values (a union of vetoes and summed scores), so
+no caller can learn one member's stances from it (FR-29).
+"""
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass, field
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dinnerbell.db.models import PreferenceRow
@@ -24,6 +30,14 @@ def _preference(row: PreferenceRow) -> Preference:
         target_id=target_id,
         stance=Stance(veto=row.veto, score=row.score),
     )
+
+
+@dataclass(frozen=True, slots=True)
+class CombinedStances:
+    vetoed_tags: frozenset[int] = frozenset()
+    vetoed_items: frozenset[int] = frozenset()
+    tag_scores: dict[int, int] = field(default_factory=dict)
+    item_scores: dict[int, int] = field(default_factory=dict)
 
 
 def _target_column(target_type: TargetType) -> str:
@@ -101,3 +115,34 @@ class PreferenceRepository:
             moved += 1
         await self._session.flush()
         return moved
+
+    async def group_preferences(self, household_id: int, member_ids: Iterable[int]) -> CombinedStances:
+        """The union of the members' vetoes and the sum of their scores, per tag and per item.
+        The database does the combining; no per-member row leaves this method."""
+        members = sorted(set(member_ids))
+        if not members:
+            return CombinedStances()
+        scope = (PreferenceRow.household_id == household_id, PreferenceRow.member_id.in_(members))
+        vetoes = await self._session.execute(
+            select(PreferenceRow.tag_id, PreferenceRow.item_id).where(*scope, PreferenceRow.veto.is_(True)).distinct()
+        )
+        tags: set[int] = set()
+        items: set[int] = set()
+        for tag_id, item_id in vetoes:
+            if tag_id is not None:
+                tags.add(tag_id)
+            elif item_id is not None:
+                items.add(item_id)
+        scores = await self._session.execute(
+            select(PreferenceRow.tag_id, PreferenceRow.item_id, func.sum(PreferenceRow.score))
+            .where(*scope, PreferenceRow.veto.is_(False))
+            .group_by(PreferenceRow.tag_id, PreferenceRow.item_id)
+        )
+        tag_scores: dict[int, int] = {}
+        item_scores: dict[int, int] = {}
+        for tag_id, item_id, total in scores:
+            if tag_id is not None:
+                tag_scores[tag_id] = int(total)
+            elif item_id is not None:
+                item_scores[item_id] = int(total)
+        return CombinedStances(frozenset(tags), frozenset(items), tag_scores, item_scores)
