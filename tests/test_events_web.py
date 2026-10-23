@@ -156,6 +156,9 @@ def test_vote_lock_and_mark_done(admin: TestClient, clock: FakeClock, migrated: 
     assert "7:15 PM" in admin.get(f"/events/{event_id}").text
     assert htmx(admin, f"/events/{event_id}/meal-time", {"at": ""}).status_code == 409
     assert htmx(admin, f"/events/{event_id}/assignments", {"role": "chef"}).status_code == 409
+    malformed = htmx(admin, f"/events/{event_id}/assignments", {"role": "pickup", "member_id": "abc"})
+    assert malformed.status_code == 409 and "Pick a member" in malformed.text  # not a silent unassign
+    assert "Picking up: admin" in page(malformed)
     assert htmx(admin, f"/events/{event_id}/assignments", {"role": "pickup", "member_id": ""}).status_code == 200
     assert 'hx-confirm="Mark this meal done?' in admin.get(f"/events/{event_id}").text
     done = htmx(admin, f"/events/{event_id}/done", {})
