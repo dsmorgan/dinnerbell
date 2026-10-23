@@ -324,6 +324,10 @@ UPDATE_KINDS = frozenset(kind for kind, cls in NOTIFICATION_TYPES.items() if cls
 # Delivery -------------------------------------------------------------------------------------
 
 
+NULL_CHANNEL_ID = "null"
+"""The channel ID in ``NullChannel``'s made-up message references. Never a real channel's."""
+
+
 @dataclass(frozen=True, slots=True)
 class MessageRef:
     """Where a channel put a message, for later updates and threading. Opaque to Dinnerbell."""

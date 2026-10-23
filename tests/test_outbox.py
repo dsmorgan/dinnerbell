@@ -285,3 +285,19 @@ async def test_a_permanent_delivery_error_gives_up_at_once(database: Database, c
             )
         ).one()
     assert failed == (1, "PermanentDeliveryError: channel_not_found")
+
+
+async def test_null_channel_refs_are_not_real_messages(database: Database, clock: FakeClock) -> None:
+    """Regression: a call posted before Slack was configured left a made-up ref, and Slack was
+    then asked to edit and thread under a message that doesn't exist."""
+    from dinnerbell.channels.base import NullChannel
+
+    await enqueue(database, opened(1))
+    await outbox.drain(database.sessionmaker, NullChannel(), clock)
+    await enqueue(database, updated(1, 2), n.ProposalsReady(info(1), ()))
+    slack = RecordingChannel()
+    assert (await outbox.drain(database.sessionmaker, slack, clock)).delivered == 2
+    assert [(s.op, s.kind, s.thread) for s in slack.sent] == [("deliver", "proposals_ready", None)]
+    async with database.sessionmaker() as db:
+        note = await db.scalar(text("SELECT last_error FROM outbox WHERE kind = 'call_updated'"))
+    assert note == outbox.NO_MESSAGE

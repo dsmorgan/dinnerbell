@@ -12,7 +12,7 @@ from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dinnerbell.db.models import OutboxRow
-from dinnerbell.domain.notifications import UPDATE_KINDS, MessageRef, Notification, to_payload
+from dinnerbell.domain.notifications import NULL_CHANNEL_ID, UPDATE_KINDS, MessageRef, Notification, to_payload
 
 
 @dataclass(frozen=True, slots=True)
@@ -212,8 +212,8 @@ class OutboxRepository:
                 .limit(1)
             )
         ).first()
-        if found is None or found[0] is None or found[1] is None:
-            return None
+        if found is None or found[0] is None or found[1] is None or found[0] == NULL_CHANNEL_ID:
+            return None  # no message, or one NullChannel only pretended to post
         return MessageRef(channel_id=found[0], message_id=found[1])
 
     async def backlog(self) -> tuple[int, int]:

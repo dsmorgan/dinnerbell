@@ -30,6 +30,7 @@ class Channel(Protocol):
 - **Once.** A row is claimed with a conditional `UPDATE` before the channel is called, so concurrent drainers never deliver the same row. The claim lasts 5 minutes (`LEASE`). If the process dies mid-delivery, another drainer can redeliver after that, so treat `idempotency_key` as a dedupe key if a duplicate post would matter.
 - **Retries.** A failure is retried after 30 seconds, doubling up to an hour. After 8 attempts (`MAX_ATTEMPTS`), or at once for `PermanentDeliveryError`, the row is marked `failed_at` and stops holding back later rows. `/healthz` reports `outbox.backlog` (waiting) and `outbox.failed`.
 - **Updates without a message.** If the post an update edits never landed (it failed for good, or the channel returned no ref), the update is closed out with `last_error = "no message to update"` instead of being sent.
+- **Messages `NullChannel` pretended to post.** `NullChannel` returns refs whose channel ID is `NULL_CHANNEL_ID` (`"null"`, in `domain/notifications.py`). The outbox never passes such a ref to a channel, as `ref` or `thread`. So for a call that opened before Slack was configured, Slack gets no edits for the old call message (they close out as above), and its later posts go to the top level instead of a thread. Never return `"null"` as a real channel ID.
 
 ## Keys
 
