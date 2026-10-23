@@ -528,11 +528,15 @@ async def tick(sessionmaker: async_sessionmaker[AsyncSession], now: datetime) ->
         async with sessionmaker() as db:
             try:
                 await open_due_calls(db, household, now)
-                event_ids = await EventRepository(db).open_ids(household.id)
             except Exception:
                 await db.rollback()
                 log.exception("could not open calls", extra={"household_id": household.id})
+            try:
                 event_ids = await EventRepository(db).open_ids(household.id)
+            except Exception:
+                await db.rollback()
+                log.exception("could not list calls", extra={"household_id": household.id})
+                continue
             for event_id in event_ids:
                 try:
                     applied += await advance(db, household.id, event_id, now)

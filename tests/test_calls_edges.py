@@ -261,3 +261,35 @@ async def test_the_scheduler_never_drains_twice_at_once(house: House, migrated: 
     await asyncio.gather(runner.drain_outbox(ctx), runner.drain_outbox(ctx), runner.call_tick(ctx))
     assert peak == 1
     assert all(e.attempts == 1 for e in await house.outbox())
+
+
+async def test_one_households_failing_lookup_does_not_stop_the_tick(
+    house: House, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Regression: when opening calls failed, the fallback lookup of open calls was unguarded,
+    so a database error there stopped the tick for every later household."""
+    from dinnerbell.db.repositories import HouseholdRepository
+    from dinnerbell.domain.schedule import default_settings
+
+    async with house.sessionmaker() as db:
+        other = await HouseholdRepository(db).create("Other", "America/Chicago", OPENS, default_settings())
+        await db.commit()
+    real_open, real_ids = lifecycle.open_due_calls, EventRepository.open_ids
+
+    async def failing_open(db: Any, household: Any, now: Any) -> list[Any]:
+        if household.id == house.household.id:
+            raise RuntimeError("open failed")
+        return await real_open(db, household, now)
+
+    async def failing_ids(self: EventRepository, household_id: int) -> list[int]:
+        if household_id == house.household.id:
+            raise RuntimeError("lookup failed")
+        return await real_ids(self, household_id)
+
+    monkeypatch.setattr(lifecycle, "open_due_calls", failing_open)
+    monkeypatch.setattr(EventRepository, "open_ids", failing_ids)
+    house.clock.now = OPENS
+    await house.tick()
+    async with house.sessionmaker() as db:
+        assert await EventRepository(db).call_for(other.id, Slot.DINNER, OPENS.date()) is not None
+    assert "could not list calls" in caplog.text
