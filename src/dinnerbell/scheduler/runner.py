@@ -116,7 +116,9 @@ async def drain_outbox(ctx: JobContext) -> None:
             log.exception("outbox drain failed")
 
 
-async def stop_scheduler(scheduler: AsyncIOScheduler, ctx: JobContext) -> None:
+async def stop_scheduler(
+    scheduler: AsyncIOScheduler, ctx: JobContext, *, grace: float = SHUTDOWN_GRACE_SECONDS
+) -> None:
     """Stop scheduling, cancel running jobs, and wait for them to finish cleaning up.
 
     APScheduler cancels asyncio jobs on shutdown but does not wait for them. Without the wait,
@@ -124,7 +126,7 @@ async def stop_scheduler(scheduler: AsyncIOScheduler, ctx: JobContext) -> None:
     """
     scheduler.shutdown(wait=False)
     if ctx.running:
-        await asyncio.wait(set(ctx.running), timeout=SHUTDOWN_GRACE_SECONDS)
+        await asyncio.wait(set(ctx.running), timeout=grace)
 
 
 def build_scheduler(ctx: JobContext) -> AsyncIOScheduler:

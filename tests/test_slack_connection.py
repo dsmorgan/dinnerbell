@@ -303,6 +303,7 @@ async def test_an_unexpected_check_failure_is_logged(
 
 async def test_start_runs_the_supervisor_and_stop_ends_it(house: House, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(connection_module, "CHECK_AGAIN_AFTER_SUCCESS", 0.01)
+    monkeypatch.setattr(connection_module, "MIN_CHECK_GAP", 0.0)
     fake = FakeSlack()
     conn = connection(house, fake)
     await conn.start()
@@ -339,7 +340,7 @@ async def test_a_connect_failure_is_logged(caplog: pytest.LogCaptureFixture) -> 
 
 async def test_bolt_socket_builds_and_closes_without_connecting(house: House) -> None:
     conn = connection(house, FakeSlack())
-    socket = BoltSocket(conn.app, APP_TOKEN)
+    socket = BoltSocket(conn.app, APP_TOKEN, lambda: None)
     assert not await socket.is_connected()
     await socket.close()
 
@@ -544,7 +545,7 @@ async def test_a_real_tick_delivers_through_slack(house: House) -> None:
 
 async def test_bolt_socket_connects_through_the_handler(house: House, monkeypatch: pytest.MonkeyPatch) -> None:
     conn = connection(house, FakeSlack())
-    socket = BoltSocket(conn.app, APP_TOKEN)
+    socket = BoltSocket(conn.app, APP_TOKEN, lambda: None)
     connected: list[bool] = []
 
     async def connect_async() -> None:
