@@ -20,6 +20,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import timedelta
+from functools import partial
 from typing import Any, NoReturn
 
 import aiohttp
@@ -228,6 +229,23 @@ class SlackApi:
         response = await self._call("conversations.info", lambda: self.client.conversations_info(channel=channel))
         info: dict[str, Any] = response["channel"]
         return info
+
+    async def channel_members(self, channel: str, *, page_size: int, max_pages: int) -> tuple[frozenset[str], bool]:
+        """The user IDs in ``channel`` (``conversations.members``), and whether every page was
+        read. Stops after ``max_pages`` pages, so a huge channel can't keep a check busy."""
+        members: set[str] = set()
+        cursor: str | None = None
+        for _ in range(max_pages):
+            response = await self._call(
+                "conversations.members",
+                partial(self.client.conversations_members, channel=channel, limit=page_size, cursor=cursor),
+            )
+            members.update(m for m in response.get("members") or () if isinstance(m, str))
+            metadata = response.get("response_metadata")
+            cursor = metadata.get("next_cursor") if isinstance(metadata, dict) else None
+            if not cursor:
+                return frozenset(members), True
+        return frozenset(members), False
 
     async def dm_channel(self, user: str) -> str | None:
         """The ID of the bot's existing direct message with ``user``, or None. Never opens one."""

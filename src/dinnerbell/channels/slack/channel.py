@@ -10,6 +10,10 @@ where ``not_in_channel`` would close them for good. A held row doesn't use up an
 goes out once the admin fixes the setup. A bot that isn't in the channel, or an archived
 channel, holds channel posts and updates only. A refused token or the wrong workspace holds
 every delivery, direct messages too.
+
+On a labeled instance, such as test (ADR 0006), ``Audience`` limits who the bot may reach to
+the members of the configured channel: a direct message to anyone else is dropped, and a
+mention of anyone else shows as their plain name. On an unlabeled instance it changes nothing.
 """
 
 from __future__ import annotations
@@ -57,6 +61,30 @@ class Hold:
             raise HeldDelivery("Slack setup problem; see /healthz and the logs", retry_after=HOLD_RETRY_SECONDS)
 
 
+@dataclass
+class Audience:
+    """Who the bot may direct-message or mention. The connection sets it; the channel reads it.
+
+    Unlimited unless ``limited``, which is set on a labeled instance. While limited, only Slack
+    users in ``members`` (the configured channel's members, read at each supervisor check) are
+    allowed. ``members`` is None until the first read succeeds and after a read fails, which
+    allows nobody: it fails closed.
+    """
+
+    limited: bool = False
+    members: frozenset[str] | None = None
+
+    def allows(self, slack_user: str) -> bool:
+        return not self.limited or (self.members is not None and slack_user in self.members)
+
+    def directory(self, directory: Directory) -> Directory:
+        """``directory`` without the Slack users this audience doesn't allow, so they render as
+        plain names instead of mentions."""
+        if not self.limited:
+            return directory
+        return Directory({m: s for m, s in directory.slack_ids.items() if self.allows(s)})
+
+
 class SlackChannel:
     def __init__(
         self,
@@ -67,28 +95,41 @@ class SlackChannel:
         sessionmaker: async_sessionmaker[AsyncSession],
         hold: Hold,
         instance_label: str = "",
+        audience: Audience | None = None,
     ) -> None:
         self.api = api
         self.hold = hold
+        self.audience = audience or Audience()
         self.channel_id = channel_id
         self.base_url = base_url
         self.sessionmaker = sessionmaker
         self.instance_label = instance_label
 
-    async def _context(self, household_id: int) -> RenderContext:
+    async def _directory(self, household_id: int) -> Directory:
         async with self.sessionmaker() as db:
-            directory = Directory(await slack_members.slack_directory(db, household_id))
-        return RenderContext(self.base_url, directory, self.instance_label)
+            return Directory(await slack_members.slack_directory(db, household_id))
+
+    def _context(self, directory: Directory) -> RenderContext:
+        return RenderContext(self.base_url, self.audience.directory(directory), self.instance_label)
 
     async def deliver(self, notification: Notification, *, thread: MessageRef | None = None) -> DeliveryResult:
         self.hold.check(direct=notification.recipient_id is not None)
-        ctx = await self._context(notification.event.household_id)
-        message = render(notification, ctx).payload()
+        directory = await self._directory(notification.event.household_id)
         recipient = notification.recipient_id
+        slack_user = None
         if recipient is not None:
-            slack_user = ctx.directory.slack_ids.get(recipient)
+            slack_user = directory.slack_ids.get(recipient)
             if slack_user is None:
                 raise PermanentDeliveryError(f"member {recipient} has no Slack user")
+            if not self.audience.allows(slack_user):
+                # Done, not failed: the row closes as delivered and is never retried.
+                log.info(
+                    "slack direct message dropped: recipient isn't in the channel",
+                    extra={"kind": notification.kind, "event_id": notification.event.id, "recipient_id": recipient},
+                )
+                return DeliveryResult(None)
+        message = render(notification, self._context(directory)).payload()
+        if slack_user is not None:
             ref = await self.api.post(slack_user, message)
         elif thread is not None:
             ref = await self.api.post(thread.channel_id, message, thread_ts=thread.message_id)
@@ -102,5 +143,5 @@ class SlackChannel:
 
     async def update(self, ref: MessageRef, notification: Notification) -> None:
         self.hold.check(direct=False)
-        ctx = await self._context(notification.event.household_id)
+        ctx = self._context(await self._directory(notification.event.household_id))
         await self.api.update(ref, render(notification, ctx).payload())

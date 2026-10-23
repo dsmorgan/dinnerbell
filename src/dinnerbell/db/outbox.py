@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -305,6 +305,17 @@ class OutboxRepository:
             select(func.count()).select_from(OutboxRow).where(OutboxRow.failed_at.is_not(None))
         )
         return int(waiting or 0), int(failed or 0)
+
+    async def clear(self, household_id: int) -> tuple[int, int]:
+        """Delete every row of the household's outbox, delivered or not, and with them the
+        message refs they hold. Returns (pending rows deleted, all rows deleted)."""
+        pending = await self._session.scalar(
+            select(func.count()).select_from(OutboxRow).where(OutboxRow.household_id == household_id, _pending())
+        )
+        result = await self._session.execute(
+            delete(OutboxRow).where(OutboxRow.household_id == household_id).execution_options(synchronize_session=False)
+        )
+        return int(pending or 0), _rowcount(result)
 
     async def for_household(self, household_id: int) -> list[OutboxEntry]:
         rows = await self._session.scalars(

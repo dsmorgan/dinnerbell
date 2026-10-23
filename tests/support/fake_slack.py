@@ -56,6 +56,8 @@ class FakeSlack(AsyncWebClient):
         self.failures: dict[str, list[Failure]] = {}
         self.users_by_email: dict[str, dict[str, Any]] = {}
         self.channel: dict[str, Any] = {"id": CHANNEL, "is_member": True, "is_archived": False}
+        self.channel_members: list[str] = [BOT_USER]
+        """``conversations.members``' answer, paged by the request's ``limit``."""
         self._ts = itertools.count(1)
         self._ephemeral_ts = itertools.count(1)
 
@@ -114,6 +116,14 @@ class FakeSlack(AsyncWebClient):
                 return {"url": "wss://wss.slack.invalid/link"}
             case "conversations.info":
                 return {"channel": dict(self.channel)}
+            case "conversations.members":
+                start = int(args.get("cursor") or 0)
+                end = start + int(args["limit"])
+                more = end < len(self.channel_members)
+                return {
+                    "members": self.channel_members[start:end],
+                    "response_metadata": {"next_cursor": str(end) if more else ""},
+                }
             case "chat.postMessage":
                 check_message(args)
                 channel = args["channel"]
