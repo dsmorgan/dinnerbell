@@ -283,7 +283,7 @@ class SlackConnection:
             self._wake.clear()  # before the pass, so a wake during it isn't lost
             started = self.monotonic()
             healthy = await self.run_once()
-            settled = healthy and self._down_since is None and self.audience.known
+            settled = self._settled(healthy)
             with contextlib.suppress(TimeoutError):
                 await asyncio.wait_for(
                     self._wake.wait(), CHECK_AGAIN_AFTER_SUCCESS if settled else CHECK_AGAIN_AFTER_FAILURE
@@ -316,6 +316,11 @@ class SlackConnection:
         except Exception:
             log.exception("linking slack users failed")
         return True
+
+    def _settled(self, healthy: bool) -> bool:
+        """Whether the next pass can wait an hour. A failed members read, even one that kept the
+        last list, is retried within a minute, like a failed check."""
+        return healthy and self._down_since is None and self.audience.known and self._audience_error is None
 
     def _report(self, problem: str | None, hold: HoldScope) -> None:
         if problem != self.state.problem:
@@ -364,8 +369,14 @@ class SlackConnection:
             except SetupProblem:
                 if self.audience.limited:
                     # Deliveries use the bot token and still go, so keep their audience current.
-                    with contextlib.suppress(SetupProblem, SlackUnavailable):
+                    # The app-token problem is the one reported either way.
+                    try:
                         await self._check_channel()
+                    except SetupProblem as channel_problem:
+                        if channel_problem.hold is not HoldScope.NONE:
+                            self.audience.members = None
+                    except SlackUnavailable:
+                        pass
                 raise
             self._connect()
         await self._check_channel()

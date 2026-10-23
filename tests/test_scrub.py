@@ -6,8 +6,9 @@ from __future__ import annotations
 import asyncio
 import io
 import logging
+import sqlite3
 from collections.abc import AsyncIterator, Iterator
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -26,7 +27,7 @@ from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.schedule import slot_schedules
 from dinnerbell.services.bootstrap import bootstrap
 from dinnerbell.services.database import Database, open_database
-from dinnerbell.services.scrub import ScrubRefused, ScrubSummary, scrub_test
+from dinnerbell.services.scrub import ScrubPreview, ScrubRefused, ScrubSummary, scrub_test
 from tests.support.calls import OPENS, REMIND, House, RecordingChannel, dinner_id, furnish, make_house
 from tests.support.clock import FakeClock
 from tests.support.slack import SLACK_IDS, link
@@ -309,6 +310,7 @@ def test_the_command_shows_the_database_then_scrubs_with_yes(labeled: Path, caps
     assert cli.main(["scrub-test", "--keep", "Admin@Example.com", "--yes"]) == 0
     out = capsys.readouterr().out
     assert f"Database: {labeled}" in out and "Household: Home" in out
+    assert "Last activity: 2026-10-22 20:00 UTC (" in out  # bootstrap's audit row
     assert "Active members: 1" in out and "Enabled slots: 1" in out and "Open events: 0" in out
     assert "Notifications not yet sent: 0" in out
     assert "Scrubbed for test." in out and "Slots turned off: 1" in out and "Members kept: 1" in out
@@ -366,3 +368,70 @@ def test_the_command_refuses_a_missing_or_unreadable_database(
     assert cli.main(["migrate"]) == 0  # a schema, but no household yet
     assert cli.main(["scrub-test", "--keep", "admin@example.com", "--yes"]) == 1
     assert "no household yet" in capsys.readouterr().err
+
+
+def test_the_preview_reads_without_writing(
+    labeled: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Opened read-only: no journal-mode change and no -wal or -shm files, even on refusal."""
+    with sqlite3.connect(labeled) as db:
+        db.execute("PRAGMA journal_mode=DELETE")
+    before = sorted(p.name for p in labeled.parent.iterdir())
+    monkeypatch.setattr("sys.stdin", io.StringIO(""))
+    assert cli.main(["scrub-test", "--keep", "admin@example.com"]) == 1
+    assert "Household: Home" in capsys.readouterr().out
+    assert sorted(p.name for p in labeled.parent.iterdir()) == before
+    with sqlite3.connect(labeled) as db:
+        assert db.execute("PRAGMA journal_mode").fetchone() == ("delete",)
+
+
+def test_a_pre_m2_backup_is_previewed_migrated_and_scrubbed(
+    cli_env: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A backup at 0002_catalog has no event or outbox table yet; they count as 0."""
+    from tests.conftest import make_settings
+    from tests.test_migrations import _upgrade_to
+
+    monkeypatch.setenv("DINNERBELL_INSTANCE_LABEL", LABEL)
+    _upgrade_to(make_settings(cli_env.parent.parent), "0002_catalog")
+    stamp = "2026-10-01 12:00:00.000000"
+    with sqlite3.connect(cli_env) as db:
+        db.execute(
+            "INSERT INTO household (id, name, timezone, settings, created_at) VALUES (1, 'Home', 'UTC', '{}', ?)",
+            (stamp,),
+        )
+        for member_id, email, role in ((1, "admin@example.com", "admin"), (2, "kim@example.com", "member")):
+            db.execute(
+                "INSERT INTO member (id, household_id, display_name, email, slack_user_id, role, can_cook, can_pickup,"
+                " can_order, mute_dm_reminders, feedback_reminder, active, created_at, updated_at)"
+                " VALUES (?, 1, ?, ?, ?, ?, 0, 0, 0, 0, 0, 1, ?, ?)",
+                (member_id, email.split("@")[0], email, f"U0{member_id}", role, stamp, stamp),
+            )
+        db.execute(
+            "INSERT INTO audit (household_id, action, target, payload, created_at)"
+            " VALUES (1, 'member.invited', 'member:2', '{}', ?)",
+            (stamp,),
+        )
+        assert {"event", "outbox"}.isdisjoint(r[0] for r in db.execute("SELECT name FROM sqlite_master"))
+
+    assert cli.main(["scrub-test", "--keep", "admin@example.com", "--yes"]) == 0
+    out = capsys.readouterr().out
+    assert "Last activity: 2026-10-01 12:00 UTC (" in out
+    assert "Active members: 2" in out and "Open events: 0" in out and "Notifications not yet sent: 0" in out
+    assert "Members deactivated: 1" in out and "Slack links removed: 1" in out
+    with sqlite3.connect(cli_env) as db:
+        assert db.execute("SELECT active, slack_user_id FROM member WHERE id = 2").fetchone() == (0, None)
+
+
+def test_last_activity_reads_as_an_age() -> None:
+    at = datetime(2026, 10, 23, 12, 0, tzinfo=UTC)
+    preview = ScrubPreview("Home", 1, 1, 0, 0, at)
+
+    def activity(now: datetime) -> str:
+        return preview.lines(now)[1]
+
+    assert activity(at + timedelta(minutes=1)) == "Last activity: 2026-10-23 12:00 UTC (1 minute ago)"
+    assert activity(at + timedelta(minutes=7)).endswith("(7 minutes ago)")
+    assert activity(at + timedelta(hours=5)).endswith("(5 hours ago)")
+    assert activity(at + timedelta(days=9)).endswith("(9 days ago)")
+    assert ScrubPreview("Home", 1, 1, 0, 0, None).lines(at)[1] == "Last activity: none recorded"

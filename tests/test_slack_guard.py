@@ -204,8 +204,11 @@ async def test_an_unreachable_read_keeps_the_last_list(house: House, failure: Fa
     fake.fail("conversations.members", failure)
     assert await conn.run_once()
     assert conn.audience.members == frozenset(IN_CHANNEL)
+    assert not conn._settled(True)  # read again within a minute, not an hour
     await conn.channel.deliver(note.ResponseReminder(event(house), person(house, "Alex")))
     assert [channel for channel, _ in posted(fake)] == [SLACK_IDS["Alex"]]  # nothing lost to a blip
+    assert await conn.run_once()
+    assert conn._settled(True)
 
 
 async def refused_read(house: House, fake: FakeSlack) -> SlackConnection:
@@ -265,6 +268,17 @@ async def test_a_bad_app_token_still_reads_the_members(house: House) -> None:
     fake.fail("conversations.info", Failure(raises=TimeoutError()))
     assert not await conn.run_once()  # an unreachable channel check doesn't hide the token problem
     assert "APP_TOKEN" in (conn.state.problem or "")
+
+
+async def test_a_bad_app_token_and_a_channel_problem_forget_the_members(house: House) -> None:
+    fake = FakeSlack()
+    conn = await checked(house, fake, limited=True)
+    conn.socket = None  # as on a restart, so the app-level token is checked again
+    fake.fail("apps.connections.open", Failure("invalid_auth"))
+    fake.channel["is_member"] = False
+    assert not await conn.run_once()
+    assert "APP_TOKEN" in (conn.state.problem or "")
+    assert conn.audience.members is None
 
 
 async def test_an_unlabeled_instance_with_a_bad_app_token_checks_nothing_more(house: House) -> None:
