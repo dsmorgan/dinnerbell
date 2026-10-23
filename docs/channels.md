@@ -46,7 +46,7 @@ Every key starts with the event and its run: `event:{event_id}:run{run}`. An adm
 | `message_key` | Names a message that later notifications edit. Posts with one create it; updates (`is_update`) edit it. Dinnerbell stores the ref the post returned (`outbox.ref_channel`, `outbox.ref_message`), so the adapter needs no table for message refs. |
 | `thread_key` | The `message_key` of the message to thread under. |
 
-Updates coalesce: while an update to a message is waiting and nobody has tried it yet, a newer update to the same message replaces its payload instead of queueing behind it. Once an update has been tried, a newer one gets its own row. Ten quick votes become one edit with the latest counts. Each update row's `idempotency_key` is the class key plus a sequence number, such as `event:7:run1:call_updated:3`.
+Updates coalesce: while the newest update to a message is waiting and nobody has tried it yet, a newer update to the same message replaces its payload instead of queueing behind it. Once the newest update has been tried, a newer one gets its own row. Only the newest row ever takes on new state, so an older row given back untried (a `HeldDelivery`) can't absorb the latest state and then be superseded by a row with older state. Ten quick votes become one edit with the latest counts. Each update row's `idempotency_key` is the class key plus a sequence number, such as `event:7:run1:call_updated:3`.
 
 ## Notifications
 
