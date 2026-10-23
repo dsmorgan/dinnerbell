@@ -354,6 +354,11 @@ class Channel(Protocol):
 # Payloads -------------------------------------------------------------------------------------
 
 
+class PermanentDeliveryError(Exception):
+    """Raised by a channel when retrying can't help, such as a deleted channel or a member who
+    left the workspace. The outbox gives up on the row at once instead of retrying."""
+
+
 class PayloadError(ValueError):
     """An outbox payload that doesn't decode to its notification type."""
 

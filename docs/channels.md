@@ -22,12 +22,13 @@ class Channel(Protocol):
 - `thread` is the message to thread the post under. The drainer passes it when the notification has a `thread_key` and that message was delivered; otherwise it's `None` and you post at the top level.
 - `update` edits the message at `ref` to show the notification's state.
 - Raise on failure. The drainer records `"<ExceptionType>: <message>"` in `outbox.last_error`, so never put a token in an exception message.
+- Raise `domain.notifications.PermanentDeliveryError` when retrying can't help, such as a deleted channel or a member who left the workspace. The row is marked failed at once, after one attempt, and stops holding back the event's later rows. Raise anything else for failures worth retrying, such as timeouts or rate limits.
 
 ## Delivery guarantees
 
-- **Order.** Rows are delivered oldest first per event. While an event's earlier row is waiting to retry or is claimed by another drainer, its later rows wait too, so an update never arrives before the post it edits. Different events don't block each other.
+- **Order.** Rows are delivered oldest first per event. While an event's earlier post is waiting to retry or is claimed by another drainer, its later rows wait too, so an update never arrives before the post it edits. A failed update is the exception: it retries on its own schedule without holding back later rows, because the next update carries the latest state anyway, and any newer update to that message coalesces into it while it waits. Different events don't block each other.
 - **Once.** A row is claimed with a conditional `UPDATE` before the channel is called, so concurrent drainers never deliver the same row. The claim lasts 5 minutes (`LEASE`). If the process dies mid-delivery, another drainer can redeliver after that, so treat `idempotency_key` as a dedupe key if a duplicate post would matter.
-- **Retries.** A failure is retried after 30 seconds, doubling up to an hour. After 8 attempts (`MAX_ATTEMPTS`), the row is marked `failed_at` and stops holding back later rows. `/healthz` reports `outbox.backlog` (waiting) and `outbox.failed`.
+- **Retries.** A failure is retried after 30 seconds, doubling up to an hour. After 8 attempts (`MAX_ATTEMPTS`), or at once for `PermanentDeliveryError`, the row is marked `failed_at` and stops holding back later rows. `/healthz` reports `outbox.backlog` (waiting) and `outbox.failed`.
 - **Updates without a message.** If the post an update edits never landed (it failed for good, or the channel returned no ref), the update is closed out with `last_error = "no message to update"` instead of being sent.
 
 ## Keys
