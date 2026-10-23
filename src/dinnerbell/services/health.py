@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
@@ -48,6 +49,30 @@ class SchedulerState:
         if age <= STALE_AFTER:
             return "ok"
         return "stale" if age <= STOPPED_AFTER else "stopped"
+
+
+@dataclass
+class SlackState:
+    """The Slack connection as /healthz reports it. The Slack adapter updates it; the web app
+    reads it. Like ``SchedulerState``, the composition root shares one instance.
+
+    ``problem`` is set when a startup check fails (bad token, wrong workspace, bot not in the
+    channel). ``connected`` asks the live socket. The status is one of ``not_configured``,
+    ``connected``, ``disconnected`` (reconnecting, or Slack unreachable), or ``error``.
+    """
+
+    configured: bool = False
+    problem: str | None = None
+    connected: Callable[[], Awaitable[bool]] | None = None
+
+    async def status(self) -> str:
+        if not self.configured:
+            return "not_configured"
+        if self.problem is not None:
+            return "error"
+        if self.connected is not None and await self.connected():
+            return "connected"
+        return "disconnected"
 
 
 async def outbox_backlog(sessionmaker: async_sessionmaker[AsyncSession]) -> tuple[int, int] | None:
