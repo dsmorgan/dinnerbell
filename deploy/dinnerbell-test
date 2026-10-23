@@ -86,7 +86,9 @@ fi
 # directory name. If it were dinnerbell-test, both instances would share containers.
 production="${COMPOSE_PROJECT_NAME:-}"
 if [ -z "$production" ] && [ -f .env ]; then
-    production=$(assignments .env COMPOSE_PROJECT_NAME | tail -n 1 | sed 's/^[^=]*=//')
+    # The value after "=", without a trailing " # comment" or quotes.
+    production=$(assignments .env COMPOSE_PROJECT_NAME | tail -n 1 |
+        sed -e 's/^[^=]*=//' -e 's/[[:space:]][[:space:]]*#.*$//' | tr -d "\"'")
 fi
 [ -n "$production" ] || production=$(basename "$PWD")
 [ "$(normalize "$production")" != "$PROJECT" ] ||

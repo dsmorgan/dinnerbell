@@ -16,7 +16,7 @@ As of M2, the Slack bot connects when `DINNERBELL_SLACK_BOT_TOKEN`, `DINNERBELL_
 
 ## Prerequisites
 
-- A Linux host with podman and podman-compose 1.0.6 or later, or Docker with the compose plugin. The host pulls the image from `ghcr.io`. These docs are checked with podman-compose 1.0.6 (Ubuntu 24.04's), 1.1.0, and 1.5.0, and Docker Compose 2.40.
+- A Linux host with podman and podman-compose 1.0.6 or later, or Docker with the compose plugin. The host pulls the image from `ghcr.io`. These docs are checked with podman-compose 1.0.6 (Ubuntu 24.04's), 1.1.0, 1.5.0, and 1.6.0, and Docker Compose 2.40.
 - A public HTTPS hostname that a reverse proxy forwards to the host's port 8013. The reference setup uses Pangolin.
 - A Slack account. You use its email address as the admin email.
 
@@ -628,7 +628,7 @@ A copy of production's data tests migrations and new features against real histo
 
    With Docker: `docker volume inspect dinnerbell_dinnerbell-data dinnerbell-test_dinnerbell-data`.
 
-3. Pick a production backup: the newest nightly `dinnerbell-YYYY-MM-DD.db`, or a `pre-upgrade-*.db` from [Back up now](#back-up-now). The commands use production's release image, which is already on the host; replace `X.Y.Z` with the release in production's `compose.yaml`. To list the backups:
+3. Pick a production backup: the newest nightly `dinnerbell-YYYY-MM-DD.db`, or a `pre-upgrade-*.db` from [Back up now](#back-up-now). The commands use production's release image, which is already on the host; replace `X.Y.Z` with the release production runs, shown in its footer. To list the backups:
 
    ```sh
    podman run --rm --network none --read-only --cap-drop ALL --security-opt no-new-privileges \
@@ -669,10 +669,17 @@ Slots are off after a scrub. To rehearse a scheduled call, turn one on in **Admi
 
 ### Promote a release
 
-Use this checklist for every release. It runs the exact release image on a fresh copy of production's data before your family sees it. Replace `X.Y.Z` with the new release.
+Use this checklist for every release. It runs the exact release image and compose files on a fresh copy of production's data before your family sees it. Replace `X.Y.Z` with the new release, and note the release production runs now.
 
 1. Read the release's **Upgrade notes** in [CHANGELOG.md](../CHANGELOG.md).
-2. Pull the release and [verify it](#verify-an-image). Don't go on if verification fails.
+2. Check out the new release, so the rehearsal uses its `compose.yaml` and `deploy/dinnerbell-test`. Production keeps running its current container until you recreate it in step 10.
+
+   ```sh
+   git fetch --tags
+   git checkout vX.Y.Z
+   ```
+
+3. Pull the release and [verify it](#verify-an-image). Don't go on if verification fails.
 
    ```sh
    DINNERBELL_TAG=X.Y.Z deploy/dinnerbell-test pull
@@ -682,22 +689,31 @@ Use this checklist for every release. It runs the exact release image on a fresh
      --source-ref refs/tags/vX.Y.Z
    ```
 
-3. In production, [back up now](#back-up-now). Note the file name, and copy the backup off the host.
-4. Follow steps 1 to 4 of [Copy production data into test](#copy-production-data-into-test) with that backup.
-5. Scrub the copy and start test with the release. Every command names the release, so the scrub migrates the copy exactly as production's upgrade will.
+4. In production, [back up now](#back-up-now). Note the file name, and copy the backup off the host.
+5. Follow steps 1 to 4 of [Copy production data into test](#copy-production-data-into-test) with that backup.
+6. Scrub the copy and start test with the release. Every command names the release, so the scrub migrates the copy exactly as production's upgrade will.
 
    ```sh
    DINNERBELL_TAG=X.Y.Z deploy/dinnerbell-test run --rm dinnerbell scrub-test --keep you@example.com
    DINNERBELL_TAG=X.Y.Z deploy/dinnerbell-test up -d
    ```
 
-6. Check that the page shows the TEST banner and `X.Y.Z` in the footer, and that `/healthz` reports `"status":"ok"`.
-7. Rehearse a call: run `/dinnerbell-test call` in `#dinnerbell-test`, respond, vote, and let it reach a decision. Check that nobody outside the test channel was notified. While the label is set, `/healthz` reports `slack_dms_dropped`, the number of direct messages withheld from people outside the channel.
-8. [Upgrade](#upgrade) production, without a second backup: check out `vX.Y.Z`, run `podman-compose pull`, then `podman-compose down && podman-compose up -d`.
-9. Check production's footer and `/healthz`.
-10. Stop the test instance: `deploy/dinnerbell-test down`.
+7. Check that the page shows the TEST banner and `X.Y.Z` in the footer, and that `/healthz` reports `"status":"ok"`.
+8. Rehearse a call: run `/dinnerbell-test call` in `#dinnerbell-test`, respond, vote, and let it reach a decision. Check that nobody outside the test channel was notified. While the label is set, `/healthz` reports `slack_dms_dropped`, the number of direct messages withheld from people outside the channel.
+9. Optional: if the rehearsal took long enough for production to record something new, such as a call or a meal, [back up now](#back-up-now) again, and use that backup if you roll back.
+10. Upgrade production. The clone is already on `vX.Y.Z`.
 
-If production misbehaves after step 8, [roll back](#roll-back) with the backup from step 3.
+    ```sh
+    podman-compose pull
+    podman-compose down && podman-compose up -d
+    ```
+
+11. Check production's footer and `/healthz`.
+12. Stop the test instance: `deploy/dinnerbell-test down`.
+
+If the rehearsal fails, stop the test instance, and check out the release production runs, so the clone matches production again. Production hasn't changed.
+
+If production misbehaves after step 10, [roll back](#roll-back) with the newest pre-upgrade backup.
 
 ## Use a different sign-in provider
 
