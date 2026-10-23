@@ -9,7 +9,7 @@
 <form method="post" action="/admin/schedule" class="stack">
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   {% for slot in slots %}{% set p = slot.value %}
-  <fieldset class="card field">
+  <fieldset class="card">
     <legend><h2>{{ p|capitalize }}</h2></legend>
     <label class="check"><input type="checkbox" name="{{ p }}_enabled"{% if values[p ~ "_enabled"] %} checked{% endif %}> Post a {{ p }} call every day</label>
     <div class="pair">
@@ -28,7 +28,7 @@
     </fieldset>
   </fieldset>
   {% endfor %}
-  <fieldset class="card field">
+  <fieldset class="card">
     <legend><h2>Ranking</h2></legend>
     <p class="small muted">How much each reason counts when Dinnerbell picks proposals. 0 turns a reason off.</p>
     <div class="weights">
