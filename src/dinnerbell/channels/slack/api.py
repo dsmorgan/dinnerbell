@@ -3,9 +3,8 @@
 
 - Errors that retrying can't fix, such as ``not_in_channel``, raise ``PermanentDeliveryError``,
   and the drainer closes the row at once.
-- Rate limits (HTTP 429, ``ratelimited``) raise ``SlackRateLimited``, which carries Slack's
-  ``Retry-After``. The drainer retries it like any failure; its first retry, 30 seconds, is
-  already longer than the waits Slack usually asks for.
+- Rate limits (HTTP 429, ``ratelimited``) raise ``SlackRateLimited``, whose ``retry_after``
+  is Slack's ``Retry-After`` in seconds. The drainer waits at least that long.
 - Anything else, including timeouts and Slack outages, raises ``SlackUnavailable``, which the
   drainer retries with backoff.
 
@@ -84,9 +83,10 @@ class SlackAuthError(SlackUnavailable):
 
 
 class SlackRateLimited(SlackUnavailable):
-    """Slack asked the app to slow down. ``retry_after`` is how long it asked to wait."""
+    """Slack asked the app to slow down. ``retry_after`` is how long it asked to wait, in
+    seconds, which the outbox drainer honors (docs/channels.md)."""
 
-    def __init__(self, message: str, *, retry_after: timedelta) -> None:
+    def __init__(self, message: str, *, retry_after: float) -> None:
         super().__init__(message)
         self.retry_after = retry_after
 
@@ -119,7 +119,8 @@ def translate(method: str, exc: BaseException) -> Exception:
         status = getattr(exc.response, "status_code", None)
         if code in RATE_LIMITED or status == 429:
             wait = _retry_after(exc)
-            return SlackRateLimited(f"Slack rate-limited {method}; retry after {wait.seconds}s", retry_after=wait)
+            seconds = int(wait.total_seconds())
+            return SlackRateLimited(f"Slack rate-limited {method}; retry after {seconds}s", retry_after=seconds)
         if code in PERMANENT:
             return PermanentDeliveryError(f"Slack {method} failed: {code}")
         if code in AUTH:
