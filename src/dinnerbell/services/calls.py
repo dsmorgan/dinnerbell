@@ -130,6 +130,21 @@ async def offer_role(
         await _roster_changed(db, event, now)
 
 
+async def toggle_role(db: AsyncSession, actor: Member, event_id: int, role: RoleOffer, *, now: datetime) -> bool:
+    """Offer ``role`` if the actor hasn't, or withdraw it if they have, reading their offer under
+    the event's lock. For buttons shared by everyone, such as on a Slack message. Returns
+    whether the actor now offers the role."""
+    async with locked_event(db, actor.household_id, event_id, now) as event:
+        check_can_respond(event, actor)
+        current = (await load(db, event)).response_of(actor.id)
+        offered = current is None or role not in current.offers
+        new = with_offer(current, actor.id, role, offered, now)
+        if new is not None:
+            await ResponseRepository(db).save(actor.household_id, event.id, new, now)
+            await _roster_changed(db, event, now)
+        return offered
+
+
 async def save_details(db: AsyncSession, actor: Member, event_id: int, details: Details, *, now: datetime) -> None:
     """FR-8: guests, guest needs, eat window, suggestions, and a note."""
     async with locked_event(db, actor.household_id, event_id, now) as event:
@@ -324,6 +339,24 @@ async def unvote(db: AsyncSession, actor: Member, event_id: int, proposal_id: in
         _proposal_in(ctx, proposal_id)
         if await VoteRepository(db).remove(actor.household_id, proposal_id, actor.id):
             await _votes_changed(db, event, now)
+
+
+async def toggle_vote(db: AsyncSession, actor: Member, event_id: int, proposal_id: int, *, now: datetime) -> bool:
+    """Vote for the proposal, or take the vote back, reading the actor's vote under the event's
+    lock. For shared buttons, such as on a Slack message. Returns whether the actor now votes
+    for it."""
+    async with locked_event(db, actor.household_id, event_id, now) as event:
+        ctx = await load(db, event)
+        check_can_vote(event, actor, ctx.response_of(actor.id))
+        _proposal_in(ctx, proposal_id)
+        votes = VoteRepository(db)
+        voted = actor.id not in ctx.votes.get(proposal_id, [])
+        if voted:
+            await votes.add(actor.household_id, event.id, proposal_id, actor.id, now)
+        else:
+            await votes.remove(actor.household_id, proposal_id, actor.id)
+        await _votes_changed(db, event, now)
+        return voted
 
 
 async def _votes_changed(db: AsyncSession, event: Event, now: datetime) -> None:

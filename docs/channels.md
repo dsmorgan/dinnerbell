@@ -79,13 +79,15 @@ Map every button or modal to one service call. Services check every rule and per
 3. Show these exceptions as ephemeral messages with `str(exc)`: `EventRuleViolation`, `InvalidResponse`, `services.errors.NotFound`, and `services.errors.Forbidden`. Treat `IllegalTransition` as "That can't happen anymore." Anything else is a bug: log it.
 4. Don't update messages from the interaction handler. The service's notifications do that through the outbox within seconds.
 
+Channel messages are shared, so a button can't show whether the person tapping it already voted or offered. Use the toggles: each reads the member's current state under the event's lock and flips it, and returns the new state for the ephemeral confirmation. The explicit `calls.vote`, `calls.unvote`, and `calls.offer_role(..., offered)` remain for surfaces that show the member's own state, such as the web page and App Home, where an explicit set survives a double tap.
+
 | Slack action | Service call |
 |---|---|
 | In, Out, Maybe | `calls.respond(db, actor, event_id, Status.IN / OUT / MAYBE, now=)` |
-| I can cook, I can pick up, I'll order (toggle) | `calls.offer_role(db, actor, event_id, RoleOffer.COOK / PICKUP / ORDER, offered, now=)` |
+| I can cook, I can pick up, I'll order | `calls.toggle_role(db, actor, event_id, RoleOffer.COOK / PICKUP / ORDER, now=)`, which returns whether the member now offers it |
 | I'll coordinate | `calls.claim_coordinator(db, actor, event_id, now=)` |
 | Details modal | `calls.save_details(db, actor, event_id, Details(guests=, guest_needs=, eat_from=, eat_until=, suggestion_item_ids=, suggestion_texts=, note=), now=)` |
-| Vote, or vote again to remove | `calls.vote` and `calls.unvote(db, actor, event_id, proposal_id, now=)` |
+| Vote, or vote again to remove | `calls.toggle_vote(db, actor, event_id, proposal_id, now=)`, which returns whether the member now votes for it |
 | Lock (coordinator or admin) | `calls.lock(db, actor, event_id, proposal_id, now=)` |
 | Add proposal modal | `calls.add_proposal(db, actor, event_id, mode, item_id=, free_text=, cuisine_id=, now=)` |
 | Mark done (ask to confirm) | `calls.mark_done(db, actor, event_id, now=)`; members can once it's meal time, admins any time |
