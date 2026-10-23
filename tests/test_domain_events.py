@@ -371,14 +371,24 @@ def test_managing_a_decision() -> None:
 
 
 def test_marking_done() -> None:
-    decided = event(EventState.DECIDED, coordinator_id=9)
-    ev.check_can_mark_done(decided, member(1), Response(1, Status.IN))
-    ev.check_can_mark_done(decided, member(9), None)
-    ev.check_can_mark_done(decided, member(2, admin=True), None)
+    decided = event(EventState.DECIDED, coordinator_id=9, meal_time=NOW)
+    ev.check_can_mark_done(decided, member(1), Response(1, Status.IN), now=NOW)
+    ev.check_can_mark_done(decided, member(9), None, now=NOW)
+    ev.check_can_mark_done(decided, member(2, admin=True), None, now=NOW)
     with pytest.raises(EventRuleViolation, match="someone at the meal"):
-        ev.check_can_mark_done(decided, member(1), Response(1, Status.OUT))
+        ev.check_can_mark_done(decided, member(1), Response(1, Status.OUT), now=NOW)
     with pytest.raises(EventRuleViolation, match="decided"):
-        ev.check_can_mark_done(event(EventState.VOTING), member(1), Response(1, Status.IN))
+        ev.check_can_mark_done(event(EventState.VOTING), member(1), Response(1, Status.IN), now=NOW)
+
+
+def test_members_mark_done_only_once_it_is_meal_time() -> None:
+    """Regression: a tap right after the decision ended the call and logged the meal early."""
+    decided = event(EventState.DECIDED, coordinator_id=9, meal_time=NOW)
+    early = NOW - timedelta(seconds=1)
+    for actor, response in ((member(1), Response(1, Status.IN)), (member(9), None)):
+        with pytest.raises(EventRuleViolation, match="once it's meal time"):
+            ev.check_can_mark_done(decided, actor, response, now=early)
+    ev.check_can_mark_done(decided, member(2, admin=True), None, now=early)  # admins can any time
 
 
 def test_ad_hoc_days_and_reruns() -> None:

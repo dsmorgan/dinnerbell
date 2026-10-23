@@ -532,13 +532,17 @@ def check_can_manage_decision(event: Event, actor: Member) -> None:
         raise EventRuleViolation("There's no decision to change.")
 
 
-def check_can_mark_done(event: Event, actor: Member, response: Response | None) -> None:
-    """FR-21: any participant marks a decided event done; so can the coordinator and admin."""
+def check_can_mark_done(event: Event, actor: Member, response: Response | None, *, now: datetime) -> None:
+    """FR-21: any participant marks a decided event done; so can the coordinator and admin.
+    Members can only once it's meal time, so a stray tap can't end the call early; admins can
+    any time, to correct the record."""
     if event.state is not EventState.DECIDED:
         raise EventRuleViolation("Only a decided meal can be marked done.")
     participant = response is not None and response.is_in
     if not actor.active or not (participant or is_coordinator(event, actor) or actor.is_admin):
         raise EventRuleViolation("Only someone at the meal can mark it done.")
+    if not actor.is_admin and event.meal_time is not None and now < event.meal_time:
+        raise EventRuleViolation("You can mark the meal done once it's meal time.")
 
 
 def check_ad_hoc_day(day: date, today: date) -> None:

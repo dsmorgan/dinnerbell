@@ -189,7 +189,7 @@ Requirements use "must" for version 1 and "should" for items that can slip to a 
 | FR-18 | A decision records item, fulfillment mode, meal time, participants with guest counts, and assignments. |
 | FR-19 | Meal time defaults to the latest "earliest" across participants' eat windows, rounded up to the quarter hour, or the slot's usual meal time when nobody gave one, and never earlier than the decision. The coordinator can change it. |
 | FR-20 | Each assignee receives a direct message with the decision, their role, meal time, item link, head count, and dietary notes. |
-| FR-21 | Events become done at meal time plus 2 hours, or when any participant marks them done. Contributions are recorded on done. |
+| FR-21 | Events become done at meal time plus 2 hours, or when any participant marks them done once it's meal time (the admin can at any time). Contributions are recorded on done. |
 | FR-22 | Done events open feedback for their participants, as specified in section 6.10. |
 
 ### 6.5 Catalog

@@ -395,5 +395,5 @@ async def mark_done(db: AsyncSession, actor: Member, event_id: int, *, now: date
     """FR-21: any participant, the coordinator, or an admin marks the meal done."""
     async with locked_event(db, actor.household_id, event_id, now) as event:
         ctx = await load(db, event)
-        check_can_mark_done(event, actor, ctx.response_of(actor.id))
+        check_can_mark_done(event, actor, ctx.response_of(actor.id), now=now)
         await lifecycle.finish(db, event, now, actor=actor)

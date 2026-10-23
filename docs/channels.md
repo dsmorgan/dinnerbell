@@ -88,7 +88,7 @@ Map every button or modal to one service call. Services check every rule and per
 | Vote, or vote again to remove | `calls.vote` and `calls.unvote(db, actor, event_id, proposal_id, now=)` |
 | Lock (coordinator or admin) | `calls.lock(db, actor, event_id, proposal_id, now=)` |
 | Add proposal modal | `calls.add_proposal(db, actor, event_id, mode, item_id=, free_text=, cuisine_id=, now=)` |
-| Mark done | `calls.mark_done(db, actor, event_id, now=)` |
+| Mark done (ask to confirm) | `calls.mark_done(db, actor, event_id, now=)`; members can once it's meal time, admins any time |
 | Hand off | `calls.hand_off(db, actor, event_id, member_id, now=)` |
 | Change meal time, change who does a role | `calls.set_meal_time(..., at: time)`, `calls.change_assignment(..., role, member_id or None)` |
 | `/dinnerbell call` | `calls.start_call(db, actor, slot, day, now=)` |
