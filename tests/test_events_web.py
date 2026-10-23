@@ -460,10 +460,16 @@ def test_open_cards_refresh_themselves(admin: TestClient, clock: FakeClock, migr
     assert "data-poll" in admin.get("/").text
     first = proposal_ids(migrated)[0]
     submit(admin, f"/events/{event_id}/proposals/{first}/lock")
-    assert "data-poll" not in admin.get("/").text  # decided: nothing left to wait for
+    assert "data-poll" in admin.get("/").text  # decided: Mark done appears at meal time
+    submit(admin, f"/events/{event_id}/done")
+    assert "data-poll" not in admin.get(f"/events/{event_id}").text  # done: nothing left to wait for
+    later = submit(admin, "/events", {"slot": "lunch", "day": "2026-10-24"})
+    later_id = int(later.headers["location"].rsplit("/", 1)[1])
+    assert f'data-poll="/events/{later_id}/card' in admin.get(f"/events/{later_id}").text  # scheduled: opening shows
     assert admin.get("/events/999/card").status_code == 404
     script = admin.get("/static/app.js").text
     assert "data-poll" in script and "details[open]" in script and "document.hidden" in script
+    assert ".htmx-request" in script  # Safari doesn't focus a tapped button, so check for a request in flight
 
 
 def test_another_households_card_is_not_found(admin: TestClient, migrated: Settings) -> None:
