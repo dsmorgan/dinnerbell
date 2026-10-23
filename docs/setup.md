@@ -16,18 +16,20 @@ As of M2, the Slack bot connects when `DINNERBELL_SLACK_BOT_TOKEN`, `DINNERBELL_
 
 ## Prerequisites
 
-- A Linux host with podman and podman-compose, or Docker with the compose plugin.
+- A Linux host with podman and podman-compose, or Docker with the compose plugin. The host pulls the image from `ghcr.io`.
 - A public HTTPS hostname that a reverse proxy forwards to the host's port 8013. The reference setup uses Pangolin.
 - A Slack account. You use its email address as the admin email.
 
 ## 0. Clone the repository
 
-Later steps use files from the repository, so clone it first.
+The repository holds `compose.yaml`, the Slack app manifests, and the example catalog, so clone it even though you don't build anything. `compose.yaml` names the release your clone is on, so `git pull` is how you move to a new release.
 
 ```sh
 git clone https://github.com/dsmorgan/dinnerbell.git
 cd dinnerbell
 ```
+
+Keep the directory name `dinnerbell`. Compose names the data volume after the directory, as `dinnerbell_dinnerbell-data`, and a different name later means a new, empty database.
 
 ## 1. Create the Slack workspace and channel
 
@@ -187,13 +189,15 @@ Avoid `0.0.0.0` unless a firewall limits who can reach the port.
    DINNERBELL_SEED_FILE=/seed/catalog.yaml
    ```
 
-8. Build the image.
+8. Pull the image.
 
    ```sh
-   podman-compose build
+   podman-compose pull
    ```
 
-   With Docker: `docker compose build`
+   With Docker: `docker compose pull`
+
+   `compose.yaml` names the release image, such as `ghcr.io/dsmorgan/dinnerbell:0.2.0`. To check that it came from this repository's release workflow, see [Verify an image](#verify-an-image).
 
 9. Start the service.
 
@@ -322,7 +326,7 @@ Dinnerbell runs an online backup of its SQLite database every night at 03:30 hou
 
 These backups live in the same volume as the database, so copy them off the host with your own backup routine. Copy `/data/backups/` only. Never copy the live `dinnerbell.db` or its WAL file, because a copy taken mid-write can be corrupt.
 
-1. List the volumes. Compose prefixes the volume name with the project name, which is the directory name by default.
+1. List the volumes. Compose prefixes the volume name with the project name, which is the directory name by default. For a clone in `dinnerbell`, the volume is `dinnerbell_dinnerbell-data`. The test instance's is `dinnerbell-test_dinnerbell-data`.
 
    ```sh
    podman volume ls
@@ -350,24 +354,299 @@ The trailing `/.` copies the directory's contents, so running the same commands 
 
 Inside `podman unshare`, your user is root, so the copy works, and the `chown` hands the copies back to your own user.
 
+### Back up now
+
+Before an upgrade, take a fresh backup instead of relying on last night's. This runs SQLite's online backup inside the running container, so you don't stop the service:
+
+```sh
+podman-compose exec dinnerbell python -c "import os, sqlite3; os.umask(0o077); sqlite3.connect('file:/data/dinnerbell.db?mode=ro', uri=True).backup(sqlite3.connect('/data/backups/pre-upgrade.db'))"
+```
+
+With Docker: `docker compose exec dinnerbell python -c "..."` with the same command.
+
+The copy lands in `/data/backups/pre-upgrade.db`, and each run replaces it. Nightly pruning never deletes it. Copy it off the host as described above.
+
 ## Upgrade
 
-1. Pull the new code.
+Releases are listed in [CHANGELOG.md](../CHANGELOG.md). Production runs a pinned release, never `latest` or `main`.
+
+1. Read the **Upgrade notes** for every release between yours and the new one.
+2. [Back up now](#back-up-now), and copy the backup off the host.
+3. Pull the new `compose.yaml`. Its image tag names the new release.
 
    ```sh
    git pull
    ```
 
-2. Rebuild and recreate the service.
+4. Pull the image.
 
    ```sh
-   podman-compose build
+   podman-compose pull
+   ```
+
+5. Recreate the service, so it starts from the new image.
+
+   ```sh
+   podman-compose down && podman-compose up -d
+   ```
+
+   With Docker: `docker compose pull`, then `docker compose down && docker compose up -d`.
+
+   `down` keeps the data volume. Never add `-v`, which deletes it.
+
+6. Check that the page footer shows the new version and that `/healthz` returns 200 with `"slack":"connected"`.
+7. Optional: [verify the image](#verify-an-image).
+
+Database migrations run on start. They only move forward: after an upgrade, the older version refuses to open the database. To go back, see [Roll back](#roll-back).
+
+If you run a [test instance](#test-instance), follow the [promotion checklist](#promote-a-release) instead. It rehearses the release on a copy of your data first.
+
+## Roll back
+
+Roll back by running the previous release on the backup you took before the upgrade. Anything recorded since that backup is lost, so roll back soon after a bad upgrade.
+
+1. Stop the service.
+
+   ```sh
+   podman-compose down
+   ```
+
+2. Check out the previous release. Git reports a detached HEAD, which is expected.
+
+   ```sh
+   git checkout v0.2.0
+   ```
+
+3. Replace the database with the pre-upgrade backup. The command runs in a one-off container on the same volume.
+
+   ```sh
+   podman-compose run --rm --entrypoint sh dinnerbell -c 'umask 077 && rm -f /data/dinnerbell.db-wal /data/dinnerbell.db-shm && cp /data/backups/pre-upgrade.db /data/dinnerbell.db'
+   ```
+
+   With Docker: `docker compose run --rm --entrypoint sh dinnerbell -c '...'` with the same command.
+
+   The command assumes the default `DINNERBELL_DATABASE_URL`. Removing the `-wal` and `-shm` files matters: SQLite would otherwise apply the newer version's changes to the restored file.
+
+4. Pull the previous image and start the service.
+
+   ```sh
+   podman-compose pull
    podman-compose up -d
    ```
 
-   With Docker: `docker compose build` then `docker compose up -d`.
+5. Check that the footer shows the previous version.
 
-Database migrations run on start. Dinnerbell refuses to start if the database has a schema version it does not recognize, for example after a downgrade.
+When a fixed release ships, return to the main branch with `git checkout main`, then [upgrade](#upgrade) as usual.
+
+## Verify an image
+
+Every release image carries build provenance and SBOM attestations signed through GitHub. To check that an image was built from this repository by its release workflow, run this on any machine with the [GitHub CLI](https://cli.github.com/):
+
+```sh
+gh attestation verify oci://ghcr.io/dsmorgan/dinnerbell:0.2.0 --repo dsmorgan/dinnerbell
+```
+
+The release notes on GitHub list each release's digest. To compare it with the image your host pulled:
+
+```sh
+podman image inspect ghcr.io/dsmorgan/dinnerbell:0.2.0 --format '{{.Digest}}'
+```
+
+With Docker: `docker image inspect ghcr.io/dsmorgan/dinnerbell:0.2.0 --format '{{index .RepoDigests 0}}'`.
+
+Don't use `podman auto-update` or a tool such as Watchtower. They follow moving tags, which defeats pinning a release.
+
+## Build from source
+
+To run your own changes, build the image from your checkout with the `compose.build.yaml` override:
+
+```sh
+podman-compose -f compose.yaml -f compose.build.yaml up -d --build
+```
+
+Pass both `-f` flags to every later compose command. The image is named `localhost/dinnerbell:dev`, has no attestations, and isn't a release, so use it for development rather than production.
+
+## Switch a source-built install to the prebuilt image
+
+Before 0.2.0, `compose.yaml` built the image on your host. This one-time switch keeps your data. It works because the new `compose.yaml` keeps the volume name, `dinnerbell-data`, which compose prefixes with the project name.
+
+1. From your clone, note the data volume's name.
+
+   ```sh
+   podman volume ls
+   ```
+
+   For a clone in a directory named `dinnerbell`, it's `dinnerbell_dinnerbell-data`. Run every later command from the same directory, so compose finds the same volume.
+
+2. [Back up now](#back-up-now), and copy the backup off the host.
+3. Pull the new files. If `git pull` complains about local changes to `compose.yaml`, move them to `compose.override.yaml`, which git ignores, and run `git checkout compose.yaml` first.
+
+   ```sh
+   git pull
+   ```
+
+4. Pull the image, and recreate the service.
+
+   ```sh
+   podman-compose pull
+   podman-compose down && podman-compose up -d
+   ```
+
+5. Run `podman volume ls` again. You should see no new Dinnerbell volume.
+6. Sign in and check that your members, catalog, and history are there. The footer shows `0.2.0`.
+7. Optional: remove the image you built.
+
+   ```sh
+   podman image rm localhost/dinnerbell
+   ```
+
+If Dinnerbell starts empty, compose created a new volume, usually because you ran it from a different directory. Run `podman-compose down`, then start it again from the original directory, or pass the original project name with `-p`. Your data is still in the old volume.
+
+## Test instance
+
+A test instance is a second copy of Dinnerbell on the same host. It runs builds from `main`, or a release before you promote it, with its own database, Slack app, channel, and hostname. Production never runs untested code, and its channel setting never changes. [ADR 0006](adr/0006-test-instance.md) explains the design.
+
+| | Production | Test |
+|---|---|---|
+| Image tag | The release in `compose.yaml` | `main`, or the release you're rehearsing |
+| Compose project | `dinnerbell` | `dinnerbell-test` |
+| Data volume | `dinnerbell_dinnerbell-data` | `dinnerbell-test_dinnerbell-data` |
+| Env file | `.env` | `.env.test` |
+| Host port | 8013 | 8014 |
+| Slack app and command | Dinnerbell, `/dinnerbell` | Dinnerbell Test, `/dinnerbell-test` |
+| Pangolin authentication | Off | On |
+
+Setup takes about half an hour. Stop the test instance when you aren't using it.
+
+### Create the test channel and Slack app
+
+Use the same workspace as production.
+
+1. Create a channel named `#dinnerbell-test`, and invite only the people who test with you. While the test instance runs, it mentions and messages only members of this channel. The channel can be private.
+2. Create a second Slack app as in [section 2](#2-create-the-slack-app), but paste `deploy/slack-app-manifest.test.yaml`, and replace `dinnerbell-test.example.com` with your test hostname.
+3. Create its app-level token, install it, and copy its bot token, client ID, and client secret, as in sections 3 through 5.
+4. Copy the test channel's ID, as in section 6.
+5. In `#dinnerbell-test`, invite the bot: `/invite @Dinnerbell Test`.
+
+Never reuse production's tokens. Socket Mode delivers each event to only one connection, so two instances on one app would split button taps between them.
+
+### Write .env.test
+
+1. Copy the example next to `.env`, and restrict access to it.
+
+   ```sh
+   cp .env.test.example .env.test
+   chmod 600 .env.test
+   ```
+
+2. Fill it in with the test app's values, a new secret key, the test hostname as `DINNERBELL_BASE_URL`, and the same `DINNERBELL_SLACK_TEAM_ID` as production. Keep `DINNERBELL_INSTANCE_LABEL=TEST` and `DINNERBELL_SLACK_COMMAND=/dinnerbell-test`.
+
+Git ignores `.env.test`. Never commit it.
+
+### Add the Pangolin resource
+
+1. Create a public HTTP resource for the test hostname, with the target on the host's port 8014.
+2. Leave **Use Platform SSO** on, and allow only your own Pangolin user.
+
+Unlike production, test runs unreleased code and only you use it, so it stays behind Pangolin's login. Sign in to Pangolin first, then select **Sign in with Slack**. If Slack's redirect lands on a Pangolin login page, sign in to Pangolin and select **Sign in with Slack** again.
+
+`DINNERBELL_TRUSTED_PROXIES` in `.env.test` takes the same address as in `.env`.
+
+### Start, stop, and refresh
+
+`deploy/dinnerbell-test` runs `podman-compose -p dinnerbell-test` with the test values, and takes any compose command:
+
+```sh
+deploy/dinnerbell-test pull
+deploy/dinnerbell-test up -d
+deploy/dinnerbell-test logs dinnerbell
+deploy/dinnerbell-test down
+```
+
+To pick up a newer `main`, run `pull`, then `down` and `up -d`. To check it, run `curl -s http://<DINNERBELL_BIND>:8014/healthz` and look for `"instance":"TEST"`, or look for the TEST banner in the browser. Test is usually stopped, so don't give it an always-on Uptime Kuma monitor.
+
+The script refuses to run when `.env.test` is missing, when it would use `.env`, or when `DINNERBELL_INSTANCE_LABEL` is empty. It exists because compose fills in `${...}` values in `compose.yaml` from the shell and from `.env`, which is production's file, and never from the env file. A `compose.override.yaml` can't do the same job: podman-compose adds an override's `ports` to the base list instead of replacing it.
+
+Set these in front of the command to change what it uses:
+
+| Variable | Default | Use |
+|---|---|---|
+| `DINNERBELL_TAG` | `main` | Image tag, such as a release you're rehearsing |
+| `DINNERBELL_ENV_FILE` | `.env.test` | Test configuration |
+| `DINNERBELL_PORT` | `8014` | Host port |
+| `DINNERBELL_BIND` | From `.env` | Host address, the same as production unless you set it |
+| `DINNERBELL_COMPOSE` | `podman-compose` | Set to `docker compose` for Docker |
+
+Set them per command, such as `DINNERBELL_TAG=0.3.0 deploy/dinnerbell-test up -d`. Never `export` them: production's compose commands in the same shell would read them too.
+
+A new test instance starts with an empty database and invites `DINNERBELL_ADMIN_EMAIL`. Add test members on **Members**, or copy production's data.
+
+### Copy production data into test
+
+A copy of production's data tests migrations and new features against real history. It contains member emails, so keep it on the host, and scrub it before the test instance starts.
+
+1. Stop the test instance. If it has never run, start and stop it once so its volume exists.
+
+   ```sh
+   deploy/dinnerbell-test down
+   ```
+
+2. Pick a production backup: the newest nightly `dinnerbell-YYYY-MM-DD.db`, or `pre-upgrade.db` from [Back up now](#back-up-now). List them:
+
+   ```sh
+   podman run --rm --entrypoint ls -v dinnerbell_dinnerbell-data:/prod:ro ghcr.io/dsmorgan/dinnerbell:main /prod/backups
+   ```
+
+3. Copy it over the test database.
+
+   ```sh
+   podman run --rm --entrypoint sh \
+     -v dinnerbell_dinnerbell-data:/prod:ro \
+     -v dinnerbell-test_dinnerbell-data:/data \
+     ghcr.io/dsmorgan/dinnerbell:main \
+     -c 'umask 077 && rm -f /data/dinnerbell.db-wal /data/dinnerbell.db-shm && cp /prod/backups/dinnerbell-2026-10-23.db /data/dinnerbell.db'
+   ```
+
+   With Docker, use `docker run` with the same arguments. Production's volume is mounted read-only, so the copy can't change it.
+
+4. Scrub the copy. List at least one active admin to keep, usually yourself. Repeat `--keep` for each person who tests with you.
+
+   ```sh
+   deploy/dinnerbell-test run --rm dinnerbell scrub-test --keep you@example.com
+   ```
+
+   Run `scrub-test` with the same tag you start next: it migrates the database first, and an older release refuses a database that a newer one migrated. It then deactivates and unlinks from Slack every member you didn't keep, turns off every schedule slot, ends open calls without notifying anyone, and empties the outbox. It leaves the meal log, catalog, and preferences alone. It refuses to run, and changes nothing, unless `DINNERBELL_INSTANCE_LABEL` is set, so it can't run against production. It prints what it changed. Running it again changes nothing.
+
+5. Start the test instance.
+
+   ```sh
+   deploy/dinnerbell-test up -d
+   ```
+
+Slots are off after a scrub. To rehearse a scheduled call, turn one on in **Admin**, or start one with `/dinnerbell-test call`.
+
+### Promote a release
+
+Use this checklist for every release. It runs the exact release image on a fresh copy of production's data before your family sees it.
+
+1. Read the release's **Upgrade notes** in [CHANGELOG.md](../CHANGELOG.md).
+2. Follow steps 1 to 3 of [Copy production data into test](#copy-production-data-into-test), using a fresh [backup](#back-up-now).
+3. Scrub the copy and start test with the release, replacing `X.Y.Z`. Every command names the release, so the scrub migrates the copy exactly as production's upgrade will.
+
+   ```sh
+   DINNERBELL_TAG=X.Y.Z deploy/dinnerbell-test pull
+   DINNERBELL_TAG=X.Y.Z deploy/dinnerbell-test run --rm dinnerbell scrub-test --keep you@example.com
+   DINNERBELL_TAG=X.Y.Z deploy/dinnerbell-test up -d
+   ```
+
+4. Check that the page shows the TEST banner and `X.Y.Z` in the footer, and that `/healthz` reports `"status":"ok"`.
+5. Rehearse a call: run `/dinnerbell-test call` in `#dinnerbell-test`, respond, vote, and let it reach a decision. Check that nobody outside the test channel was notified.
+6. In production, [back up now](#back-up-now), and copy the backup off the host.
+7. [Upgrade](#upgrade) production: `git pull`, `podman-compose pull`, then `podman-compose down && podman-compose up -d`.
+8. Check production's footer and `/healthz`.
+9. Stop the test instance: `deploy/dinnerbell-test down`.
+
+If production misbehaves after step 7, [roll back](#roll-back) with the backup from step 6.
 
 ## Use a different sign-in provider
 
@@ -431,4 +710,6 @@ Each member is linked to the account they first signed in with. After you switch
 | Sign-in says "That email is already linked" for everyone | You switched sign-in providers, so members are linked to accounts at the old provider. | Follow "Switch providers on an existing install". |
 | Startup error: `DINNERBELL_SLACK_TEAM_ID is required` | The issuer is Slack and the team ID is empty. | Set `DINNERBELL_SLACK_TEAM_ID` as described in step 6, then recreate the service. |
 | Startup error about a token prefix | The tokens are swapped or copied from the wrong page. | `DINNERBELL_SLACK_APP_TOKEN` starts with `xapp-` (Basic Information > App-Level Tokens). `DINNERBELL_SLACK_BOT_TOKEN` starts with `xoxb-` (Install App). |
+| The test instance posts in its channel but sends no direct messages or mentions to someone | While `DINNERBELL_INSTANCE_LABEL` is set, Dinnerbell notifies only members of the test channel. If the log mentions a missing scope, it can't read the channel's members and notifies no one. | Invite the person to the test channel. For a missing scope, paste `deploy/slack-app-manifest.test.yaml` again under **App Manifest** and reinstall the app. |
+| Production starts with an empty database after a `git pull` | Compose created a new volume, because you ran it from a different directory or project name. | See "Switch a source-built install to the prebuilt image". Your data is still in the old volume. |
 | Rate limiting blocks everyone at once | Dinnerbell sees the proxy's address for every request. | Set `DINNERBELL_TRUSTED_PROXIES` to the proxy's single address, then recreate with `podman-compose down && podman-compose up -d`. A restart doesn't re-read `.env`. |

@@ -1,15 +1,19 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# Run with: podman-compose up -d --build   (or: docker compose up -d --build)
+# Production: podman-compose pull && podman-compose up -d   (or: docker compose ...)
+# Test instance: deploy/dinnerbell-test pull && deploy/dinnerbell-test up -d
+# Build from source: add -f compose.yaml -f compose.build.yaml. See docs/setup.md.
+#
+# Compose reads ${...} values from the shell and from .env in this directory, not from env_file.
 services:
   dinnerbell:
-    image: dinnerbell
-    build:
-      context: .
-      dockerfile: Containerfile
-    env_file: .env
+    # Each release bumps the default tag, so `git pull` moves production to the new release.
+    image: ghcr.io/dsmorgan/dinnerbell:${DINNERBELL_TAG:-0.2.0}
+    env_file: ${DINNERBELL_ENV_FILE:-.env}
     ports:
       # Publish only on the interface your reverse proxy (Newt) reaches. Set DINNERBELL_BIND in .env.
-      - "${DINNERBELL_BIND:-127.0.0.1}:8013:8013"
+      - "${DINNERBELL_BIND:-127.0.0.1}:${DINNERBELL_PORT:-8013}:8013"
+    # Compose prefixes this name with the project name: dinnerbell_dinnerbell-data for a clone in
+    # a directory named dinnerbell, and dinnerbell-test_dinnerbell-data for the test instance.
     volumes:
       - dinnerbell-data:/data
     read_only: true
