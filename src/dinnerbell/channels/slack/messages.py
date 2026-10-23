@@ -91,7 +91,7 @@ def render(notification: note.Notification, ctx: RenderContext) -> Message:
         case note.DecisionMade():
             return decision_message(notification.event, notification.decision, ctx, notification.locked_by)
         case note.DecisionUpdated():
-            return decision_message(notification.event, notification.decision, ctx)
+            return decision_message(notification.event, notification.decision, ctx, notification.locked_by)
         case note.ResponseReminder():
             return reminder_message(notification, ctx)
         case note.MaybeResolved():
@@ -194,6 +194,8 @@ def _call_status(event: note.EventInfo) -> str:
             return "It's decided! The plan is in the thread."
         case EventState.DONE:
             return "All done. Thanks, everyone!"
+        case EventState.ABANDONED if event.end_reason is EndReason.MISSED:
+            return "This call ended without a decision."
         case EventState.ABANDONED:
             return f"No group {slot} this time. Everyone's on their own."
         case EventState.CANCELLED:
@@ -347,8 +349,8 @@ def decision_message(
         top = f"~{item}~ This {_slot(event)} was cancelled."
     else:
         top = f"*{_slot(event).capitalize()} is decided: {item}* · {_kind(proposal)}"
-        if locked_by is not None:
-            top += f"\nLocked in by {ctx.directory.mention(locked_by)}."
+    if locked_by is not None and event.state is not EventState.CANCELLED:
+        top += f"\nLocked in by {ctx.directory.mention(locked_by)}."
     blocks: list[Block] = [
         section(top),
         fields_section(
@@ -364,7 +366,7 @@ def decision_message(
     blocks.append(section(join_lines(lines)))
     buttons: list[Block] = []
     if event.state is EventState.DECIDED:
-        buttons.append(button("Mark done", ids.MARK_DONE, ids.event_value(event.id), style="primary"))
+        buttons.append(mark_done_button(event))
     buttons += _item_buttons(proposal.item, proposal.mode)
     buttons.append(_web_button(ctx, event))
     blocks.append(actions(*buttons, block_id="more"))
@@ -372,6 +374,12 @@ def decision_message(
         decision.meal_time, event.timezone
     )
     return _finish(text, blocks)
+
+
+def mark_done_button(event: note.EventInfo) -> Block:
+    """Mark done ends the meal and logs it, so it asks first (docs/channels.md)."""
+    sure = confirm(f"Mark {_slot(event)} done?", "This ends the meal and adds it to the history.", "Mark done")
+    return button("Mark done", ids.MARK_DONE, ids.event_value(event.id), style="primary", confirm=sure)
 
 
 # Direct messages ---------------------------------------------------------------------------------
@@ -411,7 +419,7 @@ def maybe_resolved_message(notification: note.MaybeResolved, ctx: RenderContext)
 def assignment_message(notification: note.AssignmentMade, ctx: RenderContext) -> Message:
     event, decision = notification.event, notification.decision
     proposal = decision.proposal
-    role = ROLE_PHRASES[notification.role]
+    role = " and ".join(ROLE_PHRASES[r] for r in notification.roles) or "helping"
     when = local_clock(decision.meal_time, event.timezone)
     lines = [
         f"Thanks for pitching in, {escape(notification.member.name)}! You're *{role}* for {_slot(event)} "

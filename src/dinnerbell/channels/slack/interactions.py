@@ -20,7 +20,7 @@ import logging
 import re
 from collections.abc import Awaitable, Callable, Coroutine
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from typing import Any
 
 from slack_bolt.async_app import AsyncApp
@@ -65,6 +65,18 @@ CONFIRM = {
     "respond_maybe": "Got it: you're a maybe.",
     "respond_out": "Got it: you're out this time.",
 }
+OFFERED = {
+    RoleOffer.COOK: "Thanks! You're offering to cook. Tap again to take it back.",
+    RoleOffer.PICKUP: "Thanks! You're offering to pick up. Tap again to take it back.",
+    RoleOffer.ORDER: "Thanks! You're offering to order. Tap again to take it back.",
+}
+WITHDRAWN = {
+    RoleOffer.COOK: "Got it: you're not offering to cook.",
+    RoleOffer.PICKUP: "Got it: you're not offering to pick up.",
+    RoleOffer.ORDER: "Got it: you're not offering to order.",
+}
+VOTED = "Vote counted. Tap Vote again to take it back."
+UNVOTED = "Vote taken back."
 SETTLE_TIMEOUT_SECONDS = 10.0
 Ack = Callable[..., Awaitable[None]]
 
@@ -286,15 +298,16 @@ class Interactions:
                 dm = source.channel_id is not None and source.channel_id.startswith("D")
                 return CONFIRM[action_id] if dm else None
             if action_id in ids.OFFER:
-                await toggle_role(db, member, ids.parse_event(value), ids.OFFER[action_id], now=now)
-                return None
+                role = ids.OFFER[action_id]
+                offered = await calls.toggle_role(db, member, ids.parse_event(value), role, now=now)
+                return (OFFERED if offered else WITHDRAWN)[role]
             if action_id == ids.COORDINATE:
                 await calls.claim_coordinator(db, member, ids.parse_event(value), now=now)
                 return None
             if action_id == ids.VOTE:
                 event_id, proposal_id = ids.parse_proposal(value)
-                await toggle_vote(db, member, event_id, proposal_id, now=now)
-                return None
+                voted = await calls.toggle_vote(db, member, event_id, proposal_id, now=now)
+                return VOTED if voted else UNVOTED
             if action_id == ids.LOCK:
                 event_id, proposal_id = ids.parse_proposal(value)
                 await calls.lock(db, member, event_id, proposal_id, now=now)
@@ -442,26 +455,6 @@ class Interactions:
             return f"Started the {slot.value} call {when}. It's posted in <#{self.channel_id}>."
 
         await self._run(source, member, work)
-
-
-async def toggle_role(db: AsyncSession, member: Member, event_id: int, role: RoleOffer, *, now: datetime) -> None:
-    """The shared role button: offer the role, or withdraw it if already offered.
-
-    Stand-in for ``calls.toggle_role``, which the m2-calls review adds; switch to it on rebase.
-    """
-    view = await event_views.event_view(db, member, event_id, now=now)
-    offered = view.mine is None or role not in view.mine.offers
-    await calls.offer_role(db, member, event_id, role, offered, now=now)
-
-
-async def toggle_vote(db: AsyncSession, member: Member, event_id: int, proposal_id: int, *, now: datetime) -> None:
-    """The shared Vote button: vote, or take the vote back if already given.
-
-    Stand-in for ``calls.toggle_vote``, which the m2-calls review adds; switch to it on rebase.
-    """
-    view = await event_views.event_view(db, member, event_id, now=now)
-    voted = any(p.info.id == proposal_id and p.voted for p in view.proposals)
-    await (calls.unvote if voted else calls.vote)(db, member, event_id, proposal_id, now=now)
 
 
 HELP = (

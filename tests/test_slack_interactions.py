@@ -14,8 +14,12 @@ from dinnerbell.channels.slack import ids
 from dinnerbell.channels.slack.interactions import (
     BROKEN,
     CONFIRM,
+    OFFERED,
     STALE,
     UNKNOWN_USER,
+    UNVOTED,
+    VOTED,
+    WITHDRAWN,
     parse_call_args,
 )
 from dinnerbell.config import Settings
@@ -107,6 +111,7 @@ async def test_role_buttons_toggle(slack: Slack, house: House) -> None:
     await slack.click("Sam", "offer_cook", str(event_id))
     response = (await house.context(event_id)).response_of(house["Sam"].id)
     assert response is not None and response.offers == frozenset()
+    assert slack.ephemerals("Sam") == [OFFERED[RoleOffer.COOK], WITHDRAWN[RoleOffer.COOK]]
 
 
 async def test_first_to_coordinate_wins_and_the_next_is_told_kindly(slack: Slack, house: House) -> None:
@@ -232,7 +237,7 @@ async def test_vote_toggles_and_lock_needs_the_coordinator(slack: Slack, house: 
     assert (await house.context(event_id)).votes.get(first, []) == []
 
     await slack.click("Sam", "lock", value)
-    assert slack.ephemerals("Sam") == ["Only the coordinator or an admin can lock a proposal."]
+    assert slack.ephemerals("Sam") == [VOTED, UNVOTED, "Only the coordinator or an admin can lock a proposal."]
     await slack.click("Alex", "lock", value)  # Alex is the admin
     event = await house.event(event_id)
     assert event.state is EventState.DECIDED and event.decided_item_id == ctx.proposals[0].item_id
@@ -284,9 +289,13 @@ async def test_mark_done(slack: Slack, house: House) -> None:
     event_id = await to_voting(slack)
     first = (await house.context(event_id)).proposals[0].id
     await slack.click("Alex", "lock", ids.proposal_value(event_id, first))
+    await slack.click("Sam", "mark_done", str(event_id))  # members wait for meal time
+    assert (await house.event(event_id)).state is EventState.DECIDED
+    assert slack.ephemerals("Sam")[-1] != "Marked done. Thanks!"
+    house.clock.now = (await house.event(event_id)).meal_time  # type: ignore[assignment]
     await slack.click("Sam", "mark_done", str(event_id))
     assert (await house.event(event_id)).state is EventState.DONE
-    assert slack.ephemerals("Sam") == ["Marked done. Thanks!"]
+    assert slack.ephemerals("Sam")[-1] == "Marked done. Thanks!"
 
 
 async def test_link_buttons_are_just_acknowledged(slack: Slack) -> None:

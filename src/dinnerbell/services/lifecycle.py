@@ -401,14 +401,13 @@ async def decide(
         decided_mode=winner.mode,
         meal_time=meal,
         decided_at=now,
+        locked_by=actor.id if locked is not None and actor is not None else None,
     )
     decided = await EventRepository(db).save(decided, now)
     roles = assign_roles(winner.mode, ctx.coverage.volunteers(winner.mode, item.cook_ids), event.coordinator_id)
     repo = AssignmentRepository(db)
     assigned = [await repo.assign(event.household_id, event.id, role, who, now) for role, who in roles.items()]
-    await _announce_decision(
-        db, decided, assigned_ids=[a.id for a in assigned], actor=actor if locked else None, now=now
-    )
+    await _announce_decision(db, decided, assigned_ids=[a.id for a in assigned], now=now)
     payload = {
         "how": "locked" if locked else "vote",
         "proposal_id": winner.id,
@@ -420,21 +419,17 @@ async def decide(
     await audit(db, event.household_id, actor if locked else None, "event.decided", _target(event), payload, now)
 
 
-async def _announce_decision(
-    db: AsyncSession, event: Event, *, assigned_ids: list[int], actor: Member | None, now: datetime
-) -> None:
+async def _announce_decision(db: AsyncSession, event: Event, *, assigned_ids: list[int], now: datetime) -> None:
     ctx = await load(db, event)
     decision = cc.decision_info(ctx)
     if decision is None:  # pragma: no cover - decide() always stores a winner and a meal time
         return
-    info = cc.event_info(ctx)
-    locked_by = ctx.person(actor.id) if actor else None
-    dms = [
-        note.AssignmentMade(info, a.id, a.role, ctx.person(a.member_id), decision)
-        for a in ctx.assignments
-        if a.id in assigned_ids
-    ]
-    await publish(db, ctx, note.DecisionMade(info, decision, locked_by), *dms, now=now)
+    first: dict[int, int] = {}  # one direct message per member, keyed by their first assignment
+    for a in sorted(ctx.assignments, key=lambda a: a.id):
+        if a.id in assigned_ids:
+            first.setdefault(a.member_id, a.id)
+    dms = [cc.assignment_made(ctx, member_id, assignment_id, decision) for member_id, assignment_id in first.items()]
+    await publish(db, ctx, note.DecisionMade(cc.event_info(ctx), decision, cc.locked_by(ctx)), *dms, now=now)
     await publish(db, ctx, cc.proposals_updated(ctx), cc.call_updated(ctx), now=now)
 
 

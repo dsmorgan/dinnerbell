@@ -211,9 +211,7 @@ async def set_coordinator(db: AsyncSession, event: Event, member_id: int | None,
     await publish(db, ctx, *_messages_for_state(ctx), now=now)
     decision = cc.decision_info(ctx)
     if new_assignment is not None and decision is not None:
-        dm = note.AssignmentMade(
-            cc.event_info(ctx), new_assignment.id, new_assignment.role, ctx.person(new_assignment.member_id), decision
-        )
+        dm = cc.assignment_made(ctx, new_assignment.member_id, new_assignment.id, decision)
         await publish(db, ctx, dm, now=now)
 
 
@@ -434,8 +432,7 @@ async def change_assignment(
         decision = cc.decision_info(ctx)
         await publish(db, ctx, *cc.decision_updated(ctx), now=now)
         if assigned is not None and decision is not None and event.state is EventState.DECIDED:
-            dm = note.AssignmentMade(cc.event_info(ctx), assigned.id, role, ctx.person(assigned.member_id), decision)
-            await publish(db, ctx, dm, now=now)
+            await publish(db, ctx, cc.assignment_made(ctx, assigned.member_id, assigned.id, decision), now=now)
         payload = {"role": role.value, "member_id": member_id}
         await audit(db, actor.household_id, actor, "event.assignment_changed", _target(event), payload, now)
 

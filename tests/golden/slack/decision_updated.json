@@ -2,7 +2,7 @@
   "blocks": [
     {
       "text": {
-        "text": "*Dinner is decided: Sam's Tacos* · Cook · Mexican",
+        "text": "*Dinner is decided: Sam's Tacos* · Cook · Mexican\nLocked in by <@U01ALEX>.",
         "type": "mrkdwn"
       },
       "type": "section"
@@ -32,6 +32,28 @@
       "elements": [
         {
           "action_id": "mark_done",
+          "confirm": {
+            "confirm": {
+              "emoji": true,
+              "text": "Mark done",
+              "type": "plain_text"
+            },
+            "deny": {
+              "emoji": true,
+              "text": "Not yet",
+              "type": "plain_text"
+            },
+            "text": {
+              "emoji": true,
+              "text": "This ends the meal and adds it to the history.",
+              "type": "plain_text"
+            },
+            "title": {
+              "emoji": true,
+              "text": "Mark dinner done?",
+              "type": "plain_text"
+            }
+          },
           "style": "primary",
           "text": {
             "emoji": true,

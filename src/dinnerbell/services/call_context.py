@@ -41,6 +41,7 @@ from dinnerbell.domain.catalog import CatalogItem, ItemKind, Mode, Tag, TagKind
 from dinnerbell.domain.events import (
     DONE_AFTER_MEAL,
     Assignment,
+    AssignmentRole,
     Coverage,
     Event,
     Proposal,
@@ -290,9 +291,22 @@ def proposals_updated(ctx: CallContext) -> note.ProposalsUpdated:
     return note.ProposalsUpdated(event_info(ctx), proposals(ctx), ctx.head_count)
 
 
+def locked_by(ctx: CallContext) -> note.PersonInfo | None:
+    return ctx.person(ctx.event.locked_by) if ctx.event.locked_by is not None else None
+
+
 def decision_updated(ctx: CallContext) -> list[note.Notification]:
     decision = decision_info(ctx)
-    return [] if decision is None else [note.DecisionUpdated(event_info(ctx), decision)]
+    return [] if decision is None else [note.DecisionUpdated(event_info(ctx), decision, locked_by(ctx))]
+
+
+def assignment_made(
+    ctx: CallContext, member_id: int, assignment_id: int, decision: note.DecisionInfo
+) -> note.AssignmentMade:
+    """The direct message to ``member_id`` about all their roles, prompted by ``assignment_id``."""
+    order = list(AssignmentRole)
+    roles = sorted({a.role for a in ctx.assignments if a.member_id == member_id}, key=order.index)
+    return note.AssignmentMade(event_info(ctx), assignment_id, ctx.person(member_id), tuple(roles), decision)
 
 
 async def publish(db: AsyncSession, ctx: CallContext, *notifications: note.Notification, now: datetime) -> None:

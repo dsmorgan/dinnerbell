@@ -269,6 +269,7 @@ class EventRow(Base):
     decided_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     done_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     end_reason: Mapped[str | None] = mapped_column(String(16))
+    locked_by: Mapped[int | None] = mapped_column(ForeignKey("member.id", ondelete="SET NULL"))
     created_at: Mapped[datetime] = mapped_column(UTCDateTime())
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime())
 
