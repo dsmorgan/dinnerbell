@@ -5,7 +5,7 @@ This is the contract between Dinnerbell's core and a channel adapter such as Sla
 ## How notifications flow
 
 1. A use case in `services` changes a call and, in the same transaction, writes one outbox row per notification (`db/outbox.py`, table `outbox`). A Slack outage never loses a change.
-2. The drainer, `services.outbox.drain`, runs every 5 seconds and after every 30-second scheduler tick. It claims a row, commits the claim, calls the channel with no transaction open, and records the outcome.
+2. The drainer, `services.outbox.drain`, runs every 5 seconds and after every 30-second scheduler tick. It lists rows that are due (past any retry delay and unclaimed), claims each, commits the claim, calls the channel with no transaction open, and records the outcome. Rows waiting to retry aren't listed, so however many there are, they can't crowd out newer events.
 3. The channel is wired once in `app_factory.py` as `JobContext.channel`. It is `channels.base.NullChannel` until Slack replaces it. `NullChannel` logs each notification, reports it delivered, and returns made-up message references, so updates and threads run the same path a real channel takes.
 
 ## The interface
