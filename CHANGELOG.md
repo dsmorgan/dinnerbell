@@ -10,6 +10,7 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 - A logo: Dinnerbone, the family's hamster. It shows in the web header, as the browser tab icon, and as the icon of a Home Screen bookmark on iPhone. To use it in Slack, upload `deploy/slack-app-icon-1024.png` in the Slack app's **Basic Information** settings (see [docs/setup.md](docs/setup.md#2-create-the-slack-app)). `scripts/render-logo.sh` regenerates the PNG icons from the SVGs.
 - A test instance (`DINNERBELL_INSTANCE_LABEL` set) shows Dinnerbot, Dinnerbone as a half-built blueprint, in the header, the browser tab, and the Home Screen icon, so you can tell it from production at a glance. Upload `deploy/slack-app-icon-test-1024.png` as the test Slack app's icon.
+- Export the catalog as a catalog file, in the format import reads ([docs/catalog-format.md](docs/catalog-format.md#export-the-catalog)). Any member can select **Download catalog** on the Catalog page, and `dinnerbell catalog export [--output FILE] [--force]` writes it from the command line, reading the database read-only. Exports are sorted, so two exports of the same catalog are identical, and importing one back changes nothing. They never include cooks, members, preferences, history, or anything else personal. To copy the catalog between production and test, see [docs/setup.md](docs/setup.md#copy-the-catalog-between-production-and-test).
 
 ### Security
 

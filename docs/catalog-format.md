@@ -8,6 +8,7 @@ The catalog is the household's list of things to eat: restaurants and home meals
 - **Bulk import.** Paste or upload a catalog file on the Catalog page. Dinnerbell validates it, shows a preview of what will be created and changed, and applies it only after you confirm. Any member can import.
 - **First run.** If `DINNERBELL_SEED_FILE` points to a catalog file, Dinnerbell imports it on first start, while the catalog is still empty. At that point only the admin is a member, so other cooks are skipped. After inviting everyone, import the same file again from the Catalog page to fill in the cooks, before editing those items in the app.
 - **With a chatbot, today.** Give any chatbot this page plus your notes ("we get Thai from Siam Garden on Main, pickup or DoorDash") and ask for a catalog file. Import the result; the preview catches mistakes.
+- **From another instance.** Export the catalog from one Dinnerbell and import it into another, such as from production into a test instance. See [Export the catalog](#export-the-catalog).
 - **With the built-in assistant, later.** Milestone M6 adds an assistant that drafts entries in this format from a description or a menu link. Its drafts go through the same preview before anything is saved.
 
 ## Example
@@ -101,6 +102,22 @@ A complete starter file is in [seed/example.yaml](../seed/example.yaml).
 - **Imports are all or nothing.** If any entry fails validation, nothing is saved and the preview lists every error with its location, such as `restaurants[3].modes[0]: "drive-thru" is not one of pickup, delivery`. List positions count from 0, so `restaurants[3]` is the fourth restaurant.
 - **Plain YAML only.** Anchors and aliases (`&name`, `*name`), repeated keys in one mapping, nesting deeper than 20 levels, and more than 50,000 values are refused, as are files over 1 MB.
 - **Preferences aren't part of the file.** Each person sets their own vetoes and likes in the app, and other members never see them.
+
+## Export the catalog
+
+An export is a catalog file of the household's whole catalog: every tag, and every restaurant and home meal, active or not. Use it to copy the catalog to another instance, to keep an editable copy, or to edit many items at once and import the result.
+
+- **In the app.** On the Catalog page, select **Download catalog**. Any member can.
+- **From the command line.** `dinnerbell catalog export` writes the file to standard output. Add `--output FILE` to write a file instead; it refuses to replace an existing file unless you add `--force`. The command reads the database read-only, so it's safe to run while Dinnerbell runs, and it needs the same configuration as the app to find the database. For a container install, see [Copy the catalog between production and test](setup.md#copy-the-catalog-between-production-and-test).
+
+An export follows these rules, so it imports cleanly:
+
+- **Every field is written.** Empty values are `null` or `[]`, and `active` is always there. Because an explicit empty value clears a field, importing an export makes each matching item exactly what the export says.
+- **Everything is sorted.** Tags are sorted by name within each kind, and items by name, so two exports of the same catalog are identical and a diff shows only real changes.
+- **Cooks aren't exported.** They're member emails. An import of an export leaves each item's cooks as they are, so set cooks in the app on each instance.
+- **Nothing personal is exported.** No members, emails, Slack IDs, preferences, vetoes, meal history, or audit records.
+
+Importing an export into the catalog it came from previews as "The catalog already matches this file." Importing it into another catalog adds the items and tags that are missing, updates the items that match by name, and, like every import, deletes nothing: items that exist only in the target stay.
 
 ## Validating a file
 

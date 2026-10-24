@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Catalog: browse, add, edit, and deactivate items; manage tags; import catalog files."""
+"""Catalog: browse, add, edit, and deactivate items; manage tags; import and export catalog files."""
 
 from __future__ import annotations
 
@@ -381,6 +381,26 @@ async def merge_tag(
         status = 200 if request.headers.get("HX-Boosted") == "true" else 400
         return await _tags_page(request, principal, db, error=str(exc), status_code=status)
     return RedirectResponse("/catalog/tags?notice=tags_merged", status_code=303)
+
+
+# Export -------------------------------------------------------------------------------------------
+
+
+@router.get("/export.yaml")
+async def export_catalog(principal: SignedIn, context: Context, db: Database) -> Response:
+    """Download the catalog as a catalog file. A GET that changes nothing, so it needs sign-in but
+    no CSRF token. The file holds no personal data, but it's still never cached."""
+    exported = await catalog_service.export(db, principal.household.id)
+    day = household_today(principal.household, context.clock())
+    return Response(
+        exported.data,
+        media_type="application/yaml; charset=utf-8",
+        headers={
+            "Content-Disposition": f'attachment; filename="dinnerbell-catalog-{day.isoformat()}.yaml"',
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+        },
+    )
 
 
 # Import -------------------------------------------------------------------------------------------

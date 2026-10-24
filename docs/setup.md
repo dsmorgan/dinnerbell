@@ -324,6 +324,35 @@ The catalog is your list of restaurants and home meals. [catalog-format.md](cata
 
 On first start, only the admin is a member yet, so the seed skips every other cook email. After you invite everyone (section 11), import the same file again from the Catalog page to fill in the cooks. Fields in the file replace what's stored, so do this before you edit those items in the app.
 
+### Copy the catalog between production and test
+
+To give the [test instance](#test-instance) production's catalog, or to bring a catalog you tried out in test back to production, export it from one and import it into the other. An export holds the tags and items, never members, cooks, or preferences, so it's safe to move between instances. It's still your household's list of places and notes, so keep it out of public repositories.
+
+1. Export the catalog from the instance you copy from. Either:
+
+   - In the browser, open the Catalog page and select **Download catalog**.
+   - On the host, run the export in a one-off container. For production:
+
+     ```sh
+     podman-compose run --rm -T dinnerbell catalog export > catalog.yaml
+     ```
+
+     For the test instance:
+
+     ```sh
+     deploy/dinnerbell-test run --rm -T dinnerbell catalog export > catalog.yaml
+     ```
+
+     With Docker: `docker compose run --rm -T dinnerbell catalog export > catalog.yaml`, and `DINNERBELL_COMPOSE="docker compose"` in front of `deploy/dinnerbell-test`.
+
+     The image's entry point is `dinnerbell`, so `catalog export` after the service name is the command. Keep `-T`: without it, compose runs the command in a terminal, which changes line endings and mixes messages into the file. The export opens the database read-only, so it works whether the instance is running or stopped, and it prints what it exported, such as `Exported 4 restaurants, 4 home meals, 25 tags.`, as a message rather than into the file.
+
+2. In the instance you copy to, open the Catalog page, select **Import a catalog file**, upload `catalog.yaml`, and select **Preview**.
+
+3. Check the preview. It lists the tags and items it will add and, for each item that matches by name, the fields it will change. If the catalogs already match, it says there's nothing to import. Then select **Apply**.
+
+The import never deletes: items that exist only in the instance you copy to stay, as do each item's cooks. To retire an item in both, set it inactive in one and copy again.
+
 ## Back up
 
 Dinnerbell runs an online backup of its SQLite database every night at 03:30 household time into `/data/backups/`, and once at start if the newest backup is more than a day old. It keeps the 14 newest daily copies plus the newest copy from each of the last 8 weeks. In M0, only `/healthz` shows the last successful backup; the Admin page gains it later.
