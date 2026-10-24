@@ -38,6 +38,15 @@ def test_admin_sees_members_page(client: TestClient, provider: FakeProvider) -> 
     assert "Invite someone" in response.text
 
 
+def test_new_member_form_defaults_to_member(client: TestClient, provider: FakeProvider) -> None:
+    sign_in(client, provider)
+    html = client.get("/admin/members").text
+    select = html[html.index('<select name="role">') : html.index("</select>", html.index('<select name="role">'))]
+    assert '<option value="member" selected>' in select
+    assert '<option value="admin">' in select
+    assert select.index('value="member"') < select.index('value="admin"')
+
+
 def test_invite_creates_member_and_audit_row(client: TestClient, provider: FakeProvider, migrated: Settings) -> None:
     sign_in(client, provider)
     response = invite(client, "  Sam@Example.com ", " Sam  Smith ", can_cook=True, can_order=True)

@@ -18,6 +18,7 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ### Fixed
 
+- The Invite someone form on Admin > Members now defaults to Member. It used to preselect Admin, so inviting someone without changing the role made them an admin.
 - A `DINNERBELL_DATABASE_URL` that isn't a URL, or has a malformed port, is reported as a configuration error, without quoting the URL, instead of stopping startup with a traceback.
 
 ### Security
