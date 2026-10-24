@@ -185,6 +185,9 @@ def png_rgba(path: Path) -> tuple[int, int, bytes]:
         (STATIC / "favicon-32.png", 32, False),
         (STATIC / "apple-touch-icon.png", 180, True),
         (ROOT / "deploy" / "slack-app-icon-1024.png", 1024, True),
+        (STATIC / "favicon-test-32.png", 32, False),
+        (STATIC / "apple-touch-icon-test.png", 180, True),
+        (ROOT / "deploy" / "slack-app-icon-test-1024.png", 1024, True),
     ],
     ids=lambda value: value.name if isinstance(value, Path) else str(value),
 )
@@ -205,6 +208,10 @@ def test_logo_files_are_served_as_images(client: TestClient) -> None:
         ("logo-mark.svg", "image/svg+xml"),
         ("favicon-32.png", "image/png"),
         ("apple-touch-icon.png", "image/png"),
+        ("logo-test.svg", "image/svg+xml"),
+        ("logo-test-mark.svg", "image/svg+xml"),
+        ("favicon-test-32.png", "image/png"),
+        ("apple-touch-icon-test.png", "image/png"),
     ]:
         response = client.get(f"/static/{name}")
         assert response.status_code == 200, name
@@ -230,10 +237,21 @@ def test_csp_allows_same_origin_images(client: TestClient) -> None:
     assert "img-src 'self' data:" in directives
 
 
-def assert_icons_and_logo(html: str, where: str) -> None:
+def assert_icons_and_logo(html: str, where: str, variant: str = "") -> None:
+    """``variant`` is "-test" on a labelled instance, which shows the test mascot instead."""
     for link in ICON_LINKS:
+        link = link.replace("favicon-", f"favicon{variant}-").replace("logo-", f"logo{variant}-")
+        link = link.replace("apple-touch-icon.", f"apple-touch-icon{variant}.")
         assert link in html, f"{link} missing on {where}"
-    assert re.search(r'<img class="logo" src="/static/logo-mark\.svg\?v=[^"]+" [^>]*alt=""', html), where
+    mark = re.escape(f"/static/logo{variant}-mark.svg?v=")
+    assert re.search(rf'<img class="logo" src="{mark}[^"]+" [^>]*alt=""', html), where
+    other = "" if variant else "-test"
+    for path in (
+        f"/static/logo{other}-mark.svg",
+        f"/static/favicon{other}-32.png",
+        f"/static/apple-touch-icon{other}.png",
+    ):
+        assert path not in html, f"{path} on {where}"
 
 
 def test_every_kind_of_page_has_icons_and_logo(client: TestClient, provider: FakeProvider) -> None:
@@ -255,3 +273,11 @@ def test_every_kind_of_page_has_icons_and_logo(client: TestClient, provider: Fak
         response = client.get(path)
         assert response.status_code == 200, path
         assert_icons_and_logo(response.text, path)
+
+
+@pytest.mark.parametrize("settings_overrides", [{"instance_label": "TEST"}])
+def test_a_labelled_instance_shows_the_test_mascot(client: TestClient, provider: FakeProvider) -> None:
+    assert_icons_and_logo(client.get("/").text, "labelled sign-in page", "-test")
+    assert_icons_and_logo(client.get("/does-not-exist").text, "labelled 404 page", "-test")
+    sign_in(client, provider)
+    assert_icons_and_logo(client.get("/").text, "labelled home page", "-test")
