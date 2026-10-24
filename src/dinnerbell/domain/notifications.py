@@ -384,6 +384,13 @@ NOTIFICATION_TYPES: dict[str, type[Notification]] = {cls.kind: cls for cls in ge
 UPDATE_KINDS = frozenset(kind for kind, cls in NOTIFICATION_TYPES.items() if cls.is_update)
 
 
+CALL_OFF_SUPERSEDES = frozenset({AssignmentMade.kind, ResponseReminder.kind})
+"""Direct messages a call-off makes wrong: "You're cooking" or "Are you in?" must never arrive
+after "It's called off". The call-off closes these unsent, and the drainer checks again just
+before sending one."""
+SUPERSEDED_BY_CALL_OFF = "superseded by a call-off"
+
+
 # Delivery -------------------------------------------------------------------------------------
 
 

@@ -31,7 +31,7 @@ from dinnerbell.domain.events import (
     Window,
 )
 from dinnerbell.domain.meals import Slot
-from dinnerbell.domain.notifications import DeliveryResult, MessageRef, PermanentDeliveryError
+from dinnerbell.domain.notifications import DeliveryResult, HeldDelivery, MessageRef, PermanentDeliveryError
 from dinnerbell.services import call_admin, calls, event_views, lifecycle
 from dinnerbell.services.database import Database, open_database
 from dinnerbell.services.errors import Forbidden
@@ -205,11 +205,14 @@ async def test_a_call_off_closes_assignment_and_reminder_messages_still_waiting(
         )
     closed = {(r.kind, r.id == live.id, r.last_error) for r in rows if r.delivered_at is not None}
     assert ("response_reminder", False, "superseded by a call-off") in closed
-    assert all(r.delivered_at is None for r in rows if r.id == live.id)
+    assert all(r.delivered_at is None for r in rows if r.id == live.id)  # a drainer holds it
     assert {r.last_error for r in rows if r.id != live.id} == {"superseded by a call-off"}
-    house.clock.now += timedelta(minutes=10)  # the held claim lapses; nothing else is left to send
+    house.clock.now += timedelta(minutes=10)  # the held claim lapses, and the drainer checks the call
     await house.drain(channel)
-    assert channel.kinds.count("assignment_made") == 1 and "response_reminder" not in channel.kinds
+    assert "assignment_made" not in channel.kinds and "response_reminder" not in channel.kinds
+    async with house.sessionmaker() as db:
+        held = await db.scalar(select(OutboxRow).where(OutboxRow.id == live.id))
+    assert held is not None and held.last_error == "superseded by a call-off"
 
 
 async def test_who_is_refused(house: House) -> None:
@@ -671,3 +674,82 @@ async def test_a_call_off_waits_while_the_tick_holds_the_lock(
         assert isinstance(outcome, EventRuleViolation) and str(outcome) == "This call already finished."
         assert event.state is EventState.DONE and len(await house.meals()) == 1
         assert await cancel_audits(house) == []
+
+
+class CallOffMidDelivery(RecordingChannel):
+    """While a drainer holds the first ``assignment_made``, someone calls the call off; then
+    the channel fails the delivery (retryable) or holds it, so the row goes back to pending."""
+
+    def __init__(self, house: House, event_id: int, failure: Exception) -> None:
+        super().__init__()
+        self.house, self.event_id, self.failure = house, event_id, failure
+        self.called_off = False
+
+    async def deliver(self, notification: n.Notification, *, thread: MessageRef | None = None) -> DeliveryResult:
+        if notification.kind == "assignment_made" and not self.called_off:
+            self.called_off = True
+            await act(self.house, calls.cancel_call, self.house["Sam"], self.event_id)
+            raise self.failure
+        return await super().deliver(notification, thread=thread)
+
+
+@pytest.mark.parametrize(
+    "failure", [ConnectionError("slack is down"), HeldDelivery("setup broken", retry_after=5)], ids=["retry", "held"]
+)
+async def test_an_assignment_message_a_drainer_held_during_the_call_off_never_follows_it(
+    house: House, failure: Exception
+) -> None:
+    """Regression: the held row went back to pending and arrived after "You're no longer…"."""
+    event_id = await decided(house)
+    channel = CallOffMidDelivery(house, event_id, failure)
+    await house.drain(channel)
+    assert channel.called_off
+    house.clock.now += timedelta(minutes=5)  # past any retry delay or hold
+    await house.drain(channel)
+    assert "assignment_cancelled" in channel.kinds and "assignment_made" not in channel.kinds
+    async with house.sessionmaker() as db:
+        rows = list(await db.scalars(select(OutboxRow).where(OutboxRow.kind == "assignment_made")))
+    assert rows and all(r.delivered_at is not None for r in rows)
+    assert {r.last_error for r in rows} == {"superseded by a call-off"}
+
+
+async def test_a_reminder_from_an_earlier_run_is_not_sent_after_a_restart(house: House) -> None:
+    event_id = await open_dinner(house)
+    house.clock.now = OPENS + timedelta(minutes=75)
+    assert await house.tick() == [Step.REMIND]
+    await act(house, calls.cancel_call, house["Alex"], event_id)
+    async with house.sessionmaker() as db:  # as if a drainer had held the reminders through the call-off
+        await db.execute(
+            text("UPDATE outbox SET delivered_at = NULL, last_error = NULL WHERE kind = 'response_reminder'")
+        )
+        await db.commit()
+    await act(house, calls.start_call, house["Kim"], Slot.DINNER, TODAY)
+    channel = RecordingChannel()
+    await house.drain(channel)
+    assert "response_reminder" not in channel.kinds and "call_opened" in channel.kinds
+
+
+async def test_a_lone_in_gets_time_to_add_a_guest(house: House) -> None:
+    event_id = await open_dinner(house)
+    await act(house, calls.respond, house["Alex"], event_id, Status.IN)
+    for name in ("Sam", "Kim", "Lee"):
+        await act(house, calls.respond, house[name], event_id, Status.OUT)
+    house.clock.now = OPENS + timedelta(minutes=1)
+    assert await house.tick() == []
+    house.clock.now += timedelta(minutes=3)
+    await act(house, calls.save_details, house["Alex"], event_id, Details(guests=1))
+    await act(house, calls.offer_role, house["Alex"], event_id, RoleOffer.PICKUP, True)
+    house.clock.now += timedelta(minutes=10)
+    assert await house.tick() == [Step.CLOSE_RESPONSES]
+    assert (await house.event(event_id)).state is EventState.VOTING
+
+
+async def test_a_lone_in_without_a_guest_ends_after_the_quiet_spell(house: House) -> None:
+    event_id = await open_dinner(house)
+    await act(house, calls.respond, house["Alex"], event_id, Status.IN)
+    for name in ("Sam", "Kim", "Lee"):
+        await act(house, calls.respond, house[name], event_id, Status.OUT)
+    house.clock.now = OPENS + timedelta(minutes=10)
+    assert await house.tick() == [Step.CLOSE_RESPONSES]
+    event = await house.event(event_id)
+    assert (event.state, event.end_reason) == (EventState.ABANDONED, EndReason.TOO_FEW)

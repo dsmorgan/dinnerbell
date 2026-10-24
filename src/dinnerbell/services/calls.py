@@ -76,6 +76,7 @@ from dinnerbell.domain.events import (
 )
 from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.members import Member
+from dinnerbell.domain.notifications import CALL_OFF_SUPERSEDES, SUPERSEDED_BY_CALL_OFF
 from dinnerbell.domain.schedule import slot_schedule
 from dinnerbell.services import call_context as cc
 from dinnerbell.services import lifecycle
@@ -459,10 +460,6 @@ async def mark_done(db: AsyncSession, actor: Member, event_id: int, *, now: date
 
 CANCEL_ROLES = (AssignmentRole.COOK, AssignmentRole.PICKUP, AssignmentRole.ORDER)
 """Assignees told directly when a decided call is called off: the people who'd shop or drive."""
-STALE_DMS = frozenset({note.AssignmentMade.kind, note.ResponseReminder.kind})
-"""Direct messages a call-off makes wrong: "You're cooking" or "Are you in?" must never arrive
-after "It's called off"."""
-CALLED_OFF = "superseded by a call-off"
 
 
 async def cancel_call(
@@ -490,7 +487,9 @@ async def cancel_call(
         before = await load(db, event)
         event = await EventRepository(db).save(replace(event, state=state, ended_by=actor.id, end_note=reason), now)
         ctx = await load(db, event)
-        await OutboxRepository(db).close_unsent(event.household_id, event.id, STALE_DMS, note=CALLED_OFF, now=now)
+        await OutboxRepository(db).close_unsent(
+            event.household_id, event.id, CALL_OFF_SUPERSEDES, note=SUPERSEDED_BY_CALL_OFF, now=now
+        )
         await publish(db, ctx, *_called_off(before, ctx, actor, reason), now=now)
         payload = {"from": before.event.state.value, "as": capacity.value, "note": reason}
         await audit(db, actor.household_id, actor, "event.cancelled", _target(event), payload, now)

@@ -24,8 +24,12 @@ from datetime import datetime, timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from dinnerbell.db.events import EventRepository
 from dinnerbell.db.outbox import OutboxEntry, OutboxRepository
+from dinnerbell.domain.events import EventState
 from dinnerbell.domain.notifications import (
+    CALL_OFF_SUPERSEDES,
+    SUPERSEDED_BY_CALL_OFF,
     Channel,
     ChannelUnavailable,
     HeldDelivery,
@@ -136,6 +140,13 @@ async def _deliver(
         await db.commit()
         result.superseded += 1
         return True
+    if notification.kind in CALL_OFF_SUPERSEDES and await _overtaken(db, notification):
+        # Called off (or started again) since this row was queued, perhaps while a drainer held
+        # it and the channel failed or held it: "You're cooking" must not follow "It's off".
+        await repo.delivered(entry.id, token, now=clock(), ref=None, note=SUPERSEDED_BY_CALL_OFF)
+        await db.commit()
+        result.superseded += 1
+        return True
     try:
         ref, skipped = await _send(repo, channel, entry, notification)
     except HeldDelivery as exc:
@@ -161,6 +172,13 @@ async def _deliver(
     await db.commit()
     result.delivered += 1
     return True
+
+
+async def _overtaken(db: AsyncSession, notification: Notification) -> bool:
+    """Whether the call ``notification`` is about was called off, or has started a newer run,
+    since it was queued."""
+    event = await EventRepository(db).get(notification.event.household_id, notification.event.id)
+    return event is None or event.state is EventState.CANCELLED or event.run != notification.event.run
 
 
 async def _send(

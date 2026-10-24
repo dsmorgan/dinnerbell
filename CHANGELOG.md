@@ -19,7 +19,7 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
   - The reply in the call's thread names who called it off and why, and mentions everyone who was in or maybe and the coordinator. The call message says "Called off by" with the reason, and a decision is struck through.
   - When a decided call is called off, each member assigned to cook, pick up, or order gets a direct message, and assignment or reminder messages that haven't gone out yet are dropped.
   - A call that was never posted, such as one scheduled for a later day, posts nothing. Its starter gets a direct message if someone else called it off.
-- Responses close on their own once every active member has answered and nobody is a maybe. If fewer than two people are eating, the call ends on-your-own at the next scheduler tick. Otherwise voting starts once someone can cook, pick up, or order and no response has changed for 10 minutes, so you can add guests, an eat window, or an offer after tapping **In**. Voting then gets its usual length. Answers kept from before a re-run or restart don't count.
+- Responses close on their own once every active member has answered and nobody is a maybe. If everyone is out, the call ends on-your-own at the next scheduler tick. Otherwise it waits until no response has changed for 10 minutes, so you can add guests, an eat window, or an offer after tapping **In**; with two or more eating, someone must also be able to cook, pick up, or order. Voting then gets its usual length. Answers kept from before a re-run or restart don't count.
 - Starting a call for a slot and day that was called off starts it again, for any member, as long as it isn't past the usual meal time plus two hours. It starts with no coordinator.
 
 ### Fixed
