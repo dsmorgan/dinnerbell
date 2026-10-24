@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Catalog use cases: items, tags, and catalog file imports.
+"""Catalog use cases: items, tags, and catalog file imports and exports.
 
 Any member can add and edit items, add tags, and import. Only the admin renames and merges
 tags. Every change writes an audit row.
@@ -38,6 +38,7 @@ from dinnerbell.domain.catalog import (
     name_key,
     normalize_tag_name,
 )
+from dinnerbell.domain.catalog_export import CatalogExport, export_catalog
 from dinnerbell.domain.catalog_file import parse_catalog
 from dinnerbell.domain.catalog_import import CatalogSnapshot, ImportPlan, ItemState, plan_import
 from dinnerbell.domain.household import Household
@@ -286,6 +287,21 @@ async def merge_tags(db: AsyncSession, actor: Member, source_id: int, target_id:
     await db.commit()
     log.info("tags merged", extra={"source_tag_id": source.id, "target_tag_id": target.id})
     return target
+
+
+# Export -------------------------------------------------------------------------------------------
+
+
+async def export(db: AsyncSession, household_id: int) -> CatalogExport:
+    """The household's catalog as a catalog file. It reads only tags and items, never members,
+    preferences, or history, so it holds no personal data. Any member may export."""
+    repo = CatalogRepository(db)
+    exported = export_catalog(await repo.tags(household_id), await repo.items(household_id))
+    log.info(
+        "catalog exported",
+        extra={"restaurants": exported.restaurants, "home_meals": exported.home_meals, "tags": exported.tags},
+    )
+    return exported
 
 
 # Import -------------------------------------------------------------------------------------------

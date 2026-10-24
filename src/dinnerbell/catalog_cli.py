@@ -1,17 +1,20 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""``dinnerbell catalog``: validate catalog files and print their JSON Schema.
+"""``dinnerbell catalog``: validate catalog files, print their JSON Schema, and export the catalog.
 
-These commands need no configuration and no database, so they work from any checkout.
+``validate`` and ``schema`` need no configuration and no database, so they work from any checkout.
+``export`` reads the configured database, read-only, so it's safe to run beside a live instance.
 """
 
 from __future__ import annotations
 
 import argparse
+import asyncio
 import sys
 from pathlib import Path
 from typing import Any
 
 from dinnerbell.domain.catalog import ItemKind, TagKind
+from dinnerbell.domain.catalog_export import CatalogExport
 from dinnerbell.domain.catalog_file import MAX_FILE_BYTES, parse_catalog, render_schema
 from dinnerbell.domain.catalog_import import CatalogSnapshot, plan_import
 
@@ -21,11 +24,20 @@ EXIT_UNREADABLE = 2
 
 
 def add_parser(commands: Any) -> None:
-    catalog = commands.add_parser("catalog", help="work with catalog files (no database needed)")
+    catalog = commands.add_parser("catalog", help="work with catalog files, and export the catalog")
     actions = catalog.add_subparsers(dest="catalog_command", required=True, metavar="ACTION")
     validate = actions.add_parser("validate", help="check a catalog file and summarize it, without importing")
     validate.add_argument("path", type=Path, help="the catalog file, such as seed/example.yaml")
     actions.add_parser("schema", help="print the JSON Schema for catalog files")
+    export = actions.add_parser(
+        "export",
+        help="write the catalog as a catalog file, reading the database read-only",
+        description="Write the household's tags and items as a catalog file (docs/catalog-format.md) to "
+        "standard output or FILE. Cooks, members, and preferences aren't exported. Needs the app's "
+        "configuration, to find the database.",
+    )
+    export.add_argument("--output", "-o", type=Path, metavar="FILE", help="write to FILE instead of standard output")
+    export.add_argument("--force", action="store_true", help="replace FILE if it already exists")
 
 
 def run(args: argparse.Namespace) -> int:
@@ -65,4 +77,63 @@ def validate(path: Path) -> int:
     if plan.unknown_cooks:
         count = _plural(len(plan.unknown_cooks), "cook email")
         print(f"  {count} will be matched to members at import; emails that match no member are skipped.")
+    return EXIT_OK
+
+
+def _exists(output: Path) -> int:
+    print(
+        f"{output} already exists. Nothing exported. Choose another file, or add --force to replace it.",
+        file=sys.stderr,
+    )
+    return EXIT_INVALID
+
+
+def export(database: Path, output: Path | None, *, force: bool = False) -> int:
+    """Export the catalog in the database at ``database``, opened read-only so it never changes
+    the database, its journal mode, or a running instance's view of it."""
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from dinnerbell.services import catalog as catalog_service
+    from dinnerbell.services.database import open_readonly_database
+    from dinnerbell.services.household import current_household
+
+    if output is not None and not force and output.exists():
+        return _exists(output)  # checked again when the file is created; this saves reading first
+    if not database.exists():
+        print(f"No database at {database}. Nothing exported.", file=sys.stderr)
+        return EXIT_UNREADABLE
+
+    async def read() -> CatalogExport:
+        opened = open_readonly_database(database)
+        try:
+            async with opened.sessionmaker() as db:
+                household = await current_household(db)
+                return await catalog_service.export(db, household.id)
+        finally:
+            await opened.close()
+
+    try:
+        exported = asyncio.run(read())
+    except SQLAlchemyError as exc:
+        print(f"Can't read the database at {database} ({type(exc).__name__}). Nothing exported.", file=sys.stderr)
+        return EXIT_UNREADABLE
+    except LookupError:
+        print(f"The database at {database} has no household yet, so there's no catalog.", file=sys.stderr)
+        return EXIT_UNREADABLE
+    if output is None:
+        sys.stdout.flush()
+        sys.stdout.buffer.write(exported.data)
+        sys.stdout.buffer.flush()
+    else:
+        try:
+            with output.open("wb" if force else "xb") as file:  # x: never replace a file created meanwhile
+                file.write(exported.data)
+        except FileExistsError:
+            return _exists(output)
+        except OSError as exc:
+            print(f"Can't write {output}: {exc.strerror or exc}. Nothing exported.", file=sys.stderr)
+            return EXIT_UNREADABLE
+    restaurants = _plural(exported.restaurants, "restaurant")
+    summary = f"{restaurants}, {_plural(exported.home_meals, 'home meal')}, {_plural(exported.tags, 'tag')}"
+    print(f"Exported {summary}{'' if output is None else f' to {output}'}.", file=sys.stderr)
     return EXIT_OK

@@ -178,7 +178,7 @@ def _serve(settings: Settings, host: str, port: int) -> None:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    if args.command == "catalog":
+    if args.command == "catalog" and args.catalog_command != "export":
         return catalog_cli.run(args)
     if args.command == "slack":
         return _slack_preview(args.kind, args.base_url)
@@ -187,6 +187,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     except ConfigError as exc:
         print(exc, file=sys.stderr)
         return 2
+    if args.command == "catalog":
+        # Before logging is configured: logs go to stdout, where the export goes. The read-only
+        # open may create -wal and -shm files next to the database; keep them owner-only.
+        os.umask(PRIVATE_UMASK)
+        return catalog_cli.export(settings.database_path, args.output, force=args.force)
     if args.command == "scrub-test" and not settings.instance_label:
         from dinnerbell.services.scrub import NOT_LABELED
 
