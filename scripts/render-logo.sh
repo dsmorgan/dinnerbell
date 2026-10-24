@@ -18,6 +18,8 @@ RESVG_VERSION=0.48.1
 RESVG=${RESVG:-resvg}
 # The cream of the logo's outer ring, behind icons that must be opaque.
 BACKGROUND='#FFF3E0'
+# Behind the test mascot's opaque icons. PLACEHOLDER: set it to the mascot's outer ring color.
+TEST_BACKGROUND='#FFF3E0'
 
 CDPATH='' cd -- "$(dirname -- "$0")/.."
 
@@ -45,5 +47,10 @@ render() {
 render "$static/logo-mark.svg" 32 "$static/favicon-32.png"
 # iOS fills transparency with black, so Home Screen and Slack icons get an opaque background.
 render "$static/logo.svg" 180 "$static/apple-touch-icon.png" --background "$BACKGROUND"
-# Slack accepts 512 to 2000 px. Upload it in both Slack apps; see docs/setup.md.
+# Slack accepts 512 to 2000 px. Upload it in the production Slack app; see docs/setup.md.
 render "$static/logo.svg" 1024 deploy/slack-app-icon-1024.png --background "$BACKGROUND"
+
+# The test instance's mascot, shown when DINNERBELL_INSTANCE_LABEL is set.
+render "$static/logo-test-mark.svg" 32 "$static/favicon-test-32.png"
+render "$static/logo-test.svg" 180 "$static/apple-touch-icon-test.png" --background "$TEST_BACKGROUND"
+render "$static/logo-test.svg" 1024 deploy/slack-app-icon-test-1024.png --background "$TEST_BACKGROUND"
