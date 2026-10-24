@@ -39,7 +39,12 @@ case "$1" in
     pull) exit 0 ;;
     run)
         case "${STUB_RUN:-}" in
-            old) echo "dinnerbell: error: argument COMMAND: invalid choice: 'config'" >&2; exit 2 ;;
+            old)
+                # What the 0.2.0 image prints.
+                echo "usage: dinnerbell [-h] [--version] COMMAND ..." >&2
+                echo "dinnerbell: error: argument COMMAND: invalid choice: 'config' (choose from 'serve', 'migrate')" >&2
+                exit 2
+                ;;
             broken) echo "Error: something went wrong" >&2; exit 125 ;;
         esac
         # Skip the engine's options and the image, and drop the shell's DINNERBELL_* variables,
@@ -62,8 +67,8 @@ ln -s ../engine "$stubs/bin/docker"
 ln -s ../compose "$stubs/bin/docker-compose"
 
 failures=0
-pass() { echo "ok: $1"; }
-fail() { echo "FAILED: $1" >&2; failures=$((failures + 1)); }
+pass() { printf 'ok: %s\n' "$1"; }
+fail() { printf 'FAILED: %s\n' "$1" >&2; failures=$((failures + 1)); }
 
 # expect DESCRIPTION COMMAND...: the command succeeds.
 expect() {
@@ -188,6 +193,8 @@ refused_naming() { refused && said "$1"; }
 refused_unchecked() { refused && ! checked && said "$1"; }
 started_unchecked() { [ "$status" -eq 0 ] && started && ! checked; }
 pulled_and_started() { logged "engine pull $test_image\$" && started_cleanly; }
+started_with_dotenv_warning() { started_cleanly && said "could not parse statement starting at line"; }
+parsing_agrees() { [ "$dotenv" = "$expected" ] && [ "$wrapper" = "$expected" ] && prints_no_secret; }
 started_with_warning() { [ "$status" -eq 0 ] && started && said "predates dinnerbell config check"; }
 # The engine's options for the check, everything before the image, each with a space on both sides.
 engine_options() { printf '%s\n' "$log" | sed -n "s|^engine run \(.*\) $test_image config check.*| \1 |p"; }
@@ -206,7 +213,7 @@ start deploy/dinnerbell-test up -d
 check "a valid .env.test starts, and nothing prints a secret" started_cleanly
 check "the check runs compose's image, $test_image, with the env file on stdin" \
     logged "engine run .* $test_image config check --env-file -\$"
-for option in -i --rm --pull=never "--network none" --read-only "--cap-drop ALL" \
+for option in -i --rm --pull=never "--log-driver none" "--network none" --read-only "--cap-drop ALL" \
     "--security-opt no-new-privileges"; do
     check "the check runs with $option" has_option "$option"
 done
@@ -215,14 +222,38 @@ for option in -v --volume --mount -p --publish -P --env-file -e --env --privileg
 done
 
 filled_env_test | sed 's/^DINNERBELL_ADMIN_EMAIL=.*/DINNERBELL_ADMIN_EMAIL=/' >.env.test
-for command in "up -d" "run --rm dinnerbell scrub-test --keep you@example.com" start restart create; do
+for command in "up -d" "run --rm dinnerbell scrub-test --keep you@example.com" start restart create \
+    "scale dinnerbell=1" watch; do
     # shellcheck disable=SC2086 # $command holds the subcommand and its arguments.
     start deploy/dinnerbell-test $command
     check "no admin email: $command names DINNERBELL_ADMIN_EMAIL and starts nothing" \
         refused_naming "DINNERBELL_ADMIN_EMAIL is required but not set."
 done
-start deploy/dinnerbell-test down
-check "no admin email: down still runs, without the check" started_unchecked
+for command in down stop kill rm logs ps pull config images top port pause unpause "exec dinnerbell true" version; do
+    # shellcheck disable=SC2086 # $command holds the subcommand and its arguments.
+    start deploy/dinnerbell-test $command
+    check "no admin email: $command still runs, without the check" started_unchecked
+done
+printf 'DINNERBELL_ADMIN_EMAIL=admin@example.com\nDINNERBELL_FEATURES=invalid choice: %s\n' "'config'" >>.env.test
+start deploy/dinnerbell-test up -d
+check "a setting whose value looks like an old image's error is still refused" \
+    refused_naming "DINNERBELL_FEATURES: unknown feature flag"
+
+filled_env_test >.env.test
+printf 'this line is not valid\n' >>.env.test
+start deploy/dinnerbell-test up -d
+check "a valid .env.test with a line python-dotenv skips starts, and shows the warning" \
+    started_with_dotenv_warning
+
+if [ "$(id -u)" -ne 0 ]; then
+    for file in .env .env.test; do
+        filled_env_test >.env.test
+        chmod 000 "$file"
+        start deploy/dinnerbell-test up -d
+        chmod 600 "$file"
+        check "an unreadable $file is refused" refused_naming "can't read $file"
+    done
+fi
 
 filled_env_test >.env.test
 for name in DINNERBELL_SECRET_KEY DINNERBELL_SLACK_BOT_TOKEN DINNERBELL_SLACK_APP_TOKEN \
@@ -239,6 +270,56 @@ printf 'DINNERBELL_SECRET_KEY=%s\nDINNERBELL_SECRET_KEY=production-secret-key-01
 start deploy/dinnerbell-test up -d
 check "a shared key that .env assigns again later starts: the last assignment counts" started_cleanly
 cp .env.example .env
+
+# Each case: whether .env.test and .env share the secret key, the .env.test line, and the .env
+# line. @KEY@ stands for the key, and @BOM@ for a UTF-8 byte-order mark. python-dotenv must agree,
+# reading as podman-compose does but with the byte-order mark stripped and names in any case.
+dotenv_shares_key() {
+    uv run --quiet --frozen python - 2>/dev/null <<'PY'
+import sys
+
+from dotenv import dotenv_values
+
+
+def key(path):
+    with open(path, encoding="utf-8-sig") as stream:
+        values = dotenv_values(stream=stream, interpolate=False)
+    return {name.upper(): value for name, value in values.items()}.get("DINNERBELL_SECRET_KEY")
+
+
+test, production = key(".env.test"), key(".env")
+sys.exit(0 if test and test == production else 1)
+PY
+}
+while IFS= read -r case_line; do
+    expected=${case_line%%|||*}
+    lines=${case_line#*|||}
+    test_line=${lines%%|||*}
+    production_line=${lines#*|||}
+    for line in "$test_line" "$production_line"; do
+        printf '%s\n' "$line" | sed -e "s/@KEY@/$test_key/g" -e "s/@BOM@/$(printf '\357\273\277')/"
+    done >"$stubs/lines"
+    { sed -n 1p "$stubs/lines"; filled_env_test | grep -v '^DINNERBELL_SECRET_KEY='; } >.env.test
+    { sed -n 2p "$stubs/lines"; grep -v '^DINNERBELL_SECRET_KEY=' .env.example; } >.env
+    if dotenv_shares_key; then dotenv=same; else dotenv=different; fi
+    start deploy/dinnerbell-test up -d
+    if said "same DINNERBELL_SECRET_KEY"; then wrapper=same; else wrapper=different; fi
+    check "parsing: $expected for python-dotenv and the wrapper: $test_line / $production_line" \
+        parsing_agrees
+done <<'CASES'
+same|||DINNERBELL_SECRET_KEY=@KEY@|||DINNERBELL_SECRET_KEY="@KEY@"#prod
+different|||DINNERBELL_SECRET_KEY="@KEY@ #x"|||DINNERBELL_SECRET_KEY="@KEY@ #y"
+same|||DINNERBELL_SECRET_KEY="@KEY@\"q"|||DINNERBELL_SECRET_KEY='@KEY@"q'
+same|||DINNERBELL_SECRET_KEY="@KEY@\\"|||DINNERBELL_SECRET_KEY='@KEY@\\'
+different|||DINNERBELL_SECRET_KEY="@KEY@\n"|||DINNERBELL_SECRET_KEY=@KEY@
+same|||DINNERBELL_SECRET_KEY=@KEY@|||@BOM@DINNERBELL_SECRET_KEY=@KEY@
+same|||DINNERBELL_SECRET_KEY=@KEY@|||dinnerbell_secret_key=@KEY@
+different|||DINNERBELL_SECRET_KEY=@KEY@#notcomment|||DINNERBELL_SECRET_KEY=@KEY@
+same|||DINNERBELL_SECRET_KEY=@KEY@   # comment|||  export DINNERBELL_SECRET_KEY = '@KEY@'  # c
+different|||DINNERBELL_SECRET_KEY="@KEY@" junk|||DINNERBELL_SECRET_KEY=@KEY@
+CASES
+cp .env.example .env
+filled_env_test >.env.test
 
 start STUB_IMAGE=missing deploy/dinnerbell-test up -d
 check "a missing image is pulled before the check" pulled_and_started

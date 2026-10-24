@@ -625,9 +625,10 @@ DINNERBELL_SLACK_BOT_TOKEN=
 DINNERBELL_SLACK_APP_TOKEN=
 DINNERBELL_SLACK_CHANNEL=
 EOF
+chmod 600 .env.test
 ```
 
-Before every start, `deploy/dinnerbell-test` checks `.env.test` and names each setting that's missing or invalid, so a blank you missed stops it with a message instead of a container that restarts forever.
+Before every start, `deploy/dinnerbell-test` checks `.env.test` and names each setting that's missing or invalid, so a required blank you missed stops it with a message instead of a container that restarts forever.
 
 Git ignores `.env.test`. Never commit it.
 
@@ -655,12 +656,13 @@ deploy/dinnerbell-test down
 
 Each run first prints the project, volume, env file, tag, and port it uses. To pick up a newer `main`, run `pull`, then `down` and `up -d`. To check it, run `curl -s http://<DINNERBELL_BIND>:8014/healthz` and look for `"instance":"TEST"`, or look for the TEST banner in the browser. Test is usually stopped, so don't give it an always-on Uptime Kuma monitor.
 
-Before `up`, `run`, `start`, `restart`, and `create`, the script checks the env file. It runs `dinnerbell config check` in a one-off container of the same image, with no network, no volume, no published port, and a read-only file system, and passes the env file on standard input. If a setting is missing or invalid, it prints the setting's name and the reason, never the value, and starts nothing. It pulls the image first if it isn't on the host. An image from before the check, such as 0.2.0, starts with a warning instead.
+Before any command that can start a container, such as `up`, `run`, `start`, or `restart`, the script checks the env file. Only commands that stop or inspect test, such as `down`, `stop`, `logs`, `ps`, and `pull`, skip the check. It runs `dinnerbell config check` in a one-off container of the same image, with no network, no published port, no logging, and a read-only file system, and passes the env file on standard input. The image declares `/data` a volume, so the engine gives the container an empty anonymous volume, and removes it with the container. If a setting is missing or invalid, the check prints the setting's name and the reason, never the value, and the script starts nothing. The script pulls the image first if it isn't on the host. An image from before the check, such as 0.2.0, starts with a warning instead.
 
 Run every test command through `deploy/dinnerbell-test`, never through `podman-compose` directly. The script sets the project, the volume, the env file, the tag, and the port together. Setting only some of them by hand mixes the instances: for example, `.env.test` without `-p dinnerbell-test` runs test's label and Slack app on production's database, where `scrub-test` would then run. The script refuses to run when:
 
 - `.env.test` is missing, sets `DINNERBELL_INSTANCE_LABEL` more than once, or leaves it empty.
-- `.env.test` has the same `DINNERBELL_SECRET_KEY`, `DINNERBELL_SLACK_BOT_TOKEN`, `DINNERBELL_SLACK_APP_TOKEN`, or `DINNERBELL_OIDC_CLIENT_SECRET` as `.env`. Shared tokens split Slack's events between the instances. Only commands that start a container check this. The script compares the values without printing them.
+- It can't read `.env.test` or `.env`. Run it as the user who owns them.
+- `.env.test` has the same `DINNERBELL_SECRET_KEY`, `DINNERBELL_SLACK_BOT_TOKEN`, `DINNERBELL_SLACK_APP_TOKEN`, or `DINNERBELL_OIDC_CLIENT_SECRET` as `.env`. Shared tokens split Slack's events between the instances. The script reads both files as compose does, compares the values without printing them, and skips this check for commands that only stop or inspect test.
 - The configuration check fails, as described above.
 - The env file is production's `.env`.
 - `.env` sets `DINNERBELL_TAG`, `DINNERBELL_PORT`, or `DINNERBELL_ENV_FILE`. podman-compose 1.1.0 and older let `.env` override the script's values.
