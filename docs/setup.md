@@ -53,6 +53,7 @@ Don't edit files in your clone, including the manifest. Local edits block `git c
 5. Paste the manifest as YAML.
 6. In the pasted text, replace `dinnerbell.example.com` in `redirect_urls` with your public hostname. Keep the path `/auth/callback`.
 7. Select **Next**, then **Create**.
+8. Optional: open **Basic Information**, and under **Display Information**, upload `deploy/slack-app-icon-1024.png` as the app icon.
 
 To keep a copy of the manifest with your hostname, write it to a file ending in `.local.yaml`, which git ignores:
 

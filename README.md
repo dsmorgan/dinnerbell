@@ -1,3 +1,5 @@
+<p align="center"><img src="src/dinnerbell/web/static/logo.svg" width="160" height="160" alt="Dinnerbone the hamster, the Dinnerbell logo"></p>
+
 # Dinnerbell
 
 Dinnerbell helps a household answer, at a fixed time each day, three questions: who is eating, what are we eating, and who is cooking, picking up, or ordering it.

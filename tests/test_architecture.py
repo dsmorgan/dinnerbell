@@ -75,7 +75,13 @@ def test_only_services_and_db_touch_the_orm() -> None:
 
 
 def source_files() -> list[Path]:
-    files = [*PACKAGE.rglob("*.py"), *PACKAGE.rglob("*.html"), *PACKAGE.rglob("*.css"), *(ROOT / "tests").rglob("*.py")]
+    files = [
+        *PACKAGE.rglob("*.py"),
+        *PACKAGE.rglob("*.html"),
+        *PACKAGE.rglob("*.css"),
+        *PACKAGE.rglob("*.svg"),
+        *(ROOT / "tests").rglob("*.py"),
+    ]
     files.append(PACKAGE / "db" / "alembic" / "script.py.mako")
     return files
 
