@@ -450,7 +450,9 @@ async def _malformed(
     request: Request, principal: Principal, context: AppContext, db: Database, event_id: int, came_from: str
 ) -> Response:
     """A post missing a field the card always writes, or with one it never writes: a 400 with
-    the fresh card and the reload message."""
+    the fresh card and the reload message. Only a plain (no-JavaScript) post shows that body:
+    HTMX drops 4xx responses other than 409 (``responseHandling`` in ``base.html``), so the page
+    shows its "Not saved. Reload the page." banner instead."""
     return await _card(request, principal, context, db, event_id, came_from=came_from, error=STALE, status_code=400)
 
 

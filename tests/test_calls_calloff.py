@@ -268,6 +268,21 @@ async def test_permissions_match_the_rules(house: House) -> None:
     assert (view.can.cancel, view.can.close_window) == (False, None)
 
 
+@pytest.mark.parametrize("window", [Window.RESPOND, Window.VOTE])
+async def test_close_now_hides_once_the_window_s_deadline_passes(house: House, window: Window) -> None:
+    """Until the next tick moves the call on, its window stays open past the deadline, but
+    ``calls.close_window`` refuses to close it then, so nobody is offered Close now."""
+    event_id = await (open_dinner(house) if window is Window.RESPOND else to_voting(house))
+    event = await house.event(event_id)
+    deadline = event.respond_deadline if window is Window.RESPOND else event.vote_deadline
+    assert deadline is not None
+    second = timedelta(seconds=1)
+    for at, offered in [(deadline - second, window), (deadline, None), (deadline + second, None)]:
+        house.clock.now = at
+        view = await act(house, event_views.event_view, house["Alex"], event_id)
+        assert (view.event.state, view.can.close_window, view.can.cancel) == (event.state, offered, True), at
+
+
 # A call that was never posted ----------------------------------------------------------------------
 
 

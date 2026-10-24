@@ -44,7 +44,8 @@ class Permissions:
     """Call it off (FR-56): ``calls.cancel_call``."""
     close_window: Window | None = None
     """The window Close now would close (``calls.close_window``): respond reads "Start the vote
-    now", vote reads "Decide now". None when the actor can't."""
+    now", vote reads "Decide now". None when the actor can't, or once the window's deadline has
+    passed."""
     restart: bool = False
     """Start a called-off call again (FR-56): ``calls.start_call`` for its slot and day."""
 
@@ -116,9 +117,21 @@ def permissions(ctx: CallContext, actor: Member, today: date, now: datetime) -> 
         and _allowed(lambda: rules.check_rerun(event, today, now=now, too_late_after=ctx.too_late_for(today))),
         move_window=_window(event) if admin else None,
         cancel=_allowed(lambda: rules.check_can_cancel(event, actor)),
-        close_window=_window(event) if _allowed(lambda: rules.check_can_close_window(event, actor)) else None,
+        close_window=_closable(event, actor, now),
         restart=actor.active and _allowed(lambda: _check_restart(ctx, today, now)),
     )
+
+
+def _closable(event: Event, actor: Member, now: datetime) -> Window | None:
+    """The window Close now would close, while its deadline is still ahead. From the deadline
+    until the scheduler's next tick moves the call on, the service refuses to close it
+    (``check_expected_window``), so the button would only say the call moved on."""
+    try:
+        window = rules.check_can_close_window(event, actor)
+        rules.check_expected_window(event, window, window, now=now)
+    except EventRuleViolation:
+        return None
+    return window
 
 
 def _check_restart(ctx: CallContext, today: date, now: datetime) -> None:
