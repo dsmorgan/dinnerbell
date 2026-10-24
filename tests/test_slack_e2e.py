@@ -48,6 +48,8 @@ def summary(call: Call) -> tuple[Any, ...]:
             return ("update", args["channel"], args["ts"], args["text"][:40])
         case "chat.postEphemeral":
             return ("ephemeral", args["channel"], args["user"], args["text"])
+        case "response_url":
+            return ("replace", args["text"])
         case "views.open":
             return ("modal", args["view"]["callback_id"])
         case _:
@@ -68,19 +70,23 @@ async def test_a_dinner_decided_in_slack(slack: Slack) -> None:
     event_id = await dinner_id(house)
     e = str(event_id)
 
-    # Members answer in the channel.
-    await slack.click("Alex", "respond_in", e)
-    await slack.click("Alex", "offer_pickup", e)
-    await slack.click("Sam", "offer_cook", e)
-    await slack.click("Sam", "details", e)
+    # Members tap Answer on the call, and answer on their own cards.
+    answer = ids.card_value(event_id, 1)
+    await slack.click("Alex", "answer", answer)
+    await slack.tap_card("Alex", "card_in", slack.cards("Alex")[-1])
+    await slack.tap_card("Alex", "card_offer_pickup", slack.cards("Alex")[-1])
+    await slack.click("Sam", "answer", answer)
+    await slack.tap_card("Sam", "card_offer_cook", slack.cards("Sam")[-1])
+    await slack.tap_card("Sam", "card_details", slack.cards("Sam")[-1])
     tacos = house.items["Sam's Tacos"].id
     details = state(
         guests={"value": "1"},
         eat_from={"selected_time": "18:40"},
         suggest_item={"selected_option": {"value": str(tacos)}},
     )
-    await slack.submit("Sam", ids.DETAILS_VIEW, details, event_id)
-    await slack.click("Kim", "respond_maybe", e)
+    await slack.submit("Sam", ids.DETAILS_VIEW, details, event_id, origin=ids.ViewOrigin(event_id, CHANNEL, run=1))
+    await slack.click("Kim", "answer", answer)
+    await slack.tap_card("Kim", "card_maybe", slack.cards("Kim")[-1])
     await slack.drain()
 
     # Lee hasn't answered, gets a reminder, and answers from the DM.
@@ -118,11 +124,14 @@ async def test_a_dinner_decided_in_slack(slack: Slack) -> None:
     picks_ts, decision_ts = "4.000100", "5.000100"
     assert [summary(c) for c in slack.fake.calls] == [
         ("post", CHANNEL, None, "Dinner call · Thursday, Oct 22: Who's in"),
-        ("ephemeral", CHANNEL, "U01ALEX", "Dinner call · Thursday, Oct 22: your answer is In"),
-        ("ephemeral", CHANNEL, "U01ALEX", "Dinner call · Thursday, Oct 22: your answer is In, can pick up"),
-        ("ephemeral", CHANNEL, "U02SAM", "Dinner call · Thursday, Oct 22: your answer is In, can cook"),
+        ("ephemeral", CHANNEL, "U01ALEX", "Dinner call · Thursday, Oct 22: you haven't answered yet"),
+        ("replace", "Dinner call · Thursday, Oct 22: your answer is In"),  # the same card, in place
+        ("replace", "Dinner call · Thursday, Oct 22: your answer is In, can pick up"),
+        ("ephemeral", CHANNEL, "U02SAM", "Dinner call · Thursday, Oct 22: you haven't answered yet"),
+        ("replace", "Dinner call · Thursday, Oct 22: your answer is In, can cook"),
         ("modal", ids.DETAILS_VIEW),
-        ("ephemeral", CHANNEL, "U03KIM", "Dinner call · Thursday, Oct 22: your answer is Maybe"),
+        ("ephemeral", CHANNEL, "U03KIM", "Dinner call · Thursday, Oct 22: you haven't answered yet"),
+        ("replace", "Dinner call · Thursday, Oct 22: your answer is Maybe"),
         ("update", *call, "Dinner call · Thursday, Oct 22: Who's in"),
         ("post", "U04LEE", None, "Are you in for dinner on Thursday, Oct 2"),
         ("conversations.open",),  # is D04LEE really Lee's DM with the bot?

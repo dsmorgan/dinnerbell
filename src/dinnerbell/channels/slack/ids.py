@@ -56,6 +56,9 @@ CARD_ACTION_FOR_WITHDRAW = {role: action for action, role in CARD_WITHDRAW.items
 CARD_COORDINATE = "card_coordinate"
 CARD_DETAILS = "card_details"
 CARD_ACTIONS = frozenset({*CARD_RESPOND, *CARD_OFFER, *CARD_WITHDRAW, CARD_COORDINATE, CARD_DETAILS})
+ANSWER = "answer"
+"""**Answer** on the call message while responses are open: posts the tapper's Your answer card.
+Its value is a ``card_value``, naming the run the message showed."""
 LINK_PREFIX = "link_"
 """URL buttons. Slack still sends their clicks, which the app acknowledges and ignores."""
 LINK_PATTERN = re.compile(r"^link_[a-z_]{1,40}$")

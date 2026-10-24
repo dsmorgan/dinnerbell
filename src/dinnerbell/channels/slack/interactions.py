@@ -402,6 +402,9 @@ class Interactions:
     ) -> str | None:
         if action_id in ids.CARD_ACTIONS:
             return await self._card_tap(member, source, action_id, value, trigger, tap)
+        if action_id == ids.ANSWER:
+            await self._answer(member, source, value, tap)
+            return None
         if action_id == ids.CALL_MENU:
             choice, event_id, run = ids.parse_menu(value)
             return await self._open_end(member, source, choice, event_id, run, trigger)
@@ -495,12 +498,24 @@ class Interactions:
             if entry.users == 0:
                 del self.card_locks[key]
 
-    async def _post_card(self, db: AsyncSession, member: Member, source: Source, event_id: int) -> None:
+    async def _post_card(
+        self, db: AsyncSession, member: Member, source: Source, event_id: int, *, run: int | None = None
+    ) -> None:
         """After a tap on the call message: a new card. Never through the tap's response_url,
-        which belongs to the call message everyone sees."""
+        which belongs to the call message everyone sees. ``run`` is the run the tapped button
+        named, if it named one; a card for an earlier run says the call moved on."""
         async with self._card_lock(source.user_id, event_id):
             view = await event_views.event_view(db, member, event_id, now=self.clock())
-            await self._send_card(source, self._card(view, member), member)
+            await self._send_card(source, self._card(view, member, run=run), member)
+
+    async def _answer(self, member: Member, source: Source, value: object, tap: Tap) -> None:
+        """**Answer** on the call message: post the tapper's card for the run the message showed.
+        It changes nothing itself; the card is where they choose."""
+        event_id, run = ids.parse_card(value)
+        if not self._on_call_message(source) or tap.ephemeral:
+            raise ids.BadValue("Answer is drawn only on the call message")
+        async with self.sessionmaker() as db:
+            await self._post_card(db, member, source, event_id, run=run)
 
     async def _send_card(self, source: Source, card: Message, member: Member, tap: Tap | None = None) -> None:
         """Replace the card ``tap`` was on, or post a new one when there's no card to replace,
