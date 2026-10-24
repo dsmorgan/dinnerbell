@@ -6,6 +6,10 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ## [Unreleased]
 
+### Fixed
+
+- **Start the vote now** and **Decide now** no longer show once the window's deadline has passed. Until the scheduler's next tick moved the call on, up to 30 seconds later, the web card and App Home still offered them, and selecting one only said the call had moved on.
+
 ## [0.3.0] - 2026-10-24
 
 ### Added

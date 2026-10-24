@@ -279,6 +279,21 @@ def test_close_now_starts_the_vote_then_decides(
     assert late.status_code == 409 and "There's no open window to close." in page(late)
 
 
+def test_close_now_hides_once_the_deadline_passes(
+    house: TestClient, provider: FakeProvider, clock: FakeClock, migrated: Settings
+) -> None:
+    """Until the next tick moves the call on, the card offers nothing the service would refuse."""
+    event_id = call_in(house, provider, clock, migrated, "collecting")
+    deadline = event_row(migrated, event_id).respond_deadline
+    second = timedelta(seconds=1)
+    for at, label in [(deadline - second, "Start the vote now"), (deadline, None), (deadline + second, None)]:
+        clock.now = at
+        for where in (f"/events/{event_id}", "/"):
+            html = house.get(where).text
+            assert close_label(html, event_id) == label and offers_cancel(html, event_id), (at, where)
+    assert state_of(migrated, event_id) == "collecting"
+
+
 def test_close_now_names_the_window_it_closes(
     house: TestClient, provider: FakeProvider, clock: FakeClock, migrated: Settings
 ) -> None:
@@ -287,8 +302,10 @@ def test_close_now_names_the_window_it_closes(
     malformed: list[dict[str, str]] = [{"run": "1", "window": bad} for bad in ("Respond", "respond ", "later", "0")]
     malformed += [{"run": "1"}, {"run": "1", "window": ""}, {"window": "respond"}, {"run": "0", "window": "respond"}]
     for fields in malformed:
-        refused = htmx(house, f"/events/{event_id}/close", fields)
-        assert refused.status_code == 400 and STALE_SHOWN in page(refused), fields
+        # HTMX drops a 400 and shows its own "Not saved" banner, so only the plain post's body is seen.
+        assert htmx(house, f"/events/{event_id}/close", fields).status_code == 400, fields
+        plain = submit(house, f"/events/{event_id}/close", fields)
+        assert plain.status_code == 400 and "<html" in plain.text and STALE_SHOWN in page(plain), fields
     moved = htmx(house, f"/events/{event_id}/close", {"run": "1", "window": "vote"})  # not open yet
     assert moved.status_code == 409 and STALE_SHOWN in page(moved)
     assert state_of(migrated, event_id) == "collecting" and audits(migrated, "event.window_closed") == []
@@ -305,14 +322,15 @@ def test_call_it_off_and_start_again_need_the_run_the_card_showed(
     is refused before anything changes."""
     event_id = call_in(house, provider, clock, migrated, "collecting")
     fields = {} if run is None else {"run": run}
-    refused = htmx(house, f"/events/{event_id}/cancel", fields | {"reason": "no run"})
-    assert refused.status_code == 400 and STALE_SHOWN in page(refused)
+    # HTMX drops a 400 and shows its own "Not saved" banner, so only the plain post's body is seen.
+    assert htmx(house, f"/events/{event_id}/cancel", fields | {"reason": "no run"}).status_code == 400
     plain = submit(house, f"/events/{event_id}/cancel", fields)
     assert plain.status_code == 400 and "<html" in plain.text and STALE_SHOWN in page(plain)
     assert state_of(migrated, event_id) == "collecting"
     assert submit(house, f"/events/{event_id}/cancel", {"run": "1"}).status_code == 303
-    refused = htmx(house, f"/events/{event_id}/restart", fields)
-    assert refused.status_code == 400 and STALE_SHOWN in page(refused)
+    assert htmx(house, f"/events/{event_id}/restart", fields).status_code == 400
+    plain = submit(house, f"/events/{event_id}/restart", fields)
+    assert plain.status_code == 400 and "<html" in plain.text and STALE_SHOWN in page(plain)
     assert (state_of(migrated, event_id), event_row(migrated, event_id).run) == ("cancelled", 1)
 
 
