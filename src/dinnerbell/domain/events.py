@@ -728,11 +728,11 @@ def closes_early(
     """FR-56: whether a collecting call's responses close before the deadline.
 
     Every active member must have answered in this run (an answer kept from before a re-run or
-    restart doesn't count) and nobody may be a maybe. Then, with fewer than two people eating
-    (everyone out, say), it closes at once and ends on-your-own. With two or more, it waits
-    until no response has changed for ``EARLY_CLOSE_QUIET`` and someone can cook, pick up, or
-    order (``coverage``), so tapping In first and adding details next is never cut short.
-    Otherwise the call waits for its deadline, or for Close now.
+    restart doesn't count) and nobody may be a maybe. With everyone out, it closes at once and
+    ends on-your-own. With anyone in, it waits until no response has changed for
+    ``EARLY_CLOSE_QUIET``, so tapping In first and adding guests or an offer next is never cut
+    short; with two or more eating, someone must also be able to cook, pick up, or order
+    (``coverage``). Otherwise the call waits for its deadline, or for Close now.
     """
     active = frozenset(active_member_ids)
     this_run = [
@@ -740,11 +740,12 @@ def closes_early(
     ]
     if not active or {r.member_id for r in this_run} != active or any(r.status is Status.MAYBE for r in this_run):
         return False
-    if head_count(this_run) < MIN_HEAD_COUNT:
+    if not any(r.is_in for r in this_run):
         return True
     last_change = max(r.updated_at for r in this_run if r.updated_at is not None)
-    covered = bool(coverage.cooks or coverage.pickups or coverage.orderers)
-    return covered and now - last_change >= EARLY_CLOSE_QUIET
+    if now - last_change < EARLY_CLOSE_QUIET:
+        return False
+    return head_count(this_run) < MIN_HEAD_COUNT or bool(coverage.cooks or coverage.pickups or coverage.orderers)
 
 
 def due_step(

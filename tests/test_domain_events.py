@@ -758,16 +758,19 @@ def due(
     return ev.due_step(event(), at, stale_after=FAR, responses=responses, active_member_ids=active, coverage=coverage)
 
 
-def test_fewer_than_two_eating_closes_as_soon_as_everyone_answered() -> None:
-    """Everyone out, or one alone: nothing more can come of waiting, and the call ends on-your-own."""
+def test_everyone_out_closes_as_soon_as_everyone_answered() -> None:
+    """Nothing can come of waiting, and the call ends on-your-own."""
     soon = NOW + timedelta(minutes=2)
     assert due(answered((1, Status.OUT), (2, Status.OUT), (3, Status.OUT)), soon, Coverage()) is Step.CLOSE_RESPONSES
-    assert due(answered((1, Status.IN), (2, Status.OUT), (3, Status.OUT)), soon) is Step.CLOSE_RESPONSES
-    one_with_a_guest = [
-        replace(r, guests=1) if r.member_id == 1 else r
-        for r in answered((1, Status.IN), (2, Status.OUT), (3, Status.OUT))
-    ]
-    assert due(one_with_a_guest, soon) is None  # two eating: wait like any other call
+
+
+def test_a_lone_in_gets_the_quiet_spell_to_add_a_guest() -> None:
+    lone = answered((1, Status.IN), (2, Status.OUT), (3, Status.OUT))
+    assert due(lone, NOW + timedelta(minutes=2)) is None
+    assert due(lone, QUIET, Coverage()) is Step.CLOSE_RESPONSES  # too few either way: no coverage needed
+    with_a_guest = [replace(lone[0], guests=1), *lone[1:]]
+    assert due(with_a_guest, QUIET, Coverage()) is None  # two eating: needs someone to cook, fetch, or order
+    assert due(with_a_guest, QUIET) is Step.CLOSE_RESPONSES
 
 
 def test_two_or_more_eating_close_early_only_after_a_quiet_spell_with_coverage() -> None:
