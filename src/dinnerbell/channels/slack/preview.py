@@ -14,7 +14,7 @@ from datetime import UTC, date, datetime, time
 from typing import Any
 
 from dinnerbell.channels.slack import ids
-from dinnerbell.channels.slack.blocks import Directory
+from dinnerbell.channels.slack.blocks import Directory, with_version_footer
 from dinnerbell.channels.slack.messages import RenderContext, render
 from dinnerbell.channels.slack.views import (
     HomeLinks,
@@ -266,6 +266,10 @@ VIEWS: dict[str, Callable[[], dict[str, Any]]] = {
         TodayView(DAY, [CALLED_OFF_VIEW], tuple(Slot)), HomeLinks(BASE_URL), notice="You called off dinner."
     ),
     "home_empty": lambda: home_view(TodayView(DAY, [], tuple(Slot)), HomeLinks(BASE_URL)),
+    # Interactions adds the footer to every Home tab it publishes.
+    "home_version": lambda: with_version_footer(
+        home_view(TodayView(DAY, [], tuple(Slot)), HomeLinks(BASE_URL)), "0.3.0+abc1234"
+    ),
 }
 
 KINDS = (*NOTIFICATIONS, *VIEWS)

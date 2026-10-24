@@ -29,7 +29,7 @@ features:
     # two apps with the same command, so test can't use /dinnerbell.
     - command: /dinnerbell-test
       description: Start or call off a test call, or open your preferences, the catalog, or history
-      usage_hint: "[call | cancel | prefs | catalog | history | help]"
+      usage_hint: "[call | cancel | prefs | catalog | history | version | help]"
       should_escape: false
 
 oauth_config:

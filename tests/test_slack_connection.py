@@ -15,6 +15,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select, text
 
+from dinnerbell import __version__
 from dinnerbell.app_factory import create_app
 from dinnerbell.channels.slack import connection as connection_module
 from dinnerbell.channels.slack.api import (
@@ -30,7 +31,7 @@ from dinnerbell.db.models import AuditRow
 from dinnerbell.domain import notifications as note
 from dinnerbell.services import outbox
 from dinnerbell.services.database import Database, open_database
-from dinnerbell.services.health import SlackState
+from dinnerbell.services.health import SlackState, schema_revision
 from tests.conftest import BASE_URL, make_settings
 from tests.support.calls import OPENS, House, dinner_id, furnish, make_house
 from tests.support.clock import FakeClock
@@ -505,6 +506,16 @@ def test_healthz_reports_connected(tmp_path: Any, clock: FakeClock, provider: Fa
         assert body["status"] == "ok"
         assert client.app.state.jobs.channel is client.app.state.slack.channel  # type: ignore[attr-defined]
     assert FakeSocket.instances[-1].closed
+
+
+def test_slack_shows_the_version_the_footer_shows(tmp_path: Any, clock: FakeClock, provider: FakeProvider) -> None:
+    """The app hands Slack ``Settings.version_label``, so /dinnerbell version matches the footer,
+    and the schema revision it read at startup."""
+    with slack_client(tmp_path, clock, provider, FakeSlack(), build="abc1234") as client:
+        wait_for_slack(client, "connected")
+        interactions = client.app.state.slack.interactions  # type: ignore[attr-defined]
+        assert interactions.version == client.get("/healthz").json()["version"] == f"{__version__}+abc1234"
+        assert interactions.schema_revision == schema_revision()
 
 
 def test_healthz_degrades_but_stays_up_on_a_slack_problem(

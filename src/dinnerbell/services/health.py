@@ -12,6 +12,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from dinnerbell.db.migrate import head_revision
 from dinnerbell.db.outbox import OutboxRepository
 
 log = logging.getLogger(__name__)
@@ -97,3 +98,13 @@ async def database_reachable(sessionmaker: async_sessionmaker[AsyncSession]) -> 
         log.warning("database health check failed", exc_info=True)
         return False
     return True
+
+
+def schema_revision() -> str:
+    """The schema revision this build migrates the database to, such as ``0006_event_ended_by``.
+
+    ``dinnerbell serve`` upgrades the database to it before it starts, and refuses a database at
+    a revision it doesn't know, so while the app runs this is the database's revision too. It
+    reads the migration scripts from disk, so call it once at startup.
+    """
+    return head_revision()

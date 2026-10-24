@@ -45,6 +45,7 @@ from slack_bolt.authorization import AuthorizeResult
 from slack_sdk.web.async_client import AsyncWebClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from dinnerbell import __version__
 from dinnerbell.channels.slack.api import SlackApi, SlackAuthError, SlackUnavailable
 from dinnerbell.channels.slack.channel import HOLD_RETRY_SECONDS, Audience, Hold, HoldScope, SlackChannel
 from dinnerbell.channels.slack.interactions import DEFAULT_COMMAND, Interactions
@@ -184,9 +185,13 @@ class SlackConnection:
         socket_factory: SocketFactory = BoltSocket,
         command: str = DEFAULT_COMMAND,
         instance_label: str = "",
+        version: str = __version__,
+        schema_revision: str,
     ) -> None:
         """A non-empty ``instance_label`` (``DINNERBELL_INSTANCE_LABEL``, such as test's) also
-        limits DMs and mentions to the channel's members."""
+        limits DMs and mentions to the channel's members. ``version`` is
+        ``Settings.version_label`` and ``schema_revision`` is ``services.health.schema_revision()``,
+        both read once at startup for ``/dinnerbell version``."""
         client = web_client or AsyncWebClient(token=bot_token, timeout=WEB_TIMEOUT_SECONDS)
         self.api = SlackApi(client)
         self.api.on_auth_error = self._token_refused
@@ -227,6 +232,8 @@ class SlackConnection:
             channel_id=channel_id,
             command=command,
             instance_label=instance_label,
+            version=version,
+            schema_revision=schema_revision,
         )
 
         async def authorize(team_id: str | None) -> AuthorizeResult:

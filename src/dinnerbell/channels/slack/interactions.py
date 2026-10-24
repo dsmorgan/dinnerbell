@@ -27,9 +27,17 @@ from typing import Any
 from slack_bolt.async_app import AsyncApp
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from dinnerbell import __version__
 from dinnerbell.channels.slack import ids
 from dinnerbell.channels.slack.api import SlackApi, SlackUnavailable
-from dinnerbell.channels.slack.blocks import day_label, escape, instance_banner
+from dinnerbell.channels.slack.blocks import (
+    day_label,
+    escape,
+    instance_banner,
+    version_line,
+    version_link,
+    with_version_footer,
+)
 from dinnerbell.channels.slack.views import (
     FormError,
     HomeLinks,
@@ -120,6 +128,8 @@ class Interactions:
         channel_id: str,
         command: str = DEFAULT_COMMAND,
         instance_label: str = "",
+        version: str = __version__,
+        schema_revision: str,
     ) -> None:
         self.api = api
         self.sessionmaker = sessionmaker
@@ -129,6 +139,10 @@ class Interactions:
         self.command = command
         """The slash command, as registered with Slack and named in replies."""
         self.instance_label = instance_label
+        self.version = version
+        """``Settings.version_label``, for ``version``, the help reply, and the Home footer."""
+        self.schema_revision = schema_revision
+        """The database's schema revision, read once at startup, for ``version``."""
         self.team_id: str | None = None
         """The workspace whose payloads are accepted. Until it's known, nothing is."""
         self.tasks: set[asyncio.Task[None]] = set()
@@ -280,7 +294,7 @@ class Interactions:
             async with self.sessionmaker() as db:
                 today = await event_views.today_view(db, member, now=self.clock())
             view = home_view(today, self.links, notice, label=self.instance_label)
-        await self.api.publish_home(user_id, view)
+        await self.api.publish_home(user_id, with_version_footer(view, self.version, self.instance_label))
 
     async def _run(self, source: Source, member: Member, work: Callable[[], Awaitable[str | None]]) -> None:
         """Run one action and report how it went. ``work`` returns a confirmation or None."""
@@ -551,8 +565,18 @@ class Interactions:
                     "Changing the schedule from Slack is coming soon. For now, the admin can change it "
                     f"on the web: <{url('/admin/schedule')}|Schedule>."
                 )
+            case "version":
+                return self.version_reply()
             case _:
-                return HELP.format(command=self.command, today=url("/"))
+                help_text = HELP.format(command=self.command, today=url("/"))
+                return f"{help_text}\n{version_line(self.version, self.instance_label)}"
+
+    def version_reply(self) -> str:
+        """Which version, build, instance, and schema revision is answering. None of it is
+        secret: /healthz shows the version and label, and the revision follows from the version.
+        So anyone in the workspace may ask, linked or not."""
+        line = version_line(self.version, self.instance_label)
+        return f"{line} · database {escape(self.schema_revision)} · {version_link(self.version)}"
 
     async def _call(self, source: Source, args: list[str]) -> None:
         member = await self._member(source)
@@ -606,6 +630,7 @@ HELP = (
     "like `{command} cancel dinner Pizza at Grandma's`.\n"
     "• `{command} prefs` links to your preferences.\n"
     "• `{command} catalog` and `{command} history` link to the catalog and meal history.\n"
+    "• `{command} version` says which version of Dinnerbell is answering.\n"
     "• `offer`, `log`, and `schedule` are coming soon.\n"
     "Open the Dinnerbell app's Home tab for today's calls, or <{today}|the web app>."
 )
