@@ -110,6 +110,134 @@ def test_cli_reports_missing_configuration(capsys: pytest.CaptureFixture[str]) -
     assert "DINNERBELL_SECRET_KEY is required" in err
 
 
+def test_config_check_accepts_a_valid_configuration(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    for key, value in REQUIRED.items():
+        monkeypatch.setenv(key, value)
+    database = tmp_path / "dinnerbell.db"
+    monkeypatch.setenv("DINNERBELL_DATABASE_URL", f"sqlite:///{database}")
+    assert cli.main(["config", "check"]) == 0
+    out, err = capsys.readouterr()
+    assert out == "Configuration is valid.\n"
+    assert err == ""
+    assert not database.exists()  # a check never creates or migrates the database
+
+
+def test_config_check_names_a_missing_setting(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    for key, value in REQUIRED.items():
+        if key != "DINNERBELL_ADMIN_EMAIL":
+            monkeypatch.setenv(key, value)
+    assert cli.main(["config", "check"]) == 2
+    out, err = capsys.readouterr()
+    assert out == ""
+    assert "DINNERBELL_ADMIN_EMAIL is required but not set." in err
+    assert err.count("  - ") == 1
+    for value in REQUIRED.values():
+        assert value not in err
+
+
+def test_config_check_names_invalid_settings_without_values(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    secrets = {
+        "DINNERBELL_SECRET_KEY": "short-secret-xyz",
+        "DINNERBELL_SLACK_BOT_TOKEN": "xoxp-wrong-kind-of-token",
+        "DINNERBELL_SLACK_APP_TOKEN": "xoxb-swapped-for-the-bot-token",
+        "DINNERBELL_BASE_URL": "https://user:hunter2-password@dinner.example.com",
+        "DINNERBELL_ADMIN_EMAIL": "not-an-email-address",
+        "DINNERBELL_LOG_LEVEL": "loud-and-secret",
+        "DINNERBELL_TRUSTED_PROXIES": "10.0.0.1,proxy-secret-name",
+    }
+    for key, value in (REQUIRED | secrets).items():
+        monkeypatch.setenv(key, value)
+    assert cli.main(["config", "check"]) == 2
+    err = capsys.readouterr().err
+    for name in secrets:
+        assert f"  - {name}: " in err, name
+    for key, value in (REQUIRED | secrets).items():
+        assert value not in err, key
+    for fragment in ("hunter2", "short-secret", "wrong-kind", "swapped", "loud", "proxy-secret"):
+        assert fragment not in err
+
+
+def _env_file_text(**overrides: str) -> str:
+    return "".join(f"{key}={value}\n" for key, value in (REQUIRED | overrides).items())
+
+
+def test_config_check_reads_an_env_file_like_compose(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import os
+
+    env_file = tmp_path / ".env.test"
+    env_file.write_text(
+        "# comment\n"
+        + _env_file_text(DINNERBELL_ADMIN_EMAIL="wrong@example.com")
+        + 'export DINNERBELL_BASE_URL="https://dinner-test.example.com"  # quoted, with a comment\n'
+        + "DINNERBELL_ADMIN_EMAIL='admin@example.com'\n"  # the last assignment wins
+        + "DINNERBELL_OIDC_SCOPES=openid email profile\n"
+        + "DINNERBELL_SLACK_CHANNEL\n"  # a bare name passes nothing through
+    )
+    monkeypatch.setenv("DINNERBELL_LOG_LEVEL", "INFO")
+    assert cli.main(["config", "check", "--env-file", str(env_file)]) == 0
+    assert capsys.readouterr().out == "Configuration is valid.\n"
+    assert "DINNERBELL_BASE_URL" not in os.environ  # the file's values don't outlive the check
+    assert os.environ["DINNERBELL_LOG_LEVEL"] == "INFO"
+
+
+def test_config_check_env_file_overrides_the_environment(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import os
+
+    for key, value in REQUIRED.items():
+        monkeypatch.setenv(key, value)
+    env_file = tmp_path / ".env.test"
+    env_file.write_text("DINNERBELL_SECRET_KEY=too-short-to-use\nDINNERBELL_ADMIN_EMAIL=\n")
+    assert cli.main(["config", "check", "--env-file", str(env_file)]) == 2
+    err = capsys.readouterr().err
+    assert "DINNERBELL_SECRET_KEY: must be at least 32 characters" in err
+    assert "DINNERBELL_ADMIN_EMAIL is required but not set." in err
+    assert "too-short-to-use" not in err
+    assert os.environ["DINNERBELL_SECRET_KEY"] == REQUIRED["DINNERBELL_SECRET_KEY"]
+
+
+def test_config_check_reads_the_env_file_from_stdin(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    import io
+
+    text = _env_file_text(DINNERBELL_ADMIN_EMAIL="")
+    monkeypatch.setattr("sys.stdin", io.StringIO(text))
+    assert cli.main(["config", "check", "--env-file", "-"]) == 2
+    out, err = capsys.readouterr()
+    assert "DINNERBELL_ADMIN_EMAIL is required but not set." in err
+    for value in REQUIRED.values():
+        assert value not in out + err
+
+    monkeypatch.setattr("sys.stdin", io.StringIO(_env_file_text()))
+    assert cli.main(["config", "check", "--env-file", "-"]) == 0
+
+
+def test_config_check_reports_an_unreadable_env_file(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    assert cli.main(["config", "check", "--env-file", str(tmp_path / "missing")]) == 2
+    assert capsys.readouterr().err == "Can't read the env file (FileNotFoundError).\n"
+    binary = tmp_path / "binary"
+    binary.write_bytes(b"DINNERBELL_SECRET_KEY=\xff\xfe-secret\n")
+    assert cli.main(["config", "check", "--env-file", str(binary)]) == 2
+    err = capsys.readouterr().err
+    assert err == "Can't read the env file (UnicodeDecodeError).\n"
+
+
+def test_config_check_needs_a_subcommand(capsys: pytest.CaptureFixture[str]) -> None:
+    with pytest.raises(SystemExit):
+        cli.main(["config"])
+    assert "required: COMMAND" in capsys.readouterr().err
+
+
 def test_cli_migrate(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     for key, value in REQUIRED.items():
         monkeypatch.setenv(key, value)

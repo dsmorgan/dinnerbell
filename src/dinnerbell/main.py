@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The ``dinnerbell`` command: ``serve``, ``migrate``, ``catalog``, ``slack``, and ``scrub-test``."""
+"""The ``dinnerbell`` command: ``serve``, ``migrate``, ``config``, ``catalog``, ``slack``, and ``scrub-test``."""
 
 from __future__ import annotations
 
@@ -9,7 +9,8 @@ import json
 import logging
 import os
 import sys
-from collections.abc import Sequence
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import contextmanager
 
 from dinnerbell import __version__, catalog_cli
 from dinnerbell.config import ConfigError, Settings, load_settings
@@ -30,6 +31,20 @@ def _parser() -> argparse.ArgumentParser:
     serve.add_argument("--host", default="0.0.0.0", help="address to listen on (default: 0.0.0.0)")  # noqa: S104 container
     serve.add_argument("--port", type=int, default=DEFAULT_PORT, help=f"port (default: {DEFAULT_PORT})")
     commands.add_parser("migrate", help="upgrade the database schema and exit")
+    config = commands.add_parser("config", help="configuration tools")
+    config_commands = config.add_subparsers(dest="config_command", required=True, metavar="COMMAND")
+    check = config_commands.add_parser(
+        "check",
+        help="check the DINNERBELL_* settings and exit",
+        description="Read the settings from the environment, as serve does, and name every one that is "
+        "missing or invalid. Never prints a value. Exits 0 when the configuration is valid, 2 when it isn't. "
+        "Touches no database.",
+    )
+    check.add_argument(
+        "--env-file",
+        metavar="FILE",
+        help="also read settings from FILE, in compose's .env syntax, over the environment; - reads stdin",
+    )
     scrub = commands.add_parser(
         "scrub-test",
         help="make a restored production backup safe for a test instance",
@@ -60,6 +75,51 @@ def _parser() -> argparse.ArgumentParser:
     preview.add_argument("kind", nargs="?", metavar="KIND", help="what to preview; omit to list the kinds")
     preview.add_argument("--base-url", default="https://dinnerbell.example.com", help="web app URL for links")
     return parser
+
+
+@contextmanager
+def _environment(values: Mapping[str, str]) -> Iterator[None]:
+    """Set ``values`` in ``os.environ`` for the duration, then put back what was there."""
+    saved = {name: os.environ.get(name) for name in values}
+    os.environ.update(values)
+    try:
+        yield
+    finally:
+        for name, previous in saved.items():
+            if previous is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = previous
+
+
+def _config_check(env_file: str | None) -> int:
+    """Validate the settings ``serve`` would read. The deploy/dinnerbell-test wrapper runs this in a
+    one-off container before it starts test, with the env file on stdin, so the file is parsed by
+    python-dotenv, as podman-compose 1.2.0 and later parse an ``env_file``."""
+    from dotenv import dotenv_values
+
+    values: dict[str, str] = {}
+    if env_file is not None:
+        try:
+            if env_file == "-":
+                parsed = dotenv_values(stream=sys.stdin)
+            else:
+                with open(env_file, encoding="utf-8") as stream:
+                    parsed = dotenv_values(stream=stream)
+        except (OSError, UnicodeDecodeError) as exc:
+            # Never the exception text: a decode error quotes bytes from the file.
+            print(f"Can't read the env file ({type(exc).__name__}).", file=sys.stderr)
+            return 2
+        # A bare NAME line passes a variable through from the engine's environment; there's none here.
+        values = {name: value for name, value in parsed.items() if value is not None}
+    with _environment(values):
+        try:
+            load_settings()
+        except ConfigError as exc:
+            print(exc, file=sys.stderr)
+            return 2
+    print("Configuration is valid.")
+    return 0
 
 
 def _slack_preview(kind: str | None, base_url: str) -> int:
@@ -182,6 +242,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return catalog_cli.run(args)
     if args.command == "slack":
         return _slack_preview(args.kind, args.base_url)
+    if args.command == "config":
+        return _config_check(args.env_file)
     try:
         settings = load_settings()
     except ConfigError as exc:

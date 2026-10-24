@@ -391,7 +391,24 @@ jobs:
           sudo apt-get install -y -q podman-compose
       - name: Shellcheck
         run: shellcheck deploy/dinnerbell-test scripts/check-compose.sh
+      # check-compose.sh runs `dinnerbell config check` from this checkout in place of the image.
+      - name: Read the uv version from the Containerfile
+        id: uv
+        run: |
+          version=$(sed -n 's|^FROM ghcr\.io/astral-sh/uv:\([0-9][0-9.]*\)@sha256:.*|\1|p' Containerfile)
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error file=Containerfile::Can't read the uv version from the FROM ghcr.io/astral-sh/uv line."
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: ${{ steps.uv.outputs.version }}
+          python-version: "3.12"
+          enable-cache: auto
+      - name: Install
+        run: uv sync --locked
       # Renders both instances from the example env files, checks volume names, tags, and ports,
-      # and checks that the test wrapper refuses unsafe setups.
+      # and checks that the test wrapper refuses unsafe setups and runs its configuration check.
       - name: Check compose files
         run: scripts/check-compose.sh

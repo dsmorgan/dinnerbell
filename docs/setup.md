@@ -557,17 +557,34 @@ To undo the switch:
 
 A test instance is a second copy of Dinnerbell on the same host. It runs builds from `main`, or a release before you promote it, with its own database, Slack app, channel, and hostname. Production never runs untested code, and its channel setting never changes. [ADR 0006](adr/0006-test-instance.md) explains the design.
 
+Setup takes about half an hour. Stop the test instance when you aren't using it.
+
+### One clone, two instances
+
+Both instances run from your production clone, as the same user. There's no second clone:
+
+```text
+~/dinnerbell/
+├── compose.yaml              both instances
+├── .env                      production's settings, and DINNERBELL_BIND for both
+├── .env.test                 test's settings
+└── deploy/
+    ├── compose.test.yaml     test's volume name
+    └── dinnerbell-test       runs compose for test
+```
+
 | | Production | Test |
 |---|---|---|
-| Image tag | The release in `compose.yaml` | `main`, or the release you're rehearsing |
-| Compose project | `dinnerbell` | `dinnerbell-test` |
-| Data volume | `dinnerbell_dinnerbell-data` (named by compose) | `dinnerbell-test_dinnerbell-data` (named in `deploy/compose.test.yaml`) |
+| Command | `podman-compose ...` | `deploy/dinnerbell-test ...` |
 | Env file | `.env` | `.env.test` |
+| Image tag | The release in `compose.yaml` | `main`, or the release you're rehearsing |
+| Data volume | `dinnerbell_dinnerbell-data` (named by compose) | `dinnerbell-test_dinnerbell-data` (named in `deploy/compose.test.yaml`) |
 | Host port | 8013 | 8014 |
+| Compose project | `dinnerbell` | `dinnerbell-test` |
 | Slack app and command | Dinnerbell, `/dinnerbell` | Dinnerbell Test, `/dinnerbell-test` |
 | Pangolin authentication | Off | On |
 
-Setup takes about half an hour. Stop the test instance when you aren't using it. Run its commands from your production clone, as the same user.
+The instances share the clone and its `compose.yaml`, the host address in `DINNERBELL_BIND`, the Slack workspace (`DINNERBELL_SLACK_TEAM_ID`), and the proxy address in `DINNERBELL_TRUSTED_PROXIES`. Everything else is separate. The secret key, both Slack tokens, and the sign-in client secret must differ: `deploy/dinnerbell-test` refuses to start test when `.env.test` shares one with `.env`.
 
 ### Create the test channel and Slack app
 
@@ -591,6 +608,26 @@ Never reuse production's tokens. Socket Mode delivers each event to only one con
    ```
 
 2. Fill it in with the test app's values, a new secret key, the test hostname as `DINNERBELL_BASE_URL`, and the same `DINNERBELL_SLACK_TEAM_ID` as production. Keep `DINNERBELL_INSTANCE_LABEL=TEST` and `DINNERBELL_SLACK_COMMAND=/dinnerbell-test`.
+
+To start from your `.env` instead, for example to keep your time zone and proxy settings, don't copy the whole file: it would hold production's secrets, and any value you forget to replace would stay production's. Copy it without the lines test must set itself, add those lines back empty, and fill in every blank:
+
+```sh
+(umask 077 && grep -Ev '^[[:space:]]*(export[[:space:]]+)?DINNERBELL_(SECRET_KEY|OIDC_CLIENT_ID|OIDC_CLIENT_SECRET|SLACK_BOT_TOKEN|SLACK_APP_TOKEN|SLACK_CHANNEL|SLACK_COMMAND|BASE_URL|INSTANCE_LABEL|HOUSEHOLD_NAME)[[:space:]]*=' .env >.env.test)
+cat >>.env.test <<'EOF'
+DINNERBELL_INSTANCE_LABEL=TEST
+DINNERBELL_SLACK_COMMAND=/dinnerbell-test
+DINNERBELL_HOUSEHOLD_NAME=Test
+DINNERBELL_BASE_URL=
+DINNERBELL_SECRET_KEY=
+DINNERBELL_OIDC_CLIENT_ID=
+DINNERBELL_OIDC_CLIENT_SECRET=
+DINNERBELL_SLACK_BOT_TOKEN=
+DINNERBELL_SLACK_APP_TOKEN=
+DINNERBELL_SLACK_CHANNEL=
+EOF
+```
+
+Before every start, `deploy/dinnerbell-test` checks `.env.test` and names each setting that's missing or invalid, so a blank you missed stops it with a message instead of a container that restarts forever.
 
 Git ignores `.env.test`. Never commit it.
 
@@ -618,9 +655,13 @@ deploy/dinnerbell-test down
 
 Each run first prints the project, volume, env file, tag, and port it uses. To pick up a newer `main`, run `pull`, then `down` and `up -d`. To check it, run `curl -s http://<DINNERBELL_BIND>:8014/healthz` and look for `"instance":"TEST"`, or look for the TEST banner in the browser. Test is usually stopped, so don't give it an always-on Uptime Kuma monitor.
 
+Before `up`, `run`, `start`, `restart`, and `create`, the script checks the env file. It runs `dinnerbell config check` in a one-off container of the same image, with no network, no volume, no published port, and a read-only file system, and passes the env file on standard input. If a setting is missing or invalid, it prints the setting's name and the reason, never the value, and starts nothing. It pulls the image first if it isn't on the host. An image from before the check, such as 0.2.0, starts with a warning instead.
+
 Run every test command through `deploy/dinnerbell-test`, never through `podman-compose` directly. The script sets the project, the volume, the env file, the tag, and the port together. Setting only some of them by hand mixes the instances: for example, `.env.test` without `-p dinnerbell-test` runs test's label and Slack app on production's database, where `scrub-test` would then run. The script refuses to run when:
 
 - `.env.test` is missing, sets `DINNERBELL_INSTANCE_LABEL` more than once, or leaves it empty.
+- `.env.test` has the same `DINNERBELL_SECRET_KEY`, `DINNERBELL_SLACK_BOT_TOKEN`, `DINNERBELL_SLACK_APP_TOKEN`, or `DINNERBELL_OIDC_CLIENT_SECRET` as `.env`. Shared tokens split Slack's events between the instances. Only commands that start a container check this. The script compares the values without printing them.
+- The configuration check fails, as described above.
 - The env file is production's `.env`.
 - `.env` sets `DINNERBELL_TAG`, `DINNERBELL_PORT`, or `DINNERBELL_ENV_FILE`. podman-compose 1.1.0 and older let `.env` override the script's values.
 - Production's compose project is also named `dinnerbell-test`, from the clone's directory name or `COMPOSE_PROJECT_NAME`.
@@ -637,6 +678,7 @@ Set these in front of the command to change what it uses:
 | `DINNERBELL_ENV_FILE` | `.env.test` | Test configuration |
 | `DINNERBELL_PORT` | `8014` | Host port |
 | `DINNERBELL_COMPOSE` | `podman-compose` | Set to `docker compose` for Docker |
+| `DINNERBELL_ENGINE` | `docker` if `DINNERBELL_COMPOSE` starts with `docker`, else `podman` | Container engine for the configuration check |
 
 Set them per command, such as `DINNERBELL_TAG=X.Y.Z deploy/dinnerbell-test up -d`. Never `export` them: production's compose commands in the same shell read them too. An exported `DINNERBELL_ENV_FILE=.env.test`, for example, starts production with test's label and Slack app on production's database.
 
@@ -811,4 +853,5 @@ Each member is linked to the account they first signed in with. After you switch
 | Startup error about a token prefix | The tokens are swapped or copied from the wrong page. | `DINNERBELL_SLACK_APP_TOKEN` starts with `xapp-` (Basic Information > App-Level Tokens). `DINNERBELL_SLACK_BOT_TOKEN` starts with `xoxb-` (Install App). |
 | The test instance posts in its channel but sends no direct messages or mentions to someone | While `DINNERBELL_INSTANCE_LABEL` is set, Dinnerbell notifies only members of the test channel, and `/healthz` counts the withheld messages in `slack_dms_dropped`. If the log mentions a missing scope, it can't read the channel's members and notifies no one. | Invite the person to the test channel. For a missing scope, paste `deploy/slack-app-manifest.test.yaml` again under **App Manifest** and reinstall the app. |
 | Production starts with an empty database after an upgrade | Compose created a new volume, because you ran it from a different directory, with a different project name, or as a different user. | See "Switch a source-built install to the prebuilt image". Your data is still in the old volume. |
+| The test port, 8014, accepts connections but never answers | The test container is in a restart loop: Dinnerbell stops at start, usually on a missing or invalid setting in `.env.test`, and compose restarts it. Port forwarding keeps the port open in between. | Run `podman ps -a --filter name=dinnerbell-test`, and look for `Restarting` or a recent `Exited`. Read why with `deploy/dinnerbell-test logs dinnerbell`. Fix `.env.test`, then run `deploy/dinnerbell-test down` and `deploy/dinnerbell-test up -d`; the configuration check names any setting that's still wrong. |
 | Rate limiting blocks everyone at once | Dinnerbell sees the proxy's address for every request. | Set `DINNERBELL_TRUSTED_PROXIES` to the proxy's single address, then recreate with `podman-compose down && podman-compose up -d`. A restart doesn't re-read `.env`. |

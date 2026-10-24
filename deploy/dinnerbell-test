@@ -15,13 +15,24 @@
 # older let .env win over the shell, so this script refuses to run if .env sets any of them.
 # Test publishes on production's DINNERBELL_BIND, read from .env.
 #
+# Before a command that starts a container (up, run, start, restart, create), it refuses an env
+# file that shares a secret with .env, and runs `dinnerbell config check` on the env file in a
+# one-off container of the same image, with no network, volume, or published port, so a missing
+# setting shows up here instead of as a restart loop.
+#
 # Overrides: DINNERBELL_TAG (default main), DINNERBELL_ENV_FILE (default .env.test),
 # DINNERBELL_PORT (default 8014), DINNERBELL_COMPOSE (default podman-compose; for Docker use
-# DINNERBELL_COMPOSE="docker compose"). Set them per command; never export them.
+# DINNERBELL_COMPOSE="docker compose"), DINNERBELL_ENGINE (the container engine for the check:
+# docker when DINNERBELL_COMPOSE starts with docker, else podman). Set them per command; never
+# export them.
 set -eu
 
 PROJECT=dinnerbell-test
 VOLUME=dinnerbell-test_dinnerbell-data
+# The image in compose.yaml, without its tag. scripts/check-compose.sh checks that they match.
+IMAGE=ghcr.io/dsmorgan/dinnerbell
+# Settings that must differ between test and production.
+SECRETS="DINNERBELL_SECRET_KEY DINNERBELL_SLACK_BOT_TOKEN DINNERBELL_SLACK_APP_TOKEN DINNERBELL_OIDC_CLIENT_SECRET"
 
 fail() {
     echo "dinnerbell-test: $*" >&2
@@ -31,6 +42,14 @@ fail() {
 # Lines in an env file that assign $2, in compose's dotenv syntax (optional "export ").
 assignments() {
     grep -E "^[[:space:]]*(export[[:space:]]+)?$2[[:space:]]*=" "$1" || true
+}
+
+# The value an env file gives $2: the last assignment, without a trailing " # comment", quotes,
+# or surrounding spaces. Empty when unset. Values can be secrets, so never print the result.
+value() {
+    assignments "$1" "$2" | tail -n 1 |
+        sed -e 's/^[^=]*=//' -e 's/[[:space:]][[:space:]]*#.*$//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' |
+        tr -d "\"'"
 }
 
 # A file's inode number, following symlinks, to tell whether two paths are the same file.
@@ -86,15 +105,63 @@ fi
 # directory name. If it were dinnerbell-test, both instances would share containers.
 production="${COMPOSE_PROJECT_NAME:-}"
 if [ -z "$production" ] && [ -f .env ]; then
-    # The value after "=", without a trailing " # comment" or quotes.
-    production=$(assignments .env COMPOSE_PROJECT_NAME | tail -n 1 |
-        sed -e 's/^[^=]*=//' -e 's/[[:space:]][[:space:]]*#.*$//' | tr -d "\"'")
+    production=$(value .env COMPOSE_PROJECT_NAME)
 fi
 [ -n "$production" ] || production=$(basename "$PWD")
 [ "$(normalize "$production")" != "$PROJECT" ] ||
     fail "production's compose project is also named $PROJECT. Rename the clone's directory (for example to dinnerbell) or change COMPOSE_PROJECT_NAME."
 
+# Commands that start a container get the pre-flight checks below. Others, such as down, logs,
+# and pull, run even when the env file is broken, so you can always stop and inspect test.
+case "${1:-}" in
+    up | run | start | restart | create) starts=yes ;;
+    *) starts=no ;;
+esac
+
+# Shared tokens split Slack events between the instances; a shared secret key lets one instance's
+# cookies and CSRF tokens work on the other. Compare in the shell, never through a command line
+# or a message, so neither value is printed or visible in ps.
+if [ "$starts" = yes ] && [ -f .env ]; then
+    for name in $SECRETS; do
+        test_value=$(value "$DINNERBELL_ENV_FILE" "$name")
+        if [ -n "$test_value" ] && [ "$test_value" = "$(value .env "$name")" ]; then
+            fail "$DINNERBELL_ENV_FILE and .env have the same $name. Give test its own: see \"Write .env.test\" in docs/setup.md."
+        fi
+    done
+    test_value=
+fi
+
 echo "dinnerbell-test: project $PROJECT, volume $VOLUME, env file $DINNERBELL_ENV_FILE, image tag $DINNERBELL_TAG, port $DINNERBELL_PORT" >&2
+
+if [ "$starts" = yes ]; then
+    case "${DINNERBELL_COMPOSE:-podman-compose}" in
+        docker*) engine="${DINNERBELL_ENGINE:-docker}" ;;
+        *) engine="${DINNERBELL_ENGINE:-podman}" ;;
+    esac
+    image="$IMAGE:$DINNERBELL_TAG"
+    if ! "$engine" image inspect "$image" >/dev/null 2>&1; then
+        echo "dinnerbell-test: pulling $image to check $DINNERBELL_ENV_FILE" >&2
+        "$engine" pull "$image" >&2 || fail "can't pull $image. Check DINNERBELL_TAG and the network. Nothing was started."
+    fi
+    # The same image and env file the service gets, with nothing it could reach or change. The env
+    # file goes in on stdin, and the app parses it with python-dotenv, as podman-compose 1.2.0 and
+    # later do (docker compose's parser agrees on quotes, "export ", and comments). podman's own
+    # --env-file would keep quotes, and quotes a line it can't parse, value and all. The image
+    # declares /data a volume, so the engine adds an empty anonymous one, and --rm deletes it.
+    # The output names settings, never values.
+    status=0
+    problems=$("$engine" run -i --rm --pull=never --network none --read-only --cap-drop ALL \
+        --security-opt no-new-privileges "$image" config check --env-file - \
+        <"$DINNERBELL_ENV_FILE" 2>&1 >/dev/null) || status=$?
+    if [ "$status" -eq 2 ] && printf '%s' "$problems" | grep -q "invalid choice: 'config'"; then
+        echo "dinnerbell-test: $image predates dinnerbell config check; starting without it." >&2
+    elif [ "$status" -ne 0 ]; then
+        printf '%s\n' "$problems" >&2
+        [ "$status" -eq 2 ] ||
+            fail "couldn't run the configuration check in $image (exit $status). Nothing was started."
+        fail "fix the settings above in $DINNERBELL_ENV_FILE, then run the command again. Nothing was started."
+    fi
+fi
 
 # DINNERBELL_COMPOSE may hold two words ("docker compose"), so it's split on purpose.
 # shellcheck disable=SC2086
