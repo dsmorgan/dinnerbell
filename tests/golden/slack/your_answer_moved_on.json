@@ -1,0 +1,28 @@
+{
+  "blocks": [
+    {
+      "text": {
+        "text": "*Dinner call · Thursday, Oct 22*\n*This call moved on.* Thanks for answering! Vote on the picks in the thread by *5:15 PM*.\nYour answer: *In* · can cook or order\n*Coordinator:* Alex",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "block_id": "more",
+      "elements": [
+        {
+          "action_id": "link_event",
+          "text": {
+            "emoji": true,
+            "text": "View on web",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "url": "https://dinnerbell.example.com/events/7"
+        }
+      ],
+      "type": "actions"
+    }
+  ],
+  "text": "Dinner call · Thursday, Oct 22: your answer is In, can cook or order"
+}

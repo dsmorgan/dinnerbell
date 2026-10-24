@@ -26,12 +26,18 @@ from typing import Any, NoReturn
 import aiohttp
 from slack_sdk.errors import SlackApiError, SlackClientError
 from slack_sdk.web.async_client import AsyncWebClient
+from slack_sdk.webhook.async_client import AsyncWebhookClient
 
 from dinnerbell.domain.notifications import ChannelUnavailable, MessageRef, PermanentDeliveryError
 
 log = logging.getLogger(__name__)
 
 DEFAULT_RETRY_AFTER = timedelta(seconds=30)
+RESPONSE_URL_TIMEOUT_SECONDS = 10
+WEBHOOK_LOG = logging.getLogger("dinnerbell.channels.slack.webhook")
+WEBHOOK_LOG.setLevel(logging.INFO)
+"""The SDK's webhook client logs each request's URL and body at DEBUG whenever its logger's own
+level allows it. A ``response_url`` is a bearer capability, so this logger never does."""
 MAX_RETRY_AFTER = timedelta(hours=1)
 PERMANENT = frozenset(
     {
@@ -157,6 +163,19 @@ def translate(method: str, exc: BaseException) -> Exception:
 TRANSPORT_ERRORS = (SlackClientError, aiohttp.ClientError, asyncio.TimeoutError, TimeoutError, OSError)
 
 
+def webhook_client(url: str) -> AsyncWebhookClient:
+    """The client for one ``response_url``."""
+    return AsyncWebhookClient(url, timeout=RESPONSE_URL_TIMEOUT_SECONDS, logger=WEBHOOK_LOG)
+
+
+def _webhook_code(body: object, status: int) -> str:
+    """Slack's error for a refused ``response_url`` post, such as ``expired_url``, or ``http_<status>``."""
+    text = body.strip() if isinstance(body, str) else ""
+    if text and len(text) <= 64 and text.isascii() and text.replace("_", "").isalnum():
+        return text
+    return f"http_{status}"
+
+
 @dataclass(frozen=True, slots=True)
 class Identity:
     """What ``auth.test`` says about the bot token."""
@@ -173,8 +192,12 @@ class SlackApi:
     and report the error at once, instead of at its next hourly check.
     """
 
-    def __init__(self, client: AsyncWebClient) -> None:
+    def __init__(
+        self, client: AsyncWebClient, *, webhook: Callable[[str], AsyncWebhookClient] = webhook_client
+    ) -> None:
         self.client = client
+        self.webhook = webhook
+        """Makes the client for a ``response_url``; tests pass a fake."""
         self.on_auth_error: Callable[[SlackAuthError], None] | None = None
 
     def _raise(self, method: str, exc: BaseException) -> NoReturn:
@@ -210,10 +233,25 @@ class SlackApi:
             ),
         )
 
-    async def ephemeral(self, channel: str, user: str, text: str) -> None:
+    async def ephemeral(self, channel: str, user: str, text: str, blocks: list[dict[str, Any]] | None = None) -> None:
         await self._call(
-            "chat.postEphemeral", lambda: self.client.chat_postEphemeral(channel=channel, user=user, text=text)
+            "chat.postEphemeral",
+            lambda: self.client.chat_postEphemeral(channel=channel, user=user, text=text, blocks=blocks),
         )
+
+    async def replace_original(self, response_url: str, message: dict[str, Any]) -> None:
+        """Replace the message a person tapped, through the tap's ``response_url``. Only ever
+        for a message that person alone sees: on a channel message, this would rewrite it for
+        everyone. Slack allows 5 posts within 30 minutes of the tap; after that it refuses."""
+        body = {**message, "replace_original": True, "response_type": "ephemeral"}
+        response = await self._call("response_url", lambda: self.webhook(response_url).send_dict(body))
+        if response.status_code == 429:
+            raise SlackRateLimited("Slack rate-limited response_url", retry_after=DEFAULT_RETRY_AFTER.total_seconds())
+        if response.status_code != 200:
+            code = _webhook_code(response.body, response.status_code)
+            if response.status_code >= 500:
+                raise SlackUnavailable(f"Slack response_url failed: {code}")
+            raise PermanentDeliveryError(f"Slack response_url failed: {code}")
 
     async def open_view(self, trigger_id: str, view: dict[str, Any]) -> None:
         await self._call("views.open", lambda: self.client.views_open(trigger_id=trigger_id, view=view))

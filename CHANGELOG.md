@@ -10,6 +10,13 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 - Slack says which version is answering. `/dinnerbell version` (`/dinnerbell-test version` on test) replies privately with the version as the web footer shows it, such as `0.3.0`, or `0.3.0+abc1234` for a build from `main`; the instance label, if one is set; the database's schema revision; and a link to the release notes, or to the commit for a `main` build. The help reply lists `version` and ends with a version line, such as "Dinnerbell 0.3.0+abc1234 · TEST", and so does the bottom of App Home.
 
+### Changed
+
+- In Slack, you can now see what you chose on a call (#42). Your first tap on **In**, **Maybe**, **Out**, a role, or **I'll coordinate** on the call posts a Your answer card only you see, with your answer and offers selected: green, and marked "✓ " so you can tell without color. Taps on the card change the card in place instead of adding another message. A tap on the call message itself still adds a new card, because Slack can't change one person's view of a shared message. The card replaces the "Thanks! You're offering to cook" lines, which piled up.
+- The call message no longer shows **In** in green, so nothing looks selected for everyone.
+- The reminder direct message and App Home show your answer selected the same way. A tap on the reminder changes the reminder itself, instead of adding a confirmation under it.
+- A card or reminder left over from before a call moved on (responses closed, called off, or started again) says "This call moved on." instead of answering the newer call.
+
 ### Fixed
 
 - **Start the vote now** and **Decide now** no longer show once the window's deadline has passed. Until the scheduler's next tick moved the call on, up to 30 seconds later, the web card and App Home still offered them, and selecting one only said the call had moved on.
@@ -17,6 +24,7 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 ### Upgrade notes
 
 - Optional: the Slack app manifests list `version` in the slash command's usage hint. To show it in Slack, open the app's **Slash Commands** settings and edit the command's usage hint to match `deploy/slack-app-manifest.yaml` (or `deploy/slack-app-manifest.test.yaml` for test). `/dinnerbell version` works without this.
+- Reminders already sent before you upgrade keep their old buttons, which still work and reply with a line of text.
 
 ## [0.3.0] - 2026-10-24
 

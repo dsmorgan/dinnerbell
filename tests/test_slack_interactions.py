@@ -14,12 +14,10 @@ from dinnerbell.channels.slack import ids
 from dinnerbell.channels.slack.interactions import (
     BROKEN,
     CONFIRM,
-    OFFERED,
     STALE,
     UNKNOWN_USER,
     UNVOTED,
     VOTED,
-    WITHDRAWN,
     parse_call_args,
 )
 from dinnerbell.config import Settings
@@ -77,6 +75,18 @@ async def status_of(house: House, event_id: int, name: str) -> Status | None:
     return None if response is None else response.status
 
 
+def selected(card: dict[str, object]) -> list[str]:
+    """The texts of a card's selected buttons."""
+    blocks: list[dict[str, object]] = card["blocks"]  # type: ignore[assignment]
+    return [
+        e["text"]["text"]
+        for b in blocks
+        if b["type"] == "actions"
+        for e in b["elements"]  # type: ignore[attr-defined]
+        if e.get("style") == "primary"
+    ]
+
+
 def body(response: object) -> dict[str, object]:
     raw = getattr(response, "body", "")
     return json.loads(raw) if raw else {}
@@ -92,15 +102,14 @@ async def test_in_maybe_out_answer_for_the_person_who_tapped(slack: Slack, house
         assert response.status == 200
         assert await status_of(house, event_id, "Kim") is status
     assert await status_of(house, event_id, "Sam") is None
-    assert slack.ephemerals("Kim") == [
-        "Got it: you're a maybe for dinner.",
-        "Got it: you're out for dinner this time.",
-        "You're in for dinner. Thanks!",
-    ]
+    # Each tap on the call message posts a Your answer card with Kim's answer marked.
+    assert [selected(card) for card in slack.cards("Kim")] == [["✓ Maybe"], ["✓ Out"], ["✓ In"]]
+    assert slack.fake.of("response_url") == []  # never the call message's response_url
 
 
-async def test_answering_from_the_reminder_dm_confirms_privately(slack: Slack, house: House) -> None:
+async def test_answering_from_an_older_reminder_dm_confirms_privately(slack: Slack, house: House) -> None:
     event_id = await open_call(house)
+    # A reminder sent before cards existed has the call message's buttons, without a run.
     await slack.click("Lee", "respond_in", str(event_id), channel="D04LEE")
     assert await status_of(house, event_id, "Lee") is Status.IN
     assert slack.ephemerals("Lee") == [CONFIRM["respond_in"].format(slot="dinner")]
@@ -115,7 +124,7 @@ async def test_role_buttons_toggle(slack: Slack, house: House) -> None:
     await slack.click("Sam", "offer_cook", str(event_id))
     response = (await house.context(event_id)).response_of(house["Sam"].id)
     assert response is not None and response.offers == frozenset()
-    assert slack.ephemerals("Sam") == [OFFERED[RoleOffer.COOK], WITHDRAWN[RoleOffer.COOK]]
+    assert [selected(card) for card in slack.cards("Sam")] == [["✓ In", "✓ I can cook"], ["✓ In"]]
 
 
 async def test_first_to_coordinate_wins_and_the_next_is_told_kindly(slack: Slack, house: House) -> None:

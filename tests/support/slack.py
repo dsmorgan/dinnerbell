@@ -55,6 +55,7 @@ def connection(
         clock=house.clock,
         state=state or SlackState(),
         web_client=fake,
+        webhook=fake.webhook,
         socket_factory=FakeSocket,
         **({"schema_revision": schema_revision()} | options),
     )
@@ -108,6 +109,30 @@ class Slack:
     def ephemerals(self, who: str) -> list[str]:
         user = SLACK_IDS.get(who, who)
         return [c.args["text"] for c in self.fake.of("chat.postEphemeral") if c.args["user"] == user]
+
+    def cards(self, who: str) -> list[dict[str, Any]]:
+        """Every Your answer card shown to ``who``, posted or replacing one, in order. Each is
+        the message payload: ``text`` and ``blocks``, and ``replace_original`` when replaced."""
+        user = SLACK_IDS.get(who, who)
+        found: list[dict[str, Any]] = []
+        for call in self.fake.calls:
+            if call.method == "chat.postEphemeral" and call.args["user"] == user and call.args.get("blocks"):
+                found.append({"text": call.args["text"], "blocks": call.args["blocks"]})
+            elif call.method == "response_url":
+                found.append(call.args)
+        return found
+
+    async def tap_card(self, who: str, action_id: str, card: dict[str, Any], **kwargs: Any) -> BoltResponse:
+        """Press ``action_id`` on ``card`` (from ``cards``), with the value the card gave it. A
+        card is an ephemeral; pass ``ephemeral=False`` for a reminder."""
+        (value,) = [
+            e["value"]
+            for b in card["blocks"]
+            if b["type"] == "actions"
+            for e in b["elements"]
+            if e["action_id"] == action_id
+        ]
+        return await self.click(who, action_id, value, **{"ephemeral": True, **kwargs})
 
     def last_home(self, who: str) -> dict[str, Any]:
         user = SLACK_IDS.get(who, who)

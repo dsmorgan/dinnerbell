@@ -87,7 +87,10 @@ async def test_a_dinner_decided_in_slack(slack: Slack) -> None:
     clock.now = REMIND
     await house.tick()
     await slack.drain()
-    await slack.click("Lee", "respond_out", e, channel="D04LEE")
+    reminder = slack.fake.of("chat.postMessage")[-1]
+    reminder_ts = "2.000100"
+    (out,) = [x for x in reminder.args["blocks"][-1]["elements"] if x["action_id"] == "card_out"]
+    await slack.click("Lee", "card_out", out["value"], channel="D04LEE", message_ts=reminder_ts)
     await slack.drain()
 
     # Responses close: Kim's maybe turns out, and the picks are posted in the thread.
@@ -115,15 +118,15 @@ async def test_a_dinner_decided_in_slack(slack: Slack) -> None:
     picks_ts, decision_ts = "4.000100", "5.000100"
     assert [summary(c) for c in slack.fake.calls] == [
         ("post", CHANNEL, None, "Dinner call · Thursday, Oct 22: Who's in"),
-        ("ephemeral", CHANNEL, "U01ALEX", "You're in for dinner. Thanks!"),
-        ("ephemeral", CHANNEL, "U01ALEX", "Thanks! You're offering to pick up. Tap again to take it back."),
-        ("ephemeral", CHANNEL, "U02SAM", "Thanks! You're offering to cook. Tap again to take it back."),
+        ("ephemeral", CHANNEL, "U01ALEX", "Dinner call · Thursday, Oct 22: your answer is In"),
+        ("ephemeral", CHANNEL, "U01ALEX", "Dinner call · Thursday, Oct 22: your answer is In, can pick up"),
+        ("ephemeral", CHANNEL, "U02SAM", "Dinner call · Thursday, Oct 22: your answer is In, can cook"),
         ("modal", ids.DETAILS_VIEW),
-        ("ephemeral", CHANNEL, "U03KIM", "Got it: you're a maybe for dinner."),
+        ("ephemeral", CHANNEL, "U03KIM", "Dinner call · Thursday, Oct 22: your answer is Maybe"),
         ("update", *call, "Dinner call · Thursday, Oct 22: Who's in"),
         ("post", "U04LEE", None, "Are you in for dinner on Thursday, Oct 2"),
         ("conversations.open",),  # is D04LEE really Lee's DM with the bot?
-        ("ephemeral", "D04LEE", "U04LEE", "Got it: you're out for dinner this time."),
+        ("update", "D04LEE", reminder_ts, "Your answer for dinner on Thursday, Oct "),  # the reminder itself
         ("update", *call, "Dinner call · Thursday, Oct 22: Who's in"),
         ("post", "U03KIM", None, "You're counted out for dinner on Thursda"),
         ("post", CHANNEL, thread, "Picks for dinner on Thursday, Oct 22: Sa"),
@@ -131,7 +134,7 @@ async def test_a_dinner_decided_in_slack(slack: Slack) -> None:
         ("ephemeral", CHANNEL, "U01ALEX", "Vote counted. Tap Vote again to take it back."),
         ("ephemeral", CHANNEL, "U02SAM", "Vote counted. Tap Vote again to take it back."),
         ("ephemeral", CHANNEL, "U02SAM", "Only the coordinator or an admin can lock a proposal."),
-        ("ephemeral", CHANNEL, "U02SAM", "You're coordinating dinner. Thanks for steering!"),
+        ("ephemeral", CHANNEL, "U02SAM", "Dinner call · Thursday, Oct 22: your answer is In, can cook"),
         ("update", CHANNEL, picks_ts, "Picks for dinner on Thursday, Oct 22: Sa"),
         ("update", *call, "Dinner call · Thursday, Oct 22: Thanks f"),
         ("post", CHANNEL, thread, "Dinner on Thursday, Oct 22: Sam's Tacos "),
@@ -144,7 +147,10 @@ async def test_a_dinner_decided_in_slack(slack: Slack) -> None:
     ]
 
     posts = slack.fake.of("chat.postMessage")
-    updates = slack.fake.of("chat.update")
+    updates = [u for u in slack.fake.of("chat.update") if u.args["channel"] == CHANNEL]
+    (dm,) = [u for u in slack.fake.of("chat.update") if u.args["channel"] == "D04LEE"]
+    assert "Your answer for dinner on Thursday, Oct 22 is *Out*" in block_text(dm, 0)
+    assert [x["text"]["text"] for x in dm.args["blocks"][1]["elements"]][:3] == ["In", "Maybe", "✓ Out"]
     assert "<@U01ALEX> <@U03KIM> <@U04LEE> <@U02SAM>" in block_text(posts[0], 1)  # everyone mentioned
     roster = block_text(updates[0], 2)
     assert "*In* · 3 people eating" in roster and "<@U02SAM> · +1 guest · can cook" in roster

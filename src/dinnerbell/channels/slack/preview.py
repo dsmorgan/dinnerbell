@@ -15,7 +15,7 @@ from typing import Any
 
 from dinnerbell.channels.slack import ids
 from dinnerbell.channels.slack.blocks import Directory, with_version_footer
-from dinnerbell.channels.slack.messages import RenderContext, render
+from dinnerbell.channels.slack.messages import RenderContext, reminder_message, render, your_answer
 from dinnerbell.channels.slack.views import (
     HomeLinks,
     cancel_modal,
@@ -272,13 +272,55 @@ VIEWS: dict[str, Callable[[], dict[str, Any]]] = {
     ),
 }
 
-KINDS = (*NOTIFICATIONS, *VIEWS)
+# Your answer cards and the answered reminder ------------------------------------------------------
+
+KIM_IN = Response(member_id=KIM.id, status=Status.IN)
+KIM_OFFERS = replace(KIM_IN, offers=frozenset({RoleOffer.COOK, RoleOffer.ORDER}))
+CardSample = Callable[[RenderContext], dict[str, Any]]
+
+
+def _card(
+    info: note.EventInfo, mine: Response | None, *, run: int | None = None, notice: str | None = None
+) -> CardSample:
+    """Kim's card. ``run`` is the run of the card tapped; None for a tap on the call message."""
+    return lambda ctx: your_answer(info, mine, KIM.id, ctx, run=run, notice=notice).payload()
+
+
+def _reminder(info: note.EventInfo, mine: Response | None, run: int) -> CardSample:
+    """Kim's reminder after a tap on it, as ``Interactions`` edits it."""
+    return lambda ctx: reminder_message(note.ResponseReminder(info, KIM), ctx, mine=mine, run=run).payload()
+
+
+CARDS: dict[str, CardSample] = {
+    "your_answer_in": _card(event(), KIM_IN),
+    "your_answer_maybe": _card(event(), replace(KIM_IN, status=Status.MAYBE), run=1),
+    "your_answer_out": _card(event(), replace(KIM_IN, status=Status.OUT), run=1),
+    "your_answer_roles": _card(event(), KIM_OFFERS, run=1),
+    "your_answer_coordinator": _card(event(coordinator=KIM), KIM_OFFERS, run=1),
+    "your_answer_other_coordinator": _card(
+        event(coordinator=note.PersonInfo(9, "<!channel> & *Co*")),
+        KIM_IN,
+        run=1,
+        notice="Someone is already coordinating. They can hand it off to you.",
+    ),
+    "your_answer_voting": _card(VOTING, KIM_OFFERS),
+    "your_answer_moved_on": _card(VOTING, KIM_OFFERS, run=1),
+    "your_answer_called_off": _card(CANCELLED, KIM_IN, run=1),
+    "your_answer_started_again": _card(replace(event(), run=2), KIM_IN, run=1),
+    "response_reminder_answered": _reminder(event(), replace(KIM_IN, status=Status.MAYBE), run=1),
+    "response_reminder_moved_on": _reminder(VOTING, KIM_IN, run=1),
+}
+"""Messages that answer a tap rather than a notification. They mention nobody."""
+
+KINDS = (*NOTIFICATIONS, *VIEWS, *CARDS)
 
 
 def preview(kind: str, base_url: str = BASE_URL) -> dict[str, Any]:
-    """The Block Kit JSON for sample ``kind``: a message payload for notifications, or the view
-    for a modal or the Home tab. Raises KeyError for an unknown kind."""
+    """The Block Kit JSON for sample ``kind``: a message payload for notifications and cards, or
+    the view for a modal or the Home tab. Raises KeyError for an unknown kind."""
     if kind in VIEWS:
         return VIEWS[kind]()
-    message = render(NOTIFICATIONS[kind](), RenderContext(base_url, DIRECTORY))
-    return message.payload()
+    ctx = RenderContext(base_url, DIRECTORY)
+    if kind in CARDS:
+        return CARDS[kind](ctx)
+    return render(NOTIFICATIONS[kind](), ctx).payload()

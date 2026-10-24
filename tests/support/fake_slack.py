@@ -3,7 +3,8 @@
 Mode socket, and Socket Mode request payloads.
 
 ``FakeSlack`` subclasses the SDK's ``AsyncWebClient`` and replaces only the HTTP request, so
-the SDK's own argument handling and ``SlackApiError`` raising run for real. It checks every
+the SDK's own argument handling and ``SlackApiError`` raising run for real. Posts to a
+``response_url`` go through ``FakeSlack.webhook``, recorded as method ``response_url``. It checks every
 message and view it receives against Block Kit's limits. Queue failures with ``fail``. It never
 touches the network. Never import this from ``src/``.
 """
@@ -21,6 +22,8 @@ from slack_bolt.async_app import AsyncApp
 from slack_bolt.response import BoltResponse
 from slack_sdk.socket_mode.request import SocketModeRequest
 from slack_sdk.web.async_client import AsyncWebClient
+from slack_sdk.webhook.async_client import AsyncWebhookClient
+from slack_sdk.webhook.webhook_response import WebhookResponse
 
 from tests.support.blockkit import check_message, check_view
 
@@ -29,6 +32,7 @@ OTHER_TEAM = "T0EVIL"
 BOT_USER = "U0BOT"
 CHANNEL = "C0DINNER"
 BOT_TOKEN = "xoxb-0000000000-fake-bot-token-do-not-log"
+RESPONSE_URL = "https://hooks.slack.com/actions/T0HOUSE/1/fake-response-url-do-not-log"
 APP_TOKEN = "xapp-1-A000-fake-app-token-do-not-log"
 
 
@@ -144,6 +148,33 @@ class FakeSlack(AsyncWebClient):
                 return {"user": self.users_by_email[args["email"]]}
         raise AssertionError(f"FakeSlack doesn't know {method}")
 
+    def webhook(self, url: str) -> AsyncWebhookClient:
+        """The ``response_url`` client factory ``SlackApi`` takes."""
+        return FakeWebhook(self, url)
+
+
+class FakeWebhook(AsyncWebhookClient):
+    """A ``response_url`` client whose HTTP request ``fake`` records as method ``response_url``,
+    with the URL as ``url``. Queue failures with ``fake.fail("response_url", Failure(...))``:
+    ``error`` is the body Slack answers with, such as ``expired_url``, and ``status`` its HTTP
+    status."""
+
+    def __init__(self, fake: FakeSlack, url: str) -> None:
+        super().__init__(url)
+        self.fake = fake
+
+    async def _perform_http_request(self, *, body: dict[str, Any], headers: dict[str, str]) -> WebhookResponse:
+        self.fake.calls.append(Call("response_url", {"url": self.url, **body}))
+        await asyncio.sleep(0)
+        queued = self.fake.failures.get("response_url")
+        if queued:
+            failure = queued.pop(0)
+            if failure.raises is not None:
+                raise failure.raises
+            return WebhookResponse(url=self.url, status_code=failure.status, body=failure.error or "", headers={})
+        check_message(body)
+        return WebhookResponse(url=self.url, status_code=200, body="ok", headers={})
+
 
 def _error(code: str | None, status: int = 200, headers: dict[str, str] | None = None) -> dict[str, Any]:
     return {"data": {"ok": False, "error": code}, "headers": headers or {}, "status_code": status}
@@ -198,8 +229,13 @@ def block_action(
     team: str | None = TEAM,
     home: bool = False,
     selected: str | None = None,
+    ephemeral: bool = False,
+    response_url: str | None = RESPONSE_URL,
+    message_ts: str = "1.000100",
 ) -> dict[str, Any]:
-    """A button press, or with ``selected``, an overflow menu option picked (its value)."""
+    """A button press, or with ``selected``, an overflow menu option picked (its value).
+    ``ephemeral`` presses it on an ephemeral, such as a Your answer card. Slack sends a
+    ``response_url`` with every message button; None leaves it out."""
     payload: dict[str, Any] = {
         "type": "block_actions",
         "team": {"id": team, "domain": "home"} if team else None,
@@ -232,11 +268,13 @@ def block_action(
     else:
         payload["container"] = {
             "type": "message",
-            "message_ts": "1.000100",
+            "message_ts": message_ts,
             "channel_id": channel,
-            "is_ephemeral": False,
+            "is_ephemeral": ephemeral,
         }
         payload["channel"] = {"id": channel, "name": "dinnerbell"}
+        if response_url is not None:
+            payload["response_url"] = response_url
     return payload
 
 

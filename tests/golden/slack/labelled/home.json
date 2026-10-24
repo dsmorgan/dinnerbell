@@ -24,7 +24,7 @@
           "style": "primary",
           "text": {
             "emoji": true,
-            "text": "In",
+            "text": "✓ In",
             "type": "plain_text"
           },
           "type": "button",

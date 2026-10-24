@@ -43,10 +43,11 @@ from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
 from slack_bolt.async_app import AsyncApp
 from slack_bolt.authorization import AuthorizeResult
 from slack_sdk.web.async_client import AsyncWebClient
+from slack_sdk.webhook.async_client import AsyncWebhookClient
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from dinnerbell import __version__
-from dinnerbell.channels.slack.api import SlackApi, SlackAuthError, SlackUnavailable
+from dinnerbell.channels.slack.api import SlackApi, SlackAuthError, SlackUnavailable, webhook_client
 from dinnerbell.channels.slack.channel import HOLD_RETRY_SECONDS, Audience, Hold, HoldScope, SlackChannel
 from dinnerbell.channels.slack.interactions import DEFAULT_COMMAND, Interactions
 from dinnerbell.domain.members import SLACK_USER_ID_PATTERN
@@ -182,6 +183,7 @@ class SlackConnection:
         clock: Clock,
         state: SlackState,
         web_client: AsyncWebClient | None = None,
+        webhook: Callable[[str], AsyncWebhookClient] = webhook_client,
         socket_factory: SocketFactory = BoltSocket,
         command: str = DEFAULT_COMMAND,
         instance_label: str = "",
@@ -193,7 +195,7 @@ class SlackConnection:
         ``Settings.version_label`` and ``schema_revision`` is ``services.health.schema_revision()``,
         both read once at startup for ``/dinnerbell version``."""
         client = web_client or AsyncWebClient(token=bot_token, timeout=WEB_TIMEOUT_SECONDS)
-        self.api = SlackApi(client)
+        self.api = SlackApi(client, webhook=webhook)
         self.api.on_auth_error = self._token_refused
         self.app_token = app_token
         self.channel_id = channel_id

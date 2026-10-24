@@ -11,7 +11,14 @@ can only name something the member could act on anyway.
 
 Errors the services raise for people are shown back as ephemeral messages (or on the Home tab
 when the button was there). Anything else is a bug: it's logged, and the member is told to try
-again. Logs carry member and event IDs only (SEC-5).
+again. Logs carry member and event IDs only (SEC-5), never a ``response_url``.
+
+An answer or an offer tapped on the call message gets a Your answer card back: an ephemeral
+showing the person's own choices (``messages.your_answer``). A tap on the card replaces it in
+place through that tap's ``response_url``, and a tap on the reminder edits the reminder with
+``chat.update``. A tap on the call message can't do either: its ``response_url`` would rewrite
+the call for everyone, and Slack can't edit an ephemeral any other way, so it posts a new card.
+Nothing about cards is stored; each is drawn from the person's response.
 """
 
 from __future__ import annotations
@@ -31,6 +38,7 @@ from dinnerbell import __version__
 from dinnerbell.channels.slack import ids
 from dinnerbell.channels.slack.api import SlackApi, SlackUnavailable
 from dinnerbell.channels.slack.blocks import (
+    Directory,
     day_label,
     escape,
     instance_banner,
@@ -38,6 +46,7 @@ from dinnerbell.channels.slack.blocks import (
     version_link,
     with_version_footer,
 )
+from dinnerbell.channels.slack.messages import Message, RenderContext, labelled, reminder_message, your_answer
 from dinnerbell.channels.slack.views import (
     FormError,
     HomeLinks,
@@ -53,21 +62,24 @@ from dinnerbell.channels.slack.views import (
 from dinnerbell.domain.events import (
     STALE_CALL,
     EventRuleViolation,
+    EventState,
     IllegalTransition,
     InvalidResponse,
     RoleOffer,
     Window,
     check_can_cancel,
     check_can_close_window,
+    check_can_respond,
     check_run,
     friendly,
 )
 from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.members import Member
-from dinnerbell.domain.notifications import PermanentDeliveryError
+from dinnerbell.domain.notifications import MessageRef, PermanentDeliveryError, PersonInfo, ResponseReminder
 from dinnerbell.services import calls, event_views, slack_members
 from dinnerbell.services.clock import Clock
 from dinnerbell.services.errors import Forbidden, NotFound
+from dinnerbell.services.event_views import EventView
 
 log = logging.getLogger(__name__)
 
@@ -115,6 +127,17 @@ class Source:
     user_id: str
     channel_id: str | None = None
     home: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class Tap:
+    """The message a button was on, from the payload's container: its ``ts``, whether it's an
+    ephemeral, and the ``response_url`` Slack sent with the tap (checked by ``ids.response_url``).
+    Never log the URL: it's a bearer capability for that message."""
+
+    message_ts: str | None = None
+    ephemeral: bool = False
+    response_url: str | None = None
 
 
 class Interactions:
@@ -341,16 +364,24 @@ class Interactions:
         if action_id == ids.CALL_MENU:  # an overflow menu sends the option it picked, not a value
             value = _get(acts[0], "selected_option", "value")
         trigger = body.get("trigger_id")
+        container = body.get("container") or {}
+        tap = Tap(
+            message_ts=ids.message_ts(container.get("message_ts")),
+            ephemeral=container.get("is_ephemeral") is True,
+            response_url=ids.response_url(body.get("response_url")),
+        )
         log.info("slack action", extra={"member_id": member.id, "action": str(action_id)[:40]})
 
         async def work() -> str | None:
-            return await self._dispatch(member, source, str(action_id), value, trigger)
+            return await self._dispatch(member, source, str(action_id), value, trigger, tap)
 
         await self._run(source, member, work)
 
     async def _dispatch(
-        self, member: Member, source: Source, action_id: str, value: object, trigger: object
+        self, member: Member, source: Source, action_id: str, value: object, trigger: object, tap: Tap
     ) -> str | None:
+        if action_id in ids.CARD_ACTIONS:
+            return await self._card_tap(member, source, action_id, value, trigger, tap)
         if action_id == ids.CALL_MENU:
             choice, event_id, run = ids.parse_menu(value)
             return await self._open_end(member, source, choice, event_id, run, trigger)
@@ -367,15 +398,19 @@ class Interactions:
             if action_id in ids.RESPOND:
                 event_id = ids.parse_event(value)
                 await calls.respond(db, member, event_id, ids.RESPOND[action_id], now=now)
-                return await self._confirm(db, member, event_id, action_id)
+                return await self._confirm(db, member, source, event_id, action_id)
             if action_id in ids.OFFER:
                 role = ids.OFFER[action_id]
-                offered = await calls.toggle_role(db, member, ids.parse_event(value), role, now=now)
+                event_id = ids.parse_event(value)
+                offered = await calls.toggle_role(db, member, event_id, role, now=now)
+                if self._on_call_message(source):
+                    await self._post_card(db, member, source, event_id)
+                    return None
                 return (OFFERED if offered else WITHDRAWN)[role]
             if action_id == ids.COORDINATE:
                 event_id = ids.parse_event(value)
                 await calls.claim_coordinator(db, member, event_id, now=now)
-                return await self._confirm(db, member, event_id, action_id)
+                return await self._confirm(db, member, source, event_id, action_id)
             if action_id == ids.VOTE:
                 event_id, proposal_id = ids.parse_proposal(value)
                 voted = await calls.toggle_vote(db, member, event_id, proposal_id, now=now)
@@ -396,9 +431,126 @@ class Interactions:
                 return await self._open_modal(db, member, source, action_id, ids.parse_event(value), trigger)
         raise ids.BadValue("unknown action")
 
-    async def _confirm(self, db: AsyncSession, member: Member, event_id: int, action_id: str) -> str:
+    async def _confirm(
+        self, db: AsyncSession, member: Member, source: Source, event_id: int, action_id: str
+    ) -> str | None:
+        """The answer to a tap that worked: a Your answer card on the call message, or a line of
+        text on the Home tab and an older reminder, whose buttons don't name a run."""
+        if self._on_call_message(source):
+            await self._post_card(db, member, source, event_id)
+            return None
         view = await event_views.event_view(db, member, event_id, now=self.clock())
         return CONFIRM[action_id].format(slot=view.event.slot.value)
+
+    # Your answer cards and the reminder (spec section 10) --------------------------------------
+
+    def _on_call_message(self, source: Source) -> bool:
+        """Whether a tap was in the household channel, where the call message and cards are."""
+        return not source.home and source.channel_id == self.channel_id
+
+    def _context(self) -> RenderContext:
+        """Cards and reminders mention nobody, so the directory is empty."""
+        return RenderContext(self.links.base_url, Directory(), self.instance_label)
+
+    def _card(self, view: EventView, member: Member, *, run: int | None = None, notice: str | None = None) -> Message:
+        return your_answer(view.info, view.mine, member.id, self._context(), run=run, notice=notice)
+
+    async def _post_card(self, db: AsyncSession, member: Member, source: Source, event_id: int) -> None:
+        """After a tap on the call message: a new card. Never through the tap's response_url,
+        which belongs to the call message everyone sees."""
+        view = await event_views.event_view(db, member, event_id, now=self.clock())
+        await self._send_card(source, self._card(view, member), member)
+
+    async def _send_card(self, source: Source, card: Message, member: Member, tap: Tap | None = None) -> None:
+        """Replace the card ``tap`` was on, or post a new one when there's no card to replace,
+        or Slack won't (its response_url lasts 30 minutes and 5 uses). Only an ephemeral in the
+        household channel is ever replaced."""
+        user, channel = source.user_id, source.channel_id
+        if tap is not None and tap.ephemeral and tap.response_url is not None and self._on_call_message(source):
+            try:
+                await self.api.replace_original(tap.response_url, card.payload())
+                return
+            except SLACK_ERRORS as exc:
+                log.info("slack card not replaced; posting a new one", extra={"error": str(exc)})
+        try:
+            if channel is None:
+                raise PermanentDeliveryError("no channel to post the card in")  # pragma: no cover
+            await self.api.ephemeral(channel, user, card.text, card.blocks)
+        except SLACK_ERRORS as exc:
+            log.warning("slack card not posted", extra={"error": str(exc), "member_id": member.id})
+            try:
+                await self.api.post(user, {"text": card.text})  # escaped already, and names nobody
+            except SLACK_ERRORS as again:
+                log.warning("slack reply failed", extra={"error": str(again)})
+
+    async def _card_tap(
+        self, member: Member, source: Source, action_id: str, value: object, trigger: object, tap: Tap
+    ) -> str | None:
+        """A button on a Your answer card or a reminder: act on the run it names, then show the
+        person where they stand on that same message. A card or reminder for a call that has
+        moved on says so instead of acting on what came after."""
+        event_id, run = ids.parse_card(value)
+        in_dm = source.channel_id is not None and not self._on_call_message(source)
+        if source.home or (not in_dm and not tap.ephemeral):
+            raise ids.BadValue("card buttons are drawn only on cards and reminders")
+        notice: str | None = None
+        async with self.sessionmaker() as db:
+            try:
+                if action_id == ids.CARD_DETAILS:
+                    return await self._card_details(db, member, source, event_id, run, trigger)
+                await self._card_change(db, member, action_id, event_id, run)
+            except SHOWN_ERRORS as exc:
+                notice = str(exc)
+            except IllegalTransition as exc:
+                notice = str(friendly(exc))
+            view = await event_views.event_view(db, member, event_id, now=self.clock())
+        moved_on = view.event.run != run or view.event.state is not EventState.COLLECTING
+        if moved_on:
+            notice = None  # the card or reminder says so itself
+        if in_dm:
+            return await self._update_reminder(view, member, source, tap, run, notice)
+        await self._send_card(source, self._card(view, member, run=run, notice=notice), member, tap)
+        return None
+
+    async def _card_change(self, db: AsyncSession, member: Member, action_id: str, event_id: int, run: int) -> None:
+        now = self.clock()
+        if action_id in ids.CARD_RESPOND:
+            await calls.respond(db, member, event_id, ids.CARD_RESPOND[action_id], run=run, now=now)
+        elif action_id in ids.CARD_OFFER:
+            await calls.offer_role(db, member, event_id, ids.CARD_OFFER[action_id], True, run=run, now=now)
+        elif action_id in ids.CARD_WITHDRAW:
+            await calls.offer_role(db, member, event_id, ids.CARD_WITHDRAW[action_id], False, run=run, now=now)
+        else:
+            await calls.claim_coordinator(db, member, event_id, run=run, now=now)
+
+    async def _card_details(
+        self, db: AsyncSession, member: Member, source: Source, event_id: int, run: int, trigger: object
+    ) -> str | None:
+        """Details from a card: the modal names the card's run, which saving checks again."""
+        if not isinstance(trigger, str) or not trigger:
+            raise ids.BadValue("no trigger")
+        view = await event_views.event_view(db, member, event_id, now=self.clock())
+        check_run(view.event, run)
+        check_can_respond(view.event, member)
+        await self.api.open_view(trigger, details_modal(view, ids.ViewOrigin(event_id, source.channel_id, run=run)))
+        return None
+
+    async def _update_reminder(
+        self, view: EventView, member: Member, source: Source, tap: Tap, run: int, notice: str | None
+    ) -> str | None:
+        """Edit the reminder that was tapped to show the answer, with ``chat.update``: it's an
+        ordinary message, and the bot's own. ``_action`` checked that the DM is this member's.
+        If it can't be edited, a line of text says what happened instead."""
+        reminder = ResponseReminder(view.info, PersonInfo(member.id, member.display_name))
+        ctx = self._context()
+        message = labelled(reminder_message(reminder, ctx, mine=view.mine, run=run), ctx)
+        if source.channel_id is not None and tap.message_ts is not None:
+            try:
+                await self.api.update(MessageRef(source.channel_id, tap.message_ts), message.payload())
+                return notice
+            except SLACK_ERRORS as exc:
+                log.warning("slack reminder not updated", extra={"error": str(exc), "member_id": member.id})
+        return notice or self._card(view, member, run=run).text
 
     async def _open_modal(
         self, db: AsyncSession, member: Member, source: Source, action_id: str, event_id: int, trigger: object
@@ -471,8 +623,8 @@ class Interactions:
             origin = ids.ViewOrigin.decode(view.get("private_metadata"))
             if (origin.window is not None) != (kind == "close"):
                 raise ids.BadValue("bad metadata")  # only Close now's confirmation names a window
-            if (origin.run is not None) != (kind in {"cancel", "close"}):
-                raise ids.BadValue("bad metadata")  # and only it and Call it off name a run
+            if (origin.run is None and kind in {"cancel", "close"}) or (origin.run is not None and kind == "proposal"):
+                raise ids.BadValue("bad metadata")  # it and Call it off name a run, Details from a card may
             form: Any = origin.window if kind == "close" else FORMS[kind](values)
         except FormError as exc:
             await ack(response_action="errors", errors={exc.block_id: str(exc)})
@@ -498,7 +650,7 @@ class Interactions:
                 return await self._cancel(member, event_id, form, origin.run)
             async with self.sessionmaker() as db:
                 if kind == "details":
-                    await calls.save_details(db, member, event_id, form, now=self.clock())
+                    await calls.save_details(db, member, event_id, form, run=origin.run, now=self.clock())
                     return None
                 await calls.add_proposal(
                     db,

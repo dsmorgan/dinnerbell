@@ -147,8 +147,12 @@ async def restart_call(
 # Responding (FR-7 to FR-9) --------------------------------------------------------------------
 
 
-async def respond(db: AsyncSession, actor: Member, event_id: int, status: Status, *, now: datetime) -> None:
+async def respond(
+    db: AsyncSession, actor: Member, event_id: int, status: Status, *, run: int | None = None, now: datetime
+) -> None:
+    """``run``, when given, is the run the actor saw (``check_run``), as on a Slack card."""
     async with locked_event(db, actor.household_id, event_id, now) as event:
+        check_run(event, run)
         check_can_respond(event, actor)
         ctx = await load(db, event)
         new = with_status(ctx.response_of(actor.id), actor.id, status, now)
@@ -157,9 +161,17 @@ async def respond(db: AsyncSession, actor: Member, event_id: int, status: Status
 
 
 async def offer_role(
-    db: AsyncSession, actor: Member, event_id: int, role: RoleOffer, offered: bool, *, now: datetime
+    db: AsyncSession,
+    actor: Member,
+    event_id: int,
+    role: RoleOffer,
+    offered: bool,
+    *,
+    run: int | None = None,
+    now: datetime,
 ) -> None:
     async with locked_event(db, actor.household_id, event_id, now) as event:
+        check_run(event, run)
         check_can_respond(event, actor)
         ctx = await load(db, event)
         new = with_offer(ctx.response_of(actor.id), actor.id, role, offered, now)
@@ -184,9 +196,12 @@ async def toggle_role(db: AsyncSession, actor: Member, event_id: int, role: Role
         return offered
 
 
-async def save_details(db: AsyncSession, actor: Member, event_id: int, details: Details, *, now: datetime) -> None:
+async def save_details(
+    db: AsyncSession, actor: Member, event_id: int, details: Details, *, run: int | None = None, now: datetime
+) -> None:
     """FR-8: guests, guest needs, eat window, suggestions, and a note."""
     async with locked_event(db, actor.household_id, event_id, now) as event:
+        check_run(event, run)
         check_can_respond(event, actor)
         ctx = await load(db, event)
         clean = check_details(
@@ -210,9 +225,12 @@ async def _roster_changed(db: AsyncSession, event: Event, now: datetime) -> None
 # Coordinating (FR-10) -------------------------------------------------------------------------
 
 
-async def claim_coordinator(db: AsyncSession, actor: Member, event_id: int, *, now: datetime) -> None:
+async def claim_coordinator(
+    db: AsyncSession, actor: Member, event_id: int, *, run: int | None = None, now: datetime
+) -> None:
     """The first member to claim coordinating gets it."""
     async with locked_event(db, actor.household_id, event_id, now) as event:
+        check_run(event, run)
         check_claim_coordinator(event, actor)
         await set_coordinator(db, event, actor.id, now=now)
         await audit(db, actor.household_id, actor, "event.coordinator_claimed", _target(event), {}, now)

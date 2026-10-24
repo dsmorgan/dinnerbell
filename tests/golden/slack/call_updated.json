@@ -27,7 +27,6 @@
       "elements": [
         {
           "action_id": "respond_in",
-          "style": "primary",
           "text": {
             "emoji": true,
             "text": "In",

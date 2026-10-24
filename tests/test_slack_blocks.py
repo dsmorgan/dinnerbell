@@ -20,7 +20,8 @@ import pytest
 
 from dinnerbell.channels.slack import blocks as bk
 from dinnerbell.channels.slack import preview as samples
-from dinnerbell.channels.slack.messages import MAX_PROPOSALS, RenderContext, render
+from dinnerbell.channels.slack.messages import MAX_PROPOSALS, Message, RenderContext, render
+from dinnerbell.channels.slack.messages import labelled as labelled_message
 from dinnerbell.channels.slack.views import HomeLinks, home_view
 from dinnerbell.domain import notifications as note
 from dinnerbell.domain.catalog import ItemKind, Mode
@@ -54,7 +55,19 @@ def test_golden(kind: str) -> None:
     assert path.read_text() == as_json(payload), f"{kind} changed; review, then DINNERBELL_UPDATE_GOLDEN=1"
 
 
-LABELLED = ("call_opened", "proposals_ready", "decision_made", "response_reminder", "home", "home_empty")
+LABELLED = (
+    "call_opened",
+    "proposals_ready",
+    "decision_made",
+    "response_reminder",
+    "home",
+    "home_empty",
+    "your_answer_roles",
+    "your_answer_moved_on",
+    "your_answer_started_again",
+    "response_reminder_answered",
+    "response_reminder_moved_on",
+)
 
 
 def labelled(kind: str) -> dict[str, object]:
@@ -62,6 +75,10 @@ def labelled(kind: str) -> dict[str, object]:
     if kind in samples.VIEWS:
         today = TodayView(samples.DAY, [samples.COLLECTING_VIEW] if kind == "home" else [], tuple(Slot))
         return home_view(today, HomeLinks(samples.BASE_URL), label="TEST")
+    if kind.startswith("your_answer"):
+        return samples.CARDS[kind](replace(CTX, label="TEST"))
+    if kind in samples.CARDS:  # the reminder after a tap, as Interactions labels it
+        return labelled_message(Message(**samples.CARDS[kind](CTX)), replace(CTX, label="TEST")).payload()
     return render(samples.NOTIFICATIONS[kind](), replace(CTX, label="TEST")).payload()
 
 
@@ -369,3 +386,18 @@ def test_views_for_an_empty_catalog_and_a_busy_day() -> None:
     text = json.dumps(home)
     assert "Voting is open in the channel thread." in text and "Are you in? Tap below." in text
     assert "start_call" not in text  # both calls exist already
+
+
+def test_cards_show_only_the_persons_own_choices_and_escape_what_people_typed() -> None:
+    from dinnerbell.channels.slack.messages import your_answer
+
+    for kind in samples.CARDS:
+        payload = samples.preview(kind)
+        assert "<@" not in json.dumps(payload) and "<!" not in json.dumps(payload), kind  # never pings
+    sneaky = replace(samples.event(), coordinator=note.PersonInfo(9, "<!here> & co"))
+    card = your_answer(sneaky, None, samples.KIM.id, CTX, notice="Can't: <@U02SAM> said so & <!channel>").payload()
+    check_message(card)
+    blocks = json.dumps(card["blocks"])
+    assert "&lt;!here&gt; &amp; co" in blocks and "&lt;@U02SAM&gt; said so &amp; &lt;!channel&gt;" in blocks
+    assert "You haven't answered yet." in card["blocks"][0]["text"]["text"]
+    assert "style" not in json.dumps(card["blocks"])  # nothing chosen, nothing marked

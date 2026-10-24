@@ -11,35 +11,34 @@
       "block_id": "participation",
       "elements": [
         {
-          "action_id": "respond_in",
-          "style": "primary",
+          "action_id": "card_in",
           "text": {
             "emoji": true,
             "text": "In",
             "type": "plain_text"
           },
           "type": "button",
-          "value": "7"
+          "value": "7:1"
         },
         {
-          "action_id": "respond_maybe",
+          "action_id": "card_maybe",
           "text": {
             "emoji": true,
             "text": "Maybe",
             "type": "plain_text"
           },
           "type": "button",
-          "value": "7"
+          "value": "7:1"
         },
         {
-          "action_id": "respond_out",
+          "action_id": "card_out",
           "text": {
             "emoji": true,
             "text": "Out",
             "type": "plain_text"
           },
           "type": "button",
-          "value": "7"
+          "value": "7:1"
         },
         {
           "action_id": "link_event",
