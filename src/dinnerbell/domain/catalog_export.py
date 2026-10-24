@@ -19,6 +19,7 @@ from typing import Any
 
 import yaml
 
+from dinnerbell.domain import catalog_file
 from dinnerbell.domain.catalog import CatalogItem, ItemKind, Tag, TagKind, sorted_modes
 from dinnerbell.domain.catalog_file import FORMAT_VERSION
 
@@ -27,7 +28,9 @@ HEADER = (
     "# Cooks aren't exported: an import keeps the cooks each item already has.\n"
 )
 MAX_LINE = 10_000
-"""Wider than any name, note, or link, so PyYAML never folds a value across lines."""
+"""Wider than any one written value, even a 500-character note with every character escaped, so
+PyYAML never folds a name, note, or link across lines. A very long inline tag list can still
+wrap between tags, which reads back the same."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,10 +39,23 @@ class CatalogExport:
     restaurants: int
     home_meals: int
     tags: int
+    values: int
+    """How many YAML values the file holds, counted the way import counts them."""
 
     @property
     def data(self) -> bytes:
         return self.text.encode()
+
+    @property
+    def too_big_to_import(self) -> str | None:
+        """Why import would refuse this file in one piece, or None if it wouldn't."""
+        if len(self.data) > catalog_file.MAX_FILE_BYTES:
+            limit = f"{catalog_file.MAX_FILE_BYTES // 1_000_000} MB"
+        elif self.values > catalog_file.MAX_NODES:
+            limit = f"{catalog_file.MAX_NODES:,} values"
+        else:
+            return None
+        return f"This export is over import's limit of {limit}. To import it, split it into smaller files."
 
 
 class _Inline(list[str]):
@@ -82,7 +98,9 @@ def export_catalog(tags: Iterable[Tag], items: Iterable[CatalogItem]) -> Catalog
     ordered = sorted(by_id.values(), key=lambda tag: (tag.key, tag.name))
     sections: dict[ItemKind, list[dict[str, Any]]] = {ItemKind.RESTAURANT: [], ItemKind.HOME: []}
     for item in sorted(items, key=lambda item: (item.key, item.name)):
-        sections[item.kind].append(_entry(item, [by_id[i] for i in item.tag_ids]))
+        # Tags and items are read in one snapshot, so every link resolves; skip one that doesn't,
+        # as import planning does, rather than fail the whole export.
+        sections[item.kind].append(_entry(item, [by_id[i] for i in item.tag_ids if i in by_id]))
     document = {
         "version": FORMAT_VERSION,
         "tags": {kind.value: _Inline(t.name for t in ordered if t.kind is kind) for kind in TagKind},
@@ -95,7 +113,17 @@ def export_catalog(tags: Iterable[Tag], items: Iterable[CatalogItem]) -> Catalog
         restaurants=len(sections[ItemKind.RESTAURANT]),
         home_meals=len(sections[ItemKind.HOME]),
         tags=len(ordered),
+        values=_count_values(document),
     )
+
+
+def _count_values(value: Any) -> int:
+    """Count YAML nodes as import's loader does: every mapping, list, key, and scalar."""
+    if isinstance(value, dict):
+        return 1 + sum(1 + _count_values(v) for v in value.values())
+    if isinstance(value, list):
+        return 1 + sum(_count_values(v) for v in value)
+    return 1
 
 
 def _entry(item: CatalogItem, tags: list[Tag]) -> dict[str, Any]:

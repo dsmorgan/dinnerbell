@@ -345,11 +345,13 @@ To give the [test instance](#test-instance) production's catalog, or to bring a 
 
      With Docker: `docker compose run --rm -T dinnerbell catalog export > catalog.yaml`, and `DINNERBELL_COMPOSE="docker compose"` in front of `deploy/dinnerbell-test`.
 
-     The image's entry point is `dinnerbell`, so `catalog export` after the service name is the command. Keep `-T`: without it, compose runs the command in a terminal, which changes line endings and mixes messages into the file. The export opens the database read-only, so it works whether the instance is running or stopped, and it prints what it exported, such as `Exported 4 restaurants, 4 home meals, 25 tags.`, as a message rather than into the file.
+     The image's entry point is `dinnerbell`, so `catalog export` after the service name is the command. Keep `-T`: without it, compose runs the command in a terminal, which changes line endings and mixes messages into the file. The export opens the database read-only, so it works whether the instance is running or stopped. It runs in the container as the app's user, so the empty `-wal` and `-shm` files SQLite creates next to a stopped instance's database belong to the app. It prints what it exported, such as `Exported 4 restaurants, 4 home meals, 25 tags.`, as a message rather than into the file.
 
 2. In the instance you copy to, open the Catalog page, select **Import a catalog file**, upload `catalog.yaml`, and select **Preview**.
 
 3. Check the preview. It lists the tags and items it will add and, for each item that matches by name, the fields it will change. If the catalogs already match, it says there's nothing to import. Then select **Apply**.
+
+Items and tags match by name, ignoring case, and a match keeps the spelling the instance you copy to already has. A tag of a different kind in each instance, such as `vegetarian` as a protein in one and as other in the other, is an error, and nothing is imported until you merge or rename it on one side.
 
 The import never deletes: items that exist only in the instance you copy to stay, as do each item's cooks. To retire an item in both, set it inactive in one and copy again.
 

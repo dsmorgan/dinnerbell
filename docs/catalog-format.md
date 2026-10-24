@@ -108,7 +108,7 @@ A complete starter file is in [seed/example.yaml](../seed/example.yaml).
 An export is a catalog file of the household's whole catalog: every tag, and every restaurant and home meal, active or not. Use it to copy the catalog to another instance, to keep an editable copy, or to edit many items at once and import the result.
 
 - **In the app.** On the Catalog page, select **Download catalog**. Any member can.
-- **From the command line.** `dinnerbell catalog export` writes the file to standard output. Add `--output FILE` to write a file instead; it refuses to replace an existing file unless you add `--force`. The command reads the database read-only, so it's safe to run while Dinnerbell runs, and it needs the same configuration as the app to find the database. For a container install, see [Copy the catalog between production and test](setup.md#copy-the-catalog-between-production-and-test).
+- **From the command line.** `dinnerbell catalog export` writes the file to standard output. Add `--output FILE` to write a file instead; it refuses to replace an existing file unless you add `--force`. The command needs the same configuration as the app to find the database. It opens the database read-only and never migrates it, so it's safe to run while Dinnerbell runs. When Dinnerbell is stopped, SQLite still creates empty `dinnerbell.db-wal` and `dinnerbell.db-shm` files next to the database, readable only by the user who ran the command. So run it inside the container, as the app's user, never as root on the host: Dinnerbell can't open sidecar files that another user owns. [Copy the catalog between production and test](setup.md#copy-the-catalog-between-production-and-test) shows how.
 
 An export follows these rules, so it imports cleanly:
 
@@ -116,6 +116,7 @@ An export follows these rules, so it imports cleanly:
 - **Everything is sorted.** Tags are sorted by name within each kind, and items by name, so two exports of the same catalog are identical and a diff shows only real changes.
 - **Cooks aren't exported.** They're member emails. An import of an export leaves each item's cooks as they are, so set cooks in the app on each instance.
 - **Nothing personal is exported.** No members, emails, Slack IDs, preferences, vetoes, meal history, or audit records.
+- **Import's limits apply.** Import refuses files over 1 MB or with more than 50,000 values, about 2,000 items. If an export is over either limit, the command warns you; split the file and import each part.
 
 Importing an export into the catalog it came from previews as "The catalog already matches this file." Importing it into another catalog adds the items and tags that are missing, updates the items that match by name, and, like every import, deletes nothing: items that exist only in the target stay.
 

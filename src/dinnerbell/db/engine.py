@@ -3,11 +3,13 @@
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-from sqlalchemy import Engine, create_engine, event
+from sqlalchemy import Engine, create_engine, event, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 BUSY_TIMEOUT_MS = 5000
@@ -42,6 +44,26 @@ def create_readonly_engine(path: Path) -> AsyncEngine:
     it never changes the journal mode, and SQLite can't create the file or write to it."""
     uri = f"file:{quote(str(path.resolve()))}?mode=ro"
     return create_async_engine(f"sqlite+aiosqlite:///{uri}&uri=true", hide_parameters=True)
+
+
+@asynccontextmanager
+async def read_snapshot(session: AsyncSession) -> AsyncIterator[None]:
+    """Make every read inside the block see one snapshot of the database, then end it.
+
+    pysqlite's default (legacy) transaction handling emits BEGIN only before INSERT, UPDATE, and
+    DELETE, so each SELECT otherwise sees whatever was committed when it ran, and a write that
+    commits between two queries shows up in one but not the other. An explicit BEGIN opens a
+    read transaction: under WAL, later writers don't block and aren't seen. The block ends
+    with a rollback, so it can only read.
+    """
+    if session.new or session.dirty or session.deleted:
+        raise RuntimeError("read_snapshot needs a session with no unsaved changes")
+    await session.rollback()  # end the session's own (read-only) transaction, so BEGIN can start one
+    await session.execute(text("BEGIN"))
+    try:
+        yield
+    finally:
+        await session.rollback()
 
 
 def create_sessionmaker(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:

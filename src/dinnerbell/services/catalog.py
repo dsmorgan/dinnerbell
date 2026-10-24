@@ -21,6 +21,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dinnerbell.db.catalog import CatalogRepository, ItemValues
+from dinnerbell.db.engine import read_snapshot
 from dinnerbell.db.events import ProposalRepository, ResponseRepository
 from dinnerbell.db.meals import MealLogRepository
 from dinnerbell.db.preferences import PreferenceRepository
@@ -294,13 +295,19 @@ async def merge_tags(db: AsyncSession, actor: Member, source_id: int, target_id:
 
 async def export(db: AsyncSession, household_id: int) -> CatalogExport:
     """The household's catalog as a catalog file. It reads only tags and items, never members,
-    preferences, or history, so it holds no personal data. Any member may export."""
+    preferences, or history, so it holds no personal data. Any member may export.
+
+    Tags and items are read in one snapshot, so a tag renamed or merged meanwhile can't leave an
+    item pointing at a tag the export doesn't list.
+    """
     repo = CatalogRepository(db)
-    exported = export_catalog(await repo.tags(household_id), await repo.items(household_id))
-    log.info(
-        "catalog exported",
-        extra={"restaurants": exported.restaurants, "home_meals": exported.home_meals, "tags": exported.tags},
-    )
+    async with read_snapshot(db):
+        tags, items = await repo.tags(household_id), await repo.items(household_id)
+    exported = export_catalog(tags, items)
+    counts = {"restaurants": exported.restaurants, "home_meals": exported.home_meals, "tags": exported.tags}
+    log.info("catalog exported", extra=counts)
+    if exported.too_big_to_import:
+        log.warning("catalog export is over the import limits", extra={"bytes": len(exported.data), **counts})
     return exported
 
 

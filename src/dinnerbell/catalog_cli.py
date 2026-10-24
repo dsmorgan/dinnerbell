@@ -9,9 +9,14 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import os
+import sqlite3
 import sys
+import tempfile
+from contextlib import closing, suppress
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from dinnerbell.domain.catalog import ItemKind, TagKind
 from dinnerbell.domain.catalog_export import CatalogExport
@@ -88,14 +93,75 @@ def _exists(output: Path) -> int:
     return EXIT_INVALID
 
 
+def _schema_hint(database: Path) -> str:
+    """Why reading may have failed, when the database's schema isn't this build's."""
+    from dinnerbell.db.migrate import head_revision
+
+    try:
+        with closing(sqlite3.connect(f"file:{quote(str(database.resolve()))}?mode=ro", uri=True)) as db:
+            row = db.execute("SELECT version_num FROM alembic_version").fetchone()
+    except sqlite3.Error:
+        return ""
+    head = head_revision()
+    if row is None or row[0] == head:
+        return ""
+    return (
+        f" The database is at schema revision {row[0]!r}, and this Dinnerbell expects {head!r}. If the database is"
+        " older, start the instance once or run `dinnerbell migrate`, then export again. If it's newer, run the"
+        " image that wrote it."
+    )
+
+
+def _write_stdout(data: bytes) -> bool:
+    try:
+        sys.stdout.flush()
+        sys.stdout.buffer.write(data)
+        sys.stdout.buffer.flush()
+    except BrokenPipeError:
+        # The reader went away, such as `| head`. Point stdout at /dev/null, so Python's own flush
+        # at exit doesn't raise again, and stop without a traceback.
+        with suppress(OSError, ValueError):
+            os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        return False
+    return True
+
+
+def _write_file(output: Path, data: bytes, *, force: bool) -> int | None:
+    """Write ``data`` to ``output``; return an exit code on failure. Without ``force``, the file is
+    created exclusively, so one created meanwhile is never replaced. With it, the data goes to a
+    temporary file next to ``output`` that then replaces it in one step, so a failed write never
+    leaves half a file in place of the old one."""
+    try:
+        if not force:
+            with output.open("xb") as file:
+                file.write(data)
+            return None
+        handle, temporary = tempfile.mkstemp(dir=output.parent, prefix=f".{output.name}.", suffix=".tmp")
+        try:
+            with os.fdopen(handle, "wb") as file:
+                file.write(data)
+            os.replace(temporary, output)
+        except BaseException:
+            with suppress(OSError):
+                os.unlink(temporary)
+            raise
+    except FileExistsError:
+        return _exists(output)
+    except OSError as exc:
+        print(f"Can't write {output}: {exc.strerror or exc}. Nothing exported.", file=sys.stderr)
+        return EXIT_UNREADABLE
+    return None
+
+
 def export(database: Path, output: Path | None, *, force: bool = False) -> int:
     """Export the catalog in the database at ``database``, opened read-only so it never changes
-    the database, its journal mode, or a running instance's view of it."""
+    the database or its journal mode. With the app stopped, SQLite may still create empty -wal
+    and -shm files next to a WAL-mode database; run as the app's user so the app can open them."""
     from sqlalchemy.exc import SQLAlchemyError
 
     from dinnerbell.services import catalog as catalog_service
     from dinnerbell.services.database import open_readonly_database
-    from dinnerbell.services.household import current_household
+    from dinnerbell.services.household import NoHousehold, current_household
 
     if output is not None and not force and output.exists():
         return _exists(output)  # checked again when the file is created; this saves reading first
@@ -115,25 +181,20 @@ def export(database: Path, output: Path | None, *, force: bool = False) -> int:
     try:
         exported = asyncio.run(read())
     except SQLAlchemyError as exc:
-        print(f"Can't read the database at {database} ({type(exc).__name__}). Nothing exported.", file=sys.stderr)
+        hint = _schema_hint(database)
+        print(f"Can't read the database at {database} ({type(exc).__name__}). Nothing exported.{hint}", file=sys.stderr)
         return EXIT_UNREADABLE
-    except LookupError:
+    except NoHousehold:
         print(f"The database at {database} has no household yet, so there's no catalog.", file=sys.stderr)
         return EXIT_UNREADABLE
     if output is None:
-        sys.stdout.flush()
-        sys.stdout.buffer.write(exported.data)
-        sys.stdout.buffer.flush()
-    else:
-        try:
-            with output.open("wb" if force else "xb") as file:  # x: never replace a file created meanwhile
-                file.write(exported.data)
-        except FileExistsError:
-            return _exists(output)
-        except OSError as exc:
-            print(f"Can't write {output}: {exc.strerror or exc}. Nothing exported.", file=sys.stderr)
-            return EXIT_UNREADABLE
+        if not _write_stdout(exported.data):
+            return EXIT_INVALID
+    elif (failed := _write_file(output, exported.data, force=force)) is not None:
+        return failed
     restaurants = _plural(exported.restaurants, "restaurant")
     summary = f"{restaurants}, {_plural(exported.home_meals, 'home meal')}, {_plural(exported.tags, 'tag')}"
     print(f"Exported {summary}{'' if output is None else f' to {output}'}.", file=sys.stderr)
+    if exported.too_big_to_import:
+        print(f"Warning: {exported.too_big_to_import}", file=sys.stderr)
     return EXIT_OK

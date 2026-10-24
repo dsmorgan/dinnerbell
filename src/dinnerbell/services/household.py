@@ -12,8 +12,12 @@ from dinnerbell.db.repositories import HouseholdRepository
 from dinnerbell.domain.household import Household
 
 
+class NoHousehold(LookupError):
+    """The database has no household yet: bootstrap hasn't run."""
+
+
 async def current_household(db: AsyncSession) -> Household:
     household = await HouseholdRepository(db).first()
     if household is None:
-        raise LookupError("no household; bootstrap has not run")
+        raise NoHousehold("no household; bootstrap has not run")
     return household
