@@ -11,6 +11,7 @@ import argparse
 import asyncio
 import os
 import sqlite3
+import stat
 import sys
 import tempfile
 from contextlib import closing, suppress
@@ -42,7 +43,11 @@ def add_parser(commands: Any) -> None:
         "configuration, to find the database.",
     )
     export.add_argument("--output", "-o", type=Path, metavar="FILE", help="write to FILE instead of standard output")
-    export.add_argument("--force", action="store_true", help="replace FILE if it already exists")
+    export.add_argument(
+        "--force",
+        action="store_true",
+        help="replace FILE if it's a regular file or a symlink (the link itself is replaced, not its target)",
+    )
 
 
 def run(args: argparse.Namespace) -> int:
@@ -126,25 +131,61 @@ def _write_stdout(data: bytes) -> bool:
     return True
 
 
+def _not_a_file(output: Path) -> int | None:
+    """Refuse to replace anything but a regular file or a symlink, such as a directory, a FIFO,
+    or a device. Returns an exit code, or None when ``output`` is missing or may be replaced."""
+    try:
+        mode = os.lstat(output).st_mode
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        print(f"Can't write {output}: {exc.strerror or exc}. Nothing exported.", file=sys.stderr)
+        return EXIT_UNREADABLE
+    if stat.S_ISREG(mode) or stat.S_ISLNK(mode):
+        return None
+    print(f"{output} isn't a regular file, so --force won't replace it. Nothing exported.", file=sys.stderr)
+    return EXIT_INVALID
+
+
+def _replace(output: Path, data: bytes) -> int | None:
+    """Write ``data`` to a temporary file next to ``output``, flush it to disk, and rename it over
+    ``output`` in one step, so a failed write never leaves half a file in place of the old one.
+    A symlink at ``output`` is replaced, not written through. Never writes to ``output`` in
+    place, which could follow a symlink swapped in meanwhile or write through a hard link."""
+    try:
+        handle, temporary = tempfile.mkstemp(dir=output.parent, prefix=f".{output.name}.", suffix=".tmp")
+    except OSError as exc:
+        print(
+            f"Can't write next to {output}: {exc.strerror or exc}. Nothing exported. "
+            "Choose a writable directory, or write to standard output.",
+            file=sys.stderr,
+        )
+        return EXIT_UNREADABLE
+    try:
+        with os.fdopen(handle, "wb") as file:
+            file.write(data)
+            file.flush()
+            os.fsync(file.fileno())
+        os.replace(temporary, output)
+    except BaseException:
+        with suppress(OSError):
+            os.unlink(temporary)
+        raise
+    return None
+
+
 def _write_file(output: Path, data: bytes, *, force: bool) -> int | None:
     """Write ``data`` to ``output``; return an exit code on failure. Without ``force``, the file is
-    created exclusively, so one created meanwhile is never replaced. With it, the data goes to a
-    temporary file next to ``output`` that then replaces it in one step, so a failed write never
-    leaves half a file in place of the old one."""
+    created exclusively, so one created meanwhile is never replaced. With it, only a missing file,
+    a regular file, or a symlink is replaced (see ``_replace``)."""
     try:
         if not force:
             with output.open("xb") as file:
                 file.write(data)
             return None
-        handle, temporary = tempfile.mkstemp(dir=output.parent, prefix=f".{output.name}.", suffix=".tmp")
-        try:
-            with os.fdopen(handle, "wb") as file:
-                file.write(data)
-            os.replace(temporary, output)
-        except BaseException:
-            with suppress(OSError):
-                os.unlink(temporary)
-            raise
+        if (refused := _not_a_file(output)) is not None:
+            return refused
+        return _replace(output, data)
     except FileExistsError:
         return _exists(output)
     except OSError as exc:
@@ -165,6 +206,8 @@ def export(database: Path, output: Path | None, *, force: bool = False) -> int:
 
     if output is not None and not force and output.exists():
         return _exists(output)  # checked again when the file is created; this saves reading first
+    if output is not None and force and (refused := _not_a_file(output)) is not None:
+        return refused
     if not database.exists():
         print(f"No database at {database}. Nothing exported.", file=sys.stderr)
         return EXIT_UNREADABLE
