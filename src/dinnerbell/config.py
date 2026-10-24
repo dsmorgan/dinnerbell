@@ -14,6 +14,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from pydantic import Field, SecretStr, ValidationError, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 from sqlalchemy.engine import make_url
+from sqlalchemy.exc import ArgumentError
 
 from dinnerbell import __version__
 from dinnerbell.domain import flags
@@ -84,7 +85,11 @@ class Settings(BaseSettings):
     @field_validator("database_url")
     @classmethod
     def _check_database_url(cls, value: str) -> str:
-        url = make_url(value)
+        try:
+            url = make_url(value)
+        except (ArgumentError, ValueError):
+            # Never the parser's message: it can quote part of the URL, such as a password.
+            raise ValueError("must be a SQLAlchemy URL such as sqlite:////data/dinnerbell.db") from None
         if url.get_backend_name() != "sqlite":
             raise ValueError("only sqlite:/// URLs are supported")
         if not url.database or url.database == ":memory:":

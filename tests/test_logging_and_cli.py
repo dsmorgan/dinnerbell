@@ -150,6 +150,7 @@ def test_config_check_names_invalid_settings_without_values(
         "DINNERBELL_ADMIN_EMAIL": "not-an-email-address",
         "DINNERBELL_LOG_LEVEL": "loud-and-secret",
         "DINNERBELL_TRUSTED_PROXIES": "10.0.0.1,proxy-secret-name",
+        "DINNERBELL_DATABASE_URL": "sqlite://user:db-password@host:PORTLEAK/x",
     }
     for key, value in (REQUIRED | secrets).items():
         monkeypatch.setenv(key, value)
@@ -159,7 +160,21 @@ def test_config_check_names_invalid_settings_without_values(
         assert f"  - {name}: " in err, name
     for key, value in (REQUIRED | secrets).items():
         assert value not in err, key
-    for fragment in ("hunter2", "short-secret", "wrong-kind", "swapped", "loud", "proxy-secret"):
+    for fragment in ("hunter2", "short-secret", "wrong-kind", "swapped", "loud", "proxy-secret", "PORTLEAK", "db-pass"):
+        assert fragment not in err
+
+
+@pytest.mark.parametrize("url", ["garbage", "sqlite://user:db-password@host:PORTLEAK/x", "postgresql://u:p@h/x"])
+def test_config_check_rejects_a_bad_database_url_without_a_traceback(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], url: str
+) -> None:
+    for key, value in REQUIRED.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setenv("DINNERBELL_DATABASE_URL", url)
+    assert cli.main(["config", "check"]) == 2
+    err = capsys.readouterr().err
+    assert "  - DINNERBELL_DATABASE_URL: " in err
+    for fragment in ("garbage", "PORTLEAK", "db-password", "Traceback"):
         assert fragment not in err
 
 

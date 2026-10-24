@@ -15,10 +15,10 @@
 # older let .env win over the shell, so this script refuses to run if .env sets any of them.
 # Test publishes on production's DINNERBELL_BIND, read from .env.
 #
-# Before a command that starts a container (up, run, start, restart, create), it refuses an env
-# file that shares a secret with .env, and runs `dinnerbell config check` on the env file in a
-# one-off container of the same image, with no network, volume, or published port, so a missing
-# setting shows up here instead of as a restart loop.
+# Before any command that may start a container (all but down, stop, logs, and the like), it
+# refuses an env file that shares a secret with .env, and runs `dinnerbell config check` on the
+# env file in a one-off container of the same image, with no network, volume, or published port,
+# so a missing setting shows up here instead of as a restart loop.
 #
 # Overrides: DINNERBELL_TAG (default main), DINNERBELL_ENV_FILE (default .env.test),
 # DINNERBELL_PORT (default 8014), DINNERBELL_COMPOSE (default podman-compose; for Docker use
@@ -44,12 +44,79 @@ assignments() {
     grep -E "^[[:space:]]*(export[[:space:]]+)?$2[[:space:]]*=" "$1" || true
 }
 
-# The value an env file gives $2: the last assignment, without a trailing " # comment", quotes,
-# or surrounding spaces. Empty when unset. Values can be secrets, so never print the result.
+# An awk program that reads env files as python-dotenv 1.2 reads them for podman-compose, and
+# keeps the last value each file gives the variable `name`: "export ", spaces around "=", and a
+# byte-order mark are ignored. A quoted value ends at the first quote that no backslash escapes,
+# and only spaces or a comment may follow it; then its backslash escapes are decoded. An unquoted
+# value ends before a "#" that follows a space. A line it can't parse is skipped; values that span
+# lines and ${...} aren't supported. With anycase=yes, the name matches in any case, as
+# pydantic-settings reads it. With mode=print, it prints the first file's value; otherwise it
+# succeeds when two files give the same non-empty value, so secrets never leave awk. Run it with
+# LC_ALL=C so every awk counts bytes.
+# shellcheck disable=SC2016 # awk's own $0, not the shell's.
+DOTENV_AWK='
+    function unescape(s, q,    out, j, c, d, e) {
+        out = ""
+        for (j = 1; j <= length(s); j++) {
+            c = substr(s, j, 1)
+            d = substr(s, j + 1, 1)
+            if (c == "\\" && d != "" &&
+                (q == "\047" ? index("\\\047", d) : index("\\\"\047abfnrtv", d))) {
+                e = index("abfnrtv", d)
+                if (q == "\"" && e) d = substr("\a\b\f\n\r\t\v", e, 1)
+                out = out d
+                j++
+            } else {
+                out = out c
+            }
+        }
+        return out
+    }
+    FILENAME != file { file = FILENAME; n++ }
+    FNR == 1 && substr($0, 1, 3) == "\357\273\277" { $0 = substr($0, 4) }
+    {
+        line = $0
+        sub(/\r$/, "", line)
+        if (!match(line, /^[ \t]*(export[ \t]+)?[^=# \t]+[ \t]*=/)) next
+        key = substr(line, 1, RLENGTH)
+        rest = substr(line, RLENGTH + 1)
+        sub(/^[ \t]*(export[ \t]+)?/, "", key)
+        sub(/[ \t]*=$/, "", key)
+        if (anycase == "yes") { if (toupper(key) != toupper(name)) next } else if (key != name) next
+        spaced = rest ~ /^[ \t]/
+        sub(/^[ \t]*/, "", rest)
+        q = substr(rest, 1, 1)
+        if (q != "\"" && q != "\047") {
+            # "NAME= # comment" is empty, and "NAME=#value" is "#value".
+            if (spaced && q == "#") rest = ""
+            sub(/[ \t]+#.*$/, "", rest)
+            sub(/[ \t]+$/, "", rest)
+            found[n] = rest
+            next
+        }
+        close_at = 0
+        for (i = 2; i <= length(rest); i++) {
+            c = substr(rest, i, 1)
+            if (c == "\\") i++
+            else if (c == q) { close_at = i; break }
+        }
+        if (!close_at || substr(rest, close_at + 1) !~ /^[ \t]*(#.*)?$/) next
+        found[n] = unescape(substr(rest, 2, close_at - 2), q)
+    }
+    END {
+        if (mode == "print") printf "%s", found[1]
+        else exit !(found[1] != "" && found[1] == found[2])
+    }
+'
+
+# The value an env file gives $2. Never use it for a secret; compare those with `shares`.
 value() {
-    assignments "$1" "$2" | tail -n 1 |
-        sed -e 's/^[^=]*=//' -e 's/[[:space:]][[:space:]]*#.*$//' -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' |
-        tr -d "\"'"
+    LC_ALL=C awk -v name="$2" -v mode=print "$DOTENV_AWK" "$1"
+}
+
+# Whether env files $1 and $2 give variable $3, in any case, the same non-empty value.
+shares() {
+    LC_ALL=C awk -v name="$3" -v anycase=yes "$DOTENV_AWK" "$1" "$2"
 }
 
 # A file's inode number, following symlinks, to tell whether two paths are the same file.
@@ -82,6 +149,9 @@ export DINNERBELL_TAG DINNERBELL_ENV_FILE DINNERBELL_PORT
 
 [ -f "$DINNERBELL_ENV_FILE" ] ||
     fail "$DINNERBELL_ENV_FILE not found. Copy .env.test.example to .env.test and fill it in."
+# Every check below reads both files; one it can't read would pass silently.
+[ -r "$DINNERBELL_ENV_FILE" ] || fail "can't read $DINNERBELL_ENV_FILE. Run this script as the user who owns it."
+[ ! -e .env ] || [ -r .env ] || fail "can't read .env. Run this script as the user who owns it."
 if [ -e .env ] && [ "$(inode "$DINNERBELL_ENV_FILE")" = "$(inode .env)" ]; then
     fail "refusing to use production's .env. Test needs its own env file, Slack app, and secret key."
 fi
@@ -111,24 +181,22 @@ fi
 [ "$(normalize "$production")" != "$PROJECT" ] ||
     fail "production's compose project is also named $PROJECT. Rename the clone's directory (for example to dinnerbell) or change COMPOSE_PROJECT_NAME."
 
-# Commands that start a container get the pre-flight checks below. Others, such as down, logs,
-# and pull, run even when the env file is broken, so you can always stop and inspect test.
+# Every command gets the pre-flight checks below, except those known not to start a container,
+# which run even when the env file is broken, so you can always stop and inspect test.
 case "${1:-}" in
-    up | run | start | restart | create) starts=yes ;;
-    *) starts=no ;;
+    down | stop | kill | rm | logs | ps | pull | config | images | top | port | pause | unpause | exec | version)
+        starts=no ;;
+    *) starts=yes ;;
 esac
 
 # Shared tokens split Slack events between the instances; a shared secret key lets one instance's
-# cookies and CSRF tokens work on the other. Compare in the shell, never through a command line
-# or a message, so neither value is printed or visible in ps.
+# cookies and CSRF tokens work on the other. awk compares the values itself, so they never reach
+# the shell, a command line, or a message.
 if [ "$starts" = yes ] && [ -f .env ]; then
     for name in $SECRETS; do
-        test_value=$(value "$DINNERBELL_ENV_FILE" "$name")
-        if [ -n "$test_value" ] && [ "$test_value" = "$(value .env "$name")" ]; then
+        ! shares "$DINNERBELL_ENV_FILE" .env "$name" ||
             fail "$DINNERBELL_ENV_FILE and .env have the same $name. Give test its own: see \"Write .env.test\" in docs/setup.md."
-        fi
     done
-    test_value=
 fi
 
 echo "dinnerbell-test: project $PROJECT, volume $VOLUME, env file $DINNERBELL_ENV_FILE, image tag $DINNERBELL_TAG, port $DINNERBELL_PORT" >&2
@@ -148,14 +216,19 @@ if [ "$starts" = yes ]; then
     # later do (docker compose's parser agrees on quotes, "export ", and comments). podman's own
     # --env-file would keep quotes, and quotes a line it can't parse, value and all. The image
     # declares /data a volume, so the engine adds an empty anonymous one, and --rm deletes it.
-    # The output names settings, never values.
+    # The output names settings and line numbers, never values; --log-driver none keeps even that
+    # out of the journal.
     status=0
-    problems=$("$engine" run -i --rm --pull=never --network none --read-only --cap-drop ALL \
-        --security-opt no-new-privileges "$image" config check --env-file - \
+    problems=$("$engine" run -i --rm --pull=never --log-driver none --network none --read-only \
+        --cap-drop ALL --security-opt no-new-privileges "$image" config check --env-file - \
         <"$DINNERBELL_ENV_FILE" 2>&1 >/dev/null) || status=$?
-    if [ "$status" -eq 2 ] && printf '%s' "$problems" | grep -q "invalid choice: 'config'"; then
+    if [ "$status" -eq 2 ] &&
+        printf '%s\n' "$problems" | grep -q "^dinnerbell: error: argument COMMAND: invalid choice: 'config'"; then
         echo "dinnerbell-test: $image predates dinnerbell config check; starting without it." >&2
-    elif [ "$status" -ne 0 ]; then
+    elif [ "$status" -eq 0 ]; then
+        # Warnings, such as a line python-dotenv can't parse.
+        [ -z "$problems" ] || printf '%s\n' "$problems" >&2
+    else
         printf '%s\n' "$problems" >&2
         [ "$status" -eq 2 ] ||
             fail "couldn't run the configuration check in $image (exit $status). Nothing was started."
