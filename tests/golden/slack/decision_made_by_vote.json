@@ -92,6 +92,16 @@
           },
           "type": "button",
           "url": "https://dinnerbell.example.com/events/7"
+        },
+        {
+          "action_id": "cancel_call",
+          "text": {
+            "emoji": true,
+            "text": "Call it off",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "cancel:7:1"
         }
       ],
       "type": "actions"

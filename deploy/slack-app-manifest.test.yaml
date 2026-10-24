@@ -28,8 +28,8 @@ features:
     # Must match DINNERBELL_SLACK_COMMAND in .env.test. A workspace can't have
     # two apps with the same command, so test can't use /dinnerbell.
     - command: /dinnerbell-test
-      description: Start a test call, or open your preferences, the catalog, or history
-      usage_hint: "[call | prefs | catalog | history | help]"
+      description: Start or call off a test call, or open your preferences, the catalog, or history
+      usage_hint: "[call | cancel | prefs | catalog | history | help]"
       should_escape: false
 
 oauth_config:

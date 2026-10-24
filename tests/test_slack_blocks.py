@@ -106,7 +106,7 @@ def test_direct_messages_and_channel_posts_differ_where_they_should() -> None:
 def test_links_point_at_the_event_page() -> None:
     payload = json.dumps(samples.preview("decision_made"))
     assert "https://dinnerbell.example.com/events/7" in payload
-    assert samples.preview("call_updated", "https://food.home.test")["blocks"][-1]["elements"][-1]["url"] == (
+    assert samples.preview("call_updated", "https://food.home.test")["blocks"][-1]["elements"][-2]["url"] == (
         "https://food.home.test/events/7"
     )
 
@@ -126,13 +126,69 @@ def test_buttons_follow_the_state() -> None:
         "coordinate",
         "details",
         "link_event",
+        "call_menu",
     ]
-    assert action_ids("call_updated_voting") == ["link_event"]  # Alex coordinates already
+    assert action_ids("call_updated_voting") == ["link_event", "call_menu"]  # Alex coordinates already
     assert action_ids("proposals_updated") == ["vote", "lock"] * 3 + ["add_proposal", "link_event"]
     assert action_ids("proposals_updated_closed") == ["link_event"]
-    assert action_ids("decision_made") == ["mark_done", "link_event"]
-    assert action_ids("decision_made_by_vote") == ["mark_done", "link_item", "link_order", "link_event"]
+    assert action_ids("decision_made") == ["mark_done", "link_event", "cancel_call"]
+    assert action_ids("decision_made_by_vote") == ["mark_done", "link_item", "link_order", "link_event", "cancel_call"]
     assert action_ids("decision_updated_done") == ["link_event"]
+    assert action_ids("decision_updated_cancelled") == ["link_event"]
+    for kind in ("call_updated_done", "call_updated_abandoned", "call_updated_cancelled"):
+        assert {"call_menu", "cancel_call"}.isdisjoint(action_ids(kind))
+
+
+def test_the_call_menu_offers_what_the_state_allows() -> None:
+    """Everyone sees the same ⋯ menu, so it follows the call's state, not the person (FR-56)."""
+
+    def menu(kind: str) -> list[tuple[str, str]]:
+        (found,) = [
+            e
+            for b in samples.preview(kind)["blocks"]
+            if b["type"] == "actions"
+            for e in b["elements"]
+            if e["type"] == "overflow"
+        ]
+        assert found["action_id"] == "call_menu" and "confirm" not in found  # Slack can't confirm one option
+        return [(o["text"]["text"], o["value"]) for o in found["options"]]
+
+    def lone_button(kind: str) -> dict[str, object]:
+        blocks = samples.preview(kind)["blocks"]
+        assert "overflow" not in json.dumps(blocks)
+        (found,) = [
+            e for b in blocks if b["type"] == "actions" for e in b["elements"] if e["action_id"] == "cancel_call"
+        ]
+        return {"text": found["text"]["text"], "value": found["value"], "style": found.get("style")}
+
+    assert menu("call_updated") == [("Call it off", "cancel:7:1"), ("Start the vote now", "close:7:1")]
+    assert menu("call_updated_voting") == [("Call it off", "cancel:7:1"), ("Decide now", "close:7:1")]
+    # Once decided, Call it off is the only option left: a plain button, never a one-option menu.
+    called_off = {"text": "Call it off", "value": "cancel:7:1", "style": None}
+    assert lone_button("call_updated_decided") == lone_button("decision_made") == called_off
+    rerun = render(note.CallUpdated(replace(samples.VOTING, run=2)), CTX)
+    assert "cancel:7:2" in json.dumps(rerun.payload()) and "close:7:2" in json.dumps(rerun.payload())
+    scheduled = render(note.CallUpdated(samples.event(EventState.SCHEDULED)), CTX)
+    assert "call_menu" not in json.dumps(scheduled.payload())  # never posted, but just in case
+
+
+def test_a_called_off_decision_says_who_and_why_escaped() -> None:
+    struck = samples.preview("decision_updated_cancelled")["blocks"][0]["text"]["text"]
+    assert struck == "~Sam's Tacos~ Called off by Alex. “Pizza at Grandma's”"
+    sneaky = replace(samples.CANCELLED, ended_by=note.PersonInfo(9, "<!here>"), end_note="<@U02SAM> & co")
+    message = render(note.DecisionUpdated(sneaky, samples.DECISION), CTX)
+    check_message(message.payload())
+    assert message.blocks[0]["text"]["text"] == "~Sam's Tacos~ Called off by &lt;!here&gt;. “&lt;@U02SAM&gt; &amp; co”"
+
+
+def test_a_reason_cant_break_the_strike_through() -> None:
+    """Beside ``~item~``, a reason's own mrkdwn markers could end or restyle the strike."""
+    marked = replace(samples.CANCELLED, end_note="~*Grandma's*~ _pizza_ `now`")
+    decision = render(note.DecisionUpdated(marked, samples.DECISION), CTX)
+    check_message(decision.payload())
+    assert decision.blocks[0]["text"]["text"] == "~Sam's Tacos~ Called off by Alex. “Grandma's pizza now”"
+    call = render(note.CallUpdated(marked), CTX)  # the call message keeps the reason as written
+    assert call.blocks[1]["text"]["text"] == "Called off by Alex. “~*Grandma's*~ _pizza_ `now`”"
 
 
 # Escaping and limits -------------------------------------------------------------------------------

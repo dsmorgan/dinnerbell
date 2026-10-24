@@ -51,6 +51,7 @@ from dinnerbell.domain.events import (
     ProposalSource,
     RoleOffer,
     Status,
+    Window,
     check_ad_hoc_day,
     check_can_cancel,
     check_can_close_window,
@@ -62,6 +63,7 @@ from dinnerbell.domain.events import (
     check_can_vote,
     check_claim_coordinator,
     check_details,
+    check_expected_window,
     check_handoff,
     check_proposal_room,
     check_run,
@@ -557,15 +559,24 @@ def _audience(ctx: CallContext) -> tuple[note.PersonInfo, ...]:
 
 
 async def close_window(
-    db: AsyncSession, actor: Member, event_id: int, *, run: int | None = None, now: datetime
+    db: AsyncSession,
+    actor: Member,
+    event_id: int,
+    *,
+    run: int | None = None,
+    expected_window: Window | None = None,
+    now: datetime,
 ) -> None:
     """Close the open window now (``check_can_close_window``): "Start the vote now" while
     collecting, "Decide now" while voting. The call then advances at once, as at its deadline:
     to voting or on-your-own, or to a decision. ``run``, when given, is the run the actor saw
-    (``check_run``). Audited as ``event.window_closed``."""
+    (``check_run``). ``expected_window``, when given, is the window they confirmed closing
+    (``check_expected_window``): if another is open, or that one already closed, nothing
+    changes. Audited as ``event.window_closed``."""
     async with locked_event(db, actor.household_id, event_id, now) as event:
         check_run(event, run)
         window = check_can_close_window(event, actor)
+        check_expected_window(event, window, expected_window, now=now)
         current, moved = await lifecycle.move_window(db, event, window, None, now)
         capacity = ActingAs.COORDINATOR if is_coordinator(event, actor) else ActingAs.ADMIN
         payload = {"window": window.value, "from": current.isoformat(), "to": moved.isoformat(), "as": capacity.value}

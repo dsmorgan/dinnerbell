@@ -171,6 +171,13 @@ async def event_view(db: AsyncSession, actor: Member, event_id: int, *, now: dat
     return view(await load(db, event), actor, await _today(db, actor, now), now)
 
 
+async def calls_on(db: AsyncSession, actor: Member, day: date) -> list[Event]:
+    """The actor's household's calls on ``day``, in slot order, open or not."""
+    events = EventRepository(db)
+    found = [await events.call_for(actor.household_id, slot, day) for slot in Slot]
+    return [event for event in found if event is not None]
+
+
 async def today_view(db: AsyncSession, actor: Member, *, now: datetime) -> TodayView:
     today = await _today(db, actor, now)
     events = await EventRepository(db).for_today(actor.household_id, today)

@@ -197,7 +197,9 @@ def block_action(
     channel: str | None = CHANNEL,
     team: str | None = TEAM,
     home: bool = False,
+    selected: str | None = None,
 ) -> dict[str, Any]:
+    """A button press, or with ``selected``, an overflow menu option picked (its value)."""
     payload: dict[str, Any] = {
         "type": "block_actions",
         "team": {"id": team, "domain": "home"} if team else None,
@@ -216,6 +218,14 @@ def block_action(
     }
     if value is not None:
         payload["actions"][0]["value"] = value
+    if selected is not None:
+        payload["actions"][0] = {
+            "action_id": action_id,
+            "block_id": "more",
+            "type": "overflow",
+            "action_ts": "1.2",
+            "selected_option": {"text": {"type": "plain_text", "text": "x"}, "value": selected},
+        }
     if home:
         payload["container"] = {"type": "view", "view_id": "V0HOME"}
         payload["view"] = {"id": "V0HOME", "type": "home"}

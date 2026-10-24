@@ -9,7 +9,7 @@ same notification and directory always give the same JSON, which the golden test
 from __future__ import annotations
 
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from dinnerbell.channels.slack import ids
@@ -34,13 +34,15 @@ from dinnerbell.channels.slack.blocks import (
     link,
     local_clock,
     names,
+    option,
+    overflow,
     plural,
     safe_url,
     section,
 )
 from dinnerbell.domain import notifications as note
 from dinnerbell.domain.catalog import Mode
-from dinnerbell.domain.events import AssignmentRole, EndReason, EventState, RoleOffer, Status
+from dinnerbell.domain.events import AssignmentRole, EndReason, EventState, RoleOffer, Status, Window
 from dinnerbell.domain.meals import Slot
 
 MAX_PROPOSALS = 10
@@ -60,6 +62,13 @@ ROLE_PHRASES = {
     AssignmentRole.ORDER: "ordering",
     AssignmentRole.COORDINATOR: "coordinating",
 }
+
+CLOSE_LABELS = {Window.RESPOND: "Start the vote now", Window.VOTE: "Decide now"}
+"""Close now, named for what it does to the open window (FR-56)."""
+MENU_WINDOWS = {EventState.COLLECTING: Window.RESPOND, EventState.VOTING: Window.VOTE}
+CALL_OFF = "Call it off"
+MARKERS = str.maketrans("", "", "~*_`")
+"""mrkdwn's emphasis and code markers, dropped from text that sits inside other formatting."""
 
 
 @dataclass(frozen=True)
@@ -139,6 +148,22 @@ def _title(event: note.EventInfo) -> str:
 
 def _web_button(ctx: RenderContext, event: note.EventInfo, text: str = "View on web") -> Block:
     return button(text, f"{ids.LINK_PREFIX}event", url=ctx.url(event.path))
+
+
+def call_menu(event: note.EventInfo) -> list[Block]:
+    """The ⋯ menu for a posted call that's still open: **Call it off**, and Close now while a
+    window is open. Everyone sees the same message, so the menu lists what the call's state
+    allows; the server checks who may when someone picks one. Each value names the run the
+    message shows. Once decided, only **Call it off** is left; Slack has required two options
+    in an overflow menu, so it's a plain button then, which opens the same modal."""
+    if event.state not in {EventState.COLLECTING, EventState.VOTING, EventState.DECIDED}:
+        return []
+    call_off = ids.menu_value(ids.MenuChoice.CANCEL, event.id, event.run)
+    window = MENU_WINDOWS.get(event.state)
+    if window is None:
+        return [button(CALL_OFF, ids.CANCEL_CALL, call_off)]
+    close = ids.menu_value(ids.MenuChoice.CLOSE, event.id, event.run)
+    return [overflow(ids.CALL_MENU, [option(CALL_OFF, call_off), option(CLOSE_LABELS[window], close)])]
 
 
 # The call message --------------------------------------------------------------------------------
@@ -268,6 +293,7 @@ def call_message(
     if event.state is EventState.COLLECTING:
         more.append(button("Details", ids.DETAILS, value))
     more.append(_web_button(ctx, event))
+    more += call_menu(event)
     blocks.append(actions(*more, block_id="more"))
     text = f"{_title(event)}: {plain_status.splitlines()[0]}"
     return _finish(text.replace("*", ""), blocks)
@@ -370,7 +396,9 @@ def decision_message(
     if event.state is EventState.DONE:
         top = f"*{_slot(event).capitalize()} is done: {item}.* Thanks to everyone who pitched in!"
     elif event.state is EventState.CANCELLED:
-        top = f"~{item}~ This {_slot(event)} was cancelled."
+        # The reason sits beside a strike-through, so mrkdwn markers in it could break it.
+        reason = event.end_note.translate(MARKERS) if event.end_note else event.end_note
+        top = f"~{item}~ {escape(_call_status(replace(event, end_note=reason)))}"
     else:
         top = f"*{_slot(event).capitalize()} is decided: {item}* · {_kind(proposal)}"
     if locked_by is not None and event.state is not EventState.CANCELLED:
@@ -393,6 +421,7 @@ def decision_message(
         buttons.append(mark_done_button(event))
     buttons += _item_buttons(proposal.item, proposal.mode)
     buttons.append(_web_button(ctx, event))
+    buttons += call_menu(event)
     blocks.append(actions(*buttons, block_id="more"))
     text = f"{_slot(event).capitalize()} on {day_label(event.day)}: {proposal.item.name} at " + local_clock(
         decision.meal_time, event.timezone

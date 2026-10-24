@@ -3,8 +3,8 @@
 
 Limits are from Slack's Block Kit reference (docs.slack.dev/reference/block-kit): 50 blocks
 per message and 100 per modal or Home tab; header text 150 characters; section text 3,000 and
-each field 2,000; button text 75, value 2,000, URL 3,000; option text 75 and value 150.
-Everything a person typed goes through ``escape`` before it reaches mrkdwn, so a name like
+each field 2,000; button text 75, value 2,000, URL 3,000; option text 75 and value 150; an
+overflow menu 5 options. Everything a person typed goes through ``escape`` before it reaches mrkdwn, so a name like
 ``<!channel>`` can't ping anyone.
 """
 
@@ -35,6 +35,7 @@ MAX_CONTEXT_ELEMENTS = 10
 MAX_OPTION_TEXT = 75
 MAX_OPTION_VALUE = 150
 MAX_OPTIONS = 100
+MAX_OVERFLOW_OPTIONS = 5
 MAX_MODAL_TITLE = 24
 MAX_FALLBACK = 4000
 """Slack recommends keeping a message's top-level ``text`` under 4,000 characters."""
@@ -219,3 +220,8 @@ def confirm(title: str, text: str, yes: str, no: str = "Not yet") -> dict[str, A
 
 def option(text: str, value: str) -> dict[str, Any]:
     return {"text": plain(text, MAX_OPTION_TEXT), "value": value[:MAX_OPTION_VALUE]}
+
+
+def overflow(action_id: str, options: Iterable[dict[str, Any]]) -> Block:
+    """A ⋯ menu. Slack has no confirm per option, only one for the whole menu."""
+    return {"type": "overflow", "action_id": action_id, "options": list(options)[:MAX_OVERFLOW_OPTIONS]}

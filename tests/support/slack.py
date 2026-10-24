@@ -79,10 +79,23 @@ class Slack:
     async def click(self, who: str, action_id: str, value: str | None, **kwargs: Any) -> BoltResponse:
         return await self._send("interactive", block_action(SLACK_IDS.get(who, who), action_id, value, **kwargs))
 
+    async def choose(self, who: str, value: str, **kwargs: Any) -> BoltResponse:
+        """Pick the ⋯ menu option with ``value`` on a call or decision message."""
+        payload = block_action(SLACK_IDS.get(who, who), ids.CALL_MENU, None, selected=value, **kwargs)
+        return await self._send("interactive", payload)
+
     async def submit(
-        self, who: str, callback_id: str, values: dict[str, Any], event_id: int, **kwargs: Any
+        self,
+        who: str,
+        callback_id: str,
+        values: dict[str, Any],
+        event_id: int,
+        *,
+        origin: ids.ViewOrigin | None = None,
+        **kwargs: Any,
     ) -> BoltResponse:
-        metadata = ids.ViewOrigin(event_id, CHANNEL).encode()
+        """``origin`` is the modal's metadata; by default, opened in the channel."""
+        metadata = (origin or ids.ViewOrigin(event_id, CHANNEL)).encode()
         payload = view_submission(SLACK_IDS.get(who, who), callback_id, values, metadata, **kwargs)
         return await self._send("interactive", payload)
 

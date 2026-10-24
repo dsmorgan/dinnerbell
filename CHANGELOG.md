@@ -23,6 +23,12 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 - Starting a call for a slot and day that was called off starts it again, for any member, as long as it isn't past the usual meal time plus two hours. It starts with no coordinator.
 - On the web, a call's card on Today and on its own page shows **Call it off** to whoever may call it off, and the coordinator and admins get **Start the vote now** while responses are open and **Decide now** while voting. **Call it off** opens a small form with an optional reason and asks you to confirm. A called-off call reads "Called off by {name}" with the reason, and anyone can select **Start dinner again** (or lunch) until the usual meal time plus two hours. Every post is checked again on the server, and a refusal shows on the card in plain words. A card left open while someone called the call off and started it again can't act on the new run; it asks you to reload.
 - Admins can skip one day's call, today or up to 7 days ahead, before it goes out, from **Skip a day** on Admin > Schedule. It offers only meals that have a daily call, and refuses a meal that's off in the schedule. Nothing is posted, the skip is audited, and anyone can still start that call on the day.
+- Call it off and Close now in Slack (FR-56):
+  - While a window is open, the call message has a ⋯ menu with **Call it off** and **Start the vote now** or **Decide now**. Once decided, the call and decision messages have a **Call it off** button. Anyone who isn't allowed gets a private reply saying who can.
+  - **Call it off** opens a modal with an optional reason. Close now asks you to confirm, and changes nothing if the call has moved on by then, or if someone else closed the window first. A menu, button, or modal left over from before a call was re-run or started again does nothing.
+  - App Home shows **Call it off** and Close now only to people who can use them, and **Start dinner again** or **Start lunch again** after a call-off, until it's too late.
+  - `/dinnerbell cancel [lunch|dinner] [day] [reason]` calls off a call. Without a slot, it calls off that day's only open call, and asks which one when lunch and dinner are both open.
+  - A called-off decision message is struck through and says who called it off and why.
 
 ### Changed
 
@@ -35,11 +41,13 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ### Security
 
+- Slack button, menu, and modal values must match exactly what Dinnerbell wrote. A value with a trailing newline, such as `7\n`, is now refused like any other value it didn't write.
 - Files served from `/static` carry a Content-Security-Policy that allows nothing (`default-src 'none'` with `sandbox`), so an SVG opened directly can't run script or load anything.
 
 ### Upgrade notes
 
 - The database migrates to revision `0006_event_ended_by` when Dinnerbell starts. It adds two empty columns to `event`, so it's quick. Back up first, as always.
+- Optional: the Slack app manifests list `cancel` in the slash command's usage hint. To show it in Slack, open the app's **Slash Commands** settings and edit the command's usage hint and description to match `deploy/slack-app-manifest.yaml` (or `deploy/slack-app-manifest.test.yaml` for test). `/dinnerbell cancel` works without this.
 
 ## [0.2.0] - 2026-10-23
 
