@@ -35,6 +35,27 @@ CANCEL_CALL = "cancel_call"
 ``menu_value(MenuChoice.CANCEL, ...)``."""
 CLOSE_WINDOW = "close_window"
 """Close now on the Home tab. Its value is a ``window_value``: the window the button closes."""
+CARD_RESPOND = {"card_in": Status.IN, "card_maybe": Status.MAYBE, "card_out": Status.OUT}
+"""In, Maybe, and Out on a message only one person sees: their Your answer card or their
+reminder. Every card button's value is a ``card_value``, which names the run it was drawn for."""
+CARD_ACTION_FOR_STATUS = {status: action for action, status in CARD_RESPOND.items()}
+CARD_OFFER = {
+    "card_offer_cook": RoleOffer.COOK,
+    "card_offer_pickup": RoleOffer.PICKUP,
+    "card_offer_order": RoleOffer.ORDER,
+}
+CARD_WITHDRAW = {
+    "card_withdraw_cook": RoleOffer.COOK,
+    "card_withdraw_pickup": RoleOffer.PICKUP,
+    "card_withdraw_order": RoleOffer.ORDER,
+}
+"""A card shows the person's own offers, so its role buttons say which way they go: offer one
+not offered yet, or withdraw one that is. A double tap can't undo itself, as a toggle would."""
+CARD_ACTION_FOR_OFFER = {role: action for action, role in CARD_OFFER.items()}
+CARD_ACTION_FOR_WITHDRAW = {role: action for action, role in CARD_WITHDRAW.items()}
+CARD_COORDINATE = "card_coordinate"
+CARD_DETAILS = "card_details"
+CARD_ACTIONS = frozenset({*CARD_RESPOND, *CARD_OFFER, *CARD_WITHDRAW, CARD_COORDINATE, CARD_DETAILS})
 LINK_PREFIX = "link_"
 """URL buttons. Slack still sends their clicks, which the app acknowledges and ignores."""
 LINK_PATTERN = re.compile(r"^link_[a-z_]{1,40}$")
@@ -49,7 +70,11 @@ _DIGITS = re.compile(r"^[0-9]{1,19}$")
 _PAIR = re.compile(r"^([0-9]{1,19}):([0-9]{1,19})$")
 _MENU = re.compile(r"(cancel|close):([1-9][0-9]{0,18}):([1-9][0-9]{0,18})")
 _WINDOW = re.compile(r"(respond|vote):([1-9][0-9]{0,18}):([1-9][0-9]{0,18})")
+_CARD = re.compile(r"([1-9][0-9]{0,18}):([1-9][0-9]{0,18})")
 _CHANNEL = re.compile(r"^[CDG][A-Z0-9]{2,31}$")
+_MESSAGE_TS = re.compile(r"[0-9]{1,12}\.[0-9]{1,8}")
+_RESPONSE_URL = re.compile(r"https://hooks\.slack(-gov)?\.com/actions/[A-Za-z0-9]+/[0-9]+/[A-Za-z0-9]+")
+MAX_RESPONSE_URL = 500
 MAX_METADATA = 3000
 
 
@@ -117,6 +142,35 @@ def parse_window(value: object) -> tuple[Window, int, int]:
     return Window(match.group(1)), _row_id(match.group(2)), _row_id(match.group(3))
 
 
+def card_value(event_id: int, run: int) -> str:
+    """``<id>:<run>``: the call and the run a card button was drawn for."""
+    return f"{event_id}:{run}"
+
+
+def parse_card(value: object) -> tuple[int, int]:
+    """``<id>:<run>``, exactly as ``card_value`` writes it: the event ID and the run."""
+    match = _CARD.fullmatch(value) if isinstance(value, str) else None
+    if match is None:
+        raise BadValue("not a card value")
+    return _row_id(match.group(1)), _row_id(match.group(2))
+
+
+def message_ts(value: object) -> str | None:
+    """A message timestamp from a payload's container, such as ``1712345678.000200``, or None."""
+    return value if isinstance(value, str) and _MESSAGE_TS.fullmatch(value) else None
+
+
+def response_url(value: object) -> str | None:
+    """An interaction's ``response_url``, or None unless the whole string is the shape Slack
+    sends: ``https://hooks.slack.com/actions/<team>/<number>/<token>`` (or ``hooks.slack-gov.com``).
+    Matching the whole string, rather than parsing it, means the string checked is the string
+    sent. It's a bearer capability for the message tapped: never log it, and never send it
+    anywhere but back to Slack."""
+    if not isinstance(value, str) or len(value) > MAX_RESPONSE_URL:
+        return None
+    return value if _RESPONSE_URL.fullmatch(value) else None
+
+
 def parse_slot(value: object) -> Slot:
     if value not in {s.value for s in Slot}:
         raise BadValue("not a slot")
@@ -144,8 +198,9 @@ class ViewOrigin:
     window: Window | None = None
     """The window a Close now modal confirms closing. Only that modal sets it."""
     run: int | None = None
-    """The run of the call the modal was opened for. Call it off and Close now set it, so a
-    modal left open across a re-run or a restart can't act on the newer run."""
+    """The run of the call the modal was opened for. Call it off and Close now set it, and so
+    does Details opened from a card, so a modal left open across a re-run or a restart can't
+    act on the newer run."""
 
     def encode(self) -> str:
         data: dict[str, object] = {"event": self.event_id, "channel": self.channel_id, "home": self.home}

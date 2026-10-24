@@ -87,15 +87,15 @@ Map every button or modal to one service call. Services check every rule and per
 1. Resolve the Slack user to an active member of the household, or refuse with an ephemeral message (spec 13.5).
 2. Open a session from the app's `sessionmaker` and call the service with `now=clock()`.
 3. Show these exceptions as ephemeral messages with `str(exc)`: `EventRuleViolation`, `InvalidResponse`, `services.errors.NotFound`, and `services.errors.Forbidden`. Show `IllegalTransition` as `str(domain.events.friendly(exc))`: "This call already finished." when the call ended before the action reached it. `calls.cancel_call` and `calls.close_window` already raise that as an `EventRuleViolation`. Anything else is a bug: log it.
-4. Don't update messages from the interaction handler. The service's notifications do that through the outbox within seconds.
+4. Don't update shared messages from the interaction handler. The service's notifications do that through the outbox within seconds. The handler updates only messages one person sees, which no notification tracks: their Your answer card and their reminder (below).
 
-Channel messages are shared, so a button can't show whether the person tapping it already voted or offered. Use the toggles: each reads the member's current state under the event's lock and flips it, and returns the new state for the ephemeral confirmation. The explicit `calls.vote`, `calls.unvote`, and `calls.offer_role(..., offered)` remain for surfaces that show the member's own state, such as the web page and App Home, where an explicit set survives a double tap.
+Channel messages are shared, so a button can't show whether the person tapping it already voted or offered. Use the toggles: each reads the member's current state under the event's lock and flips it. The explicit `calls.vote`, `calls.unvote`, and `calls.offer_role(..., offered)` remain for surfaces that show the member's own state, such as the web page, App Home, and the Your answer card, where an explicit set survives a double tap.
 
 | Slack action | Service call |
 |---|---|
-| In, Out, Maybe | `calls.respond(db, actor, event_id, Status.IN / OUT / MAYBE, now=)` |
-| I can cook, I can pick up, I'll order | `calls.toggle_role(db, actor, event_id, RoleOffer.COOK / PICKUP / ORDER, now=)`, which returns whether the member now offers it |
-| I'll coordinate | `calls.claim_coordinator(db, actor, event_id, now=)` |
+| In, Out, Maybe | `calls.respond(db, actor, event_id, Status.IN / OUT / MAYBE, now=)`; on a card or reminder, with `run=` |
+| I can cook, I can pick up, I'll order | `calls.toggle_role(db, actor, event_id, RoleOffer.COOK / PICKUP / ORDER, now=)`, which returns whether the member now offers it; on a card, `calls.offer_role(..., offered, run=, now=)` |
+| I'll coordinate | `calls.claim_coordinator(db, actor, event_id, now=)`; on a card, with `run=` |
 | Details modal (a suggestion needs no cuisine; only proposals do) | `calls.save_details(db, actor, event_id, Details(guests=, guest_needs=, eat_from=, eat_until=, suggestion_item_ids=, suggestion_texts=, note=), now=)` |
 | Vote, or vote again to remove | `calls.toggle_vote(db, actor, event_id, proposal_id, now=)`, which returns whether the member now votes for it |
 | Lock (coordinator or admin) | `calls.lock(db, actor, event_id, proposal_id, now=)` |
@@ -112,7 +112,21 @@ Channel messages are shared, so a button can't show whether the person tapping i
 
 For what to show a member (their response, which buttons apply to them), use `services.event_views.event_view(db, actor, event_id, now=)`. Its `can` flags come from the same rules the services enforce: `can.cancel` for Call it off, and `can.close_window`, the window Close now would close (`Window.RESPOND` reads "Start the vote now", `Window.VOTE` reads "Decide now"), or `None`, including once that window's deadline has passed.
 
-The Slack adapter shows Close now on a message everyone shares, and Slack confirms it some time after the label was drawn. So the confirmation carries the window it named (`ids.ViewOrigin.window`, or the Home button's `respond:<id>:<run>` or `vote:<id>:<run>`), and the adapter passes it as `calls.close_window(..., expected_window=)`. Under the event's lock, the service raises `WindowMoved` ("The call has moved on since then, so nothing changed.") when the open window is a different one or its deadline has passed, so a late confirmation, or a second one racing the first, closes nothing. Every Slack value and modal for Call it off and Close now also carries the run it was drawn for (`cancel:<id>:<run>`, `close:<id>:<run>`, `ViewOrigin.run`), passed as `run=`, so one left over from before a re-run or a restart gets `StaleRun`. `/dinnerbell cancel` names the call as it is now and passes no run.
+The Slack adapter shows Close now on a message everyone shares, and Slack confirms it some time after the label was drawn. So the confirmation carries the window it named (`ids.ViewOrigin.window`, or the Home button's `respond:<id>:<run>` or `vote:<id>:<run>`), and the adapter passes it as `calls.close_window(..., expected_window=)`. Under the event's lock, the service raises `WindowMoved` ("The call has moved on since then, so nothing changed.") when the open window is a different one or its deadline has passed, so a late confirmation, or a second one racing the first, closes nothing. Every Slack value and modal for Call it off and Close now also carries the run it was drawn for (`cancel:<id>:<run>`, `close:<id>:<run>`, `ViewOrigin.run`), passed as `run=`, so one left over from before a re-run or a restart gets `StaleRun`. `/dinnerbell cancel` names the call as it is now and passes no run. The ⋯ menu's Close now checks the window's deadline too (`check_expected_window`) before it opens the confirmation, so a pick after the deadline is refused at once.
+
+### Your answer cards and the reminder
+
+The Slack adapter answers a tap on the call message's **In**, **Maybe**, **Out**, role, or **I'll coordinate** buttons with a Your answer card (`messages.your_answer`): an ephemeral in the channel, drawn from `event_views.event_view`, with the member's own answer and offers selected (primary, and "✓ " before the text). The card's buttons (`ids.CARD_ACTIONS`) carry `<id>:<run>` (`ids.card_value`) and go through the same identity and place checks as every button. They pass the run to the service (`calls.respond`, `calls.offer_role`, `calls.claim_coordinator`, and `calls.save_details` from the card's Details modal all take `run=`), which checks it under the event's lock and raises `StaleRun` for a card drawn before a restart or re-run.
+
+A Slack ephemeral can't be edited with `chat.update`. Only the `response_url` that comes with a tap on the ephemeral itself can replace it, for 30 minutes and 5 uses. So:
+
+- A tap on the call message posts a new card with `chat.postEphemeral`. Its own `response_url` belongs to the call message; `replace_original` there would rewrite the call for everyone, so the adapter never uses it.
+- A tap on a card (`container.is_ephemeral` true, in the household channel) replaces that card through the tap's `response_url` with `replace_original`. The adapter accepts only a URL whose whole string matches `https://hooks.slack(-gov)?.com/actions/<team>/<number>/<token>` (`ids.response_url`), so the string it checks is the string it sends. It never logs the URL, and posts a new card if Slack refuses.
+- A card button anywhere else, such as on the call message or Home, isn't one the app drew, and gets "That button is out of date."
+
+The card shows what the member chose, and why a tap changed nothing, such as someone else coordinating. Claiming coordinating again as the coordinator changes nothing and isn't an error, so a double tap or a retried delivery doesn't complain. One person's taps on one call run one at a time (an in-process lock per Slack user and event, from reading the response through replacing or posting the card, dropped when nobody holds it), so two quick taps can't land out of order. Once the call has started again, closed responses, or been called off, it says "This call moved on." with the call's state and no answer buttons.
+
+The reminder uses the same card buttons, so it names its run too. The Details modal names the run it was opened for wherever it's opened (`ViewOrigin.run`), and `calls.save_details(..., run=)` refuses a save after a restart. A tap on the reminder edits the reminder with `chat.update` (the message is the bot's own, in the member's DM, whose `ts` comes with the tap) to show the answer, or that the call moved on. Reminders sent before cards existed still have the call message's buttons and get a line of text back.
 
 ## Showing the version
 

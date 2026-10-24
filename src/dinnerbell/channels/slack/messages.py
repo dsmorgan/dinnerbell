@@ -42,7 +42,7 @@ from dinnerbell.channels.slack.blocks import (
 )
 from dinnerbell.domain import notifications as note
 from dinnerbell.domain.catalog import Mode
-from dinnerbell.domain.events import AssignmentRole, EndReason, EventState, RoleOffer, Status, Window
+from dinnerbell.domain.events import AssignmentRole, EndReason, EventState, Response, RoleOffer, Status, Window
 from dinnerbell.domain.meals import Slot
 
 MAX_PROPOSALS = 10
@@ -62,6 +62,17 @@ ROLE_PHRASES = {
     AssignmentRole.ORDER: "ordering",
     AssignmentRole.COORDINATOR: "coordinating",
 }
+
+ANSWERS = (Status.IN, Status.MAYBE, Status.OUT)
+"""The participation buttons, in the order they're shown."""
+ANSWER_WORDS = {Status.IN: "In", Status.MAYBE: "Maybe", Status.OUT: "Out"}
+OFFER_LABELS = {RoleOffer.COOK: "I can cook", RoleOffer.PICKUP: "I can pick up", RoleOffer.ORDER: "I'll order"}
+SELECTED = "✓ "
+"""Marks a selected button's text as well as its color, for color-blind people and for Slack
+themes where primary isn't green."""
+MOVED_ON = "This call moved on."
+STARTED_AGAIN = "It started again, so answer on the newest call message."
+"""Why a card or reminder for an earlier run can't act: answers belong to the new one."""
 
 CLOSE_LABELS = {Window.RESPOND: "Start the vote now", Window.VOTE: "Decide now"}
 """Close now, named for what it does to the open window (FR-56)."""
@@ -95,7 +106,11 @@ class RenderContext:
 
 def render(notification: note.Notification, ctx: RenderContext) -> Message:
     """Every notification the Slack adapter sends, posts and direct messages alike."""
-    message = _render(notification, ctx)
+    return labelled(_render(notification, ctx), ctx)
+
+
+def labelled(message: Message, ctx: RenderContext) -> Message:
+    """``message`` headed by the instance label, when the instance has one."""
     if not ctx.label:
         return message
     # The largest message, the picks, is 23 blocks, so the label never pushes the footer past
@@ -148,6 +163,14 @@ def _title(event: note.EventInfo) -> str:
 
 def _web_button(ctx: RenderContext, event: note.EventInfo, text: str = "View on web") -> Block:
     return button(text, f"{ids.LINK_PREFIX}event", url=ctx.url(event.path))
+
+
+def choice_button(text: str, action_id: str, value: str, *, selected: bool) -> Block:
+    """A button on a surface only one person sees, showing whether it's their current choice:
+    primary and a ✓ when it is. Shared messages never use this; nothing there is selected."""
+    if selected:
+        return button(SELECTED + text, action_id, value, style="primary")
+    return button(text, action_id, value)
 
 
 def call_menu(event: note.EventInfo) -> list[Block]:
@@ -270,21 +293,16 @@ def call_message(
     ]
     value = ids.event_value(event.id)
     if event.state is EventState.COLLECTING:
+        # Everyone sees the same buttons, so none is styled: a primary In would look chosen.
         blocks.append(
             actions(
-                button("In", ids.ACTION_FOR_STATUS[Status.IN], value, style="primary"),
-                button("Maybe", ids.ACTION_FOR_STATUS[Status.MAYBE], value),
-                button("Out", ids.ACTION_FOR_STATUS[Status.OUT], value),
+                *(button(ANSWER_WORDS[s], ids.ACTION_FOR_STATUS[s], value) for s in ANSWERS),
                 block_id="participation",
             )
         )
     roles: list[Block] = []
     if event.state is EventState.COLLECTING:
-        roles += [
-            button("I can cook", ids.ACTION_FOR_OFFER[RoleOffer.COOK], value),
-            button("I can pick up", ids.ACTION_FOR_OFFER[RoleOffer.PICKUP], value),
-            button("I'll order", ids.ACTION_FOR_OFFER[RoleOffer.ORDER], value),
-        ]
+        roles += [button(OFFER_LABELS[role], ids.ACTION_FOR_OFFER[role], value) for role in RoleOffer]
     if event.coordinator is None and event.state in {EventState.COLLECTING, EventState.VOTING}:
         roles.append(button("I'll coordinate", ids.COORDINATE, value))
     if roles:
@@ -438,25 +456,146 @@ def mark_done_button(event: note.EventInfo) -> Block:
 # Direct messages ---------------------------------------------------------------------------------
 
 
-def reminder_message(notification: note.ResponseReminder, ctx: RenderContext) -> Message:
+def reminder_message(
+    notification: note.ResponseReminder, ctx: RenderContext, *, mine: Response | None = None, run: int | None = None
+) -> Message:
+    """The reminder (FR-11). Only its member sees it, so its buttons are card buttons: they name
+    the run, and show the member's answer once there is one. After a tap on it, ``Interactions``
+    edits it in place with ``mine``, their answer then, and ``run``, the run the tapped button
+    named. If the call has moved on since, the buttons give way to what happened."""
     event = notification.event
     closes = local_clock(event.respond_deadline, event.timezone)
-    text = (
-        f"Hi {escape(notification.member.name)}! The {_slot(event)} call for {day_label(event.day)} "
-        f"closes at *{closes}*. Are you in? A quick tap helps whoever's cooking plan ahead."
-    )
-    value = ids.event_value(event.id)
+    when = f"{_slot(event)} on {day_label(event.day)}"
+    if _moved_on(event, run):
+        why = STARTED_AGAIN if run != event.run else escape(_call_status(event))
+        text = f"*{MOVED_ON}* {why}"
+        blocks = [section(text), actions(_web_button(ctx, event), block_id="more")]
+        return _finish(f"The {_slot(event)} call for {day_label(event.day)} moved on.", blocks)
+    if mine is None:
+        text = (
+            f"Hi {escape(notification.member.name)}! The {_slot(event)} call for {day_label(event.day)} "
+            f"closes at *{closes}*. Are you in? A quick tap helps whoever's cooking plan ahead."
+        )
+        fallback = f"Are you in for {when}? Answer by {closes}."
+    else:
+        text = (
+            f"Thanks, {escape(notification.member.name)}! Your answer for {when} is "
+            f"*{ANSWER_WORDS[mine.status]}*. You can change it here until *{closes}*."
+        )
+        fallback = f"Your answer for {when}: {ANSWER_WORDS[mine.status]}."
+    value = ids.card_value(event.id, event.run)
     blocks = [
         section(text),
         actions(
-            button("In", ids.ACTION_FOR_STATUS[Status.IN], value, style="primary"),
-            button("Maybe", ids.ACTION_FOR_STATUS[Status.MAYBE], value),
-            button("Out", ids.ACTION_FOR_STATUS[Status.OUT], value),
+            *_answer_buttons(value, mine),
             _web_button(ctx, event),
             block_id="participation",
         ),
     ]
-    return _finish(f"Are you in for {_slot(event)} on {day_label(event.day)}? Answer by {closes}.", blocks)
+    return _finish(fallback, blocks)
+
+
+# Your answer -------------------------------------------------------------------------------------
+
+
+def _moved_on(event: note.EventInfo, run: int | None) -> bool:
+    """Whether a card drawn for ``run`` (None: no card was tapped) is out of date: the call has
+    started again since, or responses have closed."""
+    return run is not None and (run != event.run or event.state is not EventState.COLLECTING)
+
+
+def _answer_buttons(value: str, mine: Response | None) -> list[Block]:
+    return [
+        choice_button(
+            ANSWER_WORDS[s], ids.CARD_ACTION_FOR_STATUS[s], value, selected=mine is not None and mine.status is s
+        )
+        for s in ANSWERS
+    ]
+
+
+def _offers(mine: Response) -> list[RoleOffer]:
+    return [role for role in RoleOffer if role in mine.offers]
+
+
+def _mine_lines(event: note.EventInfo, mine: Response | None, member_id: int) -> list[str]:
+    """The member's own answer, offers, and coordinating, for their eyes only. Mentions would
+    look the same as names here, so names are plain."""
+    lines: list[str] = []
+    if mine is not None:
+        line = f"Your answer: *{ANSWER_WORDS[mine.status]}*"
+        if mine.offers:
+            line += " · can " + " or ".join(OFFER_WORDS[o] for o in _offers(mine))
+        lines.append(line)
+    elif event.state is EventState.COLLECTING:
+        lines.append("You haven't answered yet.")
+    coordinator = event.coordinator
+    if coordinator is not None and coordinator.id == member_id:
+        lines.append("You're coordinating. Thanks for steering!")
+    elif coordinator is not None:
+        lines.append(f"*Coordinator:* {escape(coordinator.name)}")
+    return lines
+
+
+def your_answer_text(event: note.EventInfo, mine: Response | None, *, run: int | None = None) -> str:
+    """The card's words as plain text, unescaped: its notification and screen-reader fallback,
+    and the line sent instead when a card or reminder can't be shown."""
+    if run is not None and run != event.run:
+        return f"{_title(event)}: {MOVED_ON}"
+    summary = ANSWER_WORDS[mine.status] if mine is not None else "no answer yet"
+    if mine is not None and mine.offers:
+        summary += ", can " + " or ".join(OFFER_WORDS[o] for o in _offers(mine))
+    return f"{_title(event)}: your answer is {summary}"
+
+
+def your_answer(
+    event: note.EventInfo,
+    mine: Response | None,
+    member_id: int,
+    ctx: RenderContext,
+    *,
+    run: int | None = None,
+    notice: str | None = None,
+) -> Message:
+    """The Your answer card: an ephemeral only ``member_id`` sees, with their answer and offers
+    marked on the same buttons the call has (spec section 10). ``event`` is the call as it is now
+    and ``mine`` their response to it. A tap in the channel posts a card; a tap on the card
+    replaces it, so ``run`` is the run the tapped card named, or None after a channel tap.
+    ``notice`` is why a tap changed nothing, such as someone else coordinating already."""
+    title = f"*{_title(event)}*"
+    if run is not None and run != event.run:
+        # Another run's answers aren't what this card was about; don't mix them in.
+        gone = [
+            section(f"{title}\n*{MOVED_ON}* {STARTED_AGAIN}"),
+            actions(_web_button(ctx, event), block_id="more"),
+        ]
+        return labelled(_finish(your_answer_text(event, mine, run=run), gone), ctx)
+    lines = [title]
+    live = not _moved_on(event, run) and event.state is EventState.COLLECTING
+    if not live:
+        status = escape(_call_status(event))
+        lines.append(f"*{MOVED_ON}* {status}" if _moved_on(event, run) else status)
+    lines += _mine_lines(event, mine, member_id)
+    blocks: list[Block] = [section(join_lines(lines))]
+    if notice:
+        blocks.append(context(escape(notice)))
+    text = your_answer_text(event, mine, run=run)
+    if not live:
+        blocks.append(actions(_web_button(ctx, event), block_id="more"))
+        return labelled(_finish(text, blocks), ctx)
+    closes = local_clock(event.respond_deadline, event.timezone)
+    blocks.append(context(f"Only you can see this. Tap to change your answer until *{closes}*."))
+    value = ids.card_value(event.id, event.run)
+    blocks.append(actions(*_answer_buttons(value, mine), block_id="participation"))
+    roles: list[Block] = []
+    for role in RoleOffer:
+        offered = mine is not None and role in mine.offers
+        action = (ids.CARD_ACTION_FOR_WITHDRAW if offered else ids.CARD_ACTION_FOR_OFFER)[role]
+        roles.append(choice_button(OFFER_LABELS[role], action, value, selected=offered))
+    if event.coordinator is None:
+        roles.append(button("I'll coordinate", ids.CARD_COORDINATE, value))
+    blocks.append(actions(*roles, block_id="roles"))
+    blocks.append(actions(button("Details", ids.CARD_DETAILS, value), _web_button(ctx, event), block_id="more"))
+    return labelled(_finish(text, blocks), ctx)
 
 
 def maybe_resolved_message(notification: note.MaybeResolved, ctx: RenderContext) -> Message:

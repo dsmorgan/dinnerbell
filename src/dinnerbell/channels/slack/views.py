@@ -33,7 +33,14 @@ from dinnerbell.channels.slack.blocks import (
     plain,
     section,
 )
-from dinnerbell.channels.slack.messages import CALL_OFF, CLOSE_LABELS, mark_done_button
+from dinnerbell.channels.slack.messages import (
+    ANSWER_WORDS,
+    ANSWERS,
+    CALL_OFF,
+    CLOSE_LABELS,
+    choice_button,
+    mark_done_button,
+)
 from dinnerbell.domain.catalog import CatalogItem, ItemKind, Mode, Tag
 from dinnerbell.domain.events import (
     CANCEL_NOTE_MAX,
@@ -365,10 +372,10 @@ def _event_card(v: EventView, links: HomeLinks) -> list[Block]:
     value = ids.event_value(v.id)
     buttons: list[Block] = []
     if v.can.respond:
+        # Home is per member, so their answer shows as selected (spec section 10).
+        answer = v.mine.status if v.mine is not None else None
         buttons += [
-            button("In", ids.ACTION_FOR_STATUS[Status.IN], value, style="primary"),
-            button("Maybe", ids.ACTION_FOR_STATUS[Status.MAYBE], value),
-            button("Out", ids.ACTION_FOR_STATUS[Status.OUT], value),
+            *(choice_button(ANSWER_WORDS[s], ids.ACTION_FOR_STATUS[s], value, selected=s is answer) for s in ANSWERS),
             button("Details", ids.DETAILS, value),
         ]
     if v.can.mark_done:

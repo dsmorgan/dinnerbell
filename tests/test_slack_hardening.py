@@ -335,7 +335,7 @@ async def test_modal_errors_from_the_home_tab_show_on_the_home_tab(slack: Slack,
     await slack.click("Sam", "details", str(event_id), home=True)
     (opened,) = slack.fake.of("views.open")
     origin = ids.ViewOrigin.decode(opened.args["view"]["private_metadata"])
-    assert origin == ids.ViewOrigin(event_id, None, home=True)
+    assert origin == ids.ViewOrigin(event_id, None, home=True, run=1)
     from tests.support.fake_slack import view_submission
 
     payload = view_submission("U02SAM", ids.DETAILS_VIEW, state(note={"value": "bad\u0007bell"}), origin.encode())

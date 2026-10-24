@@ -466,6 +466,17 @@ async def test_reminders_skip_maybes_and_muted_members_and_go_once(house: House)
 # Coordinating ----------------------------------------------------------------------------------
 
 
+async def test_claiming_coordinating_again_changes_nothing(house: House) -> None:
+    """A double tap, or Slack delivering the same tap twice, from the coordinator."""
+    event_id = await open_dinner(house)
+    await act(house, calls.claim_coordinator, house["Kim"], event_id)
+    queued = len(await house.outbox())
+    await act(house, calls.claim_coordinator, house["Kim"], event_id)
+    assert (await house.event(event_id)).coordinator_id == house["Kim"].id
+    assert len(await house.audits("event.coordinator_claimed")) == 1
+    assert len(await house.outbox()) == queued
+
+
 async def test_claim_hand_off_and_admin_assignment(house: House) -> None:
     event_id = await open_dinner(house)
     await act(house, calls.claim_coordinator, house["Kim"], event_id)

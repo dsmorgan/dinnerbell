@@ -815,12 +815,27 @@ def test_the_modals_explain_what_happens() -> None:
 
 
 async def test_modal_metadata_must_name_a_run_exactly_where_it_should(slack: Slack, house: House) -> None:
-    """Call it off and Close now carry the run they were opened for; other modals never do."""
+    """Call it off and Close now carry the run they were opened for, and Details may (from a
+    Your answer card); Add proposal never does."""
     event_id = await daily_call(house)
     no_run = ids.ViewOrigin(event_id, CHANNEL)
     await slack.submit("Alex", ids.CANCEL_VIEW, reason(None), event_id, origin=no_run)
     await slack.submit("Alex", ids.CLOSE_VIEW, {}, event_id, origin=ids.ViewOrigin(event_id, window=Window.RESPOND))
-    await slack.submit("Sam", ids.DETAILS_VIEW, state(note={"value": "x"}), event_id, origin=replace(no_run, run=1))
+    pick = state(mode={"selected_option": {"value": "cook"}}, free_text={"value": "Pho"})
+    await slack.submit("Sam", ids.PROPOSAL_VIEW, pick, event_id, origin=replace(no_run, run=1))
     assert slack.fake.calls == []
     assert (await house.event(event_id)).state is EventState.COLLECTING
     assert (await house.context(event_id)).response_of(house["Sam"].id) is None
+
+
+async def test_close_now_from_the_menu_after_the_deadline_opens_nothing(slack: Slack, house: House) -> None:
+    """At the deadline the call is advancing, even before the scheduler's next tick moves it
+    on, so the ⋯ menu's Close now refuses at once instead of opening a confirmation."""
+    event_id = await daily_call(house)
+    house.clock.now = RESPOND_BY  # the deadline, before any tick
+    assert (await house.event(event_id)).state is EventState.COLLECTING
+    await slack.choose("Alex", close(event_id))
+    assert opened(slack) == []
+    assert slack.ephemerals("Alex") == [WINDOW_MOVED]
+    await slack.choose("Alex", cancel(event_id))  # Call it off still opens
+    assert [v["callback_id"] for v in opened(slack)] == [ids.CANCEL_VIEW]

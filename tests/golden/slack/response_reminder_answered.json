@@ -1,0 +1,59 @@
+{
+  "blocks": [
+    {
+      "text": {
+        "text": "Thanks, Kim! Your answer for dinner on Thursday, Oct 22 is *Maybe*. You can change it here until *4:30 PM*.",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "block_id": "participation",
+      "elements": [
+        {
+          "action_id": "card_in",
+          "text": {
+            "emoji": true,
+            "text": "In",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "7:1"
+        },
+        {
+          "action_id": "card_maybe",
+          "style": "primary",
+          "text": {
+            "emoji": true,
+            "text": "✓ Maybe",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "7:1"
+        },
+        {
+          "action_id": "card_out",
+          "text": {
+            "emoji": true,
+            "text": "Out",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "7:1"
+        },
+        {
+          "action_id": "link_event",
+          "text": {
+            "emoji": true,
+            "text": "View on web",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "url": "https://dinnerbell.example.com/events/7"
+        }
+      ],
+      "type": "actions"
+    }
+  ],
+  "text": "Your answer for dinner on Thursday, Oct 22: Maybe."
+}

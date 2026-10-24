@@ -1,0 +1,122 @@
+{
+  "blocks": [
+    {
+      "text": {
+        "text": "*Dinner call · Thursday, Oct 22*\nYour answer: *In* · can cook or order\nYou're coordinating. Thanks for steering!",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "elements": [
+        {
+          "text": "Only you can see this. Tap to change your answer until *4:30 PM*.",
+          "type": "mrkdwn"
+        }
+      ],
+      "type": "context"
+    },
+    {
+      "block_id": "participation",
+      "elements": [
+        {
+          "action_id": "card_in",
+          "style": "primary",
+          "text": {
+            "emoji": true,
+            "text": "✓ In",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "7:1"
+        },
+        {
+          "action_id": "card_maybe",
+          "text": {
+            "emoji": true,
+            "text": "Maybe",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "7:1"
+        },
+        {
+          "action_id": "card_out",
+          "text": {
+            "emoji": true,
+            "text": "Out",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "7:1"
+        }
+      ],
+      "type": "actions"
+    },
+    {
+      "block_id": "roles",
+      "elements": [
+        {
+          "action_id": "card_withdraw_cook",
+          "style": "primary",
+          "text": {
+            "emoji": true,
+            "text": "✓ I can cook",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "7:1"
+        },
+        {
+          "action_id": "card_offer_pickup",
+          "text": {
+            "emoji": true,
+            "text": "I can pick up",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "7:1"
+        },
+        {
+          "action_id": "card_withdraw_order",
+          "style": "primary",
+          "text": {
+            "emoji": true,
+            "text": "✓ I'll order",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "7:1"
+        }
+      ],
+      "type": "actions"
+    },
+    {
+      "block_id": "more",
+      "elements": [
+        {
+          "action_id": "card_details",
+          "text": {
+            "emoji": true,
+            "text": "Details",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "7:1"
+        },
+        {
+          "action_id": "link_event",
+          "text": {
+            "emoji": true,
+            "text": "View on web",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "url": "https://dinnerbell.example.com/events/7"
+        }
+      ],
+      "type": "actions"
+    }
+  ],
+  "text": "Dinner call · Thursday, Oct 22: your answer is In, can cook or order"
+}
