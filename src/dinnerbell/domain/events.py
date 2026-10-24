@@ -100,6 +100,18 @@ CALL_FINISHED = "This call already finished."
 STALE_CALL = "That can't happen anymore."
 
 
+class StaleRun(EventRuleViolation):
+    """The person acted on an earlier run of a call that has since been started again."""
+
+
+def check_run(event: Event, run: int | None) -> None:
+    """``run`` is the run of the call the person saw, or None when their surface doesn't say.
+    A call-off, Close now, or restart from a page left open across a restart would otherwise
+    act on the newer run, which the person never saw."""
+    if run is not None and run != event.run:
+        raise StaleRun(STALE_CALL)
+
+
 def friendly(exc: IllegalTransition) -> EventRuleViolation:
     """``exc`` as a message for the person whose action lost a race, such as a call-off that
     arrived just after the scheduler marked the meal done."""

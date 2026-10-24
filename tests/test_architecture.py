@@ -132,7 +132,7 @@ def test_every_state_changing_route_checks_csrf(client: TestClient) -> None:
 def test_every_admin_route_requires_an_admin_in_the_web_layer(client: TestClient) -> None:
     api, problems = audit_routes(client.app.routes)  # type: ignore[attr-defined]
     assert problems == []
-    # Admin actions outside /admin, such as /events/{id}/admin/cancel, count too.
+    # Admin actions outside /admin, such as /events/{id}/admin/rerun, count too.
     admin = [route for route in api if route.path.startswith("/admin") or "/admin/" in route.path]
     assert admin
     for route in admin:

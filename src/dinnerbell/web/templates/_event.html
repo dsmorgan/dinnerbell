@@ -17,6 +17,8 @@
 {%- endmacro %}
 {% set e = v.event %}{% set tz = v.info.timezone %}{% set base = "/events/" ~ e.id %}
 {% set swap = 'hx-target="#event-' ~ e.id ~ '" hx-swap="outerHTML"' %}
+{#- A member starts a called-off call again with Start {slot} again, so admins don't also get Re-run for it. -#}
+{% set rerun = v.can.rerun and not v.can.restart %}
 <section class="card event state-{{ e.state.value }}" id="event-{{ e.id }}" aria-labelledby="event-{{ e.id }}-title"
   {%- if e.state.is_open %} data-poll="{{ base }}/card?from={{ from_page }}"{% endif %}>
   <div class="event-head">
@@ -32,7 +34,8 @@
     {%- elif e.state.value in ("decided", "done") and e.meal_time %}Eating at <strong>{{ e.meal_time|clock(tz) }}</strong>.
     {%- elif e.state.value == "abandoned" and e.end_reason and e.end_reason.value == "missed" %}Missed: it got too late to decide this one.
     {%- elif e.state.value == "abandoned" %}Everyone's on their own{% if e.end_reason and e.end_reason.value == "no_coverage" %}: nothing worked for everyone who could make it{% endif %}.
-    {%- elif e.state.value == "cancelled" %}Cancelled by an admin.
+    {%- elif e.state.value == "cancelled" and v.info.ended_by %}Called off by {{ v.info.ended_by.name }}.{% if v.info.end_note %} <q class="end-note">{{ v.info.end_note }}</q>{% endif %}
+    {%- elif e.state.value == "cancelled" %}This call was cancelled.
     {%- endif %}
     {% if v.info.coordinator %}Coordinator: {{ v.info.coordinator.name }}.{% elif e.state.is_open %}No coordinator yet.{% endif %}
   </p>
@@ -189,12 +192,40 @@
   </div>
   {% endif %}
 
-  {% if v.can.admin and (e.state.is_open or v.can.rerun) %}
+  {% if v.can.close_window or v.can.cancel %}
+  <div class="end-controls">
+    {% if v.can.close_window %}
+    {% if v.can.close_window.value == "respond" %}
+    {{ act(e.id, base ~ "/close", "Start the vote now", "button small", {"run": e.run}, confirm="Close responses and start the vote now?") }}
+    {% else %}
+    {{ act(e.id, base ~ "/close", "Decide now", "button small", {"run": e.run}, confirm="Close the vote and decide now?") }}
+    {% endif %}
+    {% endif %}
+    {% if v.can.cancel %}
+    <details class="details-form calloff">
+      <summary class="small">Call it off</summary>
+      <form method="post" action="{{ base }}/cancel" hx-post="{{ base }}/cancel" {{ swap|safe }} hx-confirm="Call off {{ e.slot.value }} for everyone?" class="stack">
+        {{ hidden() }}
+        <input type="hidden" name="run" value="{{ e.run }}">
+        <p class="small muted">Nobody eats together this time{% if e.state.value != "scheduled" %}, and everyone who's in hears about it{% endif %}.</p>
+        <label class="field"><span>Reason (optional)</span><input type="text" name="reason" maxlength="140" autocomplete="off"></label>
+        <button type="submit" class="button small danger">Call it off</button>
+      </form>
+    </details>
+    {% endif %}
+  </div>
+  {% endif %}
+
+  {% if v.can.restart %}
+  <div class="button-row">{{ act(e.id, base ~ "/restart", "Start " ~ e.slot.value ~ " again", "button small primary", {"run": e.run}) }}</div>
+  {% endif %}
+
+  {% if v.can.admin and (e.state.is_open or rerun) %}
   <details class="details-form admin-controls">
     <summary class="small">Admin</summary>
     {% if v.can.move_window %}
     <div class="button-row" role="group" aria-label="Move the {{ 'response' if v.can.move_window.value == 'respond' else 'vote' }} deadline">
-      {% for shift, label in (("plus15", "+15 min"), ("plus30", "+30 min"), ("minus15", "−15 min"), ("close", "Close now")) %}
+      {% for shift, label in (("plus15", "+15 min"), ("plus30", "+30 min"), ("minus15", "−15 min")) %}
       {{ act(e.id, base ~ "/admin/deadline", label, "button small", {"window": v.can.move_window.value, "shift": shift}) }}
       {% endfor %}
     </div>
@@ -208,10 +239,9 @@
       <button type="submit" class="button small">Assign</button>
     </form>
     {% endif %}
-    <div class="button-row">
-      {% if e.state.is_open %}{{ act(e.id, base ~ "/admin/cancel", "Cancel this call", "button small danger", confirm="Cancel this call for everyone?") }}{% endif %}
-      {% if v.can.rerun %}{{ act(e.id, base ~ "/admin/rerun", "Re-run", "button small", confirm="Start this call over? Proposals, votes, and any decision are cleared.") }}{% endif %}
-    </div>
+    {% if rerun %}
+    <div class="button-row">{{ act(e.id, base ~ "/admin/rerun", "Re-run", "button small", confirm="Start this call over? Proposals, votes, and any decision are cleared.") }}</div>
+    {% endif %}
   </details>
   {% endif %}
 </section>

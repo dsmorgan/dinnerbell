@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Today and event pages: respond, coordinate, propose, vote, lock, and mark done (spec 11).
+"""Today and event pages: respond, coordinate, propose, vote, lock, mark done, call it off, close
+a window now, and start a called-off call again (spec 11, FR-56).
 
 Every action posts a small form. With HTMX it swaps the event's card in place; without it, it
 redirects back to the page it came from. Admin overrides live under ``/events/{id}/admin/`` and
@@ -26,6 +27,7 @@ from dinnerbell.domain.events import (
     IllegalTransition,
     InvalidResponse,
     RoleOffer,
+    StaleRun,
     Status,
     Window,
 )
@@ -82,6 +84,8 @@ async def _run(
 ) -> Response:
     try:
         await action()
+    except StaleRun:
+        return await _card(request, principal, context, db, event_id, came_from=came_from, error=STALE)
     except RULE_ERRORS as exc:
         return await _card(request, principal, context, db, event_id, came_from=came_from, error=str(exc))
     except IllegalTransition as exc:
@@ -427,6 +431,80 @@ async def done(
     return await _run(request, principal, context, db, event_id, came_from, action)
 
 
+# Calling it off and closing early (FR-56) -------------------------------------------------------
+
+Reason = Annotated[str, Form(max_length=400)]
+"""A call-off reason. The service cuts it to 140 characters rather than refusing a longer one."""
+Run = Annotated[str, Form(max_length=20)]
+"""The run of the call the card showed, so a card left open across a restart can't act on the
+newer run. Blank skips the check."""
+
+
+def _run_seen(value: str) -> int | None:
+    if not value.strip():
+        return None
+    run = parse_id(value)
+    if run is None:
+        raise BadFormValue(STALE)
+    return run
+
+
+@router.post("/events/{event_id}/cancel")
+async def cancel(
+    request: Request,
+    principal: CSRFChecked,
+    context: Context,
+    db: Database,
+    event_id: RowId,
+    reason: Reason = "",
+    run: Run = "",
+    came_from: Annotated[str, Form(alias="from", max_length=10)] = "",
+) -> Response:
+    """Call it off: the coordinator, the starter until it's decided, or an admin; the service checks which."""
+
+    async def action() -> None:
+        seen = _run_seen(run)
+        await calls.cancel_call(db, principal.member, event_id, note=reason or None, run=seen, now=context.clock())
+
+    return await _run(request, principal, context, db, event_id, came_from, action)
+
+
+@router.post("/events/{event_id}/close")
+async def close(
+    request: Request,
+    principal: CSRFChecked,
+    context: Context,
+    db: Database,
+    event_id: RowId,
+    run: Run = "",
+    came_from: Annotated[str, Form(alias="from", max_length=10)] = "",
+) -> Response:
+    """Close now ("Start the vote now" or "Decide now"): the coordinator or an admin."""
+
+    async def action() -> None:
+        await calls.close_window(db, principal.member, event_id, run=_run_seen(run), now=context.clock())
+
+    return await _run(request, principal, context, db, event_id, came_from, action)
+
+
+@router.post("/events/{event_id}/restart")
+async def restart(
+    request: Request,
+    principal: CSRFChecked,
+    context: Context,
+    db: Database,
+    event_id: RowId,
+    run: Run = "",
+    came_from: Annotated[str, Form(alias="from", max_length=10)] = "",
+) -> Response:
+    """Start a called-off call again: any member, until the usual meal time plus two hours."""
+
+    async def action() -> None:
+        await calls.restart_call(db, principal.member, event_id, run=_run_seen(run), now=context.clock())
+
+    return await _run(request, principal, context, db, event_id, came_from, action)
+
+
 # Admin overrides (FR-6, spec 5.7) ---------------------------------------------------------------
 
 DEADLINE_SHIFTS = {"plus30": 30, "plus15": 15, "minus15": -15, "close": None}
@@ -450,21 +528,6 @@ async def move_deadline(
         await call_admin.move_deadline(
             db, principal.member, event_id, chosen, DEADLINE_SHIFTS[shift], now=context.clock()
         )
-
-    return await _run(request, principal, context, db, event_id, came_from, action)
-
-
-@router.post("/events/{event_id}/admin/cancel")
-async def cancel(
-    request: Request,
-    principal: AdminCSRFChecked,
-    context: Context,
-    db: Database,
-    event_id: RowId,
-    came_from: Annotated[str, Form(alias="from", max_length=10)] = "",
-) -> Response:
-    async def action() -> None:
-        await calls.cancel_call(db, principal.member, event_id, now=context.clock())
 
     return await _run(request, principal, context, db, event_id, came_from, action)
 

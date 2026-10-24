@@ -1,23 +1,28 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Admin > Schedule: slot schedules, ranking weights, proposal count, and variety window (FR-43)."""
+"""Admin > Schedule: slot schedules, ranking weights, proposal count, and variety window (FR-43),
+and skipping a day's call before it opens (FR-6)."""
 
 from __future__ import annotations
 
 import math
-from typing import Any
+from datetime import date, timedelta
+from typing import Annotated, Any
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Form, Request
 from fastapi.responses import RedirectResponse
 from starlette.datastructures import FormData
 from starlette.responses import Response
 
 from dinnerbell.domain.catalog import MODE_ORDER, Mode
+from dinnerbell.domain.events import AD_HOC_DAYS_AHEAD, EventRuleViolation
 from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.schedule import WEIGHT_NAMES, InvalidSchedule, SlotSchedule, Weights, format_hhmm, parse_hhmm
+from dinnerbell.services import calls, event_views
 from dinnerbell.services import schedule as schedule_service
 from dinnerbell.services.schedule import ScheduleSettings
-from dinnerbell.web.auth import AdminCSRFChecked, AdminPrincipal, Context, Database
-from dinnerbell.web.forms import BadFormValue, optional_int
+from dinnerbell.web.auth import AdminCSRFChecked, AdminPrincipal, Context, Database, Principal
+from dinnerbell.web.context import AppContext
+from dinnerbell.web.forms import BadFormValue, choice, iso_date, optional_int
 from dinnerbell.web.render import render
 
 router = APIRouter(prefix="/admin")
@@ -117,21 +122,37 @@ def _parse(posted: dict[str, Any]) -> ScheduleSettings:
     )
 
 
-def _page(values: dict[str, Any], **extra: Any) -> dict[str, Any]:
+async def _page(
+    db: Database, principal: Principal, context: AppContext, values: dict[str, Any], **extra: Any
+) -> dict[str, Any]:
+    today = await event_views.today_for(db, principal.member, now=context.clock())
+    stored = await schedule_service.schedule_settings(db, principal.member)
+    skip_slots = [slot for slot in (Slot.DINNER, Slot.LUNCH) if stored.slots[slot].enabled]
     return {
         "values": values,
         "slots": [Slot.DINNER, Slot.LUNCH],
         "modes": list(MODE_ORDER),
         "minute_fields": MINUTE_FIELDS,
         "weights": [(name, WEIGHT_LABELS[name]) for name in WEIGHT_NAMES],
+        "skip_slots": skip_slots,
+        "skip": {"slot": "", "day": (today + timedelta(days=1)).isoformat(), "reason": ""},
+        "skip_days": (today, today + timedelta(days=AD_HOC_DAYS_AHEAD)),
     } | extra
 
 
+NOTICES = {
+    "saved": "Schedule saved. It applies from the next call.",
+    "skipped": "Skipped. That call won't go out. Anyone can still start it from the Today page that day.",
+}
+
+
 @router.get("/schedule")
-async def schedule_page(request: Request, principal: AdminPrincipal, db: Database, notice: str = "") -> Response:
+async def schedule_page(
+    request: Request, principal: AdminPrincipal, context: Context, db: Database, notice: str = ""
+) -> Response:
     stored = await schedule_service.schedule_settings(db, principal.member)
-    saved = "Schedule saved. It applies from the next call." if notice == "saved" else None
-    return await render(request, "admin_schedule.html", _page(_stored(stored), notice=saved))
+    page = await _page(db, principal, context, _stored(stored), notice=NOTICES.get(notice))
+    return await render(request, "admin_schedule.html", page)
 
 
 @router.post("/schedule")
@@ -140,5 +161,37 @@ async def save_schedule(request: Request, principal: AdminCSRFChecked, context: 
     try:
         await schedule_service.update_schedule(db, principal.member, _parse(posted), now=context.clock())
     except (InvalidSchedule, BadFormValue) as exc:
-        return await render(request, "admin_schedule.html", _page(posted, error=str(exc)), status_code=400)
+        page = await _page(db, principal, context, posted, error=str(exc))
+        return await render(request, "admin_schedule.html", page, status_code=400)
     return RedirectResponse("/admin/schedule?notice=saved", status_code=303)
+
+
+Field = Annotated[str, Form(max_length=40)]
+Reason = Annotated[str, Form(max_length=400)]
+"""A skip reason. The service cuts it to 140 characters rather than refusing a longer one."""
+
+
+@router.post("/schedule/skip")
+async def skip_day(
+    request: Request,
+    principal: AdminCSRFChecked,
+    context: Context,
+    db: Database,
+    slot: Field = "",
+    day: Field = "",
+    reason: Reason = "",
+) -> Response:
+    """FR-6: skip a day's call, today or up to a week ahead, before it opens."""
+    try:
+        chosen = choice(Slot, slot)
+        if chosen is None:
+            raise BadFormValue("Pick lunch or dinner.")
+        when: date = iso_date(day, "Enter the date as YYYY-MM-DD.")
+        await calls.skip_day(db, principal.member, chosen, when, note=reason or None, now=context.clock())
+    except (EventRuleViolation, BadFormValue) as exc:
+        stored = await schedule_service.schedule_settings(db, principal.member)
+        typed = {"slot": slot, "day": day, "reason": reason}
+        page = await _page(db, principal, context, _stored(stored), skip_error=str(exc))
+        status = 400 if isinstance(exc, BadFormValue) else 409  # a malformed form, or a rule refusal
+        return await render(request, "admin_schedule.html", page | {"skip": typed}, status_code=status)
+    return RedirectResponse("/admin/schedule?notice=skipped", status_code=303)

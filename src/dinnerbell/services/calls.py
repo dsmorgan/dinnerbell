@@ -64,6 +64,7 @@ from dinnerbell.domain.events import (
     check_details,
     check_handoff,
     check_proposal_room,
+    check_run,
     check_skip_day,
     clean_cancel_note,
     friendly,
@@ -115,6 +116,30 @@ async def start_call(db: AsyncSession, actor: Member, slot: Slot, day: date, *, 
         await db.rollback()
         raise
     return event
+
+
+async def restart_call(
+    db: AsyncSession, actor: Member, event_id: int, *, run: int | None = None, now: datetime
+) -> Event:
+    """Start the called-off call ``event_id`` again (FR-56), as ``start_call`` does for its slot
+    and day. ``run``, when given, is the run the actor saw (``check_run``): a page left open
+    across a restart and a second call-off doesn't start the newer run again."""
+    if not actor.active:
+        raise EventRuleViolation("Only active members can start a call.")
+    event = await EventRepository(db).get(actor.household_id, event_id)
+    if event is None:
+        raise NotFound(cc.NO_SUCH_CALL)
+    household = await HouseholdRepository(db).get(actor.household_id)
+    if household is None:  # pragma: no cover - members cascade with their household
+        raise NotFound("No such household.")
+    check_ad_hoc_day(event.day, household_today(household, now))
+    try:
+        fresh = await lifecycle.restart(db, event, actor=actor, run=run, now=now)
+        await db.commit()
+    except BaseException:
+        await db.rollback()
+        raise
+    return fresh
 
 
 # Responding (FR-7 to FR-9) --------------------------------------------------------------------
@@ -463,7 +488,7 @@ CANCEL_ROLES = (AssignmentRole.COOK, AssignmentRole.PICKUP, AssignmentRole.ORDER
 
 
 async def cancel_call(
-    db: AsyncSession, actor: Member, event_id: int, *, note: str | None = None, now: datetime
+    db: AsyncSession, actor: Member, event_id: int, *, note: str | None = None, run: int | None = None, now: datetime
 ) -> None:
     """Call off an open call (``check_can_cancel``): it ends as cancelled, and nothing goes in
     the meal log (spec 8). ``note`` is an optional reason, cleaned by ``clean_cancel_note``.
@@ -475,9 +500,10 @@ async def cancel_call(
     A call that was never posted, a scheduled one, posts nothing; its starter gets
     ``StartedCallCancelled`` when someone else called it off. Nobody is messaged about their own
     call-off. Audited as ``event.cancelled`` with the state it left, the capacity the actor
-    acted in, and the note.
+    acted in, and the note. ``run``, when given, is the run the actor saw (``check_run``).
     """
     async with locked_event(db, actor.household_id, event_id, now) as event:
+        check_run(event, run)
         capacity = check_can_cancel(event, actor)
         reason = clean_cancel_note(note)
         try:
@@ -530,11 +556,15 @@ def _audience(ctx: CallContext) -> tuple[note.PersonInfo, ...]:
     return tuple(ctx.person(m.id) for m in sorted(people, key=lambda m: m.display_name.casefold()))
 
 
-async def close_window(db: AsyncSession, actor: Member, event_id: int, *, now: datetime) -> None:
+async def close_window(
+    db: AsyncSession, actor: Member, event_id: int, *, run: int | None = None, now: datetime
+) -> None:
     """Close the open window now (``check_can_close_window``): "Start the vote now" while
     collecting, "Decide now" while voting. The call then advances at once, as at its deadline:
-    to voting or on-your-own, or to a decision. Audited as ``event.window_closed``."""
+    to voting or on-your-own, or to a decision. ``run``, when given, is the run the actor saw
+    (``check_run``). Audited as ``event.window_closed``."""
     async with locked_event(db, actor.household_id, event_id, now) as event:
+        check_run(event, run)
         window = check_can_close_window(event, actor)
         current, moved = await lifecycle.move_window(db, event, window, None, now)
         capacity = ActingAs.COORDINATOR if is_coordinator(event, actor) else ActingAs.ADMIN
@@ -550,7 +580,8 @@ async def skip_day(
     it exists: a cancelled call takes its place, which keeps the scheduler from opening one
     (FR-2). Nothing is posted. Any member can still start it again (``start_call``). To end a
     call that already exists, call it off; to stop a slot for good, turn it off in the
-    schedule. Audited as ``event.skipped``."""
+    schedule. A slot that's off in the schedule has no daily call to skip. Audited as
+    ``event.skipped``."""
     require_admin(actor, "Only an admin can skip a day's call.")
     household = await HouseholdRepository(db).get(actor.household_id)
     if household is None:  # pragma: no cover - members cascade with their household
@@ -563,6 +594,8 @@ async def skip_day(
         existing = await events.call_for(household.id, slot, day)
         if existing is not None:
             raise EventRuleViolation(_not_skippable(existing))
+        if not schedule.enabled:  # no daily call to skip; checked second, as an ad-hoc call can still exist
+            raise EventRuleViolation(f"{slot.value.capitalize()} is off in the schedule.")
         opens_at = schedule.opens_at(day, ZoneInfo(household.timezone))
         event = await events.add(
             household_id=household.id,

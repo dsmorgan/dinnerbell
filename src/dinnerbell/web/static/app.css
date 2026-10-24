@@ -430,6 +430,11 @@ ins { color: var(--ok); text-decoration: none; }
 .pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.5rem; }
 .pair .field { margin-top: 0; }
 .admin-controls { border-top: 1px dashed var(--line); padding-top: 0.3rem; }
+.end-controls { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 0 0.6rem; border-top: 1px solid var(--line); padding-top: 0.4rem; }
+.end-controls > form { margin-top: 0.4rem; }
+.end-controls .calloff { flex: 1 1 12rem; }
+.calloff > summary { color: var(--danger); }
+.end-note { overflow-wrap: anywhere; }
 .weights, fieldset.card .pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.5rem; align-items: end; }
 /* On phones a long label wraps; a two-line label box keeps both labels and inputs in a row level. */
 @media (max-width: 30rem) {

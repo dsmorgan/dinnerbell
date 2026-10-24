@@ -45,6 +45,8 @@ class Permissions:
     close_window: Window | None = None
     """The window Close now would close (``calls.close_window``): respond reads "Start the vote
     now", vote reads "Decide now". None when the actor can't."""
+    restart: bool = False
+    """Start a called-off call again (FR-56): ``calls.start_call`` for its slot and day."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,7 +117,14 @@ def permissions(ctx: CallContext, actor: Member, today: date, now: datetime) -> 
         move_window=_window(event) if admin else None,
         cancel=_allowed(lambda: rules.check_can_cancel(event, actor)),
         close_window=_window(event) if _allowed(lambda: rules.check_can_close_window(event, actor)) else None,
+        restart=actor.active and _allowed(lambda: _check_restart(ctx, today, now)),
     )
+
+
+def _check_restart(ctx: CallContext, today: date, now: datetime) -> None:
+    """What ``calls.start_call`` checks before it starts a called-off call again."""
+    rules.check_ad_hoc_day(ctx.event.day, today)
+    rules.check_restart(ctx.event, today, now=now, too_late_after=ctx.too_late_for(today))
 
 
 def view(ctx: CallContext, actor: Member, today: date, now: datetime) -> EventView:
@@ -141,6 +150,11 @@ def view(ctx: CallContext, actor: Member, today: date, now: datetime) -> EventVi
         cuisine_tags=tuple(t for t in tags if t.kind is TagKind.CUISINE),
         items=tuple(sorted((i for i in ctx.items.values() if i.active), key=lambda i: i.key)),
     )
+
+
+async def today_for(db: AsyncSession, actor: Member, *, now: datetime) -> date:
+    """Today's date in the actor's household."""
+    return await _today(db, actor, now)
 
 
 async def _today(db: AsyncSession, actor: Member, now: datetime) -> date:
