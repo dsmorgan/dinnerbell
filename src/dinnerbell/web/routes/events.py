@@ -30,6 +30,7 @@ from dinnerbell.domain.events import (
     StaleRun,
     Status,
     Window,
+    WindowMoved,
 )
 from dinnerbell.domain.meals import Slot
 from dinnerbell.services import call_admin, calls, event_views
@@ -60,10 +61,12 @@ async def _card(
     *,
     came_from: str,
     error: str | None = None,
+    status_code: int | None = None,
 ) -> Response:
-    """The event's card for HTMX, or the event page with the error for a plain form post."""
+    """The event's card for HTMX, or the event page with the error for a plain form post.
+    An error is a 409 unless ``status_code`` says otherwise."""
     view = await event_views.event_view(db, principal.member, event_id, now=context.clock())
-    status = 409 if error else 200
+    status = status_code or (409 if error else 200)
     page = {"v": view, "from_page": came_from, "error": error}
     if is_htmx(request):
         return await render(request, "_event.html", page, status_code=status)
@@ -84,7 +87,7 @@ async def _run(
 ) -> Response:
     try:
         await action()
-    except StaleRun:
+    except (StaleRun, WindowMoved):
         return await _card(request, principal, context, db, event_id, came_from=came_from, error=STALE)
     except RULE_ERRORS as exc:
         return await _card(request, principal, context, db, event_id, came_from=came_from, error=str(exc))
@@ -437,16 +440,18 @@ Reason = Annotated[str, Form(max_length=400)]
 """A call-off reason. The service cuts it to 140 characters rather than refusing a longer one."""
 Run = Annotated[str, Form(max_length=20)]
 """The run of the call the card showed, so a card left open across a restart can't act on the
-newer run. Blank skips the check."""
+newer run. Required: every card that posts here writes it."""
+WindowField = Annotated[str, Form(max_length=10)]
+"""The window Close now's button closes (``respond`` or ``vote``), so a confirmation that arrives
+after the call moved on, or races another, closes nothing. Required, like ``run``."""
 
 
-def _run_seen(value: str) -> int | None:
-    if not value.strip():
-        return None
-    run = parse_id(value)
-    if run is None:
-        raise BadFormValue(STALE)
-    return run
+async def _malformed(
+    request: Request, principal: Principal, context: AppContext, db: Database, event_id: int, came_from: str
+) -> Response:
+    """A post missing a field the card always writes, or with one it never writes: a 400 with
+    the fresh card and the reload message."""
+    return await _card(request, principal, context, db, event_id, came_from=came_from, error=STALE, status_code=400)
 
 
 @router.post("/events/{event_id}/cancel")
@@ -461,9 +466,11 @@ async def cancel(
     came_from: Annotated[str, Form(alias="from", max_length=10)] = "",
 ) -> Response:
     """Call it off: the coordinator, the starter until it's decided, or an admin; the service checks which."""
+    seen = parse_id(run)
+    if seen is None:
+        return await _malformed(request, principal, context, db, event_id, came_from)
 
     async def action() -> None:
-        seen = _run_seen(run)
         await calls.cancel_call(db, principal.member, event_id, note=reason or None, run=seen, now=context.clock())
 
     return await _run(request, principal, context, db, event_id, came_from, action)
@@ -477,12 +484,18 @@ async def close(
     db: Database,
     event_id: RowId,
     run: Run = "",
+    window: WindowField = "",
     came_from: Annotated[str, Form(alias="from", max_length=10)] = "",
 ) -> Response:
-    """Close now ("Start the vote now" or "Decide now"): the coordinator or an admin."""
+    """Close now ("Start the vote now" or "Decide now"): the coordinator or an admin. ``window``
+    is the one the card offered to close; the service refuses if another is open by now."""
+    seen, expected = parse_id(run), choice(Window, window)
+    if seen is None or expected is None:
+        return await _malformed(request, principal, context, db, event_id, came_from)
 
     async def action() -> None:
-        await calls.close_window(db, principal.member, event_id, run=_run_seen(run), now=context.clock())
+        member = principal.member
+        await calls.close_window(db, member, event_id, run=seen, expected_window=expected, now=context.clock())
 
     return await _run(request, principal, context, db, event_id, came_from, action)
 
@@ -498,9 +511,12 @@ async def restart(
     came_from: Annotated[str, Form(alias="from", max_length=10)] = "",
 ) -> Response:
     """Start a called-off call again: any member, until the usual meal time plus two hours."""
+    seen = parse_id(run)
+    if seen is None:
+        return await _malformed(request, principal, context, db, event_id, came_from)
 
     async def action() -> None:
-        await calls.restart_call(db, principal.member, event_id, run=_run_seen(run), now=context.clock())
+        await calls.restart_call(db, principal.member, event_id, run=seen, now=context.clock())
 
     return await _run(request, principal, context, db, event_id, came_from, action)
 

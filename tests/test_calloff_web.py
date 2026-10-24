@@ -5,15 +5,17 @@ after a call-off."""
 
 from __future__ import annotations
 
+import asyncio
 import re
 from datetime import UTC, datetime, timedelta
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
 from dinnerbell.config import Settings
 from dinnerbell.db.models import AuditRow, EventRow
-from tests.conftest import csrf_from, invite, page, sign_in
+from tests.conftest import BASE_URL, csrf_from, invite, page, sign_in
 from tests.support.clock import FakeClock
 from tests.support.fake_oidc import FakeProvider
 from tests.support.households import other_call, other_household
@@ -30,6 +32,7 @@ CREW: People = {
     "other": "riley@example.com",
 }
 STATES = ("scheduled", "collecting", "voting", "decided")
+STALE_SHOWN = "That can't happen anymore. Reload the page to see what changed."
 
 
 def as_admin(client: TestClient, provider: FakeProvider) -> None:
@@ -151,12 +154,13 @@ def test_the_server_refuses_whoever_the_page_hides_the_buttons_from(
         refusals += [(role, "close", "There's no open window to close.") for role in ("other", "starter", "admin")]
     else:
         refusals += [(role, "close", "Only the coordinator or an admin") for role in ("other", "starter")]
+    fields = {"reason": "nope", "run": "1", "window": "vote" if state == "voting" else "respond"}
     for role, action, message in refusals:
         act_as(house, provider, role)
-        refused = htmx(house, f"/events/{event_id}/{action}", {"reason": "nope"})
+        refused = htmx(house, f"/events/{event_id}/{action}", fields)
         assert refused.status_code == 409 and message in page(refused), (role, action)
         assert f'id="event-{event_id}"' in refused.text  # the card, swapped in place with the reason
-        plain = submit(house, f"/events/{event_id}/{action}", {"reason": "nope"})
+        plain = submit(house, f"/events/{event_id}/{action}", fields)
         assert plain.status_code == 409 and "<html" in plain.text and message in page(plain), (role, action)
     assert state_of(migrated, event_id) == state
     assert (event_row(migrated, event_id).version, event_audits(migrated)) == before
@@ -184,7 +188,8 @@ def test_another_households_call_cannot_be_called_off(house: TestClient, migrate
     settings = migrated
     theirs = other_call(settings, other_household(settings))["event"]
     for action in ("cancel", "close", "restart"):
-        assert submit(house, f"/events/{theirs}/{action}", {"reason": "x"}).status_code == 404, action
+        fields = {"reason": "x", "run": "1", "window": "vote"}
+        assert submit(house, f"/events/{theirs}/{action}", fields).status_code == 404, action
     assert state_of(migrated, theirs) == "voting"
 
 
@@ -200,7 +205,7 @@ def test_the_starter_calls_it_off_with_a_reason(
     assert '<summary class="small">Call it off</summary>' in html and 'name="reason" maxlength="140"' in html
     assert 'hx-confirm="Call off dinner for everyone?"' in html
     reason = 'Pizza at <b>Grandma\'s</b> & "cake"'
-    card = htmx(house, f"/events/{event_id}/cancel", {"reason": reason, "from": "event"})
+    card = htmx(house, f"/events/{event_id}/cancel", {"reason": reason, "run": "1", "from": "event"})
     assert card.status_code == 200 and "Called off by Sam." in card.text
     assert "Pizza at &lt;b&gt;Grandma&#39;s&lt;/b&gt; &amp; &#34;cake&#34;" in card.text
     assert "<b>Grandma" not in card.text
@@ -209,7 +214,7 @@ def test_the_starter_calls_it_off_with_a_reason(
     assert (row.state, row.end_note, row.ended_by) == ("cancelled", reason, member(migrated, CREW["starter"]).id)
     (audit,) = audits(migrated, "event.cancelled")
     assert audit.payload == {"from": "collecting", "as": "starter", "note": reason}
-    again = htmx(house, f"/events/{event_id}/cancel", {})
+    again = htmx(house, f"/events/{event_id}/cancel", {"run": "1"})
     assert again.status_code == 409 and "This call already finished." in again.text
 
 
@@ -217,7 +222,7 @@ def test_the_coordinator_calls_off_a_decided_call_from_today(
     house: TestClient, provider: FakeProvider, clock: FakeClock, migrated: Settings
 ) -> None:
     event_id = call_in(house, provider, clock, migrated, "decided")
-    done = submit(house, f"/events/{event_id}/cancel", {"from": "today"})
+    done = submit(house, f"/events/{event_id}/cancel", {"run": "1", "from": "today"})
     assert (done.status_code, done.headers["location"]) == (303, "/")
     html = page(house.get("/"))
     assert "Called off by Pat." in html and "<q" not in html  # no reason, no quote
@@ -234,7 +239,7 @@ def test_an_admin_calls_off_anyone_s_call_and_admin_cancel_is_gone(
     assert "/admin/cancel" not in html and "Cancel this call" not in html and ">Close now<" not in html
     assert submit(house, f"/events/{event_id}/admin/cancel").status_code == 404
     long = "x" * 200
-    assert htmx(house, f"/events/{event_id}/cancel", {"reason": long}).status_code == 200
+    assert htmx(house, f"/events/{event_id}/cancel", {"reason": long, "run": "1"}).status_code == 200
     assert event_row(migrated, event_id).end_note == "x" * 140  # cut, not refused
     (audit,) = audits(migrated, "event.cancelled")
     assert audit.payload["as"] == "admin"
@@ -262,16 +267,93 @@ def test_close_now_starts_the_vote_then_decides(
     event_id = call_in(house, provider, clock, migrated, "collecting")
     html = house.get(f"/events/{event_id}").text
     assert 'hx-confirm="Close responses and start the vote now?"' in html
-    voting = htmx(house, f"/events/{event_id}/close", {})
+    voting = htmx(house, f"/events/{event_id}/close", {"run": "1", "window": "respond"})
     assert voting.status_code == 200 and state_of(migrated, event_id) == "voting"
     assert close_label(voting.text, event_id) == "Decide now" and "Proposals" in voting.text
-    decided = submit(house, f"/events/{event_id}/close", {"from": "event"})
+    decided = submit(house, f"/events/{event_id}/close", {"run": "1", "window": "vote", "from": "event"})
     assert (decided.status_code, decided.headers["location"]) == (303, f"/events/{event_id}")
     assert state_of(migrated, event_id) == "decided"
     assert close_label(house.get(f"/events/{event_id}").text, event_id) is None
     assert [a.payload["window"] for a in audits(migrated, "event.window_closed")] == ["respond", "vote"]
-    late = htmx(house, f"/events/{event_id}/close", {})
+    late = htmx(house, f"/events/{event_id}/close", {"run": "1", "window": "vote"})
     assert late.status_code == 409 and "There's no open window to close." in page(late)
+
+
+def test_close_now_names_the_window_it_closes(
+    house: TestClient, provider: FakeProvider, clock: FakeClock, migrated: Settings
+) -> None:
+    event_id = call_in(house, provider, clock, migrated, "collecting")
+    assert 'name="window" value="respond"' in house.get(f"/events/{event_id}").text
+    malformed: list[dict[str, str]] = [{"run": "1", "window": bad} for bad in ("Respond", "respond ", "later", "0")]
+    malformed += [{"run": "1"}, {"run": "1", "window": ""}, {"window": "respond"}, {"run": "0", "window": "respond"}]
+    for fields in malformed:
+        refused = htmx(house, f"/events/{event_id}/close", fields)
+        assert refused.status_code == 400 and STALE_SHOWN in page(refused), fields
+    moved = htmx(house, f"/events/{event_id}/close", {"run": "1", "window": "vote"})  # not open yet
+    assert moved.status_code == 409 and STALE_SHOWN in page(moved)
+    assert state_of(migrated, event_id) == "collecting" and audits(migrated, "event.window_closed") == []
+    voting = htmx(house, f"/events/{event_id}/close", {"run": "1", "window": "respond"})
+    assert voting.status_code == 200 and 'name="window" value="vote"' in voting.text
+    assert state_of(migrated, event_id) == "voting"
+
+
+@pytest.mark.parametrize("run", [None, "", " 1", "1.0", "-1", "first", "99999999999999999999"])
+def test_call_it_off_and_start_again_need_the_run_the_card_showed(
+    house: TestClient, provider: FakeProvider, clock: FakeClock, migrated: Settings, run: str | None
+) -> None:
+    """Every card that posts here writes ``run``; a post without it, or with one no card writes,
+    is refused before anything changes."""
+    event_id = call_in(house, provider, clock, migrated, "collecting")
+    fields = {} if run is None else {"run": run}
+    refused = htmx(house, f"/events/{event_id}/cancel", fields | {"reason": "no run"})
+    assert refused.status_code == 400 and STALE_SHOWN in page(refused)
+    plain = submit(house, f"/events/{event_id}/cancel", fields)
+    assert plain.status_code == 400 and "<html" in plain.text and STALE_SHOWN in page(plain)
+    assert state_of(migrated, event_id) == "collecting"
+    assert submit(house, f"/events/{event_id}/cancel", {"run": "1"}).status_code == 303
+    refused = htmx(house, f"/events/{event_id}/restart", fields)
+    assert refused.status_code == 400 and STALE_SHOWN in page(refused)
+    assert (state_of(migrated, event_id), event_row(migrated, event_id).run) == ("cancelled", 1)
+
+
+def test_two_close_now_confirmations_at_once_close_one_window(
+    house: TestClient, provider: FakeProvider, clock: FakeClock, migrated: Settings
+) -> None:
+    """Pat (coordinating) and an admin both confirm Start the vote now. One closes responses;
+    the other must not then close the vote nobody confirmed."""
+    event_id = call_in(house, provider, clock, migrated, "collecting")
+    pat = (dict(house.cookies), csrf_from(house))
+    as_admin(house, provider)
+    admin = (dict(house.cookies), csrf_from(house))
+
+    async def post(cookies: dict[str, str], token: str) -> httpx.Response:
+        headers = {"Origin": BASE_URL, "HX-Request": "true", "X-CSRF-Token": token}
+        transport = httpx.ASGITransport(app=house.app)
+        async with httpx.AsyncClient(transport=transport, base_url=BASE_URL, cookies=cookies, headers=headers) as c:
+            return await c.post(f"/events/{event_id}/close", data={"run": "1", "window": "respond"})
+
+    async def both() -> list[httpx.Response]:
+        return list(await asyncio.gather(post(*pat), post(*admin)))
+
+    responses = house.portal.call(both)  # type: ignore[union-attr]
+    assert sorted(r.status_code for r in responses) == [200, 409]
+    assert any(STALE_SHOWN in page(r) for r in responses)
+    assert state_of(migrated, event_id) == "voting"
+    assert [a.payload["window"] for a in audits(migrated, "event.window_closed")] == ["respond"]
+
+
+def test_close_now_after_the_deadline_changes_nothing(
+    house: TestClient, provider: FakeProvider, clock: FakeClock, migrated: Settings
+) -> None:
+    """Responses are due to close, and the next tick will start the vote: a confirmation now
+    would only close the window a second time."""
+    event_id = call_in(house, provider, clock, migrated, "collecting")
+    clock.advance(timedelta(minutes=90))
+    late = htmx(house, f"/events/{event_id}/close", {"run": "1", "window": "respond"})
+    assert late.status_code == 409 and STALE_SHOWN in page(late)
+    assert state_of(migrated, event_id) == "collecting" and audits(migrated, "event.window_closed") == []
+    tick(house, clock)
+    assert state_of(migrated, event_id) == "voting"
 
 
 # Starting again ----------------------------------------------------------------------------------
@@ -281,13 +363,13 @@ def test_any_member_starts_a_called_off_call_again(
     house: TestClient, provider: FakeProvider, clock: FakeClock, migrated: Settings
 ) -> None:
     event_id = call_in(house, provider, clock, migrated, "voting")
-    open_call = htmx(house, f"/events/{event_id}/restart", {})
+    open_call = htmx(house, f"/events/{event_id}/restart", {"run": "1"})
     assert open_call.status_code == 409 and "already a dinner call" in page(open_call)
-    submit(house, f"/events/{event_id}/cancel", {"reason": "Rain"})
+    submit(house, f"/events/{event_id}/cancel", {"reason": "Rain", "run": "1"})
     sign_in_as(house, provider, CREW["other"])
     html = house.get("/").text
     assert "Start dinner again" in html and f'action="/events/{event_id}/restart"' in html
-    restarted = htmx(house, f"/events/{event_id}/restart", {"from": "today"})
+    restarted = htmx(house, f"/events/{event_id}/restart", {"run": "1", "from": "today"})
     assert restarted.status_code == 200 and "Answer by" in restarted.text and "Called off" not in restarted.text
     row = event_row(migrated, event_id)
     riley = member(migrated, CREW["other"]).id
@@ -299,7 +381,7 @@ def test_admins_see_start_again_instead_of_re_run(
     house: TestClient, provider: FakeProvider, clock: FakeClock, migrated: Settings
 ) -> None:
     event_id = call_in(house, provider, clock, migrated, "collecting")
-    submit(house, f"/events/{event_id}/cancel")
+    submit(house, f"/events/{event_id}/cancel", {"run": "1"})
     as_admin(house, provider)
     html = house.get(f"/events/{event_id}").text
     assert "Start dinner again" in html and ">Re-run<" not in html
@@ -309,18 +391,16 @@ def test_starting_again_is_too_late_after_the_meal(
     house: TestClient, provider: FakeProvider, clock: FakeClock, migrated: Settings
 ) -> None:
     event_id = call_in(house, provider, clock, migrated, "collecting")
-    submit(house, f"/events/{event_id}/cancel")
+    submit(house, f"/events/{event_id}/cancel", {"run": "1"})
     clock.advance(timedelta(hours=8, minutes=1))  # 21:01 in Chicago: past 18:30 plus two hours, still the 22nd
     html = house.get("/").text
     assert "Called off by Pat." in html and "Start dinner again" not in html
-    late = htmx(house, f"/events/{event_id}/restart", {})
+    late = htmx(house, f"/events/{event_id}/restart", {"run": "1"})
     assert late.status_code == 409 and "It's too late to start today's dinner call again." in page(late)
     assert state_of(migrated, event_id) == "cancelled"
 
 
 # A card left open across a restart -------------------------------------------------------------
-
-STALE_SHOWN = "That can't happen anymore. Reload the page to see what changed."
 
 
 def test_a_card_left_open_cannot_act_on_a_newer_run(
@@ -338,12 +418,12 @@ def test_a_card_left_open_cannot_act_on_a_newer_run(
     before = (event_row(migrated, event_id).version, event_audits(migrated))
     for role, action in (("coordinator", "cancel"), ("admin", "cancel"), ("admin", "close")):
         act_as(house, provider, role)
-        stale = htmx(house, f"/events/{event_id}/{action}", {"run": "1", "reason": "old page"})
+        stale = htmx(house, f"/events/{event_id}/{action}", {"run": "1", "window": "respond", "reason": "old page"})
         assert stale.status_code == 409 and STALE_SHOWN in page(stale), (role, action)
         if role == "admin":  # an admin may act on any run, so only the run stops it
             assert 'name="run" value="2"' in stale.text  # the fresh card, so the next tap is current
     malformed = htmx(house, f"/events/{event_id}/cancel", {"run": "first"})
-    assert malformed.status_code == 409 and STALE_SHOWN in page(malformed)
+    assert malformed.status_code == 400 and STALE_SHOWN in page(malformed)
     row = event_row(migrated, event_id)
     assert (row.run, row.state, row.end_note) == (2, "collecting", None)
     assert (row.version, event_audits(migrated)) == before
@@ -429,7 +509,7 @@ def test_skipping_a_day_that_has_a_call(
     as_admin(house, provider)
     open_call = submit(house, "/admin/schedule/skip", {"slot": "dinner", "day": "2026-10-22"})
     assert open_call.status_code == 409 and "Call it off instead." in page(open_call)
-    submit(house, f"/events/{event_id}/cancel")
+    submit(house, f"/events/{event_id}/cancel", {"run": "1"})
     off = submit(house, "/admin/schedule/skip", {"slot": "dinner", "day": "2026-10-22"})
     assert off.status_code == 409 and "already off" in page(off)
 

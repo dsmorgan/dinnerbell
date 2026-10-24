@@ -208,9 +208,9 @@ def test_admin_overrides_from_the_page(admin: TestClient, clock: FakeClock, migr
     assert rows(migrated, EventRow)[0].coordinator_id is not None
     submit(admin, f"/events/{event_id}/admin/coordinator", {"member_id": ""})
     assert rows(migrated, EventRow)[0].coordinator_id is None
-    cancelled = htmx(admin, f"/events/{event_id}/cancel", {})
+    cancelled = htmx(admin, f"/events/{event_id}/cancel", {"run": "1"})
     assert cancelled.status_code == 200 and "Called off by admin." in cancelled.text
-    again = htmx(admin, f"/events/{event_id}/cancel", {})
+    again = htmx(admin, f"/events/{event_id}/cancel", {"run": "1"})
     assert again.status_code == 409 and "This call already finished." in again.text  # shown, not a 500
     rerun = htmx(admin, f"/events/{event_id}/admin/rerun", {})
     assert rerun.status_code == 200 and rows(migrated, EventRow)[0].run == 2

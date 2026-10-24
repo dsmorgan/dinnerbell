@@ -104,8 +104,8 @@ Channel messages are shared, so a button can't show whether the person tapping i
 | Hand off | `calls.hand_off(db, actor, event_id, member_id, now=)` |
 | Change meal time, change who does a role | `calls.set_meal_time(..., at: time)`, `calls.change_assignment(..., role, member_id or None)` |
 | `/dinnerbell call`, and starting a called-off call again | `calls.start_call(db, actor, slot, day, now=)`. A call that was called off for that slot and day starts again as a new run of the same row. |
-| Call it off (coordinator, starter until decided, or admin) | `calls.cancel_call(db, actor, event_id, note=reason or None, now=)` |
-| Close now: "Start the vote now" or "Decide now" (coordinator or admin) | `calls.close_window(db, actor, event_id, now=)` |
+| Call it off (coordinator, starter until decided, or admin) | `calls.cancel_call(db, actor, event_id, note=reason or None, run=, now=)`, with the run the person saw |
+| Close now: "Start the vote now" or "Decide now" (coordinator or admin) | `calls.close_window(db, actor, event_id, run=, expected_window=, now=)`. Pass the run and the window the person confirmed, from Slack and the web alike, so a late or doubled confirmation closes nothing. |
 | Admin: extend or shorten a window | `call_admin.move_deadline(db, actor, event_id, Window.RESPOND / VOTE, minutes or None, now=)` |
 | Admin: skip a daily call before it opens | `calls.skip_day(db, actor, slot, day, note=reason or None, now=)` |
 | Admin: re-run, assign coordinator | `call_admin.rerun`, `call_admin.assign_coordinator(..., member_id or None)` |

@@ -196,9 +196,9 @@
   <div class="end-controls">
     {% if v.can.close_window %}
     {% if v.can.close_window.value == "respond" %}
-    {{ act(e.id, base ~ "/close", "Start the vote now", "button small", {"run": e.run}, confirm="Close responses and start the vote now?") }}
+    {{ act(e.id, base ~ "/close", "Start the vote now", "button small", {"run": e.run, "window": "respond"}, confirm="Close responses and start the vote now?") }}
     {% else %}
-    {{ act(e.id, base ~ "/close", "Decide now", "button small", {"run": e.run}, confirm="Close the vote and decide now?") }}
+    {{ act(e.id, base ~ "/close", "Decide now", "button small", {"run": e.run, "window": "vote"}, confirm="Close the vote and decide now?") }}
     {% endif %}
     {% endif %}
     {% if v.can.cancel %}

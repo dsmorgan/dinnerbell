@@ -36,6 +36,7 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ### Fixed
 
+- On the web, two people confirming **Start the vote now** at once, or a web confirmation racing one from Slack, could close responses and then the vote, skipping it. The Close now form now says which window it closes, and a confirmation for a window that's no longer open, or already closed, changes nothing and asks you to reload. **Call it off**, Close now, and **Start {slot} again** now require the run (and Close now the window) that the card writes; a post without them gets a 400 and the same reload message.
 - The Invite someone form on Admin > Members now defaults to Member. It used to preselect Admin, so inviting someone without changing the role made them an admin.
 - A `DINNERBELL_DATABASE_URL` that isn't a URL, or has a malformed port, is reported as a configuration error, without quoting the URL, instead of stopping startup with a traceback.
 
