@@ -13,6 +13,7 @@ from xml.etree import ElementTree
 import pytest
 from fastapi.testclient import TestClient
 
+from dinnerbell.web.middleware import CONTENT_SECURITY_POLICY, STATIC_CONTENT_SECURITY_POLICY
 from tests.conftest import sign_in
 from tests.support.fake_oidc import FakeProvider
 
@@ -24,36 +25,56 @@ ICON_LINKS = (
     '<link rel="icon" href="/static/logo-mark.svg?v=',
     '<link rel="apple-touch-icon" href="/static/apple-touch-icon.png?v=',
 )
+SVG = "{http://www.w3.org/2000/svg}"
+# Exactly what the logos use. Anything new, such as the M4 badge art's `class` attributes and
+# CSS-driven animation (#15), must be added here deliberately, with a look at what it can load.
+ELEMENTS = {"svg", "title", "defs", "clipPath", "radialGradient", "stop", "g", "circle", "ellipse", "rect", "path"}
+ATTRIBUTES = {
+    "viewBox", "role", "aria-labelledby", "id", "cx", "cy", "r", "rx", "ry", "x", "y", "width", "height", "d",
+    "fill", "stroke", "stroke-width", "stroke-linecap", "stroke-linejoin", "opacity", "offset", "stop-color",
+    "transform", "clip-path",
+}  # fmt: skip
+LOCAL_URL = re.compile(r"url\(#[\w-]+\)")
+TRANSFORM = re.compile(r"(\s*(translate|scale|rotate|matrix|skewX|skewY)\(\s*-?[\d.]+(\s*,?\s*-?[\d.]+)*\s*\))+\s*")
 
 
 def committed_svgs() -> list[Path]:
-    return sorted(path for path in ROOT.rglob("*.svg") if not SKIP_DIRS.intersection(path.relative_to(ROOT).parts))
+    return sorted(
+        path
+        for path in ROOT.rglob("*")
+        if path.suffix.lower() in {".svg", ".svgz"}
+        and not SKIP_DIRS.intersection(path.relative_to(ROOT).parts)
+        and path.is_file()
+    )
 
 
 def svg_problems(text: str) -> list[str]:
-    """Anything that could run code or fetch something when the SVG is opened on its own."""
-    # A DTD allows entity expansion and a stylesheet instruction loads CSS from elsewhere. Stop
+    """Anything outside the allowlist above. A denylist of active content is easy to slip past
+    (CSS escapes, <set> and <animate> rewriting href, url() in a <style>), so this accepts only
+    plain shapes, local paint and clip references, and transforms."""
+    # A DTD allows entity expansion and a processing instruction can load a stylesheet. Stop
     # before parsing a DTD; the files are ours, but the parser shouldn't expand anything.
-    problems = [
-        f"contains {marker}"
-        for marker in ("<!doctype", "<!entity", "<?xml-stylesheet", "@import")
-        if marker in text.lower()
-    ]
+    problems = [f"contains {marker}" for marker in ("<!doctype", "<!entity", "<?") if marker in text.lower()]
     if problems:
         return problems
-    for element in ElementTree.fromstring(text).iter():  # noqa: S314 - DTDs are refused above
-        name = element.tag.rpartition("}")[2].lower()
-        if name in {"script", "foreignobject", "iframe", "embed", "object"}:
-            problems.append(f"<{name}> element")
+    root = ElementTree.fromstring(text)  # noqa: S314 - DTDs are refused above
+    if root.tag != f"{SVG}svg":
+        return [f"root element {root.tag}"]
+    for element in root.iter():
+        name = element.tag.removeprefix(SVG)
+        if not isinstance(element.tag, str) or not element.tag.startswith(SVG) or name not in ELEMENTS:
+            problems.append(f"element {element.tag}")
+        if name != "title" and (element.text or "").strip():
+            problems.append(f"text in <{name}>")
+        if (element.tail or "").strip():
+            problems.append(f"text after <{name}>")
         for attribute, value in element.attrib.items():
-            local = attribute.rpartition("}")[2].lower()
-            if local.startswith("on"):
-                problems.append(f"{local}= on <{name}>")
-            if local == "href" and not value.startswith("#"):
-                problems.append(f"external href {value!r}")
-            for url in re.findall(r"url\(\s*['\"]?([^)'\"]*)", value):
-                if not url.startswith("#"):
-                    problems.append(f"external url({url})")
+            if attribute not in ATTRIBUTES:
+                problems.append(f"attribute {attribute} on <{name}>")
+            elif "(" in value and not (
+                LOCAL_URL.fullmatch(value) or (attribute == "transform" and TRANSFORM.fullmatch(value))
+            ):
+                problems.append(f"{attribute}={value!r} on <{name}>")
     return problems
 
 
@@ -64,30 +85,53 @@ def test_there_are_svgs_to_check() -> None:
 
 @pytest.mark.parametrize("path", committed_svgs(), ids=lambda path: str(path.relative_to(ROOT)))
 def test_committed_svg_is_inert(path: Path) -> None:
+    assert path.suffix == ".svg", "commit plain .svg files; compressed or upper-case names skip review"
     assert svg_problems(path.read_text()) == []
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "<script>alert(1)</script>",
+        "<SCRIPT>alert(1)</SCRIPT>",
+        '<circle r="1" onclick="alert(1)"/>',
+        '<circle r="1" ONCLICK="alert(1)"/>',
+        "<foreignObject><p>hi</p></foreignObject>",
+        '<use xmlns:x="http://www.w3.org/1999/xlink" x:href="https://example.com/a.svg#b"/>',
+        '<a href="javascript:alert(1)"><circle r="1"/></a>',
+        '<image href="data:image/png;base64,AAAA"/>',
+        '<iframe src="https://example.com"/>',
+        '<rect fill="url(https://example.com/x#p)"/>',
+        '<rect fill="URL(https://example.com/x#p)"/>',
+        '<rect fill="url(#p) url(https://example.com/x)"/>',
+        '<rect style="fill:\\75rl(https://example.com/p)"/>',
+        "<style>@import url(https://example.com/x.css);</style>",
+        "<style>&#64;import url(https://example.com/x.css);</style>",
+        '<style>@\\69mport "https://example.com/x.css";</style>',
+        "<style>circle{fill:url(https://example.com/p)}</style>",
+        '<style>rect{fill:image-set("https://example.com/m.png" 1x)}</style>',
+        '<set attributeName="href" to="javascript:alert(1)"/>',
+        '<animate attributeName="xlink:href" values="https://example.com/s.svg#a"/>',
+        '<g transform="translate(1 2) url(https://example.com/x)"/>',
+        '<x:script xmlns:x="http://www.w3.org/2000/svg">alert(1)</x:script>',
+        '<script xmlns="http://www.w3.org/1999/xhtml">alert(1)</script>',
+        "<g>loose text</g>",
+    ],
+)
+def test_svg_check_catches_active_content(body: str) -> None:
+    assert svg_problems(f'<svg xmlns="http://www.w3.org/2000/svg">{body}</svg>')
 
 
 @pytest.mark.parametrize(
     "svg",
     [
-        '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>',
-        '<svg xmlns="http://www.w3.org/2000/svg"><SCRIPT>alert(1)</SCRIPT></svg>',
-        '<s:svg xmlns:s="http://www.w3.org/2000/svg"><s:script>alert(1)</s:script></s:svg>',
         '<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)"/>',
-        '<svg xmlns="http://www.w3.org/2000/svg"><circle r="1" ONCLICK="alert(1)"/></svg>',
-        '<svg xmlns="http://www.w3.org/2000/svg"><foreignObject><p>hi</p></foreignObject></svg>',
-        '<svg xmlns="http://www.w3.org/2000/svg" xmlns:x="http://www.w3.org/1999/xlink">'
-        '<use x:href="https://example.com/a.svg#b"/></svg>',
-        '<svg xmlns="http://www.w3.org/2000/svg"><a href="javascript:alert(1)"><circle r="1"/></a></svg>',
-        '<svg xmlns="http://www.w3.org/2000/svg"><image href="data:image/png;base64,AAAA"/></svg>',
-        '<svg xmlns="http://www.w3.org/2000/svg"><rect fill="url(https://example.com/x#p)"/></svg>',
-        '<svg xmlns="http://www.w3.org/2000/svg"><style>@import url(https://example.com/x.css);</style></svg>',
+        '<html xmlns="http://www.w3.org/1999/xhtml"><script>alert(1)</script></html>',
         '<?xml-stylesheet href="https://example.com/x.css"?><svg xmlns="http://www.w3.org/2000/svg"/>',
         '<!DOCTYPE svg [<!ENTITY a "aaaa">]><svg xmlns="http://www.w3.org/2000/svg">&a;</svg>',
-        '<svg xmlns="http://www.w3.org/2000/svg"><iframe src="https://example.com"/></svg>',
     ],
 )
-def test_svg_check_catches_active_content(svg: str) -> None:
+def test_svg_check_catches_bad_documents(svg: str) -> None:
     assert svg_problems(svg)
 
 
@@ -163,7 +207,19 @@ def test_logo_files_are_served_as_images(client: TestClient) -> None:
         assert response.status_code == 200, name
         assert response.headers["content-type"] == kind
         assert response.headers["x-content-type-options"] == "nosniff"
-        assert "default-src 'self'" in response.headers["content-security-policy"]
+
+
+def test_static_files_get_a_policy_that_allows_nothing(client: TestClient) -> None:
+    """Opened directly, an SVG is a document; it must not run script or fetch anything."""
+    for name in ("logo.svg", "logo-mark.svg", "app.css", "app.js"):
+        response = client.get(f"/static/{name}")
+        assert response.headers["content-security-policy"] == STATIC_CONTENT_SECURITY_POLICY, name
+    policy = [part.strip() for part in STATIC_CONTENT_SECURITY_POLICY.split(";")]
+    assert {"default-src 'none'", "frame-ancestors 'none'", "sandbox"} <= set(policy)
+    # A miss renders the normal error page, which needs the page policy for its stylesheet.
+    missing = client.get("/static/nope.svg")
+    assert missing.status_code == 404
+    assert missing.headers["content-security-policy"] == CONTENT_SECURITY_POLICY
 
 
 def test_csp_allows_same_origin_images(client: TestClient) -> None:
@@ -174,7 +230,7 @@ def test_csp_allows_same_origin_images(client: TestClient) -> None:
 def assert_icons_and_logo(html: str, where: str) -> None:
     for link in ICON_LINKS:
         assert link in html, f"{link} missing on {where}"
-    assert re.search(r'<img class="logo" src="/static/logo-mark\.svg\?v=[^"]+" [^>]*alt="[^"]+"', html), where
+    assert re.search(r'<img class="logo" src="/static/logo-mark\.svg\?v=[^"]+" [^>]*alt=""', html), where
 
 
 def test_every_kind_of_page_has_icons_and_logo(client: TestClient, provider: FakeProvider) -> None:

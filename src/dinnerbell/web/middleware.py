@@ -36,6 +36,12 @@ CONTENT_SECURITY_POLICY = "; ".join(
         "frame-ancestors 'none'",
     ]
 )
+# Static files are never pages. An SVG opened directly is a document that could run script or
+# fetch other resources, so every file served from /static gets a policy that allows nothing. Browsers
+# ignore a CSP on scripts, stylesheets, and images loaded by a page, so this costs nothing there.
+STATIC_CONTENT_SECURITY_POLICY = (
+    "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; sandbox"
+)
 SECURITY_HEADERS = {
     "Content-Security-Policy": CONTENT_SECURITY_POLICY,
     "X-Content-Type-Options": "nosniff",
@@ -109,7 +115,8 @@ class RequestContextMiddleware:
 
 
 class SecurityHeadersMiddleware:
-    """Add SEC-2 headers to every response and forbid caching outside /static."""
+    """Add SEC-2 headers to every response, lock /static down to a no-op CSP, and forbid caching
+    outside /static."""
 
     def __init__(self, app: ASGIApp) -> None:
         self.app = app
@@ -127,6 +134,9 @@ class SecurityHeadersMiddleware:
                     headers.setdefault(name, value)
                 if not cacheable:
                     headers["Cache-Control"] = "no-store"
+                elif message["status"] < 400:
+                    # A miss under /static renders the normal error page, which keeps its policy.
+                    headers["Content-Security-Policy"] = STATIC_CONTENT_SECURITY_POLICY
             await send(message)
 
         await self.app(scope, receive, send_with_headers)
