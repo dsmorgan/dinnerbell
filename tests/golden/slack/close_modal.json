@@ -23,7 +23,7 @@
     "text": "Not yet",
     "type": "plain_text"
   },
-  "private_metadata": "{\"event\":7,\"channel\":\"C0DINNER\",\"home\":false,\"window\":\"respond\"}",
+  "private_metadata": "{\"event\":7,\"channel\":\"C0DINNER\",\"home\":false,\"window\":\"respond\",\"run\":1}",
   "submit": {
     "emoji": true,
     "text": "Start the vote",

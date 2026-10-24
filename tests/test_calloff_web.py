@@ -5,15 +5,17 @@ after a call-off."""
 
 from __future__ import annotations
 
+import asyncio
 import re
 from datetime import UTC, datetime, timedelta
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
 from dinnerbell.config import Settings
 from dinnerbell.db.models import AuditRow, EventRow
-from tests.conftest import csrf_from, invite, page, sign_in
+from tests.conftest import BASE_URL, csrf_from, invite, page, sign_in
 from tests.support.clock import FakeClock
 from tests.support.fake_oidc import FakeProvider
 from tests.support.households import other_call, other_household
@@ -30,6 +32,7 @@ CREW: People = {
     "other": "riley@example.com",
 }
 STATES = ("scheduled", "collecting", "voting", "decided")
+STALE_SHOWN = "That can't happen anymore. Reload the page to see what changed."
 
 
 def as_admin(client: TestClient, provider: FakeProvider) -> None:
@@ -274,6 +277,62 @@ def test_close_now_starts_the_vote_then_decides(
     assert late.status_code == 409 and "There's no open window to close." in page(late)
 
 
+def test_close_now_names_the_window_it_closes(
+    house: TestClient, provider: FakeProvider, clock: FakeClock, migrated: Settings
+) -> None:
+    event_id = call_in(house, provider, clock, migrated, "collecting")
+    assert 'name="window" value="respond"' in house.get(f"/events/{event_id}").text
+    for bad in ("Respond", "respond ", " vote", "later", "0"):
+        refused = htmx(house, f"/events/{event_id}/close", {"run": "1", "window": bad})
+        assert refused.status_code == 400 and STALE_SHOWN in page(refused), bad
+    moved = htmx(house, f"/events/{event_id}/close", {"run": "1", "window": "vote"})  # not open yet
+    assert moved.status_code == 409 and STALE_SHOWN in page(moved)
+    assert state_of(migrated, event_id) == "collecting" and audits(migrated, "event.window_closed") == []
+    voting = htmx(house, f"/events/{event_id}/close", {"run": "1", "window": "respond"})
+    assert voting.status_code == 200 and 'name="window" value="vote"' in voting.text
+    assert state_of(migrated, event_id) == "voting"
+
+
+def test_two_close_now_confirmations_at_once_close_one_window(
+    house: TestClient, provider: FakeProvider, clock: FakeClock, migrated: Settings
+) -> None:
+    """Pat (coordinating) and an admin both confirm Start the vote now. One closes responses;
+    the other must not then close the vote nobody confirmed."""
+    event_id = call_in(house, provider, clock, migrated, "collecting")
+    pat = (dict(house.cookies), csrf_from(house))
+    as_admin(house, provider)
+    admin = (dict(house.cookies), csrf_from(house))
+
+    async def post(cookies: dict[str, str], token: str) -> httpx.Response:
+        headers = {"Origin": BASE_URL, "HX-Request": "true", "X-CSRF-Token": token}
+        transport = httpx.ASGITransport(app=house.app)
+        async with httpx.AsyncClient(transport=transport, base_url=BASE_URL, cookies=cookies, headers=headers) as c:
+            return await c.post(f"/events/{event_id}/close", data={"run": "1", "window": "respond"})
+
+    async def both() -> list[httpx.Response]:
+        return list(await asyncio.gather(post(*pat), post(*admin)))
+
+    responses = house.portal.call(both)  # type: ignore[union-attr]
+    assert sorted(r.status_code for r in responses) == [200, 409]
+    assert any(STALE_SHOWN in page(r) for r in responses)
+    assert state_of(migrated, event_id) == "voting"
+    assert [a.payload["window"] for a in audits(migrated, "event.window_closed")] == ["respond"]
+
+
+def test_close_now_after_the_deadline_changes_nothing(
+    house: TestClient, provider: FakeProvider, clock: FakeClock, migrated: Settings
+) -> None:
+    """Responses are due to close, and the next tick will start the vote: a confirmation now
+    would only close the window a second time."""
+    event_id = call_in(house, provider, clock, migrated, "collecting")
+    clock.advance(timedelta(minutes=90))
+    late = htmx(house, f"/events/{event_id}/close", {"run": "1", "window": "respond"})
+    assert late.status_code == 409 and STALE_SHOWN in page(late)
+    assert state_of(migrated, event_id) == "collecting" and audits(migrated, "event.window_closed") == []
+    tick(house, clock)
+    assert state_of(migrated, event_id) == "voting"
+
+
 # Starting again ----------------------------------------------------------------------------------
 
 
@@ -319,8 +378,6 @@ def test_starting_again_is_too_late_after_the_meal(
 
 
 # A card left open across a restart -------------------------------------------------------------
-
-STALE_SHOWN = "That can't happen anymore. Reload the page to see what changed."
 
 
 def test_a_card_left_open_cannot_act_on_a_newer_run(

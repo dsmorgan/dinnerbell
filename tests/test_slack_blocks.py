@@ -85,6 +85,17 @@ def test_labelled_golden(kind: str) -> None:
         assert payload == {**unlabelled, "blocks": [bk.instance_banner("TEST"), *unlabelled["blocks"]]}
 
 
+def test_call_off_modal_samples_carry_what_interactions_write() -> None:
+    """The Call it off and Close now samples name a run, as the app's own modals do."""
+    from dinnerbell.channels.slack import ids
+    from dinnerbell.domain.events import Window
+
+    windows = {"cancel_modal": None, "cancel_modal_decided": None, "close_modal": Window.RESPOND}
+    for kind, window in (windows | {"close_modal_vote": Window.VOTE}).items():
+        origin = ids.ViewOrigin.decode(samples.preview(kind)["private_metadata"])
+        assert (origin.run, origin.window) == (1, window), kind
+
+
 def test_every_notification_kind_has_a_sample_and_no_stale_goldens() -> None:
     sampled = {samples.NOTIFICATIONS[k]().kind for k in samples.NOTIFICATIONS}
     assert sampled == set(note.NOTIFICATION_TYPES)

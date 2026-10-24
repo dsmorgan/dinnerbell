@@ -237,6 +237,8 @@ VOTING_VIEW = _event_view(EventState.VOTING, SAM_RESPONSE, Permissions(vote=True
 DECIDED_VIEW = _event_view(EventState.DECIDED, SAM_RESPONSE, Permissions(mark_done=True))
 CALLED_OFF_VIEW = _event_view(EventState.CANCELLED, SAM_RESPONSE, Permissions(restart=True))
 ORIGIN = ids.ViewOrigin(7, "C0DINNER")
+CALL_OFF_ORIGIN = replace(ORIGIN, run=1)
+"""Call it off and Close now name the run they were opened for, as ``Interactions`` writes them."""
 
 VIEWS: dict[str, Callable[[], dict[str, Any]]] = {
     "details_modal": lambda: details_modal(COLLECTING_VIEW, ORIGIN),
@@ -244,10 +246,10 @@ VIEWS: dict[str, Callable[[], dict[str, Any]]] = {
         _event_view(EventState.COLLECTING, None, Permissions(respond=True)), ORIGIN
     ),
     "proposal_modal": lambda: proposal_modal(VOTING_VIEW, ORIGIN),
-    "cancel_modal": lambda: cancel_modal(COLLECTING_VIEW, ORIGIN),
-    "cancel_modal_decided": lambda: cancel_modal(DECIDED_VIEW, replace(ORIGIN, home=True)),
-    "close_modal": lambda: close_modal(COLLECTING_VIEW, replace(ORIGIN, window=Window.RESPOND)),
-    "close_modal_vote": lambda: close_modal(VOTING_VIEW, replace(ORIGIN, window=Window.VOTE)),
+    "cancel_modal": lambda: cancel_modal(COLLECTING_VIEW, CALL_OFF_ORIGIN),
+    "cancel_modal_decided": lambda: cancel_modal(DECIDED_VIEW, replace(CALL_OFF_ORIGIN, home=True)),
+    "close_modal": lambda: close_modal(COLLECTING_VIEW, replace(CALL_OFF_ORIGIN, window=Window.RESPOND)),
+    "close_modal_vote": lambda: close_modal(VOTING_VIEW, replace(CALL_OFF_ORIGIN, window=Window.VOTE)),
     "home": lambda: home_view(TodayView(DAY, [COLLECTING_VIEW], tuple(Slot)), HomeLinks(BASE_URL)),
     "home_decided": lambda: home_view(
         TodayView(DAY, [DECIDED_VIEW], tuple(Slot)), HomeLinks(BASE_URL), notice="Marked done. Thanks!"

@@ -71,7 +71,8 @@ def check_element(element: Any, where: str, action_ids: set[str]) -> None:
             check_text(confirm["confirm"], 30, f"{where}.confirm.confirm", plain_only=True)
             check_text(confirm["deny"], 30, f"{where}.confirm.deny", plain_only=True)
     if kind == "overflow":
-        assert 1 <= len(element["options"]) <= 5, f"{where}: an overflow menu has 1 to 5 options"
+        # Slack's reference says up to five; Slack has also rejected menus with fewer than two.
+        assert 2 <= len(element["options"]) <= 5, f"{where}: an overflow menu has 2 to 5 options"
         for option in element["options"]:
             check_option(option, f"{where}.option")
         assert {"value", "style", "url"}.isdisjoint(element), f"{where}: overflow menus take options only"
