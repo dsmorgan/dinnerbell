@@ -35,7 +35,9 @@ ATTRIBUTES = {
     "transform", "clip-path",
 }  # fmt: skip
 LOCAL_URL = re.compile(r"url\(#[\w-]+\)")
-TRANSFORM = re.compile(r"(\s*(translate|scale|rotate|matrix|skewX|skewY)\(\s*-?[\d.]+(\s*,?\s*-?[\d.]+)*\s*\))+\s*")
+TRANSFORM = re.compile(
+    r"(\s*(translate|scale|rotate|matrix|skewX|skewY)\(\s*-?[\d.]+(?:(?:\s*,\s*|\s+|(?=-))-?[\d.]+)*\s*\))+\s*"
+)
 
 
 def committed_svgs() -> list[Path]:
