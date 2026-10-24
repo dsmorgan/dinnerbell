@@ -36,12 +36,13 @@ ATTRIBUTES = {
     # The test mascot's blueprint lines (#10). Its value must be a plain list of numbers.
     "stroke-dasharray",
 }  # fmt: skip
-LOCAL_URL = re.compile(r"url\(#[\w-]+\)")
+LOCAL_URL = re.compile(r"url\(#[\w-]+\)", re.ASCII)
 NUMBER = r"-?(?:\d+(?:\.\d*)?|\.\d+)"
 TRANSFORM = re.compile(
-    rf"(?:\s*(?:translate|scale|rotate|matrix|skewX|skewY)\(\s*{NUMBER}(?:(?:\s*,\s*|\s+|(?=-)){NUMBER})*\s*\))+\s*"
+    rf"(?:\s*(?:translate|scale|rotate|matrix|skewX|skewY)\(\s*{NUMBER}(?:(?:\s*,\s*|\s+|(?=-)){NUMBER})*\s*\))+\s*",
+    re.ASCII,
 )
-DASHES = re.compile(rf"\s*{NUMBER}(?:(?:\s*,\s*|\s+){NUMBER})*\s*")
+DASHES = re.compile(rf"\s*{NUMBER}(?:(?:\s*,\s*|\s+){NUMBER})*\s*", re.ASCII)
 
 
 def value_is_allowed(attribute: str, value: str) -> bool:
