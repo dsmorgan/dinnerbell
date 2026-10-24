@@ -116,12 +116,14 @@ async def test_labelled_home_footer_names_the_build_and_label(test_build: Slack,
     assert home["blocks"][-1] == bk.context(f"Dinnerbell {MAIN_BUILD} · TEST")
 
 
-def test_footer_takes_the_last_place_in_a_full_view() -> None:
-    full = {"type": "home", "blocks": [bk.divider()] * bk.MAX_VIEW_BLOCKS}
-    footed = bk.with_version_footer(full, "0.3.0")
-    assert len(footed["blocks"]) == bk.MAX_VIEW_BLOCKS
-    assert footed["blocks"][-1] == bk.context("Dinnerbell 0.3.0")
-    assert len(full["blocks"]) == bk.MAX_VIEW_BLOCKS  # the view passed in is left alone
+def test_a_full_view_gets_no_footer() -> None:
+    """The last block of a full Home may be a call's buttons, so the footer never replaces it."""
+    full = {"type": "home", "blocks": [bk.divider()] * (bk.MAX_VIEW_BLOCKS - 1) + [bk.actions(block_id="last")]}
+    assert bk.with_version_footer(full, "0.3.0") == full
+    one_short = {"type": "home", "blocks": full["blocks"][1:]}
+    footed = bk.with_version_footer(one_short, "0.3.0")
+    assert footed["blocks"] == [*one_short["blocks"], bk.context("Dinnerbell 0.3.0")]
+    assert len(one_short["blocks"]) == bk.MAX_VIEW_BLOCKS - 1  # the view passed in is left alone
 
 
 def test_version_link_and_line() -> None:

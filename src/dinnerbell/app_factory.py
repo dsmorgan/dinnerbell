@@ -26,7 +26,7 @@ from dinnerbell.services import catalog as catalog_service
 from dinnerbell.services.bootstrap import bootstrap
 from dinnerbell.services.clock import Clock, utc_now
 from dinnerbell.services.database import open_database
-from dinnerbell.services.health import SchedulerState, SlackState
+from dinnerbell.services.health import SchedulerState, SlackState, schema_revision
 from dinnerbell.web.app import build_app
 from dinnerbell.web.context import LOGIN_STATE_LIFETIME, AppContext, CookieNames
 from dinnerbell.web.oidc import OIDCClient
@@ -140,6 +140,7 @@ def _slack(
         command=settings.slack_command,
         instance_label=settings.instance_label,
         version=settings.version_label,
+        schema_revision=schema_revision(),
     )
 
 

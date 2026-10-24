@@ -14,7 +14,7 @@ from dinnerbell.channels.slack import ids
 from dinnerbell.channels.slack.connection import SlackConnection
 from dinnerbell.db.repositories import MemberRepository
 from dinnerbell.services import outbox
-from dinnerbell.services.health import SlackState
+from dinnerbell.services.health import SlackState, schema_revision
 from tests.support.calls import House
 from tests.support.fake_slack import (
     APP_TOKEN,
@@ -56,7 +56,7 @@ def connection(
         state=state or SlackState(),
         web_client=fake,
         socket_factory=FakeSocket,
-        **options,
+        **({"schema_revision": schema_revision()} | options),
     )
 
 

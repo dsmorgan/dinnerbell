@@ -68,7 +68,6 @@ from dinnerbell.domain.notifications import PermanentDeliveryError
 from dinnerbell.services import calls, event_views, slack_members
 from dinnerbell.services.clock import Clock
 from dinnerbell.services.errors import Forbidden, NotFound
-from dinnerbell.services.health import schema_revision
 
 log = logging.getLogger(__name__)
 
@@ -130,6 +129,7 @@ class Interactions:
         command: str = DEFAULT_COMMAND,
         instance_label: str = "",
         version: str = __version__,
+        schema_revision: str,
     ) -> None:
         self.api = api
         self.sessionmaker = sessionmaker
@@ -141,6 +141,8 @@ class Interactions:
         self.instance_label = instance_label
         self.version = version
         """``Settings.version_label``, for ``version``, the help reply, and the Home footer."""
+        self.schema_revision = schema_revision
+        """The database's schema revision, read once at startup, for ``version``."""
         self.team_id: str | None = None
         """The workspace whose payloads are accepted. Until it's known, nothing is."""
         self.tasks: set[asyncio.Task[None]] = set()
@@ -574,7 +576,7 @@ class Interactions:
         secret: /healthz shows the version and label, and the revision follows from the version.
         So anyone in the workspace may ask, linked or not."""
         line = version_line(self.version, self.instance_label)
-        return f"{line} · database {escape(schema_revision())} · {version_link(self.version)}"
+        return f"{line} · database {escape(self.schema_revision)} · {version_link(self.version)}"
 
     async def _call(self, source: Source, args: list[str]) -> None:
         member = await self._member(source)

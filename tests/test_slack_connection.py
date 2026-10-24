@@ -31,7 +31,7 @@ from dinnerbell.db.models import AuditRow
 from dinnerbell.domain import notifications as note
 from dinnerbell.services import outbox
 from dinnerbell.services.database import Database, open_database
-from dinnerbell.services.health import SlackState
+from dinnerbell.services.health import SlackState, schema_revision
 from tests.conftest import BASE_URL, make_settings
 from tests.support.calls import OPENS, House, dinner_id, furnish, make_house
 from tests.support.clock import FakeClock
@@ -509,11 +509,13 @@ def test_healthz_reports_connected(tmp_path: Any, clock: FakeClock, provider: Fa
 
 
 def test_slack_shows_the_version_the_footer_shows(tmp_path: Any, clock: FakeClock, provider: FakeProvider) -> None:
-    """The app hands Slack ``Settings.version_label``, so /dinnerbell version matches the footer."""
+    """The app hands Slack ``Settings.version_label``, so /dinnerbell version matches the footer,
+    and the schema revision it read at startup."""
     with slack_client(tmp_path, clock, provider, FakeSlack(), build="abc1234") as client:
         wait_for_slack(client, "connected")
-        version = client.app.state.slack.interactions.version  # type: ignore[attr-defined]
-        assert version == client.get("/healthz").json()["version"] == f"{__version__}+abc1234"
+        interactions = client.app.state.slack.interactions  # type: ignore[attr-defined]
+        assert interactions.version == client.get("/healthz").json()["version"] == f"{__version__}+abc1234"
+        assert interactions.schema_revision == schema_revision()
 
 
 def test_healthz_degrades_but_stays_up_on_a_slack_problem(

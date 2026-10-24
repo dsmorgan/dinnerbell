@@ -7,7 +7,6 @@ import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from functools import cache
 
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
@@ -101,11 +100,11 @@ async def database_reachable(sessionmaker: async_sessionmaker[AsyncSession]) -> 
     return True
 
 
-@cache
 def schema_revision() -> str:
     """The schema revision this build migrates the database to, such as ``0006_event_ended_by``.
 
     ``dinnerbell serve`` upgrades the database to it before it starts, and refuses a database at
-    a revision it doesn't know, so while the app runs this is the database's revision too.
+    a revision it doesn't know, so while the app runs this is the database's revision too. It
+    reads the migration scripts from disk, so call it once at startup.
     """
     return head_revision()

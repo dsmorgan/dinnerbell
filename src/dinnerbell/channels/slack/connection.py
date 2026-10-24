@@ -186,10 +186,12 @@ class SlackConnection:
         command: str = DEFAULT_COMMAND,
         instance_label: str = "",
         version: str = __version__,
+        schema_revision: str,
     ) -> None:
         """A non-empty ``instance_label`` (``DINNERBELL_INSTANCE_LABEL``, such as test's) also
         limits DMs and mentions to the channel's members. ``version`` is
-        ``Settings.version_label``, which Slack shows in ``/dinnerbell version``."""
+        ``Settings.version_label`` and ``schema_revision`` is ``services.health.schema_revision()``,
+        both read once at startup for ``/dinnerbell version``."""
         client = web_client or AsyncWebClient(token=bot_token, timeout=WEB_TIMEOUT_SECONDS)
         self.api = SlackApi(client)
         self.api.on_auth_error = self._token_refused
@@ -231,6 +233,7 @@ class SlackConnection:
             command=command,
             instance_label=instance_label,
             version=version,
+            schema_revision=schema_revision,
         )
 
         async def authorize(team_id: str | None) -> AuthorizeResult:
