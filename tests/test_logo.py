@@ -33,12 +33,24 @@ ATTRIBUTES = {
     "viewBox", "role", "aria-labelledby", "id", "cx", "cy", "r", "rx", "ry", "x", "y", "width", "height", "d",
     "fill", "stroke", "stroke-width", "stroke-linecap", "stroke-linejoin", "opacity", "offset", "stop-color",
     "transform", "clip-path",
+    # The test mascot's blueprint lines (#10). Its value must be a plain list of numbers.
+    "stroke-dasharray",
 }  # fmt: skip
 LOCAL_URL = re.compile(r"url\(#[\w-]+\)")
 NUMBER = r"-?(?:\d+(?:\.\d*)?|\.\d+)"
 TRANSFORM = re.compile(
     rf"(?:\s*(?:translate|scale|rotate|matrix|skewX|skewY)\(\s*{NUMBER}(?:(?:\s*,\s*|\s+|(?=-)){NUMBER})*\s*\))+\s*"
 )
+DASHES = re.compile(rf"\s*{NUMBER}(?:(?:\s*,\s*|\s+){NUMBER})*\s*")
+
+
+def value_is_allowed(attribute: str, value: str) -> bool:
+    """Dashes are numbers only; anything with a parenthesis is a local reference or a transform."""
+    if attribute == "stroke-dasharray":
+        return DASHES.fullmatch(value) is not None
+    if "(" not in value:
+        return True
+    return bool(LOCAL_URL.fullmatch(value) or (attribute == "transform" and TRANSFORM.fullmatch(value)))
 
 
 def committed_svgs() -> list[Path]:
@@ -74,9 +86,7 @@ def svg_problems(text: str) -> list[str]:
         for attribute, value in element.attrib.items():
             if attribute not in ATTRIBUTES:
                 problems.append(f"attribute {attribute} on <{name}>")
-            elif "(" in value and not (
-                LOCAL_URL.fullmatch(value) or (attribute == "transform" and TRANSFORM.fullmatch(value))
-            ):
+            elif not value_is_allowed(attribute, value):
                 problems.append(f"{attribute}={value!r} on <{name}>")
     return problems
 
@@ -119,6 +129,10 @@ def test_committed_svg_is_inert(path: Path) -> None:
         '<x:script xmlns:x="http://www.w3.org/2000/svg">alert(1)</x:script>',
         '<script xmlns="http://www.w3.org/1999/xhtml">alert(1)</script>',
         "<g>loose text</g>",
+        '<path stroke-dasharray="url(https://example.com/x)"/>',
+        '<path stroke-dasharray="var(--x)"/>',
+        '<path stroke-dasharray="6 6; fill: red"/>',
+        '<path display="none"/>',
     ],
 )
 def test_svg_check_catches_active_content(body: str) -> None:
