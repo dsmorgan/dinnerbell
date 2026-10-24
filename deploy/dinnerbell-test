@@ -50,9 +50,12 @@ assignments() {
 # and only spaces or a comment may follow it; then its backslash escapes are decoded. An unquoted
 # value ends before a "#" that follows a space. A line it can't parse is skipped; values that span
 # lines and ${...} aren't supported. With anycase=yes, the name matches in any case, as
-# pydantic-settings reads it. With mode=print, it prints the first file's value; otherwise it
-# succeeds when two files give the same non-empty value, so secrets never leave awk. Run it with
-# LC_ALL=C so every awk counts bytes.
+# pydantic-settings reads it. With mode=print, it prints the value from its one file. Otherwise
+# it takes production's file, then test's, and exits 0 when both give the same non-empty value,
+# 3 when a line of test's file contains production's value (16 bytes or longer) anywhere, which
+# catches what the parser misses, such as a commented-out copy or ${...}, and 1 when neither
+# holds; secrets never leave awk. Run it with LC_ALL=C so every awk counts bytes, and with "./"
+# before a relative file name, so a name with "=" in it isn't read as an assignment.
 # shellcheck disable=SC2016 # awk's own $0, not the shell's.
 DOTENV_AWK='
     function unescape(s, q,    out, j, c, d, e) {
@@ -72,7 +75,8 @@ DOTENV_AWK='
         }
         return out
     }
-    FILENAME != file { file = FILENAME; n++ }
+    { n = (ARGC > 2 && FILENAME == ARGV[2]) ? 2 : 1 }
+    n == 2 && length(found[1]) >= 16 && index($0, found[1]) { leaked = 1 }
     FNR == 1 && substr($0, 1, 3) == "\357\273\277" { $0 = substr($0, 4) }
     {
         line = $0
@@ -105,18 +109,30 @@ DOTENV_AWK='
     }
     END {
         if (mode == "print") printf "%s", found[1]
-        else exit !(found[1] != "" && found[1] == found[2])
+        else if (found[1] != "" && found[1] == found[2]) exit 0
+        else if (leaked) exit 3
+        else exit 1
     }
 '
 
 # The value an env file gives $2. Never use it for a secret; compare those with `shares`.
 value() {
-    LC_ALL=C awk -v name="$2" -v mode=print "$DOTENV_AWK" "$1"
+    LC_ALL=C awk -v name="$2" -v mode=print "$DOTENV_AWK" "$(operand "$1")"
 }
 
-# Whether env files $1 and $2 give variable $3, in any case, the same non-empty value.
+# Whether test's env file $2 shares production's ($1) value of variable $3, in any case: exit 0
+# for the same value, 3 for production's value inside a line, 1 for neither, anything else for
+# an error.
 shares() {
-    LC_ALL=C awk -v name="$3" -v anycase=yes "$DOTENV_AWK" "$1" "$2"
+    LC_ALL=C awk -v name="$3" -v anycase=yes "$DOTENV_AWK" "$(operand "$1")" "$(operand "$2")"
+}
+
+# A file name awk reads as a file: "./" before a relative one.
+operand() {
+    case "$1" in
+        /*) printf '%s' "$1" ;;
+        *) printf './%s' "$1" ;;
+    esac
 }
 
 # A file's inode number, following symlinks, to tell whether two paths are the same file.
@@ -191,11 +207,17 @@ esac
 
 # Shared tokens split Slack events between the instances; a shared secret key lets one instance's
 # cookies and CSRF tokens work on the other. awk compares the values itself, so they never reach
-# the shell, a command line, or a message.
+# the shell, a command line, or a message. An error counts as shared.
 if [ "$starts" = yes ] && [ -f .env ]; then
     for name in $SECRETS; do
-        ! shares "$DINNERBELL_ENV_FILE" .env "$name" ||
-            fail "$DINNERBELL_ENV_FILE and .env have the same $name. Give test its own: see \"Write .env.test\" in docs/setup.md."
+        status=0
+        shares .env "$DINNERBELL_ENV_FILE" "$name" || status=$?
+        case "$status" in
+            0) fail "$DINNERBELL_ENV_FILE and .env have the same $name. Give test its own: see \"Write .env.test\" in docs/setup.md." ;;
+            1) ;;
+            3) fail "$DINNERBELL_ENV_FILE contains production's $name from .env, in a comment or another line. Remove it." ;;
+            *) fail "can't compare $name in $DINNERBELL_ENV_FILE and .env (awk exit $status). Nothing was started." ;;
+        esac
     done
 fi
 
