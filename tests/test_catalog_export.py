@@ -12,9 +12,11 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import io
+import os
 import random
 import re
 import sqlite3
+import stat
 from collections.abc import AsyncIterator, Callable
 from contextlib import closing
 from pathlib import Path
@@ -723,3 +725,53 @@ def test_an_old_schema_gets_a_migrate_hint(cli_env_only: Path, capsys: pytest.Ca
     assert "Can't read the database" in err
     assert "The database is at schema revision '0001_initial', and this Dinnerbell expects" in err
     assert "run `dinnerbell migrate`, then export again" in err
+
+
+def test_force_replaces_only_regular_files_and_symlinks(
+    cli_db: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    pipe, folder = tmp_path / "pipe", tmp_path / "folder"
+    os.mkfifo(pipe)
+    folder.mkdir()
+    for output in (pipe, folder):
+        assert cli.main(["catalog", "export", "-o", str(output), "--force"]) == 1
+        assert f"{output} isn't a regular file, so --force won't replace it." in capsys.readouterr().err
+    assert stat.S_ISFIFO(os.lstat(pipe).st_mode) and folder.is_dir()
+
+    target, link = tmp_path / "target.yaml", tmp_path / "link.yaml"
+    target.write_text("keep me\n")
+    link.symlink_to(target)
+    assert cli.main(["catalog", "export", "-o", str(link), "--force"]) == 0
+    assert not link.is_symlink() and link.read_text() == expected(cli_db)
+    assert target.read_text() == "keep me\n"  # the link was replaced, not written through
+
+
+def test_force_syncs_before_it_renames(cli_db: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+    fsync, replace = os.fsync, os.replace
+    monkeypatch.setattr("os.fsync", lambda fd: (calls.append("fsync"), fsync(fd))[1])
+    monkeypatch.setattr("os.replace", lambda *args: (calls.append("replace"), replace(*args))[1])
+    output = tmp_path / "catalog.yaml"
+    output.write_text("old\n")
+    assert cli.main(["catalog", "export", "-o", str(output), "--force"]) == 0
+    assert calls == ["fsync", "replace"]
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root can create files in a read-only directory")
+def test_force_never_writes_in_place(cli_db: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """In a directory that refuses the temporary file, even a writable file is left alone: writing
+    it in place could follow a symlink swapped in meanwhile, or write through a hard link."""
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    output = locked / "catalog.yaml"
+    output.write_text("old\n")
+    locked.chmod(0o555)
+    try:
+        assert cli.main(["catalog", "export", "-o", str(output), "--force"]) == 2
+        assert output.read_text() == "old\n"
+        assert sorted(p.name for p in locked.iterdir()) == ["catalog.yaml"]
+    finally:
+        locked.chmod(0o755)
+    err = capsys.readouterr().err
+    assert f"Can't write next to {output}: Permission denied. Nothing exported." in err
+    assert "Choose a writable directory, or write to standard output." in err
