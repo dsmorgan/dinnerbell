@@ -11,10 +11,12 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import io
 import random
 import re
 import sqlite3
 from collections.abc import AsyncIterator, Callable
+from contextlib import closing
 from pathlib import Path
 
 import pytest
@@ -24,9 +26,11 @@ from sqlalchemy import select
 
 from dinnerbell import main as cli
 from dinnerbell.config import Settings
+from dinnerbell.db.catalog import CatalogRepository
+from dinnerbell.db.engine import read_snapshot
 from dinnerbell.db.meals import MealLogRepository
 from dinnerbell.db.migrate import run_migrations
-from dinnerbell.db.models import CatalogItemCookRow, CatalogItemRow
+from dinnerbell.db.models import CatalogItemCookRow, CatalogItemRow, TagRow
 from dinnerbell.db.preferences import PreferenceRepository
 from dinnerbell.db.repositories import SessionRepository
 from dinnerbell.domain.catalog import (
@@ -41,7 +45,7 @@ from dinnerbell.domain.catalog import (
     normalize_tag_name,
 )
 from dinnerbell.domain.catalog_export import CatalogExport, export_catalog
-from dinnerbell.domain.catalog_file import HomeMealEntry, RestaurantEntry, parse_catalog
+from dinnerbell.domain.catalog_file import HomeMealEntry, RestaurantEntry, _Loader, parse_catalog
 from dinnerbell.domain.catalog_import import ImportPlan
 from dinnerbell.domain.meals import MemberRef, Slot, TagRef
 from dinnerbell.domain.preferences import Stance, TargetType
@@ -182,6 +186,59 @@ def test_the_output_is_plain_yaml_the_hardened_loader_accepts() -> None:
     assert parse_catalog(text).errors == ()
 
 
+def test_a_link_to_an_unknown_tag_is_skipped() -> None:
+    """Reads happen in one snapshot, so this can't happen; if it did, export still works."""
+    dangling = CatalogItem(
+        **{**{f: getattr(ITEMS[1], f) for f in CatalogItem.__slots__}, "tag_ids": frozenset({4, 99})}
+    )
+    text = export_catalog(TAGS, [ITEMS[0], dangling]).text
+    assert "  - name: chicken larb\n    cuisine: [Lao]\n    tags: []\n" in text
+
+
+def test_values_are_counted_as_import_counts_them() -> None:
+    exported = export_catalog(TAGS, ITEMS)
+    loader = _Loader(exported.text)
+    try:
+        loader.get_single_data()
+    finally:
+        loader.dispose()
+    assert exported.values == loader._nodes
+    assert exported.too_big_to_import is None
+
+
+def _many(count: int, notes: str | None) -> list[CatalogItem]:
+    return [
+        CatalogItem(
+            id=n,
+            household_id=1,
+            kind=ItemKind.RESTAURANT,
+            name=f"Place {n:05}",
+            modes=frozenset({Mode.PICKUP}),
+            tag_ids=frozenset({1}),
+            cook_ids=frozenset(),
+            notes=notes,
+        )
+        for n in range(count)
+    ]
+
+
+def test_an_export_over_the_import_limits_says_so() -> None:
+    big = export_catalog(TAGS, _many(2_100, "n" * 480))
+    assert len(big.data) > 1_000_000 and big.values < 50_000
+    assert (
+        big.too_big_to_import
+        == "This export is over import's limit of 1 MB. To import it, split it into smaller files."
+    )
+    assert parse_catalog(big.data).errors[0].message.startswith("The file is larger than 1 MB")
+
+    many = export_catalog(TAGS, _many(2_700, None))
+    assert len(many.data) < 1_000_000 and many.values > 50_000
+    assert many.too_big_to_import == (
+        "This export is over import's limit of 50,000 values. To import it, split it into smaller files."
+    )
+    assert "more than 50,000 values" in parse_catalog(many.data).errors[0].message
+
+
 ALPHABET = [*"abcXYZ019 -_:#'\"[]{},&*!|>%@`?\t\n\\", "é", "中", "🍜", "\xa0", "\u2028", "ß", "İ"]
 
 
@@ -319,6 +376,46 @@ async def test_importing_an_export_restores_what_it_says_and_deletes_nothing(
 
 
 @pytest.mark.anyio
+async def test_a_merge_during_an_export_doesnt_split_it(
+    databases: dict[str, Database], clock: FakeClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Another request merges "spicy" into "comfort" after the export read the tags but before it
+    read the items. The export still sees the catalog from before the merge, whole."""
+    source = databases["source"]
+    await apply(source, EXAMPLE, clock)
+    read_items = CatalogRepository.items
+
+    async def merge_first(repo: CatalogRepository, household_id: int) -> list[CatalogItem]:
+        async with source.sessionmaker() as other:
+            ids = {t.name: t.id for t in await CatalogRepository(other).tags(1)}
+            await CatalogRepository(other).move_tag_links(1, ids["spicy"], ids["comfort"])
+            await CatalogRepository(other).delete_tag(1, ids["spicy"])
+            await other.commit()
+        return await read_items(repo, household_id)
+
+    monkeypatch.setattr(CatalogRepository, "items", merge_first)
+    during = await export(source)
+    monkeypatch.setattr(CatalogRepository, "items", read_items)
+    assert "  other: [comfort, healthy, quick, spicy]\n" in during.text
+    assert "    tags: [gluten-free option, spicy, vegetarian]\n" in during.text
+    assert parse_catalog(during.data).errors == ()
+
+    after = (await export(source)).text
+    assert "  other: [comfort, healthy, quick]\n" in after and "spicy" not in after
+
+
+@pytest.mark.anyio
+async def test_a_snapshot_refuses_a_session_with_unsaved_changes(
+    databases: dict[str, Database], clock: FakeClock
+) -> None:
+    async with databases["source"].sessionmaker() as db:
+        db.add(TagRow(household_id=1, kind="other", name="unsaved", name_key="unsaved", created_at=clock()))
+        with pytest.raises(RuntimeError, match="no unsaved changes"):
+            async with read_snapshot(db):
+                pass
+
+
+@pytest.mark.anyio
 async def test_an_export_holds_no_personal_data(migrated: Settings, clock: FakeClock) -> None:
     """Members, emails, Slack IDs, preferences, vetoes, history, audit rows, sessions, and secrets
     are all in the database, and none of them reach the export."""
@@ -390,7 +487,8 @@ def test_any_member_downloads_the_catalog(client: TestClient, provider: FakeProv
     assert invite(client, "kim@example.com", "Kim").status_code == 303
     sign_in_as(client, provider, "kim-sub", "kim@example.com")
 
-    assert 'href="/catalog/export.yaml" download>Download catalog</a>' in page(client.get("/catalog"))
+    # No download attribute: Content-Disposition saves the file, and a sign-in page or error isn't saved.
+    assert 'href="/catalog/export.yaml">Download catalog</a>' in page(client.get("/catalog"))
     response = client.get("/catalog/export.yaml")
     assert response.status_code == 200
     assert re.fullmatch(
@@ -414,13 +512,22 @@ def test_any_member_downloads_the_catalog(client: TestClient, provider: FakeProv
 
 
 @pytest.fixture
-def cli_db(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, clock: FakeClock) -> Path:
-    """Configuration in the environment, and a database with the example catalog. The command
-    must neither migrate nor configure logging, which writes to stdout."""
+def cli_env_only(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
+    """Configuration in the environment, for a database that doesn't exist yet. The command must
+    neither migrate nor configure logging, which writes to stdout."""
     for key, value in REQUIRED.items():
         monkeypatch.setenv(key, value)
     path = tmp_path / "data" / "dinnerbell.db"
     monkeypatch.setenv("DINNERBELL_DATABASE_URL", f"sqlite:///{path}")
+    monkeypatch.setattr(cli, "run_migrations", lambda *args: pytest.fail("export migrated the database"))
+    monkeypatch.setattr(cli, "configure_logging", lambda *args: pytest.fail("export configured logging"))
+    return path
+
+
+@pytest.fixture
+def cli_db(cli_env_only: Path, clock: FakeClock) -> Path:
+    """A database with the example catalog."""
+    path = cli_env_only
     run_migrations(f"sqlite:///{path}", path)
 
     async def seed() -> None:
@@ -432,8 +539,6 @@ def cli_db(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, clock: FakeClock) ->
         await database.close()
 
     asyncio.run(seed())
-    monkeypatch.setattr(cli, "run_migrations", lambda *args: pytest.fail("export migrated the database"))
-    monkeypatch.setattr(cli, "configure_logging", lambda *args: pytest.fail("export configured logging"))
     return path
 
 
@@ -509,3 +614,112 @@ def test_the_command_refuses_a_missing_unreadable_or_empty_database(
 def test_the_command_needs_configuration(capsys: pytest.CaptureFixture[str]) -> None:
     assert cli.main(["catalog", "export"]) == 2
     assert "DINNERBELL_" in capsys.readouterr().err
+
+
+def test_a_wal_database_gets_private_sidecar_files_the_app_can_use(
+    cli_db: Path, capsys: pytest.CaptureFixture[str], clock: FakeClock
+) -> None:
+    """With the app stopped, a WAL database has no -wal or -shm file. A read-only open creates
+    them; they must be owner-only, and the app must still open and write the database after."""
+    with closing(sqlite3.connect(cli_db)) as db:
+        assert db.execute("PRAGMA journal_mode").fetchone() == ("wal",)
+    assert sorted(p.name for p in cli_db.parent.iterdir()) == ["dinnerbell.db"]
+    assert cli.main(["catalog", "export"]) == 0
+    sidecars = {p.name: p.stat().st_mode & 0o777 for p in cli_db.parent.iterdir() if p != cli_db}
+    assert sidecars == {"dinnerbell.db-wal": 0o600, "dinnerbell.db-shm": 0o600}
+
+    async def write() -> None:
+        database = open_database(f"sqlite+aiosqlite:///{cli_db}")
+        try:
+            async with database.sessionmaker() as db:
+                await CatalogRepository(db).add_tag(1, TagKind.OTHER, "after export", clock())
+                await db.commit()
+        finally:
+            await database.close()
+
+    asyncio.run(write())
+    assert "after export" in expected(cli_db)
+
+
+def test_a_missing_household_is_the_only_lookup_error_reported_as_one(
+    cli_db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def broken(*args: object) -> CatalogExport:
+        raise KeyError(99)
+
+    monkeypatch.setattr(catalog_service, "export", broken)
+    with pytest.raises(KeyError):
+        cli.main(["catalog", "export"])
+
+
+def test_the_command_warns_when_import_would_refuse_the_file(
+    cli_db: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from dinnerbell.domain import catalog_file
+
+    monkeypatch.setattr(catalog_file, "MAX_NODES", 10)
+    assert cli.main(["catalog", "export"]) == 0
+    err = capsys.readouterr().err
+    assert err.endswith(
+        "Warning: This export is over import's limit of 10 values. To import it, split it into smaller files.\n"
+    )
+
+
+def test_force_replaces_the_file_in_one_step(
+    cli_db: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    output = tmp_path / "catalog.yaml"
+    output.write_text("my edits\n")
+
+    def fail(*args: object) -> None:
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr("os.replace", fail)
+    assert cli.main(["catalog", "export", "-o", str(output), "--force"]) == 2
+    assert "Can't write" in capsys.readouterr().err
+    assert output.read_text() == "my edits\n"
+    monkeypatch.undo()
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["catalog.yaml", "data"]  # no temporary file left
+
+
+class ClosedPipe:
+    """Stands in for stdout when the reader has gone, such as ``| head``."""
+
+    class Buffer:
+        def write(self, data: bytes) -> int:
+            raise BrokenPipeError(32, "Broken pipe")
+
+        def flush(self) -> None:
+            pass
+
+    buffer = Buffer()
+
+    def flush(self) -> None:
+        pass
+
+    def fileno(self) -> int:
+        raise io.UnsupportedOperation("fileno")
+
+
+def test_a_closed_pipe_stops_quietly(
+    cli_db: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr("sys.stdout", ClosedPipe())
+    assert cli.main(["catalog", "export"]) == 1
+    assert capsys.readouterr().err == ""
+
+
+def test_an_old_schema_gets_a_migrate_hint(cli_env_only: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    from tests.test_migrations import _upgrade_to
+
+    _upgrade_to(make_settings(cli_env_only.parent.parent), "0001_initial")
+    with sqlite3.connect(cli_env_only) as db:
+        db.execute(
+            "INSERT INTO household (id, name, timezone, settings, created_at)"
+            " VALUES (1, 'Home', 'UTC', '{}', '2026-10-01 12:00:00.000000')"
+        )
+    assert cli.main(["catalog", "export"]) == 2
+    err = capsys.readouterr().err
+    assert "Can't read the database" in err
+    assert "The database is at schema revision '0001_initial', and this Dinnerbell expects" in err
+    assert "run `dinnerbell migrate`, then export again" in err
