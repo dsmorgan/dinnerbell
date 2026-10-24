@@ -214,6 +214,7 @@ def _response(row: ResponseRow) -> Response:
         note=row.note,
         maybe_at_deadline=row.maybe_at_deadline,
         responded_at=row.responded_at,
+        updated_at=row.updated_at,
     )
 
 

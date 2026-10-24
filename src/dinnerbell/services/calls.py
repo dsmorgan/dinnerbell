@@ -26,6 +26,7 @@ from dinnerbell.db.events import (
     VoteRepository,
 )
 from dinnerbell.db.meals import household_settings
+from dinnerbell.db.outbox import OutboxRepository
 from dinnerbell.db.repositories import HouseholdRepository
 from dinnerbell.domain import notifications as note
 from dinnerbell.domain.catalog import (
@@ -458,6 +459,10 @@ async def mark_done(db: AsyncSession, actor: Member, event_id: int, *, now: date
 
 CANCEL_ROLES = (AssignmentRole.COOK, AssignmentRole.PICKUP, AssignmentRole.ORDER)
 """Assignees told directly when a decided call is called off: the people who'd shop or drive."""
+STALE_DMS = frozenset({note.AssignmentMade.kind, note.ResponseReminder.kind})
+"""Direct messages a call-off makes wrong: "You're cooking" or "Are you in?" must never arrive
+after "It's called off"."""
+CALLED_OFF = "superseded by a call-off"
 
 
 async def cancel_call(
@@ -465,10 +470,11 @@ async def cancel_call(
 ) -> None:
     """Call off an open call (``check_can_cancel``): it ends as cancelled, and nothing goes in
     the meal log (spec 8). ``note`` is an optional reason, cleaned by ``clean_cancel_note``.
+    Undelivered assignment and reminder direct messages for the call are closed unsent.
 
     A call that was posted gets an ``EventCancelled`` reply in its thread, mentioning everyone
     who was in or maybe and the coordinator, and its messages are updated (a decision is struck
-    through). A decided call's cooks, pickups, and orderers each get ``AssignmentCancelled``.
+    through). A decided call's active cooks, pickups, and orderers each get ``AssignmentCancelled``.
     A call that was never posted, a scheduled one, posts nothing; its starter gets
     ``StartedCallCancelled`` when someone else called it off. Nobody is messaged about their own
     call-off. Audited as ``event.cancelled`` with the state it left, the capacity the actor
@@ -484,6 +490,7 @@ async def cancel_call(
         before = await load(db, event)
         event = await EventRepository(db).save(replace(event, state=state, ended_by=actor.id, end_note=reason), now)
         ctx = await load(db, event)
+        await OutboxRepository(db).close_unsent(event.household_id, event.id, STALE_DMS, note=CALLED_OFF, now=now)
         await publish(db, ctx, *_called_off(before, ctx, actor, reason), now=now)
         payload = {"from": before.event.state.value, "as": capacity.value, "note": reason}
         await audit(db, actor.household_id, actor, "event.cancelled", _target(event), payload, now)
@@ -506,7 +513,8 @@ def _called_off(before: CallContext, ctx: CallContext, actor: Member, reason: st
         order = list(AssignmentRole)
         roles: dict[int, set[AssignmentRole]] = {}
         for a in before.assignments:
-            if a.role in CANCEL_ROLES and a.member_id != actor.id:
+            assignee = ctx.members.get(a.member_id)
+            if a.role in CANCEL_ROLES and a.member_id != actor.id and assignee is not None and assignee.active:
                 roles.setdefault(a.member_id, set()).add(a.role)
         for member_id, theirs in roles.items():
             mine = tuple(sorted(theirs, key=order.index))
@@ -553,8 +561,9 @@ async def skip_day(
     schedule = slot_schedule(await household_settings(db, household.id), slot)
     events = EventRepository(db)
     try:
-        if await events.call_for(household.id, slot, day) is not None:
-            raise EventRuleViolation(f"There's already a {slot.value} call for that day. Call it off instead.")
+        existing = await events.call_for(household.id, slot, day)
+        if existing is not None:
+            raise EventRuleViolation(_not_skippable(existing))
         opens_at = schedule.opens_at(day, ZoneInfo(household.timezone))
         event = await events.add(
             household_id=household.id,
@@ -577,8 +586,19 @@ async def skip_day(
         await db.rollback()
         if not is_unique_violation(exc):
             raise
+        # Whoever won the race, the scheduler or a member, just opened or scheduled the call.
         raise EventRuleViolation(f"There's already a {slot.value} call for that day. Call it off instead.") from None
     except BaseException:
         await db.rollback()
         raise
     return event
+
+
+def _not_skippable(existing: Event) -> str:
+    """Why a day that already has a call can't be skipped, and what to do instead."""
+    slot = existing.slot.value
+    if existing.state.is_open:
+        return f"There's already a {slot} call for that day. Call it off instead."
+    if existing.state is EventState.CANCELLED:
+        return f"The {slot} call for that day is already off."
+    return f"The {slot} call for that day already finished."

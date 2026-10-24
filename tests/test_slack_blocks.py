@@ -271,6 +271,8 @@ def test_call_off_messages_escape_the_reason_and_fall_back_for_older_rows() -> N
     shown = "Called off by R&amp;D &lt;bot&gt;. “&lt;!channel&gt; &amp; &lt;@U02SAM&gt;?”"
     assert call.blocks[1]["text"]["text"] == shown
     assert call.text.endswith(shown)  # escaped once, not twice
+    nobody = render(note.EventCancelled(lunch, (samples.SAM,), samples.KIM, audience=()), CTX)
+    assert "Heads up" not in nobody.blocks[0]["text"]["text"]  # an empty audience is not an old row
     unsigned = render(note.CallUpdated(lunch), CTX)  # cancelled before calls recorded who called them off
     assert unsigned.blocks[1]["text"]["text"] == "This call was cancelled."
     for message in (older, call, unsigned):

@@ -39,7 +39,7 @@ from dinnerbell.domain.events import (
     Step,
     Window,
     assign_roles,
-    check_rerun,
+    check_restart,
     check_window_change,
     choose_winner,
     head_count,
@@ -169,15 +169,16 @@ async def open_due_calls(db: AsyncSession, household: Household, now: datetime) 
 
 async def restart(db: AsyncSession, event: Event, *, actor: Member, now: datetime) -> Event:
     """FR-3 and FR-56: any member starts a called-off call again, as a fresh run of the same
-    row (a slot has one call per date), and becomes its starter. The re-run's too-late rule
-    applies. Takes the event's lock; the caller commits. Audited."""
+    row (a slot has one call per date). They become its starter, and it starts with no
+    coordinator. The re-run's too-late rule applies. Takes the event's lock; the caller
+    commits. Audited."""
     if not await EventRepository(db).lock(event.household_id, event.id, now):  # pragma: no cover - just read
         raise NotFound("No such call.")
     ctx = await load(db, event)  # re-read under the lock
     if ctx.event.state is not EventState.CANCELLED:
         raise CallExists(f"There's already a {event.slot.value} call for that day.")
     today = household_today(ctx.household, now)
-    check_rerun(ctx.event, today, now=now, too_late_after=ctx.too_late_for(today))
+    check_restart(ctx.event, today, now=now, too_late_after=ctx.too_late_for(today))
     fresh = await reopen(db, ctx, today=today, now=now, started_by=actor)
     payload = {"from": EventState.CANCELLED.value, "run": fresh.run, "respond_by": fresh.respond_deadline.isoformat()}
     await audit(db, event.household_id, actor, "event.restarted", _target(event), payload, now)
@@ -192,8 +193,10 @@ async def reopen(
     event's lock, checks ``check_rerun``, and audits.
 
     Responses stay; maybes the deadline turned out are maybes again. Proposals, votes, the
-    decision, assignments, and who called it off are cleared. ``started_by``, when given,
-    becomes the starter. The run number goes up, so the channel posts a new call message and
+    decision, assignments, and who called it off are cleared. ``started_by``, when given (a
+    member starting a called-off call again), becomes the starter, and the coordinator is
+    cleared: whoever coordinated the call that was called off may not be around for this one.
+    An admin re-run keeps both. The run number goes up, so the channel posts a new call message and
     the reminder can go out once more.
     """
     event, household_id = ctx.event, ctx.event.household_id
@@ -208,6 +211,7 @@ async def reopen(
         state=transition(event.state, EventState.SCHEDULED if later else EventState.COLLECTING),
         run=event.run + 1,
         created_by=started_by.id if started_by is not None else event.created_by,
+        coordinator_id=None if started_by is not None else event.coordinator_id,
         opens_at=opens_at,
         respond_deadline=opens_at + schedule.response_window,
         reminder_minutes=schedule.reminder_minutes,

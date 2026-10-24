@@ -24,6 +24,9 @@ MAX_SUGGESTION_LENGTH = 100
 MAX_SUGGESTIONS = 3
 MIN_HEAD_COUNT = 2
 DONE_AFTER_MEAL = timedelta(hours=2)
+EARLY_CLOSE_QUIET = timedelta(minutes=10)
+"""How long responses must sit unchanged before a call with people in closes early: time to
+add guests, an eat window, a suggestion, or an offer to cook after tapping In."""
 MAX_DEADLINE_SHIFT_MINUTES = 240
 AD_HOC_DAYS_AHEAD = 7
 MAX_PROPOSALS = 10
@@ -217,6 +220,8 @@ class Response:
     note: str | None = None
     maybe_at_deadline: bool = False
     responded_at: datetime | None = None
+    updated_at: datetime | None = None
+    """The last change to the response, for the early close (``closes_early``)."""
 
     @property
     def is_in(self) -> bool:
@@ -652,6 +657,18 @@ def check_rerun(event: Event, today: date, *, now: datetime, too_late_after: dat
         raise EventRuleViolation("It's too late to re-run today's call. Start one for tomorrow instead.")
 
 
+def check_restart(event: Event, today: date, *, now: datetime, too_late_after: datetime) -> None:
+    """FR-56: any member starts a called-off call again, under the re-run's timing rules."""
+    if event.state is not EventState.CANCELLED:
+        raise EventRuleViolation(f"There's already a {event.slot.value} call for that day.")
+    if event.day < today:  # pragma: no cover - start_call allows only today or later
+        raise EventRuleViolation("You can start a call for today or a later day.")
+    if event.day == today and now >= too_late_after:
+        raise EventRuleViolation(
+            f"It's too late to start today's {event.slot.value} call again. Start one for tomorrow instead."
+        )
+
+
 def shifted_deadline(current: datetime, minutes: int | None, now: datetime, *, latest: datetime) -> datetime:
     """A window's new deadline: ``minutes`` later (negative is earlier), or now when None.
     Never earlier than now, so shortening past the present closes the window, and never past
@@ -701,12 +718,33 @@ def stale_after(event: Event, *, usual_meal: time, zone: tzinfo) -> datetime:
     return min(midnight, max(usual, natural_end + DONE_AFTER_MEAL))
 
 
-def everyone_answered(responses: Iterable[Response], active_member_ids: Iterable[int]) -> bool:
-    """FR-56: every active member answered and none is a maybe, so waiting for the deadline
-    can't change anything. False for a household with no active members."""
+def closes_early(
+    event: Event,
+    now: datetime,
+    responses: Iterable[Response],
+    active_member_ids: Iterable[int],
+    coverage: Coverage,
+) -> bool:
+    """FR-56: whether a collecting call's responses close before the deadline.
+
+    Every active member must have answered in this run (an answer kept from before a re-run or
+    restart doesn't count) and nobody may be a maybe. Then, with fewer than two people eating
+    (everyone out, say), it closes at once and ends on-your-own. With two or more, it waits
+    until no response has changed for ``EARLY_CLOSE_QUIET`` and someone can cook, pick up, or
+    order (``coverage``), so tapping In first and adding details next is never cut short.
+    Otherwise the call waits for its deadline, or for Close now.
+    """
     active = frozenset(active_member_ids)
-    statuses = {r.member_id: r.status for r in responses if r.member_id in active}
-    return bool(active) and statuses.keys() == active and Status.MAYBE not in statuses.values()
+    this_run = [
+        r for r in responses if r.member_id in active and r.updated_at is not None and r.updated_at >= event.opens_at
+    ]
+    if not active or {r.member_id for r in this_run} != active or any(r.status is Status.MAYBE for r in this_run):
+        return False
+    if head_count(this_run) < MIN_HEAD_COUNT:
+        return True
+    last_change = max(r.updated_at for r in this_run if r.updated_at is not None)
+    covered = bool(coverage.cooks or coverage.pickups or coverage.orderers)
+    return covered and now - last_change >= EARLY_CLOSE_QUIET
 
 
 def due_step(
@@ -716,15 +754,16 @@ def due_step(
     stale_after: datetime,
     responses: Iterable[Response] = (),
     active_member_ids: Iterable[int] = (),
+    coverage: Coverage | None = None,
 ) -> Step | None:
     """The next thing the scheduler owes ``event`` at ``now``, if anything.
 
     After downtime, calling this repeatedly walks an event through every missed step. A
     reminder whose deadline has already passed is skipped: it would only arrive too late. An
     undecided call past ``stale_after``, or a scheduled call whose response window already
-    passed, expires instead of being caught up (FR-2). Responses close early once everyone
-    answered (``everyone_answered``, given the call's responses and the household's active
-    members); with no responses passed, they close at the deadline.
+    passed, expires instead of being caught up (FR-2). Responses close early by
+    ``closes_early``, given the call's responses, the household's active members, and the
+    responses' coverage; with none passed, they close at the deadline.
     """
     if event.state in UNDECIDED and now >= stale_after:
         return Step.EXPIRE
@@ -733,7 +772,8 @@ def due_step(
             return Step.EXPIRE
         return Step.OPEN if now >= event.opens_at else None
     if event.state is EventState.COLLECTING:
-        if now >= event.respond_deadline or everyone_answered(responses, active_member_ids):
+        early = closes_early(event, now, responses, active_member_ids, coverage or Coverage())
+        if now >= event.respond_deadline or early:
             return Step.CLOSE_RESPONSES
         if event.reminder_sent_at is None and now >= event.remind_at:
             return Step.REMIND

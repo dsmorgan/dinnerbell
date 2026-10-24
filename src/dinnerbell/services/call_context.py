@@ -332,10 +332,12 @@ async def stale_cutoff(db: AsyncSession, event: Event) -> datetime:
 
 async def due(db: AsyncSession, event: Event, now: datetime) -> Step | None:
     """``domain.events.due_step`` for ``event``. A call that's collecting also gets its
-    responses and the household's active members, for the early close (FR-56)."""
+    responses, the household's active members, and the coverage, for the early close (FR-56)."""
     cutoff = await stale_cutoff(db, event)
     if event.state is not EventState.COLLECTING:
         return due_step(event, now, stale_after=cutoff)
     responses = await ResponseRepository(db).for_event(event.household_id, event.id)
-    active = [m.id for m in await MemberRepository(db).list(event.household_id) if m.active]
-    return due_step(event, now, stale_after=cutoff, responses=responses, active_member_ids=active)
+    members = {m.id: m for m in await MemberRepository(db).list(event.household_id)}
+    active = [m.id for m in members.values() if m.active]
+    covered = coverage(responses, members)
+    return due_step(event, now, stale_after=cutoff, responses=responses, active_member_ids=active, coverage=covered)

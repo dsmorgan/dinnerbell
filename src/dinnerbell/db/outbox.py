@@ -246,6 +246,26 @@ class OutboxRepository:
         )
         return _rowcount(result) == 1
 
+    async def close_unsent(
+        self, household_id: int, event_id: int, kinds: frozenset[str], *, note: str, now: datetime
+    ) -> int:
+        """Close the event's undelivered rows of ``kinds`` unsent, with ``note`` as the reason.
+        A row a live drainer holds is already in a channel's hands and is left alone. Returns
+        how many rows it closed."""
+        result = await self._session.execute(
+            update(OutboxRow)
+            .where(
+                OutboxRow.household_id == household_id,
+                OutboxRow.event_id == event_id,
+                OutboxRow.kind.in_(kinds),
+                _pending(),
+                OutboxRow.claimed_until.is_(None) | (OutboxRow.claimed_until <= now),
+            )
+            .values(delivered_at=now, claim_token=None, claimed_until=None, last_error=note)
+            .execution_options(synchronize_session=False)
+        )
+        return _rowcount(result)
+
     async def newer_update_exists(self, entry: OutboxEntry) -> bool:
         """Whether a later update to the same message is queued or sent, making ``entry`` stale."""
         newer = await self._session.scalar(
