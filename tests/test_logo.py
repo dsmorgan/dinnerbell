@@ -35,8 +35,9 @@ ATTRIBUTES = {
     "transform", "clip-path",
 }  # fmt: skip
 LOCAL_URL = re.compile(r"url\(#[\w-]+\)")
+NUMBER = r"-?(?:\d+(?:\.\d*)?|\.\d+)"
 TRANSFORM = re.compile(
-    r"(\s*(translate|scale|rotate|matrix|skewX|skewY)\(\s*-?[\d.]+(?:(?:\s*,\s*|\s+|(?=-))-?[\d.]+)*\s*\))+\s*"
+    rf"(?:\s*(?:translate|scale|rotate|matrix|skewX|skewY)\(\s*{NUMBER}(?:(?:\s*,\s*|\s+|(?=-)){NUMBER})*\s*\))+\s*"
 )
 
 
