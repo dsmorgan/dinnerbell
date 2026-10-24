@@ -29,6 +29,8 @@ AD_HOC_DAYS_AHEAD = 7
 MAX_PROPOSALS = 10
 """Proposals per call, ranked and added together: enough choice, and a Slack message that fits."""
 MAX_ADDED_PER_MEMBER = 3
+CANCEL_NOTE_MAX = 140
+"""A call-off reason: one line, short enough for a Slack notification preview."""
 QUARTER_HOUR = timedelta(minutes=15)
 LATEST_EAT_TIME = time(23, 45)
 """The latest eat time: later ones round the meal time up past midnight, off the call's day."""
@@ -89,6 +91,16 @@ class IllegalTransition(Exception):
 
 class EventRuleViolation(Exception):
     """An action the call rules forbid right now. The message is written for the person who tried it."""
+
+
+CALL_FINISHED = "This call already finished."
+STALE_CALL = "That can't happen anymore."
+
+
+def friendly(exc: IllegalTransition) -> EventRuleViolation:
+    """``exc`` as a message for the person whose action lost a race, such as a call-off that
+    arrived just after the scheduler marked the meal done."""
+    return EventRuleViolation(STALE_CALL if exc.current.is_open else CALL_FINISHED)
 
 
 class InvalidResponse(ValueError):
@@ -174,6 +186,10 @@ class Event:
     end_reason: EndReason | None = None
     locked_by: int | None = None
     """Who locked the decision (FR-15), or None when the vote decided it."""
+    ended_by: int | None = None
+    """Who called the call off (FR-56), or None. A restart or re-run clears it."""
+    end_note: str | None = None
+    """The reason they gave, if any (``clean_cancel_note``)."""
 
     @property
     def remind_at(self) -> datetime:
@@ -551,6 +567,73 @@ def check_can_mark_done(event: Event, actor: Member, response: Response | None, 
         raise EventRuleViolation("You can mark the meal done once it's meal time.")
 
 
+class ActingAs(StrEnum):
+    """The capacity someone acts in, for the audit row of a call-off or a close: the narrowest
+    that allows it."""
+
+    COORDINATOR = "coordinator"
+    STARTER = "starter"
+    ADMIN = "admin"
+
+
+STARTER_STATES = frozenset({EventState.SCHEDULED, EventState.COLLECTING, EventState.VOTING})
+"""While the member who started a call may still call it off. Once it's decided, people may be
+cooking or driving, so only the coordinator or an admin can."""
+CLOSABLE_STATES = frozenset({EventState.COLLECTING, EventState.VOTING})
+
+
+def check_can_cancel(event: Event, actor: Member) -> ActingAs:
+    """FR-56: who may call a call off. The coordinator and admins, in any open state; the
+    member who started an ad-hoc call (``created_by``), until it's decided. Returns the
+    narrowest capacity that allows it, so an admin who coordinates is audited as coordinator."""
+    if not actor.active:
+        raise EventRuleViolation("Only active members can call off a call.")
+    if not event.state.is_open:
+        raise EventRuleViolation(CALL_FINISHED)
+    if is_coordinator(event, actor):
+        return ActingAs.COORDINATOR
+    starter = event.created_by is not None and event.created_by == actor.id
+    if starter and event.state in STARTER_STATES:
+        return ActingAs.STARTER
+    if actor.is_admin:
+        return ActingAs.ADMIN
+    if starter:
+        raise EventRuleViolation("It's decided now, so only the coordinator or an admin can call it off.")
+    raise EventRuleViolation("Only the coordinator, whoever started this call, or an admin can call it off.")
+
+
+def check_can_close_window(event: Event, actor: Member) -> Window:
+    """FR-56: the coordinator or an admin closes the open window now: "Start the vote now"
+    while collecting, "Decide now" while voting. Returns the window it closes."""
+    if not actor.active:
+        raise EventRuleViolation("Only active members can close a window.")
+    if not event.state.is_open:
+        raise EventRuleViolation(CALL_FINISHED)
+    if event.state not in CLOSABLE_STATES:
+        raise EventRuleViolation("There's no open window to close.")
+    if not (is_coordinator(event, actor) or actor.is_admin):
+        raise EventRuleViolation("Only the coordinator or an admin can close it now.")
+    return Window.RESPOND if event.state is EventState.COLLECTING else Window.VOTE
+
+
+def clean_cancel_note(text: str | None) -> str | None:
+    """A call-off reason as one line of at most ``CANCEL_NOTE_MAX`` characters, or None when
+    blank. Whitespace runs become one space and other control characters are dropped, keeping
+    the zero-width joiner that emoji sequences use. Longer text is cut, not refused: the reason
+    is optional, and refusing it would lose the call-off."""
+    kept = "".join(c for c in " ".join((text or "").split()) if c == "\u200d" or not _is_control(c))
+    return kept[:CANCEL_NOTE_MAX].strip() or None
+
+
+def check_skip_day(day: date, today: date) -> None:
+    """An admin skips a daily call from today up to ``AD_HOC_DAYS_AHEAD`` days ahead: the
+    days anyone can start a call for."""
+    if day < today:
+        raise EventRuleViolation("You can skip today's call or a later day's.")
+    if day > today + timedelta(days=AD_HOC_DAYS_AHEAD):
+        raise EventRuleViolation(f"You can skip a call up to {AD_HOC_DAYS_AHEAD} days ahead.")
+
+
 def check_ad_hoc_day(day: date, today: date) -> None:
     if day < today:
         raise EventRuleViolation("You can start a call for today or a later day.")
@@ -618,13 +701,30 @@ def stale_after(event: Event, *, usual_meal: time, zone: tzinfo) -> datetime:
     return min(midnight, max(usual, natural_end + DONE_AFTER_MEAL))
 
 
-def due_step(event: Event, now: datetime, *, stale_after: datetime) -> Step | None:
+def everyone_answered(responses: Iterable[Response], active_member_ids: Iterable[int]) -> bool:
+    """FR-56: every active member answered and none is a maybe, so waiting for the deadline
+    can't change anything. False for a household with no active members."""
+    active = frozenset(active_member_ids)
+    statuses = {r.member_id: r.status for r in responses if r.member_id in active}
+    return bool(active) and statuses.keys() == active and Status.MAYBE not in statuses.values()
+
+
+def due_step(
+    event: Event,
+    now: datetime,
+    *,
+    stale_after: datetime,
+    responses: Iterable[Response] = (),
+    active_member_ids: Iterable[int] = (),
+) -> Step | None:
     """The next thing the scheduler owes ``event`` at ``now``, if anything.
 
     After downtime, calling this repeatedly walks an event through every missed step. A
     reminder whose deadline has already passed is skipped: it would only arrive too late. An
     undecided call past ``stale_after``, or a scheduled call whose response window already
-    passed, expires instead of being caught up (FR-2).
+    passed, expires instead of being caught up (FR-2). Responses close early once everyone
+    answered (``everyone_answered``, given the call's responses and the household's active
+    members); with no responses passed, they close at the deadline.
     """
     if event.state in UNDECIDED and now >= stale_after:
         return Step.EXPIRE
@@ -633,7 +733,7 @@ def due_step(event: Event, now: datetime, *, stale_after: datetime) -> Step | No
             return Step.EXPIRE
         return Step.OPEN if now >= event.opens_at else None
     if event.state is EventState.COLLECTING:
-        if now >= event.respond_deadline:
+        if now >= event.respond_deadline or everyone_answered(responses, active_member_ids):
             return Step.CLOSE_RESPONSES
         if event.reminder_sent_at is None and now >= event.remind_at:
             return Step.REMIND

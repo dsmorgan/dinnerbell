@@ -210,7 +210,8 @@ def test_admin_overrides_from_the_page(admin: TestClient, clock: FakeClock, migr
     assert rows(migrated, EventRow)[0].coordinator_id is None
     cancelled = htmx(admin, f"/events/{event_id}/admin/cancel", {})
     assert cancelled.status_code == 200 and "Cancelled by an admin." in cancelled.text and "Re-run" in cancelled.text
-    assert htmx(admin, f"/events/{event_id}/admin/cancel", {}).status_code == 409  # illegal transition, shown
+    again = htmx(admin, f"/events/{event_id}/admin/cancel", {})
+    assert again.status_code == 409 and "This call already finished." in again.text  # shown, not a 500
     rerun = htmx(admin, f"/events/{event_id}/admin/rerun", {})
     assert rerun.status_code == 200 and rows(migrated, EventRow)[0].run == 2
     actions = [a.action for a in rows(migrated, AuditRow) if a.action.startswith("event.")]
@@ -475,3 +476,22 @@ def test_open_cards_refresh_themselves(admin: TestClient, clock: FakeClock, migr
 def test_another_households_card_is_not_found(admin: TestClient, migrated: Settings) -> None:
     theirs = other_call(migrated, other_household(migrated))
     assert admin.get(f"/events/{theirs['event']}/card").status_code == 404
+
+
+@pytest.mark.parametrize(
+    ("current", "shown"), [("done", "This call already finished."), ("voting", "That can&#39;t happen anymore.")]
+)
+def test_an_action_that_lost_a_race_says_so(
+    admin: TestClient, monkeypatch: pytest.MonkeyPatch, current: str, shown: str
+) -> None:
+    from dinnerbell.domain.events import EventState, IllegalTransition
+    from dinnerbell.services import calls
+
+    event_id = start(admin)
+
+    async def lost(*args: object, **kwargs: object) -> None:
+        raise IllegalTransition(EventState(current), EventState.DONE)
+
+    monkeypatch.setattr(calls, "mark_done", lost)
+    response = htmx(admin, f"/events/{event_id}/done", {})
+    assert response.status_code == 409 and shown in response.text

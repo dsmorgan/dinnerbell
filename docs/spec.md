@@ -128,7 +128,9 @@ Anyone can record what the household ate when there was no call or offer, with `
 
 ### 5.7 Admin override
 
-The admin can, from Slack or the web app: assign or replace the coordinator, extend or shorten a window, lock a decision, cancel an event, re-run a call, and correct an assignment after the fact.
+The admin can, from Slack or the web app: assign or replace the coordinator, extend or shorten a window, lock a decision, re-run a call, skip a later day's call, and correct an assignment after the fact.
+
+Calling a call off and closing a window now aren't admin-only (FR-56). The coordinator can do both, and whoever started an ad-hoc call can call it off until it's decided. Any member who's in can become coordinator with **I'll coordinate**, so nobody has to wait for an admin.
 
 ### 5.8 Changing the schedule
 
@@ -159,7 +161,8 @@ Requirements use "must" for version 1 and "should" for items that can slip to a 
 | FR-3 | Any member must be able to start an ad-hoc call for a slot and date from Slack or the web app. A call for today opens at once; a call for a later day, up to 7 days ahead, opens at the slot's call time. A slot has at most one call per date. |
 | FR-4 | Any member must be able to post an offer with item, fulfillment mode, time, and capacity. |
 | FR-5 | An offer for a slot that already has an open call must attach to it as a proposal; a cooking offer posted before the call must replace that day's call. |
-| FR-6 | The admin must be able to extend, shorten, lock, cancel, and re-run events. Re-running a voting, decided, abandoned, or cancelled call reopens it with fresh windows: now for today's call (not after the usual meal time plus two hours), or at the slot's call time for a later day. Responses stay; proposals, votes, the decision, and assignments are cleared. |
+| FR-6 | The admin must be able to extend, shorten, lock, cancel, and re-run events, and skip a daily call up to 7 days ahead before it opens. Re-running a voting, decided, abandoned, or cancelled call reopens it with fresh windows: now for today's call (not after the usual meal time plus two hours), or at the slot's call time for a later day. Responses stay; proposals, votes, the decision, and assignments are cleared. Cancelling isn't admin-only: see FR-56. |
+| FR-56 | **Call it off.** An admin or the coordinator can call off a call in any open state, and the member who started an ad-hoc call can while it's scheduled, collecting, or voting. An optional reason of up to 140 characters goes with it. The call ends as cancelled and nothing goes in the meal log. Everyone who was in or maybe and the coordinator are told in the call's thread, and each member assigned to cook, pick up, or order gets a direct message. A call that was never posted posts nothing; its starter gets a direct message if someone else called it off. Any member can start a called-off call again, the same way as a new one, until the usual meal time plus two hours. **Close now:** the coordinator or an admin ends the open window early: "Start the vote now" while collecting, "Decide now" while voting. Responses also close on their own once every active member has answered and nobody is a maybe. |
 
 ### 6.2 Responses
 
@@ -302,24 +305,24 @@ Feedback is not an input in version 1; FR-55 adds it once there is enough data. 
 stateDiagram-v2
     [*] --> scheduled
     scheduled --> collecting: call time
-    collecting --> abandoned: deadline, fewer than 2 in
-    collecting --> voting: deadline, 2 or more in
+    collecting --> abandoned: deadline or everyone answered, fewer than 2 in
+    collecting --> voting: deadline or everyone answered, 2 or more in
     voting --> decided: lock or vote deadline with coverage
     voting --> abandoned: deadline, no coverage
     decided --> done: meal time + 2h or marked done
-    scheduled --> cancelled: admin
+    scheduled --> cancelled: called off
     scheduled --> abandoned: window passed during downtime
-    collecting --> cancelled: admin
-    voting --> cancelled: admin
-    decided --> cancelled: admin
+    collecting --> cancelled: called off
+    voting --> cancelled: called off
+    decided --> cancelled: called off
     voting --> collecting: admin re-run
     decided --> collecting: admin re-run
     abandoned --> collecting: admin re-run
-    cancelled --> collecting: admin re-run
+    cancelled --> collecting: admin re-run, or started again
     voting --> scheduled: admin re-run, later day
     decided --> scheduled: admin re-run, later day
     abandoned --> scheduled: admin re-run, later day
-    cancelled --> scheduled: admin re-run, later day
+    cancelled --> scheduled: admin re-run or started again, later day
     done --> [*]
     abandoned --> [*]
     cancelled --> [*]
@@ -348,7 +351,9 @@ Catch-up stops where it would be too late to matter. An undecided call (schedule
 | Offer full | Offerer | Direct message |
 | Badge earned | Everyone | Channel post |
 | Monthly recap | Everyone | Channel post |
-| Event cancelled by admin | Participants | Channel post, threaded |
+| Call called off | Everyone who was in or maybe, and the coordinator | Channel post, threaded. None for a call that was never posted |
+| Called off after the decision | Each member assigned to cook, pick up, or order | Direct message |
+| Unposted call called off by someone else | The member who started it | Direct message |
 | Schedule changed | Everyone | Channel post. Deferred to M3 with FR-44: in M2 only the admin changes the schedule, from Admin > Schedule, and the change is audited |
 | Feedback reminder | Participants who turned the reminder on | Direct message, once per meal |
 
@@ -486,7 +491,7 @@ Every table carries `household_id`. Timestamps are UTC; the household time zone 
 | catalog_item_tag | item, tag |
 | catalog_item_cook | item, member |
 | preference | member, tag (nullable), item (nullable), veto, score (−2 to +2). Exactly one of tag and item is set (check constraint); both are foreign keys. A veto has score 0, and neutral stances aren't stored. |
-| event | slot, date, kind (call, offer), state, run (admin re-runs), version (the write lock), created_by, coordinator, opens_at, respond_deadline, vote_deadline, reminder and vote window lengths copied from the schedule, reminder_sent_at, decided_item, decided_mode, meal_time, decided_at, done_at, end_reason. One call per household, slot, and date. Offer fields arrive with M3; Slack message references live in the Slack adapter's own table or in the outbox, not here |
+| event | slot, date, kind (call, offer), state, run (admin re-runs), version (the write lock), created_by, coordinator, opens_at, respond_deadline, vote_deadline, reminder and vote window lengths copied from the schedule, reminder_sent_at, decided_item, decided_mode, meal_time, decided_at, done_at, end_reason, locked_by, ended_by and end_note (who called it off and why). One call per household, slot, and date. Offer fields arrive with M3; Slack message references live in the Slack adapter's own table or in the outbox, not here |
 | response | event, member, status (in, out, maybe), guests, guest_needs (tags), eat_from, eat_until, offers_cook, offers_pickup, offers_order, note, maybe_at_deadline. Coordinating is event.coordinator, not a response field |
 | suggestion | event, member, item (nullable), free_text |
 | proposal | event, item (nullable), free_text and its cuisine (until it wins), mode, rank, score, reasons (JSON), source (system, coordinator, member), proposed_by |

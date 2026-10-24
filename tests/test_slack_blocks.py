@@ -247,8 +247,33 @@ def test_plain_entries_and_bare_notifications() -> None:
     picks = render(note.ProposalsUpdated(samples.VOTING, (proposal,), 2), CTX)
     assert picks.blocks[1]["text"]["text"].splitlines()[1] == "2 votes: <@U01ALEX>, <@U02SAM>"
     cancelled = render(note.EventCancelled(samples.event(EventState.CANCELLED)), CTX)
-    assert cancelled.blocks[0]["text"]["text"] == "An admin cancelled the dinner call for Thursday, Oct 22."
+    assert cancelled.blocks[0]["text"]["text"] == (
+        "An admin called off dinner for Thursday, Oct 22. No group dinner this time. Enjoy your evening!"
+    )
     for message in (scheduled, picks, cancelled):
+        check_message(message.payload())
+
+
+def test_call_off_messages_escape_the_reason_and_fall_back_for_older_rows() -> None:
+    """The reason is the member's own text: escaped, never a mention. A row queued before
+    ``audience`` existed mentions its participants instead, and lunch gets its own sign-off."""
+    lunch = replace(samples.event(EventState.CANCELLED), slot=Slot.LUNCH)
+    sneaky = "<!channel> & <@U02SAM>?"
+    older = render(note.EventCancelled(lunch, (samples.SAM,), samples.KIM, note=sneaky), CTX)
+    text = older.blocks[0]["text"]["text"]
+    assert text == (
+        "Kim called off lunch for Thursday, Oct 22: *&lt;!channel&gt; &amp; &lt;@U02SAM&gt;?* "
+        "No group lunch this time. Enjoy your day!\nHeads up <@U02SAM>."
+    )
+    assert older.text == "Kim called off lunch for Thursday, Oct 22: &lt;!channel&gt; &amp; &lt;@U02SAM&gt;?"
+    status = replace(lunch, ended_by=note.PersonInfo(9, "R&D <bot>"), end_note=sneaky)
+    call = render(note.CallUpdated(status), CTX)
+    shown = "Called off by R&amp;D &lt;bot&gt;. “&lt;!channel&gt; &amp; &lt;@U02SAM&gt;?”"
+    assert call.blocks[1]["text"]["text"] == shown
+    assert call.text.endswith(shown)  # escaped once, not twice
+    unsigned = render(note.CallUpdated(lunch), CTX)  # cancelled before calls recorded who called them off
+    assert unsigned.blocks[1]["text"]["text"] == "This call was cancelled."
+    for message in (older, call, unsigned):
         check_message(message.payload())
 
 

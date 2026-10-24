@@ -10,14 +10,14 @@
     },
     {
       "text": {
-        "text": "This call was cancelled.",
+        "text": "Called off by Alex. “Pizza at Grandma's”",
         "type": "mrkdwn"
       },
       "type": "section"
     },
     {
       "text": {
-        "text": "*In* · 3 people eating\n• <@U01ALEX> · can pick up\n• <@U02SAM> · +1 guest (Vegetarian) · can cook · eats after 6:40 PM · suggests Sam's Tacos\n    “Home late, but I'll cook if it's easy.”\n*Maybe:* <@U03KIM>",
+        "text": "*In* · 3 people eating\n• <@U01ALEX> · can pick up\n• <@U02SAM> · +1 guest (Vegetarian) · can cook · eats after 6:40 PM · suggests Sam's Tacos\n    “Home late, but I'll cook if it's easy.”\n*Maybe:* <@U03KIM>\n*Coordinator:* <@U01ALEX>",
         "type": "mrkdwn"
       },
       "type": "section"
@@ -39,5 +39,5 @@
       "type": "actions"
     }
   ],
-  "text": "Dinner call · Thursday, Oct 22: This call was cancelled."
+  "text": "Dinner call · Thursday, Oct 22: Called off by Alex. “Pizza at Grandma's”"
 }

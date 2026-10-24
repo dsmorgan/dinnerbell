@@ -346,3 +346,42 @@ def test_migrations_run_without_cascades_and_refuse_dangling_references(settings
             assert MigrationContext.configure(c).get_current_heads() == (head_revision(),)
     finally:
         engine.dispose()
+
+
+def test_0006_adds_who_called_a_call_off_and_downgrade_removes_it(settings: Settings) -> None:
+    _upgrade_to(settings, "0005_event_locked_by")
+    engine = create_sync_engine(settings.sync_database_url)
+    try:
+        with engine.begin() as c:
+            c.execute(
+                text("INSERT INTO household (name, timezone, settings, created_at) VALUES ('H', 'UTC', '{}', :t)"),
+                {"t": STAMP},
+            )
+            c.execute(text(EVENT_INSERT), {"kind": "call", "t": STAMP})
+        run_migrations(settings.sync_database_url, settings.database_path)
+        columns = {c["name"]: c for c in inspect(engine).get_columns("event")}
+        assert columns["ended_by"]["nullable"] and columns["end_note"]["nullable"]
+        fks = [fk for fk in inspect(engine).get_foreign_keys("event") if fk["constrained_columns"] == ["ended_by"]]
+        assert [(fk["referred_table"], fk["options"].get("ondelete")) for fk in fks] == [("member", "SET NULL")]
+        with engine.begin() as c:
+            assert c.execute(text("SELECT ended_by, end_note FROM event")).all() == [(None, None)]  # existing rows
+            c.execute(
+                text(
+                    "INSERT INTO member (household_id, display_name, email, role, can_cook, can_pickup, can_order, "
+                    "mute_dm_reminders, feedback_reminder, active, slack_link_locked, created_at, updated_at) "
+                    "VALUES (1, 'Sam', 'sam@example.com', 'member', 0, 0, 0, 0, 0, 1, 0, :t, :t)"
+                ),
+                {"t": STAMP},
+            )
+            c.execute(text("UPDATE event SET state = 'cancelled', ended_by = 1, end_note = 'Snow day'"))
+    finally:
+        engine.dispose()
+    _downgrade_to(settings, "0005_event_locked_by")
+    engine = create_sync_engine(settings.sync_database_url)
+    try:
+        assert not {"ended_by", "end_note"} & {c["name"] for c in inspect(engine).get_columns("event")}
+        with engine.connect() as c:
+            assert c.execute(text("SELECT state FROM event")).all() == [("cancelled",)]  # the call itself stays
+    finally:
+        engine.dispose()
+    run_migrations(settings.sync_database_url, settings.database_path)

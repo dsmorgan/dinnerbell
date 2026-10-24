@@ -1,0 +1,28 @@
+{
+  "blocks": [
+    {
+      "text": {
+        "text": "Change of plans, Sam. Alex called off dinner for Thursday, Oct 22: *Pizza at Grandma's*.\nYou're no longer cooking: ~Sam's Tacos~. Thanks for being ready to pitch in!",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "block_id": "more",
+      "elements": [
+        {
+          "action_id": "link_event",
+          "text": {
+            "emoji": true,
+            "text": "View on web",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "url": "https://dinnerbell.example.com/events/7"
+        }
+      ],
+      "type": "actions"
+    }
+  ],
+  "text": "Alex called off dinner for Thursday, Oct 22: Pizza at Grandma's. You're no longer cooking."
+}

@@ -311,13 +311,18 @@ async def test_link_buttons_are_just_acknowledged(slack: Slack) -> None:
 # Errors ------------------------------------------------------------------------------------------
 
 
-async def test_a_stale_transition_says_so(slack: Slack, house: House, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    ("current", "shown"), [(EventState.DONE, "This call already finished."), (EventState.VOTING, STALE)]
+)
+async def test_a_stale_transition_says_so(
+    slack: Slack, house: House, monkeypatch: pytest.MonkeyPatch, current: EventState, shown: str
+) -> None:
     async def stale(*args: object, **kwargs: object) -> None:
-        raise IllegalTransition(EventState.DONE, EventState.DONE)
+        raise IllegalTransition(current, EventState.DONE)
 
     monkeypatch.setattr(calls, "mark_done", stale)
     await slack.click("Sam", "mark_done", "7")
-    assert slack.ephemerals("Sam") == [STALE]
+    assert slack.ephemerals("Sam") == [shown]
 
 
 async def test_a_bug_is_logged_and_the_member_told_to_retry(

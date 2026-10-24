@@ -2,7 +2,7 @@
   "blocks": [
     {
       "text": {
-        "text": "Alex cancelled the dinner call for Thursday, Oct 22.\nHeads up <@U01ALEX>, <@U02SAM>: no group dinner this time.",
+        "text": "Alex called off dinner for Thursday, Oct 22: *Pizza at Grandma's*. No group dinner this time. Enjoy your evening!\nHeads up <@U01ALEX>, <@U03KIM>, <@U02SAM>.",
         "type": "mrkdwn"
       },
       "type": "section"
@@ -17,5 +17,5 @@
       "type": "context"
     }
   ],
-  "text": "Alex cancelled the dinner call for Thursday, Oct 22."
+  "text": "Alex called off dinner for Thursday, Oct 22: Pizza at Grandma's."
 }

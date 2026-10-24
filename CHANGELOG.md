@@ -15,6 +15,12 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 - `deploy/dinnerbell-test` checks the env file before every command that can start a container, such as `up`, `run`, and `start`, with `dinnerbell config check` in a one-off container of the same image that has no network, volume, or published port. A missing setting, such as `DINNERBELL_ADMIN_EMAIL`, now stops it with the setting's name, instead of starting a container that restarts forever. `DINNERBELL_ENGINE` picks the container engine for the check.
 - `deploy/dinnerbell-test` refuses to start test when `.env.test` and `.env` share `DINNERBELL_SECRET_KEY`, `DINNERBELL_SLACK_BOT_TOKEN`, `DINNERBELL_SLACK_APP_TOKEN`, or `DINNERBELL_OIDC_CLIENT_SECRET`, or when any line of `.env.test` contains production's value of one of them. It never prints the values.
 - [docs/setup.md](docs/setup.md#test-instance) shows how both instances share one clone, how to write `.env.test` from `.env` without copying production's secrets, and what to do when the test port hangs.
+- Calling a call off isn't admin-only anymore (FR-56). The coordinator can call off a call at any point, and whoever started an ad-hoc call can until it's decided. An optional reason of up to 140 characters goes with it. Slack and web buttons for members arrive in a follow-up; until then, the admin's **Cancel this call** button on the event page uses the new rules.
+  - The reply in the call's thread names who called it off and why, and mentions everyone who was in or maybe and the coordinator. The call message says "Called off by" with the reason, and a decision is struck through.
+  - When a decided call is called off, each member assigned to cook, pick up, or order gets a direct message.
+  - A call that was never posted, such as one scheduled for a later day, posts nothing. Its starter gets a direct message if someone else called it off.
+- Responses close on their own once every active member has answered and nobody is a maybe. Voting starts at the next scheduler tick, with its usual length from then; if fewer than two people are in, everyone's on their own, as at the deadline.
+- Starting a call for a slot and day that was called off starts it again, for any member, as long as it isn't past the usual meal time plus two hours.
 
 ### Fixed
 
@@ -23,6 +29,10 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 ### Security
 
 - Files served from `/static` carry a Content-Security-Policy that allows nothing (`default-src 'none'` with `sandbox`), so an SVG opened directly can't run script or load anything.
+
+### Upgrade notes
+
+- The database migrates to revision `0006_event_ended_by` when Dinnerbell starts. It adds two empty columns to `event`, so it's quick. Back up first, as always.
 
 ## [0.2.0] - 2026-10-23
 

@@ -307,8 +307,8 @@ def test_a_cancelled_posts_fallback_text_is_escaped_once() -> None:
     message = render(
         replace(base, cancelled_by=note.PersonInfo(1, "Tom & Jerry")), RenderContext("https://x", DIRECTORY)
     )
-    assert message.text.startswith("Tom &amp; Jerry cancelled")
-    assert message.blocks[0]["text"]["text"].startswith("Tom &amp; Jerry cancelled")
+    assert message.text.startswith("Tom &amp; Jerry called off")
+    assert message.blocks[0]["text"]["text"].startswith("Tom &amp; Jerry called off")
 
 
 async def test_replies_escape_what_services_say(slack: Slack, house: House, monkeypatch: pytest.MonkeyPatch) -> None:

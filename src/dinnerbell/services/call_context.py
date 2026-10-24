@@ -44,10 +44,13 @@ from dinnerbell.domain.events import (
     AssignmentRole,
     Coverage,
     Event,
+    EventState,
     Proposal,
     Response,
+    Step,
     Suggestion,
     coverage,
+    due_step,
     head_count,
     stale_after,
 )
@@ -186,6 +189,8 @@ def event_info(ctx: CallContext) -> note.EventInfo:
         vote_deadline=event.vote_deadline,
         coordinator=ctx.person(event.coordinator_id) if event.coordinator_id is not None else None,
         end_reason=event.end_reason,
+        ended_by=ctx.person(event.ended_by) if event.ended_by is not None else None,
+        end_note=event.end_note,
     )
 
 
@@ -323,3 +328,14 @@ async def stale_cutoff(db: AsyncSession, event: Event) -> datetime:
         raise NotFound(NO_SUCH_CALL)
     schedule = slot_schedule(await household_settings(db, event.household_id), event.slot)
     return stale_after(event, usual_meal=schedule.meal_time, zone=ZoneInfo(household.timezone))
+
+
+async def due(db: AsyncSession, event: Event, now: datetime) -> Step | None:
+    """``domain.events.due_step`` for ``event``. A call that's collecting also gets its
+    responses and the household's active members, for the early close (FR-56)."""
+    cutoff = await stale_cutoff(db, event)
+    if event.state is not EventState.COLLECTING:
+        return due_step(event, now, stale_after=cutoff)
+    responses = await ResponseRepository(db).for_event(event.household_id, event.id)
+    active = [m.id for m in await MemberRepository(db).list(event.household_id) if m.active]
+    return due_step(event, now, stale_after=cutoff, responses=responses, active_member_ids=active)

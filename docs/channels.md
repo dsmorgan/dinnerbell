@@ -35,6 +35,7 @@ class Channel(Protocol):
 - **Once.** A row is claimed with a conditional `UPDATE` before the channel is called, so concurrent drainers never deliver the same row. The claim lasts 5 minutes (`LEASE`). If the process dies mid-delivery, another drainer can redeliver after that, so treat `idempotency_key` as a dedupe key if a duplicate post would matter.
 - **Retries.** A failure is retried after 30 seconds, doubling up to an hour. A `HeldDelivery` isn't a failure: it never counts toward `MAX_ATTEMPTS`. When the exception has a numeric `retry_after` (seconds), the next attempt waits for the longer of that and the backoff, at most an hour. After 8 attempts (`MAX_ATTEMPTS`), or at once for `PermanentDeliveryError`, the row is marked `failed_at` and stops holding back later rows. `/healthz` reports `outbox.backlog` (waiting) and `outbox.failed`.
 - **Updates without a message.** If the post an update edits never landed (it failed for good, or the channel returned no ref), the update is closed out with `last_error = "no message to update"` instead of being sent.
+- **Replies without a thread.** A reply whose class sets `needs_thread` (only `event_cancelled`) means nothing without the call message. If that message never landed, the row is closed with `last_error = "no message to thread under"` instead of being posted at the top level. Other threaded posts still go to the top level.
 - **Messages `NullChannel` pretended to post.** `NullChannel` returns refs whose channel ID is `NULL_CHANNEL_ID` (`"null"`, in `domain/notifications.py`). The outbox never passes such a ref to a channel, as `ref` or `thread`. So for a call that opened before Slack was configured, Slack gets no edits for the old call message (they close out as above), and its later posts go to the top level instead of a thread. Never return `"null"` as a real channel ID.
 
 ## Keys
@@ -65,7 +66,11 @@ All types are frozen dataclasses in `domain/notifications.py` with an `event: Ev
 | `decision_updated` | `DecisionUpdated` | Update | `…:decision` | | Meal time, assignments, coordinator, or done. Carries `locked_by` like `DecisionMade`, so every edit can still say who locked it. |
 | `assignment_made` | `AssignmentMade` | DM `member` | | | At the decision, one message per assignee listing all their `roles` (coordinating and cooking, say); later, one for each reassignment while decided, listing the member's roles then (FR-20). `assignment_id` is the assignment that prompted it, and the key, `…:assignment_made:member{id}:{assignment_id}`, is stable per member and run. |
 | `call_abandoned` | `CallAbandoned` | Channel | | | Too few people (`reason = too_few`) or nothing covered (`no_coverage`). Never sent for `missed`. |
-| `event_cancelled` | `EventCancelled` | Channel; for `participants` | | `…:call` | An admin cancels. |
+| `event_cancelled` | `EventCancelled` | Channel; mention everyone in `audience` | | `…:call` | Someone calls off a call that was posted (FR-56). `audience` is everyone who was in or maybe, plus the coordinator; `participants` (who was in) is kept for rows queued before `audience` existed. `cancelled_by` and the optional `note` (the reason, at most 140 characters) say who and why. Never sent for a call that was never posted, and dropped if the call message never landed (`needs_thread`). |
+| `assignment_cancelled` | `AssignmentCancelled` | DM `member` | | | A decided call is called off: one message to each member assigned to cook, pick up, or order, with their `roles`, the `decision` they no longer need to carry out, `cancelled_by`, and `note`. Nobody is messaged about their own call-off. Key: `…:assignment_cancelled:member{id}`. |
+| `started_call_cancelled` | `StartedCallCancelled` | DM `member` | | | Someone else calls off a call `member` started that was never posted (it was still scheduled), so there's no thread to reply in. Key: `…:started_call_cancelled:member{id}`. |
+
+A called-off call has `EventInfo.state = cancelled`, with `EventInfo.ended_by` (who called it off) and `EventInfo.end_note` (the reason, if any). Its `call_updated`, `proposals_updated`, and `decision_updated` go out as usual, so the call message can say "Called off by Sam" and the decision can be struck through. A call that was never posted sends only `started_call_cancelled`, and only when someone other than its starter called it off.
 
 A call that got too late to finish after an outage ends with `EventInfo.state = abandoned` and `EventInfo.end_reason = missed`, quietly: Dinnerbell sends no `call_abandoned` post and no direct messages, only `call_updated` (and `proposals_updated` if it was voting) so its existing messages show that it ended. A scheduled call that expires this way was never posted and sends nothing. Render `missed` as a quiet "too late to decide" state, not as a new announcement.
 
@@ -81,7 +86,7 @@ Map every button or modal to one service call. Services check every rule and per
 
 1. Resolve the Slack user to an active member of the household, or refuse with an ephemeral message (spec 13.5).
 2. Open a session from the app's `sessionmaker` and call the service with `now=clock()`.
-3. Show these exceptions as ephemeral messages with `str(exc)`: `EventRuleViolation`, `InvalidResponse`, `services.errors.NotFound`, and `services.errors.Forbidden`. Treat `IllegalTransition` as "That can't happen anymore." Anything else is a bug: log it.
+3. Show these exceptions as ephemeral messages with `str(exc)`: `EventRuleViolation`, `InvalidResponse`, `services.errors.NotFound`, and `services.errors.Forbidden`. Show `IllegalTransition` as `str(domain.events.friendly(exc))`: "This call already finished." when the call ended before the action reached it. `calls.cancel_call` and `calls.close_window` already raise that as an `EventRuleViolation`. Anything else is a bug: log it.
 4. Don't update messages from the interaction handler. The service's notifications do that through the outbox within seconds.
 
 Channel messages are shared, so a button can't show whether the person tapping it already voted or offered. Use the toggles: each reads the member's current state under the event's lock and flips it, and returns the new state for the ephemeral confirmation. The explicit `calls.vote`, `calls.unvote`, and `calls.offer_role(..., offered)` remain for surfaces that show the member's own state, such as the web page and App Home, where an explicit set survives a double tap.
@@ -98,8 +103,11 @@ Channel messages are shared, so a button can't show whether the person tapping i
 | Mark done (ask to confirm) | `calls.mark_done(db, actor, event_id, now=)`; members can once it's meal time, admins any time |
 | Hand off | `calls.hand_off(db, actor, event_id, member_id, now=)` |
 | Change meal time, change who does a role | `calls.set_meal_time(..., at: time)`, `calls.change_assignment(..., role, member_id or None)` |
-| `/dinnerbell call` | `calls.start_call(db, actor, slot, day, now=)` |
-| Admin: extend, shorten, or close a window | `call_admin.move_deadline(db, actor, event_id, Window.RESPOND / VOTE, minutes or None, now=)` |
-| Admin: cancel, re-run, assign coordinator | `call_admin.cancel`, `call_admin.rerun`, `call_admin.assign_coordinator(..., member_id or None)` |
+| `/dinnerbell call`, and starting a called-off call again | `calls.start_call(db, actor, slot, day, now=)`. A call that was called off for that slot and day starts again as a new run of the same row. |
+| Call it off (coordinator, starter until decided, or admin) | `calls.cancel_call(db, actor, event_id, note=reason or None, now=)` |
+| Close now: "Start the vote now" or "Decide now" (coordinator or admin) | `calls.close_window(db, actor, event_id, now=)` |
+| Admin: extend or shorten a window | `call_admin.move_deadline(db, actor, event_id, Window.RESPOND / VOTE, minutes or None, now=)` |
+| Admin: skip a daily call before it opens | `calls.skip_day(db, actor, slot, day, note=reason or None, now=)` |
+| Admin: re-run, assign coordinator | `call_admin.rerun`, `call_admin.assign_coordinator(..., member_id or None)` |
 
-For what to show a member (their response, which buttons apply to them), use `services.event_views.event_view(db, actor, event_id, now=)`. Its `can` flags come from the same rules the services enforce.
+For what to show a member (their response, which buttons apply to them), use `services.event_views.event_view(db, actor, event_id, now=)`. Its `can` flags come from the same rules the services enforce: `can.cancel` for Call it off, and `can.close_window`, the window Close now would close (`Window.RESPOND` reads "Start the vote now", `Window.VOTE` reads "Decide now"), or `None`.

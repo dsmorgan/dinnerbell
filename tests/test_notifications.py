@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, date, datetime, time
 from typing import Any
 
@@ -76,6 +77,27 @@ EXAMPLES: list[tuple[n.Notification, str, str | None, str | None, int | None]] =
     ),
     (n.CallAbandoned(EVENT, EndReason.TOO_FEW, 1), "event:7:run2:call_abandoned", None, None, None),
     (n.EventCancelled(EVENT, (ALEX,), SAM), "event:7:run2:event_cancelled", None, "event:7:run2:call", None),
+    (
+        n.EventCancelled(EVENT, (ALEX,), SAM, "Pizza at Grandma's", (ALEX, SAM)),
+        "event:7:run2:event_cancelled",
+        None,
+        "event:7:run2:call",
+        None,
+    ),
+    (
+        n.AssignmentCancelled(EVENT, SAM, (AssignmentRole.PICKUP,), DECISION, ALEX, "Snow day"),
+        f"event:7:run2:assignment_cancelled:member{SAM.id}",
+        None,
+        None,
+        2,
+    ),
+    (
+        n.StartedCallCancelled(replace(EVENT, ended_by=ALEX, end_note="Away"), SAM, ALEX),
+        f"event:7:run2:started_call_cancelled:member{SAM.id}",
+        None,
+        None,
+        2,
+    ),
 ]
 
 
@@ -100,6 +122,19 @@ def test_payload_round_trips_through_json(notification: n.Notification) -> None:
 
     payload = json.loads(json.dumps(n.to_payload(notification)))
     assert n.from_payload(notification.kind, payload) == notification
+
+
+def test_only_a_call_off_needs_its_thread() -> None:
+    """The outbox drops a reply whose call message never landed only for a call-off: the other
+    threaded posts still mean something at the top level."""
+    assert {kind for kind, cls in n.NOTIFICATION_TYPES.items() if cls.needs_thread} == {"event_cancelled"}
+
+
+def test_a_call_off_queued_before_note_and_audience_still_decodes() -> None:
+    old = n.to_payload(n.EventCancelled(EVENT, (ALEX,), SAM))
+    del old["note"], old["audience"]
+    del old["event"]["ended_by"], old["event"]["end_note"]
+    assert n.from_payload("event_cancelled", old) == n.EventCancelled(EVENT, (ALEX,), SAM)
 
 
 def test_payload_is_plain_domain_data() -> None:

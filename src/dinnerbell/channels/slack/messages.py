@@ -41,6 +41,7 @@ from dinnerbell.channels.slack.blocks import (
 from dinnerbell.domain import notifications as note
 from dinnerbell.domain.catalog import Mode
 from dinnerbell.domain.events import AssignmentRole, EndReason, EventState, RoleOffer, Status
+from dinnerbell.domain.meals import Slot
 
 MAX_PROPOSALS = 10
 """Services allow 10 proposals per call. Each takes two blocks, well under the 50 a message
@@ -116,6 +117,10 @@ def _render(notification: note.Notification, ctx: RenderContext) -> Message:
             return abandoned_message(notification, ctx)
         case note.EventCancelled():
             return cancelled_message(notification, ctx)
+        case note.AssignmentCancelled():
+            return assignment_cancelled_message(notification, ctx)
+        case note.StartedCallCancelled():
+            return started_call_cancelled_message(notification, ctx)
     raise TypeError(f"no Slack rendering for {type(notification).__name__}")  # pragma: no cover
 
 
@@ -197,6 +202,7 @@ def _roster(
 
 
 def _call_status(event: note.EventInfo) -> str:
+    """Plain words with mrkdwn emphasis: escape before putting it in a block."""
     slot = _slot(event)
     match event.state:
         case EventState.COLLECTING:
@@ -212,6 +218,9 @@ def _call_status(event: note.EventInfo) -> str:
             return "This call ended without a decision."
         case EventState.ABANDONED:
             return f"No group {slot} this time. Everyone's on their own."
+        case EventState.CANCELLED if event.ended_by is not None:
+            reason = f" “{event.end_note}”" if event.end_note else ""
+            return f"Called off by {event.ended_by.name}.{reason}"
         case EventState.CANCELLED:
             return "This call was cancelled."
         case _:
@@ -225,7 +234,8 @@ def call_message(
     mentions: tuple[note.PersonInfo, ...] = (),
 ) -> Message:
     event = notification.event
-    status = _call_status(event)
+    plain_status = _call_status(event)
+    status = escape(plain_status)
     if mentions and event.state is EventState.COLLECTING:
         status += "\n" + " ".join(ctx.directory.mention(p) for p in mentions)
     blocks: list[Block] = [
@@ -259,7 +269,7 @@ def call_message(
         more.append(button("Details", ids.DETAILS, value))
     more.append(_web_button(ctx, event))
     blocks.append(actions(*more, block_id="more"))
-    text = f"{_title(event)}: {status.splitlines()[0]}"
+    text = f"{_title(event)}: {plain_status.splitlines()[0]}"
     return _finish(text.replace("*", ""), blocks)
 
 
@@ -474,14 +484,60 @@ def abandoned_message(notification: note.CallAbandoned, ctx: RenderContext) -> M
     return _finish(text, blocks)
 
 
+ENJOY = {Slot.LUNCH: "Enjoy your day!", Slot.DINNER: "Enjoy your evening!"}
+
+
+def _stop(reason: str) -> str:
+    """A full stop after a reason, unless it ends a sentence already."""
+    return "" if reason.endswith((".", "!", "?", "…")) else "."
+
+
+def _called_off(event: note.EventInfo, by: note.PersonInfo | None, reason: str | None) -> str:
+    """Plain words for a call-off, such as "Sam called off dinner for Friday, Oct 23: pizza at
+    Grandma's." Escape before putting it in a block."""
+    who = by.name if by is not None else "An admin"
+    said = f": {reason}{_stop(reason)}" if reason else "."
+    return f"{who} called off {_slot(event)} for {day_label(event.day)}{said}"
+
+
+def _reason(event: note.EventInfo, by: note.PersonInfo | None, reason: str | None) -> str:
+    """``_called_off`` as mrkdwn, with the reason in bold."""
+    who = escape(by.name) if by is not None else "An admin"
+    said = f": *{escape(reason)}*{_stop(reason)}" if reason else "."
+    return f"{who} called off {_slot(event)} for {day_label(event.day)}{said}"
+
+
 def cancelled_message(notification: note.EventCancelled, ctx: RenderContext) -> Message:
     event = notification.event
-    who = notification.cancelled_by.name if notification.cancelled_by else "An admin"
-    text = f"{who} cancelled the {_slot(event)} call for {day_label(event.day)}."  # _finish escapes it
-    lines = [escape(text)]
-    if notification.participants:
-        lines.append(
-            f"Heads up {ctx.directory.mentions(notification.participants)}: no group {_slot(event)} this time."
-        )
+    lines = [
+        f"{_reason(event, notification.cancelled_by, notification.note)} No group {_slot(event)} this time. "
+        f"{ENJOY[event.slot]}"
+    ]
+    people = notification.audience or notification.participants  # rows queued before audience existed
+    if people:
+        lines.append(f"Heads up {ctx.directory.mentions(people)}.")
     blocks = [section(join_lines(lines)), context(link(ctx.url(event.path), "Open the call on the web"))]
+    return _finish(_called_off(event, notification.cancelled_by, notification.note), blocks)
+
+
+def assignment_cancelled_message(notification: note.AssignmentCancelled, ctx: RenderContext) -> Message:
+    event, proposal = notification.event, notification.decision.proposal
+    role = " and ".join(ROLE_PHRASES[r] for r in notification.roles) or "helping"
+    lines = [
+        f"Change of plans, {escape(notification.member.name)}. "
+        + _reason(event, notification.cancelled_by, notification.note),
+        f"You're no longer {role}: ~{_item_name(proposal.item)}~. Thanks for being ready to pitch in!",
+    ]
+    blocks = [section(join_lines(lines)), actions(_web_button(ctx, event), block_id="more")]
+    text = f"{_called_off(event, notification.cancelled_by, notification.note)} You're no longer {role}."
     return _finish(text, blocks)
+
+
+def started_call_cancelled_message(notification: note.StartedCallCancelled, ctx: RenderContext) -> Message:
+    event = notification.event
+    lines = [
+        _reason(event, notification.cancelled_by, notification.note),
+        f"That's the {_slot(event)} call you started. It hadn't been posted yet, so nobody else was told.",
+    ]
+    blocks = [section(join_lines(lines)), actions(_web_button(ctx, event), block_id="more")]
+    return _finish(_called_off(event, notification.cancelled_by, notification.note), blocks)

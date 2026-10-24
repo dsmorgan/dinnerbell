@@ -51,6 +51,10 @@ class EventInfo:
     vote_deadline: datetime | None = None
     coordinator: PersonInfo | None = None
     end_reason: EndReason | None = None
+    ended_by: PersonInfo | None = None
+    """Who called the call off (FR-56), when it's cancelled."""
+    end_note: str | None = None
+    """The reason they gave, if any."""
 
     @property
     def key(self) -> str:
@@ -133,6 +137,9 @@ class _Notification:
     is_update: ClassVar[bool] = False
     message_suffix: ClassVar[str | None] = None
     thread_suffix: ClassVar[str | None] = None
+    needs_thread: ClassVar[bool] = False
+    """A reply that means nothing without the message it threads under. When that message
+    never landed, the outbox closes the row unsent instead of posting it at the top level."""
 
     event: EventInfo
 
@@ -300,13 +307,61 @@ class CallAbandoned(_Notification):
 
 @dataclass(frozen=True, slots=True)
 class EventCancelled(_Notification):
-    """Cancelled by the admin: a post threaded under the call, for the participants."""
+    """Called off (FR-56): a reply threaded under the call message. ``audience`` is who to
+    mention: everyone who was in or maybe, plus the coordinator. ``participants`` (who was in)
+    predates it. A call that was never posted sends none, and the outbox drops one whose call
+    message never landed (``needs_thread``)."""
 
     kind: ClassVar[str] = "event_cancelled"
     thread_suffix: ClassVar[str | None] = "call"
+    needs_thread: ClassVar[bool] = True
     event: EventInfo
     participants: tuple[PersonInfo, ...] = ()
     cancelled_by: PersonInfo | None = None
+    note: str | None = None
+    audience: tuple[PersonInfo, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class AssignmentCancelled(_Notification):
+    """A decided call was called off: one direct message to each member assigned to cook,
+    pick up, or order, so nobody shops or drives for nothing. ``roles`` are theirs."""
+
+    kind: ClassVar[str] = "assignment_cancelled"
+    event: EventInfo
+    member: PersonInfo
+    roles: tuple[AssignmentRole, ...]
+    decision: DecisionInfo
+    cancelled_by: PersonInfo | None = None
+    note: str | None = None
+
+    @property
+    def idempotency_key(self) -> str:
+        return f"{self.event.key}:{self.kind}:member{self.member.id}"
+
+    @property
+    def recipient_id(self) -> int | None:
+        return self.member.id
+
+
+@dataclass(frozen=True, slots=True)
+class StartedCallCancelled(_Notification):
+    """Someone else called off a call ``member`` started before it was ever posted, so there's
+    no thread to reply in: one direct message to the starter instead."""
+
+    kind: ClassVar[str] = "started_call_cancelled"
+    event: EventInfo
+    member: PersonInfo
+    cancelled_by: PersonInfo
+    note: str | None = None
+
+    @property
+    def idempotency_key(self) -> str:
+        return f"{self.event.key}:{self.kind}:member{self.member.id}"
+
+    @property
+    def recipient_id(self) -> int | None:
+        return self.member.id
 
 
 Notification = Union[  # noqa: UP007 - a runtime union, used for isinstance checks and payload decoding
@@ -321,6 +376,8 @@ Notification = Union[  # noqa: UP007 - a runtime union, used for isinstance chec
     AssignmentMade,
     CallAbandoned,
     EventCancelled,
+    AssignmentCancelled,
+    StartedCallCancelled,
 ]
 NOTIFICATION_TYPES: dict[str, type[Notification]] = {cls.kind: cls for cls in get_args(Notification)}
 UPDATE_KINDS = frozenset(kind for kind, cls in NOTIFICATION_TYPES.items() if cls.is_update)

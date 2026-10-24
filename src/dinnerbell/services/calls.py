@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""What members do with a call: start one, respond, coordinate, propose, vote, lock, and mark
-done (spec 5.1, FR-3, FR-7 to FR-21).
+"""What members do with a call: start one, respond, coordinate, propose, vote, lock, mark done,
+call it off, and close a window now (spec 5.1, FR-3, FR-7 to FR-21, FR-56).
 
 Every function takes the acting member and the event ID, and looks the event up only inside the
 actor's household, so another household's ID is simply not found. Members change only their own
@@ -13,6 +13,7 @@ from dataclasses import replace
 from datetime import UTC, date, datetime, time
 from zoneinfo import ZoneInfo
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dinnerbell.db.catalog import CatalogRepository
@@ -38,16 +39,20 @@ from dinnerbell.domain.catalog import (
 )
 from dinnerbell.domain.events import (
     MODE_ROLE,
+    ActingAs,
     AssignmentRole,
     Details,
     Event,
     EventRuleViolation,
     EventState,
+    IllegalTransition,
     Proposal,
     ProposalSource,
     RoleOffer,
     Status,
     check_ad_hoc_day,
+    check_can_cancel,
+    check_can_close_window,
     check_can_lock,
     check_can_manage_decision,
     check_can_mark_done,
@@ -58,7 +63,11 @@ from dinnerbell.domain.events import (
     check_details,
     check_handoff,
     check_proposal_room,
+    check_skip_day,
+    clean_cancel_note,
+    friendly,
     is_coordinator,
+    transition,
     veto_participants,
     with_details,
     with_offer,
@@ -70,7 +79,7 @@ from dinnerbell.domain.schedule import slot_schedule
 from dinnerbell.services import call_context as cc
 from dinnerbell.services import lifecycle
 from dinnerbell.services.call_context import CallContext, load, locked_event, publish
-from dinnerbell.services.common import audit
+from dinnerbell.services.common import audit, is_unique_violation, require_admin
 from dinnerbell.services.errors import NotFound
 from dinnerbell.services.preferences import group_preferences
 from dinnerbell.services.variety import household_today
@@ -443,3 +452,133 @@ async def mark_done(db: AsyncSession, actor: Member, event_id: int, *, now: date
         ctx = await load(db, event)
         check_can_mark_done(event, actor, ctx.response_of(actor.id), now=now)
         await lifecycle.finish(db, event, now, actor=actor)
+
+
+# Calling it off and closing early (FR-56) -----------------------------------------------------
+
+CANCEL_ROLES = (AssignmentRole.COOK, AssignmentRole.PICKUP, AssignmentRole.ORDER)
+"""Assignees told directly when a decided call is called off: the people who'd shop or drive."""
+
+
+async def cancel_call(
+    db: AsyncSession, actor: Member, event_id: int, *, note: str | None = None, now: datetime
+) -> None:
+    """Call off an open call (``check_can_cancel``): it ends as cancelled, and nothing goes in
+    the meal log (spec 8). ``note`` is an optional reason, cleaned by ``clean_cancel_note``.
+
+    A call that was posted gets an ``EventCancelled`` reply in its thread, mentioning everyone
+    who was in or maybe and the coordinator, and its messages are updated (a decision is struck
+    through). A decided call's cooks, pickups, and orderers each get ``AssignmentCancelled``.
+    A call that was never posted, a scheduled one, posts nothing; its starter gets
+    ``StartedCallCancelled`` when someone else called it off. Nobody is messaged about their own
+    call-off. Audited as ``event.cancelled`` with the state it left, the capacity the actor
+    acted in, and the note.
+    """
+    async with locked_event(db, actor.household_id, event_id, now) as event:
+        capacity = check_can_cancel(event, actor)
+        reason = clean_cancel_note(note)
+        try:
+            state = transition(event.state, EventState.CANCELLED)
+        except IllegalTransition as exc:  # pragma: no cover - check_can_cancel refuses finished calls
+            raise friendly(exc) from None
+        before = await load(db, event)
+        event = await EventRepository(db).save(replace(event, state=state, ended_by=actor.id, end_note=reason), now)
+        ctx = await load(db, event)
+        await publish(db, ctx, *_called_off(before, ctx, actor, reason), now=now)
+        payload = {"from": before.event.state.value, "as": capacity.value, "note": reason}
+        await audit(db, actor.household_id, actor, "event.cancelled", _target(event), payload, now)
+
+
+def _called_off(before: CallContext, ctx: CallContext, actor: Member, reason: str | None) -> list[note.Notification]:
+    """What a call-off sends, given the call ``before`` it and after (``ctx``)."""
+    info, by = cc.event_info(ctx), ctx.person(actor.id)
+    sent: list[note.Notification] = []
+    if before.event.state is EventState.SCHEDULED:
+        starter = ctx.members.get(before.event.created_by) if before.event.created_by is not None else None
+        if starter is not None and starter.active and starter.id != actor.id:
+            sent.append(note.StartedCallCancelled(info, ctx.person(starter.id), by, reason))
+        return sent
+    participants = tuple(ctx.person(r.member_id) for r in before.participants)
+    sent.append(note.EventCancelled(info, participants, by, reason, _audience(before)))
+    sent += [cc.call_updated(ctx), *([cc.proposals_updated(ctx)] if ctx.proposals else []), *cc.decision_updated(ctx)]
+    decision = cc.decision_info(before)
+    if before.event.state is EventState.DECIDED and decision is not None:
+        order = list(AssignmentRole)
+        roles: dict[int, set[AssignmentRole]] = {}
+        for a in before.assignments:
+            if a.role in CANCEL_ROLES and a.member_id != actor.id:
+                roles.setdefault(a.member_id, set()).add(a.role)
+        for member_id, theirs in roles.items():
+            mine = tuple(sorted(theirs, key=order.index))
+            sent.append(note.AssignmentCancelled(info, ctx.person(member_id), mine, decision, by, reason))
+    return sent
+
+
+def _audience(ctx: CallContext) -> tuple[note.PersonInfo, ...]:
+    """Who a call-off reply mentions: active members who were in or maybe, and the coordinator."""
+    who = {r.member_id for r in ctx.responses if r.status is not Status.OUT}
+    if ctx.event.coordinator_id is not None:
+        who.add(ctx.event.coordinator_id)
+    people = [m for m in ctx.active_members if m.id in who]
+    return tuple(ctx.person(m.id) for m in sorted(people, key=lambda m: m.display_name.casefold()))
+
+
+async def close_window(db: AsyncSession, actor: Member, event_id: int, *, now: datetime) -> None:
+    """Close the open window now (``check_can_close_window``): "Start the vote now" while
+    collecting, "Decide now" while voting. The call then advances at once, as at its deadline:
+    to voting or on-your-own, or to a decision. Audited as ``event.window_closed``."""
+    async with locked_event(db, actor.household_id, event_id, now) as event:
+        window = check_can_close_window(event, actor)
+        current, moved = await lifecycle.move_window(db, event, window, None, now)
+        capacity = ActingAs.COORDINATOR if is_coordinator(event, actor) else ActingAs.ADMIN
+        payload = {"window": window.value, "from": current.isoformat(), "to": moved.isoformat(), "as": capacity.value}
+        await audit(db, actor.household_id, actor, "event.window_closed", _target(event), payload, now)
+    await lifecycle.advance(db, actor.household_id, event_id, now)
+
+
+async def skip_day(
+    db: AsyncSession, actor: Member, slot: Slot, day: date, *, note: str | None = None, now: datetime
+) -> Event:
+    """An admin skips the daily call for ``slot`` on ``day``, today or up to a week ahead, before
+    it exists: a cancelled call takes its place, which keeps the scheduler from opening one
+    (FR-2). Nothing is posted. Any member can still start it again (``start_call``). To end a
+    call that already exists, call it off; to stop a slot for good, turn it off in the
+    schedule. Audited as ``event.skipped``."""
+    require_admin(actor, "Only an admin can skip a day's call.")
+    household = await HouseholdRepository(db).get(actor.household_id)
+    if household is None:  # pragma: no cover - members cascade with their household
+        raise NotFound("No such household.")
+    check_skip_day(day, household_today(household, now))
+    reason = clean_cancel_note(note)
+    schedule = slot_schedule(await household_settings(db, household.id), slot)
+    events = EventRepository(db)
+    try:
+        if await events.call_for(household.id, slot, day) is not None:
+            raise EventRuleViolation(f"There's already a {slot.value} call for that day. Call it off instead.")
+        opens_at = schedule.opens_at(day, ZoneInfo(household.timezone))
+        event = await events.add(
+            household_id=household.id,
+            slot=slot,
+            day=day,
+            state=EventState.CANCELLED,
+            opens_at=opens_at,
+            respond_deadline=opens_at + schedule.response_window,
+            reminder_minutes=schedule.reminder_minutes,
+            vote_minutes=schedule.vote_minutes,
+            created_by=None,
+            ended_by=actor.id,
+            end_note=reason,
+            now=now,
+        )
+        payload = {"slot": slot.value, "date": day.isoformat(), "note": reason}
+        await audit(db, household.id, actor, "event.skipped", _target(event), payload, now)
+        await db.commit()
+    except IntegrityError as exc:
+        await db.rollback()
+        if not is_unique_violation(exc):
+            raise
+        raise EventRuleViolation(f"There's already a {slot.value} call for that day. Call it off instead.") from None
+    except BaseException:
+        await db.rollback()
+        raise
+    return event
