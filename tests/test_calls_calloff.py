@@ -12,14 +12,16 @@ from typing import Any
 from zoneinfo import ZoneInfo
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, text
 
 from dinnerbell.config import Settings
 from dinnerbell.db.events import EventRepository
 from dinnerbell.db.models import OutboxRow
+from dinnerbell.db.outbox import OutboxRepository
 from dinnerbell.domain import notifications as n
 from dinnerbell.domain.events import (
     AssignmentRole,
+    Details,
     EndReason,
     EventRuleViolation,
     EventState,
@@ -174,6 +176,42 @@ async def test_an_assignee_who_calls_it_off_is_not_messaged_about_it(house: Hous
     assert (await cancel_audits(house))[-1] == {"from": "decided", "as": "admin", "note": None}
 
 
+async def test_a_deactivated_assignee_is_not_messaged(house: House) -> None:
+    event_id = await decided(house)
+    async with house.sessionmaker() as db:
+        await db.execute(text("UPDATE member SET active = 0 WHERE id = :id"), {"id": house["Alex"].id})
+        await db.commit()
+    await act(house, calls.cancel_call, house["Sam"], event_id)
+    assert "assignment_cancelled" not in await house.kinds()
+
+
+async def test_a_call_off_closes_assignment_and_reminder_messages_still_waiting(house: House) -> None:
+    """A slow "You're picking up" must never arrive after "You're no longer picking up"."""
+    event_id = await decided(house)
+    channel = RecordingChannel()
+    async with house.sessionmaker() as db:
+        # A decided call has no reminder left waiting, so stand one in: closed rows are never decoded.
+        await db.execute(text("UPDATE outbox SET kind = 'response_reminder' WHERE kind = 'maybe_resolved'"))
+        await db.commit()
+        repo = OutboxRepository(db)
+        waiting = [e for e in await repo.for_household(house.household.id) if e.kind == "assignment_made"]
+        live = waiting[0]  # a drainer holds this one: it's already in Slack's hands
+        assert await repo.claim(live.id, "t", now=house.clock(), until=house.clock() + timedelta(minutes=5))
+        await db.commit()
+    await act(house, calls.cancel_call, house["Sam"], event_id)
+    async with house.sessionmaker() as db:
+        rows = list(
+            await db.scalars(select(OutboxRow).where(OutboxRow.kind.in_(["assignment_made", "response_reminder"])))
+        )
+    closed = {(r.kind, r.id == live.id, r.last_error) for r in rows if r.delivered_at is not None}
+    assert ("response_reminder", False, "superseded by a call-off") in closed
+    assert all(r.delivered_at is None for r in rows if r.id == live.id)
+    assert {r.last_error for r in rows if r.id != live.id} == {"superseded by a call-off"}
+    house.clock.now += timedelta(minutes=10)  # the held claim lapses; nothing else is left to send
+    await house.drain(channel)
+    assert channel.kinds.count("assignment_made") == 1 and "response_reminder" not in channel.kinds
+
+
 async def test_who_is_refused(house: House) -> None:
     event_id = await to_voting(house)
     with pytest.raises(EventRuleViolation, match="whoever started this call, or an admin"):
@@ -281,6 +319,8 @@ async def test_the_outbox_drops_a_call_off_whose_call_message_never_landed(house
 async def test_starting_a_called_off_call_again_reuses_its_row(house: House) -> None:
     event_id = await open_dinner(house)
     await act(house, calls.respond, house["Sam"], event_id, Status.MAYBE)
+    await act(house, calls.respond, house["Lee"], event_id, Status.IN)
+    await act(house, calls.claim_coordinator, house["Lee"], event_id)
     house.clock.now = OPENS + timedelta(minutes=10)
     await act(house, calls.cancel_call, house["Alex"], event_id, note="Oops")
     house.clock.now = OPENS + timedelta(minutes=20)
@@ -290,6 +330,7 @@ async def test_starting_a_called_off_call_again_reuses_its_row(house: House) -> 
     event = ctx.event
     assert (event.state, event.run, event.created_by) == (EventState.COLLECTING, 2, house["Kim"].id)
     assert (event.ended_by, event.end_note, event.opens_at) == (None, None, house.clock())
+    assert event.coordinator_id is None  # whoever coordinated the called-off call may not be around
     assert ctx.response_of(house["Sam"].id).status is Status.MAYBE  # type: ignore[union-attr]
     entries = await house.outbox()
     assert (entries[-1].kind, entries[-1].idempotency_key) == ("call_opened", f"event:{event_id}:run2:call_opened")
@@ -308,7 +349,7 @@ async def test_starting_again_keeps_the_too_late_rule_and_a_later_days_timing(ho
     event_id = await open_dinner(house)
     await act(house, calls.cancel_call, house["Alex"], event_id)
     house.clock.now = local(22, 20, 31)  # past the usual 18:30 meal time plus two hours
-    with pytest.raises(EventRuleViolation, match="too late"):
+    with pytest.raises(EventRuleViolation, match="too late to start today's dinner call again"):
         await act(house, calls.start_call, house["Kim"], Slot.DINNER, TODAY)
     assert (await house.event(event_id)).state is EventState.CANCELLED
     tomorrow = await act(house, calls.start_call, house["Kim"], Slot.DINNER, TOMORROW)
@@ -342,12 +383,52 @@ async def test_a_restart_that_finds_the_call_reopened_under_the_lock_is_refused(
     assert (await house.event(event_id)).run == 1
 
 
-async def test_an_admin_rerun_clears_who_called_it_off(house: House) -> None:
+async def test_an_admin_rerun_clears_who_called_it_off_and_keeps_the_coordinator(house: House) -> None:
     event_id = await open_dinner(house)
+    await act(house, calls.respond, house["Sam"], event_id, Status.IN)
+    await act(house, calls.claim_coordinator, house["Sam"], event_id)
     await act(house, calls.cancel_call, house["Alex"], event_id, note="Oops")
     await act(house, call_admin.rerun, house["Alex"], event_id)
     event = await house.event(event_id)
     assert (event.state, event.ended_by, event.end_note, event.created_by) == (EventState.COLLECTING, None, None, None)
+    assert event.coordinator_id == house["Sam"].id
+
+
+async def test_answers_kept_from_before_a_restart_do_not_close_it_early(house: House) -> None:
+    """Regression: the next tick closed a restarted call on answers from its called-off run."""
+    event_id = await open_dinner(house)
+    for name in ("Alex", "Sam", "Kim", "Lee"):
+        await act(house, calls.respond, house[name], event_id, Status.IN)
+    await act(house, calls.offer_role, house["Sam"], event_id, RoleOffer.PICKUP, True)
+    house.clock.now = OPENS + timedelta(minutes=5)
+    await act(house, calls.cancel_call, house["Alex"], event_id)
+    house.clock.now = OPENS + timedelta(minutes=10)
+    await act(house, calls.start_call, house["Kim"], Slot.DINNER, TODAY)
+    house.clock.now += timedelta(minutes=30)  # past the quiet spell, before the reminder
+    assert await house.tick() == []
+    # A partly answered run waits too: three answer again, Lee's answer is the old one.
+    for name in ("Alex", "Sam", "Kim"):
+        await act(house, calls.respond, house[name], event_id, Status.IN)
+    house.clock.now += timedelta(minutes=15)
+    assert await house.tick() == []
+    await act(house, calls.respond, house["Lee"], event_id, Status.IN)
+    house.clock.now += timedelta(minutes=10)
+    assert await house.tick() == [Step.CLOSE_RESPONSES]
+
+
+async def test_an_admin_rerun_of_an_everyone_out_call_gets_a_real_window(house: House) -> None:
+    """Regression: re-running a call everyone was out of abandoned it again at the next tick."""
+    event_id = await open_dinner(house)
+    for name in ("Alex", "Sam", "Kim", "Lee"):
+        await act(house, calls.respond, house[name], event_id, Status.OUT)
+    house.clock.now = OPENS + timedelta(minutes=1)
+    assert await house.tick() == [Step.CLOSE_RESPONSES]
+    assert (await house.event(event_id)).state is EventState.ABANDONED
+    house.clock.now = OPENS + timedelta(minutes=5)
+    await act(house, call_admin.rerun, house["Alex"], event_id)
+    house.clock.now += timedelta(seconds=30)
+    assert await house.tick() == []
+    assert (await house.event(event_id)).state is EventState.COLLECTING
 
 
 # Skipping a day ---------------------------------------------------------------------------------------
@@ -407,8 +488,14 @@ async def test_skip_day_rules(house: House) -> None:
     with pytest.raises(EventRuleViolation, match="Call it off instead"):
         await act(house, calls.skip_day, house["Alex"], Slot.LUNCH, TOMORROW)
     await act(house, calls.skip_day, house["Alex"], Slot.DINNER, TOMORROW)
-    with pytest.raises(EventRuleViolation, match="Call it off instead"):
+    with pytest.raises(EventRuleViolation, match=r"^The dinner call for that day is already off\.$"):
         await act(house, calls.skip_day, house["Alex"], Slot.DINNER, TOMORROW)
+    today = await open_dinner(house)
+    await act(house, calls.respond, house["Alex"], today, Status.IN)
+    house.clock.now = RESPOND_BY
+    await house.tick()  # too few: on-your-own
+    with pytest.raises(EventRuleViolation, match=r"^The dinner call for that day already finished\.$"):
+        await act(house, calls.skip_day, house["Alex"], Slot.DINNER, TODAY)
     assert [a.action for a in await house.audits() if a.action == "event.skipped"] == ["event.skipped"]
 
 
@@ -449,21 +536,41 @@ async def test_close_now_on_a_finished_call(house: House) -> None:
 # Closing early once everyone answered -----------------------------------------------------------------
 
 
-async def test_everyone_answering_starts_the_vote_at_the_next_tick(house: House) -> None:
+async def test_everyone_answering_starts_the_vote_after_a_quiet_spell(house: House) -> None:
     event_id = await open_dinner(house)
     await act(house, calls.respond, house["Alex"], event_id, Status.IN)
-    await act(house, calls.offer_role, house["Sam"], event_id, RoleOffer.PICKUP, True)
+    await act(house, calls.respond, house["Sam"], event_id, Status.IN)
     await act(house, calls.respond, house["Kim"], event_id, Status.MAYBE)
     await act(house, calls.respond, house["Lee"], event_id, Status.OUT)
-    house.clock.now = OPENS + timedelta(minutes=10)
+    house.clock.now = OPENS + timedelta(minutes=20)
     assert await house.tick() == []  # Kim is a maybe
     await act(house, calls.respond, house["Kim"], event_id, Status.OUT)
+    house.clock.now += timedelta(minutes=15)
+    assert await house.tick() == []  # quiet, but nobody can cook, pick up, or order yet
+    await act(house, calls.offer_role, house["Sam"], event_id, RoleOffer.PICKUP, True)
+    house.clock.now += timedelta(minutes=9)
+    assert await house.tick() == []  # the offer restarted the quiet spell
+    house.clock.now += timedelta(minutes=1)
     assert await house.tick() == [Step.CLOSE_RESPONSES]
     event = await house.event(event_id)
     assert event.state is EventState.VOTING
     assert (event.respond_deadline, event.vote_deadline) == (house.clock(), house.clock() + timedelta(minutes=45))
     early = next(a for a in await house.audits() if a.action == "event.everyone_answered")
     assert (early.actor_member_id, early.payload["from"]) == (None, RESPOND_BY.isoformat())
+
+
+async def test_in_first_and_details_next_is_never_cut_short(house: House) -> None:
+    """Regression: everyone tapped In, and the next tick ended the call as nothing covered
+    before anyone could offer to pick up."""
+    event_id = await open_dinner(house)
+    for name in ("Alex", "Sam", "Kim", "Lee"):
+        await act(house, calls.respond, house[name], event_id, Status.IN)
+    house.clock.now = OPENS + timedelta(seconds=30)
+    assert await house.tick() == []
+    house.clock.now += timedelta(minutes=2)
+    await act(house, calls.offer_role, house["Alex"], event_id, RoleOffer.PICKUP, True)
+    await act(house, calls.save_details, house["Sam"], event_id, Details(guests=1))
+    assert (await house.event(event_id)).state is EventState.COLLECTING
 
 
 async def test_everyone_out_ends_the_call_early(house: House) -> None:
@@ -542,16 +649,19 @@ async def test_a_call_off_waits_while_the_tick_holds_the_lock(
     event_id = await (to_voting(house) if step is Step.CLOSE_VOTING else decided(house))
     real = lifecycle.HANDLERS[step]
     racing: list[asyncio.Task[Any]] = []
+    waited: list[bool] = []
 
     async def step_then_call_off(db: Any, event: Any, now: datetime) -> None:
         await real(db, event, now)
         racing.append(asyncio.create_task(act(house, calls.cancel_call, house["Sam"], event_id)))
         await asyncio.sleep(0.05)  # the call-off is now waiting on this transaction's lock
+        waited.append(not racing[0].done())
 
     monkeypatch.setitem(lifecycle.HANDLERS, step, step_then_call_off)
     house.clock.now = when
     assert await house.tick() == [step]
     [outcome] = await asyncio.gather(*racing, return_exceptions=True)
+    assert waited == [True]  # it really did wait for the tick's commit
     event = await house.event(event_id)
     if step is Step.CLOSE_VOTING:
         assert outcome is None and event.state is EventState.CANCELLED

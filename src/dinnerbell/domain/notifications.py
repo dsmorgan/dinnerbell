@@ -319,7 +319,8 @@ class EventCancelled(_Notification):
     participants: tuple[PersonInfo, ...] = ()
     cancelled_by: PersonInfo | None = None
     note: str | None = None
-    audience: tuple[PersonInfo, ...] = ()
+    audience: tuple[PersonInfo, ...] | None = None
+    """None only on rows queued before it existed; mention ``participants`` for those."""
 
 
 @dataclass(frozen=True, slots=True)

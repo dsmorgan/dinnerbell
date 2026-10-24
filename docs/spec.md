@@ -162,7 +162,7 @@ Requirements use "must" for version 1 and "should" for items that can slip to a 
 | FR-4 | Any member must be able to post an offer with item, fulfillment mode, time, and capacity. |
 | FR-5 | An offer for a slot that already has an open call must attach to it as a proposal; a cooking offer posted before the call must replace that day's call. |
 | FR-6 | The admin must be able to extend, shorten, lock, cancel, and re-run events, and skip a daily call up to 7 days ahead before it opens. Re-running a voting, decided, abandoned, or cancelled call reopens it with fresh windows: now for today's call (not after the usual meal time plus two hours), or at the slot's call time for a later day. Responses stay; proposals, votes, the decision, and assignments are cleared. Cancelling isn't admin-only: see FR-56. |
-| FR-56 | **Call it off.** An admin or the coordinator can call off a call in any open state, and the member who started an ad-hoc call can while it's scheduled, collecting, or voting. An optional reason of up to 140 characters goes with it. The call ends as cancelled and nothing goes in the meal log. Everyone who was in or maybe and the coordinator are told in the call's thread, and each member assigned to cook, pick up, or order gets a direct message. A call that was never posted posts nothing; its starter gets a direct message if someone else called it off. Any member can start a called-off call again, the same way as a new one, until the usual meal time plus two hours. **Close now:** the coordinator or an admin ends the open window early: "Start the vote now" while collecting, "Decide now" while voting. Responses also close on their own once every active member has answered and nobody is a maybe. |
+| FR-56 | **Call it off.** An admin or the coordinator can call off a call in any open state, and the member who started an ad-hoc call can while it's scheduled, collecting, or voting. An optional reason of up to 140 characters goes with it. The call ends as cancelled and nothing goes in the meal log. Everyone who was in or maybe and the coordinator are told in the call's thread, and each active member assigned to cook, pick up, or order gets a direct message; assignment and reminder messages not yet sent are dropped. A call that was never posted posts nothing; its starter gets a direct message if someone else called it off. Any member can start a called-off call again, the same way as a new one, until the usual meal time plus two hours; it starts with no coordinator. **Close now:** the coordinator or an admin ends the open window early: "Start the vote now" while collecting, "Decide now" while voting. Responses also close on their own once every active member has answered in this run of the call and nobody is a maybe: at once when fewer than two people are eating, and otherwise only when someone can cook, pick up, or order and no response has changed for 10 minutes, so people can add details after tapping In. Answers kept from before a re-run or restart don't count. |
 
 ### 6.2 Responses
 
@@ -305,8 +305,8 @@ Feedback is not an input in version 1; FR-55 adds it once there is enough data. 
 stateDiagram-v2
     [*] --> scheduled
     scheduled --> collecting: call time
-    collecting --> abandoned: deadline or everyone answered, fewer than 2 in
-    collecting --> voting: deadline or everyone answered, 2 or more in
+    collecting --> abandoned: deadline or everyone answered (FR-56), fewer than 2 in
+    collecting --> voting: deadline or everyone answered and quiet (FR-56), 2 or more in
     voting --> decided: lock or vote deadline with coverage
     voting --> abandoned: deadline, no coverage
     decided --> done: meal time + 2h or marked done

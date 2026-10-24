@@ -513,7 +513,7 @@ def cancelled_message(notification: note.EventCancelled, ctx: RenderContext) -> 
         f"{_reason(event, notification.cancelled_by, notification.note)} No group {_slot(event)} this time. "
         f"{ENJOY[event.slot]}"
     ]
-    people = notification.audience or notification.participants  # rows queued before audience existed
+    people = notification.participants if notification.audience is None else notification.audience
     if people:
         lines.append(f"Heads up {ctx.directory.mentions(people)}.")
     blocks = [section(join_lines(lines)), context(link(ctx.url(event.path), "Open the call on the web"))]

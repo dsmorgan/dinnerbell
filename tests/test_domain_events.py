@@ -743,31 +743,75 @@ def test_an_illegal_transition_reads_as_a_finished_call() -> None:
     assert str(ev.friendly(IllegalTransition(EventState.COLLECTING, EventState.DONE))) == ev.STALE_CALL
 
 
-def answered(*pairs: tuple[int, Status]) -> list[Response]:
-    return [Response(member_id=m, status=s) for m, s in pairs]
+def answered(*pairs: tuple[int, Status], at: datetime = NOW + timedelta(minutes=1)) -> list[Response]:
+    """Answers given in this run (the test call opens at NOW), last changed ``at``."""
+    return [Response(member_id=m, status=s, updated_at=at) for m, s in pairs]
 
 
-def test_everyone_answered_closes_responses_early() -> None:
-    early = NOW + timedelta(minutes=10)  # well before the deadline and the reminder
-    collecting = event()
-    everyone = (1, 2, 3)
-    cases = [
-        (answered((1, Status.IN), (2, Status.IN), (3, Status.OUT)), Step.CLOSE_RESPONSES),
-        (answered((1, Status.OUT), (2, Status.OUT), (3, Status.OUT)), Step.CLOSE_RESPONSES),  # ends too few
-        (answered((1, Status.IN), (2, Status.IN)), None),  # 3 hasn't answered
-        (answered((1, Status.IN), (2, Status.IN), (3, Status.MAYBE)), None),  # a maybe might still come
-        # An inactive member's answer, maybe or not, doesn't count either way.
-        (answered((1, Status.IN), (2, Status.IN), (3, Status.IN), (9, Status.MAYBE)), Step.CLOSE_RESPONSES),
+PICKUP = Coverage(pickups=(1,))
+QUIET = NOW + timedelta(minutes=1) + ev.EARLY_CLOSE_QUIET
+
+
+def due(
+    responses: list[Response], at: datetime, coverage: Coverage = PICKUP, active: tuple[int, ...] = (1, 2, 3)
+) -> Step | None:
+    return ev.due_step(event(), at, stale_after=FAR, responses=responses, active_member_ids=active, coverage=coverage)
+
+
+def test_fewer_than_two_eating_closes_as_soon_as_everyone_answered() -> None:
+    """Everyone out, or one alone: nothing more can come of waiting, and the call ends on-your-own."""
+    soon = NOW + timedelta(minutes=2)
+    assert due(answered((1, Status.OUT), (2, Status.OUT), (3, Status.OUT)), soon, Coverage()) is Step.CLOSE_RESPONSES
+    assert due(answered((1, Status.IN), (2, Status.OUT), (3, Status.OUT)), soon) is Step.CLOSE_RESPONSES
+    one_with_a_guest = [
+        replace(r, guests=1) if r.member_id == 1 else r
+        for r in answered((1, Status.IN), (2, Status.OUT), (3, Status.OUT))
     ]
-    for responses, step in cases:
-        assert ev.due_step(collecting, early, stale_after=FAR, responses=responses, active_member_ids=everyone) is step
-    all_in = answered((1, Status.IN), (2, Status.IN), (3, Status.IN))
-    assert ev.due_step(collecting, early, stale_after=FAR, responses=all_in, active_member_ids=()) is None
-    assert ev.due_step(collecting, early, stale_after=FAR) is None  # no responses given: wait for the deadline
+    assert due(one_with_a_guest, soon) is None  # two eating: wait like any other call
+
+
+def test_two_or_more_eating_close_early_only_after_a_quiet_spell_with_coverage() -> None:
+    """Tapping In first and adding guests, an eat window, or an offer next is never cut short."""
+    two_in = answered((1, Status.IN), (2, Status.IN), (3, Status.OUT))
+    assert due(two_in, QUIET - timedelta(seconds=1)) is None
+    assert due(two_in, QUIET) is Step.CLOSE_RESPONSES
+    assert due(two_in, QUIET, Coverage()) is None  # nobody can cook, pick up, or order yet
+    for coverage in (Coverage(cooks=(2,)), Coverage(orderers=(1,))):
+        assert due(two_in, QUIET, coverage) is Step.CLOSE_RESPONSES
+    # The latest change counts: one late edit restarts the quiet spell.
+    edited = [*two_in[:2], replace(two_in[2], updated_at=QUIET - timedelta(minutes=1))]
+    assert due(edited, QUIET) is None
+
+
+def test_early_close_needs_every_active_member_to_answer_this_run() -> None:
+    assert due(answered((1, Status.IN), (2, Status.IN)), QUIET) is None  # 3 hasn't answered
+    assert due(answered((1, Status.IN), (2, Status.IN), (3, Status.MAYBE)), QUIET) is None  # a maybe might come
+    # An inactive member's answer, maybe or not, doesn't count either way.
+    extra = answered((1, Status.IN), (2, Status.IN), (3, Status.IN), (9, Status.MAYBE))
+    assert due(extra, QUIET) is Step.CLOSE_RESPONSES
+    # Answers kept from before a re-run or restart (changed before this run opened) don't count.
+    kept = answered((1, Status.OUT), (2, Status.OUT), (3, Status.OUT), at=NOW - timedelta(minutes=1))
+    assert due(kept, QUIET) is None
+    partly = [*answered((1, Status.IN), (2, Status.IN)), *answered((3, Status.OUT), at=NOW - timedelta(minutes=1))]
+    assert due(partly, QUIET) is None
+    assert due([replace(r, updated_at=None) for r in extra], QUIET) is None
+    assert due(extra, QUIET, active=()) is None  # no active members
+    assert ev.due_step(event(), QUIET, stale_after=FAR) is None  # no responses given: wait for the deadline
     # Only a call that's collecting closes early.
     for state in (EventState.SCHEDULED, EventState.VOTING, EventState.DECIDED):
         call = event(state, opens_at=FAR, vote_deadline=FAR, meal_time=FAR)
-        assert ev.due_step(call, early, stale_after=FAR, responses=all_in, active_member_ids=everyone) is None
+        assert ev.due_step(call, QUIET, stale_after=FAR, responses=extra, active_member_ids=(1, 2, 3)) is None
+
+
+def test_starting_a_called_off_call_again() -> None:
+    today = date(2026, 10, 22)
+    cancelled = event(EventState.CANCELLED)
+    ev.check_restart(cancelled, today, now=NOW, too_late_after=FAR)
+    with pytest.raises(EventRuleViolation, match="too late to start today's dinner call again"):
+        ev.check_restart(cancelled, today, now=FAR, too_late_after=FAR)
+    ev.check_restart(replace(cancelled, day=today + timedelta(days=1)), today, now=FAR, too_late_after=FAR)
+    with pytest.raises(EventRuleViolation, match="already a dinner call"):
+        ev.check_restart(event(EventState.ABANDONED), today, now=NOW, too_late_after=FAR)
 
 
 def test_skip_day_reaches_as_far_as_an_ad_hoc_call() -> None:
