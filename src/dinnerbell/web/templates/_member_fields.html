@@ -13,8 +13,10 @@
 <label class="field">
   <span>Role</span>
   <select name="role">
-    {% for role in roles %}
-    <option value="{{ role.value }}"{% if values and (values.role == role or values.role == role.value) %} selected{% endif %}>{{ role.value|capitalize }}</option>
+    {#- A new person is a member unless the admin chooses otherwise. -#}
+    {% set chosen = values.role if values and values.role else "member" %}
+    {% for role in roles|sort(attribute="value", reverse=true) %}
+    <option value="{{ role.value }}"{% if chosen == role or chosen == role.value %} selected{% endif %}>{{ role.value|capitalize }}</option>
     {% endfor %}
   </select>
 </label>
