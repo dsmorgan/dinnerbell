@@ -18,8 +18,8 @@ RESVG_VERSION=0.48.1
 RESVG=${RESVG:-resvg}
 # The cream of the logo's outer ring, behind icons that must be opaque.
 BACKGROUND='#FFF3E0'
-# Behind the test mascot's opaque icons. PLACEHOLDER: set it to the mascot's outer ring color.
-TEST_BACKGROUND='#FFF3E0'
+# The light blue of the test mascot's outer ring, behind its opaque icons.
+TEST_BACKGROUND='#EAF4FF'
 
 CDPATH='' cd -- "$(dirname -- "$0")/.."
 

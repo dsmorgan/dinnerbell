@@ -8,7 +8,8 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ### Added
 
-- A logo: Dinnerbone, the family's hamster. It shows in the web header, as the browser tab icon, and as the icon of a Home Screen bookmark on iPhone. To use it in Slack, upload `deploy/slack-app-icon-1024.png` in each Slack app's **Basic Information** settings (see [docs/setup.md](docs/setup.md#2-create-the-slack-app)). `scripts/render-logo.sh` regenerates the PNG icons from the SVGs.
+- A logo: Dinnerbone, the family's hamster. It shows in the web header, as the browser tab icon, and as the icon of a Home Screen bookmark on iPhone. To use it in Slack, upload `deploy/slack-app-icon-1024.png` in the Slack app's **Basic Information** settings (see [docs/setup.md](docs/setup.md#2-create-the-slack-app)). `scripts/render-logo.sh` regenerates the PNG icons from the SVGs.
+- A test instance (`DINNERBELL_INSTANCE_LABEL` set) shows Dinnerbot, Dinnerbone as a half-built blueprint, in the header, the browser tab, and the Home Screen icon, so you can tell it from production at a glance. Upload `deploy/slack-app-icon-test-1024.png` as the test Slack app's icon.
 
 ### Security
 

@@ -543,7 +543,7 @@ Setup takes about half an hour. Stop the test instance when you aren't using it.
 Use the same workspace as production.
 
 1. Create a channel named `#dinnerbell-test`, and invite only the people who test with you. While the test instance runs, it mentions and messages only members of this channel. The channel can be private.
-2. Create a second Slack app as in [section 2](#2-create-the-slack-app), but paste `deploy/slack-app-manifest.test.yaml`, and replace `dinnerbell-test.example.com` with your test hostname.
+2. Create a second Slack app as in [section 2](#2-create-the-slack-app), but paste `deploy/slack-app-manifest.test.yaml`, and replace `dinnerbell-test.example.com` with your test hostname. For its icon, upload `deploy/slack-app-icon-test-1024.png`, which shows Dinnerbot, the test mascot.
 3. Create its app-level token, install it, and copy its bot token, client ID, and client secret, as in sections 3 through 5.
 4. Copy the test channel's ID, as in section 6.
 5. In `#dinnerbell-test`, invite the bot: `/invite @Dinnerbell Test`.
