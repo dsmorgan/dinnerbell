@@ -196,9 +196,9 @@
   <div class="end-controls">
     {% if v.can.close_window %}
     {% if v.can.close_window.value == "respond" %}
-    {{ act(e.id, base ~ "/close", "Start the vote now", "button small", confirm="Close responses and start the vote now?") }}
+    {{ act(e.id, base ~ "/close", "Start the vote now", "button small", {"run": e.run}, confirm="Close responses and start the vote now?") }}
     {% else %}
-    {{ act(e.id, base ~ "/close", "Decide now", "button small", confirm="Close the vote and decide now?") }}
+    {{ act(e.id, base ~ "/close", "Decide now", "button small", {"run": e.run}, confirm="Close the vote and decide now?") }}
     {% endif %}
     {% endif %}
     {% if v.can.cancel %}
@@ -206,6 +206,7 @@
       <summary class="small">Call it off</summary>
       <form method="post" action="{{ base }}/cancel" hx-post="{{ base }}/cancel" {{ swap|safe }} hx-confirm="Call off {{ e.slot.value }} for everyone?" class="stack">
         {{ hidden() }}
+        <input type="hidden" name="run" value="{{ e.run }}">
         <p class="small muted">Nobody eats together this time{% if e.state.value != "scheduled" %}, and everyone who's in hears about it{% endif %}.</p>
         <label class="field"><span>Reason (optional)</span><input type="text" name="reason" maxlength="140" autocomplete="off"></label>
         <button type="submit" class="button small danger">Call it off</button>
@@ -216,7 +217,7 @@
   {% endif %}
 
   {% if v.can.restart %}
-  <div class="button-row">{{ act(e.id, base ~ "/restart", "Start " ~ e.slot.value ~ " again", "button small primary") }}</div>
+  <div class="button-row">{{ act(e.id, base ~ "/restart", "Start " ~ e.slot.value ~ " again", "button small primary", {"run": e.run}) }}</div>
   {% endif %}
 
   {% if v.can.admin and (e.state.is_open or rerun) %}

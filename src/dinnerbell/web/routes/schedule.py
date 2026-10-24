@@ -126,13 +126,16 @@ async def _page(
     db: Database, principal: Principal, context: AppContext, values: dict[str, Any], **extra: Any
 ) -> dict[str, Any]:
     today = await event_views.today_for(db, principal.member, now=context.clock())
+    stored = await schedule_service.schedule_settings(db, principal.member)
+    skip_slots = [slot for slot in (Slot.DINNER, Slot.LUNCH) if stored.slots[slot].enabled]
     return {
         "values": values,
         "slots": [Slot.DINNER, Slot.LUNCH],
         "modes": list(MODE_ORDER),
         "minute_fields": MINUTE_FIELDS,
         "weights": [(name, WEIGHT_LABELS[name]) for name in WEIGHT_NAMES],
-        "skip": {"slot": Slot.DINNER.value, "day": (today + timedelta(days=1)).isoformat(), "reason": ""},
+        "skip_slots": skip_slots,
+        "skip": {"slot": "", "day": (today + timedelta(days=1)).isoformat(), "reason": ""},
         "skip_days": (today, today + timedelta(days=AD_HOC_DAYS_AHEAD)),
     } | extra
 
@@ -189,5 +192,6 @@ async def skip_day(
         stored = await schedule_service.schedule_settings(db, principal.member)
         typed = {"slot": slot, "day": day, "reason": reason}
         page = await _page(db, principal, context, _stored(stored), skip_error=str(exc))
-        return await render(request, "admin_schedule.html", page | {"skip": typed}, status_code=409)
+        status = 400 if isinstance(exc, BadFormValue) else 409  # a malformed form, or a rule refusal
+        return await render(request, "admin_schedule.html", page | {"skip": typed}, status_code=status)
     return RedirectResponse("/admin/schedule?notice=skipped", status_code=303)

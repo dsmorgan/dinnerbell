@@ -825,3 +825,12 @@ def test_skip_day_reaches_as_far_as_an_ad_hoc_call() -> None:
         ev.check_skip_day(today - timedelta(days=1), today)
     with pytest.raises(EventRuleViolation, match="7 days ahead"):
         ev.check_skip_day(today + timedelta(days=ev.AD_HOC_DAYS_AHEAD + 1), today)
+
+
+def test_an_action_from_an_earlier_run_is_stale() -> None:
+    second = event(EventState.COLLECTING, run=2)
+    ev.check_run(second, None)  # a surface that doesn't say which run it showed
+    ev.check_run(second, 2)
+    with pytest.raises(ev.StaleRun, match=r"^That can't happen anymore\.$"):
+        ev.check_run(second, 1)
+    assert issubclass(ev.StaleRun, EventRuleViolation)  # surfaces that don't know it still show it kindly

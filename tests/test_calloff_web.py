@@ -6,7 +6,7 @@ after a call-off."""
 from __future__ import annotations
 
 import re
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -19,7 +19,7 @@ from tests.support.fake_oidc import FakeProvider
 from tests.support.households import other_call, other_household
 from tests.support.web import add_item, htmx, submit
 from tests.test_auth_flow import member, rows
-from tests.test_events_web import proposal_ids, sign_in_as, tick
+from tests.test_events_web import proposal_ids, schedule_form, sign_in_as, tick
 
 People = dict[str, str]
 """Role name to the email that plays it."""
@@ -29,7 +29,7 @@ CREW: People = {
     "coordinator": "pat@example.com",
     "other": "riley@example.com",
 }
-STATES = ("collecting", "voting", "decided")
+STATES = ("scheduled", "collecting", "voting", "decided")
 
 
 def as_admin(client: TestClient, provider: FakeProvider) -> None:
@@ -57,12 +57,17 @@ def house(client: TestClient, provider: FakeProvider) -> TestClient:
 
 def call_in(client: TestClient, provider: FakeProvider, clock: FakeClock, settings: Settings, state: str) -> int:
     """Sam starts today's dinner; Pat is in with a guest, picks up, and coordinates. Then it
-    moves on to ``state``. Leaves Pat signed in."""
+    moves on to ``state``. Leaves Pat signed in. For ``scheduled``, Sam starts tomorrow's
+    dinner, which nobody can answer or coordinate yet."""
     sign_in_as(client, provider, CREW["starter"])
-    started = submit(client, "/events", {"slot": "dinner", "day": "2026-10-22"})
+    day = "2026-10-23" if state == "scheduled" else "2026-10-22"
+    started = submit(client, "/events", {"slot": "dinner", "day": day})
     assert started.status_code == 303, page(started)
     event_id = int(started.headers["location"].rsplit("/", 1)[1])
     sign_in_as(client, provider, CREW["coordinator"])
+    if state == "scheduled":
+        assert state_of(settings, event_id) == state
+        return event_id
     for path, data in [
         ("respond", {"status": "in"}),
         ("offer", {"role": "pickup", "offered": "1"}),
@@ -108,12 +113,12 @@ def close_label(html: str, event_id: int) -> str | None:
 # Who sees what, and the server checks again ------------------------------------------------------
 
 CAN_CANCEL = {
-    "starter": {"collecting", "voting"},
-    "coordinator": set(STATES),
+    "starter": {"scheduled", "collecting", "voting"},
+    "coordinator": {"collecting", "voting", "decided"},  # Pat can't coordinate a call before it opens
     "admin": set(STATES),
     "other": set(),
 }
-CLOSE_LABELS = {"collecting": "Start the vote now", "voting": "Decide now", "decided": None}
+CLOSE_LABELS = {"scheduled": None, "collecting": "Start the vote now", "voting": "Decide now", "decided": None}
 
 
 @pytest.mark.parametrize("state", STATES)
@@ -138,7 +143,10 @@ def test_the_server_refuses_whoever_the_page_hides_the_buttons_from(
     event_id = call_in(house, provider, clock, migrated, state)
     before = (event_row(migrated, event_id).version, event_audits(migrated))
     refusals = [("other", "cancel", "Only the coordinator, whoever started this call, or an admin")]
-    if state == "decided":
+    if state == "scheduled":
+        refusals += [("coordinator", "cancel", "Only the coordinator, whoever started this call, or an admin")]
+        refusals += [(role, "close", "There's no open window to close.") for role in ("other", "starter", "admin")]
+    elif state == "decided":
         refusals += [("starter", "cancel", "It's decided now, so only the coordinator or an admin")]
         refusals += [(role, "close", "There's no open window to close.") for role in ("other", "starter", "admin")]
     else:
@@ -212,7 +220,7 @@ def test_the_coordinator_calls_off_a_decided_call_from_today(
     done = submit(house, f"/events/{event_id}/cancel", {"from": "today"})
     assert (done.status_code, done.headers["location"]) == (303, "/")
     html = page(house.get("/"))
-    assert "Called off by Pat." in html and "“" not in html  # no reason, no quote
+    assert "Called off by Pat." in html and "<q" not in html  # no reason, no quote
     (audit,) = audits(migrated, "event.cancelled")
     assert audit.payload == {"from": "decided", "as": "coordinator", "note": None}
 
@@ -310,6 +318,42 @@ def test_starting_again_is_too_late_after_the_meal(
     assert state_of(migrated, event_id) == "cancelled"
 
 
+# A card left open across a restart -------------------------------------------------------------
+
+STALE_SHOWN = "That can't happen anymore. Reload the page to see what changed."
+
+
+def test_a_card_left_open_cannot_act_on_a_newer_run(
+    house: TestClient, provider: FakeProvider, clock: FakeClock, migrated: Settings
+) -> None:
+    """Pat's card shows run 1. Pat calls it off and Riley starts it again as run 2; forms from
+    run 1's card, Pat's and an admin's, are refused and run 2 is untouched."""
+    event_id = call_in(house, provider, clock, migrated, "collecting")
+    card = house.get(f"/events/{event_id}").text
+    assert card.count('name="run" value="1"') == 2  # Close now and Call it off
+    assert submit(house, f"/events/{event_id}/cancel", {"run": "1"}).status_code == 303
+    sign_in_as(house, provider, CREW["other"])
+    assert 'name="run" value="1"' in house.get(f"/events/{event_id}").text  # Start dinner again
+    assert htmx(house, f"/events/{event_id}/restart", {"run": "1"}).status_code == 200
+    before = (event_row(migrated, event_id).version, event_audits(migrated))
+    for role, action in (("coordinator", "cancel"), ("admin", "cancel"), ("admin", "close")):
+        act_as(house, provider, role)
+        stale = htmx(house, f"/events/{event_id}/{action}", {"run": "1", "reason": "old page"})
+        assert stale.status_code == 409 and STALE_SHOWN in page(stale), (role, action)
+        if role == "admin":  # an admin may act on any run, so only the run stops it
+            assert 'name="run" value="2"' in stale.text  # the fresh card, so the next tap is current
+    malformed = htmx(house, f"/events/{event_id}/cancel", {"run": "first"})
+    assert malformed.status_code == 409 and STALE_SHOWN in page(malformed)
+    row = event_row(migrated, event_id)
+    assert (row.run, row.state, row.end_note) == (2, "collecting", None)
+    assert (row.version, event_audits(migrated)) == before
+    act_as(house, provider, "other")  # Riley started run 2, calls it off; run 1's restart is stale too
+    assert submit(house, f"/events/{event_id}/cancel", {"run": "2"}).status_code == 303
+    again = htmx(house, f"/events/{event_id}/restart", {"run": "1"})
+    assert again.status_code == 409 and STALE_SHOWN in page(again)
+    assert (event_row(migrated, event_id).run, state_of(migrated, event_id)) == (2, "cancelled")
+
+
 # Skip a day --------------------------------------------------------------------------------------
 
 
@@ -333,21 +377,49 @@ def test_an_admin_skips_a_later_day(
 
 
 @pytest.mark.parametrize(
-    ("form", "message"),
+    ("form", "status", "message"),
     [
-        ({"slot": "dinner", "day": "2026-10-21"}, "You can skip today's call or a later day's."),
-        ({"slot": "dinner", "day": "2026-10-30"}, "You can skip a call up to 7 days ahead."),
-        ({"slot": "brunch", "day": "2026-10-23"}, "Pick lunch or dinner."),
-        ({"slot": "dinner", "day": "Friday"}, "YYYY-MM-DD"),
+        ({"slot": "dinner", "day": "2026-10-21"}, 409, "You can skip today's call or a later day's."),
+        ({"slot": "dinner", "day": "2026-10-30"}, 409, "You can skip a call up to 7 days ahead."),
+        ({"slot": "lunch", "day": "2026-10-23"}, 409, "Lunch is off in the schedule."),
+        ({"slot": "brunch", "day": "2026-10-23"}, 400, "Pick lunch or dinner."),
+        ({"slot": "dinner", "day": "Friday"}, 400, "YYYY-MM-DD"),
     ],
 )
 def test_skipping_a_day_explains_refusals(
-    house: TestClient, form: dict[str, str], message: str, migrated: Settings
+    house: TestClient, form: dict[str, str], status: int, message: str, migrated: Settings
 ) -> None:
     refused = submit(house, "/admin/schedule/skip", form | {"reason": "Trip"})
-    assert refused.status_code == 409 and message in page(refused)
+    assert refused.status_code == status and message in page(refused)
     assert 'value="Trip"' in refused.text and f'value="{form["day"]}"' in refused.text  # as typed
     assert rows(migrated, EventRow) == [] and audits(migrated, "event.skipped") == []
+
+
+def test_skip_a_day_offers_only_slots_with_a_daily_call(house: TestClient) -> None:
+    html = house.get("/admin/schedule").text
+    picker = re.search(r'<select name="slot">(.*?)</select>', html, flags=re.S)
+    assert picker is not None and re.findall(r'value="(\w+)"', picker.group(1)) == ["dinner"]  # lunch is off
+    off = schedule_form()
+    off.pop("dinner_enabled")
+    assert submit(house, "/admin/schedule", off).status_code == 303
+    html = house.get("/admin/schedule").text
+    assert 'action="/admin/schedule/skip"' not in html and "nothing to skip" in html
+    lunch = schedule_form(lunch_enabled="on")
+    assert submit(house, "/admin/schedule", lunch).status_code == 303
+    picker = re.search(r'<select name="slot">(.*?)</select>', house.get("/admin/schedule").text, flags=re.S)
+    assert picker is not None and re.findall(r'value="(\w+)"', picker.group(1)) == ["dinner", "lunch"]
+
+
+def test_skip_a_day_bounds_follow_the_household_date(house: TestClient, clock: FakeClock, migrated: Settings) -> None:
+    """00:30 UTC on the 23rd is still the 22nd in Chicago."""
+    clock.now = datetime(2026, 10, 23, 0, 30, tzinfo=UTC)
+    html = house.get("/admin/schedule").text
+    assert 'min="2026-10-22" max="2026-10-29"' in html
+    late = submit(house, "/admin/schedule/skip", {"slot": "dinner", "day": "2026-10-30"})
+    assert late.status_code == 409 and "up to 7 days ahead" in page(late)
+    today = submit(house, "/admin/schedule/skip", {"slot": "dinner", "day": "2026-10-22"})
+    assert today.status_code == 303
+    assert [str(e.date) for e in rows(migrated, EventRow)] == ["2026-10-22"]
 
 
 def test_skipping_a_day_that_has_a_call(

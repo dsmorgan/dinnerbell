@@ -40,6 +40,7 @@ from dinnerbell.domain.events import (
     Window,
     assign_roles,
     check_restart,
+    check_run,
     check_window_change,
     choose_winner,
     head_count,
@@ -167,14 +168,15 @@ async def open_due_calls(db: AsyncSession, household: Household, now: datetime) 
     return opened
 
 
-async def restart(db: AsyncSession, event: Event, *, actor: Member, now: datetime) -> Event:
+async def restart(db: AsyncSession, event: Event, *, actor: Member, run: int | None = None, now: datetime) -> Event:
     """FR-3 and FR-56: any member starts a called-off call again, as a fresh run of the same
     row (a slot has one call per date). They become its starter, and it starts with no
-    coordinator. The re-run's too-late rule applies. Takes the event's lock; the caller
-    commits. Audited."""
+    coordinator. The re-run's too-late rule applies. ``run``, when given, is the run the actor
+    saw (``check_run``). Takes the event's lock; the caller commits. Audited."""
     if not await EventRepository(db).lock(event.household_id, event.id, now):  # pragma: no cover - just read
         raise NotFound("No such call.")
     ctx = await load(db, event)  # re-read under the lock
+    check_run(ctx.event, run)
     if ctx.event.state is not EventState.CANCELLED:
         raise CallExists(f"There's already a {event.slot.value} call for that day.")
     today = household_today(ctx.household, now)

@@ -27,6 +27,7 @@ from dinnerbell.domain.events import (
     IllegalTransition,
     InvalidResponse,
     RoleOffer,
+    StaleRun,
     Status,
     Window,
 )
@@ -83,6 +84,8 @@ async def _run(
 ) -> Response:
     try:
         await action()
+    except StaleRun:
+        return await _card(request, principal, context, db, event_id, came_from=came_from, error=STALE)
     except RULE_ERRORS as exc:
         return await _card(request, principal, context, db, event_id, came_from=came_from, error=str(exc))
     except IllegalTransition as exc:
@@ -432,6 +435,18 @@ async def done(
 
 Reason = Annotated[str, Form(max_length=400)]
 """A call-off reason. The service cuts it to 140 characters rather than refusing a longer one."""
+Run = Annotated[str, Form(max_length=20)]
+"""The run of the call the card showed, so a card left open across a restart can't act on the
+newer run. Blank skips the check."""
+
+
+def _run_seen(value: str) -> int | None:
+    if not value.strip():
+        return None
+    run = parse_id(value)
+    if run is None:
+        raise BadFormValue(STALE)
+    return run
 
 
 @router.post("/events/{event_id}/cancel")
@@ -442,12 +457,14 @@ async def cancel(
     db: Database,
     event_id: RowId,
     reason: Reason = "",
+    run: Run = "",
     came_from: Annotated[str, Form(alias="from", max_length=10)] = "",
 ) -> Response:
     """Call it off: the coordinator, the starter until it's decided, or an admin; the service checks which."""
 
     async def action() -> None:
-        await calls.cancel_call(db, principal.member, event_id, note=reason or None, now=context.clock())
+        seen = _run_seen(run)
+        await calls.cancel_call(db, principal.member, event_id, note=reason or None, run=seen, now=context.clock())
 
     return await _run(request, principal, context, db, event_id, came_from, action)
 
@@ -459,12 +476,13 @@ async def close(
     context: Context,
     db: Database,
     event_id: RowId,
+    run: Run = "",
     came_from: Annotated[str, Form(alias="from", max_length=10)] = "",
 ) -> Response:
     """Close now ("Start the vote now" or "Decide now"): the coordinator or an admin."""
 
     async def action() -> None:
-        await calls.close_window(db, principal.member, event_id, now=context.clock())
+        await calls.close_window(db, principal.member, event_id, run=_run_seen(run), now=context.clock())
 
     return await _run(request, principal, context, db, event_id, came_from, action)
 
@@ -476,14 +494,13 @@ async def restart(
     context: Context,
     db: Database,
     event_id: RowId,
+    run: Run = "",
     came_from: Annotated[str, Form(alias="from", max_length=10)] = "",
 ) -> Response:
     """Start a called-off call again: any member, until the usual meal time plus two hours."""
 
     async def action() -> None:
-        view = await event_views.event_view(db, principal.member, event_id, now=context.clock())
-        event = view.event
-        await calls.start_call(db, principal.member, event.slot, event.day, now=context.clock())
+        await calls.restart_call(db, principal.member, event_id, run=_run_seen(run), now=context.clock())
 
     return await _run(request, principal, context, db, event_id, came_from, action)
 

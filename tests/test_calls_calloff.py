@@ -26,6 +26,7 @@ from dinnerbell.domain.events import (
     EventRuleViolation,
     EventState,
     RoleOffer,
+    StaleRun,
     Status,
     Step,
     Window,
@@ -34,7 +35,8 @@ from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.notifications import DeliveryResult, HeldDelivery, MessageRef, PermanentDeliveryError
 from dinnerbell.services import call_admin, calls, event_views, lifecycle
 from dinnerbell.services.database import Database, open_database
-from dinnerbell.services.errors import Forbidden
+from dinnerbell.services.errors import Forbidden, NotFound
+from dinnerbell.services.lifecycle import CallExists
 from tests.support.calls import (
     DONE_AT,
     OPENS,
@@ -500,6 +502,55 @@ async def test_skip_day_rules(house: House) -> None:
     with pytest.raises(EventRuleViolation, match=r"^The dinner call for that day already finished\.$"):
         await act(house, calls.skip_day, house["Alex"], Slot.DINNER, TODAY)
     assert [a.action for a in await house.audits() if a.action == "event.skipped"] == ["event.skipped"]
+
+
+async def test_skip_day_refuses_a_slot_that_is_off(house: House) -> None:
+    """Lunch is off by default: there's no daily lunch call to skip, so a skip would only leave
+    a cancelled lunch that invites "Start lunch again"."""
+    house.clock.now = OPENS - timedelta(hours=1)
+    with pytest.raises(EventRuleViolation, match=r"^Lunch is off in the schedule\.$"):
+        await act(house, calls.skip_day, house["Alex"], Slot.LUNCH, TOMORROW)
+    async with house.sessionmaker() as db:
+        assert await EventRepository(db).call_for(house.household.id, Slot.LUNCH, TOMORROW) is None
+    assert [a.action for a in await house.audits() if a.action == "event.skipped"] == []
+
+
+# A page left open across a restart -------------------------------------------------------------------
+
+
+async def test_an_old_run_cannot_call_off_close_or_restart_the_new_one(house: House) -> None:
+    """Someone calls off run 1 and starts it again; a page still showing run 1 is refused."""
+    event_id = await open_dinner(house)
+    await act(house, calls.claim_coordinator, house["Alex"], event_id)
+    await act(house, calls.cancel_call, house["Alex"], event_id, run=1)
+    restarted = await act(house, calls.restart_call, house["Kim"], event_id, run=1)
+    assert (restarted.run, restarted.state, restarted.created_by) == (2, EventState.COLLECTING, house["Kim"].id)
+    for use_case in (calls.cancel_call, calls.close_window):
+        with pytest.raises(StaleRun, match=r"^That can't happen anymore\.$"):
+            await act(house, use_case, house["Alex"], event_id, run=1)
+    await act(house, calls.cancel_call, house["Kim"], event_id, run=2)
+    with pytest.raises(StaleRun):
+        await act(house, calls.restart_call, house["Kim"], event_id, run=1)
+    event = await house.event(event_id)
+    assert (event.run, event.state, event.ended_by) == (2, EventState.CANCELLED, house["Kim"].id)
+    cancels = [a.payload["from"] for a in await house.audits() if a.action == "event.cancelled"]
+    assert cancels == ["collecting", "collecting"]
+
+
+async def test_restart_call_refusals(house: House) -> None:
+    event_id = await open_dinner(house)
+    with pytest.raises(CallExists, match="already a dinner call"):
+        await act(house, calls.restart_call, house["Kim"], event_id)
+    with pytest.raises(NotFound):
+        await act(house, calls.restart_call, house["Kim"], event_id + 1000)
+    await act(house, calls.cancel_call, house["Alex"], event_id)
+    async with house.sessionmaker() as db:
+        await db.execute(text("UPDATE member SET active = 0 WHERE id = :id"), {"id": house["Kim"].id})
+        await db.commit()
+    await house.refresh("Kim")
+    with pytest.raises(EventRuleViolation, match="Only active members"):
+        await act(house, calls.restart_call, house["Kim"], event_id)
+    assert (await house.event(event_id)).state is EventState.CANCELLED
 
 
 # Close now -------------------------------------------------------------------------------------------
