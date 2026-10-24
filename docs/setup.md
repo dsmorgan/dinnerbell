@@ -662,7 +662,7 @@ Run every test command through `deploy/dinnerbell-test`, never through `podman-c
 
 - `.env.test` is missing, sets `DINNERBELL_INSTANCE_LABEL` more than once, or leaves it empty.
 - It can't read `.env.test` or `.env`. Run it as the user who owns them.
-- `.env.test` has the same `DINNERBELL_SECRET_KEY`, `DINNERBELL_SLACK_BOT_TOKEN`, `DINNERBELL_SLACK_APP_TOKEN`, or `DINNERBELL_OIDC_CLIENT_SECRET` as `.env`. Shared tokens split Slack's events between the instances. The script reads both files as compose does, compares the values without printing them, and skips this check for commands that only stop or inspect test.
+- `.env.test` has the same `DINNERBELL_SECRET_KEY`, `DINNERBELL_SLACK_BOT_TOKEN`, `DINNERBELL_SLACK_APP_TOKEN`, or `DINNERBELL_OIDC_CLIENT_SECRET` as `.env`, or has production's value of one of them anywhere in a line, such as a commented-out copy. Shared tokens split Slack's events between the instances. The script reads both files as compose does, compares the values without printing them, and skips this check for commands that only stop or inspect test.
 - The configuration check fails, as described above.
 - The env file is production's `.env`.
 - `.env` sets `DINNERBELL_TAG`, `DINNERBELL_PORT`, or `DINNERBELL_ENV_FILE`. podman-compose 1.1.0 and older let `.env` override the script's values.

@@ -65,6 +65,14 @@ mkdir "$stubs/bin"
 ln -s ../engine "$stubs/bin/podman"
 ln -s ../engine "$stubs/bin/docker"
 ln -s ../compose "$stubs/bin/docker-compose"
+# An awk that fails when the wrapper compares secrets, and works otherwise.
+mkdir "$stubs/broken-awk"
+cat >"$stubs/broken-awk/awk" <<STUB
+#!/bin/sh
+case " \$* " in *" anycase=yes "*) exit 2 ;; esac
+exec $(command -v awk) "\$@"
+STUB
+chmod +x "$stubs/broken-awk/awk"
 
 failures=0
 pass() { printf 'ok: %s\n' "$1"; }
@@ -155,7 +163,10 @@ EOF
 )
 # Made-up values for every required setting and secret in .env.test.
 test_key=check-compose-test-secret-key-0123456789abcdef
-test_secrets="$test_key check-compose-test-client-secret xoxb-check-compose-test xapp-check-compose-test"
+production_key="production-secret-key-0123456789abcdef"
+production_bot_token="xoxb-production-token-0123456789"
+test_secrets="$test_key check-compose-test-client-secret xoxb-check-compose-test xapp-check-compose-test
+$production_key $production_bot_token"
 filled_env_test() {
     sed -e "s|^DINNERBELL_SECRET_KEY=.*|DINNERBELL_SECRET_KEY=$test_key|" \
         -e 's|^DINNERBELL_ADMIN_EMAIL=.*|DINNERBELL_ADMIN_EMAIL=admin@example.com|' \
@@ -318,6 +329,47 @@ different|||DINNERBELL_SECRET_KEY=@KEY@#notcomment|||DINNERBELL_SECRET_KEY=@KEY@
 same|||DINNERBELL_SECRET_KEY=@KEY@   # comment|||  export DINNERBELL_SECRET_KEY = '@KEY@'  # c
 different|||DINNERBELL_SECRET_KEY="@KEY@" junk|||DINNERBELL_SECRET_KEY=@KEY@
 CASES
+
+# Each case: lines for .env.test, separated by "@@", that hold production's key (@PROD@, from
+# .env) where the parser can't see it. The wrapper must refuse each one by name, because a line
+# contains production's value.
+while IFS= read -r case_line; do
+    printf '%s\n' "$case_line" | sed -e "s/@PROD@/$production_key/g" -e "s/@KEY@/$test_key/g" |
+        tr '@' '\n' | sed '/^$/d' >"$stubs/lines"
+    { filled_env_test | grep -v '^DINNERBELL_SECRET_KEY='; cat "$stubs/lines"; } >.env.test
+    { cat .env.example; printf 'DINNERBELL_SECRET_KEY=%s\n' "$production_key"; } >.env
+    start deploy/dinnerbell-test up -d
+    check "production's key inside .env.test is refused: $case_line" \
+        refused_unchecked "contains production's DINNERBELL_SECRET_KEY"
+done <<'CASES'
+'DINNERBELL_SECRET_KEY'=@PROD@
+COPY=@PROD@@@DINNERBELL_SECRET_KEY=${COPY}
+DINNERBELL_SECRET_KEY="@PROD@@@"
+dinnerbell_secret_key=@PROD@@@DINNERBELL_SECRET_KEY=@KEY@
+# DINNERBELL_SECRET_KEY=@PROD@@@DINNERBELL_SECRET_KEY=@KEY@
+DINNERBELL_SECRET_KEY=@KEY@@@OLD_KEY="@PROD@"  # from production
+CASES
+filled_env_test >.env.test
+printf '# old: %s\n' "$production_bot_token" >>.env.test
+{ cat .env.example; printf 'DINNERBELL_SLACK_BOT_TOKEN=%s\n' "$production_bot_token"; } >.env
+start deploy/dinnerbell-test up -d
+check "production's bot token in a comment in .env.test is refused by name" \
+    refused_unchecked "contains production's DINNERBELL_SLACK_BOT_TOKEN"
+for token in xoxb-15-bytes-a xoxb-16-bytes-ab; do
+    filled_env_test >.env.test
+    printf '# old: %s\n' "$token" >>.env.test
+    { cat .env.example; printf 'DINNERBELL_SLACK_BOT_TOKEN=%s\n' "$token"; } >.env
+    start deploy/dinnerbell-test up -d
+    if [ "${#token}" -ge 16 ]; then
+        check "a ${#token}-byte production token inside .env.test is refused" \
+            refused_unchecked "contains production's DINNERBELL_SLACK_BOT_TOKEN"
+    else
+        check "a ${#token}-byte production token inside .env.test doesn't count" started_cleanly
+    fi
+done
+start PATH="$stubs/broken-awk:$PATH" deploy/dinnerbell-test up -d
+check "a comparison that fails is refused, not passed" refused_unchecked "can't compare DINNERBELL_SECRET_KEY"
+
 cp .env.example .env
 filled_env_test >.env.test
 
