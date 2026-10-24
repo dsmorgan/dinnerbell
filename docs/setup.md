@@ -10,7 +10,7 @@ Dinnerbell is under construction. Milestones M0 through M2 ship these parts, and
 - `/healthz`
 - The scheduler and nightly backups
 - The catalog, catalog file import, `DINNERBELL_SEED_FILE`, preferences, and meal history
-- Dinner calls in Slack: the call, reminders, proposals and votes, the decision, and assignments, plus the App Home and `/dinnerbell call`
+- Dinner calls in Slack: the call, reminders, proposals and votes, the decision, and assignments, plus the App Home, `/dinnerbell call`, and calling off a call or closing a window early from Slack (`/dinnerbell cancel`)
 
 As of M2, the Slack bot connects when `DINNERBELL_SLACK_BOT_TOKEN`, `DINNERBELL_SLACK_APP_TOKEN`, and `DINNERBELL_SLACK_CHANNEL` are all set. Offers, `/dinnerbell offer`, `log`, and `schedule` come in M3.
 

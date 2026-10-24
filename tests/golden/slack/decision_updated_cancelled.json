@@ -1,0 +1,48 @@
+{
+  "blocks": [
+    {
+      "text": {
+        "text": "~Sam's Tacos~ Called off by Alex. “Pizza at Grandma's”",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "fields": [
+        {
+          "text": "*When*\n6:45 PM",
+          "type": "mrkdwn"
+        },
+        {
+          "text": "*Eating*\n3 people (1 guest)",
+          "type": "mrkdwn"
+        }
+      ],
+      "type": "section"
+    },
+    {
+      "text": {
+        "text": "*Cooking:* <@U02SAM>\n*Coordinating:* <@U01ALEX>\n*Guests' dietary needs:* Vegetarian",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "block_id": "more",
+      "elements": [
+        {
+          "action_id": "link_event",
+          "text": {
+            "emoji": true,
+            "text": "View on web",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "url": "https://dinnerbell.example.com/events/7"
+        }
+      ],
+      "type": "actions"
+    }
+  ],
+  "text": "Dinner on Thursday, Oct 22: Sam's Tacos at 6:45 PM"
+}

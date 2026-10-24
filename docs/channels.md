@@ -111,3 +111,5 @@ Channel messages are shared, so a button can't show whether the person tapping i
 | Admin: re-run, assign coordinator | `call_admin.rerun`, `call_admin.assign_coordinator(..., member_id or None)` |
 
 For what to show a member (their response, which buttons apply to them), use `services.event_views.event_view(db, actor, event_id, now=)`. Its `can` flags come from the same rules the services enforce: `can.cancel` for Call it off, and `can.close_window`, the window Close now would close (`Window.RESPOND` reads "Start the vote now", `Window.VOTE` reads "Decide now"), or `None`.
+
+The Slack adapter shows Close now on a message everyone shares, and Slack confirms it some time after the label was drawn. So the confirmation carries the window it named (`ids.ViewOrigin.window`, or the Home button's `respond:<id>` or `vote:<id>`), and the adapter calls `calls.close_window` only if `can.close_window` is still that window. Otherwise it says the call has moved on and changes nothing.

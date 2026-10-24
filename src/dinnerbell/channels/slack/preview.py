@@ -16,7 +16,14 @@ from typing import Any
 from dinnerbell.channels.slack import ids
 from dinnerbell.channels.slack.blocks import Directory
 from dinnerbell.channels.slack.messages import RenderContext, render
-from dinnerbell.channels.slack.views import HomeLinks, details_modal, home_view, proposal_modal
+from dinnerbell.channels.slack.views import (
+    HomeLinks,
+    cancel_modal,
+    close_modal,
+    details_modal,
+    home_view,
+    proposal_modal,
+)
 from dinnerbell.domain import notifications as note
 from dinnerbell.domain.catalog import CatalogItem, ItemKind, Mode, Tag, TagKind
 from dinnerbell.domain.events import (
@@ -29,6 +36,7 @@ from dinnerbell.domain.events import (
     Response,
     RoleOffer,
     Status,
+    Window,
 )
 from dinnerbell.domain.meals import Slot
 from dinnerbell.services.event_views import EventView, Permissions, ProposalView, TodayView
@@ -144,6 +152,7 @@ NOTIFICATIONS: dict[str, Callable[[], note.Notification]] = {
     "decision_made": lambda: note.DecisionMade(DECIDED, DECISION, locked_by=ALEX),
     "decision_made_by_vote": lambda: note.DecisionMade(DECIDED, DELIVERY),
     "decision_updated": lambda: note.DecisionUpdated(DECIDED, DECISION, locked_by=ALEX),
+    "decision_updated_cancelled": lambda: note.DecisionUpdated(CANCELLED, DECISION),
     "decision_updated_done": lambda: note.DecisionUpdated(event(EventState.DONE, coordinator=ALEX), DECISION),
     "assignment_made": lambda: note.AssignmentMade(DECIDED, 31, SAM, (AssignmentRole.COOK,), DECISION),
     "assignment_made_two_roles": lambda: note.AssignmentMade(
@@ -178,7 +187,7 @@ ITEMS = (
 
 
 def _event_view(state: EventState, mine: Response | None, can: Permissions) -> EventView:
-    info = event(state, coordinator=ALEX)
+    info = CANCELLED if state is EventState.CANCELLED else event(state, coordinator=ALEX)
     base = Event(
         id=7,
         household_id=1,
@@ -226,6 +235,7 @@ SAM_RESPONSE = Response(
 COLLECTING_VIEW = _event_view(EventState.COLLECTING, SAM_RESPONSE, Permissions(respond=True, claim=False))
 VOTING_VIEW = _event_view(EventState.VOTING, SAM_RESPONSE, Permissions(vote=True, propose=True))
 DECIDED_VIEW = _event_view(EventState.DECIDED, SAM_RESPONSE, Permissions(mark_done=True))
+CALLED_OFF_VIEW = _event_view(EventState.CANCELLED, SAM_RESPONSE, Permissions(restart=True))
 ORIGIN = ids.ViewOrigin(7, "C0DINNER")
 
 VIEWS: dict[str, Callable[[], dict[str, Any]]] = {
@@ -234,9 +244,24 @@ VIEWS: dict[str, Callable[[], dict[str, Any]]] = {
         _event_view(EventState.COLLECTING, None, Permissions(respond=True)), ORIGIN
     ),
     "proposal_modal": lambda: proposal_modal(VOTING_VIEW, ORIGIN),
+    "cancel_modal": lambda: cancel_modal(COLLECTING_VIEW, ORIGIN),
+    "cancel_modal_decided": lambda: cancel_modal(DECIDED_VIEW, replace(ORIGIN, home=True)),
+    "close_modal": lambda: close_modal(COLLECTING_VIEW, replace(ORIGIN, window=Window.RESPOND)),
+    "close_modal_vote": lambda: close_modal(VOTING_VIEW, replace(ORIGIN, window=Window.VOTE)),
     "home": lambda: home_view(TodayView(DAY, [COLLECTING_VIEW], tuple(Slot)), HomeLinks(BASE_URL)),
     "home_decided": lambda: home_view(
         TodayView(DAY, [DECIDED_VIEW], tuple(Slot)), HomeLinks(BASE_URL), notice="Marked done. Thanks!"
+    ),
+    "home_coordinator": lambda: home_view(
+        TodayView(
+            DAY,
+            [replace(COLLECTING_VIEW, can=Permissions(respond=True, cancel=True, close_window=Window.RESPOND))],
+            tuple(Slot),
+        ),
+        HomeLinks(BASE_URL),
+    ),
+    "home_called_off": lambda: home_view(
+        TodayView(DAY, [CALLED_OFF_VIEW], tuple(Slot)), HomeLinks(BASE_URL), notice="You called off dinner."
     ),
     "home_empty": lambda: home_view(TodayView(DAY, [], tuple(Slot)), HomeLinks(BASE_URL)),
 }

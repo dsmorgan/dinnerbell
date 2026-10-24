@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Modals and the App Home tab (spec section 10): the Details modal, the Add proposal modal,
-and each member's Home with today's calls.
+"""Modals and the App Home tab (spec section 10): the Details, Add proposal, Call it off, and
+Close now modals, and each member's Home with today's calls.
 
 Modals carry their event and origin in ``private_metadata`` (see ``ids.ViewOrigin``). Input
 blocks use fixed block and action IDs, which ``parse_details`` and ``parse_proposal`` read
@@ -23,6 +23,7 @@ from dinnerbell.channels.slack.blocks import (
     actions,
     button,
     clip,
+    confirm,
     context,
     day_label,
     divider,
@@ -32,9 +33,10 @@ from dinnerbell.channels.slack.blocks import (
     plain,
     section,
 )
-from dinnerbell.channels.slack.messages import mark_done_button
+from dinnerbell.channels.slack.messages import CALL_OFF, CLOSE_LABELS, mark_done_button
 from dinnerbell.domain.catalog import CatalogItem, ItemKind, Mode, Tag
 from dinnerbell.domain.events import (
+    CANCEL_NOTE_MAX,
     MAX_GUESTS,
     MAX_NOTE_LENGTH,
     MAX_SUGGESTION_LENGTH,
@@ -42,6 +44,7 @@ from dinnerbell.domain.events import (
     EventState,
     RoleOffer,
     Status,
+    Window,
 )
 from dinnerbell.domain.meals import Slot
 from dinnerbell.services.event_views import EventView, TodayView
@@ -52,14 +55,16 @@ STATUS_WORDS = {Status.IN: "You're in.", Status.MAYBE: "You said maybe.", Status
 OFFER_WORDS = {RoleOffer.COOK: "cook", RoleOffer.PICKUP: "pick up", RoleOffer.ORDER: "order"}
 
 
-def _modal(title: str, callback_id: str, origin: ids.ViewOrigin, blocks: list[Block], submit: str) -> dict[str, Any]:
+def _modal(
+    title: str, callback_id: str, origin: ids.ViewOrigin, blocks: list[Block], submit: str, close: str = "Cancel"
+) -> dict[str, Any]:
     return {
         "type": "modal",
         "callback_id": callback_id,
         "private_metadata": origin.encode(),
         "title": plain(title, MAX_MODAL_TITLE),
         "submit": plain(submit, MAX_MODAL_TITLE),
-        "close": plain("Cancel", MAX_MODAL_TITLE),
+        "close": plain(close, MAX_MODAL_TITLE),
         "blocks": blocks[:MAX_VIEW_BLOCKS],
     }
 
@@ -276,6 +281,59 @@ def parse_proposal(values: Any) -> ProposalInput:
     return ProposalInput(mode, item, text, cuisine if text is not None else None)
 
 
+# Call it off and Close now (FR-56) ----------------------------------------------------------------
+
+CLOSE_SUBMIT = {Window.RESPOND: "Start the vote", Window.VOTE: "Decide now"}
+CLOSE_EFFECT = {
+    Window.RESPOND: (
+        "Responses close for everyone now, and the vote on the picks starts. "
+        "If fewer than two people are in, everyone's on their own."
+    ),
+    Window.VOTE: "Voting closes for everyone now, and the votes so far decide the plan.",
+}
+
+
+def cancel_modal(v: EventView, origin: ids.ViewOrigin) -> dict[str, Any]:
+    """Call it off, with an optional reason. Submitting is the confirmation, so the modal says
+    what happens. Slack can't color a modal's submit button, so it isn't red."""
+    slot = v.event.slot.value
+    lines = [f"This ends the {slot} call for everyone, so nobody eats together this time."]
+    if v.decision is not None:
+        lines.append(
+            f"The plan, *{escape(v.decision.proposal.item.name)}*, is off, and whoever was cooking, "
+            "picking up, or ordering gets a message."
+        )
+    if v.event.state is EventState.SCHEDULED:
+        lines.append("It hasn't been posted yet, so nothing goes to the channel.")
+    else:
+        lines.append("The call's thread says who called it off, with your reason if you give one.")
+    reason: Block = {
+        "type": "plain_text_input",
+        "max_length": CANCEL_NOTE_MAX,
+        "placeholder": plain("Pizza at Grandma's", 150),
+    }
+    blocks = [_intro(v), section(" ".join(lines)), _input("reason", "Reason", reason, hint="Everyone sees it.")]
+    return _modal(CALL_OFF, ids.CANCEL_VIEW, origin, blocks, CALL_OFF, close="Keep it")
+
+
+def parse_cancel(values: Any) -> str | None:
+    """The Call it off modal's reason, or None. ``calls.cancel_call`` cleans it."""
+    reason = _text(values, "reason")
+    if len(reason) > CANCEL_NOTE_MAX:  # Slack enforces max_length; this is a tampered payload
+        raise FormError("reason", f"Keep the reason to {CANCEL_NOTE_MAX} characters.")
+    return reason or None
+
+
+def close_modal(v: EventView, origin: ids.ViewOrigin) -> dict[str, Any]:
+    """Close now's confirmation from the ⋯ menu, which can't confirm one option and not the
+    other. ``origin.window`` is the window it closes; the submission checks it's still open."""
+    if origin.window is None:
+        raise ValueError("a Close now modal needs the window it closes")
+    window = origin.window
+    blocks = [_intro(v), section(CLOSE_EFFECT[window])]
+    return _modal(CLOSE_LABELS[window], ids.CLOSE_VIEW, origin, blocks, CLOSE_SUBMIT[window], close="Not yet")
+
+
 # App Home ----------------------------------------------------------------------------------------
 
 
@@ -301,6 +359,9 @@ def _event_card(v: EventView, links: HomeLinks) -> list[Block]:
         lines.append(f"The plan: *{escape(v.decision.proposal.item.name)}*")
     elif state is EventState.VOTING:
         lines.append("Voting is open in the channel thread.")
+    if state is EventState.CANCELLED and v.info.ended_by is not None:
+        reason = f" “{escape(v.info.end_note)}”" if v.info.end_note else ""
+        lines.append(f"Called off by {escape(v.info.ended_by.name)}.{reason}")
     value = ids.event_value(v.id)
     buttons: list[Block] = []
     if v.can.respond:
@@ -312,6 +373,14 @@ def _event_card(v: EventView, links: HomeLinks) -> list[Block]:
         ]
     if v.can.mark_done:
         buttons.append(mark_done_button(v.info))
+    # Home is per member, so these show only to people allowed to use them (FR-56).
+    window = v.can.close_window
+    if window is not None:
+        sure = confirm(f"{CLOSE_LABELS[window]}?", CLOSE_EFFECT[window], CLOSE_SUBMIT[window])
+        buttons.append(button(CLOSE_LABELS[window], ids.CLOSE_WINDOW, ids.window_value(window, v.id), confirm=sure))
+    if v.can.cancel:
+        cancel = ids.menu_value(ids.MenuChoice.CANCEL, v.id)
+        buttons.append(button(CALL_OFF, ids.CANCEL_CALL, cancel, style="danger"))
     buttons.append(button("Open", f"{ids.LINK_PREFIX}event", url=links.url(v.event.path)))
     return [section("\n".join(lines), block_id=f"event-{v.id}"), actions(*buttons, block_id=f"event-actions-{v.id}")]
 
@@ -327,11 +396,13 @@ def home_view(today: TodayView, links: HomeLinks, notice: str | None = None, *, 
     if not today.events:
         blocks.append(section("No calls today yet."))
     started = {v.event.slot for v in today.events}
-    starts = [
-        button(f"Start a {slot.value} call", ids.ACTION_FOR_START[slot], slot.value)
-        for slot in (Slot.DINNER, Slot.LUNCH)
-        if slot not in started
-    ]
+    called_off = {v.event.slot for v in today.events if v.event.day == today.today and v.can.restart}
+    starts: list[Block] = []
+    for slot in (Slot.DINNER, Slot.LUNCH):
+        if slot in called_off:  # starting it again takes the start button's path (FR-56)
+            starts.append(button(f"Start {slot.value} again", ids.ACTION_FOR_START[slot], slot.value))
+        elif slot not in started:
+            starts.append(button(f"Start a {slot.value} call", ids.ACTION_FOR_START[slot], slot.value))
     if starts:
         blocks.append(actions(*starts, block_id="start"))
     blocks += [

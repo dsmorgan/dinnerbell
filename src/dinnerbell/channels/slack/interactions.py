@@ -33,8 +33,11 @@ from dinnerbell.channels.slack.blocks import day_label, escape, instance_banner
 from dinnerbell.channels.slack.views import (
     FormError,
     HomeLinks,
+    cancel_modal,
+    close_modal,
     details_modal,
     home_view,
+    parse_cancel,
     parse_details,
     parse_proposal,
     proposal_modal,
@@ -45,6 +48,9 @@ from dinnerbell.domain.events import (
     IllegalTransition,
     InvalidResponse,
     RoleOffer,
+    Window,
+    check_can_cancel,
+    check_can_close_window,
     friendly,
 )
 from dinnerbell.domain.meals import Slot
@@ -85,6 +91,9 @@ WITHDRAWN = {
     RoleOffer.PICKUP: "Got it: you're not offering to pick up.",
     RoleOffer.ORDER: "Got it: you're not offering to order.",
 }
+CALLED_OFF = "You called off {slot} for {day}."
+CLOSED = {Window.RESPOND: "Responses are closed for {slot}.", Window.VOTE: "Voting is closed for {slot}."}
+MOVED_ON = "The call has moved on since then, so nothing changed. Check the latest message."
 VOTED = "Vote counted. Tap Vote again to take it back."
 UNVOTED = "Vote taken back."
 SETTLE_TIMEOUT_SECONDS = 10.0
@@ -145,6 +154,12 @@ class Interactions:
         async def proposal(ack: Ack, body: dict[str, Any]) -> None:
             await self._submission(ack, body, "proposal")
 
+        async def cancel(ack: Ack, body: dict[str, Any]) -> None:
+            await self._submission(ack, body, "cancel")
+
+        async def close(ack: Ack, body: dict[str, Any]) -> None:
+            await self._submission(ack, body, "close")
+
         async def command(ack: Ack, body: dict[str, Any]) -> None:
             await self._command(ack, body)
 
@@ -156,6 +171,8 @@ class Interactions:
         app.action(re.compile(r"^[a-z_]{1,40}$"))(action)
         app.view(ids.DETAILS_VIEW)(details)
         app.view(ids.PROPOSAL_VIEW)(proposal)
+        app.view(ids.CANCEL_VIEW)(cancel)
+        app.view(ids.CLOSE_VIEW)(close)
         app.command(self.command)(command)
         app.event("app_home_opened")(home_opened)
 
@@ -307,6 +324,8 @@ class Interactions:
         if member is None:
             return
         action_id, value = acts[0].get("action_id"), acts[0].get("value")
+        if action_id == ids.CALL_MENU:  # an overflow menu sends the option it picked, not a value
+            value = _get(acts[0], "selected_option", "value")
         trigger = body.get("trigger_id")
         log.info("slack action", extra={"member_id": member.id, "action": str(action_id)[:40]})
 
@@ -318,6 +337,17 @@ class Interactions:
     async def _dispatch(
         self, member: Member, source: Source, action_id: str, value: object, trigger: object
     ) -> str | None:
+        if action_id == ids.CALL_MENU:
+            choice, event_id = ids.parse_menu(value)
+            return await self._open_end(member, source, choice, event_id, trigger)
+        if action_id == ids.CANCEL_CALL:
+            choice, event_id = ids.parse_menu(value)
+            if choice is not ids.MenuChoice.CANCEL:
+                raise ids.BadValue("not a call-off value")
+            return await self._open_end(member, source, choice, event_id, trigger)
+        if action_id == ids.CLOSE_WINDOW:  # Slack asked them to confirm already
+            window, event_id = ids.parse_window(value)
+            return await self._close(member, event_id, window)
         now = self.clock()
         async with self.sessionmaker() as db:
             if action_id in ids.RESPOND:
@@ -373,6 +403,46 @@ class Interactions:
             await self.api.open_view(trigger, proposal_modal(view, origin))
         return None
 
+    # Call it off and Close now (FR-56) ---------------------------------------------------------
+
+    async def _open_end(
+        self, member: Member, source: Source, choice: ids.MenuChoice, event_id: int, trigger: object
+    ) -> str | None:
+        """Open Call it off's modal, or Close now's confirmation, for someone allowed to. Anyone
+        else is told why not instead, with the rule's own words."""
+        if not isinstance(trigger, str) or not trigger:
+            raise ids.BadValue("no trigger")
+        async with self.sessionmaker() as db:
+            view = await event_views.event_view(db, member, event_id, now=self.clock())
+        if choice is ids.MenuChoice.CANCEL:
+            check_can_cancel(view.event, member)
+            origin = ids.ViewOrigin(event_id, source.channel_id, home=source.home)
+            await self.api.open_view(trigger, cancel_modal(view, origin))
+        else:
+            window = check_can_close_window(view.event, member)
+            origin = ids.ViewOrigin(event_id, source.channel_id, home=source.home, window=window)
+            await self.api.open_view(trigger, close_modal(view, origin))
+        return None
+
+    async def _close(self, member: Member, event_id: int, window: Window) -> str:
+        """Close ``window``, the one the member confirmed closing, if it's still the open one.
+        By the time they confirm, the call may have moved on, and closing the next window
+        instead would do something they never agreed to."""
+        async with self.sessionmaker() as db:
+            view = await event_views.event_view(db, member, event_id, now=self.clock())
+        if view.can.close_window is not window:
+            check_can_close_window(view.event, member)  # says why, when they can't close any
+            return MOVED_ON
+        async with self.sessionmaker() as db:  # the event's lock must start its own transaction
+            await calls.close_window(db, member, event_id, now=self.clock())
+        return CLOSED[window].format(slot=view.event.slot.value)
+
+    async def _cancel(self, member: Member, event_id: int, reason: str | None) -> str:
+        async with self.sessionmaker() as db:
+            await calls.cancel_call(db, member, event_id, note=reason, now=self.clock())
+            view = await event_views.event_view(db, member, event_id, now=self.clock())
+        return CALLED_OFF.format(slot=view.event.slot.value, day=day_label(view.event.day))
+
     # Modals ------------------------------------------------------------------------------------
 
     async def _submission(self, ack: Callable[..., Awaitable[None]], body: dict[str, Any], kind: str) -> None:
@@ -386,7 +456,9 @@ class Interactions:
         values = _get(view, "state", "values")
         try:
             origin = ids.ViewOrigin.decode(view.get("private_metadata"))
-            form: Any = parse_details(values) if kind == "details" else parse_proposal(values)
+            if (origin.window is not None) != (kind == "close"):
+                raise ids.BadValue("bad metadata")  # only Close now's confirmation names a window
+            form: Any = origin.window if kind == "close" else FORMS[kind](values)
         except FormError as exc:
             await ack(response_action="errors", errors={exc.block_id: str(exc)})
             return
@@ -404,6 +476,10 @@ class Interactions:
             return
 
         async def work() -> str | None:
+            if kind == "close":
+                return await self._close(member, event_id, form)
+            if kind == "cancel":
+                return await self._cancel(member, event_id, form)
             async with self.sessionmaker() as db:
                 if kind == "details":
                     await calls.save_details(db, member, event_id, form, now=self.clock())
@@ -441,16 +517,19 @@ class Interactions:
         if not self._team_ok(body.get("team_id")):
             await ack(response_type="ephemeral", text=WRONG_WORKSPACE)
             return
-        words = str(body.get("text") or "").lower().split()
-        sub, args = (words[0], words[1:]) if words else ("help", [])
-        if sub != "call":
+        words = str(body.get("text") or "").split()
+        sub, args = (words[0].lower(), words[1:]) if words else ("help", [])
+        if sub not in {"call", "cancel"}:
             await ack(response_type="ephemeral", text=self.command_reply(sub))
             return
         user, channel = body.get("user_id"), body.get("channel_id")
         await ack()
         if isinstance(user, str):
             source = Source(user, channel_id=channel if ids.is_channel_id(channel) else None)
-            self._spawn(self._call(source, args))
+            if sub == "call":
+                self._spawn(self._call(source, [word.lower() for word in args]))
+            else:
+                self._spawn(self._cancel_command(source, args))
 
     def command_reply(self, sub: str) -> str:
         url = self.links.url
@@ -488,17 +567,58 @@ class Interactions:
 
         await self._run(source, member, work)
 
+    async def _cancel_command(self, source: Source, args: list[str]) -> None:
+        """``cancel [lunch|dinner] [day] [reason]``: call off that call, or today's only open one."""
+        member = await self._member(source)
+        if member is None:
+            return
+
+        async def work() -> str | None:
+            async with self.sessionmaker() as db:
+                today = await slack_members.today(db, member, now=self.clock())
+                slot, day, reason = parse_cancel_args(args, today, command=self.command)
+                on = day or today
+                found = await event_views.calls_on(db, member, on)
+            when = "today" if on == today else f"on {day_label(on)}"
+            if slot is not None:
+                found = [event for event in found if event.slot is slot]
+                if not found:
+                    raise EventRuleViolation(f"There's no {slot.value} call {when}.")
+            else:
+                found = [event for event in found if event.state.is_open]
+                if not found:
+                    raise EventRuleViolation(NO_OPEN_CALL.format(when=when))
+                if len(found) > 1:
+                    named = "" if on == today else f" {on.isoformat()}"
+                    return WHICH_CALL.format(when=when, command=self.command, day=named)
+            return await self._cancel(member, found[0].id, reason)
+
+        await self._run(source, member, work)
+
 
 HELP = (
     "*Dinnerbell* helps the household decide what to eat.\n"
     "• `{command} call` starts a dinner call for today. Add `lunch`, `tomorrow`, or a date "
     "like `2026-10-24`.\n"
+    "• `{command} cancel` calls off today's call. Add `lunch` or `dinner`, a day, and a reason, "
+    "like `{command} cancel dinner Pizza at Grandma's`.\n"
     "• `{command} prefs` links to your preferences.\n"
     "• `{command} catalog` and `{command} history` link to the catalog and meal history.\n"
     "• `offer`, `log`, and `schedule` are coming soon.\n"
     "Open the Dinnerbell app's Home tab for today's calls, or <{today}|the web app>."
 )
 CALL_USAGE = "Try `{command} call`, `{command} call lunch tomorrow`, or `{command} call dinner 2026-10-24`."
+CANCEL_USAGE = (
+    "Try `{command} cancel`, `{command} cancel lunch`, or `{command} cancel dinner tomorrow Pizza at Grandma's`."
+)
+NO_OPEN_CALL = "There's no open call to call off {when}."
+WHICH_CALL = (
+    "Lunch and dinner are both open {when}. Which one? Try `{command} cancel lunch{day}` or "
+    "`{command} cancel dinner{day}`, and add a reason after it if you like."
+)
+_ISO_DAY = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
+FORMS: dict[str, Callable[[Any], Any]] = {"details": parse_details, "proposal": parse_proposal, "cancel": parse_cancel}
+"""Each modal's form parser, by kind. Close now's confirmation has no fields."""
 
 
 def parse_call_args(args: list[str], today: date, *, command: str = DEFAULT_COMMAND) -> tuple[Slot, date]:
@@ -517,6 +637,34 @@ def parse_call_args(args: list[str], today: date, *, command: str = DEFAULT_COMM
             except ValueError:
                 raise EventRuleViolation(CALL_USAGE.format(command=command)) from None
     return slot, day
+
+
+def parse_cancel_args(
+    args: list[str], today: date, *, command: str = DEFAULT_COMMAND
+) -> tuple[Slot | None, date | None, str | None]:
+    """``cancel [lunch|dinner] [today|tomorrow|YYYY-MM-DD] [reason]``: the slot and the day, in
+    either order, then the reason, which keeps its case. Only the first slot and the first day
+    count, so after ``dinner`` a reason can start with "lunch". Slack escapes ``&``, ``<``, and ``>`` in a
+    command's text; the reason gets them back, and is escaped again wherever it's shown."""
+    slot: Slot | None = None
+    day: date | None = None
+    rest = list(args)
+    while rest:
+        word = rest[0].lower()
+        if slot is None and word in {s.value for s in Slot}:
+            slot = Slot(word)
+        elif day is None and word in {"today", "tomorrow"}:
+            day = today if word == "today" else today + timedelta(days=1)
+        elif day is None and _ISO_DAY.fullmatch(word):
+            try:
+                day = date.fromisoformat(word)
+            except ValueError:
+                raise EventRuleViolation(CANCEL_USAGE.format(command=command)) from None
+        else:
+            break
+        rest.pop(0)
+    reason = " ".join(rest).replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
+    return slot, day, reason or None
 
 
 def _get(data: object, *path: str) -> object:

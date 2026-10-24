@@ -106,7 +106,7 @@ def test_direct_messages_and_channel_posts_differ_where_they_should() -> None:
 def test_links_point_at_the_event_page() -> None:
     payload = json.dumps(samples.preview("decision_made"))
     assert "https://dinnerbell.example.com/events/7" in payload
-    assert samples.preview("call_updated", "https://food.home.test")["blocks"][-1]["elements"][-1]["url"] == (
+    assert samples.preview("call_updated", "https://food.home.test")["blocks"][-1]["elements"][-2]["url"] == (
         "https://food.home.test/events/7"
     )
 
@@ -126,13 +126,48 @@ def test_buttons_follow_the_state() -> None:
         "coordinate",
         "details",
         "link_event",
+        "call_menu",
     ]
-    assert action_ids("call_updated_voting") == ["link_event"]  # Alex coordinates already
+    assert action_ids("call_updated_voting") == ["link_event", "call_menu"]  # Alex coordinates already
     assert action_ids("proposals_updated") == ["vote", "lock"] * 3 + ["add_proposal", "link_event"]
     assert action_ids("proposals_updated_closed") == ["link_event"]
-    assert action_ids("decision_made") == ["mark_done", "link_event"]
-    assert action_ids("decision_made_by_vote") == ["mark_done", "link_item", "link_order", "link_event"]
+    assert action_ids("decision_made") == ["mark_done", "link_event", "call_menu"]
+    assert action_ids("decision_made_by_vote") == ["mark_done", "link_item", "link_order", "link_event", "call_menu"]
     assert action_ids("decision_updated_done") == ["link_event"]
+    assert action_ids("decision_updated_cancelled") == ["link_event"]
+    for kind in ("call_updated_done", "call_updated_abandoned", "call_updated_cancelled"):
+        assert "call_menu" not in action_ids(kind)
+
+
+def test_the_call_menu_offers_what_the_state_allows() -> None:
+    """Everyone sees the same ⋯ menu, so it follows the call's state, not the person (FR-56)."""
+
+    def menu(kind: str) -> list[tuple[str, str]]:
+        (found,) = [
+            e
+            for b in samples.preview(kind)["blocks"]
+            if b["type"] == "actions"
+            for e in b["elements"]
+            if e["type"] == "overflow"
+        ]
+        assert found["action_id"] == "call_menu" and "confirm" not in found  # Slack can't confirm one option
+        return [(o["text"]["text"], o["value"]) for o in found["options"]]
+
+    assert menu("call_updated") == [("Call it off", "cancel:7"), ("Start the vote now", "close:7")]
+    assert menu("call_updated_voting") == [("Call it off", "cancel:7"), ("Decide now", "close:7")]
+    assert menu("call_updated_decided") == [("Call it off", "cancel:7")]
+    assert menu("decision_made") == [("Call it off", "cancel:7")]
+    scheduled = render(note.CallUpdated(samples.event(EventState.SCHEDULED)), CTX)
+    assert "call_menu" not in json.dumps(scheduled.payload())  # never posted, but just in case
+
+
+def test_a_called_off_decision_says_who_and_why_escaped() -> None:
+    struck = samples.preview("decision_updated_cancelled")["blocks"][0]["text"]["text"]
+    assert struck == "~Sam's Tacos~ Called off by Alex. “Pizza at Grandma's”"
+    sneaky = replace(samples.CANCELLED, ended_by=note.PersonInfo(9, "<!here>"), end_note="<@U02SAM> & co")
+    message = render(note.DecisionUpdated(sneaky, samples.DECISION), CTX)
+    check_message(message.payload())
+    assert message.blocks[0]["text"]["text"] == "~Sam's Tacos~ Called off by &lt;!here&gt;. “&lt;@U02SAM&gt; &amp; co”"
 
 
 # Escaping and limits -------------------------------------------------------------------------------

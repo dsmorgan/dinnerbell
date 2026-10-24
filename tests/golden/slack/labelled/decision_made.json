@@ -81,6 +81,20 @@
           },
           "type": "button",
           "url": "https://dinnerbell.example.com/events/7"
+        },
+        {
+          "action_id": "call_menu",
+          "options": [
+            {
+              "text": {
+                "emoji": true,
+                "text": "Call it off",
+                "type": "plain_text"
+              },
+              "value": "cancel:7"
+            }
+          ],
+          "type": "overflow"
         }
       ],
       "type": "actions"

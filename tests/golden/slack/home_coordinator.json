@@ -1,0 +1,149 @@
+{
+  "blocks": [
+    {
+      "text": {
+        "emoji": true,
+        "text": "Today · Thursday, Oct 22",
+        "type": "plain_text"
+      },
+      "type": "header"
+    },
+    {
+      "block_id": "event-7",
+      "text": {
+        "text": "*Dinner* · Who's in?\nYou're in. You offered to cook.",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "block_id": "event-actions-7",
+      "elements": [
+        {
+          "action_id": "respond_in",
+          "style": "primary",
+          "text": {
+            "emoji": true,
+            "text": "In",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "7"
+        },
+        {
+          "action_id": "respond_maybe",
+          "text": {
+            "emoji": true,
+            "text": "Maybe",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "7"
+        },
+        {
+          "action_id": "respond_out",
+          "text": {
+            "emoji": true,
+            "text": "Out",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "7"
+        },
+        {
+          "action_id": "details",
+          "text": {
+            "emoji": true,
+            "text": "Details",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "7"
+        },
+        {
+          "action_id": "close_window",
+          "confirm": {
+            "confirm": {
+              "emoji": true,
+              "text": "Start the vote",
+              "type": "plain_text"
+            },
+            "deny": {
+              "emoji": true,
+              "text": "Not yet",
+              "type": "plain_text"
+            },
+            "text": {
+              "emoji": true,
+              "text": "Responses close for everyone now, and the vote on the picks starts. If fewer than two people are in, everyone's on their own.",
+              "type": "plain_text"
+            },
+            "title": {
+              "emoji": true,
+              "text": "Start the vote now?",
+              "type": "plain_text"
+            }
+          },
+          "text": {
+            "emoji": true,
+            "text": "Start the vote now",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "respond:7"
+        },
+        {
+          "action_id": "cancel_call",
+          "style": "danger",
+          "text": {
+            "emoji": true,
+            "text": "Call it off",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "cancel:7"
+        },
+        {
+          "action_id": "link_event",
+          "text": {
+            "emoji": true,
+            "text": "Open",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "url": "https://dinnerbell.example.com/events/7"
+        }
+      ],
+      "type": "actions"
+    },
+    {
+      "block_id": "start",
+      "elements": [
+        {
+          "action_id": "start_call_lunch",
+          "text": {
+            "emoji": true,
+            "text": "Start a lunch call",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "lunch"
+        }
+      ],
+      "type": "actions"
+    },
+    {
+      "type": "divider"
+    },
+    {
+      "elements": [
+        {
+          "text": "<https://dinnerbell.example.com/preferences|Your preferences> · <https://dinnerbell.example.com/catalog|Catalog> · <https://dinnerbell.example.com/history|History> · <https://dinnerbell.example.com/|Today on the web>",
+          "type": "mrkdwn"
+        }
+      ],
+      "type": "context"
+    }
+  ],
+  "type": "home"
+}

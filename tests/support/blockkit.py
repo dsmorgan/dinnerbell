@@ -12,6 +12,7 @@ MAX_BLOCKS = {"message": 50, "modal": 100, "home": 100}
 TEXT_TYPES = {"plain_text", "mrkdwn"}
 ELEMENTS = {
     "button",
+    "overflow",
     "static_select",
     "multi_static_select",
     "timepicker",
@@ -69,6 +70,11 @@ def check_element(element: Any, where: str, action_ids: set[str]) -> None:
             check_text(confirm["text"], 300, f"{where}.confirm.text")
             check_text(confirm["confirm"], 30, f"{where}.confirm.confirm", plain_only=True)
             check_text(confirm["deny"], 30, f"{where}.confirm.deny", plain_only=True)
+    if kind == "overflow":
+        assert 1 <= len(element["options"]) <= 5, f"{where}: an overflow menu has 1 to 5 options"
+        for option in element["options"]:
+            check_option(option, f"{where}.option")
+        assert {"value", "style", "url"}.isdisjoint(element), f"{where}: overflow menus take options only"
     if kind in {"static_select", "multi_static_select"}:
         assert ("options" in element) != ("option_groups" in element), f"{where}: options xor option_groups"
         groups = element.get("option_groups") or [{"options": element["options"]}]
