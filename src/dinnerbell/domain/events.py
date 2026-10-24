@@ -104,6 +104,13 @@ class StaleRun(EventRuleViolation):
     """The person acted on an earlier run of a call that has since been started again."""
 
 
+WINDOW_MOVED = "The call has moved on since then, so nothing changed."
+
+
+class WindowMoved(EventRuleViolation):
+    """Close now was confirmed for a window that's no longer the open one."""
+
+
 def check_run(event: Event, run: int | None) -> None:
     """``run`` is the run of the call the person saw, or None when their surface doesn't say.
     A call-off, Close now, or restart from a page left open across a restart would otherwise
@@ -631,6 +638,18 @@ def check_can_close_window(event: Event, actor: Member) -> Window:
     if not (is_coordinator(event, actor) or actor.is_admin):
         raise EventRuleViolation("Only the coordinator or an admin can close it now.")
     return Window.RESPOND if event.state is EventState.COLLECTING else Window.VOTE
+
+
+def check_expected_window(event: Event, window: Window, expected: Window | None, *, now: datetime) -> None:
+    """``expected`` is the window the person confirmed closing, or None when their surface
+    doesn't say. ``window`` is the one open now. A confirmation that arrives after the call
+    moved on, or a second one racing the first, must not close the next window, nor close
+    this one again once its deadline has passed and the call is advancing."""
+    if expected is None:
+        return
+    deadline = event.respond_deadline if window is Window.RESPOND else event.vote_deadline
+    if window is not expected or (deadline is not None and deadline <= now):
+        raise WindowMoved(WINDOW_MOVED)
 
 
 def clean_cancel_note(text: str | None) -> str | None:

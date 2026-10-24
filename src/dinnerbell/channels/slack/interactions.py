@@ -20,7 +20,7 @@ import asyncio
 import logging
 import re
 from collections.abc import Awaitable, Callable, Coroutine
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, timedelta
 from typing import Any
 
@@ -51,6 +51,7 @@ from dinnerbell.domain.events import (
     Window,
     check_can_cancel,
     check_can_close_window,
+    check_run,
     friendly,
 )
 from dinnerbell.domain.meals import Slot
@@ -93,7 +94,6 @@ WITHDRAWN = {
 }
 CALLED_OFF = "You called off {slot} for {day}."
 CLOSED = {Window.RESPOND: "Responses are closed for {slot}.", Window.VOTE: "Voting is closed for {slot}."}
-MOVED_ON = "The call has moved on since then, so nothing changed. Check the latest message."
 VOTED = "Vote counted. Tap Vote again to take it back."
 UNVOTED = "Vote taken back."
 SETTLE_TIMEOUT_SECONDS = 10.0
@@ -338,16 +338,16 @@ class Interactions:
         self, member: Member, source: Source, action_id: str, value: object, trigger: object
     ) -> str | None:
         if action_id == ids.CALL_MENU:
-            choice, event_id = ids.parse_menu(value)
-            return await self._open_end(member, source, choice, event_id, trigger)
+            choice, event_id, run = ids.parse_menu(value)
+            return await self._open_end(member, source, choice, event_id, run, trigger)
         if action_id == ids.CANCEL_CALL:
-            choice, event_id = ids.parse_menu(value)
+            choice, event_id, run = ids.parse_menu(value)
             if choice is not ids.MenuChoice.CANCEL:
                 raise ids.BadValue("not a call-off value")
-            return await self._open_end(member, source, choice, event_id, trigger)
+            return await self._open_end(member, source, choice, event_id, run, trigger)
         if action_id == ids.CLOSE_WINDOW:  # Slack asked them to confirm already
-            window, event_id = ids.parse_window(value)
-            return await self._close(member, event_id, window)
+            window, event_id, run = ids.parse_window(value)
+            return await self._close(member, event_id, window, run)
         now = self.clock()
         async with self.sessionmaker() as db:
             if action_id in ids.RESPOND:
@@ -406,40 +406,39 @@ class Interactions:
     # Call it off and Close now (FR-56) ---------------------------------------------------------
 
     async def _open_end(
-        self, member: Member, source: Source, choice: ids.MenuChoice, event_id: int, trigger: object
+        self, member: Member, source: Source, choice: ids.MenuChoice, event_id: int, run: int, trigger: object
     ) -> str | None:
-        """Open Call it off's modal, or Close now's confirmation, for someone allowed to. Anyone
-        else is told why not instead, with the rule's own words."""
+        """Open Call it off's modal, or Close now's confirmation, for someone allowed to, on the
+        run of the call they tapped. Anyone else is told why not instead, with the rule's own
+        words. The modal keeps the run, and the service checks it again on submit."""
         if not isinstance(trigger, str) or not trigger:
             raise ids.BadValue("no trigger")
         async with self.sessionmaker() as db:
             view = await event_views.event_view(db, member, event_id, now=self.clock())
+        check_run(view.event, run)
+        origin = ids.ViewOrigin(event_id, source.channel_id, home=source.home, run=run)
         if choice is ids.MenuChoice.CANCEL:
             check_can_cancel(view.event, member)
-            origin = ids.ViewOrigin(event_id, source.channel_id, home=source.home)
             await self.api.open_view(trigger, cancel_modal(view, origin))
         else:
             window = check_can_close_window(view.event, member)
-            origin = ids.ViewOrigin(event_id, source.channel_id, home=source.home, window=window)
-            await self.api.open_view(trigger, close_modal(view, origin))
+            await self.api.open_view(trigger, close_modal(view, replace(origin, window=window)))
         return None
 
-    async def _close(self, member: Member, event_id: int, window: Window) -> str:
-        """Close ``window``, the one the member confirmed closing, if it's still the open one.
-        By the time they confirm, the call may have moved on, and closing the next window
-        instead would do something they never agreed to."""
+    async def _close(self, member: Member, event_id: int, window: Window, run: int | None) -> str:
+        """Close ``window`` on ``run``: the window and run the member confirmed. The service
+        checks both under the event's lock, so a confirmation that arrives after the call moved
+        on, or a second one racing the first, closes nothing."""
         async with self.sessionmaker() as db:
+            await calls.close_window(db, member, event_id, run=run, expected_window=window, now=self.clock())
             view = await event_views.event_view(db, member, event_id, now=self.clock())
-        if view.can.close_window is not window:
-            check_can_close_window(view.event, member)  # says why, when they can't close any
-            return MOVED_ON
-        async with self.sessionmaker() as db:  # the event's lock must start its own transaction
-            await calls.close_window(db, member, event_id, now=self.clock())
         return CLOSED[window].format(slot=view.event.slot.value)
 
-    async def _cancel(self, member: Member, event_id: int, reason: str | None) -> str:
+    async def _cancel(self, member: Member, event_id: int, reason: str | None, run: int | None) -> str:
+        """Call off ``event_id``; ``run`` is the run the member saw, or None from the slash
+        command, which names the call as it is now."""
         async with self.sessionmaker() as db:
-            await calls.cancel_call(db, member, event_id, note=reason, now=self.clock())
+            await calls.cancel_call(db, member, event_id, note=reason, run=run, now=self.clock())
             view = await event_views.event_view(db, member, event_id, now=self.clock())
         return CALLED_OFF.format(slot=view.event.slot.value, day=day_label(view.event.day))
 
@@ -458,6 +457,8 @@ class Interactions:
             origin = ids.ViewOrigin.decode(view.get("private_metadata"))
             if (origin.window is not None) != (kind == "close"):
                 raise ids.BadValue("bad metadata")  # only Close now's confirmation names a window
+            if (origin.run is not None) != (kind in {"cancel", "close"}):
+                raise ids.BadValue("bad metadata")  # and only it and Call it off name a run
             form: Any = origin.window if kind == "close" else FORMS[kind](values)
         except FormError as exc:
             await ack(response_action="errors", errors={exc.block_id: str(exc)})
@@ -468,18 +469,19 @@ class Interactions:
             return
         await ack()
         source = Source(user, channel_id=origin.channel_id, home=origin.home)
-        self._spawn(self._save(source, origin.event_id, kind, form))
+        self._spawn(self._save(source, origin, kind, form))
 
-    async def _save(self, source: Source, event_id: int, kind: str, form: Any) -> None:
+    async def _save(self, source: Source, origin: ids.ViewOrigin, kind: str, form: Any) -> None:
         member = await self._member(source)
         if member is None:
             return
+        event_id = origin.event_id
 
         async def work() -> str | None:
             if kind == "close":
-                return await self._close(member, event_id, form)
+                return await self._close(member, event_id, form, origin.run)
             if kind == "cancel":
-                return await self._cancel(member, event_id, form)
+                return await self._cancel(member, event_id, form, origin.run)
             async with self.sessionmaker() as db:
                 if kind == "details":
                     await calls.save_details(db, member, event_id, form, now=self.clock())
@@ -591,7 +593,7 @@ class Interactions:
                 if len(found) > 1:
                     named = "" if on == today else f" {on.isoformat()}"
                     return WHICH_CALL.format(when=when, command=self.command, day=named)
-            return await self._cancel(member, found[0].id, reason)
+            return await self._cancel(member, found[0].id, reason, None)
 
         await self._run(source, member, work)
 

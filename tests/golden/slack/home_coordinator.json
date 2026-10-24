@@ -90,7 +90,7 @@
             "type": "plain_text"
           },
           "type": "button",
-          "value": "respond:7"
+          "value": "respond:7:1"
         },
         {
           "action_id": "cancel_call",
@@ -101,7 +101,7 @@
             "type": "plain_text"
           },
           "type": "button",
-          "value": "cancel:7"
+          "value": "cancel:7:1"
         },
         {
           "action_id": "link_event",

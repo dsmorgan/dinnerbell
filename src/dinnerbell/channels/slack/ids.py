@@ -31,7 +31,8 @@ ACTION_FOR_START = {slot: action for action, slot in START_CALL.items()}
 CALL_MENU = "call_menu"
 """The ⋯ menu on the call and decision messages. Its options' values are ``menu_value``s."""
 CANCEL_CALL = "cancel_call"
-"""Call it off on the Home tab. Its value is ``menu_value(MenuChoice.CANCEL, ...)``."""
+"""A Call it off button, on the Home tab or on a decided call's messages. Its value is
+``menu_value(MenuChoice.CANCEL, ...)``."""
 CLOSE_WINDOW = "close_window"
 """Close now on the Home tab. Its value is a ``window_value``: the window the button closes."""
 LINK_PREFIX = "link_"
@@ -46,8 +47,8 @@ CLOSE_VIEW = "close_modal"
 MAX_ID = 2**63 - 1
 _DIGITS = re.compile(r"^[0-9]{1,19}$")
 _PAIR = re.compile(r"^([0-9]{1,19}):([0-9]{1,19})$")
-_MENU = re.compile(r"^(cancel|close):([1-9][0-9]{0,18})$")
-_WINDOW = re.compile(r"^(respond|vote):([1-9][0-9]{0,18})$")
+_MENU = re.compile(r"(cancel|close):([1-9][0-9]{0,18}):([1-9][0-9]{0,18})")
+_WINDOW = re.compile(r"(respond|vote):([1-9][0-9]{0,18}):([1-9][0-9]{0,18})")
 _CHANNEL = re.compile(r"^[CDG][A-Z0-9]{2,31}$")
 MAX_METADATA = 3000
 
@@ -89,28 +90,31 @@ class MenuChoice(StrEnum):
     CLOSE = "close"
 
 
-def menu_value(choice: MenuChoice, event_id: int) -> str:
-    return f"{choice.value}:{event_id}"
+def menu_value(choice: MenuChoice, event_id: int, run: int) -> str:
+    """``cancel:<id>:<run>`` or ``close:<id>:<run>``. The run is the one the message shows, so
+    a message left over from before a re-run or a restart can't act on the newer run."""
+    return f"{choice.value}:{event_id}:{run}"
 
 
-def parse_menu(value: object) -> tuple[MenuChoice, int]:
-    """``cancel:<id>`` or ``close:<id>``, exactly as ``menu_value`` writes them."""
+def parse_menu(value: object) -> tuple[MenuChoice, int, int]:
+    """``cancel:<id>:<run>`` or ``close:<id>:<run>``, exactly as ``menu_value`` writes them:
+    the choice, the event ID, and the run."""
     match = _MENU.fullmatch(value) if isinstance(value, str) else None
     if match is None:
         raise BadValue("not a menu value")
-    return MenuChoice(match.group(1)), _row_id(match.group(2))
+    return MenuChoice(match.group(1)), _row_id(match.group(2)), _row_id(match.group(3))
 
 
-def window_value(window: Window, event_id: int) -> str:
-    return f"{window.value}:{event_id}"
+def window_value(window: Window, event_id: int, run: int) -> str:
+    return f"{window.value}:{event_id}:{run}"
 
 
-def parse_window(value: object) -> tuple[Window, int]:
-    """``respond:<id>`` or ``vote:<id>``, exactly as ``window_value`` writes them."""
+def parse_window(value: object) -> tuple[Window, int, int]:
+    """``respond:<id>:<run>`` or ``vote:<id>:<run>``, exactly as ``window_value`` writes them."""
     match = _WINDOW.fullmatch(value) if isinstance(value, str) else None
     if match is None:
         raise BadValue("not a window value")
-    return Window(match.group(1)), _row_id(match.group(2))
+    return Window(match.group(1)), _row_id(match.group(2)), _row_id(match.group(3))
 
 
 def parse_slot(value: object) -> Slot:
@@ -139,11 +143,16 @@ class ViewOrigin:
     """Opened from the Home tab: answer there, not in a direct message (spec 10)."""
     window: Window | None = None
     """The window a Close now modal confirms closing. Only that modal sets it."""
+    run: int | None = None
+    """The run of the call the modal was opened for. Call it off and Close now set it, so a
+    modal left open across a re-run or a restart can't act on the newer run."""
 
     def encode(self) -> str:
         data: dict[str, object] = {"event": self.event_id, "channel": self.channel_id, "home": self.home}
         if self.window is not None:
             data["window"] = self.window.value
+        if self.run is not None:
+            data["run"] = self.run
         return json.dumps(data, separators=(",", ":"))
 
     @classmethod
@@ -154,11 +163,13 @@ class ViewOrigin:
             data = json.loads(text)
         except ValueError:
             raise BadValue("bad metadata") from None
-        if not isinstance(data, dict) or set(data) - {"window"} != {"event", "channel", "home"}:
+        if not isinstance(data, dict) or set(data) - {"window", "run"} != {"event", "channel", "home"}:
             raise BadValue("bad metadata")
         event, channel, home = data["event"], data["channel"], data["home"]
-        window = data.get("window")
+        window, run = data.get("window"), data.get("run")
         if "window" in data and not (isinstance(window, str) and window in {w.value for w in Window}):
+            raise BadValue("bad metadata")
+        if "run" in data and not (isinstance(run, int) and not isinstance(run, bool) and 1 <= run <= MAX_ID):
             raise BadValue("bad metadata")
         if not isinstance(home, bool):
             raise BadValue("bad metadata")
@@ -166,4 +177,4 @@ class ViewOrigin:
             raise BadValue("bad metadata")
         if channel is not None and not is_channel_id(channel):
             raise BadValue("bad metadata")
-        return cls(event, channel, home, Window(window) if window is not None else None)
+        return cls(event, channel, home, Window(window) if window is not None else None, run)

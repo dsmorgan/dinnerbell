@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator
+from dataclasses import replace
 from datetime import date
 from typing import Any
 
@@ -20,7 +21,6 @@ from dinnerbell.channels.slack.interactions import (
     CALLED_OFF,
     CLOSED,
     HELP,
-    MOVED_ON,
     NO_OPEN_CALL,
     OUT_OF_DATE,
     WHICH_CALL,
@@ -28,9 +28,9 @@ from dinnerbell.channels.slack.interactions import (
 )
 from dinnerbell.channels.slack.views import FormError, parse_cancel
 from dinnerbell.config import Settings
-from dinnerbell.domain.events import EventRuleViolation, EventState, Window
+from dinnerbell.domain.events import STALE_CALL, WINDOW_MOVED, EventRuleViolation, EventState, Window, WindowMoved
 from dinnerbell.domain.meals import Slot
-from dinnerbell.services import calls, event_views
+from dinnerbell.services import call_admin, calls, event_views
 from dinnerbell.services.database import Database, open_database
 from tests.support.calls import DONE_AT, OPENS, RESPOND_BY, House, dinner_id, furnish, make_house
 from tests.support.clock import FakeClock
@@ -95,12 +95,22 @@ async def to_decided(slack: Slack, event_id: int) -> None:
     assert (await slack.house.event(event_id)).state is EventState.DECIDED
 
 
-def cancel(event_id: int) -> str:
-    return ids.menu_value(ids.MenuChoice.CANCEL, event_id)
+def cancel(event_id: int, run: int = 1) -> str:
+    return ids.menu_value(ids.MenuChoice.CANCEL, event_id, run)
 
 
-def close(event_id: int) -> str:
-    return ids.menu_value(ids.MenuChoice.CLOSE, event_id)
+def close(event_id: int, run: int = 1) -> str:
+    return ids.menu_value(ids.MenuChoice.CLOSE, event_id, run)
+
+
+def closes(window: Window, event_id: int, run: int = 1) -> str:
+    return ids.window_value(window, event_id, run)
+
+
+async def call_off(slack: Slack, who: str, values: dict[str, Any], event_id: int, run: int = 1) -> Any:
+    """Submit the Call it off modal as opened in the channel for ``run``."""
+    origin = ids.ViewOrigin(event_id, CHANNEL, run=run)
+    return await slack.submit(who, ids.CANCEL_VIEW, values, event_id, origin=origin)
 
 
 def opened(slack: Slack) -> list[dict[str, Any]]:
@@ -125,10 +135,11 @@ def home_actions(slack: Slack, who: str) -> list[str]:
 
 
 def test_menu_and_window_values_round_trip() -> None:
-    assert ids.parse_menu(cancel(7)) == (ids.MenuChoice.CANCEL, 7)
-    assert ids.parse_menu(close(2**63 - 1)) == (ids.MenuChoice.CLOSE, 2**63 - 1)
-    assert ids.parse_window(ids.window_value(Window.RESPOND, 7)) == (Window.RESPOND, 7)
-    assert ids.parse_window(ids.window_value(Window.VOTE, 8)) == (Window.VOTE, 8)
+    assert cancel(7, 2) == "cancel:7:2"
+    assert ids.parse_menu(cancel(7)) == (ids.MenuChoice.CANCEL, 7, 1)
+    assert ids.parse_menu(close(2**63 - 1, 3)) == (ids.MenuChoice.CLOSE, 2**63 - 1, 3)
+    assert ids.parse_window(closes(Window.RESPOND, 7)) == (Window.RESPOND, 7, 1)
+    assert ids.parse_window(closes(Window.VOTE, 8, 2)) == (Window.VOTE, 8, 2)
 
 
 @pytest.mark.parametrize(
@@ -143,15 +154,21 @@ def test_menu_and_window_values_round_trip() -> None:
         "cancel:0",
         "cancel:007",
         "cancel:-7",
-        "cancel:7 ",
-        " cancel:7",
-        "cancel:7:8",
-        "CANCEL:7",
-        "drop:7",
-        "respond:7",
-        "cancel:99999999999999999999",
-        "cancel:9223372036854775808",
-        "cancel:7\n",
+        "cancel:7",  # the two-part form, from before values named the run
+        "close:7",
+        "cancel:7:1 ",
+        " cancel:7:1",
+        "cancel:7:0",
+        "cancel:7:01",
+        "cancel:7:1:2",
+        "cancel::1",
+        "CANCEL:7:1",
+        "drop:7:1",
+        "respond:7:1",
+        "cancel:99999999999999999999:1",
+        "cancel:9223372036854775808:1",
+        "cancel:7:9223372036854775808",
+        "cancel:7:1\n",
     ],
 )
 def test_menu_values_this_app_did_not_write_are_refused(value: object) -> None:
@@ -159,7 +176,10 @@ def test_menu_values_this_app_did_not_write_are_refused(value: object) -> None:
         ids.parse_menu(value)
 
 
-@pytest.mark.parametrize("value", [None, "7", "cancel:7", "close:7", "respond:0", "vote:x", "Vote:7", "respond:7:1"])
+@pytest.mark.parametrize(
+    "value",
+    [None, "7", "respond:7", "vote:7", "cancel:7:1", "close:7:1", "respond:0:1", "vote:x:1", "Vote:7:1", "respond:7:0"],
+)
 def test_window_values_this_app_did_not_write_are_refused(value: object) -> None:
     with pytest.raises(ids.BadValue):
         ids.parse_window(value)
@@ -170,18 +190,25 @@ def test_a_trailing_newline_is_not_the_value_this_app_wrote() -> None:
     for parse, value in (
         (ids.parse_event, "7\n"),
         (ids.parse_proposal, "7:8\n"),
-        (ids.parse_window, "respond:7\n"),
+        (ids.parse_window, "respond:7:1\n"),
     ):
         with pytest.raises(ids.BadValue):
             parse(value)
     assert not ids.is_channel_id("C0DINNER\n")
 
 
-def test_close_now_metadata_carries_its_window_and_nothing_else() -> None:
-    origin = ids.ViewOrigin(7, "C0DINNER", window=Window.VOTE)
+def test_call_off_metadata_carries_its_run_and_window_and_nothing_else() -> None:
+    origin = ids.ViewOrigin(7, "C0DINNER", window=Window.VOTE, run=3)
     assert ids.ViewOrigin.decode(origin.encode()) == origin
-    assert "window" not in ids.ViewOrigin(7, "C0DINNER").encode()  # older modals' metadata unchanged
+    assert ids.ViewOrigin.decode(ids.ViewOrigin(7, run=2).encode()) == ids.ViewOrigin(7, run=2)
+    plain = ids.ViewOrigin(7, "C0DINNER").encode()
+    assert "window" not in plain and "run" not in plain  # other modals' metadata unchanged
     for bad in (
+        '{"event":7,"channel":null,"home":false,"run":0}',
+        '{"event":7,"channel":null,"home":false,"run":"1"}',
+        '{"event":7,"channel":null,"home":false,"run":true}',
+        '{"event":7,"channel":null,"home":false,"run":null}',
+        '{"event":7,"channel":null,"home":false,"run":9223372036854775808}',
         '{"event":7,"channel":null,"home":false,"window":"later"}',
         '{"event":7,"channel":null,"home":false,"window":null}',
         '{"event":7,"channel":null,"home":false,"window":["vote"]}',
@@ -245,9 +272,9 @@ async def test_the_coordinator_gets_both(slack: Slack, house: House) -> None:
     await slack.choose("Sam", close(event_id))
     modal, confirm = opened(slack)
     assert modal["callback_id"] == ids.CANCEL_VIEW and confirm["callback_id"] == ids.CLOSE_VIEW
-    assert ids.ViewOrigin.decode(modal["private_metadata"]) == ids.ViewOrigin(event_id, CHANNEL)
+    assert ids.ViewOrigin.decode(modal["private_metadata"]) == ids.ViewOrigin(event_id, CHANNEL, run=1)
     assert ids.ViewOrigin.decode(confirm["private_metadata"]) == ids.ViewOrigin(
-        event_id, CHANNEL, window=Window.RESPOND
+        event_id, CHANNEL, window=Window.RESPOND, run=1
     )
     assert confirm["title"]["text"] == "Start the vote now" and confirm["submit"]["text"] == "Start the vote"
     assert slack.ephemerals("Sam") == []
@@ -282,10 +309,12 @@ async def test_the_starter_can_call_it_off_until_its_decided(slack: Slack, house
     assert "whoever was cooking, picking up, or ordering gets a message" in decided
 
 
-@pytest.mark.parametrize("value", ["cancel", "cancel:0", "cancel:007", "close:7:1", "drop:7", "7", ""])
+@pytest.mark.parametrize(
+    "value", ["cancel", "cancel:{id}", "close:{id}", "cancel:0:1", "cancel:{id}:0", "close:{id}:1:1", "drop:{id}:1", ""]
+)
 async def test_menu_values_this_app_did_not_write_get_out_of_date(slack: Slack, house: House, value: str) -> None:
     event_id = await daily_call(house)
-    await slack.choose("Alex", value.replace("7", str(event_id)) if value != "cancel:007" else value)
+    await slack.choose("Alex", value.format(id=event_id))
     assert opened(slack) == []
     assert slack.ephemerals("Alex") == [OUT_OF_DATE]
     assert (await house.event(event_id)).state is EventState.COLLECTING
@@ -307,9 +336,11 @@ async def test_another_households_call_is_not_found(slack: Slack, migrated: Sett
     await slack.choose("Alex", cancel(theirs))
     await slack.choose("Alex", close(theirs))
     await slack.click("Alex", ids.CANCEL_CALL, cancel(theirs), home=True)
-    await slack.click("Alex", ids.CLOSE_WINDOW, ids.window_value(Window.VOTE, theirs))
-    await slack.submit("Alex", ids.CANCEL_VIEW, reason("mine now"), theirs)
-    await slack.submit("Alex", ids.CLOSE_VIEW, {}, theirs, origin=ids.ViewOrigin(theirs, CHANNEL, window=Window.VOTE))
+    await slack.click("Alex", ids.CLOSE_WINDOW, closes(Window.VOTE, theirs))
+    await call_off(slack, "Alex", reason("mine now"), theirs)
+    await slack.submit(
+        "Alex", ids.CLOSE_VIEW, {}, theirs, origin=ids.ViewOrigin(theirs, CHANNEL, window=Window.VOTE, run=1)
+    )
     assert opened(slack) == []
     assert slack.ephemerals("Alex") == ["No such call."] * 5
     assert "No such call." in json.dumps(slack.last_home("Alex"))
@@ -317,11 +348,11 @@ async def test_another_households_call_is_not_found(slack: Slack, migrated: Sett
 
 async def test_a_finished_call_says_so(slack: Slack, house: House) -> None:
     event_id = await daily_call(house)
-    await slack.submit("Alex", ids.CANCEL_VIEW, reason(None), event_id)
+    await call_off(slack, "Alex", reason(None), event_id)
     slack.fake.clear()
     await slack.choose("Alex", cancel(event_id))
     await slack.choose("Alex", close(event_id))
-    await slack.submit("Alex", ids.CANCEL_VIEW, reason(None), event_id)
+    await call_off(slack, "Alex", reason(None), event_id)
     assert opened(slack) == []
     assert slack.ephemerals("Alex") == [FINISHED] * 3
 
@@ -331,7 +362,7 @@ async def test_a_finished_call_says_so(slack: Slack, house: House) -> None:
 
 async def test_calling_it_off_with_a_reason(slack: Slack, house: House) -> None:
     event_id = await kims_call(slack)
-    response = await slack.submit("Kim", ids.CANCEL_VIEW, reason("  Pizza at   Grandma's "), event_id)
+    response = await call_off(slack, "Kim", reason("  Pizza at   Grandma's "), event_id)
     assert response.status == 200 and body(response) == {}
     event = await house.event(event_id)
     assert (event.state, event.ended_by, event.end_note) == (
@@ -346,7 +377,7 @@ async def test_calling_it_off_with_a_reason(slack: Slack, house: House) -> None:
 
 async def test_calling_it_off_without_a_reason(slack: Slack, house: House) -> None:
     event_id = await daily_call(house)
-    await slack.submit("Alex", ids.CANCEL_VIEW, {}, event_id)
+    await call_off(slack, "Alex", {}, event_id)
     event = await house.event(event_id)
     assert (event.state, event.end_note) == (EventState.CANCELLED, None)
     (audit,) = await house.audits("event.cancelled")
@@ -355,7 +386,7 @@ async def test_calling_it_off_without_a_reason(slack: Slack, house: House) -> No
 
 async def test_a_too_long_reason_is_flagged_on_the_field(slack: Slack, house: House) -> None:
     event_id = await daily_call(house)
-    response = await slack.submit("Alex", ids.CANCEL_VIEW, reason("x" * 141), event_id)
+    response = await call_off(slack, "Alex", reason("x" * 141), event_id)
     assert body(response) == {"response_action": "errors", "errors": {"reason": "Keep the reason to 140 characters."}}
     assert (await house.event(event_id)).state is EventState.COLLECTING
 
@@ -363,14 +394,14 @@ async def test_a_too_long_reason_is_flagged_on_the_field(slack: Slack, house: Ho
 async def test_a_forged_submission_is_still_checked(slack: Slack, house: House) -> None:
     """The modal opens only for people allowed to, but a submission is checked again."""
     event_id = await daily_call(house)
-    await slack.submit("Kim", ids.CANCEL_VIEW, reason("nope"), event_id)
+    await call_off(slack, "Kim", reason("nope"), event_id)
     assert slack.ephemerals("Kim") == [ONLY_SOME]
     assert (await house.event(event_id)).state is EventState.COLLECTING
 
 
 async def test_cancel_metadata_naming_a_window_is_dropped(slack: Slack, house: House) -> None:
     event_id = await daily_call(house)
-    origin = ids.ViewOrigin(event_id, CHANNEL, window=Window.RESPOND)
+    origin = ids.ViewOrigin(event_id, CHANNEL, window=Window.RESPOND, run=1)
     response = await slack.submit("Alex", ids.CANCEL_VIEW, reason(None), event_id, origin=origin)
     assert response.status == 200
     assert (await house.event(event_id)).state is EventState.COLLECTING
@@ -383,12 +414,12 @@ async def test_the_channel_shows_who_called_it_off_and_strikes_the_decision(slac
     await to_decided(slack, event_id)
     await slack.drain()
     slack.fake.clear()
-    await slack.submit("Alex", ids.CANCEL_VIEW, reason("<!channel> Pizza & <@U02SAM>"), event_id)
+    await call_off(slack, "Alex", reason("<!channel> Pizza & <@U02SAM>"), event_id)
     await slack.drain()
     updates = {c.args["text"].split(":")[0]: c.args for c in slack.fake.of("chat.update")}
     call = updates["Dinner call · Thursday, Oct 22"]
     assert call["blocks"][1]["text"]["text"] == "Called off by Alex. “&lt;!channel&gt; Pizza &amp; &lt;@U02SAM&gt;”"
-    assert "call_menu" not in json.dumps(call)  # nothing left to call off
+    assert "call_menu" not in json.dumps(call) and "cancel_call" not in json.dumps(call)  # nothing left
     decision = updates["Dinner on Thursday, Oct 22"]
     assert decision["blocks"][0]["text"]["text"].startswith("~")
     assert "Called off by Alex." in decision["blocks"][0]["text"]["text"]
@@ -404,7 +435,7 @@ async def test_close_now_from_the_menu_starts_the_vote(slack: Slack, house: Hous
     await slack.click("Alex", "respond_in", str(event_id))
     await slack.click("Alex", "offer_pickup", str(event_id))
     await slack.click("Sam", "respond_in", str(event_id))
-    origin = ids.ViewOrigin(event_id, CHANNEL, window=Window.RESPOND)
+    origin = ids.ViewOrigin(event_id, CHANNEL, window=Window.RESPOND, run=1)
     response = await slack.submit("Alex", ids.CLOSE_VIEW, {}, event_id, origin=origin)
     assert response.status == 200 and body(response) == {}
     assert (await house.event(event_id)).state is EventState.VOTING
@@ -416,17 +447,17 @@ async def test_close_now_from_the_menu_starts_the_vote(slack: Slack, house: Hous
 async def test_close_now_never_closes_a_window_nobody_confirmed(slack: Slack, house: House) -> None:
     """Confirmed while collecting, submitted once voting had started: the vote stays open."""
     event_id = await daily_call(house)
-    origin = ids.ViewOrigin(event_id, CHANNEL, window=Window.RESPOND)
+    origin = ids.ViewOrigin(event_id, CHANNEL, window=Window.RESPOND, run=1)
     await to_voting(slack, event_id)
     await slack.submit("Alex", ids.CLOSE_VIEW, {}, event_id, origin=origin)
     assert (await house.event(event_id)).state is EventState.VOTING
-    assert slack.ephemerals("Alex")[-1] == MOVED_ON
+    assert slack.ephemerals("Alex")[-1] == WINDOW_MOVED
     assert await house.audits("event.window_closed") == []
 
 
 async def test_close_now_refuses_who_cant_even_after_the_modal(slack: Slack, house: House) -> None:
     event_id = await daily_call(house)
-    origin = ids.ViewOrigin(event_id, CHANNEL, window=Window.RESPOND)
+    origin = ids.ViewOrigin(event_id, CHANNEL, window=Window.RESPOND, run=1)
     await slack.submit("Kim", ids.CLOSE_VIEW, {}, event_id, origin=origin)
     assert slack.ephemerals("Kim") == [NOT_CLOSER]
     assert (await house.event(event_id)).state is EventState.COLLECTING
@@ -439,6 +470,105 @@ async def test_close_metadata_without_a_window_is_dropped(slack: Slack, house: H
     await slack._send("interactive", payload)
     assert (await house.event(event_id)).state is EventState.COLLECTING
     assert slack.fake.calls == []
+
+
+async def test_two_confirmations_at_once_close_one_window(slack: Slack, house: House) -> None:
+    """The coordinator and an admin both confirm Start the vote now: one closes responses, and
+    the other must not then close the vote it never saw."""
+    event_id = await daily_call(house)
+    await slack.click("Alex", "respond_in", str(event_id))
+    await slack.click("Alex", "offer_pickup", str(event_id))
+    await slack.click("Sam", "respond_in", str(event_id))
+    await slack.click("Sam", "coordinate", str(event_id))
+    origin = ids.ViewOrigin(event_id, CHANNEL, window=Window.RESPOND, run=1)
+    await asyncio.gather(
+        slack.submit("Alex", ids.CLOSE_VIEW, {}, event_id, origin=origin),
+        slack.submit("Sam", ids.CLOSE_VIEW, {}, event_id, origin=origin),
+    )
+    assert (await house.event(event_id)).state is EventState.VOTING
+    (audit,) = await house.audits("event.window_closed")
+    assert audit.payload["window"] == "respond"
+    told = sorted([slack.ephemerals("Alex")[-1], slack.ephemerals("Sam")[-1]])
+    assert told == sorted([CLOSED[Window.RESPOND].format(slot="dinner"), WINDOW_MOVED])
+
+
+async def test_close_window_checks_the_window_it_was_asked_to_close(slack: Slack, house: House) -> None:
+    event_id = await daily_call(house)
+    house.clock.now = RESPOND_BY  # responses are due to close, but no tick has advanced the call yet
+    with pytest.raises(WindowMoved, match=f"^{WINDOW_MOVED}$"):
+        async with house.sessionmaker() as db:
+            await calls.close_window(db, house["Alex"], event_id, expected_window=Window.RESPOND, now=house.clock())
+    assert await house.audits("event.window_closed") == []
+    house.clock.now = OPENS
+    await to_voting(slack, event_id)
+    with pytest.raises(WindowMoved):
+        async with house.sessionmaker() as db:
+            await calls.close_window(db, house["Alex"], event_id, expected_window=Window.RESPOND, now=house.clock())
+    async with house.sessionmaker() as db:  # without an expected window, as before
+        await calls.close_window(db, house["Alex"], event_id, now=house.clock())
+    assert (await house.event(event_id)).state is EventState.DECIDED
+    assert len(await house.audits("event.window_closed")) == 1
+
+
+async def opened_now(slack: Slack, who: str, value: str) -> ids.ViewOrigin:
+    """Pick ``value`` from the ⋯ menu and return the modal's metadata."""
+    await slack.choose(who, value)
+    return ids.ViewOrigin.decode(opened(slack)[-1]["private_metadata"])
+
+
+async def test_an_old_modal_menu_or_button_cant_touch_a_restarted_call(slack: Slack, house: House) -> None:
+    event_id = await daily_call(house)
+    old_cancel = await opened_now(slack, "Alex", cancel(event_id))
+    old_close = await opened_now(slack, "Alex", close(event_id))
+    assert (old_cancel.run, old_close.run) == (1, 1)
+    await call_off(slack, "Alex", reason(None), event_id)
+    await slack.click("Lee", ids.ACTION_FOR_START[Slot.DINNER], "dinner", home=True)  # run 2
+    assert ((await house.event(event_id)).state, (await house.event(event_id)).run) == (EventState.COLLECTING, 2)
+    slack.fake.clear()
+
+    await slack.submit("Alex", ids.CANCEL_VIEW, reason("old"), event_id, origin=old_cancel)
+    await slack.submit("Alex", ids.CLOSE_VIEW, {}, event_id, origin=old_close)
+    await slack.choose("Alex", cancel(event_id))
+    await slack.choose("Alex", close(event_id))
+    await slack.click("Alex", ids.CANCEL_CALL, cancel(event_id))
+    await slack.click("Alex", ids.CLOSE_WINDOW, closes(Window.RESPOND, event_id), home=True)
+    assert slack.ephemerals("Alex") == [STALE_CALL] * 5
+    assert STALE_CALL in json.dumps(slack.last_home("Alex"))
+    assert opened(slack) == []
+    event = await house.event(event_id)
+    assert (event.state, event.run, event.end_note) == (EventState.COLLECTING, 2, None)
+    await slack.choose("Alex", cancel(event_id, run=2))  # the new message's menu works
+    assert ids.ViewOrigin.decode(opened(slack)[-1]["private_metadata"]).run == 2
+
+
+async def test_an_old_modal_cant_touch_an_admin_rerun(slack: Slack, house: House) -> None:
+    """Run 1's message keeps its menu after an admin re-runs the call. A Start the vote now
+    confirmed on run 1 would match run 2's open window, so only the run tells them apart."""
+    event_id = await daily_call(house)
+    await to_voting(slack, event_id)
+    old_cancel = await opened_now(slack, "Alex", cancel(event_id))
+    async with house.sessionmaker() as db:
+        await call_admin.rerun(db, house["Alex"], event_id, now=house.clock())
+    assert ((await house.event(event_id)).state, (await house.event(event_id)).run) == (EventState.COLLECTING, 2)
+    stale_close = ids.ViewOrigin(event_id, CHANNEL, window=Window.RESPOND, run=1)
+    slack.fake.clear()
+    await slack.submit("Alex", ids.CANCEL_VIEW, reason(None), event_id, origin=old_cancel)
+    await slack.submit("Alex", ids.CLOSE_VIEW, {}, event_id, origin=stale_close)
+    await slack.choose("Alex", close(event_id))
+    assert slack.ephemerals("Alex") == [STALE_CALL] * 3
+    assert (await house.event(event_id)).state is EventState.COLLECTING
+    assert await house.audits("event.window_closed") == []
+
+
+async def test_a_decided_calls_call_it_off_button_opens_the_modal_in_the_channel(slack: Slack, house: House) -> None:
+    event_id = await daily_call(house)
+    await to_decided(slack, event_id)
+    slack.fake.clear()
+    await slack.click("Alex", ids.CANCEL_CALL, cancel(event_id))
+    (modal,) = opened(slack)
+    assert ids.ViewOrigin.decode(modal["private_metadata"]) == ids.ViewOrigin(event_id, CHANNEL, run=1)
+    await slack.click("Kim", ids.CANCEL_CALL, cancel(event_id))
+    assert slack.ephemerals("Kim") == [ONLY_SOME]
 
 
 # App Home ----------------------------------------------------------------------------------------
@@ -458,7 +588,7 @@ async def test_home_shows_call_it_off_and_close_now_only_to_who_can(slack: Slack
         e["action_id"]: e for b in slack.last_home("Sam")["blocks"] if b["type"] == "actions" for e in b["elements"]
     }
     assert buttons["cancel_call"]["style"] == "danger" and buttons["cancel_call"]["value"] == cancel(event_id)
-    assert buttons["close_window"]["value"] == ids.window_value(Window.RESPOND, event_id)
+    assert buttons["close_window"]["value"] == closes(Window.RESPOND, event_id)
     assert buttons["close_window"]["text"]["text"] == "Start the vote now"
     assert buttons["close_window"]["confirm"]["confirm"]["text"] == "Start the vote"
 
@@ -477,7 +607,7 @@ async def test_call_it_off_from_home_opens_the_modal_and_answers_on_home(slack: 
     await slack.click("Alex", ids.CANCEL_CALL, cancel(event_id), home=True)
     (modal,) = opened(slack)
     origin = ids.ViewOrigin.decode(modal["private_metadata"])
-    assert origin == ids.ViewOrigin(event_id, None, home=True)
+    assert origin == ids.ViewOrigin(event_id, None, home=True, run=1)
     await slack.submit("Alex", ids.CANCEL_VIEW, reason("Snow day"), event_id, origin=origin)
     assert (await house.event(event_id)).state is EventState.CANCELLED
     home = json.dumps(slack.last_home("Alex"), ensure_ascii=False)
@@ -496,12 +626,12 @@ async def test_home_buttons_refuse_values_of_the_wrong_kind(slack: Slack, house:
 
 async def test_close_now_from_home_is_confirmed_by_slack_and_checked_again(slack: Slack, house: House) -> None:
     event_id = await daily_call(house)
-    await slack.click("Kim", ids.CLOSE_WINDOW, ids.window_value(Window.RESPOND, event_id), home=True)
+    await slack.click("Kim", ids.CLOSE_WINDOW, closes(Window.RESPOND, event_id), home=True)
     assert NOT_CLOSER in json.dumps(slack.last_home("Kim"))
-    await slack.click("Alex", ids.CLOSE_WINDOW, ids.window_value(Window.VOTE, event_id), home=True)  # stale Home
-    assert MOVED_ON in json.dumps(slack.last_home("Alex"))
+    await slack.click("Alex", ids.CLOSE_WINDOW, closes(Window.VOTE, event_id), home=True)  # stale Home
+    assert WINDOW_MOVED in json.dumps(slack.last_home("Alex"))
     assert (await house.event(event_id)).state is EventState.COLLECTING
-    await slack.click("Alex", ids.CLOSE_WINDOW, ids.window_value(Window.RESPOND, event_id), home=True)
+    await slack.click("Alex", ids.CLOSE_WINDOW, closes(Window.RESPOND, event_id), home=True)
     assert (await house.event(event_id)).state is EventState.ABANDONED  # nobody was in
     assert CLOSED[Window.RESPOND].format(slot="dinner") in json.dumps(slack.last_home("Alex"))
 
@@ -509,7 +639,7 @@ async def test_close_now_from_home_is_confirmed_by_slack_and_checked_again(slack
 async def test_home_offers_to_start_a_called_off_slot_again(slack: Slack, house: House) -> None:
     event_id = await kims_call(slack)
     await slack.click("Kim", "respond_in", str(event_id))
-    await slack.submit("Kim", ids.CANCEL_VIEW, reason(None), event_id)
+    await call_off(slack, "Kim", reason(None), event_id)
     for who in ("Sam", "Lee"):  # any member, not only whoever called it off
         await slack.open_home(who)
         assert home_actions(slack, who) == ["link_event", "start_call_dinner", "start_call_lunch"]
@@ -523,7 +653,7 @@ async def test_home_offers_to_start_a_called_off_slot_again(slack: Slack, house:
 
 async def test_home_hides_start_again_once_its_too_late(slack: Slack, house: House) -> None:
     event_id = await daily_call(house)
-    await slack.submit("Alex", ids.CANCEL_VIEW, reason(None), event_id)
+    await call_off(slack, "Alex", reason(None), event_id)
     house.clock.now = DONE_AT  # the usual meal time plus two hours
     await slack.open_home("Sam")
     assert "start_call_dinner" not in home_actions(slack, "Sam")
@@ -633,15 +763,24 @@ async def test_every_call_off_handler_acks_before_its_work(
 
         return slow
 
-    for module, name in ((event_views, "event_view"), (event_views, "calls_on"), (calls, "cancel_call")):
+    held_calls = (
+        (event_views, "event_view"),
+        (event_views, "calls_on"),
+        (calls, "cancel_call"),
+        (calls, "close_window"),
+    )
+    for module, name in held_calls:
         monkeypatch.setattr(module, name, held(name, getattr(module, name)))
-    window = ids.ViewOrigin(event_id, CHANNEL, window=Window.RESPOND).encode()
+    window = ids.ViewOrigin(event_id, CHANNEL, window=Window.RESPOND, run=1).encode()
     requests = [
         ("interactive", block_action("U01ALEX", ids.CALL_MENU, None, selected=cancel(event_id))),
         ("interactive", block_action("U01ALEX", ids.CALL_MENU, None, selected=close(event_id))),
         ("interactive", block_action("U01ALEX", ids.CANCEL_CALL, cancel(event_id), home=True)),
-        ("interactive", block_action("U01ALEX", ids.CLOSE_WINDOW, ids.window_value(Window.RESPOND, event_id))),
-        ("interactive", view_submission("U01ALEX", ids.CANCEL_VIEW, reason("x"), ids.ViewOrigin(event_id).encode())),
+        ("interactive", block_action("U01ALEX", ids.CLOSE_WINDOW, closes(Window.RESPOND, event_id))),
+        (
+            "interactive",
+            view_submission("U01ALEX", ids.CANCEL_VIEW, reason("x"), ids.ViewOrigin(event_id, run=1).encode()),
+        ),
         ("interactive", view_submission("U01ALEX", ids.CLOSE_VIEW, {}, window)),
         ("slash_commands", slash("U01ALEX", "cancel dinner")),
     ]
@@ -651,15 +790,13 @@ async def test_every_call_off_handler_acks_before_its_work(
     for _ in range(20):
         await asyncio.sleep(0)
     assert len(slack.conn.interactions.tasks) == len(requests)  # all still waiting on the service
-    assert sorted(set(waited)) == ["calls_on", "cancel_call", "event_view"]
+    assert sorted(set(waited)) == ["calls_on", "cancel_call", "close_window", "event_view"]
     gate.set()
     await slack.conn.interactions.settle()
     assert slack.conn.interactions.tasks == set()
 
 
 def test_the_modals_explain_what_happens() -> None:
-    from dataclasses import replace
-
     from dinnerbell.channels.slack import preview as samples
     from dinnerbell.channels.slack.views import cancel_modal, close_modal
     from tests.support.blockkit import check_view
@@ -675,3 +812,15 @@ def test_the_modals_explain_what_happens() -> None:
     assert "*Taqueria &lt;Lupita&gt; &amp; Co*" in evil["blocks"][1]["text"]["text"]
     with pytest.raises(ValueError, match="needs the window"):
         close_modal(view, samples.ORIGIN)
+
+
+async def test_modal_metadata_must_name_a_run_exactly_where_it_should(slack: Slack, house: House) -> None:
+    """Call it off and Close now carry the run they were opened for; other modals never do."""
+    event_id = await daily_call(house)
+    no_run = ids.ViewOrigin(event_id, CHANNEL)
+    await slack.submit("Alex", ids.CANCEL_VIEW, reason(None), event_id, origin=no_run)
+    await slack.submit("Alex", ids.CLOSE_VIEW, {}, event_id, origin=ids.ViewOrigin(event_id, window=Window.RESPOND))
+    await slack.submit("Sam", ids.DETAILS_VIEW, state(note={"value": "x"}), event_id, origin=replace(no_run, run=1))
+    assert slack.fake.calls == []
+    assert (await house.event(event_id)).state is EventState.COLLECTING
+    assert (await house.context(event_id)).response_of(house["Sam"].id) is None

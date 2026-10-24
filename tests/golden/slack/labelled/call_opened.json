@@ -146,7 +146,7 @@
                 "text": "Call it off",
                 "type": "plain_text"
               },
-              "value": "cancel:7"
+              "value": "cancel:7:1"
             },
             {
               "text": {
@@ -154,7 +154,7 @@
                 "text": "Start the vote now",
                 "type": "plain_text"
               },
-              "value": "close:7"
+              "value": "close:7:1"
             }
           ],
           "type": "overflow"

@@ -377,9 +377,11 @@ def _event_card(v: EventView, links: HomeLinks) -> list[Block]:
     window = v.can.close_window
     if window is not None:
         sure = confirm(f"{CLOSE_LABELS[window]}?", CLOSE_EFFECT[window], CLOSE_SUBMIT[window])
-        buttons.append(button(CLOSE_LABELS[window], ids.CLOSE_WINDOW, ids.window_value(window, v.id), confirm=sure))
+        buttons.append(
+            button(CLOSE_LABELS[window], ids.CLOSE_WINDOW, ids.window_value(window, v.id, v.event.run), confirm=sure)
+        )
     if v.can.cancel:
-        cancel = ids.menu_value(ids.MenuChoice.CANCEL, v.id)
+        cancel = ids.menu_value(ids.MenuChoice.CANCEL, v.id, v.event.run)
         buttons.append(button(CALL_OFF, ids.CANCEL_CALL, cancel, style="danger"))
     buttons.append(button("Open", f"{ids.LINK_PREFIX}event", url=links.url(v.event.path)))
     return [section("\n".join(lines), block_id=f"event-{v.id}"), actions(*buttons, block_id=f"event-actions-{v.id}")]
