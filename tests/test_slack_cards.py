@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from typing import Any
 
 import pytest
@@ -203,23 +203,31 @@ async def test_two_quick_taps_land_in_order(slack: Slack, house: House) -> None:
     person ends up with shows their last answer."""
     event_id = await open_call(house)
     await slack.click("Kim", "respond_in", str(event_id))
-    card = slack.cards("Kim")[-1]
     value = ids.card_value(event_id, 1)
     slack.fake.clear()
     gate = slack.fake.gates["response_url"] = asyncio.Event()
+    locks = slack.conn.interactions.card_locks
+    key = ("U03KIM", event_id)
+
+    async def until(condition: Callable[[], bool]) -> None:
+        for _ in range(1000):  # up to 10 seconds on a slow runner
+            if condition():
+                return
+            await asyncio.sleep(0.01)
+        raise AssertionError("timed out")
+
     await send(slack.conn.app, "interactive", block_action("U03KIM", "card_maybe", value, ephemeral=True))
+    await until(lambda: bool(slack.fake.of("response_url")))  # the first holds the lock, waiting on Slack
     await send(slack.conn.app, "interactive", block_action("U03KIM", "card_out", value, ephemeral=True))
-    for _ in range(20):
-        await asyncio.sleep(0)
-    assert len(slack.fake.of("response_url")) == 1  # the first, waiting on Slack
+    await until(lambda: key in locks and locks[key].users == 2)  # the second waits for it
+    assert len(slack.fake.of("response_url")) == 1
     assert await response(house, event_id, "Kim") == (Status.MAYBE, frozenset())  # the second hasn't run
-    assert list(slack.conn.interactions.card_locks) == [("U03KIM", event_id)]
+    assert list(locks) == [key]
     gate.set()
     await slack.conn.interactions.settle()
     assert [selected(r.args) for r in slack.fake.of("response_url")] == [["✓ Maybe"], ["✓ Out"]]
     assert await response(house, event_id, "Kim") == (Status.OUT, frozenset())
     assert slack.conn.interactions.card_locks == {}  # dropped once nobody holds it
-    assert card is not None
 
 
 async def test_send_card_replaces_only_an_ephemeral_in_the_channel(slack: Slack, house: House) -> None:
