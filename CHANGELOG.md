@@ -6,6 +6,8 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-24
+
 ### Added
 
 - A logo: Dinnerbone, the family's hamster. It shows in the web header, as the browser tab icon, and as the icon of a Home Screen bookmark on iPhone. To use it in Slack, upload `deploy/slack-app-icon-1024.png` in the Slack app's **Basic Information** settings (see [docs/setup.md](docs/setup.md#2-create-the-slack-app)). `scripts/render-logo.sh` regenerates the PNG icons from the SVGs.
@@ -21,7 +23,7 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
   - A call that was never posted, such as one scheduled for a later day, posts nothing. Its starter gets a direct message if someone else called it off.
 - Responses close on their own once every active member has answered and nobody is a maybe. If everyone is out, the call ends on-your-own at the next scheduler tick. Otherwise it waits until no response has changed for 10 minutes, so you can add guests, an eat window, or an offer after tapping **In**; with two or more eating, someone must also be able to cook, pick up, or order. Voting then gets its usual length. Answers kept from before a re-run or restart don't count.
 - Starting a call for a slot and day that was called off starts it again, for any member, as long as it isn't past the usual meal time plus two hours. It starts with no coordinator.
-- On the web, a call's card on Today and on its own page shows **Call it off** to whoever may call it off, and the coordinator and admins get **Start the vote now** while responses are open and **Decide now** while voting. **Call it off** opens a small form with an optional reason and asks you to confirm. A called-off call reads "Called off by {name}" with the reason, and anyone can select **Start dinner again** (or lunch) until the usual meal time plus two hours. Every post is checked again on the server, and a refusal shows on the card in plain words. A card left open while someone called the call off and started it again can't act on the new run; it asks you to reload.
+- On the web, a call's card on Today and on its own page shows **Call it off** to whoever may call it off, and the coordinator and admins get **Start the vote now** while responses are open and **Decide now** while voting. **Call it off** opens a small form with an optional reason and asks you to confirm. A called-off call reads "Called off by {name}" with the reason, and anyone can select **Start dinner again** (or lunch) until the usual meal time plus two hours. Every post is checked again on the server, and a refusal shows on the card in plain words. **Start the vote now** and **Decide now** change nothing if the call has moved on, or if someone else closed the window first, and a card left open while someone called the call off and started it again can't act on the new run; either way, the card asks you to reload.
 - Admins can skip one day's call, today or up to 7 days ahead, before it goes out, from **Skip a day** on Admin > Schedule. It offers only meals that have a daily call, and refuses a meal that's off in the schedule. Nothing is posted, the skip is audited, and anyone can still start that call on the day.
 - Call it off and Close now in Slack (FR-56):
   - While a window is open, the call message has a ⋯ menu with **Call it off** and **Start the vote now** or **Decide now**. Once decided, the call and decision messages have a **Call it off** button. Anyone who isn't allowed gets a private reply saying who can.
@@ -36,7 +38,6 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ### Fixed
 
-- On the web, two people confirming **Start the vote now** at once, or a web confirmation racing one from Slack, could close responses and then the vote, skipping it. The Close now form now says which window it closes, and a confirmation for a window that's no longer open, or already closed, changes nothing and asks you to reload. **Call it off**, Close now, and **Start {slot} again** now require the run (and Close now the window) that the card writes; a post without them gets a 400 and the same reload message.
 - The Invite someone form on Admin > Members now defaults to Member. It used to preselect Admin, so inviting someone without changing the role made them an admin.
 - A `DINNERBELL_DATABASE_URL` that isn't a URL, or has a malformed port, is reported as a configuration error, without quoting the URL, instead of stopping startup with a traceback.
 
@@ -91,6 +92,7 @@ The source-built version, never published as an image. It covers milestones M0 t
 - **M1:** the catalog with file import, preferences and vetoes, meal history, and the members admin page.
 - **M2:** dinner calls in Slack: the scheduled call, reminders, ranked proposals and votes, the decision, assignments, the abandon path, admin overrides, App Home, and `/dinnerbell call`.
 
-[Unreleased]: https://github.com/dsmorgan/dinnerbell/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/dsmorgan/dinnerbell/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/dsmorgan/dinnerbell/releases/tag/v0.3.0
 [0.2.0]: https://github.com/dsmorgan/dinnerbell/releases/tag/v0.2.0
 [0.1.0]: https://github.com/dsmorgan/dinnerbell/tree/c179898
