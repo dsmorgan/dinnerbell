@@ -309,6 +309,7 @@ CARDS: dict[str, CardSample] = {
     "your_answer_started_again": _card(replace(event(), run=2), KIM_IN, run=1),
     "response_reminder_answered": _reminder(event(), replace(KIM_IN, status=Status.MAYBE), run=1),
     "response_reminder_moved_on": _reminder(VOTING, KIM_IN, run=1),
+    "response_reminder_started_again": _reminder(replace(event(), run=2), KIM_IN, run=1),
 }
 """Messages that answer a tap rather than a notification. They mention nobody."""
 

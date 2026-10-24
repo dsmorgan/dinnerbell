@@ -32,7 +32,7 @@ OTHER_TEAM = "T0EVIL"
 BOT_USER = "U0BOT"
 CHANNEL = "C0DINNER"
 BOT_TOKEN = "xoxb-0000000000-fake-bot-token-do-not-log"
-RESPONSE_URL = "https://hooks.slack.com/actions/T0HOUSE/1/fake-response-url-do-not-log"
+RESPONSE_URL = "https://hooks.slack.com/actions/T0HOUSE/1/FakeResponseUrlDoNotLog"
 APP_TOKEN = "xapp-1-A000-fake-app-token-do-not-log"
 
 
@@ -62,6 +62,8 @@ class FakeSlack(AsyncWebClient):
         self.channel: dict[str, Any] = {"id": CHANNEL, "is_member": True, "is_archived": False}
         self.channel_members: list[str] = [BOT_USER]
         """``conversations.members``' answer, paged by the request's ``limit``."""
+        self.gates: dict[str, asyncio.Event] = {}
+        """Calls to a method named here wait until its event is set: to hold one call mid-flight."""
         self._ts = itertools.count(1)
         self._ephemeral_ts = itertools.count(1)
 
@@ -165,6 +167,9 @@ class FakeWebhook(AsyncWebhookClient):
 
     async def _perform_http_request(self, *, body: dict[str, Any], headers: dict[str, str]) -> WebhookResponse:
         self.fake.calls.append(Call("response_url", {"url": self.url, **body}))
+        gate = self.fake.gates.pop("response_url", None)
+        if gate is not None:
+            await gate.wait()
         await asyncio.sleep(0)
         queued = self.fake.failures.get("response_url")
         if queued:

@@ -20,6 +20,9 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 ### Fixed
 
 - **Start the vote now** and **Decide now** no longer show once the window's deadline has passed. Until the scheduler's next tick moved the call on, up to 30 seconds later, the web card and App Home still offered them, and selecting one only said the call had moved on.
+- In Slack, picking **Start the vote now** or **Decide now** from the call's ⋯ menu after the deadline says the call has moved on right away, instead of opening a confirmation that could only fail.
+- Tapping **I'll coordinate** again when you already coordinate no longer says someone else is coordinating.
+- Details saved in Slack after the call was called off and started again no longer change the new call.
 
 ### Upgrade notes
 

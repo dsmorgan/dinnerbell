@@ -71,6 +71,8 @@ SELECTED = "✓ "
 """Marks a selected button's text as well as its color, for color-blind people and for Slack
 themes where primary isn't green."""
 MOVED_ON = "This call moved on."
+STARTED_AGAIN = "It started again, so answer on the newest call message."
+"""Why a card or reminder for an earlier run can't act: answers belong to the new one."""
 
 CLOSE_LABELS = {Window.RESPOND: "Start the vote now", Window.VOTE: "Decide now"}
 """Close now, named for what it does to the open window (FR-56)."""
@@ -465,7 +467,8 @@ def reminder_message(
     closes = local_clock(event.respond_deadline, event.timezone)
     when = f"{_slot(event)} on {day_label(event.day)}"
     if _moved_on(event, run):
-        text = f"*{MOVED_ON}* {escape(_call_status(event))}"
+        why = STARTED_AGAIN if run != event.run else escape(_call_status(event))
+        text = f"*{MOVED_ON}* {why}"
         blocks = [section(text), actions(_web_button(ctx, event), block_id="more")]
         return _finish(f"The {_slot(event)} call for {day_label(event.day)} moved on.", blocks)
     if mine is None:
@@ -533,6 +536,17 @@ def _mine_lines(event: note.EventInfo, mine: Response | None, member_id: int) ->
     return lines
 
 
+def your_answer_text(event: note.EventInfo, mine: Response | None, *, run: int | None = None) -> str:
+    """The card's words as plain text, unescaped: its notification and screen-reader fallback,
+    and the line sent instead when a card or reminder can't be shown."""
+    if run is not None and run != event.run:
+        return f"{_title(event)}: {MOVED_ON}"
+    summary = ANSWER_WORDS[mine.status] if mine is not None else "no answer yet"
+    if mine is not None and mine.offers:
+        summary += ", can " + " or ".join(OFFER_WORDS[o] for o in _offers(mine))
+    return f"{_title(event)}: your answer is {summary}"
+
+
 def your_answer(
     event: note.EventInfo,
     mine: Response | None,
@@ -548,14 +562,13 @@ def your_answer(
     replaces it, so ``run`` is the run the tapped card named, or None after a channel tap.
     ``notice`` is why a tap changed nothing, such as someone else coordinating already."""
     title = f"*{_title(event)}*"
-    plain_title = _title(event)
     if run is not None and run != event.run:
         # Another run's answers aren't what this card was about; don't mix them in.
         gone = [
-            section(f"{title}\n*{MOVED_ON}* It started again, so answer on the newest call message."),
+            section(f"{title}\n*{MOVED_ON}* {STARTED_AGAIN}"),
             actions(_web_button(ctx, event), block_id="more"),
         ]
-        return labelled(_finish(f"{plain_title}: {MOVED_ON}", gone), ctx)
+        return labelled(_finish(your_answer_text(event, mine, run=run), gone), ctx)
     lines = [title]
     live = not _moved_on(event, run) and event.state is EventState.COLLECTING
     if not live:
@@ -565,10 +578,7 @@ def your_answer(
     blocks: list[Block] = [section(join_lines(lines))]
     if notice:
         blocks.append(context(escape(notice)))
-    summary = f"{ANSWER_WORDS[mine.status]}" if mine is not None else "no answer yet"
-    if mine is not None and mine.offers:
-        summary += ", can " + " or ".join(OFFER_WORDS[o] for o in _offers(mine))
-    text = f"{plain_title}: your answer is {summary}"
+    text = your_answer_text(event, mine, run=run)
     if not live:
         blocks.append(actions(_web_button(ctx, event), block_id="more"))
         return labelled(_finish(text, blocks), ctx)

@@ -155,7 +155,7 @@ async def test_details_opens_a_prefilled_modal(slack: Slack, house: House) -> No
     view = call.args["view"]
     assert call.args["trigger_id"] == "1234.5678.trigger"
     assert view["callback_id"] == ids.DETAILS_VIEW
-    assert ids.ViewOrigin.decode(view["private_metadata"]) == ids.ViewOrigin(event_id, "C0DINNER")
+    assert ids.ViewOrigin.decode(view["private_metadata"]) == ids.ViewOrigin(event_id, "C0DINNER", run=1)
     assert [b.get("block_id") for b in view["blocks"][1:]] == [
         "guests",
         "eat_from",

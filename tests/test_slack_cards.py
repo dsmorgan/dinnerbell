@@ -9,6 +9,7 @@ and one for a call that has moved on says so instead of acting."""
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator
@@ -18,8 +19,9 @@ import pytest
 
 from dinnerbell.channels.slack import ids
 from dinnerbell.channels.slack.api import WEBHOOK_LOG, SlackApi, SlackUnavailable
-from dinnerbell.channels.slack.interactions import OUT_OF_DATE
-from dinnerbell.channels.slack.messages import MOVED_ON
+from dinnerbell.channels.slack.blocks import section
+from dinnerbell.channels.slack.interactions import OUT_OF_DATE, Source, Tap
+from dinnerbell.channels.slack.messages import MOVED_ON, Message
 from dinnerbell.config import Settings
 from dinnerbell.domain.events import EventState, RoleOffer, Status
 from dinnerbell.domain.meals import Slot
@@ -28,7 +30,7 @@ from dinnerbell.services import calls
 from dinnerbell.services.database import Database, open_database
 from tests.support.calls import OPENS, REMIND, RESPOND_BY, House, dinner_id, furnish, make_house
 from tests.support.clock import FakeClock
-from tests.support.fake_slack import BOT_TOKEN, CHANNEL, RESPONSE_URL, Failure, FakeSlack, state
+from tests.support.fake_slack import BOT_TOKEN, CHANNEL, RESPONSE_URL, Failure, FakeSlack, block_action, send, state
 from tests.support.slack import Slack, wire
 
 pytestmark = pytest.mark.anyio
@@ -185,6 +187,57 @@ async def test_coordinating_from_the_card(slack: Slack, house: House) -> None:
     assert slack.ephemerals("Sam") == [slack.cards("Sam")[0]["text"]]
 
 
+async def test_a_second_coordinate_tap_from_the_coordinator_changes_nothing(slack: Slack, house: House) -> None:
+    event_id = await open_call(house)
+    await slack.click("Kim", "respond_in", str(event_id))
+    card = slack.cards("Kim")[-1]
+    await slack.tap_card("Kim", "card_coordinate", card)
+    await slack.tap_card("Kim", "card_coordinate", card)  # the double tap, on the card as it was
+    last = slack.cards("Kim")[-1]
+    assert "You're coordinating." in text_of(last) and "already coordinating" not in text_of(last)
+    assert len(await house.audits("event.coordinator_claimed")) == 1
+
+
+async def test_two_quick_taps_land_in_order(slack: Slack, house: House) -> None:
+    """The first tap's replace is held up in Slack; the second waits for it, so the card the
+    person ends up with shows their last answer."""
+    event_id = await open_call(house)
+    await slack.click("Kim", "respond_in", str(event_id))
+    card = slack.cards("Kim")[-1]
+    value = ids.card_value(event_id, 1)
+    slack.fake.clear()
+    gate = slack.fake.gates["response_url"] = asyncio.Event()
+    await send(slack.conn.app, "interactive", block_action("U03KIM", "card_maybe", value, ephemeral=True))
+    await send(slack.conn.app, "interactive", block_action("U03KIM", "card_out", value, ephemeral=True))
+    for _ in range(20):
+        await asyncio.sleep(0)
+    assert len(slack.fake.of("response_url")) == 1  # the first, waiting on Slack
+    assert await response(house, event_id, "Kim") == (Status.MAYBE, frozenset())  # the second hasn't run
+    assert list(slack.conn.interactions.card_locks) == [("U03KIM", event_id)]
+    gate.set()
+    await slack.conn.interactions.settle()
+    assert [selected(r.args) for r in slack.fake.of("response_url")] == [["✓ Maybe"], ["✓ Out"]]
+    assert await response(house, event_id, "Kim") == (Status.OUT, frozenset())
+    assert slack.conn.interactions.card_locks == {}  # dropped once nobody holds it
+    assert card is not None
+
+
+async def test_send_card_replaces_only_an_ephemeral_in_the_channel(slack: Slack, house: House) -> None:
+    """``_send_card``'s own guards, apart from ``_card_tap``'s: never through the response_url
+    of a message everyone sees, or one outside the household channel."""
+    card = Message("Your answer", [section("Your answer")])
+    send_card = slack.conn.interactions._send_card
+    kim = house["Kim"]
+    shared = Tap(message_ts="1.000100", ephemeral=False, response_url=RESPONSE_URL)
+    await send_card(Source("U03KIM", channel_id=CHANNEL), card, kim, shared)
+    elsewhere = Tap(message_ts="1.000100", ephemeral=True, response_url=RESPONSE_URL)
+    await send_card(Source("U03KIM", channel_id="C0ELSEWHERE"), card, kim, elsewhere)
+    await send_card(Source("U03KIM", channel_id=CHANNEL, home=True), card, kim, elsewhere)
+    assert slack.fake.of("response_url") == []
+    await send_card(Source("U03KIM", channel_id=CHANNEL), card, kim, elsewhere)
+    assert len(slack.fake.of("response_url")) == 1
+
+
 async def test_a_card_slack_wont_replace_gives_way_to_a_new_one(slack: Slack, house: House) -> None:
     """Slack allows a response_url 5 uses within 30 minutes; after that, post a fresh card."""
     event_id = await open_call(house)
@@ -335,6 +388,21 @@ async def test_details_from_the_card_name_the_run(slack: Slack, house: House) ->
     assert slack.ephemerals("Kim") == ["That can't happen anymore."]
 
 
+async def test_details_from_the_call_message_cant_save_into_a_restarted_call(slack: Slack, house: House) -> None:
+    event_id = await open_call(house)
+    await slack.click("Kim", "details", str(event_id))
+    origin = ids.ViewOrigin.decode(slack.fake.of("views.open")[-1].args["view"]["private_metadata"])
+    assert origin.run == 1
+    async with house.sessionmaker() as db:
+        await calls.cancel_call(db, house["Alex"], event_id, now=house.clock())
+    await slack.click("Lee", ids.ACTION_FOR_START[Slot.DINNER], "dinner", home=True)
+    assert (await house.event(event_id)).run == 2
+    slack.fake.clear()
+    await slack.submit("Kim", ids.DETAILS_VIEW, state(guests={"value": "2"}), event_id, origin=origin)
+    assert (await house.context(event_id)).response_of(house["Kim"].id) is None
+    assert slack.ephemerals("Kim") == ["That can't happen anymore."]
+
+
 # The reminder -------------------------------------------------------------------------------------
 
 
@@ -464,6 +532,15 @@ def test_the_webhook_logger_never_logs_request_urls() -> None:
         ("https://hooks.slack.com:/actions/T0HOUSE/1/abc", False),
         ("https://[::1/actions/x", False),
         ("https://hooks.slack.com/actions/é", False),
+        ("https://hooks.slack.com/actions/T0HOUSE/1/abc\n", False),
+        ("https://hooks\t.slack.com/actions/T0HOUSE/1/abc", False),
+        ("https://hooks.slack.com\t/actions/T0HOUSE/1/abc", False),
+        ("https://hooks.slack.com/actions/../commands/T0HOUSE/1/abc", False),
+        ("https://hooks.slack.com/actions/T0HOUSE/../1/abc", False),
+        ("\x00https://hooks.slack.com/actions/T0HOUSE/1/abc", False),
+        (" https://hooks.slack.com/actions/T0HOUSE/1/abc", False),
+        ("https://hooks.slack.com/actions/T0HOUSE/1/abc/extra", False),
+        ("https://hooks.slack.com/actions/T0HOUSE/x/abc", False),
         (42, False),
     ],
 )

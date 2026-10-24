@@ -826,3 +826,16 @@ async def test_modal_metadata_must_name_a_run_exactly_where_it_should(slack: Sla
     assert slack.fake.calls == []
     assert (await house.event(event_id)).state is EventState.COLLECTING
     assert (await house.context(event_id)).response_of(house["Sam"].id) is None
+
+
+async def test_close_now_from_the_menu_after_the_deadline_opens_nothing(slack: Slack, house: House) -> None:
+    """At the deadline the call is advancing, even before the scheduler's next tick moves it
+    on, so the ⋯ menu's Close now refuses at once instead of opening a confirmation."""
+    event_id = await daily_call(house)
+    house.clock.now = RESPOND_BY  # the deadline, before any tick
+    assert (await house.event(event_id)).state is EventState.COLLECTING
+    await slack.choose("Alex", close(event_id))
+    assert opened(slack) == []
+    assert slack.ephemerals("Alex") == [WINDOW_MOVED]
+    await slack.choose("Alex", cancel(event_id))  # Call it off still opens
+    assert [v["callback_id"] for v in opened(slack)] == [ids.CANCEL_VIEW]

@@ -24,9 +24,10 @@ Nothing about cards is stored; each is drawn from the person's response.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import re
-from collections.abc import Awaitable, Callable, Coroutine
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
 from dataclasses import dataclass, replace
 from datetime import date, timedelta
 from typing import Any
@@ -46,7 +47,14 @@ from dinnerbell.channels.slack.blocks import (
     version_link,
     with_version_footer,
 )
-from dinnerbell.channels.slack.messages import Message, RenderContext, labelled, reminder_message, your_answer
+from dinnerbell.channels.slack.messages import (
+    Message,
+    RenderContext,
+    labelled,
+    reminder_message,
+    your_answer,
+    your_answer_text,
+)
 from dinnerbell.channels.slack.views import (
     FormError,
     HomeLinks,
@@ -70,6 +78,7 @@ from dinnerbell.domain.events import (
     check_can_cancel,
     check_can_close_window,
     check_can_respond,
+    check_expected_window,
     check_run,
     friendly,
 )
@@ -140,6 +149,15 @@ class Tap:
     response_url: str | None = None
 
 
+@dataclass(slots=True)
+class _CardLock:
+    """One person's card and reminder work on one call, one tap at a time. ``users`` counts the
+    taps holding or waiting for it; the last one out drops it."""
+
+    lock: asyncio.Lock
+    users: int = 0
+
+
 class Interactions:
     def __init__(
         self,
@@ -171,6 +189,8 @@ class Interactions:
         self.tasks: set[asyncio.Task[None]] = set()
         self.dm_channels: dict[str, str] = {}
         """Slack user ID to the bot's DM with them, as conversations.open reported it."""
+        self.card_locks: dict[tuple[str, int], _CardLock] = {}
+        """Per (Slack user, event), while a tap holds or waits for it; see ``_card_lock``."""
 
     # Wiring ------------------------------------------------------------------------------------
 
@@ -455,11 +475,32 @@ class Interactions:
     def _card(self, view: EventView, member: Member, *, run: int | None = None, notice: str | None = None) -> Message:
         return your_answer(view.info, view.mine, member.id, self._context(), run=run, notice=notice)
 
+    @contextlib.asynccontextmanager
+    async def _card_lock(self, user: str, event_id: int) -> AsyncIterator[None]:
+        """Run one tap's card or reminder work at a time per person and call, from reading their
+        response through replacing or posting the card. Otherwise two quick taps could each read
+        their own state and land in the other order, leaving the older one on screen. Locks
+        exist only while a tap holds or waits for one, so there are at most as many as taps in
+        flight."""
+        key = (user, event_id)
+        entry = self.card_locks.get(key)
+        if entry is None:
+            entry = self.card_locks[key] = _CardLock(asyncio.Lock())
+        entry.users += 1
+        try:
+            async with entry.lock:
+                yield
+        finally:
+            entry.users -= 1
+            if entry.users == 0:
+                del self.card_locks[key]
+
     async def _post_card(self, db: AsyncSession, member: Member, source: Source, event_id: int) -> None:
         """After a tap on the call message: a new card. Never through the tap's response_url,
         which belongs to the call message everyone sees."""
-        view = await event_views.event_view(db, member, event_id, now=self.clock())
-        await self._send_card(source, self._card(view, member), member)
+        async with self._card_lock(source.user_id, event_id):
+            view = await event_views.event_view(db, member, event_id, now=self.clock())
+            await self._send_card(source, self._card(view, member), member)
 
     async def _send_card(self, source: Source, card: Message, member: Member, tap: Tap | None = None) -> None:
         """Replace the card ``tap`` was on, or post a new one when there's no card to replace,
@@ -493,6 +534,21 @@ class Interactions:
         in_dm = source.channel_id is not None and not self._on_call_message(source)
         if source.home or (not in_dm and not tap.ephemeral):
             raise ids.BadValue("card buttons are drawn only on cards and reminders")
+        async with self._card_lock(source.user_id, event_id):
+            return await self._card_tap_locked(member, source, action_id, event_id, run, trigger, tap, in_dm=in_dm)
+
+    async def _card_tap_locked(
+        self,
+        member: Member,
+        source: Source,
+        action_id: str,
+        event_id: int,
+        run: int,
+        trigger: object,
+        tap: Tap,
+        *,
+        in_dm: bool,
+    ) -> str | None:
         notice: str | None = None
         async with self.sessionmaker() as db:
             try:
@@ -550,7 +606,7 @@ class Interactions:
                 return notice
             except SLACK_ERRORS as exc:
                 log.warning("slack reminder not updated", extra={"error": str(exc), "member_id": member.id})
-        return notice or self._card(view, member, run=run).text
+        return notice or your_answer_text(view.info, view.mine, run=run)  # tell() escapes it
 
     async def _open_modal(
         self, db: AsyncSession, member: Member, source: Source, action_id: str, event_id: int, trigger: object
@@ -562,7 +618,8 @@ class Interactions:
         if action_id == ids.DETAILS:
             if not view.can.respond:
                 return "Responses are closed for this call."
-            await self.api.open_view(trigger, details_modal(view, origin))
+            # Named for the run it was drawn for, so a save after a restart changes nothing.
+            await self.api.open_view(trigger, details_modal(view, replace(origin, run=view.event.run)))
         else:
             if not view.can.propose:
                 return "You can add proposals only while voting is open."
@@ -588,6 +645,8 @@ class Interactions:
             await self.api.open_view(trigger, cancel_modal(view, origin))
         else:
             window = check_can_close_window(view.event, member)
+            # Past the window's deadline the call is advancing, so there's nothing to confirm.
+            check_expected_window(view.event, window, window, now=self.clock())
             await self.api.open_view(trigger, close_modal(view, replace(origin, window=window)))
         return None
 

@@ -12,7 +12,6 @@ import json
 import re
 from dataclasses import dataclass
 from enum import StrEnum
-from urllib.parse import urlsplit
 
 from dinnerbell.domain.events import RoleOffer, Status, Window
 from dinnerbell.domain.meals import Slot
@@ -74,7 +73,7 @@ _WINDOW = re.compile(r"(respond|vote):([1-9][0-9]{0,18}):([1-9][0-9]{0,18})")
 _CARD = re.compile(r"([1-9][0-9]{0,18}):([1-9][0-9]{0,18})")
 _CHANNEL = re.compile(r"^[CDG][A-Z0-9]{2,31}$")
 _MESSAGE_TS = re.compile(r"[0-9]{1,12}\.[0-9]{1,8}")
-RESPONSE_URL_HOSTS = frozenset({"hooks.slack.com", "hooks.slack-gov.com"})
+_RESPONSE_URL = re.compile(r"https://hooks\.slack(-gov)?\.com/actions/[A-Za-z0-9]+/[0-9]+/[A-Za-z0-9]+")
 MAX_RESPONSE_URL = 500
 MAX_METADATA = 3000
 
@@ -162,21 +161,14 @@ def message_ts(value: object) -> str | None:
 
 
 def response_url(value: object) -> str | None:
-    """An interaction's ``response_url``, or None unless it's an https URL on Slack's hooks
-    host. It's a bearer capability for the message tapped: never log it, and never send it
+    """An interaction's ``response_url``, or None unless the whole string is the shape Slack
+    sends: ``https://hooks.slack.com/actions/<team>/<number>/<token>`` (or ``hooks.slack-gov.com``).
+    Matching the whole string, rather than parsing it, means the string checked is the string
+    sent. It's a bearer capability for the message tapped: never log it, and never send it
     anywhere but back to Slack."""
-    if not isinstance(value, str) or len(value) > MAX_RESPONSE_URL or not value.isascii():
+    if not isinstance(value, str) or len(value) > MAX_RESPONSE_URL:
         return None
-    try:
-        parts = urlsplit(value)
-        port = parts.port
-    except ValueError:
-        return None
-    if parts.scheme != "https" or parts.hostname not in RESPONSE_URL_HOSTS or parts.netloc != parts.hostname:
-        return None
-    if port is not None or parts.query or parts.fragment or not parts.path.startswith("/actions/"):
-        return None
-    return value
+    return value if _RESPONSE_URL.fullmatch(value) else None
 
 
 def parse_slot(value: object) -> Slot:

@@ -228,9 +228,12 @@ async def _roster_changed(db: AsyncSession, event: Event, now: datetime) -> None
 async def claim_coordinator(
     db: AsyncSession, actor: Member, event_id: int, *, run: int | None = None, now: datetime
 ) -> None:
-    """The first member to claim coordinating gets it."""
+    """The first member to claim coordinating gets it. Claiming it again, as from a double tap
+    or a retried Slack delivery, changes nothing and isn't an error."""
     async with locked_event(db, actor.household_id, event_id, now) as event:
         check_run(event, run)
+        if actor.active and is_coordinator(event, actor):
+            return
         check_claim_coordinator(event, actor)
         await set_coordinator(db, event, actor.id, now=now)
         await audit(db, actor.household_id, actor, "event.coordinator_claimed", _target(event), {}, now)
