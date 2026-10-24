@@ -208,9 +208,9 @@ def test_admin_overrides_from_the_page(admin: TestClient, clock: FakeClock, migr
     assert rows(migrated, EventRow)[0].coordinator_id is not None
     submit(admin, f"/events/{event_id}/admin/coordinator", {"member_id": ""})
     assert rows(migrated, EventRow)[0].coordinator_id is None
-    cancelled = htmx(admin, f"/events/{event_id}/admin/cancel", {})
-    assert cancelled.status_code == 200 and "Cancelled by an admin." in cancelled.text and "Re-run" in cancelled.text
-    again = htmx(admin, f"/events/{event_id}/admin/cancel", {})
+    cancelled = htmx(admin, f"/events/{event_id}/cancel", {})
+    assert cancelled.status_code == 200 and "Called off by admin." in cancelled.text
+    again = htmx(admin, f"/events/{event_id}/cancel", {})
     assert again.status_code == 409 and "This call already finished." in again.text  # shown, not a 500
     rerun = htmx(admin, f"/events/{event_id}/admin/rerun", {})
     assert rerun.status_code == 200 and rows(migrated, EventRow)[0].run == 2
@@ -229,11 +229,10 @@ def test_members_cannot_use_admin_overrides(admin: TestClient, provider: FakePro
     event_id = start(admin)
     sign_in_as(admin, provider, "sam@example.com")
     html = admin.get(f"/events/{event_id}").text
-    assert "+15 min" not in html and "Cancel this call" not in html and "/admin/" not in html
+    assert "+15 min" not in html and "/admin/" not in html
     before = len(rows(migrated, AuditRow))
     for path, data in [
         ("deadline", {"window": "respond", "shift": "close"}),
-        ("cancel", {}),
         ("rerun", {}),
         ("coordinator", {"member_id": ""}),
     ]:
@@ -338,7 +337,7 @@ def voting(admin: TestClient, clock: FakeClock, migrated: Settings) -> Settings:
 
 
 def test_every_m2_post_route_is_enumerated(client: TestClient) -> None:
-    assert len(m2_posts(client)) == 18
+    assert len(m2_posts(client)) == 21
 
 
 def test_every_admin_override_checks_for_an_admin_in_the_web_layer(client: TestClient) -> None:
@@ -347,10 +346,10 @@ def test_every_admin_override_checks_for_an_admin_in_the_web_layer(client: TestC
     admin_paths = [r for r in audit_routes(client.app.routes)[0] if "/admin/" in r.path or r.path.startswith("/admin")]  # type: ignore[attr-defined]
     assert {r.path for r in admin_paths} >= {
         "/events/{event_id}/admin/deadline",
-        "/events/{event_id}/admin/cancel",
         "/events/{event_id}/admin/rerun",
         "/events/{event_id}/admin/coordinator",
         "/admin/schedule",
+        "/admin/schedule/skip",
     }
     for route in admin_paths:
         if "POST" in route.methods:

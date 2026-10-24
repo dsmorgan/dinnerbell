@@ -128,7 +128,7 @@ Anyone can record what the household ate when there was no call or offer, with `
 
 ### 5.7 Admin override
 
-The admin can, from Slack or the web app: assign or replace the coordinator, extend or shorten a window, lock a decision, re-run a call, skip a later day's call, and correct an assignment after the fact.
+The admin can, from Slack or the web app: assign or replace the coordinator, extend or shorten a window, lock a decision, re-run a call, skip a day's call before it goes out (today or up to 7 days ahead), and correct an assignment after the fact.
 
 Calling a call off and closing a window now aren't admin-only (FR-56). The coordinator can do both, and whoever started an ad-hoc call can call it off until it's decided. Any member who's in can become coordinator with **I'll coordinate**, so nobody has to wait for an admin.
 
@@ -395,12 +395,12 @@ Mobile-first server-rendered pages with HTMX for in-place updates. No JavaScript
 
 | Page | Content |
 |---|---|
-| Today | Open events with roster, proposals, votes, and the same actions Slack offers. Start a call or post an offer. |
+| Today | Open events with roster, proposals, votes, and the same actions Slack offers, including **Call it off** and **Close now** for whoever FR-56 allows. A called-off call shows who called it off and why, and **Start {slot} again**. Start a call or post an offer. |
 | Catalog | Search and filter items by tag, kind, mode. Add and edit items. See last eaten and feedback counts. Tag management: any member adds tags; the admin renames and merges them. Import a catalog file with a preview (FR-26). |
 | Preferences | Tags and items with veto and −2 to +2 controls. Capability flags. Mute reminders. Feedback reminder on or off. Calendar URL (later phase). |
 | History | Meals by week. Cuisines in the current variety window. Give or edit feedback on recent meals. |
 | Stats | Contribution counts, badges with progress to the next tier, household recap. |
-| Admin | Members and invitations, Slack mapping, slot schedules, time zone, ranking weights, badge thresholds, backup status. |
+| Admin | Members and invitations, Slack mapping, slot schedules, skipping a day's call (FR-6), time zone, ranking weights, badge thresholds, backup status. |
 
 ## 12. Metrics and badges
 

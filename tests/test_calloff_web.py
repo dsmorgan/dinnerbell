@@ -1,0 +1,370 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+"""Call it off, Close now, Start again, and Skip a day on the web (FR-6, FR-56): who sees each
+control in which state, that the server checks again on every post, and what the page shows
+after a call-off."""
+
+from __future__ import annotations
+
+import re
+from datetime import timedelta
+
+import pytest
+from fastapi.testclient import TestClient
+
+from dinnerbell.config import Settings
+from dinnerbell.db.models import AuditRow, EventRow
+from tests.conftest import csrf_from, invite, page, sign_in
+from tests.support.clock import FakeClock
+from tests.support.fake_oidc import FakeProvider
+from tests.support.households import other_call, other_household
+from tests.support.web import add_item, htmx, submit
+from tests.test_auth_flow import member, rows
+from tests.test_events_web import proposal_ids, sign_in_as, tick
+
+People = dict[str, str]
+"""Role name to the email that plays it."""
+
+CREW: People = {
+    "starter": "sam@example.com",
+    "coordinator": "pat@example.com",
+    "other": "riley@example.com",
+}
+STATES = ("collecting", "voting", "decided")
+
+
+def as_admin(client: TestClient, provider: FakeProvider) -> None:
+    client.cookies.clear()
+    assert sign_in(client, provider).status_code == 303
+
+
+def act_as(client: TestClient, provider: FakeProvider, role: str) -> None:
+    if role == "admin":
+        as_admin(client, provider)
+    else:
+        sign_in_as(client, provider, CREW[role])
+
+
+@pytest.fixture
+def house(client: TestClient, provider: FakeProvider) -> TestClient:
+    """An admin, Sam (who starts the call), Pat (who coordinates), and Riley (who doesn't)."""
+    sign_in(client, provider)
+    add_item(client, "Siam Garden", cuisines="Thai")
+    add_item(client, "Taqueria", cuisines="Mexican")
+    for name, email in (("Sam", CREW["starter"]), ("Pat", CREW["coordinator"]), ("Riley", CREW["other"])):
+        assert invite(client, email, name).status_code == 303
+    return client
+
+
+def call_in(client: TestClient, provider: FakeProvider, clock: FakeClock, settings: Settings, state: str) -> int:
+    """Sam starts today's dinner; Pat is in with a guest, picks up, and coordinates. Then it
+    moves on to ``state``. Leaves Pat signed in."""
+    sign_in_as(client, provider, CREW["starter"])
+    started = submit(client, "/events", {"slot": "dinner", "day": "2026-10-22"})
+    assert started.status_code == 303, page(started)
+    event_id = int(started.headers["location"].rsplit("/", 1)[1])
+    sign_in_as(client, provider, CREW["coordinator"])
+    for path, data in [
+        ("respond", {"status": "in"}),
+        ("offer", {"role": "pickup", "offered": "1"}),
+        ("details", {"guests": "1"}),
+        ("coordinate", {}),
+    ]:
+        assert submit(client, f"/events/{event_id}/{path}", data).status_code == 303, path
+    if state in ("voting", "decided"):
+        clock.advance(timedelta(minutes=90))
+        tick(client, clock)
+    if state == "decided":
+        submit(client, f"/events/{event_id}/proposals/{proposal_ids(settings)[0]}/lock")
+    assert state_of(settings, event_id) == state
+    return event_id
+
+
+def event_row(settings: Settings, event_id: int) -> EventRow:
+    return next(e for e in rows(settings, EventRow) if e.id == event_id)
+
+
+def state_of(settings: Settings, event_id: int) -> str:
+    return str(event_row(settings, event_id).state)
+
+
+def event_audits(settings: Settings) -> int:
+    """How many audit rows record something done to a call; signing in writes others."""
+    return sum(1 for a in rows(settings, AuditRow) if a.action.startswith("event."))
+
+
+def audits(settings: Settings, action: str) -> list[AuditRow]:
+    return [a for a in rows(settings, AuditRow) if a.action == action]
+
+
+def offers_cancel(html: str, event_id: int) -> bool:
+    return f'action="/events/{event_id}/cancel"' in html
+
+
+def close_label(html: str, event_id: int) -> str | None:
+    found = re.search(rf'action="/events/{event_id}/close".*?<button[^>]*>([^<]+)</button>', html, flags=re.S)
+    return found.group(1) if found else None
+
+
+# Who sees what, and the server checks again ------------------------------------------------------
+
+CAN_CANCEL = {
+    "starter": {"collecting", "voting"},
+    "coordinator": set(STATES),
+    "admin": set(STATES),
+    "other": set(),
+}
+CLOSE_LABELS = {"collecting": "Start the vote now", "voting": "Decide now", "decided": None}
+
+
+@pytest.mark.parametrize("state", STATES)
+def test_who_sees_call_it_off_and_close_now(
+    house: TestClient, provider: FakeProvider, clock: FakeClock, state: str, migrated: Settings
+) -> None:
+    event_id = call_in(house, provider, clock, migrated, state)
+    for role in ("starter", "coordinator", "admin", "other"):
+        act_as(house, provider, role)
+        for where in (f"/events/{event_id}", "/"):
+            html = house.get(where).text
+            assert offers_cancel(html, event_id) == (state in CAN_CANCEL[role]), (role, where)
+            closes = role in ("coordinator", "admin")
+            assert close_label(html, event_id) == (CLOSE_LABELS[state] if closes else None), (role, where)
+            assert "Start dinner again" not in html
+
+
+@pytest.mark.parametrize("state", STATES)
+def test_the_server_refuses_whoever_the_page_hides_the_buttons_from(
+    house: TestClient, provider: FakeProvider, clock: FakeClock, state: str, migrated: Settings
+) -> None:
+    event_id = call_in(house, provider, clock, migrated, state)
+    before = (event_row(migrated, event_id).version, event_audits(migrated))
+    refusals = [("other", "cancel", "Only the coordinator, whoever started this call, or an admin")]
+    if state == "decided":
+        refusals += [("starter", "cancel", "It's decided now, so only the coordinator or an admin")]
+        refusals += [(role, "close", "There's no open window to close.") for role in ("other", "starter", "admin")]
+    else:
+        refusals += [(role, "close", "Only the coordinator or an admin") for role in ("other", "starter")]
+    for role, action, message in refusals:
+        act_as(house, provider, role)
+        refused = htmx(house, f"/events/{event_id}/{action}", {"reason": "nope"})
+        assert refused.status_code == 409 and message in page(refused), (role, action)
+        assert f'id="event-{event_id}"' in refused.text  # the card, swapped in place with the reason
+        plain = submit(house, f"/events/{event_id}/{action}", {"reason": "nope"})
+        assert plain.status_code == 409 and "<html" in plain.text and message in page(plain), (role, action)
+    assert state_of(migrated, event_id) == state
+    assert (event_row(migrated, event_id).version, event_audits(migrated)) == before
+
+
+def test_a_deactivated_starter_cannot_call_it_off(
+    house: TestClient, provider: FakeProvider, clock: FakeClock, migrated: Settings
+) -> None:
+    event_id = call_in(house, provider, clock, migrated, "collecting")
+    sign_in_as(house, provider, CREW["starter"])
+    sam_cookies, sam_token = dict(house.cookies), csrf_from(house)
+    as_admin(house, provider)
+    sam = member(migrated, CREW["starter"]).id
+    assert submit(house, f"/admin/members/{sam}/deactivate").status_code == 303
+    house.cookies.clear()
+    house.cookies.update(sam_cookies)
+    for action in ("cancel", "close", "restart"):
+        response = house.post(f"/events/{event_id}/{action}", data={"csrf_token": sam_token})
+        assert (response.status_code, response.headers["location"]) == (303, "/"), action  # signed out everywhere
+    assert state_of(migrated, event_id) == "collecting"
+    assert audits(migrated, "event.cancelled") == []
+
+
+def test_another_households_call_cannot_be_called_off(house: TestClient, migrated: Settings) -> None:
+    settings = migrated
+    theirs = other_call(settings, other_household(settings))["event"]
+    for action in ("cancel", "close", "restart"):
+        assert submit(house, f"/events/{theirs}/{action}", {"reason": "x"}).status_code == 404, action
+    assert state_of(migrated, theirs) == "voting"
+
+
+# Calling it off ----------------------------------------------------------------------------------
+
+
+def test_the_starter_calls_it_off_with_a_reason(
+    house: TestClient, provider: FakeProvider, clock: FakeClock, migrated: Settings
+) -> None:
+    event_id = call_in(house, provider, clock, migrated, "collecting")
+    sign_in_as(house, provider, CREW["starter"])
+    html = house.get(f"/events/{event_id}").text
+    assert '<summary class="small">Call it off</summary>' in html and 'name="reason" maxlength="140"' in html
+    assert 'hx-confirm="Call off dinner for everyone?"' in html
+    reason = 'Pizza at <b>Grandma\'s</b> & "cake"'
+    card = htmx(house, f"/events/{event_id}/cancel", {"reason": reason, "from": "event"})
+    assert card.status_code == 200 and "Called off by Sam." in card.text
+    assert "Pizza at &lt;b&gt;Grandma&#39;s&lt;/b&gt; &amp; &#34;cake&#34;" in card.text
+    assert "<b>Grandma" not in card.text
+    assert "data-poll" not in card.text and not offers_cancel(card.text, event_id)
+    row = event_row(migrated, event_id)
+    assert (row.state, row.end_note, row.ended_by) == ("cancelled", reason, member(migrated, CREW["starter"]).id)
+    (audit,) = audits(migrated, "event.cancelled")
+    assert audit.payload == {"from": "collecting", "as": "starter", "note": reason}
+    again = htmx(house, f"/events/{event_id}/cancel", {})
+    assert again.status_code == 409 and "This call already finished." in again.text
+
+
+def test_the_coordinator_calls_off_a_decided_call_from_today(
+    house: TestClient, provider: FakeProvider, clock: FakeClock, migrated: Settings
+) -> None:
+    event_id = call_in(house, provider, clock, migrated, "decided")
+    done = submit(house, f"/events/{event_id}/cancel", {"from": "today"})
+    assert (done.status_code, done.headers["location"]) == (303, "/")
+    html = page(house.get("/"))
+    assert "Called off by Pat." in html and "“" not in html  # no reason, no quote
+    (audit,) = audits(migrated, "event.cancelled")
+    assert audit.payload == {"from": "decided", "as": "coordinator", "note": None}
+
+
+def test_an_admin_calls_off_anyone_s_call_and_admin_cancel_is_gone(
+    house: TestClient, provider: FakeProvider, clock: FakeClock, migrated: Settings
+) -> None:
+    event_id = call_in(house, provider, clock, migrated, "voting")
+    as_admin(house, provider)
+    html = house.get(f"/events/{event_id}").text
+    assert "/admin/cancel" not in html and "Cancel this call" not in html and ">Close now<" not in html
+    assert submit(house, f"/events/{event_id}/admin/cancel").status_code == 404
+    long = "x" * 200
+    assert htmx(house, f"/events/{event_id}/cancel", {"reason": long}).status_code == 200
+    assert event_row(migrated, event_id).end_note == "x" * 140  # cut, not refused
+    (audit,) = audits(migrated, "event.cancelled")
+    assert audit.payload["as"] == "admin"
+
+
+def test_a_call_cancelled_before_it_said_who_reads_plainly(
+    house: TestClient, provider: FakeProvider, clock: FakeClock, migrated: Settings
+) -> None:
+    from sqlalchemy import create_engine, text
+
+    event_id = call_in(house, provider, clock, migrated, "collecting")
+    engine = create_engine(migrated.sync_database_url)
+    with engine.begin() as c:  # a call cancelled before migration 0006 recorded who did it
+        c.execute(text("UPDATE event SET state = 'cancelled' WHERE id = :e"), {"e": event_id})
+    engine.dispose()
+    assert "This call was cancelled." in house.get(f"/events/{event_id}").text
+
+
+# Close now ---------------------------------------------------------------------------------------
+
+
+def test_close_now_starts_the_vote_then_decides(
+    house: TestClient, provider: FakeProvider, clock: FakeClock, migrated: Settings
+) -> None:
+    event_id = call_in(house, provider, clock, migrated, "collecting")
+    html = house.get(f"/events/{event_id}").text
+    assert 'hx-confirm="Close responses and start the vote now?"' in html
+    voting = htmx(house, f"/events/{event_id}/close", {})
+    assert voting.status_code == 200 and state_of(migrated, event_id) == "voting"
+    assert close_label(voting.text, event_id) == "Decide now" and "Proposals" in voting.text
+    decided = submit(house, f"/events/{event_id}/close", {"from": "event"})
+    assert (decided.status_code, decided.headers["location"]) == (303, f"/events/{event_id}")
+    assert state_of(migrated, event_id) == "decided"
+    assert close_label(house.get(f"/events/{event_id}").text, event_id) is None
+    assert [a.payload["window"] for a in audits(migrated, "event.window_closed")] == ["respond", "vote"]
+    late = htmx(house, f"/events/{event_id}/close", {})
+    assert late.status_code == 409 and "There's no open window to close." in page(late)
+
+
+# Starting again ----------------------------------------------------------------------------------
+
+
+def test_any_member_starts_a_called_off_call_again(
+    house: TestClient, provider: FakeProvider, clock: FakeClock, migrated: Settings
+) -> None:
+    event_id = call_in(house, provider, clock, migrated, "voting")
+    open_call = htmx(house, f"/events/{event_id}/restart", {})
+    assert open_call.status_code == 409 and "already a dinner call" in page(open_call)
+    submit(house, f"/events/{event_id}/cancel", {"reason": "Rain"})
+    sign_in_as(house, provider, CREW["other"])
+    html = house.get("/").text
+    assert "Start dinner again" in html and f'action="/events/{event_id}/restart"' in html
+    restarted = htmx(house, f"/events/{event_id}/restart", {"from": "today"})
+    assert restarted.status_code == 200 and "Answer by" in restarted.text and "Called off" not in restarted.text
+    row = event_row(migrated, event_id)
+    riley = member(migrated, CREW["other"]).id
+    assert (row.state, row.run, row.created_by, row.coordinator_id) == ("collecting", 2, riley, None)
+    assert offers_cancel(restarted.text, event_id)  # Riley started it, so Riley can call it off
+
+
+def test_admins_see_start_again_instead_of_re_run(
+    house: TestClient, provider: FakeProvider, clock: FakeClock, migrated: Settings
+) -> None:
+    event_id = call_in(house, provider, clock, migrated, "collecting")
+    submit(house, f"/events/{event_id}/cancel")
+    as_admin(house, provider)
+    html = house.get(f"/events/{event_id}").text
+    assert "Start dinner again" in html and ">Re-run<" not in html
+
+
+def test_starting_again_is_too_late_after_the_meal(
+    house: TestClient, provider: FakeProvider, clock: FakeClock, migrated: Settings
+) -> None:
+    event_id = call_in(house, provider, clock, migrated, "collecting")
+    submit(house, f"/events/{event_id}/cancel")
+    clock.advance(timedelta(hours=8, minutes=1))  # 21:01 in Chicago: past 18:30 plus two hours, still the 22nd
+    html = house.get("/").text
+    assert "Called off by Pat." in html and "Start dinner again" not in html
+    late = htmx(house, f"/events/{event_id}/restart", {})
+    assert late.status_code == 409 and "It's too late to start today's dinner call again." in page(late)
+    assert state_of(migrated, event_id) == "cancelled"
+
+
+# Skip a day --------------------------------------------------------------------------------------
+
+
+def test_an_admin_skips_a_later_day(
+    house: TestClient, provider: FakeProvider, clock: FakeClock, migrated: Settings
+) -> None:
+    html = house.get("/admin/schedule").text
+    assert 'action="/admin/schedule/skip"' in html and 'min="2026-10-22" max="2026-10-29"' in html
+    skipped = submit(house, "/admin/schedule/skip", {"slot": "dinner", "day": "2026-10-24", "reason": "<i>Away</i>"})
+    assert (skipped.status_code, skipped.headers["location"]) == (303, "/admin/schedule?notice=skipped")
+    assert "Skipped." in house.get("/admin/schedule?notice=skipped").text
+    (row,) = rows(migrated, EventRow)
+    assert (str(row.date), row.slot, row.state, row.end_note) == ("2026-10-24", "dinner", "cancelled", "<i>Away</i>")
+    (audit,) = audits(migrated, "event.skipped")
+    assert audit.payload == {"slot": "dinner", "date": "2026-10-24", "note": "<i>Away</i>"}
+    clock.advance(timedelta(days=2))  # the skipped day: it shows on Today, and anyone can start it
+    sign_in_as(house, provider, CREW["other"])
+    today = house.get("/").text
+    assert "Called off by admin." in today and "&lt;i&gt;Away&lt;/i&gt;" in today and "<i>Away" not in today
+    assert "Start dinner again" in today
+
+
+@pytest.mark.parametrize(
+    ("form", "message"),
+    [
+        ({"slot": "dinner", "day": "2026-10-21"}, "You can skip today's call or a later day's."),
+        ({"slot": "dinner", "day": "2026-10-30"}, "You can skip a call up to 7 days ahead."),
+        ({"slot": "brunch", "day": "2026-10-23"}, "Pick lunch or dinner."),
+        ({"slot": "dinner", "day": "Friday"}, "YYYY-MM-DD"),
+    ],
+)
+def test_skipping_a_day_explains_refusals(
+    house: TestClient, form: dict[str, str], message: str, migrated: Settings
+) -> None:
+    refused = submit(house, "/admin/schedule/skip", form | {"reason": "Trip"})
+    assert refused.status_code == 409 and message in page(refused)
+    assert 'value="Trip"' in refused.text and f'value="{form["day"]}"' in refused.text  # as typed
+    assert rows(migrated, EventRow) == [] and audits(migrated, "event.skipped") == []
+
+
+def test_skipping_a_day_that_has_a_call(
+    house: TestClient, provider: FakeProvider, clock: FakeClock, migrated: Settings
+) -> None:
+    event_id = call_in(house, provider, clock, migrated, "collecting")
+    as_admin(house, provider)
+    open_call = submit(house, "/admin/schedule/skip", {"slot": "dinner", "day": "2026-10-22"})
+    assert open_call.status_code == 409 and "Call it off instead." in page(open_call)
+    submit(house, f"/events/{event_id}/cancel")
+    off = submit(house, "/admin/schedule/skip", {"slot": "dinner", "day": "2026-10-22"})
+    assert off.status_code == 409 and "already off" in page(off)
+
+
+def test_members_cannot_skip_a_day(house: TestClient, provider: FakeProvider, migrated: Settings) -> None:
+    sign_in_as(house, provider, CREW["other"])
+    assert house.get("/admin/schedule").status_code == 403
+    refused = submit(house, "/admin/schedule/skip", {"slot": "dinner", "day": "2026-10-23"})
+    assert refused.status_code == 403
+    assert rows(migrated, EventRow) == [] and audits(migrated, "event.skipped") == []

@@ -43,4 +43,20 @@
   </fieldset>
   <button type="submit" class="button primary block">Save schedule</button>
 </form>
+<section class="card" id="skip" aria-labelledby="skip-title">
+  <h2 id="skip-title">Skip a day</h2>
+  <p class="small muted">Skip one day's call, today or up to a week ahead, before it goes out. Nothing is posted, and anyone can still start that call from the Today page. To end a call that's already out, use <strong>Call it off</strong> on the call.</p>
+  {% if skip_error %}<p class="alert error" role="alert">{{ skip_error }}</p>{% endif %}
+  <form method="post" action="/admin/schedule/skip" class="stack">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="pair">
+      <label class="field"><span>Meal</span>
+        <select name="slot">{% for slot in slots %}<option value="{{ slot.value }}"{% if slot.value == skip.slot %} selected{% endif %}>{{ slot.value|capitalize }}</option>{% endfor %}</select>
+      </label>
+      <label class="field"><span>Day</span><input type="date" name="day" value="{{ skip.day }}" min="{{ skip_days[0].isoformat() }}" max="{{ skip_days[1].isoformat() }}" required></label>
+    </div>
+    <label class="field"><span>Reason (optional)</span><input type="text" name="reason" maxlength="140" autocomplete="off" value="{{ skip.reason }}"></label>
+    <button type="submit" class="button block">Skip this call</button>
+  </form>
+</section>
 {% endblock %}
