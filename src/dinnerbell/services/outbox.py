@@ -46,6 +46,7 @@ MAX_ATTEMPTS = 8
 FIRST_RETRY = timedelta(seconds=30)
 LONGEST_RETRY = timedelta(hours=1)
 NO_MESSAGE = "no message to update"
+NO_THREAD = "no message to thread under"
 MIN_HOLD = timedelta(seconds=5)
 """The shortest a held row waits, even if the channel asks for less."""
 SUPERSEDED = "superseded by a newer update"
@@ -154,7 +155,8 @@ async def _deliver(
         error = f"{type(exc).__name__}: {exc}"
         await _record_failure(db, entry, token, error, clock, result, final=final, at_least=asked_wait(exc))
         return final
-    if not await repo.delivered(entry.id, token, now=clock(), ref=ref, note=NO_MESSAGE if skipped else None):
+    note = (NO_MESSAGE if notification.is_update else NO_THREAD) if skipped else None
+    if not await repo.delivered(entry.id, token, now=clock(), ref=ref, note=note):
         log.warning("outbox claim expired during delivery", extra={"outbox_id": entry.id, "kind": entry.kind})
     await db.commit()
     result.delivered += 1
@@ -164,7 +166,8 @@ async def _deliver(
 async def _send(
     repo: OutboxRepository, channel: Channel, entry: OutboxEntry, notification: Notification
 ) -> tuple[MessageRef | None, bool]:
-    """Call the channel. Returns the new message's ref, and whether an update had no message."""
+    """Call the channel. Returns the new message's ref, and whether the row had no message to
+    update or, for a reply that ``needs_thread``, none to thread under."""
     if notification.is_update:
         target = await repo.message_ref(entry.household_id, entry.message_key or "")
         if target is None:
@@ -172,6 +175,8 @@ async def _send(
         await channel.update(target, notification)
         return None, False
     thread = await repo.message_ref(entry.household_id, entry.thread_key) if entry.thread_key else None
+    if thread is None and notification.needs_thread:
+        return None, True
     delivered = await channel.deliver(notification, thread=thread)
     return delivered.ref, False
 

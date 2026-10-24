@@ -39,7 +39,14 @@ from dinnerbell.channels.slack.views import (
     parse_proposal,
     proposal_modal,
 )
-from dinnerbell.domain.events import EventRuleViolation, IllegalTransition, InvalidResponse, RoleOffer
+from dinnerbell.domain.events import (
+    STALE_CALL,
+    EventRuleViolation,
+    IllegalTransition,
+    InvalidResponse,
+    RoleOffer,
+    friendly,
+)
 from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.members import Member
 from dinnerbell.domain.notifications import PermanentDeliveryError
@@ -57,7 +64,7 @@ UNKNOWN_USER = (
     "or ask the admin to link you on the Members page."
 )
 INACTIVE = "Your Dinnerbell account is turned off. Ask the admin if that's a mistake."
-STALE = "That can't happen anymore."
+STALE = STALE_CALL
 BROKEN = "That didn't work. Try again in a moment, or use the web."
 OUT_OF_DATE = "That button is out of date. Try the latest message, or use the web."
 WRONG_PLACE = "That button only works in the Dinnerbell channel."
@@ -265,8 +272,8 @@ class Interactions:
             notice = await work()
         except SHOWN_ERRORS as exc:
             notice = str(exc)
-        except IllegalTransition:
-            notice = STALE
+        except IllegalTransition as exc:
+            notice = str(friendly(exc))
         except ids.BadValue:
             log.warning("slack action with a value this app didn't write", extra={"member_id": member.id})
             notice = OUT_OF_DATE

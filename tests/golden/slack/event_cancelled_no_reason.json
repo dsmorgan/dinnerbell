@@ -1,0 +1,21 @@
+{
+  "blocks": [
+    {
+      "text": {
+        "text": "Alex called off dinner for Thursday, Oct 22. No group dinner this time. Enjoy your evening!\nHeads up <@U01ALEX>, <@U03KIM>, Lee, <@U02SAM>.",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "elements": [
+        {
+          "text": "<https://dinnerbell.example.com/events/7|Open the call on the web>",
+          "type": "mrkdwn"
+        }
+      ],
+      "type": "context"
+    }
+  ],
+  "text": "Alex called off dinner for Thursday, Oct 22."
+}

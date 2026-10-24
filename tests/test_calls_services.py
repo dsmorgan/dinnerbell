@@ -22,7 +22,6 @@ from dinnerbell.domain.events import (
     EndReason,
     EventRuleViolation,
     EventState,
-    IllegalTransition,
     InvalidResponse,
     RoleOffer,
     Status,
@@ -606,17 +605,17 @@ async def test_extend_shorten_and_close_windows(house: House) -> None:
 
 async def test_cancel_from_every_open_state(house: House) -> None:
     event_id = await decided(house)
-    with pytest.raises(Forbidden):
-        await act(house, call_admin.cancel, house["Sam"], event_id)
-    await act(house, call_admin.cancel, house["Alex"], event_id)
+    with pytest.raises(EventRuleViolation, match="whoever started this call, or an admin"):
+        await act(house, calls.cancel_call, house["Kim"], event_id)
+    await act(house, calls.cancel_call, house["Alex"], event_id)
     event = await house.event(event_id)
     assert event.state is EventState.CANCELLED
     cancelled = next(e for e in await house.outbox() if e.kind == "event_cancelled")
     assert cancelled.payload["cancelled_by"]["name"] == "Alex"
     assert [p["name"] for p in cancelled.payload["participants"]] == ["Alex", "Sam"]
     assert cancelled.thread_key == f"event:{event_id}:run1:call"
-    with pytest.raises(IllegalTransition):
-        await act(house, call_admin.cancel, house["Alex"], event_id)
+    with pytest.raises(EventRuleViolation, match="already finished"):
+        await act(house, calls.cancel_call, house["Alex"], event_id)
     house.clock.now = VOTE_BY + timedelta(hours=6)
     assert await house.tick() == []
     assert await house.meals() == []
@@ -627,7 +626,7 @@ async def test_cancel_a_scheduled_ad_hoc_call(house: House) -> None:
     tomorrow = date(2026, 10, 23)
     event = await act(house, calls.start_call, house["Kim"], Slot.DINNER, tomorrow)
     assert event.state is EventState.SCHEDULED
-    await act(house, call_admin.cancel, house["Alex"], event.id)
+    await act(house, calls.cancel_call, house["Alex"], event.id)
     assert (await house.event(event.id)).state is EventState.CANCELLED
 
 
@@ -667,7 +666,7 @@ async def test_rerun_rules(house: House) -> None:
     event_id = await open_dinner(house)
     with pytest.raises(EventRuleViolation, match="re-run"):
         await act(house, call_admin.rerun, house["Alex"], event_id)
-    await act(house, call_admin.cancel, house["Alex"], event_id)
+    await act(house, calls.cancel_call, house["Alex"], event_id)
     house.clock.now += timedelta(days=1)
     with pytest.raises(EventRuleViolation, match="today's"):
         await act(house, call_admin.rerun, house["Alex"], event_id)
@@ -831,7 +830,8 @@ async def test_nothing_reaches_another_households_call(house: House, database: D
         (calls.change_assignment, (alex, theirs, AssignmentRole.COOK, alex.id)),
         (calls.mark_done, (alex, theirs)),
         (call_admin.move_deadline, (alex, theirs, Window.VOTE, 15)),
-        (call_admin.cancel, (alex, theirs)),
+        (calls.cancel_call, (alex, theirs)),
+        (calls.close_window, (alex, theirs)),
         (call_admin.rerun, (alex, theirs)),
         (call_admin.assign_coordinator, (alex, theirs, alex.id)),
         (event_views.event_view, (alex, theirs)),
@@ -1012,12 +1012,12 @@ async def test_a_vote_that_would_put_the_meal_after_midnight_expires_without_sid
 
 async def test_rerun_is_refused_late_in_the_evening_and_keeps_a_later_days_timing(house: House) -> None:
     event_id = await open_dinner(house)
-    await act(house, call_admin.cancel, house["Alex"], event_id)
+    await act(house, calls.cancel_call, house["Alex"], event_id)
     house.clock.now = local(22, 20, 31)
     with pytest.raises(EventRuleViolation, match="too late to re-run"):
         await act(house, call_admin.rerun, house["Alex"], event_id)
     tomorrow = await act(house, calls.start_call, house["Kim"], Slot.DINNER, date(2026, 10, 23))
-    await act(house, call_admin.cancel, house["Alex"], tomorrow.id)
+    await act(house, calls.cancel_call, house["Alex"], tomorrow.id)
     before = await house.kinds()
     await act(house, call_admin.rerun, house["Alex"], tomorrow.id)
     rerun = await house.event(tomorrow.id)

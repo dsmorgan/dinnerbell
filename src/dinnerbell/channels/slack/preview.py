@@ -122,6 +122,8 @@ TWO_ROLES = replace(
 WAITING = (KIM, LEE)
 VOTING = event(EventState.VOTING, coordinator=ALEX)
 DECIDED = event(EventState.DECIDED, coordinator=ALEX)
+REASON = "Pizza at Grandma's"
+CANCELLED = replace(event(EventState.CANCELLED, coordinator=ALEX), ended_by=ALEX, end_note=REASON)
 
 NOTIFICATIONS: dict[str, Callable[[], note.Notification]] = {
     "call_opened": lambda: note.CallOpened(event(), (ALEX, KIM, LEE, SAM), waiting_on=(ALEX, KIM, LEE, SAM)),
@@ -133,7 +135,7 @@ NOTIFICATIONS: dict[str, Callable[[], note.Notification]] = {
     "call_updated_missed": lambda: note.CallUpdated(
         replace(event(EventState.ABANDONED), end_reason=EndReason.MISSED), ROSTER, (LEE,), 3
     ),
-    "call_updated_cancelled": lambda: note.CallUpdated(event(EventState.CANCELLED), ROSTER, (LEE,), 3),
+    "call_updated_cancelled": lambda: note.CallUpdated(CANCELLED, ROSTER, (LEE,), 3),
     "response_reminder": lambda: note.ResponseReminder(event(), KIM),
     "maybe_resolved": lambda: note.MaybeResolved(VOTING, KIM),
     "proposals_ready": lambda: note.ProposalsReady(VOTING, tuple(replace(p, voters=()) for p in PROPOSALS), 3),
@@ -150,7 +152,18 @@ NOTIFICATIONS: dict[str, Callable[[], note.Notification]] = {
     "assignment_made_order": lambda: note.AssignmentMade(DECIDED, 32, LEE, (AssignmentRole.ORDER,), DELIVERY),
     "call_abandoned": lambda: note.CallAbandoned(event(EventState.ABANDONED), EndReason.TOO_FEW, head_count=1),
     "call_abandoned_no_coverage": lambda: note.CallAbandoned(event(EventState.ABANDONED), EndReason.NO_COVERAGE, 3),
-    "event_cancelled": lambda: note.EventCancelled(event(EventState.CANCELLED), (ALEX, SAM), cancelled_by=ALEX),
+    "event_cancelled": lambda: note.EventCancelled(
+        CANCELLED, (ALEX, SAM), cancelled_by=ALEX, note=REASON, audience=(ALEX, KIM, SAM)
+    ),
+    "event_cancelled_no_reason": lambda: note.EventCancelled(
+        event(EventState.CANCELLED), (ALEX, SAM), cancelled_by=ALEX, audience=(ALEX, KIM, LEE, SAM)
+    ),
+    "assignment_cancelled": lambda: note.AssignmentCancelled(
+        CANCELLED, SAM, (AssignmentRole.COOK,), DECISION, cancelled_by=ALEX, note=REASON
+    ),
+    "started_call_cancelled": lambda: note.StartedCallCancelled(
+        replace(event(EventState.CANCELLED), day=date(2026, 10, 23)), KIM, cancelled_by=ALEX
+    ),
 }
 
 

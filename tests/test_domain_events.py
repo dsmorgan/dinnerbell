@@ -631,3 +631,150 @@ def test_deadlines_never_move_past_midnight() -> None:
     assert ev.shifted_deadline(NOW, 240, NOW, latest=midnight) == NOW + timedelta(hours=4)
     with pytest.raises(EventRuleViolation, match="past midnight"):
         ev.shifted_deadline(NOW + timedelta(hours=4), 90, NOW, latest=midnight)
+
+
+# Calling it off and closing early (FR-56) -------------------------------------------------------
+
+STARTER, COORDINATOR, ADMIN, OTHER = 2, 3, 1, 4
+CANCEL_ACTORS = {
+    "admin": member(ADMIN, admin=True),
+    "coordinator": member(COORDINATOR),
+    "starter": member(STARTER),
+    "member": member(OTHER),
+    "inactive admin": member(ADMIN, admin=True, active=False),
+    "inactive coordinator": member(COORDINATOR, active=False),
+    "inactive starter": member(STARTER, active=False),
+}
+CANCEL_AS = {
+    # Who may call it off, by state: the capacity recorded, or None for a refusal.
+    EventState.SCHEDULED: {"admin": "admin", "coordinator": "coordinator", "starter": "starter"},
+    EventState.COLLECTING: {"admin": "admin", "coordinator": "coordinator", "starter": "starter"},
+    EventState.VOTING: {"admin": "admin", "coordinator": "coordinator", "starter": "starter"},
+    EventState.DECIDED: {"admin": "admin", "coordinator": "coordinator"},
+    EventState.DONE: {},
+    EventState.ABANDONED: {},
+    EventState.CANCELLED: {},
+}
+
+
+@pytest.mark.parametrize(("state", "who"), list(itertools.product(EventState, CANCEL_ACTORS)))
+def test_who_may_call_it_off(state: EventState, who: str) -> None:
+    call = event(state, created_by=STARTER, coordinator_id=COORDINATOR)
+    expected = CANCEL_AS[state].get(who)
+    if expected is not None:
+        assert ev.check_can_cancel(call, CANCEL_ACTORS[who]) is ev.ActingAs(expected)
+        return
+    with pytest.raises(EventRuleViolation) as refused:
+        ev.check_can_cancel(call, CANCEL_ACTORS[who])
+    message = str(refused.value)
+    if who.startswith("inactive"):
+        assert message == "Only active members can call off a call."
+    elif not state.is_open:
+        assert message == "This call already finished."
+    elif who == "starter":
+        assert message == "It's decided now, so only the coordinator or an admin can call it off."
+    else:
+        assert message == "Only the coordinator, whoever started this call, or an admin can call it off."
+
+
+def test_call_off_records_the_narrowest_capacity() -> None:
+    """An admin who coordinates or started the call is audited as that, not as an override.
+    A scheduled daily call has no starter, so nobody can call it off as one."""
+    admin = member(ADMIN, admin=True)
+    assert ev.check_can_cancel(event(coordinator_id=ADMIN, created_by=ADMIN), admin) is ev.ActingAs.COORDINATOR
+    assert ev.check_can_cancel(event(created_by=ADMIN), admin) is ev.ActingAs.STARTER
+    assert ev.check_can_cancel(event(EventState.DECIDED, created_by=ADMIN), admin) is ev.ActingAs.ADMIN
+    with pytest.raises(EventRuleViolation, match="whoever started"):
+        ev.check_can_cancel(event(created_by=None), member(OTHER))
+
+
+CLOSE_ACTORS = {
+    "admin": member(ADMIN, admin=True),
+    "coordinator": member(COORDINATOR),
+    "starter": member(STARTER),
+    "member": member(OTHER),
+    "inactive admin": member(ADMIN, admin=True, active=False),
+    "inactive coordinator": member(COORDINATOR, active=False),
+}
+
+
+@pytest.mark.parametrize(("state", "who"), list(itertools.product(EventState, CLOSE_ACTORS)))
+def test_who_may_close_a_window_now(state: EventState, who: str) -> None:
+    call = event(state, created_by=STARTER, coordinator_id=COORDINATOR, vote_deadline=NOW)
+    allowed = who in {"admin", "coordinator"} and state in {EventState.COLLECTING, EventState.VOTING}
+    if allowed:
+        window = ev.Window.RESPOND if state is EventState.COLLECTING else ev.Window.VOTE
+        assert ev.check_can_close_window(call, CLOSE_ACTORS[who]) is window
+        return
+    with pytest.raises(EventRuleViolation) as refused:
+        ev.check_can_close_window(call, CLOSE_ACTORS[who])
+    message = str(refused.value)
+    if who.startswith("inactive"):
+        assert message == "Only active members can close a window."
+    elif not state.is_open:
+        assert message == "This call already finished."
+    elif state not in {EventState.COLLECTING, EventState.VOTING}:
+        assert message == "There's no open window to close."
+    else:
+        assert message == "Only the coordinator or an admin can close it now."
+
+
+@pytest.mark.parametrize(
+    ("text", "cleaned"),
+    [
+        (None, None),
+        ("", None),
+        ("  \n\t ", None),
+        ("  Pizza   at\nGrandma's  ", "Pizza at Grandma's"),
+        ("Snow\x00 day‮", "Snow day"),  # control and bidi-override characters are dropped
+        ("Family 👨‍👩‍👧 night", "Family 👨‍👩‍👧 night"),  # emoji joiners stay
+        ("x" * 141, "x" * 140),
+        ("a" * 139 + " b", "a" * 139),  # cut, then trimmed
+    ],
+)
+def test_clean_cancel_note(text: str | None, cleaned: str | None) -> None:
+    assert ev.clean_cancel_note(text) == cleaned
+    assert cleaned is None or len(cleaned) <= ev.CANCEL_NOTE_MAX
+
+
+def test_an_illegal_transition_reads_as_a_finished_call() -> None:
+    finished = ev.friendly(IllegalTransition(EventState.DONE, EventState.CANCELLED))
+    assert isinstance(finished, EventRuleViolation) and str(finished) == "This call already finished."
+    assert str(ev.friendly(IllegalTransition(EventState.COLLECTING, EventState.DONE))) == ev.STALE_CALL
+
+
+def answered(*pairs: tuple[int, Status]) -> list[Response]:
+    return [Response(member_id=m, status=s) for m, s in pairs]
+
+
+def test_everyone_answered_closes_responses_early() -> None:
+    early = NOW + timedelta(minutes=10)  # well before the deadline and the reminder
+    collecting = event()
+    everyone = (1, 2, 3)
+    cases = [
+        (answered((1, Status.IN), (2, Status.IN), (3, Status.OUT)), Step.CLOSE_RESPONSES),
+        (answered((1, Status.OUT), (2, Status.OUT), (3, Status.OUT)), Step.CLOSE_RESPONSES),  # ends too few
+        (answered((1, Status.IN), (2, Status.IN)), None),  # 3 hasn't answered
+        (answered((1, Status.IN), (2, Status.IN), (3, Status.MAYBE)), None),  # a maybe might still come
+        # An inactive member's answer, maybe or not, doesn't count either way.
+        (answered((1, Status.IN), (2, Status.IN), (3, Status.IN), (9, Status.MAYBE)), Step.CLOSE_RESPONSES),
+    ]
+    for responses, step in cases:
+        assert ev.due_step(collecting, early, stale_after=FAR, responses=responses, active_member_ids=everyone) is step
+    all_in = answered((1, Status.IN), (2, Status.IN), (3, Status.IN))
+    assert ev.due_step(collecting, early, stale_after=FAR, responses=all_in, active_member_ids=()) is None
+    assert ev.due_step(collecting, early, stale_after=FAR) is None  # no responses given: wait for the deadline
+    # Only a call that's collecting closes early.
+    for state in (EventState.SCHEDULED, EventState.VOTING, EventState.DECIDED):
+        call = event(state, opens_at=FAR, vote_deadline=FAR, meal_time=FAR)
+        assert ev.due_step(call, early, stale_after=FAR, responses=all_in, active_member_ids=everyone) is None
+
+
+def test_skip_day_reaches_as_far_as_an_ad_hoc_call() -> None:
+    today = date(2026, 10, 22)
+    ev.check_skip_day(today, today)
+    ev.check_skip_day(today + timedelta(days=ev.AD_HOC_DAYS_AHEAD), today)
+    with pytest.raises(EventRuleViolation, match="today's call or a later"):
+        ev.check_skip_day(today - timedelta(days=1), today)
+    with pytest.raises(EventRuleViolation, match="7 days ahead"):
+        ev.check_skip_day(today + timedelta(days=ev.AD_HOC_DAYS_AHEAD + 1), today)

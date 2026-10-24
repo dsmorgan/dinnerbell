@@ -40,6 +40,11 @@ class Permissions:
     admin: bool = False
     rerun: bool = False
     move_window: Window | None = None
+    cancel: bool = False
+    """Call it off (FR-56): ``calls.cancel_call``."""
+    close_window: Window | None = None
+    """The window Close now would close (``calls.close_window``): respond reads "Start the vote
+    now", vote reads "Decide now". None when the actor can't."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,7 +83,7 @@ class TodayView:
     slots: tuple[Slot, ...]
 
 
-def _allowed(check: Callable[[], None]) -> bool:
+def _allowed(check: Callable[[], object]) -> bool:
     try:
         check()
     except EventRuleViolation:
@@ -108,6 +113,8 @@ def permissions(ctx: CallContext, actor: Member, today: date, now: datetime) -> 
         rerun=admin
         and _allowed(lambda: rules.check_rerun(event, today, now=now, too_late_after=ctx.too_late_for(today))),
         move_window=_window(event) if admin else None,
+        cancel=_allowed(lambda: rules.check_can_cancel(event, actor)),
+        close_window=_window(event) if _allowed(lambda: rules.check_can_close_window(event, actor)) else None,
     )
 
 

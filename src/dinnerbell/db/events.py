@@ -60,6 +60,8 @@ def _event(row: EventRow) -> Event:
         done_at=row.done_at,
         end_reason=EndReason(row.end_reason) if row.end_reason else None,
         locked_by=row.locked_by,
+        ended_by=row.ended_by,
+        end_note=row.end_note,
     )
 
 
@@ -141,6 +143,8 @@ class EventRepository:
         vote_minutes: int,
         created_by: int | None,
         now: datetime,
+        ended_by: int | None = None,
+        end_note: str | None = None,
     ) -> Event:
         row = EventRow(
             household_id=household_id,
@@ -155,6 +159,8 @@ class EventRepository:
             respond_deadline=respond_deadline,
             reminder_minutes=reminder_minutes,
             vote_minutes=vote_minutes,
+            ended_by=ended_by,
+            end_note=end_note,
             created_at=now,
             updated_at=now,
         )
@@ -169,6 +175,7 @@ class EventRepository:
             raise LookupError(event.id)
         row.state = event.state.value
         row.run = event.run
+        row.created_by = event.created_by
         row.coordinator_id = event.coordinator_id
         row.opens_at = event.opens_at
         row.respond_deadline = event.respond_deadline
@@ -183,6 +190,8 @@ class EventRepository:
         row.done_at = event.done_at
         row.end_reason = event.end_reason.value if event.end_reason else None
         row.locked_by = event.locked_by
+        row.ended_by = event.ended_by
+        row.end_note = event.end_note
         row.updated_at = now
         await self._session.flush()
         return _event(row)

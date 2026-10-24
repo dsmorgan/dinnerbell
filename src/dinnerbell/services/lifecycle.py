@@ -5,8 +5,8 @@
 The scheduler's tick calls ``tick`` every 30 seconds. ``tick`` opens each household's standing
 calls once their time comes and asks every open event for the step it owes (``domain.events.
 due_step``), applying steps until none is due. A restart or downtime past several deadlines is
-caught up on the next tick, one transaction per step. Members' actions reuse ``decide`` (lock)
-and ``finish`` (mark done).
+caught up on the next tick, one transaction per step. Members' actions reuse ``decide`` (lock),
+``finish`` (mark done), ``move_window`` (close now), and ``reopen`` (re-run and restart).
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from sqlalchemy.exc import IntegrityError
@@ -37,13 +37,16 @@ from dinnerbell.domain.events import (
     ProposalSource,
     ProposalTally,
     Step,
+    Window,
     assign_roles,
+    check_rerun,
+    check_window_change,
     choose_winner,
-    due_step,
     head_count,
     meal_time,
     needs_reminder,
     resolve_maybes,
+    shifted_deadline,
     should_open_today,
     transition,
     veto_participants,
@@ -56,6 +59,7 @@ from dinnerbell.domain.schedule import proposal_count, slot_schedule, slot_sched
 from dinnerbell.services import call_context as cc
 from dinnerbell.services.call_context import CallContext, load, locked_event, publish
 from dinnerbell.services.common import audit, is_unique_violation
+from dinnerbell.services.errors import NotFound
 from dinnerbell.services.preferences import group_preferences
 from dinnerbell.services.variety import household_today, last_eaten, variety_window
 
@@ -86,10 +90,15 @@ async def create_call(
     now: datetime,
 ) -> Event:
     """Add a call for ``slot`` on ``day`` and open it if its time has come. The caller commits.
-    Raises CallExists if the household already has that call."""
+
+    A member (``actor``) starting a call that was called off for that slot and day starts it
+    again instead (``restart``). Raises CallExists if the household already has that call."""
     schedule = slot_schedule(await household_settings(db, household.id), slot)
     events = EventRepository(db)
-    if await events.call_for(household.id, slot, day) is not None:
+    existing = await events.call_for(household.id, slot, day)
+    if existing is not None:
+        if existing.state is EventState.CANCELLED and actor is not None:
+            return await restart(db, existing, actor=actor, now=now)
         raise CallExists(f"There's already a {slot.value} call for that day.")
     try:
         event = await events.add(
@@ -158,6 +167,90 @@ async def open_due_calls(db: AsyncSession, household: Household, now: datetime) 
     return opened
 
 
+async def restart(db: AsyncSession, event: Event, *, actor: Member, now: datetime) -> Event:
+    """FR-3 and FR-56: any member starts a called-off call again, as a fresh run of the same
+    row (a slot has one call per date), and becomes its starter. The re-run's too-late rule
+    applies. Takes the event's lock; the caller commits. Audited."""
+    if not await EventRepository(db).lock(event.household_id, event.id, now):  # pragma: no cover - just read
+        raise NotFound("No such call.")
+    ctx = await load(db, event)  # re-read under the lock
+    if ctx.event.state is not EventState.CANCELLED:
+        raise CallExists(f"There's already a {event.slot.value} call for that day.")
+    today = household_today(ctx.household, now)
+    check_rerun(ctx.event, today, now=now, too_late_after=ctx.too_late_for(today))
+    fresh = await reopen(db, ctx, today=today, now=now, started_by=actor)
+    payload = {"from": EventState.CANCELLED.value, "run": fresh.run, "respond_by": fresh.respond_deadline.isoformat()}
+    await audit(db, event.household_id, actor, "event.restarted", _target(event), payload, now)
+    return fresh
+
+
+async def reopen(
+    db: AsyncSession, ctx: CallContext, *, today: date, now: datetime, started_by: Member | None = None
+) -> Event:
+    """Start ``ctx.event`` again with fresh windows from the current schedule: now, for today's
+    call, or at the slot's call time for a later day (FR-3 timing). The caller holds the
+    event's lock, checks ``check_rerun``, and audits.
+
+    Responses stay; maybes the deadline turned out are maybes again. Proposals, votes, the
+    decision, assignments, and who called it off are cleared. ``started_by``, when given,
+    becomes the starter. The run number goes up, so the channel posts a new call message and
+    the reminder can go out once more.
+    """
+    event, household_id = ctx.event, ctx.event.household_id
+    await ProposalRepository(db).clear(household_id, event.id)
+    await AssignmentRepository(db).clear(household_id, event.id)
+    await ResponseRepository(db).restore_maybes(household_id, event.id, now)
+    schedule = ctx.schedule
+    later = event.day > today
+    opens_at = schedule.opens_at(event.day, ctx.zone) if later else now
+    fresh = replace(
+        event,
+        state=transition(event.state, EventState.SCHEDULED if later else EventState.COLLECTING),
+        run=event.run + 1,
+        created_by=started_by.id if started_by is not None else event.created_by,
+        opens_at=opens_at,
+        respond_deadline=opens_at + schedule.response_window,
+        reminder_minutes=schedule.reminder_minutes,
+        vote_minutes=schedule.vote_minutes,
+        vote_deadline=None,
+        reminder_sent_at=None,
+        decided_item_id=None,
+        decided_mode=None,
+        meal_time=None,
+        decided_at=None,
+        end_reason=None,
+        locked_by=None,
+        ended_by=None,
+        end_note=None,
+    )
+    fresh = await EventRepository(db).save(fresh, now)
+    if not later:  # a later day's call is posted when the tick opens it
+        opened = await load(db, fresh)
+        await publish(db, opened, cc.call_opened(opened), now=now)
+    return fresh
+
+
+# Deadlines --------------------------------------------------------------------------------------
+
+
+async def move_window(
+    db: AsyncSession, event: Event, window: Window, minutes: int | None, now: datetime
+) -> tuple[datetime, datetime]:
+    """Move the open ``window``'s deadline by ``minutes``, or to now when None, and update the
+    messages that show it. Returns the old and new deadlines. The caller holds the event's
+    lock, checks who may, audits, and calls ``advance`` after its commit, so a deadline moved
+    into the past closes the window at once."""
+    current = check_window_change(event, window)
+    zone = (await load(db, event)).zone
+    midnight = datetime.combine(event.day + timedelta(days=1), time(0), tzinfo=zone).astimezone(UTC)
+    moved = shifted_deadline(current, minutes, now, latest=midnight)
+    changes = {"respond_deadline": moved} if window is Window.RESPOND else {"vote_deadline": moved}
+    event = await EventRepository(db).save(replace(event, **changes), now)  # type: ignore[arg-type]
+    ctx = await load(db, event)
+    await publish(db, ctx, cc.call_updated(ctx), *([cc.proposals_updated(ctx)] if ctx.proposals else []), now=now)
+    return current, moved
+
+
 # Reminders --------------------------------------------------------------------------------------
 
 
@@ -223,7 +316,13 @@ async def ranking_snapshot(db: AsyncSession, ctx: CallContext, group: GroupPrefe
 
 async def _close_responses(db: AsyncSession, event: Event, now: datetime) -> None:
     """The response deadline: rank with everyone who might eat, turn maybes out and tell them,
-    then abandon (fewer than two, or nothing fits) or open voting."""
+    then abandon (fewer than two, or nothing fits) or open voting. Before the deadline,
+    because everyone answered (FR-56), the deadline moves to now first, so voting gets its
+    usual length from now, as when the coordinator closes the window."""
+    if now < event.respond_deadline:
+        early = {"window": Window.RESPOND.value, "from": event.respond_deadline.isoformat(), "to": now.isoformat()}
+        event = await EventRepository(db).save(replace(event, respond_deadline=now), now)
+        await audit(db, event.household_id, None, "event.everyone_answered", _target(event), early, now)
     ctx = await load(db, event)
     group = await group_preferences(db, event.household_id, veto_participants(ctx.responses))
     ranked = rank(await ranking_snapshot(db, ctx, group))
@@ -498,10 +597,10 @@ async def advance(db: AsyncSession, household_id: int, event_id: int, now: datet
     applied: list[Step] = []
     for _ in range(MAX_STEPS):
         current = await EventRepository(db).get(household_id, event_id)
-        if current is None or due_step(current, now, stale_after=await cc.stale_cutoff(db, current)) is None:
+        if current is None or await cc.due(db, current, now) is None:
             break
         async with locked_event(db, household_id, event_id, now) as event:
-            step = due_step(event, now, stale_after=await cc.stale_cutoff(db, event))
+            step = await cc.due(db, event, now)
             if step is not None:
                 await HANDLERS[step](db, event, now)
         if step is None:  # pragma: no cover - another worker took the step between the read and the lock

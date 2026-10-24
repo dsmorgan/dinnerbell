@@ -18,6 +18,7 @@ from starlette.responses import Response
 
 from dinnerbell.domain.catalog import Mode
 from dinnerbell.domain.events import (
+    CALL_FINISHED,
     MAX_GUESTS,
     AssignmentRole,
     Details,
@@ -83,8 +84,9 @@ async def _run(
         await action()
     except RULE_ERRORS as exc:
         return await _card(request, principal, context, db, event_id, came_from=came_from, error=str(exc))
-    except IllegalTransition:
-        return await _card(request, principal, context, db, event_id, came_from=came_from, error=STALE)
+    except IllegalTransition as exc:
+        error = STALE if exc.current.is_open else CALL_FINISHED
+        return await _card(request, principal, context, db, event_id, came_from=came_from, error=error)
     if is_htmx(request):
         return await _card(request, principal, context, db, event_id, came_from=came_from)
     return RedirectResponse(_back(event_id, came_from), status_code=303)
@@ -462,7 +464,7 @@ async def cancel(
     came_from: Annotated[str, Form(alias="from", max_length=10)] = "",
 ) -> Response:
     async def action() -> None:
-        await call_admin.cancel(db, principal.member, event_id, now=context.clock())
+        await calls.cancel_call(db, principal.member, event_id, now=context.clock())
 
     return await _run(request, principal, context, db, event_id, came_from, action)
 
