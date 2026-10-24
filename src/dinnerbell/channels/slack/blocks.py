@@ -225,3 +225,30 @@ def option(text: str, value: str) -> dict[str, Any]:
 def overflow(action_id: str, options: Iterable[dict[str, Any]]) -> Block:
     """A ⋯ menu. Slack has no confirm per option, only one for the whole menu."""
     return {"type": "overflow", "action_id": action_id, "options": list(options)[:MAX_OVERFLOW_OPTIONS]}
+
+
+# Version ---------------------------------------------------------------------------------------
+
+REPO_URL = "https://github.com/dsmorgan/dinnerbell"
+
+
+def version_line(version: str, label: str = "") -> str:
+    """mrkdwn naming what's running: "Dinnerbell 0.3.0", or "Dinnerbell 0.3.0+abc1234 · TEST"
+    for a ``main`` build on a labelled instance. ``version`` is ``Settings.version_label``."""
+    line = f"Dinnerbell {version}"
+    return escape(f"{line} · {label}" if label else line)
+
+
+def version_link(version: str) -> str:
+    """mrkdwn linking a release's notes, or a ``main`` build's commit."""
+    release, _, build = version.partition("+")
+    if build:
+        return link(f"{REPO_URL}/commit/{build}", f"commit {build}")
+    return link(f"{REPO_URL}/releases/tag/v{release}", "release notes")
+
+
+def with_version_footer(view: dict[str, Any], version: str, label: str = "") -> dict[str, Any]:
+    """``view``, a Home tab, with the version at the bottom. The footer takes the last block's
+    place when the view is already full."""
+    footer = context(version_line(version, label))
+    return {**view, "blocks": [*view["blocks"][: MAX_VIEW_BLOCKS - 1], footer]}

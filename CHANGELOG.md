@@ -6,9 +6,17 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ## [Unreleased]
 
+### Added
+
+- Slack says which version is answering. `/dinnerbell version` (`/dinnerbell-test version` on test) replies privately with the version as the web footer shows it, such as `0.3.0`, or `0.3.0+abc1234` for a build from `main`; the instance label, if one is set; the database's schema revision; and a link to the release notes, or to the commit for a `main` build. The help reply lists `version` and ends with a version line, such as "Dinnerbell 0.3.0+abc1234 · TEST", and so does the bottom of App Home.
+
 ### Fixed
 
 - **Start the vote now** and **Decide now** no longer show once the window's deadline has passed. Until the scheduler's next tick moved the call on, up to 30 seconds later, the web card and App Home still offered them, and selecting one only said the call had moved on.
+
+### Upgrade notes
+
+- Optional: the Slack app manifests list `version` in the slash command's usage hint. To show it in Slack, open the app's **Slash Commands** settings and edit the command's usage hint to match `deploy/slack-app-manifest.yaml` (or `deploy/slack-app-manifest.test.yaml` for test). `/dinnerbell version` works without this.
 
 ## [0.3.0] - 2026-10-24
 
