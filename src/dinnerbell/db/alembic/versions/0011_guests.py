@@ -2,8 +2,10 @@
 """Guests (#38): a member's ``guest`` role, guests' dietary needs, whether an admin removed them,
 and the ``invitation`` table, one row per guest invited to a call.
 
-A guest has no email unless an admin gives one, so ``member.email`` becomes nullable, with a
-check that only a guest may leave it empty. SQLite changes a column's nullability and adds a
+A guest never has an email: ``member.email`` is how members sign in (FR-41), so it becomes
+nullable, with a check that a guest's is empty and everyone else's isn't. The email Slack shares
+for a guest who joined from the channel goes in ``slack_email`` instead, which sign-in never
+reads; it's only for spotting a member the admin is about to add twice. SQLite changes a column's nullability and adds a
 check constraint only by rebuilding the table. ``member`` is the parent of nearly every table,
 so this refuses to run with foreign keys on, which would cascade-delete sessions, preferences,
 responses, votes, assignments, and feedback, as 0007 and 0010 do. ``run_migrations`` turns them
@@ -68,7 +70,10 @@ def upgrade() -> None:
         batch_op.add_column(sa.Column("join_refused", sa.Boolean(), server_default=sa.false(), nullable=False))
         batch_op.drop_constraint("role", type_="check")
         batch_op.create_check_constraint("role", "role IN ('admin', 'member', 'guest')")
-        batch_op.create_check_constraint("email", "role = 'guest' OR email IS NOT NULL")
+        batch_op.add_column(sa.Column("slack_email", sa.String(length=254), nullable=True))
+        batch_op.create_check_constraint(
+            "email", "(role = 'guest' AND email IS NULL) OR (role <> 'guest' AND email IS NOT NULL)"
+        )
     _restore_sequence("member", before)
     op.create_table(
         "invitation",
@@ -132,6 +137,7 @@ def downgrade() -> None:
     before = _sequence("member")
     with op.batch_alter_table("member", recreate="always") as batch_op:
         batch_op.drop_constraint("email", type_="check")
+        batch_op.drop_column("slack_email")
         batch_op.drop_constraint("role", type_="check")
         batch_op.create_check_constraint("role", "role IN ('admin', 'member')")
         batch_op.drop_column("join_refused")

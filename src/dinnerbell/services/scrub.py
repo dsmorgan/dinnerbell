@@ -228,14 +228,14 @@ async def _scrub(db: AsyncSession, *, instance_label: str, keep: Iterable[str], 
                 member.display_name == anonymous
                 and not member.dietary_needs
                 and member.oidc_subject is None
-                and member.email is None
+                and member.slack_email is None
             )
             if not wiped:
                 changes |= {
                     "display_name": anonymous,
                     "dietary_needs": frozenset(),
                     "oidc_subject": None,
-                    "email": None,
+                    "slack_email": None,
                 }
                 guests += 1
         if changes:

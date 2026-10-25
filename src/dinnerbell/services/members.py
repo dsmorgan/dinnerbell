@@ -79,9 +79,10 @@ async def invite_member(db: AsyncSession, actor: Member, data: MemberInput, *, n
     require_admin(actor, MANAGE_MEMBERS)
     clean = _clean(data)
     members = MemberRepository(db)
+    guest = await members.guest_by_slack_email(actor.household_id, clean.email)
+    if guest is not None:
+        raise GuestHoldsEmail(guest)
     holder = await members.by_email(actor.household_id, clean.email)
-    if holder is not None and holder.is_guest:
-        raise GuestHoldsEmail(holder)
     if holder is not None:
         raise MemberRuleViolation("A member with that email already exists.")
     async with _unique_email(db):
@@ -108,9 +109,11 @@ async def update_member(db: AsyncSession, actor: Member, member_id: int, data: M
     everyone = await members.list(actor.household_id)
     check_role_change(actor, target, clean.role, everyone)
     check_email_change(target, clean.email)
+    if clean.email != target.email:
+        guest = await members.guest_by_slack_email(actor.household_id, clean.email)
+        if guest is not None:
+            raise GuestHoldsEmail(guest)
     holder = await members.by_email(actor.household_id, clean.email) if clean.email != target.email else None
-    if holder is not None and holder.is_guest:
-        raise GuestHoldsEmail(holder)
     if holder is not None:
         raise MemberRuleViolation("A member with that email already exists.")
     async with _unique_email(db):

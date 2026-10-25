@@ -82,7 +82,7 @@ def decide_sign_in(
         return Allow(by_slack_user, link_subject=True)
     if not claims.email_verified or not claims.email:
         return Refuse(Refusal.EMAIL_NOT_VERIFIED)
-    if by_email is None:
+    if by_email is None or by_email.is_guest:  # guests sign in only by their Slack user (#38)
         return Refuse(Refusal.UNKNOWN_EMAIL)
     if by_email.is_linked:
         return Refuse(Refusal.EMAIL_LINKED_ELSEWHERE, by_email.id)

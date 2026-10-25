@@ -47,6 +47,7 @@ def to_member(row: MemberRow) -> Member:
         feedback_reminder=row.feedback_reminder,
         dietary_needs=frozenset(int(t) for t in row.dietary_needs or []),
         join_refused=row.join_refused,
+        slack_email=row.slack_email,
     )
 
 
@@ -108,6 +109,18 @@ class MemberRepository:
     async def by_email(self, household_id: int, email: str) -> Member | None:
         row = await self._session.scalar(
             select(MemberRow).where(MemberRow.household_id == household_id, MemberRow.email == email)
+        )
+        return None if row is None else to_member(row)
+
+    async def guest_by_slack_email(self, household_id: int, email: str) -> Member | None:
+        """An active guest who joined with ``email`` as their Slack email (#38)."""
+        row = await self._session.scalar(
+            select(MemberRow).where(
+                MemberRow.household_id == household_id,
+                MemberRow.role == "guest",
+                MemberRow.active.is_(True),
+                MemberRow.slack_email == email,
+            )
         )
         return None if row is None else to_member(row)
 

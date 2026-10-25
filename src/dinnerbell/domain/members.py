@@ -67,6 +67,8 @@ class Member:
     guests' needs are (spec 5.5)."""
     join_refused: bool = False
     """An admin removed this guest: they can't join from the channel again (#38)."""
+    slack_email: str | None = None
+    """A joined guest's Slack email (#38): never used to sign in."""
 
     @property
     def is_admin(self) -> bool:

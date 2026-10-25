@@ -999,7 +999,8 @@ async def test_a_member_never_lands_on_a_guest_record(house: House) -> None:
     from dinnerbell.services import members as member_service
 
     joined = await act(house, guests.join, person("U09NINA", "Nina", email="Nina@Example.com"), via="slack")
-    assert joined.joined_as is guests.JoinedAs.GUEST and joined.member.email == "nina@example.com"
+    assert joined.joined_as is guests.JoinedAs.GUEST
+    assert (joined.member.email, joined.member.slack_email) == (None, "nina@example.com")  # never to sign in with
     data = member_service.MemberInput("Nina", "nina@example.com", Role.MEMBER, Capabilities())
     with pytest.raises(member_service.GuestHoldsEmail) as conflict:
         await act(house, member_service.invite_member, house["Alex"], data)
@@ -1085,7 +1086,7 @@ async def test_scrub_redacts_audit_rows_about_guests(house: House) -> None:
     assert rows and all(r.payload == {"redacted": "scrub-test"} for r in rows)
     assert all("U09" not in (r.target or "") for r in rows)
     async with house.sessionmaker() as db:
-        emails = list(await db.scalars(select(MemberRow.email).where(MemberRow.role == "guest")))
+        emails = list(await db.scalars(select(MemberRow.slack_email).where(MemberRow.role == "guest")))
     assert emails and all(e is None for e in emails)
 
 
@@ -1126,3 +1127,32 @@ async def test_when_dietary_needs_rule_out_every_pick_the_call_says_so(house: Ho
     assert (await house.event(event_id)).state is EventState.ABANDONED
     (abandoned,) = [e for e in await house.outbox() if e.kind == "call_abandoned"]
     assert abandoned.payload["needs_unmet"] is True and abandoned.payload["reason"] == "no_coverage"
+
+
+def test_a_guest_never_signs_in_through_the_email_path() -> None:
+    """Whatever a guest record holds, only the Slack-user branch, with Slack as the issuer, signs
+    a guest in: an email match never does."""
+    guest = Member(9, 1, "Pat", "pat@example.com", Role.GUEST, Capabilities(), True)  # as if one had leaked in
+    verified = claims(slack_user=None, email="pat@example.com", email_verified=True)
+    for slack in (True, False):
+        decision = decide_sign_in(verified, by_subject=None, by_email=guest, required_team_id=None, slack_sign_in=slack)
+        assert isinstance(decision, Refuse) and decision.reason is Refusal.UNKNOWN_EMAIL
+
+
+async def test_a_joined_guests_slack_email_signs_in_no_one(house: House) -> None:
+    from dinnerbell.services import auth
+
+    joined = await act(house, guests.join, person("U09NOVA", "Nova", email="nova@example.com"), via="slack")
+    by_email = claims(slack_user=None, subject="sub-other", email="nova@example.com", email_verified=True)
+    async with house.sessionmaker() as db:
+        outcome = await auth.sign_in(db, by_email, required_team_id=None, now=house.clock())
+    assert isinstance(outcome, Refuse) and outcome.reason is Refusal.UNKNOWN_EMAIL
+    async with house.sessionmaker() as db:
+        assert list(await db.scalars(select(SessionRow).where(SessionRow.member_id == joined.member.id))) == []
+    from sqlalchemy.exc import IntegrityError
+
+    async with house.sessionmaker() as db:  # a guest can't hold a sign-in email at all
+        with pytest.raises(IntegrityError, match="CHECK"):
+            await MemberRepository(db).update(
+                house.household.id, joined.member.id, house.clock(), email="x@example.com"
+            )

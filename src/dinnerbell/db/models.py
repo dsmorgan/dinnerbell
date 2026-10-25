@@ -64,14 +64,17 @@ class MemberRow(Base):
         UniqueConstraint("household_id", "oidc_subject"),
         UniqueConstraint("household_id", "slack_user_id"),
         CheckConstraint("role IN ('admin', 'member', 'guest')", name="role"),
-        CheckConstraint("role = 'guest' OR email IS NOT NULL", name="email"),
+        CheckConstraint("(role = 'guest' AND email IS NULL) OR (role <> 'guest' AND email IS NOT NULL)", name="email"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     household_id: Mapped[int] = mapped_column(ForeignKey("household.id", ondelete="CASCADE"), index=True)
     display_name: Mapped[str] = mapped_column(String(80))
     email: Mapped[str | None] = mapped_column(String(254))
-    """Required for admins and members; a guest has none unless an admin gave one."""
+    """How a member signs in (FR-41): required for admins and members, and never set for a guest."""
+    slack_email: Mapped[str | None] = mapped_column(String(254))
+    """The email Slack shared when a guest joined from the channel (#38). Sign-in never reads it;
+    it only warns the admin who adds a member with it."""
     oidc_subject: Mapped[str | None] = mapped_column(String(255))
     slack_user_id: Mapped[str | None] = mapped_column(String(32))
     slack_link_locked: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())

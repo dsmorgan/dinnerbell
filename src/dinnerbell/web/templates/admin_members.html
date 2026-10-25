@@ -9,9 +9,9 @@
 {% if conflict %}
 <form method="post" action="/admin/guests/{{ conflict.id }}/promote" class="card inline-form">
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-  <input type="hidden" name="email" value="{{ conflict.email }}">
+  <input type="hidden" name="email" value="{{ conflict.slack_email }}">
   <input type="hidden" name="role" value="{{ draft.role if draft and draft.role in ('admin', 'member') else 'member' }}">
-  <p class="small">{{ conflict.display_name }} joined from the Slack channel with {{ conflict.email }}.</p>
+  <p class="small">{{ conflict.display_name }} joined from the Slack channel with {{ conflict.slack_email }}.</p>
   <button type="submit" class="button small primary">Promote {{ conflict.display_name }} instead</button>
 </form>
 {% endif %}

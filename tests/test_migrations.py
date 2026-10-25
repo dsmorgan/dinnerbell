@@ -880,12 +880,14 @@ def test_0011_adds_guests_and_invitations_without_losing_a_row(settings: Setting
     before, members = _snapshot(settings), _members(settings)
     _upgrade_to(settings, "0011_guests")
     assert _snapshot(settings)["rows"] == before["rows"]
-    assert [m[:-2] for m in _members(settings)] == members  # plus dietary_needs '[]' and join_refused 0
-    assert all(m[-2:] == ("[]", 0) for m in _members(settings))
+    assert [m[:-3] for m in _members(settings)] == members  # plus dietary_needs, join_refused, slack_email
+    assert all(m[-3:] == ("[]", 0, None) for m in _members(settings))
     engine = create_sync_engine(settings.sync_database_url)
     try:
         with pytest.raises(IntegrityError, match="CHECK"), engine.begin() as c:
             c.execute(text(GUEST_INSERT), {"name": "Ann", "email": None, "role": "member", "t": STAMP})
+        with pytest.raises(IntegrityError, match="CHECK"), engine.begin() as c:  # a guest never has a sign-in email
+            c.execute(text(GUEST_INSERT), {"name": "Bo", "email": "bo@example.com", "role": "guest", "t": STAMP})
         with engine.begin() as c:
             c.execute(text(GUEST_INSERT), {"name": "Pat", "email": None, "role": "guest", "t": STAMP})
             guest = c.execute(text("SELECT max(id) FROM member")).scalar_one()

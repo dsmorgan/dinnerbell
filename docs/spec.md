@@ -497,7 +497,7 @@ Every table carries `household_id`. Timestamps are UTC; the household time zone 
 | Table | Key fields |
 |---|---|
 | household | name, timezone, settings (JSON: slots, weights, variety window, badge thresholds, slack channel) |
-| member | display name, email (only a guest may have none), oidc_subject, slack_user_id, slack_link_locked, role (admin, member, guest), can_cook, can_pickup, can_order, mute_dm_reminders, feedback_reminder, dietary_needs (a guest's dietary tags), join_refused (an admin removed this guest), active |
+| member | display name, email (members sign in with it; a guest never has one), slack_email (a joined guest's Slack email, never used to sign in), oidc_subject, slack_user_id, slack_link_locked, role (admin, member, guest), can_cook, can_pickup, can_order, mute_dm_reminders, feedback_reminder, dietary_needs (a guest's dietary tags), join_refused (an admin removed this guest), active |
 | tag | kind (cuisine, protein, dietary, other), name |
 | catalog_item | kind (home, restaurant), name, notes, url, order_url, modes (cook, pickup, delivery), default_servings, created_by, active |
 | catalog_item_tag | item, tag |

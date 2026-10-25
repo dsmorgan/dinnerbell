@@ -405,7 +405,7 @@ def test_adding_a_member_with_a_joined_guests_email_offers_to_promote_them(
 
     engine = create_engine(migrated.sync_database_url)
     with engine.begin() as c:  # as joining from the channel keeps it
-        c.execute(text("UPDATE member SET email = 'nina@example.com' WHERE id = :id"), {"id": nina.id})
+        c.execute(text("UPDATE member SET slack_email = 'nina@example.com' WHERE id = :id"), {"id": nina.id})
     engine.dispose()
     refused = invite(admin, "nina@example.com", "Nina")
     assert refused.status_code == 400

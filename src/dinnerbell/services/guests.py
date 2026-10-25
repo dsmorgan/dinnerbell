@@ -385,7 +385,7 @@ async def promote(
         raise MemberRuleViolation("A member with that email already exists.")
     # A guest's dietary needs come along: a need ("must be nut-free") has no exact veto to turn
     # into, so it stays a need, a hard constraint for members too, set on Preferences.
-    updated = await members.update(actor.household_id, guest.id, now, role=role, email=clean)
+    updated = await members.update(actor.household_id, guest.id, now, role=role, email=clean, slack_email=None)
     payload = {"to": role.value}
     await audit(db, actor.household_id, actor, "member.promoted", f"member:{guest.id}", payload, now)
     await db.commit()
@@ -614,6 +614,8 @@ async def join(db: AsyncSession, person: SlackPerson, *, via: str, now: datetime
             raise JoinRefused(NotJoinable.OFF)
         email = _email_of(person)
         holder = await members.by_email(household.id, email) if email else None
+        if holder is None and email:  # another guest who joined with this Slack email
+            holder = await members.guest_by_slack_email(household.id, email)
         if holder is not None and not holder.active:
             await _refused(db, household.id, person, NotJoinable.REMOVED, via, now)
             raise JoinRefused(NotJoinable.REMOVED)
@@ -642,9 +644,9 @@ async def join(db: AsyncSession, person: SlackPerson, *, via: str, now: datetime
             now=now,
         )
         if email is not None:
-            # Kept so the admin can't add a member with this email without seeing the guest
-            # first (``members.invite_member``).
-            guest = await members.update(household.id, guest.id, now, email=email)
+            # Kept apart from ``email``, which members sign in with, so the admin can't add a
+            # member with it without seeing this guest first (``members.invite_member``).
+            guest = await members.update(household.id, guest.id, now, slack_email=email)
         joined: dict[str, object] = {"slack_user_id": person.slack_user_id, "via": via}
         joined["slack_guest"] = not person.full_member
         await audit(db, household.id, None, "member.joined", f"member:{guest.id}", joined, now)
