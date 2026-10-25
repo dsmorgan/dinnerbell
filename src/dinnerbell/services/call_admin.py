@@ -42,9 +42,10 @@ async def move_deadline(
 
 async def rerun(db: AsyncSession, actor: Member, event_id: int, *, now: datetime) -> None:
     """Start the call again with fresh windows (``lifecycle.reopen``): now, for today's call,
-    or at the slot's call time for a later day (FR-3 timing), unless it was posted early. Refused for today's call once
-    it's past the usual meal time plus two hours. Any member can start a called-off call again
-    with ``calls.start_call``; re-running a voting, decided, or abandoned one is the admin's.
+    or at the slot's call time for a later day (FR-3 timing), unless it was posted early.
+    Refused for today's call once it's past the usual meal time plus two hours. Any member can
+    start a called-off call again with ``calls.start_call``; re-running a voting, decided, or
+    abandoned one is the admin's.
     """
     require_admin(actor, ADMINS_ONLY)
     async with locked_event(db, actor.household_id, event_id, now) as event:
