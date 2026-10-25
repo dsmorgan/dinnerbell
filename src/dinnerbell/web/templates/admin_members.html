@@ -11,8 +11,25 @@
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   <input type="hidden" name="email" value="{{ conflict.slack_email }}">
   <input type="hidden" name="role" value="{{ draft.role if draft and draft.role in ('admin', 'member') else 'member' }}">
-  <p class="small">{{ conflict.display_name }} joined from the Slack channel with {{ conflict.slack_email }}.</p>
+  <p class="small">{{ conflict.display_name }} joined from the Slack channel with {{ conflict.slack_email }}.{% if conflict.slack_guest_account %} <strong>They use a Slack guest account, not a full member of your workspace.</strong>{% endif %}</p>
   <button type="submit" class="button small primary">Promote {{ conflict.display_name }} instead</button>
+</form>
+{% endif %}
+{% if link_check %}
+{% set lg, lt = link_check.guest, link_check.target %}
+<form method="post" action="/admin/guests/{{ lg.id }}/link" class="card stack" id="link-check">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <input type="hidden" name="member_id" value="{{ lt.id }}">
+  <h2>Link {{ lg.display_name }} to {{ lt.display_name }}?</h2>
+  <p class="small">Their emails differ. Anyone in the channel can take any name, and whoever uses this Slack account will act as {{ lt.display_name }} in Slack.</p>
+  <dl class="small">
+    <dt>{{ lg.display_name }}'s Slack account</dt><dd><code>{{ lg.slack_user_id }}</code>{% if lg.slack_guest_account %} (a Slack guest account){% endif %}</dd>
+    <dt>Their Slack email</dt><dd>{{ lg.slack_email or "Slack shares no email for them" }}</dd>
+    <dt>{{ lt.display_name }}'s email</dt><dd>{{ lt.email }}</dd>
+  </dl>
+  <label class="field"><span>Type {{ lt.display_name }} to link anyway</span><input type="text" name="confirm" maxlength="80" autocomplete="off" required></label>
+  <button type="submit" class="button small danger">Link anyway</button>
+  <a class="button small" href="/admin/members">Cancel</a>
 </form>
 {% endif %}
 <ul class="members">
@@ -46,7 +63,7 @@
         <span class="badge">Guest</span>
         {% if not g.active %}<span class="badge status-deactivated">{% if g.join_refused %}Removed{% else %}Deactivated{% endif %}</span>{% endif %}
       </div>
-      <div class="muted small">{% if g.slack_user_id %}Slack: linked as <code>{{ g.slack_user_id }}</code>{% else %}No Slack: whoever invites them answers for them{% endif %}</div>
+      <div class="muted small">{% if g.slack_user_id %}Slack: linked as <code>{{ g.slack_user_id }}</code>{% if g.slack_guest_account %} (a Slack guest account){% endif %}{% if g.slack_email %}, Slack email {{ g.slack_email }}{% endif %}{% else %}No Slack: whoever invites them answers for them{% endif %}</div>
       <details class="details-form">
         <summary class="small">Edit, link Slack, or make a member</summary>
         <form method="post" action="/admin/guests/{{ g.id }}" class="stack">
@@ -66,13 +83,13 @@
           <label class="field compact"><span>Slack member ID</span><input type="text" name="slack_user_id" maxlength="32" value="{{ g.slack_user_id or '' }}"></label>
           <button type="submit" class="button small">Link</button>
         </form>
-        {% set unlinked = members|selectattr("active")|rejectattr("slack_user_id")|list %}
-        {% if g.active and g.slack_user_id and unlinked %}
+        {% if g.active and g.slack_user_id and linkable %}
         <form method="post" action="/admin/guests/{{ g.id }}/link" class="inline-form">
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-          <label class="field compact"><span>They're really</span><select name="member_id">{% for m in unlinked %}<option value="{{ m.id }}">{{ m.display_name }}</option>{% endfor %}</select></label>
+          <label class="field compact"><span>They're really</span><select name="member_id">{% for m in linkable %}<option value="{{ m.id }}">{{ m.display_name }} ({{ m.email }}){% if g.slack_email and m.email and g.slack_email|lower == m.email|lower %}: same email{% endif %}</option>{% endfor %}</select></label>
           <button type="submit" class="button small">Link to member</button>
         </form>
+        <p class="muted small">Admins aren't listed: an admin sets their own Slack member ID on their row.</p>
         {% endif %}
         {% if g.active %}
         <form method="post" action="/admin/guests/{{ g.id }}/promote" class="inline-form">

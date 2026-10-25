@@ -2,7 +2,7 @@
   "blocks": [
     {
       "text": {
-        "text": "*Pat* joined Dinnerbell from the Dinnerbell channel, as a guest. Guests answer only the calls a member invites them to, and never vote.\nMake them a member, remove them, or leave them as a guest.\n_Is this one of Kim, Lee, whose Slack accounts aren't linked yet? Then link them to their membership on the Members page._",
+        "text": "*Pat* (<@U07PAT>, Slack email pat@example.com) joined Dinnerbell from the Dinnerbell channel, as a guest. Guests answer only the calls a member invites them to, and never vote.\nMake them a member, remove them, or leave them as a guest.\n_Is this one of Kim, Lee, whose Slack accounts aren't linked yet? Anyone can take any name, so check the Slack email first, then link them to their membership on the Members page._",
         "type": "mrkdwn"
       },
       "type": "section"

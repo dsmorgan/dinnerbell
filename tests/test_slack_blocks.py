@@ -400,3 +400,20 @@ def test_cards_show_only_the_persons_own_choices_and_escape_what_people_typed() 
     assert "&lt;!here&gt; &amp; co" in blocks and "&lt;@U02SAM&gt; said so &amp; &lt;!channel&gt;" in blocks
     assert "You haven't answered yet." in card["blocks"][0]["text"]["text"]
     assert "style" not in json.dumps(card["blocks"])  # nothing chosen, nothing marked
+
+
+def test_messages_offering_a_link_show_the_slack_account_and_its_email() -> None:
+    """A display name proves nothing (#38): wherever an admin might link a Slack account, the
+    message shows the account itself and the email Slack shares, and never offers an admin."""
+    joined = json.dumps(samples.preview("guest_joined_unlinked"))
+    assert "<@U07PAT>, Slack email pat@example.com" in joined and "check the Slack email first" in joined
+    assert "Slack shares no email for it" in json.dumps(samples.preview("guest_joined"))
+    assert "a Slack guest account" in json.dumps(samples.preview("guest_joined_slack_guest"))
+    hourly = json.dumps(samples.preview("link_needed_hourly"))
+    assert "<@U09KIM>, Slack email kim@example.com" in hourly and "Link to member" in hourly
+    admin = json.dumps(samples.preview("link_needed_hourly_admin"))
+    assert "Link to member" not in admin and "is an admin" in admin
+    forged = render(note.GuestJoined(1, samples.ALEX, samples.PAT, "slack", slack_user_id="<!channel>"), CTX)
+    assert "<!channel>" not in json.dumps(forged.payload()) and "an unknown Slack account" in json.dumps(
+        forged.payload()
+    )

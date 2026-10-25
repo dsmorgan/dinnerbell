@@ -1,0 +1,28 @@
+{
+  "blocks": [
+    {
+      "text": {
+        "text": "Alex's Slack account (<@U01ALEX>, Slack email alex@example.com) is linked to someone else in Dinnerbell already, so it can't be linked to Alex. Alex is an admin, so a guest can't be linked to them: remove that guest, then set Alex's Slack member ID on their row on the Members page.",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "block_id": "more",
+      "elements": [
+        {
+          "action_id": "link_members",
+          "text": {
+            "emoji": true,
+            "text": "Members page",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "url": "https://dinnerbell.example.com/admin/members"
+        }
+      ],
+      "type": "actions"
+    }
+  ],
+  "text": "A Slack account needs linking to Alex."
+}

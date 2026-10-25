@@ -2,7 +2,7 @@
   "blocks": [
     {
       "text": {
-        "text": "Kim's Slack account (U09KIM) is linked to someone else in Dinnerbell already, so it can't be linked to Kim. If that's a guest who is really Kim, select *Link to member* on their row on the Members page.",
+        "text": "Kim's Slack account (<@U09KIM>, Slack email kim@example.com) is linked to someone else in Dinnerbell already, so it can't be linked to Kim. If that's a guest who is really Kim, select *Link to member* on their row on the Members page.",
         "type": "mrkdwn"
       },
       "type": "section"

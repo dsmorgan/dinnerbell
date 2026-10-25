@@ -588,7 +588,12 @@ class GuestJoined:
     guest: PersonInfo
     via: str
     unlinked: tuple[PersonInfo, ...] = ()
-    """Members with no Slack account yet, who the guest might really be."""
+    """Members, not admins, with no Slack account yet, who the guest might really be."""
+    slack_user_id: str = ""
+    slack_email: str | None = None
+    """The email Slack shares for the guest, so the admin can tell who they really are: anyone
+    can take any display name."""
+    slack_guest_account: bool = False
 
     @property
     def idempotency_key(self) -> str:
@@ -648,6 +653,10 @@ class LinkNeeded:
     slack_user_id: str
     slack_name: str
     reason: str
+    slack_email: str | None = None
+    """The email that matched: ``member``'s, which the Slack account has too."""
+    member_is_admin: bool = False
+    """An admin sets their own Slack member ID; a guest is never linked to one."""
 
     @property
     def idempotency_key(self) -> str:

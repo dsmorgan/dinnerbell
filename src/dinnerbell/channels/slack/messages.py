@@ -54,6 +54,7 @@ from dinnerbell.domain.events import (
     Window,
 )
 from dinnerbell.domain.meals import Slot
+from dinnerbell.domain.members import SLACK_USER_ID_PATTERN
 from dinnerbell.domain.schedule import SlotSchedule
 
 MAX_PROPOSALS = 10
@@ -611,21 +612,37 @@ def guest_invited_message(notification: note.GuestInvited, ctx: RenderContext) -
     return reminder_message(notification, ctx)
 
 
+def _slack_account(slack_user_id: str, email: str | None) -> str:
+    """Who a Slack account really is, for an admin about to link it: the account itself, which
+    Slack shows with its current profile, and the email Slack shares. A display name is whatever
+    its owner typed, so it's never enough (#38)."""
+    account = f"<@{slack_user_id}>" if SLACK_USER_ID_PATTERN.match(slack_user_id) else "an unknown Slack account"
+    shared = f"Slack email {escape(email)}" if email else "Slack shares no email for it"
+    return f"{account}, {shared}"
+
+
 def link_needed_message(notification: note.LinkNeeded, ctx: RenderContext) -> Message:
     """To each admin: a Slack account Dinnerbell can't link without them (#38)."""
     member = escape(notification.member.name)
     slack = escape((notification.slack_name or "Someone").translate(MARKERS))
+    account = _slack_account(notification.slack_user_id, notification.slack_email)
     if notification.reason == "join":
         text = (
-            f"{slack} tried to join Dinnerbell from the channel, and their Slack email is {member}'s. "
+            f"{slack} ({account}) tried to join Dinnerbell from the channel, and their Slack email is {member}'s. "
             f"If that's {member}, set their Slack member ID ({notification.slack_user_id}) on the Members page; "
             "otherwise add them as a guest there."
         )
+    elif notification.member_is_admin:
+        text = (
+            f"{member}'s Slack account ({account}) is linked to someone else in Dinnerbell already, so it "
+            f"can't be linked to {member}. {member} is an admin, so a guest can't be linked to them: remove "
+            f"that guest, then set {member}'s Slack member ID on their row on the Members page."
+        )
     else:
         text = (
-            f"{member}'s Slack account ({notification.slack_user_id}) is linked to someone else in Dinnerbell "
-            f"already, so it can't be linked to {member}. If that's a guest who is really {member}, select "
-            "*Link to member* on their row on the Members page."
+            f"{member}'s Slack account ({account}) is linked to someone else in Dinnerbell already, so it "
+            f"can't be linked to {member}. If that's a guest who is really {member}, select *Link to member* "
+            "on their row on the Members page."
         )
     members = button("Members page", f"{ids.LINK_PREFIX}members", url=ctx.url("/admin/members"))
     blocks = [section(text), actions(members, block_id="more")]
@@ -650,16 +667,21 @@ def guest_joined_message(notification: note.GuestJoined, ctx: RenderContext) -> 
     says otherwise."""
     where = "Sign in with Slack" if notification.via == "web" else "the Dinnerbell channel"
     name = escape(notification.guest.name.translate(MARKERS))  # it sits inside bold
+    account = _slack_account(notification.slack_user_id, notification.slack_email)
+    kind = " They use a Slack guest account, not a full one." if notification.slack_guest_account else ""
     lines = [
-        f"*{name}* joined Dinnerbell from {where}, as a guest. Guests answer only the calls a member "
-        "invites them to, and never vote.",
+        f"*{name}* ({account}) joined Dinnerbell from {where}, as a guest.{kind} Guests answer only the "
+        "calls a member invites them to, and never vote.",
         "Make them a member, remove them, or leave them as a guest.",
     ]
     if notification.unlinked:
         one = len(notification.unlinked) == 1
         who = names(notification.unlinked) if one else f"one of {names(notification.unlinked)}"
         whose = "whose Slack account isn't" if one else "whose Slack accounts aren't"
-        lines.append(f"_Is this {who}, {whose} linked yet? Then link them to their membership on the Members page._")
+        lines.append(
+            f"_Is this {who}, {whose} linked yet? Anyone can take any name, so check the Slack email "
+            "first, then link them to their membership on the Members page._"
+        )
     guest = ids.event_value(notification.guest.id)
     remove = confirm(
         f"Remove {clip(notification.guest.name, 60)}?",

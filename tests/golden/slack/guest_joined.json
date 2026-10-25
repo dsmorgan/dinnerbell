@@ -2,7 +2,7 @@
   "blocks": [
     {
       "text": {
-        "text": "*Pat &lt;Slack&gt; &amp; Co* joined Dinnerbell from the Dinnerbell channel, as a guest. Guests answer only the calls a member invites them to, and never vote.\nMake them a member, remove them, or leave them as a guest.",
+        "text": "*Pat &lt;Slack&gt; &amp; Co* (<@U07PAT>, Slack shares no email for it) joined Dinnerbell from the Dinnerbell channel, as a guest. Guests answer only the calls a member invites them to, and never vote.\nMake them a member, remove them, or leave them as a guest.",
         "type": "mrkdwn"
       },
       "type": "section"

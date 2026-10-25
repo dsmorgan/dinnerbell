@@ -323,7 +323,7 @@ A guest eats with the household when a member invites them to a call: they answe
 
 - To add only the people you choose, turn **Join from the channel** off on **Members**. Do it right after upgrading if you don't want anyone to join on their own.
 - **Add people from the channel** on **Members** lists everyone in the channel who isn't in Dinnerbell, to add each as a guest or a member.
-- If someone you invited by email joins as a guest because their Slack email differs, select **Link to member** on their guest row: their Slack account moves to their membership.
+- If someone you invited by email joins as a guest because their Slack email differs, select **Link to member** on their guest row: their Slack account moves to their membership. Anyone can take any name in Slack, so check the Slack account and the email Slack shares, shown in the join message and on the guest row. When that email isn't the member's, the page shows both and asks you to type the member's name to link anyway. Admins aren't offered: an admin sets their own Slack member ID on their row.
 - **Remove** signs a guest out and stops them joining again until you select **Add back**.
 
 Joining needs no extra Slack scopes for a public channel: `channels:read` reads who's in it and `users:read` checks the person. A private channel needs `groups:read`.

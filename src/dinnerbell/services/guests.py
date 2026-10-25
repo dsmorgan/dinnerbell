@@ -12,10 +12,11 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, replace
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import Any, Protocol
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dinnerbell.db.catalog import CatalogRepository
@@ -61,7 +62,6 @@ from dinnerbell.services import call_context as cc
 from dinnerbell.services.call_context import load, locked_event, publish
 from dinnerbell.services.common import audit, require_admin
 from dinnerbell.services.errors import Forbidden, NotFound
-from dinnerbell.services.variety import household_today
 
 log = logging.getLogger(__name__)
 
@@ -243,13 +243,6 @@ async def _drop_from_call(db: AsyncSession, event: Event, guest_id: int, now: da
     await publish(db, ctx, cc.message_updated(ctx), *cc.decision_updated(ctx), *told, now=now)
 
 
-async def _today(db: AsyncSession, actor: Member, now: datetime) -> date:
-    household = await HouseholdRepository(db).get(actor.household_id)
-    if household is None:  # pragma: no cover - members cascade with their household
-        raise NotFound("No such household.")
-    return household_today(household, now)
-
-
 # Guest records ---------------------------------------------------------------------------------
 
 
@@ -320,8 +313,9 @@ async def set_my_needs(db: AsyncSession, actor: Member, needs: frozenset[int], *
     # now would rule them out after the fact, as a member's guests' needs can't change then.
     events = EventRepository(db)
     if needs != actor.dietary_needs:
-        for event in await events.for_today(actor.household_id, await _today(db, actor, now)):
-            if event.state is not EventState.VOTING:
+        for event_id in await events.open_ids(actor.household_id):  # any day, not just today
+            event = await events.get(actor.household_id, event_id)
+            if event is None or event.state is not EventState.VOTING:
                 continue
             responses = await ResponseRepository(db).for_event(actor.household_id, event.id)
             answer = next((r for r in responses if r.member_id == actor.id), None)
@@ -392,30 +386,74 @@ async def promote(
     return updated
 
 
-async def link_to_member(db: AsyncSession, actor: Member, guest_id: int, member_id: int, *, now: datetime) -> Member:
-    """The guest is really a member whose Slack account Dinnerbell couldn't match, such as one
-    whose Slack email differs from the one they were invited with: move the guest's Slack user
-    to the member, locked as a link the admin set (FR-42), and retire the guest record. The
-    guest's history stays under the guest; they leave any open call, and are signed out. A join
-    from that Slack user then finds the member. Audited as ``guest.linked_to_member``."""
+class LinkNeedsOverride(MemberRuleViolation):
+    """The guest's Slack email isn't the member's, so linking needs the admin to look at both
+    and type the member's name (``link_to_member``). Carries both, for the confirmation step."""
+
+    def __init__(self, guest: Member, target: Member, message: str) -> None:
+        super().__init__(message)
+        self.guest = guest
+        self.target = target
+
+
+LINK_GONE = "That guest isn't active any more, so there's nothing to link. Reload the page."
+
+
+def emails_match(guest: Member, target: Member) -> bool:
+    """Whether the email Slack shared for ``guest`` is ``target``'s, ignoring case."""
+    return bool(guest.slack_email and target.email and guest.slack_email.casefold() == target.email.casefold())
+
+
+async def link_to_member(
+    db: AsyncSession, actor: Member, guest_id: int, member_id: int, *, confirm: str = "", now: datetime
+) -> Member:
+    """The guest is really a member whose Slack account Dinnerbell couldn't match: move the
+    guest's Slack user to the member, locked as a link the admin set (FR-42), and retire the
+    guest record. The guest's history stays under the guest; they leave any open call, and are
+    signed out. A join from that Slack user then finds the member.
+
+    A display name proves nothing: anyone in the channel can call themselves "Kim". So linking
+    is never offered to an admin, who sets their own Slack member ID by hand, and when the
+    email Slack shared for the guest isn't the member's, the admin must type the member's name
+    (``confirm``) after seeing both emails (``LinkNeedsOverride``). Audited as
+    ``guest.linked_to_member``, with ``override`` true for such a link."""
     require_admin(actor, MANAGE_GUESTS)
-    guest = await _guest(db, actor, guest_id)
-    members = MemberRepository(db)
-    target = await members.get(actor.household_id, member_id)
-    if target is None or not target.is_member:
-        raise NotFound("No such member.")
-    if guest.slack_user_id is None:
-        raise MemberRuleViolation(f"{guest.display_name} has no Slack account to link.")
-    if target.slack_user_id is not None:
-        raise MemberRuleViolation(f"{target.display_name} is linked to a Slack account already.")
-    slack_id = guest.slack_user_id
-    await members.update(actor.household_id, guest.id, now, slack_user_id=None, oidc_subject=None, active=False)
-    await SessionRepository(db).delete_for_member(guest.id)
-    linked = await members.update(actor.household_id, target.id, now, slack_user_id=slack_id, slack_link_locked=True)
-    await _leave_open_calls(db, actor, guest, now)
-    payload = {"guest_id": guest.id, "slack_user_id": slack_id}
-    await audit(db, actor.household_id, actor, "guest.linked_to_member", f"member:{target.id}", payload, now)
-    await db.commit()
+    async with write_transaction(db):  # a second link of the same guest reads the first's result
+        guest = await _guest(db, actor, guest_id)
+        if not guest.active or guest.join_refused:
+            raise MemberRuleViolation(LINK_GONE)
+        members = MemberRepository(db)
+        target = await members.get(actor.household_id, member_id)
+        if target is None or not target.is_member:
+            raise NotFound("No such member.")
+        if target.is_admin:
+            raise MemberRuleViolation(
+                "A guest can't be linked to an admin. An admin sets their own Slack member ID on their row."
+            )
+        if guest.slack_user_id is None:
+            raise MemberRuleViolation(f"{guest.display_name} has no Slack account to link.")
+        if target.slack_user_id is not None:
+            raise MemberRuleViolation(f"{target.display_name} is linked to a Slack account already.")
+        override = not emails_match(guest, target)
+        if override and not confirm:
+            raise LinkNeedsOverride(guest, target, "Their Slack email isn't the member's. Check both before linking.")
+        if override and confirm.strip().casefold() != target.display_name.casefold():
+            raise LinkNeedsOverride(guest, target, f"Type {target.display_name} exactly to link anyway.")
+        slack_id = guest.slack_user_id
+        try:
+            await members.update(actor.household_id, guest.id, now, slack_user_id=None, oidc_subject=None, active=False)
+            await SessionRepository(db).delete_for_member(guest.id)
+            linked = await members.update(
+                actor.household_id, target.id, now, slack_user_id=slack_id, slack_link_locked=True
+            )
+        except IntegrityError:
+            # Another link took this Slack account first: answer as a replay would.
+            await db.rollback()
+            raise MemberRuleViolation(LINK_GONE) from None
+        await _leave_open_calls(db, actor, guest, now)
+        payload = {"guest_id": guest.id, "slack_user_id": slack_id, "override": override}
+        await audit(db, actor.household_id, actor, "guest.linked_to_member", f"member:{target.id}", payload, now)
+        await db.commit()
     return linked
 
 
@@ -429,9 +467,16 @@ async def _leave_open_calls(db: AsyncSession, actor: Member, guest: Member, now:
 
 
 async def unlinked_members(db: AsyncSession, actor: Member) -> list[Member]:
-    """Active members with no Slack account yet: who a guest might really be."""
+    """Who a guest might really be: active members, not admins, with no Slack account yet."""
     require_admin(actor, MANAGE_GUESTS)
-    return [m for m in await MemberRepository(db).list(actor.household_id) if m.is_member and m.slack_user_id is None]
+    return [m for m in await MemberRepository(db).list(actor.household_id) if _link_target(m)]
+
+
+def _link_target(member: Member) -> bool:
+    """Whether a guest may be linked to ``member`` (``link_to_member``): an active member with
+    no Slack account. Never an admin: a guest linked to an admin would act as that admin in
+    Slack, so admins set their own Slack member ID by hand on their row."""
+    return member.is_member and not member.is_admin and member.slack_user_id is None
 
 
 async def remove(db: AsyncSession, actor: Member, guest_id: int, *, now: datetime) -> Member:
@@ -641,6 +686,7 @@ async def join(db: AsyncSession, person: SlackPerson, *, via: str, now: datetime
             display_name=name,
             dietary_needs=frozenset(),
             slack_user_id=person.slack_user_id,
+            slack_guest_account=not person.full_member,
             now=now,
         )
         if email is not None:
@@ -653,13 +699,20 @@ async def join(db: AsyncSession, person: SlackPerson, *, via: str, now: datetime
         everyone = await members.list(household.id)
         admins = [m for m in everyone if m.is_member and m.is_admin]
         # Someone invited by email whose Slack email differs joins as a guest; the admin can
-        # link them to their membership instead (``link_to_member``).
-        unlinked = tuple(
-            note.PersonInfo(m.id, m.display_name) for m in everyone if m.is_member and m.slack_user_id is None
-        )
+        # link them to their membership instead (``link_to_member``), never to an admin's.
+        unlinked = tuple(note.PersonInfo(m.id, m.display_name) for m in everyone if _link_target(m))
         joined_guest = note.PersonInfo(guest.id, guest.display_name)
         outbox_now = [
-            note.GuestJoined(household.id, note.PersonInfo(a.id, a.display_name), joined_guest, via, unlinked)
+            note.GuestJoined(
+                household.id,
+                note.PersonInfo(a.id, a.display_name),
+                joined_guest,
+                via,
+                unlinked,
+                slack_user_id=person.slack_user_id,
+                slack_email=email,
+                slack_guest_account=not person.full_member,
+            )
             for a in admins
         ]
         for dm in outbox_now:
@@ -699,6 +752,8 @@ async def ask_admins(
             person.slack_user_id,
             person.name,
             reason,
+            slack_email=member.email or member.slack_email,
+            member_is_admin=member.is_admin,
         )
         await OutboxRepository(db).enqueue(household_id, None, notice, now)
 
@@ -759,6 +814,7 @@ async def import_person(db: AsyncSession, actor: Member, person: SlackPerson, ro
             display_name=name,
             dietary_needs=frozenset(),
             slack_user_id=person.slack_user_id,
+            slack_guest_account=not person.full_member,
             now=now,
         )
     elif role is Role.MEMBER and person.email and person.full_member:

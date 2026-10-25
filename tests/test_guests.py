@@ -49,6 +49,7 @@ from dinnerbell.services.offers import OfferInput
 from dinnerbell.services.preferences import set_my_preference
 from tests.support.calls import OPENS, RESPOND_BY, VOTE_BY, House, dinner_id, furnish, make_house
 from tests.support.clock import FakeClock
+from tests.support.households import other_household
 
 pytestmark = pytest.mark.anyio
 DAY = date(2026, 10, 22)
@@ -653,8 +654,20 @@ def test_an_invited_members_email_wins_over_a_guest_holding_their_slack() -> Non
 async def test_scrub_makes_guests_anonymous(house: House) -> None:
     veg = house.tags["Vegetarian"].id
     await act(house, guests.set_my_needs, house["Pat"], frozenset({veg}))
+    # Slack links set or cleared by hand name a Slack account: a guest's lose their payloads,
+    # a member's stay.
+    await act(house, guests.set_guest_slack_user, house["Alex"], house["Jo"].id, "U07JO")
+    await act(house, guests.set_guest_slack_user, house["Alex"], house["Jo"].id, "")
+    from dinnerbell.services import members as member_service
+
+    await act(house, member_service.set_slack_user, house["Alex"], house["Kim"].id, "U03KIM")
     summary = await act(house, scrub.scrub_test, instance_label="TEST", keep=["admin@example.com"])
     assert summary.guests_scrubbed == 2
+    by_target = {(a.action, a.target): a.payload for a in await house.audits("member.slack_user_")}
+    jo, kim = f"member:{house['Jo'].id}", f"member:{house['Kim'].id}"
+    assert by_target[("member.slack_user_set", jo)] == {"redacted": "scrub-test"}
+    assert by_target[("member.slack_user_cleared", jo)] == {"redacted": "scrub-test"}
+    assert by_target[("member.slack_user_set", kim)] != {"redacted": "scrub-test"}
     async with house.sessionmaker() as db:
         rows = list(await db.scalars(select(MemberRow).where(MemberRow.role == "guest").order_by(MemberRow.id)))
     for row in rows:
@@ -742,6 +755,10 @@ async def test_a_guests_needs_hold_still_while_their_call_votes(house: House) ->
     with pytest.raises(EventRuleViolation, match="voting now"):
         await act(house, guests.set_my_needs, pat, frozenset())
     await act(house, guests.set_my_needs, pat, frozenset({veg}))  # the same needs again is no change
+    house.clock.now = OPENS + timedelta(days=1)  # still voting the next day: still held
+    assert (await house.event(event_id)).state is EventState.VOTING
+    with pytest.raises(EventRuleViolation, match="voting now"):
+        await act(house, guests.set_my_needs, pat, frozenset())
 
 
 async def test_a_deactivated_members_email_cant_come_back_as_a_guest(house: House) -> None:
@@ -850,28 +867,142 @@ async def test_a_promoted_guest_keeps_their_dietary_needs_as_a_hard_constraint(h
 
 
 async def test_the_admin_links_a_joined_guest_to_their_membership(house: House) -> None:
-    """Kim was invited by email, but her Slack email differs, so she joined as a guest. The
-    admin's message names the members with no Slack yet, and the admin links her."""
+    """Kim was invited by email, but Slack shares no email for her, so she joined as a guest. The
+    admin's message names the members with no Slack yet, never an admin, and shows her Slack
+    account. With no matching email, linking takes the admin typing Kim's name."""
+    from dinnerbell.domain.members import MemberRuleViolation
+
     joined = await act(house, guests.join, person("U09KIM", "Kim K"), via="slack")
     dm = next(e for e in await house.outbox() if e.kind == "guest_joined")
-    assert {p["name"] for p in dm.payload["unlinked"]} == {"Alex", "Kim", "Lee", "Sam"}
+    assert {p["name"] for p in dm.payload["unlinked"]} == {"Kim", "Lee", "Sam"}  # not Alex, an admin
+    assert (dm.payload["slack_user_id"], dm.payload["slack_email"]) == ("U09KIM", None)
     event_id = await open_dinner(house)
     await act(house, guests.invite, house["Sam"], event_id, guest_id=joined.member.id)
     with pytest.raises(Forbidden):
         await act(house, guests.link_to_member, house["Sam"], joined.member.id, house["Kim"].id)
-    linked = await act(house, guests.link_to_member, house["Alex"], joined.member.id, house["Kim"].id)
+    for confirm in ("", "Kim K", "Lee"):
+        with pytest.raises(guests.LinkNeedsOverride) as refused:
+            await act(house, guests.link_to_member, house["Alex"], joined.member.id, house["Kim"].id, confirm=confirm)
+        assert (refused.value.guest.id, refused.value.target.id) == (joined.member.id, house["Kim"].id)
+    assert (await house.refresh("Kim")).slack_user_id is None
+    linked = await act(house, guests.link_to_member, house["Alex"], joined.member.id, house["Kim"].id, confirm=" kim ")
     assert (linked.id, linked.slack_user_id, linked.slack_link_locked) == (house["Kim"].id, "U09KIM", True)
+    (row,) = await house.audits("guest.linked_to_member")
+    assert row.payload == {"guest_id": joined.member.id, "slack_user_id": "U09KIM", "override": True}
     async with house.sessionmaker() as db:
         retired = await MemberRepository(db).get(house.household.id, joined.member.id)
     assert retired is not None and (retired.active, retired.slack_user_id) == (False, None)
     again = await act(house, guests.join, person("U09KIM", "Kim K"), via="slack")
     assert again.joined_as is guests.JoinedAs.ALREADY and again.member.id == house["Kim"].id
+    with pytest.raises(MemberRuleViolation, match="isn't active"):  # a replay
+        await act(house, guests.link_to_member, house["Alex"], joined.member.id, house["Lee"].id, confirm="Lee")
+    with pytest.raises(MemberRuleViolation, match="no Slack"):
+        await act(house, guests.link_to_member, house["Alex"], house["Jo"].id, house["Lee"].id, confirm="Lee")
+    with pytest.raises(MemberRuleViolation, match="linked to a Slack account"):
+        await act(house, guests.link_to_member, house["Alex"], house["Pat"].id, house["Kim"].id, confirm="Kim")
+
+
+async def test_a_guest_whose_slack_email_is_the_members_links_without_typing(house: House) -> None:
+    """The email Slack shares for the guest is Kim's (in any case): the normal link, no override.
+    It signs the guest out."""
+    pat = house["Pat"]
+    async with house.sessionmaker() as db:
+        await MemberRepository(db).update(house.household.id, pat.id, house.clock(), slack_email="KIM@example.com")
+        now = house.clock()
+        db.add(
+            SessionRow(
+                id="c" * 64,
+                household_id=house.household.id,
+                member_id=pat.id,
+                created_at=now,
+                expires_at=now + timedelta(days=1),
+                last_seen=now,
+            )
+        )
+        await db.commit()
+    assert house["Kim"].email == "kim@example.com"
+    linked = await act(house, guests.link_to_member, house["Alex"], pat.id, house["Kim"].id)
+    assert (linked.slack_user_id, linked.slack_link_locked) == ("U07PAT", True)
+    (row,) = await house.audits("guest.linked_to_member")
+    assert row.payload["override"] is False
+    async with house.sessionmaker() as db:
+        assert list(await db.scalars(select(SessionRow).where(SessionRow.member_id == pat.id))) == []
+
+
+async def test_a_guest_is_never_linked_to_an_admin(house: House) -> None:
+    """Anyone in the channel can call themselves "Alex": a guest never becomes an admin's Slack
+    account, whatever the admin types. Admins set their own Slack member ID by hand."""
     from dinnerbell.domain.members import MemberRuleViolation
 
-    with pytest.raises(MemberRuleViolation, match="no Slack"):
-        await act(house, guests.link_to_member, house["Alex"], house["Jo"].id, house["Lee"].id)
-    with pytest.raises(MemberRuleViolation, match="linked to a Slack account"):
-        await act(house, guests.link_to_member, house["Alex"], house["Pat"].id, house["Kim"].id)
+    pat = house["Pat"]
+    async with house.sessionmaker() as db:
+        await MemberRepository(db).update(house.household.id, pat.id, house.clock(), slack_email=house["Alex"].email)
+        await db.commit()
+    for confirm in ("", "Alex"):
+        with pytest.raises(MemberRuleViolation, match="admin"):
+            await act(house, guests.link_to_member, house["Alex"], pat.id, house["Alex"].id, confirm=confirm)
+    assert (await house.refresh("Alex")).slack_user_id is None
+    assert all(not m.is_admin for m in await read(house, guests.unlinked_members, house["Alex"]))
+
+
+async def test_linking_refuses_retired_guests_and_anyone_but_an_active_member(house: House, migrated: Settings) -> None:
+    from sqlalchemy import text
+
+    from dinnerbell.domain.members import MemberRuleViolation
+    from dinnerbell.services import members as member_service
+
+    pat = house["Pat"]
+    async with house.sessionmaker() as db:  # refused from joining, though somehow still active
+        await MemberRepository(db).update(house.household.id, pat.id, house.clock(), join_refused=True)
+        await db.commit()
+    with pytest.raises(MemberRuleViolation, match="isn't active"):
+        await act(house, guests.link_to_member, house["Alex"], pat.id, house["Kim"].id, confirm="Kim")
+    async with house.sessionmaker() as db:
+        await MemberRepository(db).update(house.household.id, pat.id, house.clock(), join_refused=False)
+        await db.commit()
+    await act(house, guests.remove, house["Alex"], pat.id)
+    await act(house, member_service.set_member_active, house["Alex"], pat.id, True)
+    ana = await add_guest(house, "Ana", slack="U07ANA")
+    await act(house, guests.remove, house["Alex"], ana.id)  # removed: inactive and refused
+    with pytest.raises(MemberRuleViolation, match="isn't active"):
+        await act(house, guests.link_to_member, house["Alex"], ana.id, house["Kim"].id, confirm="Kim")
+    # The target must be an active member of this household: not a guest, not deactivated.
+    await act(house, member_service.set_member_active, house["Alex"], house["Lee"].id, False)
+    others = other_household(migrated)
+    async with house.sessionmaker() as db:
+        await db.execute(
+            text(
+                "INSERT INTO member (household_id, display_name, email, role, can_cook, can_pickup, can_order, "
+                "mute_dm_reminders, feedback_reminder, active, created_at, updated_at) "
+                "VALUES (:h, 'Eve', 'eve@example.com', 'member', 0, 0, 0, 0, 0, 1, :t, :t)"
+            ),
+            {"h": others["household"], "t": "2026-01-01 00:00:00"},
+        )
+        eve = (await db.execute(text("SELECT max(id) FROM member"))).scalar_one()
+        await db.commit()
+    for target, name in ((house["Jo"].id, "Jo"), (house["Lee"].id, "Lee"), (eve, "Eve")):
+        with pytest.raises(NotFound, match="No such member"):
+            await act(house, guests.link_to_member, house["Alex"], pat.id, target, confirm=name)
+    assert (await house.refresh("Pat")).slack_user_id == "U07PAT"
+
+
+async def test_two_links_at_once_refuse_the_second_like_a_replay(house: House, monkeypatch: pytest.MonkeyPatch) -> None:
+    """The second of two links read the guest before the first committed. Its write would take
+    the Slack account the first gave Kim: it's refused as a replay would be, not a 500."""
+    from dinnerbell.domain.members import MemberRuleViolation
+
+    stale = house["Pat"]
+    await act(house, guests.link_to_member, house["Alex"], stale.id, house["Kim"].id, confirm="Kim")
+
+    async def as_read_before(db: Any, actor: Member, guest_id: int) -> Member:
+        return stale
+
+    monkeypatch.setattr(guests, "_guest", as_read_before)
+    with pytest.raises(MemberRuleViolation, match="isn't active"):
+        await act(house, guests.link_to_member, house["Alex"], stale.id, house["Lee"].id, confirm="Lee")
+    assert (await house.refresh("Lee")).slack_user_id is None
+    assert (await house.refresh("Kim")).slack_user_id == "U07PAT"
+    assert len(await house.audits("guest.linked_to_member")) == 1
 
 
 async def test_member_pickers_leave_out_saved_guests(house: House) -> None:
@@ -1001,6 +1132,8 @@ async def test_a_member_never_lands_on_a_guest_record(house: House) -> None:
     joined = await act(house, guests.join, person("U09NINA", "Nina", email="Nina@Example.com"), via="slack")
     assert joined.joined_as is guests.JoinedAs.GUEST
     assert (joined.member.email, joined.member.slack_email) == (None, "nina@example.com")  # never to sign in with
+    dm = next(e for e in await house.outbox() if e.kind == "guest_joined")
+    assert (dm.payload["slack_user_id"], dm.payload["slack_email"]) == ("U09NINA", "nina@example.com")
     data = member_service.MemberInput("Nina", "nina@example.com", Role.MEMBER, Capabilities())
     with pytest.raises(member_service.GuestHoldsEmail) as conflict:
         await act(house, member_service.invite_member, house["Alex"], data)

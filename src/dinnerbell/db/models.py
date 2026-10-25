@@ -64,7 +64,10 @@ class MemberRow(Base):
         UniqueConstraint("household_id", "oidc_subject"),
         UniqueConstraint("household_id", "slack_user_id"),
         CheckConstraint("role IN ('admin', 'member', 'guest')", name="role"),
-        CheckConstraint("(role = 'guest' AND email IS NULL) OR (role <> 'guest' AND email IS NOT NULL)", name="email"),
+        CheckConstraint(
+            "(role = 'guest' AND email IS NULL) OR (role <> 'guest' AND email IS NOT NULL AND email <> '')",
+            name="email",
+        ),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -89,6 +92,8 @@ class MemberRow(Base):
     """A guest's dietary tag IDs (#38). Empty for members, whose stances are preferences."""
     join_refused: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     """An admin removed this guest, so joining from the channel is refused (#38)."""
+    slack_guest_account: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    """The guest joined with a Slack guest account, not as a full member of the workspace (#38)."""
     created_at: Mapped[datetime] = mapped_column(UTCDateTime())
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime())
 

@@ -48,6 +48,7 @@ def to_member(row: MemberRow) -> Member:
         dietary_needs=frozenset(int(t) for t in row.dietary_needs or []),
         join_refused=row.join_refused,
         slack_email=row.slack_email,
+        slack_guest_account=row.slack_guest_account,
     )
 
 
@@ -180,6 +181,7 @@ class MemberRepository:
         dietary_needs: frozenset[int],
         now: datetime,
         slack_user_id: str | None = None,
+        slack_guest_account: bool = False,
     ) -> Member:
         """A guest (#38): no email, no capabilities, and a Slack user only if they have one."""
         row = MemberRow(
@@ -196,6 +198,7 @@ class MemberRepository:
             active=True,
             dietary_needs=sorted(dietary_needs),
             join_refused=False,
+            slack_guest_account=slack_guest_account,
             created_at=now,
             updated_at=now,
         )
@@ -310,6 +313,28 @@ class AuditRepository:
             target = "slack:redacted" if (row.target or "").startswith("slack:") else row.target
             if row.payload != payload or row.target != target:
                 row.payload, row.target = dict(payload), target
+                changed += 1
+        await self._session.flush()
+        return changed
+
+    async def redact_about(
+        self, household_id: int, actions: tuple[str, ...], targets: set[str], payload: dict[str, Any]
+    ) -> int:
+        """Replace the payload of every audit row with one of ``actions`` about one of
+        ``targets``, for ``scrub-test``. Returns how many changed."""
+        if not targets:
+            return 0
+        rows = await self._session.scalars(
+            select(AuditRow).where(
+                AuditRow.household_id == household_id,
+                AuditRow.action.in_(actions),
+                AuditRow.target.in_(sorted(targets)),
+            )
+        )
+        changed = 0
+        for row in rows:
+            if row.payload != payload:
+                row.payload = dict(payload)
                 changed += 1
         await self._session.flush()
         return changed

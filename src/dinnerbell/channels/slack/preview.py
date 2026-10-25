@@ -264,13 +264,27 @@ NOTIFICATIONS: dict[str, Callable[[], note.Notification]] = {
         replace(LUNCH_OFFER, state=EventState.CANCELLED), (ALEX, SAM), cancelled_by=ALEX, audience=(ALEX, SAM)
     ),
     "guest_invited": lambda: note.GuestInvited(event(), PAT, KIM),
-    "guest_joined": lambda: note.GuestJoined(1, ALEX, note.PersonInfo(9, "Pat <Slack> & *Co*"), "slack"),
-    "guest_joined_web": lambda: note.GuestJoined(1, ALEX, PAT, "web", unlinked=(KIM,)),
-    "guest_joined_unlinked": lambda: note.GuestJoined(1, ALEX, PAT, "slack", unlinked=(KIM, LEE)),
+    "guest_joined": lambda: note.GuestJoined(
+        1, ALEX, note.PersonInfo(9, "Pat <Slack> & *Co*"), "slack", slack_user_id="U07PAT"
+    ),
+    "guest_joined_web": lambda: note.GuestJoined(
+        1, ALEX, PAT, "web", unlinked=(KIM,), slack_user_id="U07PAT", slack_email="pat@example.com"
+    ),
+    "guest_joined_unlinked": lambda: note.GuestJoined(
+        1, ALEX, PAT, "slack", unlinked=(KIM, LEE), slack_user_id="U07PAT", slack_email="pat@example.com"
+    ),
+    "guest_joined_slack_guest": lambda: note.GuestJoined(
+        1, ALEX, PAT, "slack", slack_user_id="U07PAT", slack_email="pat@example.com", slack_guest_account=True
+    ),
     "response_reminder_guest": lambda: note.ResponseReminder(event(), PAT, guest=True),
     "role_vacated": lambda: note.RoleVacated(DECIDED, ALEX, PAT, (AssignmentRole.PICKUP,)),
-    "link_needed": lambda: note.LinkNeeded(1, ALEX, KIM, "U09KIM", "Kim <K> & *Co*", "join"),
-    "link_needed_hourly": lambda: note.LinkNeeded(1, ALEX, KIM, "U09KIM", "", "hourly"),
+    "link_needed": lambda: note.LinkNeeded(
+        1, ALEX, KIM, "U09KIM", "Kim <K> & *Co*", "join", slack_email="kim@example.com"
+    ),
+    "link_needed_hourly": lambda: note.LinkNeeded(1, ALEX, KIM, "U09KIM", "", "hourly", slack_email="kim@example.com"),
+    "link_needed_hourly_admin": lambda: note.LinkNeeded(
+        1, ALEX, ALEX, "U01ALEX", "", "hourly", slack_email="alex@example.com", member_is_admin=True
+    ),
     "assignment_made_for_guest": lambda: note.AssignmentMade(
         DECIDED, 34, PAT, (AssignmentRole.PICKUP,), replace(DECISION, dietary_notes=("Vegetarian",)), via=KIM
     ),

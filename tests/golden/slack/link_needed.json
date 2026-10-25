@@ -2,7 +2,7 @@
   "blocks": [
     {
       "text": {
-        "text": "Kim &lt;K&gt; &amp; Co tried to join Dinnerbell from the channel, and their Slack email is Kim's. If that's Kim, set their Slack member ID (U09KIM) on the Members page; otherwise add them as a guest there.",
+        "text": "Kim &lt;K&gt; &amp; Co (<@U09KIM>, Slack email kim@example.com) tried to join Dinnerbell from the channel, and their Slack email is Kim's. If that's Kim, set their Slack member ID (U09KIM) on the Members page; otherwise add them as a guest there.",
         "type": "mrkdwn"
       },
       "type": "section"

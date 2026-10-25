@@ -102,6 +102,7 @@ async def _members_page(
         "joining": await guest_service.joining_on(db, principal.member.household_id),
         "slack_connected": context.slack_people is not None,
         "dietary_tags": await guest_service.dietary_tags(db, principal.member),
+        "linkable": await guest_service.unlinked_members(db, principal.member),
     }
     return await render(request, "admin_members.html", page | extra, status_code=status_code)
 
@@ -343,13 +344,20 @@ async def link_guest(
     db: Database,
     guest_id: RowId,
     member_id: Text = "",
+    confirm: Text = "",
 ) -> Response:
-    """The guest is really a member whose Slack account wasn't matched: move the link (#38)."""
+    """The guest is really a member whose Slack account wasn't matched: move the link (#38).
+    When the guest's Slack email isn't the member's, the page shows both and asks the admin to
+    type the member's name (``confirm``) before linking anyway."""
     try:
         target = parse_id(member_id)
         if target is None:
             raise InvalidMemberInput("Pick the member they are.")
-        await guest_service.link_to_member(db, principal.member, guest_id, target, now=context.clock())
+        await guest_service.link_to_member(db, principal.member, guest_id, target, confirm=confirm, now=context.clock())
+    except guest_service.LinkNeedsOverride as exc:
+        check = {"guest": exc.guest, "target": exc.target}
+        page = {"error": str(exc) if confirm else None, "link_check": check}
+        return await _members_page(request, principal, context, db, status_code=400 if confirm else 200, **page)
     except GUEST_ERRORS as exc:
         return await _guest_error(request, principal, context, db, exc)
     return RedirectResponse("/admin/members?notice=guest_linked", status_code=303)

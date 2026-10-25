@@ -374,14 +374,38 @@ def test_a_guest_never_sees_votes_or_admin_controls(
 
 
 def test_the_admin_links_a_guest_to_a_member_on_the_web(admin: TestClient, migrated: Settings) -> None:
+    """Pat's Slack email isn't Kim's, so the page shows both and links only after the admin
+    types Kim's name. Admins are never offered."""
     pat = add_guest(admin, "Pat", slack="U07PAT")
     invite(admin, "kim@example.com", "Kim")
     kim = next(m for m in rows(migrated, MemberRow) if m.display_name == "Kim")
-    assert "Link to member" in page(admin.get("/admin/members"))
+    me = next(m for m in rows(migrated, MemberRow) if m.role == "admin")
+    html = page(admin.get("/admin/members"))
+    assert "Link to member" in html and f'<option value="{kim.id}">Kim (kim@example.com)</option>' in html
+    assert f'<option value="{me.id}">' not in html
     assert submit(admin, f"/admin/guests/{pat}/link", {"member_id": ""}).status_code == 400
-    assert submit(admin, f"/admin/guests/{pat}/link", {"member_id": str(kim.id)}).status_code == 303
+    check = submit(admin, f"/admin/guests/{pat}/link", {"member_id": str(kim.id)})
+    assert check.status_code == 200
+    html = page(check)
+    assert "Link Pat to Kim?" in html and "kim@example.com" in html and "Slack shares no email for them" in html
+    assert 'name="confirm"' in html and "U07PAT" in html
+    wrong = submit(admin, f"/admin/guests/{pat}/link", {"member_id": str(kim.id), "confirm": "Pat"})
+    assert wrong.status_code == 400 and "Type Kim exactly" in page(wrong)
+    assert next(m for m in rows(migrated, MemberRow) if m.id == kim.id).slack_user_id is None
+    linked = submit(admin, f"/admin/guests/{pat}/link", {"member_id": str(kim.id), "confirm": "Kim"})
+    assert linked.status_code == 303
     by_id = {m.id: m for m in rows(migrated, MemberRow)}
     assert (by_id[kim.id].slack_user_id, by_id[pat].slack_user_id, by_id[pat].active) == ("U07PAT", None, False)
+    (row,) = [a for a in rows(migrated, AuditRow) if a.action == "guest.linked_to_member"]
+    assert row.payload["override"] is True
+
+
+def test_a_guest_cant_be_linked_to_an_admin_on_the_web(admin: TestClient, migrated: Settings) -> None:
+    pat = add_guest(admin, "Pat", slack="U07PAT")
+    me = next(m for m in rows(migrated, MemberRow) if m.role == "admin")
+    refused = submit(admin, f"/admin/guests/{pat}/link", {"member_id": str(me.id), "confirm": me.display_name})
+    assert refused.status_code == 400 and "linked to an admin" in page(refused)
+    assert next(m for m in rows(migrated, MemberRow) if m.id == me.id).slack_user_id != "U07PAT"
 
 
 def test_a_member_sets_their_dietary_needs_on_preferences(admin: TestClient, migrated: Settings) -> None:
@@ -411,9 +435,28 @@ def test_adding_a_member_with_a_joined_guests_email_offers_to_promote_them(
     assert refused.status_code == 400
     html = page(refused)
     assert "joined from the Slack channel as a guest" in html and f'action="/admin/guests/{nina.id}/promote"' in html
+    assert "Slack guest account" not in html
     assert (
         submit(admin, f"/admin/guests/{nina.id}/promote", {"role": "member", "email": "nina@example.com"}).status_code
         == 303
     )
     row = next(m for m in rows(migrated, MemberRow) if m.id == nina.id)
     assert (row.role, row.slack_user_id) == ("member", "U09NINA")
+
+
+def test_the_promote_instead_form_says_when_the_guest_is_a_slack_guest_account(
+    admin: TestClient, migrated: Settings
+) -> None:
+    use_people(admin, FakePeople(SlackPerson("U09OLA", "Ola", "ola@example.com", full_member=False)))
+    assert submit(admin, "/admin/channel", {"slack_user_id": "U09OLA", "role": "guest"}).status_code == 303
+    ola = next(m for m in rows(migrated, MemberRow) if m.slack_user_id == "U09OLA")
+    assert ola.slack_guest_account is True
+    from sqlalchemy import create_engine, text
+
+    engine = create_engine(migrated.sync_database_url)
+    with engine.begin() as c:
+        c.execute(text("UPDATE member SET slack_email = 'ola@example.com' WHERE id = :id"), {"id": ola.id})
+    engine.dispose()
+    html = page(invite(admin, "ola@example.com", "Ola"))
+    assert "They use a Slack guest account, not a full member of your workspace." in html
+    assert "(a Slack guest account), Slack email ola@example.com" in html

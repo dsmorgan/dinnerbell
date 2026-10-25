@@ -16,7 +16,8 @@ Run it with test stopped, after restoring the backup. In one transaction it:
 - strips guests (#38) of what identifies them, as they're people outside the household: each is
   renamed "Guest <ID>" and loses their email, Slack user, sign-in, and dietary needs, as well as
   being deactivated like any member who isn't kept, and the audit rows about guests and joining
-  (``GUEST_AUDIT``), which hold names, Slack IDs, and dietary tags, lose their payloads. Their
+  (``GUEST_AUDIT``), which hold names, Slack IDs, and dietary tags, lose their payloads, as do
+  hand-set Slack links of guests (``GUEST_SLACK_AUDIT``). Their
   invitations stay with the calls' history.
 
 It never touches the meal log, the catalog, preferences, or the history of past events. Running
@@ -50,6 +51,8 @@ from dinnerbell.services.household import current_household
 GUEST_AUDIT = ("guest.", "member.join", "member.imported")
 """Audit actions whose payloads name guests or people who tried to join (#38): their names, Slack
 IDs, and dietary tags, all personal data of people outside the household."""
+GUEST_SLACK_AUDIT = ("member.slack_user_set", "member.slack_user_cleared")
+"""Audit actions that name a Slack account, redacted when their target is a guest."""
 NOT_LABELED = (
     "scrub-test runs only on a labeled instance. Set DINNERBELL_INSTANCE_LABEL (such as TEST) in the test "
     "instance's env file; never run it against production. Nothing changed."
@@ -267,7 +270,11 @@ async def _scrub(db: AsyncSession, *, instance_label: str, keep: Iterable[str], 
         payload = {"reason": "scrub", "from": event.state.value}
         await audit(db, household.id, None, action, f"event:{event.id}", payload, now)
 
-    redacted = await AuditRepository(db).redact(household.id, GUEST_AUDIT, {"redacted": "scrub-test"})
+    scrubbed = {"redacted": "scrub-test"}
+    redacted = await AuditRepository(db).redact(household.id, GUEST_AUDIT, scrubbed)
+    # A guest's Slack links set or cleared by hand name their Slack account too.
+    about_guests = {f"member:{m.id}" for m in members if m.is_guest}
+    redacted += await AuditRepository(db).redact_about(household.id, GUEST_SLACK_AUDIT, about_guests, scrubbed)
     pending, rows = await OutboxRepository(db).clear(household.id)
     feedback_deleted = await FeedbackRepository(db).clear(household.id)
 
