@@ -70,6 +70,7 @@ async def my_stance(
     db: AsyncSession, actor: Member, target_type: TargetType, target_id: int
 ) -> tuple[str, Stance] | None:
     """The actor's stored stance on one tag or item, with its name, or None if it's gone."""
+    require_member(actor)
     repo = CatalogRepository(db)
     target = (
         await repo.tag(actor.household_id, target_id)

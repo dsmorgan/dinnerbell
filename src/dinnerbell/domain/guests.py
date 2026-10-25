@@ -96,10 +96,14 @@ def check_guest(event: Event | None, actor: Member, action: GuestAction, *, invi
     is invited to ``event``. ``event`` is None for an action on no call yet, such as starting one."""
     if not actor.is_guest:
         return
+    # An event the guest isn't invited to reads the same whatever they tried, so no refusal
+    # can tell them it exists or what it's doing.
+    if event is not None and (event.kind is not EventKind.CALL or not invited):
+        raise EventRuleViolation(NOT_INVITED)
     allowed = GUEST_RULES.get(action)
     if allowed is None:
         raise EventRuleViolation(REFUSED.get(action, NOT_NOW))
-    if event is None or event.kind is not EventKind.CALL or not invited:
+    if event is None:
         raise EventRuleViolation(NOT_INVITED)
     if event.state not in allowed:
         raise EventRuleViolation(NOT_NOW)

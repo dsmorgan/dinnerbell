@@ -160,9 +160,11 @@ async def _join(context: AppContext, db: Database, claims: IdentityClaims, refus
         return False
     now = context.clock()
     if not context.join_limiter.allow(slack_id, now):
-        await guests.record_refusal(db, slack_id, guests.NotJoinable.TOO_MANY, via="web", now=now)
+        if context.join_limiter.first_refusal(slack_id):  # audited once per window
+            await guests.record_refusal(db, slack_id, guests.NotJoinable.TOO_MANY, via="web", now=now)
         return False
     if not await guests.joining_open(db):
+        await guests.record_refusal(db, slack_id, guests.NotJoinable.OFF, via="web", now=now)
         return False
     person = await people.person(slack_id)
     if not isinstance(person, guests.SlackPerson):

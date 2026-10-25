@@ -488,12 +488,18 @@ def coverage(responses: Iterable[Response], members: Mapping[int, Member]) -> Co
 
 
 def choose_winner(
-    tallies: Iterable[ProposalTally], *, coordinator_id: int | None, admin_ids: frozenset[int]
+    tallies: Iterable[ProposalTally],
+    *,
+    coordinator_id: int | None,
+    admin_ids: frozenset[int],
+    admins_next: bool = False,
 ) -> ProposalTally | None:
     """The proposal that wins at the vote deadline, or None if none is covered.
 
     Most votes wins. Ties go to the proposal the coordinator voted for; with no coordinator, to
-    the one more admins voted for; then to ranking order.
+    the one more admins voted for; then to ranking order. ``admins_next`` lets admins break a
+    tie ``coordinator_id``'s vote didn't: with a guest coordinating, ``coordinator_id`` is whoever
+    invited them, and admins come after them (#38).
     """
     eligible = [t for t in tallies if t.covered]
     if not eligible:
@@ -501,7 +507,7 @@ def choose_winner(
 
     def key(t: ProposalTally) -> tuple[int, int, int, int]:
         coordinator_pick = 1 if coordinator_id is not None and coordinator_id in t.voters else 0
-        admin_picks = len(t.voters & admin_ids) if coordinator_id is None else 0
+        admin_picks = len(t.voters & admin_ids) if coordinator_id is None or admins_next else 0
         return (-len(t.voters), -coordinator_pick, -admin_picks, t.rank)
 
     return min(eligible, key=key)

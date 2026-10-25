@@ -123,7 +123,7 @@ def test_the_guest_matrix_by_call_state(action: GuestAction, state: EventState) 
     else:
         with pytest.raises(EventRuleViolation):
             check_guest(call(state), GUEST, action, invited=True)
-    with pytest.raises(EventRuleViolation):  # never without an invitation
+    with pytest.raises(EventRuleViolation, match=NOT_INVITED):  # never without an invitation, and says only that
         check_guest(call(state), GUEST, action, invited=False)
     with pytest.raises(EventRuleViolation):  # never on an offer
         check_guest(call(state, EventKind.OFFER), GUEST, action, invited=True)
@@ -142,6 +142,13 @@ def test_a_guest_coordinator_never_breaks_a_tie() -> None:
     assert tie_breaker(GUEST, None) is None  # then the admins
     assert tie_breaker(MEMBER, None) == MEMBER.id
     assert tie_breaker(None, 2) is None
+    from dinnerbell.domain.events import ProposalTally, choose_winner
+
+    tied = [ProposalTally(1, 1, True, frozenset({5})), ProposalTally(2, 2, True, frozenset({1}))]
+    admins = frozenset({1})
+    # The inviter (7) didn't vote, so an admin's vote breaks the tie, not ranking order.
+    assert choose_winner(tied, coordinator_id=7, admin_ids=admins, admins_next=True).id == 2  # type: ignore[union-attr]
+    assert choose_winner(tied, coordinator_id=7, admin_ids=admins).id == 1  # type: ignore[union-attr]
 
 
 # Inviting and answering --------------------------------------------------------------------------
@@ -661,3 +668,70 @@ async def test_a_call_off_mentions_guests_who_were_in_and_a_discard_takes_invita
             db, house.household.id, event_id, actor=house["Alex"], instance_label="TEST", now=house.clock()
         )
     assert summary.rows["invitation"] == 1
+
+
+async def test_a_guest_who_leaves_a_call_leaves_no_coordinator_behind(house: House) -> None:
+    event_id = await open_dinner(house)
+    await invite(house, "Kim", "Pat", event_id)
+    await act(house, calls.respond, house["Pat"], event_id, Status.IN)
+    await act(house, calls.claim_coordinator, house["Pat"], event_id)
+    await act(house, guests.uninvite, house["Kim"], event_id, house["Pat"].id)
+    assert (await house.event(event_id)).coordinator_id is None
+    await invite(house, "Kim", "Pat", event_id)
+    await act(house, calls.respond, house["Pat"], event_id, Status.IN)
+    await act(house, calls.claim_coordinator, house["Pat"], event_id)
+    await act(house, guests.remove, house["Alex"], house["Pat"].id)
+    ctx = await house.context(event_id)
+    assert ctx.event.coordinator_id is None and ctx.response_of(house["Pat"].id).status is Status.OUT  # type: ignore[union-attr]
+    assert ctx.head_count == 0
+
+
+async def test_relinking_a_guests_slack_signs_out_the_old_account(house: House) -> None:
+    pat = house["Pat"]
+    async with house.sessionmaker() as db:
+        await MemberRepository(db).update(house.household.id, pat.id, house.clock(), oidc_subject="sub-old")
+        now = house.clock()
+        db.add(
+            SessionRow(
+                id="c" * 64,
+                household_id=house.household.id,
+                member_id=pat.id,
+                created_at=now,
+                expires_at=now + timedelta(days=1),
+                last_seen=now,
+            )
+        )
+        await db.commit()
+    updated = await act(house, guests.set_guest_slack_user, house["Alex"], pat.id, "U07OTHER")
+    assert (updated.slack_user_id, updated.oidc_subject, updated.slack_link_locked) == ("U07OTHER", None, True)
+    async with house.sessionmaker() as db:
+        assert list(await db.scalars(select(SessionRow).where(SessionRow.member_id == pat.id))) == []
+    from dinnerbell.domain.members import MemberRuleViolation
+
+    with pytest.raises(MemberRuleViolation, match="already linked"):
+        await act(house, guests.set_guest_slack_user, house["Alex"], house["Jo"].id, "U07OTHER")
+
+
+async def test_a_guests_needs_hold_still_while_their_call_votes(house: House) -> None:
+    veg = house.tags["Vegetarian"].id
+    event_id = await open_dinner(house)
+    await invite(house, "Kim", "Pat", event_id)
+    await act(house, guests.set_my_needs, house["Pat"], frozenset({veg}))  # fine while answering
+    pat = await house.refresh("Pat")
+    for name in ("Alex", "Sam"):
+        await act(house, calls.respond, house[name], event_id, Status.IN)
+    await act(house, calls.offer_role, house["Alex"], event_id, RoleOffer.PICKUP, True)
+    house.clock.now = RESPOND_BY
+    await house.tick()
+    with pytest.raises(EventRuleViolation, match="voting now"):
+        await act(house, guests.set_my_needs, pat, frozenset())
+    await act(house, guests.set_my_needs, pat, frozenset({veg}))  # the same needs again is no change
+
+
+async def test_a_deactivated_members_email_cant_come_back_as_a_guest(house: House) -> None:
+    from dinnerbell.services import members as member_service
+
+    await act(house, member_service.set_member_active, house["Alex"], house["Kim"].id, False)
+    with pytest.raises(guests.JoinRefused) as refused:
+        await act(house, guests.join, person("U09KIM", "Kim", email="kim@example.com"), via="slack")
+    assert refused.value.reason is guests.NotJoinable.REMOVED

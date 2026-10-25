@@ -609,7 +609,8 @@ async def decide(
         # A guest coordinating doesn't break a tie: whoever invited them does, then an admin (#38).
         coordinator = ctx.members.get(event.coordinator_id) if event.coordinator_id is not None else None
         breaker = tie_breaker(coordinator, ctx.invitations.get(coordinator.id) if coordinator else None)
-        chosen = choose_winner(tallies, coordinator_id=breaker, admin_ids=admins)
+        guest_coordinating = coordinator is not None and coordinator.is_guest
+        chosen = choose_winner(tallies, coordinator_id=breaker, admin_ids=admins, admins_next=guest_coordinating)
         found = ctx.proposal(chosen.id) if chosen is not None else None
         if found is None:
             await abandon(db, event, EndReason.NO_COVERAGE, now)

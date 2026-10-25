@@ -20,15 +20,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from dinnerbell.db.catalog import CatalogRepository
 from dinnerbell.db.engine import write_transaction
-from dinnerbell.db.events import EventRepository, InvitationRepository, ResponseRepository
+from dinnerbell.db.events import AssignmentRepository, EventRepository, InvitationRepository, ResponseRepository
 from dinnerbell.db.meals import household_settings
 from dinnerbell.db.outbox import OutboxRepository
 from dinnerbell.db.repositories import HouseholdRepository, MemberRepository, SessionRepository
 from dinnerbell.domain import notifications as note
 from dinnerbell.domain.catalog import TagKind
 from dinnerbell.domain.events import (
+    AssignmentRole,
     Event,
     EventRuleViolation,
+    EventState,
     RoleOffer,
     Status,
     check_can_respond,
@@ -164,12 +166,7 @@ async def uninvite(db: AsyncSession, actor: Member, event_id: int, guest_id: int
         if not (actor.is_admin or ctx.invitations[guest_id] == actor.id):
             raise Forbidden("Only whoever invited them, or an admin, can take a guest off the call.")
         await InvitationRepository(db).remove(actor.household_id, event.id, guest_id)
-        current = ctx.response_of(guest_id)
-        if current is not None and current.status is not Status.OUT:
-            out = replace(with_status(current, guest_id, Status.OUT, now), guests=0, guest_needs=frozenset())
-            await ResponseRepository(db).save(actor.household_id, event.id, out, now)
-        ctx = await load(db, event)
-        await publish(db, ctx, cc.call_updated(ctx), now=now)
+        await _drop_from_call(db, event, guest_id, now)
         await audit(
             db, actor.household_id, actor, "event.guest_uninvited", f"event:{event.id}", {"guest_id": guest_id}, now
         )
@@ -213,6 +210,21 @@ async def answer_for(
         await ResponseRepository(db).save(actor.household_id, event.id, answer, now)
         ctx = await load(db, event)
         await publish(db, ctx, cc.call_updated(ctx), now=now)
+
+
+async def _drop_from_call(db: AsyncSession, event: Event, guest_id: int, now: datetime) -> None:
+    """Take a guest out of a call they no longer belong to: their answer is out, and if they
+    were coordinating, nobody is, so a member can claim it. Updates the call's messages."""
+    ctx = await load(db, event)
+    current = ctx.response_of(guest_id)
+    if current is not None and current.status is not Status.OUT:
+        out = replace(with_status(current, guest_id, Status.OUT, now), guests=0, guest_needs=frozenset())
+        await ResponseRepository(db).save(event.household_id, event.id, out, now)
+    if ctx.event.coordinator_id == guest_id:
+        await EventRepository(db).save(replace(ctx.event, coordinator_id=None), now)
+        await AssignmentRepository(db).unassign(event.household_id, event.id, AssignmentRole.COORDINATOR)
+    ctx = await load(db, event)
+    await publish(db, ctx, cc.message_updated(ctx), *cc.decision_updated(ctx), now=now)
 
 
 # Guest records ---------------------------------------------------------------------------------
@@ -280,6 +292,16 @@ async def set_my_needs(db: AsyncSession, actor: Member, needs: frozenset[int], *
     if not (actor.is_guest and actor.active):
         raise Forbidden("Members set their preferences on the Preferences page.")
     check_dietary_needs(needs, dietary_tag_ids=await _dietary_tag_ids(db, actor.household_id))
+    # The picks of a call that's voting passed everyone's needs as they were (FR-29); a change
+    # now would rule them out after the fact, as a member's guests' needs can't change then.
+    events = EventRepository(db)
+    for event_id in await invited_events(db, actor):
+        event = await events.get(actor.household_id, event_id)
+        if event is not None and event.state is EventState.VOTING and needs != actor.dietary_needs:
+            raise EventRuleViolation(
+                "A call you're invited to is voting now. Change your needs once it's decided, "
+                "or ask whoever invited you."
+            )
     updated = await MemberRepository(db).update(actor.household_id, actor.id, now, dietary_needs=needs)
     payload = {"dietary_needs": sorted(needs)}
     await audit(db, actor.household_id, actor, "guest.needs_updated", f"member:{actor.id}", payload, now)
@@ -299,7 +321,12 @@ async def set_guest_slack_user(
     holder = await members.by_slack_user_id(actor.household_id, value) if value else None
     if holder is not None and holder.id != guest.id:
         raise MemberRuleViolation(f"{holder.display_name} is already linked to that Slack user.")
-    updated = await members.update(actor.household_id, guest.id, now, slack_user_id=value, slack_link_locked=True)
+    changes: dict[str, Any] = {"slack_user_id": value, "slack_link_locked": True}
+    if value != guest.slack_user_id:
+        # Whoever signed in with the old Slack account isn't this guest any more.
+        changes["oidc_subject"] = None
+        await SessionRepository(db).delete_for_member(guest.id)
+    updated = await members.update(actor.household_id, guest.id, now, **changes)
     action = "member.slack_user_set" if value else "member.slack_user_cleared"
     await audit(
         db, actor.household_id, actor, action, f"member:{guest.id}", {"from": guest.slack_user_id, "to": value}, now
@@ -340,6 +367,12 @@ async def remove(db: AsyncSession, actor: Member, guest_id: int, *, now: datetim
     guest = await _guest(db, actor, guest_id)
     updated = await MemberRepository(db).update(actor.household_id, guest.id, now, active=False, join_refused=True)
     await SessionRepository(db).delete_for_member(guest.id)
+    events = EventRepository(db)
+    for event_id in await invited_events(db, guest):
+        event = await events.get(actor.household_id, event_id)
+        if event is not None and event.state in {EventState.COLLECTING, EventState.VOTING, EventState.DECIDED}:
+            await events.lock(actor.household_id, event_id, now)
+            await _drop_from_call(db, event, guest.id, now)
     await audit(db, actor.household_id, actor, "guest.removed", f"member:{guest.id}", {}, now)
     await db.commit()
     return updated
@@ -440,16 +473,28 @@ class JoinLimiter:
         self.attempts = attempts
         self.window = window
         self.seen: dict[str, list[datetime]] = {}
+        self.told: set[str] = set()
+        """Slack users refused in their current window: only the first refusal is audited and
+        answered, so a stuck button can't fill the audit log."""
+
+    def first_refusal(self, slack_user_id: str) -> bool:
+        """After ``allow`` said no: whether this is the first refusal in the window."""
+        if slack_user_id in self.told:
+            return False
+        self.told.add(slack_user_id)
+        return True
 
     def allow(self, slack_user_id: str, now: datetime) -> bool:
         recent = [t for t in self.seen.get(slack_user_id, []) if now - t < self.window]
         if len(recent) >= self.attempts:
             self.seen[slack_user_id] = recent
             return False
+        self.told.discard(slack_user_id)
         self.seen[slack_user_id] = [*recent, now]
         # Forget people with nothing recent, so the map can't grow without end.
         for user in [u for u, times in self.seen.items() if not any(now - t < self.window for t in times)]:
             del self.seen[user]
+            self.told.discard(user)
         return True
 
 
@@ -494,6 +539,9 @@ async def join(db: AsyncSession, person: SlackPerson, *, via: str, now: datetime
         if not join_allowed(await household_settings(db, household.id)):
             await _refused(db, household.id, person, NotJoinable.OFF, via, now)
             raise JoinRefused(NotJoinable.OFF)
+        if await _removed_member(members, household.id, person):
+            await _refused(db, household.id, person, NotJoinable.REMOVED, via, now)
+            raise JoinRefused(NotJoinable.REMOVED)
         invited = await _invited_member(members, household.id, person)
         if invited is not None:
             linked = await members.update(household.id, invited.id, now, slack_user_id=person.slack_user_id)
@@ -530,6 +578,19 @@ async def join(db: AsyncSession, person: SlackPerson, *, via: str, now: datetime
         await db.commit()
     log.info("guest joined", extra={"member_id": guest.id})
     return Joined(guest, JoinedAs.GUEST)
+
+
+async def _removed_member(members: MemberRepository, household_id: int, person: SlackPerson) -> bool:
+    """Whether this person's email belongs to a member an admin deactivated: they don't come
+    back as a guest by joining."""
+    if not person.email:
+        return False
+    try:
+        email = normalize_email(person.email)
+    except InvalidMemberInput:
+        return False
+    found = await members.by_email(household_id, email)
+    return found is not None and not found.active
 
 
 async def _invited_member(members: MemberRepository, household_id: int, person: SlackPerson) -> Member | None:

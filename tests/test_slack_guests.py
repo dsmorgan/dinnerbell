@@ -168,6 +168,12 @@ async def test_joining_is_rate_limited_per_slack_user(slack: Slack, house: House
     assert slack.ephemerals(NEW)[-1] == guests.JOIN_REFUSALS[guests.NotJoinable.TOO_MANY]
     assert len(slack.fake.of("users.info")) == 0  # never asked: not in the channel
     assert len(slack.fake.of("conversations.members")) == 5
+    told = len(slack.ephemerals(NEW))
+    for _ in range(3):  # told once a window; after that, nothing is answered or audited
+        await slack.click(NEW, ids.JOIN_DINNERBELL, ids.JOIN_DINNERBELL)
+    assert len(slack.ephemerals(NEW)) == told
+    reasons = [r.payload["reason"] for r in await house.audits("member.join_refused")]
+    assert reasons.count("rate_limited") == 1
 
 
 async def test_a_join_from_another_workspace_is_ignored(slack: Slack, house: House) -> None:
@@ -334,3 +340,12 @@ async def test_channel_people_fails_closed_when_slack_does_not_answer(slack: Sla
 async def test_nobody_joins_before_the_workspace_is_known(slack: Slack) -> None:
     slack.conn.team_id = None
     assert await slack.conn.people.person(NEW) is guests.NotJoinable.NOT_A_PERSON
+
+
+async def test_a_guest_cant_probe_for_calls_with_the_command(slack: Slack, house: House) -> None:
+    """Whether or not there's a call that day, a guest gets the same answer, before any lookup."""
+    await open_dinner(house)
+    for text in ("cancel", "cancel dinner", "cancel lunch 2026-10-25"):
+        await slack.command(PAT, text)
+    replies = set(slack.ephemerals(PAT))
+    assert replies == {REFUSED[GuestAction.CALL_OFF]}

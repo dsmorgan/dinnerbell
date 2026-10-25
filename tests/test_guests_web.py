@@ -326,6 +326,8 @@ def test_signing_in_with_slack_is_refused_while_joining_is_off(
     submit(admin, "/admin/joining", {"on": "0"})
     assert stranger(admin, provider).status_code == 403
     assert people.asked == []
+    (row,) = [a for a in rows(migrated, AuditRow) if a.action == "member.join_refused"]
+    assert row.payload == {"slack_user_id": "U09NEW", "reason": "off", "via": "web"}
 
 
 def test_signing_in_with_slack_is_rate_limited(admin: TestClient, provider: FakeProvider, migrated: Settings) -> None:

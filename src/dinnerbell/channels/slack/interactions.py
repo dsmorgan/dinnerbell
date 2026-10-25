@@ -101,6 +101,7 @@ from dinnerbell.domain.events import (
     friendly,
 )
 from dinnerbell.domain.feedback import InvalidFeedback
+from dinnerbell.domain.guests import REFUSED, GuestAction
 from dinnerbell.domain.meals import InvalidMeal, Slot
 from dinnerbell.domain.members import Member, Role
 from dinnerbell.domain.notifications import (
@@ -388,6 +389,8 @@ class Interactions:
         refused: guests.NotJoinable | None = None
         person: guests.SlackPerson | guests.NotJoinable | None = None
         if not self.join_limiter.allow(user, now):
+            if not self.join_limiter.first_refusal(user):
+                return  # told once this window already; stay quiet
             refused = guests.NotJoinable.TOO_MANY
         elif self.people is None or not await self._joinable():
             refused = guests.NotJoinable.OFF
@@ -1289,6 +1292,9 @@ class Interactions:
         member = await self._member(source)
         if member is None:
             return
+        if member.is_guest:  # before looking anything up, so the reply says nothing about calls (#38)
+            await self.tell(source, REFUSED[GuestAction.CALL_OFF], member=member)
+            return
 
         async def work() -> str | None:
             async with self.sessionmaker() as db:
@@ -1317,6 +1323,9 @@ class Interactions:
         discard that call, dinner today by default. The service checks for an admin."""
         member = await self._member(source)
         if member is None:
+            return
+        if member.is_guest:  # before looking anything up (#38)
+            await self.tell(source, GUESTS_DONT, member=member)
             return
 
         async def work() -> str | None:
