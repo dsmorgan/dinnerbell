@@ -721,7 +721,7 @@ def test_0010_adds_capacity_for_offers_only_and_keeps_every_row(settings: Settin
     a capacity and an offer must have one from 1 to 20. A downgrade removes offers with their rows."""
     from sqlalchemy.exc import IntegrityError
 
-    _upgrade_to(settings, "0008_meal_feedback")
+    _upgrade_to(settings, "0009_meal_log_autoincrement")
     _populate_calls(settings)
     before = _snapshot(settings)["rows"]
     _upgrade_to(settings, "0010_offers")
@@ -748,7 +748,7 @@ def test_0010_adds_capacity_for_offers_only_and_keeps_every_row(settings: Settin
             )
     finally:
         engine.dispose()
-    _downgrade_to(settings, "0008_meal_feedback")
+    _downgrade_to(settings, "0009_meal_log_autoincrement")
     assert _snapshot(settings)["rows"] == before
     run_migrations(settings.sync_database_url, settings.database_path)
 
@@ -759,7 +759,7 @@ def test_0010_refuses_to_run_with_foreign_keys_on(settings: Settings) -> None:
 
     from dinnerbell.db.migrate import _alembic_config
 
-    _upgrade_to(settings, "0008_meal_feedback")
+    _upgrade_to(settings, "0009_meal_log_autoincrement")
     _populate_calls(settings)
     engine = create_sync_engine(settings.sync_database_url)  # the app's engine: foreign keys on
     try:

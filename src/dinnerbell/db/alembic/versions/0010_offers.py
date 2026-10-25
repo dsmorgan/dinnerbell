@@ -10,7 +10,7 @@ does, keeping AUTOINCREMENT, and refuses to run with foreign keys on, which woul
 every call's rows. ``run_migrations`` turns them off.
 
 Revision ID: 0010_offers
-Revises: 0008_meal_feedback
+Revises: 0009_meal_log_autoincrement
 Create Date: 2026-10-25
 """
 
@@ -22,7 +22,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "0010_offers"
-down_revision: str | None = "0008_meal_feedback"
+down_revision: str | None = "0009_meal_log_autoincrement"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
