@@ -6,6 +6,15 @@
 <h1>Members</h1>
 {% if notice %}<p class="alert ok" role="status">{{ notice }}</p>{% endif %}
 {% if error %}<p class="alert error" role="alert">{{ error }}</p>{% endif %}
+{% if conflict %}
+<form method="post" action="/admin/guests/{{ conflict.id }}/promote" class="card inline-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <input type="hidden" name="email" value="{{ conflict.email }}">
+  <input type="hidden" name="role" value="{{ draft.role if draft and draft.role in ('admin', 'member') else 'member' }}">
+  <p class="small">{{ conflict.display_name }} joined from the Slack channel with {{ conflict.email }}.</p>
+  <button type="submit" class="button small primary">Promote {{ conflict.display_name }} instead</button>
+</form>
+{% endif %}
 <ul class="members">
   {% for m in members %}{% include "_member_row.html" %}{% endfor %}
 </ul>

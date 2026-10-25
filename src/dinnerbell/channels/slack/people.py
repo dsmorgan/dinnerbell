@@ -41,6 +41,8 @@ class ChannelPeople:
         self.api = api
         self.channel_id = channel_id
         self.team_id = team_id
+        self.complete = True
+        """Whether the last read of the channel's members got them all."""
 
     def check(self, user: dict[str, Any] | None) -> SlackPerson | NotJoinable:
         """The person behind ``users.info``'s answer, or why they can't join."""
@@ -68,6 +70,7 @@ class ChannelPeople:
         except (SlackUnavailable, PermanentDeliveryError) as exc:
             log.warning("reading the channel's members for a join failed", extra={"error": str(exc)})
             return NotJoinable.UNAVAILABLE
+        self.complete = complete
         if not complete:
             log.warning("the channel has more members than Dinnerbell reads; the rest can't join")
         return members
@@ -79,7 +82,8 @@ class ChannelPeople:
         if isinstance(members, NotJoinable):
             return members
         if slack_user_id not in members:
-            return NotJoinable.NOT_IN_CHANNEL
+            # Past the paging cap, "join the channel" might be wrong: they may be in it already.
+            return NotJoinable.NOT_IN_CHANNEL if self.complete else NotJoinable.ASK_ADMIN
         try:
             user = await self.api.user_info(slack_user_id)
         except (SlackUnavailable, PermanentDeliveryError) as exc:

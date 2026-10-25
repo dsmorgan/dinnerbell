@@ -12,8 +12,9 @@ from typing import Any
 import pytest
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
+from joserfc.jwk import RSAKey
 
-from dinnerbell.config import Settings
+from dinnerbell.config import SLACK_ISSUER, Settings
 from dinnerbell.db.models import AuditRow, EventRow, InvitationRow, MemberRow, ResponseRow, VoteRow
 from dinnerbell.services.guests import NotJoinable, SlackPerson
 from dinnerbell.web.auth import require_anyone, require_csrf_anyone
@@ -27,7 +28,15 @@ from tests.test_events_web import tick
 
 TEAM = "T-HOUSE"
 SLACK_ADMIN = {"sub": "subject-admin", "https://slack.com/team_id": TEAM, "https://slack.com/user_id": "U01ADMIN"}
-pytestmark = pytest.mark.parametrize("settings_overrides", [{"slack_team_id": TEAM}])
+pytestmark = pytest.mark.parametrize("settings_overrides", [{"slack_team_id": TEAM, "oidc_issuer": SLACK_ISSUER}])
+
+
+@pytest.fixture
+def provider(signing_key: RSAKey, clock: FakeClock, settings: Settings) -> FakeProvider:
+    """Sign in with Slack, as configured: guests match by Slack user only when Slack is the
+    issuer (#38)."""
+    return FakeProvider(key=signing_key, clock=clock, issuer=settings.oidc_issuer)
+
 
 GUEST_ROUTES = {
     ("GET", "/"),
@@ -383,3 +392,28 @@ def test_a_member_sets_their_dietary_needs_on_preferences(admin: TestClient, mig
     assert response.headers["location"] == "/preferences?notice=settings"
     me = next(m for m in rows(migrated, MemberRow) if m.role == "admin")
     assert me.dietary_needs == [int(veg.group(1))]
+
+
+def test_adding_a_member_with_a_joined_guests_email_offers_to_promote_them(
+    admin: TestClient, migrated: Settings
+) -> None:
+    use_people(admin, FakePeople(SlackPerson("U09NINA", "Nina", "nina@example.com")))
+    response = submit(admin, "/admin/channel", {"slack_user_id": "U09NINA", "role": "guest"})
+    assert response.status_code == 303
+    nina = next(m for m in rows(migrated, MemberRow) if m.slack_user_id == "U09NINA")
+    from sqlalchemy import create_engine, text
+
+    engine = create_engine(migrated.sync_database_url)
+    with engine.begin() as c:  # as joining from the channel keeps it
+        c.execute(text("UPDATE member SET email = 'nina@example.com' WHERE id = :id"), {"id": nina.id})
+    engine.dispose()
+    refused = invite(admin, "nina@example.com", "Nina")
+    assert refused.status_code == 400
+    html = page(refused)
+    assert "joined from the Slack channel as a guest" in html and f'action="/admin/guests/{nina.id}/promote"' in html
+    assert (
+        submit(admin, f"/admin/guests/{nina.id}/promote", {"role": "member", "email": "nina@example.com"}).status_code
+        == 303
+    )
+    row = next(m for m in rows(migrated, MemberRow) if m.id == nina.id)
+    assert (row.role, row.slack_user_id) == ("member", "U09NINA")

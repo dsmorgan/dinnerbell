@@ -125,6 +125,7 @@ async def _complete(
         db,
         claims,
         required_team_id=context.settings.slack_team_id,
+        slack_sign_in=context.settings.slack_sign_in,
         now=context.clock(),
         replaces_token=request.cookies.get(context.cookies.session),
     )
@@ -134,6 +135,7 @@ async def _complete(
             db,
             claims,
             required_team_id=context.settings.slack_team_id,
+            slack_sign_in=context.settings.slack_sign_in,
             now=context.clock(),
             replaces_token=request.cookies.get(context.cookies.session),
         )
@@ -156,7 +158,7 @@ async def _join(context: AppContext, db: Database, claims: IdentityClaims, refus
     per Slack user, and audited either way."""
     slack_id = claims.slack_user_id
     people = context.slack_people
-    if refusal.reason not in JOINABLE or people is None or not context.settings.slack_team_id or not slack_id:
+    if refusal.reason not in JOINABLE or people is None or not context.settings.slack_sign_in or not slack_id:
         return False
     now = context.clock()
     if not context.join_limiter.allow(slack_id, now):

@@ -14,8 +14,10 @@ Run it with test stopped, after restoring the backup. In one transaction it:
 - deletes all feedback on meals, which says how each member rated them (FR-49), so test, where
   testers act as other people, never holds production's answers;
 - strips guests (#38) of what identifies them, as they're people outside the household: each is
-  renamed "Guest <ID>" and loses their Slack user, sign-in, and dietary needs, as well as being
-  deactivated like any member who isn't kept. Their invitations stay with the calls' history.
+  renamed "Guest <ID>" and loses their email, Slack user, sign-in, and dietary needs, as well as
+  being deactivated like any member who isn't kept, and the audit rows about guests and joining
+  (``GUEST_AUDIT``), which hold names, Slack IDs, and dietary tags, lose their payloads. Their
+  invitations stay with the calls' history.
 
 It never touches the meal log, the catalog, preferences, or the history of past events. Running
 it again changes nothing but writes another audit row.
@@ -37,7 +39,7 @@ from dinnerbell.db.events import EventRepository
 from dinnerbell.db.feedback import FeedbackRepository
 from dinnerbell.db.meals import household_settings
 from dinnerbell.db.outbox import OutboxRepository
-from dinnerbell.db.repositories import HouseholdRepository, MemberRepository, SessionRepository
+from dinnerbell.db.repositories import AuditRepository, HouseholdRepository, MemberRepository, SessionRepository
 from dinnerbell.db.types import UTCDateTime
 from dinnerbell.domain.events import OPEN_STATES, EndReason, EventState, transition
 from dinnerbell.domain.members import InvalidMemberInput, normalize_email
@@ -45,6 +47,9 @@ from dinnerbell.domain.schedule import SLOTS_KEY, slot_schedules, slot_to_json
 from dinnerbell.services.common import audit
 from dinnerbell.services.household import current_household
 
+GUEST_AUDIT = ("guest.", "member.join", "member.imported")
+"""Audit actions whose payloads name guests or people who tried to join (#38): their names, Slack
+IDs, and dietary tags, all personal data of people outside the household."""
 NOT_LABELED = (
     "scrub-test runs only on a labeled instance. Set DINNERBELL_INSTANCE_LABEL (such as TEST) in the test "
     "instance's env file; never run it against production. Nothing changed."
@@ -150,6 +155,7 @@ class ScrubSummary:
     outbox_rows_deleted: int
     feedback_deleted: int = 0
     guests_scrubbed: int = 0
+    audit_rows_redacted: int = 0
 
     def lines(self) -> list[str]:
         return [
@@ -162,6 +168,7 @@ class ScrubSummary:
             f"Outbox rows deleted: {self.outbox_rows_deleted} ({self.outbox_pending_deleted} not yet sent)",
             f"Feedback rows deleted: {self.feedback_deleted}",
             f"Guests made anonymous: {self.guests_scrubbed}",
+            f"Audit rows about guests redacted: {self.audit_rows_redacted}",
         ]
 
 
@@ -217,9 +224,19 @@ async def _scrub(db: AsyncSession, *, instance_label: str, keep: Iterable[str], 
             changes["slack_link_locked"] = True
         if member.is_guest:
             anonymous = f"Guest {member.id}"
-            wiped = member.display_name == anonymous and not member.dietary_needs and member.oidc_subject is None
+            wiped = (
+                member.display_name == anonymous
+                and not member.dietary_needs
+                and member.oidc_subject is None
+                and member.email is None
+            )
             if not wiped:
-                changes |= {"display_name": anonymous, "dietary_needs": frozenset(), "oidc_subject": None}
+                changes |= {
+                    "display_name": anonymous,
+                    "dietary_needs": frozenset(),
+                    "oidc_subject": None,
+                    "email": None,
+                }
                 guests += 1
         if changes:
             await members_repo.update(household.id, member.id, now, **changes)
@@ -250,6 +267,7 @@ async def _scrub(db: AsyncSession, *, instance_label: str, keep: Iterable[str], 
         payload = {"reason": "scrub", "from": event.state.value}
         await audit(db, household.id, None, action, f"event:{event.id}", payload, now)
 
+    redacted = await AuditRepository(db).redact(household.id, GUEST_AUDIT, {"redacted": "scrub-test"})
     pending, rows = await OutboxRepository(db).clear(household.id)
     feedback_deleted = await FeedbackRepository(db).clear(household.id)
 
@@ -264,6 +282,7 @@ async def _scrub(db: AsyncSession, *, instance_label: str, keep: Iterable[str], 
         outbox_rows_deleted=rows,
         feedback_deleted=feedback_deleted,
         guests_scrubbed=guests,
+        audit_rows_redacted=redacted,
     )
     summary_payload = {"kept_member_ids": sorted(kept_ids), "instance_label": instance_label} | asdict(summary)
     target = f"household:{household.id}"

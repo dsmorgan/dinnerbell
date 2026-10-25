@@ -51,6 +51,7 @@ def decide_sign_in(
     by_email: Member | None,
     required_team_id: str | None,
     by_slack_user: Member | None = None,
+    slack_sign_in: bool = False,
 ) -> SignInDecision:
     """Decide whether an identity may sign in.
 
@@ -64,10 +65,16 @@ def decide_sign_in(
         if not by_subject.active:
             return Refuse(Refusal.INACTIVE, by_subject.id)
         return Allow(by_subject, link_subject=False)
-    # #38: someone with no email, such as a guest who joined from the channel, signs in with the
-    # Slack account they're linked to. Only with Slack as the provider, whose workspace was
-    # checked above, and only for a record without an email, so members still match by email.
-    if required_team_id is not None and by_slack_user is not None and by_slack_user.email is None:
+    # An invited member who hasn't signed in yet matches by verified email first, even when a
+    # guest record holds their Slack account (#38: they joined from the channel before the
+    # admin added them). The admin links or retires that guest afterward.
+    member_by_email = by_email is not None and by_email.is_member and not by_email.is_linked
+    if member_by_email and claims.email_verified and claims.email and by_email is not None:
+        return Allow(by_email, link_subject=True)
+    # #38: a guest, such as one who joined from the channel, signs in with the Slack account
+    # they're linked to. Only with Slack as the provider (``slack_sign_in``: the configured issuer
+    # is Slack's), whose workspace was checked above, and only for a guest: members match by email.
+    if slack_sign_in and required_team_id is not None and by_slack_user is not None and by_slack_user.is_guest:
         if by_slack_user.is_linked:
             return Refuse(Refusal.EMAIL_LINKED_ELSEWHERE, by_slack_user.id)
         if not by_slack_user.active:

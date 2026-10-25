@@ -200,7 +200,7 @@ async def answer_for(
             raise NotFound(NO_SUCH_GUEST)
         if not can_answer_for(guest, actor, ctx.invitations[guest_id]):
             raise Forbidden("Only whoever invited them, or an admin, answers for a guest without Slack.")
-        check_can_respond(event, guest)
+        check_can_respond(event, guest, invited=True)  # invited: it's in ctx.invitations
         current = ctx.response_of(guest_id)
         if status is not None:
             answer = with_status(current, guest_id, status, now)
@@ -380,7 +380,8 @@ async def promote(
         raise InvalidMemberInput("Enter their email: members sign in with it.")
     clean = normalize_email(email)
     members = MemberRepository(db)
-    if await members.by_email(actor.household_id, clean) is not None:
+    holder = await members.by_email(actor.household_id, clean)
+    if holder is not None and holder.id != guest.id:
         raise MemberRuleViolation("A member with that email already exists.")
     # A guest's dietary needs come along: a need ("must be nut-free") has no exact veto to turn
     # into, so it stays a need, a hard constraint for members too, set on Preferences.
@@ -467,6 +468,9 @@ class NotJoinable(StrEnum):
 
     OFF = "off"
     REMOVED = "removed"
+    ASK_ADMIN = "ask_admin"
+    """Their email belongs to someone the admin must link by hand, or Slack couldn't list the
+    whole channel."""
     NOT_IN_CHANNEL = "not_in_channel"
     NOT_A_PERSON = "not_a_person"
     TOO_MANY = "rate_limited"
@@ -476,6 +480,7 @@ class NotJoinable(StrEnum):
 JOIN_REFUSALS = {
     NotJoinable.OFF: "Joining from the channel is turned off. Ask the admin to add you.",
     NotJoinable.REMOVED: "The admin removed you from Dinnerbell. Ask them if that's a mistake.",
+    NotJoinable.ASK_ADMIN: "Ask the admin to add you. They've been told you tried.",
     NotJoinable.NOT_IN_CHANNEL: "Join the Dinnerbell channel first, then try again.",
     NotJoinable.NOT_A_PERSON: "Only people in this workspace can join Dinnerbell.",
     NotJoinable.TOO_MANY: "That's a lot of tries. Wait a few minutes, then try again.",
@@ -607,16 +612,24 @@ async def join(db: AsyncSession, person: SlackPerson, *, via: str, now: datetime
         if not join_allowed(await household_settings(db, household.id)):
             await _refused(db, household.id, person, NotJoinable.OFF, via, now)
             raise JoinRefused(NotJoinable.OFF)
-        if await _removed_member(members, household.id, person):
+        email = _email_of(person)
+        holder = await members.by_email(household.id, email) if email else None
+        if holder is not None and not holder.active:
             await _refused(db, household.id, person, NotJoinable.REMOVED, via, now)
             raise JoinRefused(NotJoinable.REMOVED)
-        invited = await _invited_member(members, household.id, person)
-        if invited is not None:
-            linked = await members.update(household.id, invited.id, now, slack_user_id=person.slack_user_id)
+        if holder is not None and _linkable(holder, person):
+            linked = await members.update(household.id, holder.id, now, slack_user_id=person.slack_user_id)
             payload = {"slack_user_id": person.slack_user_id, "matched_by": "email", "via": via}
             await audit(db, household.id, None, "member.slack_linked", f"member:{linked.id}", payload, now)
             await db.commit()
             return Joined(linked, JoinedAs.MEMBER)
+        if holder is not None:
+            # Their email belongs to someone Dinnerbell knows, whom this Slack account can't be
+            # linked to on its own: a member linked to another Slack account, a Slack guest
+            # account, or a guest. A guest record here would only stand in their way (#38).
+            await ask_admins(db, household.id, holder, person, "join", now)
+            await _refused(db, household.id, person, NotJoinable.ASK_ADMIN, via, now)
+            raise JoinRefused(NotJoinable.ASK_ADMIN)
         try:
             name = normalize_display_name(person.name)
         except InvalidMemberInput:
@@ -628,6 +641,10 @@ async def join(db: AsyncSession, person: SlackPerson, *, via: str, now: datetime
             slack_user_id=person.slack_user_id,
             now=now,
         )
+        if email is not None:
+            # Kept so the admin can't add a member with this email without seeing the guest
+            # first (``members.invite_member``).
+            guest = await members.update(household.id, guest.id, now, email=email)
         joined: dict[str, object] = {"slack_user_id": person.slack_user_id, "via": via}
         joined["slack_guest"] = not person.full_member
         await audit(db, household.id, None, "member.joined", f"member:{guest.id}", joined, now)
@@ -650,32 +667,38 @@ async def join(db: AsyncSession, person: SlackPerson, *, via: str, now: datetime
     return Joined(guest, JoinedAs.GUEST)
 
 
-async def _removed_member(members: MemberRepository, household_id: int, person: SlackPerson) -> bool:
-    """Whether this person's email belongs to a member an admin deactivated: they don't come
-    back as a guest by joining."""
+def _email_of(person: SlackPerson) -> str | None:
+    """The email Slack shares for ``person``, normalized, or None."""
     if not person.email:
-        return False
-    try:
-        email = normalize_email(person.email)
-    except InvalidMemberInput:
-        return False
-    found = await members.by_email(household_id, email)
-    return found is not None and not found.active
-
-
-async def _invited_member(members: MemberRepository, household_id: int, person: SlackPerson) -> Member | None:
-    """An invited member who hasn't been linked yet, whose email is this person's. Only for a
-    full member of the workspace, as the hourly email match requires."""
-    if not person.full_member or not person.email:
         return None
     try:
-        email = normalize_email(person.email)
+        return normalize_email(person.email)
     except InvalidMemberInput:
         return None
-    found = await members.by_email(household_id, email)
-    if found is None or not found.is_member or found.slack_user_id or found.slack_link_locked:
-        return None
-    return found
+
+
+def _linkable(holder: Member, person: SlackPerson) -> bool:
+    """Whether ``person``'s Slack account links to ``holder``, the member with their email, as
+    the hourly email match would: an active member, not linked yet or locked by hand, and a full
+    member of the workspace."""
+    return holder.is_member and person.full_member and not holder.slack_user_id and not holder.slack_link_locked
+
+
+async def ask_admins(
+    db: AsyncSession, household_id: int, member: Member, person: SlackPerson, reason: str, now: datetime
+) -> None:
+    """Tell each active admin that ``person``'s Slack account needs a hand link (#38)."""
+    admins = [m for m in await MemberRepository(db).list(household_id) if m.is_member and m.is_admin]
+    for admin in admins:
+        notice = note.LinkNeeded(
+            household_id,
+            note.PersonInfo(admin.id, admin.display_name),
+            note.PersonInfo(member.id, member.display_name),
+            person.slack_user_id,
+            person.name,
+            reason,
+        )
+        await OutboxRepository(db).enqueue(household_id, None, notice, now)
 
 
 async def _refused(

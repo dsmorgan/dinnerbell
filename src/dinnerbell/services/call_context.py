@@ -129,7 +129,8 @@ class CallContext:
         who might be eating (in, or maybe). Needs left on a response with no guests don't count."""
         who = veto_participants(self.responses)
         brought = {tag for r in self.responses if r.member_id in who and r.guests for tag in r.guest_needs}
-        own = {tag for m in who if m in self.members for tag in self.members[m].dietary_needs}
+        people = [self.members[m] for m in who if m in self.members]
+        own = {tag for m in people if m.active for tag in m.dietary_needs}
         return frozenset(brought | own)
 
     @property
@@ -330,9 +331,8 @@ def guest_dietary_notes(ctx: CallContext) -> tuple[str, ...]:
     """Dietary needs of the guests of everyone in, and of everyone in who has their own (FR-8,
     FR-20, #38). Only the needs, never whose."""
     brought = {tag for r in ctx.participants if r.guests for tag in r.guest_needs}
-    own = {
-        tag for r in ctx.participants if r.member_id in ctx.members for tag in ctx.members[r.member_id].dietary_needs
-    }
+    people = [ctx.members[r.member_id] for r in ctx.participants if r.member_id in ctx.members]
+    own = {tag for m in people if m.active for tag in m.dietary_needs}
     return _tag_names(ctx, brought | own)
 
 

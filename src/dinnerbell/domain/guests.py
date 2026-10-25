@@ -25,7 +25,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import StrEnum
 
-from dinnerbell.domain.events import Event, EventKind, EventRuleViolation, EventState, Status
+from dinnerbell.domain.events import GUEST_NOT_INVITED, Event, EventKind, EventRuleViolation, EventState, Status
 from dinnerbell.domain.members import InvalidMemberInput, Member, normalize_display_name
 
 
@@ -62,7 +62,9 @@ GUEST_RULES: dict[GuestAction, frozenset[EventState]] = {
     GuestAction.OFFER_ROLE: ANSWERING,
     GuestAction.COORDINATE: frozenset({EventState.COLLECTING, EventState.VOTING}),
     GuestAction.HAND_OFF: OPEN,
-    GuestAction.CLOSE_WINDOW: frozenset({EventState.COLLECTING, EventState.VOTING}),
+    # Close now only while answers are open: "Decide now" while voting picks the plan from the
+    # votes, which is choosing, not logistics.
+    GuestAction.CLOSE_WINDOW: frozenset({EventState.COLLECTING}),
     GuestAction.MANAGE_DECISION: frozenset({EventState.DECIDED}),
     GuestAction.MARK_DONE: frozenset({EventState.DECIDED}),
 }
@@ -85,9 +87,10 @@ REFUSED: dict[GuestAction, str] = {
     GuestAction.FEEDBACK: "Thanks! Feedback is for household members.",
     GuestAction.INVITE: "Only a household member can invite a guest.",
 }
-NOT_INVITED = "You haven't been invited to this one. Ask a household member to invite you."
+NOT_INVITED = GUEST_NOT_INVITED
 NOT_NOW = "That isn't open to guests right now."
-MAX_GUEST_DIETARY_NEEDS = 10
+MAX_GUEST_DIETARY_NEEDS = 5
+"""Few enough that one person's needs can't quietly rule out the whole catalog by accident."""
 
 
 def check_guest(event: Event | None, actor: Member, action: GuestAction, *, invited: bool) -> None:

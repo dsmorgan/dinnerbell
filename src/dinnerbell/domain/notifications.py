@@ -344,6 +344,9 @@ class CallAbandoned(_Notification):
     event: EventInfo
     reason: EndReason
     head_count: int = 0
+    needs_unmet: bool = False
+    """Nothing fit, and it was the dietary needs that ruled out what else would have: say so,
+    without saying whose (#38)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -629,6 +632,44 @@ class RoleVacated(_Notification):
         return self.member.id
 
 
+@dataclass(frozen=True, slots=True)
+class LinkNeeded:
+    """A Slack account Dinnerbell can't link on its own (#38): one direct message to each
+    active admin (``admin``). ``member`` holds the email the Slack account has; ``reason`` is
+    ``join`` (they tried to join from the channel) or ``hourly`` (the email match found the Slack
+    account linked to someone else already). About the household, like ``GuestJoined``."""
+
+    kind: ClassVar[str] = "link_needed"
+    is_update: ClassVar[bool] = False
+    needs_thread: ClassVar[bool] = False
+    household_id: int
+    admin: PersonInfo
+    member: PersonInfo
+    slack_user_id: str
+    slack_name: str
+    reason: str
+
+    @property
+    def idempotency_key(self) -> str:
+        return f"link:{self.reason}:{self.member.id}:{self.slack_user_id}:admin{self.admin.id}"
+
+    @property
+    def message_key(self) -> str | None:
+        return None
+
+    @property
+    def thread_key(self) -> str | None:
+        return None
+
+    @property
+    def recipient_id(self) -> int | None:
+        return self.admin.id
+
+    @property
+    def event_id(self) -> int | None:
+        return None
+
+
 Notification = Union[  # noqa: UP007 - a runtime union, used for isinstance checks and payload decoding
     CallOpened,
     CallUpdated,
@@ -652,6 +693,7 @@ Notification = Union[  # noqa: UP007 - a runtime union, used for isinstance chec
     GuestInvited,
     GuestJoined,
     RoleVacated,
+    LinkNeeded,
 ]
 NOTIFICATION_TYPES: dict[str, type[Notification]] = {cls.kind: cls for cls in get_args(Notification)}
 UPDATE_KINDS = frozenset(kind for kind, cls in NOTIFICATION_TYPES.items() if cls.is_update)

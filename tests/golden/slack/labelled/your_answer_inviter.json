@@ -111,7 +111,7 @@
     {
       "block_id": "guest-9",
       "text": {
-        "text": "*Pat*, your guest: In · can pick up",
+        "text": "*Pat*, your guest (Vegetarian): In · can pick up",
         "type": "mrkdwn"
       },
       "type": "section"

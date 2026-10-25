@@ -115,6 +115,8 @@ def check_can_join(offer: Event, actor: Member) -> None:
         raise EventRuleViolation("That isn't an offer.")
     if not actor.active:
         raise EventRuleViolation("Only active members can join an offer.")
+    if actor.is_guest:  # a member brings a guest with +1 guest (#38)
+        raise EventRuleViolation("Ask a household member to bring you along as their guest.")
     if offer.state is not EventState.COLLECTING:
         raise EventRuleViolation("This offer isn't taking people anymore.")
 

@@ -215,6 +215,9 @@ NOTIFICATIONS: dict[str, Callable[[], note.Notification]] = {
     "assignment_made_order": lambda: note.AssignmentMade(DECIDED, 32, LEE, (AssignmentRole.ORDER,), DELIVERY),
     "call_abandoned": lambda: note.CallAbandoned(event(EventState.ABANDONED), EndReason.TOO_FEW, head_count=1),
     "call_abandoned_no_coverage": lambda: note.CallAbandoned(event(EventState.ABANDONED), EndReason.NO_COVERAGE, 3),
+    "call_abandoned_needs_unmet": lambda: note.CallAbandoned(
+        event(EventState.ABANDONED), EndReason.NO_COVERAGE, 3, needs_unmet=True
+    ),
     "event_cancelled": lambda: note.EventCancelled(
         CANCELLED, (ALEX, SAM), cancelled_by=ALEX, note=REASON, audience=(ALEX, KIM, SAM)
     ),
@@ -266,6 +269,8 @@ NOTIFICATIONS: dict[str, Callable[[], note.Notification]] = {
     "guest_joined_unlinked": lambda: note.GuestJoined(1, ALEX, PAT, "slack", unlinked=(KIM, LEE)),
     "response_reminder_guest": lambda: note.ResponseReminder(event(), PAT, guest=True),
     "role_vacated": lambda: note.RoleVacated(DECIDED, ALEX, PAT, (AssignmentRole.PICKUP,)),
+    "link_needed": lambda: note.LinkNeeded(1, ALEX, KIM, "U09KIM", "Kim <K> & *Co*", "join"),
+    "link_needed_hourly": lambda: note.LinkNeeded(1, ALEX, KIM, "U09KIM", "", "hourly"),
     "assignment_made_for_guest": lambda: note.AssignmentMade(
         DECIDED, 34, PAT, (AssignmentRole.PICKUP,), replace(DECISION, dietary_notes=("Vegetarian",)), via=KIM
     ),
@@ -517,7 +522,7 @@ CARDS: dict[str, CardSample] = {
         run=1,
         can_invite=True,
         guests=(
-            CardGuest(9, "Pat", Response(9, Status.IN, offers=frozenset({RoleOffer.PICKUP}))),
+            CardGuest(9, "Pat", Response(9, Status.IN, offers=frozenset({RoleOffer.PICKUP})), ("Vegetarian",)),
             CardGuest(10, "Jo <dev>", None),
         ),
     ).payload(),

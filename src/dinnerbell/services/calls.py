@@ -22,6 +22,7 @@ from dinnerbell.db.engine import write_transaction
 from dinnerbell.db.events import (
     AssignmentRepository,
     EventRepository,
+    InvitationRepository,
     ProposalRepository,
     ResponseRepository,
     SuggestionRepository,
@@ -196,7 +197,7 @@ async def respond(
     async with locked_event(db, actor.household_id, event_id, now) as event:
         await guest_rules.gate(db, event, actor, answer_action(status))
         check_run(event, run)
-        check_can_respond(event, actor)
+        check_can_respond(event, actor, invited=await _invited(db, event, actor))
         ctx = await load(db, event)
         new = with_status(ctx.response_of(actor.id), actor.id, status, now)
         await ResponseRepository(db).save(actor.household_id, event.id, new, now)
@@ -216,7 +217,7 @@ async def offer_role(
     async with locked_event(db, actor.household_id, event_id, now) as event:
         await guest_rules.gate(db, event, actor, GuestAction.OFFER_ROLE)
         check_run(event, run)
-        check_can_respond(event, actor)
+        check_can_respond(event, actor, invited=await _invited(db, event, actor))
         ctx = await load(db, event)
         new = with_offer(ctx.response_of(actor.id), actor.id, role, offered, now)
         if new is None:
@@ -231,7 +232,7 @@ async def toggle_role(db: AsyncSession, actor: Member, event_id: int, role: Role
     whether the actor now offers the role."""
     async with locked_event(db, actor.household_id, event_id, now) as event:
         await guest_rules.gate(db, event, actor, GuestAction.OFFER_ROLE)
-        check_can_respond(event, actor)
+        check_can_respond(event, actor, invited=await _invited(db, event, actor))
         current = (await load(db, event)).response_of(actor.id)
         offered = current is None or role not in current.offers
         new = with_offer(current, actor.id, role, offered, now)
@@ -248,7 +249,7 @@ async def save_details(
     async with locked_event(db, actor.household_id, event_id, now) as event:
         await guest_rules.gate(db, event, actor, GuestAction.DETAILS)
         check_run(event, run)
-        check_can_respond(event, actor)
+        check_can_respond(event, actor, invited=await _invited(db, event, actor))
         ctx = await load(db, event)
         clean = check_details(
             details,
@@ -261,6 +262,12 @@ async def save_details(
             actor.household_id, event.id, actor.id, clean.suggestion_item_ids, clean.suggestion_texts, now
         )
         await _roster_changed(db, event, now)
+
+
+async def _invited(db: AsyncSession, event: Event, actor: Member) -> bool:
+    """Whether ``actor``, a guest, is invited to ``event``, for the domain's own guard (#38).
+    Members never need it, so it reads nothing for them."""
+    return actor.is_guest and actor.id in await InvitationRepository(db).for_event(event.household_id, event.id)
 
 
 async def _roster_changed(db: AsyncSession, event: Event, now: datetime) -> None:
@@ -281,7 +288,7 @@ async def claim_coordinator(
         check_run(event, run)
         if actor.active and is_coordinator(event, actor):
             return
-        check_claim_coordinator(event, actor)
+        check_claim_coordinator(event, actor, invited=await _invited(db, event, actor))
         await set_coordinator(db, event, actor.id, now=now)
         await audit(db, actor.household_id, actor, "event.coordinator_claimed", _target(event), {}, now)
 

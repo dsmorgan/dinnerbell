@@ -172,6 +172,8 @@ def _render(notification: note.Notification, ctx: RenderContext) -> Message:
             return guest_joined_message(notification, ctx)
         case note.RoleVacated():
             return role_vacated_message(notification, ctx)
+        case note.LinkNeeded():
+            return link_needed_message(notification, ctx)
     raise TypeError(f"no Slack rendering for {type(notification).__name__}")  # pragma: no cover
 
 
@@ -609,6 +611,27 @@ def guest_invited_message(notification: note.GuestInvited, ctx: RenderContext) -
     return reminder_message(notification, ctx)
 
 
+def link_needed_message(notification: note.LinkNeeded, ctx: RenderContext) -> Message:
+    """To each admin: a Slack account Dinnerbell can't link without them (#38)."""
+    member = escape(notification.member.name)
+    slack = escape((notification.slack_name or "Someone").translate(MARKERS))
+    if notification.reason == "join":
+        text = (
+            f"{slack} tried to join Dinnerbell from the channel, and their Slack email is {member}'s. "
+            f"If that's {member}, set their Slack member ID ({notification.slack_user_id}) on the Members page; "
+            "otherwise add them as a guest there."
+        )
+    else:
+        text = (
+            f"{member}'s Slack account ({notification.slack_user_id}) is linked to someone else in Dinnerbell "
+            f"already, so it can't be linked to {member}. If that's a guest who is really {member}, select "
+            "*Link to member* on their row on the Members page."
+        )
+    members = button("Members page", f"{ids.LINK_PREFIX}members", url=ctx.url("/admin/members"))
+    blocks = [section(text), actions(members, block_id="more")]
+    return _finish(f"A Slack account needs linking to {notification.member.name}.", blocks)
+
+
 def role_vacated_message(notification: note.RoleVacated, ctx: RenderContext) -> Message:
     """To the coordinator, or each admin with none: a guest who had a role left the call."""
     event = notification.event
@@ -742,6 +765,8 @@ class CardGuest:
     id: int
     name: str
     answer: Response | None
+    needs: tuple[str, ...] = ()
+    """Their dietary needs, which the member answering for them should know."""
 
 
 def _guest_rows(event: note.EventInfo, guests: tuple[CardGuest, ...]) -> list[Block]:
@@ -750,7 +775,8 @@ def _guest_rows(event: note.EventInfo, guests: tuple[CardGuest, ...]) -> list[Bl
     for guest in guests[:MAX_CARD_GUESTS]:
         mine = guest.answer
         value = ids.guest_value(event.id, event.run, guest.id)
-        line = f"*{escape(guest.name)}*, your guest: " + (ANSWER_WORDS[mine.status] if mine else "no answer yet")
+        needs = f" ({escape(', '.join(guest.needs))})" if guest.needs else ""
+        line = f"*{escape(guest.name)}*, your guest{needs}: " + (ANSWER_WORDS[mine.status] if mine else "no answer yet")
         if mine is not None and mine.offers:
             line += " · can " + " or ".join(OFFER_WORDS[o] for o in _offers(mine))
         buttons = [
@@ -877,12 +903,17 @@ ABANDONED = {
         "Nobody was free to cook or fetch any of the picks for {slot} on {day}, so everyone's on their own this time."
     ),
 }
+NEEDS_UNMET = (
+    "Nothing in the catalog fits everyone's dietary needs for {slot} on {day}, so everyone's on their own this "
+    "time. Adding a dish or a place that fits them helps next time."
+)
 ABANDONED_OTHERWISE = "The {slot} call for {day} has ended, so everyone's on their own this time."
 
 
 def abandoned_message(notification: note.CallAbandoned, ctx: RenderContext) -> Message:
     event = notification.event
-    text = ABANDONED.get(notification.reason, ABANDONED_OTHERWISE).format(slot=_slot(event), day=day_label(event.day))
+    template = NEEDS_UNMET if notification.needs_unmet else ABANDONED.get(notification.reason, ABANDONED_OTHERWISE)
+    text = template.format(slot=_slot(event), day=day_label(event.day))
     blocks = [
         section(text + " Thanks for answering, and see you at the next one!"),
         context(link(ctx.url(event.path), "Open the call on the web")),

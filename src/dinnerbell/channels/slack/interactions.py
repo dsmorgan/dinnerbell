@@ -679,7 +679,7 @@ class Interactions:
         return RenderContext(self.links.base_url, Directory(), self.instance_label)
 
     def _card(self, view: EventView, member: Member, *, run: int | None = None, notice: str | None = None) -> Message:
-        mine = tuple(CardGuest(g.person.id, g.person.name, g.answer) for g in view.guests if g.answerable)
+        mine = tuple(CardGuest(g.person.id, g.person.name, g.answer, g.needs) for g in view.guests if g.answerable)
         return your_answer(
             view.info,
             view.mine,

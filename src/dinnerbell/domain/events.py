@@ -105,6 +105,7 @@ OFFER_JOIN_INSTEAD = "This is an offer: tap Count me in to join it."
 OFFER_CHANGE = "To change an offer, call it off and post a new one."
 NO_COORDINATOR = "An offer has no coordinator: whoever made it is in charge."
 GUESTS_DONT = "Guests can answer and pitch in, but not that."
+GUEST_NOT_INVITED = "You haven't been invited to this one. Ask a household member to invite you."
 """For a guest at a rule only members may use (#38). ``domain.guests`` has the full matrix."""
 
 
@@ -369,11 +370,14 @@ def check_details(details: Details, *, dietary_tag_ids: Iterable[int], active_it
     )
 
 
-def check_can_respond(event: Event, actor: Member) -> None:
+def check_can_respond(event: Event, actor: Member, *, invited: bool = False) -> None:
     """FR-7: members respond while the response window is open. An offer is joined instead
-    (``domain.offers``), where seats are counted."""
+    (``domain.offers``), where seats are counted. A guest responds only to a call they're
+    ``invited`` to (#38); ``domain.guests`` has the rest of what a guest may do."""
     if not actor.active:
         raise EventRuleViolation("Only active members can respond.")
+    if actor.is_guest and not invited:
+        raise EventRuleViolation(GUEST_NOT_INVITED)
     if event.is_offer:
         raise EventRuleViolation(OFFER_JOIN_INSTEAD)
     if event.state is not EventState.COLLECTING:
@@ -550,9 +554,12 @@ def is_coordinator(event: Event, actor: Member) -> bool:
     return event.coordinator_id is not None and event.coordinator_id == actor.id
 
 
-def check_claim_coordinator(event: Event, actor: Member) -> None:
+def check_claim_coordinator(event: Event, actor: Member, *, invited: bool = False) -> None:
+    """A guest claims coordinating only on a call they're ``invited`` to (#38)."""
     if not actor.active:
         raise EventRuleViolation("Only active members can coordinate.")
+    if actor.is_guest and not invited:
+        raise EventRuleViolation(GUEST_NOT_INVITED)
     if event.is_offer:
         raise EventRuleViolation(NO_COORDINATOR)
     if event.state not in {EventState.COLLECTING, EventState.VOTING}:

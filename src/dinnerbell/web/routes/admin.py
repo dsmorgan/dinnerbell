@@ -121,12 +121,16 @@ async def invite(
     db: Database,
     posted: Posted,
 ) -> Response:
+    conflict = None
     try:
         await member_service.invite_member(db, principal.member, posted.to_input(), now=context.clock())
         return RedirectResponse("/admin/members?notice=invited", status_code=303)
+    except member_service.GuestHoldsEmail as exc:
+        error, conflict = str(exc), exc.guest
     except (InvalidMemberInput, MemberRuleViolation) as exc:
         error = str(exc)
-    return await _members_page(request, principal, context, db, status_code=400, error=error, draft=posted)
+    page = {"error": error, "draft": posted, "conflict": conflict}
+    return await _members_page(request, principal, context, db, status_code=400, **page)
 
 
 @router.get("/members/{member_id}")

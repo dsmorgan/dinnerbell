@@ -616,20 +616,35 @@ def claims(slack_user: str = "U07PAT", **changes: Any) -> IdentityClaims:
 
 
 def test_a_guest_signs_in_with_their_linked_slack_user() -> None:
-    decision = decide_sign_in(claims(), by_subject=None, by_email=None, required_team_id="T0HOUSE", by_slack_user=GUEST)
-    assert isinstance(decision, Allow) and decision.member is GUEST and decision.link_subject
-    # Not without Slack as the provider, not for the wrong workspace, and never for a member with an email.
-    for kwargs in ({"required_team_id": None}, {"required_team_id": "T0EVIL"}):
-        refused = decide_sign_in(claims(), by_subject=None, by_email=None, by_slack_user=GUEST, **kwargs)
-        assert isinstance(refused, Refuse)
-    member = decide_sign_in(claims(), by_subject=None, by_email=None, required_team_id="T0HOUSE", by_slack_user=MEMBER)
-    assert isinstance(member, Refuse) and member.reason is Refusal.EMAIL_NOT_VERIFIED
     from dataclasses import replace
 
-    gone = decide_sign_in(
-        claims(), by_subject=None, by_email=None, required_team_id="T0HOUSE", by_slack_user=replace(GUEST, active=False)
-    )
+    slack = {"required_team_id": "T0HOUSE", "slack_sign_in": True}
+    decision = decide_sign_in(claims(), by_subject=None, by_email=None, by_slack_user=GUEST, **slack)  # type: ignore[arg-type]
+    assert isinstance(decision, Allow) and decision.member is GUEST and decision.link_subject
+    # Not without Slack as the issuer, not for the wrong workspace, and never for a member.
+    for kwargs in (
+        {"required_team_id": "T0HOUSE"},  # a team ID set, but another issuer
+        {"required_team_id": None, "slack_sign_in": True},
+        {"required_team_id": "T0EVIL", "slack_sign_in": True},
+    ):
+        refused = decide_sign_in(claims(), by_subject=None, by_email=None, by_slack_user=GUEST, **kwargs)  # type: ignore[arg-type]
+        assert isinstance(refused, Refuse), kwargs
+    member = decide_sign_in(claims(), by_subject=None, by_email=None, by_slack_user=MEMBER, **slack)  # type: ignore[arg-type]
+    assert isinstance(member, Refuse) and member.reason is Refusal.EMAIL_NOT_VERIFIED
+    gone = decide_sign_in(claims(), by_subject=None, by_email=None, by_slack_user=replace(GUEST, active=False), **slack)  # type: ignore[arg-type]
     assert isinstance(gone, Refuse) and gone.reason is Refusal.INACTIVE
+
+
+def test_an_invited_members_email_wins_over_a_guest_holding_their_slack() -> None:
+    """Kim joined from the channel before the admin added her: her verified email matches her
+    membership, which wins over the guest record that holds her Slack account."""
+    kim = Member(5, 1, "Kim", "kim@example.com", Role.MEMBER, Capabilities(), True)
+    guest = Member(9, 1, "Kim K", "kim@example.com", Role.GUEST, Capabilities(), True, slack_user_id="U07PAT")
+    verified = claims(email="kim@example.com", email_verified=True)
+    decision = decide_sign_in(
+        verified, by_subject=None, by_email=kim, by_slack_user=guest, required_team_id="T0HOUSE", slack_sign_in=True
+    )
+    assert isinstance(decision, Allow) and decision.member is kim
 
 
 # Scrubbing a test instance -----------------------------------------------------------------------
@@ -929,3 +944,185 @@ async def test_removing_a_guest_from_a_decided_call_clears_their_role(house: Hou
     assert all(a.member_id != pat.id for a in ctx.assignments)
     (vacated,) = [e for e in await house.outbox() if e.kind == "role_vacated"]
     assert vacated.payload["member"]["id"] == house["Alex"].id and vacated.payload["roles"] == ["pickup"]
+
+
+@pytest.mark.parametrize("use", ["offer_role", "toggle_role", "claim_coordinator", "post_offer", "join_offer"])
+async def test_an_uninvited_guest_is_refused_each_action(house: House, use: str) -> None:
+    """Each guard on its own line: these fail if the line that refuses an uninvited guest goes."""
+    from dinnerbell.domain.guests import REFUSED
+
+    event_id = await open_dinner(house)
+    pat = house["Pat"]
+    lunch = OfferInput(
+        Slot.LUNCH, DAY + timedelta(days=1), Mode.PICKUP, time(12, 30), 3, item_id=house.items["Taqueria"].id
+    )
+    cases: dict[str, tuple[Callable[..., Awaitable[Any]], tuple[Any, ...], str]] = {
+        "offer_role": (calls.offer_role, (pat, event_id, RoleOffer.COOK, True), NOT_INVITED),
+        "toggle_role": (calls.toggle_role, (pat, event_id, RoleOffer.PICKUP), NOT_INVITED),
+        "claim_coordinator": (calls.claim_coordinator, (pat, event_id), NOT_INVITED),
+        "post_offer": (offers.post_offer, (pat, lunch), REFUSED[GuestAction.OFFER]),
+    }
+    if use == "join_offer":
+        offer = await act(house, offers.post_offer, house["Sam"], lunch)
+        cases["join_offer"] = (offers.join, (pat, offer.event_id), REFUSED[GuestAction.JOIN_OFFER])
+    use_case, args, message = cases[use]
+    before = await house.kinds()
+    with pytest.raises(EventRuleViolation) as refused:
+        await act(house, use_case, *args)
+    assert str(refused.value) == message
+    assert await house.kinds() == before
+
+
+def test_the_domain_refuses_an_uninvited_guest_on_its_own() -> None:
+    """A second layer under ``guests.gate``: the rules themselves need the invitation."""
+    from dinnerbell.domain.events import check_can_respond, check_claim_coordinator
+    from dinnerbell.domain.offers import check_can_join
+
+    collecting = call(EventState.COLLECTING)
+    for check in (check_can_respond, check_claim_coordinator):
+        with pytest.raises(EventRuleViolation, match=NOT_INVITED):
+            check(collecting, GUEST)
+        check(collecting, GUEST, invited=True)
+        check(collecting, MEMBER)
+    offer = Event(2, 1, EventKind.OFFER, Slot.LUNCH, DAY, EventState.COLLECTING, 1, OPENS, RESPOND_BY, 0, 0, capacity=3)
+    with pytest.raises(EventRuleViolation, match="bring you along"):
+        check_can_join(offer, GUEST)
+    check_can_join(offer, MEMBER)
+
+
+# The #68 security review ---------------------------------------------------------------------------
+
+
+async def test_a_member_never_lands_on_a_guest_record(house: House) -> None:
+    """Nina joins from the channel before the admin adds her. Adding her by email offers to
+    promote her guest record instead, and promoting it makes her a member with her Slack."""
+    from dinnerbell.services import members as member_service
+
+    joined = await act(house, guests.join, person("U09NINA", "Nina", email="Nina@Example.com"), via="slack")
+    assert joined.joined_as is guests.JoinedAs.GUEST and joined.member.email == "nina@example.com"
+    data = member_service.MemberInput("Nina", "nina@example.com", Role.MEMBER, Capabilities())
+    with pytest.raises(member_service.GuestHoldsEmail) as conflict:
+        await act(house, member_service.invite_member, house["Alex"], data)
+    assert conflict.value.guest.id == joined.member.id
+    promoted = await act(house, guests.promote, house["Alex"], joined.member.id, Role.MEMBER, email="nina@example.com")
+    assert (promoted.role, promoted.slack_user_id, promoted.email) == (Role.MEMBER, "U09NINA", "nina@example.com")
+
+
+async def test_a_join_whose_email_belongs_to_a_member_asks_the_admin(house: House) -> None:
+    from dinnerbell.services import members as member_service
+
+    await act(house, member_service.set_slack_user, house["Alex"], house["Kim"].id, "U03KIM")  # Kim is linked
+    with pytest.raises(guests.JoinRefused) as refused:  # a second Slack account with Kim's email
+        await act(house, guests.join, person("U09KIM2", "Kim", email="kim@example.com"), via="slack")
+    assert refused.value.reason is guests.NotJoinable.ASK_ADMIN
+    with pytest.raises(guests.JoinRefused):  # a Slack guest account with Lee's email
+        await act(house, guests.join, person("U09LEE", "Lee", email="lee@example.com", full_member=False), via="slack")
+    notices = [e for e in await house.outbox() if e.kind == "link_needed"]
+    assert {(n.payload["member"]["name"], n.payload["reason"]) for n in notices} == {("Kim", "join"), ("Lee", "join")}
+    async with house.sessionmaker() as db:
+        assert await MemberRepository(db).by_slack_user_id(house.household.id, "U09KIM2") is None
+
+
+async def test_the_hourly_match_tells_the_admins_about_a_guest_holding_a_members_slack(house: House) -> None:
+    from dinnerbell.services import slack_members
+
+    async with house.sessionmaker() as db:
+        linked = await slack_members.link_slack_users(
+            db, house.household.id, {house["Kim"].id: "U07PAT"}, now=house.clock()
+        )
+    assert linked == []
+    (notice,) = [e for e in await house.outbox() if e.kind == "link_needed"]
+    assert (notice.payload["member"]["id"], notice.payload["slack_user_id"], notice.payload["reason"]) == (
+        house["Kim"].id,
+        "U07PAT",
+        "hourly",
+    )
+
+
+async def test_the_member_routes_hand_guests_to_the_guest_paths(house: House) -> None:
+    from dinnerbell.domain.members import MemberRuleViolation
+    from dinnerbell.services import members as member_service
+
+    with pytest.raises(MemberRuleViolation, match="Guests section"):
+        await act(house, member_service.set_slack_user, house["Alex"], house["Pat"].id, "U07NEW")
+    event_id = await open_dinner(house)
+    await invite(house, "Kim", "Pat", event_id)
+    await act(house, calls.respond, house["Pat"], event_id, Status.IN)
+    deactivated = await act(house, member_service.set_member_active, house["Alex"], house["Pat"].id, False)
+    assert (deactivated.active, deactivated.join_refused) == (False, True)  # as Remove does
+    assert (await house.context(event_id)).response_of(house["Pat"].id).status is Status.OUT  # type: ignore[union-attr]
+
+
+async def test_an_inactive_guests_needs_dont_count(house: House) -> None:
+    from sqlalchemy import update
+
+    event_id = await open_dinner(house)
+    mo = await add_guest(house, "Mo", slack="U08MO", needs=("Vegetarian",))
+    await invite(house, "Kim", "Mo", event_id)
+    await act(house, calls.respond, mo, event_id, Status.IN)
+    assert (await house.context(event_id)).guest_needs == {house.tags["Vegetarian"].id}
+    async with house.sessionmaker() as db:
+        await db.execute(update(MemberRow).where(MemberRow.id == mo.id).values(active=False))
+        await db.commit()
+    assert (await house.context(event_id)).guest_needs == frozenset()
+
+
+async def test_scrub_redacts_audit_rows_about_guests(house: House) -> None:
+    from dinnerbell.db.models import AuditRow
+
+    await act(house, guests.join, person("U09NEW", "Nova", email="nova@example.com"), via="slack")
+    await act(house, guests.add_guest, house["Alex"], GuestInput("Ash", frozenset({house.tags["Vegetarian"].id})))
+    async with house.sessionmaker() as db:
+        await guests.record_refusal(db, "U09BAD", guests.NotJoinable.NOT_IN_CHANNEL, via="slack", now=house.clock())
+    summary = await act(house, scrub.scrub_test, instance_label="TEST", keep=["admin@example.com"])
+    assert summary.audit_rows_redacted == 3
+    async with house.sessionmaker() as db:
+        rows = list(
+            await db.scalars(
+                select(AuditRow).where(AuditRow.action.in_(["member.joined", "guest.added", "member.join_refused"]))
+            )
+        )
+    assert rows and all(r.payload == {"redacted": "scrub-test"} for r in rows)
+    assert all("U09" not in (r.target or "") for r in rows)
+    async with house.sessionmaker() as db:
+        emails = list(await db.scalars(select(MemberRow.email).where(MemberRow.role == "guest")))
+    assert emails and all(e is None for e in emails)
+
+
+async def test_dietary_needs_are_capped_at_five(house: House) -> None:
+    tags = [await house.tag(f"Need {n}", TagKind.DIETARY) for n in range(6)]
+    with pytest.raises(InvalidMemberInput, match="up to 5"):
+        await act(house, guests.set_my_needs, house["Pat"], frozenset(t.id for t in tags))
+    await act(house, guests.set_my_needs, house["Pat"], frozenset(t.id for t in tags[:5]))
+
+
+async def test_a_guest_coordinator_closes_answers_but_not_the_vote(house: House) -> None:
+    event_id = await open_dinner(house)
+    await invite(house, "Kim", "Pat", event_id)
+    pat = house["Pat"]
+    await act(house, calls.respond, pat, event_id, Status.IN)
+    await act(house, calls.claim_coordinator, pat, event_id)
+    for name in ("Alex", "Sam"):
+        await act(house, calls.respond, house[name], event_id, Status.IN)
+    await act(house, calls.offer_role, house["Alex"], event_id, RoleOffer.PICKUP, True)
+    await act(house, calls.close_window, pat, event_id)  # "Start the vote now": logistics
+    assert (await house.event(event_id)).state is EventState.VOTING
+    with pytest.raises(EventRuleViolation):  # "Decide now" picks the plan
+        await act(house, calls.close_window, pat, event_id)
+    view = await act(house, event_views.event_view, pat, event_id)
+    assert view.can.close_window is None
+
+
+async def test_when_dietary_needs_rule_out_every_pick_the_call_says_so(house: House) -> None:
+    await house.tag("Halal", TagKind.DIETARY)
+    event_id = await open_dinner(house)
+    mo = await add_guest(house, "Mo", slack="U08MO", needs=("Halal",))
+    await invite(house, "Kim", "Mo", event_id)
+    await act(house, calls.respond, mo, event_id, Status.IN)
+    await act(house, calls.respond, house["Alex"], event_id, Status.IN)
+    await act(house, calls.offer_role, house["Alex"], event_id, RoleOffer.PICKUP, True)
+    house.clock.now = RESPOND_BY
+    await house.tick()
+    assert (await house.event(event_id)).state is EventState.ABANDONED
+    (abandoned,) = [e for e in await house.outbox() if e.kind == "call_abandoned"]
+    assert abandoned.payload["needs_unmet"] is True and abandoned.payload["reason"] == "no_coverage"

@@ -377,3 +377,14 @@ def test_a_card_with_many_guests_and_a_guest_home_with_many_invitations_fit_slac
     home = with_version_footer(home, "0.5.0")
     assert len(home["blocks"]) <= MAX_VIEW_BLOCKS
     assert home["blocks"][-1]["elements"][0]["text"].startswith("Dinnerbell 0.5.0")
+
+
+async def test_past_the_paging_cap_someone_unlisted_is_asked_to_ask_the_admin(
+    slack: Slack, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dinnerbell.channels.slack import people as people_module
+
+    monkeypatch.setattr(people_module, "PAGE_SIZE", 1)
+    monkeypatch.setattr(people_module, "MAX_PAGES", 1)  # reads one member of several
+    slack.fake.add_person("U09ZED", "Zed")
+    assert await slack.conn.people.person("U09ZED") is guests.NotJoinable.ASK_ADMIN

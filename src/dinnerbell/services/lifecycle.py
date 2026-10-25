@@ -408,7 +408,8 @@ async def _close_responses(db: AsyncSession, event: Event, now: datetime) -> Non
     group = await group_preferences(db, event.household_id, ctx.veto_people)
     attached = await _keep_attached(db, ctx, group, now)
     taken = {(p.item_id, p.mode) for p in attached}
-    ranked = [r for r in rank(await ranking_snapshot(db, ctx, group)) if (r.item_id, r.mode) not in taken]
+    snapshot = await ranking_snapshot(db, ctx, group)
+    ranked = [r for r in rank(snapshot) if (r.item_id, r.mode) not in taken]
     ranked = ranked[: max(MAX_PROPOSALS - len(attached), 0)]  # FR-13: at most 10 picks in all
     resolved = resolve_maybes(ctx.responses)
     for response in resolved:
@@ -419,7 +420,9 @@ async def _close_responses(db: AsyncSession, event: Event, now: datetime) -> Non
         await abandon(db, event, EndReason.TOO_FEW, now)
         return
     if not ranked and not attached:
-        await abandon(db, event, EndReason.NO_COVERAGE, now)
+        # Would anything have fit without the dietary needs? Then they're why nothing did.
+        unmet = bool(snapshot.guest_needs) and bool(rank(replace(snapshot, guest_needs=frozenset())))
+        await abandon(db, event, EndReason.NO_COVERAGE, now, needs_unmet=unmet)
         return
     proposals = ProposalRepository(db)
     for position, offered in enumerate(attached, start=len(ranked) + 1):
@@ -498,12 +501,15 @@ async def expire(db: AsyncSession, event: Event, now: datetime) -> None:
     await audit(db, event.household_id, None, "event.abandoned", _target(event), payload, now)
 
 
-async def abandon(db: AsyncSession, event: Event, reason: EndReason, now: datetime) -> None:
-    """Spec 5.4: the on-your-own message. Nothing is assigned or logged."""
+async def abandon(
+    db: AsyncSession, event: Event, reason: EndReason, now: datetime, *, needs_unmet: bool = False
+) -> None:
+    """Spec 5.4: the on-your-own message. Nothing is assigned or logged. ``needs_unmet`` says
+    the dietary needs of who was eating ruled out everything else that would have fit."""
     ended = replace(event, state=transition(event.state, EventState.ABANDONED), end_reason=reason)
     ended = await EventRepository(db).save(ended, now)
     ctx = await load(db, ended)
-    await publish(db, ctx, note.CallAbandoned(cc.event_info(ctx), reason, ctx.head_count), now=now)
+    await publish(db, ctx, note.CallAbandoned(cc.event_info(ctx), reason, ctx.head_count, needs_unmet), now=now)
     await publish(db, ctx, cc.call_updated(ctx), *([cc.proposals_updated(ctx)] if ctx.proposals else []), now=now)
     await audit(db, event.household_id, None, "event.abandoned", _target(event), {"reason": reason.value}, now)
 

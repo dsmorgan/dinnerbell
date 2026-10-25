@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dinnerbell.db.models import AuditRow, HouseholdRow, MemberRow, SessionRow
@@ -280,6 +280,26 @@ class AuditRepository:
             )
         )
         await self._session.flush()
+
+    async def redact(self, household_id: int, prefixes: tuple[str, ...], payload: dict[str, Any]) -> int:
+        """Replace the payload of every audit row whose action starts with one of ``prefixes``,
+        and a target naming a Slack user, for ``scrub-test``. Returns how many changed."""
+        rows = list(
+            await self._session.scalars(
+                select(AuditRow).where(
+                    AuditRow.household_id == household_id,
+                    or_(*(AuditRow.action.startswith(prefix) for prefix in prefixes)),
+                )
+            )
+        )
+        changed = 0
+        for row in rows:
+            target = "slack:redacted" if (row.target or "").startswith("slack:") else row.target
+            if row.payload != payload or row.target != target:
+                row.payload, row.target = dict(payload), target
+                changed += 1
+        await self._session.flush()
+        return changed
 
     async def latest(self, household_id: int, target: str) -> tuple[str, dict[str, Any]] | None:
         """The newest audit row about ``target``, as (action, payload), or None."""

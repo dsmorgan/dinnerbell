@@ -1,0 +1,28 @@
+{
+  "blocks": [
+    {
+      "text": {
+        "text": "Kim &lt;K&gt; &amp; Co tried to join Dinnerbell from the channel, and their Slack email is Kim's. If that's Kim, set their Slack member ID (U09KIM) on the Members page; otherwise add them as a guest there.",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "block_id": "more",
+      "elements": [
+        {
+          "action_id": "link_members",
+          "text": {
+            "emoji": true,
+            "text": "Members page",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "url": "https://dinnerbell.example.com/admin/members"
+        }
+      ],
+      "type": "actions"
+    }
+  ],
+  "text": "A Slack account needs linking to Kim."
+}

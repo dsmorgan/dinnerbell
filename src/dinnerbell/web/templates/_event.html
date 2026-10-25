@@ -152,6 +152,7 @@
       <strong>{{ g.person.name }}</strong>
       <span class="chip status">{{ g.answer.status.value|capitalize if g.answer else "No answer yet" }}</span>
       {% if g.answer %}{% for o in g.answer.offers %}<span class="chip role">{{ {"cook": "Cooks", "pickup": "Picks up", "order": "Orders"}[o.value] }}</span>{% endfor %}{% endif %}
+      {% if g.needs %}<span class="chip">Needs {{ g.needs|join(", ") }}</span>{% endif %}
       {% if g.invited_by %}<span class="small muted">invited by {{ g.invited_by.name }}</span>{% endif %}
       {% if g.answerable %}
       <div class="button-row" role="group" aria-label="Answer for {{ g.person.name }}">

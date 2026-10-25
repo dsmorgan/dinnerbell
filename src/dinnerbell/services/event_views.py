@@ -76,6 +76,8 @@ class GuestView:
     answer: Response | None
     answerable: bool
     removable: bool
+    needs: tuple[str, ...] = ()
+    """The guest's dietary needs, by name: only for whoever answers for them."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -194,8 +196,8 @@ def _member_permissions(
     event, mine = ctx.event, ctx.response_of(actor.id)
     admin = actor.active and actor.is_admin
     return Permissions(
-        respond=_allowed(lambda: rules.check_can_respond(event, actor)),
-        claim=_allowed(lambda: rules.check_claim_coordinator(event, actor)),
+        respond=_allowed(lambda: rules.check_can_respond(event, actor, invited=ctx.invited(actor.id))),
+        claim=_allowed(lambda: rules.check_claim_coordinator(event, actor, invited=ctx.invited(actor.id))),
         hand_off=rules.is_coordinator(event, actor) and event.state.is_open and event.state is not EventState.SCHEDULED,
         vote=_allowed(lambda: rules.check_can_vote(event, actor, mine)),
         propose=_allowed(lambda: rules.check_can_propose(event, actor)),
@@ -233,6 +235,10 @@ def _check_restart(ctx: CallContext, today: date, now: datetime, any_time: bool)
     rules.check_restart(ctx.event, today, now=now, too_late_after=ctx.too_late_for(today), any_time=any_time)
 
 
+def _needs(ctx: CallContext, guest: Member) -> tuple[str, ...]:
+    return tuple(sorted((ctx.tags[t].name for t in guest.dietary_needs if t in ctx.tags), key=str.casefold))
+
+
 def _guest_views(ctx: CallContext, actor: Member) -> tuple[GuestView, ...]:
     if ctx.event.is_offer:
         return ()
@@ -248,6 +254,7 @@ def _guest_views(ctx: CallContext, actor: Member) -> tuple[GuestView, ...]:
                 answer=ctx.response_of(guest.id),
                 answerable=collecting and can_answer_for(guest, actor, inviter),
                 removable=collecting and actor.is_member and (actor.is_admin or inviter == actor.id),
+                needs=_needs(ctx, guest) if can_answer_for(guest, actor, inviter) else (),
             )
         )
     return tuple(found)
