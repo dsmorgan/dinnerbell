@@ -11,6 +11,10 @@ them on cascade-deletes every response, proposal, vote, assignment, and outbox r
 ``meal_log.event_id``. ``run_migrations`` turns them off; this revision refuses to run if they're
 on. Copying the rows sets ``sqlite_sequence`` to the largest ID, so no existing ID is reused.
 
+A downgrade drops that record, and upgrading again reseeds it from the largest ID left, so an
+ID deleted in between could be given out again. Production never downgrades: it rolls back by
+restoring a backup (docs/setup.md, "Roll back").
+
 Revision ID: 0007_event_autoincrement
 Revises: 0006_event_ended_by
 Create Date: 2026-10-24

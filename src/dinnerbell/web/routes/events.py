@@ -166,7 +166,7 @@ async def start_call(
             raise BadFormValue("Pick lunch or dinner.")
         when = iso_date(day, "Enter the date as YYYY-MM-DD.")
         event = await calls.start_call(
-            db, principal.member, chosen, when, now=context.clock(), restart_any_time=_any_time(context)
+            db, principal.member, chosen, when, now=context.clock(), instance_label=context.settings.instance_label
         )
     except RULE_ERRORS as exc:
         view = await event_views.today_view(db, principal.member, now=context.clock(), any_time=_any_time(context))
@@ -546,9 +546,8 @@ async def restart(
         return await _malformed(request, principal, context, db, event_id, came_from)
 
     async def action() -> None:
-        await calls.restart_call(
-            db, principal.member, event_id, run=seen, now=context.clock(), any_time=_any_time(context)
-        )
+        label = context.settings.instance_label
+        await calls.restart_call(db, principal.member, event_id, run=seen, now=context.clock(), instance_label=label)
 
     return await _run(request, principal, context, db, event_id, came_from, action)
 

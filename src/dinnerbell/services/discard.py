@@ -35,6 +35,7 @@ from dinnerbell.services import call_context as cc
 from dinnerbell.services.call_context import load, locked_event
 from dinnerbell.services.common import audit, require_admin
 from dinnerbell.services.errors import NotFound
+from dinnerbell.services.outbox import LEASE
 
 NOT_LABELED = (
     "Discarding a call works only on a labeled instance. Set DINNERBELL_INSTANCE_LABEL (such as TEST) in the "
@@ -130,11 +131,16 @@ async def discard_call(
         household_id = actor.household_id
     async with locked_event(db, household_id, event_id, now) as event:
         info = cc.event_info(await load(db, event))
-        pending, deleted, message_keys = await OutboxRepository(db).discard_event(household_id, event.id)
-        rows = await EventRepository(db).discard(household_id, event.id)
         outbox = OutboxRepository(db)
-        for key in message_keys:
-            await outbox.enqueue(household_id, None, note.CallDiscarded(info, key), now)
+        gone = await outbox.discard_event(household_id, event.id, now)
+        rows = await EventRepository(db).discard(household_id, event.id)
+        # A delivery in a drainer's hands may still land, such as an edit of the call message;
+        # hold the edits until its claim runs out, so it can't overwrite "Discarded (test)".
+        due = now + LEASE if gone.in_flight else now
+        for key in gone.message_keys:
+            edit = note.CallDiscarded(info, key)
+            await outbox.enqueue(household_id, edit.event_id, edit, now, available_at=due)
+        pending, deleted, message_keys = gone.pending, gone.deleted, gone.message_keys
         summary = DiscardSummary(
             event_id=event.id,
             slot=event.slot,

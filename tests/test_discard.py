@@ -399,6 +399,64 @@ async def test_a_discard_while_the_drainer_holds_a_post_is_clean(
     assert channel.sent == []
 
 
+async def test_edits_wait_out_a_delivery_still_in_a_drainers_hands(house: House) -> None:
+    """An edit of the call message claimed by a drainer when the call is discarded may still
+    land; the "Discarded (test)" edits wait until its claim runs out, so it can't overwrite them."""
+    from dinnerbell.services.outbox import LEASE
+
+    channel = RecordingChannel()
+    house.clock.now = OPENS
+    await house.tick()
+    event_id = await dinner_id(house)
+    await house.drain(channel)
+    await act(house, calls.respond, house["Sam"], event_id, Status.IN)
+    async with house.sessionmaker() as db:  # a drainer holds the call_updated row
+        await db.execute(
+            OutboxRow.__table__.update()
+            .where(OutboxRow.event_id == event_id, OutboxRow.kind == "call_updated")
+            .values(claim_token="t" * 32, claimed_until=OPENS + LEASE, attempts=1)
+        )
+        await db.commit()
+    await throw_away(house, event_id)
+    edits = [r for r in await house.outbox() if r.kind == "call_discarded"]
+    assert [r.available_at for r in edits] == [OPENS + LEASE]
+    channel.sent.clear()
+    await house.drain(channel)
+    assert channel.sent == []
+    house.clock.now = OPENS + LEASE
+    await house.drain(channel)
+    assert [(s.op, s.kind) for s in channel.sent] == [("update", "call_discarded")]
+
+
+async def test_edits_go_at_once_when_nothing_is_in_flight(house: House) -> None:
+    channel = RecordingChannel()
+    house.clock.now = OPENS
+    await house.tick()
+    event_id = await dinner_id(house)
+    await house.drain(channel)
+    await throw_away(house, event_id)
+    assert [r.available_at for r in await house.outbox() if r.kind == "call_discarded"] == [OPENS]
+
+
+async def test_the_tick_still_reports_a_not_found_for_a_call_that_exists(
+    house: House, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only a call that's gone owes nothing; any other NotFound from a step is a bug to log."""
+    house.clock.now = OPENS
+    await house.tick()
+    event_id = await dinner_id(house)
+
+    async def broken(db: Any, event: Any, now: datetime) -> None:
+        raise NotFound("No such member.")
+
+    monkeypatch.setitem(lifecycle.HANDLERS, Step.CLOSE_RESPONSES, broken)
+    house.clock.now = RESPOND_BY
+    async with house.sessionmaker() as db:
+        with pytest.raises(NotFound, match="No such member"):
+            await lifecycle.advance(db, house.household.id, event_id, house.clock())
+    assert (await house.event(event_id)).state is EventState.COLLECTING
+
+
 # Starting a called-off call again at any time ------------------------------------------------------
 
 
@@ -417,8 +475,8 @@ async def test_a_called_off_call_starts_again_at_any_time_on_test_only(house: Ho
     view = await act(house, event_views.event_view, house["Kim"], event_id, any_time=True)
     today = await act(house, event_views.today_view, house["Kim"], any_time=True)
     assert view.can.restart and [v.can.restart for v in today.events] == [True]
-    again = await act(house, calls.start_call, house["Kim"], Slot.DINNER, TODAY, restart_any_time=True)
+    again = await act(house, calls.start_call, house["Kim"], Slot.DINNER, TODAY, instance_label=LABEL)
     assert (again.id, again.run, again.state) == (event_id, 2, EventState.COLLECTING)
     await act(house, calls.cancel_call, house["Alex"], event_id)
-    third = await act(house, calls.restart_call, house["Kim"], event_id, any_time=True)
+    third = await act(house, calls.restart_call, house["Kim"], event_id, instance_label=LABEL)
     assert (third.run, third.state) == (3, EventState.COLLECTING)

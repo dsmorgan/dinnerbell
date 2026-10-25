@@ -456,7 +456,7 @@ class Interactions:
             if action_id in ids.START_CALL:
                 slot = ids.parse_slot(value)
                 day = await slack_members.today(db, member, now=now)
-                await calls.start_call(db, member, slot, day, now=now, restart_any_time=self.any_time)
+                await calls.start_call(db, member, slot, day, now=now, instance_label=self.instance_label)
                 return f"Started the {slot.value} call. It's posted in the Dinnerbell channel."
             if action_id in {ids.DETAILS, ids.ADD_PROPOSAL}:
                 return await self._open_modal(db, member, source, action_id, ids.parse_event(value), trigger)
@@ -825,7 +825,7 @@ class Interactions:
             async with self.sessionmaker() as db:
                 today = await slack_members.today(db, member, now=self.clock())
                 slot, day = parse_call_args(args, today, command=self.command)
-                await calls.start_call(db, member, slot, day, now=self.clock(), restart_any_time=self.any_time)
+                await calls.start_call(db, member, slot, day, now=self.clock(), instance_label=self.instance_label)
             when = "today" if day == today else f"for {day_label(day)}"
             return f"Started the {slot.value} call {when}. It's posted in the Dinnerbell channel."
 

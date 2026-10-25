@@ -617,7 +617,9 @@ async def advance(db: AsyncSession, household_id: int, event_id: int, now: datet
                 if step is not None:
                     await HANDLERS[step](db, event, now)
         except NotFound:
-            break  # discarded since the read, on a test instance (#60): nothing is owed
+            if await EventRepository(db).get(household_id, event_id) is None:
+                break  # discarded since the read, on a test instance (#60): nothing is owed
+            raise
         if step is None:  # pragma: no cover - another worker took the step between the read and the lock
             break
         applied.append(step)
