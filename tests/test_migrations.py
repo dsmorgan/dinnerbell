@@ -9,6 +9,7 @@ import pytest
 from alembic.autogenerate import compare_metadata
 from alembic.runtime.migration import MigrationContext
 from sqlalchemy import create_engine, inspect, text
+from sqlalchemy.exc import IntegrityError
 
 from dinnerbell.config import Settings
 from dinnerbell.db.engine import create_sync_engine
@@ -18,6 +19,7 @@ from dinnerbell.db.models import Base
 M0_TABLES = {"household", "member", "session", "audit"}
 M1_TABLES = {"tag", "catalog_item", "catalog_item_tag", "catalog_item_cook", "preference", "meal_log"}
 M2_TABLES = {"event", "response", "suggestion", "proposal", "vote", "assignment", "outbox"}
+M3_TABLES = {"feedback"}
 
 
 def test_migrates_an_empty_database(settings: Settings) -> None:
@@ -26,8 +28,9 @@ def test_migrates_an_empty_database(settings: Settings) -> None:
     engine = create_engine(settings.sync_database_url)
     try:
         inspector = inspect(engine)
-        assert set(inspector.get_table_names()) == M0_TABLES | M1_TABLES | M2_TABLES | {"alembic_version"}
-        for table in (M0_TABLES | M1_TABLES | M2_TABLES) - {"household"}:
+        everything = M0_TABLES | M1_TABLES | M2_TABLES | M3_TABLES
+        assert set(inspector.get_table_names()) == everything | {"alembic_version"}
+        for table in everything - {"household"}:
             assert "household_id" in {c["name"] for c in inspector.get_columns(table)}, table
         member_columns = {c["name"] for c in inspector.get_columns("member")}
         assert {"feedback_reminder", "mute_dm_reminders", "oidc_subject", "slack_user_id"} <= member_columns
@@ -474,7 +477,7 @@ def test_0007_rebuilds_event_without_losing_a_row(settings: Settings) -> None:
     assert all(before["rows"][t] for t in ("event", *EVENT_CHILDREN))  # type: ignore[index]
     assert "AUTOINCREMENT" not in _event_sql(settings)
 
-    run_migrations(settings.sync_database_url, settings.database_path)
+    _upgrade_to(settings, "0007_event_autoincrement")  # later revisions add their own indexes
     assert "AUTOINCREMENT" in _event_sql(settings)
     assert _snapshot(settings) == before
 
@@ -482,7 +485,7 @@ def test_0007_rebuilds_event_without_losing_a_row(settings: Settings) -> None:
     assert "AUTOINCREMENT" not in _event_sql(settings)
     assert _snapshot(settings) == before
 
-    run_migrations(settings.sync_database_url, settings.database_path)
+    _upgrade_to(settings, "0007_event_autoincrement")  # later revisions add their own indexes
     assert _snapshot(settings) == before
     index = next(i for i in before["indexes"] if i[0] == "uq_event_call_per_slot")  # type: ignore[attr-defined]
     assert index[1].endswith("WHERE kind = 'call'")
@@ -521,3 +524,72 @@ def test_0007_refuses_to_run_with_foreign_keys_on(settings: Settings) -> None:
             assert c.execute(text("SELECT count(*) FROM response")).scalar() == 2
     finally:
         engine.dispose()
+
+
+def test_0008_adds_feedback_that_goes_with_its_meal_and_downgrade_removes_it(settings: Settings) -> None:
+    _upgrade_to(settings, "0007_event_autoincrement")
+    engine = create_sync_engine(settings.sync_database_url)
+    member = (
+        "INSERT INTO member (household_id, display_name, email, role, can_cook, can_pickup, can_order, "
+        "mute_dm_reminders, feedback_reminder, active, slack_link_locked, created_at, updated_at) "
+        "VALUES (1, 'Sam', 'sam@example.com', 'member', 0, 0, 0, 0, 0, 1, 0, :t, :t)"
+    )
+    try:
+        with engine.begin() as c:
+            c.execute(
+                text("INSERT INTO household (name, timezone, settings, created_at) VALUES ('H', 'UTC', '{}', :t)"),
+                {"t": STAMP},
+            )
+            c.execute(text(member), {"t": STAMP})
+            c.execute(
+                text(
+                    "INSERT INTO catalog_item (household_id, kind, name, name_key, modes, active, created_at, "
+                    "updated_at) VALUES (1, 'restaurant', 'X', 'x', '[\"pickup\"]', 1, :t, :t)"
+                ),
+                {"t": STAMP},
+            )
+            c.execute(
+                text(
+                    "INSERT INTO meal_log (household_id, date, slot, item_id, cuisine_tags, participants, "
+                    "created_at, updated_at) VALUES (1, '2026-10-22', 'dinner', 1, '[]', '[]', :t, :t)"
+                ),
+                {"t": STAMP},
+            )
+        run_migrations(settings.sync_database_url, settings.database_path)
+        engine.dispose()  # a connection from before the table existed reads stale foreign key lists
+        fks = {
+            (fk["constrained_columns"][0], fk["referred_table"], fk["options"].get("ondelete"))
+            for fk in inspect(engine).get_foreign_keys("feedback")
+        }
+        assert fks == {
+            ("household_id", "household", "CASCADE"),
+            ("meal_id", "meal_log", "CASCADE"),  # feedback goes with its meal
+            ("member_id", "member", "CASCADE"),
+            ("item_id", "catalog_item", "RESTRICT"),
+            ("cook_member_id", "member", "SET NULL"),
+        }
+        insert = text(
+            "INSERT INTO feedback (household_id, meal_id, member_id, food, place_issues, cook_thanks, item_id, "
+            "item_name, item_kind, participants, created_at, updated_at) "
+            "VALUES (1, 1, 1, :food, '[]', 0, 1, 'X', 'restaurant', '[]', :t, :t)"
+        )
+        with engine.begin() as c:
+            c.execute(text("PRAGMA foreign_keys=ON"))
+            c.execute(insert, {"food": "not_again", "t": STAMP})
+        with pytest.raises(IntegrityError), engine.begin() as c:
+            c.execute(insert, {"food": "loved", "t": STAMP})  # one per member per meal
+        with pytest.raises(IntegrityError), engine.begin() as c:
+            c.execute(text("UPDATE feedback SET food = 'meh'"))
+        with engine.begin() as c:
+            c.execute(text("PRAGMA foreign_keys=ON"))
+            c.execute(text("DELETE FROM meal_log"))
+            assert c.execute(text("SELECT count(*) FROM feedback")).scalar() == 0
+    finally:
+        engine.dispose()
+    _downgrade_to(settings, "0007_event_autoincrement")
+    engine = create_sync_engine(settings.sync_database_url)
+    try:
+        assert "feedback" not in inspect(engine).get_table_names()
+    finally:
+        engine.dispose()
+    run_migrations(settings.sync_database_url, settings.database_path)

@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """ORM models. M0: household, member, session, audit. M1: the catalog, preferences, and meal log.
 M2: dinner calls (event, response, suggestion, proposal, vote, assignment) and the outbox.
+M3: feedback on meals.
 
 Every table carries ``household_id`` (the household table's own key is that ID).
 Changing a model requires a new Alembic revision; see CLAUDE.md.
@@ -424,3 +425,41 @@ class OutboxRow(Base):
     failed_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     ref_channel: Mapped[str | None] = mapped_column(String(64))
     ref_message: Mapped[str | None] = mapped_column(String(64))
+
+
+class FeedbackRow(Base):
+    """One member's feedback on one meal (FR-45, FR-46). ``food`` and ``place`` are ratings,
+    ``place_issues`` a JSON list of issue chips. ``item_id`` through ``participants`` snapshot
+    the meal when the feedback was saved: the item, its kind and mode, the cook, and who ate.
+
+    Deleting the meal deletes its feedback (``meal_id`` cascades), so a discarded call that
+    takes its meal log with it leaves nothing behind.
+    """
+
+    __tablename__ = "feedback"
+    __table_args__ = (
+        UniqueConstraint("meal_id", "member_id"),
+        CheckConstraint("food IS NULL OR food IN ('loved', 'fine', 'not_again')", name="food"),
+        CheckConstraint("place IS NULL OR place IN ('loved', 'fine', 'not_again')", name="place"),
+        CheckConstraint("item_kind IN ('home', 'restaurant')", name="item_kind"),
+        CheckConstraint("mode IS NULL OR mode IN ('cook', 'pickup', 'delivery')", name="mode"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    household_id: Mapped[int] = mapped_column(ForeignKey("household.id", ondelete="CASCADE"))
+    meal_id: Mapped[int] = mapped_column(ForeignKey("meal_log.id", ondelete="CASCADE"))
+    member_id: Mapped[int] = mapped_column(ForeignKey("member.id", ondelete="CASCADE"), index=True)
+    food: Mapped[str | None] = mapped_column(String(16))
+    place: Mapped[str | None] = mapped_column(String(16))
+    place_issues: Mapped[list[str]] = mapped_column(JSON, default=list)
+    cook_thanks: Mapped[bool] = mapped_column(Boolean, default=False)
+    cook_note: Mapped[str | None] = mapped_column(String(200))
+    item_id: Mapped[int] = mapped_column(ForeignKey("catalog_item.id", ondelete="RESTRICT"), index=True)
+    item_name: Mapped[str] = mapped_column(String(100))
+    item_kind: Mapped[str] = mapped_column(String(16))
+    mode: Mapped[str | None] = mapped_column(String(16))
+    cook_member_id: Mapped[int | None] = mapped_column(ForeignKey("member.id", ondelete="SET NULL"), index=True)
+    cook_name: Mapped[str | None] = mapped_column(String(80))
+    participants: Mapped[list[dict[str, Any]]] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime())
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime())
