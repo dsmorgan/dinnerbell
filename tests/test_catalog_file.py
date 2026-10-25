@@ -128,26 +128,41 @@ def test_aliases_are_refused() -> None:
     assert "aliases" in message
 
 
-def quickly(source: str | bytes, seconds: float = 1.0) -> FileError:
-    """Parse ``source`` and return its single error, failing if parsing takes too long."""
-    started = time.perf_counter()
+def quickly(monkeypatch: pytest.MonkeyPatch, source: str | bytes, most_values: int) -> FileError:
+    """Parse ``source`` and return its single error, failing unless the parser stopped composing
+    after at most ``most_values`` values. Counting work instead of timing it keeps a slow or busy
+    CI runner from making these tests flaky. A CPU-time ceiling far above the normal 0.1 seconds
+    still catches a blowup outside composing, such as in reading or scanning."""
+    import dinnerbell.domain.catalog_file as catalog_file
+
+    composed = 0
+    original = catalog_file._Loader.compose_node
+
+    def counting(self: catalog_file._Loader, parent: object, index: object) -> object:
+        nonlocal composed
+        composed += 1
+        return original(self, parent, index)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(catalog_file._Loader, "compose_node", counting)
+    started = time.process_time()
     found = parse_catalog(source).errors
-    assert time.perf_counter() - started < seconds
+    assert time.process_time() - started < 10
+    assert composed <= most_values
     assert len(found) == 1, found
     return found[0]
 
 
-def test_billion_laughs_is_refused_quickly() -> None:
+def test_billion_laughs_is_refused_quickly(monkeypatch: pytest.MonkeyPatch) -> None:
     lines = ["version: 1", 'a0: &a0 ["x","x","x","x","x","x","x","x","x"]']
     lines += [f"a{i}: &a{i} [*a{i - 1},*a{i - 1},*a{i - 1},*a{i - 1},*a{i - 1}]" for i in range(1, 10)]
-    error = quickly("\n".join(lines))
+    error = quickly(monkeypatch, "\n".join(lines), most_values=20)  # refused at the first alias
     assert error.location == "line 3"
     assert "aliases" in error.message
 
 
-def test_deep_nesting_is_refused_quickly() -> None:
+def test_deep_nesting_is_refused_quickly(monkeypatch: pytest.MonkeyPatch) -> None:
     depth = 200_000  # far past the interpreter's recursion limit, well under 1 MB
-    error = quickly("version: 1\nrestaurants: " + "[" * depth + "]" * depth + "\n")
+    error = quickly(monkeypatch, "version: 1\nrestaurants: " + "[" * depth + "]" * depth + "\n", MAX_DEPTH + 5)
     assert error.location == "line 2"
     assert error.message == f"values are nested more than {MAX_DEPTH} levels deep"
 
