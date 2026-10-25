@@ -7,7 +7,7 @@ Read `docs/spec.md` (especially section 13) before changing anything. Decisions 
 ```sh
 uv sync                          # install, including dev tools
 uv run pytest                    # tests
-uv run pytest --cov              # tests with coverage (CI fails under 90%)
+uv run pytest -n auto --cov      # tests on every CPU, with coverage (CI fails under 90%)
 uv run ruff check . && uv run ruff format --check .
 uv run mypy                      # strict, whole package
 uv run --env-file .env dinnerbell serve   # run locally (needs a .env; see .env.example)
@@ -63,4 +63,4 @@ The app runs migrations on `dinnerbell serve` and `dinnerbell migrate`, and refu
 
 - Tests run with production security: HTTPS base URL, `Secure` `__Host-` cookies, CSRF tokens, Origin checks. **Never weaken auth, CSRF, or headers to make a test pass**; send what a browser sends instead (see `tests/conftest.py`).
 - The fake OIDC provider lives in `tests/support/fake_oidc.py`. It must never be imported from `src/` or shipped in the image.
-- Use `FakeClock` for anything time-dependent.
+- Use `FakeClock` for anything time-dependent. Never wait a fixed time; tests run in parallel with pytest-xdist, so keep them xdist-safe (see [CONTRIBUTING.md](CONTRIBUTING.md#write-tests-that-stay-fast-and-parallel)).
