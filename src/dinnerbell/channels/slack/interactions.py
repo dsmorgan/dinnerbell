@@ -165,6 +165,11 @@ class Reply:
     notice: str
 
 
+Done = str | Message | Reply | None
+"""What an action replies: a line of text, a message with a channel link or buttons (never
+from Home), a ``Reply`` for both places, or nothing."""
+
+
 @dataclass(slots=True)
 class _CardLock:
     """One person's card and reminder work on one call, one tap at a time. ``users`` counts the
@@ -374,15 +379,17 @@ class Interactions:
             view = home_view(today, self.links, notice, label=self.instance_label)
         await self.api.publish_home(user_id, with_version_footer(view, self.version, self.instance_label))
 
-    async def _run(self, source: Source, member: Member, work: Callable[[], Awaitable[str | Reply | None]]) -> None:
-        """Run one action and report how it went. ``work`` returns a confirmation, a ``Reply``, or None."""
+    async def _run(self, source: Source, member: Member, work: Callable[[], Awaitable[Done]]) -> None:
+        """Run one action and report how it went. ``work`` returns what to reply (``Done``)."""
         notice: str | None = None
         try:
             done = await work()
-            if isinstance(done, Reply) and not source.home:
-                await self._reply(source, done.message, member)
+            if isinstance(done, Reply):
+                done = done.notice if source.home else done.message
+            if isinstance(done, Message):
+                await self._reply(source, done, member)
             else:
-                notice = done.notice if isinstance(done, Reply) else done
+                notice = done
         except SHOWN_ERRORS as exc:
             notice = str(exc)
         except IllegalTransition as exc:
@@ -431,14 +438,14 @@ class Interactions:
         )
         log.info("slack action", extra={"member_id": member.id, "action": str(action_id)[:40]})
 
-        async def work() -> str | Reply | None:
+        async def work() -> Done:
             return await self._dispatch(member, source, str(action_id), value, trigger, tap)
 
         await self._run(source, member, work)
 
     async def _dispatch(
         self, member: Member, source: Source, action_id: str, value: object, trigger: object, tap: Tap
-    ) -> str | Reply | None:
+    ) -> Done:
         if action_id in ids.CARD_ACTIONS:
             return await self._card_tap(member, source, action_id, value, trigger, tap)
         if action_id == ids.ANSWER:
@@ -705,16 +712,11 @@ class Interactions:
         notice = f"The {event.slot.value} call for {day_label(event.day)} is posted in the Dinnerbell channel."
         return Reply(posted_reply(view.info, channel_id=self.channel_id, ctx=self._context()), notice)
 
-    def _started(self, view: EventView, today: date) -> Reply:
-        """The reply to starting a call: posted, or scheduled with **Post it now**."""
+    def _started(self, view: EventView, today: date) -> Message:
+        """The reply to starting a call from the slash command: posted, or scheduled with
+        **Post it now**. Home's start buttons start today's call, and reply with a line."""
         event = view.event
-        message = started_reply(view.info, event.opens_at, today=today, channel_id=self.channel_id, ctx=self._context())
-        when = "today" if event.day == today else f"for {day_label(event.day)}"
-        if event.state is EventState.SCHEDULED:
-            notice = f"Scheduled the {event.slot.value} call {when}. It posts at its usual time."
-        else:
-            notice = f"Started the {event.slot.value} call {when}. It's posted in the Dinnerbell channel."
-        return Reply(message, notice)
+        return started_reply(view.info, event.opens_at, today=today, channel_id=self.channel_id, ctx=self._context())
 
     # Call it off and Close now (FR-56) ---------------------------------------------------------
 
@@ -888,7 +890,7 @@ class Interactions:
         if member is None:
             return
 
-        async def work() -> str | Reply | None:
+        async def work() -> Done:
             async with self.sessionmaker() as db:
                 today = await slack_members.today(db, member, now=self.clock())
                 slot, day, early = parse_call_args(args, today, command=self.command)
@@ -897,10 +899,10 @@ class Interactions:
                         db, member, slot, day, now=self.clock(), instance_label=self.instance_label
                     )
                 except CallExists:
-                    scheduled = [e for e in await event_views.calls_on(db, member, day) if e.slot is slot]
-                    if not early or not scheduled or scheduled[0].state is not EventState.SCHEDULED:
+                    scheduled = await event_views.scheduled_call(db, member, slot, day) if early else None
+                    if scheduled is None:
                         raise
-                    event = scheduled[0]  # posting a call that's scheduled already
+                    event = scheduled  # posting a call that's scheduled already
                 if not early:
                     return self._started(await event_views.event_view(db, member, event.id, now=self.clock()), today)
             return await self._post_now(member, event.id, None)

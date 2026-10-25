@@ -21,7 +21,7 @@ from dinnerbell.config import Settings
 from dinnerbell.domain import notifications as n
 from dinnerbell.domain.events import EventRuleViolation, EventState, RoleOffer, StaleRun, Status, Step
 from dinnerbell.domain.meals import Slot
-from dinnerbell.services import calls, event_views
+from dinnerbell.services import call_admin, call_context, calls, event_views, lifecycle
 from dinnerbell.services.database import Database, open_database
 from dinnerbell.services.errors import NotFound
 from tests.support.calls import OPENS, RESPOND_BY, House, dinner_id, furnish, make_house
@@ -128,17 +128,37 @@ async def test_posting_twice_or_after_the_tick_changes_nothing(house: House) -> 
     assert [a["actor"] for a in await opened_audits(house)] == [house["Kim"].id, None]
 
 
-async def test_posting_now_races_the_tick_safely(house: House) -> None:
-    """Both take the event's lock, so whichever runs second finds the call posted."""
+async def test_posting_now_races_the_tick_safely(house: House, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Posting holds the event's lock from its check to its commit. Here the tick reads the
+    call as scheduled and goes for the lock while posting is between the two; it waits for the
+    commit, then finds the call posted. Without the lock both would post it."""
     event_id = await schedule_lunch(house)
     house.clock.now = LUNCH_POSTS
+    tick_read = asyncio.Event()
+    real_due, real_open = call_context.due, lifecycle.open_call
+
+    async def due(db: Any, event: Any, now: datetime) -> Step | None:
+        step = await real_due(db, event, now)
+        if step is Step.OPEN:
+            tick_read.set()  # the tick saw the call scheduled, and takes the lock next
+        return step
+
+    async def open_after_the_tick_read(db: Any, event: Any, now: datetime, **kwargs: Any) -> Any:
+        await tick_read.wait()
+        return await real_open(db, event, now, **kwargs)
+
+    monkeypatch.setattr(call_context, "due", due)
+    monkeypatch.setattr(lifecycle, "open_call", open_after_the_tick_read)  # posting's path; the tick's is HANDLERS
     async with house.sessionmaker() as db:
-        tick, posted = await asyncio.gather(
-            house.tick(), calls.post_now(db, house["Kim"], event_id, now=LUNCH_POSTS), return_exceptions=True
+        posted, tick = await asyncio.gather(
+            calls.post_now(db, house["Kim"], event_id, now=LUNCH_POSTS), house.tick(), return_exceptions=True
         )
+    assert tick_read.is_set()
     assert not isinstance(tick, BaseException) and not isinstance(posted, BaseException)
+    assert tick == []  # it found nothing left to do
     assert (await house.event(event_id)).state is EventState.COLLECTING
-    assert len(await call_messages(house, event_id)) == 1 and len(await opened_audits(house)) == 1
+    assert len(await call_messages(house, event_id)) == 1
+    assert [a["actor"] for a in await opened_audits(house)] == [house["Kim"].id]
 
 
 async def test_who_may_post_now_and_what_is_refused(house: House) -> None:
@@ -339,3 +359,63 @@ async def test_a_reply_slack_wont_show_in_the_channel_falls_back_to_a_dm(
     slack.fake.fail("chat.postMessage", Failure(raises=TimeoutError()))
     await slack.command("Kim", "call dinner tomorrow")  # no exception escapes
     assert any(r.message == "slack reply failed" for r in caplog.records)
+
+
+# Re-running or restarting a call posted early (issue #59) ---------------------------------------
+
+
+async def post_lunch_early(house: House) -> int:
+    event_id = await schedule_lunch(house)
+    await act(house, calls.post_now, house["Kim"], event_id)
+    return event_id
+
+
+async def assert_posted_again(house: House, event_id: int) -> None:
+    """Run 2 is open now with tomorrow's deadline, and has its own call message."""
+    event = await house.event(event_id)
+    assert (event.run, event.state) == (2, EventState.COLLECTING)
+    assert (event.opens_at, event.respond_deadline) == (house.clock(), LUNCH_BY)
+    opened = await call_messages(house, event_id)
+    assert [m.event.run for m in opened] == [1, 2] and opened[-1].event.early
+
+
+async def test_an_admin_rerun_of_a_call_posted_early_posts_it_again(house: House) -> None:
+    event_id = await post_lunch_early(house)
+    for name in ("Alex", "Sam", "Kim", "Lee"):
+        await act(house, calls.respond, house[name], event_id, Status.OUT)
+    await house.tick()
+    assert (await house.event(event_id)).state is EventState.ABANDONED
+    house.clock.now = OPENS.replace(minute=30)
+    await act(house, call_admin.rerun, house["Alex"], event_id)
+    await assert_posted_again(house, event_id)
+
+
+async def test_starting_a_called_off_call_posted_early_posts_it_again(house: House) -> None:
+    event_id = await post_lunch_early(house)
+    await act(house, calls.cancel_call, house["Sam"], event_id)
+    house.clock.now = OPENS.replace(minute=30)
+    fresh = await act(house, calls.start_call, house["Lee"], Slot.LUNCH, TOMORROW)
+    assert fresh.id == event_id
+    await assert_posted_again(house, event_id)
+
+
+async def test_a_called_off_call_that_was_never_posted_stays_scheduled_when_started_again(house: House) -> None:
+    event_id = await schedule_lunch(house)
+    await act(house, calls.cancel_call, house["Sam"], event_id)
+    await act(house, calls.start_call, house["Lee"], Slot.LUNCH, TOMORROW)
+    event = await house.event(event_id)
+    assert (event.run, event.state, event.opens_at, event.respond_deadline) == (
+        2,
+        EventState.SCHEDULED,
+        LUNCH_POSTS,
+        LUNCH_BY,
+    )
+    assert await call_messages(house, event_id) == []
+
+
+def test_a_call_message_queued_before_early_still_decodes() -> None:
+    """Outbox rows written before ``EventInfo.early`` existed decode as not posted early."""
+    info = n.EventInfo(7, 1, Slot.DINNER, TOMORROW, EventState.COLLECTING, 1, "/events/7", "UTC", LUNCH_BY)
+    old = n.to_payload(n.CallUpdated(info, (), (), 0))
+    del old["event"]["early"]
+    assert n.from_payload("call_updated", old) == n.CallUpdated(info, (), (), 0)

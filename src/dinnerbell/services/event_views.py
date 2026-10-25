@@ -210,6 +210,13 @@ async def calls_on(db: AsyncSession, actor: Member, day: date) -> list[Event]:
     return [event for event in found if event is not None]
 
 
+async def scheduled_call(db: AsyncSession, actor: Member, slot: Slot, day: date) -> Event | None:
+    """The actor's household's call for ``slot`` on ``day`` if it's scheduled and not posted
+    yet, for starting a call with "post it now" when it exists already (issue #59)."""
+    event = await EventRepository(db).call_for(actor.household_id, slot, day)
+    return event if event is not None and event.state is EventState.SCHEDULED else None
+
+
 async def today_view(db: AsyncSession, actor: Member, *, now: datetime, any_time: bool = False) -> TodayView:
     """``any_time``: see ``permissions``."""
     today = await _today(db, actor, now)

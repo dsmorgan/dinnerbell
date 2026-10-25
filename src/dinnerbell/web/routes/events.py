@@ -40,6 +40,7 @@ from dinnerbell.domain.events import (
 from dinnerbell.domain.meals import Slot
 from dinnerbell.services import call_admin, calls, discard, event_views
 from dinnerbell.services.errors import NotFound
+from dinnerbell.services.lifecycle import CallExists
 from dinnerbell.web.auth import (
     AdminCSRFChecked,
     AdminPrincipal,
@@ -167,15 +168,26 @@ async def start_call(
         if chosen is None:
             raise BadFormValue("Pick lunch or dinner.")
         when = iso_date(day, "Enter the date as YYYY-MM-DD.")
-        event = await calls.start_call(
-            db, principal.member, chosen, when, now=context.clock(), instance_label=context.settings.instance_label
-        )
-        if post_now:
-            await calls.post_now(db, principal.member, event.id, run=event.run, now=context.clock())
+        try:
+            event = await calls.start_call(
+                db, principal.member, chosen, when, now=context.clock(), instance_label=context.settings.instance_label
+            )
+        except CallExists:
+            scheduled = await event_views.scheduled_call(db, principal.member, chosen, when) if post_now else None
+            if scheduled is None:
+                raise
+            event = scheduled  # posting a call that's scheduled already, as /dinnerbell call ... now does
     except RULE_ERRORS as exc:
         view = await event_views.today_view(db, principal.member, now=context.clock(), any_time=_any_time(context))
         page = {"today": view, "from_page": "today", "start_error": str(exc)}
         return await render(request, "today.html", page, status_code=409)
+    if post_now:
+        # The call exists now, so a refusal shows on its card rather than as a failed start.
+        member = principal.member
+        try:
+            await calls.post_now(db, member, event.id, run=event.run, now=context.clock())
+        except RULE_ERRORS as exc:
+            return await _card(request, principal, context, db, event.id, came_from="event", error=str(exc))
     return RedirectResponse(f"/events/{event.id}", status_code=303)
 
 

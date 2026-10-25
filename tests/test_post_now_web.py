@@ -10,6 +10,8 @@ from fastapi.testclient import TestClient
 
 from dinnerbell.config import Settings
 from dinnerbell.db.models import AuditRow, EventRow
+from dinnerbell.domain.events import EventRuleViolation
+from dinnerbell.services import calls
 from tests.conftest import invite, page, sign_in
 from tests.support.fake_oidc import FakeProvider
 from tests.support.web import add_item, htmx, submit
@@ -78,3 +80,27 @@ def test_post_now_needs_the_run_and_refuses_an_old_one(house: TestClient, migrat
     assert submit(house, f"/events/{event_id}/post-now", {"run": "1"}).status_code == 303
     assert submit(house, f"/events/{event_id}/post-now", {"run": "1"}).status_code == 303  # nothing to do
     assert event_row(migrated, event_id).state == "collecting"
+
+
+def test_the_start_form_posts_a_call_that_is_scheduled_already(house: TestClient, migrated: Settings) -> None:
+    """As `/dinnerbell call ... now` does; without Post it now, or once it's posted, it's there already."""
+    event_id = start(house)
+    again = submit(house, "/events", {"slot": "lunch", "day": "2026-10-23"})
+    assert again.status_code == 409 and "already a lunch call" in again.text
+    assert start(house, post_now="1") == event_id
+    assert event_row(migrated, event_id).state == "collecting"
+    posted = submit(house, "/events", {"slot": "lunch", "day": "2026-10-23", "post_now": "1"})
+    assert posted.status_code == 409 and "already a lunch call" in posted.text
+
+
+def test_a_refused_post_now_after_starting_shows_on_the_new_calls_card(
+    house: TestClient, migrated: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def refuse(*args: object, **kwargs: object) -> None:
+        raise EventRuleViolation("Not now.")
+
+    monkeypatch.setattr(calls, "post_now", refuse)
+    response = submit(house, "/events", {"slot": "lunch", "day": "2026-10-23", "post_now": "1"})
+    assert response.status_code == 409 and "Not now." in response.text
+    assert 'action="/events/1/post-now"' in response.text  # the call was started; it's scheduled
+    assert event_row(migrated, 1).state == "scheduled"
