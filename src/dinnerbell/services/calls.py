@@ -588,7 +588,11 @@ def _called_off(before: CallContext, ctx: CallContext, actor: Member, reason: st
         return sent
     participants = tuple(ctx.person(r.member_id) for r in before.participants)
     sent.append(note.EventCancelled(info, participants, by, reason, _audience(before)))
-    sent += [cc.call_updated(ctx), *([cc.proposals_updated(ctx)] if ctx.proposals else []), *cc.decision_updated(ctx)]
+    sent += [
+        cc.message_updated(ctx),
+        *([cc.proposals_updated(ctx)] if ctx.proposals else []),
+        *cc.decision_updated(ctx),
+    ]
     decision = cc.decision_info(before)
     if before.event.state is EventState.DECIDED and decision is not None:
         order = list(AssignmentRole)

@@ -75,6 +75,7 @@ ALLOWED = {
     (EventState.SCHEDULED, EventState.CANCELLED),
     (EventState.SCHEDULED, EventState.ABANDONED),
     (EventState.COLLECTING, EventState.VOTING),
+    (EventState.COLLECTING, EventState.DECIDED),  # an offer at its time (FR-4)
     (EventState.COLLECTING, EventState.ABANDONED),
     (EventState.COLLECTING, EventState.CANCELLED),
     (EventState.VOTING, EventState.DECIDED),

@@ -581,9 +581,16 @@ async def test_home_shows_call_it_off_and_close_now_only_to_who_can(slack: Slack
     for who in ("Alex", "Sam", "Kim"):
         await slack.open_home(who)
     common = ["respond_in", "respond_maybe", "respond_out", "details"]
-    assert home_actions(slack, "Kim") == [*common, "link_event", "start_call_lunch"]
+    assert home_actions(slack, "Kim") == [*common, "link_event", "make_offer", "start_call_lunch"]
     for who in ("Alex", "Sam"):  # an admin, and the coordinator
-        assert home_actions(slack, who) == [*common, "close_window", "cancel_call", "link_event", "start_call_lunch"]
+        assert home_actions(slack, who) == [
+            *common,
+            "close_window",
+            "cancel_call",
+            "link_event",
+            "make_offer",
+            "start_call_lunch",
+        ]
     buttons = {
         e["action_id"]: e for b in slack.last_home("Sam")["blocks"] if b["type"] == "actions" for e in b["elements"]
     }
@@ -642,9 +649,9 @@ async def test_home_offers_to_start_a_called_off_slot_again(slack: Slack, house:
     await call_off(slack, "Kim", reason(None), event_id)
     for who in ("Sam", "Lee"):  # any member, not only whoever called it off
         await slack.open_home(who)
-        assert home_actions(slack, who) == ["link_event", "start_call_dinner", "start_call_lunch"]
+        assert home_actions(slack, who) == ["link_event", "make_offer", "start_call_dinner", "start_call_lunch"]
         starts = next(b for b in slack.last_home(who)["blocks"] if b.get("block_id") == "start")["elements"]
-        assert [e["text"]["text"] for e in starts] == ["Start dinner again", "Start a lunch call"]
+        assert [e["text"]["text"] for e in starts] == ["Make an offer", "Start dinner again", "Start a lunch call"]
     await slack.click("Lee", ids.ACTION_FOR_START[Slot.DINNER], "dinner", home=True)
     event = await house.event(event_id)
     assert (event.state, event.run, event.created_by) == (EventState.COLLECTING, 2, house["Lee"].id)

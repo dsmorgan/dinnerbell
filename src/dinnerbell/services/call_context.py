@@ -57,6 +57,7 @@ from dinnerbell.domain.events import (
 )
 from dinnerbell.domain.household import Household
 from dinnerbell.domain.members import Member
+from dinnerbell.domain.offers import seats_taken
 from dinnerbell.domain.schedule import SlotSchedule, slot_schedule
 from dinnerbell.services.errors import NotFound
 
@@ -193,6 +194,7 @@ def event_info(ctx: CallContext) -> note.EventInfo:
         ended_by=ctx.person(event.ended_by) if event.ended_by is not None else None,
         end_note=event.end_note,
         early=posted_before_its_day(event, ctx.zone),
+        kind=event.kind,
     )
 
 
@@ -207,6 +209,15 @@ def suggestion_text(ctx: CallContext, suggestion: Suggestion) -> str:
     return suggestion.free_text or ""
 
 
+def _picks_of(ctx: CallContext, member_id: int) -> tuple[str, ...]:
+    """What ``member_id`` suggested, and, while responses are open, the picks their offers added
+    (FR-5): those are proposals already, but the proposals message comes only with the vote."""
+    said = [suggestion_text(ctx, s) for s in ctx.suggestions if s.member_id == member_id]
+    if ctx.event.state is EventState.COLLECTING:
+        said += [item_info(ctx, p).name for p in ctx.proposals if p.proposed_by == member_id]
+    return tuple(said)
+
+
 def roster(ctx: CallContext) -> tuple[note.RosterEntry, ...]:
     return tuple(
         note.RosterEntry(
@@ -217,7 +228,7 @@ def roster(ctx: CallContext) -> tuple[note.RosterEntry, ...]:
             eat_from=r.eat_from,
             eat_until=r.eat_until,
             offers=tuple(sorted(r.offers)),
-            suggestions=tuple(suggestion_text(ctx, s) for s in ctx.suggestions if s.member_id == r.member_id),
+            suggestions=_picks_of(ctx, r.member_id),
             note=r.note,
         )
         for r in ctx.responses
@@ -270,15 +281,57 @@ def decision_info(ctx: CallContext) -> note.DecisionInfo | None:
     winner, meal_time = ctx.winner, ctx.event.meal_time
     if winner is None or meal_time is None:
         return None
-    needs = {tag for r in ctx.participants if r.guests for tag in r.guest_needs}
     return note.DecisionInfo(
         proposal=proposal_info(ctx, winner),
         meal_time=meal_time,
         head_count=ctx.head_count,
         participants=tuple(note.ParticipantInfo(ctx.person(r.member_id), r.guests) for r in ctx.participants),
         assignments=tuple(note.AssignmentInfo(a.role, ctx.person(a.member_id)) for a in ctx.assignments),
-        dietary_notes=_tag_names(ctx, needs),
+        dietary_notes=guest_dietary_notes(ctx),
     )
+
+
+def guest_dietary_notes(ctx: CallContext) -> tuple[str, ...]:
+    """Dietary needs of the guests of everyone in (FR-8, FR-20)."""
+    return _tag_names(ctx, {tag for r in ctx.participants if r.guests for tag in r.guest_needs})
+
+
+def offer_info(ctx: CallContext) -> note.OfferInfo:
+    """The offer ``ctx.event`` (FR-4). An offer keeps its item, mode, and time on the event."""
+    event = ctx.event
+    if not event.is_offer or event.decided_item_id is None or event.decided_mode is None or event.meal_time is None:
+        raise ValueError("not an offer")  # pragma: no cover - offers are created with all three
+    item = ctx.items.get(event.decided_item_id)
+    found = (
+        note.ItemInfo(
+            item.id, item.name, item.kind, item.url, item.order_url, _tag_names(ctx, ctx.cuisine_ids(item.tag_ids))
+        )
+        if item is not None
+        else note.ItemInfo(None, "A removed item", ItemKind.RESTAURANT)  # pragma: no cover - items are never deleted
+    )
+    offerer = ctx.person(event.created_by) if event.created_by is not None else note.PersonInfo(0, "A former member")
+    return note.OfferInfo(
+        offerer=offerer,
+        item=found,
+        mode=event.decided_mode,
+        at=event.meal_time,
+        capacity=event.capacity or 0,
+        taken=seats_taken(event, ctx.responses),
+        dietary_notes=guest_dietary_notes(ctx),
+    )
+
+
+def offer_posted(ctx: CallContext) -> note.OfferPosted:
+    return note.OfferPosted(event_info(ctx), offer_info(ctx), roster(ctx), ctx.head_count)
+
+
+def offer_updated(ctx: CallContext) -> note.OfferUpdated:
+    return note.OfferUpdated(event_info(ctx), offer_info(ctx), roster(ctx), ctx.head_count)
+
+
+def message_updated(ctx: CallContext) -> note.CallUpdated | note.OfferUpdated:
+    """The update for the event's own message: the call message, or the offer message."""
+    return offer_updated(ctx) if ctx.event.is_offer else call_updated(ctx)
 
 
 def call_opened(ctx: CallContext) -> note.CallOpened:

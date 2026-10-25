@@ -16,6 +16,7 @@ ELEMENTS = {
     "static_select",
     "multi_static_select",
     "timepicker",
+    "datepicker",
     "number_input",
     "plain_text_input",
     "radio_buttons",
@@ -75,6 +76,8 @@ def check_element(element: Any, where: str, action_ids: set[str]) -> None:
             check_text(confirm["text"], 300, f"{where}.confirm.text")
             check_text(confirm["confirm"], 30, f"{where}.confirm.confirm", plain_only=True)
             check_text(confirm["deny"], 30, f"{where}.confirm.deny", plain_only=True)
+    if kind == "datepicker" and "initial_date" in element:
+        assert re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", element["initial_date"]), f"{where}: initial_date"
     if kind == "overflow":
         # Slack's reference says up to five; Slack has also rejected menus with fewer than two.
         assert 2 <= len(element["options"]) <= 5, f"{where}: an overflow menu has 2 to 5 options"

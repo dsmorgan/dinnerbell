@@ -193,6 +193,11 @@ EVENT_INSERT = (
     "reminder_minutes, vote_minutes, created_at, updated_at) VALUES (1, :kind, 'dinner', '2026-10-22', "
     "'collecting', 1, 1, :t, :t, 15, 45, :t, :t)"
 )
+OFFER_INSERT = (
+    "INSERT INTO event (household_id, kind, slot, date, state, run, version, opens_at, respond_deadline, "
+    "reminder_minutes, vote_minutes, capacity, created_at, updated_at) VALUES (1, 'offer', 'dinner', "
+    "'2026-10-22', 'collecting', 1, 1, :t, :t, 0, 0, :capacity, :t, :t)"
+)
 STAMP = "2026-10-22 00:00:00"
 
 
@@ -207,7 +212,7 @@ def test_one_call_per_household_slot_and_date(migrated: Settings) -> None:
                 {"t": STAMP},
             )
             c.execute(text(EVENT_INSERT), {"kind": "call", "t": STAMP})
-            c.execute(text(EVENT_INSERT), {"kind": "offer", "t": STAMP})  # offers (M3) don't count
+            c.execute(text(OFFER_INSERT), {"capacity": 3, "t": STAMP})  # offers don't count
         with pytest.raises(IntegrityError, match="UNIQUE"), engine.begin() as c:
             c.execute(text(EVENT_INSERT), {"kind": "call", "t": STAMP})
     finally:
@@ -704,5 +709,63 @@ def test_0009_refuses_to_run_with_foreign_keys_on(settings: Settings) -> None:
             command.upgrade(_alembic_config(connection), "0009_meal_log_autoincrement")
         with engine.connect() as c:
             assert c.execute(text("SELECT count(*) FROM feedback")).scalar() == 2
+    finally:
+        engine.dispose()
+
+
+# 0010: offers' spare servings --------------------------------------------------------------------
+
+
+def test_0010_adds_capacity_for_offers_only_and_keeps_every_row(settings: Settings) -> None:
+    """The rebuild keeps every call and child row and AUTOINCREMENT; afterward a call can't have
+    a capacity and an offer must have one from 1 to 20. A downgrade removes offers with their rows."""
+    from sqlalchemy.exc import IntegrityError
+
+    _upgrade_to(settings, "0008_meal_feedback")
+    _populate_calls(settings)
+    before = _snapshot(settings)["rows"]
+    _upgrade_to(settings, "0010_offers")
+    assert "AUTOINCREMENT" in _event_sql(settings)
+    after = _snapshot(settings)["rows"]
+    assert {t: len(r) for t, r in after.items()} == {t: len(r) for t, r in before.items()}  # type: ignore[union-attr]
+    engine = create_sync_engine(settings.sync_database_url)
+    try:
+        for kind, capacity in (("offer", None), ("offer", 0), ("offer", 21)):
+            with pytest.raises(IntegrityError, match="CHECK"), engine.begin() as c:
+                c.execute(text(OFFER_INSERT.replace("'offer'", f"'{kind}'")), {"capacity": capacity, "t": STAMP})
+        with pytest.raises(IntegrityError, match="CHECK"), engine.begin() as c:
+            c.execute(text(OFFER_INSERT.replace("'offer'", "'call'")), {"capacity": 3, "t": STAMP})
+        with engine.begin() as c:
+            c.execute(text(OFFER_INSERT), {"capacity": 3, "t": STAMP})
+            offer = c.execute(text("SELECT max(id) FROM event")).scalar_one()
+            c.execute(
+                text(
+                    "INSERT INTO response (household_id, event_id, member_id, status, guests, guest_needs, "
+                    "offers_cook, offers_pickup, offers_order, maybe_at_deadline, responded_at, updated_at) "
+                    "VALUES (1, :e, 1, 'in', 0, '[]', 0, 0, 0, 0, :t, :t)"
+                ),
+                {"e": offer, "t": STAMP},
+            )
+    finally:
+        engine.dispose()
+    _downgrade_to(settings, "0008_meal_feedback")
+    assert _snapshot(settings)["rows"] == before
+    run_migrations(settings.sync_database_url, settings.database_path)
+
+
+def test_0010_refuses_to_run_with_foreign_keys_on(settings: Settings) -> None:
+    """Like 0007, it rebuilds ``event``, so with foreign keys on it refuses rather than cascade."""
+    from alembic import command
+
+    from dinnerbell.db.migrate import _alembic_config
+
+    _upgrade_to(settings, "0008_meal_feedback")
+    _populate_calls(settings)
+    engine = create_sync_engine(settings.sync_database_url)  # the app's engine: foreign keys on
+    try:
+        with pytest.raises(RuntimeError, match="foreign keys on"), engine.begin() as connection:
+            command.upgrade(_alembic_config(connection), "0010_offers")
+        with engine.connect() as c:
+            assert c.execute(text("SELECT count(*) FROM response")).scalar() == 2
     finally:
         engine.dispose()

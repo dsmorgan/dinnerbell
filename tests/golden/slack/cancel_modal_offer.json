@@ -1,0 +1,63 @@
+{
+  "blocks": [
+    {
+      "elements": [
+        {
+          "text": "*Lunch · Thursday, Oct 22*",
+          "type": "mrkdwn"
+        }
+      ],
+      "type": "context"
+    },
+    {
+      "text": {
+        "text": "This calls off your lunch offer, *Siam Garden*, for everyone who joined. The call's thread says who called it off, with your reason if you give one.",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "block_id": "reason",
+      "element": {
+        "action_id": "value",
+        "max_length": 140,
+        "placeholder": {
+          "emoji": true,
+          "text": "Pizza at Grandma's",
+          "type": "plain_text"
+        },
+        "type": "plain_text_input"
+      },
+      "hint": {
+        "emoji": true,
+        "text": "Everyone sees it.",
+        "type": "plain_text"
+      },
+      "label": {
+        "emoji": true,
+        "text": "Reason",
+        "type": "plain_text"
+      },
+      "optional": true,
+      "type": "input"
+    }
+  ],
+  "callback_id": "cancel_modal",
+  "close": {
+    "emoji": true,
+    "text": "Keep it",
+    "type": "plain_text"
+  },
+  "private_metadata": "{\"event\":9,\"channel\":\"C0DINNER\",\"home\":false,\"run\":1}",
+  "submit": {
+    "emoji": true,
+    "text": "Call it off",
+    "type": "plain_text"
+  },
+  "title": {
+    "emoji": true,
+    "text": "Call it off",
+    "type": "plain_text"
+  },
+  "type": "modal"
+}

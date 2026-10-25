@@ -1,0 +1,73 @@
+{
+  "blocks": [
+    {
+      "text": {
+        "emoji": true,
+        "text": "Lunch offer · Thursday, Oct 22",
+        "type": "plain_text"
+      },
+      "type": "header"
+    },
+    {
+      "text": {
+        "text": "Alex is picking up *<https://siam.example/menu|Siam Garden>* for lunch at *12:30 PM*.\nIt's full. Thanks, everyone!",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "text": {
+        "text": "*Eating* · 4 people\n• <@U01ALEX>\n• <@U02SAM> · +1 guest\n• <@U03KIM>\n*Guests' dietary needs:* Vegetarian",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "block_id": "more",
+      "elements": [
+        {
+          "action_id": "leave_offer",
+          "text": {
+            "emoji": true,
+            "text": "Can't make it",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "9:1"
+        },
+        {
+          "action_id": "link_item",
+          "text": {
+            "emoji": true,
+            "text": "Website",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "url": "https://siam.example/menu"
+        },
+        {
+          "action_id": "link_event",
+          "text": {
+            "emoji": true,
+            "text": "View on web",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "url": "https://dinnerbell.example.com/events/9"
+        },
+        {
+          "action_id": "cancel_call",
+          "text": {
+            "emoji": true,
+            "text": "Call it off",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "cancel:9:1"
+        }
+      ],
+      "type": "actions"
+    }
+  ],
+  "text": "Alex is picking up Siam Garden for lunch at 12:30 PM. It's full. Thanks, everyone!"
+}

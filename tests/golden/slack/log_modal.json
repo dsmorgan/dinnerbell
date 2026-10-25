@@ -1,0 +1,186 @@
+{
+  "blocks": [
+    {
+      "elements": [
+        {
+          "text": "Logged meals count for variety and history. Feedback on them is on the History page.",
+          "type": "mrkdwn"
+        }
+      ],
+      "type": "context"
+    },
+    {
+      "block_id": "item",
+      "element": {
+        "action_id": "value",
+        "option_groups": [
+          {
+            "label": {
+              "emoji": true,
+              "text": "Home meals",
+              "type": "plain_text"
+            },
+            "options": [
+              {
+                "text": {
+                  "emoji": true,
+                  "text": "Sam's Tacos",
+                  "type": "plain_text"
+                },
+                "value": "11"
+              }
+            ]
+          },
+          {
+            "label": {
+              "emoji": true,
+              "text": "Restaurants",
+              "type": "plain_text"
+            },
+            "options": [
+              {
+                "text": {
+                  "emoji": true,
+                  "text": "Siam Garden",
+                  "type": "plain_text"
+                },
+                "value": "12"
+              }
+            ]
+          }
+        ],
+        "type": "static_select"
+      },
+      "label": {
+        "emoji": true,
+        "text": "What",
+        "type": "plain_text"
+      },
+      "optional": false,
+      "type": "input"
+    },
+    {
+      "block_id": "slot",
+      "element": {
+        "action_id": "value",
+        "initial_option": {
+          "text": {
+            "emoji": true,
+            "text": "Dinner",
+            "type": "plain_text"
+          },
+          "value": "dinner"
+        },
+        "options": [
+          {
+            "text": {
+              "emoji": true,
+              "text": "Lunch",
+              "type": "plain_text"
+            },
+            "value": "lunch"
+          },
+          {
+            "text": {
+              "emoji": true,
+              "text": "Dinner",
+              "type": "plain_text"
+            },
+            "value": "dinner"
+          }
+        ],
+        "type": "static_select"
+      },
+      "label": {
+        "emoji": true,
+        "text": "Meal",
+        "type": "plain_text"
+      },
+      "optional": false,
+      "type": "input"
+    },
+    {
+      "block_id": "day",
+      "element": {
+        "action_id": "value",
+        "initial_date": "2026-10-22",
+        "type": "datepicker"
+      },
+      "label": {
+        "emoji": true,
+        "text": "Day",
+        "type": "plain_text"
+      },
+      "optional": false,
+      "type": "input"
+    },
+    {
+      "block_id": "who",
+      "element": {
+        "action_id": "value",
+        "initial_options": [
+          {
+            "text": {
+              "emoji": true,
+              "text": "Sam",
+              "type": "plain_text"
+            },
+            "value": "2"
+          }
+        ],
+        "options": [
+          {
+            "text": {
+              "emoji": true,
+              "text": "Alex",
+              "type": "plain_text"
+            },
+            "value": "1"
+          },
+          {
+            "text": {
+              "emoji": true,
+              "text": "Kim",
+              "type": "plain_text"
+            },
+            "value": "3"
+          },
+          {
+            "text": {
+              "emoji": true,
+              "text": "Sam",
+              "type": "plain_text"
+            },
+            "value": "2"
+          }
+        ],
+        "type": "multi_static_select"
+      },
+      "label": {
+        "emoji": true,
+        "text": "Who ate",
+        "type": "plain_text"
+      },
+      "optional": false,
+      "type": "input"
+    }
+  ],
+  "callback_id": "log_modal",
+  "close": {
+    "emoji": true,
+    "text": "Cancel",
+    "type": "plain_text"
+  },
+  "private_metadata": "{\"form\":true,\"channel\":null,\"home\":true}",
+  "submit": {
+    "emoji": true,
+    "text": "Log it",
+    "type": "plain_text"
+  },
+  "title": {
+    "emoji": true,
+    "text": "Log a meal",
+    "type": "plain_text"
+  },
+  "type": "modal"
+}

@@ -22,7 +22,7 @@ from enum import Enum
 from typing import Any, ClassVar, Protocol, Union, get_args, get_origin, get_type_hints
 
 from dinnerbell.domain.catalog import ItemKind, Mode
-from dinnerbell.domain.events import AssignmentRole, EndReason, EventState, ProposalSource, RoleOffer, Status
+from dinnerbell.domain.events import AssignmentRole, EndReason, EventKind, EventState, ProposalSource, RoleOffer, Status
 from dinnerbell.domain.meals import Slot
 
 # Building blocks ------------------------------------------------------------------------------
@@ -57,6 +57,8 @@ class EventInfo:
     """The reason they gave, if any."""
     early: bool = False
     """Posted before its day (issue #59), so messages say which day its deadline is on."""
+    kind: EventKind = EventKind.CALL
+    """A call or an offer (FR-4)."""
 
     @property
     def key(self) -> str:
@@ -114,6 +116,30 @@ class ParticipantInfo:
 class AssignmentInfo:
     role: AssignmentRole
     member: PersonInfo
+
+
+@dataclass(frozen=True, slots=True)
+class OfferInfo:
+    """An offer (FR-4): who's making or getting what, how, by when, and how many seats are left.
+    ``capacity`` is the spare servings; ``taken`` counts everyone in but the offerer, guests
+    included (``domain.offers.seats_taken``). Guests' dietary needs are listed so whoever
+    cooks or orders can plan."""
+
+    offerer: PersonInfo
+    item: ItemInfo
+    mode: Mode
+    at: datetime
+    capacity: int
+    taken: int
+    dietary_notes: tuple[str, ...] = ()
+
+    @property
+    def seats_left(self) -> int:
+        return max(self.capacity - self.taken, 0)
+
+    @property
+    def full(self) -> bool:
+        return self.seats_left == 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -479,6 +505,47 @@ class FeedbackReminder(_Notification):
         return self.member.id
 
 
+@dataclass(frozen=True, slots=True)
+class OfferPosted(_Notification):
+    """Offer posted (FR-4): a channel post with the offer, its roster, and join buttons. Its
+    message is the event's only one, so it shares the call message's key (``…:call``): a
+    call-off threads under it, and a discard on a test instance edits it."""
+
+    kind: ClassVar[str] = "offer_posted"
+    message_suffix: ClassVar[str | None] = "call"
+    event: EventInfo
+    offer: OfferInfo
+    roster: tuple[RosterEntry, ...] = ()
+    head_count: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class OfferUpdated(_Notification):
+    """The offer message's new state: who joined, seats left, closed, done, or called off."""
+
+    kind: ClassVar[str] = "offer_updated"
+    is_update: ClassVar[bool] = True
+    message_suffix: ClassVar[str | None] = "call"
+    event: EventInfo
+    offer: OfferInfo
+    roster: tuple[RosterEntry, ...] = ()
+    head_count: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class OfferFull(_Notification):
+    """Offer full: one direct message to whoever made it, once per offer, when the last seat goes."""
+
+    kind: ClassVar[str] = "offer_full"
+    event: EventInfo
+    member: PersonInfo
+    offer: OfferInfo
+
+    @property
+    def recipient_id(self) -> int | None:
+        return self.member.id
+
+
 Notification = Union[  # noqa: UP007 - a runtime union, used for isinstance checks and payload decoding
     CallOpened,
     CallUpdated,
@@ -496,6 +563,9 @@ Notification = Union[  # noqa: UP007 - a runtime union, used for isinstance chec
     ScheduleChanged,
     CallDiscarded,
     FeedbackReminder,
+    OfferPosted,
+    OfferUpdated,
+    OfferFull,
 ]
 NOTIFICATION_TYPES: dict[str, type[Notification]] = {cls.kind: cls for cls in get_args(Notification)}
 UPDATE_KINDS = frozenset(kind for kind, cls in NOTIFICATION_TYPES.items() if cls.is_update)

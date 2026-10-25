@@ -1,0 +1,105 @@
+{
+  "blocks": [
+    {
+      "text": {
+        "emoji": true,
+        "text": "Today · Thursday, Oct 22",
+        "type": "plain_text"
+      },
+      "type": "header"
+    },
+    {
+      "block_id": "event-9",
+      "text": {
+        "text": "*Lunch offer* · Alex is picking up *Siam Garden* at 12:30 PM\n1 serving spare.\nYou're in with 1 guest.",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "block_id": "event-actions-9",
+      "elements": [
+        {
+          "action_id": "add_guest",
+          "text": {
+            "emoji": true,
+            "text": "+1 guest",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "9:1"
+        },
+        {
+          "action_id": "leave_offer",
+          "text": {
+            "emoji": true,
+            "text": "Can't make it",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "9:1"
+        },
+        {
+          "action_id": "link_event",
+          "text": {
+            "emoji": true,
+            "text": "Open",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "url": "https://dinnerbell.example.com/events/9"
+        }
+      ],
+      "type": "actions"
+    },
+    {
+      "block_id": "start",
+      "elements": [
+        {
+          "action_id": "make_offer",
+          "text": {
+            "emoji": true,
+            "text": "Make an offer",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "make_offer"
+        },
+        {
+          "action_id": "start_call_dinner",
+          "text": {
+            "emoji": true,
+            "text": "Start a dinner call",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "dinner"
+        },
+        {
+          "action_id": "start_call_lunch",
+          "text": {
+            "emoji": true,
+            "text": "Start a lunch call",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "lunch"
+        }
+      ],
+      "type": "actions"
+    },
+    {
+      "type": "divider"
+    },
+    {
+      "elements": [
+        {
+          "text": "<https://dinnerbell.example.com/preferences|Your preferences> · <https://dinnerbell.example.com/catalog|Catalog> · <https://dinnerbell.example.com/history|History> · <https://dinnerbell.example.com/|Today on the web>",
+          "type": "mrkdwn"
+        }
+      ],
+      "type": "context"
+    }
+  ],
+  "type": "home"
+}

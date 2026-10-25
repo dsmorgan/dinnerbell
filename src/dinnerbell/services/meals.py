@@ -18,7 +18,7 @@ from dinnerbell.db.catalog import CatalogRepository
 from dinnerbell.db.feedback import FeedbackRepository
 from dinnerbell.db.meals import MealLogRepository
 from dinnerbell.db.repositories import MemberRepository
-from dinnerbell.domain.catalog import TagKind
+from dinnerbell.domain.catalog import CatalogItem, TagKind
 from dinnerbell.domain.meals import MealInput, MealLog, MemberRef, TagRef, by_week, can_change, check_meal, week_start
 from dinnerbell.domain.members import Member
 from dinnerbell.services.common import audit
@@ -32,6 +32,22 @@ class History:
     weeks: list[tuple[date, list[MealLog]]]
     page: int
     has_older: bool
+
+
+@dataclass(frozen=True, slots=True)
+class LogForm:
+    """What a form for logging a meal starts with: today in the household, the active catalog,
+    and who can be ticked as having eaten."""
+
+    today: date
+    member_id: int
+    items: tuple[CatalogItem, ...]
+    people: tuple[MemberRef, ...]
+
+
+async def log_form(db: AsyncSession, actor: Member, *, today: date) -> LogForm:
+    items = sorted((i for i in await CatalogRepository(db).items(actor.household_id) if i.active), key=lambda i: i.key)
+    return LogForm(today, actor.id, tuple(items), tuple(await participant_choices(db, actor)))
 
 
 async def get_meal(db: AsyncSession, actor: Member, meal_id: int) -> MealLog:

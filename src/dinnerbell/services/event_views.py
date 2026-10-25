@@ -17,6 +17,7 @@ from dinnerbell.db.events import EventRepository
 from dinnerbell.db.repositories import HouseholdRepository
 from dinnerbell.domain import events as rules
 from dinnerbell.domain import notifications as note
+from dinnerbell.domain import offers
 from dinnerbell.domain.catalog import CatalogItem, Tag, TagKind
 from dinnerbell.domain.events import Event, EventRuleViolation, EventState, Response, Window
 from dinnerbell.domain.meals import Slot
@@ -50,6 +51,12 @@ class Permissions:
     """Start a called-off call again (FR-56): ``calls.start_call`` for its slot and day."""
     post_now: bool = False
     """Post a scheduled call now instead of at its usual time (issue #59): ``calls.post_now``."""
+    join: bool = False
+    """Join an open offer that has a seat left (FR-4): ``offers.join``."""
+    add_guest: bool = False
+    """Bring one more guest to an open offer with a seat left: ``offers.add_guest``."""
+    leave: bool = False
+    """Drop out of an open offer they're in, unless it's theirs: ``offers.leave``."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,6 +82,8 @@ class EventView:
     dietary_tags: tuple[Tag, ...]
     cuisine_tags: tuple[Tag, ...]
     items: tuple[CatalogItem, ...]
+    offer: note.OfferInfo | None = None
+    """The offer, when the event is one (FR-4)."""
 
     @property
     def id(self) -> int:
@@ -112,9 +121,27 @@ def _window(event: Event) -> Window | None:
     return Window.VOTE if event.state is EventState.VOTING else None
 
 
+def _offer_permissions(ctx: CallContext, actor: Member, now: datetime) -> Permissions:
+    """What ``actor`` may do with an offer: the same checks ``offers`` and ``calls`` make."""
+    event, mine = ctx.event, ctx.response_of(actor.id)
+    seats = offers.seats_left(event, ctx.responses) > 0
+    open_to_them = _allowed(lambda: offers.check_can_join(event, actor))
+    inside = mine is not None and mine.is_in
+    return Permissions(
+        join=open_to_them and seats and not inside,
+        add_guest=open_to_them and seats,
+        leave=inside and _allowed(lambda: offers.check_can_leave(event, actor)),
+        mark_done=_allowed(lambda: rules.check_can_mark_done(event, actor, mine, now=now)),
+        admin=actor.active and actor.is_admin,
+        cancel=_allowed(lambda: rules.check_can_cancel(event, actor)),
+    )
+
+
 def permissions(ctx: CallContext, actor: Member, today: date, now: datetime, *, any_time: bool = False) -> Permissions:
     """What ``actor`` may do. ``any_time``, on a test instance only (#60), lifts the too-late
     rule for starting a called-off call again, as ``calls.start_call`` does there."""
+    if ctx.event.is_offer:
+        return _offer_permissions(ctx, actor, now)
     event, mine = ctx.event, ctx.response_of(actor.id)
     admin = actor.active and actor.is_admin
     return Permissions(
@@ -178,6 +205,7 @@ def view(ctx: CallContext, actor: Member, today: date, now: datetime, *, any_tim
         dietary_tags=tuple(t for t in tags if t.kind is TagKind.DIETARY),
         cuisine_tags=tuple(t for t in tags if t.kind is TagKind.CUISINE),
         items=tuple(sorted((i for i in ctx.items.values() if i.active), key=lambda i: i.key)),
+        offer=cc.offer_info(ctx) if ctx.event.is_offer else None,
     )
 
 

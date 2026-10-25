@@ -31,6 +31,8 @@ from dinnerbell.channels.slack.views import (
     details_modal,
     feedback_modal,
     home_view,
+    log_modal,
+    offer_modal,
     proposal_modal,
 )
 from dinnerbell.domain import notifications as note
@@ -52,6 +54,8 @@ from dinnerbell.domain.meals import MemberRef, Slot
 from dinnerbell.domain.schedule import DEFAULT_SLOTS
 from dinnerbell.services.event_views import EventView, Permissions, ProposalView, TodayView
 from dinnerbell.services.feedback import Awaiting, FeedbackForm
+from dinnerbell.services.meals import LogForm
+from dinnerbell.services.offers import OfferForm, SlotDefaults
 
 BASE_URL = "https://dinnerbell.example.com"
 ZONE = "America/Chicago"
@@ -149,6 +153,23 @@ EARLY = replace(
 )
 """Posted the evening before its day (issue #59)."""
 
+LUNCH_OFFER = replace(
+    event(),
+    id=9,
+    slot=Slot.LUNCH,
+    path="/events/9",
+    respond_deadline=datetime(2026, 10, 22, 17, 30, tzinfo=UTC),
+    kind=EventKind.OFFER,
+)
+"""Alex's lunch offer: picking up Siam Garden at 12:30 PM, with 3 servings spare."""
+OFFER = note.OfferInfo(ALEX, SIAM, Mode.PICKUP, datetime(2026, 10, 22, 17, 30, tzinfo=UTC), capacity=3, taken=2)
+OFFER_ROSTER = (
+    note.RosterEntry(ALEX, Status.IN),
+    note.RosterEntry(SAM, Status.IN, guests=1, guest_needs=("Vegetarian",)),
+)
+FULL_OFFER = replace(OFFER, taken=3, dietary_notes=("Vegetarian",))
+FULL_ROSTER = (*OFFER_ROSTER, note.RosterEntry(KIM, Status.IN))
+
 DINNER_SCHEDULE = note.SlotScheduleInfo(
     enabled=True,
     call_time=time(15, 0),
@@ -213,6 +234,27 @@ NOTIFICATIONS: dict[str, Callable[[], note.Notification]] = {
         kept_today_at=time(15, 0),
     ),
     "call_discarded": lambda: note.CallDiscarded(DECIDED, "event:7:run1:call"),
+    "offer_posted": lambda: note.OfferPosted(LUNCH_OFFER, replace(OFFER, taken=0), OFFER_ROSTER[:1], 1),
+    "offer_updated": lambda: note.OfferUpdated(
+        LUNCH_OFFER, replace(OFFER, dietary_notes=("Vegetarian",)), OFFER_ROSTER, 3
+    ),
+    "offer_updated_full": lambda: note.OfferUpdated(LUNCH_OFFER, FULL_OFFER, FULL_ROSTER, 4),
+    "offer_updated_closed": lambda: note.OfferUpdated(
+        replace(LUNCH_OFFER, state=EventState.DECIDED), FULL_OFFER, FULL_ROSTER, 4
+    ),
+    "offer_updated_done": lambda: note.OfferUpdated(
+        replace(LUNCH_OFFER, state=EventState.DONE), FULL_OFFER, FULL_ROSTER, 4
+    ),
+    "offer_updated_cancelled": lambda: note.OfferUpdated(
+        replace(LUNCH_OFFER, state=EventState.CANCELLED, ended_by=ALEX, end_note="Siam is closed today"),
+        OFFER,
+        OFFER_ROSTER,
+        3,
+    ),
+    "offer_full": lambda: note.OfferFull(LUNCH_OFFER, ALEX, FULL_OFFER),
+    "offer_cancelled": lambda: note.EventCancelled(
+        replace(LUNCH_OFFER, state=EventState.CANCELLED), (ALEX, SAM), cancelled_by=ALEX, audience=(ALEX, SAM)
+    ),
     "feedback_reminder": lambda: note.FeedbackReminder(
         event(EventState.DONE, coordinator=ALEX), KIM, "Sam's Tacos", date(2026, 10, 29)
     ),
@@ -316,6 +358,42 @@ AWAITING = tuple(
     for n, name in enumerate(("Sam's Tacos", "Siam Garden", "Pho <Saigon>", "Taqueria", "Curry Night", "Pizza"))
 )
 FEEDBACK_ORIGIN = replace(ORIGIN, run=1)
+_OFFER_BASE = _event_view(EventState.COLLECTING, None, Permissions(join=True, add_guest=True))
+OFFER_VIEW = replace(
+    _OFFER_BASE,
+    event=replace(
+        _OFFER_BASE.event,
+        id=9,
+        kind=EventKind.OFFER,
+        slot=Slot.LUNCH,
+        coordinator_id=None,
+        created_by=ALEX.id,
+        capacity=3,
+        decided_item_id=12,
+        decided_mode=Mode.PICKUP,
+        meal_time=OFFER.at,
+        respond_deadline=OFFER.at,
+    ),
+    info=LUNCH_OFFER,
+    roster=OFFER_ROSTER,
+    offer=OFFER,
+)
+"""Alex's lunch offer as Sam sees it on Home, before joining."""
+OFFER_JOINED_VIEW = replace(
+    OFFER_VIEW, mine=Response(SAM.id, Status.IN, guests=1), can=Permissions(add_guest=True, leave=True)
+)
+OFFER_FORM = OfferForm(
+    DAY,
+    Slot.LUNCH,
+    {
+        Slot.LUNCH: SlotDefaults(Mode.PICKUP, time(12, 30)),
+        Slot.DINNER: SlotDefaults(Mode.PICKUP, time(18, 30)),
+    },
+    3,
+    ITEMS,
+    CUISINES,
+)
+LOG_FORM = LogForm(DAY, SAM.id, ITEMS, (MemberRef(1, "Alex"), MemberRef(3, "Kim"), MemberRef(2, "Sam")))
 
 VIEWS: dict[str, Callable[[], dict[str, Any]]] = {
     "details_modal": lambda: details_modal(COLLECTING_VIEW, ORIGIN),
@@ -359,6 +437,13 @@ VIEWS: dict[str, Callable[[], dict[str, Any]]] = {
         FeedbackForm(HOME_MEAL, KIM.id, FeedbackInput(Rating.FINE, cook_thanks=True, cook_note="Best yet!"), CLOSES),
         FEEDBACK_ORIGIN,
     ),
+    "home_offer": lambda: home_view(TodayView(DAY, [OFFER_VIEW, COLLECTING_VIEW], tuple(Slot)), HomeLinks(BASE_URL)),
+    "home_offer_joined": lambda: home_view(TodayView(DAY, [OFFER_JOINED_VIEW], tuple(Slot)), HomeLinks(BASE_URL)),
+    "offer_modal": lambda: offer_modal(OFFER_FORM, ids.FormOrigin("C0DINNER")),
+    "log_modal": lambda: log_modal(LOG_FORM, ids.FormOrigin(None, home=True)),
+    "cancel_modal_offer": lambda: cancel_modal(
+        replace(OFFER_VIEW, can=Permissions(cancel=True)), replace(CALL_OFF_ORIGIN, event_id=9)
+    ),
     # Interactions adds the footer to every Home tab it publishes.
     "home_version": lambda: with_version_footer(
         home_view(TodayView(DAY, [], tuple(Slot)), HomeLinks(BASE_URL)), "0.3.0+abc1234"
@@ -389,6 +474,7 @@ CARDS: dict[str, CardSample] = {
     "your_answer_maybe": _card(event(), replace(KIM_IN, status=Status.MAYBE), run=1),
     "your_answer_out": _card(event(), replace(KIM_IN, status=Status.OUT), run=1),
     "your_answer_roles": _card(event(), KIM_OFFERS, run=1),
+    "your_answer_guests": _card(event(), replace(KIM_OFFERS, guests=2), run=1),
     "your_answer_coordinator": _card(event(coordinator=KIM), KIM_OFFERS, run=1),
     "your_answer_other_coordinator": _card(
         event(coordinator=note.PersonInfo(9, "<!channel> & *Co*")),

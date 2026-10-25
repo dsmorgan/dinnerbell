@@ -1,0 +1,274 @@
+{
+  "blocks": [
+    {
+      "elements": [
+        {
+          "text": "Posts in the Dinnerbell channel. If that meal's call is open already, it's added there as a pick.",
+          "type": "mrkdwn"
+        }
+      ],
+      "type": "context"
+    },
+    {
+      "block_id": "slot",
+      "element": {
+        "action_id": "value",
+        "initial_option": {
+          "text": {
+            "emoji": true,
+            "text": "Lunch",
+            "type": "plain_text"
+          },
+          "value": "lunch"
+        },
+        "options": [
+          {
+            "text": {
+              "emoji": true,
+              "text": "Lunch",
+              "type": "plain_text"
+            },
+            "value": "lunch"
+          },
+          {
+            "text": {
+              "emoji": true,
+              "text": "Dinner",
+              "type": "plain_text"
+            },
+            "value": "dinner"
+          }
+        ],
+        "type": "static_select"
+      },
+      "label": {
+        "emoji": true,
+        "text": "Meal",
+        "type": "plain_text"
+      },
+      "optional": false,
+      "type": "input"
+    },
+    {
+      "block_id": "day",
+      "element": {
+        "action_id": "value",
+        "initial_date": "2026-10-22",
+        "type": "datepicker"
+      },
+      "label": {
+        "emoji": true,
+        "text": "Day",
+        "type": "plain_text"
+      },
+      "optional": false,
+      "type": "input"
+    },
+    {
+      "block_id": "mode",
+      "element": {
+        "action_id": "value",
+        "initial_option": {
+          "text": {
+            "emoji": true,
+            "text": "Pickup",
+            "type": "plain_text"
+          },
+          "value": "pickup"
+        },
+        "options": [
+          {
+            "text": {
+              "emoji": true,
+              "text": "Cook",
+              "type": "plain_text"
+            },
+            "value": "cook"
+          },
+          {
+            "text": {
+              "emoji": true,
+              "text": "Pickup",
+              "type": "plain_text"
+            },
+            "value": "pickup"
+          },
+          {
+            "text": {
+              "emoji": true,
+              "text": "Delivery",
+              "type": "plain_text"
+            },
+            "value": "delivery"
+          }
+        ],
+        "type": "static_select"
+      },
+      "label": {
+        "emoji": true,
+        "text": "How",
+        "type": "plain_text"
+      },
+      "optional": false,
+      "type": "input"
+    },
+    {
+      "block_id": "item",
+      "element": {
+        "action_id": "value",
+        "option_groups": [
+          {
+            "label": {
+              "emoji": true,
+              "text": "Home meals",
+              "type": "plain_text"
+            },
+            "options": [
+              {
+                "text": {
+                  "emoji": true,
+                  "text": "Sam's Tacos",
+                  "type": "plain_text"
+                },
+                "value": "11"
+              }
+            ]
+          },
+          {
+            "label": {
+              "emoji": true,
+              "text": "Restaurants",
+              "type": "plain_text"
+            },
+            "options": [
+              {
+                "text": {
+                  "emoji": true,
+                  "text": "Siam Garden",
+                  "type": "plain_text"
+                },
+                "value": "12"
+              }
+            ]
+          }
+        ],
+        "type": "static_select"
+      },
+      "label": {
+        "emoji": true,
+        "text": "From the catalog",
+        "type": "plain_text"
+      },
+      "optional": true,
+      "type": "input"
+    },
+    {
+      "block_id": "free_text",
+      "element": {
+        "action_id": "value",
+        "max_length": 100,
+        "type": "plain_text_input"
+      },
+      "label": {
+        "emoji": true,
+        "text": "Or something new",
+        "type": "plain_text"
+      },
+      "optional": true,
+      "type": "input"
+    },
+    {
+      "block_id": "cuisine",
+      "element": {
+        "action_id": "value",
+        "options": [
+          {
+            "text": {
+              "emoji": true,
+              "text": "Mexican",
+              "type": "plain_text"
+            },
+            "value": "43"
+          },
+          {
+            "text": {
+              "emoji": true,
+              "text": "Thai",
+              "type": "plain_text"
+            },
+            "value": "44"
+          }
+        ],
+        "type": "static_select"
+      },
+      "hint": {
+        "emoji": true,
+        "text": "Needed for something new.",
+        "type": "plain_text"
+      },
+      "label": {
+        "emoji": true,
+        "text": "Cuisine",
+        "type": "plain_text"
+      },
+      "optional": true,
+      "type": "input"
+    },
+    {
+      "block_id": "at",
+      "element": {
+        "action_id": "value",
+        "initial_time": "12:30",
+        "type": "timepicker"
+      },
+      "label": {
+        "emoji": true,
+        "text": "Time",
+        "type": "plain_text"
+      },
+      "optional": false,
+      "type": "input"
+    },
+    {
+      "block_id": "capacity",
+      "element": {
+        "action_id": "value",
+        "initial_value": "3",
+        "is_decimal_allowed": false,
+        "max_value": "20",
+        "min_value": "1",
+        "type": "number_input"
+      },
+      "hint": {
+        "emoji": true,
+        "text": "How many others can join, guests included.",
+        "type": "plain_text"
+      },
+      "label": {
+        "emoji": true,
+        "text": "Spare servings",
+        "type": "plain_text"
+      },
+      "optional": false,
+      "type": "input"
+    }
+  ],
+  "callback_id": "offer_modal",
+  "close": {
+    "emoji": true,
+    "text": "Cancel",
+    "type": "plain_text"
+  },
+  "private_metadata": "{\"form\":true,\"channel\":\"C0DINNER\",\"home\":false}",
+  "submit": {
+    "emoji": true,
+    "text": "Post it",
+    "type": "plain_text"
+  },
+  "title": {
+    "emoji": true,
+    "text": "Make an offer",
+    "type": "plain_text"
+  },
+  "type": "modal"
+}

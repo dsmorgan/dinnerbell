@@ -69,6 +69,16 @@ and on the Home tab. Its value is a ``card_value``."""
 FEEDBACK = "feedback"
 """**How was it?** on a done call's decision message, the feedback reminder, and Home: opens the
 feedback modal. Its value is a ``card_value``, naming the run the meal was decided in."""
+JOIN_OFFER = "join_offer"
+"""**Count me in** on an offer message (FR-4): join, or tap again to drop out. Its value is a
+``card_value``, naming the offer and its run."""
+ADD_GUEST = "add_guest"
+"""**+1 guest** on an offer message: one more guest, counting the tapper in. A ``card_value``."""
+LEAVE_OFFER = "leave_offer"
+"""**Can't make it** on a full offer message, or on Home: drop out with any guests. A ``card_value``."""
+OFFER_ACTIONS = frozenset({JOIN_OFFER, ADD_GUEST, LEAVE_OFFER})
+MAKE_OFFER = "make_offer"
+"""**Make an offer** on the Home tab: opens the offer modal. Its value is ``MAKE_OFFER``."""
 LINK_PREFIX = "link_"
 """URL buttons. Slack still sends their clicks, which the app acknowledges and ignores."""
 LINK_PATTERN = re.compile(r"^link_[a-z_]{1,40}$")
@@ -78,6 +88,8 @@ PROPOSAL_VIEW = "proposal_modal"
 CANCEL_VIEW = "cancel_modal"
 CLOSE_VIEW = "close_modal"
 FEEDBACK_VIEW = "feedback_modal"
+OFFER_VIEW = "offer_modal"
+LOG_VIEW = "log_modal"
 
 MAX_ID = 2**63 - 1
 _DIGITS = re.compile(r"^[0-9]{1,19}$")
@@ -247,3 +259,30 @@ class ViewOrigin:
         if channel is not None and not is_channel_id(channel):
             raise BadValue("bad metadata")
         return cls(event, channel, home, Window(window) if window is not None else None, run)
+
+
+@dataclass(frozen=True, slots=True)
+class FormOrigin:
+    """Where a modal that isn't about an event was opened: the offer and log modals. The
+    channel (or DM) to answer in, or the Home tab. Kept in private_metadata."""
+
+    channel_id: str | None = None
+    home: bool = False
+
+    def encode(self) -> str:
+        return json.dumps({"form": True, "channel": self.channel_id, "home": self.home}, separators=(",", ":"))
+
+    @classmethod
+    def decode(cls, text: object) -> FormOrigin:
+        if not isinstance(text, str) or len(text) > MAX_METADATA:
+            raise BadValue("bad metadata")
+        try:
+            data = json.loads(text)
+        except ValueError:
+            raise BadValue("bad metadata") from None
+        if not isinstance(data, dict) or set(data) != {"form", "channel", "home"} or data["form"] is not True:
+            raise BadValue("bad metadata")
+        channel, home = data["channel"], data["home"]
+        if not isinstance(home, bool) or (channel is not None and not is_channel_id(channel)):
+            raise BadValue("bad metadata")
+        return cls(channel, home)
