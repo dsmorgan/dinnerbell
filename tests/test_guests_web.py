@@ -460,3 +460,22 @@ def test_the_promote_instead_form_says_when_the_guest_is_a_slack_guest_account(
     html = page(invite(admin, "ola@example.com", "Ola"))
     assert "They use a Slack guest account, not a full member of your workspace." in html
     assert "(a Slack guest account), Slack email ola@example.com" in html
+
+
+def test_linking_a_slack_guest_account_always_asks_for_the_members_name(admin: TestClient, migrated: Settings) -> None:
+    invite(admin, "kim@example.com", "Kim")  # before Ola, whose Slack email would hold it
+    use_people(admin, FakePeople(SlackPerson("U09OLA", "Ola", "kim@example.com", full_member=False)))
+    assert submit(admin, "/admin/channel", {"slack_user_id": "U09OLA", "role": "guest"}).status_code == 303
+    ola = next(m for m in rows(migrated, MemberRow) if m.slack_user_id == "U09OLA")
+    from sqlalchemy import create_engine, text
+
+    engine = create_engine(migrated.sync_database_url)
+    with engine.begin() as c:
+        c.execute(text("UPDATE member SET slack_email = 'kim@example.com' WHERE id = :id"), {"id": ola.id})
+    engine.dispose()
+    kim = next(m for m in rows(migrated, MemberRow) if m.display_name == "Kim")
+    check = submit(admin, f"/admin/guests/{ola.id}/link", {"member_id": str(kim.id)})
+    assert check.status_code == 200 and "Ola uses a Slack guest account" in page(check)
+    assert next(m for m in rows(migrated, MemberRow) if m.id == kim.id).slack_user_id is None
+    linked = submit(admin, f"/admin/guests/{ola.id}/link", {"member_id": str(kim.id), "confirm": "Kim"})
+    assert linked.status_code == 303

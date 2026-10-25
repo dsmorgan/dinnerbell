@@ -21,7 +21,7 @@
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   <input type="hidden" name="member_id" value="{{ lt.id }}">
   <h2>Link {{ lg.display_name }} to {{ lt.display_name }}?</h2>
-  <p class="small">Their emails differ. Anyone in the channel can take any name, and whoever uses this Slack account will act as {{ lt.display_name }} in Slack.</p>
+  <p class="small">{% if lg.slack_email and lt.email and lg.slack_email|lower == lt.email|lower %}{{ lg.display_name }} uses a Slack guest account, which Dinnerbell never links on its email alone.{% else %}Their emails differ.{% endif %} Anyone in the channel can take any name, and whoever uses this Slack account will act as {{ lt.display_name }} in Slack.</p>
   <dl class="small">
     <dt>{{ lg.display_name }}'s Slack account</dt><dd><code>{{ lg.slack_user_id }}</code>{% if lg.slack_guest_account %} (a Slack guest account){% endif %}</dd>
     <dt>Their Slack email</dt><dd>{{ lg.slack_email or "Slack shares no email for them" }}</dd>

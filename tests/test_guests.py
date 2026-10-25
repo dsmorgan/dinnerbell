@@ -929,6 +929,32 @@ async def test_a_guest_whose_slack_email_is_the_members_links_without_typing(hou
         assert list(await db.scalars(select(SessionRow).where(SessionRow.member_id == pat.id))) == []
 
 
+async def test_a_slack_guest_account_needs_the_override_even_with_the_members_email(house: House) -> None:
+    """Joining and the hourly match never link a Slack guest account on its email alone, so the
+    admin's link doesn't either: they see both emails and type the member's name."""
+    async with house.sessionmaker() as db:  # such as a guest the admin added from the channel
+        added = await MemberRepository(db).add_guest(
+            household_id=house.household.id,
+            display_name="Ola",
+            dietary_needs=frozenset(),
+            slack_user_id="U09OLA",
+            slack_guest_account=True,
+            now=house.clock(),
+        )
+        ola = await MemberRepository(db).update(
+            house.household.id, added.id, house.clock(), slack_email="kim@example.com"
+        )
+        await db.commit()
+    assert (ola.is_guest, ola.slack_guest_account, ola.slack_email) == (True, True, "kim@example.com")
+    with pytest.raises(guests.LinkNeedsOverride, match="Slack guest account"):
+        await act(house, guests.link_to_member, house["Alex"], ola.id, house["Kim"].id)
+    assert (await house.refresh("Kim")).slack_user_id is None
+    linked = await act(house, guests.link_to_member, house["Alex"], ola.id, house["Kim"].id, confirm="Kim")
+    assert linked.slack_user_id == "U09OLA"
+    (row,) = await house.audits("guest.linked_to_member")
+    assert row.payload["override"] is True
+
+
 async def test_a_guest_is_never_linked_to_an_admin(house: House) -> None:
     """Anyone in the channel can call themselves "Alex": a guest never becomes an admin's Slack
     account, whatever the admin types. Admins set their own Slack member ID by hand."""

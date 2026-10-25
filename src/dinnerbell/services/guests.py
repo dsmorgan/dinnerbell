@@ -387,8 +387,9 @@ async def promote(
 
 
 class LinkNeedsOverride(MemberRuleViolation):
-    """The guest's Slack email isn't the member's, so linking needs the admin to look at both
-    and type the member's name (``link_to_member``). Carries both, for the confirmation step."""
+    """The guest's Slack email isn't the member's, or they use a Slack guest account, so linking
+    needs the admin to look at both emails and type the member's name (``link_to_member``).
+    Carries both people, for the confirmation step."""
 
     def __init__(self, guest: Member, target: Member, message: str) -> None:
         super().__init__(message)
@@ -414,8 +415,9 @@ async def link_to_member(
 
     A display name proves nothing: anyone in the channel can call themselves "Kim". So linking
     is never offered to an admin, who sets their own Slack member ID by hand, and when the
-    email Slack shared for the guest isn't the member's, the admin must type the member's name
-    (``confirm``) after seeing both emails (``LinkNeedsOverride``). Audited as
+    email Slack shared for the guest isn't the member's, or the guest uses a Slack guest
+    account, the admin must type the member's name (``confirm``) after seeing both emails
+    (``LinkNeedsOverride``). Audited as
     ``guest.linked_to_member``, with ``override`` true for such a link."""
     require_admin(actor, MANAGE_GUESTS)
     async with write_transaction(db):  # a second link of the same guest reads the first's result
@@ -434,9 +436,16 @@ async def link_to_member(
             raise MemberRuleViolation(f"{guest.display_name} has no Slack account to link.")
         if target.slack_user_id is not None:
             raise MemberRuleViolation(f"{target.display_name} is linked to a Slack account already.")
-        override = not emails_match(guest, target)
+        # A Slack guest account is never linked on its email alone, as joining and the hourly
+        # match never link one (``_linkable``).
+        override = guest.slack_guest_account or not emails_match(guest, target)
         if override and not confirm:
-            raise LinkNeedsOverride(guest, target, "Their Slack email isn't the member's. Check both before linking.")
+            why = (
+                "uses a Slack guest account"
+                if emails_match(guest, target)
+                else "has a Slack email that isn't the member's"
+            )
+            raise LinkNeedsOverride(guest, target, f"{guest.display_name} {why}. Check both before linking.")
         if override and confirm.strip().casefold() != target.display_name.casefold():
             raise LinkNeedsOverride(guest, target, f"Type {target.display_name} exactly to link anyway.")
         slack_id = guest.slack_user_id
