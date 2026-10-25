@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Slot schedules and ranking weights, as stored in the household settings JSON (FR-1, FR-43).
+"""Slot schedules and ranking weights, as stored in the household settings JSON (FR-1, FR-43,
+FR-44).
 
 Reading is forgiving: a missing or malformed value falls back to its default, so a bad edit
 can't stop the scheduler. Writing is strict: ``check_schedule`` and ``check_weights`` reject
-anything out of range with a message the admin can act on.
+anything out of range with a message the person editing can act on.
 
 Times are wall-clock times in the household time zone. The caller passes the ``tzinfo``; this
 module never reads time zone data itself.
@@ -11,7 +12,9 @@ module never reads time zone data itself.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+import hashlib
+import json
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass, fields
 from datetime import UTC, date, datetime, time, timedelta, tzinfo
 from typing import Any
@@ -180,8 +183,14 @@ def proposal_count(settings: Mapping[str, Any]) -> int:
     return DEFAULT_PROPOSAL_COUNT if value is None else value
 
 
+def _wall(value: time) -> str:
+    return f"{value.hour % 12 or 12}:{value.minute:02d} {'AM' if value.hour < 12 else 'PM'}"
+
+
 def check_schedule(schedule: SlotSchedule) -> SlotSchedule:
-    """Raise InvalidSchedule unless every field is in range."""
+    """Raise InvalidSchedule unless every field is in range, and, for a slot that's on, voting
+    closes before the usual meal time. A slot can always be turned off, whatever its times.
+    Times are wall-clock times in the household time zone."""
     if not MIN_WINDOW_MINUTES <= schedule.response_minutes <= MAX_WINDOW_MINUTES:
         raise InvalidSchedule(f"The response window runs {MIN_WINDOW_MINUTES} to {MAX_WINDOW_MINUTES} minutes.")
     if not MIN_WINDOW_MINUTES <= schedule.vote_minutes <= MAX_WINDOW_MINUTES:
@@ -195,6 +204,12 @@ def check_schedule(schedule: SlotSchedule) -> SlotSchedule:
         raise InvalidSchedule("The call's windows run past midnight. Move the call earlier or shorten them.")
     if schedule.meal_time > LATEST_MEAL_TIME:
         raise InvalidSchedule("Set the usual meal time by 11:45 PM.")
+    closes = start + schedule.response_minutes + schedule.vote_minutes
+    if schedule.enabled and closes >= schedule.meal_time.hour * 60 + schedule.meal_time.minute:
+        raise InvalidSchedule(
+            f"Voting would close at {_wall(time(closes // 60 % 24, closes % 60))}, but the usual meal time is "
+            f"{_wall(schedule.meal_time)}. Move the call earlier, shorten the windows, or set a later meal time."
+        )
     return schedule
 
 
@@ -217,6 +232,41 @@ def slot_to_json(schedule: SlotSchedule) -> dict[str, Any]:
         "modes": [m.value for m in sorted_modes(schedule.modes)],
         "meal_time": format_hhmm(schedule.meal_time),
     }
+
+
+def slot_changes(before: SlotSchedule, after: SlotSchedule) -> dict[str, dict[str, Any]]:
+    """What changed from ``before`` to ``after``, as stored: ``{"call_time": {"from": "15:00",
+    "to": "14:00"}}``. Empty when nothing did."""
+    old, new = slot_to_json(before), slot_to_json(after)
+    return {name: {"from": old[name], "to": new[name]} for name in new if old[name] != new[name]}
+
+
+def slot_fingerprint(schedule: SlotSchedule) -> str:
+    """A short digest of ``schedule`` as stored. A form carries the one it was drawn from, so a
+    save over someone else's newer change is refused instead of undoing it."""
+    encoded = json.dumps(slot_to_json(schedule), sort_keys=True).encode()
+    return hashlib.sha256(encoded).hexdigest()[:16]
+
+
+def can_open_today(schedule: SlotSchedule, *, today: date, now: datetime, zone: tzinfo) -> bool:
+    """Whether the scheduler would still open today's call on ``schedule``, if it had none yet:
+    the slot is on and its response deadline hasn't passed (FR-2)."""
+    return schedule.enabled and now < schedule.opens_at(today, zone) + schedule.response_window
+
+
+def first_day_using(
+    schedule: SlotSchedule, *, today: date, now: datetime, zone: tzinfo, taken: Collection[date]
+) -> date:
+    """The first day whose daily call follows ``schedule`` (FR-44: changes apply from the next
+    call). A day that already has a call, open, scheduled, finished, or skipped, keeps it as it
+    is, so it's passed over (``taken``). So is today when the slot is on but its call could no
+    longer open. A slot turned off applies from the first day without a call."""
+    day = today
+    if day not in taken and schedule.enabled and not can_open_today(schedule, today=today, now=now, zone=zone):
+        day += timedelta(days=1)
+    while day in taken:
+        day += timedelta(days=1)
+    return day
 
 
 def weights_to_json(values: Weights) -> dict[str, float]:

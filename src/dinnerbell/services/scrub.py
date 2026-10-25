@@ -26,6 +26,7 @@ from datetime import datetime
 from sqlalchemy import TextClause, bindparam, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from dinnerbell.db.engine import write_transaction
 from dinnerbell.db.events import EventRepository
 from dinnerbell.db.meals import household_settings
 from dinnerbell.db.outbox import OutboxRepository
@@ -152,7 +153,13 @@ class ScrubSummary:
 async def scrub_test(db: AsyncSession, *, instance_label: str, keep: Iterable[str], now: datetime) -> ScrubSummary:
     """Scrub the household for test. Raises ScrubRefused, changing nothing, when the instance has
     no label, a kept email isn't a valid address or matches no member, or no kept member is an
-    active admin (nobody could run test's admin pages)."""
+    active admin (nobody could run test's admin pages). It holds the write lock throughout, so a
+    schedule saved meanwhile can't undo turning the slots off."""
+    async with write_transaction(db):
+        return await _scrub(db, instance_label=instance_label, keep=keep, now=now)
+
+
+async def _scrub(db: AsyncSession, *, instance_label: str, keep: Iterable[str], now: datetime) -> ScrubSummary:
     if not instance_label:
         raise ScrubRefused(NOT_LABELED)
     wanted: set[str] = set()

@@ -1,0 +1,37 @@
+{
+  "blocks": [
+    {
+      "text": {
+        "text": "*Dinner:* the call goes out at *3:00 PM*. Answers close at 4:30 PM, voting at 5:15 PM, and the usual meal time is 6:30 PM.\n*Lunch:* no daily call.",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "block_id": "more",
+      "elements": [
+        {
+          "action_id": "link_schedule",
+          "text": {
+            "emoji": true,
+            "text": "Change the schedule",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "url": "https://dinnerbell.example.com/schedule"
+        }
+      ],
+      "type": "actions"
+    },
+    {
+      "elements": [
+        {
+          "text": "Anyone in the household can change it. Each change is posted in the Dinnerbell channel.",
+          "type": "mrkdwn"
+        }
+      ],
+      "type": "context"
+    }
+  ],
+  "text": "When calls go out: Dinner: the call goes out at 3:00 PM. Answers close at 4:30 PM, voting at 5:15 PM, and the usual meal time is 6:30 PM. Lunch: no daily call."
+}

@@ -66,5 +66,25 @@ async def read_snapshot(session: AsyncSession) -> AsyncIterator[None]:
         await session.rollback()
 
 
+@asynccontextmanager
+async def write_transaction(session: AsyncSession) -> AsyncIterator[None]:
+    """Run a read-modify-write as one transaction that holds SQLite's write lock from its first
+    read. Commit inside the block; anything left uncommitted is rolled back at the end.
+
+    pysqlite's legacy transaction handling begins a transaction only at the first INSERT,
+    UPDATE, or DELETE, so two sessions could otherwise both read a value, then each write their
+    own change over it, and one change would be lost. ``BEGIN IMMEDIATE`` takes the write lock
+    first: a second writer waits (``busy_timeout``) and then reads what the first committed.
+    """
+    if session.new or session.dirty or session.deleted:
+        raise RuntimeError("write_transaction needs a session with no unsaved changes")
+    await session.rollback()  # end the session's own transaction, so BEGIN can start one
+    await session.execute(text("BEGIN IMMEDIATE"))
+    try:
+        yield
+    finally:
+        await session.rollback()  # a no-op after a commit; otherwise it releases the lock
+
+
 def create_sessionmaker(engine: AsyncEngine) -> async_sessionmaker[AsyncSession]:
     return async_sessionmaker(engine, expire_on_commit=False)

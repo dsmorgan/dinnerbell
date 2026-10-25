@@ -12,7 +12,7 @@ Dinnerbell is under construction. Milestones M0 through M2 ship these parts, and
 - The catalog, catalog file import, `DINNERBELL_SEED_FILE`, preferences, and meal history
 - Dinner calls in Slack: the call, reminders, proposals and votes, the decision, and assignments, plus the App Home, `/dinnerbell call`, and calling off a call or closing a window early from Slack (`/dinnerbell cancel`)
 
-As of M2, the Slack bot connects when `DINNERBELL_SLACK_BOT_TOKEN`, `DINNERBELL_SLACK_APP_TOKEN`, and `DINNERBELL_SLACK_CHANNEL` are all set. Offers, `/dinnerbell offer`, `log`, and `schedule` come in M3.
+As of M2, the Slack bot connects when `DINNERBELL_SLACK_BOT_TOKEN`, `DINNERBELL_SLACK_APP_TOKEN`, and `DINNERBELL_SLACK_CHANNEL` are all set. Offers, `/dinnerbell offer`, and `log` come in M3.
 
 ## Prerequisites
 
@@ -741,7 +741,7 @@ A copy of production's data tests migrations and new features against real histo
    deploy/dinnerbell-test up -d
    ```
 
-Slots are off after a scrub. To rehearse a scheduled call, turn one on in **Admin**, or start one with `/dinnerbell-test call`.
+Slots are off after a scrub. To rehearse a scheduled call, turn one on on the **Schedule** page, or start one with `/dinnerbell-test call`.
 
 ### Promote a release
 

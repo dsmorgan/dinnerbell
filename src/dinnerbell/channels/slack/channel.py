@@ -132,7 +132,7 @@ class SlackChannel:
 
     async def deliver(self, notification: Notification, *, thread: MessageRef | None = None) -> DeliveryResult:
         self.hold.check(direct=notification.recipient_id is not None)
-        directory = await self._directory(notification.event.household_id)
+        directory = await self._directory(notification.household_id)
         recipient = notification.recipient_id
         slack_user = None
         if recipient is not None:
@@ -143,7 +143,7 @@ class SlackChannel:
                 # Done, not failed: the row closes as delivered and is never retried.
                 log.info(
                     "slack direct message dropped: recipient isn't in the channel",
-                    extra={"kind": notification.kind, "event_id": notification.event.id, "recipient_id": recipient},
+                    extra={"kind": notification.kind, "event_id": notification.event_id, "recipient_id": recipient},
                 )
                 if self.state is not None and self.state.dms_dropped is not None:
                     self.state.dms_dropped += 1
@@ -157,11 +157,11 @@ class SlackChannel:
             ref = await self.api.post(self.channel_id, message)
         log.info(
             "slack message posted",
-            extra={"kind": notification.kind, "event_id": notification.event.id, "recipient_id": recipient},
+            extra={"kind": notification.kind, "event_id": notification.event_id, "recipient_id": recipient},
         )
         return DeliveryResult(ref)
 
     async def update(self, ref: MessageRef, notification: Notification) -> None:
         self.hold.check(direct=False)
-        ctx = self._context(await self._directory(notification.event.household_id))
+        ctx = self._context(await self._directory(notification.household_id))
         await self.api.update(ref, render(notification, ctx).payload())

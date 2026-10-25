@@ -242,72 +242,48 @@ def test_members_cannot_use_admin_overrides(admin: TestClient, provider: FakePro
     assert admin.get("/admin/schedule").status_code == 403
 
 
-# Admin > Schedule -------------------------------------------------------------------------------
+# Admin > Ranking -------------------------------------------------------------------------------
 
 
-def schedule_form(**changes: Any) -> dict[str, Any]:
-    form: dict[str, Any] = {
-        "dinner_enabled": "on",
-        "dinner_call_time": "15:00",
-        "dinner_meal_time": "18:30",
-        "dinner_response_minutes": "90",
-        "dinner_vote_minutes": "45",
-        "dinner_reminder_minutes": "15",
-        "dinner_modes": ["pickup", "delivery"],
-        "lunch_call_time": "10:30",
-        "lunch_meal_time": "12:30",
-        "lunch_response_minutes": "60",
-        "lunch_vote_minutes": "30",
-        "lunch_reminder_minutes": "15",
-        "lunch_modes": ["pickup"],
-        "proposal_count": "3",
-        "variety_window_days": "7",
-    }
+def ranking_form(**changes: Any) -> dict[str, Any]:
+    form: dict[str, Any] = {"proposal_count": "3", "variety_window_days": "7"}
     form |= {f"weight_{n}": v for n, v in (("soft_preference", "1"), ("cuisine_variety", "3"), ("novelty", "1"))}
     form |= {f"weight_{n}": v for n, v in (("suggested", "2"), ("default_mode", "1"), ("volunteer_fit", "1"))}
     return form | changes
 
 
-def test_schedule_page_saves_and_audits(admin: TestClient, migrated: Settings) -> None:
+def test_ranking_page_saves_and_audits(admin: TestClient, migrated: Settings) -> None:
     html = admin.get("/admin/schedule").text
-    assert 'name="dinner_call_time" value="15:00"' in html and 'name="weight_cuisine_variety" value="3"' in html
-    assert submit(admin, "/admin/schedule", schedule_form()).status_code == 303
-    assert [a for a in rows(migrated, AuditRow) if a.action == "household.schedule_updated"] == []  # no change
-    changed = schedule_form(
-        dinner_call_time="14:00", lunch_enabled="on", weight_novelty="2.5", variety_window_days="10"
-    )
-    saved = submit(admin, "/admin/schedule", changed)
+    assert 'name="weight_cuisine_variety" value="3"' in html and 'href="/schedule"' in html
+    assert "dinner_call_time" not in html  # call times moved to the Schedule page
+    assert submit(admin, "/admin/schedule", ranking_form()).status_code == 303
+    assert [a for a in rows(migrated, AuditRow) if a.action == "household.ranking_updated"] == []  # no change
+    saved = submit(admin, "/admin/schedule", ranking_form(weight_novelty="2.5", variety_window_days="10"))
     assert (saved.status_code, saved.headers["location"]) == (303, "/admin/schedule?notice=saved")
-    assert "Schedule saved" in admin.get("/admin/schedule?notice=saved").text
+    assert "Ranking saved" in admin.get("/admin/schedule?notice=saved").text
     settings = rows(migrated, HouseholdRow)[0].settings
-    assert settings["slots"]["dinner"]["call_time"] == "14:00" and settings["slots"]["lunch"]["enabled"] is True
     assert settings["ranking_weights"]["novelty"] == 2.5 and settings["variety_window_days"] == 10
-    (audit,) = [a for a in rows(migrated, AuditRow) if a.action == "household.schedule_updated"]
-    assert set(audit.payload) == {"slots", "ranking_weights", "variety_window_days"}
+    assert settings["slots"]["dinner"]["call_time"] == "15:00"  # untouched
+    (audit,) = [a for a in rows(migrated, AuditRow) if a.action == "household.ranking_updated"]
+    assert set(audit.payload) == {"ranking_weights", "variety_window_days"}
 
 
 @pytest.mark.parametrize(
     ("changes", "message"),
     [
-        ({"dinner_call_time": "3pm"}, "HH:MM"),
-        ({"dinner_vote_minutes": "1"}, "vote window"),
-        ({"dinner_reminder_minutes": ""}, "Enter the reminder time"),
-        ({"dinner_response_minutes": "ninety"}, "whole number"),
-        ({"dinner_modes": []}, "default way"),
-        ({"dinner_modes": ["teleport"]}, "cook, pickup, or delivery"),
         ({"weight_novelty": "11"}, "Weights run"),
         ({"weight_novelty": "nan"}, "must be a number"),
         ({"weight_novelty": "x"}, "must be a number"),
         ({"proposal_count": "9"}, "proposals"),
+        ({"proposal_count": ""}, "Enter the number of proposals"),
         ({"variety_window_days": "0"}, "variety window"),
     ],
 )
-def test_schedule_page_rejects_bad_values(admin: TestClient, changes: dict[str, Any], message: str) -> None:
-    form = schedule_form(**changes)
-    response = submit(admin, "/admin/schedule", form)
+def test_ranking_page_rejects_bad_values(admin: TestClient, changes: dict[str, Any], message: str) -> None:
+    response = submit(admin, "/admin/schedule", ranking_form(**changes))
     assert response.status_code == 400 and message in page(response)
     for name, value in changes.items():  # what the admin typed is still there
-        if isinstance(value, str) and value:
+        if value:
             assert f'value="{value}"' in response.text, name
 
 

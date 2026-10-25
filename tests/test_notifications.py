@@ -47,6 +47,8 @@ DECISION = n.DecisionInfo(
     dietary_notes=("Vegan",),
 )
 
+SCHEDULE = n.SlotScheduleInfo(True, time(15), 90, 45, 15, time(18, 30), (Mode.PICKUP, Mode.DELIVERY))
+
 EXAMPLES: list[tuple[n.Notification, str, str | None, str | None, int | None]] = [
     (n.CallOpened(EVENT, (ALEX, SAM), ROSTER, (SAM,), 3), "event:7:run2:call_opened", "event:7:run2:call", None, None),
     (n.CallUpdated(EVENT, ROSTER, (), 3), "event:7:run2:call_updated", "event:7:run2:call", None, None),
@@ -97,6 +99,22 @@ EXAMPLES: list[tuple[n.Notification, str, str | None, str | None, int | None]] =
         None,
         None,
         2,
+    ),
+    (
+        n.ScheduleChanged(
+            household_id=1,
+            change_id="abc123",
+            slot=Slot.DINNER,
+            changed_by=SAM,
+            before=SCHEDULE,
+            after=replace(SCHEDULE, call_time=time(14), modes=(Mode.COOK,)),
+            starts_on=date(2026, 10, 23),
+            path="/schedule",
+        ),
+        "schedule:dinner:abc123",
+        None,
+        None,
+        None,
     ),
 ]
 

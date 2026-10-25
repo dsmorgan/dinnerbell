@@ -2,5 +2,5 @@
 {% set path = request.url.path %}
 <nav class="tabs" aria-label="Admin">
   <a href="/admin/members"{% if path.startswith("/admin/members") %} aria-current="page"{% endif %}>Members</a>
-  <a href="/admin/schedule"{% if path.startswith("/admin/schedule") %} aria-current="page"{% endif %}>Schedule</a>
+  <a href="/admin/schedule"{% if path.startswith("/admin/schedule") %} aria-current="page"{% endif %}>Ranking</a>
 </nav>

@@ -424,7 +424,6 @@ async def test_home_republish_failure_after_an_action_is_logged(
         ("history", "https://dinnerbell.test/history"),
         ("log", "coming soon"),
         ("offer", "coming soon"),
-        ("schedule", "https://dinnerbell.test/admin/schedule"),
         ("what", "`/dinnerbell call` starts a dinner call"),
     ],
 )

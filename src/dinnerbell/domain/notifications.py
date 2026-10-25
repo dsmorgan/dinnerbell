@@ -160,6 +160,15 @@ class _Notification:
         """The member to message directly, or None for a channel post."""
         return None
 
+    @property
+    def household_id(self) -> int:
+        return self.event.household_id
+
+    @property
+    def event_id(self) -> int | None:
+        """The event the notification is about, or None for one about the household."""
+        return self.event.id
+
 
 @dataclass(frozen=True, slots=True)
 class CallOpened(_Notification):
@@ -365,6 +374,63 @@ class StartedCallCancelled(_Notification):
         return self.member.id
 
 
+@dataclass(frozen=True, slots=True)
+class SlotScheduleInfo:
+    """A slot's standing schedule (FR-1), as a schedule change shows it. Times are wall-clock
+    times in the household time zone."""
+
+    enabled: bool
+    call_time: time
+    response_minutes: int
+    vote_minutes: int
+    reminder_minutes: int
+    meal_time: time
+    modes: tuple[Mode, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ScheduleChanged:
+    """A member changed a slot's standing schedule (FR-44): a channel post naming them, with
+    what changed. It's about the household, not an event, so it has no ``event``; the outbox
+    stores it with no event ID, and it holds back nothing. ``starts_on`` is the first day whose
+    call follows the new schedule. ``kept_today_at`` is set when today's call keeps the old
+    call time because the new one would have skipped it. ``change_id`` makes each change its
+    own post, and matches the change's audit row."""
+
+    kind: ClassVar[str] = "schedule_changed"
+    is_update: ClassVar[bool] = False
+    needs_thread: ClassVar[bool] = False
+    household_id: int
+    change_id: str
+    slot: Slot
+    changed_by: PersonInfo
+    before: SlotScheduleInfo
+    after: SlotScheduleInfo
+    starts_on: date
+    path: str
+    kept_today_at: time | None = None
+
+    @property
+    def idempotency_key(self) -> str:
+        return f"schedule:{self.slot.value}:{self.change_id}"
+
+    @property
+    def message_key(self) -> str | None:
+        return None
+
+    @property
+    def thread_key(self) -> str | None:
+        return None
+
+    @property
+    def recipient_id(self) -> int | None:
+        return None
+
+    @property
+    def event_id(self) -> int | None:
+        return None
+
+
 Notification = Union[  # noqa: UP007 - a runtime union, used for isinstance checks and payload decoding
     CallOpened,
     CallUpdated,
@@ -379,6 +445,7 @@ Notification = Union[  # noqa: UP007 - a runtime union, used for isinstance chec
     EventCancelled,
     AssignmentCancelled,
     StartedCallCancelled,
+    ScheduleChanged,
 ]
 NOTIFICATION_TYPES: dict[str, type[Notification]] = {cls.kind: cls for cls in get_args(Notification)}
 UPDATE_KINDS = frozenset(kind for kind, cls in NOTIFICATION_TYPES.items() if cls.is_update)

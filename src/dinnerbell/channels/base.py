@@ -32,7 +32,7 @@ class NullChannel:
             "notification not sent: no channel configured",
             extra={
                 "kind": notification.kind,
-                "event_id": notification.event.id,
+                "event_id": notification.event_id,
                 "recipient_id": notification.recipient_id,
                 "threaded": thread is not None,
             },
@@ -42,5 +42,5 @@ class NullChannel:
     async def update(self, ref: MessageRef, notification: Notification) -> None:
         log.info(
             "notification update not sent: no channel configured",
-            extra={"kind": notification.kind, "event_id": notification.event.id, "message_id": ref.message_id},
+            extra={"kind": notification.kind, "event_id": notification.event_id, "message_id": ref.message_id},
         )
