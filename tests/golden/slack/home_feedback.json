@@ -1,0 +1,164 @@
+{
+  "blocks": [
+    {
+      "text": {
+        "emoji": true,
+        "text": "Today · Thursday, Oct 22",
+        "type": "plain_text"
+      },
+      "type": "header"
+    },
+    {
+      "text": {
+        "text": "No calls today yet.",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "block_id": "start",
+      "elements": [
+        {
+          "action_id": "start_call_dinner",
+          "text": {
+            "emoji": true,
+            "text": "Start a dinner call",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "dinner"
+        },
+        {
+          "action_id": "start_call_lunch",
+          "text": {
+            "emoji": true,
+            "text": "Start a lunch call",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "lunch"
+        }
+      ],
+      "type": "actions"
+    },
+    {
+      "text": {
+        "text": "*How was it?* Meals you ate in the last week. Only you see your ratings.",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "accessory": {
+        "action_id": "feedback",
+        "text": {
+          "emoji": true,
+          "text": "How was it?",
+          "type": "plain_text"
+        },
+        "type": "button",
+        "value": "7:1"
+      },
+      "block_id": "feedback-60",
+      "text": {
+        "text": "*Dinner · Thursday, Oct 22*: Sam's Tacos\nOpen until Thursday, Oct 29",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "accessory": {
+        "action_id": "feedback",
+        "text": {
+          "emoji": true,
+          "text": "How was it?",
+          "type": "plain_text"
+        },
+        "type": "button",
+        "value": "8:1"
+      },
+      "block_id": "feedback-61",
+      "text": {
+        "text": "*Dinner · Wednesday, Oct 21*: Siam Garden\nOpen until Wednesday, Oct 28",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "accessory": {
+        "action_id": "feedback",
+        "text": {
+          "emoji": true,
+          "text": "How was it?",
+          "type": "plain_text"
+        },
+        "type": "button",
+        "value": "9:1"
+      },
+      "block_id": "feedback-62",
+      "text": {
+        "text": "*Dinner · Tuesday, Oct 20*: Pho &lt;Saigon&gt;\nOpen until Tuesday, Oct 27",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "accessory": {
+        "action_id": "feedback",
+        "text": {
+          "emoji": true,
+          "text": "How was it?",
+          "type": "plain_text"
+        },
+        "type": "button",
+        "value": "10:1"
+      },
+      "block_id": "feedback-63",
+      "text": {
+        "text": "*Dinner · Monday, Oct 19*: Taqueria\nOpen until Monday, Oct 26",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "accessory": {
+        "action_id": "feedback",
+        "text": {
+          "emoji": true,
+          "text": "How was it?",
+          "type": "plain_text"
+        },
+        "type": "button",
+        "value": "11:1"
+      },
+      "block_id": "feedback-64",
+      "text": {
+        "text": "*Dinner · Sunday, Oct 18*: Curry Night\nOpen until Sunday, Oct 25",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "elements": [
+        {
+          "text": "…and 1 more on <https://dinnerbell.example.com/history|History>.",
+          "type": "mrkdwn"
+        }
+      ],
+      "type": "context"
+    },
+    {
+      "type": "divider"
+    },
+    {
+      "elements": [
+        {
+          "text": "<https://dinnerbell.example.com/preferences|Your preferences> · <https://dinnerbell.example.com/catalog|Catalog> · <https://dinnerbell.example.com/history|History> · <https://dinnerbell.example.com/|Today on the web>",
+          "type": "mrkdwn"
+        }
+      ],
+      "type": "context"
+    }
+  ],
+  "type": "home"
+}

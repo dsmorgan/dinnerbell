@@ -117,6 +117,13 @@ EXAMPLES: list[tuple[n.Notification, str, str | None, str | None, int | None]] =
         None,
     ),
     (n.CallDiscarded(EVENT, "event:7:run1:call"), "event:7:run1:call:call_discarded", "event:7:run1:call", None, None),
+    (
+        n.FeedbackReminder(replace(EVENT, state=EventState.DONE), SAM, "Siam Garden", date(2026, 10, 29)),
+        f"event:7:run2:feedback_reminder:member{SAM.id}",
+        None,
+        None,
+        2,
+    ),
 ]
 
 

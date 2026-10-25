@@ -1,0 +1,40 @@
+{
+  "blocks": [
+    {
+      "text": {
+        "text": "Hi Kim! How was dinner on Thursday, Oct 22: *Sam's Tacos*? Only you see your ratings, and you can change them until *Thursday, Oct 29*.",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "block_id": "more",
+      "elements": [
+        {
+          "accessibility_label": "Say how dinner was: the food, the place, or thanks to the cook",
+          "action_id": "feedback",
+          "style": "primary",
+          "text": {
+            "emoji": true,
+            "text": "How was it?",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "7:1"
+        },
+        {
+          "action_id": "link_event",
+          "text": {
+            "emoji": true,
+            "text": "View on web",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "url": "https://dinnerbell.example.com/events/7"
+        }
+      ],
+      "type": "actions"
+    }
+  ],
+  "text": "How was dinner on Thursday, Oct 22? Tell us by Thursday, Oct 29."
+}

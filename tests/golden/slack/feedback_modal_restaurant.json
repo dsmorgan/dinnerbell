@@ -1,0 +1,202 @@
+{
+  "blocks": [
+    {
+      "elements": [
+        {
+          "text": "*Dinner · Thursday, Oct 22* · Taqueria &lt;Lupita&gt; &amp; Co",
+          "type": "mrkdwn"
+        }
+      ],
+      "type": "context"
+    },
+    {
+      "block_id": "food",
+      "element": {
+        "action_id": "value",
+        "initial_option": {
+          "text": {
+            "emoji": true,
+            "text": "Loved it",
+            "type": "plain_text"
+          },
+          "value": "loved"
+        },
+        "options": [
+          {
+            "text": {
+              "emoji": true,
+              "text": "Loved it",
+              "type": "plain_text"
+            },
+            "value": "loved"
+          },
+          {
+            "text": {
+              "emoji": true,
+              "text": "Fine",
+              "type": "plain_text"
+            },
+            "value": "fine"
+          },
+          {
+            "text": {
+              "emoji": true,
+              "text": "Not again",
+              "type": "plain_text"
+            },
+            "value": "not_again"
+          }
+        ],
+        "type": "radio_buttons"
+      },
+      "label": {
+        "emoji": true,
+        "text": "The food",
+        "type": "plain_text"
+      },
+      "optional": true,
+      "type": "input"
+    },
+    {
+      "block_id": "place",
+      "element": {
+        "action_id": "value",
+        "initial_option": {
+          "text": {
+            "emoji": true,
+            "text": "Not again",
+            "type": "plain_text"
+          },
+          "value": "not_again"
+        },
+        "options": [
+          {
+            "text": {
+              "emoji": true,
+              "text": "Loved it",
+              "type": "plain_text"
+            },
+            "value": "loved"
+          },
+          {
+            "text": {
+              "emoji": true,
+              "text": "Fine",
+              "type": "plain_text"
+            },
+            "value": "fine"
+          },
+          {
+            "text": {
+              "emoji": true,
+              "text": "Not again",
+              "type": "plain_text"
+            },
+            "value": "not_again"
+          }
+        ],
+        "type": "radio_buttons"
+      },
+      "label": {
+        "emoji": true,
+        "text": "The place",
+        "type": "plain_text"
+      },
+      "optional": true,
+      "type": "input"
+    },
+    {
+      "block_id": "place_issues",
+      "element": {
+        "action_id": "value",
+        "initial_options": [
+          {
+            "text": {
+              "emoji": true,
+              "text": "Late",
+              "type": "plain_text"
+            },
+            "value": "late"
+          },
+          {
+            "text": {
+              "emoji": true,
+              "text": "Cold",
+              "type": "plain_text"
+            },
+            "value": "cold"
+          }
+        ],
+        "options": [
+          {
+            "text": {
+              "emoji": true,
+              "text": "Late",
+              "type": "plain_text"
+            },
+            "value": "late"
+          },
+          {
+            "text": {
+              "emoji": true,
+              "text": "Wrong order",
+              "type": "plain_text"
+            },
+            "value": "wrong_order"
+          },
+          {
+            "text": {
+              "emoji": true,
+              "text": "Cold",
+              "type": "plain_text"
+            },
+            "value": "cold"
+          },
+          {
+            "text": {
+              "emoji": true,
+              "text": "Other",
+              "type": "plain_text"
+            },
+            "value": "other"
+          }
+        ],
+        "type": "checkboxes"
+      },
+      "label": {
+        "emoji": true,
+        "text": "Anything go wrong?",
+        "type": "plain_text"
+      },
+      "optional": true,
+      "type": "input"
+    },
+    {
+      "elements": [
+        {
+          "text": "Only you see your ratings. Everyone else sees counts on the catalog, never who said what. You can change it until Thursday, Oct 29.",
+          "type": "mrkdwn"
+        }
+      ],
+      "type": "context"
+    }
+  ],
+  "callback_id": "feedback_modal",
+  "close": {
+    "emoji": true,
+    "text": "Cancel",
+    "type": "plain_text"
+  },
+  "private_metadata": "{\"event\":7,\"channel\":\"C0DINNER\",\"home\":true,\"run\":1}",
+  "submit": {
+    "emoji": true,
+    "text": "Save",
+    "type": "plain_text"
+  },
+  "title": {
+    "emoji": true,
+    "text": "How was it?",
+    "type": "plain_text"
+  },
+  "type": "modal"
+}

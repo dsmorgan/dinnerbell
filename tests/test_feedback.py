@@ -31,7 +31,7 @@ from dinnerbell.services.database import Database, open_database
 from dinnerbell.services.errors import NotFound
 from tests.support.calls import DONE_AT, OPENS, House, dinner_id, furnish, make_house
 from tests.support.clock import FakeClock
-from tests.support.feedback import done_dinner
+from tests.support.feedback import done_dinner, remind
 
 DAY = date(2026, 10, 22)
 SAM, KIM = MemberRef(2, "Sam"), MemberRef(3, "Kim")
@@ -190,6 +190,15 @@ async def test_meals_await_feedback_until_given_or_closed(house: House) -> None:
     house.clock.now = DONE_AT + timedelta(days=8)
     async with house.sessionmaker() as db:
         assert await feedback.awaiting(db, house["Alex"], now=house.clock()) == []
+
+
+async def test_the_reminder_goes_once_to_those_who_turned_it_on(house: House) -> None:
+    await remind(house, "Kim", "Lee")  # Lee doesn't eat, so gets nothing
+    event_id = await done_dinner(house)
+    sent = [e for e in await house.outbox() if e.kind == "feedback_reminder"]
+    assert [(e.idempotency_key, e.payload["member"]["name"], e.payload["item"], e.payload["closes"]) for e in sent] == [
+        (f"event:{event_id}:run1:feedback_reminder:member{house['Kim'].id}", "Kim", "Sam's Tacos", "2026-10-29")
+    ]
 
 
 # Who sees what (FR-49) -------------------------------------------------------------------------

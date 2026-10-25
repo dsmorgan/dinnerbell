@@ -59,6 +59,7 @@ from dinnerbell.domain.members import Member
 from dinnerbell.domain.ranking import GroupPreferences, RankingSnapshot, RankItem, rank
 from dinnerbell.domain.schedule import proposal_count, slot_schedule, slot_schedules, weights
 from dinnerbell.services import call_context as cc
+from dinnerbell.services import feedback
 from dinnerbell.services.call_context import CallContext, load, locked_event, publish
 from dinnerbell.services.common import audit, is_unique_violation
 from dinnerbell.services.errors import NotFound
@@ -580,7 +581,8 @@ async def finish(db: AsyncSession, event: Event, now: datetime, *, actor: Member
             event_id=event.id,
         )
     ctx = await load(db, done)
-    await publish(db, ctx, *cc.decision_updated(ctx), cc.call_updated(ctx), now=now)
+    reminders = feedback.reminders(ctx, item.name) if item is not None else []  # FR-48: only those who asked
+    await publish(db, ctx, *cc.decision_updated(ctx), cc.call_updated(ctx), *reminders, now=now)
     await audit(db, event.household_id, actor, "event.done", _target(event), {"item_id": event.decided_item_id}, now)
 
 

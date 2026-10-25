@@ -64,9 +64,11 @@ from dinnerbell.channels.slack.views import (
     cancel_modal,
     close_modal,
     details_modal,
+    feedback_modal,
     home_view,
     parse_cancel,
     parse_details,
+    parse_feedback,
     parse_proposal,
     proposal_modal,
 )
@@ -86,10 +88,11 @@ from dinnerbell.domain.events import (
     check_run,
     friendly,
 )
+from dinnerbell.domain.feedback import InvalidFeedback
 from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.members import Member
 from dinnerbell.domain.notifications import MessageRef, PermanentDeliveryError, PersonInfo, ResponseReminder
-from dinnerbell.services import calls, discard, event_views, slack_members
+from dinnerbell.services import calls, discard, event_views, feedback, slack_members
 from dinnerbell.services import schedule as schedule_service
 from dinnerbell.services.clock import Clock
 from dinnerbell.services.errors import Forbidden, NotFound
@@ -99,7 +102,7 @@ from dinnerbell.services.lifecycle import CallExists
 log = logging.getLogger(__name__)
 
 DEFAULT_COMMAND = "/dinnerbell"
-SHOWN_ERRORS = (EventRuleViolation, InvalidResponse, NotFound, Forbidden)
+SHOWN_ERRORS = (EventRuleViolation, InvalidResponse, InvalidFeedback, NotFound, Forbidden)
 SLACK_ERRORS = (SlackUnavailable, PermanentDeliveryError)
 UNKNOWN_USER = (
     "I don't know your Slack account yet. Sign in to Dinnerbell on the web with Slack once, "
@@ -131,6 +134,8 @@ CALLED_OFF = "You called off {slot} for {day}."
 CLOSED = {Window.RESPOND: "Responses are closed for {slot}.", Window.VOTE: "Voting is closed for {slot}."}
 VOTED = "Vote counted. Tap Vote again to take it back."
 UNVOTED = "Vote taken back."
+FEEDBACK_SAVED = "Thanks for the feedback! Only you see your ratings."
+FEEDBACK_NONE = "Got it: no feedback from you on this meal."
 SETTLE_TIMEOUT_SECONDS = 10.0
 Ack = Callable[..., Awaitable[None]]
 
@@ -243,6 +248,9 @@ class Interactions:
         async def close(ack: Ack, body: dict[str, Any]) -> None:
             await self._submission(ack, body, "close")
 
+        async def feedback_view(ack: Ack, body: dict[str, Any]) -> None:
+            await self._submission(ack, body, "feedback")
+
         async def command(ack: Ack, body: dict[str, Any]) -> None:
             await self._command(ack, body)
 
@@ -256,6 +264,7 @@ class Interactions:
         app.view(ids.PROPOSAL_VIEW)(proposal)
         app.view(ids.CANCEL_VIEW)(cancel)
         app.view(ids.CLOSE_VIEW)(close)
+        app.view(ids.FEEDBACK_VIEW)(feedback_view)
         app.command(self.command)(command)
         app.event("app_home_opened")(home_opened)
 
@@ -376,7 +385,8 @@ class Interactions:
         else:
             async with self.sessionmaker() as db:
                 today = await event_views.today_view(db, member, now=self.clock(), any_time=self.any_time)
-            view = home_view(today, self.links, notice, label=self.instance_label)
+                awaiting = await feedback.awaiting(db, member, now=self.clock())
+            view = home_view(today, self.links, notice, label=self.instance_label, awaiting=awaiting)
         await self.api.publish_home(user_id, with_version_footer(view, self.version, self.instance_label))
 
     async def _run(self, source: Source, member: Member, work: Callable[[], Awaitable[Done]]) -> None:
@@ -467,6 +477,8 @@ class Interactions:
         if action_id == ids.CLOSE_WINDOW:  # Slack asked them to confirm already
             window, event_id, run = ids.parse_window(value)
             return await self._close(member, event_id, window, run)
+        if action_id == ids.FEEDBACK:
+            return await self._open_feedback(member, source, value, trigger)
         now = self.clock()
         async with self.sessionmaker() as db:
             if action_id in ids.RESPOND:
@@ -759,6 +771,28 @@ class Interactions:
             view = await event_views.event_view(db, member, event_id, now=self.clock())
         return CALLED_OFF.format(slot=view.event.slot.value, day=day_label(view.event.day))
 
+    # Feedback (FR-45 to FR-49) -----------------------------------------------------------------
+
+    async def _open_feedback(self, member: Member, source: Source, value: object, trigger: object) -> str | None:
+        """**How was it?** from the decision message, the reminder, or Home: open the feedback
+        modal for the run the button names. The service says why not to anyone who didn't eat
+        the meal, or after feedback has closed."""
+        event_id, run = ids.parse_card(value)
+        if not isinstance(trigger, str) or not trigger:
+            raise ids.BadValue("no trigger")
+        async with self.sessionmaker() as db:
+            form = await feedback.form_for_event(db, member, event_id, run=run, now=self.clock())
+        origin = ids.ViewOrigin(event_id, source.channel_id, home=source.home, run=run)
+        await self.api.open_view(trigger, feedback_modal(form, origin))
+        return None
+
+    async def _give_feedback(self, member: Member, event_id: int, form: Any, run: int | None) -> str:
+        if run is None:  # pragma: no cover - _submission refuses a feedback modal without a run
+            raise ids.BadValue("no run")
+        async with self.sessionmaker() as db:
+            saved = await feedback.give_for_event(db, member, event_id, form, run=run, now=self.clock())
+        return FEEDBACK_SAVED if saved is not None else FEEDBACK_NONE
+
     # Modals ------------------------------------------------------------------------------------
 
     async def _submission(self, ack: Callable[..., Awaitable[None]], body: dict[str, Any], kind: str) -> None:
@@ -774,8 +808,10 @@ class Interactions:
             origin = ids.ViewOrigin.decode(view.get("private_metadata"))
             if (origin.window is not None) != (kind == "close"):
                 raise ids.BadValue("bad metadata")  # only Close now's confirmation names a window
-            if (origin.run is None and kind in {"cancel", "close"}) or (origin.run is not None and kind == "proposal"):
-                raise ids.BadValue("bad metadata")  # it and Call it off name a run, Details from a card may
+            if (origin.run is None and kind in {"cancel", "close", "feedback"}) or (
+                origin.run is not None and kind == "proposal"
+            ):
+                raise ids.BadValue("bad metadata")  # these name a run, Details from a card may
             form: Any = origin.window if kind == "close" else FORMS[kind](values)
         except FormError as exc:
             await ack(response_action="errors", errors={exc.block_id: str(exc)})
@@ -799,6 +835,8 @@ class Interactions:
                 return await self._close(member, event_id, form, origin.run)
             if kind == "cancel":
                 return await self._cancel(member, event_id, form, origin.run)
+            if kind == "feedback":
+                return await self._give_feedback(member, event_id, form, origin.run)
             async with self.sessionmaker() as db:
                 if kind == "details":
                     await calls.save_details(db, member, event_id, form, run=origin.run, now=self.clock())
@@ -1025,7 +1063,12 @@ WHICH_CALL = (
     "`{command} cancel dinner{day}`, and add a reason after it if you like."
 )
 _ISO_DAY = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
-FORMS: dict[str, Callable[[Any], Any]] = {"details": parse_details, "proposal": parse_proposal, "cancel": parse_cancel}
+FORMS: dict[str, Callable[[Any], Any]] = {
+    "details": parse_details,
+    "proposal": parse_proposal,
+    "cancel": parse_cancel,
+    "feedback": parse_feedback,
+}
 """Each modal's form parser, by kind. Close now's confirmation has no fields."""
 
 

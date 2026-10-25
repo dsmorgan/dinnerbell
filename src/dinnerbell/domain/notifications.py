@@ -458,6 +458,27 @@ class CallDiscarded(_Notification):
         return None
 
 
+@dataclass(frozen=True, slots=True)
+class FeedbackReminder(_Notification):
+    """Feedback reminder (FR-48): one direct message per done meal to a member who ate it and
+    turned the reminder on. ``item`` names what they ate, and ``closes`` is the last day they
+    can give feedback, in the household's time zone."""
+
+    kind: ClassVar[str] = "feedback_reminder"
+    event: EventInfo
+    member: PersonInfo
+    item: str
+    closes: date
+
+    @property
+    def idempotency_key(self) -> str:
+        return f"{self.event.key}:{self.kind}:member{self.member.id}"
+
+    @property
+    def recipient_id(self) -> int | None:
+        return self.member.id
+
+
 Notification = Union[  # noqa: UP007 - a runtime union, used for isinstance checks and payload decoding
     CallOpened,
     CallUpdated,
@@ -474,6 +495,7 @@ Notification = Union[  # noqa: UP007 - a runtime union, used for isinstance chec
     StartedCallCancelled,
     ScheduleChanged,
     CallDiscarded,
+    FeedbackReminder,
 ]
 NOTIFICATION_TYPES: dict[str, type[Notification]] = {cls.kind: cls for cls in get_args(Notification)}
 UPDATE_KINDS = frozenset(kind for kind, cls in NOTIFICATION_TYPES.items() if cls.is_update)

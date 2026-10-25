@@ -18,6 +18,8 @@ ELEMENTS = {
     "timepicker",
     "number_input",
     "plain_text_input",
+    "radio_buttons",
+    "checkboxes",
 }
 _LINK = re.compile(r"<([^<>]*)>")
 
@@ -95,6 +97,16 @@ def check_element(element: Any, where: str, action_ids: set[str]) -> None:
             [element["initial_option"]] if "initial_option" in element else []
         ):
             assert initial in [o for g in groups for o in g["options"]], f"{where}: initial option not offered"
+    if kind in {"radio_buttons", "checkboxes"}:
+        assert 0 < len(element["options"]) <= 10, f"{where}: {kind} take 1 to 10 options"
+        for option in element["options"]:
+            check_option(option, f"{where}.option")
+        initial = element.get("initial_options", []) + (
+            [element["initial_option"]] if "initial_option" in element else []
+        )
+        assert kind == "checkboxes" or "initial_options" not in element, f"{where}: radio buttons take one"
+        for chosen in initial:
+            assert chosen in element["options"], f"{where}: initial option not offered"
     if kind == "plain_text_input":
         assert 1 <= element.get("max_length", 3000) <= 3000
         assert len(element.get("initial_value", "")) <= element.get("max_length", 3000)
@@ -124,6 +136,8 @@ def check_blocks(blocks: Any, surface: str = "message") -> None:
             for field in block.get("fields", []):
                 check_text(field, 2000, f"{where}.field")
             assert len(block.get("fields", [])) <= 10, where
+            if "accessory" in block:
+                check_element(block["accessory"], f"{where}.accessory", action_ids)
         elif kind == "context":
             assert 0 < len(block["elements"]) <= 10, where
             for element in block["elements"]:

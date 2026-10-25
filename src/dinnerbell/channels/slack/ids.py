@@ -66,6 +66,9 @@ CALL_COORDINATE = "call_coordinate"
 POST_NOW = "post_now"
 """**Post it now** on a scheduled call (issue #59): on the reply to starting a later day's call,
 and on the Home tab. Its value is a ``card_value``."""
+FEEDBACK = "feedback"
+"""**How was it?** on a done call's decision message, the feedback reminder, and Home: opens the
+feedback modal. Its value is a ``card_value``, naming the run the meal was decided in."""
 LINK_PREFIX = "link_"
 """URL buttons. Slack still sends their clicks, which the app acknowledges and ignores."""
 LINK_PATTERN = re.compile(r"^link_[a-z_]{1,40}$")
@@ -74,6 +77,7 @@ DETAILS_VIEW = "details_modal"
 PROPOSAL_VIEW = "proposal_modal"
 CANCEL_VIEW = "cancel_modal"
 CLOSE_VIEW = "close_modal"
+FEEDBACK_VIEW = "feedback_modal"
 
 MAX_ID = 2**63 - 1
 _DIGITS = re.compile(r"^[0-9]{1,19}$")
@@ -208,9 +212,9 @@ class ViewOrigin:
     window: Window | None = None
     """The window a Close now modal confirms closing. Only that modal sets it."""
     run: int | None = None
-    """The run of the call the modal was opened for. Call it off and Close now set it, and so
-    does Details opened from a card, so a modal left open across a re-run or a restart can't
-    act on the newer run."""
+    """The run of the call the modal was opened for. Call it off, Close now, and feedback set it,
+    and so does Details opened from a card, so a modal left open across a re-run or a restart
+    can't act on the newer run."""
 
     def encode(self) -> str:
         data: dict[str, object] = {"event": self.event_id, "channel": self.channel_id, "home": self.home}
