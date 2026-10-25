@@ -1,0 +1,11 @@
+{#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
+{#- Feedback on one catalog item as counts only, never who said what (FR-49). Expects c, an
+    ItemCounts, or None. -#}
+{% if c and (c.food or c.place or c.place_issues) %}
+<p class="small item-feedback">
+  {%- if c.food %}Food: {% for r, n in c.line(c.food) %}{{ n }} {{ r.label|lower }}{{ " · " if not loop.last }}{% endfor %}{% endif %}
+  {%- if c.food and (c.place or c.place_issues) %}<br>{% endif %}
+  {%- if c.place %}Place: {% for r, n in c.line(c.place) %}{{ n }} {{ r.label|lower }}{{ " · " if not loop.last }}{% endfor %}{% endif %}
+  {%- if c.place_issues %}{{ " · " if c.place }}{% for i, n in c.place_issues|dictsort %}{{ i.label }} ×{{ n }}{{ ", " if not loop.last }}{% endfor %}{% endif %}
+</p>
+{% endif %}

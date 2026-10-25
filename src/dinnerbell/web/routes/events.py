@@ -38,7 +38,7 @@ from dinnerbell.domain.events import (
     WindowMoved,
 )
 from dinnerbell.domain.meals import Slot
-from dinnerbell.services import call_admin, calls, discard, event_views
+from dinnerbell.services import call_admin, calls, discard, event_views, feedback
 from dinnerbell.services.errors import NotFound
 from dinnerbell.services.lifecycle import CallExists
 from dinnerbell.web.auth import (
@@ -131,7 +131,8 @@ async def event_page(
     view = await event_views.event_view(
         db, principal.member, event_id, now=context.clock(), any_time=_any_time(context)
     )
-    return await render(request, "event.html", {"v": view, "from_page": "event"})
+    meal = await feedback.event_meal(db, principal.member, event_id, now=context.clock())
+    return await render(request, "event.html", {"v": view, "from_page": "event", "meal_feedback": meal})
 
 
 @router.get("/events/{event_id}/card")

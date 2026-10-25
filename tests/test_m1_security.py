@@ -10,7 +10,7 @@ from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
 
 from dinnerbell.config import Settings
-from dinnerbell.db.models import AuditRow, CatalogItemRow, MealLogRow, PreferenceRow, TagRow
+from dinnerbell.db.models import AuditRow, CatalogItemRow, FeedbackRow, MealLogRow, PreferenceRow, TagRow
 from tests.conftest import csrf_from, sign_in
 from tests.support.fake_oidc import FakeProvider
 from tests.support.web import add_item, htmx, submit
@@ -47,11 +47,12 @@ def populated(client: TestClient, provider: FakeProvider, migrated: Settings) ->
 
 
 def snapshot(settings: Settings) -> tuple[int, ...]:
-    return tuple(len(rows(settings, model)) for model in (CatalogItemRow, TagRow, PreferenceRow, MealLogRow, AuditRow))
+    models = (CatalogItemRow, TagRow, PreferenceRow, MealLogRow, FeedbackRow, AuditRow)
+    return tuple(len(rows(settings, model)) for model in models)
 
 
 def test_every_m1_post_route_is_enumerated(client: TestClient) -> None:
-    assert len(m1_posts(client)) == 14
+    assert len(m1_posts(client)) == 15  # 14 from M1, and feedback on a meal (M3)
 
 
 def test_every_m1_post_refuses_a_missing_or_wrong_csrf_token(client: TestClient, populated: Settings) -> None:

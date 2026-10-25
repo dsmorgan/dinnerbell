@@ -4,4 +4,12 @@
 {% block content %}
 <p class="small"><a href="/">Today</a></p>
 {% include "_event.html" %}
+{% if meal_feedback %}
+{% set meal, fb = meal_feedback %}
+<section class="card" id="feedback" aria-labelledby="feedback-heading">
+  <h2 id="feedback-heading">How was it?</h2>
+  {% with from_page="event" %}{% include "_meal_feedback.html" %}{% endwith %}
+  {% if not fb.mine and not fb.can_give and not fb.thanks.count and not fb.thanks.notes %}<p class="small muted">Feedback is for the people who ate, for 7 days after the meal.</p>{% endif %}
+</section>
+{% endif %}
 {% endblock %}

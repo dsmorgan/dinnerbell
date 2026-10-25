@@ -44,6 +44,7 @@
       <strong>{{ meal.item_name }}</strong>
       {% if meal.cuisines %}<div class="chips">{% for c in meal.cuisines %}<span class="chip tag-cuisine">{{ c.name }}</span>{% endfor %}</div>{% endif %}
       <p class="small muted">{% for p in meal.participants %}{{ p.name }}{{ ", " if not loop.last }}{% endfor %}{% if meal.logged_by %} · logged by {{ member_names.get(meal.logged_by, "a former member") }}{% endif %}</p>
+      {% with fb=feedback.get(meal.id), from_page="history" %}{% include "_meal_feedback.html" %}{% endwith %}
       {% if can_change(meal) %}
       <div class="item-actions">
         <a class="button small" href="/history/meals/{{ meal.id }}">Edit</a>

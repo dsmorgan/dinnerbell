@@ -30,6 +30,7 @@ from dinnerbell import main as cli
 from dinnerbell.config import Settings
 from dinnerbell.db.catalog import CatalogRepository
 from dinnerbell.db.engine import read_snapshot
+from dinnerbell.db.feedback import FeedbackRepository
 from dinnerbell.db.meals import MealLogRepository
 from dinnerbell.db.migrate import run_migrations
 from dinnerbell.db.models import CatalogItemCookRow, CatalogItemRow, TagRow
@@ -49,6 +50,7 @@ from dinnerbell.domain.catalog import (
 from dinnerbell.domain.catalog_export import CatalogExport, export_catalog
 from dinnerbell.domain.catalog_file import HomeMealEntry, RestaurantEntry, _Loader, parse_catalog
 from dinnerbell.domain.catalog_import import ImportPlan
+from dinnerbell.domain.feedback import FeedbackInput, MealFacts, PlaceIssue, Rating
 from dinnerbell.domain.meals import MemberRef, Slot, TagRef
 from dinnerbell.domain.preferences import Stance, TargetType
 from dinnerbell.services import catalog as catalog_service
@@ -419,8 +421,8 @@ async def test_a_snapshot_refuses_a_session_with_unsaved_changes(
 
 @pytest.mark.anyio
 async def test_an_export_holds_no_personal_data(migrated: Settings, clock: FakeClock) -> None:
-    """Members, emails, Slack IDs, preferences, vetoes, history, audit rows, sessions, and secrets
-    are all in the database, and none of them reach the export."""
+    """Members, emails, Slack IDs, preferences, vetoes, history, feedback, audit rows, sessions,
+    and secrets are all in the database, and none of them reach the export."""
     database = open_database(migrated.async_database_url)
     try:
         house = await furnish(await make_house(database.sessionmaker, clock, migrated.admin_email))
@@ -433,7 +435,7 @@ async def test_an_export_holds_no_personal_data(migrated: Settings, clock: FakeC
             prefs = PreferenceRepository(db)
             await prefs.set(1, zeb.id, TargetType.ITEM, siam.id, Stance(veto=True), clock())
             await prefs.set(1, house["Sam"].id, TargetType.TAG, house.tags["Thai"].id, Stance(score=-2), clock())
-            await MealLogRepository(db).add(
+            meal_id = await MealLogRepository(db).add(
                 household_id=1,
                 day=clock().date(),
                 slot=Slot.DINNER,
@@ -443,6 +445,19 @@ async def test_an_export_holds_no_personal_data(migrated: Settings, clock: FakeC
                 logged_by=zeb.id,
                 now=clock(),
             )
+            facts = MealFacts(
+                meal_id,
+                clock().date(),
+                Slot.DINNER,
+                siam.id,
+                siam.name,
+                siam.kind,
+                None,
+                None,
+                (MemberRef(zeb.id, "Z"),),
+            )
+            answers = FeedbackInput(Rating.NOT_AGAIN, Rating.NOT_AGAIN, frozenset({PlaceIssue.WRONG_ORDER}))
+            await FeedbackRepository(db).save(1, zeb.id, answers, facts, clock())
             await audit(db, 1, zeb, "test.marker", "member:zeb", {"note": "AUDIT-PAYLOAD-MARKER"}, clock())
             await SessionRepository(db).add(
                 token_hash="SESSION-HASH-MARKER", member=zeb, now=clock(), expires_at=clock()
@@ -463,6 +478,10 @@ async def test_an_export_holds_no_personal_data(migrated: Settings, clock: FakeC
         *SLACK_IDS.values(),
         "U0ZEBULON9",
         "veto",
+        "not_again",
+        "Not again",
+        "wrong_order",
+        "feedback",
         "AUDIT-PAYLOAD-MARKER",
         "SESSION-HASH-MARKER",
         SECRET_KEY,

@@ -29,6 +29,7 @@ from dinnerbell.domain.catalog import (
 from dinnerbell.domain.catalog_file import MAX_FILE_BYTES
 from dinnerbell.domain.catalog_import import ImportPlan
 from dinnerbell.services import catalog as catalog_service
+from dinnerbell.services import feedback as feedback_service
 from dinnerbell.services.variety import household_today
 from dinnerbell.web.auth import AdminCSRFChecked, Context, CSRFChecked, Database, Principal, SignedIn
 from dinnerbell.web.context import AppContext
@@ -110,6 +111,7 @@ async def catalog_page(
             "tags": {t.id: t for t in data.tags},
             "members": {m.id: m for m in data.members},
             "eaten": {i.id: last_eaten_label(data.last_eaten.get(i.id), today) for i in items},
+            "feedback": await feedback_service.item_counts(db, principal.member),
             "sorted_modes": sorted_modes,
             "kinds": list(ItemKind),
             "modes": list(Mode),
@@ -220,6 +222,7 @@ async def _item_page(
 ) -> Response:
     data = await catalog_service.catalog(db, principal.member)
     cooks = [m for m in data.members if m.active or m.id in form.cook_ids]
+    counts = await feedback_service.item_counts(db, principal.member, [item.id]) if item else {}
     return await render(
         request,
         "catalog_item.html",
@@ -233,6 +236,7 @@ async def _item_page(
             "tag_kinds": list(TagKind),
             "cooks": cooks,
             "restaurant_modes": [Mode.PICKUP, Mode.DELIVERY],
+            "counts": counts.get(item.id) if item else None,
         },
         status_code=status_code,
     )
