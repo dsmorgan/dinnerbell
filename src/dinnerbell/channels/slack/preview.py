@@ -191,9 +191,10 @@ NOTIFICATIONS: dict[str, Callable[[], note.Notification]] = {
         slot=Slot.DINNER,
         changed_by=note.PersonInfo(9, "<!channel> & *Co*"),
         before=DINNER_SCHEDULE,
-        after=replace(DINNER_SCHEDULE, call_time=time(14, 0), response_minutes=60, modes=(Mode.COOK, Mode.PICKUP)),
+        after=replace(DINNER_SCHEDULE, call_time=time(11, 0), response_minutes=60, modes=(Mode.COOK, Mode.PICKUP)),
         starts_on=date(2026, 10, 23),
         path="/schedule",
+        kept_today_at=time(15, 0),
     ),
 }
 

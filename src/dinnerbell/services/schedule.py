@@ -16,6 +16,7 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from dinnerbell.db.engine import write_transaction
 from dinnerbell.db.events import EventRepository
 from dinnerbell.db.meals import household_settings
 from dinnerbell.db.outbox import OutboxRepository
@@ -32,9 +33,11 @@ from dinnerbell.domain.schedule import (
     InvalidSchedule,
     SlotSchedule,
     Weights,
+    can_open_today,
     check_schedule,
     check_weights,
     first_day_using,
+    format_hhmm,
     proposal_count,
     slot_changes,
     slot_fingerprint,
@@ -49,6 +52,7 @@ from dinnerbell.domain.variety import (
     SETTINGS_KEY,
     variety_window_days,
 )
+from dinnerbell.services import lifecycle
 from dinnerbell.services.common import audit, require_admin
 from dinnerbell.services.errors import Forbidden, NotFound
 from dinnerbell.services.variety import household_today
@@ -89,56 +93,86 @@ def _info(schedule: SlotSchedule) -> SlotScheduleInfo:
 
 
 async def update_slot(
-    db: AsyncSession, actor: Member, slot: Slot, schedule: SlotSchedule, *, seen: str | None = None, now: datetime
+    db: AsyncSession, actor: Member, slot: Slot, schedule: SlotSchedule, *, seen: str, now: datetime
 ) -> bool:
     """FR-44: any active member changes ``slot``'s standing schedule. The change is audited
     (``household.slot_schedule_updated``, old and new values) and announced in the channel with
-    the member's name. ``seen`` is ``slot_fingerprint`` of the schedule the member was shown;
-    when someone else has saved since, ScheduleMoved is raised and nothing changes. Returns
-    whether anything changed: a save that changes nothing writes and announces nothing."""
+    the member's name. Returns whether anything changed: a save that changes nothing writes and
+    announces nothing, even from a form drawn before someone else's change.
+
+    ``seen`` is ``slot_fingerprint`` of the schedule the member was shown. When someone else has
+    saved since, and this save would change something, ScheduleMoved is raised and nothing
+    changes. The whole save holds the write lock (``write_transaction``), so two saves can't
+    both read the old settings and each write over the other.
+
+    The change applies from the next call. When today's call doesn't exist yet, today uses the
+    new schedule if its call can still open today. If it can't, but the old schedule would
+    still have opened one, today's call is scheduled now on the old schedule, so moving the
+    call earlier never silently drops today's call. Turning the slot off applies today."""
     _require_member(actor)
     check_schedule(schedule)
     household = await HouseholdRepository(db).get(actor.household_id)
     if household is None:  # pragma: no cover - members cascade with their household
         raise NotFound("No such household.")
-    stored = await household_settings(db, household.id)
-    before = slot_schedules(stored)[slot]
-    if seen is not None and seen != slot_fingerprint(before):
-        raise ScheduleMoved(
-            f"Someone changed the {slot.value} schedule while you were editing it. Here it is now; "
-            "make your change again if you still want it."
+    async with write_transaction(db):
+        stored = await household_settings(db, household.id)
+        before = slot_schedules(stored)[slot]
+        changes = slot_changes(before, schedule)
+        if not changes:
+            return False
+        if seen != slot_fingerprint(before):
+            raise ScheduleMoved(
+                f"Someone changed the {slot.value} schedule while you were editing it. Here it is now; "
+                "make your change again if you still want it."
+            )
+        zone = ZoneInfo(household.timezone)
+        today = household_today(household, now)
+        events = EventRepository(db)
+        kept_today_at = None
+        if (
+            await events.call_for(household.id, slot, today) is None
+            and schedule.enabled
+            and can_open_today(before, today=today, now=now, zone=zone)
+            and not can_open_today(schedule, today=today, now=now, zone=zone)
+        ):
+            # Settings still hold the old schedule, so the call gets the old time and windows.
+            opens_at = before.opens_at(today, zone)
+            await lifecycle.create_call(db, household, slot, today, opens_at=opens_at, actor=None, now=now)
+            kept_today_at = before.call_time
+        raw = stored.get(SLOTS_KEY)
+        slots = dict(raw) if isinstance(raw, dict) else {}
+        slots[slot.value] = slot_to_json(schedule)
+        await HouseholdRepository(db).update_settings(household.id, stored | {SLOTS_KEY: slots})
+        taken: set[date] = set()
+        for ahead in range(AD_HOC_DAYS_AHEAD + 1):  # a call exists at most a week ahead
+            day = today + timedelta(days=ahead)
+            if await events.call_for(household.id, slot, day) is not None:
+                taken.add(day)
+        starts_on = first_day_using(schedule, today=today, now=now, zone=zone, taken=taken)
+        change_id = secrets.token_hex(8)
+        payload: dict[str, Any] = {
+            "slot": slot.value,
+            "changes": changes,
+            "starts_on": starts_on.isoformat(),
+            "change_id": change_id,
+        }
+        if kept_today_at is not None:
+            payload["kept_today_at"] = format_hhmm(kept_today_at)
+        target = f"household:{household.id}"
+        await audit(db, household.id, actor, "household.slot_schedule_updated", target, payload, now)
+        announcement = ScheduleChanged(
+            household_id=household.id,
+            change_id=change_id,
+            slot=slot,
+            changed_by=PersonInfo(actor.id, actor.display_name),
+            before=_info(before),
+            after=_info(schedule),
+            starts_on=starts_on,
+            path=SCHEDULE_PATH,
+            kept_today_at=kept_today_at,
         )
-    changes = slot_changes(before, schedule)
-    if not changes:
-        return False
-    raw = stored.get(SLOTS_KEY)
-    slots = dict(raw) if isinstance(raw, dict) else {}
-    slots[slot.value] = slot_to_json(schedule)
-    await HouseholdRepository(db).update_settings(household.id, stored | {SLOTS_KEY: slots})
-    zone = ZoneInfo(household.timezone)
-    today = household_today(household, now)
-    taken: set[date] = set()
-    events = EventRepository(db)
-    for ahead in range(AD_HOC_DAYS_AHEAD + 1):  # a call exists at most a week ahead
-        day = today + timedelta(days=ahead)
-        if await events.call_for(household.id, slot, day) is not None:
-            taken.add(day)
-    starts_on = first_day_using(schedule, today=today, now=now, zone=zone, taken=taken)
-    change_id = secrets.token_hex(8)
-    payload = {"slot": slot.value, "changes": changes, "starts_on": starts_on.isoformat(), "change_id": change_id}
-    await audit(db, household.id, actor, "household.slot_schedule_updated", f"household:{household.id}", payload, now)
-    announcement = ScheduleChanged(
-        household_id=household.id,
-        change_id=change_id,
-        slot=slot,
-        changed_by=PersonInfo(actor.id, actor.display_name),
-        before=_info(before),
-        after=_info(schedule),
-        starts_on=starts_on,
-        path=SCHEDULE_PATH,
-    )
-    await OutboxRepository(db).enqueue(household.id, None, announcement, now)
-    await db.commit()
+        await OutboxRepository(db).enqueue(household.id, None, announcement, now)
+        await db.commit()
     return True
 
 
@@ -176,14 +210,14 @@ async def update_ranking(db: AsyncSession, actor: Member, values: RankingSetting
     check_weights(values.weights, values.proposal_count)
     if not MIN_VARIETY_WINDOW_DAYS <= values.variety_window_days <= MAX_VARIETY_WINDOW_DAYS:
         raise InvalidSchedule(f"The variety window runs {MIN_VARIETY_WINDOW_DAYS} to {MAX_VARIETY_WINDOW_DAYS} days.")
-    stored = await household_settings(db, actor.household_id)
-    before = _to_json(await ranking_settings(db, actor))
-    after = _to_json(values)
-    changed = {key: {"from": before[key], "to": value} for key, value in after.items() if before[key] != value}
-    if not changed:
-        return
-    await HouseholdRepository(db).update_settings(actor.household_id, stored | after)
-    await audit(
-        db, actor.household_id, actor, "household.ranking_updated", f"household:{actor.household_id}", changed, now
-    )
-    await db.commit()
+    async with write_transaction(db):  # read and write under one lock, so no save is lost
+        stored = await household_settings(db, actor.household_id)
+        before = _to_json(await ranking_settings(db, actor))
+        after = _to_json(values)
+        changed = {key: {"from": before[key], "to": value} for key, value in after.items() if before[key] != value}
+        if not changed:
+            return
+        await HouseholdRepository(db).update_settings(actor.household_id, stored | after)
+        target = f"household:{actor.household_id}"
+        await audit(db, actor.household_id, actor, "household.ranking_updated", target, changed, now)
+        await db.commit()

@@ -2,7 +2,7 @@
   "blocks": [
     {
       "text": {
-        "text": "&lt;!channel&gt; &amp; *Co* changed the dinner schedule, starting *Friday, Oct 23*.\n• Call time: 3:00 PM → *2:00 PM*\n• Time to answer: 90 minutes → *60 minutes*\n• Usual ways to get it: pickup, delivery → *cook, pickup*",
+        "text": "&lt;!channel&gt; &amp; *Co* changed the dinner schedule, starting *Friday, Oct 23*.\n• Call time: 3:00 PM → *11:00 AM*\n• Time to answer: 90 minutes → *60 minutes*\n• Usual ways to get it: pickup, delivery → *cook, pickup*\nToday's dinner call still goes out at 3:00 PM, as planned.",
         "type": "mrkdwn"
       },
       "type": "section"
@@ -10,12 +10,16 @@
     {
       "elements": [
         {
-          "text": "Calls already out or scheduled keep their times. <https://dinnerbell.example.com/schedule|See the schedule>",
+          "text": "Calls already out or scheduled keep their times; a call started again uses the new ones.",
+          "type": "mrkdwn"
+        },
+        {
+          "text": "<https://dinnerbell.example.com/schedule|See the schedule>",
           "type": "mrkdwn"
         }
       ],
       "type": "context"
     }
   ],
-  "text": "&lt;!channel&gt; &amp; *Co* changed the dinner schedule, starting Friday, Oct 23: call time 3:00 PM → 2:00 PM; time to answer 90 minutes → 60 minutes; usual ways to get it pickup, delivery → cook, pickup."
+  "text": "&lt;!channel&gt; &amp; *Co* changed the dinner schedule, starting Friday, Oct 23: call time 3:00 PM → 11:00 AM; time to answer 90 minutes → 60 minutes; usual ways to get it pickup, delivery → cook, pickup."
 }

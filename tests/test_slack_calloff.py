@@ -752,12 +752,14 @@ async def test_every_call_off_handler_acks_before_its_work(
     """Slack gives an interaction 3 seconds. Hold every service call until each request has
     been answered, so a slow database can never make Slack show an error."""
     event_id = await daily_call(house)
-    gate = asyncio.Event()
+    gate, arrived = asyncio.Event(), asyncio.Event()
     waited: list[str] = []
 
     def held(name: str, real: Any) -> Any:
         async def slow(*args: Any, **kwargs: Any) -> Any:
             waited.append(name)
+            if len(waited) == len(requests):
+                arrived.set()
             await gate.wait()
             return await real(*args, **kwargs)
 
@@ -785,10 +787,11 @@ async def test_every_call_off_handler_acks_before_its_work(
         ("slash_commands", slash("U01ALEX", "cancel dinner")),
     ]
     for kind, payload in requests:
-        response = await asyncio.wait_for(send(slack.conn.app, kind, payload), timeout=1.0)
-        assert response.status == 200
-    for _ in range(20):
-        await asyncio.sleep(0)
+        response = await asyncio.wait_for(send(slack.conn.app, kind, payload), timeout=10.0)
+        assert response.status == 200  # answered while every service call is still held
+    # Each request's work reaches its first service call and waits there. Wait for all of them,
+    # not a fixed number of loop turns, which a busy machine may not get through in time.
+    await asyncio.wait_for(arrived.wait(), timeout=10.0)
     assert len(slack.conn.interactions.tasks) == len(requests)  # all still waiting on the service
     assert sorted(set(waited)) == ["calls_on", "cancel_call", "close_window", "event_view"]
     gate.set()

@@ -18,6 +18,9 @@ from dinnerbell.domain.catalog import MODE_ORDER, Mode
 from dinnerbell.domain.events import AD_HOC_DAYS_AHEAD, EventRuleViolation
 from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.schedule import (
+    MAX_REMINDER_MINUTES,
+    MAX_WINDOW_MINUTES,
+    MIN_WINDOW_MINUTES,
     WEIGHT_NAMES,
     InvalidSchedule,
     SlotSchedule,
@@ -46,10 +49,12 @@ WEIGHT_LABELS = {
     "volunteer_fit": "Volunteer knows the dish",
 }
 MINUTE_FIELDS = (
-    ("response_minutes", "Time to answer (minutes)"),
-    ("vote_minutes", "Time to vote (minutes)"),
-    ("reminder_minutes", "Reminder before answers close (minutes)"),
+    ("response_minutes", "Time to answer (minutes)", MIN_WINDOW_MINUTES, MAX_WINDOW_MINUTES),
+    ("vote_minutes", "Time to vote (minutes)", MIN_WINDOW_MINUTES, MAX_WINDOW_MINUTES),
+    ("reminder_minutes", "Reminder before answers close (minutes)", 0, MAX_REMINDER_MINUTES),
 )
+"""Each minutes field: its name, label, and the range the domain accepts (``check_schedule``)."""
+OUT_OF_DATE = "This form is out of date. Here's the schedule now; make your change again."
 MAX_FIELD = 40
 SLOTS = (Slot.DINNER, Slot.LUNCH)
 
@@ -79,7 +84,7 @@ def _slot_values(slot: Slot, schedule: SlotSchedule) -> dict[str, Any]:
         f"{p}_modes": [m.value for m in schedule.modes],
         f"{p}_seen": slot_fingerprint(schedule),
     }
-    return values | {f"{p}_{name}": str(getattr(schedule, name)) for name, _ in MINUTE_FIELDS}
+    return values | {f"{p}_{name}": str(getattr(schedule, name)) for name, *_ in MINUTE_FIELDS}
 
 
 def _posted_slot(form: FormData, slot: Slot) -> dict[str, Any]:
@@ -89,7 +94,7 @@ def _posted_slot(form: FormData, slot: Slot) -> dict[str, Any]:
         f"{p}_enabled": form.get(f"{p}_enabled") is not None,
         f"{p}_modes": [v for v in form.getlist(f"{p}_modes") if isinstance(v, str)][: len(MODE_ORDER)],
     }
-    for name in ("call_time", "meal_time", "seen", *(n for n, _ in MINUTE_FIELDS)):
+    for name in ("call_time", "meal_time", "seen", *(n for n, *_ in MINUTE_FIELDS)):
         posted[f"{p}_{name}"] = _text(form, f"{p}_{name}")
     return posted
 
@@ -140,14 +145,13 @@ async def save_slot(request: Request, slot: str, principal: CSRFChecked, context
     if chosen is None:
         raise NotFound("No such meal.")
     posted = _posted_slot(await request.form(), chosen)
+    seen = posted[f"{chosen.value}_seen"]
+    if not seen:  # every form we draw has one; without it, a save could undo someone else's
+        page = await _schedule_page(db, principal, errors={chosen: OUT_OF_DATE})
+        return await render(request, "schedule.html", page, status_code=400)
     try:
         changed = await schedule_service.update_slot(
-            db,
-            principal.member,
-            chosen,
-            _parse_slot(posted, chosen),
-            seen=posted[f"{chosen.value}_seen"] or None,
-            now=context.clock(),
+            db, principal.member, chosen, _parse_slot(posted, chosen), seen=seen, now=context.clock()
         )
     except ScheduleMoved as exc:  # show what's there now, not what they typed over
         page = await _schedule_page(db, principal, errors={chosen: str(exc)})

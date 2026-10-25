@@ -33,9 +33,10 @@ DEFAULTS = {
 
 
 def slot_form(slot: Slot, **changes: Any) -> dict[str, Any]:
-    """The Schedule page's form for ``slot`` as it's first shown, without the fingerprint."""
+    """The Schedule page's form for ``slot`` as it's first shown, drawn from the defaults."""
     p, d = slot.value, DEFAULTS[slot]
     form: dict[str, Any] = {
+        f"{p}_seen": slot_fingerprint(DEFAULT_SLOTS[slot]),
         f"{p}_call_time": d["call_time"],
         f"{p}_meal_time": d["meal_time"],
         f"{p}_response_minutes": d["response"],
@@ -46,6 +47,13 @@ def slot_form(slot: Slot, **changes: Any) -> dict[str, Any]:
     if slot is Slot.DINNER:
         form["dinner_enabled"] = "on"
     return form | changes
+
+
+def seen_on_page(client: TestClient, slot: Slot) -> str:
+    """The fingerprint the Schedule page draws ``slot``'s form with now."""
+    found = re.search(rf'name="{slot.value}_seen" value="(\w+)"', client.get("/schedule").text)
+    assert found is not None
+    return found.group(1)
 
 
 @pytest.fixture
@@ -68,10 +76,12 @@ def test_a_member_sees_the_schedule_in_the_nav_and_saves_a_change(kim: TestClien
     html = kim.get("/schedule").text
     assert 'action="/schedule/dinner"' in html and 'action="/schedule/lunch"' in html
     assert 'name="dinner_call_time" value="15:00"' in html and "Admin &gt; Ranking" not in html
+    assert 'name="dinner_response_minutes" min="5" max="360"' in html  # the ranges the server accepts
+    assert 'name="dinner_reminder_minutes" min="0" max="180"' in html
     seen = slot_fingerprint(DEFAULT_SLOTS[Slot.DINNER])
     assert f'name="dinner_seen" value="{seen}"' in html
 
-    saved = submit(kim, "/schedule/dinner", slot_form(Slot.DINNER, dinner_call_time="14:00", dinner_seen=seen))
+    saved = submit(kim, "/schedule/dinner", slot_form(Slot.DINNER, dinner_call_time="14:00"))
     assert (saved.status_code, saved.headers["location"]) == (303, "/schedule?saved=dinner#dinner")
     assert "Dinner schedule saved and posted in the channel" in kim.get("/schedule?saved=dinner").text
     assert rows(migrated, HouseholdRow)[0].settings["slots"]["dinner"]["call_time"] == "14:00"
@@ -121,6 +131,17 @@ def test_a_save_over_someone_elses_change_is_refused(kim: TestClient, migrated: 
     assert refused.status_code == 409 and "Someone changed the dinner schedule" in page(refused)
     assert 'name="dinner_call_time" value="14:00"' in refused.text  # what's stored now, not what was typed
     assert len(schedule_rows(migrated)[0]) == 1
+    again = submit(kim, "/schedule/dinner", first)  # the first save again, from the same old form
+    assert again.status_code == 200 and "Nothing changed" in page(again)
+
+
+def test_a_form_without_its_fingerprint_is_refused(kim: TestClient, migrated: Settings) -> None:
+    form = slot_form(Slot.DINNER, dinner_call_time="14:00")
+    del form["dinner_seen"]
+    refused = submit(kim, "/schedule/dinner", form)
+    assert refused.status_code == 400 and "This form is out of date." in page(refused)
+    assert 'name="dinner_call_time" value="15:00"' in refused.text
+    assert schedule_rows(migrated) == ([], [])
 
 
 def test_an_unknown_meal_is_not_found(kim: TestClient, migrated: Settings) -> None:

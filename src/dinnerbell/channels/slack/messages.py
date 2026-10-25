@@ -744,7 +744,8 @@ def _schedule_fields(schedule: note.SlotScheduleInfo) -> list[tuple[str, str]]:
 
 def schedule_changed_message(notification: note.ScheduleChanged, ctx: RenderContext) -> Message:
     """FR-44: who changed a slot's standing schedule, what changed, and from which day. Calls
-    already out or scheduled keep their times, so it says so instead of naming them."""
+    already out or scheduled keep their times, so it says so instead of naming them, and says
+    when today's call keeps the old time because the new one has passed."""
     slot = notification.slot.value
     who = notification.changed_by.name
     when = day_label(notification.starts_on)
@@ -753,10 +754,14 @@ def schedule_changed_message(notification: note.ScheduleChanged, ctx: RenderCont
     changes = [(label, old, new) for label, old, new in changes if old != new]
     lines = [f"{escape(who)} changed the {slot} schedule, starting *{when}*."]
     lines += [f"• {label}: {old} → *{new}*" for label, old, new in changes]
+    kept = notification.kept_today_at
+    if kept is not None:
+        lines.append(f"Today's {slot} call still goes out at {clock(kept)}, as planned.")
     blocks = [
         section(join_lines(lines)),
         context(
-            f"Calls already out or scheduled keep their times. {link(ctx.url(notification.path), 'See the schedule')}"
+            "Calls already out or scheduled keep their times; a call started again uses the new ones.",
+            link(ctx.url(notification.path), "See the schedule"),
         ),
     ]
     summary = "; ".join(f"{label.lower()} {old} → {new}" for label, old, new in changes)

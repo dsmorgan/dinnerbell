@@ -4,10 +4,11 @@ and announcement, that a change applies from the next call only, and the schedul
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import AsyncIterator
 from dataclasses import replace
-from datetime import UTC, date, datetime, time
+from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -45,6 +46,8 @@ def test_voting_closes_before_the_usual_meal_time() -> None:
             sched.check_schedule(replace(DINNER, meal_time=meal))
     lunch = sched.DEFAULT_SLOTS[Slot.LUNCH]
     assert sched.check_schedule(lunch) is lunch  # the defaults pass
+    off = replace(DINNER, enabled=False, meal_time=time(17, 0))
+    assert sched.check_schedule(off) is off  # a slot can always be turned off
 
 
 def test_slot_changes_name_old_and_new_values() -> None:
@@ -92,9 +95,15 @@ async def house(database: Database, clock: FakeClock, migrated: Settings) -> Hou
     return await furnish(await make_house(database.sessionmaker, clock, migrated.admin_email))
 
 
-async def update(house: House, who: str, schedule: sched.SlotSchedule, *, seen: str | None = None) -> bool:
+async def update(
+    house: House, who: str, schedule: sched.SlotSchedule, *, seen: str | None = None, slot: Slot = Slot.DINNER
+) -> bool:
+    """``who`` saves ``schedule`` from a form drawn from what's stored now, unless ``seen`` says
+    otherwise."""
     async with house.sessionmaker() as db:
-        return await schedule_service.update_slot(db, house[who], Slot.DINNER, schedule, seen=seen, now=house.clock())
+        if seen is None:
+            seen = sched.slot_fingerprint((await schedule_service.slot_schedules_for(db, house[who]))[slot])
+        return await schedule_service.update_slot(db, house[who], slot, schedule, seen=seen, now=house.clock())
 
 
 async def stored(house: House) -> sched.SlotSchedule:
@@ -133,7 +142,10 @@ async def test_each_change_is_its_own_announcement(house: House) -> None:
 
 async def test_a_save_that_changes_nothing_writes_and_announces_nothing(house: House) -> None:
     assert await update(house, "Kim", DINNER) is False
-    assert await house.outbox() == [] and await house.audits("household.slot") == []
+    assert await update(house, "Kim", EARLIER) is True
+    # A resubmit from a form drawn before that save already says what's stored: nothing to do.
+    assert await update(house, "Kim", EARLIER, seen=sched.slot_fingerprint(DINNER)) is False
+    assert len(await house.outbox()) == 1 and len(await house.audits("household.slot")) == 1
 
 
 async def test_bad_or_stale_saves_change_nothing(house: House) -> None:
@@ -234,3 +246,111 @@ async def test_slash_schedule_refuses_strangers(slack: Slack) -> None:
     await slack.command("U9STRANGER", "schedule")
     (refusal,) = slack.ephemerals("U9STRANGER")
     assert refusal.startswith("I don") and "When calls go out" not in refusal
+
+
+# Today's call when it doesn't exist yet -----------------------------------------------------------
+
+TWO_PM = datetime(2026, 10, 22, 19, 0, tzinfo=UTC)
+"""2 PM in Chicago: before today's 3 PM dinner call is created."""
+
+
+async def test_moving_the_call_earlier_than_now_keeps_todays_call(house: House, clock: FakeClock) -> None:
+    """At 2 PM, an 11 AM call with an hour to answer could no longer open today, so today's
+    call is scheduled now on the old schedule instead of being dropped."""
+    clock.now = TWO_PM
+    assert await update(house, "Kim", replace(DINNER, call_time=time(11, 0), response_minutes=60)) is True
+    today = await house.event(await dinner_id(house))
+    assert today.state is EventState.SCHEDULED
+    assert (today.opens_at, today.respond_deadline) == (OPENS, OPENS + timedelta(minutes=90))
+    assert (today.vote_minutes, today.reminder_minutes) == (45, 15)
+    (row,) = await house.outbox()
+    announced = from_payload(row.kind, row.payload)
+    assert isinstance(announced, ScheduleChanged)
+    assert (announced.starts_on, announced.kept_today_at) == (date(2026, 10, 23), time(15, 0))
+    (audit,) = await house.audits("household.slot")
+    assert (audit.payload["starts_on"], audit.payload["kept_today_at"]) == ("2026-10-23", "15:00")
+    clock.now = OPENS + timedelta(minutes=5)
+    await house.tick()
+    assert (await house.event(today.id)).state is EventState.COLLECTING
+
+
+@pytest.mark.parametrize(
+    ("changed", "opens_at"),
+    [
+        (replace(DINNER, call_time=time(16, 0)), datetime(2026, 10, 22, 21, 0, tzinfo=UTC)),  # later: 4 PM
+        (replace(DINNER, call_time=time(13, 30)), TWO_PM),  # earlier, but it can still open: at once
+    ],
+)
+async def test_today_uses_the_new_schedule_when_it_still_can(
+    house: House, clock: FakeClock, changed: sched.SlotSchedule, opens_at: datetime
+) -> None:
+    clock.now = TWO_PM
+    assert await update(house, "Kim", changed) is True
+    (row,) = await house.outbox()
+    assert row.payload["starts_on"] == "2026-10-22" and row.payload["kept_today_at"] is None
+    clock.now = opens_at - timedelta(minutes=1)
+    if clock.now >= TWO_PM:
+        await house.tick()
+        with pytest.raises(AssertionError):  # not at the old 3 PM, nor before the new time
+            await dinner_id(house)
+    clock.now = opens_at
+    await house.tick()
+    opened = await house.event(await dinner_id(house))
+    assert opened.state is EventState.COLLECTING
+    assert opened.respond_deadline == changed.opens_at(TODAY, CHICAGO) + timedelta(minutes=90)
+
+
+async def test_turning_a_slot_off_applies_today(house: House, clock: FakeClock) -> None:
+    clock.now = TWO_PM
+    assert await update(house, "Kim", replace(DINNER, enabled=False)) is True
+    (row,) = await house.outbox()
+    assert row.payload["starts_on"] == "2026-10-22" and row.payload["kept_today_at"] is None
+    clock.now = OPENS + timedelta(minutes=5)
+    await house.tick()
+    with pytest.raises(AssertionError):
+        await dinner_id(house)
+
+
+# Saves at the same moment --------------------------------------------------------------------------
+
+
+async def test_two_members_saving_at_once_both_count(house: House) -> None:
+    """Each save reads and writes the settings under the write lock, so neither undoes the other."""
+    lunch = replace(sched.DEFAULT_SLOTS[Slot.LUNCH], enabled=True)
+    for round_ in range(3):
+        saved = await asyncio.gather(
+            update(house, "Kim", replace(DINNER, call_time=time(14, 0)) if round_ % 2 == 0 else DINNER),
+            update(house, "Sam", lunch if round_ % 2 == 0 else sched.DEFAULT_SLOTS[Slot.LUNCH], slot=Slot.LUNCH),
+        )
+        assert saved == [True, True]
+        async with house.sessionmaker() as db:
+            now = await schedule_service.slot_schedules_for(db, house["Kim"])
+        assert now[Slot.DINNER].call_time == (time(14, 0) if round_ % 2 == 0 else time(15, 0))
+        assert now[Slot.LUNCH].enabled is (round_ % 2 == 0)
+    assert len(await house.audits("household.slot")) == 6
+
+
+async def test_a_slot_save_and_a_ranking_save_at_once_both_count(house: House) -> None:
+    async def rank() -> None:
+        async with house.sessionmaker() as db:
+            values = schedule_service.RankingSettings(sched.Weights(novelty=2.5), 4, 10)
+            await schedule_service.update_ranking(db, house["Alex"], values, now=house.clock())
+
+    await asyncio.gather(update(house, "Kim", EARLIER), rank())
+    async with house.sessionmaker() as db:
+        assert (await schedule_service.slot_schedules_for(db, house["Kim"]))[Slot.DINNER] == EARLIER
+        ranking = await schedule_service.ranking_settings(db, house["Alex"])
+    assert (ranking.weights.novelty, ranking.proposal_count, ranking.variety_window_days) == (2.5, 4, 10)
+
+
+async def test_two_saves_from_the_same_form_cannot_both_win(house: House) -> None:
+    """Both forms were drawn from the defaults. The lock makes the fingerprint check atomic:
+    whichever save goes second sees the first and is refused."""
+    seen = sched.slot_fingerprint(DINNER)
+    results = await asyncio.gather(
+        update(house, "Kim", EARLIER, seen=seen),
+        update(house, "Sam", replace(DINNER, vote_minutes=30), seen=seen),
+        return_exceptions=True,
+    )
+    assert sorted(type(r).__name__ for r in results) == ["ScheduleMoved", "bool"]
+    assert len(await house.audits("household.slot")) == 1

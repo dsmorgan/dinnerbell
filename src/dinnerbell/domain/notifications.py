@@ -393,8 +393,9 @@ class ScheduleChanged:
     """A member changed a slot's standing schedule (FR-44): a channel post naming them, with
     what changed. It's about the household, not an event, so it has no ``event``; the outbox
     stores it with no event ID, and it holds back nothing. ``starts_on`` is the first day whose
-    call follows the new schedule. ``change_id`` makes each change its own post, and matches
-    the change's audit row."""
+    call follows the new schedule. ``kept_today_at`` is set when today's call keeps the old
+    call time because the new one would have skipped it. ``change_id`` makes each change its
+    own post, and matches the change's audit row."""
 
     kind: ClassVar[str] = "schedule_changed"
     is_update: ClassVar[bool] = False
@@ -407,6 +408,7 @@ class ScheduleChanged:
     after: SlotScheduleInfo
     starts_on: date
     path: str
+    kept_today_at: time | None = None
 
     @property
     def idempotency_key(self) -> str:

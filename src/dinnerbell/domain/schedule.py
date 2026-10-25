@@ -188,8 +188,9 @@ def _wall(value: time) -> str:
 
 
 def check_schedule(schedule: SlotSchedule) -> SlotSchedule:
-    """Raise InvalidSchedule unless every field is in range, and voting closes before the usual
-    meal time. Times are wall-clock times in the household time zone."""
+    """Raise InvalidSchedule unless every field is in range, and, for a slot that's on, voting
+    closes before the usual meal time. A slot can always be turned off, whatever its times.
+    Times are wall-clock times in the household time zone."""
     if not MIN_WINDOW_MINUTES <= schedule.response_minutes <= MAX_WINDOW_MINUTES:
         raise InvalidSchedule(f"The response window runs {MIN_WINDOW_MINUTES} to {MAX_WINDOW_MINUTES} minutes.")
     if not MIN_WINDOW_MINUTES <= schedule.vote_minutes <= MAX_WINDOW_MINUTES:
@@ -204,7 +205,7 @@ def check_schedule(schedule: SlotSchedule) -> SlotSchedule:
     if schedule.meal_time > LATEST_MEAL_TIME:
         raise InvalidSchedule("Set the usual meal time by 11:45 PM.")
     closes = start + schedule.response_minutes + schedule.vote_minutes
-    if closes >= schedule.meal_time.hour * 60 + schedule.meal_time.minute:
+    if schedule.enabled and closes >= schedule.meal_time.hour * 60 + schedule.meal_time.minute:
         raise InvalidSchedule(
             f"Voting would close at {_wall(time(closes // 60 % 24, closes % 60))}, but the usual meal time is "
             f"{_wall(schedule.meal_time)}. Move the call earlier, shorten the windows, or set a later meal time."
@@ -247,15 +248,21 @@ def slot_fingerprint(schedule: SlotSchedule) -> str:
     return hashlib.sha256(encoded).hexdigest()[:16]
 
 
+def can_open_today(schedule: SlotSchedule, *, today: date, now: datetime, zone: tzinfo) -> bool:
+    """Whether the scheduler would still open today's call on ``schedule``, if it had none yet:
+    the slot is on and its response deadline hasn't passed (FR-2)."""
+    return schedule.enabled and now < schedule.opens_at(today, zone) + schedule.response_window
+
+
 def first_day_using(
     schedule: SlotSchedule, *, today: date, now: datetime, zone: tzinfo, taken: Collection[date]
 ) -> date:
     """The first day whose daily call follows ``schedule`` (FR-44: changes apply from the next
     call). A day that already has a call, open, scheduled, finished, or skipped, keeps it as it
-    is, so it's passed over (``taken``). So is today once its call could no longer open: the
-    scheduler opens one only before its response deadline (FR-2)."""
+    is, so it's passed over (``taken``). So is today when the slot is on but its call could no
+    longer open. A slot turned off applies from the first day without a call."""
     day = today
-    if day not in taken and now >= schedule.opens_at(day, zone) + schedule.response_window:
+    if day not in taken and schedule.enabled and not can_open_today(schedule, today=today, now=now, zone=zone):
         day += timedelta(days=1)
     while day in taken:
         day += timedelta(days=1)

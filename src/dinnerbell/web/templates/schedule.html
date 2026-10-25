@@ -3,7 +3,7 @@
 {% block title %}Schedule{% endblock %}
 {% block content %}
 <h1>Schedule</h1>
-<p class="small muted">When each meal's daily call goes out, and how long people have to answer and vote. Anyone in the household can change it. Each change is posted in the Dinnerbell channel with your name, and applies from the next call: a call that's already out or scheduled keeps its times. Times are in the household's time zone.</p>
+<p class="small muted">When each meal's daily call goes out, and how long people have to answer and vote. Anyone in the household can change it. Each change is posted in the Dinnerbell channel with your name, and applies from the next call: a call that's already out or scheduled keeps its times, and a call started again uses the new ones. If today's call hasn't gone out yet, it uses the new schedule when it still can; if the new time has already passed today, today's call keeps the old time. Times are in the household's time zone.</p>
 {% for slot in slots %}{% set p = slot.value %}
 <form method="post" action="/schedule/{{ p }}" class="stack" id="{{ p }}">
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -18,8 +18,8 @@
       <label class="field"><span>Call time</span><input type="time" name="{{ p }}_call_time" value="{{ values[p ~ '_call_time'] }}" required></label>
       <label class="field"><span>Usual meal time</span><input type="time" name="{{ p }}_meal_time" value="{{ values[p ~ '_meal_time'] }}" required></label>
     </div>
-    {% for name, label in minute_fields %}
-    <label class="field"><span>{{ label }}</span><input type="number" inputmode="numeric" name="{{ p }}_{{ name }}" min="0" max="360" value="{{ values[p ~ '_' ~ name] }}" required></label>
+    {% for name, label, low, high in minute_fields %}
+    <label class="field"><span>{{ label }}</span><input type="number" inputmode="numeric" name="{{ p }}_{{ name }}" min="{{ low }}" max="{{ high }}" value="{{ values[p ~ '_' ~ name] }}" required></label>
     {% endfor %}
     <fieldset class="field"><legend>Usual ways to get it</legend>
       <div class="chip-picker">
