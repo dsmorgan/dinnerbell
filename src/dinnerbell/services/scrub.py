@@ -10,7 +10,9 @@ Run it with test stopped, after restoring the backup. In one transaction it:
   ``missed``, the quiet ending, and decided ones are cancelled, since a decided call can't be
   abandoned and finishing it would write to the meal log;
 - deletes the outbox, pending rows and the message refs of delivered posts alike, so test never
-  sends production's queue or edits production's messages.
+  sends production's queue or edits production's messages;
+- deletes all feedback on meals, which says how each member rated them (FR-49), so test, where
+  testers act as other people, never holds production's answers.
 
 It never touches the meal log, the catalog, preferences, or the history of past events. Running
 it again changes nothing but writes another audit row.
@@ -29,6 +31,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from dinnerbell.config import is_test_instance
 from dinnerbell.db.engine import write_transaction
 from dinnerbell.db.events import EventRepository
+from dinnerbell.db.feedback import FeedbackRepository
 from dinnerbell.db.meals import household_settings
 from dinnerbell.db.outbox import OutboxRepository
 from dinnerbell.db.repositories import HouseholdRepository, MemberRepository, SessionRepository
@@ -56,6 +59,8 @@ class ScrubPreview:
     open_events: int
     pending_outbox: int
     last_activity: datetime | None
+    feedback: int = 0
+    """Feedback rows, as a number only."""
 
     def lines(self, now: datetime) -> list[str]:
         return [
@@ -65,6 +70,7 @@ class ScrubPreview:
             f"Enabled slots: {self.enabled_slots}",
             f"Open events: {self.open_events}",
             f"Notifications not yet sent: {self.pending_outbox}",
+            f"Feedback on meals: {self.feedback}",
         ]
 
 
@@ -121,6 +127,7 @@ async def preview(db: AsyncSession) -> ScrubPreview | None:
             ),
         ),
         last_activity=await db.scalar(newest, {"household": household_id}) if "audit" in tables else None,
+        feedback=await count("feedback", text("SELECT count(*) FROM feedback WHERE household_id = :household")),
     )
 
 
@@ -138,6 +145,7 @@ class ScrubSummary:
     events_cancelled: int
     outbox_pending_deleted: int
     outbox_rows_deleted: int
+    feedback_deleted: int = 0
 
     def lines(self) -> list[str]:
         return [
@@ -148,6 +156,7 @@ class ScrubSummary:
             f"Open calls abandoned: {self.events_abandoned}",
             f"Decided calls cancelled: {self.events_cancelled}",
             f"Outbox rows deleted: {self.outbox_rows_deleted} ({self.outbox_pending_deleted} not yet sent)",
+            f"Feedback rows deleted: {self.feedback_deleted}",
         ]
 
 
@@ -231,6 +240,7 @@ async def _scrub(db: AsyncSession, *, instance_label: str, keep: Iterable[str], 
         await audit(db, household.id, None, action, f"event:{event.id}", payload, now)
 
     pending, rows = await OutboxRepository(db).clear(household.id)
+    feedback_deleted = await FeedbackRepository(db).clear(household.id)
 
     summary = ScrubSummary(
         members_kept=len(kept),
@@ -241,6 +251,7 @@ async def _scrub(db: AsyncSession, *, instance_label: str, keep: Iterable[str], 
         events_cancelled=cancelled,
         outbox_pending_deleted=pending,
         outbox_rows_deleted=rows,
+        feedback_deleted=feedback_deleted,
     )
     summary_payload = {"kept_member_ids": sorted(kept_ids), "instance_label": instance_label} | asdict(summary)
     target = f"household:{household.id}"

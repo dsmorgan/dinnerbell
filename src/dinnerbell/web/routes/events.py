@@ -666,6 +666,7 @@ ROW_LABELS = {
     "response": "Answers",
     "assignment": "Assignments",
     "meal_log": "Meal log entries",
+    "feedback": "Feedback on the meal",
 }
 
 

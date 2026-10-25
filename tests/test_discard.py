@@ -17,12 +17,13 @@ from sqlalchemy import func, select, text
 
 from dinnerbell.config import Settings, is_test_instance
 from dinnerbell.db.events import EVENT_ROWS
-from dinnerbell.db.models import Base, EventRow, OutboxRow
+from dinnerbell.db.models import Base, EventRow, FeedbackRow, OutboxRow
 from dinnerbell.domain import notifications as n
 from dinnerbell.domain.events import EventRuleViolation, EventState, RoleOffer, Status, Step
+from dinnerbell.domain.feedback import FeedbackInput, Rating
 from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.notifications import DeliveryResult, MessageRef
-from dinnerbell.services import calls, discard, event_views, lifecycle
+from dinnerbell.services import calls, discard, event_views, feedback, lifecycle
 from dinnerbell.services.database import Database, open_database
 from dinnerbell.services.errors import Forbidden, NotFound
 from tests.support.calls import (
@@ -126,7 +127,8 @@ async def leftovers(house: House, event_id: int) -> dict[str, int]:
 
 def test_discard_handles_every_table_that_refers_to_an_event() -> None:
     """A new table that refers to events must be added to ``EVENT_ROWS`` (or be the outbox), so
-    discarding a call can't leave its rows behind. TODO(m3a-feedback): the feedback tables."""
+    discarding a call can't leave its rows behind. Feedback refers to the meal log, not the event;
+    ``test_discarding_a_done_call_deletes_its_feedback`` covers it."""
     handled = {model.__tablename__ for model in EVENT_ROWS} | {"outbox"}
     assert event_linked_tables() == handled
 
@@ -186,6 +188,31 @@ async def test_discarding_a_done_call_deletes_everything_and_a_fresh_call_can_st
     channel.sent.clear()
     await house.drain(channel)
     assert [(s.op, s.kind) for s in channel.sent] == [("deliver", "call_opened")]
+
+
+async def test_discarding_a_done_call_deletes_its_feedback(house: House) -> None:
+    """Feedback hangs off the meal the call logged. A discard deletes it, and the preview and
+    the audit row count it, as a number only."""
+    event_id = await done_dinner(house, RecordingChannel())
+    (meal,) = await house.meals()
+    for name, answers in (("Alex", FeedbackInput(food=Rating.NOT_AGAIN)), ("Sam", FeedbackInput(food=Rating.LOVED))):
+        await act(house, feedback.give, house[name], meal.id, answers)
+    preview = await act_no_clock(house, discard.preview, house.household.id, event_id)
+    assert preview.rows["feedback"] == 2 and "feedback 2" in preview.lines()[2]
+
+    summary = await throw_away(house, event_id)
+
+    assert summary.rows["feedback"] == 2
+    async with house.sessionmaker() as db:
+        assert await db.scalar(select(func.count()).select_from(FeedbackRow)) == 0
+    audit = next(a for a in await house.audits() if a.action == "event.discarded")
+    assert audit.payload["rows"]["feedback"] == 2
+    assert "not_again" not in str(audit.payload) and "loved" not in str(audit.payload)
+
+
+async def act_no_clock(house: House, use_case: Any, *args: Any) -> Any:
+    async with house.sessionmaker() as db:
+        return await use_case(db, *args)
 
 
 async def test_discarding_an_open_call_deletes_its_pending_and_held_notifications(house: House) -> None:

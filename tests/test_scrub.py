@@ -18,16 +18,19 @@ from sqlalchemy import select
 from dinnerbell import main as cli
 from dinnerbell.config import Settings
 from dinnerbell.db.events import EventRepository
+from dinnerbell.db.feedback import FeedbackRepository
 from dinnerbell.db.meals import MealLogRepository, household_settings
-from dinnerbell.db.models import AuditRow, EventRow, MemberRow, OutboxRow, SessionRow
+from dinnerbell.db.models import AuditRow, EventRow, FeedbackRow, MemberRow, OutboxRow, SessionRow
 from dinnerbell.db.outbox import OutboxRepository
 from dinnerbell.db.repositories import MemberRepository, SessionRepository
 from dinnerbell.domain.events import EndReason, EventState
-from dinnerbell.domain.meals import Slot
+from dinnerbell.domain.feedback import FeedbackInput, MealFacts, Rating
+from dinnerbell.domain.meals import MemberRef, Slot
 from dinnerbell.domain.schedule import slot_schedules
 from dinnerbell.services.bootstrap import bootstrap
 from dinnerbell.services.database import Database, open_database
 from dinnerbell.services.scrub import ScrubPreview, ScrubRefused, ScrubSummary, scrub_test
+from dinnerbell.services.scrub import preview as scrub_preview
 from tests.support.calls import OPENS, REMIND, House, RecordingChannel, dinner_id, furnish, make_house
 from tests.support.clock import FakeClock
 from tests.support.slack import SLACK_IDS, link
@@ -180,6 +183,31 @@ async def test_scrub_leaves_only_kept_members_and_sends_nothing(house: House) ->
     assert row.payload["kept_member_ids"] == sorted([house["Alex"].id, house["Sam"].id])
     assert row.payload["members_deactivated"] == 1 and row.payload["instance_label"] == LABEL
     assert "@" not in str(row.payload)  # no emails in the audit log
+
+
+async def test_scrub_deletes_all_feedback_and_counts_it(house: House) -> None:
+    """Feedback says how each member rated a meal (FR-49). Test, where testers act as other
+    people, never keeps it; the meals themselves stay."""
+    (meal,) = await house.meals()
+    eaters = (MemberRef(house["Kim"].id, "Kim"),)
+    item = house.items["Taqueria"]
+    facts = MealFacts(meal.id, meal.date, Slot.DINNER, item.id, item.name, item.kind, None, None, eaters)
+    async with house.sessionmaker() as db:
+        await FeedbackRepository(db).save(
+            house.household.id, house["Kim"].id, FeedbackInput(Rating.NOT_AGAIN), facts, house.clock()
+        )
+        await db.commit()
+        shown = await scrub_preview(db)
+    assert shown is not None and shown.feedback == 1 and "Feedback on meals: 1" in shown.lines(house.clock())
+
+    summary = await scrub(house)
+
+    assert summary.feedback_deleted == 1 and "Feedback rows deleted: 1" in summary.lines()
+    async with house.sessionmaker() as db:
+        assert list(await db.scalars(select(FeedbackRow))) == []
+    assert [m.id for m in await house.meals()] == [meal.id]
+    (row,) = await house.audits("instance.")
+    assert row.payload["feedback_deleted"] == 1 and "not_again" not in str(row.payload)
 
 
 async def test_a_second_run_changes_nothing(house: House) -> None:

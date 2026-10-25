@@ -8,7 +8,7 @@ from collections.abc import Iterable
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dinnerbell.db.models import FeedbackRow
@@ -93,6 +93,14 @@ class FeedbackRepository:
         await self._session.delete(row)
         await self._session.flush()
         return True
+
+    async def clear(self, household_id: int) -> int:
+        """Delete all of the household's feedback, for ``scrub-test``. Returns how many rows."""
+        found = await self._session.scalar(
+            select(func.count()).select_from(FeedbackRow).where(FeedbackRow.household_id == household_id)
+        )
+        await self._session.execute(delete(FeedbackRow).where(FeedbackRow.household_id == household_id))
+        return int(found or 0)
 
     async def for_meals(self, household_id: int, meal_ids: Iterable[int]) -> list[Feedback]:
         """Everyone's feedback on these meals, oldest first. Services must filter it."""
