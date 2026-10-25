@@ -46,6 +46,7 @@ from dinnerbell.domain.events import (
     head_count,
     meal_time,
     needs_reminder,
+    posted_before_its_day,
     resolve_maybes,
     shifted_deadline,
     should_open_today,
@@ -129,7 +130,12 @@ async def create_call(
 
 
 async def open_call(db: AsyncSession, event: Event, now: datetime, *, actor: Member | None = None) -> Event:
-    event = await EventRepository(db).save(replace(event, state=transition(event.state, EventState.COLLECTING)), now)
+    """Post ``event`` and open responses: the tick's ``Step.OPEN`` at the call's time, or a
+    member posting it early (``calls.post_now``), whose payload keeps when it was due. Either
+    way responses open now (``opens_at``), and the deadlines stay as scheduled."""
+    early = event.opens_at if now < event.opens_at else None
+    opened = replace(event, state=transition(event.state, EventState.COLLECTING), opens_at=min(event.opens_at, now))
+    event = await EventRepository(db).save(opened, now)
     ctx = await load(db, event)
     await publish(db, ctx, cc.call_opened(ctx), now=now)
     payload = {
@@ -137,6 +143,8 @@ async def open_call(db: AsyncSession, event: Event, now: datetime, *, actor: Mem
         "date": event.day.isoformat(),
         "respond_by": event.respond_deadline.isoformat(),
     }
+    if early is not None:
+        payload["scheduled_for"] = early.isoformat()
     await audit(db, event.household_id, actor, "event.opened", _target(event), payload, now)
     return event
 
@@ -196,7 +204,9 @@ async def reopen(
     db: AsyncSession, ctx: CallContext, *, today: date, now: datetime, started_by: Member | None = None
 ) -> Event:
     """Start ``ctx.event`` again with fresh windows from the current schedule: now, for today's
-    call, or at the slot's call time for a later day (FR-3 timing). The caller holds the
+    call, or at the slot's call time for a later day (FR-3 timing). A later day's call that was
+    posted early (``posted_before_its_day``) stays posted: it opens now, with that day's
+    response deadline, as ``calls.post_now`` leaves it (issue #59). The caller holds the
     event's lock, checks ``check_rerun``, and audits.
 
     Responses stay; maybes the deadline turned out are maybes again. Proposals, votes, the
@@ -211,16 +221,17 @@ async def reopen(
     await AssignmentRepository(db).clear(household_id, event.id)
     await ResponseRepository(db).restore_maybes(household_id, event.id, now)
     schedule = ctx.schedule
-    later = event.day > today
-    opens_at = schedule.opens_at(event.day, ctx.zone) if later else now
+    due = schedule.opens_at(event.day, ctx.zone) if event.day > today else now
+    scheduled = event.day > today and not posted_before_its_day(event, ctx.zone)
+    opens_at = due if scheduled else now
     fresh = replace(
         event,
-        state=transition(event.state, EventState.SCHEDULED if later else EventState.COLLECTING),
+        state=transition(event.state, EventState.SCHEDULED if scheduled else EventState.COLLECTING),
         run=event.run + 1,
         created_by=started_by.id if started_by is not None else event.created_by,
         coordinator_id=None if started_by is not None else event.coordinator_id,
         opens_at=opens_at,
-        respond_deadline=opens_at + schedule.response_window,
+        respond_deadline=due + schedule.response_window,
         reminder_minutes=schedule.reminder_minutes,
         vote_minutes=schedule.vote_minutes,
         vote_deadline=None,
@@ -235,7 +246,7 @@ async def reopen(
         end_note=None,
     )
     fresh = await EventRepository(db).save(fresh, now)
-    if not later:  # a later day's call is posted when the tick opens it
+    if not scheduled:  # a scheduled call is posted when the tick opens it
         opened = await load(db, fresh)
         await publish(db, opened, cc.call_opened(opened), now=now)
     return fresh

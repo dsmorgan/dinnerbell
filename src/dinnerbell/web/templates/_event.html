@@ -28,8 +28,8 @@
   {% if error %}<p class="alert error small" role="alert">{{ error }}</p>{% endif %}
 
   <p class="event-when small">
-    {%- if e.state.value == "scheduled" %}Opens at {{ e.opens_at|clock(tz) }}.
-    {%- elif e.state.value == "collecting" %}Answer by <strong>{{ e.respond_deadline|clock(tz) }}</strong>.
+    {%- if e.state.value == "scheduled" %}Posts {{ e.day|day }} at <strong>{{ e.opens_at|clock(tz) }}</strong>.
+    {%- elif e.state.value == "collecting" %}Answer by <strong>{{ e.respond_deadline|clock(tz) }}</strong>{% if v.info.early %} {{ e.day|day }}{% endif %}.
     {%- elif e.state.value == "voting" %}Vote by <strong>{{ e.vote_deadline|clock(tz) }}</strong>.
     {%- elif e.state.value in ("decided", "done") and e.meal_time %}Eating at <strong>{{ e.meal_time|clock(tz) }}</strong>.
     {%- elif e.state.value == "abandoned" and e.end_reason and e.end_reason.value == "missed" %}Missed: it got too late to decide this one.
@@ -214,6 +214,10 @@
     </details>
     {% endif %}
   </div>
+  {% endif %}
+
+  {% if v.can.post_now %}
+  <div class="button-row">{{ act(e.id, base ~ "/post-now", "Post it now", "button small primary", {"run": e.run}, confirm="Post this call now? Answers are still due " ~ (e.day|day) ~ ".") }}</div>
   {% endif %}
 
   {% if v.can.restart %}

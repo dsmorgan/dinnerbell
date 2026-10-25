@@ -52,6 +52,7 @@ from dinnerbell.domain.events import (
     coverage,
     due_step,
     head_count,
+    posted_before_its_day,
     stale_after,
 )
 from dinnerbell.domain.household import Household
@@ -191,6 +192,7 @@ def event_info(ctx: CallContext) -> note.EventInfo:
         end_reason=event.end_reason,
         ended_by=ctx.person(event.ended_by) if event.ended_by is not None else None,
         end_note=event.end_note,
+        early=posted_before_its_day(event, ctx.zone),
     )
 
 

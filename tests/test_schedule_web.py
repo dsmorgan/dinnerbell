@@ -122,6 +122,22 @@ def test_bad_values_are_refused_and_kept(
     assert schedule_rows(migrated) == ([], [])
 
 
+def test_a_reminder_past_the_limit_is_refused(kim: TestClient, migrated: Settings) -> None:
+    """A hand-crafted post past the form's max: stored, it would read back as the default."""
+    before = rows(migrated, HouseholdRow)[0].settings
+    form = slot_form(
+        Slot.DINNER,
+        dinner_call_time="12:00",
+        dinner_meal_time="23:00",
+        dinner_response_minutes="300",
+        dinner_reminder_minutes="200",
+    )
+    response = submit(kim, "/schedule/dinner", form)
+    assert response.status_code == 400 and "at most 180 minutes" in page(response)
+    assert rows(migrated, HouseholdRow)[0].settings == before
+    assert schedule_rows(migrated) == ([], [])
+
+
 def test_a_save_over_someone_elses_change_is_refused(kim: TestClient, migrated: Settings) -> None:
     stale = slot_fingerprint(DEFAULT_SLOTS[Slot.DINNER])
     first = slot_form(Slot.DINNER, dinner_call_time="14:00", dinner_seen=stale)

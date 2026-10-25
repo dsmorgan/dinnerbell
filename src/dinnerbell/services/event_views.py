@@ -48,6 +48,8 @@ class Permissions:
     passed."""
     restart: bool = False
     """Start a called-off call again (FR-56): ``calls.start_call`` for its slot and day."""
+    post_now: bool = False
+    """Post a scheduled call now instead of at its usual time (issue #59): ``calls.post_now``."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,6 +87,16 @@ class TodayView:
     events: list[EventView]
     slots: tuple[Slot, ...]
 
+    @property
+    def current(self) -> list[EventView]:
+        """Calls that are posted or over: today's, and any posted for another day."""
+        return [v for v in self.events if v.event.state is not EventState.SCHEDULED]
+
+    @property
+    def upcoming(self) -> list[EventView]:
+        """Calls scheduled and not posted yet, soonest first (issue #59)."""
+        return [v for v in self.events if v.event.state is EventState.SCHEDULED]
+
 
 def _allowed(check: Callable[[], object]) -> bool:
     try:
@@ -121,6 +133,8 @@ def permissions(ctx: CallContext, actor: Member, today: date, now: datetime, *, 
         cancel=_allowed(lambda: rules.check_can_cancel(event, actor)),
         close_window=_closable(event, actor, now),
         restart=actor.active and _allowed(lambda: _check_restart(ctx, today, now, any_time)),
+        post_now=event.state is EventState.SCHEDULED
+        and _allowed(lambda: rules.check_can_post_now(event, actor, now=now)),
     )
 
 
@@ -194,6 +208,13 @@ async def calls_on(db: AsyncSession, actor: Member, day: date) -> list[Event]:
     events = EventRepository(db)
     found = [await events.call_for(actor.household_id, slot, day) for slot in Slot]
     return [event for event in found if event is not None]
+
+
+async def scheduled_call(db: AsyncSession, actor: Member, slot: Slot, day: date) -> Event | None:
+    """The actor's household's call for ``slot`` on ``day`` if it's scheduled and not posted
+    yet, for starting a call with "post it now" when it exists already (issue #59)."""
+    event = await EventRepository(db).call_for(actor.household_id, slot, day)
+    return event if event is not None and event.state is EventState.SCHEDULED else None
 
 
 async def today_view(db: AsyncSession, actor: Member, *, now: datetime, any_time: bool = False) -> TodayView:

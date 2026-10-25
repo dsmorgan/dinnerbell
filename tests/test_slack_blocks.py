@@ -148,7 +148,7 @@ def test_buttons_follow_the_state() -> None:
     assert action_ids("call_updated") == ["answer", "link_event", "call_menu"]
     assert action_ids("call_opened") == ["answer", "link_event", "call_menu"]
     assert action_ids("call_updated_voting") == ["link_event", "call_menu"]  # Alex coordinates already
-    assert action_ids("call_updated_voting_no_coordinator") == ["coordinate", "link_event", "call_menu"]
+    assert action_ids("call_updated_voting_no_coordinator") == ["call_coordinate", "link_event", "call_menu"]
     assert action_ids("proposals_updated") == ["vote", "lock"] * 3 + ["add_proposal", "link_event"]
     assert action_ids("proposals_updated_closed") == ["link_event"]
     assert action_ids("decision_made") == ["mark_done", "link_event", "cancel_call"]

@@ -55,6 +55,8 @@ class EventInfo:
     """Who called the call off (FR-56), when it's cancelled."""
     end_note: str | None = None
     """The reason they gave, if any."""
+    early: bool = False
+    """Posted before its day (issue #59), so messages say which day its deadline is on."""
 
     @property
     def key(self) -> str:

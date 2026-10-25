@@ -1,0 +1,12 @@
+{
+  "blocks": [
+    {
+      "text": {
+        "text": "Started the dinner call today. It's posted in <#C0DINNER>.",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    }
+  ],
+  "text": "Started the dinner call today. It's posted in <#C0DINNER>."
+}

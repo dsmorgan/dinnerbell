@@ -15,7 +15,15 @@ from typing import Any
 
 from dinnerbell.channels.slack import ids
 from dinnerbell.channels.slack.blocks import Directory, with_version_footer
-from dinnerbell.channels.slack.messages import RenderContext, reminder_message, render, schedule_reply, your_answer
+from dinnerbell.channels.slack.messages import (
+    RenderContext,
+    posted_reply,
+    reminder_message,
+    render,
+    schedule_reply,
+    started_reply,
+    your_answer,
+)
 from dinnerbell.channels.slack.views import (
     HomeLinks,
     cancel_modal,
@@ -133,6 +141,10 @@ VOTING = event(EventState.VOTING, coordinator=ALEX)
 DECIDED = event(EventState.DECIDED, coordinator=ALEX)
 REASON = "Pizza at Grandma's"
 CANCELLED = replace(event(EventState.CANCELLED, coordinator=ALEX), ended_by=ALEX, end_note=REASON)
+EARLY = replace(
+    event(), day=date(2026, 10, 23), respond_deadline=datetime(2026, 10, 23, 21, 30, tzinfo=UTC), early=True
+)
+"""Posted the evening before its day (issue #59)."""
 
 DINNER_SCHEDULE = note.SlotScheduleInfo(
     enabled=True,
@@ -146,6 +158,7 @@ DINNER_SCHEDULE = note.SlotScheduleInfo(
 
 NOTIFICATIONS: dict[str, Callable[[], note.Notification]] = {
     "call_opened": lambda: note.CallOpened(event(), (ALEX, KIM, LEE, SAM), waiting_on=(ALEX, KIM, LEE, SAM)),
+    "call_opened_early": lambda: note.CallOpened(EARLY, (ALEX, KIM, LEE, SAM), waiting_on=(ALEX, KIM, LEE, SAM)),
     "call_updated": lambda: note.CallUpdated(event(), ROSTER, (LEE,), head_count=3),
     "call_updated_voting": lambda: note.CallUpdated(VOTING, ROSTER, (), head_count=3),
     "call_updated_voting_no_coordinator": lambda: note.CallUpdated(event(EventState.VOTING), ROSTER, (), head_count=3),
@@ -260,6 +273,29 @@ COLLECTING_VIEW = _event_view(EventState.COLLECTING, SAM_RESPONSE, Permissions(r
 VOTING_VIEW = _event_view(EventState.VOTING, SAM_RESPONSE, Permissions(vote=True, propose=True))
 DECIDED_VIEW = _event_view(EventState.DECIDED, SAM_RESPONSE, Permissions(mark_done=True))
 CALLED_OFF_VIEW = _event_view(EventState.CANCELLED, SAM_RESPONSE, Permissions(restart=True))
+TOMORROW = date(2026, 10, 23)
+_LUNCH = _event_view(EventState.SCHEDULED, None, Permissions(post_now=True, cancel=True))
+SCHEDULED_VIEW = replace(
+    _LUNCH,
+    event=replace(
+        _LUNCH.event,
+        id=8,
+        slot=Slot.LUNCH,
+        day=TOMORROW,
+        opens_at=datetime(2026, 10, 23, 15, 30, tzinfo=UTC),
+        respond_deadline=datetime(2026, 10, 23, 16, 30, tzinfo=UTC),
+        coordinator_id=None,
+    ),
+    info=replace(
+        event(EventState.SCHEDULED),
+        id=8,
+        slot=Slot.LUNCH,
+        day=TOMORROW,
+        path="/events/8",
+        respond_deadline=datetime(2026, 10, 23, 16, 30, tzinfo=UTC),
+    ),
+)
+"""Tomorrow's lunch, scheduled for 10:30 AM, which Sam may post now or call off."""
 ORIGIN = ids.ViewOrigin(7, "C0DINNER")
 CALL_OFF_ORIGIN = replace(ORIGIN, run=1)
 """Call it off and Close now name the run they were opened for, as ``Interactions`` writes them."""
@@ -290,6 +326,9 @@ VIEWS: dict[str, Callable[[], dict[str, Any]]] = {
         TodayView(DAY, [CALLED_OFF_VIEW], tuple(Slot)), HomeLinks(BASE_URL), notice="You called off dinner."
     ),
     "home_empty": lambda: home_view(TodayView(DAY, [], tuple(Slot)), HomeLinks(BASE_URL)),
+    "home_upcoming": lambda: home_view(
+        TodayView(DAY, [COLLECTING_VIEW, SCHEDULED_VIEW], tuple(Slot)), HomeLinks(BASE_URL)
+    ),
     # Interactions adds the footer to every Home tab it publishes.
     "home_version": lambda: with_version_footer(
         home_view(TodayView(DAY, [], tuple(Slot)), HomeLinks(BASE_URL)), "0.3.0+abc1234"
@@ -335,6 +374,15 @@ CARDS: dict[str, CardSample] = {
     "response_reminder_moved_on": _reminder(VOTING, KIM_IN, run=1),
     "response_reminder_started_again": _reminder(replace(event(), run=2), KIM_IN, run=1),
     "schedule_reply": lambda ctx: schedule_reply(DEFAULT_SLOTS, ctx).payload(),
+    "call_started_reply": lambda ctx: started_reply(
+        event(), datetime(2026, 10, 22, 20, 0, tzinfo=UTC), today=DAY, channel_id="C0DINNER", ctx=ctx
+    ).payload(),
+    "call_scheduled_reply": lambda ctx: started_reply(
+        SCHEDULED_VIEW.info, SCHEDULED_VIEW.event.opens_at, today=DAY, channel_id="C0DINNER", ctx=ctx
+    ).payload(),
+    "call_posted_reply": lambda ctx: posted_reply(
+        replace(SCHEDULED_VIEW.info, state=EventState.COLLECTING, early=True), channel_id="C0DINNER", ctx=ctx
+    ).payload(),
 }
 """Messages that answer a tap or a command rather than a notification. They mention nobody."""
 

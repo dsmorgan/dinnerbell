@@ -26,14 +26,14 @@
       "block_id": "roles",
       "elements": [
         {
-          "action_id": "coordinate",
+          "action_id": "call_coordinate",
           "text": {
             "emoji": true,
             "text": "I'll coordinate",
             "type": "plain_text"
           },
           "type": "button",
-          "value": "7"
+          "value": "7:1"
         }
       ],
       "type": "actions"

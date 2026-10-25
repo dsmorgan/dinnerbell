@@ -726,6 +726,30 @@ def check_window_change(event: Event, window: Window) -> datetime:
     raise EventRuleViolation("That window isn't open.")
 
 
+def posted_before_its_day(event: Event, zone: tzinfo) -> bool:
+    """Whether ``event`` was posted before its day (issue #59). Only posting early opens a call
+    before its day, and ``opens_at`` records when responses opened, so it stays true through
+    voting, a decision, a call-off, and a re-run or restart, which keep it posted
+    (``lifecycle.reopen``). A scheduled call hasn't been posted at all."""
+    return event.state is not EventState.SCHEDULED and event.opens_at.astimezone(zone).date() < event.day
+
+
+def check_can_post_now(event: Event, actor: Member, *, now: datetime) -> bool:
+    """Issue #59: any active member, who could start the call, posts a scheduled call now,
+    such as tomorrow's lunch the evening before. Returns whether there's anything to post: a
+    call that's posted already stays as it is. A finished call, or a scheduled one whose
+    response window has passed (the scheduler expires it instead, FR-2), is refused."""
+    if not actor.active:
+        raise EventRuleViolation("Only active members can post a call.")
+    if not event.state.is_open:
+        raise EventRuleViolation(CALL_FINISHED)
+    if event.state is not EventState.SCHEDULED:
+        return False
+    if now >= event.respond_deadline:
+        raise EventRuleViolation("It's too late to post this call.")
+    return True
+
+
 # Scheduler steps -------------------------------------------------------------------------------
 
 

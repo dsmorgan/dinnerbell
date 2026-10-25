@@ -1,0 +1,40 @@
+{
+  "blocks": [
+    {
+      "text": {
+        "text": "Scheduled the lunch call for Friday, Oct 23. It posts in <#C0DINNER> at 10:30 AM that day.\nTo ask everyone now instead, tap *Post it now*. Answers are still due that day.",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "block_id": "more",
+      "elements": [
+        {
+          "accessibility_label": "Post the lunch call for Friday, Oct 23 now",
+          "action_id": "post_now",
+          "style": "primary",
+          "text": {
+            "emoji": true,
+            "text": "Post it now",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "8:1"
+        },
+        {
+          "action_id": "link_event",
+          "text": {
+            "emoji": true,
+            "text": "View on web",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "url": "https://dinnerbell.example.com/events/8"
+        }
+      ],
+      "type": "actions"
+    }
+  ],
+  "text": "Scheduled the lunch call for Friday, Oct 23. It posts in <#C0DINNER> at 10:30 AM that day."
+}

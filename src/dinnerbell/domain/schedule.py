@@ -197,6 +197,9 @@ def check_schedule(schedule: SlotSchedule) -> SlotSchedule:
         raise InvalidSchedule(f"The vote window runs {MIN_WINDOW_MINUTES} to {MAX_WINDOW_MINUTES} minutes.")
     if not 0 <= schedule.reminder_minutes < schedule.response_minutes:
         raise InvalidSchedule("The reminder must come before the response window closes.")
+    if schedule.reminder_minutes > MAX_REMINDER_MINUTES:
+        # Stored settings past this read back as the default (``_minutes``), so refuse them here.
+        raise InvalidSchedule(f"Send the reminder at most {MAX_REMINDER_MINUTES} minutes before answers close.")
     if not schedule.modes:
         raise InvalidSchedule("Pick at least one default way to get the meal.")
     start = schedule.call_time.hour * 60 + schedule.call_time.minute

@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Modals and the App Home tab (spec section 10): the Details, Add proposal, Call it off, and
-Close now modals, and each member's Home with today's calls.
+Close now modals, and each member's Home with today's calls and those coming up.
 
 Modals carry their event and origin in ``private_metadata`` (see ``ids.ViewOrigin``). Input
 blocks use fixed block and action IDs, which ``parse_details`` and ``parse_proposal`` read
@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
-from datetime import time
+from datetime import date, time
 from typing import Any
 
 from dinnerbell.channels.slack import ids
@@ -29,6 +29,7 @@ from dinnerbell.channels.slack.blocks import (
     divider,
     escape,
     header,
+    local_clock,
     option,
     plain,
     section,
@@ -38,6 +39,7 @@ from dinnerbell.channels.slack.messages import (
     ANSWERS,
     CALL_OFF,
     CLOSE_LABELS,
+    POST_NOW,
     choice_button,
     mark_done_button,
 )
@@ -352,9 +354,10 @@ class HomeLinks:
         return f"{self.base_url}{path}"
 
 
-def _event_card(v: EventView, links: HomeLinks) -> list[Block]:
+def _event_card(v: EventView, links: HomeLinks, today: date) -> list[Block]:
     state = v.event.state
-    lines = [f"*{v.event.slot.value.capitalize()}* · {state.label}"]
+    day = "" if v.event.day == today else f" · {day_label(v.event.day)}"  # posted early (#59)
+    lines = [f"*{v.event.slot.value.capitalize()}*{day} · {state.label}"]
     if v.mine is not None:
         mine = STATUS_WORDS[v.mine.status]
         if v.mine.offers:
@@ -394,17 +397,33 @@ def _event_card(v: EventView, links: HomeLinks) -> list[Block]:
     return [section("\n".join(lines), block_id=f"event-{v.id}"), actions(*buttons, block_id=f"event-actions-{v.id}")]
 
 
+def _upcoming_card(v: EventView, links: HomeLinks) -> list[Block]:
+    """A call scheduled and not posted yet (issue #59): when it posts, with **Post it now** and
+    **Call it off** for whoever may."""
+    event = v.event
+    posts = local_clock(event.opens_at, v.info.timezone)
+    line = f"*{event.slot.value.capitalize()}* · {day_label(event.day)} · posts at {posts}"
+    buttons: list[Block] = []
+    if v.can.post_now:
+        buttons.append(button(POST_NOW, ids.POST_NOW, ids.card_value(v.id, event.run), style="primary"))
+    if v.can.cancel:
+        cancel = ids.menu_value(ids.MenuChoice.CANCEL, v.id, event.run)
+        buttons.append(button(CALL_OFF, ids.CANCEL_CALL, cancel, style="danger"))
+    buttons.append(button("Open", f"{ids.LINK_PREFIX}event", url=links.url(event.path)))
+    return [section(line, block_id=f"event-{v.id}"), actions(*buttons, block_id=f"event-actions-{v.id}")]
+
+
 def home_view(today: TodayView, links: HomeLinks, notice: str | None = None, *, label: str = "") -> dict[str, Any]:
     """Each member's Home tab. ``label``, the instance label, prefixes the header when set."""
     title = f"Today · {day_label(today.today)}"
     blocks: list[Block] = [header(f"{label} · {title}" if label else title)]
     if notice:
         blocks.append(section(f"*{escape(clip(notice, 500))}*"))
-    for v in today.events:
-        blocks += _event_card(v, links)
-    if not today.events:
+    for v in today.current:
+        blocks += _event_card(v, links, today.today)
+    if not today.current:
         blocks.append(section("No calls today yet."))
-    started = {v.event.slot for v in today.events}
+    started = {v.event.slot for v in today.events if v.event.day == today.today}
     called_off = {v.event.slot for v in today.events if v.event.day == today.today and v.can.restart}
     starts: list[Block] = []
     for slot in (Slot.DINNER, Slot.LUNCH):
@@ -414,6 +433,10 @@ def home_view(today: TodayView, links: HomeLinks, notice: str | None = None, *, 
             starts.append(button(f"Start a {slot.value} call", ids.ACTION_FOR_START[slot], slot.value))
     if starts:
         blocks.append(actions(*starts, block_id="start"))
+    if today.upcoming:
+        blocks.append(section("*Coming up*"))
+        for v in today.upcoming:
+            blocks += _upcoming_card(v, links)
     blocks += [
         divider(),
         context(
