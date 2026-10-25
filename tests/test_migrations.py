@@ -716,23 +716,103 @@ def test_0009_refuses_to_run_with_foreign_keys_on(settings: Settings) -> None:
 # 0010: offers' spare servings --------------------------------------------------------------------
 
 
-def test_0010_adds_capacity_for_offers_only_and_keeps_every_row(settings: Settings) -> None:
-    """The rebuild keeps every call and child row and AUTOINCREMENT; afterward a call can't have
-    a capacity and an offer must have one from 1 to 20. A downgrade removes offers with their rows."""
+def _event_foreign_keys(settings: Settings) -> list[object]:
+    engine = create_engine(settings.sync_database_url)
+    try:
+        with engine.connect() as c:
+            # id and seq number the keys, and a rebuild may number them differently.
+            return sorted(tuple(row)[2:] for row in c.execute(text("PRAGMA foreign_key_list(event)")).all())
+    finally:
+        engine.dispose()
+
+
+def _without_capacity(snapshot: dict[str, object]) -> dict[str, object]:
+    """``snapshot`` with event rows minus their last column, ``capacity``, which must be NULL."""
+    rows = dict(snapshot["rows"])  # type: ignore[call-overload]
+    assert all(row[-1] is None for row in rows["event"])
+    rows["event"] = [tuple(row)[:-1] for row in rows["event"]]
+    return {**snapshot, "rows": rows}
+
+
+CAPACITY_CHECK = (
+    "CONSTRAINT ck_event_capacity CHECK ((kind = 'call' AND capacity IS NULL) OR "
+    "(kind = 'offer' AND capacity IS NOT NULL AND capacity BETWEEN 1 AND 20))"
+)
+
+
+def test_0010_rebuilds_event_without_losing_a_row(settings: Settings) -> None:
+    """Up, down, and up again, every event and child row survives, with the event table's
+    indexes, foreign keys, and constraints; the upgrade adds only the empty capacity column and
+    its check."""
+    _upgrade_to(settings, "0009_meal_log_autoincrement")
+    _populate_calls(settings)
+    before, fks = _snapshot(settings), _event_foreign_keys(settings)
+    assert all(before["rows"][t] for t in ("event", *EVENT_CHILDREN))  # type: ignore[index]
+
+    _upgrade_to(settings, "0010_offers")
+    after = _without_capacity(_snapshot(settings))
+    assert after["rows"] == before["rows"] and after["indexes"] == before["indexes"]
+    assert after["constraints"] == sorted([*before["constraints"], CAPACITY_CHECK])  # type: ignore[misc]
+    assert _event_foreign_keys(settings) == fks
+    assert "AUTOINCREMENT" in _event_sql(settings)
+
+    _downgrade_to(settings, "0009_meal_log_autoincrement")
+    assert _snapshot(settings) == before and _event_foreign_keys(settings) == fks
+    _upgrade_to(settings, "0010_offers")
+    assert _without_capacity(_snapshot(settings))["rows"] == before["rows"]
+
+
+def _delete_newest_call(settings: Settings) -> None:
+    engine = create_sync_engine(settings.sync_database_url)
+    try:
+        with engine.begin() as c:
+            for table in ("vote", "proposal", "suggestion", "response", "outbox"):
+                c.execute(text(f"DELETE FROM {table} WHERE event_id = 2"))  # noqa: S608 - fixed names
+            c.execute(text("DELETE FROM event WHERE id = 2"))
+    finally:
+        engine.dispose()
+
+
+def _next_event_id(settings: Settings) -> int:
+    engine = create_sync_engine(settings.sync_database_url)
+    try:
+        with engine.begin() as c:
+            c.execute(text(EVENT_INSERT), {"kind": "call", "t": STAMP})
+            found: int = c.execute(text("SELECT max(id) FROM event")).scalar_one()
+    finally:
+        engine.dispose()
+    return found
+
+
+@pytest.mark.parametrize("down_and_up", [False, True])
+def test_0010_never_gives_back_an_id_deleted_before_it(settings: Settings, down_and_up: bool) -> None:
+    """The newest call was deleted (discarded, say) before the upgrade. The rebuild must keep
+    the AUTOINCREMENT high-water mark, not reseed it from the largest ID left, or that call's ID
+    comes back (#60). A downgrade rebuilds the table too, and keeps it as well."""
+    _upgrade_to(settings, "0009_meal_log_autoincrement")
+    _populate_calls(settings)
+    _delete_newest_call(settings)
+    _upgrade_to(settings, "0010_offers")
+    if down_and_up:
+        _downgrade_to(settings, "0009_meal_log_autoincrement")
+        _upgrade_to(settings, "0010_offers")
+    assert _next_event_id(settings) == 3
+
+
+def test_0010_lets_only_offers_have_a_capacity(settings: Settings) -> None:
+    """A call can't have a capacity and an offer must have one from 1 to 20. A downgrade removes
+    offers with their rows, leaving everything else as it was."""
     from sqlalchemy.exc import IntegrityError
 
     _upgrade_to(settings, "0009_meal_log_autoincrement")
     _populate_calls(settings)
-    before = _snapshot(settings)["rows"]
+    before = _snapshot(settings)
     _upgrade_to(settings, "0010_offers")
-    assert "AUTOINCREMENT" in _event_sql(settings)
-    after = _snapshot(settings)["rows"]
-    assert {t: len(r) for t, r in after.items()} == {t: len(r) for t, r in before.items()}  # type: ignore[union-attr]
     engine = create_sync_engine(settings.sync_database_url)
     try:
-        for kind, capacity in (("offer", None), ("offer", 0), ("offer", 21)):
+        for capacity in (None, 0, 21):
             with pytest.raises(IntegrityError, match="CHECK"), engine.begin() as c:
-                c.execute(text(OFFER_INSERT.replace("'offer'", f"'{kind}'")), {"capacity": capacity, "t": STAMP})
+                c.execute(text(OFFER_INSERT), {"capacity": capacity, "t": STAMP})
         with pytest.raises(IntegrityError, match="CHECK"), engine.begin() as c:
             c.execute(text(OFFER_INSERT.replace("'offer'", "'call'")), {"capacity": 3, "t": STAMP})
         with engine.begin() as c:
@@ -749,7 +829,7 @@ def test_0010_adds_capacity_for_offers_only_and_keeps_every_row(settings: Settin
     finally:
         engine.dispose()
     _downgrade_to(settings, "0009_meal_log_autoincrement")
-    assert _snapshot(settings)["rows"] == before
+    assert _snapshot(settings)["rows"] == before["rows"]
     run_migrations(settings.sync_database_url, settings.database_path)
 
 

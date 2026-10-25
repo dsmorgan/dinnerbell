@@ -5,6 +5,7 @@ checks, and every call action an offer refuses."""
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
@@ -275,6 +276,8 @@ async def test_every_call_action_is_refused_on_an_offer(house: House) -> None:
         (calls.post_now, (kim, offer_id), {}),
         (call_admin.move_deadline, (alex, offer_id, Window.RESPOND, 15), {}),
         (call_admin.rerun, (alex, offer_id), {}),
+        (call_admin.assign_coordinator, (alex, offer_id, kim.id), {}),
+        (calls.hand_off, (house["Sam"], offer_id, kim.id), {}),
         (calls.vote, (kim, offer_id, 1), {}),
         (calls.add_proposal, (kim, offer_id, Mode.PICKUP), {"item_id": house.items["Taqueria"].id}),
         (calls.lock, (alex, offer_id, 1), {}),
@@ -546,3 +549,103 @@ async def test_a_discarded_offer_leaves_nothing_behind(house: House) -> None:
         await act(house, offers.join, house["Sam"], offer_id)
     kinds = await house.kinds()
     assert kinds.count("call_discarded") == 1  # the offer message says so
+
+
+# Races, admin overrides, and limits (review of #67) --------------------------------------------
+
+
+async def live(house: House, day: date = DAY) -> tuple[bool, bool]:
+    """Whether a cooking offer stands, and whether a dinner call is open, for ``day``."""
+    from dinnerbell.db.events import EventRepository
+
+    async with house.sessionmaker() as db:
+        events = EventRepository(db)
+        call = await events.call_for(house.household.id, Slot.DINNER, day)
+        offers_ = await events.offers_for(house.household.id, Slot.DINNER, day)
+    return any(replaces_call(o) for o in offers_), call is not None and call.state.is_open
+
+
+@pytest.mark.parametrize("offer_first", [True, False])
+async def test_a_cooking_offer_and_the_tick_never_both_win(house: House, offer_first: bool) -> None:
+    """The tick checks for a cooking offer and creates the call under the write lock, as
+    posting an offer does, so exactly one of them holds the slot: a call with the offer as a
+    pick, or the offer with no call."""
+    house.clock.now = OPENS
+    work = [act(house, offers.post_offer, house["Sam"], tacos(house)), house.tick()]
+    await asyncio.gather(*(work if offer_first else reversed(work)))
+    offer_live, call_live = await live(house)
+    assert offer_live != call_live
+
+
+@pytest.mark.parametrize("offer_first", [True, False])
+async def test_a_cooking_offer_and_starting_a_call_never_both_win(house: House, offer_first: bool) -> None:
+    work = [
+        act(house, offers.post_offer, house["Sam"], tacos(house)),
+        act(house, calls.start_call, house["Kim"], Slot.DINNER, DAY),
+    ]
+    results = await asyncio.gather(*(work if offer_first else reversed(work)), return_exceptions=True)
+    assert all(r is None or not isinstance(r, Exception) or isinstance(r, OfferedInstead) for r in results)
+    offer_live, call_live = await live(house)
+    assert offer_live != call_live
+
+
+async def test_an_admin_cant_rerun_or_restart_a_call_an_offer_replaced(house: House) -> None:
+    tomorrow = DAY + timedelta(days=1)
+    call = await act(house, calls.start_call, house["Kim"], Slot.DINNER, tomorrow)
+    await post(house, "Sam", tacos(house, day=tomorrow))
+    with pytest.raises(OfferedInstead):
+        await act(house, call_admin.rerun, house["Alex"], call.id)
+    with pytest.raises(OfferedInstead):
+        await act(house, calls.restart_call, house["Kim"], call.id)
+    assert (await house.event(call.id)).state is EventState.CANCELLED
+
+
+async def test_an_admin_cant_give_an_offer_a_coordinator(house: House) -> None:
+    offer_id = (await post(house, "Sam", lunch(house))).event_id
+    for use_case, args in (
+        (call_admin.assign_coordinator, (house["Alex"], offer_id, house["Kim"].id)),
+        (call_admin.assign_coordinator, (house["Alex"], offer_id, None)),
+        (calls.hand_off, (house["Sam"], offer_id, house["Kim"].id)),
+    ):
+        with pytest.raises(EventRuleViolation, match="no coordinator"):
+            await act(house, use_case, *args)
+    assert not any(k == "call_updated" for k in await house.kinds())
+
+
+async def test_a_pick_whose_offerer_said_out_is_dropped(house: House) -> None:
+    event_id = await open_dinner(house)
+    await post(house, "Lee", lunch(house, slot=Slot.DINNER, at=time(18, 30)))
+    await act(house, calls.respond, house["Lee"], event_id, Status.OUT)  # nobody picks it up now
+    for name in ("Alex", "Sam"):
+        await act(house, calls.respond, house[name], event_id, Status.IN)
+    await act(house, calls.offer_role, house["Alex"], event_id, RoleOffer.PICKUP, True)
+    house.clock.now = RESPOND_BY
+    await house.tick()
+    ctx = await house.context(event_id)
+    assert all(p.proposed_by is None for p in ctx.proposals)  # only ranked picks, which Alex can fetch
+    assert len(await house.audits("event.pick_dropped")) == 1
+
+
+async def test_ranked_picks_leave_room_for_attached_ones(house: House, monkeypatch: pytest.MonkeyPatch) -> None:
+    from dinnerbell.services import lifecycle
+
+    monkeypatch.setattr(lifecycle, "MAX_PROPOSALS", 2)
+    event_id = await open_dinner(house)
+    await post(house, "Lee", lunch(house, slot=Slot.DINNER, at=time(18, 30)))
+    for name in ("Alex", "Sam"):
+        await act(house, calls.respond, house[name], event_id, Status.IN)
+    await act(house, calls.offer_role, house["Alex"], event_id, RoleOffer.PICKUP, True)
+    house.clock.now = RESPOND_BY
+    await house.tick()
+    ctx = await house.context(event_id)
+    assert len(ctx.proposals) == 2  # one ranked, then the offer's pick
+    assert ctx.proposals[-1].proposed_by == house["Lee"].id
+
+
+async def test_a_member_has_at_most_three_offers_on_per_meal(house: House) -> None:
+    for hour in (11, 12, 13):
+        await post(house, "Kim", lunch(house, at=time(hour, 0)))
+    with pytest.raises(EventRuleViolation, match="3 lunch offers"):
+        await post(house, "Kim", lunch(house, at=time(13, 30)))
+    await post(house, "Lee", lunch(house, at=time(13, 30)))  # someone else still can
+    await post(house, "Kim", lunch(house, slot=Slot.DINNER, at=time(18, 0)))  # and Kim, for dinner

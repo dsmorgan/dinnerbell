@@ -56,6 +56,7 @@ from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.members import Member
 from dinnerbell.domain.offers import (
     DEFAULT_CAPACITY,
+    MAX_OPEN_OFFERS,
     OfferPath,
     check_can_join,
     check_can_leave,
@@ -238,6 +239,11 @@ async def _post(
     """A standalone offer, posted in the channel. Its offerer is in, and assigned the role the
     mode needs, so feedback can thank them as the cook."""
     events = EventRepository(db)
+    mine = [o for o in await events.offers_for(actor.household_id, data.slot, data.day) if o.created_by == actor.id]
+    if sum(1 for o in mine if o.state.is_open) >= MAX_OPEN_OFFERS:
+        raise EventRuleViolation(
+            f"You have {MAX_OPEN_OFFERS} {data.slot.value} offers on for that day already. Call one off first."
+        )
     offer = await events.add_offer(
         household_id=actor.household_id,
         slot=data.slot,
@@ -357,6 +363,8 @@ class Seat:
     guests: int
     seats_left: int
     item_name: str
+    offerer: bool = False
+    """It's the member's own offer, so they're in without taking a seat and can't drop out."""
 
 
 async def _offer_context(db: AsyncSession, event: Event, run: int | None) -> CallContext:
@@ -372,7 +380,8 @@ async def _seat(db: AsyncSession, event: Event, member_id: int) -> Seat:
     item = ctx.items.get(event.decided_item_id) if event.decided_item_id is not None else None
     name = item.name if item is not None else "the offer"
     joined_now = mine is not None and mine.is_in
-    return Seat(joined_now, mine.guests if mine and joined_now else 0, seats_left(event, ctx.responses), name)
+    guests = mine.guests if mine and joined_now else 0
+    return Seat(joined_now, guests, seats_left(event, ctx.responses), name, offerer=event.created_by == member_id)
 
 
 async def _changed(db: AsyncSession, before: CallContext, actor: Member, now: datetime) -> None:

@@ -101,6 +101,7 @@ def test_a_bad_offer_shows_on_today(admin: TestClient, migrated: Settings) -> No
         ({"at": "noon"}, "HH:MM"),
         ({"slot": "brunch"}, "Pick the meal"),
         ({"item_id": "", "free_text": ""}, "not both"),
+        ({"free_text": "Pho Real"}, "not both"),  # an item and a name, as Slack's form refuses
         ({"item_id": "", "free_text": "Pho Real"}, "cuisine"),
     ]:
         response = submit(admin, "/offers", offer_form(**changes))

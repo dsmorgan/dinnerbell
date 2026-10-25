@@ -36,6 +36,9 @@ from dinnerbell.domain.members import Member
 MAX_CAPACITY = 20
 """Spare servings an offer can have: the most guests one response can bring."""
 DEFAULT_CAPACITY = 3
+MAX_OPEN_OFFERS = 3
+"""Offers one member may have on at once for one slot and day: plenty for a real meal, and it
+keeps a stuck button or a script from flooding the channel and App Home."""
 FULL = "Sorry, it's full."
 
 

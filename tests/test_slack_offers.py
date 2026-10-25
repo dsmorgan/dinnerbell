@@ -237,3 +237,37 @@ async def test_log_opens_a_modal_and_logs_the_meal(slack: Slack, house: House) -
         slack, "Sam", ids.LOG_VIEW, dict(values, who={"value": {"selected_options": []}}), ids.FormOrigin(CHANNEL)
     )
     assert "who" in json.loads(response.body)["errors"]
+
+
+async def test_the_offerers_own_tap_says_its_their_offer(slack: Slack, house: House) -> None:
+    siam = house.items["Siam Garden"].id
+    await submit_form(slack, "Alex", ids.OFFER_VIEW, offer_values(siam), ids.FormOrigin(CHANNEL))
+    event_id = await offer_id(house)
+    await slack.click("Alex", ids.JOIN_OFFER, f"{event_id}:1")
+    assert slack.ephemerals("Alex")[-1] == "It's your offer, so you're in. 3 spare."
+    await slack.click("Alex", ids.ADD_GUEST, f"{event_id}:1")
+    assert slack.ephemerals("Alex")[-1] == "It's your offer, so you're in, with 1 guest. 2 spare."
+
+
+def test_home_keeps_within_100_blocks_with_the_footer_last() -> None:
+    """However many calls and offers there are, Home leaves room for the version footer and
+    keeps the start buttons and links; the ones that don't fit are counted and left to the web."""
+    from dataclasses import replace as copy
+
+    from dinnerbell.channels.slack.blocks import MAX_VIEW_BLOCKS, with_version_footer
+    from dinnerbell.channels.slack.preview import AWAITING, OFFER_VIEW, SCHEDULED_VIEW
+    from dinnerbell.channels.slack.views import HomeLinks, home_view
+    from dinnerbell.services.event_views import TodayView
+
+    offers_ = [copy(OFFER_VIEW, event=copy(OFFER_VIEW.event, id=100 + n)) for n in range(60)]
+    today = TodayView(DAY, [*offers_, SCHEDULED_VIEW], tuple(Slot))
+    view = with_version_footer(
+        home_view(today, HomeLinks("https://dinnerbell.example.com"), notice="Hi", awaiting=AWAITING), "0.5.0"
+    )
+    blocks = view["blocks"]
+    assert MAX_VIEW_BLOCKS - 2 <= len(blocks) <= MAX_VIEW_BLOCKS  # cards are two blocks each
+    assert blocks[-1]["elements"][0]["text"].startswith("Dinnerbell 0.5.0")
+    assert any(b.get("block_id") == "start" for b in blocks)
+    assert "Today on the web" in json.dumps(blocks[-2])
+    shown = sum(1 for b in blocks if str(b.get("block_id", "")).startswith("event-actions-"))
+    assert f"…and {61 - shown} more" in json.dumps(blocks, ensure_ascii=False)

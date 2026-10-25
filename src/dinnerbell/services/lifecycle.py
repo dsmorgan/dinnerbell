@@ -21,12 +21,14 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from dinnerbell.db.catalog import CatalogRepository, ItemValues
+from dinnerbell.db.engine import write_transaction
 from dinnerbell.db.events import AssignmentRepository, EventRepository, ProposalRepository, ResponseRepository
 from dinnerbell.db.meals import MealLogRepository, household_settings
 from dinnerbell.db.repositories import HouseholdRepository, MemberRepository
 from dinnerbell.domain import notifications as note
 from dinnerbell.domain.catalog import CatalogItem, ItemKind, Mode
 from dinnerbell.domain.events import (
+    MAX_PROPOSALS,
     MIN_HEAD_COUNT,
     MODE_ROLE,
     EndReason,
@@ -86,7 +88,9 @@ async def cooking_offer(db: AsyncSession, household_id: int, slot: Slot, day: da
     return next((o for o in offers if replaces_call(o)), None)
 
 
-async def _check_no_cooking_offer(db: AsyncSession, household_id: int, slot: Slot, day: date) -> None:
+async def check_no_cooking_offer(db: AsyncSession, household_id: int, slot: Slot, day: date) -> None:
+    """Refuse a call for ``slot`` on ``day`` while a live cooking offer stands in for it (FR-5):
+    starting one, starting a called-off one again, or an admin's re-run."""
     offer = await cooking_offer(db, household_id, slot, day)
     if offer is not None:
         cook = await MemberRepository(db).get(household_id, offer.created_by) if offer.created_by else None
@@ -123,8 +127,8 @@ async def create_call(
     schedule = slot_schedule(await household_settings(db, household.id), slot)
     events = EventRepository(db)
     existing = await events.call_for(household.id, slot, day)
-    if actor is not None and (existing is None or existing.state is EventState.CANCELLED):
-        await _check_no_cooking_offer(db, household.id, slot, day)
+    if actor is not None and existing is None:  # ``restart`` checks a called-off one
+        await check_no_cooking_offer(db, household.id, slot, day)
     if existing is not None:
         if existing.state is EventState.CANCELLED and actor is not None:
             return await restart(db, existing, actor=actor, now=now, any_time=restart_any_time)
@@ -185,24 +189,27 @@ async def open_due_calls(db: AsyncSession, household: Household, now: datetime) 
     opened: list[Event] = []
     for slot, schedule in slot_schedules(await household_settings(db, household.id)).items():
         opens_at = schedule.opens_at(today, zone)
-        exists = await EventRepository(db).call_for(household.id, slot, today) is not None
-        # A cooking offer stands in for the call (FR-5). Called off before the response deadline,
-        # it frees the slot, and the next tick posts the call after all.
-        exists = exists or await cooking_offer(db, household.id, slot, today) is not None
-        due = should_open_today(
-            enabled=schedule.enabled,
-            opens_at=opens_at,
-            respond_deadline=opens_at + schedule.response_window,
-            now=now,
-            exists=exists,
-        )
-        if not due:
-            continue
-        try:
-            opened.append(await create_call(db, household, slot, today, opens_at=opens_at, actor=None, now=now))
-            await db.commit()
-        except CallExists:
-            await db.rollback()
+        # Check and create under the write lock, so a cooking offer posted at the same moment
+        # (``offers.post_offer`` takes it too) either sees the call or keeps it from opening.
+        async with write_transaction(db):
+            exists = await EventRepository(db).call_for(household.id, slot, today) is not None
+            # A cooking offer stands in for the call (FR-5). Called off before the response
+            # deadline, it frees the slot, and the next tick posts the call after all.
+            exists = exists or await cooking_offer(db, household.id, slot, today) is not None
+            due = should_open_today(
+                enabled=schedule.enabled,
+                opens_at=opens_at,
+                respond_deadline=opens_at + schedule.response_window,
+                now=now,
+                exists=exists,
+            )
+            if not due:
+                continue
+            try:
+                opened.append(await create_call(db, household, slot, today, opens_at=opens_at, actor=None, now=now))
+                await db.commit()
+            except CallExists:
+                await db.rollback()
     return opened
 
 
@@ -222,6 +229,7 @@ async def restart(
         raise CallExists(f"There's already a {event.slot.value} call for that day.")
     today = household_today(ctx.household, now)
     check_restart(ctx.event, today, now=now, too_late_after=ctx.too_late_for(today), any_time=any_time)
+    await check_no_cooking_offer(db, event.household_id, event.slot, event.day)
     fresh = await reopen(db, ctx, today=today, now=now, started_by=actor)
     payload = {"from": EventState.CANCELLED.value, "run": fresh.run, "respond_by": fresh.respond_deadline.isoformat()}
     await audit(db, event.household_id, actor, "event.restarted", _target(event), payload, now)
@@ -379,6 +387,7 @@ async def _close_responses(db: AsyncSession, event: Event, now: datetime) -> Non
     attached = await _keep_attached(db, ctx, group, now)
     taken = {(p.item_id, p.mode) for p in attached}
     ranked = [r for r in rank(await ranking_snapshot(db, ctx, group)) if (r.item_id, r.mode) not in taken]
+    ranked = ranked[: max(MAX_PROPOSALS - len(attached), 0)]  # FR-13: at most 10 picks in all
     resolved = resolve_maybes(ctx.responses)
     for response in resolved:
         await ResponseRepository(db).save(event.household_id, event.id, response, now)
@@ -416,13 +425,15 @@ async def _close_responses(db: AsyncSession, event: Event, now: datetime) -> Non
 
 
 async def _keep_attached(db: AsyncSession, ctx: CallContext, group: GroupPreferences, now: datetime) -> list[Proposal]:
-    """Picks offers added while responses were open (FR-5) that still fit everyone who might be
-    eating. Each passed the vetoes of everyone in when it was offered, but people who answered
-    since may veto it, or bring a guest it doesn't suit; those go, as ranking would never have
-    proposed them (FR-29). Audited as ``event.pick_dropped``, without saying why."""
+    """Picks offers added while responses were open (FR-5) that can still be decided. Each passed
+    every check when it was offered, but since then people who answered may veto it or bring a
+    guest it doesn't suit, its offerer may have said out, or its item may have left the catalog.
+    Those go, as ranking would never propose them (FR-29). Audited as ``event.pick_dropped``,
+    without saying why."""
     kept: list[Proposal] = []
     for proposal in ctx.proposals:
-        if misfit(ctx, proposal, group) == DOESNT_FIT:
+        offerer = ctx.response_of(proposal.proposed_by) if proposal.proposed_by is not None else None
+        if offerer is None or not offerer.is_in or misfit(ctx, proposal, group) is not None:
             await ProposalRepository(db).delete(ctx.event.household_id, proposal.id)
             payload = {"proposal_id": proposal.id, "item_id": proposal.item_id, "mode": proposal.mode.value}
             await audit(db, ctx.event.household_id, None, "event.pick_dropped", _target(ctx.event), payload, now)

@@ -635,7 +635,7 @@ async def make_offer(
             at=when,
             capacity=seats if seats is not None else 0,
             item_id=item,
-            free_text=None if item is not None else (free_text or None),
+            free_text=free_text or None,  # with an item too, the service refuses, as Slack's form does
             cuisine_id=parse_id(cuisine_id),
         )
         posted = await offers.post_offer(db, principal.member, data, now=context.clock())

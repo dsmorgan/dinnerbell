@@ -103,6 +103,7 @@ CALL_FINISHED = "This call already finished."
 STALE_CALL = "That can't happen anymore."
 OFFER_JOIN_INSTEAD = "This is an offer: tap Count me in to join it."
 OFFER_CHANGE = "To change an offer, call it off and post a new one."
+NO_COORDINATOR = "An offer has no coordinator: whoever made it is in charge."
 
 
 class StaleRun(EventRuleViolation):
@@ -545,14 +546,24 @@ def check_claim_coordinator(event: Event, actor: Member) -> None:
     if not actor.active:
         raise EventRuleViolation("Only active members can coordinate.")
     if event.is_offer:
-        raise EventRuleViolation("An offer has no coordinator: whoever made it is in charge.")
+        raise EventRuleViolation(NO_COORDINATOR)
     if event.state not in {EventState.COLLECTING, EventState.VOTING}:
         raise EventRuleViolation("You can claim coordinating only while the call is open.")
     if event.coordinator_id is not None:
         raise EventRuleViolation("Someone is already coordinating. They can hand it off to you.")
 
 
+def check_assign_coordinator(event: Event) -> None:
+    """FR-10: the admin assigns, replaces, or clears the coordinator of a posted, open call."""
+    if event.is_offer:
+        raise EventRuleViolation(NO_COORDINATOR)
+    if event.state not in OPEN_STATES - {EventState.SCHEDULED}:
+        raise EventRuleViolation("This call is over.")
+
+
 def check_handoff(event: Event, actor: Member, target: Member) -> None:
+    if event.is_offer:
+        raise EventRuleViolation(NO_COORDINATOR)
     if not is_coordinator(event, actor):
         raise EventRuleViolation("Only the coordinator can hand off coordinating.")
     if event.state not in {EventState.COLLECTING, EventState.VOTING, EventState.DECIDED}:

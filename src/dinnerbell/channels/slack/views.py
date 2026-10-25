@@ -709,17 +709,20 @@ def home_view(
     awaiting: Sequence[Awaiting] = (),
 ) -> dict[str, Any]:
     """Each member's Home tab. ``label``, the instance label, prefixes the header when set.
-    ``awaiting`` lists meals the member hasn't given feedback on yet."""
+    ``awaiting`` lists meals the member hasn't given feedback on yet.
+
+    It leaves room for the version footer (``blocks.with_version_footer``) within Slack's 100
+    blocks, and keeps the start buttons and the links at the bottom: when calls and offers
+    don't all fit, the ones that don't are left to the web, and a line says how many."""
     title = f"Today · {day_label(today.today)}"
-    blocks: list[Block] = [header(f"{label} · {title}" if label else title)]
+    head: list[Block] = [header(f"{label} · {title}" if label else title)]
     if notice:
-        blocks.append(section(f"*{escape(clip(notice, 500))}*"))
-    for v in today.current:
-        blocks += (
-            _offer_card(v, v.offer, links, today.today) if v.offer is not None else _event_card(v, links, today.today)
-        )
-    if not today.current:
-        blocks.append(section("No calls today yet."))
+        head.append(section(f"*{escape(clip(notice, 500))}*"))
+    current = [
+        _offer_card(v, v.offer, links, today.today) if v.offer is not None else _event_card(v, links, today.today)
+        for v in today.current
+    ]
+    upcoming = [_upcoming_card(v, links) for v in today.upcoming]
     todays = [v.event for v in today.events if v.event.day == today.today]
     # A cooking offer stands in for that slot's call (FR-5), so there's no call to start.
     started = {e.slot for e in todays if not e.is_offer or replaces_call(e)}
@@ -730,18 +733,38 @@ def home_view(
             starts.append(button(f"Start {slot.value} again", ids.ACTION_FOR_START[slot], slot.value))
         elif slot not in started:
             starts.append(button(f"Start a {slot.value} call", ids.ACTION_FOR_START[slot], slot.value))
-    if starts:
-        blocks.append(actions(*starts, block_id="start"))
-    if today.upcoming:
-        blocks.append(section("*Coming up*"))
-        for v in today.upcoming:
-            blocks += _upcoming_card(v, links)
-    blocks += _awaiting(awaiting, links)
-    blocks += [
+    tail: list[Block] = [
+        *_awaiting(awaiting, links),
         divider(),
         context(
             f"<{links.url('/preferences')}|Your preferences> · <{links.url('/catalog')}|Catalog> · "
             f"<{links.url('/history')}|History> · <{links.url('/')}|Today on the web>"
         ),
     ]
-    return {"type": "home", "blocks": blocks[:MAX_VIEW_BLOCKS]}
+    # One block for the footer, one for the start buttons, and one for "…and N more".
+    room = MAX_VIEW_BLOCKS - 1 - len(head) - 1 - len(tail) - 1 - (1 if upcoming else 0) - (0 if current else 1)
+    blocks = list(head)
+    shown = 0
+    for card in current:
+        if len(card) > room:
+            break
+        blocks += card
+        room -= len(card)
+        shown += 1
+    if not current:
+        blocks.append(section("No calls today yet."))
+    blocks.append(actions(*starts, block_id="start"))
+    later: list[Block] = []
+    for card in upcoming:
+        if shown < len(current) or len(card) > room:
+            break
+        later += card
+        room -= len(card)
+        shown += 1
+    if later:
+        blocks += [section("*Coming up*"), *later]
+    hidden = len(current) + len(upcoming) - shown
+    if hidden:
+        blocks.append(context(f"…and {hidden} more on <{links.url('/')}|Today on the web>."))
+    blocks += tail
+    return {"type": "home", "blocks": blocks}

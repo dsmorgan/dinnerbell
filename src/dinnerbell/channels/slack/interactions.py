@@ -1174,6 +1174,9 @@ FORMS: dict[str, Callable[[Any], Any]] = {
 def seat_reply(seat: offers.Seat) -> str:
     """Where a member stands on an offer after a tap on it."""
     left = "It's full now." if seat.seats_left == 0 else f"{seat.seats_left} spare."
+    if seat.offerer:
+        guests = f", with {seat.guests} guest{'' if seat.guests == 1 else 's'}" if seat.guests else ""
+        return f"It's your offer, so you're in{guests}. {left}"
     if not seat.joined:
         return f"Got it: you're not joining {seat.item_name}. {left}"
     guests = f" with {seat.guests} guest{'' if seat.guests == 1 else 's'}" if seat.guests else ""
