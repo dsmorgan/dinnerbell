@@ -593,3 +593,116 @@ def test_0008_adds_feedback_that_goes_with_its_meal_and_downgrade_removes_it(set
     finally:
         engine.dispose()
     run_migrations(settings.sync_database_url, settings.database_path)
+
+
+# 0009: meal IDs are never reused (#56) ---------------------------------------------------------
+
+FEEDBACK_ROW = (
+    "INSERT INTO feedback (household_id, meal_id, member_id, food, place_issues, cook_thanks, item_id, item_name, "
+    "item_kind, participants, created_at, updated_at) VALUES (1, :meal, 1, 'loved', '[]', 0, 1, 'X', 'restaurant', "
+    "'[]', :t, :t)"
+)
+MEAL_ROW = (
+    "INSERT INTO meal_log (household_id, date, slot, item_id, cuisine_tags, participants, created_at, updated_at) "
+    "VALUES (1, :day, 'lunch', 1, '[]', '[]', :t, :t)"
+)
+
+
+def _populate_meals(settings: Settings) -> None:
+    """The calls of 0007's test, a second meal with no call, and feedback on both meals."""
+    _populate_calls(settings)
+    engine = create_sync_engine(settings.sync_database_url)
+    try:
+        with engine.begin() as c:
+            c.execute(text(MEAL_ROW), {"day": "2026-10-22", "t": STAMP})
+            for meal in (1, 2):
+                c.execute(text(FEEDBACK_ROW), {"meal": meal, "t": STAMP})
+    finally:
+        engine.dispose()
+
+
+def _meal_snapshot(settings: Settings) -> dict[str, object]:
+    engine = create_engine(settings.sync_database_url)
+    try:
+        with engine.connect() as c:
+            rows = {t: c.execute(text(f"SELECT * FROM {t} ORDER BY rowid")).all() for t in ("meal_log", "feedback")}  # noqa: S608
+            indexes = c.execute(
+                text(
+                    "SELECT name, sql FROM sqlite_master WHERE type = 'index' AND tbl_name = 'meal_log' "
+                    "AND sql IS NOT NULL ORDER BY name"
+                )
+            ).all()
+            assert c.execute(text("PRAGMA foreign_key_check")).all() == []
+    finally:
+        engine.dispose()
+    return {"rows": rows, "indexes": indexes}
+
+
+def _meal_log_sql(settings: Settings) -> str:
+    engine = create_engine(settings.sync_database_url)
+    try:
+        with engine.connect() as c:
+            sql: str = c.execute(text("SELECT sql FROM sqlite_master WHERE name = 'meal_log'")).scalar_one()
+    finally:
+        engine.dispose()
+    return sql
+
+
+def test_0009_rebuilds_meal_log_without_losing_a_row_or_its_feedback(settings: Settings) -> None:
+    """Feedback cascades with its meal, so a rebuild with foreign keys on would empty it. Every
+    meal and every feedback row survive, up, down, and up again, with meal_log's indexes."""
+    _upgrade_to(settings, "0008_meal_feedback")
+    _populate_meals(settings)
+    before = _meal_snapshot(settings)
+    assert [len(before["rows"][t]) for t in ("meal_log", "feedback")] == [2, 2]  # type: ignore[index]
+    assert "AUTOINCREMENT" not in _meal_log_sql(settings)
+
+    _upgrade_to(settings, "0009_meal_log_autoincrement")
+    assert "AUTOINCREMENT" in _meal_log_sql(settings)
+    assert _meal_snapshot(settings) == before
+
+    _downgrade_to(settings, "0008_meal_feedback")
+    assert "AUTOINCREMENT" not in _meal_log_sql(settings)
+    assert _meal_snapshot(settings) == before
+
+    _upgrade_to(settings, "0009_meal_log_autoincrement")
+    assert _meal_snapshot(settings) == before
+    assert _snapshot(settings)["rows"]["meal_log"] == before["rows"]["meal_log"]  # type: ignore[index]
+
+
+def test_0009_never_reuses_a_meal_id(settings: Settings) -> None:
+    """After the upgrade, deleting the newest meal doesn't free its ID, and deleting a meal
+    still deletes its feedback."""
+    _upgrade_to(settings, "0008_meal_feedback")
+    _populate_meals(settings)
+    run_migrations(settings.sync_database_url, settings.database_path)
+    engine = create_sync_engine(settings.sync_database_url)  # foreign keys on, as the app runs
+    try:
+        with engine.begin() as c:
+            c.execute(text("DELETE FROM meal_log WHERE id = 2"))
+            assert c.execute(text("SELECT count(*) FROM feedback WHERE meal_id = 2")).scalar() == 0
+            c.execute(text(MEAL_ROW), {"day": "2026-10-23", "t": STAMP})
+            assert c.execute(text("SELECT max(id) FROM meal_log")).scalar() == 3
+            c.execute(text("DELETE FROM meal_log"))
+            c.execute(text(MEAL_ROW), {"day": "2026-10-24", "t": STAMP})
+            assert c.execute(text("SELECT id FROM meal_log")).scalar() == 4
+    finally:
+        engine.dispose()
+
+
+def test_0009_refuses_to_run_with_foreign_keys_on(settings: Settings) -> None:
+    """With foreign keys on, dropping the old meal_log would delete all feedback, so 0009 refuses."""
+    from alembic import command
+
+    from dinnerbell.db.migrate import _alembic_config
+
+    _upgrade_to(settings, "0008_meal_feedback")
+    _populate_meals(settings)
+    engine = create_sync_engine(settings.sync_database_url)
+    try:
+        with pytest.raises(RuntimeError, match="foreign keys on"), engine.begin() as connection:
+            command.upgrade(_alembic_config(connection), "0009_meal_log_autoincrement")
+        with engine.connect() as c:
+            assert c.execute(text("SELECT count(*) FROM feedback")).scalar() == 2
+    finally:
+        engine.dispose()

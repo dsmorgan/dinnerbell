@@ -6,6 +6,18 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ## [Unreleased]
 
+### Added
+
+- `dinnerbell reset-history` clears the history from testing before you go live (#56): every call and everything in it, the meal log, feedback on meals, and the outbox. It keeps the catalog, members and roles, Slack links, preferences and vetoes, the schedule and settings, sign-ins, and the audit log. It works on production. Before it changes anything, it shows how many rows it deletes and keeps in each table, refuses while a call is open, asks you to type `reset` (or takes `--yes`), and backs up the database to `backups/pre-reset-VERSION-TIME.db`, checking the backup before it goes on. It runs in one transaction and writes a `history.reset` audit row with the counts. Days you skipped, or whose call you called off, from today on stay off. Messages from earlier calls stay in Slack unchanged. See "Going live" in [docs/setup.md](docs/setup.md#going-live).
+
+### Changed
+
+- Meal IDs are never reused, so a History or feedback page left open while meals are deleted, such as by `dinnerbell reset-history`, can't save to a different meal. The upgrade rebuilds the `meal_log` table (migration 0009) and keeps every row and its feedback.
+
+### Upgrade notes
+
+- The database migrates to revision `0009_meal_log_autoincrement` when Dinnerbell starts. It rebuilds the `meal_log` table so a deleted meal's ID is never given to a new meal, keeping every meal and its feedback. It's quick for a household's data. Back up first, as always. To go back to an earlier release, restore that backup: older releases refuse a database at a revision they don't know.
+
 ## [0.4.0] - 2026-10-25
 
 ### Added

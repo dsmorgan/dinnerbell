@@ -355,6 +355,38 @@ Items and tags match by name, ignoring case, and a match keeps the spelling the 
 
 The import never deletes: items that exist only in the instance you copy to stay, as do each item's cooks. To retire an item in both, set it inactive in one and copy again.
 
+## Going live
+
+While you try Dinnerbell out, it records test calls, votes, meals, and feedback. Before the household relies on it, delete them, so History, "eaten lately" in proposals, and later stats start from a clean record. `dinnerbell reset-history` deletes every call and everything in it (answers, suggestions, proposals, votes, decisions, and assignments), the meal log, feedback on meals, and the outbox of Slack notifications. It keeps the catalog, members and their roles, Slack links, preferences and vetoes, the schedule and settings, sign-ins, and the audit log. Run it once, on production.
+
+1. Call off every call that's still open: on its card or in Slack, select **Call it off**. The reset refuses while a call is scheduled, taking answers, voting, or decided, and lists those calls. Calling off a call that someone else scheduled for a later day sends them the usual direct message saying you called it off, so tell them first.
+2. [Back up now](#back-up-now), and copy the backup off the host.
+3. Reset the history in the running container:
+
+   ```sh
+   podman-compose exec dinnerbell dinnerbell reset-history
+   ```
+
+   With Docker: `docker compose exec dinnerbell dinnerbell reset-history`.
+
+   Before it changes anything, the command prints the database path, the household name, and, for each table, how many rows it deletes and how many it keeps. Check the numbers:
+
+   - **Notifications not yet sent** should be 0. If you just called a call off, Slack may not show it yet; type anything but `reset`, wait a minute, and run the command again.
+   - **Days off kept** lists the days, today or later, whose call was skipped or called off. They stay off: the reset replaces each with a fresh called-off call, so the scheduler doesn't post that day's call. To have one after all, start it from App Home, Today, or `/dinnerbell call`.
+   - If it says the scheduler posts today's call again, that call already finished while its answers are still open, so the next tick posts a fresh one. To avoid it, run the reset after the call's answer deadline.
+
+   Then type `reset` to confirm. Without a terminal, run the command again with `--yes` added, after checking the same numbers. The command backs up the database to `/data/backups/pre-reset-VERSION-TIME.db`, such as `pre-reset-0.3.0-20261024T013000Z.db`, then deletes the history in one transaction, so it either finishes or changes nothing. The audit log records a `history.reset` row with the counts and the backup's name. Nightly pruning never deletes the backup.
+
+4. Check the result:
+
+   - History has no meals, and Stats, in versions that have it, is empty.
+   - Today and App Home show no old calls.
+   - The catalog, Members, Preferences, and Schedule look as they did. The **Kept** counts the command printed match the **Keeps** counts in its preview.
+
+Messages from earlier calls stay in the Slack channel as they were. Dinnerbell never edits them again, and their buttons reply "No such call." Call IDs are never reused, so an old button can't reach a new call. The next scheduled call posts as usual.
+
+To undo the reset, restore its `pre-reset-*.db` backup the way you'd restore a pre-upgrade one: follow steps 1, 3, and 4 of [Roll back](#roll-back) with the `pre-reset-*.db` file name, skip step 2 because you stay on the same release, then start the service with `podman-compose up -d`. Anything recorded after the reset is lost.
+
 ## Back up
 
 Dinnerbell runs an online backup of its SQLite database every night at 03:30 household time into `/data/backups/`, and once at start if the newest backup is more than a day old. It keeps the 14 newest daily copies plus the newest copy from each of the last 8 weeks. In M0, only `/healthz` shows the last successful backup; the Admin page gains it later.
