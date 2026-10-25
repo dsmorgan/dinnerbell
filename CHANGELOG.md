@@ -6,6 +6,8 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-25
+
 ### Added
 
 - `dinnerbell reset-history` clears the history from testing before you go live (#56): every call and everything in it, the meal log, feedback on meals, and the outbox. It keeps the catalog, members and roles, Slack links, preferences and vetoes, the schedule and settings, sign-ins, and the audit log. It works on production. Before it changes anything, it shows how many rows it deletes and keeps in each table, refuses while a call is open, asks you to type `reset` (or takes `--yes`), and backs up the database to `backups/pre-reset-VERSION-TIME.db`, checking the backup before it goes on. It runs in one transaction and writes a `history.reset` audit row with the counts. Days you skipped, or whose call you called off, from today on stay off. Messages from earlier calls stay in Slack unchanged. See "Going live" in [docs/setup.md](docs/setup.md#going-live).
@@ -33,7 +35,7 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ### Security
 
-- Checking an email address takes time in proportion to its length, whatever it contains (CodeQL `py/polynomial-redos`). Addresses were already capped at 254 characters, so this wasn't exploitable. The check is a little stricter too: it refuses an empty part between the dots of the domain, such as `sam@example..com` or `sam@example.com.`.
+- Checking an email address takes time in proportion to its length, whatever it contains (CodeQL `py/polynomial-redos`). Addresses were already capped at 254 characters, so this wasn't exploitable. The check is a little stricter too: it refuses an empty part between the dots of the domain, such as `sam@.example.com`, `sam@example..com`, or `sam@example.com.`.
 
 ### Upgrade notes
 
@@ -41,6 +43,7 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 - The database then migrates to revision `0010_offers`, after `0009_meal_log_autoincrement`. It rebuilds the `event` table to add an offer's spare servings, `capacity`, with a check that only offers have one, from 1 to 20; every row is kept, and event IDs are still never reused. Like migration 0007, it must run with foreign keys off, as `dinnerbell serve` and `dinnerbell migrate` do; run any other way, it refuses rather than delete call data. Back up first. To go back to an earlier release, restore that backup; downgrading the schema instead deletes every offer.
 - No Slack scope changes, so no reinstall. Optional: both Slack app manifests list `offer` and `log` in the slash command's usage hint. To show them, edit the command's usage hint in the app's **Slash Commands** settings to match `deploy/slack-app-manifest.yaml` (or `deploy/slack-app-manifest.test.yaml` for test).
 - The database then migrates to revision `0011_guests`. It rebuilds the `member` table so a guest has no email, with a check that guests never have one and everyone else does, adds `slack_email` for the email Slack shares when a guest joins (never used to sign in) and `slack_guest_account`, and adds guests' dietary needs, whether an admin removed them, and the `invitation` table. Every row is kept. Like 0010, it must run with foreign keys off, as `dinnerbell serve` and `dinnerbell migrate` do; run any other way, it refuses. To go back, restore your backup; downgrading the schema instead deletes every guest.
+- The stricter email check refuses `sam@.example.com`, `sam@example..com`, and `sam@example.com.`. If `DINNERBELL_ADMIN_EMAIL` has one of those shapes, Dinnerbell stops at start with a configuration error; fix it in `.env` first. A member whose stored email has one can't be edited or matched by email until an admin corrects it.
 - Joining is on as soon as you upgrade. Anyone in the Dinnerbell channel can join as a guest from then on, and joined guests appear in every member's **Invite a guest** list. If you don't want that, turn it off on Admin > Members right after the upgrade.
 - Joining from the channel needs no new Slack scope either: it reads the channel's members with `conversations.members` and the person with `users.info`, which `channels:read` and `users:read` already allow. A private channel also needs `groups:read`, as before.
 - `reset-history` clears the new `invitation` table with the calls, and keeps guests, who are rows of `member`.
@@ -178,7 +181,8 @@ The source-built version, never published as an image. It covers milestones M0 t
 - **M1:** the catalog with file import, preferences and vetoes, meal history, and the members admin page.
 - **M2:** dinner calls in Slack: the scheduled call, reminders, ranked proposals and votes, the decision, assignments, the abandon path, admin overrides, App Home, and `/dinnerbell call`.
 
-[Unreleased]: https://github.com/dsmorgan/dinnerbell/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/dsmorgan/dinnerbell/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/dsmorgan/dinnerbell/releases/tag/v0.5.0
 [0.4.0]: https://github.com/dsmorgan/dinnerbell/releases/tag/v0.4.0
 [0.3.0]: https://github.com/dsmorgan/dinnerbell/releases/tag/v0.3.0
 [0.2.0]: https://github.com/dsmorgan/dinnerbell/releases/tag/v0.2.0
