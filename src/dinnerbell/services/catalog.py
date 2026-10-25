@@ -97,7 +97,7 @@ async def catalog(db: AsyncSession, actor: Member) -> CatalogData:
     return CatalogData(
         items=await repo.items(actor.household_id),
         tags=await repo.tags(actor.household_id),
-        members=await MemberRepository(db).list(actor.household_id),
+        members=[m for m in await MemberRepository(db).list(actor.household_id) if not m.is_guest],
         last_eaten=await MealLogRepository(db).last_eaten(actor.household_id),
     )
 
@@ -129,7 +129,7 @@ async def _clean(
     """Validate an item. Cooks must be active members, except that an edit may keep cooks the
     item already has, so deactivating someone doesn't make their dishes uneditable."""
     existing_tags = await CatalogRepository(db).tags(actor.household_id)
-    cooks = {m.id for m in await MemberRepository(db).list(actor.household_id) if m.active}
+    cooks = {m.id for m in await MemberRepository(db).list(actor.household_id) if m.is_member}  # never a guest
     if current is not None:
         cooks |= current.cook_ids
     return clean_item(data, existing_tags, cooks), existing_tags
@@ -329,7 +329,7 @@ async def snapshot(db: AsyncSession, household_id: int) -> CatalogSnapshot:
     return CatalogSnapshot(
         tags=tuple(await repo.tags(household_id)),
         items=tuple(await repo.items(household_id)),
-        members=tuple(await MemberRepository(db).list(household_id)),
+        members=tuple(m for m in await MemberRepository(db).list(household_id) if not m.is_guest),  # cooks
     )
 
 

@@ -71,7 +71,8 @@ async def participant_choices(db: AsyncSession, actor: Member, meal: MealLog | N
 
 async def _eligible(db: AsyncSession, actor: Member, meal: MealLog | None) -> dict[int, str]:
     kept = {ref.id: ref.name for ref in meal.participants} if meal is not None else {}
-    active = {m.id: m.display_name for m in await MemberRepository(db).list(actor.household_id) if m.active}
+    # Members only: a guest (#38) is on a meal only from a call they were invited to.
+    active = {m.id: m.display_name for m in await MemberRepository(db).list(actor.household_id) if m.is_member}
     return kept | active  # active members appear under their current name
 
 

@@ -59,7 +59,7 @@ Measure these 30 days after the household starts using Dinnerbell for dinner.
 
 | Role | Who | Can do |
 |---|---|---|
-| Admin | David | Everything a member can, plus: invite and deactivate members, edit household settings other than the meal schedule, override or reassign a coordinator, lock or cancel a decision, rename and merge tags, connect Slack. |
+| Admin | David | Everything a member can, plus: invite and deactivate members, make a guest a member or remove a guest, turn joining from the channel on or off, edit household settings other than the meal schedule, override or reassign a coordinator, lock or cancel a decision, rename and merge tags, connect Slack. |
 | Member | Each household adult | Respond to calls, make offers, change the meal schedule, claim roles, propose and vote, maintain the catalog, set their own preferences, invite guests, log meals, give feedback on meals, view history and badges. |
 | Guest | A partner or friend at a meal (#38) | Eats with the household when a member invites them to a call, one call at a time. Once invited, answers In or Out, offers to cook, pick up, or order, can be assigned those roles, and can coordinate the logistics: Close now, marking it done, the meal time, who does what, and handing off. Never votes, proposes, suggests, vetoes, locks a pick, breaks a tie, calls a call off, starts or posts a call, makes or joins an offer, or gives feedback. Their dietary needs are hard constraints. A **registered guest** has a Slack account and answers for themselves; for an **unregistered guest** the inviting member answers and gets their messages. On the web a registered guest sees only the calls they're invited to and their own dietary needs. Someone who joins on their own starts as a guest; only an admin makes a guest a member. A member can also still bring head-count guests on their own response (5.5). |
 
@@ -178,7 +178,10 @@ Requirements use "must" for version 1 and "should" for items that can slip to a 
 | FR-8 | A response may include guest count, guest dietary needs, an eat window (earliest and latest), roles offered (cook, pickup, order, coordinate), one or more suggestions, and a free-text note. |
 | FR-9 | "Maybe" counts toward hard-veto filtering and not toward capacity. Unresolved maybes become out at the deadline and the member is told. |
 | FR-10 | The first member to claim coordinate becomes coordinator. The coordinator can hand off. The admin can reassign. Offering to cook, pick up, or order counts a member in unless they said maybe; saying out withdraws their offers. |
-| FR-11 | Non-responders receive exactly one direct-message reminder per call at the configured lead time. |
+| FR-11 | Non-responders receive exactly one direct-message reminder per call at the configured lead time. Guests invited to the call who have Slack get it too (#38). |
+| FR-57 | **Guests** (#38). Any active member can invite a guest to a call while answers are open: a saved guest or someone new, with dietary needs. A guest is in only by invitation, one call at a time, and only to calls. A guest with Slack answers themselves; for one without, whoever invited them, or an admin, answers and gets their messages. A guest's dietary needs are hard constraints whenever they're in or maybe, and a member's own dietary needs, such as a promoted guest's, are too. A guest's stances never count. |
+| FR-58 | **What a guest may do** (`domain.guests`): answer In or Out, offer to cook, pick up, or order, coordinate, and, as coordinator, close the window, change the meal time and assignments, hand off, and mark done. Never vote, propose, suggest, veto, lock, call off, start or post a call, make or join an offer, or give feedback; with a guest coordinating, a tie goes to whoever invited them, then an admin. On the web a guest sees only their invitations and their own dietary needs; every other page refuses them on the server. Nobody waits for a guest to close a call early, but a guest's answer counts toward who's in. |
+| FR-59 | **Joining from the channel** (#38 addendum). Someone in the configured channel of the configured workspace, checked with Slack and never a bot, a deactivated account, or someone over Slack Connect, can join as a guest from Slack or by signing in with Slack, while the admin's **Join from the channel** setting is on (default on). Joins are rate-limited per Slack user and audited; someone an admin removed is refused. Each admin gets a message with **Make member** and **Remove**. Only an admin makes a guest a member, and every promotion is audited. The admin can add people from the channel as guests or members, and link a guest to the member they really are. |
 
 ### 6.3 Proposals, ranking, and voting
 
@@ -409,7 +412,7 @@ Mobile-first server-rendered pages with HTMX for in-place updates. No JavaScript
 | History | Meals by week. Cuisines in the current variety window. Give or edit feedback on recent meals. |
 | Stats | Contribution counts, badges with progress to the next tier, household recap. |
 | Schedule | Each slot's standing schedule, which any member can change (FR-44). |
-| Admin | Members and invitations, Slack mapping, skipping a day's call (FR-6), time zone, ranking weights, badge thresholds, backup status. |
+| Admin | Members and invitations, Slack mapping, guests (add, edit, link Slack, link to a member, promote, remove), **Join from the channel**, **Add people from the channel**, skipping a day's call (FR-6), time zone, ranking weights, badge thresholds, backup status. |
 
 ## 12. Metrics and badges
 

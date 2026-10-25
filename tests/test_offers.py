@@ -651,9 +651,10 @@ async def test_a_member_has_at_most_three_offers_on_per_meal(house: House) -> No
     await post(house, "Kim", lunch(house, slot=Slot.DINNER, at=time(18, 0)))  # and Kim, for dinner
 
 
-async def test_a_schedule_save_keeps_no_call_next_to_a_cooking_offer(house: House) -> None:
-    """Moving the dinner call earlier than now would keep today's call at the old time, but a
-    cooking offer already stands in for it (FR-5), so none is kept and none opens."""
+async def test_a_schedule_save_never_opens_a_call_next_to_a_cooking_offer(house: House) -> None:
+    """Moving the dinner call earlier than now keeps today's call at the old time, as always; a
+    cooking offer stands in for it (FR-5), so at that time the tick calls it off instead of
+    posting it."""
     from dataclasses import replace as copy
 
     from dinnerbell.domain.schedule import DEFAULT_SLOTS, slot_fingerprint
@@ -669,13 +670,16 @@ async def test_a_schedule_save_keeps_no_call_next_to_a_cooking_offer(house: Hous
     from dinnerbell.db.events import EventRepository
 
     async with house.sessionmaker() as db:
-        assert await EventRepository(db).call_for(house.household.id, Slot.DINNER, DAY) is None
-    (audit,) = await house.audits("household.slot_schedule_updated")
-    assert "kept_today_at" not in audit.payload
+        kept = await EventRepository(db).call_for(house.household.id, Slot.DINNER, DAY)
+    assert kept is not None and kept.state is EventState.SCHEDULED  # kept at the old time, as for anyone
     house.clock.now = OPENS
     await house.tick()
     offer_live, call_live = await live(house)
     assert offer_live and not call_live
+    assert (await house.event(kept.id)).state is EventState.CANCELLED  # the tick called it off, quietly
+    (audit,) = await house.audits("event.replaced_by_offer")
+    assert audit.payload["from"] == "scheduled" and audit.actor_member_id is None
+    assert not any(e.kind == "call_opened" for e in await house.outbox())
 
 
 async def test_the_tick_calls_off_a_scheduled_call_a_cooking_offer_stands_in_for(house: House) -> None:

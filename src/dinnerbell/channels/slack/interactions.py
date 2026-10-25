@@ -837,7 +837,7 @@ class Interactions:
         ordinary message, and the bot's own. ``_action`` checked that the DM is this member's.
         If it can't be edited, a line of text says what happened instead."""
         me = PersonInfo(member.id, member.display_name)
-        reminder: ResponseReminder | GuestInvited = ResponseReminder(view.info, me)
+        reminder: ResponseReminder | GuestInvited = ResponseReminder(view.info, me, member.is_guest)
         if member.is_guest:  # their invitation, which has In and Out only (#38)
             inviter = next((g.invited_by for g in view.guests if g.person.id == member.id), None)
             reminder = GuestInvited(view.info, me, inviter or PersonInfo(0, "A member"))

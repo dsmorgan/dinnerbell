@@ -62,7 +62,7 @@
   </form>
   {% endif %}
   {% if v.can.leave %}<div class="button-row">{{ act(e.id, base ~ "/leave", "Can't make it", "button small", {"run": e.run}) }}</div>{% endif %}
-  {% if o.dietary_notes %}<p class="small">Guests need: {{ o.dietary_notes|join(", ") }}.</p>{% endif %}
+  {% if o.dietary_notes %}<p class="small">Dietary needs: {{ o.dietary_notes|join(", ") }}.</p>{% endif %}
   {% if v.can.mark_done %}<div class="button-row">{{ act(e.id, base ~ "/done", "Mark done", "button small", confirm="Mark this meal done? It goes into the history.") }}</div>{% endif %}
   {% else %}
   <p class="event-when small">
@@ -253,7 +253,7 @@
   {% set d = v.decision %}
   <div class="decision">
     <h3>{% if d.proposal.item.url %}<a href="{{ d.proposal.item.url }}" rel="noopener noreferrer" target="_blank">{{ d.proposal.item.name }}</a>{% else %}{{ d.proposal.item.name }}{% endif %} <span class="chip mode">{{ d.proposal.mode.label }}</span></h3>
-    <p class="small">{{ d.head_count }} eating: {% for p in d.participants %}{{ p.member.name }}{% if p.guests %} +{{ p.guests }}{% endif %}{{ ", " if not loop.last }}{% endfor %}{% if d.dietary_notes %}. Guests need: {{ d.dietary_notes|join(", ") }}{% endif %}.</p>
+    <p class="small">{{ d.head_count }} eating: {% for p in d.participants %}{{ p.member.name }}{% if p.guests %} +{{ p.guests }}{% endif %}{{ ", " if not loop.last }}{% endfor %}{% if d.dietary_notes %}. Dietary needs: {{ d.dietary_notes|join(", ") }}{% endif %}.</p>
     <ul class="chips assignments">
       {% for a in d.assignments %}<li class="chip role">{{ {"cook": "Cooking", "pickup": "Picking up", "order": "Ordering", "coordinator": "Coordinating"}[a.role.value] }}: {{ a.member.name }}</li>{% endfor %}
     </ul>

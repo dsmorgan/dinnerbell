@@ -125,11 +125,11 @@ class CallContext:
     @property
     def guest_needs(self) -> frozenset[int]:
         """Dietary needs every pick must meet (spec 5.5, 7): those of the guests members bring,
-        and of guests themselves (#38), for everyone who might be eating (in, or maybe). Needs
-        left on a response with no guests don't count."""
+        and people's own (#38: a guest's, and a promoted guest's, which they keep), for everyone
+        who might be eating (in, or maybe). Needs left on a response with no guests don't count."""
         who = veto_participants(self.responses)
         brought = {tag for r in self.responses if r.member_id in who and r.guests for tag in r.guest_needs}
-        own = {tag for m in who if self.is_guest(m) for tag in self.members[m].dietary_needs}
+        own = {tag for m in who if m in self.members for tag in self.members[m].dietary_needs}
         return frozenset(brought | own)
 
     @property
@@ -327,9 +327,12 @@ def decision_info(ctx: CallContext) -> note.DecisionInfo | None:
 
 
 def guest_dietary_notes(ctx: CallContext) -> tuple[str, ...]:
-    """Dietary needs of the guests of everyone in, and of guests who are in (FR-8, FR-20, #38)."""
+    """Dietary needs of the guests of everyone in, and of everyone in who has their own (FR-8,
+    FR-20, #38). Only the needs, never whose."""
     brought = {tag for r in ctx.participants if r.guests for tag in r.guest_needs}
-    own = {tag for r in ctx.participants if ctx.is_guest(r.member_id) for tag in ctx.members[r.member_id].dietary_needs}
+    own = {
+        tag for r in ctx.participants if r.member_id in ctx.members for tag in ctx.members[r.member_id].dietary_needs
+    }
     return _tag_names(ctx, brought | own)
 
 
@@ -407,6 +410,21 @@ def assignment_made(
     return note.AssignmentMade(event_info(ctx), assignment_id, ctx.person(member_id), tuple(roles), decision, via)
 
 
+def guest_invitations(ctx: CallContext) -> list[note.GuestInvited]:
+    """Invitations to send again when a call starts a new run (#38): to each registered guest
+    invited to it who hasn't answered this run. The key names the run, so each run sends once."""
+    info = event_info(ctx)
+    sent: list[note.GuestInvited] = []
+    for guest in ctx.guests:
+        answer = ctx.response_of(guest.id)
+        fresh = answer is not None and answer.updated_at is not None and answer.updated_at >= ctx.event.opens_at
+        if guest.is_registered_guest and not fresh:
+            inviter = ctx.invitations.get(guest.id)
+            by = ctx.person(inviter) if inviter is not None else note.PersonInfo(0, "A member")
+            sent.append(note.GuestInvited(info, ctx.person(guest.id), by))
+    return sent
+
+
 def answering_for(ctx: CallContext, member_id: int) -> note.PersonInfo | None:
     """Who gets a guest's direct messages when the guest has no Slack (#38): the member who
     invited them. None for anyone who gets their own."""
@@ -441,6 +459,16 @@ async def due(db: AsyncSession, event: Event, now: datetime) -> Step | None:
         return due_step(event, now, stale_after=cutoff)
     responses = await ResponseRepository(db).for_event(event.household_id, event.id)
     members = {m.id: m for m in await MemberRepository(db).list(event.household_id)}
-    active = [m.id for m in members.values() if m.active]
+    active = [m.id for m in members.values() if m.is_member]  # nobody waits for a guest (#38)
+    invited = await InvitationRepository(db).for_event(event.household_id, event.id)
+    guests = [g for g in invited if g in members and members[g].active]
     covered = coverage(responses, members)
-    return due_step(event, now, stale_after=cutoff, responses=responses, active_member_ids=active, coverage=covered)
+    return due_step(
+        event,
+        now,
+        stale_after=cutoff,
+        responses=responses,
+        active_member_ids=active,
+        coverage=covered,
+        guest_ids=guests,
+    )

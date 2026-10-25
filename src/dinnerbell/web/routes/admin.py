@@ -238,6 +238,7 @@ GUEST_NOTICES = {
     "guest_updated": "Guest updated.",
     "guest_promoted": "They're a member now.",
     "guest_removed": "Guest removed. They can't join from the channel again unless you add them back.",
+    "guest_linked": "Linked. Their Slack account belongs to the member now, and the guest record is retired.",
     "imported": "Added from the channel.",
 }
 NOTICES.update(GUEST_NOTICES)
@@ -328,6 +329,26 @@ async def promote_guest(
     except GUEST_ERRORS as exc:
         return await _guest_error(request, principal, context, db, exc)
     return RedirectResponse("/admin/members?notice=guest_promoted", status_code=303)
+
+
+@router.post("/guests/{guest_id}/link")
+async def link_guest(
+    request: Request,
+    principal: AdminCSRFChecked,
+    context: Context,
+    db: Database,
+    guest_id: RowId,
+    member_id: Text = "",
+) -> Response:
+    """The guest is really a member whose Slack account wasn't matched: move the link (#38)."""
+    try:
+        target = parse_id(member_id)
+        if target is None:
+            raise InvalidMemberInput("Pick the member they are.")
+        await guest_service.link_to_member(db, principal.member, guest_id, target, now=context.clock())
+    except GUEST_ERRORS as exc:
+        return await _guest_error(request, principal, context, db, exc)
+    return RedirectResponse("/admin/members?notice=guest_linked", status_code=303)
 
 
 @router.post("/guests/{guest_id}/remove")

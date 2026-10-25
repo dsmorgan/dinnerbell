@@ -231,6 +231,8 @@ class ResponseReminder(_Notification):
     kind: ClassVar[str] = "response_reminder"
     event: EventInfo
     member: PersonInfo
+    guest: bool = False
+    """The member is a guest invited to the call (#38): In and Out only."""
 
     @property
     def idempotency_key(self) -> str:
@@ -582,6 +584,8 @@ class GuestJoined:
     admin: PersonInfo
     guest: PersonInfo
     via: str
+    unlinked: tuple[PersonInfo, ...] = ()
+    """Members with no Slack account yet, who the guest might really be."""
 
     @property
     def idempotency_key(self) -> str:
@@ -602,6 +606,27 @@ class GuestJoined:
     @property
     def event_id(self) -> int | None:
         return None
+
+
+@dataclass(frozen=True, slots=True)
+class RoleVacated(_Notification):
+    """A guest left a decided call (#38: an admin removed them) while assigned to cook, pick up,
+    or order: one direct message to ``member``, the coordinator or, with none, each admin, to
+    pick someone else. ``left`` is the guest; ``roles`` are the ones nobody has now."""
+
+    kind: ClassVar[str] = "role_vacated"
+    event: EventInfo
+    member: PersonInfo
+    left: PersonInfo
+    roles: tuple[AssignmentRole, ...]
+
+    @property
+    def idempotency_key(self) -> str:
+        return f"{self.event.key}:{self.kind}:member{self.member.id}:left{self.left.id}"
+
+    @property
+    def recipient_id(self) -> int | None:
+        return self.member.id
 
 
 Notification = Union[  # noqa: UP007 - a runtime union, used for isinstance checks and payload decoding
@@ -626,6 +651,7 @@ Notification = Union[  # noqa: UP007 - a runtime union, used for isinstance chec
     OfferFull,
     GuestInvited,
     GuestJoined,
+    RoleVacated,
 ]
 NOTIFICATION_TYPES: dict[str, type[Notification]] = {cls.kind: cls for cls in get_args(Notification)}
 UPDATE_KINDS = frozenset(kind for kind, cls in NOTIFICATION_TYPES.items() if cls.is_update)

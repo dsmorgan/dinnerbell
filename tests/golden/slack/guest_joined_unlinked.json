@@ -1,0 +1,72 @@
+{
+  "blocks": [
+    {
+      "text": {
+        "text": "*Pat* joined Dinnerbell from the Dinnerbell channel, as a guest. Guests answer only the calls a member invites them to, and never vote.\nMake them a member, remove them, or leave them as a guest.\n_Is this one of Kim, Lee, whose Slack accounts aren't linked yet? Then link them to their membership on the Members page._",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "block_id": "more",
+      "elements": [
+        {
+          "action_id": "make_member",
+          "style": "primary",
+          "text": {
+            "emoji": true,
+            "text": "Make member",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "9"
+        },
+        {
+          "action_id": "remove_guest",
+          "confirm": {
+            "confirm": {
+              "emoji": true,
+              "text": "Remove",
+              "type": "plain_text"
+            },
+            "deny": {
+              "emoji": true,
+              "text": "Not yet",
+              "type": "plain_text"
+            },
+            "text": {
+              "emoji": true,
+              "text": "They can't use Dinnerbell or join from the channel again, unless you add them back.",
+              "type": "plain_text"
+            },
+            "title": {
+              "emoji": true,
+              "text": "Remove Pat?",
+              "type": "plain_text"
+            }
+          },
+          "style": "danger",
+          "text": {
+            "emoji": true,
+            "text": "Remove",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "9"
+        },
+        {
+          "action_id": "link_members",
+          "text": {
+            "emoji": true,
+            "text": "Members page",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "url": "https://dinnerbell.example.com/admin/members"
+        }
+      ],
+      "type": "actions"
+    }
+  ],
+  "text": "Pat joined Dinnerbell as a guest."
+}

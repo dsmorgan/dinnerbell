@@ -170,6 +170,8 @@ def _render(notification: note.Notification, ctx: RenderContext) -> Message:
             return guest_invited_message(notification, ctx)
         case note.GuestJoined():
             return guest_joined_message(notification, ctx)
+        case note.RoleVacated():
+            return role_vacated_message(notification, ctx)
     raise TypeError(f"no Slack rendering for {type(notification).__name__}")  # pragma: no cover
 
 
@@ -471,7 +473,7 @@ def decision_message(
     ]
     lines = _assignments(decision.assignments, ctx) or ["_Nobody is assigned yet._"]
     if decision.dietary_notes:
-        lines.append(f"*Guests' dietary needs:* {escape(', '.join(decision.dietary_notes))}")
+        lines.append(f"*Dietary needs:* {escape(', '.join(decision.dietary_notes))}")
     blocks.append(section(join_lines(lines)))
     buttons: list[Block] = []
     if event.state is EventState.DECIDED:
@@ -570,7 +572,7 @@ def reminder_message(
         text = f"*{MOVED_ON}* {why}"
         blocks = [section(text), actions(_web_button(ctx, event), block_id="more")]
         return _finish(f"The {_slot(event)} call for {day_label(event.day)} moved on.", blocks)
-    guest = isinstance(notification, note.GuestInvited)
+    guest = isinstance(notification, note.GuestInvited) or notification.guest
     if mine is None and isinstance(notification, note.GuestInvited):
         text = (
             f"Hi {escape(notification.member.name)}! {escape(notification.invited_by.name)} invited you to "
@@ -607,6 +609,19 @@ def guest_invited_message(notification: note.GuestInvited, ctx: RenderContext) -
     return reminder_message(notification, ctx)
 
 
+def role_vacated_message(notification: note.RoleVacated, ctx: RenderContext) -> Message:
+    """To the coordinator, or each admin with none: a guest who had a role left the call."""
+    event = notification.event
+    role = " and ".join(ROLE_PHRASES[r] for r in notification.roles) or "helping"
+    who = escape(notification.left.name)
+    text = (
+        f"Heads up, {escape(notification.member.name)}: {who} isn't coming to {_slot(event)} on "
+        f"{day_label(event.day)} any more, so nobody is *{role}*. Pick someone who's in on the web."
+    )
+    blocks = [section(text), actions(_web_button(ctx, event, "Pick someone"), block_id="more")]
+    return _finish(f"{notification.left.name} isn't coming, so nobody is {role} for {_slot(event)}.", blocks)
+
+
 def guest_joined_message(notification: note.GuestJoined, ctx: RenderContext) -> Message:
     """To each admin when someone joins from the channel (#38 addendum): a guest until an admin
     says otherwise."""
@@ -617,6 +632,11 @@ def guest_joined_message(notification: note.GuestJoined, ctx: RenderContext) -> 
         "invites them to, and never vote.",
         "Make them a member, remove them, or leave them as a guest.",
     ]
+    if notification.unlinked:
+        one = len(notification.unlinked) == 1
+        who = names(notification.unlinked) if one else f"one of {names(notification.unlinked)}"
+        whose = "whose Slack account isn't" if one else "whose Slack accounts aren't"
+        lines.append(f"_Is this {who}, {whose} linked yet? Then link them to their membership on the Members page._")
     guest = ids.event_value(notification.guest.id)
     remove = confirm(
         f"Remove {clip(notification.guest.name, 60)}?",
@@ -836,7 +856,7 @@ def assignment_message(notification: note.AssignmentMade, ctx: RenderContext) ->
         f"*When:* {when} · *Eating:* {_head_count(decision)}",
     ]
     if decision.dietary_notes:
-        lines.append(f"*Guests' dietary needs:* {escape(', '.join(decision.dietary_notes))}")
+        lines.append(f"*Dietary needs:* {escape(', '.join(decision.dietary_notes))}")
     others = [a for a in decision.assignments if a.member.id != notification.member.id]
     if others:
         lines.append(
@@ -1055,7 +1075,7 @@ def _offer_roster(roster: tuple[note.RosterEntry, ...], offer: note.OfferInfo, c
             line += f" · +{plural(entry.guests, 'guest')}"
         lines.append(line)
     if offer.dietary_notes:
-        lines.append(f"*Guests' dietary needs:* {escape(', '.join(offer.dietary_notes))}")
+        lines.append(f"*Dietary needs:* {escape(', '.join(offer.dietary_notes))}")
     return join_lines(lines)
 
 
@@ -1111,7 +1131,7 @@ def offer_full_message(notification: note.OfferFull, ctx: RenderContext) -> Mess
         f"*{_item_name(offer.item)}* at {local_clock(offer.at, event.timezone)}. Thanks for sharing!"
     ]
     if offer.dietary_notes:
-        lines.append(f"*Guests' dietary needs:* {escape(', '.join(offer.dietary_notes))}")
+        lines.append(f"*Dietary needs:* {escape(', '.join(offer.dietary_notes))}")
     blocks = [section(join_lines(lines)), actions(_web_button(ctx, event), block_id="more")]
     return _finish(f"Your {_slot(event)} offer is full: {eating} joining you.", blocks)
 

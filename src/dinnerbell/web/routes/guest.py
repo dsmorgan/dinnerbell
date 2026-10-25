@@ -10,6 +10,7 @@ from fastapi import APIRouter, Form, Request
 from fastapi.responses import RedirectResponse
 from starlette.responses import Response
 
+from dinnerbell.domain.events import EventRuleViolation
 from dinnerbell.domain.members import InvalidMemberInput
 from dinnerbell.services import guests
 from dinnerbell.web.auth import Context, Database, GuestCSRFChecked, GuestOrMember
@@ -36,8 +37,10 @@ async def save_my_needs(
     chosen = frozenset(i for v in needs or [] if (i := parse_id(v)) is not None)
     try:
         await guests.set_my_needs(db, principal.member, chosen, now=context.clock())
-    except InvalidMemberInput as exc:
+    except (InvalidMemberInput, EventRuleViolation) as exc:
         tags = await guests.dietary_tags(db, principal.member)
         page = {"tags": tags, "mine": chosen, "error": str(exc)}
         return await render(request, "me.html", page, status_code=400)
+    if not principal.member.is_guest:  # a member's form is on Preferences
+        return RedirectResponse("/preferences?notice=settings", status_code=303)
     return RedirectResponse("/me?saved=1", status_code=303)

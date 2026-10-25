@@ -67,11 +67,17 @@ LABELLED = (
     "your_answer_started_again",
     "response_reminder_answered",
     "response_reminder_moved_on",
+    "home_guest",
+    "your_answer_as_guest",
+    "your_answer_inviter",
+    "guest_invited",
 )
 
 
 def labelled(kind: str) -> dict[str, object]:
     """Sample ``kind`` from an instance labelled TEST (ADR 0006)."""
+    if kind == "home_guest":
+        return samples.guest_home(label="TEST")
     if kind in samples.VIEWS:
         today = TodayView(samples.DAY, [samples.COLLECTING_VIEW] if kind == "home" else [], tuple(Slot))
         return home_view(today, HomeLinks(samples.BASE_URL), label="TEST")

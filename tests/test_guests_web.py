@@ -362,3 +362,24 @@ def test_a_guest_never_sees_votes_or_admin_controls(
     assert proposal.state == "voting"
     assert submit(guest, f"/events/{event_id}/proposals/1/vote", {}).status_code == 403
     assert rows(migrated, VoteRow) == []
+
+
+def test_the_admin_links_a_guest_to_a_member_on_the_web(admin: TestClient, migrated: Settings) -> None:
+    pat = add_guest(admin, "Pat", slack="U07PAT")
+    invite(admin, "kim@example.com", "Kim")
+    kim = next(m for m in rows(migrated, MemberRow) if m.display_name == "Kim")
+    assert "Link to member" in page(admin.get("/admin/members"))
+    assert submit(admin, f"/admin/guests/{pat}/link", {"member_id": ""}).status_code == 400
+    assert submit(admin, f"/admin/guests/{pat}/link", {"member_id": str(kim.id)}).status_code == 303
+    by_id = {m.id: m for m in rows(migrated, MemberRow)}
+    assert (by_id[kim.id].slack_user_id, by_id[pat].slack_user_id, by_id[pat].active) == ("U07PAT", None, False)
+
+
+def test_a_member_sets_their_dietary_needs_on_preferences(admin: TestClient, migrated: Settings) -> None:
+    html = page(admin.get("/preferences"))
+    veg = re.search(r'name="needs" value="(\d+)"', html)
+    assert veg is not None and "Your dietary needs" in html
+    response = submit(admin, "/me", {"needs": [veg.group(1)]})
+    assert response.headers["location"] == "/preferences?notice=settings"
+    me = next(m for m in rows(migrated, MemberRow) if m.role == "admin")
+    assert me.dietary_needs == [int(veg.group(1))]

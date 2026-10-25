@@ -349,3 +349,31 @@ async def test_a_guest_cant_probe_for_calls_with_the_command(slack: Slack, house
         await slack.command(PAT, text)
     replies = set(slack.ephemerals(PAT))
     assert replies == {REFUSED[GuestAction.CALL_OFF]}
+
+
+def test_a_card_with_many_guests_and_a_guest_home_with_many_invitations_fit_slack() -> None:
+    from dataclasses import replace as copy
+
+    from dinnerbell.channels.slack import preview as samples
+    from dinnerbell.channels.slack.blocks import MAX_VIEW_BLOCKS, with_version_footer
+    from dinnerbell.channels.slack.messages import MAX_CARD_GUESTS, CardGuest, RenderContext, your_answer
+    from dinnerbell.channels.slack.views import HomeLinks, home_view
+    from dinnerbell.domain.events import Response
+    from dinnerbell.services.event_views import Permissions, TodayView
+
+    ctx = RenderContext(samples.BASE_URL, samples.DIRECTORY)
+    many = tuple(
+        CardGuest(100 + i, f"Guest {i}", Response(100 + i, Status.IN, offers=frozenset(RoleOffer))) for i in range(12)
+    )
+    card = your_answer(samples.event(), samples.KIM_IN, samples.KIM.id, ctx, run=1, can_invite=True, guests=many)
+    blocks = card.payload()["blocks"]
+    assert len(blocks) <= 50 and all(len(b["elements"]) <= 25 for b in blocks if b["type"] == "actions")
+    assert sum(1 for b in blocks if str(b.get("block_id", "")).startswith("guest-actions-")) == MAX_CARD_GUESTS
+    assert "Answer for your other guests on the web." in json.dumps(blocks)
+
+    view = copy(samples.COLLECTING_VIEW, mine=None, can=Permissions(respond=True))
+    views = [copy(view, event=copy(view.event, id=i)) for i in range(80)]
+    home = home_view(TodayView(samples.DAY, views, tuple(Slot)), HomeLinks(samples.BASE_URL), guest=True)
+    home = with_version_footer(home, "0.5.0")
+    assert len(home["blocks"]) <= MAX_VIEW_BLOCKS
+    assert home["blocks"][-1]["elements"][0]["text"].startswith("Dinnerbell 0.5.0")

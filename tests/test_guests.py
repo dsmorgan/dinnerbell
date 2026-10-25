@@ -495,12 +495,12 @@ async def test_only_an_admin_promotes_or_removes_a_guest(house: House) -> None:
     assert (back.active, back.join_refused) == (True, False)
 
 
-async def test_a_guest_sets_only_their_own_needs(house: House) -> None:
+async def test_people_set_their_own_dietary_needs(house: House) -> None:
     veg = house.tags["Vegetarian"].id
     updated = await act(house, guests.set_my_needs, house["Pat"], frozenset({veg}))
     assert updated.dietary_needs == {veg}
-    with pytest.raises(Forbidden):
-        await act(house, guests.set_my_needs, house["Sam"], frozenset({veg}))
+    sam = await act(house, guests.set_my_needs, house["Sam"], frozenset({veg}))  # a member's own, on Preferences
+    assert sam.dietary_needs == {veg}
     with pytest.raises(InvalidMemberInput):
         await act(house, guests.set_my_needs, house["Pat"], frozenset({house.tags["Thai"].id}))
 
@@ -718,6 +718,7 @@ async def test_a_guests_needs_hold_still_while_their_call_votes(house: House) ->
     await invite(house, "Kim", "Pat", event_id)
     await act(house, guests.set_my_needs, house["Pat"], frozenset({veg}))  # fine while answering
     pat = await house.refresh("Pat")
+    await act(house, calls.respond, pat, event_id, Status.IN)
     for name in ("Alex", "Sam"):
         await act(house, calls.respond, house[name], event_id, Status.IN)
     await act(house, calls.offer_role, house["Alex"], event_id, RoleOffer.PICKUP, True)
@@ -735,3 +736,196 @@ async def test_a_deactivated_members_email_cant_come_back_as_a_guest(house: Hous
     with pytest.raises(guests.JoinRefused) as refused:
         await act(house, guests.join, person("U09KIM", "Kim", email="kim@example.com"), via="slack")
     assert refused.value.reason is guests.NotJoinable.REMOVED
+
+
+# The #38 "Done when", end to end, and the follow-ups from #68's review ------------------------------
+
+
+async def test_done_when_end_to_end(house: House) -> None:
+    """#38: a member invites a registered and an unregistered guest; the registered guest taps In
+    and offers to pick up, and is refused a vote; the member answers for the other; the decision
+    honors both guests' needs, and the assignment message reaches the right person."""
+    await house.tag("Nut-free", TagKind.DIETARY)
+    await house.add_item("Nutty Thai", Mode.PICKUP, cuisine="Thai", tags=("Vegetarian",))
+    await house.add_item("Safe Bowl", Mode.PICKUP, cuisine="Thai", tags=("Vegetarian", "Nut-free"))
+    rae = await add_guest(house, "Rae", slack="U09RAE", needs=("Nut-free",))
+    event_id = await open_dinner(house)
+    await invite(house, "Kim", "Rae", event_id)
+    veg = frozenset({house.tags["Vegetarian"].id})
+    uma = (await act(house, guests.invite, house["Kim"], event_id, new_guest=GuestInput("Uma", veg))).guest
+    await act(house, calls.respond, rae, event_id, Status.IN)
+    await act(house, calls.offer_role, rae, event_id, RoleOffer.PICKUP, True)
+    await act(house, guests.answer_for, house["Kim"], event_id, uma.id, status=Status.IN)
+    await act(house, calls.respond, house["Kim"], event_id, Status.IN)
+    house.clock.now = RESPOND_BY
+    await house.tick()
+    ctx = await house.context(event_id)
+    assert ctx.event.state is EventState.VOTING
+    assert {ctx.items[p.item_id].name for p in ctx.proposals if p.item_id} == {"Safe Bowl"}
+    with pytest.raises(EventRuleViolation):
+        await act(house, calls.vote, rae, event_id, ctx.proposals[0].id)
+    await act(house, calls.vote, house["Kim"], event_id, ctx.proposals[0].id)
+    house.clock.now = VOTE_BY
+    await house.tick()
+    from dinnerbell.domain.notifications import from_payload
+
+    dms = [from_payload(e.kind, e.payload) for e in await house.outbox() if e.kind == "assignment_made"]
+    assert {(d.member.id, d.recipient_id) for d in dms} == {(rae.id, rae.id)}  # type: ignore[union-attr]
+
+
+async def test_a_vote_decided_assignment_for_a_guest_without_slack_reaches_the_inviter(house: House) -> None:
+    from dinnerbell.domain.notifications import from_payload
+
+    event_id = await open_dinner(house)
+    await invite(house, "Kim", "Jo", event_id)
+    await act(house, guests.answer_for, house["Kim"], event_id, house["Jo"].id, role=RoleOffer.PICKUP)
+    await act(house, calls.respond, house["Sam"], event_id, Status.IN)
+    house.clock.now = RESPOND_BY
+    await house.tick()
+    pick = next(p for p in (await house.context(event_id)).proposals if p.mode is Mode.PICKUP)
+    await act(house, calls.vote, house["Sam"], event_id, pick.id)
+    house.clock.now = VOTE_BY
+    await house.tick()
+    dms = [from_payload(e.kind, e.payload) for e in await house.outbox() if e.kind == "assignment_made"]
+    assert {(d.member.id, d.recipient_id) for d in dms} == {(house["Jo"].id, house["Kim"].id)}  # type: ignore[union-attr]
+
+
+async def test_everyone_out_closes_early_with_saved_guests_in_the_household(house: House) -> None:
+    """Nobody waits for a guest: Pat and Jo are saved guests, not invited, and the call still
+    closes as soon as every member is out."""
+    event_id = await open_dinner(house)
+    for name in ("Alex", "Sam", "Kim", "Lee"):
+        await act(house, calls.respond, house[name], event_id, Status.OUT)
+    house.clock.now = OPENS + timedelta(minutes=1)
+    await house.tick()
+    assert (await house.event(event_id)).state is EventState.ABANDONED
+
+
+async def test_an_invited_guest_who_is_in_counts_toward_the_early_close(house: House) -> None:
+    """Every member is out, but Jo, invited, is in and offering to cook: the call isn't ended at
+    once as if nobody were eating; it waits out the quiet spell, then closes on the head count."""
+    event_id = await open_dinner(house)
+    await invite(house, "Kim", "Jo", event_id)
+    await act(house, guests.answer_for, house["Kim"], event_id, house["Jo"].id, role=RoleOffer.COOK)
+    for name in ("Alex", "Sam", "Kim", "Lee"):
+        await act(house, calls.respond, house[name], event_id, Status.OUT)
+    house.clock.now = OPENS + timedelta(minutes=5)
+    await house.tick()
+    assert (await house.event(event_id)).state is EventState.COLLECTING
+    house.clock.now = OPENS + timedelta(minutes=11)
+    await house.tick()
+    ended = await house.event(event_id)
+    assert ended.state is EventState.ABANDONED and ended.end_reason.value == "too_few"  # type: ignore[union-attr]
+
+
+async def test_a_promoted_guest_keeps_their_dietary_needs_as_a_hard_constraint(house: House) -> None:
+    nut = await house.tag("Nut-free", TagKind.DIETARY)
+    await house.add_item("Safe Bowl", Mode.PICKUP, cuisine="Thai", tags=("Nut-free",))
+    jo = await add_guest(house, "Mo", needs=("Nut-free",))
+    promoted = await act(house, guests.promote, house["Alex"], jo.id, Role.MEMBER, email="mo@example.com")
+    assert promoted.dietary_needs == {nut.id}  # a need has no exact veto to become, so it stays a need
+    event_id = await open_dinner(house)
+    for who in (promoted, house["Alex"]):
+        await act(house, calls.respond, who, event_id, Status.IN)
+    await act(house, calls.offer_role, house["Alex"], event_id, RoleOffer.PICKUP, True)
+    house.clock.now = RESPOND_BY
+    await house.tick()
+    ctx = await house.context(event_id)
+    assert {ctx.items[p.item_id].name for p in ctx.proposals if p.item_id} == {"Safe Bowl"}
+
+
+async def test_the_admin_links_a_joined_guest_to_their_membership(house: House) -> None:
+    """Kim was invited by email, but her Slack email differs, so she joined as a guest. The
+    admin's message names the members with no Slack yet, and the admin links her."""
+    joined = await act(house, guests.join, person("U09KIM", "Kim K"), via="slack")
+    dm = next(e for e in await house.outbox() if e.kind == "guest_joined")
+    assert {p["name"] for p in dm.payload["unlinked"]} == {"Alex", "Kim", "Lee", "Sam"}
+    event_id = await open_dinner(house)
+    await act(house, guests.invite, house["Sam"], event_id, guest_id=joined.member.id)
+    with pytest.raises(Forbidden):
+        await act(house, guests.link_to_member, house["Sam"], joined.member.id, house["Kim"].id)
+    linked = await act(house, guests.link_to_member, house["Alex"], joined.member.id, house["Kim"].id)
+    assert (linked.id, linked.slack_user_id, linked.slack_link_locked) == (house["Kim"].id, "U09KIM", True)
+    async with house.sessionmaker() as db:
+        retired = await MemberRepository(db).get(house.household.id, joined.member.id)
+    assert retired is not None and (retired.active, retired.slack_user_id) == (False, None)
+    again = await act(house, guests.join, person("U09KIM", "Kim K"), via="slack")
+    assert again.joined_as is guests.JoinedAs.ALREADY and again.member.id == house["Kim"].id
+    from dinnerbell.domain.members import MemberRuleViolation
+
+    with pytest.raises(MemberRuleViolation, match="no Slack"):
+        await act(house, guests.link_to_member, house["Alex"], house["Jo"].id, house["Lee"].id)
+    with pytest.raises(MemberRuleViolation, match="linked to a Slack account"):
+        await act(house, guests.link_to_member, house["Alex"], house["Pat"].id, house["Kim"].id)
+
+
+async def test_member_pickers_leave_out_saved_guests(house: House) -> None:
+    from dinnerbell.domain.catalog import ItemInput, ItemKind
+
+    people = await read(house, meals.participant_choices, house["Kim"])
+    assert {p.name for p in people} == {"Alex", "Kim", "Lee", "Sam"}
+    data = await read(house, catalog_service.catalog, house["Kim"])
+    assert all(not m.is_guest for m in data.members)
+    with pytest.raises(Exception, match="cook"):
+        await act(
+            house,
+            catalog_service.create_item,
+            house["Kim"],
+            ItemInput(
+                kind=ItemKind.HOME,
+                name="Jo's Soup",
+                modes=frozenset({Mode.COOK}),
+                tag_ids=frozenset({house.tags["Thai"].id}),
+                cook_ids=frozenset({house["Jo"].id}),
+            ),
+        )
+
+
+async def test_a_new_run_invites_registered_guests_again(house: House) -> None:
+    event_id = await open_dinner(house)
+    await invite(house, "Kim", "Pat", event_id)
+    await act(house, calls.cancel_call, house["Alex"], event_id)
+    await act(house, calls.start_call, house["Sam"], Slot.DINNER, DAY)
+    keys = [e.idempotency_key for e in await house.outbox() if e.kind == "guest_invited"]
+    assert keys == [
+        f"event:{event_id}:run1:guest_invited:member{house['Pat'].id}",
+        f"event:{event_id}:run2:guest_invited:member{house['Pat'].id}",
+    ]
+
+
+async def test_invited_registered_guests_get_the_reminder(house: House) -> None:
+    from dinnerbell.domain.notifications import from_payload
+    from tests.support.calls import REMIND
+
+    event_id = await open_dinner(house)
+    await invite(house, "Kim", "Pat", event_id)
+    await invite(house, "Kim", "Jo", event_id)  # no Slack: no reminder
+    house.clock.now = REMIND
+    await house.tick()
+    reminders = [from_payload(e.kind, e.payload) for e in await house.outbox() if e.kind == "response_reminder"]
+    pat = [r for r in reminders if r.recipient_id == house["Pat"].id]
+    assert len(pat) == 1 and pat[0].guest  # type: ignore[union-attr]
+    assert house["Jo"].id not in {r.recipient_id for r in reminders}
+
+
+async def test_removing_a_guest_from_a_decided_call_clears_their_role(house: House) -> None:
+    from dinnerbell.domain.events import AssignmentRole
+
+    event_id = await open_dinner(house)
+    await invite(house, "Kim", "Pat", event_id)
+    pat = house["Pat"]
+    await act(house, calls.respond, pat, event_id, Status.IN)
+    await act(house, calls.offer_role, pat, event_id, RoleOffer.PICKUP, True)
+    await act(house, calls.respond, house["Sam"], event_id, Status.IN)
+    house.clock.now = RESPOND_BY
+    await house.tick()
+    pick = next(p for p in (await house.context(event_id)).proposals if p.mode is Mode.PICKUP)
+    await act(house, calls.lock, house["Alex"], event_id, pick.id)
+    assert any(
+        a.member_id == pat.id and a.role is AssignmentRole.PICKUP for a in (await house.context(event_id)).assignments
+    )
+    await act(house, guests.remove, house["Alex"], pat.id)
+    ctx = await house.context(event_id)
+    assert all(a.member_id != pat.id for a in ctx.assignments)
+    (vacated,) = [e for e in await house.outbox() if e.kind == "role_vacated"]
+    assert vacated.payload["member"]["id"] == house["Alex"].id and vacated.payload["roles"] == ["pickup"]

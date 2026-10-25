@@ -134,6 +134,13 @@ EXAMPLES: list[tuple[n.Notification, str, str | None, str | None, int | None]] =
     (n.GuestInvited(EVENT, PAT, ALEX), f"event:7:run2:guest_invited:member{PAT.id}", None, None, PAT.id),
     (n.GuestJoined(1, ALEX, PAT, "slack"), f"join:{PAT.id}:admin{ALEX.id}", None, None, ALEX.id),
     (
+        n.RoleVacated(EVENT, ALEX, PAT, (AssignmentRole.PICKUP,)),
+        f"event:7:run2:role_vacated:member{ALEX.id}:left{PAT.id}",
+        None,
+        None,
+        ALEX.id,
+    ),
+    (
         n.AssignmentMade(EVENT, 12, PAT, (AssignmentRole.PICKUP,), DECISION, via=SAM),
         f"event:7:run2:assignment_made:member{PAT.id}:12",
         None,

@@ -860,6 +860,7 @@ def closes_early(
     responses: Iterable[Response],
     active_member_ids: Iterable[int],
     coverage: Coverage,
+    guest_ids: Iterable[int] = (),
 ) -> bool:
     """FR-56: whether a collecting call's responses close before the deadline.
 
@@ -869,12 +870,18 @@ def closes_early(
     ``EARLY_CLOSE_QUIET``, so tapping In first and adding guests or an offer next is never cut
     short; with two or more eating, someone must also be able to cook, pick up, or order
     (``coverage``). Otherwise the call waits for its deadline, or for Close now.
+
+    ``active_member_ids`` are the household's members and admins, whom the call waits for;
+    ``guest_ids`` are the guests invited to it (#38). Nobody waits for a guest, but a guest's
+    answer counts like anyone's toward who's in, the head count, and the quiet spell.
     """
     active = frozenset(active_member_ids)
+    counted = active | frozenset(guest_ids)
     this_run = [
-        r for r in responses if r.member_id in active and r.updated_at is not None and r.updated_at >= event.opens_at
+        r for r in responses if r.member_id in counted and r.updated_at is not None and r.updated_at >= event.opens_at
     ]
-    if not active or {r.member_id for r in this_run} != active or any(r.status is Status.MAYBE for r in this_run):
+    answered = {r.member_id for r in this_run} & active
+    if not active or answered != active or any(r.status is Status.MAYBE for r in this_run):
         return False
     if not any(r.is_in for r in this_run):
         return True
@@ -892,6 +899,7 @@ def due_step(
     responses: Iterable[Response] = (),
     active_member_ids: Iterable[int] = (),
     coverage: Coverage | None = None,
+    guest_ids: Iterable[int] = (),
 ) -> Step | None:
     """The next thing the scheduler owes ``event`` at ``now``, if anything.
 
@@ -922,7 +930,7 @@ def due_step(
             return Step.EXPIRE
         return Step.OPEN if now >= event.opens_at else None
     if event.state is EventState.COLLECTING:
-        early = closes_early(event, now, responses, active_member_ids, coverage or Coverage())
+        early = closes_early(event, now, responses, active_member_ids, coverage or Coverage(), guest_ids)
         if now >= event.respond_deadline or early:
             return Step.CLOSE_RESPONSES
         if event.reminder_sent_at is None and now >= event.remind_at:

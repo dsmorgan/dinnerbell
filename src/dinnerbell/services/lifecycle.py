@@ -167,7 +167,7 @@ async def open_call(db: AsyncSession, event: Event, now: datetime, *, actor: Mem
     opened = replace(event, state=transition(event.state, EventState.COLLECTING), opens_at=min(event.opens_at, now))
     event = await EventRepository(db).save(opened, now)
     ctx = await load(db, event)
-    await publish(db, ctx, cc.call_opened(ctx), now=now)
+    await publish(db, ctx, cc.call_opened(ctx), *cc.guest_invitations(ctx), now=now)
     payload = {
         "slot": event.slot.value,
         "date": event.day.isoformat(),
@@ -285,7 +285,7 @@ async def reopen(
     fresh = await EventRepository(db).save(fresh, now)
     if not scheduled:  # a scheduled call is posted when the tick opens it
         opened = await load(db, fresh)
-        await publish(db, opened, cc.call_opened(opened), now=now)
+        await publish(db, opened, cc.call_opened(opened), *cc.guest_invitations(opened), now=now)
     return fresh
 
 
@@ -336,9 +336,13 @@ async def _remind(db: AsyncSession, event: Event, now: datetime) -> None:
     """FR-11: one direct message to each active member who hasn't answered, once per call run."""
     ctx = await load(db, event)
     info = cc.event_info(ctx)
-    members = sorted(ctx.active_members, key=lambda m: m.display_name.casefold())
+    # Members, and registered guests invited to the call (#38); guests' reminders have In and Out only.
+    people = [*ctx.active_members, *(g for g in ctx.guests if g.is_registered_guest)]
+    members = sorted(people, key=lambda m: m.display_name.casefold())
     reminders = [
-        note.ResponseReminder(info, ctx.person(m.id)) for m in members if needs_reminder(m, ctx.response_of(m.id))
+        note.ResponseReminder(info, ctx.person(m.id), m.is_guest)
+        for m in members
+        if needs_reminder(m, ctx.response_of(m.id))
     ]
     await publish(db, ctx, *reminders, now=now)
     await EventRepository(db).save(replace(event, reminder_sent_at=now), now)

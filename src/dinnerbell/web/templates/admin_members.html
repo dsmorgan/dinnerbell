@@ -57,6 +57,14 @@
           <label class="field compact"><span>Slack member ID</span><input type="text" name="slack_user_id" maxlength="32" value="{{ g.slack_user_id or '' }}"></label>
           <button type="submit" class="button small">Link</button>
         </form>
+        {% set unlinked = members|selectattr("active")|rejectattr("slack_user_id")|list %}
+        {% if g.active and g.slack_user_id and unlinked %}
+        <form method="post" action="/admin/guests/{{ g.id }}/link" class="inline-form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <label class="field compact"><span>They're really</span><select name="member_id">{% for m in unlinked %}<option value="{{ m.id }}">{{ m.display_name }}</option>{% endfor %}</select></label>
+          <button type="submit" class="button small">Link to member</button>
+        </form>
+        {% endif %}
         {% if g.active %}
         <form method="post" action="/admin/guests/{{ g.id }}/promote" class="inline-form">
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">

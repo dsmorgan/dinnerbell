@@ -262,7 +262,10 @@ NOTIFICATIONS: dict[str, Callable[[], note.Notification]] = {
     ),
     "guest_invited": lambda: note.GuestInvited(event(), PAT, KIM),
     "guest_joined": lambda: note.GuestJoined(1, ALEX, note.PersonInfo(9, "Pat <Slack> & *Co*"), "slack"),
-    "guest_joined_web": lambda: note.GuestJoined(1, ALEX, PAT, "web"),
+    "guest_joined_web": lambda: note.GuestJoined(1, ALEX, PAT, "web", unlinked=(KIM,)),
+    "guest_joined_unlinked": lambda: note.GuestJoined(1, ALEX, PAT, "slack", unlinked=(KIM, LEE)),
+    "response_reminder_guest": lambda: note.ResponseReminder(event(), PAT, guest=True),
+    "role_vacated": lambda: note.RoleVacated(DECIDED, ALEX, PAT, (AssignmentRole.PICKUP,)),
     "assignment_made_for_guest": lambda: note.AssignmentMade(
         DECIDED, 34, PAT, (AssignmentRole.PICKUP,), replace(DECISION, dietary_notes=("Vegetarian",)), via=KIM
     ),
@@ -410,6 +413,14 @@ OFFER_FORM = OfferForm(
 SAVED_GUESTS = tuple(
     Member(9 + n, 1, name, None, Role.GUEST, Capabilities(), True) for n, name in enumerate(("Pat", "Jo <dev>"))
 )
+
+
+def guest_home(label: str = "") -> dict[str, Any]:
+    """Pat's Home as a guest invited to dinner (#38): In and Out, and nothing else of the household's."""
+    view = replace(COLLECTING_VIEW, mine=None, can=Permissions(respond=True))
+    return home_view(TodayView(DAY, [view], tuple(Slot)), HomeLinks(BASE_URL), label=label, guest=True)
+
+
 LOG_FORM = LogForm(DAY, SAM.id, ITEMS, (MemberRef(1, "Alex"), MemberRef(3, "Kim"), MemberRef(2, "Sam")))
 
 VIEWS: dict[str, Callable[[], dict[str, Any]]] = {
@@ -461,11 +472,7 @@ VIEWS: dict[str, Callable[[], dict[str, Any]]] = {
     "invite_modal": lambda: invite_modal(
         replace(COLLECTING_VIEW, can=Permissions(respond=True, invite=True)), SAVED_GUESTS, CALL_OFF_ORIGIN
     ),
-    "home_guest": lambda: home_view(
-        TodayView(DAY, [replace(COLLECTING_VIEW, mine=None, can=Permissions(respond=True))], tuple(Slot)),
-        HomeLinks(BASE_URL),
-        guest=True,
-    ),
+    "home_guest": lambda: guest_home(),
     "home_guest_empty": lambda: home_view(TodayView(DAY, [], tuple(Slot)), HomeLinks(BASE_URL), guest=True),
     "cancel_modal_offer": lambda: cancel_modal(
         replace(OFFER_VIEW, can=Permissions(cancel=True)), replace(CALL_OFF_ORIGIN, event_id=9)

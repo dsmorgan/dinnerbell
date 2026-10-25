@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, replace
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from enum import StrEnum
 from typing import Any, Protocol
 
@@ -61,6 +61,7 @@ from dinnerbell.services import call_context as cc
 from dinnerbell.services.call_context import load, locked_event, publish
 from dinnerbell.services.common import audit, require_admin
 from dinnerbell.services.errors import Forbidden, NotFound
+from dinnerbell.services.variety import household_today
 
 log = logging.getLogger(__name__)
 
@@ -68,6 +69,7 @@ JOIN_SETTING = "join_from_channel"
 """Household setting: whether people in the Dinnerbell channel may join as guests on their own
 (#38). On unless an admin turns it off."""
 NO_SUCH_GUEST = "No such guest."
+WORK_ROLES = (AssignmentRole.COOK, AssignmentRole.PICKUP, AssignmentRole.ORDER)
 MANAGE_GUESTS = "Only admins can manage guests."
 
 
@@ -223,8 +225,29 @@ async def _drop_from_call(db: AsyncSession, event: Event, guest_id: int, now: da
     if ctx.event.coordinator_id == guest_id:
         await EventRepository(db).save(replace(ctx.event, coordinator_id=None), now)
         await AssignmentRepository(db).unassign(event.household_id, event.id, AssignmentRole.COORDINATOR)
+    vacated = tuple(a.role for a in ctx.assignments if a.member_id == guest_id and a.role in WORK_ROLES)
+    for role in vacated:
+        await AssignmentRepository(db).unassign(event.household_id, event.id, role)
     ctx = await load(db, event)
-    await publish(db, ctx, cc.message_updated(ctx), *cc.decision_updated(ctx), now=now)
+    told: list[note.Notification] = []
+    if vacated:
+        # Whoever can reassign it hears: the coordinator, or each admin when nobody coordinates.
+        coordinator = ctx.members.get(ctx.event.coordinator_id) if ctx.event.coordinator_id is not None else None
+        deciders = (
+            [coordinator]
+            if coordinator is not None and coordinator.active
+            else [m for m in ctx.active_members if m.is_admin]
+        )
+        info, left = cc.event_info(ctx), ctx.person(guest_id)
+        told = [note.RoleVacated(info, ctx.person(m.id), left, vacated) for m in deciders]
+    await publish(db, ctx, cc.message_updated(ctx), *cc.decision_updated(ctx), *told, now=now)
+
+
+async def _today(db: AsyncSession, actor: Member, now: datetime) -> date:
+    household = await HouseholdRepository(db).get(actor.household_id)
+    if household is None:  # pragma: no cover - members cascade with their household
+        raise NotFound("No such household.")
+    return household_today(household, now)
 
 
 # Guest records ---------------------------------------------------------------------------------
@@ -287,20 +310,26 @@ async def update_guest(db: AsyncSession, actor: Member, guest_id: int, data: Gue
 
 
 async def set_my_needs(db: AsyncSession, actor: Member, needs: frozenset[int], *, now: datetime) -> Member:
-    """A guest sets their own dietary needs, the one thing about themselves they change (#38
-    rule 4). Members set preferences instead."""
-    if not (actor.is_guest and actor.active):
-        raise Forbidden("Members set their preferences on the Preferences page.")
+    """Someone sets their own dietary needs: hard constraints whenever they're in or maybe. The
+    one thing a guest changes about themselves (#38 rule 4); a member, such as a promoted guest,
+    sets them on Preferences."""
+    if not actor.active:
+        raise Forbidden("Sign in again.")
     check_dietary_needs(needs, dietary_tag_ids=await _dietary_tag_ids(db, actor.household_id))
     # The picks of a call that's voting passed everyone's needs as they were (FR-29); a change
     # now would rule them out after the fact, as a member's guests' needs can't change then.
     events = EventRepository(db)
-    for event_id in await invited_events(db, actor):
-        event = await events.get(actor.household_id, event_id)
-        if event is not None and event.state is EventState.VOTING and needs != actor.dietary_needs:
+    if needs != actor.dietary_needs:
+        for event in await events.for_today(actor.household_id, await _today(db, actor, now)):
+            if event.state is not EventState.VOTING:
+                continue
+            responses = await ResponseRepository(db).for_event(actor.household_id, event.id)
+            answer = next((r for r in responses if r.member_id == actor.id), None)
+            if answer is None or answer.status is Status.OUT:
+                continue
             raise EventRuleViolation(
-                "A call you're invited to is voting now. Change your needs once it's decided, "
-                "or ask whoever invited you."
+                "A call you're in is voting now, and its picks already fit your needs as they were. "
+                "Change them once it's decided."
             )
     updated = await MemberRepository(db).update(actor.household_id, actor.id, now, dietary_needs=needs)
     payload = {"dietary_needs": sorted(needs)}
@@ -353,11 +382,55 @@ async def promote(
     members = MemberRepository(db)
     if await members.by_email(actor.household_id, clean) is not None:
         raise MemberRuleViolation("A member with that email already exists.")
-    updated = await members.update(actor.household_id, guest.id, now, role=role, email=clean, dietary_needs=frozenset())
+    # A guest's dietary needs come along: a need ("must be nut-free") has no exact veto to turn
+    # into, so it stays a need, a hard constraint for members too, set on Preferences.
+    updated = await members.update(actor.household_id, guest.id, now, role=role, email=clean)
     payload = {"to": role.value}
     await audit(db, actor.household_id, actor, "member.promoted", f"member:{guest.id}", payload, now)
     await db.commit()
     return updated
+
+
+async def link_to_member(db: AsyncSession, actor: Member, guest_id: int, member_id: int, *, now: datetime) -> Member:
+    """The guest is really a member whose Slack account Dinnerbell couldn't match, such as one
+    whose Slack email differs from the one they were invited with: move the guest's Slack user
+    to the member, locked as a link the admin set (FR-42), and retire the guest record. The
+    guest's history stays under the guest; they leave any open call, and are signed out. A join
+    from that Slack user then finds the member. Audited as ``guest.linked_to_member``."""
+    require_admin(actor, MANAGE_GUESTS)
+    guest = await _guest(db, actor, guest_id)
+    members = MemberRepository(db)
+    target = await members.get(actor.household_id, member_id)
+    if target is None or not target.is_member:
+        raise NotFound("No such member.")
+    if guest.slack_user_id is None:
+        raise MemberRuleViolation(f"{guest.display_name} has no Slack account to link.")
+    if target.slack_user_id is not None:
+        raise MemberRuleViolation(f"{target.display_name} is linked to a Slack account already.")
+    slack_id = guest.slack_user_id
+    await members.update(actor.household_id, guest.id, now, slack_user_id=None, oidc_subject=None, active=False)
+    await SessionRepository(db).delete_for_member(guest.id)
+    linked = await members.update(actor.household_id, target.id, now, slack_user_id=slack_id, slack_link_locked=True)
+    await _leave_open_calls(db, actor, guest, now)
+    payload = {"guest_id": guest.id, "slack_user_id": slack_id}
+    await audit(db, actor.household_id, actor, "guest.linked_to_member", f"member:{target.id}", payload, now)
+    await db.commit()
+    return linked
+
+
+async def _leave_open_calls(db: AsyncSession, actor: Member, guest: Member, now: datetime) -> None:
+    events = EventRepository(db)
+    for event_id in await invited_events(db, guest):
+        event = await events.get(actor.household_id, event_id)
+        if event is not None and event.state in {EventState.COLLECTING, EventState.VOTING, EventState.DECIDED}:
+            await events.lock(actor.household_id, event_id, now)
+            await _drop_from_call(db, event, guest.id, now)
+
+
+async def unlinked_members(db: AsyncSession, actor: Member) -> list[Member]:
+    """Active members with no Slack account yet: who a guest might really be."""
+    require_admin(actor, MANAGE_GUESTS)
+    return [m for m in await MemberRepository(db).list(actor.household_id) if m.is_member and m.slack_user_id is None]
 
 
 async def remove(db: AsyncSession, actor: Member, guest_id: int, *, now: datetime) -> Member:
@@ -367,12 +440,7 @@ async def remove(db: AsyncSession, actor: Member, guest_id: int, *, now: datetim
     guest = await _guest(db, actor, guest_id)
     updated = await MemberRepository(db).update(actor.household_id, guest.id, now, active=False, join_refused=True)
     await SessionRepository(db).delete_for_member(guest.id)
-    events = EventRepository(db)
-    for event_id in await invited_events(db, guest):
-        event = await events.get(actor.household_id, event_id)
-        if event is not None and event.state in {EventState.COLLECTING, EventState.VOTING, EventState.DECIDED}:
-            await events.lock(actor.household_id, event_id, now)
-            await _drop_from_call(db, event, guest.id, now)
+    await _leave_open_calls(db, actor, guest, now)
     await audit(db, actor.household_id, actor, "guest.removed", f"member:{guest.id}", {}, now)
     await db.commit()
     return updated
@@ -563,15 +631,17 @@ async def join(db: AsyncSession, person: SlackPerson, *, via: str, now: datetime
         joined: dict[str, object] = {"slack_user_id": person.slack_user_id, "via": via}
         joined["slack_guest"] = not person.full_member
         await audit(db, household.id, None, "member.joined", f"member:{guest.id}", joined, now)
-        admins = [m for m in await members.list(household.id) if m.is_member and m.is_admin]
+        everyone = await members.list(household.id)
+        admins = [m for m in everyone if m.is_member and m.is_admin]
+        # Someone invited by email whose Slack email differs joins as a guest; the admin can
+        # link them to their membership instead (``link_to_member``).
+        unlinked = tuple(
+            note.PersonInfo(m.id, m.display_name) for m in everyone if m.is_member and m.slack_user_id is None
+        )
+        joined_guest = note.PersonInfo(guest.id, guest.display_name)
         outbox_now = [
-            note.GuestJoined(
-                household.id,
-                note.PersonInfo(admin.id, admin.display_name),
-                note.PersonInfo(guest.id, guest.display_name),
-                via,
-            )
-            for admin in admins
+            note.GuestJoined(household.id, note.PersonInfo(a.id, a.display_name), joined_guest, via, unlinked)
+            for a in admins
         ]
         for dm in outbox_now:
             await OutboxRepository(db).enqueue(household.id, None, dm, now)
