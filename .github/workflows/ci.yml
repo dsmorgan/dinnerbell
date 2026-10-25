@@ -69,8 +69,10 @@ jobs:
         run: uv run ruff format --check .
       - name: Mypy (strict)
         run: uv run mypy
+      # One pytest worker per vCPU (4 on GitHub's runners); pytest-cov combines their data. The
+      # slowest tests are listed so a regression in test time shows up in the log.
       - name: Pytest with coverage
-        run: uv run pytest --cov --cov-report=term
+        run: uv run pytest -n auto --cov --cov-report=term --durations=20
       - name: pip-audit
         run: |
           uv export --frozen --all-groups --format requirements-txt --no-emit-project -o "$RUNNER_TEMP/requirements.txt"

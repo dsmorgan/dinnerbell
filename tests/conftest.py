@@ -4,6 +4,7 @@ __Host- cookies, CSRF, and Origin checks all on. Browsers send Origin; so does t
 
 from __future__ import annotations
 
+import shutil
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -101,9 +102,21 @@ def settings(request: pytest.FixtureRequest, tmp_path: Path, settings_overrides:
     return settings
 
 
+@pytest.fixture(scope="session")
+def migrated_template(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """A database migrated once per session (once per xdist worker), for ``migrated`` to copy.
+    tests/test_migrations.py still runs real migrations against fresh and old databases."""
+    path = tmp_path_factory.mktemp("template") / "dinnerbell.db"
+    run_migrations(f"sqlite:///{path}", path)
+    # The last connection closing checkpoints the WAL and deletes it, so the one file is the database.
+    assert not path.with_name(path.name + "-wal").exists()
+    return path
+
+
 @pytest.fixture
-def migrated(settings: Settings) -> Settings:
-    run_migrations(settings.sync_database_url, settings.database_path)
+def migrated(settings: Settings, migrated_template: Path) -> Settings:
+    settings.database_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(migrated_template, settings.database_path)
     return settings
 
 

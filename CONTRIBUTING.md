@@ -39,11 +39,21 @@ Run the same checks CI runs:
 uv run ruff check .
 uv run ruff format --check .
 uv run mypy
-uv run pytest --cov
+uv run pytest -n auto --cov
 docker build -f Containerfile -t dinnerbell .
 ```
 
 If you change `compose.yaml`, `deploy/`, or an env example, also run `scripts/check-compose.sh` (it needs Docker and jq, and checks podman-compose too when it's installed) and `shellcheck deploy/dinnerbell-test scripts/check-compose.sh`.
+
+## Write tests that stay fast and parallel
+
+CI runs the suite on every CPU with [pytest-xdist](https://pytest-xdist.readthedocs.io/) (`-n auto`), and the `check` job gates every merge, so keep each test quick and independent:
+
+- **Never wait a fixed time.** Move time with the `clock` fixture (`FakeClock`) or a `now=` argument. When a test must wait for a background task, poll for the state it expects, and give up after a generous deadline, such as 10 seconds: a passing test returns as soon as the state holds, so only a failing test pays for the deadline.
+- **Keep tests xdist-safe.** Each worker is a separate process with its own temporary directories. Write files only under `tmp_path`, never bind a fixed port, and never rely on another test's leftovers or on running in a particular order.
+- **Take a database from the `migrated` fixture.** It copies a database that was migrated once per worker, which is much faster than migrating per test. Call `run_migrations` yourself only when the test is about migrations.
+
+To debug a single test with `breakpoint()` or `--pdb`, run it without workers: `uv run pytest -n 0 tests/test_x.py::test_y`. To find slow tests, add `--durations=20`.
 
 [CLAUDE.md](CLAUDE.md) lists the project conventions: layers and import rules, license headers, and the migration workflow. They apply to people and agents alike.
 
