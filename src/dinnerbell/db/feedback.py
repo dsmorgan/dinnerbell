@@ -94,6 +94,15 @@ class FeedbackRepository:
         await self._session.flush()
         return True
 
+    async def prune(self, household_id: int, meal_id: int, keep_member_ids: Iterable[int] | None) -> int:
+        """Delete feedback on ``meal_id`` from anyone not in ``keep_member_ids``, or from everyone
+        when it's None. Returns how many rows went."""
+        query = delete(FeedbackRow).where(FeedbackRow.household_id == household_id, FeedbackRow.meal_id == meal_id)
+        if keep_member_ids is not None:
+            query = query.where(FeedbackRow.member_id.not_in(list(keep_member_ids)))
+        gone = await self._session.execute(query.execution_options(synchronize_session=False))
+        return int(getattr(gone, "rowcount", 0) or 0)
+
     async def clear(self, household_id: int) -> int:
         """Delete all of the household's feedback, for ``scrub-test``. Returns how many rows."""
         found = await self._session.scalar(

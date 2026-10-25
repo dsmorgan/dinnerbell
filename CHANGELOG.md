@@ -17,6 +17,7 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
   - On the web, History and a done call's page have **How was it?**, and show your own answers.
   - The catalog shows how many loved each item's food and place. "Fine," "not again," and place issues are kept for later but never shown, not even as counts. Cooks see who thanked them and their notes; everyone else sees only how many thank-yous there were. Nobody, admins included, sees who chose "not again", on any page, in Slack, or in the catalog file.
   - Turn on the feedback reminder in Preferences to get one direct message after each meal you ate. It's off by default, and muting direct-message reminders stops it too.
+  - Changing a meal's item in History deletes its feedback, and taking someone off a meal deletes theirs, because it was about a meal they no longer ate.
   - On a test instance, discarding a call deletes the feedback on its meal, and `scrub-test` deletes all feedback; both show how many rows, as a number only.
 - Slack says which version is answering. `/dinnerbell version` (`/dinnerbell-test version` on test) replies privately with the version as the web footer shows it, such as `0.3.0`, or `0.3.0+abc1234` for a build from `main`; the instance label, if one is set; the database's schema revision; and a link to the release notes, or to the commit for a `main` build. The help reply lists `version` and ends with a version line, such as "Dinnerbell 0.3.0+abc1234 · TEST", and so does the bottom of App Home.
 

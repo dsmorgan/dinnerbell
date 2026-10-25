@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 from datetime import UTC, date, datetime, timedelta
+from typing import Any
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -13,6 +14,7 @@ from sqlalchemy import select
 
 from dinnerbell.config import Settings
 from dinnerbell.db.events import AssignmentRepository
+from dinnerbell.db.feedback import FeedbackRepository
 from dinnerbell.db.models import FeedbackRow
 from dinnerbell.db.repositories import MemberRepository
 from dinnerbell.domain.catalog import ItemKind, Mode
@@ -277,3 +279,48 @@ async def test_the_window_closes_at_midnight_in_the_households_time_zone(house: 
         await give(house, "Kim", meal_id, FeedbackInput(food=Rating.FINE))
     (row,) = await rows(house)
     assert row.food == "loved"
+
+
+async def test_a_double_submit_that_loses_the_insert_race_replaces_the_winner(
+    house: House, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two first saves at once: the second finds no row, its insert hits the unique
+    constraint, and it saves again as an edit, so there's still one row, with its answer."""
+    meal_id = await meal_of(house, await done_dinner(house))
+    await give(house, "Kim", meal_id, FeedbackInput(food=Rating.FINE))
+    real = FeedbackRepository._row
+    missed: list[bool] = []
+
+    async def miss_once(self: FeedbackRepository, *args: Any) -> FeedbackRow | None:
+        if not missed:
+            missed.append(True)
+            return None  # as if the other submit hadn't committed yet
+        return await real(self, *args)
+
+    monkeypatch.setattr(FeedbackRepository, "_row", miss_once)
+    saved = await give(house, "Kim", meal_id, FeedbackInput(food=Rating.LOVED))
+    assert missed and saved is not None and saved.answers.food is Rating.LOVED
+    (row,) = await rows(house)
+    assert row.food == "loved"
+
+
+async def test_editing_a_logged_meal_drops_feedback_that_no_longer_fits(house: House) -> None:
+    house.clock.now = DONE_AT
+    meal_id = await log(house, "Siam Garden", "Alex", "Kim", "Lee")
+    for name in ("Alex", "Kim", "Lee"):
+        await give(house, name, meal_id, FeedbackInput(food=Rating.LOVED, place=Rating.LOVED))
+
+    async def edit(item: str, *people: str) -> None:
+        data = MealInput(DAY, Slot.LUNCH, house.items[item].id, frozenset(house[p].id for p in people))
+        async with house.sessionmaker() as db:
+            await meals.update_meal(db, house["Alex"], meal_id, data, today=DAY, now=house.clock())
+
+    await edit("Siam Garden", "Alex", "Kim")  # Lee didn't eat it after all
+    assert sorted(r.member_id for r in await rows(house)) == [house["Alex"].id, house["Kim"].id]
+    audit = (await house.audits("meal.updated"))[-1]
+    assert audit.payload["feedback_removed"] == 1 and "loved" not in str(audit.payload)
+
+    await edit("Taqueria", "Alex", "Kim")  # a different place: every answer was about Siam Garden
+    assert await rows(house) == []
+    async with house.sessionmaker() as db:
+        assert await feedback.item_counts(db, house["Alex"]) == {}
