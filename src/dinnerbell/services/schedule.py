@@ -134,6 +134,8 @@ async def update_slot(
             and schedule.enabled
             and can_open_today(before, today=today, now=now, zone=zone)
             and not can_open_today(schedule, today=today, now=now, zone=zone)
+            # A cooking offer already stands in for today's call (FR-5), so there's none to keep.
+            and await lifecycle.cooking_offer(db, household.id, slot, today) is None
         ):
             # Settings still hold the old schedule, so the call gets the old time and windows.
             opens_at = before.opens_at(today, zone)

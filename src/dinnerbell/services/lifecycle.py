@@ -45,6 +45,7 @@ from dinnerbell.domain.events import (
     check_run,
     check_window_change,
     choose_winner,
+    clean_cancel_note,
     head_count,
     meal_time,
     needs_reminder,
@@ -286,6 +287,25 @@ async def reopen(
         opened = await load(db, fresh)
         await publish(db, opened, cc.call_opened(opened), now=now)
     return fresh
+
+
+async def _open_scheduled(db: AsyncSession, event: Event, now: datetime) -> None:
+    """The tick's ``Step.OPEN``. A call scheduled for a slot and day that a live cooking offer
+    now stands in for (FR-5) is called off quietly instead of posted next to it: it was never
+    posted, so nobody is told. ``offers.post_offer`` replaces a scheduled call itself; this is
+    the backstop for any other way one got scheduled. Audited as ``event.replaced_by_offer``."""
+    offer = await cooking_offer(db, event.household_id, event.slot, event.day)
+    if offer is None:
+        await open_call(db, event, now)
+        return
+    cook = await MemberRepository(db).get(event.household_id, offer.created_by) if offer.created_by else None
+    note_text = clean_cancel_note(f"{cook.display_name} is cooking instead.") if cook is not None else None
+    ended = replace(
+        event, state=transition(event.state, EventState.CANCELLED), ended_by=offer.created_by, end_note=note_text
+    )
+    await EventRepository(db).save(ended, now)
+    payload = {"offer_id": offer.id, "from": event.state.value}
+    await audit(db, event.household_id, None, "event.replaced_by_offer", _target(event), payload, now)
 
 
 # Deadlines --------------------------------------------------------------------------------------
@@ -684,7 +704,7 @@ async def _mark_done(db: AsyncSession, event: Event, now: datetime) -> None:
 
 HANDLERS: dict[Step, Handler] = {
     Step.EXPIRE: expire,
-    Step.OPEN: open_call,
+    Step.OPEN: _open_scheduled,
     Step.REMIND: _remind,
     Step.CLOSE_RESPONSES: _close,
     Step.CLOSE_VOTING: _decide_by_vote,
