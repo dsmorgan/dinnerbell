@@ -6,6 +6,8 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-25
+
 ### Added
 
 - Any member can change a meal's standing schedule (FR-44, #12): whether its call goes out every day, the call time, how long people have to answer and vote, the reminder, the usual meal time, and the usual ways to get it. Open **Schedule** in the web app's menu. Each change is posted in the Dinnerbell channel with who made it, what changed, and the first day it applies, and the audit log records the old and new values. A change applies from the next call: a call that's already out, or scheduled for a later day, keeps its times, and a call started again uses the new ones. If today's call hasn't gone out yet, it follows the new schedule when it still can; moving the call to a time that has already passed today keeps today's call at the old time, and the post says so. Saving without a change posts nothing, and a save over someone else's newer change is refused so it can't undo theirs.
@@ -20,7 +22,6 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
   - Changing a meal's item in History deletes its feedback, and taking someone off a meal deletes theirs, because it was about a meal they no longer ate.
   - On a test instance, discarding a call deletes the feedback on its meal, and `scrub-test` deletes all feedback; both show how many rows, as a number only.
 - Slack says which version is answering. `/dinnerbell version` (`/dinnerbell-test version` on test) replies privately with the version as the web footer shows it, such as `0.3.0`, or `0.3.0+abc1234` for a build from `main`; the instance label, if one is set; the database's schema revision; and a link to the release notes, or to the commit for a `main` build. The help reply lists `version` and ends with a version line, such as "Dinnerbell 0.3.0+abc1234 · TEST", and so does the bottom of App Home.
-
 - On a test instance only (`DINNERBELL_INSTANCE_LABEL` set), an admin can discard a call so a fresh one can start for the same slot and day (#60): **Discard (test)** on the call's card, behind a confirmation page; `/dinnerbell-test discard [lunch|dinner] [day]`; or `dinnerbell discard-call ID [--yes]`, which shows what it will delete first. Discarding deletes the call with its answers, suggestions, proposals, votes, decision, assignments, logged meal, and unsent notifications, edits its Slack messages to "Discarded (test)", and writes an audit row. On test, a called-off call can also start again at any time, not only until the usual meal time plus two hours. On production none of this appears: the pages are a 404, the slash command and the CLI refuse, and the rules don't change. See [docs/setup.md](docs/setup.md#discard-a-call-and-start-again).
 
 ### Changed
@@ -45,7 +46,7 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 ### Upgrade notes
 
 - The audit log names schedule changes differently. Ranking changes on Admin > Ranking are now `household.ranking_updated`, and a member's change to a slot's schedule is `household.slot_schedule_updated`. Rows written before you upgrade keep `household.schedule_updated`. If you search the audit log for schedule changes, search for all three.
-- The database migrates to revision `0008_meal_feedback` when Dinnerbell starts. It adds an empty `feedback` table, so it's quick. Back up first, as always. To go back to an earlier release, restore that backup: older releases refuse a database at a revision they don't know.
+- The database migrates to revision `0008_meal_feedback` when Dinnerbell starts, in two steps: `0007_event_autoincrement` rebuilds the `event` table so call IDs are never reused, keeping every row, and `0008_meal_feedback` adds an empty `feedback` table. Both are quick for a household's data. Back up first, as always. To go back to an earlier release, restore that backup: older releases refuse a database at a revision they don't know.
 - Decision messages for calls that finished before you upgrade don't get **How was it?** until they're redrawn. Those meals still take feedback from App Home and the web.
 - Members who already turned on the feedback reminder in Preferences, which did nothing until now, start getting it for meals that finish after the upgrade, unless they muted direct-message reminders.
 - Optional: the Slack app manifests list `version` in the slash command's usage hint. To show it in Slack, open the app's **Slash Commands** settings and edit the command's usage hint to match `deploy/slack-app-manifest.yaml` (or `deploy/slack-app-manifest.test.yaml` for test). `/dinnerbell version` works without this.
@@ -138,7 +139,8 @@ The source-built version, never published as an image. It covers milestones M0 t
 - **M1:** the catalog with file import, preferences and vetoes, meal history, and the members admin page.
 - **M2:** dinner calls in Slack: the scheduled call, reminders, ranked proposals and votes, the decision, assignments, the abandon path, admin overrides, App Home, and `/dinnerbell call`.
 
-[Unreleased]: https://github.com/dsmorgan/dinnerbell/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/dsmorgan/dinnerbell/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/dsmorgan/dinnerbell/releases/tag/v0.4.0
 [0.3.0]: https://github.com/dsmorgan/dinnerbell/releases/tag/v0.3.0
 [0.2.0]: https://github.com/dsmorgan/dinnerbell/releases/tag/v0.2.0
 [0.1.0]: https://github.com/dsmorgan/dinnerbell/tree/c179898
