@@ -16,7 +16,9 @@ from enum import StrEnum
 
 MAX_EMAIL_LENGTH = 254
 MAX_DISPLAY_NAME_LENGTH = 80
-_EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+# Dots split the domain into labels that can't contain dots, so there's one way to match any
+# address and the match takes linear time (CodeQL py/polynomial-redos).
+_EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s.]+(?:\.[^@\s.]+)+$")
 
 
 class Role(StrEnum):

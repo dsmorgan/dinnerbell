@@ -56,6 +56,7 @@ from dinnerbell.web.auth import (
 )
 from dinnerbell.web.context import AppContext
 from dinnerbell.web.forms import BadFormValue, RowId, choice, iso_date, optional_int, parse_id
+from dinnerbell.web.redirects import local_redirect
 from dinnerbell.web.render import is_htmx, render
 
 router = APIRouter()
@@ -71,9 +72,9 @@ def _any_time(context: AppContext) -> bool:
     return is_test_instance(context.settings.instance_label)
 
 
-def _back(event_id: int, came_from: str) -> str:
+def _back(event_id: int, came_from: str) -> Response:
     """Where a form posted without HTMX returns: Today or the event page, never anywhere else."""
-    return "/" if came_from == "today" else f"/events/{event_id}"
+    return local_redirect("/") if came_from == "today" else local_redirect("/events/{}", event_id)
 
 
 async def _card(
@@ -122,7 +123,7 @@ async def _run(
         return await _card(request, principal, context, db, event_id, came_from=came_from, error=error)
     if is_htmx(request):
         return await _card(request, principal, context, db, event_id, came_from=came_from)
-    return RedirectResponse(_back(event_id, came_from), status_code=303)
+    return _back(event_id, came_from)
 
 
 # Pages ------------------------------------------------------------------------------------------
@@ -191,7 +192,7 @@ async def start_call(
             await calls.post_now(db, member, event.id, run=event.run, now=context.clock())
         except RULE_ERRORS as exc:
             return await _card(request, principal, context, db, event.id, came_from="event", error=str(exc))
-    return RedirectResponse(f"/events/{event.id}", status_code=303)
+    return local_redirect("/events/{}", event.id)
 
 
 async def _today_error(
@@ -644,7 +645,7 @@ async def make_offer(
         posted = await offers.post_offer(db, principal.member, data, now=context.clock())
     except RULE_ERRORS as exc:
         return await _today_error(request, principal, context, db, offer_error=str(exc))
-    return RedirectResponse(f"/events/{posted.event_id}", status_code=303)
+    return local_redirect("/events/{}", posted.event_id)
 
 
 @router.post("/events/{event_id}/join")

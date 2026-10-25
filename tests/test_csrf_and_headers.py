@@ -14,6 +14,7 @@ from dinnerbell.db.models import MemberRow
 from dinnerbell.web.middleware import SECURITY_HEADERS
 from tests.conftest import BASE_URL, csrf_from, sign_in
 from tests.support.fake_oidc import FakeProvider
+from tests.support.pages import inline_code
 from tests.test_auth_flow import rows
 
 INVITE = {"display_name": "Sam", "email": "sam@example.com", "role": "member"}
@@ -130,18 +131,28 @@ def test_security_headers_on_errors_redirects_and_static(client: TestClient) -> 
 
 
 def test_pages_have_no_inline_script(client: TestClient, provider: FakeProvider) -> None:
-    import re
-
     sign_in(client, provider)
     for path in ("/", "/admin/members"):
-        html = client.get(path).text
-        scripts = re.findall(r"<script([^>]*)>(.*?)</script>", html, flags=re.S)
+        scripts, problems = inline_code(client.get(path).text)
         assert scripts, path
-        for attributes, body in scripts:
-            assert 'src="/static/' in attributes
-            assert body.strip() == ""
-        assert " style=" not in html
-        assert not re.search(r"\son[a-z]+=", html), f"inline event handler on {path}"
+        assert problems == [], path
+
+
+@pytest.mark.parametrize(
+    "html",
+    [
+        "<script>alert(1)</script>",
+        "<SCRIPT>alert(1)</SCRIPT >",
+        '<script src="/static/htmx.js">alert(1)</script >',
+        '<script src="https://cdn.example.com/x.js"></script>',
+        "<script>alert(1)",
+        '<p STYLE="color: red">',
+        '<button ONCLICK="go()">',
+        '<img src="/static/x.png" onerror="go()"/>',
+    ],
+)
+def test_inline_code_check_catches_what_a_browser_runs(html: str) -> None:
+    assert inline_code(html)[1], html
 
 
 def test_vendored_htmx_is_served(client: TestClient) -> None:
