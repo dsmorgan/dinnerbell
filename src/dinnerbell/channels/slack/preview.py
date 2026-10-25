@@ -15,7 +15,7 @@ from typing import Any
 
 from dinnerbell.channels.slack import ids
 from dinnerbell.channels.slack.blocks import Directory, with_version_footer
-from dinnerbell.channels.slack.messages import RenderContext, reminder_message, render, your_answer
+from dinnerbell.channels.slack.messages import RenderContext, reminder_message, render, schedule_reply, your_answer
 from dinnerbell.channels.slack.views import (
     HomeLinks,
     cancel_modal,
@@ -39,6 +39,7 @@ from dinnerbell.domain.events import (
     Window,
 )
 from dinnerbell.domain.meals import Slot
+from dinnerbell.domain.schedule import DEFAULT_SLOTS
 from dinnerbell.services.event_views import EventView, Permissions, ProposalView, TodayView
 
 BASE_URL = "https://dinnerbell.example.com"
@@ -133,6 +134,16 @@ DECIDED = event(EventState.DECIDED, coordinator=ALEX)
 REASON = "Pizza at Grandma's"
 CANCELLED = replace(event(EventState.CANCELLED, coordinator=ALEX), ended_by=ALEX, end_note=REASON)
 
+DINNER_SCHEDULE = note.SlotScheduleInfo(
+    enabled=True,
+    call_time=time(15, 0),
+    response_minutes=90,
+    vote_minutes=45,
+    reminder_minutes=15,
+    meal_time=time(18, 30),
+    modes=(Mode.PICKUP, Mode.DELIVERY),
+)
+
 NOTIFICATIONS: dict[str, Callable[[], note.Notification]] = {
     "call_opened": lambda: note.CallOpened(event(), (ALEX, KIM, LEE, SAM), waiting_on=(ALEX, KIM, LEE, SAM)),
     "call_updated": lambda: note.CallUpdated(event(), ROSTER, (LEE,), head_count=3),
@@ -173,6 +184,16 @@ NOTIFICATIONS: dict[str, Callable[[], note.Notification]] = {
     ),
     "started_call_cancelled": lambda: note.StartedCallCancelled(
         replace(event(EventState.CANCELLED), day=date(2026, 10, 23)), KIM, cancelled_by=ALEX
+    ),
+    "schedule_changed": lambda: note.ScheduleChanged(
+        household_id=1,
+        change_id="0123456789abcdef",
+        slot=Slot.DINNER,
+        changed_by=note.PersonInfo(9, "<!channel> & *Co*"),
+        before=DINNER_SCHEDULE,
+        after=replace(DINNER_SCHEDULE, call_time=time(14, 0), response_minutes=60, modes=(Mode.COOK, Mode.PICKUP)),
+        starts_on=date(2026, 10, 23),
+        path="/schedule",
     ),
 }
 
@@ -311,8 +332,9 @@ CARDS: dict[str, CardSample] = {
     "response_reminder_answered": _reminder(event(), replace(KIM_IN, status=Status.MAYBE), run=1),
     "response_reminder_moved_on": _reminder(VOTING, KIM_IN, run=1),
     "response_reminder_started_again": _reminder(replace(event(), run=2), KIM_IN, run=1),
+    "schedule_reply": lambda ctx: schedule_reply(DEFAULT_SLOTS, ctx).payload(),
 }
-"""Messages that answer a tap rather than a notification. They mention nobody."""
+"""Messages that answer a tap or a command rather than a notification. They mention nobody."""
 
 KINDS = (*NOTIFICATIONS, *VIEWS, *CARDS)
 

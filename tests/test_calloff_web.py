@@ -15,13 +15,15 @@ from fastapi.testclient import TestClient
 
 from dinnerbell.config import Settings
 from dinnerbell.db.models import AuditRow, EventRow
+from dinnerbell.domain.meals import Slot
 from tests.conftest import BASE_URL, csrf_from, invite, page, sign_in
 from tests.support.clock import FakeClock
 from tests.support.fake_oidc import FakeProvider
 from tests.support.households import other_call, other_household
 from tests.support.web import add_item, htmx, submit
 from tests.test_auth_flow import member, rows
-from tests.test_events_web import proposal_ids, schedule_form, sign_in_as, tick
+from tests.test_events_web import proposal_ids, sign_in_as, tick
+from tests.test_schedule_web import slot_form
 
 People = dict[str, str]
 """Role name to the email that plays it."""
@@ -497,13 +499,13 @@ def test_skip_a_day_offers_only_slots_with_a_daily_call(house: TestClient) -> No
     html = house.get("/admin/schedule").text
     picker = re.search(r'<select name="slot">(.*?)</select>', html, flags=re.S)
     assert picker is not None and re.findall(r'value="(\w+)"', picker.group(1)) == ["dinner"]  # lunch is off
-    off = schedule_form()
+    off = slot_form(Slot.DINNER)
     off.pop("dinner_enabled")
-    assert submit(house, "/admin/schedule", off).status_code == 303
+    assert submit(house, "/schedule/dinner", off).status_code == 303
     html = house.get("/admin/schedule").text
     assert 'action="/admin/schedule/skip"' not in html and "nothing to skip" in html
-    lunch = schedule_form(lunch_enabled="on")
-    assert submit(house, "/admin/schedule", lunch).status_code == 303
+    assert submit(house, "/schedule/lunch", slot_form(Slot.LUNCH, lunch_enabled="on")).status_code == 303
+    assert submit(house, "/schedule/dinner", slot_form(Slot.DINNER)).status_code == 303
     picker = re.search(r'<select name="slot">(.*?)</select>', house.get("/admin/schedule").text, flags=re.S)
     assert picker is not None and re.findall(r'value="(\w+)"', picker.group(1)) == ["dinner", "lunch"]
 

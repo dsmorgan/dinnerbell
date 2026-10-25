@@ -36,6 +36,7 @@
       <a href="/catalog"{% if path.startswith("/catalog") %} aria-current="page"{% endif %}>Catalog</a>
       <a href="/preferences"{% if path.startswith("/preferences") %} aria-current="page"{% endif %}>Preferences</a>
       <a href="/history"{% if path.startswith("/history") %} aria-current="page"{% endif %}>History</a>
+      <a href="/schedule"{% if path.startswith("/schedule") %} aria-current="page"{% endif %}>Schedule</a>
       {% if principal.member.is_admin %}
       <a href="/admin/members"{% if path.startswith("/admin") %} aria-current="page"{% endif %}>Members</a>
       {% endif %}

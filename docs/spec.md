@@ -134,7 +134,7 @@ Calling a call off and closing a window now aren't admin-only (FR-56). The coord
 
 ### 5.8 Changing the schedule
 
-Calls run at the same times every day by default. Any member can change a slot's standing schedule, such as moving the dinner call from 15:00 to 14:00, from the web app or `/dinnerbell schedule`. The bot posts the change in the channel with who made it, and the change applies from the next call. Moving only today's call is an admin override.
+Calls run at the same times every day by default. Any member can change a slot's standing schedule, such as moving the dinner call from 15:00 to 14:00, on the web app's Schedule page; `/dinnerbell schedule` shows the schedule and links there. The bot posts the change in the channel with who made it, and the change applies from the next call. Moving only today's call is an admin override.
 
 ### 5.9 Feedback after meals
 
@@ -156,7 +156,7 @@ Requirements use "must" for version 1 and "should" for items that can slip to a 
 
 | ID | Requirement |
 |---|---|
-| FR-1 | Each slot has: call enabled or disabled, call time, response window length, vote window length, reminder lead time, default fulfillment modes, and a usual meal time for when nobody gives an eat window (FR-19). Dinner defaults: enabled, 15:00, 90 minutes, 45 minutes, 15 minutes, pickup and delivery, 18:30. Lunch defaults: disabled, 10:30, 60, 30, 15, pickup, 12:30. The schedule is the same every day of the week. In M2 only the admin edits it (FR-44 is M3). |
+| FR-1 | Each slot has: call enabled or disabled, call time, response window length, vote window length, reminder lead time, default fulfillment modes, and a usual meal time for when nobody gives an eat window (FR-19). Dinner defaults: enabled, 15:00, 90 minutes, 45 minutes, 15 minutes, pickup and delivery, 18:30. Lunch defaults: disabled, 10:30, 60, 30, 15, pickup, 12:30. The schedule is the same every day of the week. Any member edits it (FR-44). |
 | FR-2 | The scheduler must post a call for each enabled slot once per day at the configured time, in the household time zone, and must not double-post after a restart. A call whose response window ended while the server was down is not posted, and a call is only ever posted on its own day: it's stale at midnight after it, so a call time late in the evening gets cut off at midnight. |
 | FR-3 | Any member must be able to start an ad-hoc call for a slot and date from Slack or the web app. A call for today opens at once; a call for a later day, up to 7 days ahead, opens at the slot's call time. A slot has at most one call per date. |
 | FR-4 | Any member must be able to post an offer with item, fulfillment mode, time, and capacity. |
@@ -260,7 +260,7 @@ Requirements use "must" for version 1 and "should" for items that can slip to a 
 | FR-41 | The admin invites a member by email. The member's first sign-in with that email activates the account and links the identity. Unknown emails are refused with a message to ask the admin. |
 | FR-42 | The admin maps or confirms each member's Slack user ID. Default mapping is by email match. |
 | FR-43 | The admin edits time zone, variety window, ranking weights, and badge thresholds in the web app. |
-| FR-44 | Any member can edit the standing schedule for a slot: call enabled, call time, and window lengths. Each change is announced in the channel with the member's name, written to the audit log, and applies from the next call. |
+| FR-44 | Any active member can edit the standing schedule for a slot, on the web app's Schedule page: call enabled, call time, window lengths, reminder lead time, usual meal time, and default fulfillment modes (everything in FR-1). Times are wall-clock times in the household's time zone. Windows run 5 to 360 minutes, the reminder comes before responses close, the call's windows end by midnight, and voting closes before the usual meal time. Each change is written to the audit log with who changed what, old and new, and announced in the channel with the member's name, what changed, and the first day it applies. A save that changes nothing posts nothing, and a save over someone else's newer change is refused. A change applies from the next call: a call that's open, or already scheduled for a later day, keeps the times it was created with, and so does a day an admin skipped. `/dinnerbell schedule` shows each slot's schedule and links to the page; editing stays on the web. Ranking weights, the proposal count, the variety window, and skipping a day stay admin-only (FR-43, FR-6). |
 
 ### 6.13 Later phases
 
@@ -354,7 +354,7 @@ Catch-up stops where it would be too late to matter. An undecided call (schedule
 | Call called off | Everyone who was in or maybe, and the coordinator | Channel post, threaded. None for a call that was never posted |
 | Called off after the decision | Each member assigned to cook, pick up, or order | Direct message |
 | Unposted call called off by someone else | The member who started it | Direct message |
-| Schedule changed | Everyone | Channel post. Deferred to M3 with FR-44: in M2 only the admin changes the schedule, from Admin > Schedule, and the change is audited |
+| Schedule changed | Everyone | Channel post naming who changed it, what changed, and the first day it applies (FR-44). No mentions |
 | Feedback reminder | Participants who turned the reminder on | Direct message, once per meal |
 
 Each member can mute direct-message reminders in their preferences. Channel posts are never suppressed per member. The call, proposals, and decision messages are also edited in place as they change; see [docs/channels.md](channels.md).
@@ -385,7 +385,7 @@ The adapter lives in `src/dinnerbell/channels/slack/`. `dinnerbell slack preview
 
 **App Home.** Today's events with the member's status and quick buttons (**In**, **Maybe**, **Out**, **Details**, **Mark done**, **Open**), with their answer selected as on the card, **Start a dinner call** or **Start a lunch call** for any slot without a call today, **Start dinner again** or **Start lunch again** for a slot called off today until the usual meal time plus two hours, links to preferences, the catalog, and history on the web, and the version line from the help reply at the bottom. Home is per member, so it shows **Call it off** (red) and Close now (**Start the vote now** or **Decide now**, with Slack's confirm dialog) only to people allowed to use them: the coordinator and admins, and the starter of an ad-hoc call for **Call it off** until it's decided (FR-56). It's published when the member opens it and after each tap there, with the result as a notice at the top. Offers, meals awaiting feedback, and badges come with M3 and M4.
 
-**Slash command.** `/dinnerbell` (or the command `DINNERBELL_SLACK_COMMAND` names) with subcommands `call`, `cancel`, `prefs`, `catalog`, `history`, `version`, and `help`. `call` starts a dinner call today; add `lunch`, `tomorrow`, or a date such as `2026-10-24`. `cancel [lunch|dinner] [today|tomorrow|YYYY-MM-DD] [reason]` calls off a call, with the rest of the line as the reason; without a slot it calls off that day's only open call, and asks which when lunch and dinner are both open. The day defaults to today. `version` names the running version as the web footer shows it, the instance label if one is set, the database's schema revision, and a link to the release notes, or to the commit for a `main` build; it needs no linked member, only the right workspace. Help ends with a version line, such as "Dinnerbell 0.3.0+abc1234 · TEST". The others reply with links. `offer`, `log`, and `schedule` say they're coming soon (M3) and link to the web where it can do the job. Replies are ephemeral.
+**Slash command.** `/dinnerbell` (or the command `DINNERBELL_SLACK_COMMAND` names) with subcommands `call`, `cancel`, `schedule`, `prefs`, `catalog`, `history`, `version`, and `help`. `call` starts a dinner call today; add `lunch`, `tomorrow`, or a date such as `2026-10-24`. `cancel [lunch|dinner] [today|tomorrow|YYYY-MM-DD] [reason]` calls off a call, with the rest of the line as the reason; without a slot it calls off that day's only open call, and asks which when lunch and dinner are both open. The day defaults to today. `version` names the running version as the web footer shows it, the instance label if one is set, the database's schema revision, and a link to the release notes, or to the commit for a `main` build; it needs no linked member, only the right workspace. Help ends with a version line, such as "Dinnerbell 0.3.0+abc1234 · TEST". `schedule` shows each slot's call time, when answers and voting close, and the usual meal time, with a **Change the schedule** button that opens the web app's Schedule page; changing it from Slack would need a modal as long as the web form, so it stays on the web. The others reply with links. `offer` and `log` say they're coming soon (M3) and link to the web where it can do the job. Replies are ephemeral.
 
 **Identity.** The bot acts only for Slack users linked to active members, and only on payloads from the configured workspace. Message buttons work only in the configured channel and in the bot's direct message with the member who taps (checked with `conversations.open`). Unlinked users get an ephemeral message asking them to sign in on the web once or ask the admin. Members are linked by the `https://slack.com/user_id` claim when they sign in with Slack, by email every hour (`users.lookupByEmail`), or by hand on Admin > Members (FR-42). An email match links only a full member of the configured workspace: never a guest, a bot, an external (Slack Connect) user, or a deactivated account. A link the admin sets or clears by hand is locked, so neither the email match nor sign-in changes it.
 
@@ -402,7 +402,8 @@ Mobile-first server-rendered pages with HTMX for in-place updates. No JavaScript
 | Preferences | Tags and items with veto and −2 to +2 controls. Capability flags. Mute reminders. Feedback reminder on or off. Calendar URL (later phase). |
 | History | Meals by week. Cuisines in the current variety window. Give or edit feedback on recent meals. |
 | Stats | Contribution counts, badges with progress to the next tier, household recap. |
-| Admin | Members and invitations, Slack mapping, slot schedules, skipping a day's call (FR-6), time zone, ranking weights, badge thresholds, backup status. |
+| Schedule | Each slot's standing schedule, which any member can change (FR-44). |
+| Admin | Members and invitations, Slack mapping, skipping a day's call (FR-6), time zone, ranking weights, badge thresholds, backup status. |
 
 ## 12. Metrics and badges
 

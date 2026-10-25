@@ -1,0 +1,38 @@
+{#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
+{% extends "base.html" %}
+{% block title %}Schedule{% endblock %}
+{% block content %}
+<h1>Schedule</h1>
+<p class="small muted">When each meal's daily call goes out, and how long people have to answer and vote. Anyone in the household can change it. Each change is posted in the Dinnerbell channel with your name, and applies from the next call: a call that's already out or scheduled keeps its times. Times are in the household's time zone.</p>
+{% for slot in slots %}{% set p = slot.value %}
+<form method="post" action="/schedule/{{ p }}" class="stack" id="{{ p }}">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <input type="hidden" name="{{ p }}_seen" value="{{ values[p ~ '_seen'] }}">
+  <fieldset class="card">
+    <legend><h2>{{ p|capitalize }}</h2></legend>
+    {% if saved == slot %}<p class="alert ok" role="status">{{ p|capitalize }} schedule saved and posted in the channel. It applies from the next call.</p>{% endif %}
+    {% if unchanged == slot %}<p class="alert ok" role="status">Nothing changed, so nothing was posted.</p>{% endif %}
+    {% if errors and errors.get(slot) %}<p class="alert error" role="alert">{{ errors[slot] }}</p>{% endif %}
+    <label class="check"><input type="checkbox" name="{{ p }}_enabled"{% if values[p ~ "_enabled"] %} checked{% endif %}> Post a {{ p }} call every day</label>
+    <div class="pair">
+      <label class="field"><span>Call time</span><input type="time" name="{{ p }}_call_time" value="{{ values[p ~ '_call_time'] }}" required></label>
+      <label class="field"><span>Usual meal time</span><input type="time" name="{{ p }}_meal_time" value="{{ values[p ~ '_meal_time'] }}" required></label>
+    </div>
+    {% for name, label in minute_fields %}
+    <label class="field"><span>{{ label }}</span><input type="number" inputmode="numeric" name="{{ p }}_{{ name }}" min="0" max="360" value="{{ values[p ~ '_' ~ name] }}" required></label>
+    {% endfor %}
+    <fieldset class="field"><legend>Usual ways to get it</legend>
+      <div class="chip-picker">
+        {% for mode in modes %}
+        <label class="chip-toggle"><input type="checkbox" name="{{ p }}_modes" value="{{ mode.value }}"{% if mode.value in values[p ~ "_modes"] %} checked{% endif %}><span>{{ mode.label }}</span></label>
+        {% endfor %}
+      </div>
+    </fieldset>
+    <button type="submit" class="button primary block">Save {{ p }} schedule</button>
+  </fieldset>
+</form>
+{% endfor %}
+{% if principal.member.is_admin %}
+<p class="small muted">Admins: skip one day's call, or change how proposals are ranked, on <a href="/admin/schedule">Admin &gt; Ranking</a>.</p>
+{% endif %}
+{% endblock %}

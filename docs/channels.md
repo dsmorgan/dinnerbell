@@ -40,7 +40,7 @@ class Channel(Protocol):
 
 ## Keys
 
-Every key starts with the event and its run: `event:{event_id}:run{run}`. An admin re-run increments `run`, so a re-run posts a fresh call message and its own thread.
+Every key of an event's notification starts with the event and its run: `event:{event_id}:run{run}`. An admin re-run increments `run`, so a re-run posts a fresh call message and its own thread. A `schedule_changed` key is `schedule:{slot}:{change_id}` instead.
 
 | Key | Meaning |
 |---|---|
@@ -52,7 +52,7 @@ Updates coalesce: while the newest update to a message is waiting and nobody has
 
 ## Notifications
 
-All types are frozen dataclasses in `domain/notifications.py` with an `event: EventInfo`. They carry only domain data: IDs, display names, the event's state and `end_reason`, UTC times plus the household's `timezone`, items with URLs, and the event page's `path` (join it to `DINNERBELL_BASE_URL` for links, per FR-37). Rows store them as JSON; `from_payload(kind, payload)` rebuilds them. The drainer hands adapters the dataclass.
+All types are frozen dataclasses in `domain/notifications.py`. Every type but `schedule_changed` has an `event: EventInfo`; for any notification, use `household_id` and `event_id` (None for `schedule_changed`) rather than reaching into `event`. The outbox stores a notification without an event with no `event_id`, so it holds back nothing and nothing holds it back. They carry only domain data: IDs, display names, the event's state and `end_reason`, UTC times plus the household's `timezone`, items with URLs, and the event page's `path` (join it to `DINNERBELL_BASE_URL` for links, per FR-37). Rows store them as JSON; `from_payload(kind, payload)` rebuilds them. The drainer hands adapters the dataclass.
 
 | `kind` | Class | Audience | `message_key` | `thread_key` | Sent when |
 |---|---|---|---|---|---|
@@ -69,6 +69,7 @@ All types are frozen dataclasses in `domain/notifications.py` with an `event: Ev
 | `event_cancelled` | `EventCancelled` | Channel; mention everyone in `audience` | | `…:call` | Someone calls off a call that was posted (FR-56). `audience` is everyone who was in or maybe, plus the coordinator; `audience` is `None` only on rows queued before it existed; mention `participants` (who was in) for those. `cancelled_by` and the optional `note` (the reason, at most 140 characters) say who and why. Never sent for a call that was never posted, and dropped if the call message never landed (`needs_thread`). |
 | `assignment_cancelled` | `AssignmentCancelled` | DM `member` | | | A decided call is called off: one message to each active member assigned to cook, pick up, or order, with their `roles`, the `decision` they no longer need to carry out, `cancelled_by`, and `note`. Nobody is messaged about their own call-off. Key: `…:assignment_cancelled:member{id}`. |
 | `started_call_cancelled` | `StartedCallCancelled` | DM `member` | | | Someone else calls off a call `member` started that was never posted (it was still scheduled), so there's no thread to reply in. Key: `…:started_call_cancelled:member{id}`. |
+| `schedule_changed` | `ScheduleChanged` | Channel; mentions nobody | | | A member changes a slot's standing schedule (FR-44). It has no `event`: it carries `household_id`, the `slot`, `changed_by`, the schedule `before` and `after` (`SlotScheduleInfo`, wall-clock times in the household time zone), `starts_on` (the first day whose call follows it), and `path`, the Schedule page. Name what changed, old and new, and say that calls already out or scheduled keep their times. A save that changes nothing sends none. Key: `schedule:{slot}:{change_id}`, where `change_id` matches the change's audit row. |
 
 A call-off closes the event's undelivered `assignment_made` and `response_reminder` rows unsent, with `last_error = "superseded by a call-off"`. A row a drainer already holds is left to that drainer; if its delivery fails or is held, the drainer checks the call again before the next attempt, and closes the row the same way once the call is cancelled or has started a newer run. Only a delivery already in the channel's hands at the moment of the call-off can still arrive, before the call-off's own messages. A called-off call has `EventInfo.state = cancelled`, with `EventInfo.ended_by` (who called it off) and `EventInfo.end_note` (the reason, if any). Its `call_updated`, `proposals_updated`, and `decision_updated` go out as usual, so the call message can say "Called off by Sam" and the decision can be struck through. A call that was never posted sends only `started_call_cancelled`, and only when someone other than its starter called it off.
 
@@ -108,6 +109,7 @@ Channel messages are shared, so a button can't show whether the person tapping i
 | Close now: "Start the vote now" or "Decide now" (coordinator or admin) | `calls.close_window(db, actor, event_id, run=, expected_window=, now=)`. Pass the run and the window the person confirmed, from Slack and the web alike, so a late or doubled confirmation closes nothing. |
 | Admin: extend or shorten a window | `call_admin.move_deadline(db, actor, event_id, Window.RESPOND / VOTE, minutes or None, now=)` |
 | Admin: skip a daily call before it opens | `calls.skip_day(db, actor, slot, day, note=reason or None, now=)` |
+| `/dinnerbell schedule` | `schedule.slot_schedules_for(db, actor)`, shown with `messages.schedule_reply`. Changing it is on the web: `schedule.update_slot(db, actor, slot, schedule, seen=, now=)` |
 | Admin: re-run, assign coordinator | `call_admin.rerun`, `call_admin.assign_coordinator(..., member_id or None)` |
 
 For what to show a member (their response, which buttons apply to them), use `services.event_views.event_view(db, actor, event_id, now=)`. Its `can` flags come from the same rules the services enforce: `can.cancel` for Call it off, and `can.close_window`, the window Close now would close (`Window.RESPOND` reads "Start the vote now", `Window.VOTE` reads "Decide now"), or `None`, including once that window's deadline has passed.

@@ -8,10 +8,14 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ### Added
 
+- Any member can change a meal's standing schedule (FR-44, #12): whether its call goes out every day, the call time, how long people have to answer and vote, the reminder, the usual meal time, and the usual ways to get it. Open **Schedule** in the web app's menu. Each change is posted in the Dinnerbell channel with who made it, what changed, and the first day it applies, and the audit log records the old and new values. A change applies from the next call: a call that's already out, or scheduled for a later day, keeps its times. Saving without a change posts nothing, and a save over someone else's newer change is refused so it can't undo theirs.
+- `/dinnerbell schedule` shows each meal's call time, when answers and voting close, and the usual meal time, with a **Change the schedule** button that opens the Schedule page. It no longer says "coming soon".
 - Slack says which version is answering. `/dinnerbell version` (`/dinnerbell-test version` on test) replies privately with the version as the web footer shows it, such as `0.3.0`, or `0.3.0+abc1234` for a build from `main`; the instance label, if one is set; the database's schema revision; and a link to the release notes, or to the commit for a `main` build. The help reply lists `version` and ends with a version line, such as "Dinnerbell 0.3.0+abc1234 · TEST", and so does the bottom of App Home.
 
 ### Changed
 
+- Admin > Schedule is now **Admin > Ranking**. It keeps the ranking weights, proposals per call, variety window, and **Skip a day**; call times and windows moved to the Schedule page.
+- A schedule must close voting before the usual meal time. Saving one that doesn't, such as a 3:00 PM call with 90 minutes to answer and 45 to vote and a 5:00 PM meal, explains how to fix it. Schedules already saved keep working.
 - In Slack, you can now see what you chose on a call (#42, #52). While responses are open, the call message has one **Answer** button instead of **In**, **Maybe**, **Out**, the role offers, **I'll coordinate**, and **Details**. **Answer** posts a Your answer card only you see, with those buttons and your answer and offers selected: green, and marked "✓ " so you can tell without color. Taps on the card change the card in place instead of adding another message. Tapping **Answer** again adds a new card, because Slack can't change one person's view of a shared message. The card replaces the "Thanks! You're offering to cook" lines, which piled up.
 - While voting with nobody coordinating, the call message still has **I'll coordinate**.
 - The reminder direct message and App Home show your answer selected the same way. A tap on the reminder changes the reminder itself, instead of adding a confirmation under it.

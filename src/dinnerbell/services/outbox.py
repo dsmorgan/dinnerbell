@@ -37,6 +37,7 @@ from dinnerbell.domain.notifications import (
     Notification,
     PayloadError,
     PermanentDeliveryError,
+    ScheduleChanged,
     from_payload,
 )
 from dinnerbell.services.clock import Clock
@@ -177,6 +178,8 @@ async def _deliver(
 async def _overtaken(db: AsyncSession, notification: Notification) -> bool:
     """Whether the call ``notification`` is about was called off, or has started a newer run,
     since it was queued."""
+    if isinstance(notification, ScheduleChanged):  # pragma: no cover - not one CALL_OFF_SUPERSEDES names
+        return False
     event = await EventRepository(db).get(notification.event.household_id, notification.event.id)
     return event is None or event.state is EventState.CANCELLED or event.run != notification.event.run
 

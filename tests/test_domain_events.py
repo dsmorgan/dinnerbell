@@ -619,7 +619,10 @@ def test_eat_windows_end_by_a_quarter_to_midnight() -> None:
 
 def test_schedules_stay_within_the_day() -> None:
     dinner = sched.DEFAULT_SLOTS[Slot.DINNER]
-    sched.check_schedule(replace(dinner, call_time=time(21, 45), response_minutes=90, vote_minutes=45))  # ends 24:00
+    late = replace(dinner, call_time=time(21, 45), response_minutes=90, vote_minutes=45, meal_time=time(23, 45))
+    with pytest.raises(sched.InvalidSchedule, match="usual meal time"):  # voting ends at midnight
+        sched.check_schedule(late)
+    sched.check_schedule(replace(late, call_time=time(21, 0)))  # ends 23:15
     with pytest.raises(sched.InvalidSchedule, match="past midnight"):
         sched.check_schedule(replace(dinner, call_time=time(22, 0), response_minutes=90, vote_minutes=45))
     with pytest.raises(sched.InvalidSchedule, match="11:45 PM"):

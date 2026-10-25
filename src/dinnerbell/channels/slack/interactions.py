@@ -52,6 +52,7 @@ from dinnerbell.channels.slack.messages import (
     RenderContext,
     labelled,
     reminder_message,
+    schedule_reply,
     your_answer,
     your_answer_text,
 )
@@ -86,6 +87,7 @@ from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.members import Member
 from dinnerbell.domain.notifications import MessageRef, PermanentDeliveryError, PersonInfo, ResponseReminder
 from dinnerbell.services import calls, event_views, slack_members
+from dinnerbell.services import schedule as schedule_service
 from dinnerbell.services.clock import Clock
 from dinnerbell.services.errors import Forbidden, NotFound
 from dinnerbell.services.event_views import EventView
@@ -761,7 +763,7 @@ class Interactions:
             return
         words = str(body.get("text") or "").split()
         sub, args = (words[0].lower(), words[1:]) if words else ("help", [])
-        if sub not in {"call", "cancel"}:
+        if sub not in {"call", "cancel", "schedule"}:
             await ack(response_type="ephemeral", text=self.command_reply(sub))
             return
         user, channel = body.get("user_id"), body.get("channel_id")
@@ -770,6 +772,8 @@ class Interactions:
             source = Source(user, channel_id=channel if ids.is_channel_id(channel) else None)
             if sub == "call":
                 self._spawn(self._call(source, [word.lower() for word in args]))
+            elif sub == "schedule":
+                self._spawn(self._schedule_command(source))
             else:
                 self._spawn(self._cancel_command(source, args))
 
@@ -786,11 +790,6 @@ class Interactions:
                 return f"Logging a meal from Slack is coming soon. For now, log it on <{url('/history')}|History>."
             case "offer":
                 return f"Offers are coming soon. Until then, start a call with `{self.command} call`."
-            case "schedule":
-                return (
-                    "Changing the schedule from Slack is coming soon. For now, the admin can change it "
-                    f"on the web: <{url('/admin/schedule')}|Schedule>."
-                )
             case "version":
                 return self.version_reply()
             case _:
@@ -816,6 +815,27 @@ class Interactions:
                 await calls.start_call(db, member, slot, day, now=self.clock())
             when = "today" if day == today else f"for {day_label(day)}"
             return f"Started the {slot.value} call {when}. It's posted in the Dinnerbell channel."
+
+        await self._run(source, member, work)
+
+    async def _schedule_command(self, source: Source) -> None:
+        """``schedule``: each slot's standing schedule, with a link to change it on the web
+        (FR-44). Changing it happens on the web, where the whole form fits."""
+        member = await self._member(source)
+        if member is None:
+            return
+
+        async def work() -> str | None:
+            async with self.sessionmaker() as db:
+                schedules = await schedule_service.slot_schedules_for(db, member)
+            reply = schedule_reply(schedules, self._context())
+            try:
+                if source.channel_id is None:
+                    raise PermanentDeliveryError("no channel to reply in")
+                await self.api.ephemeral(source.channel_id, source.user_id, reply.text, reply.blocks)
+            except SLACK_ERRORS:  # not in that channel, for example: a direct message instead
+                await self.api.post(source.user_id, reply.payload())
+            return None
 
         await self._run(source, member, work)
 
@@ -857,7 +877,8 @@ HELP = (
     "• `{command} prefs` links to your preferences.\n"
     "• `{command} catalog` and `{command} history` link to the catalog and meal history.\n"
     "• `{command} version` says which version of Dinnerbell is answering.\n"
-    "• `offer`, `log`, and `schedule` are coming soon.\n"
+    "• `{command} schedule` shows when calls go out, with a link to change it.\n"
+    "• `offer` and `log` are coming soon.\n"
     "Open the Dinnerbell app's Home tab for today's calls, or <{today}|the web app>."
 )
 CALL_USAGE = "Try `{command} call`, `{command} call lunch tomorrow`, or `{command} call dinner 2026-10-24`."

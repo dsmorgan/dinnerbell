@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass, replace
+from datetime import time
 from typing import Any
 
 from dinnerbell.channels.slack import ids
@@ -44,6 +45,7 @@ from dinnerbell.domain import notifications as note
 from dinnerbell.domain.catalog import Mode
 from dinnerbell.domain.events import AssignmentRole, EndReason, EventState, Response, RoleOffer, Status, Window
 from dinnerbell.domain.meals import Slot
+from dinnerbell.domain.schedule import SlotSchedule
 
 MAX_PROPOSALS = 10
 """Services allow 10 proposals per call. Each takes two blocks, well under the 50 a message
@@ -145,6 +147,8 @@ def _render(notification: note.Notification, ctx: RenderContext) -> Message:
             return assignment_cancelled_message(notification, ctx)
         case note.StartedCallCancelled():
             return started_call_cancelled_message(notification, ctx)
+        case note.ScheduleChanged():
+            return schedule_changed_message(notification, ctx)
     raise TypeError(f"no Slack rendering for {type(notification).__name__}")  # pragma: no cover
 
 
@@ -714,3 +718,77 @@ def started_call_cancelled_message(notification: note.StartedCallCancelled, ctx:
     ]
     blocks = [section(join_lines(lines)), actions(_web_button(ctx, event), block_id="more")]
     return _finish(_called_off(event, notification.cancelled_by, notification.note), blocks)
+
+
+# The schedule (FR-44) ----------------------------------------------------------------------------
+
+MODE_WORDS = {Mode.COOK: "cook", Mode.PICKUP: "pickup", Mode.DELIVERY: "delivery"}
+
+
+def _minutes(count: int) -> str:
+    return plural(count, "minute")
+
+
+def _schedule_fields(schedule: note.SlotScheduleInfo) -> list[tuple[str, str]]:
+    """Each field of a slot's schedule, labeled, in the order the web form shows them."""
+    return [
+        ("Daily call", "on" if schedule.enabled else "off"),
+        ("Call time", clock(schedule.call_time)),
+        ("Usual meal time", clock(schedule.meal_time)),
+        ("Time to answer", _minutes(schedule.response_minutes)),
+        ("Time to vote", _minutes(schedule.vote_minutes)),
+        ("Reminder", f"{_minutes(schedule.reminder_minutes)} before answers close"),
+        ("Usual ways to get it", ", ".join(MODE_WORDS[m] for m in schedule.modes)),
+    ]
+
+
+def schedule_changed_message(notification: note.ScheduleChanged, ctx: RenderContext) -> Message:
+    """FR-44: who changed a slot's standing schedule, what changed, and from which day. Calls
+    already out or scheduled keep their times, so it says so instead of naming them."""
+    slot = notification.slot.value
+    who = notification.changed_by.name
+    when = day_label(notification.starts_on)
+    before = dict(_schedule_fields(notification.before))
+    changes = [(label, before[label], value) for label, value in _schedule_fields(notification.after)]
+    changes = [(label, old, new) for label, old, new in changes if old != new]
+    lines = [f"{escape(who)} changed the {slot} schedule, starting *{when}*."]
+    lines += [f"• {label}: {old} → *{new}*" for label, old, new in changes]
+    blocks = [
+        section(join_lines(lines)),
+        context(
+            f"Calls already out or scheduled keep their times. {link(ctx.url(notification.path), 'See the schedule')}"
+        ),
+    ]
+    summary = "; ".join(f"{label.lower()} {old} → {new}" for label, old, new in changes)
+    text = f"{who} changed the {slot} schedule, starting {when}" + (f": {summary}." if summary else ".")
+    return _finish(text, blocks)
+
+
+def schedule_reply(schedules: dict[Slot, SlotSchedule], ctx: RenderContext) -> Message:
+    """``/dinnerbell schedule``: each slot's standing schedule, and a link to change it on the
+    web. Only the person who asked sees it."""
+    lines: list[str] = []
+    for slot, schedule in schedules.items():
+        name = slot.value.capitalize()
+        if not schedule.enabled:
+            lines.append(f"*{name}:* no daily call.")
+            continue
+        answer = clock(_add(schedule.call_time, schedule.response_minutes))
+        vote = clock(_add(schedule.call_time, schedule.response_minutes + schedule.vote_minutes))
+        lines.append(
+            f"*{name}:* the call goes out at *{clock(schedule.call_time)}*. Answers close at {answer}, "
+            f"voting at {vote}, and the usual meal time is {clock(schedule.meal_time)}."
+        )
+    blocks = [
+        section(join_lines(lines)),
+        actions(button("Change the schedule", f"{ids.LINK_PREFIX}schedule", url=ctx.url("/schedule")), block_id="more"),
+        context("Anyone in the household can change it. Each change is posted in the Dinnerbell channel."),
+    ]
+    text = "When calls go out: " + " ".join(lines).replace("*", "")
+    return labelled(_finish(text, blocks), ctx)
+
+
+def _add(at: time, minutes: int) -> time:
+    """``at`` plus ``minutes`` on the clock. Schedules end by midnight (``check_schedule``)."""
+    total = (at.hour * 60 + at.minute + minutes) % (24 * 60)
+    return time(total // 60, total % 60)
