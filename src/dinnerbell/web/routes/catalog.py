@@ -34,6 +34,7 @@ from dinnerbell.services.variety import household_today
 from dinnerbell.web.auth import AdminCSRFChecked, Context, CSRFChecked, Database, Principal, SignedIn
 from dinnerbell.web.context import AppContext
 from dinnerbell.web.forms import BadFormValue, RowId, choice, optional_int, parse_id, split_names
+from dinnerbell.web.redirects import local_redirect
 from dinnerbell.web.render import render
 from dinnerbell.web.signing import SignedPayload, derive_key
 
@@ -262,7 +263,7 @@ async def create_item(
         item = await catalog_service.create_item(db, principal.member, form.to_input(chosen), now=context.clock())
     except (InvalidCatalogInput, CatalogRuleViolation, BadFormValue) as exc:
         return await _item_page(request, principal, db, kind=chosen, form=form, error=str(exc), status_code=400)
-    return RedirectResponse(f"/catalog?notice=created#item-{item.id}", status_code=303)
+    return local_redirect("/catalog?notice=created#item-{}", item.id)
 
 
 @router.get("/items/{item_id}")
@@ -285,19 +286,19 @@ async def update_item(
         return await _item_page(
             request, principal, db, kind=item.kind, form=form, item=item, error=str(exc), status_code=400
         )
-    return RedirectResponse(f"/catalog?notice=updated#item-{item_id}", status_code=303)
+    return local_redirect("/catalog?notice=updated#item-{}", item_id)
 
 
 @router.post("/items/{item_id}/deactivate")
 async def deactivate_item(principal: CSRFChecked, context: Context, db: Database, item_id: RowId) -> Response:
     await catalog_service.set_item_active(db, principal.member, item_id, False, now=context.clock())
-    return RedirectResponse(f"/catalog/items/{item_id}?notice=deactivated", status_code=303)
+    return local_redirect("/catalog/items/{}?notice=deactivated", item_id)
 
 
 @router.post("/items/{item_id}/reactivate")
 async def reactivate_item(principal: CSRFChecked, context: Context, db: Database, item_id: RowId) -> Response:
     await catalog_service.set_item_active(db, principal.member, item_id, True, now=context.clock())
-    return RedirectResponse(f"/catalog/items/{item_id}?notice=reactivated", status_code=303)
+    return local_redirect("/catalog/items/{}?notice=reactivated", item_id)
 
 
 # Tags ---------------------------------------------------------------------------------------------
@@ -557,8 +558,9 @@ async def apply_import(
             request, context, principal, content=content, plan=exc.plan, notice=str(exc), status_code=409
         )
     summary = plan.summary()
-    location = (
-        f"/catalog?notice=imported&created={summary['items_created']}"
-        f"&updated={summary['items_updated']}&tags_created={summary['tags_created']}"
+    return local_redirect(
+        "/catalog?notice=imported&created={}&updated={}&tags_created={}",
+        summary["items_created"],
+        summary["items_updated"],
+        summary["tags_created"],
     )
-    return RedirectResponse(location, status_code=303)

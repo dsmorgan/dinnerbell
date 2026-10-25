@@ -21,6 +21,7 @@ from dinnerbell.services import preferences as preference_service
 from dinnerbell.services.errors import NotFound
 from dinnerbell.web.auth import Context, CSRFChecked, Database, Principal, SignedIn
 from dinnerbell.web.forms import checked, choice, parse_id
+from dinnerbell.web.redirects import local_redirect
 from dinnerbell.web.render import is_htmx, render
 
 router = APIRouter(prefix="/preferences")
@@ -137,4 +138,4 @@ async def save_stance(
             "_preference_row.html",
             {"target": target, "name": name, "stance": stance, "levels": _levels(), "saved": True},
         )
-    return RedirectResponse(f"/preferences?notice=saved#pref-{target_type.value}-{target_id}", status_code=303)
+    return local_redirect("/preferences?notice=saved#pref-{}-{}", target_type, target_id)

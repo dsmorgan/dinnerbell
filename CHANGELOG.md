@@ -31,6 +31,10 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 - Meal IDs are never reused, so a History or feedback page left open while meals are deleted, such as by `dinnerbell reset-history`, can't save to a different meal. The upgrade rebuilds the `meal_log` table (migration 0009) and keeps every row and its feedback.
 
+### Security
+
+- Checking an email address takes time in proportion to its length, whatever it contains (CodeQL `py/polynomial-redos`). Addresses were already capped at 254 characters, so this wasn't exploitable. The check is a little stricter too: it refuses an empty part between the dots of the domain, such as `sam@example..com` or `sam@example.com.`.
+
 ### Upgrade notes
 
 - The database migrates to revision `0009_meal_log_autoincrement` when Dinnerbell starts. It rebuilds the `meal_log` table so a deleted meal's ID is never given to a new meal, keeping every meal and its feedback. It's quick for a household's data. Back up first, as always. To go back to an earlier release, restore that backup: older releases refuse a database at a revision they don't know.

@@ -28,6 +28,7 @@ from tests.conftest import csrf_from, invite, page, sign_in
 from tests.support.clock import FakeClock
 from tests.support.fake_oidc import FakeProvider
 from tests.support.households import other_call, other_household
+from tests.support.pages import inline_code
 from tests.support.web import add_item, htmx, submit
 from tests.test_architecture import audit_routes
 from tests.test_auth_flow import member, rows
@@ -395,12 +396,7 @@ def test_m2_pages_have_no_inline_script_or_style(admin: TestClient, clock: FakeC
     pages_seen.append(admin.get(f"/events/{event_id}"))
     for response in pages_seen:
         assert response.status_code == 200
-        html = response.text
-        for attributes, body in re.findall(r"<script([^>]*)>(.*?)</script>", html, flags=re.S):
-            assert 'src="/static/' in attributes
-            assert body.strip() == ""
-        assert " style=" not in html
-        assert not re.search(r"\son[a-z]+=", html)
+        assert inline_code(response.text)[1] == []
 
 
 def test_malformed_event_ids_are_not_found(admin: TestClient) -> None:

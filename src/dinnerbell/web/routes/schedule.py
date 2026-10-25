@@ -36,6 +36,7 @@ from dinnerbell.services.schedule import RankingSettings, ScheduleMoved
 from dinnerbell.web.auth import AdminCSRFChecked, AdminPrincipal, Context, CSRFChecked, Database, Principal, SignedIn
 from dinnerbell.web.context import AppContext
 from dinnerbell.web.forms import BadFormValue, choice, iso_date, optional_int
+from dinnerbell.web.redirects import local_redirect
 from dinnerbell.web.render import render
 
 router = APIRouter()
@@ -162,7 +163,7 @@ async def save_slot(request: Request, slot: str, principal: CSRFChecked, context
     if not changed:
         page = await _schedule_page(db, principal, unchanged=chosen)
         return await render(request, "schedule.html", page)
-    return RedirectResponse(f"/schedule?saved={chosen.value}#{chosen.value}", status_code=303)
+    return local_redirect("/schedule?saved={}#{}", chosen, chosen)
 
 
 # Admin > Ranking (FR-43) and Skip a day (FR-6) -------------------------------------------------

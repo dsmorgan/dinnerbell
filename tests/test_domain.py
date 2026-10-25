@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 
@@ -12,6 +13,8 @@ from dinnerbell.domain import sessions
 from dinnerbell.domain.backups import backups_to_delete, backups_to_keep
 from dinnerbell.domain.identity import Allow, IdentityClaims, Refusal, Refuse, decide_sign_in
 from dinnerbell.domain.members import (
+    _EMAIL_PATTERN,
+    MAX_EMAIL_LENGTH,
     Capabilities,
     InvalidMemberInput,
     Member,
@@ -60,11 +63,31 @@ class TestMembers:
             "a b@example.com",
             "sam@exa\x00mple.com",
             "x" * 250 + "@example.com",
+            "sam@.example.com",
+            "sam@example..com",
+            "sam@example.com.",
         ],
     )
     def test_invalid_emails(self, value: str) -> None:
         with pytest.raises(InvalidMemberInput):
             normalize_email(value)
+
+    def test_valid_emails(self) -> None:
+        for value in ("sam@example.com", "sam.smith+food@mail.example.co.uk", "x" * 242 + "@example.com"):
+            assert normalize_email(value) == value
+
+    def test_email_pattern_takes_linear_time(self) -> None:
+        """CodeQL py/polynomial-redos: the old pattern took quadratic time on many "!." pairs
+        followed by a character that can't match. Addresses are capped at 254 characters, so
+        check the cap, then run the pattern itself on 200,000 characters. The old pattern needs
+        about a minute of CPU for that; the new one takes milliseconds, far under the ceiling."""
+        attack = "!@!." + "!." * 124 + "!@"
+        assert len(attack) == MAX_EMAIL_LENGTH
+        with pytest.raises(InvalidMemberInput):
+            normalize_email(attack)
+        started = time.process_time()
+        assert _EMAIL_PATTERN.match("!@!." + "!." * 100_000 + "@") is None
+        assert time.process_time() - started < 2
 
     def test_display_name(self) -> None:
         assert normalize_display_name("  Sam   Smith ") == "Sam Smith"

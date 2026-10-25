@@ -13,6 +13,7 @@ from dinnerbell.config import Settings
 from dinnerbell.db.models import AuditRow, CatalogItemRow, FeedbackRow, MealLogRow, PreferenceRow, TagRow
 from tests.conftest import csrf_from, sign_in
 from tests.support.fake_oidc import FakeProvider
+from tests.support.pages import inline_code
 from tests.support.web import add_item, htmx, submit
 from tests.test_architecture import audit_routes
 from tests.test_auth_flow import member, rows
@@ -93,11 +94,7 @@ def test_m1_pages_have_no_inline_script_or_style(client: TestClient, populated: 
         response = client.get(path)
         assert response.status_code == 200, path
         html = response.text
-        for attributes, body in re.findall(r"<script([^>]*)>(.*?)</script>", html, flags=re.S):
-            assert 'src="/static/' in attributes, path
-            assert body.strip() == "", path
-        assert " style=" not in html, path
-        assert not re.search(r"\son[a-z]+=", html), f"inline event handler on {path}"
+        assert inline_code(html)[1] == [], path
         assert 'name="viewport" content="width=device-width' in html
 
 
