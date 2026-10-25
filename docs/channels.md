@@ -128,7 +128,7 @@ The Slack adapter shows Close now on a message everyone shares, and Slack confir
 
 Once a call is done, its decision message carries **How was it?** (`ids.FEEDBACK`, value `<id>:<run>` from `ids.card_value`), and so do the feedback reminder and each meal in App Home's "How was it?" list (`feedback.awaiting`). Every one goes through `_action`'s identity and place checks and opens the feedback modal (`ids.FEEDBACK_VIEW`), whose `ViewOrigin` names the run; `_submission` refuses a feedback modal without one, and the service checks it again. The modal asks only what the meal takes: the food always, the place and its issue chips for a restaurant, and the cook's thank-you and note for a home meal someone else cooked. The service refuses anyone who didn't eat the meal, and any change after the 7-day window, with an `InvalidFeedback` message to show.
 
-Show a member only their own food and place answers. Counts per catalog item (`feedback.item_counts`) and the thank-yous on a meal (`feedback.for_meals`) are all anyone else may see, and only the cook a thank-you named gets its sender and note. Never log a rating.
+Show a member only their own food and place answers. How many loved each catalog item's food and place (`feedback.item_counts`) and the thank-yous on a meal (`feedback.for_meals`) are all anyone else may see; never show "fine", "not again", or issue chips, not even as counts, and only the cook a thank-you named gets its sender and note. Never log a rating.
 
 ### Your answer cards and the reminder
 

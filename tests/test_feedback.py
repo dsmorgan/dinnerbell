@@ -222,7 +222,7 @@ async def test_nobody_sees_who_chose_not_again(house: House) -> None:
     assert seen["Alex"].mine == FeedbackInput(food=Rating.LOVED, cook_thanks=True)  # only their own answers
     assert seen["Alex"].thanks == CookThanks(2, sam) and seen["Alex"].can_give
     assert seen["Lee"].mine is None and seen["Lee"].thanks == CookThanks(2, sam) and not seen["Lee"].can_give
-    assert counts[house.items["Sam's Tacos"].id] == ItemCounts({Rating.LOVED: 1, Rating.NOT_AGAIN: 1})
+    assert counts[house.items["Sam's Tacos"].id] == ItemCounts(food_loved=1)
     for view in seen.values():
         assert "not_again" not in repr(view) and "NOT_AGAIN" not in repr(view)
 

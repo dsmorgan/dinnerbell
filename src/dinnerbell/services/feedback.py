@@ -6,7 +6,7 @@ Each save snapshots the meal: the item, its kind and mode, the cook, and who ate
 no effect on ranking in version 1.
 
 What anyone may see (FR-49) is decided here, not in the pages: a member sees their own answers,
-everyone sees food and place feedback only as counts per catalog item, and only the cook sees
+everyone sees only how many loved an item's food or place, and only the cook sees
 who thanked them and their notes. Nothing here logs or audits a rating, so no log line or
 audit row can say who chose "not again".
 """
@@ -273,7 +273,7 @@ async def event_meal(
 
 
 async def item_counts(db: AsyncSession, actor: Member, item_ids: Iterable[int] | None = None) -> dict[int, ItemCounts]:
-    """Food and place feedback per catalog item, as counts only (FR-49)."""
+    """How many loved each catalog item's food and place (FR-49). Nothing else is counted."""
     return count(await FeedbackRepository(db).for_items(actor.household_id, item_ids))
 
 

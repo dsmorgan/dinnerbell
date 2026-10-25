@@ -84,11 +84,12 @@ def test_counts_name_nobody() -> None:
             _saved(4, 11, FeedbackInput(cook_thanks=True), cook=SAM),
         ]
     )
-    assert counts == {
-        12: ItemCounts({Rating.LOVED: 2, Rating.NOT_AGAIN: 1}, {Rating.NOT_AGAIN: 2}, {PlaceIssue.LATE: 1})
-    }
-    assert ItemCounts.line(counts[12].food) == [(Rating.LOVED, 2), (Rating.NOT_AGAIN, 1)]
-    assert counts[12].total == 5
+    # Only "loved it" is counted. Fine, not again, and issues are stored but never counted for
+    # display: with one rater, any count of them would name that person.
+    assert counts == {12: ItemCounts(food_loved=2, place_loved=0)}
+    only_negative = count([_saved(5, 13, FeedbackInput(Rating.NOT_AGAIN, Rating.FINE, late))])
+    assert only_negative == {}
+    assert count([_saved(6, 13, FeedbackInput(place=Rating.LOVED))]) == {13: ItemCounts(0, 1)}
 
 
 def test_only_the_cook_sees_who_thanked_them_and_their_notes() -> None:

@@ -165,6 +165,19 @@ async def test_saving_nothing_and_rules_the_modal_cant_check(slack: Slack, house
     assert slack.ephemerals("Kim")[-1] == NO_PLACE
     assert await rows(house) == []
 
+    # Slack can't unselect a radio button, so "No answer" clears a rating, as on the web.
+    await slack.submit("Kim", ids.FEEDBACK_VIEW, state(food=LOVED), event_id, origin=origin)
+    assert len(await rows(house)) == 1
+    await slack.click("Kim", ids.FEEDBACK, ids.card_value(event_id, 1))
+    food = fields(modal(slack))["food"]
+    assert [o["value"] for o in food["options"]] == ["loved", "fine", "not_again", "none"]
+    assert food["initial_option"]["value"] == "loved"
+    await slack.submit(
+        "Kim", ids.FEEDBACK_VIEW, state(food={"selected_option": {"value": "none"}}), event_id, origin=origin
+    )
+    assert slack.ephemerals("Kim")[-1] == FEEDBACK_NONE
+    assert await rows(house) == []
+
 
 async def test_tampered_feedback_modals_change_nothing(slack: Slack, house: House) -> None:
     event_id = await done_dinner(house)

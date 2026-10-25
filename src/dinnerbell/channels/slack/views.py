@@ -348,19 +348,19 @@ def close_modal(v: EventView, origin: ids.ViewOrigin) -> dict[str, Any]:
 
 # Feedback (FR-45 to FR-49) -------------------------------------------------------------------------
 
-PRIVATE = "Only you see your ratings. Everyone else sees counts on the catalog, never who said what."
+PRIVATE = "Only you see your ratings. The catalog shows only how many loved an item, never who."
 THANKS = "thanks"
+NO_ANSWER = option("No answer", "none")
+"""Slack can't unselect a radio button, so this is how a rating is cleared, as on the web."""
 
 
 def _rating_options() -> list[dict[str, Any]]:
-    return [option(r.label, r.value) for r in Rating]
+    return [*(option(r.label, r.value) for r in Rating), NO_ANSWER]
 
 
 def _radio(answer: Rating | None) -> Block:
-    element: Block = {"type": "radio_buttons", "options": _rating_options()}
-    if answer is not None:
-        element["initial_option"] = option(answer.label, answer.value)
-    return element
+    initial = option(answer.label, answer.value) if answer is not None else NO_ANSWER
+    return {"type": "radio_buttons", "options": _rating_options(), "initial_option": initial}
 
 
 def feedback_modal(form: FeedbackForm, origin: ids.ViewOrigin) -> dict[str, Any]:
@@ -396,6 +396,8 @@ def _picked_rating(values: Any, block_id: str) -> Rating | None:
     if selected is None:
         return None
     raw = selected.get("value") if isinstance(selected, dict) else None
+    if raw == NO_ANSWER["value"]:
+        return None
     if raw not in {r.value for r in Rating}:
         raise ids.BadValue("not a rating")
     return Rating(str(raw))

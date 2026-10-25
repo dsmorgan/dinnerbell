@@ -7,14 +7,15 @@ meals with a known cook only). It's stored with a snapshot of the meal as it was
 milestone to use; in version 1 it doesn't affect ranking.
 
 Privacy (FR-49): nobody ever sees who chose "not again". Food and place ratings are shown only
-to the member who gave them and, to everyone else, only as counts per catalog item. A cook sees
-their thank-yous and notes; other members see only how many thank-yous there were.
+to the member who gave them. Everyone else sees only how many loved an item's food or place:
+"fine", "not again", and issue chips are never shown, not even as counts. A cook sees their
+thank-yous and notes; other members see only how many thank-yous there were.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from enum import StrEnum
 
@@ -170,39 +171,26 @@ def clean(data: FeedbackInput, facts: MealFacts, member_id: int) -> FeedbackInpu
 
 @dataclass(frozen=True, slots=True)
 class ItemCounts:
-    """Feedback on one catalog item as counts only: never who gave which."""
+    """Feedback on one catalog item as others may see it: how many loved the food and how many
+    loved the place, and nothing else. "Fine", "not again", and the issue chips are stored for a
+    later milestone's ranking but never counted for display, because in a small household any
+    count of them could name the one person who gave it."""
 
-    food: Mapping[Rating, int] = field(default_factory=dict)
-    place: Mapping[Rating, int] = field(default_factory=dict)
-    place_issues: Mapping[PlaceIssue, int] = field(default_factory=dict)
-
-    @property
-    def total(self) -> int:
-        return sum(self.food.values()) + sum(self.place.values())
-
-    @staticmethod
-    def line(counts: Mapping[Rating, int]) -> list[tuple[Rating, int]]:
-        """The non-zero counts in a fixed order: loved, fine, not again."""
-        return [(rating, counts[rating]) for rating in Rating if counts.get(rating)]
+    food_loved: int = 0
+    place_loved: int = 0
 
 
 def count(feedback: Iterable[Feedback]) -> dict[int, ItemCounts]:
-    """Counts per catalog item, from each feedback's snapshot of the item."""
-    food: dict[int, dict[Rating, int]] = {}
-    place: dict[int, dict[Rating, int]] = {}
-    issues: dict[int, dict[PlaceIssue, int]] = {}
+    """Positive counts per catalog item, from each feedback's snapshot of the item. Items with
+    no "loved it" are left out."""
+    food: dict[int, int] = {}
+    place: dict[int, int] = {}
     for f in feedback:
-        if f.answers.food is not None:
-            bucket = food.setdefault(f.item_id, {})
-            bucket[f.answers.food] = bucket.get(f.answers.food, 0) + 1
-        if f.answers.place is not None:
-            bucket = place.setdefault(f.item_id, {})
-            bucket[f.answers.place] = bucket.get(f.answers.place, 0) + 1
-        for issue in f.answers.place_issues:
-            chips = issues.setdefault(f.item_id, {})
-            chips[issue] = chips.get(issue, 0) + 1
-    items = food.keys() | place.keys() | issues.keys()
-    return {i: ItemCounts(food.get(i, {}), place.get(i, {}), issues.get(i, {})) for i in items}
+        if f.answers.food is Rating.LOVED:
+            food[f.item_id] = food.get(f.item_id, 0) + 1
+        if f.answers.place is Rating.LOVED:
+            place[f.item_id] = place.get(f.item_id, 0) + 1
+    return {i: ItemCounts(food.get(i, 0), place.get(i, 0)) for i in food.keys() | place.keys()}
 
 
 @dataclass(frozen=True, slots=True)

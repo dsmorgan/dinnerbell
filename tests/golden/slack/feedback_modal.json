@@ -13,6 +13,14 @@
       "block_id": "food",
       "element": {
         "action_id": "value",
+        "initial_option": {
+          "text": {
+            "emoji": true,
+            "text": "No answer",
+            "type": "plain_text"
+          },
+          "value": "none"
+        },
         "options": [
           {
             "text": {
@@ -37,6 +45,14 @@
               "type": "plain_text"
             },
             "value": "not_again"
+          },
+          {
+            "text": {
+              "emoji": true,
+              "text": "No answer",
+              "type": "plain_text"
+            },
+            "value": "none"
           }
         ],
         "type": "radio_buttons"
@@ -97,7 +113,7 @@
     {
       "elements": [
         {
-          "text": "Only you see your ratings. Everyone else sees counts on the catalog, never who said what. You can change it until Thursday, Oct 29.",
+          "text": "Only you see your ratings. The catalog shows only how many loved an item, never who. You can change it until Thursday, Oct 29.",
           "type": "mrkdwn"
         }
       ],

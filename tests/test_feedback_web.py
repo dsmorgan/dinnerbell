@@ -109,6 +109,48 @@ def test_the_form_follows_the_meal_and_the_rules(
     assert rows(migrated, FeedbackRow) == []
 
 
+NEGATIVE_COUNT = re.compile(r"\b\d+\s*(fine|not again|late|cold|wrong order|other)\b|\u00d7", re.IGNORECASE)
+"""A count of anything but "loved it", which could name the one person who gave it (FR-49)."""
+
+
+def item_entry(html: str, item_id: int) -> str:
+    match = re.search(rf'<li class="item[^"]*" id="item-{item_id}">(.*?)</li>', html, re.S)
+    assert match, f"item {item_id} not listed"
+    return match.group(1)
+
+
+def test_only_loved_it_is_ever_counted_even_with_one_rater(
+    client: TestClient, provider: FakeProvider, household: dict[str, int], migrated: Settings
+) -> None:
+    log(client, household["siam"], [household["admin"], household["kim"]])
+    siam = meal_id(migrated, household["siam"])
+    sign_in_as(client, provider, KIM)
+    issues = ["late", "cold", "wrong_order", "other"]
+    give(client, siam, food="fine", place="not_again", place_issues=issues)
+    assert "Your feedback: food fine. Place not again. Cold, Late, Other, Wrong order." in page(client.get("/history"))
+
+    # The admin, looking at an item only Kim rated, sees nothing that could be hers.
+    client.cookies.clear()
+    sign_in(client, provider)
+    pages = {
+        "list": item_entry(page(client.get("/catalog")), household["siam"]),
+        "item": page(client.get(f"/catalog/items/{household['siam']}")),
+        "history": page(client.get("/history")),
+    }
+    for name, html in pages.items():
+        assert "item-feedback" not in html and "not again" not in html.lower(), name
+        assert NEGATIVE_COUNT.search(html) is None, name
+
+    sign_in_as(client, provider, KIM)
+    give(client, siam, food="loved", place="fine", place_issues=["cold"])
+    client.cookies.clear()
+    sign_in(client, provider)
+    entry = item_entry(page(client.get("/catalog")), household["siam"])
+    assert "Food: 1 loved it" in entry and "Place" not in entry and NEGATIVE_COUNT.search(entry) is None
+    item = page(client.get(f"/catalog/items/{household['siam']}"))
+    assert "Food: 1 loved it" in item and NEGATIVE_COUNT.search(item) is None
+
+
 def test_feedback_posts_check_csrf_and_origin(
     client: TestClient, household: dict[str, int], migrated: Settings
 ) -> None:
@@ -178,10 +220,9 @@ def test_the_event_page_takes_feedback_and_only_the_cook_sees_notes(
         seen = page(client.get(path))
         assert "1 thank-you for Sam." in seen, path
         assert "Thanks for trying" not in seen and "not again" not in seen.lower(), path
-    catalog = page(client.get("/catalog"))
-    assert "Food: 1 not again" in catalog
-    assert "Food: 1 not again" in page(client.get(f"/catalog/items/{household['tacos']}"))
-    assert re.search(r"Kim[^<]*not again", catalog, re.IGNORECASE) is None
+    # Kim chose "not again", which is never counted for display; nobody loved it, so no line.
+    for path in ("/catalog", f"/catalog/items/{household['tacos']}"):
+        assert "item-feedback" not in page(client.get(path)), path
     # The catalog file never carries feedback.
     exported = client.get("/catalog/export.yaml").text
     assert "not_again" not in exported and "Thanks for trying" not in exported and "feedback" not in exported
