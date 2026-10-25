@@ -100,8 +100,12 @@ def _target(event: Event) -> str:
 # Starting a call (FR-3) -----------------------------------------------------------------------
 
 
-async def start_call(db: AsyncSession, actor: Member, slot: Slot, day: date, *, now: datetime) -> Event:
-    """An ad-hoc call. For today it opens now; for a later day, at the slot's usual time."""
+async def start_call(
+    db: AsyncSession, actor: Member, slot: Slot, day: date, *, now: datetime, restart_any_time: bool = False
+) -> Event:
+    """An ad-hoc call. For today it opens now; for a later day, at the slot's usual time.
+    ``restart_any_time``, on a test instance only (#60), lets a called-off call start again
+    after the usual meal time plus two hours."""
     if not actor.active:
         raise EventRuleViolation("Only active members can start a call.")
     household = await HouseholdRepository(db).get(actor.household_id)
@@ -112,7 +116,9 @@ async def start_call(db: AsyncSession, actor: Member, slot: Slot, day: date, *, 
     schedule = slot_schedule(await household_settings(db, household.id), slot)
     opens_at = now if day == today else schedule.opens_at(day, ZoneInfo(household.timezone))
     try:
-        event = await lifecycle.create_call(db, household, slot, day, opens_at=opens_at, actor=actor, now=now)
+        event = await lifecycle.create_call(
+            db, household, slot, day, opens_at=opens_at, actor=actor, now=now, restart_any_time=restart_any_time
+        )
         await db.commit()
     except BaseException:
         await db.rollback()
@@ -121,11 +127,18 @@ async def start_call(db: AsyncSession, actor: Member, slot: Slot, day: date, *, 
 
 
 async def restart_call(
-    db: AsyncSession, actor: Member, event_id: int, *, run: int | None = None, now: datetime
+    db: AsyncSession,
+    actor: Member,
+    event_id: int,
+    *,
+    run: int | None = None,
+    now: datetime,
+    any_time: bool = False,
 ) -> Event:
     """Start the called-off call ``event_id`` again (FR-56), as ``start_call`` does for its slot
     and day. ``run``, when given, is the run the actor saw (``check_run``): a page left open
-    across a restart and a second call-off doesn't start the newer run again."""
+    across a restart and a second call-off doesn't start the newer run again. ``any_time``, on a
+    test instance only (#60), lifts the too-late rule."""
     if not actor.active:
         raise EventRuleViolation("Only active members can start a call.")
     event = await EventRepository(db).get(actor.household_id, event_id)
@@ -136,7 +149,7 @@ async def restart_call(
         raise NotFound("No such household.")
     check_ad_hoc_day(event.day, household_today(household, now))
     try:
-        fresh = await lifecycle.restart(db, event, actor=actor, run=run, now=now)
+        fresh = await lifecycle.restart(db, event, actor=actor, run=run, now=now, any_time=any_time)
         await db.commit()
     except BaseException:
         await db.rollback()

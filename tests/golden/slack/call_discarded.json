@@ -1,0 +1,21 @@
+{
+  "blocks": [
+    {
+      "text": {
+        "text": "~Dinner call · Thursday, Oct 22~ · *Discarded (test)*",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "elements": [
+        {
+          "text": "An admin discarded this call on the test instance, with everything in it.",
+          "type": "mrkdwn"
+        }
+      ],
+      "type": "context"
+    }
+  ],
+  "text": "Dinner call · Thursday, Oct 22: Discarded (test)"
+}

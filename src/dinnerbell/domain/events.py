@@ -688,13 +688,16 @@ def check_rerun(event: Event, today: date, *, now: datetime, too_late_after: dat
         raise EventRuleViolation("It's too late to re-run today's call. Start one for tomorrow instead.")
 
 
-def check_restart(event: Event, today: date, *, now: datetime, too_late_after: datetime) -> None:
-    """FR-56: any member starts a called-off call again, under the re-run's timing rules."""
+def check_restart(
+    event: Event, today: date, *, now: datetime, too_late_after: datetime, any_time: bool = False
+) -> None:
+    """FR-56: any member starts a called-off call again, under the re-run's timing rules.
+    ``any_time``, on a test instance only (#60), lifts the too-late rule."""
     if event.state is not EventState.CANCELLED:
         raise EventRuleViolation(f"There's already a {event.slot.value} call for that day.")
     if event.day < today:  # pragma: no cover - start_call allows only today or later
         raise EventRuleViolation("You can start a call for today or a later day.")
-    if event.day == today and now >= too_late_after:
+    if event.day == today and now >= too_late_after and not any_time:
         raise EventRuleViolation(
             f"It's too late to start today's {event.slot.value} call again. Start one for tomorrow instead."
         )

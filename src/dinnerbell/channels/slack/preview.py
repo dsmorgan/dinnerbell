@@ -196,6 +196,7 @@ NOTIFICATIONS: dict[str, Callable[[], note.Notification]] = {
         path="/schedule",
         kept_today_at=time(15, 0),
     ),
+    "call_discarded": lambda: note.CallDiscarded(DECIDED, "event:7:run1:call"),
 }
 
 

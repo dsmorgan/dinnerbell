@@ -116,12 +116,13 @@ EXAMPLES: list[tuple[n.Notification, str, str | None, str | None, int | None]] =
         None,
         None,
     ),
+    (n.CallDiscarded(EVENT, "event:7:run1:call"), "event:7:run1:call:call_discarded", "event:7:run1:call", None, None),
 ]
 
 
 def test_every_notification_type_has_an_example() -> None:
     assert {type(example[0]) for example in EXAMPLES} == set(n.NOTIFICATION_TYPES.values())
-    assert {"call_updated", "proposals_updated", "decision_updated"} == n.UPDATE_KINDS
+    assert {"call_updated", "proposals_updated", "decision_updated", "call_discarded"} == n.UPDATE_KINDS
 
 
 @pytest.mark.parametrize(("notification", "key", "message", "thread", "recipient"), EXAMPLES)

@@ -89,17 +89,19 @@ async def create_call(
     opens_at: datetime,
     actor: Member | None,
     now: datetime,
+    restart_any_time: bool = False,
 ) -> Event:
     """Add a call for ``slot`` on ``day`` and open it if its time has come. The caller commits.
 
     A member (``actor``) starting a call that was called off for that slot and day starts it
-    again instead (``restart``). Raises CallExists if the household already has that call."""
+    again instead (``restart``, with ``restart_any_time`` as its ``any_time``). Raises
+    CallExists if the household already has that call."""
     schedule = slot_schedule(await household_settings(db, household.id), slot)
     events = EventRepository(db)
     existing = await events.call_for(household.id, slot, day)
     if existing is not None:
         if existing.state is EventState.CANCELLED and actor is not None:
-            return await restart(db, existing, actor=actor, now=now)
+            return await restart(db, existing, actor=actor, now=now, any_time=restart_any_time)
         raise CallExists(f"There's already a {slot.value} call for that day.")
     try:
         event = await events.add(
@@ -168,11 +170,14 @@ async def open_due_calls(db: AsyncSession, household: Household, now: datetime) 
     return opened
 
 
-async def restart(db: AsyncSession, event: Event, *, actor: Member, run: int | None = None, now: datetime) -> Event:
+async def restart(
+    db: AsyncSession, event: Event, *, actor: Member, run: int | None = None, now: datetime, any_time: bool = False
+) -> Event:
     """FR-3 and FR-56: any member starts a called-off call again, as a fresh run of the same
     row (a slot has one call per date). They become its starter, and it starts with no
-    coordinator. The re-run's too-late rule applies. ``run``, when given, is the run the actor
-    saw (``check_run``). Takes the event's lock; the caller commits. Audited."""
+    coordinator. The re-run's too-late rule applies, unless ``any_time`` (a test instance, #60).
+    ``run``, when given, is the run the actor saw (``check_run``). Takes the event's lock; the
+    caller commits. Audited."""
     if not await EventRepository(db).lock(event.household_id, event.id, now):  # pragma: no cover - just read
         raise NotFound("No such call.")
     ctx = await load(db, event)  # re-read under the lock
@@ -180,7 +185,7 @@ async def restart(db: AsyncSession, event: Event, *, actor: Member, run: int | N
     if ctx.event.state is not EventState.CANCELLED:
         raise CallExists(f"There's already a {event.slot.value} call for that day.")
     today = household_today(ctx.household, now)
-    check_restart(ctx.event, today, now=now, too_late_after=ctx.too_late_for(today))
+    check_restart(ctx.event, today, now=now, too_late_after=ctx.too_late_for(today), any_time=any_time)
     fresh = await reopen(db, ctx, today=today, now=now, started_by=actor)
     payload = {"from": EventState.CANCELLED.value, "run": fresh.run, "respond_by": fresh.respond_deadline.isoformat()}
     await audit(db, event.household_id, actor, "event.restarted", _target(event), payload, now)
@@ -598,17 +603,21 @@ HANDLERS: dict[Step, Handler] = {
 async def advance(db: AsyncSession, household_id: int, event_id: int, now: datetime) -> list[Step]:
     """Apply every step ``event_id`` owes at ``now``, each in its own transaction.
 
-    The cheap read first means an event with nothing due costs no write.
+    The cheap read first means an event with nothing due costs no write. A call that's gone
+    (discarded) owes nothing.
     """
     applied: list[Step] = []
     for _ in range(MAX_STEPS):
         current = await EventRepository(db).get(household_id, event_id)
         if current is None or await cc.due(db, current, now) is None:
             break
-        async with locked_event(db, household_id, event_id, now) as event:
-            step = await cc.due(db, event, now)
-            if step is not None:
-                await HANDLERS[step](db, event, now)
+        try:
+            async with locked_event(db, household_id, event_id, now) as event:
+                step = await cc.due(db, event, now)
+                if step is not None:
+                    await HANDLERS[step](db, event, now)
+        except NotFound:
+            break  # discarded since the read, on a test instance (#60): nothing is owed
         if step is None:  # pragma: no cover - another worker took the step between the read and the lock
             break
         applied.append(step)

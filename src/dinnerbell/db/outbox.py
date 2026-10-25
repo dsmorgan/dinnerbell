@@ -337,6 +337,45 @@ class OutboxRepository:
         )
         return int(pending or 0), _rowcount(result)
 
+    async def pending_for_event(self, household_id: int, event_id: int) -> int:
+        """How many of the event's rows are waiting for delivery, held ones included."""
+        found = await self._session.scalar(
+            select(func.count())
+            .select_from(OutboxRow)
+            .where(OutboxRow.household_id == household_id, OutboxRow.event_id == event_id, _pending())
+        )
+        return int(found or 0)
+
+    async def discard_event(self, household_id: int, event_id: int) -> tuple[int, int, list[str]]:
+        """For discarding a call on a test instance (#60): delete the event's rows, sent or not,
+        except the delivered posts that created a channel's message. Those are kept, detached
+        from the event (``event_id`` NULL), as the record of where each message landed, so an
+        update can still edit it. A row a drainer holds right now is deleted too; its delivery
+        then finds no row to record.
+
+        Returns (pending rows deleted, rows deleted, the kept posts' message keys, oldest first).
+        """
+        mine = (OutboxRow.household_id == household_id, OutboxRow.event_id == event_id)
+        landed = (
+            OutboxRow.message_key.is_not(None),
+            OutboxRow.kind.not_in(UPDATE_KINDS),
+            OutboxRow.delivered_at.is_not(None),
+            OutboxRow.ref_message.is_not(None),
+            OutboxRow.ref_channel.is_not(None),
+            OutboxRow.ref_channel != NULL_CHANNEL_ID,
+        )
+        kept = list(
+            await self._session.scalars(select(OutboxRow.message_key).where(*mine, *landed).order_by(OutboxRow.id))
+        )
+        await self._session.execute(
+            update(OutboxRow).where(*mine, *landed).values(event_id=None).execution_options(synchronize_session=False)
+        )
+        pending = await self._session.scalar(select(func.count()).select_from(OutboxRow).where(*mine, _pending()))
+        result = await self._session.execute(
+            delete(OutboxRow).where(*mine).execution_options(synchronize_session=False)
+        )
+        return int(pending or 0), _rowcount(result), [key for key in dict.fromkeys(kept) if key is not None]
+
     async def for_household(self, household_id: int) -> list[OutboxEntry]:
         rows = await self._session.scalars(
             select(OutboxRow).where(OutboxRow.household_id == household_id).order_by(OutboxRow.id)

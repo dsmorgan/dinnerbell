@@ -14,7 +14,15 @@ from typing import Any
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from dinnerbell.db.models import AssignmentRow, EventRow, ProposalRow, ResponseRow, SuggestionRow, VoteRow
+from dinnerbell.db.models import (
+    AssignmentRow,
+    EventRow,
+    MealLogRow,
+    ProposalRow,
+    ResponseRow,
+    SuggestionRow,
+    VoteRow,
+)
 from dinnerbell.domain.catalog import Mode
 from dinnerbell.domain.events import (
     OPEN_STATES,
@@ -34,6 +42,22 @@ from dinnerbell.domain.events import (
 from dinnerbell.domain.meals import Slot
 
 FRESH: dict[str, Any] = {"populate_existing": True}
+
+EVENT_ROWS: tuple[type[VoteRow | ProposalRow | SuggestionRow | ResponseRow | AssignmentRow | MealLogRow], ...] = (
+    VoteRow,
+    ProposalRow,
+    SuggestionRow,
+    ResponseRow,
+    AssignmentRow,
+    MealLogRow,
+)
+"""Every table whose rows belong to one event, by ``event_id``, children before parents (a vote
+before its proposal). Discarding a call (``EventRepository.discard``) deletes their rows; the
+outbox, which refers to events too, is ``OutboxRepository.discard_event``'s. A test fails when
+a table refers to ``event`` and isn't one of these or the outbox."""
+# TODO(m3a-feedback): the feedback tables refer to events. Whichever pull request lands second
+# adds them here; tests/test_discard.py::test_discard_handles_every_table_that_refers_to_an_event
+# fails until it does.
 
 
 def _event(row: EventRow) -> Event:
@@ -83,6 +107,37 @@ class EventRepository:
             .execution_options(synchronize_session=False)
         )
         return int(getattr(result, "rowcount", 0) or 0) == 1
+
+    async def linked_counts(self, household_id: int, event_id: int) -> dict[str, int]:
+        """How many rows of each ``EVENT_ROWS`` table belong to the event, by table name."""
+        counts: dict[str, int] = {}
+        for model in EVENT_ROWS:
+            found = await self._session.scalar(
+                select(func.count())
+                .select_from(model)
+                .where(model.household_id == household_id, model.event_id == event_id)
+            )
+            counts[model.__tablename__] = int(found or 0)
+        return counts
+
+    async def discard(self, household_id: int, event_id: int) -> dict[str, int]:
+        """Delete the event and its rows in every ``EVENT_ROWS`` table, including the meal it
+        logged. Returns how many rows went from each table, by table name. The outbox is the
+        caller's (``OutboxRepository.discard_event``), before this. For a test instance only."""
+        counts: dict[str, int] = {}
+        for model in EVENT_ROWS:
+            result = await self._session.execute(
+                delete(model)
+                .where(model.household_id == household_id, model.event_id == event_id)
+                .execution_options(synchronize_session=False)
+            )
+            counts[model.__tablename__] = int(getattr(result, "rowcount", 0) or 0)
+        await self._session.execute(
+            delete(EventRow)
+            .where(EventRow.household_id == household_id, EventRow.id == event_id)
+            .execution_options(synchronize_session=False)
+        )
+        return counts
 
     async def get(self, household_id: int, event_id: int) -> Event | None:
         row = await self._row(household_id, event_id)
