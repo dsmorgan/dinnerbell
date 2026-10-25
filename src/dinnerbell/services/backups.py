@@ -64,6 +64,30 @@ def run_backup(database_path: Path, backup_dir: Path, today: date) -> BackupResu
     return BackupResult(path=target, created=created, deleted=deleted)
 
 
+def one_off_name(purpose: str, version: str, now: datetime) -> str:
+    """The name of a backup taken before something risky, such as
+    ``pre-reset-0.3.0-20261024T013000Z.db``: what it's for, the version, and the UTC time, as
+    docs/setup.md names the backups taken before an upgrade."""
+    return f"pre-{purpose}-{version}-{now.astimezone(UTC):%Y%m%dT%H%M%SZ}{SUFFIX}"
+
+
+def run_one_off_backup(database_path: Path, backup_dir: Path, name: str) -> Path:
+    """Back up ``database_path`` now, as ``name`` in ``backup_dir``. Nightly pruning never
+    deletes it, since only ``dinnerbell-YYYY-MM-DD.db`` names are pruned. Raises
+    FileExistsError rather than replace a backup, and leaves no partial copy on failure."""
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    target = backup_dir / name
+    if target.exists():
+        raise FileExistsError(f"{target} already exists")
+    try:
+        _copy_online(database_path, target)
+    except BaseException:
+        target.with_suffix(PARTIAL).unlink(missing_ok=True)
+        raise
+    log.info("database backup written", extra={"backup": target.name})
+    return target
+
+
 def prune(backup_dir: Path) -> tuple[Path, ...]:
     backups = existing_backups(backup_dir)
     doomed = tuple(sorted(backups[day] for day in backups_to_delete(backups)))

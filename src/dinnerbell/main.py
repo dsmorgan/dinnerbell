@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The ``dinnerbell`` command: ``serve``, ``migrate``, ``config``, ``catalog``, ``slack``, and, on a
-test instance only, ``scrub-test`` and ``discard-call``."""
+"""The ``dinnerbell`` command: ``serve``, ``migrate``, ``config``, ``catalog``, ``slack``,
+``reset-history``, and, on a test instance only, ``scrub-test`` and ``discard-call``."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ import os
 import sys
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from dinnerbell import __version__, catalog_cli
@@ -80,6 +81,20 @@ def _parser() -> argparse.ArgumentParser:
         "--yes",
         action="store_true",
         help="skip the typed confirmation, after checking the call it names; needed without a terminal",
+    )
+    reset = commands.add_parser(
+        "reset-history",
+        help="before going live, delete calls, meals, and feedback, and keep the setup",
+        description="Delete every call and everything in it, the meal log, feedback on meals, and the outbox. "
+        "Keep the catalog, members and roles, Slack links, preferences and vetoes, the schedule and settings, "
+        "sign-ins, and the audit log. Shows what it will delete first, backs up the database to "
+        "backups/pre-reset-VERSION-TIME.db, and refuses while a call is open. Works on production; run it in "
+        "the running container.",
+    )
+    reset.add_argument(
+        "--yes",
+        action="store_true",
+        help="skip the typed confirmation, after checking what it will delete; needed without a terminal",
     )
     catalog_cli.add_parser(commands)
     slack = commands.add_parser("slack", help="Slack tools that need no workspace")
@@ -305,6 +320,101 @@ def _discard_call(settings: Settings, event_id: int, yes: bool) -> int:
     return 0
 
 
+RESET_WORD = "reset"
+
+
+def _confirm_reset(settings: Settings, yes: bool) -> bool:
+    """Show what the reset would delete and keep, refuse while a call is open, and ask for a
+    typed confirmation unless ``--yes``. It reads the database read-only, before anything (even
+    a migration or the backup) writes."""
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from dinnerbell.services import reset
+    from dinnerbell.services.clock import utc_now
+    from dinnerbell.services.database import open_readonly_database
+
+    path = settings.database_path
+    if not path.exists():
+        print(f"No database at {path}. Nothing changed.", file=sys.stderr)
+        return False
+
+    async def read() -> reset.ResetPreview | None:
+        database = open_readonly_database(path)
+        try:
+            async with database.sessionmaker() as db:
+                return await reset.preview(db, now=utc_now())
+        finally:
+            await database.close()
+
+    try:
+        found = asyncio.run(read())
+    except SQLAlchemyError as exc:
+        print(f"Can't read the database at {path} ({type(exc).__name__}). Nothing changed.", file=sys.stderr)
+        return False
+    if found is None:
+        print(f"The database at {path} has no household yet, so there's no history to reset.", file=sys.stderr)
+        return False
+    print("reset-history will delete this household's history and keep its setup:")
+    print("\n".join(f"  {line}" for line in [f"Database: {path}", *found.lines()]))
+    if found.open_calls:
+        print(reset.refusal(found.open_calls), file=sys.stderr)
+        return False
+    if yes:
+        return True
+    if not sys.stdin.isatty():
+        print("No terminal to confirm on. Check the counts above, then run again with --yes.", file=sys.stderr)
+        return False
+    try:
+        answer = input(f'Type "{RESET_WORD}" to delete the history: ')
+    except EOFError:
+        answer = ""
+    if answer.strip() != RESET_WORD:
+        print("Not reset. Nothing changed.", file=sys.stderr)
+        return False
+    return True
+
+
+def _backup_before_reset(settings: Settings) -> Path | None:
+    """Back up the database as ``pre-reset-VERSION-TIME.db``, the way upgrades are backed up."""
+    import sqlite3
+
+    from dinnerbell.services.backups import one_off_name, run_one_off_backup
+    from dinnerbell.services.clock import utc_now
+
+    name = one_off_name("reset", __version__, utc_now())
+    try:
+        backup = run_one_off_backup(settings.database_path, settings.backup_dir, name)
+    except (OSError, sqlite3.Error) as exc:
+        print(f"Can't back up the database ({type(exc).__name__}). Nothing changed.", file=sys.stderr)
+        return None
+    print(f"Backed up the database to {backup}")
+    return backup
+
+
+def _reset_history(settings: Settings, backup: Path) -> int:
+    from dinnerbell.services.clock import utc_now
+    from dinnerbell.services.database import open_database
+    from dinnerbell.services.reset import ResetRefused, reset_history
+
+    async def run() -> list[str]:
+        database = open_database(settings.async_database_url)
+        try:
+            async with database.sessionmaker() as db:
+                summary = await reset_history(db, backup=backup.name, now=utc_now())
+        finally:
+            await database.close()
+        return summary.lines()
+
+    try:
+        lines = asyncio.run(run())
+    except ResetRefused as exc:
+        print(exc, file=sys.stderr)
+        return 1
+    print("Reset the history.")
+    print("\n".join(f"  {line}" for line in lines))
+    return 0
+
+
 def _serve(settings: Settings, host: str, port: int) -> None:
     import uvicorn
 
@@ -353,6 +463,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     os.umask(PRIVATE_UMASK)
     if args.command == "scrub-test" and not _confirm_scrub(settings, args.yes):
         return 1
+    backup: Path | None = None
+    if args.command == "reset-history":
+        # Before migrating: the backup is of the database as the operator found it.
+        if not _confirm_reset(settings, args.yes):
+            return 1
+        backup = _backup_before_reset(settings)
+        if backup is None:
+            return 1
     if not _migrate(settings):
         return 1
     if args.command == "serve":
@@ -361,6 +479,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _scrub_test(settings, args.keep)
     if args.command == "discard-call":
         return _discard_call(settings, args.event_id, args.yes)
+    if args.command == "reset-history" and backup is not None:
+        return _reset_history(settings, backup)
     return 0
 
 
