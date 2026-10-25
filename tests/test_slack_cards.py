@@ -100,16 +100,105 @@ async def test_each_person_sees_only_their_own_choices(slack: Slack, house: Hous
     assert slack.fake.of("response_url", "chat.postMessage", "chat.update") == []
 
 
-async def test_the_call_message_marks_nobody(slack: Slack, house: House) -> None:
+def call_buttons(blocks: list[dict[str, Any]]) -> list[tuple[str, str | None]]:
+    return [(e["action_id"], e.get("style")) for b in blocks if b["type"] == "actions" for e in b["elements"]]
+
+
+async def test_the_call_message_offers_one_answer_button_and_marks_nobody(slack: Slack, house: House) -> None:
+    """The choices are on each person's card; the shared message only leads there (#52)."""
     event_id = await open_call(house)
     await slack.drain()
     (post,) = slack.fake.of("chat.postMessage")
-    assert "primary" not in json.dumps(post.args["blocks"])
+    assert call_buttons(post.args["blocks"]) == [("answer", "primary"), ("link_event", None), ("call_menu", None)]
     assert "✓" not in json.dumps(post.args["blocks"], ensure_ascii=False)
-    await slack.click("Kim", "respond_in", str(event_id))
+    (answer,) = [
+        e for b in post.args["blocks"] if b["type"] == "actions" for e in b["elements"] if e["action_id"] == "answer"
+    ]
+    assert answer["value"] == ids.card_value(event_id, 1) and answer["accessibility_label"].startswith("Answer the")
+    await slack.click("Kim", "answer", answer["value"])
+    await slack.tap_card("Kim", "card_in", slack.cards("Kim")[-1])
     await slack.drain()
     (update,) = slack.fake.of("chat.update")
-    assert "primary" not in json.dumps(update.args["blocks"])
+    assert call_buttons(update.args["blocks"]) == [("answer", "primary"), ("link_event", None), ("call_menu", None)]
+
+
+async def test_answer_posts_your_card_and_changes_nothing(slack: Slack, house: House) -> None:
+    event_id = await open_call(house)
+    async with house.sessionmaker() as db:
+        await calls.respond(db, house["Kim"], event_id, Status.MAYBE, now=house.clock())
+        await calls.offer_role(db, house["Kim"], event_id, RoleOffer.ORDER, True, now=house.clock())
+    slack.fake.clear()
+    await slack.click("Kim", "answer", ids.card_value(event_id, 1))
+    (card,) = slack.cards("Kim")
+    assert selected(card) == ["✓ Maybe", "✓ I'll order"]
+    assert "card_offer_cook" in action_ids(card) and "card_details" in action_ids(card)
+    assert slack.fake.of("response_url", "chat.postMessage") == []  # never the call message's response_url
+    assert await response(house, event_id, "Kim") == (Status.MAYBE, frozenset({RoleOffer.ORDER}))
+    assert slack.conn.interactions.card_locks == {}  # it went through the card lock, and let it go
+
+    # Every change then happens on the card, which is replaced in place.
+    await slack.tap_card("Kim", "card_in", card)
+    assert len(slack.fake.of("chat.postEphemeral")) == 1 and len(slack.fake.of("response_url")) == 1
+
+
+async def test_answer_on_a_call_message_from_before_a_restart_says_it_moved_on(slack: Slack, house: House) -> None:
+    event_id = await open_call(house)
+    async with house.sessionmaker() as db:
+        await calls.cancel_call(db, house["Alex"], event_id, now=house.clock())
+    await slack.click("Lee", ids.ACTION_FOR_START[Slot.DINNER], "dinner", home=True)
+    assert (await house.event(event_id)).run == 2
+    slack.fake.clear()
+    await slack.click("Kim", "answer", ids.card_value(event_id, 1))  # run 1's message, not yet redrawn
+    (card,) = slack.cards("Kim")
+    assert f"*{MOVED_ON}* It started again" in text_of(card) and action_ids(card) == ["link_event"]
+    assert slack.fake.of("response_url") == []
+    await slack.click("Kim", "answer", ids.card_value(event_id, 2))  # the new message's works
+    assert "card_in" in action_ids(slack.cards("Kim")[-1])
+
+
+async def test_answer_after_responses_close_says_the_call_moved_on(slack: Slack, house: House) -> None:
+    event_id = await open_call(house)
+    await slack.click("Alex", "offer_pickup", str(event_id))
+    await slack.click("Kim", "respond_in", str(event_id))
+    house.clock.now = RESPOND_BY
+    await house.tick()
+    slack.fake.clear()
+    await slack.click("Kim", "answer", ids.card_value(event_id, 1))
+    (card,) = slack.cards("Kim")
+    assert f"*{MOVED_ON}* Thanks for answering!" in text_of(card) and action_ids(card) == ["link_event"]
+
+
+@pytest.mark.parametrize(
+    "where",
+    [{"ephemeral": True}, {"home": True}, {"channel": "D03KIM"}, {"channel": "C0ELSEWHERE"}],
+)
+async def test_answer_works_only_on_the_call_message(slack: Slack, house: House, where: dict[str, Any]) -> None:
+    event_id = await open_call(house)
+    await slack.click("Kim", "answer", ids.card_value(event_id, 1), **where)
+    assert slack.cards("Kim") == []
+    assert slack.fake.of("response_url") == []
+
+
+@pytest.mark.parametrize("value", [None, "", "7", "7:0", "x:1", "1:1:1"])
+async def test_an_answer_value_this_app_didnt_write_is_refused(slack: Slack, house: House, value: str | None) -> None:
+    await open_call(house)
+    await slack.click("Kim", "answer", value)
+    assert slack.ephemerals("Kim") == [OUT_OF_DATE]
+
+
+async def test_older_call_messages_buttons_still_post_a_card(slack: Slack, house: House) -> None:
+    """A call message posted before #52 keeps In, Maybe, Out, the offers, and Details until it's
+    redrawn, and they still work."""
+    event_id = await open_call(house)
+    e = str(event_id)
+    await slack.click("Kim", "respond_maybe", e)
+    await slack.click("Kim", "offer_cook", e)
+    assert [selected(card) for card in slack.cards("Kim")] == [["✓ Maybe"], ["✓ Maybe", "✓ I can cook"]]
+    await slack.click("Kim", "coordinate", e)
+    assert "You're coordinating." in text_of(slack.cards("Kim")[-1])
+    await slack.click("Kim", "details", e)
+    assert len(slack.fake.of("views.open")) == 1
+    assert slack.fake.of("response_url") == []
 
 
 async def test_a_tap_on_the_call_message_never_replaces_through_its_response_url(slack: Slack, house: House) -> None:

@@ -173,6 +173,18 @@ def choice_button(text: str, action_id: str, value: str, *, selected: bool) -> B
     return button(text, action_id, value)
 
 
+def answer_button(event: note.EventInfo) -> Block:
+    """**Answer**, which posts the tapper's Your answer card. Primary: it's the one action the
+    call asks of everyone, and not anyone's choice, so it can't look like one."""
+    return button(
+        "Answer",
+        ids.ANSWER,
+        ids.card_value(event.id, event.run),
+        style="primary",
+        accessibility_label=f"Answer the {_slot(event)} call: in, maybe, or out, and how you can help",
+    )
+
+
 def call_menu(event: note.EventInfo) -> list[Block]:
     """The ⋯ menu for a posted call that's still open: **Call it off**, and Close now while a
     window is open. Everyone sees the same message, so the menu lists what the call's state
@@ -244,7 +256,9 @@ def _roster(
         lines.append(f"_Still to answer: {names(waiting_on)}_")
     if event.coordinator is not None:
         lines.append(f"*Coordinator:* {ctx.directory.mention(event.coordinator)}")
-    elif event.state in {EventState.COLLECTING, EventState.VOTING}:
+    elif event.state is EventState.COLLECTING:
+        lines.append("_No coordinator yet. Anyone can tap *Answer*, then *I'll coordinate*, to steer the vote._")
+    elif event.state is EventState.VOTING:
         lines.append("_No coordinator yet. Anyone can tap *I'll coordinate* to steer the vote._")
     return join_lines(lines)
 
@@ -291,25 +305,14 @@ def call_message(
         section(status),
         section(_roster(event, notification.roster, notification.waiting_on, notification.head_count, ctx)),
     ]
-    value = ids.event_value(event.id)
-    if event.state is EventState.COLLECTING:
-        # Everyone sees the same buttons, so none is styled: a primary In would look chosen.
-        blocks.append(
-            actions(
-                *(button(ANSWER_WORDS[s], ids.ACTION_FOR_STATUS[s], value) for s in ANSWERS),
-                block_id="participation",
-            )
-        )
-    roles: list[Block] = []
-    if event.state is EventState.COLLECTING:
-        roles += [button(OFFER_LABELS[role], ids.ACTION_FOR_OFFER[role], value) for role in RoleOffer]
-    if event.coordinator is None and event.state in {EventState.COLLECTING, EventState.VOTING}:
-        roles.append(button("I'll coordinate", ids.COORDINATE, value))
-    if roles:
-        blocks.append(actions(*roles, block_id="roles"))
+    if event.coordinator is None and event.state is EventState.VOTING:
+        # Answering is over, so no card is offered, but someone can still take the vote in hand.
+        blocks.append(actions(button("I'll coordinate", ids.COORDINATE, ids.event_value(event.id)), block_id="roles"))
     more: list[Block] = []
     if event.state is EventState.COLLECTING:
-        more.append(button("Details", ids.DETAILS, value))
+        # Everyone sees this message, so it offers no choices, only the way to your own card,
+        # where In, Maybe, Out, the offers, I'll coordinate, and Details are (issue #52).
+        more.append(answer_button(event))
     more.append(_web_button(ctx, event))
     more += call_menu(event)
     blocks.append(actions(*more, block_id="more"))
@@ -541,8 +544,10 @@ def your_answer_text(event: note.EventInfo, mine: Response | None, *, run: int |
     and the line sent instead when a card or reminder can't be shown."""
     if run is not None and run != event.run:
         return f"{_title(event)}: {MOVED_ON}"
-    summary = ANSWER_WORDS[mine.status] if mine is not None else "no answer yet"
-    if mine is not None and mine.offers:
+    if mine is None:
+        return f"{_title(event)}: you haven't answered yet"
+    summary = ANSWER_WORDS[mine.status]
+    if mine.offers:
         summary += ", can " + " or ".join(OFFER_WORDS[o] for o in _offers(mine))
     return f"{_title(event)}: your answer is {summary}"
 

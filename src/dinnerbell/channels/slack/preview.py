@@ -137,6 +137,7 @@ NOTIFICATIONS: dict[str, Callable[[], note.Notification]] = {
     "call_opened": lambda: note.CallOpened(event(), (ALEX, KIM, LEE, SAM), waiting_on=(ALEX, KIM, LEE, SAM)),
     "call_updated": lambda: note.CallUpdated(event(), ROSTER, (LEE,), head_count=3),
     "call_updated_voting": lambda: note.CallUpdated(VOTING, ROSTER, (), head_count=3),
+    "call_updated_voting_no_coordinator": lambda: note.CallUpdated(event(EventState.VOTING), ROSTER, (), head_count=3),
     "call_updated_decided": lambda: note.CallUpdated(DECIDED, ROSTER, (), head_count=3),
     "call_updated_done": lambda: note.CallUpdated(event(EventState.DONE, coordinator=ALEX), ROSTER, (), 3),
     "call_updated_abandoned": lambda: note.CallUpdated(event(EventState.ABANDONED), ROSTER[2:], (LEE,), 0),

@@ -17,105 +17,25 @@
     },
     {
       "text": {
-        "text": "*In* · 3 people eating\n• <@U01ALEX> · can pick up\n• <@U02SAM> · +1 guest (Vegetarian) · can cook · eats after 6:40 PM · suggests Sam's Tacos\n    “Home late, but I'll cook if it's easy.”\n*Maybe:* <@U03KIM>\n_Still to answer: Lee_\n_No coordinator yet. Anyone can tap *I'll coordinate* to steer the vote._",
+        "text": "*In* · 3 people eating\n• <@U01ALEX> · can pick up\n• <@U02SAM> · +1 guest (Vegetarian) · can cook · eats after 6:40 PM · suggests Sam's Tacos\n    “Home late, but I'll cook if it's easy.”\n*Maybe:* <@U03KIM>\n_Still to answer: Lee_\n_No coordinator yet. Anyone can tap *Answer*, then *I'll coordinate*, to steer the vote._",
         "type": "mrkdwn"
       },
       "type": "section"
     },
     {
-      "block_id": "participation",
-      "elements": [
-        {
-          "action_id": "respond_in",
-          "text": {
-            "emoji": true,
-            "text": "In",
-            "type": "plain_text"
-          },
-          "type": "button",
-          "value": "7"
-        },
-        {
-          "action_id": "respond_maybe",
-          "text": {
-            "emoji": true,
-            "text": "Maybe",
-            "type": "plain_text"
-          },
-          "type": "button",
-          "value": "7"
-        },
-        {
-          "action_id": "respond_out",
-          "text": {
-            "emoji": true,
-            "text": "Out",
-            "type": "plain_text"
-          },
-          "type": "button",
-          "value": "7"
-        }
-      ],
-      "type": "actions"
-    },
-    {
-      "block_id": "roles",
-      "elements": [
-        {
-          "action_id": "offer_cook",
-          "text": {
-            "emoji": true,
-            "text": "I can cook",
-            "type": "plain_text"
-          },
-          "type": "button",
-          "value": "7"
-        },
-        {
-          "action_id": "offer_pickup",
-          "text": {
-            "emoji": true,
-            "text": "I can pick up",
-            "type": "plain_text"
-          },
-          "type": "button",
-          "value": "7"
-        },
-        {
-          "action_id": "offer_order",
-          "text": {
-            "emoji": true,
-            "text": "I'll order",
-            "type": "plain_text"
-          },
-          "type": "button",
-          "value": "7"
-        },
-        {
-          "action_id": "coordinate",
-          "text": {
-            "emoji": true,
-            "text": "I'll coordinate",
-            "type": "plain_text"
-          },
-          "type": "button",
-          "value": "7"
-        }
-      ],
-      "type": "actions"
-    },
-    {
       "block_id": "more",
       "elements": [
         {
-          "action_id": "details",
+          "accessibility_label": "Answer the dinner call: in, maybe, or out, and how you can help",
+          "action_id": "answer",
+          "style": "primary",
           "text": {
             "emoji": true,
-            "text": "Details",
+            "text": "Answer",
             "type": "plain_text"
           },
           "type": "button",
-          "value": "7"
+          "value": "7:1"
         },
         {
           "action_id": "link_event",

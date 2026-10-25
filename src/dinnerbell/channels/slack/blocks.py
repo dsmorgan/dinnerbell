@@ -196,7 +196,9 @@ def button(
     style: str | None = None,
     url: str | None = None,
     confirm: dict[str, Any] | None = None,
+    accessibility_label: str | None = None,
 ) -> Block:
+    """``accessibility_label`` is what screen readers say instead of ``text``."""
     element: Block = {"type": "button", "text": plain(text, MAX_BUTTON_TEXT), "action_id": action_id}
     if value is not None:
         element["value"] = value[:MAX_BUTTON_VALUE]
@@ -206,6 +208,8 @@ def button(
         element["style"] = style
     if confirm is not None:
         element["confirm"] = confirm
+    if accessibility_label is not None:
+        element["accessibility_label"] = clip(accessibility_label, MAX_BUTTON_TEXT)
     return element
 
 

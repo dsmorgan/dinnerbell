@@ -64,6 +64,9 @@ def check_element(element: Any, where: str, action_ids: set[str]) -> None:
         assert len(element.get("value", "")) <= 2000, f"{where}: value too long"
         assert len(element.get("url", "")) <= 3000, f"{where}: url too long"
         assert element.get("style") in {None, "primary", "danger"}, where
+        if "accessibility_label" in element:
+            label = element["accessibility_label"]
+            assert isinstance(label, str) and 0 < len(label) <= 75, f"{where}: accessibility_label"
         if "confirm" in element:
             confirm = element["confirm"]
             check_text(confirm["title"], 100, f"{where}.confirm.title", plain_only=True)

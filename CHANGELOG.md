@@ -12,8 +12,8 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ### Changed
 
-- In Slack, you can now see what you chose on a call (#42). Your first tap on **In**, **Maybe**, **Out**, a role, or **I'll coordinate** on the call posts a Your answer card only you see, with your answer and offers selected: green, and marked "✓ " so you can tell without color. Taps on the card change the card in place instead of adding another message. A tap on the call message itself still adds a new card, because Slack can't change one person's view of a shared message. The card replaces the "Thanks! You're offering to cook" lines, which piled up.
-- The call message no longer shows **In** in green, so nothing looks selected for everyone.
+- In Slack, you can now see what you chose on a call (#42, #52). While responses are open, the call message has one **Answer** button instead of **In**, **Maybe**, **Out**, the role offers, **I'll coordinate**, and **Details**. **Answer** posts a Your answer card only you see, with those buttons and your answer and offers selected: green, and marked "✓ " so you can tell without color. Taps on the card change the card in place instead of adding another message. Tapping **Answer** again adds a new card, because Slack can't change one person's view of a shared message. The card replaces the "Thanks! You're offering to cook" lines, which piled up.
+- While voting with nobody coordinating, the call message still has **I'll coordinate**.
 - The reminder direct message and App Home show your answer selected the same way. A tap on the reminder changes the reminder itself, instead of adding a confirmation under it.
 - A card or reminder left over from before a call moved on (responses closed, called off, or started again) says "This call moved on." instead of answering the newer call.
 
@@ -27,7 +27,7 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 ### Upgrade notes
 
 - Optional: the Slack app manifests list `version` in the slash command's usage hint. To show it in Slack, open the app's **Slash Commands** settings and edit the command's usage hint to match `deploy/slack-app-manifest.yaml` (or `deploy/slack-app-manifest.test.yaml` for test). `/dinnerbell version` works without this.
-- Reminders already sent before you upgrade keep their old buttons, which still work and reply with a line of text.
+- Call messages and reminders already posted before you upgrade keep their old buttons until they're redrawn. They still work: the call's old buttons post your card, and an old reminder's buttons reply with a line of text.
 
 ## [0.3.0] - 2026-10-24
 
