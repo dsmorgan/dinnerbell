@@ -11,12 +11,15 @@ import logging
 import re
 import sqlite3
 from collections.abc import AsyncIterator, Iterator
+from contextlib import asynccontextmanager
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
 import pytest
 from sqlalchemy import text
+from sqlalchemy.exc import OperationalError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from dinnerbell import __version__
 from dinnerbell import main as cli
@@ -96,6 +99,28 @@ async def reset_now(house: House) -> reset.ResetSummary:
 # The classification ------------------------------------------------------------------------------
 
 
+EXPECTED_KEEP = {
+    "household",
+    "member",
+    "session",
+    "audit",
+    "tag",
+    "catalog_item",
+    "catalog_item_tag",
+    "catalog_item_cook",
+    "preference",
+}
+EXPECTED_CLEAR = {"event", "response", "suggestion", "proposal", "vote", "assignment", "meal_log", "feedback", "outbox"}
+
+
+def test_the_classification_is_what_the_owner_agreed() -> None:
+    """Pinned on purpose: moving a table between KEEP and CLEAR changes what going live deletes
+    on production, so it needs the owner's sign-off (#56). A new table is added to one of them,
+    and here, in the same pull request."""
+    assert reset.KEEP == EXPECTED_KEEP
+    assert reset.CLEAR == EXPECTED_CLEAR
+
+
 def test_every_table_is_kept_or_cleared() -> None:
     """A new table must be added to ``reset.KEEP`` or ``reset.CLEAR``, so going live can't leave
     test history behind in it, or delete setup with it. Classify it in services/reset.py."""
@@ -130,10 +155,11 @@ async def test_the_reset_empties_every_cleared_table_and_keeps_every_other_row(h
     summary = await reset_now(house)
 
     after = await everything(house)
-    for name in sorted(reset.CLEAR):
+    for name in sorted(EXPECTED_CLEAR):
         assert after[name] == [], name
         assert summary.deleted[name] == len(before[name]), name
-    for name in sorted(reset.KEEP - {"audit"}):
+    assert set(after) == EXPECTED_CLEAR | EXPECTED_KEEP
+    for name in sorted(EXPECTED_KEEP - {"audit"}):
         assert after[name] == before[name], name
         assert summary.kept[name] == len(before[name]), name
     assert after["audit"][: len(before["audit"])] == before["audit"]
@@ -145,7 +171,7 @@ async def test_one_audit_row_records_the_counts_and_the_backup(house: House) -> 
     summary = await reset_now(house)
     (row,) = await house.audits("history.")
     assert (row.action, row.actor_member_id, row.target) == ("history.reset", None, f"household:{house.household.id}")
-    assert row.payload == {"rows": summary.deleted, "backup": BACKUP}
+    assert row.payload == {"rows": summary.deleted, "days_off_kept": [], "backup": BACKUP}
     assert row.payload["rows"]["event"] == 1 and row.payload["rows"]["feedback"] == 1
     assert "loved" not in str(row.payload)
     assert summary.lines()[0] == f"Backup: {BACKUP}"
@@ -177,6 +203,43 @@ async def test_history_home_and_old_slack_buttons_show_nothing_afterwards(house:
     channel.sent.clear()
     await house.drain(channel)
     assert channel.sent == []
+
+
+async def test_the_reset_holds_the_write_lock(house: House, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Everything happens inside ``write_transaction`` (BEGIN IMMEDIATE): the open-call check,
+    the deletes, and the audit row, so no call can open or tap land in between."""
+    await lived_in(house)
+    real = reset.write_transaction
+    seen: list[bool] = []
+
+    @asynccontextmanager
+    async def watched(db: AsyncSession) -> AsyncIterator[None]:
+        async with real(db):
+            seen.append(db.in_transaction())
+            yield
+            seen.append(db.in_transaction())  # still inside: the commit is the block's last step
+
+    monkeypatch.setattr(reset, "write_transaction", watched)
+    await reset_now(house)
+    assert seen == [True, False]
+    assert await house.meals() == []
+
+
+async def test_a_second_writer_waits_for_the_reset(house: House) -> None:
+    """While another connection holds the write lock, the reset can't start writing."""
+    await lived_in(house)
+    path = house.sessionmaker.kw["bind"].url.database
+    holder = sqlite3.connect(path, timeout=0)
+    holder.execute("BEGIN IMMEDIATE")
+    try:
+        async with house.sessionmaker() as db:
+            await db.execute(text("PRAGMA busy_timeout = 50"))
+            with pytest.raises(OperationalError, match="locked"):
+                await reset.reset_history(db, backup=BACKUP, now=house.clock())
+    finally:
+        holder.rollback()
+        holder.close()
+    assert len(await house.meals()) == 1
 
 
 async def test_the_next_tick_opens_a_call_as_usual(house: House) -> None:
@@ -235,39 +298,109 @@ async def test_an_open_call_refuses_the_reset_until_it_is_called_off(house: Hous
     assert summary.deleted["event"] == 1
 
 
-async def test_the_preview_counts_by_table_and_says_what_posts_again(house: House) -> None:
-    """A dinner called off while its answers are still open is posted again after the reset."""
-    event_id = await open_call(house, EventState.COLLECTING)
+async def preview_now(house: House) -> reset.ResetPreview:
     async with house.sessionmaker() as db:
         found = await reset.preview(db, now=house.clock())
     assert found is not None
+    return found
+
+
+async def test_the_preview_counts_by_table(house: House) -> None:
+    event_id = await open_call(house, EventState.COLLECTING)
+    found = await preview_now(house)
     assert found.open_calls == (reset.OpenCall(event_id, Slot.DINNER, TODAY, EventState.COLLECTING),)
     assert found.clear["event"] == 1 and found.clear["meal_log"] == 0
     assert found.keep["catalog_item"] == 3 and found.keep["member"] == 4
-    assert found.posts_again == (Slot.DINNER,)
 
     await act(house, calls.cancel_call, house["Alex"], event_id)
-    async with house.sessionmaker() as db:
-        found = await reset.preview(db, now=house.clock())
-    assert found is not None and found.open_calls == () and found.pending_outbox > 0
+    found = await preview_now(house)
+    assert found.open_calls == () and found.pending_outbox > 0
     lines = found.lines()
     assert lines[0] == "Household: Home"
     assert lines[1].startswith("Deletes: assignment 0, event 1, feedback 0,")
     assert lines[2].startswith("Keeps: audit ")
-    assert lines[4] == "Today's dinner call is still taking answers, so the scheduler posts it again after the reset."
+    assert lines[4] == "Days off kept: dinner on 2026-10-22"
+    assert found.posts_again == ()  # it stays called off
 
+
+async def test_a_call_that_ended_while_answers_are_open_posts_again(house: House) -> None:
+    """A finished call for today, deleted while its response window is still open, leaves
+    nothing to stop the tick, which posts it again. The preview says so."""
+    event_id = await open_call(house, EventState.COLLECTING)
+    async with house.sessionmaker() as db:  # as if it ended early
+        await db.execute(
+            text("UPDATE event SET state = 'abandoned', end_reason = 'too_few' WHERE id = :e"), {"e": event_id}
+        )
+        await db.commit()
     house.clock.now = OPENS + timedelta(minutes=10)
+    found = await preview_now(house)
+    assert found.posts_again == (Slot.DINNER,) and found.days_off == ()
+    assert found.lines()[-1] == (
+        "Today's dinner call is still taking answers, so the scheduler posts it again after the reset."
+    )
     await reset_now(house)
     await house.tick()
     fresh = await house.event(await dinner_id(house))
     assert fresh.id > event_id and fresh.state is EventState.COLLECTING
 
 
+# Days off ----------------------------------------------------------------------------------------
+
+
+async def test_a_skipped_day_stays_skipped(house: House) -> None:
+    """The cancelled call that ``skip_day`` leaves is what stops the scheduler. The reset
+    replaces it with a fresh one, with no link to the old, so tomorrow's dinner still doesn't post."""
+    await done_dinner(house, RecordingChannel())
+    skipped = await act(house, calls.skip_day, house["Alex"], Slot.DINNER, TOMORROW, note="Out of town")
+    found = await preview_now(house)
+    assert found.days_off == (reset.DayOff(Slot.DINNER, TOMORROW),)
+
+    summary = await reset_now(house)
+
+    assert summary.days_off == (reset.DayOff(Slot.DINNER, TOMORROW),)
+    assert summary.lines()[-1] == "Days off kept: dinner on 2026-10-23"
+    kept = await house.event(await dinner_id(house, TOMORROW))
+    assert kept.id > skipped.id and kept.state is EventState.CANCELLED and kept.run == 1
+    assert (kept.ended_by, kept.created_by, kept.end_note, kept.coordinator_id) == (None, None, None, None)
+    (row,) = await house.audits("history.")
+    assert row.payload["days_off_kept"] == [{"slot": "dinner", "date": "2026-10-23"}]
+    assert row.payload["rows"]["event"] == 2  # the dinner and the old skip; the fresh skip is new
+
+    house.clock.now = OPENS + timedelta(days=1)
+    await house.tick()
+    assert (await house.event(kept.id)).state is EventState.CANCELLED
+    channel = RecordingChannel()
+    await house.drain(channel)
+    assert channel.sent == []
+
+
+async def test_a_call_called_off_for_a_later_day_stays_off_and_past_ones_go(house: House) -> None:
+    later = await act(house, calls.start_call, house["Kim"], Slot.DINNER, TOMORROW + timedelta(days=1))
+    await act(house, calls.cancel_call, house["Kim"], later.id)
+    past = await open_call(house, EventState.COLLECTING)
+    await act(house, calls.cancel_call, house["Alex"], past)
+    house.clock.now = OPENS + timedelta(days=1)  # today's dinner was yesterday's, so it goes
+
+    summary = await reset_now(house)
+
+    assert summary.days_off == (reset.DayOff(Slot.DINNER, TOMORROW + timedelta(days=1)),)
+    async with house.sessionmaker() as db:
+        days = list(await db.scalars(text("SELECT date FROM event ORDER BY date")))
+    assert days == ["2026-10-24"]
+
+
+async def test_a_reset_with_a_skip_can_run_again(house: House) -> None:
+    await act(house, calls.skip_day, house["Alex"], Slot.DINNER, TOMORROW)
+    await reset_now(house)
+    again = await reset_now(house)
+    assert again.deleted["event"] == 1 and again.days_off == (reset.DayOff(Slot.DINNER, TOMORROW),)
+
+
 async def test_a_call_whose_answers_closed_does_not_post_again(house: House) -> None:
     await done_dinner(house, RecordingChannel())
     async with house.sessionmaker() as db:
         found = await reset.preview(db, now=house.clock())
-    assert found is not None and found.posts_again == () and len(found.lines()) == 4
+    assert found is not None and found.posts_again == () and found.days_off == () and len(found.lines()) == 4
 
 
 async def test_no_household_is_refused(database: Database, clock: FakeClock) -> None:
@@ -403,7 +536,7 @@ def test_an_open_call_is_listed_and_refused_before_the_backup(
 def test_a_failed_backup_changes_nothing(
     production: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    def full(*args: object) -> Path:
+    def full(*args: object, **kwargs: object) -> Path:
         raise OSError("No space left on device")
 
     monkeypatch.setattr(backups, "run_one_off_backup", full)
@@ -452,3 +585,57 @@ def test_a_partial_copy_is_removed_when_the_backup_fails(
     with pytest.raises(sqlite3.OperationalError):
         backups.run_one_off_backup(production, folder, "pre-reset-0.3.0-20261023T120000Z.db")
     assert list(folder.iterdir()) == []
+
+
+def test_a_backup_that_fails_its_check_is_deleted(tmp_path: Path, production: Path) -> None:
+    folder = tmp_path / "copies"
+    with pytest.raises(backups.BackupCheckFailed, match="no nonexistent table"):
+        backups.run_one_off_backup(production, folder, "pre-reset-x.db", require_tables=("event", "nonexistent"))
+    assert list(folder.iterdir()) == []
+    good = backups.run_one_off_backup(production, folder, "pre-reset-y.db", require_tables=("event",))
+    assert sorted(p.name for p in folder.iterdir()) == [good.name]  # checked without -wal or -shm files
+
+
+def test_a_corrupt_backup_fails_quick_check(tmp_path: Path, production: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    real = backups._copy_online
+
+    def corrupt(source: Path, target: Path) -> None:
+        real(source, target)
+        with target.open("r+b") as stream:  # scribble over a page in the middle of the file
+            size = target.stat().st_size
+            stream.seek(size // 2)
+            stream.write(b"\xff" * 4096)
+
+    monkeypatch.setattr(backups, "_copy_online", corrupt)
+    folder = tmp_path / "copies"
+    with pytest.raises((backups.BackupCheckFailed, sqlite3.DatabaseError)):
+        backups.run_one_off_backup(production, folder, "pre-reset-x.db")
+    assert list(folder.iterdir()) == []
+
+
+def test_a_failed_check_stops_the_command(
+    production: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def failing(path: Path, require_tables: object) -> None:
+        raise backups.BackupCheckFailed("the backup failed SQLite's quick_check (2 problems)")
+
+    monkeypatch.setattr(backups, "_check", failing)
+    assert cli.main(["reset-history", "--yes"]) == 1
+    err = capsys.readouterr().err
+    assert "Can't back up the database: the backup failed SQLite's quick_check (2 problems). Nothing changed." in err
+    assert backups_in(production) == []
+    assert count(production, "SELECT count(*) FROM event") == 1
+
+
+def test_a_database_error_during_the_reset_names_the_backup(
+    production: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    async def broken(db: AsyncSession, *, backup: str, now: object) -> None:
+        raise OperationalError("DELETE FROM event", {}, Exception("disk I/O error"))
+
+    monkeypatch.setattr(reset, "reset_history", broken)
+    assert cli.main(["reset-history", "--yes"]) == 1
+    (backup,) = backups_in(production)
+    err = capsys.readouterr().err
+    assert f"Can't reset the history (OperationalError). Nothing changed. Backup: {backup}" in err
+    assert count(production, "SELECT count(*) FROM event") == 1

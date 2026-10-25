@@ -378,12 +378,15 @@ def _backup_before_reset(settings: Settings) -> Path | None:
     """Back up the database as ``pre-reset-VERSION-TIME.db``, the way upgrades are backed up."""
     import sqlite3
 
-    from dinnerbell.services.backups import one_off_name, run_one_off_backup
+    from dinnerbell.services.backups import BackupCheckFailed, one_off_name, run_one_off_backup
     from dinnerbell.services.clock import utc_now
 
     name = one_off_name("reset", __version__, utc_now())
     try:
-        backup = run_one_off_backup(settings.database_path, settings.backup_dir, name)
+        backup = run_one_off_backup(settings.database_path, settings.backup_dir, name, require_tables=("event",))
+    except BackupCheckFailed as exc:
+        print(f"Can't back up the database: {exc}. Nothing changed.", file=sys.stderr)
+        return None
     except (OSError, sqlite3.Error) as exc:
         print(f"Can't back up the database ({type(exc).__name__}). Nothing changed.", file=sys.stderr)
         return None
@@ -392,6 +395,8 @@ def _backup_before_reset(settings: Settings) -> Path | None:
 
 
 def _reset_history(settings: Settings, backup: Path) -> int:
+    from sqlalchemy.exc import SQLAlchemyError
+
     from dinnerbell.services.clock import utc_now
     from dinnerbell.services.database import open_database
     from dinnerbell.services.reset import ResetRefused, reset_history
@@ -409,6 +414,9 @@ def _reset_history(settings: Settings, backup: Path) -> int:
         lines = asyncio.run(run())
     except ResetRefused as exc:
         print(exc, file=sys.stderr)
+        return 1
+    except SQLAlchemyError as exc:  # rolled back: write_transaction ends uncommitted work
+        print(f"Can't reset the history ({type(exc).__name__}). Nothing changed. Backup: {backup}", file=sys.stderr)
         return 1
     print("Reset the history.")
     print("\n".join(f"  {line}" for line in lines))

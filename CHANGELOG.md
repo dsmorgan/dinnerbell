@@ -6,6 +6,18 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ## [Unreleased]
 
+### Added
+
+- `dinnerbell reset-history` clears the history from testing before you go live (#56): every call and everything in it, the meal log, feedback on meals, and the outbox. It keeps the catalog, members and roles, Slack links, preferences and vetoes, the schedule and settings, sign-ins, and the audit log. It works on production. Before it changes anything, it shows how many rows it deletes and keeps in each table, refuses while a call is open, asks you to type `reset` (or takes `--yes`), and backs up the database to `backups/pre-reset-VERSION-TIME.db`, checking the backup before it goes on. It runs in one transaction and writes a `history.reset` audit row with the counts. Days you skipped, or whose call you called off, from today on stay off. Messages from earlier calls stay in Slack unchanged. See "Going live" in [docs/setup.md](docs/setup.md#going-live).
+
+### Changed
+
+- Meal IDs are never reused, so a History or feedback page left open while meals are deleted, such as by `dinnerbell reset-history`, can't save to a different meal. The upgrade rebuilds the `meal_log` table (migration 0009) and keeps every row and its feedback.
+
+### Upgrade notes
+
+- The database migrates to revision `0009_meal_log_autoincrement` when Dinnerbell starts. It rebuilds the `meal_log` table so a deleted meal's ID is never given to a new meal, keeping every meal and its feedback. It's quick for a household's data. Back up first, as always. To go back to an earlier release, restore that backup: older releases refuse a database at a revision they don't know.
+
 ## [0.4.0] - 2026-10-25
 
 ### Added
@@ -23,7 +35,6 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
   - On a test instance, discarding a call deletes the feedback on its meal, and `scrub-test` deletes all feedback; both show how many rows, as a number only.
 - Slack says which version is answering. `/dinnerbell version` (`/dinnerbell-test version` on test) replies privately with the version as the web footer shows it, such as `0.3.0`, or `0.3.0+abc1234` for a build from `main`; the instance label, if one is set; the database's schema revision; and a link to the release notes, or to the commit for a `main` build. The help reply lists `version` and ends with a version line, such as "Dinnerbell 0.3.0+abc1234 · TEST", and so does the bottom of App Home.
 - On a test instance only (`DINNERBELL_INSTANCE_LABEL` set), an admin can discard a call so a fresh one can start for the same slot and day (#60): **Discard (test)** on the call's card, behind a confirmation page; `/dinnerbell-test discard [lunch|dinner] [day]`; or `dinnerbell discard-call ID [--yes]`, which shows what it will delete first. Discarding deletes the call with its answers, suggestions, proposals, votes, decision, assignments, logged meal, and unsent notifications, edits its Slack messages to "Discarded (test)", and writes an audit row. On test, a called-off call can also start again at any time, not only until the usual meal time plus two hours. On production none of this appears: the pages are a 404, the slash command and the CLI refuse, and the rules don't change. See [docs/setup.md](docs/setup.md#discard-a-call-and-start-again).
-- `dinnerbell reset-history` clears the history from testing before you go live (#56): every call and everything in it, the meal log, feedback on meals, and the outbox. It keeps the catalog, members and roles, Slack links, preferences and vetoes, the schedule and settings, sign-ins, and the audit log. It works on production. Before it changes anything, it shows how many rows it deletes and keeps in each table, refuses while a call is open, asks you to type `reset` (or takes `--yes`), and backs up the database to `backups/pre-reset-VERSION-TIME.db`. It runs in one transaction and writes a `history.reset` audit row with the counts. Messages from earlier calls stay in Slack unchanged. See "Going live" in [docs/setup.md](docs/setup.md#going-live).
 
 ### Changed
 

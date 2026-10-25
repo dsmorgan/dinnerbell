@@ -199,6 +199,10 @@ class MealLogRow(Base):
 
     ``event_id`` links a meal to the call that decided it. It is unique, so marking a call done
     twice can never log the meal twice.
+
+    AUTOINCREMENT, because deleting meals (``dinnerbell reset-history``, #56) would otherwise let
+    SQLite give their IDs to the next meals, and a History or feedback page left open would post
+    to a different meal.
     """
 
     __tablename__ = "meal_log"
@@ -206,6 +210,7 @@ class MealLogRow(Base):
         Index("ix_meal_log_household_date", "household_id", "date"),
         CheckConstraint("slot IN ('lunch', 'dinner')", name="slot"),
         UniqueConstraint("event_id"),
+        {"sqlite_autoincrement": True},
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
