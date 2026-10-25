@@ -45,7 +45,7 @@ from dinnerbell.domain.catalog_import import CatalogSnapshot, ImportPlan, ItemSt
 from dinnerbell.domain.household import Household
 from dinnerbell.domain.members import Member
 from dinnerbell.domain.preferences import merged_stance
-from dinnerbell.services.common import audit, is_unique_violation, require_admin
+from dinnerbell.services.common import audit, is_unique_violation, require_admin, require_member
 from dinnerbell.services.errors import NotFound
 
 log = logging.getLogger(__name__)
@@ -92,16 +92,18 @@ async def _unique(db: AsyncSession, message: str) -> AsyncIterator[None]:
 
 
 async def catalog(db: AsyncSession, actor: Member) -> CatalogData:
+    require_member(actor)
     repo = CatalogRepository(db)
     return CatalogData(
         items=await repo.items(actor.household_id),
         tags=await repo.tags(actor.household_id),
-        members=await MemberRepository(db).list(actor.household_id),
+        members=[m for m in await MemberRepository(db).list(actor.household_id) if not m.is_guest],
         last_eaten=await MealLogRepository(db).last_eaten(actor.household_id),
     )
 
 
 async def get_item(db: AsyncSession, actor: Member, item_id: int) -> CatalogItem:
+    require_member(actor)
     item = await CatalogRepository(db).item(actor.household_id, item_id)
     if item is None:
         raise NotFound("No such catalog item.")
@@ -109,10 +111,12 @@ async def get_item(db: AsyncSession, actor: Member, item_id: int) -> CatalogItem
 
 
 async def tags(db: AsyncSession, actor: Member) -> list[Tag]:
+    require_member(actor)
     return await CatalogRepository(db).tags(actor.household_id)
 
 
 async def tag_usage(db: AsyncSession, actor: Member) -> dict[int, int]:
+    require_member(actor)
     return await CatalogRepository(db).tag_usage(actor.household_id)
 
 
@@ -125,7 +129,7 @@ async def _clean(
     """Validate an item. Cooks must be active members, except that an edit may keep cooks the
     item already has, so deactivating someone doesn't make their dishes uneditable."""
     existing_tags = await CatalogRepository(db).tags(actor.household_id)
-    cooks = {m.id for m in await MemberRepository(db).list(actor.household_id) if m.active}
+    cooks = {m.id for m in await MemberRepository(db).list(actor.household_id) if m.is_member}  # never a guest
     if current is not None:
         cooks |= current.cook_ids
     return clean_item(data, existing_tags, cooks), existing_tags
@@ -169,6 +173,7 @@ def _describe(item: CatalogItem, tag_names: dict[int, str]) -> dict[str, object]
 
 
 async def create_item(db: AsyncSession, actor: Member, data: ItemInput, *, now: datetime) -> CatalogItem:
+    require_member(actor)
     clean, _ = await _clean(db, actor, data)
     repo = CatalogRepository(db)
     duplicate = f"A {clean.kind.label.lower()} named {clean.name} already exists."
@@ -187,6 +192,7 @@ async def create_item(db: AsyncSession, actor: Member, data: ItemInput, *, now: 
 
 
 async def update_item(db: AsyncSession, actor: Member, item_id: int, data: ItemInput, *, now: datetime) -> CatalogItem:
+    require_member(actor)
     before = await get_item(db, actor, item_id)
     if data.kind is not before.kind:
         raise InvalidCatalogInput("An item's kind can't change. Add a new item instead.")
@@ -210,6 +216,7 @@ async def update_item(db: AsyncSession, actor: Member, item_id: int, data: ItemI
 
 
 async def set_item_active(db: AsyncSession, actor: Member, item_id: int, active: bool, *, now: datetime) -> CatalogItem:
+    require_member(actor)
     item = await get_item(db, actor, item_id)
     if item.active == active:
         return item
@@ -231,6 +238,7 @@ async def _tag(db: AsyncSession, actor: Member, tag_id: int) -> Tag:
 
 
 async def create_tag(db: AsyncSession, actor: Member, kind: TagKind, name: str, *, now: datetime) -> Tag:
+    require_member(actor)
     clean = normalize_tag_name(name)
     repo = CatalogRepository(db)
     existing = next((t for t in await repo.tags(actor.household_id) if t.key == name_key(clean)), None)
@@ -245,6 +253,7 @@ async def create_tag(db: AsyncSession, actor: Member, kind: TagKind, name: str, 
 
 
 async def rename_tag(db: AsyncSession, actor: Member, tag_id: int, name: str, *, now: datetime) -> Tag:
+    require_member(actor)
     require_admin(actor, "Only the household admin can rename tags.")
     tag = await _tag(db, actor, tag_id)
     clean = normalize_tag_name(name)
@@ -265,6 +274,7 @@ async def rename_tag(db: AsyncSession, actor: Member, tag_id: int, name: str, *,
 async def merge_tags(db: AsyncSession, actor: Member, source_id: int, target_id: int, *, now: datetime) -> Tag:
     """Merge ``source`` into ``target``: items, preferences, meal-log snapshots, guest needs, and
     free-text proposals that named the source now name the target, and the source tag is removed."""
+    require_member(actor)
     require_admin(actor, "Only the household admin can merge tags.")
     source = await _tag(db, actor, source_id)
     target = await _tag(db, actor, target_id)
@@ -319,7 +329,7 @@ async def snapshot(db: AsyncSession, household_id: int) -> CatalogSnapshot:
     return CatalogSnapshot(
         tags=tuple(await repo.tags(household_id)),
         items=tuple(await repo.items(household_id)),
-        members=tuple(await MemberRepository(db).list(household_id)),
+        members=tuple(m for m in await MemberRepository(db).list(household_id) if not m.is_guest),  # cooks
     )
 
 

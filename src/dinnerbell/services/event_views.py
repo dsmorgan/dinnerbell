@@ -7,6 +7,7 @@ button whose action would be refused, and hiding a button is never the only prot
 
 from __future__ import annotations
 
+import functools
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -20,9 +21,11 @@ from dinnerbell.domain import notifications as note
 from dinnerbell.domain import offers
 from dinnerbell.domain.catalog import CatalogItem, Tag, TagKind
 from dinnerbell.domain.events import Event, EventRuleViolation, EventState, Response, Window
+from dinnerbell.domain.guests import GuestAction, can_answer_for, check_can_invite, check_guest
 from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.members import Member
 from dinnerbell.services import call_context as cc
+from dinnerbell.services import guests as guest_rules
 from dinnerbell.services.call_context import CallContext, load
 from dinnerbell.services.errors import NotFound
 from dinnerbell.services.variety import household_today
@@ -57,6 +60,24 @@ class Permissions:
     """Bring one more guest to an open offer with a seat left: ``offers.add_guest``."""
     leave: bool = False
     """Drop out of an open offer they're in, unless it's theirs: ``offers.leave``."""
+    invite: bool = False
+    """Invite a guest to the call (#38): ``guests.invite``."""
+
+
+@dataclass(frozen=True, slots=True)
+class GuestView:
+    """A guest invited to the call, as the viewer sees them (#38). ``answerable`` when the
+    viewer answers for them: a guest without Slack whom they invited, or any such guest for an
+    admin."""
+
+    person: note.PersonInfo
+    registered: bool
+    invited_by: note.PersonInfo | None
+    answer: Response | None
+    answerable: bool
+    removable: bool
+    needs: tuple[str, ...] = ()
+    """The guest's dietary needs, by name: only for whoever answers for them."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,6 +105,10 @@ class EventView:
     items: tuple[CatalogItem, ...]
     offer: note.OfferInfo | None = None
     """The offer, when the event is one (FR-4)."""
+    guests: tuple[GuestView, ...] = ()
+    """Guests invited to the call (#38)."""
+    invitable: tuple[note.PersonInfo, ...] = ()
+    """Saved guests the viewer could invite: only for a member who may invite (#38)."""
 
     @property
     def id(self) -> int:
@@ -137,16 +162,42 @@ def _offer_permissions(ctx: CallContext, actor: Member, now: datetime) -> Permis
     )
 
 
+def _guest_may(ctx: CallContext, actor: Member, action: GuestAction) -> bool:
+    return _allowed(lambda: check_guest(ctx.event, actor, action, invited=ctx.invited(actor.id)))
+
+
+def _guest_permissions(base: Permissions, ctx: CallContext, actor: Member) -> Permissions:
+    """``base`` cut down to what ``domain.guests`` lets an invited guest do (#38)."""
+    may = functools.partial(_guest_may, ctx, actor)
+    return Permissions(
+        respond=base.respond and may(GuestAction.ANSWER),
+        claim=base.claim and may(GuestAction.COORDINATE),
+        hand_off=base.hand_off and may(GuestAction.HAND_OFF),
+        manage=base.manage and may(GuestAction.MANAGE_DECISION),
+        mark_done=base.mark_done and may(GuestAction.MARK_DONE),
+        close_window=base.close_window if may(GuestAction.CLOSE_WINDOW) else None,
+    )
+
+
 def permissions(ctx: CallContext, actor: Member, today: date, now: datetime, *, any_time: bool = False) -> Permissions:
     """What ``actor`` may do. ``any_time``, on a test instance only (#60), lifts the too-late
-    rule for starting a called-off call again, as ``calls.start_call`` does there."""
+    rule for starting a called-off call again, as ``calls.start_call`` does there. A guest gets
+    only what ``domain.guests`` allows them (#38)."""
+    if actor.is_guest:
+        return _guest_permissions(_member_permissions(ctx, actor, today, now, any_time=any_time), ctx, actor)
+    return _member_permissions(ctx, actor, today, now, any_time=any_time)
+
+
+def _member_permissions(
+    ctx: CallContext, actor: Member, today: date, now: datetime, *, any_time: bool = False
+) -> Permissions:
     if ctx.event.is_offer:
         return _offer_permissions(ctx, actor, now)
     event, mine = ctx.event, ctx.response_of(actor.id)
     admin = actor.active and actor.is_admin
     return Permissions(
-        respond=_allowed(lambda: rules.check_can_respond(event, actor)),
-        claim=_allowed(lambda: rules.check_claim_coordinator(event, actor)),
+        respond=_allowed(lambda: rules.check_can_respond(event, actor, invited=ctx.invited(actor.id))),
+        claim=_allowed(lambda: rules.check_claim_coordinator(event, actor, invited=ctx.invited(actor.id))),
         hand_off=rules.is_coordinator(event, actor) and event.state.is_open and event.state is not EventState.SCHEDULED,
         vote=_allowed(lambda: rules.check_can_vote(event, actor, mine)),
         propose=_allowed(lambda: rules.check_can_propose(event, actor)),
@@ -162,6 +213,7 @@ def permissions(ctx: CallContext, actor: Member, today: date, now: datetime, *, 
         restart=actor.active and _allowed(lambda: _check_restart(ctx, today, now, any_time)),
         post_now=event.state is EventState.SCHEDULED
         and _allowed(lambda: rules.check_can_post_now(event, actor, now=now)),
+        invite=_allowed(lambda: check_can_invite(event, actor)),
     )
 
 
@@ -183,8 +235,41 @@ def _check_restart(ctx: CallContext, today: date, now: datetime, any_time: bool)
     rules.check_restart(ctx.event, today, now=now, too_late_after=ctx.too_late_for(today), any_time=any_time)
 
 
+def _needs(ctx: CallContext, guest: Member) -> tuple[str, ...]:
+    return tuple(sorted((ctx.tags[t].name for t in guest.dietary_needs if t in ctx.tags), key=str.casefold))
+
+
+def _guest_views(ctx: CallContext, actor: Member) -> tuple[GuestView, ...]:
+    if ctx.event.is_offer:
+        return ()
+    found: list[GuestView] = []
+    collecting = ctx.event.state is EventState.COLLECTING
+    for guest in ctx.guests:
+        inviter = ctx.invitations.get(guest.id)
+        found.append(
+            GuestView(
+                person=ctx.person(guest.id),
+                registered=guest.is_registered_guest,
+                invited_by=ctx.person(inviter) if inviter is not None else None,
+                answer=ctx.response_of(guest.id),
+                answerable=collecting and can_answer_for(guest, actor, inviter),
+                removable=collecting and actor.is_member and (actor.is_admin or inviter == actor.id),
+                needs=_needs(ctx, guest) if can_answer_for(guest, actor, inviter) else (),
+            )
+        )
+    return tuple(found)
+
+
+def _invitable(ctx: CallContext, actor: Member) -> tuple[note.PersonInfo, ...]:
+    if not _allowed(lambda: check_can_invite(ctx.event, actor)):
+        return ()
+    saved = [m for m in ctx.members.values() if m.is_guest and m.active and not ctx.invited(m.id)]
+    return tuple(ctx.person(m.id) for m in sorted(saved, key=lambda m: m.display_name.casefold()))
+
+
 def view(ctx: CallContext, actor: Member, today: date, now: datetime, *, any_time: bool = False) -> EventView:
-    by_name = sorted(ctx.active_members, key=lambda m: m.display_name.casefold())
+    # Who can be handed coordinating or assigned a role: members, and guests invited to the call.
+    by_name = sorted([*ctx.active_members, *ctx.guests], key=lambda m: m.display_name.casefold())
     mine = [s for s in ctx.suggestions if s.member_id == actor.id]
     tags = sorted(ctx.tags.values(), key=lambda t: t.key)
     return EventView(
@@ -206,6 +291,8 @@ def view(ctx: CallContext, actor: Member, today: date, now: datetime, *, any_tim
         cuisine_tags=tuple(t for t in tags if t.kind is TagKind.CUISINE),
         items=tuple(sorted((i for i in ctx.items.values() if i.active), key=lambda i: i.key)),
         offer=cc.offer_info(ctx) if ctx.event.is_offer else None,
+        guests=_guest_views(ctx, actor),
+        invitable=_invitable(ctx, actor),
     )
 
 
@@ -224,7 +311,8 @@ async def _today(db: AsyncSession, actor: Member, now: datetime) -> date:
 async def event_view(
     db: AsyncSession, actor: Member, event_id: int, *, now: datetime, any_time: bool = False
 ) -> EventView:
-    """``any_time``: see ``permissions``."""
+    """``any_time``: see ``permissions``. A guest sees only calls they're invited to (#38)."""
+    await guest_rules.check_event_visible(db, actor, event_id)
     event = await EventRepository(db).get(actor.household_id, event_id)
     if event is None:
         raise NotFound(cc.NO_SUCH_CALL)
@@ -249,6 +337,9 @@ async def today_view(db: AsyncSession, actor: Member, *, now: datetime, any_time
     """``any_time``: see ``permissions``."""
     today = await _today(db, actor, now)
     events = await EventRepository(db).for_today(actor.household_id, today)
+    if actor.is_guest:  # only the calls they're invited to (#38)
+        invited = set(await guest_rules.invited_events(db, actor)) if actor.active else set()
+        events = [e for e in events if e.id in invited]
     return TodayView(
         today=today,
         events=[view(await load(db, event), actor, today, now, any_time=any_time) for event in events],

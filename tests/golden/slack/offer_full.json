@@ -2,7 +2,7 @@
   "blocks": [
     {
       "text": {
-        "text": "Your lunch offer is full, Alex: *3 people* joining you for *<https://siam.example/menu|Siam Garden>* at 12:30 PM. Thanks for sharing!\n*Guests' dietary needs:* Vegetarian",
+        "text": "Your lunch offer is full, Alex: *3 people* joining you for *<https://siam.example/menu|Siam Garden>* at 12:30 PM. Thanks for sharing!\n*Dietary needs:* Vegetarian",
         "type": "mrkdwn"
       },
       "type": "section"

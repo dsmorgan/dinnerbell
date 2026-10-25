@@ -649,3 +649,67 @@ async def test_a_member_has_at_most_three_offers_on_per_meal(house: House) -> No
         await post(house, "Kim", lunch(house, at=time(13, 30)))
     await post(house, "Lee", lunch(house, at=time(13, 30)))  # someone else still can
     await post(house, "Kim", lunch(house, slot=Slot.DINNER, at=time(18, 0)))  # and Kim, for dinner
+
+
+async def test_a_schedule_save_never_opens_a_call_next_to_a_cooking_offer(house: House) -> None:
+    """Moving the dinner call earlier than now keeps today's call at the old time, as always; a
+    cooking offer stands in for it (FR-5), so at that time the tick calls it off instead of
+    posting it."""
+    from dataclasses import replace as copy
+
+    from dinnerbell.domain.schedule import DEFAULT_SLOTS, slot_fingerprint
+    from dinnerbell.services import schedule as schedule_service
+
+    await post(house, "Sam", tacos(house))
+    before = DEFAULT_SLOTS[Slot.DINNER]
+    earlier = copy(before, call_time=time(8, 0))
+    changed = await act(
+        house, schedule_service.update_slot, house["Kim"], Slot.DINNER, earlier, seen=slot_fingerprint(before)
+    )
+    assert changed
+    from dinnerbell.db.events import EventRepository
+
+    async with house.sessionmaker() as db:
+        kept = await EventRepository(db).call_for(house.household.id, Slot.DINNER, DAY)
+    assert kept is not None and kept.state is EventState.SCHEDULED  # kept at the old time, as for anyone
+    house.clock.now = OPENS
+    await house.tick()
+    offer_live, call_live = await live(house)
+    assert offer_live and not call_live
+    assert (await house.event(kept.id)).state is EventState.CANCELLED  # the tick called it off, quietly
+    (audit,) = await house.audits("event.replaced_by_offer")
+    assert audit.payload["from"] == "scheduled" and audit.actor_member_id is None
+    assert not any(e.kind == "call_opened" for e in await house.outbox())
+
+
+async def test_the_tick_calls_off_a_scheduled_call_a_cooking_offer_stands_in_for(house: House) -> None:
+    """A backstop: however a call came to be scheduled beside a live cooking offer, the tick
+    calls it off quietly when its time comes instead of posting it."""
+    from dinnerbell.db.events import EventRepository
+
+    await post(house, "Sam", tacos(house))
+    async with house.sessionmaker() as db:
+        call = await EventRepository(db).add(
+            household_id=house.household.id,
+            slot=Slot.DINNER,
+            day=DAY,
+            state=EventState.SCHEDULED,
+            opens_at=OPENS,
+            respond_deadline=RESPOND_BY,
+            reminder_minutes=15,
+            vote_minutes=45,
+            created_by=None,
+            now=house.clock(),
+        )
+        await db.commit()
+    house.clock.now = OPENS
+    await house.tick()
+    ended = await house.event(call.id)
+    assert (ended.state, ended.ended_by, ended.end_note) == (
+        EventState.CANCELLED,
+        house["Sam"].id,
+        "Sam is cooking instead.",
+    )
+    assert not any(e.kind == "call_opened" for e in await house.outbox())
+    (audit,) = await house.audits("event.replaced_by_offer")
+    assert audit.actor_member_id is None

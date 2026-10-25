@@ -16,6 +16,7 @@ from typing import Any
 from dinnerbell.channels.slack import ids
 from dinnerbell.channels.slack.blocks import Directory, with_version_footer
 from dinnerbell.channels.slack.messages import (
+    CardGuest,
     RenderContext,
     posted_reply,
     reminder_message,
@@ -31,6 +32,7 @@ from dinnerbell.channels.slack.views import (
     details_modal,
     feedback_modal,
     home_view,
+    invite_modal,
     log_modal,
     offer_modal,
     proposal_modal,
@@ -51,6 +53,7 @@ from dinnerbell.domain.events import (
 )
 from dinnerbell.domain.feedback import FeedbackInput, MealFacts, PlaceIssue, Rating
 from dinnerbell.domain.meals import MemberRef, Slot
+from dinnerbell.domain.members import Capabilities, Member, Role
 from dinnerbell.domain.schedule import DEFAULT_SLOTS
 from dinnerbell.services.event_views import EventView, Permissions, ProposalView, TodayView
 from dinnerbell.services.feedback import Awaiting, FeedbackForm
@@ -65,6 +68,8 @@ ALEX = note.PersonInfo(1, "Alex")
 SAM = note.PersonInfo(2, "Sam")
 KIM = note.PersonInfo(3, "Kim")
 LEE = note.PersonInfo(4, "Lee")
+PAT = note.PersonInfo(9, "Pat")
+"""A guest (#38)."""
 DIRECTORY = Directory({1: "U01ALEX", 2: "U02SAM", 3: "U03KIM"})
 
 TACOS = note.ItemInfo(11, "Sam's Tacos", ItemKind.HOME, cuisines=("Mexican",))
@@ -210,6 +215,9 @@ NOTIFICATIONS: dict[str, Callable[[], note.Notification]] = {
     "assignment_made_order": lambda: note.AssignmentMade(DECIDED, 32, LEE, (AssignmentRole.ORDER,), DELIVERY),
     "call_abandoned": lambda: note.CallAbandoned(event(EventState.ABANDONED), EndReason.TOO_FEW, head_count=1),
     "call_abandoned_no_coverage": lambda: note.CallAbandoned(event(EventState.ABANDONED), EndReason.NO_COVERAGE, 3),
+    "call_abandoned_needs_unmet": lambda: note.CallAbandoned(
+        event(EventState.ABANDONED), EndReason.NO_COVERAGE, 3, needs_unmet=True
+    ),
     "event_cancelled": lambda: note.EventCancelled(
         CANCELLED, (ALEX, SAM), cancelled_by=ALEX, note=REASON, audience=(ALEX, KIM, SAM)
     ),
@@ -254,6 +262,34 @@ NOTIFICATIONS: dict[str, Callable[[], note.Notification]] = {
     "offer_full": lambda: note.OfferFull(LUNCH_OFFER, ALEX, FULL_OFFER),
     "offer_cancelled": lambda: note.EventCancelled(
         replace(LUNCH_OFFER, state=EventState.CANCELLED), (ALEX, SAM), cancelled_by=ALEX, audience=(ALEX, SAM)
+    ),
+    "guest_invited": lambda: note.GuestInvited(event(), PAT, KIM),
+    "guest_joined": lambda: note.GuestJoined(
+        1, ALEX, note.PersonInfo(9, "Pat <Slack> & *Co*"), "slack", slack_user_id="U07PAT"
+    ),
+    "guest_joined_web": lambda: note.GuestJoined(
+        1, ALEX, PAT, "web", unlinked=(KIM,), slack_user_id="U07PAT", slack_email="pat@example.com"
+    ),
+    "guest_joined_unlinked": lambda: note.GuestJoined(
+        1, ALEX, PAT, "slack", unlinked=(KIM, LEE), slack_user_id="U07PAT", slack_email="pat@example.com"
+    ),
+    "guest_joined_slack_guest": lambda: note.GuestJoined(
+        1, ALEX, PAT, "slack", slack_user_id="U07PAT", slack_email="pat@example.com", slack_guest_account=True
+    ),
+    "response_reminder_guest": lambda: note.ResponseReminder(event(), PAT, guest=True),
+    "role_vacated": lambda: note.RoleVacated(DECIDED, ALEX, PAT, (AssignmentRole.PICKUP,)),
+    "link_needed": lambda: note.LinkNeeded(
+        1, ALEX, KIM, "U09KIM", "Kim <K> & *Co*", "join", slack_email="kim@example.com"
+    ),
+    "link_needed_hourly": lambda: note.LinkNeeded(1, ALEX, KIM, "U09KIM", "", "hourly", slack_email="kim@example.com"),
+    "link_needed_hourly_admin": lambda: note.LinkNeeded(
+        1, ALEX, ALEX, "U01ALEX", "", "hourly", slack_email="alex@example.com", member_is_admin=True
+    ),
+    "assignment_made_for_guest": lambda: note.AssignmentMade(
+        DECIDED, 34, PAT, (AssignmentRole.PICKUP,), replace(DECISION, dietary_notes=("Vegetarian",)), via=KIM
+    ),
+    "assignment_cancelled_for_guest": lambda: note.AssignmentCancelled(
+        CANCELLED, PAT, (AssignmentRole.PICKUP,), DECISION, cancelled_by=ALEX, note=REASON, via=KIM
     ),
     "feedback_reminder": lambda: note.FeedbackReminder(
         event(EventState.DONE, coordinator=ALEX), KIM, "Sam's Tacos", date(2026, 10, 29)
@@ -393,6 +429,17 @@ OFFER_FORM = OfferForm(
     ITEMS,
     CUISINES,
 )
+SAVED_GUESTS = tuple(
+    Member(9 + n, 1, name, None, Role.GUEST, Capabilities(), True) for n, name in enumerate(("Pat", "Jo <dev>"))
+)
+
+
+def guest_home(label: str = "") -> dict[str, Any]:
+    """Pat's Home as a guest invited to dinner (#38): In and Out, and nothing else of the household's."""
+    view = replace(COLLECTING_VIEW, mine=None, can=Permissions(respond=True))
+    return home_view(TodayView(DAY, [view], tuple(Slot)), HomeLinks(BASE_URL), label=label, guest=True)
+
+
 LOG_FORM = LogForm(DAY, SAM.id, ITEMS, (MemberRef(1, "Alex"), MemberRef(3, "Kim"), MemberRef(2, "Sam")))
 
 VIEWS: dict[str, Callable[[], dict[str, Any]]] = {
@@ -441,6 +488,11 @@ VIEWS: dict[str, Callable[[], dict[str, Any]]] = {
     "home_offer_joined": lambda: home_view(TodayView(DAY, [OFFER_JOINED_VIEW], tuple(Slot)), HomeLinks(BASE_URL)),
     "offer_modal": lambda: offer_modal(OFFER_FORM, ids.FormOrigin("C0DINNER")),
     "log_modal": lambda: log_modal(LOG_FORM, ids.FormOrigin(None, home=True)),
+    "invite_modal": lambda: invite_modal(
+        replace(COLLECTING_VIEW, can=Permissions(respond=True, invite=True)), SAVED_GUESTS, CALL_OFF_ORIGIN
+    ),
+    "home_guest": lambda: guest_home(),
+    "home_guest_empty": lambda: home_view(TodayView(DAY, [], tuple(Slot)), HomeLinks(BASE_URL), guest=True),
     "cancel_modal_offer": lambda: cancel_modal(
         replace(OFFER_VIEW, can=Permissions(cancel=True)), replace(CALL_OFF_ORIGIN, event_id=9)
     ),
@@ -475,6 +527,22 @@ CARDS: dict[str, CardSample] = {
     "your_answer_out": _card(event(), replace(KIM_IN, status=Status.OUT), run=1),
     "your_answer_roles": _card(event(), KIM_OFFERS, run=1),
     "your_answer_guests": _card(event(), replace(KIM_OFFERS, guests=2), run=1),
+    "your_answer_as_guest": lambda ctx: your_answer(event(), KIM_IN, KIM.id, ctx, run=1, guest=True).payload(),
+    "your_answer_inviter": lambda ctx: your_answer(
+        event(),
+        KIM_IN,
+        KIM.id,
+        ctx,
+        run=1,
+        can_invite=True,
+        guests=(
+            CardGuest(9, "Pat", Response(9, Status.IN, offers=frozenset({RoleOffer.PICKUP})), ("Vegetarian",)),
+            CardGuest(10, "Jo <dev>", None),
+        ),
+    ).payload(),
+    "guest_invited_answered": lambda ctx: reminder_message(
+        note.GuestInvited(event(), PAT, KIM), ctx, mine=Response(9, Status.OUT), run=1
+    ).payload(),
     "your_answer_coordinator": _card(event(coordinator=KIM), KIM_OFFERS, run=1),
     "your_answer_other_coordinator": _card(
         event(coordinator=note.PersonInfo(9, "<!channel> & *Co*")),

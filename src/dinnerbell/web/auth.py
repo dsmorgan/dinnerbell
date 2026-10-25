@@ -87,13 +87,30 @@ async def optional_principal(request: Request, context: Context, db: Database) -
 MaybePrincipal = Annotated[Principal | None, Depends(optional_principal)]
 
 
-async def require_principal(principal: MaybePrincipal) -> Principal:
+GUESTS_KEEP_OUT = "That page is for household members. Your invitations are on Today."
+
+
+async def require_anyone(principal: MaybePrincipal) -> Principal:
+    """A signed-in member, admin, or guest. Only routes a guest may use depend on this directly:
+    the guest's restricted view (#38). Each one still checks, in its service, that the event is
+    one the guest is invited to."""
     if principal is None:
         raise NotSignedIn
     return principal
 
 
+async def require_principal(principal: MaybePrincipal) -> Principal:
+    """A signed-in member or admin. A guest is refused here, so every route is closed to guests
+    unless it opts in with ``GuestOrMember`` (#38)."""
+    if principal is None:
+        raise NotSignedIn
+    if principal.member.is_guest:
+        raise AccessDenied(GUESTS_KEEP_OUT)
+    return principal
+
+
 SignedIn = Annotated[Principal, Depends(require_principal)]
+GuestOrMember = Annotated[Principal, Depends(require_anyone)]
 
 
 async def require_admin(principal: SignedIn) -> Principal:
@@ -130,6 +147,13 @@ async def require_admin_csrf(request: Request, principal: AdminPrincipal) -> Pri
     return principal
 
 
+async def require_csrf_anyone(request: Request, principal: GuestOrMember) -> Principal:
+    """``require_csrf`` for the routes a guest may use too (#38)."""
+    if not tokens_match(principal.csrf_token, await _supplied_csrf(request)):
+        raise CSRFRejected
+    return principal
+
+
 async def csrf_if_signed_in(request: Request, principal: MaybePrincipal) -> Principal | None:
     if principal is not None and not tokens_match(principal.csrf_token, await _supplied_csrf(request)):
         raise CSRFRejected
@@ -137,6 +161,7 @@ async def csrf_if_signed_in(request: Request, principal: MaybePrincipal) -> Prin
 
 
 CSRFChecked = Annotated[Principal, Depends(require_csrf)]
+GuestCSRFChecked = Annotated[Principal, Depends(require_csrf_anyone)]
 AdminCSRFChecked = Annotated[Principal, Depends(require_admin_csrf)]
 CSRFCheckedIfSignedIn = Annotated[Principal | None, Depends(csrf_if_signed_in)]
 

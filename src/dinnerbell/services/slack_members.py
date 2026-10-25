@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from dinnerbell.db.repositories import HouseholdRepository, MemberRepository
 from dinnerbell.domain.household import Household
 from dinnerbell.domain.members import Member
+from dinnerbell.services import guests
 from dinnerbell.services.common import audit
 from dinnerbell.services.errors import NotFound
 from dinnerbell.services.variety import household_today
@@ -66,8 +67,8 @@ async def unlinked_members(db: AsyncSession) -> tuple[int, list[Unlinked]]:
     link the admin set or cleared by hand."""
     household = await _household(db)
     members = await MemberRepository(db).list(household.id)
-    unlinked = [m for m in members if m.active and not m.slack_user_id and not m.slack_link_locked]
-    return household.id, [Unlinked(m.id, m.email) for m in unlinked]
+    unlinked = [m for m in members if m.is_member and not m.slack_user_id and not m.slack_link_locked and m.email]
+    return household.id, [Unlinked(m.id, m.email) for m in unlinked if m.email]
 
 
 async def link_slack_users(
@@ -86,6 +87,9 @@ async def link_slack_users(
             continue
         if slack_user_id in taken:
             log.warning("slack user already linked to another member", extra={"member_id": member_id})
+            # Such as a guest who joined from the channel before the admin added them as a
+            # member (#38): the admins hear, once, so they can link or retire that guest.
+            await guests.ask_admins(db, household_id, member, guests.SlackPerson(slack_user_id, ""), "hourly", now)
             continue
         await repo.update(household_id, member_id, now, slack_user_id=slack_user_id)
         payload = {"slack_user_id": slack_user_id, "matched_by": "email"}

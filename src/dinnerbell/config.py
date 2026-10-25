@@ -243,6 +243,12 @@ class Settings(BaseSettings):
         """The version people see: 0.2.0 on a release image, 0.2.0+abc1234 on a main build."""
         return f"{__version__}+{self.build}" if self.build else __version__
 
+    @property
+    def slack_sign_in(self) -> bool:
+        """Whether people sign in with Slack: the configured issuer is Slack's, so ID tokens
+        carry a Slack user ID Dinnerbell may match on (#38)."""
+        return self.oidc_issuer.rstrip("/") == SLACK_ISSUER
+
     @cached_property
     def cookie_secure(self) -> bool:
         return urlsplit(self.base_url).scheme == "https"

@@ -19,7 +19,7 @@ from dinnerbell.db.models import Base
 M0_TABLES = {"household", "member", "session", "audit"}
 M1_TABLES = {"tag", "catalog_item", "catalog_item_tag", "catalog_item_cook", "preference", "meal_log"}
 M2_TABLES = {"event", "response", "suggestion", "proposal", "vote", "assignment", "outbox"}
-M3_TABLES = {"feedback"}
+M3_TABLES = {"feedback", "invitation"}
 
 
 def test_migrates_an_empty_database(settings: Settings) -> None:
@@ -34,6 +34,7 @@ def test_migrates_an_empty_database(settings: Settings) -> None:
             assert "household_id" in {c["name"] for c in inspector.get_columns(table)}, table
         member_columns = {c["name"] for c in inspector.get_columns("member")}
         assert {"feedback_reminder", "mute_dm_reminders", "oidc_subject", "slack_user_id"} <= member_columns
+        assert {"dietary_needs", "join_refused"} <= member_columns
         with engine.connect() as connection:
             assert MigrationContext.configure(connection).get_current_heads() == (head_revision(),)
     finally:
@@ -845,6 +846,101 @@ def test_0010_refuses_to_run_with_foreign_keys_on(settings: Settings) -> None:
     try:
         with pytest.raises(RuntimeError, match="foreign keys on"), engine.begin() as connection:
             command.upgrade(_alembic_config(connection), "0010_offers")
+        with engine.connect() as c:
+            assert c.execute(text("SELECT count(*) FROM response")).scalar() == 2
+    finally:
+        engine.dispose()
+
+
+# 0011: guests (#38) ------------------------------------------------------------------------------
+
+GUEST_INSERT = (
+    "INSERT INTO member (household_id, display_name, email, role, can_cook, can_pickup, can_order, "
+    "mute_dm_reminders, feedback_reminder, active, slack_link_locked, created_at, updated_at) "
+    "VALUES (1, :name, :email, :role, 0, 0, 0, 0, 0, 1, 0, :t, :t)"
+)
+
+
+def _members(settings: Settings) -> list[tuple[object, ...]]:
+    engine = create_engine(settings.sync_database_url)
+    try:
+        with engine.connect() as c:
+            return [tuple(r) for r in c.execute(text("SELECT * FROM member ORDER BY id")).all()]
+    finally:
+        engine.dispose()
+
+
+def test_0011_adds_guests_and_invitations_without_losing_a_row(settings: Settings) -> None:
+    """The member rebuild keeps every member and every row that refers to one; afterward only a
+    guest may have no email, and a downgrade takes guests away with their rows."""
+    from sqlalchemy.exc import IntegrityError
+
+    _upgrade_to(settings, "0010_offers")
+    _populate_calls(settings)
+    before, members = _snapshot(settings), _members(settings)
+    _upgrade_to(settings, "0011_guests")
+    assert _snapshot(settings)["rows"] == before["rows"]
+    # plus dietary_needs, join_refused, slack_email, slack_guest_account
+    assert [m[:-4] for m in _members(settings)] == members
+    assert all(m[-4:] == ("[]", 0, None, 0) for m in _members(settings))
+    engine = create_sync_engine(settings.sync_database_url)
+    try:
+        with pytest.raises(IntegrityError, match="CHECK"), engine.begin() as c:
+            c.execute(text(GUEST_INSERT), {"name": "Ann", "email": None, "role": "member", "t": STAMP})
+        with pytest.raises(IntegrityError, match="CHECK"), engine.begin() as c:  # nor an empty one
+            c.execute(text(GUEST_INSERT), {"name": "Cy", "email": "", "role": "member", "t": STAMP})
+        with pytest.raises(IntegrityError, match="CHECK"), engine.begin() as c:  # a guest never has a sign-in email
+            c.execute(text(GUEST_INSERT), {"name": "Bo", "email": "bo@example.com", "role": "guest", "t": STAMP})
+        with engine.begin() as c:
+            c.execute(text(GUEST_INSERT), {"name": "Pat", "email": None, "role": "guest", "t": STAMP})
+            guest = c.execute(text("SELECT max(id) FROM member")).scalar_one()
+            c.execute(
+                text(
+                    "INSERT INTO invitation (household_id, event_id, guest_id, invited_by, created_at) "
+                    "VALUES (1, 2, :g, 1, :t)"
+                ),
+                {"g": guest, "t": STAMP},
+            )
+            c.execute(
+                text(
+                    "INSERT INTO response (household_id, event_id, member_id, status, guests, guest_needs, "
+                    "offers_cook, offers_pickup, offers_order, maybe_at_deadline, responded_at, updated_at) "
+                    "VALUES (1, 2, :g, 'in', 0, '[]', 0, 0, 0, 0, :t, :t)"
+                ),
+                {"g": guest, "t": STAMP},
+            )
+        with pytest.raises(IntegrityError, match="UNIQUE"), engine.begin() as c:
+            c.execute(
+                text(
+                    "INSERT INTO invitation (household_id, event_id, guest_id, invited_by, created_at) "
+                    "VALUES (1, 2, :g, 1, :t)"
+                ),
+                {"g": guest, "t": STAMP},
+            )
+        with engine.begin() as c:
+            c.execute(text("PRAGMA foreign_keys=ON"))
+            c.execute(text("DELETE FROM event WHERE id = 2"))
+            assert c.execute(text("SELECT count(*) FROM invitation")).scalar() == 0  # goes with its call
+    finally:
+        engine.dispose()
+    _downgrade_to(settings, "0010_offers")
+    assert _members(settings) == members
+    assert "invitation" not in inspect(create_engine(settings.sync_database_url)).get_table_names()
+    run_migrations(settings.sync_database_url, settings.database_path)
+
+
+def test_0011_refuses_to_run_with_foreign_keys_on(settings: Settings) -> None:
+    """Rebuilding ``member`` with foreign keys on would cascade to nearly every table."""
+    from alembic import command
+
+    from dinnerbell.db.migrate import _alembic_config
+
+    _upgrade_to(settings, "0010_offers")
+    _populate_calls(settings)
+    engine = create_sync_engine(settings.sync_database_url)
+    try:
+        with pytest.raises(RuntimeError, match="foreign keys on"), engine.begin() as connection:
+            command.upgrade(_alembic_config(connection), "0011_guests")
         with engine.connect() as c:
             assert c.execute(text("SELECT count(*) FROM response")).scalar() == 2
     finally:

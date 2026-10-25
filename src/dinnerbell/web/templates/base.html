@@ -33,12 +33,16 @@
     {% set path = request.url.path %}
     <nav class="nav" aria-label="Main">
       <a href="/"{% if path == "/" %} aria-current="page"{% endif %}>Today</a>
+      {% if principal.member.is_guest %}
+      <a href="/me"{% if path.startswith("/me") %} aria-current="page"{% endif %}>Your dietary needs</a>
+      {% else %}
       <a href="/catalog"{% if path.startswith("/catalog") %} aria-current="page"{% endif %}>Catalog</a>
       <a href="/preferences"{% if path.startswith("/preferences") %} aria-current="page"{% endif %}>Preferences</a>
       <a href="/history"{% if path.startswith("/history") %} aria-current="page"{% endif %}>History</a>
       <a href="/schedule"{% if path.startswith("/schedule") %} aria-current="page"{% endif %}>Schedule</a>
       {% if principal.member.is_admin %}
       <a href="/admin/members"{% if path.startswith("/admin") %} aria-current="page"{% endif %}>Members</a>
+      {% endif %}
       {% endif %}
     </nav>
     {% endif %}

@@ -70,7 +70,7 @@ class ScheduleMoved(InvalidSchedule):
 
 
 def _require_member(actor: Member) -> None:
-    if not actor.active:
+    if not actor.is_member:  # deactivated members and guests (#38)
         raise Forbidden(MEMBERS_ONLY)
 
 
@@ -135,6 +135,8 @@ async def update_slot(
             and can_open_today(before, today=today, now=now, zone=zone)
             and not can_open_today(schedule, today=today, now=now, zone=zone)
         ):
+            # A cooking offer standing in for today's call (FR-5) still gets one scheduled here:
+            # the tick calls it off at its time instead of posting it (``lifecycle``'s open step).
             # Settings still hold the old schedule, so the call gets the old time and windows.
             opens_at = before.opens_at(today, zone)
             await lifecycle.create_call(db, household, slot, today, opens_at=opens_at, actor=None, now=now)

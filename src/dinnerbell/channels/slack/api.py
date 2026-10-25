@@ -299,6 +299,19 @@ class SlackApi:
         """Ask for a Socket Mode URL with the app-level token, to check it before connecting."""
         await self._call("apps.connections.open", lambda: self.client.apps_connections_open(app_token=app_token))
 
+    async def user_info(self, user: str) -> dict[str, Any] | None:
+        """The workspace user ``user`` (``users.info``), or None when Slack doesn't know them."""
+        try:
+            response = await self.client.users_info(user=user)
+        except SlackApiError as exc:
+            if error_code(exc) in {"user_not_found", "user_not_visible"}:
+                return None
+            self._raise("users.info", exc)
+        except TRANSPORT_ERRORS as exc:
+            self._raise("users.info", exc)
+        found: dict[str, Any] = response["user"]
+        return found
+
     async def user_by_email(self, email: str) -> dict[str, Any] | None:
         """The workspace user with this email, or None when there isn't one."""
         try:

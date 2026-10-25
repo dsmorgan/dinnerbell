@@ -22,6 +22,18 @@
   {% endif %}
 </section>
 
+{% if dietary_tags %}
+<form method="post" action="/me" class="card stack" id="dietary-needs">
+  <h2>Your dietary needs</h2>
+  <p class="small muted">Every meal you're in or maybe for fits these, as a guest's needs do. Only the needs show, never whose.</p>
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <div class="chip-picker">
+    {% for tag in dietary_tags %}<label class="chip-toggle"><input type="checkbox" name="needs" value="{{ tag.id }}"{% if tag.id in me.dietary_needs %} checked{% endif %}><span>{{ tag.name }}</span></label>{% endfor %}
+  </div>
+  <button type="submit" class="button">Save needs</button>
+</form>
+{% endif %}
+
 <form method="post" action="/preferences/settings" class="card stack">
   <h2>You</h2>
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">

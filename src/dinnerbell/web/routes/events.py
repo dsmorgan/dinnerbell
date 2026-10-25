@@ -37,10 +37,12 @@ from dinnerbell.domain.events import (
     Window,
     WindowMoved,
 )
+from dinnerbell.domain.guests import GuestInput
 from dinnerbell.domain.meals import Slot
+from dinnerbell.domain.members import InvalidMemberInput
 from dinnerbell.domain.offers import MAX_CAPACITY
-from dinnerbell.services import call_admin, calls, discard, event_views, feedback, offers
-from dinnerbell.services.errors import NotFound
+from dinnerbell.services import call_admin, calls, discard, event_views, feedback, guests, offers
+from dinnerbell.services.errors import Forbidden, NotFound
 from dinnerbell.services.lifecycle import CallExists
 from dinnerbell.web.auth import (
     AdminCSRFChecked,
@@ -48,8 +50,9 @@ from dinnerbell.web.auth import (
     Context,
     CSRFChecked,
     Database,
+    GuestCSRFChecked,
+    GuestOrMember,
     Principal,
-    SignedIn,
 )
 from dinnerbell.web.context import AppContext
 from dinnerbell.web.forms import BadFormValue, RowId, choice, iso_date, optional_int, parse_id
@@ -60,7 +63,7 @@ router = APIRouter()
 Field = Annotated[str, Form(max_length=200)]
 Many = Annotated[list[str] | None, Form()]
 STALE = "That can't happen anymore. Reload the page to see what changed."
-RULE_ERRORS = (EventRuleViolation, InvalidResponse, BadFormValue)
+RULE_ERRORS = (EventRuleViolation, InvalidResponse, BadFormValue, InvalidMemberInput, Forbidden)
 
 
 def _any_time(context: AppContext) -> bool:
@@ -127,7 +130,7 @@ async def _run(
 
 @router.get("/events/{event_id}")
 async def event_page(
-    request: Request, principal: SignedIn, context: Context, db: Database, event_id: RowId
+    request: Request, principal: GuestOrMember, context: Context, db: Database, event_id: RowId
 ) -> Response:
     view = await event_views.event_view(
         db, principal.member, event_id, now=context.clock(), any_time=_any_time(context)
@@ -139,7 +142,7 @@ async def event_page(
 @router.get("/events/{event_id}/card")
 async def event_card(
     request: Request,
-    principal: SignedIn,
+    principal: GuestOrMember,
     context: Context,
     db: Database,
     event_id: RowId,
@@ -207,7 +210,7 @@ async def _today_error(
 @router.post("/events/{event_id}/respond")
 async def respond(
     request: Request,
-    principal: CSRFChecked,
+    principal: GuestCSRFChecked,
     context: Context,
     db: Database,
     event_id: RowId,
@@ -226,7 +229,7 @@ async def respond(
 @router.post("/events/{event_id}/offer")
 async def offer(
     request: Request,
-    principal: CSRFChecked,
+    principal: GuestCSRFChecked,
     context: Context,
     db: Database,
     event_id: RowId,
@@ -294,7 +297,7 @@ async def details(
 @router.post("/events/{event_id}/coordinate")
 async def coordinate(
     request: Request,
-    principal: CSRFChecked,
+    principal: GuestCSRFChecked,
     context: Context,
     db: Database,
     event_id: RowId,
@@ -316,7 +319,7 @@ def _member_id(value: str) -> int:
 @router.post("/events/{event_id}/hand-off")
 async def hand_off(
     request: Request,
-    principal: CSRFChecked,
+    principal: GuestCSRFChecked,
     context: Context,
     db: Database,
     event_id: RowId,
@@ -433,7 +436,7 @@ async def lock(
 @router.post("/events/{event_id}/meal-time")
 async def meal_time(
     request: Request,
-    principal: CSRFChecked,
+    principal: GuestCSRFChecked,
     context: Context,
     db: Database,
     event_id: RowId,
@@ -452,7 +455,7 @@ async def meal_time(
 @router.post("/events/{event_id}/assignments")
 async def assignment(
     request: Request,
-    principal: CSRFChecked,
+    principal: GuestCSRFChecked,
     context: Context,
     db: Database,
     event_id: RowId,
@@ -475,7 +478,7 @@ async def assignment(
 @router.post("/events/{event_id}/done")
 async def done(
     request: Request,
-    principal: CSRFChecked,
+    principal: GuestCSRFChecked,
     context: Context,
     db: Database,
     event_id: RowId,
@@ -534,7 +537,7 @@ async def cancel(
 @router.post("/events/{event_id}/close")
 async def close(
     request: Request,
-    principal: CSRFChecked,
+    principal: GuestCSRFChecked,
     context: Context,
     db: Database,
     event_id: RowId,
@@ -691,6 +694,98 @@ async def leave_offer(
     return await _run(request, principal, context, db, event_id, came_from, action)
 
 
+# Guests (#38) -----------------------------------------------------------------------------------
+
+GuestNeeds = Annotated[list[str] | None, Form()]
+
+
+@router.post("/events/{event_id}/guests")
+async def invite_guest(
+    request: Request,
+    principal: CSRFChecked,
+    context: Context,
+    db: Database,
+    event_id: RowId,
+    guest_id: Field = "",
+    name: Field = "",
+    needs: GuestNeeds = None,
+    run: Run = "",
+    came_from: Annotated[str, Form(alias="from", max_length=10)] = "",
+) -> Response:
+    """Invite a saved guest, or a new one by name with their dietary needs: any member, while
+    answers are open. Guests can't reach this route."""
+    seen = parse_id(run)
+    if seen is None:
+        return await _malformed(request, principal, context, db, event_id, came_from)
+
+    async def action() -> None:
+        saved = parse_id(guest_id)
+        new = None if saved is not None else GuestInput(name, _ids(needs))
+        await guests.invite(
+            db, principal.member, event_id, guest_id=saved, new_guest=new, run=seen, now=context.clock()
+        )
+
+    return await _run(request, principal, context, db, event_id, came_from, action)
+
+
+@router.post("/events/{event_id}/guests/{guest_id}/answer")
+async def answer_for_guest(
+    request: Request,
+    principal: CSRFChecked,
+    context: Context,
+    db: Database,
+    event_id: RowId,
+    guest_id: RowId,
+    status: Field = "",
+    role: Field = "",
+    offered: Field = "1",
+    run: Run = "",
+    came_from: Annotated[str, Form(alias="from", max_length=10)] = "",
+) -> Response:
+    """In, Out, or a role for a guest without Slack: whoever invited them, or an admin."""
+    seen = parse_id(run)
+    if seen is None:
+        return await _malformed(request, principal, context, db, event_id, came_from)
+
+    async def action() -> None:
+        answer, chosen = choice(Status, status), choice(RoleOffer, role)
+        if (answer is None) == (chosen is None):
+            raise BadFormValue("Pick in or out, or a role.")
+        await guests.answer_for(
+            db,
+            principal.member,
+            event_id,
+            guest_id,
+            status=answer,
+            role=chosen,
+            offered=offered == "1",
+            run=seen,
+            now=context.clock(),
+        )
+
+    return await _run(request, principal, context, db, event_id, came_from, action)
+
+
+@router.post("/events/{event_id}/guests/{guest_id}/remove")
+async def uninvite_guest(
+    request: Request,
+    principal: CSRFChecked,
+    context: Context,
+    db: Database,
+    event_id: RowId,
+    guest_id: RowId,
+    came_from: Annotated[str, Form(alias="from", max_length=10)] = "",
+) -> Response:
+    async def action() -> None:
+        await guests.uninvite(db, principal.member, event_id, guest_id, now=context.clock())
+
+    return await _run(request, principal, context, db, event_id, came_from, action)
+
+
+def _ids(values: list[str] | None) -> frozenset[int]:
+    return frozenset(i for v in values or [] if (i := parse_id(v)) is not None)
+
+
 # Admin overrides (FR-6, spec 5.7) ---------------------------------------------------------------
 
 DEADLINE_SHIFTS = {"plus30": 30, "plus15": 15, "minus15": -15, "close": None}
@@ -766,6 +861,7 @@ ROW_LABELS = {
     "suggestion": "Suggestions",
     "response": "Answers",
     "assignment": "Assignments",
+    "invitation": "Guest invitations",
     "meal_log": "Meal log entries",
     "feedback": "Feedback on the meal",
 }

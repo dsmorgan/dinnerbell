@@ -1,0 +1,24 @@
+{#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
+{% extends "base.html" %}
+{% block title %}Your dietary needs{% endblock %}
+{% block content %}
+<h1>Your dietary needs</h1>
+<p class="muted">Every meal you're invited to fits these, whoever is cooking or ordering. Only the needs show, never who has them.</p>
+{% if saved %}<p class="alert ok" role="status">Saved.</p>{% endif %}
+{% if error %}<p class="alert error" role="alert">{{ error }}</p>{% endif %}
+<form method="post" action="/me" class="card stack">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  {% if tags %}
+  <fieldset class="field"><legend>I need</legend>
+    <div class="chip-picker">
+      {% for tag in tags %}
+      <label class="chip-toggle"><input type="checkbox" name="needs" value="{{ tag.id }}"{% if tag.id in mine %} checked{% endif %}><span>{{ tag.name }}</span></label>
+      {% endfor %}
+    </div>
+  </fieldset>
+  {% else %}
+  <p class="small muted">The household hasn't set up any dietary tags yet.</p>
+  {% endif %}
+  <button type="submit" class="button primary">Save</button>
+</form>
+{% endblock %}

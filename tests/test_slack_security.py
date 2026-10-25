@@ -14,7 +14,13 @@ import pytest
 from sqlalchemy import text
 
 from dinnerbell.channels.slack import ids
-from dinnerbell.channels.slack.interactions import INACTIVE, OUT_OF_DATE, UNKNOWN_USER, WRONG_PLACE, WRONG_WORKSPACE
+from dinnerbell.channels.slack.interactions import (
+    INACTIVE,
+    JOIN_OFFER,
+    OUT_OF_DATE,
+    WRONG_PLACE,
+    WRONG_WORKSPACE,
+)
 from dinnerbell.config import Settings
 from dinnerbell.db.repositories import MemberRepository
 from dinnerbell.domain.events import EventState
@@ -62,8 +68,8 @@ async def test_an_unlinked_slack_user_is_refused(slack: Slack, house: House) -> 
     await slack.click("U04LEE", "respond_in", str(event_id))  # Lee has no Slack link
     await slack.click("U9STRANGER", "respond_in", str(event_id))
     assert await responses(house, event_id) == 0
-    assert slack.ephemerals("U04LEE") == [UNKNOWN_USER]
-    assert slack.ephemerals("U9STRANGER") == [UNKNOWN_USER]
+    assert slack.ephemerals("U04LEE") == [JOIN_OFFER]
+    assert slack.ephemerals("U9STRANGER") == [JOIN_OFFER]
 
 
 async def test_an_inactive_member_is_refused(slack: Slack, house: House) -> None:
@@ -232,7 +238,7 @@ async def test_tampered_modal_values_are_dropped(slack: Slack, house: House, val
 async def test_slash_call_by_a_stranger_is_refused(slack: Slack, house: House) -> None:
     house.clock.now = OPENS
     await slack.command("U9STRANGER", "call lunch")
-    assert slack.ephemerals("U9STRANGER") == [UNKNOWN_USER]
+    assert slack.ephemerals("U9STRANGER") == [JOIN_OFFER]
 
 
 async def test_tokens_never_reach_logs_errors_or_the_outbox(house: House, caplog: pytest.LogCaptureFixture) -> None:
@@ -276,9 +282,9 @@ async def test_tokens_never_reach_logs_errors_or_the_outbox(house: House, caplog
 async def test_strangers_on_the_home_tab_and_in_modals(slack: Slack, house: House) -> None:
     event_id = await open_call(house)
     await slack.click("U9STRANGER", "respond_in", str(event_id), home=True)
-    assert UNKNOWN_USER in str(slack.last_home("U9STRANGER"))
+    assert JOIN_OFFER in str(slack.last_home("U9STRANGER"))
     await slack.submit("U9STRANGER", ids.DETAILS_VIEW, state(note={"value": "x"}), event_id)
-    assert slack.ephemerals("U9STRANGER") == [UNKNOWN_USER]
+    assert slack.ephemerals("U9STRANGER") == [JOIN_OFFER]
     assert await responses(house, event_id) == 0
 
 

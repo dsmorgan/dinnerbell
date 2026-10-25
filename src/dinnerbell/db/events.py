@@ -18,6 +18,7 @@ from dinnerbell.db.models import (
     AssignmentRow,
     EventRow,
     FeedbackRow,
+    InvitationRow,
     MealLogRow,
     ProposalRow,
     ResponseRow,
@@ -44,12 +45,15 @@ from dinnerbell.domain.meals import Slot
 
 FRESH: dict[str, Any] = {"populate_existing": True}
 
-EVENT_ROWS: tuple[type[VoteRow | ProposalRow | SuggestionRow | ResponseRow | AssignmentRow | MealLogRow], ...] = (
+EVENT_ROWS: tuple[
+    type[VoteRow | ProposalRow | SuggestionRow | ResponseRow | AssignmentRow | InvitationRow | MealLogRow], ...
+] = (
     VoteRow,
     ProposalRow,
     SuggestionRow,
     ResponseRow,
     AssignmentRow,
+    InvitationRow,
     MealLogRow,
 )
 """Every table whose rows belong to one event, by ``event_id``, children before parents (a vote
@@ -644,3 +648,55 @@ class AssignmentRepository:
         await self._session.execute(
             delete(AssignmentRow).where(AssignmentRow.household_id == household_id, AssignmentRow.event_id == event_id)
         )
+
+
+class InvitationRepository:
+    """Guests invited to calls (#38): guest ID to the member who invited them."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def for_event(self, household_id: int, event_id: int) -> dict[int, int | None]:
+        rows = await self._session.execute(
+            select(InvitationRow.guest_id, InvitationRow.invited_by)
+            .where(InvitationRow.household_id == household_id, InvitationRow.event_id == event_id)
+            .order_by(InvitationRow.id)
+        )
+        found: dict[int, int | None] = {}
+        for guest, inviter in rows:
+            found[int(guest)] = inviter
+        return found
+
+    async def events_for(self, household_id: int, guest_id: int) -> list[int]:
+        """The events ``guest_id`` is invited to, oldest first."""
+        rows = await self._session.scalars(
+            select(InvitationRow.event_id)
+            .where(InvitationRow.household_id == household_id, InvitationRow.guest_id == guest_id)
+            .order_by(InvitationRow.event_id)
+        )
+        return list(rows)
+
+    async def add(self, household_id: int, event_id: int, guest_id: int, invited_by: int, now: datetime) -> bool:
+        """Invite ``guest_id``; False when they're invited already."""
+        existing = await self._session.scalar(
+            select(InvitationRow.id).where(InvitationRow.event_id == event_id, InvitationRow.guest_id == guest_id)
+        )
+        if existing is not None:
+            return False
+        self._session.add(
+            InvitationRow(
+                household_id=household_id, event_id=event_id, guest_id=guest_id, invited_by=invited_by, created_at=now
+            )
+        )
+        await self._session.flush()
+        return True
+
+    async def remove(self, household_id: int, event_id: int, guest_id: int) -> bool:
+        result = await self._session.execute(
+            delete(InvitationRow).where(
+                InvitationRow.household_id == household_id,
+                InvitationRow.event_id == event_id,
+                InvitationRow.guest_id == guest_id,
+            )
+        )
+        return int(getattr(result, "rowcount", 0) or 0) > 0

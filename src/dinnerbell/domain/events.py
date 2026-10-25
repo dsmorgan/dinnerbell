@@ -104,6 +104,9 @@ STALE_CALL = "That can't happen anymore."
 OFFER_JOIN_INSTEAD = "This is an offer: tap Count me in to join it."
 OFFER_CHANGE = "To change an offer, call it off and post a new one."
 NO_COORDINATOR = "An offer has no coordinator: whoever made it is in charge."
+GUESTS_DONT = "Guests can answer and pitch in, but not that."
+GUEST_NOT_INVITED = "You haven't been invited to this one. Ask a household member to invite you."
+"""For a guest at a rule only members may use (#38). ``domain.guests`` has the full matrix."""
 
 
 class StaleRun(EventRuleViolation):
@@ -367,11 +370,14 @@ def check_details(details: Details, *, dietary_tag_ids: Iterable[int], active_it
     )
 
 
-def check_can_respond(event: Event, actor: Member) -> None:
+def check_can_respond(event: Event, actor: Member, *, invited: bool = False) -> None:
     """FR-7: members respond while the response window is open. An offer is joined instead
-    (``domain.offers``), where seats are counted."""
+    (``domain.offers``), where seats are counted. A guest responds only to a call they're
+    ``invited`` to (#38); ``domain.guests`` has the rest of what a guest may do."""
     if not actor.active:
         raise EventRuleViolation("Only active members can respond.")
+    if actor.is_guest and not invited:
+        raise EventRuleViolation(GUEST_NOT_INVITED)
     if event.is_offer:
         raise EventRuleViolation(OFFER_JOIN_INSTEAD)
     if event.state is not EventState.COLLECTING:
@@ -486,12 +492,18 @@ def coverage(responses: Iterable[Response], members: Mapping[int, Member]) -> Co
 
 
 def choose_winner(
-    tallies: Iterable[ProposalTally], *, coordinator_id: int | None, admin_ids: frozenset[int]
+    tallies: Iterable[ProposalTally],
+    *,
+    coordinator_id: int | None,
+    admin_ids: frozenset[int],
+    admins_next: bool = False,
 ) -> ProposalTally | None:
     """The proposal that wins at the vote deadline, or None if none is covered.
 
     Most votes wins. Ties go to the proposal the coordinator voted for; with no coordinator, to
-    the one more admins voted for; then to ranking order.
+    the one more admins voted for; then to ranking order. ``admins_next`` lets admins break a
+    tie ``coordinator_id``'s vote didn't: with a guest coordinating, ``coordinator_id`` is whoever
+    invited them, and admins come after them (#38).
     """
     eligible = [t for t in tallies if t.covered]
     if not eligible:
@@ -499,7 +511,7 @@ def choose_winner(
 
     def key(t: ProposalTally) -> tuple[int, int, int, int]:
         coordinator_pick = 1 if coordinator_id is not None and coordinator_id in t.voters else 0
-        admin_picks = len(t.voters & admin_ids) if coordinator_id is None else 0
+        admin_picks = len(t.voters & admin_ids) if coordinator_id is None or admins_next else 0
         return (-len(t.voters), -coordinator_pick, -admin_picks, t.rank)
 
     return min(eligible, key=key)
@@ -542,9 +554,12 @@ def is_coordinator(event: Event, actor: Member) -> bool:
     return event.coordinator_id is not None and event.coordinator_id == actor.id
 
 
-def check_claim_coordinator(event: Event, actor: Member) -> None:
+def check_claim_coordinator(event: Event, actor: Member, *, invited: bool = False) -> None:
+    """A guest claims coordinating only on a call they're ``invited`` to (#38)."""
     if not actor.active:
         raise EventRuleViolation("Only active members can coordinate.")
+    if actor.is_guest and not invited:
+        raise EventRuleViolation(GUEST_NOT_INVITED)
     if event.is_offer:
         raise EventRuleViolation(NO_COORDINATOR)
     if event.state not in {EventState.COLLECTING, EventState.VOTING}:
@@ -573,6 +588,8 @@ def check_handoff(event: Event, actor: Member, target: Member) -> None:
 
 
 def check_can_vote(event: Event, actor: Member, response: Response | None) -> None:
+    if actor.is_guest:
+        raise EventRuleViolation(GUESTS_DONT)
     if event.state is not EventState.VOTING:
         raise EventRuleViolation("Voting is closed.")
     if not actor.active or not ((response is not None and response.is_in) or is_coordinator(event, actor)):
@@ -580,6 +597,8 @@ def check_can_vote(event: Event, actor: Member, response: Response | None) -> No
 
 
 def check_can_propose(event: Event, actor: Member) -> None:
+    if actor.is_guest:
+        raise EventRuleViolation(GUESTS_DONT)
     if event.state is not EventState.VOTING:
         raise EventRuleViolation("You can add proposals only while voting is open.")
     if not actor.active:
@@ -596,7 +615,10 @@ def check_proposal_room(proposals: Iterable[Proposal], actor: Member) -> None:
 
 
 def check_can_lock(event: Event, actor: Member) -> None:
-    """FR-15: the coordinator, or the admin, locks a proposal during the vote window."""
+    """FR-15: the coordinator, or the admin, locks a proposal during the vote window. A guest
+    coordinator can't: picking between proposals isn't theirs (#38)."""
+    if actor.is_guest:
+        raise EventRuleViolation(GUESTS_DONT)
     if event.state is not EventState.VOTING:
         raise EventRuleViolation("Voting is closed.")
     if not actor.active or not (is_coordinator(event, actor) or actor.is_admin):
@@ -654,6 +676,8 @@ def check_can_cancel(event: Event, actor: Member) -> ActingAs:
     the one cooking or driving."""
     if not actor.active:
         raise EventRuleViolation("Only active members can call off a call.")
+    if actor.is_guest:
+        raise EventRuleViolation(GUESTS_DONT)
     if not event.state.is_open:
         raise EventRuleViolation(CALL_FINISHED)
     if event.is_offer:
@@ -798,6 +822,8 @@ def check_can_post_now(event: Event, actor: Member, *, now: datetime) -> bool:
     response window has passed (the scheduler expires it instead, FR-2), is refused."""
     if not actor.active:
         raise EventRuleViolation("Only active members can post a call.")
+    if actor.is_guest:
+        raise EventRuleViolation(GUESTS_DONT)
     if event.is_offer:
         raise EventRuleViolation("An offer is posted as soon as it's made.")
     if not event.state.is_open:
@@ -841,6 +867,7 @@ def closes_early(
     responses: Iterable[Response],
     active_member_ids: Iterable[int],
     coverage: Coverage,
+    guest_ids: Iterable[int] = (),
 ) -> bool:
     """FR-56: whether a collecting call's responses close before the deadline.
 
@@ -850,12 +877,18 @@ def closes_early(
     ``EARLY_CLOSE_QUIET``, so tapping In first and adding guests or an offer next is never cut
     short; with two or more eating, someone must also be able to cook, pick up, or order
     (``coverage``). Otherwise the call waits for its deadline, or for Close now.
+
+    ``active_member_ids`` are the household's members and admins, whom the call waits for;
+    ``guest_ids`` are the guests invited to it (#38). Nobody waits for a guest, but a guest's
+    answer counts like anyone's toward who's in, the head count, and the quiet spell.
     """
     active = frozenset(active_member_ids)
+    counted = active | frozenset(guest_ids)
     this_run = [
-        r for r in responses if r.member_id in active and r.updated_at is not None and r.updated_at >= event.opens_at
+        r for r in responses if r.member_id in counted and r.updated_at is not None and r.updated_at >= event.opens_at
     ]
-    if not active or {r.member_id for r in this_run} != active or any(r.status is Status.MAYBE for r in this_run):
+    answered = {r.member_id for r in this_run} & active
+    if not active or answered != active or any(r.status is Status.MAYBE for r in this_run):
         return False
     if not any(r.is_in for r in this_run):
         return True
@@ -873,6 +906,7 @@ def due_step(
     responses: Iterable[Response] = (),
     active_member_ids: Iterable[int] = (),
     coverage: Coverage | None = None,
+    guest_ids: Iterable[int] = (),
 ) -> Step | None:
     """The next thing the scheduler owes ``event`` at ``now``, if anything.
 
@@ -903,7 +937,7 @@ def due_step(
             return Step.EXPIRE
         return Step.OPEN if now >= event.opens_at else None
     if event.state is EventState.COLLECTING:
-        early = closes_early(event, now, responses, active_member_ids, coverage or Coverage())
+        early = closes_early(event, now, responses, active_member_ids, coverage or Coverage(), guest_ids)
         if now >= event.respond_deadline or early:
             return Step.CLOSE_RESPONSES
         if event.reminder_sent_at is None and now >= event.remind_at:

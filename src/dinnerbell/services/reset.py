@@ -49,7 +49,7 @@ from dinnerbell.services.common import audit
 KEEP: Final = frozenset(
     {
         "household",  # its name, time zone, and settings: the schedule, ranking weights, variety window
-        "member",  # members, roles, what each can do, and Slack links
+        "member",  # members, roles, what each can do, and Slack links; guests and their dietary needs too
         "session",  # who's signed in
         "audit",  # the audit log, which records the reset itself
         "tag",  # the catalog ...
@@ -69,6 +69,7 @@ CLEAR: Final = frozenset(
         "proposal",
         "vote",
         "assignment",
+        "invitation",  # which guests were invited to which call (#38)
         "meal_log",  # what the household ate
         "feedback",  # and how it was
         "outbox",  # notifications, sent and unsent, and where each Slack message landed

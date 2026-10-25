@@ -40,14 +40,18 @@ from dinnerbell.channels.slack import ids
 from dinnerbell.channels.slack.api import SlackApi, SlackUnavailable
 from dinnerbell.channels.slack.blocks import (
     Directory,
+    actions,
+    button,
     day_label,
     escape,
     instance_banner,
+    section,
     version_line,
     version_link,
     with_version_footer,
 )
 from dinnerbell.channels.slack.messages import (
+    CardGuest,
     Message,
     RenderContext,
     labelled,
@@ -61,16 +65,19 @@ from dinnerbell.channels.slack.messages import (
 from dinnerbell.channels.slack.views import (
     FormError,
     HomeLinks,
+    InviteInput,
     cancel_modal,
     close_modal,
     details_modal,
     feedback_modal,
     home_view,
+    invite_modal,
     log_modal,
     offer_modal,
     parse_cancel,
     parse_details,
     parse_feedback,
+    parse_invite,
     parse_log,
     parse_offer,
     parse_proposal,
@@ -78,6 +85,7 @@ from dinnerbell.channels.slack.views import (
 )
 from dinnerbell.config import is_test_instance
 from dinnerbell.domain.events import (
+    GUESTS_DONT,
     STALE_CALL,
     EventRuleViolation,
     EventState,
@@ -93,11 +101,18 @@ from dinnerbell.domain.events import (
     friendly,
 )
 from dinnerbell.domain.feedback import InvalidFeedback
+from dinnerbell.domain.guests import REFUSED, GuestAction
 from dinnerbell.domain.meals import InvalidMeal, Slot
-from dinnerbell.domain.members import Member
-from dinnerbell.domain.notifications import MessageRef, PermanentDeliveryError, PersonInfo, ResponseReminder
+from dinnerbell.domain.members import Member, Role
+from dinnerbell.domain.notifications import (
+    GuestInvited,
+    MessageRef,
+    PermanentDeliveryError,
+    PersonInfo,
+    ResponseReminder,
+)
 from dinnerbell.domain.offers import OfferPath
-from dinnerbell.services import calls, discard, event_views, feedback, meals, offers, slack_members
+from dinnerbell.services import calls, discard, event_views, feedback, guests, meals, offers, slack_members
 from dinnerbell.services import schedule as schedule_service
 from dinnerbell.services.clock import Clock
 from dinnerbell.services.errors import Forbidden, NotFound
@@ -202,8 +217,12 @@ class Interactions:
         instance_label: str = "",
         version: str = __version__,
         schema_revision: str,
+        people: guests.SlackPeople | None = None,
     ) -> None:
         self.api = api
+        self.people = people
+        """Who may join from the channel (#38); None leaves joining to the web and the admin."""
+        self.join_limiter = guests.JoinLimiter()
         self.sessionmaker = sessionmaker
         self.clock = clock
         self.links = HomeLinks(base_url)
@@ -256,6 +275,9 @@ class Interactions:
         async def feedback_view(ack: Ack, body: dict[str, Any]) -> None:
             await self._submission(ack, body, "feedback")
 
+        async def invite_view(ack: Ack, body: dict[str, Any]) -> None:
+            await self._submission(ack, body, "invite")
+
         async def offer_view(ack: Ack, body: dict[str, Any]) -> None:
             await self._form_submission(ack, body, "offer")
 
@@ -276,6 +298,7 @@ class Interactions:
         app.view(ids.CANCEL_VIEW)(cancel)
         app.view(ids.CLOSE_VIEW)(close)
         app.view(ids.FEEDBACK_VIEW)(feedback_view)
+        app.view(ids.INVITE_VIEW)(invite_view)
         app.view(ids.OFFER_VIEW)(offer_view)
         app.view(ids.LOG_VIEW)(log_view)
         app.command(self.command)(command)
@@ -311,14 +334,90 @@ class Interactions:
         return ok
 
     async def _member(self, source: Source) -> Member | None:
-        """The active member behind ``source``, or None after telling them why not."""
+        """The active member or guest behind ``source``, or None after telling them why not.
+        Someone in the channel whom Dinnerbell doesn't know is offered **Join Dinnerbell**
+        instead, while joining from the channel is on (#38)."""
         async with self.sessionmaker() as db:
             member = await slack_members.member_for_slack_user(db, source.user_id)
-        if member is None or not member.active:
-            log.info("slack user refused", extra={"member_id": member.id if member else None})
-            await self.tell(source, UNKNOWN_USER if member is None else INACTIVE, member=None)
+        if member is None:
+            log.info("slack user refused", extra={"member_id": None})
+            await self._unknown(source)
+            return None
+        if not member.active:
+            log.info("slack user refused", extra={"member_id": member.id})
+            await self.tell(source, INACTIVE, member=None)
             return None
         return member
+
+    # Joining from the channel (#38, option A) ---------------------------------------------------
+
+    async def _joinable(self) -> bool:
+        if self.people is None:
+            return False
+        async with self.sessionmaker() as db:
+            return await guests.joining_open(db)
+
+    async def _unknown(self, source: Source) -> None:
+        """Someone Dinnerbell doesn't know tapped, opened Home, or ran the command: offer to join,
+        or say to ask the admin while joining is off."""
+        if not await self._joinable():
+            await self.tell(source, UNKNOWN_USER, member=None)
+            return
+        message = join_offer_message()
+        try:
+            if source.home:
+                blocks = list(message.blocks)
+                if self.instance_label:
+                    blocks.insert(0, instance_banner(self.instance_label))
+                view = with_version_footer({"type": "home", "blocks": blocks}, self.version, self.instance_label)
+                await self.api.publish_home(source.user_id, view)
+                return
+            if source.channel_id is not None:
+                try:
+                    await self.api.ephemeral(source.channel_id, source.user_id, message.text, message.blocks)
+                    return
+                except SLACK_ERRORS:
+                    pass  # not in that channel: a direct message instead
+            await self.api.post(source.user_id, message.payload())
+        except SLACK_ERRORS as exc:
+            log.warning("slack reply failed", extra={"error": str(exc)})
+
+    async def _join(self, source: Source) -> None:
+        """**Join Dinnerbell**: check with Slack that this is a real person of the workspace in
+        the channel, and join them as a guest (``guests.join``). Rate-limited per Slack user."""
+        user, now = source.user_id, self.clock()
+        refused: guests.NotJoinable | None = None
+        person: guests.SlackPerson | guests.NotJoinable | None = None
+        if not self.join_limiter.allow(user, now):
+            if not self.join_limiter.first_refusal(user):
+                return  # told once this window already; stay quiet
+            refused = guests.NotJoinable.TOO_MANY
+        elif self.people is None or not await self._joinable():
+            refused = guests.NotJoinable.OFF
+        else:
+            person = await self.people.person(user)
+            if isinstance(person, guests.NotJoinable):
+                refused = person
+        if refused is not None or not isinstance(person, guests.SlackPerson):
+            reason = refused or guests.NotJoinable.UNAVAILABLE
+            async with self.sessionmaker() as db:
+                await guests.record_refusal(db, user, reason, via="slack", now=now)
+            await self.tell(source, guests.JOIN_REFUSALS[reason], member=None)
+            return
+        try:
+            async with self.sessionmaker() as db:
+                joined = await guests.join(db, person, via="slack", now=now)
+        except guests.JoinRefused as exc:
+            await self.tell(source, str(exc), member=None)
+            return
+        await self.tell(
+            Source(user, home=source.home) if source.home else source, JOINED[joined.joined_as], member=joined.member
+        )
+        if not source.home:
+            try:
+                await self.publish_home(user, joined.member)
+            except SLACK_ERRORS as exc:
+                log.warning("slack home publish failed", extra={"error": str(exc)})
 
     async def _is_their_dm(self, source: Source) -> bool:
         """True when ``source.channel_id`` is the bot's direct message with ``source.user_id``.
@@ -359,6 +458,13 @@ class Interactions:
         else an ephemeral message where they acted, else a direct message."""
         try:
             if source.home:
+                if member is None:  # nobody to draw a Home for: just the words
+                    view = {
+                        "type": "home",
+                        "blocks": [{"type": "section", "text": {"type": "mrkdwn", "text": escape(text)}}],
+                    }
+                    await self.api.publish_home(source.user_id, view)
+                    return
                 await self.publish_home(source.user_id, member, notice=text)
                 return
             safe = escape(text)  # service messages can quote what people typed
@@ -399,7 +505,9 @@ class Interactions:
             async with self.sessionmaker() as db:
                 today = await event_views.today_view(db, member, now=self.clock(), any_time=self.any_time)
                 awaiting = await feedback.awaiting(db, member, now=self.clock())
-            view = home_view(today, self.links, notice, label=self.instance_label, awaiting=awaiting)
+            view = home_view(
+                today, self.links, notice, label=self.instance_label, awaiting=awaiting, guest=member.is_guest
+            )
         await self.api.publish_home(user_id, with_version_footer(view, self.version, self.instance_label))
 
     async def _run(self, source: Source, member: Member, work: Callable[[], Awaitable[Done]]) -> None:
@@ -446,6 +554,10 @@ class Interactions:
             log.warning("slack action from an unexpected channel refused")
             await self.tell(Source(source.user_id), WRONG_PLACE, member=None)
             return
+        if acts[0].get("action_id") == ids.JOIN_DINNERBELL:  # before _member: they aren't one yet
+            if acts[0].get("value") == ids.JOIN_DINNERBELL:
+                await self._join(source)
+            return
         member = await self._member(source)
         if member is None:
             return
@@ -469,6 +581,15 @@ class Interactions:
     async def _dispatch(
         self, member: Member, source: Source, action_id: str, value: object, trigger: object, tap: Tap
     ) -> Done:
+        if member.is_guest and action_id not in GUEST_TAPS:
+            # Guests answer, offer roles, and coordinate logistics; the services check again (#38).
+            raise EventRuleViolation(GUESTS_DONT)
+        if action_id in ids.GUEST_ACTIONS:
+            return await self._guest_tap(member, source, action_id, value, tap)
+        if action_id == ids.INVITE_GUEST:
+            return await self._open_invite(member, source, value, trigger)
+        if action_id in {ids.MAKE_MEMBER, ids.REMOVE_GUEST}:
+            return await self._admin_guest(member, action_id, value)
         if action_id in ids.CARD_ACTIONS:
             return await self._card_tap(member, source, action_id, value, trigger, tap)
         if action_id == ids.ANSWER:
@@ -558,7 +679,18 @@ class Interactions:
         return RenderContext(self.links.base_url, Directory(), self.instance_label)
 
     def _card(self, view: EventView, member: Member, *, run: int | None = None, notice: str | None = None) -> Message:
-        return your_answer(view.info, view.mine, member.id, self._context(), run=run, notice=notice)
+        mine = tuple(CardGuest(g.person.id, g.person.name, g.answer, g.needs) for g in view.guests if g.answerable)
+        return your_answer(
+            view.info,
+            view.mine,
+            member.id,
+            self._context(),
+            run=run,
+            notice=notice,
+            guest=member.is_guest,
+            can_invite=view.can.invite,
+            guests=mine,
+        )
 
     @contextlib.asynccontextmanager
     async def _card_lock(self, user: str, event_id: int) -> AsyncIterator[None]:
@@ -704,7 +836,11 @@ class Interactions:
         """Edit the reminder that was tapped to show the answer, with ``chat.update``: it's an
         ordinary message, and the bot's own. ``_action`` checked that the DM is this member's.
         If it can't be edited, a line of text says what happened instead."""
-        reminder = ResponseReminder(view.info, PersonInfo(member.id, member.display_name))
+        me = PersonInfo(member.id, member.display_name)
+        reminder: ResponseReminder | GuestInvited = ResponseReminder(view.info, me, member.is_guest)
+        if member.is_guest:  # their invitation, which has In and Out only (#38)
+            inviter = next((g.invited_by for g in view.guests if g.person.id == member.id), None)
+            reminder = GuestInvited(view.info, me, inviter or PersonInfo(0, "A member"))
         ctx = self._context()
         message = labelled(reminder_message(reminder, ctx, mine=view.mine, run=run), ctx)
         if source.channel_id is not None and tap.message_ts is not None:
@@ -879,6 +1015,88 @@ class Interactions:
 
         await self._run(source, member, work)
 
+    # Guests (#38) ------------------------------------------------------------------------------
+
+    async def _open_invite(self, member: Member, source: Source, value: object, trigger: object) -> str | None:
+        """**Invite a guest** on a member's card: the modal names the run, which inviting checks."""
+        event_id, run = ids.parse_card(value)
+        if not isinstance(trigger, str) or not trigger:
+            raise ids.BadValue("no trigger")
+        async with self.sessionmaker() as db:
+            view = await event_views.event_view(db, member, event_id, now=self.clock())
+            check_run(view.event, run)
+            if not view.can.invite:
+                raise EventRuleViolation("Invite guests while answers are open.")
+            saved = await guests.saved_guests(db, member)
+        origin = ids.ViewOrigin(event_id, source.channel_id, home=source.home, run=run)
+        await self.api.open_view(trigger, invite_modal(view, saved, origin))
+        return None
+
+    async def _invite(self, member: Member, event_id: int, form: InviteInput, run: int | None) -> str:
+        async with self.sessionmaker() as db:
+            invited = await guests.invite(
+                db, member, event_id, guest_id=form.guest_id, new_guest=form.new_guest, run=run, now=self.clock()
+            )
+        name = invited.guest.display_name
+        if invited.guest.is_registered_guest:
+            return f"{name} is invited, and gets a message to say whether they're in."
+        return f"{name} is invited and counted in. Tap Answer on the call to answer or offer a role for them."
+
+    async def _guest_tap(self, member: Member, source: Source, action_id: str, value: object, tap: Tap) -> str | None:
+        """In, Out, or a role for a guest without Slack, on the card of the member answering
+        for them. Like any card tap, it acts on the run the card names and redraws the card."""
+        event_id, run, guest_id = ids.parse_guest(value)
+        if not (self._on_call_message(source) and tap.ephemeral):
+            raise ids.BadValue("guest buttons are drawn only on cards")
+        async with self._card_lock(source.user_id, event_id):
+            notice: str | None = None
+            async with self.sessionmaker() as db:
+                try:
+                    if action_id in ids.GUEST_RESPOND:
+                        status = ids.GUEST_RESPOND[action_id]
+                        await guests.answer_for(
+                            db, member, event_id, guest_id, status=status, run=run, now=self.clock()
+                        )
+                    else:
+                        offered = action_id in ids.GUEST_OFFER
+                        role = (ids.GUEST_OFFER if offered else ids.GUEST_WITHDRAW)[action_id]
+                        await guests.answer_for(
+                            db, member, event_id, guest_id, role=role, offered=offered, run=run, now=self.clock()
+                        )
+                except SHOWN_ERRORS as exc:
+                    notice = str(exc)
+                except IllegalTransition as exc:
+                    notice = str(friendly(exc))
+                view = await event_views.event_view(db, member, event_id, now=self.clock())
+            if view.event.run != run or view.event.state is not EventState.COLLECTING:
+                notice = None
+            await self._send_card(source, self._card(view, member, run=run, notice=notice), member, tap)
+        return None
+
+    async def _email_of(self, db: AsyncSession, admin: Member, guest_id: int) -> str | None:
+        """The email Slack shares for a guest who's a full member of the workspace, to make
+        them a member with; None when Slack doesn't share one, or for a Slack guest account."""
+        guest = next((g for g in await guests.guests_for_admin(db, admin) if g.id == guest_id), None)
+        if guest is None or guest.slack_user_id is None or self.people is None:
+            return None
+        person = await self.people.person(guest.slack_user_id)
+        if not isinstance(person, guests.SlackPerson) or not person.full_member:
+            return None
+        return person.email
+
+    async def _admin_guest(self, member: Member, action_id: str, value: object) -> str:
+        """**Make member** and **Remove** on an admin's message about a guest who joined."""
+        guest_id = ids.parse_event(value)
+        async with self.sessionmaker() as db:
+            if action_id == ids.MAKE_MEMBER:
+                email = await self._email_of(db, member, guest_id)
+                if email is None:
+                    return NO_EMAIL.format(url=self.links.url("/admin/members#guests"))
+                promoted = await guests.promote(db, member, guest_id, Role.MEMBER, email=email, now=self.clock())
+                return f"{promoted.display_name} is a member now."
+            removed = await guests.remove(db, member, guest_id, now=self.clock())
+        return f"Removed {removed.display_name}. They can't join from the channel again unless you add them back."
+
     # Modals ------------------------------------------------------------------------------------
 
     async def _submission(self, ack: Callable[..., Awaitable[None]], body: dict[str, Any], kind: str) -> None:
@@ -923,6 +1141,8 @@ class Interactions:
                 return await self._cancel(member, event_id, form, origin.run)
             if kind == "feedback":
                 return await self._give_feedback(member, event_id, form, origin.run)
+            if kind == "invite":
+                return await self._invite(member, event_id, form, origin.run)
             async with self.sessionmaker() as db:
                 if kind == "details":
                     await calls.save_details(db, member, event_id, form, run=origin.run, now=self.clock())
@@ -947,8 +1167,10 @@ class Interactions:
         async with self.sessionmaker() as db:
             member = await slack_members.member_for_slack_user(db, user)
         try:
-            if member is None or not member.active:
-                await self.publish_home(user, None, UNKNOWN_USER if member is None else INACTIVE)
+            if member is None:
+                await self._unknown(Source(user, home=True))
+            elif not member.active:
+                await self.publish_home(user, None, INACTIVE)
             else:
                 await self.publish_home(user, member)
         except SLACK_ERRORS as exc:
@@ -1070,6 +1292,9 @@ class Interactions:
         member = await self._member(source)
         if member is None:
             return
+        if member.is_guest:  # before looking anything up, so the reply says nothing about calls (#38)
+            await self.tell(source, REFUSED[GuestAction.CALL_OFF], member=member)
+            return
 
         async def work() -> str | None:
             async with self.sessionmaker() as db:
@@ -1098,6 +1323,9 @@ class Interactions:
         discard that call, dinner today by default. The service checks for an admin."""
         member = await self._member(source)
         if member is None:
+            return
+        if member.is_guest:  # before looking anything up (#38)
+            await self.tell(source, GUESTS_DONT, member=member)
             return
 
         async def work() -> str | None:
@@ -1167,8 +1395,53 @@ FORMS: dict[str, Callable[[Any], Any]] = {
     "proposal": parse_proposal,
     "cancel": parse_cancel,
     "feedback": parse_feedback,
+    "invite": parse_invite,
 }
 """Each modal's form parser, by kind. Close now's confirmation has no fields."""
+
+
+GUEST_TAPS = frozenset(
+    {
+        *ids.CARD_RESPOND,
+        *ids.CARD_OFFER,
+        *ids.CARD_WITHDRAW,
+        ids.CARD_COORDINATE,
+        ids.ANSWER,
+        ids.CALL_COORDINATE,
+        ids.COORDINATE,
+        *ids.RESPOND,
+        *ids.OFFER,
+        ids.MARK_DONE,
+        ids.CLOSE_WINDOW,
+        ids.CALL_MENU,
+    }
+)
+"""Buttons a guest may tap (#38): answering, the roles, and coordinating's logistics. Everything
+else is refused before any service runs; the services refuse it again."""
+JOINED = {
+    guests.JoinedAs.GUEST: (
+        "Welcome to Dinnerbell! You're in as a guest. When a member invites you to a meal, you'll get a "
+        "message here, and you can say whether you're in."
+    ),
+    guests.JoinedAs.MEMBER: "Welcome! Your Slack account is now linked to your Dinnerbell membership.",
+    guests.JoinedAs.ALREADY: "You're in Dinnerbell already.",
+}
+
+
+NO_EMAIL = (
+    "Slack doesn't share their email, or they're a Slack guest, so make them a member on "
+    "<{url}|the Members page>, with their email."
+)
+JOIN_OFFER = (
+    "You're not in Dinnerbell yet. Join as a guest: household members can then invite you to meals, "
+    "and the admin can make you a member."
+)
+
+
+def join_offer_message() -> Message:
+    text = JOIN_OFFER
+    join = button("Join Dinnerbell", ids.JOIN_DINNERBELL, ids.JOIN_DINNERBELL, style="primary")
+    return Message(text, [section(text), actions(join, block_id="join")])
 
 
 def seat_reply(seat: offers.Seat) -> str:

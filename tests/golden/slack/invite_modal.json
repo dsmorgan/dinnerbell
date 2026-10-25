@@ -1,0 +1,124 @@
+{
+  "blocks": [
+    {
+      "elements": [
+        {
+          "text": "*Dinner · Thursday, Oct 22*",
+          "type": "mrkdwn"
+        }
+      ],
+      "type": "context"
+    },
+    {
+      "elements": [
+        {
+          "text": "Guests eat with you and can pitch in, but don't vote or suggest. Their dietary needs always apply.",
+          "type": "mrkdwn"
+        }
+      ],
+      "type": "context"
+    },
+    {
+      "block_id": "guest",
+      "element": {
+        "action_id": "value",
+        "options": [
+          {
+            "text": {
+              "emoji": true,
+              "text": "Pat",
+              "type": "plain_text"
+            },
+            "value": "9"
+          },
+          {
+            "text": {
+              "emoji": true,
+              "text": "Jo <dev>",
+              "type": "plain_text"
+            },
+            "value": "10"
+          }
+        ],
+        "type": "static_select"
+      },
+      "label": {
+        "emoji": true,
+        "text": "A saved guest",
+        "type": "plain_text"
+      },
+      "optional": true,
+      "type": "input"
+    },
+    {
+      "block_id": "name",
+      "element": {
+        "action_id": "value",
+        "max_length": 80,
+        "type": "plain_text_input"
+      },
+      "label": {
+        "emoji": true,
+        "text": "Or someone new",
+        "type": "plain_text"
+      },
+      "optional": true,
+      "type": "input"
+    },
+    {
+      "block_id": "needs",
+      "element": {
+        "action_id": "value",
+        "options": [
+          {
+            "text": {
+              "emoji": true,
+              "text": "Vegetarian",
+              "type": "plain_text"
+            },
+            "value": "41"
+          },
+          {
+            "text": {
+              "emoji": true,
+              "text": "Gluten-free",
+              "type": "plain_text"
+            },
+            "value": "42"
+          }
+        ],
+        "type": "multi_static_select"
+      },
+      "hint": {
+        "emoji": true,
+        "text": "For someone new. A saved guest keeps theirs.",
+        "type": "plain_text"
+      },
+      "label": {
+        "emoji": true,
+        "text": "Their dietary needs",
+        "type": "plain_text"
+      },
+      "optional": true,
+      "type": "input"
+    }
+  ],
+  "callback_id": "invite_modal",
+  "close": {
+    "emoji": true,
+    "text": "Cancel",
+    "type": "plain_text"
+  },
+  "private_metadata": "{\"event\":7,\"channel\":\"C0DINNER\",\"home\":false,\"run\":1}",
+  "submit": {
+    "emoji": true,
+    "text": "Invite",
+    "type": "plain_text"
+  },
+  "title": {
+    "emoji": true,
+    "text": "Invite a guest",
+    "type": "plain_text"
+  },
+  "type": "modal"
+}

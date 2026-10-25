@@ -6,6 +6,32 @@
 <h1>Members</h1>
 {% if notice %}<p class="alert ok" role="status">{{ notice }}</p>{% endif %}
 {% if error %}<p class="alert error" role="alert">{{ error }}</p>{% endif %}
+{% if conflict %}
+<form method="post" action="/admin/guests/{{ conflict.id }}/promote" class="card inline-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <input type="hidden" name="email" value="{{ conflict.slack_email }}">
+  <input type="hidden" name="role" value="{{ draft.role if draft and draft.role in ('admin', 'member') else 'member' }}">
+  <p class="small">{{ conflict.display_name }} joined from the Slack channel with {{ conflict.slack_email }}.{% if conflict.slack_guest_account %} <strong>They use a Slack guest account, not a full member of your workspace.</strong>{% endif %}</p>
+  <button type="submit" class="button small primary">Promote {{ conflict.display_name }} instead</button>
+</form>
+{% endif %}
+{% if link_check %}
+{% set lg, lt = link_check.guest, link_check.target %}
+<form method="post" action="/admin/guests/{{ lg.id }}/link" class="card stack" id="link-check">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <input type="hidden" name="member_id" value="{{ lt.id }}">
+  <h2>Link {{ lg.display_name }} to {{ lt.display_name }}?</h2>
+  <p class="small">{% if lg.slack_email and lt.email and lg.slack_email|lower == lt.email|lower %}{{ lg.display_name }} uses a Slack guest account, which Dinnerbell never links on its email alone.{% else %}Their emails differ.{% endif %} Anyone in the channel can take any name, and whoever uses this Slack account will act as {{ lt.display_name }} in Slack.</p>
+  <dl class="small">
+    <dt>{{ lg.display_name }}'s Slack account</dt><dd><code>{{ lg.slack_user_id }}</code>{% if lg.slack_guest_account %} (a Slack guest account){% endif %}</dd>
+    <dt>Their Slack email</dt><dd>{{ lg.slack_email or "Slack shares no email for them" }}</dd>
+    <dt>{{ lt.display_name }}'s email</dt><dd>{{ lt.email }}</dd>
+  </dl>
+  <label class="field"><span>Type {{ lt.display_name }} to link anyway</span><input type="text" name="confirm" maxlength="80" autocomplete="off" required></label>
+  <button type="submit" class="button small danger">Link anyway</button>
+  <a class="button small" href="/admin/members">Cancel</a>
+</form>
+{% endif %}
 <ul class="members">
   {% for m in members %}{% include "_member_row.html" %}{% endfor %}
 </ul>
@@ -16,6 +42,96 @@
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     {% with values=draft, email_locked=false %}{% include "_member_fields.html" %}{% endwith %}
     <button type="submit" class="button primary block">Invite</button>
+  </form>
+</details>
+
+<h2 id="guests">Guests</h2>
+<p class="muted small">Guests eat with the household when a member invites them to a call. They answer, offer to cook, pick up, or order, and can coordinate, but they don't vote or suggest picks. Their dietary needs always apply.</p>
+<form method="post" action="/admin/joining" class="card inline-form">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <input type="hidden" name="on" value="{{ '0' if joining else '1' }}">
+  <p class="small">{% if joining %}<strong>Join from the channel is on.</strong> People in the Dinnerbell channel can join as guests from Slack, or by signing in with Slack. You get a message for each.{% else %}<strong>Join from the channel is off.</strong> Only you add people.{% endif %}</p>
+  <button type="submit" class="button small">{{ "Turn it off" if joining else "Turn it on" }}</button>
+</form>
+{% if slack_connected %}<p><a class="button small" href="/admin/channel">Add people from the channel</a></p>{% endif %}
+<ul class="members guests">
+  {% for g in guests %}
+  <li class="member{% if not g.active %} inactive{% endif %}" id="guest-{{ g.id }}">
+    <div class="member-main">
+      <div class="member-name">
+        <strong>{{ g.display_name }}</strong>
+        <span class="badge">Guest</span>
+        {% if not g.active %}<span class="badge status-deactivated">{% if g.join_refused %}Removed{% else %}Deactivated{% endif %}</span>{% endif %}
+      </div>
+      <div class="muted small">{% if g.slack_user_id %}Slack: linked as <code>{{ g.slack_user_id }}</code>{% if g.slack_guest_account %} (a Slack guest account){% endif %}{% if g.slack_email %}, Slack email {{ g.slack_email }}{% endif %}{% else %}No Slack: whoever invites them answers for them{% endif %}</div>
+      <details class="details-form">
+        <summary class="small">Edit, link Slack, or make a member</summary>
+        <form method="post" action="/admin/guests/{{ g.id }}" class="stack">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <label class="field"><span>Name</span><input type="text" name="display_name" maxlength="80" value="{{ g.display_name }}" required></label>
+          {% if dietary_tags %}
+          <fieldset class="field"><legend>Dietary needs</legend>
+            <div class="chip-picker">
+              {% for tag in dietary_tags %}<label class="chip-toggle"><input type="checkbox" name="dietary_needs" value="{{ tag.id }}"{% if tag.id in g.dietary_needs %} checked{% endif %}><span>{{ tag.name }}</span></label>{% endfor %}
+            </div>
+          </fieldset>
+          {% endif %}
+          <button type="submit" class="button small">Save</button>
+        </form>
+        <form method="post" action="/admin/guests/{{ g.id }}/slack" class="inline-form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <label class="field compact"><span>Slack member ID</span><input type="text" name="slack_user_id" maxlength="32" value="{{ g.slack_user_id or '' }}"></label>
+          <button type="submit" class="button small">Link</button>
+        </form>
+        {% if g.active and g.slack_user_id and linkable %}
+        <form method="post" action="/admin/guests/{{ g.id }}/link" class="inline-form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <label class="field compact"><span>They're really</span><select name="member_id">{% for m in linkable %}<option value="{{ m.id }}">{{ m.display_name }} ({{ m.email }}){% if g.slack_email and m.email and g.slack_email|lower == m.email|lower %}: same email{% endif %}</option>{% endfor %}</select></label>
+          <button type="submit" class="button small">Link to member</button>
+        </form>
+        <p class="muted small">Admins aren't listed: an admin sets their own Slack member ID on their row.</p>
+        {% endif %}
+        {% if g.active %}
+        <form method="post" action="/admin/guests/{{ g.id }}/promote" class="inline-form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <label class="field compact"><span>Make them</span><select name="role">{% for r in roles %}<option value="{{ r.value }}"{% if r.value == "member" %} selected{% endif %}>{{ r.value|capitalize }}</option>{% endfor %}</select></label>
+          <label class="field compact"><span>Email</span><input type="email" name="email" maxlength="254" required></label>
+          <button type="submit" class="button small primary">Promote</button>
+        </form>
+        {% endif %}
+      </details>
+    </div>
+    <div class="member-actions">
+      {% if g.active %}
+      <form method="post" action="/admin/guests/{{ g.id }}/remove" class="inline">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="button small danger">Remove</button>
+      </form>
+      {% else %}
+      <form method="post" action="/admin/members/{{ g.id }}/reactivate" class="inline">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="button small">Add back</button>
+      </form>
+      {% endif %}
+    </div>
+  </li>
+  {% else %}
+  <li class="muted">No guests yet.</li>
+  {% endfor %}
+</ul>
+<details class="card">
+  <summary><h2>Add a guest</h2></summary>
+  <form method="post" action="/admin/guests" class="stack">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label class="field"><span>Name</span><input type="text" name="display_name" maxlength="80" required></label>
+    {% if dietary_tags %}
+    <fieldset class="field"><legend>Dietary needs</legend>
+      <div class="chip-picker">
+        {% for tag in dietary_tags %}<label class="chip-toggle"><input type="checkbox" name="dietary_needs" value="{{ tag.id }}"><span>{{ tag.name }}</span></label>{% endfor %}
+      </div>
+    </fieldset>
+    {% endif %}
+    <button type="submit" class="button primary block">Add guest</button>
   </form>
 </details>
 {% endblock %}

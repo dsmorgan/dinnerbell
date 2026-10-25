@@ -49,9 +49,9 @@ from dinnerbell.domain.events import (
     clean_cancel_note,
     is_coordinator,
     transition,
-    veto_participants,
     with_status,
 )
+from dinnerbell.domain.guests import GuestAction
 from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.members import Member
 from dinnerbell.domain.offers import (
@@ -68,6 +68,7 @@ from dinnerbell.domain.offers import (
 )
 from dinnerbell.domain.schedule import slot_schedules
 from dinnerbell.services import call_context as cc
+from dinnerbell.services import guests as guest_rules
 from dinnerbell.services.call_context import CallContext, load, locked_event, publish
 from dinnerbell.services.common import audit
 from dinnerbell.services.errors import NotFound
@@ -130,6 +131,7 @@ class OfferForm:
 async def offer_form(db: AsyncSession, actor: Member, *, now: datetime) -> OfferForm:
     """Lunch until its usual meal time, then dinner; each with its schedule's first default
     mode and usual meal time, so lunch offers start as pickup at 12:30 (FR-1)."""
+    guest_rules.refuse_guest(actor, GuestAction.OFFER)
     household = await HouseholdRepository(db).get(actor.household_id)
     if household is None:  # pragma: no cover - members cascade with their household
         raise NotFound("No such household.")
@@ -153,6 +155,7 @@ async def post_offer(db: AsyncSession, actor: Member, data: OfferInput, *, now: 
     """Post ``data`` for ``actor`` (FR-4, FR-5), and commit. Audited."""
     if not actor.active:
         raise EventRuleViolation("Only active members can make an offer.")
+    guest_rules.refuse_guest(actor, GuestAction.OFFER)
     async with write_transaction(db):
         household = await HouseholdRepository(db).get(actor.household_id)
         if household is None:  # pragma: no cover - members cascade with their household
@@ -327,7 +330,7 @@ async def _attach(db: AsyncSession, actor: Member, call: Event, item: CatalogIte
     source = ProposalSource.COORDINATOR if is_coordinator(call, actor) else ProposalSource.MEMBER
     reasons = (f"{actor.display_name} offered to {DOING[mode]}.",)
     candidate = Proposal(0, call.id, mode, 0, source, item_id=item.id, reasons=reasons, proposed_by=actor.id)
-    group = await group_preferences(db, call.household_id, veto_participants(ctx.responses))
+    group = await group_preferences(db, call.household_id, ctx.veto_people)
     problem = misfit(ctx, candidate, group)
     if problem is not None:
         raise EventRuleViolation(problem)
@@ -367,9 +370,10 @@ class Seat:
     """It's the member's own offer, so they're in without taking a seat and can't drop out."""
 
 
-async def _offer_context(db: AsyncSession, event: Event, run: int | None) -> CallContext:
+async def _offer_context(db: AsyncSession, event: Event, run: int | None, actor: Member) -> CallContext:
     if not event.is_offer:
         raise NotFound(NO_SUCH_OFFER)
+    guest_rules.refuse_guest(actor, GuestAction.JOIN_OFFER)  # a member brings a guest with +1 guest
     check_run(event, run)
     return await load(db, event)
 
@@ -441,14 +445,14 @@ async def join(
     """Join the offer with ``guests``, or change how many guests you bring and what they need,
     within the seats left (FR-4, FR-8). ``run``, when given, is the run the person saw."""
     async with locked_event(db, actor.household_id, event_id, now) as event:
-        before = await _offer_context(db, event, run)
+        before = await _offer_context(db, event, run, actor)
         return await _join_locked(db, actor, before, guests=guests, guest_needs=guest_needs, now=now)
 
 
 async def add_guest(db: AsyncSession, actor: Member, event_id: int, *, run: int | None = None, now: datetime) -> Seat:
     """**+1 guest**: one more guest, counting the member in if they weren't."""
     async with locked_event(db, actor.household_id, event_id, now) as event:
-        before = await _offer_context(db, event, run)
+        before = await _offer_context(db, event, run, actor)
         mine = before.response_of(actor.id)
         inside = mine is not None and mine.is_in
         guests = mine.guests if mine is not None and inside else 0
@@ -459,7 +463,7 @@ async def add_guest(db: AsyncSession, actor: Member, event_id: int, *, run: int 
 async def leave(db: AsyncSession, actor: Member, event_id: int, *, run: int | None = None, now: datetime) -> Seat:
     """Drop out of an offer, with any guests, freeing their seats."""
     async with locked_event(db, actor.household_id, event_id, now) as event:
-        return await _leave_locked(db, actor, await _offer_context(db, event, run), now)
+        return await _leave_locked(db, actor, await _offer_context(db, event, run, actor), now)
 
 
 async def toggle_join(db: AsyncSession, actor: Member, event_id: int, *, run: int | None = None, now: datetime) -> Seat:
@@ -467,7 +471,7 @@ async def toggle_join(db: AsyncSession, actor: Member, event_id: int, *, run: in
     the member's answer under the offer's lock, so a double tap ends where it started.
     Whoever made the offer is always in; their tap changes nothing."""
     async with locked_event(db, actor.household_id, event_id, now) as event:
-        before = await _offer_context(db, event, run)
+        before = await _offer_context(db, event, run, actor)
         mine = before.response_of(actor.id)
         if mine is not None and mine.is_in:
             if event.created_by == actor.id:

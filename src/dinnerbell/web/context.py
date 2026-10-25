@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from dinnerbell.config import Settings
 from dinnerbell.services.clock import Clock
+from dinnerbell.services.guests import JoinLimiter, SlackPeople
 from dinnerbell.services.health import SchedulerState, SlackState
 from dinnerbell.web.oidc import OIDCClient
 from dinnerbell.web.signing import SignedPayload
@@ -46,6 +47,10 @@ class AppContext:
     oidc: OIDCClient
     scheduler_state: SchedulerState
     slack_state: SlackState = field(default_factory=SlackState)
+    slack_people: SlackPeople | None = None
+    """Who may join from the Slack channel (#38): set when Slack is connected."""
+    join_limiter: JoinLimiter = field(default_factory=JoinLimiter)
+    """Joins from Sign in with Slack, per Slack user (#38)."""
 
 
 def app_context(request: Request) -> AppContext:

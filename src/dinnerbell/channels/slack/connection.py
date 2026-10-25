@@ -50,6 +50,7 @@ from dinnerbell import __version__
 from dinnerbell.channels.slack.api import SlackApi, SlackAuthError, SlackUnavailable, webhook_client
 from dinnerbell.channels.slack.channel import HOLD_RETRY_SECONDS, Audience, Hold, HoldScope, SlackChannel
 from dinnerbell.channels.slack.interactions import DEFAULT_COMMAND, Interactions
+from dinnerbell.channels.slack.people import ChannelPeople
 from dinnerbell.domain.members import SLACK_USER_ID_PATTERN
 from dinnerbell.domain.notifications import PermanentDeliveryError
 from dinnerbell.services import slack_members
@@ -226,8 +227,11 @@ class SlackConnection:
             audience=self.audience,
             state=state,
         )
+        self.people = ChannelPeople(self.api, channel_id=channel_id, team_id=lambda: self.team_id)
+        """Who may join from the channel (#38), for the Slack adapter and the web app."""
         self.interactions = Interactions(
             self.api,
+            people=self.people,
             sessionmaker=sessionmaker,
             clock=clock,
             base_url=base_url,

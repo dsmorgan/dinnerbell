@@ -16,6 +16,8 @@
 <input type="hidden" name="from" value="{{ from_page }}">
 {%- endmacro %}
 {% set e = v.event %}{% set tz = v.info.timezone %}{% set base = "/events/" ~ e.id %}
+{#- A guest is in or out, with no details, and sees only what they may do (#38). -#}
+{% set as_guest = principal.member.is_guest %}
 {% set swap = 'hx-target="#event-' ~ e.id ~ '" hx-swap="outerHTML"' %}
 {#- A member starts a called-off call again with Start {slot} again, so admins don't also get Re-run for it. -#}
 {% set rerun = v.can.rerun and not v.can.restart %}
@@ -60,7 +62,7 @@
   </form>
   {% endif %}
   {% if v.can.leave %}<div class="button-row">{{ act(e.id, base ~ "/leave", "Can't make it", "button small", {"run": e.run}) }}</div>{% endif %}
-  {% if o.dietary_notes %}<p class="small">Guests need: {{ o.dietary_notes|join(", ") }}.</p>{% endif %}
+  {% if o.dietary_notes %}<p class="small">Dietary needs: {{ o.dietary_notes|join(", ") }}.</p>{% endif %}
   {% if v.can.mark_done %}<div class="button-row">{{ act(e.id, base ~ "/done", "Mark done", "button small", confirm="Mark this meal done? It goes into the history.") }}</div>{% endif %}
   {% else %}
   <p class="event-when small">
@@ -80,7 +82,7 @@
   {% if v.can.respond %}
   {% set mine = v.mine %}
   <div class="button-row respond" role="group" aria-label="Are you in?">
-    {% for status, label in (("in", "In"), ("out", "Out"), ("maybe", "Maybe")) %}
+    {% for status, label in ((("in", "In"), ("out", "Out")) if as_guest else (("in", "In"), ("out", "Out"), ("maybe", "Maybe"))) %}
     {{ act(e.id, base ~ "/respond", label, "button small choice", {"status": status}, pressed=(mine is not none and mine.status.value == status)) }}
     {% endfor %}
   </div>
@@ -91,6 +93,7 @@
     {% endfor %}
     {% if v.can.claim %}{{ act(e.id, base ~ "/coordinate", "I'll coordinate", "button small choice") }}{% endif %}
   </div>
+  {% if not as_guest %}
   <details class="details-form">
     <summary class="small">Guests, times, a suggestion, or a note</summary>
     <form method="post" action="{{ base }}/details" hx-post="{{ base }}/details" {{ swap|safe }} class="stack">
@@ -121,6 +124,7 @@
     </form>
   </details>
   {% endif %}
+  {% endif %}
 
   {% if v.roster or v.waiting_on %}
   <h3>Who's in <span class="muted small">· {{ v.head_count }} eating</span></h3>
@@ -138,6 +142,57 @@
     {% endfor %}
   </ul>
   {% if v.waiting_on and e.state.value == "collecting" %}<p class="small muted">Waiting on {{ v.waiting_on|map(attribute="name")|join(", ") }}.</p>{% endif %}
+  {% endif %}
+
+  {% if v.guests or v.can.invite %}
+  <h3>Guests</h3>
+  <ul class="roster guests">
+    {% for g in v.guests %}
+    <li>
+      <strong>{{ g.person.name }}</strong>
+      <span class="chip status">{{ g.answer.status.value|capitalize if g.answer else "No answer yet" }}</span>
+      {% if g.answer %}{% for o in g.answer.offers %}<span class="chip role">{{ {"cook": "Cooks", "pickup": "Picks up", "order": "Orders"}[o.value] }}</span>{% endfor %}{% endif %}
+      {% if g.needs %}<span class="chip">Needs {{ g.needs|join(", ") }}</span>{% endif %}
+      {% if g.invited_by %}<span class="small muted">invited by {{ g.invited_by.name }}</span>{% endif %}
+      {% if g.answerable %}
+      <div class="button-row" role="group" aria-label="Answer for {{ g.person.name }}">
+        {% for status, label in (("in", "In"), ("out", "Out")) %}
+        {{ act(e.id, base ~ "/guests/" ~ g.person.id ~ "/answer", label, "button small choice", {"status": status, "run": e.run}, pressed=(g.answer is not none and g.answer.status.value == status)) }}
+        {% endfor %}
+        {% for role, label in (("cook", "Can cook"), ("pickup", "Can pick up"), ("order", "Will order")) %}
+        {% set offered = g.answer is not none and role in g.answer.offers|map(attribute="value")|list %}
+        {{ act(e.id, base ~ "/guests/" ~ g.person.id ~ "/answer", label, "button small choice", {"role": role, "offered": "0" if offered else "1", "run": e.run}, pressed=offered) }}
+        {% endfor %}
+      </div>
+      {% endif %}
+      {% if g.removable %}{{ act(e.id, base ~ "/guests/" ~ g.person.id ~ "/remove", "Take off the call", "button small", confirm="Take " ~ g.person.name ~ " off this call?") }}{% endif %}
+    </li>
+    {% endfor %}
+  </ul>
+  {% if v.can.invite %}
+  <details class="details-form">
+    <summary class="small">Invite a guest</summary>
+    <form method="post" action="{{ base }}/guests" hx-post="{{ base }}/guests" {{ swap|safe }} class="stack">
+      {{ hidden() }}
+      <input type="hidden" name="run" value="{{ e.run }}">
+      <p class="small muted">Guests eat with you and can pitch in, but don't vote or suggest. If they have no Slack, you answer for them here.</p>
+      {% if v.invitable %}
+      <label class="field"><span>A saved guest</span>
+        <select name="guest_id"><option value="">Someone new instead</option>{% for g in v.invitable %}<option value="{{ g.id }}">{{ g.name }}</option>{% endfor %}</select>
+      </label>
+      {% endif %}
+      <label class="field"><span>Someone new</span><input type="text" name="name" maxlength="80"></label>
+      {% if v.dietary_tags %}
+      <fieldset class="field"><legend>Their dietary needs</legend>
+        <div class="chip-picker">
+          {% for tag in v.dietary_tags %}<label class="chip-toggle"><input type="checkbox" name="needs" value="{{ tag.id }}"><span>{{ tag.name }}</span></label>{% endfor %}
+        </div>
+      </fieldset>
+      {% endif %}
+      <button type="submit" class="button primary">Invite</button>
+    </form>
+  </details>
+  {% endif %}
   {% endif %}
 
   {% if v.can.hand_off %}
@@ -199,7 +254,7 @@
   {% set d = v.decision %}
   <div class="decision">
     <h3>{% if d.proposal.item.url %}<a href="{{ d.proposal.item.url }}" rel="noopener noreferrer" target="_blank">{{ d.proposal.item.name }}</a>{% else %}{{ d.proposal.item.name }}{% endif %} <span class="chip mode">{{ d.proposal.mode.label }}</span></h3>
-    <p class="small">{{ d.head_count }} eating: {% for p in d.participants %}{{ p.member.name }}{% if p.guests %} +{{ p.guests }}{% endif %}{{ ", " if not loop.last }}{% endfor %}{% if d.dietary_notes %}. Guests need: {{ d.dietary_notes|join(", ") }}{% endif %}.</p>
+    <p class="small">{{ d.head_count }} eating: {% for p in d.participants %}{{ p.member.name }}{% if p.guests %} +{{ p.guests }}{% endif %}{{ ", " if not loop.last }}{% endfor %}{% if d.dietary_notes %}. Dietary needs: {{ d.dietary_notes|join(", ") }}{% endif %}.</p>
     <ul class="chips assignments">
       {% for a in d.assignments %}<li class="chip role">{{ {"cook": "Cooking", "pickup": "Picking up", "order": "Ordering", "coordinator": "Coordinating"}[a.role.value] }}: {{ a.member.name }}</li>{% endfor %}
     </ul>
@@ -286,7 +341,7 @@
   </details>
   {% endif %}
   {#- Test instance only (#60); the route is a 404 anywhere else. -#}
-  {% if test_instance and v.can.admin %}
+  {% if test_instance and v.can.admin and not as_guest %}
   <p class="small"><a class="button small danger" href="{{ base }}/admin/discard">Discard (test)</a></p>
   {% endif %}
 </section>

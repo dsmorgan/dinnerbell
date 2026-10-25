@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dinnerbell.db.models import AuditRow, HouseholdRow, MemberRow, SessionRow
@@ -45,6 +45,10 @@ def to_member(row: MemberRow) -> Member:
         slack_link_locked=row.slack_link_locked,
         mute_dm_reminders=row.mute_dm_reminders,
         feedback_reminder=row.feedback_reminder,
+        dietary_needs=frozenset(int(t) for t in row.dietary_needs or []),
+        join_refused=row.join_refused,
+        slack_email=row.slack_email,
+        slack_guest_account=row.slack_guest_account,
     )
 
 
@@ -109,6 +113,18 @@ class MemberRepository:
         )
         return None if row is None else to_member(row)
 
+    async def guest_by_slack_email(self, household_id: int, email: str) -> Member | None:
+        """An active guest who joined with ``email`` as their Slack email (#38)."""
+        row = await self._session.scalar(
+            select(MemberRow).where(
+                MemberRow.household_id == household_id,
+                MemberRow.role == "guest",
+                MemberRow.active.is_(True),
+                MemberRow.slack_email == email,
+            )
+        )
+        return None if row is None else to_member(row)
+
     async def by_subject(self, household_id: int, subject: str) -> Member | None:
         row = await self._session.scalar(
             select(MemberRow).where(MemberRow.household_id == household_id, MemberRow.oidc_subject == subject)
@@ -157,11 +173,46 @@ class MemberRepository:
         await self._session.flush()
         return to_member(row)
 
+    async def add_guest(
+        self,
+        *,
+        household_id: int,
+        display_name: str,
+        dietary_needs: frozenset[int],
+        now: datetime,
+        slack_user_id: str | None = None,
+        slack_guest_account: bool = False,
+    ) -> Member:
+        """A guest (#38): no email, no capabilities, and a Slack user only if they have one."""
+        row = MemberRow(
+            household_id=household_id,
+            display_name=display_name,
+            email=None,
+            slack_user_id=slack_user_id,
+            role=Role.GUEST.value,
+            can_cook=False,
+            can_pickup=False,
+            can_order=False,
+            mute_dm_reminders=False,
+            feedback_reminder=False,
+            active=True,
+            dietary_needs=sorted(dietary_needs),
+            join_refused=False,
+            slack_guest_account=slack_guest_account,
+            created_at=now,
+            updated_at=now,
+        )
+        self._session.add(row)
+        await self._session.flush()
+        return to_member(row)
+
     async def update(self, household_id: int, member_id: int, now: datetime, **values: Any) -> Member:
         row = await self._row(household_id, member_id)
         if row is None:
             raise LookupError(member_id)
         for name, value in values.items():
+            if isinstance(value, frozenset):
+                value = sorted(value)  # dietary needs, stored as a JSON list
             setattr(row, name, value.value if isinstance(value, Role) else value)
         row.updated_at = now
         await self._session.flush()
@@ -245,6 +296,48 @@ class AuditRepository:
             )
         )
         await self._session.flush()
+
+    async def redact(self, household_id: int, prefixes: tuple[str, ...], payload: dict[str, Any]) -> int:
+        """Replace the payload of every audit row whose action starts with one of ``prefixes``,
+        and a target naming a Slack user, for ``scrub-test``. Returns how many changed."""
+        rows = list(
+            await self._session.scalars(
+                select(AuditRow).where(
+                    AuditRow.household_id == household_id,
+                    or_(*(AuditRow.action.startswith(prefix) for prefix in prefixes)),
+                )
+            )
+        )
+        changed = 0
+        for row in rows:
+            target = "slack:redacted" if (row.target or "").startswith("slack:") else row.target
+            if row.payload != payload or row.target != target:
+                row.payload, row.target = dict(payload), target
+                changed += 1
+        await self._session.flush()
+        return changed
+
+    async def redact_about(
+        self, household_id: int, actions: tuple[str, ...], targets: set[str], payload: dict[str, Any]
+    ) -> int:
+        """Replace the payload of every audit row with one of ``actions`` about one of
+        ``targets``, for ``scrub-test``. Returns how many changed."""
+        if not targets:
+            return 0
+        rows = await self._session.scalars(
+            select(AuditRow).where(
+                AuditRow.household_id == household_id,
+                AuditRow.action.in_(actions),
+                AuditRow.target.in_(sorted(targets)),
+            )
+        )
+        changed = 0
+        for row in rows:
+            if row.payload != payload:
+                row.payload = dict(payload)
+                changed += 1
+        await self._session.flush()
+        return changed
 
     async def latest(self, household_id: int, target: str) -> tuple[str, dict[str, Any]] | None:
         """The newest audit row about ``target``, as (action, payload), or None."""

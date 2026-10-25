@@ -25,7 +25,7 @@ from dinnerbell.domain.catalog import CatalogItem, Tag
 from dinnerbell.domain.members import Capabilities, Member
 from dinnerbell.domain.preferences import NEUTRAL, Stance, TargetType
 from dinnerbell.domain.ranking import GroupPreferences
-from dinnerbell.services.common import is_unique_violation
+from dinnerbell.services.common import is_unique_violation, require_member
 from dinnerbell.services.errors import NotFound
 
 
@@ -54,6 +54,7 @@ class MySettings:
 
 async def my_preferences(db: AsyncSession, actor: Member) -> MyPreferences:
     """The actor's stances, with every tag and active item they can rate."""
+    require_member(actor)
     repo = CatalogRepository(db)
     stances = {
         (p.target_type, p.target_id): p.stance
@@ -69,6 +70,7 @@ async def my_stance(
     db: AsyncSession, actor: Member, target_type: TargetType, target_id: int
 ) -> tuple[str, Stance] | None:
     """The actor's stored stance on one tag or item, with its name, or None if it's gone."""
+    require_member(actor)
     repo = CatalogRepository(db)
     target = (
         await repo.tag(actor.household_id, target_id)
@@ -88,6 +90,7 @@ async def set_my_preference(
     db: AsyncSession, actor: Member, target_type: TargetType, target_id: int, stance: Stance, *, now: datetime
 ) -> str:
     """Store the actor's stance on a tag or item and return the target's name."""
+    require_member(actor)
     repo = CatalogRepository(db)
     target = (
         await repo.tag(actor.household_id, target_id)
@@ -110,6 +113,7 @@ async def set_my_preference(
 
 
 async def update_my_settings(db: AsyncSession, actor: Member, settings: MySettings, *, now: datetime) -> Member:
+    require_member(actor)
     updated = await MemberRepository(db).update(
         actor.household_id,
         actor.id,

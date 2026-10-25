@@ -1,0 +1,32 @@
+{
+  "blocks": [
+    {
+      "text": {
+        "emoji": true,
+        "text": "Today · Thursday, Oct 22",
+        "type": "plain_text"
+      },
+      "type": "header"
+    },
+    {
+      "text": {
+        "text": "No invitations right now. When a member invites you to a meal, it shows here.",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "type": "divider"
+    },
+    {
+      "elements": [
+        {
+          "text": "<https://dinnerbell.example.com/me|Your dietary needs> · <https://dinnerbell.example.com/|Your invitations on the web>",
+          "type": "mrkdwn"
+        }
+      ],
+      "type": "context"
+    }
+  ],
+  "type": "home"
+}

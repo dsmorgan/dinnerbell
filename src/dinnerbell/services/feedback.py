@@ -48,7 +48,7 @@ from dinnerbell.domain.meals import MealLog, MemberRef, Slot
 from dinnerbell.domain.members import Member
 from dinnerbell.services import call_context as cc
 from dinnerbell.services.call_context import NO_SUCH_CALL, CallContext
-from dinnerbell.services.common import is_unique_violation
+from dinnerbell.services.common import is_unique_violation, require_member
 from dinnerbell.services.errors import NotFound
 from dinnerbell.services.event_views import today_for
 
@@ -138,6 +138,7 @@ async def _cook(db: AsyncSession, household_id: int, meal: MealLog) -> MemberRef
 
 
 async def _meal(db: AsyncSession, actor: Member, meal_id: int) -> MealLog:
+    require_member(actor)
     meal = await MealLogRepository(db).get(actor.household_id, meal_id)
     if meal is None:
         raise NotFound("No such meal.")
@@ -146,6 +147,7 @@ async def _meal(db: AsyncSession, actor: Member, meal_id: int) -> MealLog:
 
 async def meal_for_event(db: AsyncSession, actor: Member, event_id: int, *, run: int | None = None) -> int:
     """The meal a done call logged. ``run`` is the run the person saw, when their surface says."""
+    require_member(actor)
     event = await EventRepository(db).get(actor.household_id, event_id)
     if event is None:
         raise NotFound(NO_SUCH_CALL)
@@ -215,7 +217,7 @@ async def give_for_event(
 async def awaiting(db: AsyncSession, actor: Member, *, now: datetime) -> list[Awaiting]:
     """Meals from done calls in the feedback window that ``actor`` ate and hasn't given
     feedback on, newest first, for App Home. Logged meals take feedback on the History page."""
-    if not actor.active:
+    if not actor.is_member:  # guests give no feedback (#38)
         return []
     today = await today_for(db, actor, now=now)
     meals = await MealLogRepository(db).between(actor.household_id, today - timedelta(days=FEEDBACK_DAYS), today)
@@ -262,7 +264,10 @@ async def for_meals(
 async def event_meal(
     db: AsyncSession, actor: Member, event_id: int, *, now: datetime
 ) -> tuple[MealLog, MealFeedback] | None:
-    """A done call's meal and its feedback as ``actor`` may see it, for the event page."""
+    """A done call's meal and its feedback as ``actor`` may see it, for the event page. None
+    for a guest, who gives no feedback (#38)."""
+    if not actor.is_member:
+        return None
     meals = MealLogRepository(db)
     meal_id = await meals.for_event(actor.household_id, event_id)
     meal = await meals.get(actor.household_id, meal_id) if meal_id is not None else None
@@ -274,6 +279,7 @@ async def event_meal(
 
 async def item_counts(db: AsyncSession, actor: Member, item_ids: Iterable[int] | None = None) -> dict[int, ItemCounts]:
     """How many loved each catalog item's food and place (FR-49). Nothing else is counted."""
+    require_member(actor)
     return count(await FeedbackRepository(db).for_items(actor.household_id, item_ids))
 
 

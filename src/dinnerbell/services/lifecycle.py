@@ -45,6 +45,7 @@ from dinnerbell.domain.events import (
     check_run,
     check_window_change,
     choose_winner,
+    clean_cancel_note,
     head_count,
     meal_time,
     needs_reminder,
@@ -53,8 +54,8 @@ from dinnerbell.domain.events import (
     shifted_deadline,
     should_open_today,
     transition,
-    veto_participants,
 )
+from dinnerbell.domain.guests import tie_breaker
 from dinnerbell.domain.household import Household
 from dinnerbell.domain.meals import MemberRef, Slot, TagRef
 from dinnerbell.domain.members import Member
@@ -166,7 +167,7 @@ async def open_call(db: AsyncSession, event: Event, now: datetime, *, actor: Mem
     opened = replace(event, state=transition(event.state, EventState.COLLECTING), opens_at=min(event.opens_at, now))
     event = await EventRepository(db).save(opened, now)
     ctx = await load(db, event)
-    await publish(db, ctx, cc.call_opened(ctx), now=now)
+    await publish(db, ctx, cc.call_opened(ctx), *cc.guest_invitations(ctx), now=now)
     payload = {
         "slot": event.slot.value,
         "date": event.day.isoformat(),
@@ -284,8 +285,27 @@ async def reopen(
     fresh = await EventRepository(db).save(fresh, now)
     if not scheduled:  # a scheduled call is posted when the tick opens it
         opened = await load(db, fresh)
-        await publish(db, opened, cc.call_opened(opened), now=now)
+        await publish(db, opened, cc.call_opened(opened), *cc.guest_invitations(opened), now=now)
     return fresh
+
+
+async def _open_scheduled(db: AsyncSession, event: Event, now: datetime) -> None:
+    """The tick's ``Step.OPEN``. A call scheduled for a slot and day that a live cooking offer
+    now stands in for (FR-5) is called off quietly instead of posted next to it: it was never
+    posted, so nobody is told. ``offers.post_offer`` replaces a scheduled call itself; this is
+    the backstop for any other way one got scheduled. Audited as ``event.replaced_by_offer``."""
+    offer = await cooking_offer(db, event.household_id, event.slot, event.day)
+    if offer is None:
+        await open_call(db, event, now)
+        return
+    cook = await MemberRepository(db).get(event.household_id, offer.created_by) if offer.created_by else None
+    note_text = clean_cancel_note(f"{cook.display_name} is cooking instead.") if cook is not None else None
+    ended = replace(
+        event, state=transition(event.state, EventState.CANCELLED), ended_by=offer.created_by, end_note=note_text
+    )
+    await EventRepository(db).save(ended, now)
+    payload = {"offer_id": offer.id, "from": event.state.value}
+    await audit(db, event.household_id, None, "event.replaced_by_offer", _target(event), payload, now)
 
 
 # Deadlines --------------------------------------------------------------------------------------
@@ -316,9 +336,13 @@ async def _remind(db: AsyncSession, event: Event, now: datetime) -> None:
     """FR-11: one direct message to each active member who hasn't answered, once per call run."""
     ctx = await load(db, event)
     info = cc.event_info(ctx)
-    members = sorted(ctx.active_members, key=lambda m: m.display_name.casefold())
+    # Members, and registered guests invited to the call (#38); guests' reminders have In and Out only.
+    people = [*ctx.active_members, *(g for g in ctx.guests if g.is_registered_guest)]
+    members = sorted(people, key=lambda m: m.display_name.casefold())
     reminders = [
-        note.ResponseReminder(info, ctx.person(m.id)) for m in members if needs_reminder(m, ctx.response_of(m.id))
+        note.ResponseReminder(info, ctx.person(m.id), m.is_guest)
+        for m in members
+        if needs_reminder(m, ctx.response_of(m.id))
     ]
     await publish(db, ctx, *reminders, now=now)
     await EventRepository(db).save(replace(event, reminder_sent_at=now), now)
@@ -339,17 +363,15 @@ def rank_item(ctx: CallContext, item: CatalogItem) -> RankItem:
 
 
 def guest_needs(ctx: CallContext) -> frozenset[int]:
-    """Dietary needs of guests of everyone who might be eating (in, or maybe). Needs left on a
-    response with no guests don't count."""
-    who = veto_participants(ctx.responses)
-    return frozenset(tag for r in ctx.responses if r.member_id in who and r.guests for tag in r.guest_needs)
+    """``CallContext.guest_needs``: what every pick must meet for the guests who might eat."""
+    return ctx.guest_needs
 
 
 async def ranking_snapshot(db: AsyncSession, ctx: CallContext, group: GroupPreferences) -> RankingSnapshot:
     """Spec section 7's inputs for this call, as of the call's date."""
     household_id, day = ctx.event.household_id, ctx.event.day
     window = await variety_window(db, household_id, day)
-    who = veto_participants(ctx.responses)
+    who = ctx.veto_people
     suggesters: dict[int, dict[int, str]] = {}  # item -> {member ID: name}, credited once per member
     for suggestion in ctx.suggestions:
         if suggestion.item_id is not None and suggestion.member_id in who:
@@ -383,10 +405,11 @@ async def _close_responses(db: AsyncSession, event: Event, now: datetime) -> Non
         event = await EventRepository(db).save(replace(event, respond_deadline=now), now)
         await audit(db, event.household_id, None, "event.everyone_answered", _target(event), early, now)
     ctx = await load(db, event)
-    group = await group_preferences(db, event.household_id, veto_participants(ctx.responses))
+    group = await group_preferences(db, event.household_id, ctx.veto_people)
     attached = await _keep_attached(db, ctx, group, now)
     taken = {(p.item_id, p.mode) for p in attached}
-    ranked = [r for r in rank(await ranking_snapshot(db, ctx, group)) if (r.item_id, r.mode) not in taken]
+    snapshot = await ranking_snapshot(db, ctx, group)
+    ranked = [r for r in rank(snapshot) if (r.item_id, r.mode) not in taken]
     ranked = ranked[: max(MAX_PROPOSALS - len(attached), 0)]  # FR-13: at most 10 picks in all
     resolved = resolve_maybes(ctx.responses)
     for response in resolved:
@@ -397,7 +420,9 @@ async def _close_responses(db: AsyncSession, event: Event, now: datetime) -> Non
         await abandon(db, event, EndReason.TOO_FEW, now)
         return
     if not ranked and not attached:
-        await abandon(db, event, EndReason.NO_COVERAGE, now)
+        # Would anything have fit without the dietary needs? Then they're why nothing did.
+        unmet = bool(snapshot.guest_needs) and bool(rank(replace(snapshot, guest_needs=frozenset())))
+        await abandon(db, event, EndReason.NO_COVERAGE, now, needs_unmet=unmet)
         return
     proposals = ProposalRepository(db)
     for position, offered in enumerate(attached, start=len(ranked) + 1):
@@ -476,12 +501,15 @@ async def expire(db: AsyncSession, event: Event, now: datetime) -> None:
     await audit(db, event.household_id, None, "event.abandoned", _target(event), payload, now)
 
 
-async def abandon(db: AsyncSession, event: Event, reason: EndReason, now: datetime) -> None:
-    """Spec 5.4: the on-your-own message. Nothing is assigned or logged."""
+async def abandon(
+    db: AsyncSession, event: Event, reason: EndReason, now: datetime, *, needs_unmet: bool = False
+) -> None:
+    """Spec 5.4: the on-your-own message. Nothing is assigned or logged. ``needs_unmet`` says
+    the dietary needs of who was eating ruled out everything else that would have fit."""
     ended = replace(event, state=transition(event.state, EventState.ABANDONED), end_reason=reason)
     ended = await EventRepository(db).save(ended, now)
     ctx = await load(db, ended)
-    await publish(db, ctx, note.CallAbandoned(cc.event_info(ctx), reason, ctx.head_count), now=now)
+    await publish(db, ctx, note.CallAbandoned(cc.event_info(ctx), reason, ctx.head_count, needs_unmet), now=now)
     await publish(db, ctx, cc.call_updated(ctx), *([cc.proposals_updated(ctx)] if ctx.proposals else []), now=now)
     await audit(db, event.household_id, None, "event.abandoned", _target(event), {"reason": reason.value}, now)
 
@@ -574,7 +602,7 @@ async def decide(
             raise EventRuleViolation("It's too late to decide: the meal would be after midnight.")
         await expire(db, event, now)
         return
-    group = await group_preferences(db, event.household_id, veto_participants(ctx.responses))
+    group = await group_preferences(db, event.household_id, ctx.veto_people)
     # Check free text as the catalog item it will become, if one by that name exists by now.
     checked = {p.id: await _as_catalog_item(db, ctx, p) for p in ctx.proposals}
     if locked is not None:
@@ -588,7 +616,11 @@ async def decide(
             for p in ctx.proposals
         ]
         admins = frozenset(m.id for m in ctx.active_members if m.is_admin)
-        chosen = choose_winner(tallies, coordinator_id=event.coordinator_id, admin_ids=admins)
+        # A guest coordinating doesn't break a tie: whoever invited them does, then an admin (#38).
+        coordinator = ctx.members.get(event.coordinator_id) if event.coordinator_id is not None else None
+        breaker = tie_breaker(coordinator, ctx.invitations.get(coordinator.id) if coordinator else None)
+        guest_coordinating = coordinator is not None and coordinator.is_guest
+        chosen = choose_winner(tallies, coordinator_id=breaker, admin_ids=admins, admins_next=guest_coordinating)
         found = ctx.proposal(chosen.id) if chosen is not None else None
         if found is None:
             await abandon(db, event, EndReason.NO_COVERAGE, now)
@@ -684,7 +716,7 @@ async def _mark_done(db: AsyncSession, event: Event, now: datetime) -> None:
 
 HANDLERS: dict[Step, Handler] = {
     Step.EXPIRE: expire,
-    Step.OPEN: open_call,
+    Step.OPEN: _open_scheduled,
     Step.REMIND: _remind,
     Step.CLOSE_RESPONSES: _close,
     Step.CLOSE_VOTING: _decide_by_vote,

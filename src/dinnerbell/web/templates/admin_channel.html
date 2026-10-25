@@ -1,0 +1,40 @@
+{#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
+{% extends "base.html" %}
+{% block title %}Add from the channel{% endblock %}
+{% block content %}
+{% include "_admin_tabs.html" %}
+<h1>Add from the channel</h1>
+<p class="muted">People in the Dinnerbell channel who aren't in Dinnerbell yet. Add each as a guest, or as a member if Slack shares their email. Slack guest accounts can be guests only.</p>
+{% if not slack_connected %}
+<p class="alert error" role="alert">Slack isn't connected, so Dinnerbell can't see the channel.</p>
+{% endif %}
+<ul class="members">
+  {% for c in candidates %}
+  <li class="member" id="candidate-{{ c.slack_user_id }}">
+    <div class="member-main">
+      <div class="member-name"><strong>{{ c.name }}</strong>{% if not c.full_member %} <span class="badge">Slack guest</span>{% endif %}</div>
+      <div class="muted small">Slack: <code>{{ c.slack_user_id }}</code></div>
+    </div>
+    <div class="member-actions">
+      <form method="post" action="/admin/channel" class="inline">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="slack_user_id" value="{{ c.slack_user_id }}">
+        <input type="hidden" name="role" value="guest">
+        <button type="submit" class="button small">Add as guest</button>
+      </form>
+      {% if c.full_member and c.has_email %}
+      <form method="post" action="/admin/channel" class="inline">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <input type="hidden" name="slack_user_id" value="{{ c.slack_user_id }}">
+        <input type="hidden" name="role" value="member">
+        <button type="submit" class="button small primary">Add as member</button>
+      </form>
+      {% endif %}
+    </div>
+  </li>
+  {% else %}
+  <li class="muted">Everyone in the channel is in Dinnerbell already.</li>
+  {% endfor %}
+</ul>
+<p><a href="/admin/members">Back to Members</a></p>
+{% endblock %}

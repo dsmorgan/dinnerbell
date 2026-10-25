@@ -231,6 +231,8 @@ class ResponseReminder(_Notification):
     kind: ClassVar[str] = "response_reminder"
     event: EventInfo
     member: PersonInfo
+    guest: bool = False
+    """The member is a guest invited to the call (#38): In and Out only."""
 
     @property
     def idempotency_key(self) -> str:
@@ -322,6 +324,8 @@ class AssignmentMade(_Notification):
     member: PersonInfo
     roles: tuple[AssignmentRole, ...]
     decision: DecisionInfo
+    via: PersonInfo | None = None
+    """For a guest without Slack (#38), the member who invited them, who gets the message."""
 
     @property
     def idempotency_key(self) -> str:
@@ -329,7 +333,7 @@ class AssignmentMade(_Notification):
 
     @property
     def recipient_id(self) -> int | None:
-        return self.member.id
+        return self.via.id if self.via is not None else self.member.id
 
 
 @dataclass(frozen=True, slots=True)
@@ -340,6 +344,9 @@ class CallAbandoned(_Notification):
     event: EventInfo
     reason: EndReason
     head_count: int = 0
+    needs_unmet: bool = False
+    """Nothing fit, and it was the dietary needs that ruled out what else would have: say so,
+    without saying whose (#38)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -372,6 +379,8 @@ class AssignmentCancelled(_Notification):
     decision: DecisionInfo
     cancelled_by: PersonInfo | None = None
     note: str | None = None
+    via: PersonInfo | None = None
+    """For a guest without Slack (#38), the member who invited them, who gets the message."""
 
     @property
     def idempotency_key(self) -> str:
@@ -379,7 +388,7 @@ class AssignmentCancelled(_Notification):
 
     @property
     def recipient_id(self) -> int | None:
-        return self.member.id
+        return self.via.id if self.via is not None else self.member.id
 
 
 @dataclass(frozen=True, slots=True)
@@ -546,6 +555,130 @@ class OfferFull(_Notification):
         return self.member.id
 
 
+@dataclass(frozen=True, slots=True)
+class GuestInvited(_Notification):
+    """A member invited a guest with Slack to a call (#38): one direct message to the guest,
+    with In and Out buttons that name the run, like the reminder's."""
+
+    kind: ClassVar[str] = "guest_invited"
+    event: EventInfo
+    member: PersonInfo
+    invited_by: PersonInfo
+
+    @property
+    def idempotency_key(self) -> str:
+        return f"{self.event.key}:{self.kind}:member{self.member.id}"
+
+    @property
+    def recipient_id(self) -> int | None:
+        return self.member.id
+
+
+@dataclass(frozen=True, slots=True)
+class GuestJoined:
+    """Someone joined from the channel as a guest (#38 addendum): one direct message to each
+    active admin (``admin``), with **Make member** and **Remove**. It's about the household, not
+    an event, like ``ScheduleChanged``. ``via`` is ``slack`` or ``web``."""
+
+    kind: ClassVar[str] = "guest_joined"
+    is_update: ClassVar[bool] = False
+    needs_thread: ClassVar[bool] = False
+    household_id: int
+    admin: PersonInfo
+    guest: PersonInfo
+    via: str
+    unlinked: tuple[PersonInfo, ...] = ()
+    """Members, not admins, with no Slack account yet, who the guest might really be."""
+    slack_user_id: str = ""
+    slack_email: str | None = None
+    """The email Slack shares for the guest, so the admin can tell who they really are: anyone
+    can take any display name."""
+    slack_guest_account: bool = False
+
+    @property
+    def idempotency_key(self) -> str:
+        return f"join:{self.guest.id}:admin{self.admin.id}"
+
+    @property
+    def message_key(self) -> str | None:
+        return None
+
+    @property
+    def thread_key(self) -> str | None:
+        return None
+
+    @property
+    def recipient_id(self) -> int | None:
+        return self.admin.id
+
+    @property
+    def event_id(self) -> int | None:
+        return None
+
+
+@dataclass(frozen=True, slots=True)
+class RoleVacated(_Notification):
+    """A guest left a decided call (#38: an admin removed them) while assigned to cook, pick up,
+    or order: one direct message to ``member``, the coordinator or, with none, each admin, to
+    pick someone else. ``left`` is the guest; ``roles`` are the ones nobody has now."""
+
+    kind: ClassVar[str] = "role_vacated"
+    event: EventInfo
+    member: PersonInfo
+    left: PersonInfo
+    roles: tuple[AssignmentRole, ...]
+
+    @property
+    def idempotency_key(self) -> str:
+        return f"{self.event.key}:{self.kind}:member{self.member.id}:left{self.left.id}"
+
+    @property
+    def recipient_id(self) -> int | None:
+        return self.member.id
+
+
+@dataclass(frozen=True, slots=True)
+class LinkNeeded:
+    """A Slack account Dinnerbell can't link on its own (#38): one direct message to each
+    active admin (``admin``). ``member`` holds the email the Slack account has; ``reason`` is
+    ``join`` (they tried to join from the channel) or ``hourly`` (the email match found the Slack
+    account linked to someone else already). About the household, like ``GuestJoined``."""
+
+    kind: ClassVar[str] = "link_needed"
+    is_update: ClassVar[bool] = False
+    needs_thread: ClassVar[bool] = False
+    household_id: int
+    admin: PersonInfo
+    member: PersonInfo
+    slack_user_id: str
+    slack_name: str
+    reason: str
+    slack_email: str | None = None
+    """The email that matched: ``member``'s, which the Slack account has too."""
+    member_is_admin: bool = False
+    """An admin sets their own Slack member ID; a guest is never linked to one."""
+
+    @property
+    def idempotency_key(self) -> str:
+        return f"link:{self.reason}:{self.member.id}:{self.slack_user_id}:admin{self.admin.id}"
+
+    @property
+    def message_key(self) -> str | None:
+        return None
+
+    @property
+    def thread_key(self) -> str | None:
+        return None
+
+    @property
+    def recipient_id(self) -> int | None:
+        return self.admin.id
+
+    @property
+    def event_id(self) -> int | None:
+        return None
+
+
 Notification = Union[  # noqa: UP007 - a runtime union, used for isinstance checks and payload decoding
     CallOpened,
     CallUpdated,
@@ -566,6 +699,10 @@ Notification = Union[  # noqa: UP007 - a runtime union, used for isinstance chec
     OfferPosted,
     OfferUpdated,
     OfferFull,
+    GuestInvited,
+    GuestJoined,
+    RoleVacated,
+    LinkNeeded,
 ]
 NOTIFICATION_TYPES: dict[str, type[Notification]] = {cls.kind: cls for cls in get_args(Notification)}
 UPDATE_KINDS = frozenset(kind for kind, cls in NOTIFICATION_TYPES.items() if cls.is_update)

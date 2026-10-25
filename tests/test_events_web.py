@@ -313,7 +313,7 @@ def voting(admin: TestClient, clock: FakeClock, migrated: Settings) -> Settings:
 
 
 def test_every_m2_post_route_is_enumerated(client: TestClient) -> None:
-    assert len(m2_posts(client)) == 26
+    assert len(m2_posts(client)) == 29
 
 
 def test_every_admin_override_checks_for_an_admin_in_the_web_layer(client: TestClient) -> None:

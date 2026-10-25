@@ -79,6 +79,32 @@ LEAVE_OFFER = "leave_offer"
 OFFER_ACTIONS = frozenset({JOIN_OFFER, ADD_GUEST, LEAVE_OFFER})
 MAKE_OFFER = "make_offer"
 """**Make an offer** on the Home tab: opens the offer modal. Its value is ``MAKE_OFFER``."""
+INVITE_GUEST = "invite_guest"
+"""**Invite a guest** on a member's Your answer card (#38): opens the invite modal. A ``card_value``."""
+GUEST_RESPOND = {"guest_in": Status.IN, "guest_out": Status.OUT}
+"""In and Out for a guest without Slack, on the card of the member who invited them. Their value
+is a ``guest_value``, naming the call, its run, and the guest."""
+GUEST_OFFER = {
+    "guest_offer_cook": RoleOffer.COOK,
+    "guest_offer_pickup": RoleOffer.PICKUP,
+    "guest_offer_order": RoleOffer.ORDER,
+}
+GUEST_WITHDRAW = {
+    "guest_withdraw_cook": RoleOffer.COOK,
+    "guest_withdraw_pickup": RoleOffer.PICKUP,
+    "guest_withdraw_order": RoleOffer.ORDER,
+}
+GUEST_ACTION_FOR_STATUS = {status: action for action, status in GUEST_RESPOND.items()}
+GUEST_ACTION_FOR_OFFER = {role: action for action, role in GUEST_OFFER.items()}
+GUEST_ACTION_FOR_WITHDRAW = {role: action for action, role in GUEST_WITHDRAW.items()}
+GUEST_ACTIONS = frozenset({*GUEST_RESPOND, *GUEST_OFFER, *GUEST_WITHDRAW})
+JOIN_DINNERBELL = "join_dinnerbell"
+"""**Join Dinnerbell**, shown to someone in the channel Dinnerbell doesn't know (#38, option A).
+Its value is ``JOIN_DINNERBELL``."""
+MAKE_MEMBER = "make_member"
+"""**Make member** on the admin's message about a guest who joined. Its value is the guest's ID."""
+REMOVE_GUEST = "remove_guest"
+"""**Remove** on the admin's message about a guest who joined. Its value is the guest's ID."""
 LINK_PREFIX = "link_"
 """URL buttons. Slack still sends their clicks, which the app acknowledges and ignores."""
 LINK_PATTERN = re.compile(r"^link_[a-z_]{1,40}$")
@@ -89,6 +115,7 @@ CANCEL_VIEW = "cancel_modal"
 CLOSE_VIEW = "close_modal"
 FEEDBACK_VIEW = "feedback_modal"
 OFFER_VIEW = "offer_modal"
+INVITE_VIEW = "invite_modal"
 LOG_VIEW = "log_modal"
 
 MAX_ID = 2**63 - 1
@@ -97,6 +124,7 @@ _PAIR = re.compile(r"^([0-9]{1,19}):([0-9]{1,19})$")
 _MENU = re.compile(r"(cancel|close):([1-9][0-9]{0,18}):([1-9][0-9]{0,18})")
 _WINDOW = re.compile(r"(respond|vote):([1-9][0-9]{0,18}):([1-9][0-9]{0,18})")
 _CARD = re.compile(r"([1-9][0-9]{0,18}):([1-9][0-9]{0,18})")
+_GUEST = re.compile(r"([1-9][0-9]{0,18}):([1-9][0-9]{0,18}):([1-9][0-9]{0,18})")
 _CHANNEL = re.compile(r"^[CDG][A-Z0-9]{2,31}$")
 _MESSAGE_TS = re.compile(r"[0-9]{1,12}\.[0-9]{1,8}")
 _RESPONSE_URL = re.compile(r"https://hooks\.slack(-gov)?\.com/actions/[A-Za-z0-9]+/[0-9]+/[A-Za-z0-9]+")
@@ -179,6 +207,19 @@ def parse_card(value: object) -> tuple[int, int]:
     if match is None:
         raise BadValue("not a card value")
     return _row_id(match.group(1)), _row_id(match.group(2))
+
+
+def guest_value(event_id: int, run: int, guest_id: int) -> str:
+    """``<id>:<run>:<guest>``: a guest button on a member's card, for that call's run."""
+    return f"{event_id}:{run}:{guest_id}"
+
+
+def parse_guest(value: object) -> tuple[int, int, int]:
+    """``<id>:<run>:<guest>``, exactly as ``guest_value`` writes it."""
+    match = _GUEST.fullmatch(value) if isinstance(value, str) else None
+    if match is None:
+        raise BadValue("not a guest value")
+    return _row_id(match.group(1)), _row_id(match.group(2)), _row_id(match.group(3))
 
 
 def message_ts(value: object) -> str | None:

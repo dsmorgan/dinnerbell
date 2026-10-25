@@ -1,0 +1,69 @@
+{
+  "blocks": [
+    {
+      "text": {
+        "emoji": true,
+        "text": "TEST · Today · Thursday, Oct 22",
+        "type": "plain_text"
+      },
+      "type": "header"
+    },
+    {
+      "block_id": "event-7",
+      "text": {
+        "text": "*Dinner* · Who's in?\nAre you in? Tap below.",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "block_id": "event-actions-7",
+      "elements": [
+        {
+          "action_id": "respond_in",
+          "text": {
+            "emoji": true,
+            "text": "In",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "7"
+        },
+        {
+          "action_id": "respond_out",
+          "text": {
+            "emoji": true,
+            "text": "Out",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "7"
+        },
+        {
+          "action_id": "link_event",
+          "text": {
+            "emoji": true,
+            "text": "Open",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "url": "https://dinnerbell.example.com/events/7"
+        }
+      ],
+      "type": "actions"
+    },
+    {
+      "type": "divider"
+    },
+    {
+      "elements": [
+        {
+          "text": "<https://dinnerbell.example.com/me|Your dietary needs> · <https://dinnerbell.example.com/|Your invitations on the web>",
+          "type": "mrkdwn"
+        }
+      ],
+      "type": "context"
+    }
+  ],
+  "type": "home"
+}

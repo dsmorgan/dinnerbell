@@ -42,6 +42,7 @@ from dinnerbell.channels.slack.messages import (
     CALL_OFF,
     CANT_MAKE_IT,
     CLOSE_LABELS,
+    GUEST_ANSWERS,
     OFFER_VERBS,
     POST_NOW,
     choice_button,
@@ -61,7 +62,9 @@ from dinnerbell.domain.events import (
     Window,
 )
 from dinnerbell.domain.feedback import COOK_NOTE_MAX, FeedbackInput, PlaceIssue, Rating
+from dinnerbell.domain.guests import GuestInput
 from dinnerbell.domain.meals import MealInput, Slot
+from dinnerbell.domain.members import MAX_DISPLAY_NAME_LENGTH, Member
 from dinnerbell.domain.offers import MAX_CAPACITY, replaces_call
 from dinnerbell.services.event_views import EventView, TodayView
 from dinnerbell.services.feedback import MAX_AWAITING, Awaiting, FeedbackForm
@@ -576,6 +579,47 @@ def parse_log(values: Any) -> MealInput:
     return MealInput(day=_day(values, "day"), slot=slot, item_id=item, participant_ids=who)
 
 
+# Inviting a guest (#38) ----------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class InviteInput:
+    guest_id: int | None
+    new_guest: GuestInput | None
+
+
+def invite_modal(v: EventView, saved: Sequence[Member], origin: ids.ViewOrigin) -> dict[str, Any]:
+    """Invite a saved guest or a new one to the call. A guest with Slack answers themselves;
+    for one without, you answer and offer roles on your card."""
+    invited = {g.person.id for g in v.guests}
+    choices = [option(m.display_name, str(m.id)) for m in saved if m.id not in invited][:MAX_OPTIONS]
+    blocks: list[Block] = [
+        _intro(v),
+        context("Guests eat with you and can pitch in, but don't vote or suggest. Their dietary needs always apply."),
+    ]
+    if choices:
+        blocks.append(_input("guest", "A saved guest", {"type": "static_select", "options": choices}))
+    blocks.append(_input("name", "Or someone new", {"type": "plain_text_input", "max_length": MAX_DISPLAY_NAME_LENGTH}))
+    if v.dietary_tags:
+        needs: Block = {"type": "multi_static_select", "options": _tag_options(v.dietary_tags)}
+        blocks.append(
+            _input("needs", "Their dietary needs", needs, hint="For someone new. A saved guest keeps theirs.")
+        )
+    return _modal("Invite a guest", ids.INVITE_VIEW, origin, blocks, "Invite")
+
+
+def parse_invite(values: Any) -> InviteInput:
+    guest = _picked(values, "guest")
+    name = _text(values, "name").strip()
+    if (guest is None) == (not name):
+        raise FormError("name", "Pick a saved guest, or type a new guest's name, but not both.")
+    if len(name) > MAX_DISPLAY_NAME_LENGTH:  # Slack enforces max_length; this is a tampered payload
+        raise FormError("name", f"Keep the name to {MAX_DISPLAY_NAME_LENGTH} characters.")
+    if guest is not None:
+        return InviteInput(guest, None)
+    return InviteInput(None, GuestInput(name, _picked_many(values, "needs")))
+
+
 # App Home ----------------------------------------------------------------------------------------
 
 
@@ -587,7 +631,7 @@ class HomeLinks:
         return f"{self.base_url}{path}"
 
 
-def _event_card(v: EventView, links: HomeLinks, today: date) -> list[Block]:
+def _event_card(v: EventView, links: HomeLinks, today: date, *, guest: bool = False) -> list[Block]:
     state = v.event.state
     day = "" if v.event.day == today else f" · {day_label(v.event.day)}"  # posted early (#59)
     lines = [f"*{v.event.slot.value.capitalize()}*{day} · {state.label}"]
@@ -610,12 +654,15 @@ def _event_card(v: EventView, links: HomeLinks, today: date) -> list[Block]:
     value = ids.event_value(v.id)
     buttons: list[Block] = []
     if v.can.respond:
-        # Home is per member, so their answer shows as selected (spec section 10).
+        # Home is per member, so their answer shows as selected (spec section 10). A guest is
+        # in or out, with no details (#38).
         answer = v.mine.status if v.mine is not None else None
+        choices = GUEST_ANSWERS if guest else ANSWERS
         buttons += [
-            *(choice_button(ANSWER_WORDS[s], ids.ACTION_FOR_STATUS[s], value, selected=s is answer) for s in ANSWERS),
-            button("Details", ids.DETAILS, value),
+            choice_button(ANSWER_WORDS[s], ids.ACTION_FOR_STATUS[s], value, selected=s is answer) for s in choices
         ]
+        if not guest:
+            buttons.append(button("Details", ids.DETAILS, value))
     if v.can.mark_done:
         buttons.append(mark_done_button(v.info))
     # Home is per member, so these show only to people allowed to use them (FR-56).
@@ -700,6 +747,19 @@ def _awaiting(awaiting: Sequence[Awaiting], links: HomeLinks) -> list[Block]:
     return blocks
 
 
+def _guest_home(head: list[Block], current: list[list[Block]], links: HomeLinks) -> dict[str, Any]:
+    blocks = list(head)
+    for card in current[: (MAX_VIEW_BLOCKS - len(head) - 4) // 2]:
+        blocks += card
+    if not current:
+        blocks.append(section("No invitations right now. When a member invites you to a meal, it shows here."))
+    blocks += [
+        divider(),
+        context(f"<{links.url('/me')}|Your dietary needs> · <{links.url('/')}|Your invitations on the web>"),
+    ]
+    return {"type": "home", "blocks": blocks}
+
+
 def home_view(
     today: TodayView,
     links: HomeLinks,
@@ -707,9 +767,12 @@ def home_view(
     *,
     label: str = "",
     awaiting: Sequence[Awaiting] = (),
+    guest: bool = False,
 ) -> dict[str, Any]:
     """Each member's Home tab. ``label``, the instance label, prefixes the header when set.
-    ``awaiting`` lists meals the member hasn't given feedback on yet.
+    ``awaiting`` lists meals the member hasn't given feedback on yet. A guest's Home (``guest``)
+    shows only the calls they're invited to, with In, Out, and what they may do, and none of
+    the household's buttons or links (#38).
 
     It leaves room for the version footer (``blocks.with_version_footer``) within Slack's 100
     blocks, and keeps the start buttons and the links at the bottom: when calls and offers
@@ -719,7 +782,9 @@ def home_view(
     if notice:
         head.append(section(f"*{escape(clip(notice, 500))}*"))
     current = [
-        _offer_card(v, v.offer, links, today.today) if v.offer is not None else _event_card(v, links, today.today)
+        _offer_card(v, v.offer, links, today.today)
+        if v.offer is not None
+        else _event_card(v, links, today.today, guest=guest)
         for v in today.current
     ]
     upcoming = [_upcoming_card(v, links) for v in today.upcoming]
@@ -741,6 +806,8 @@ def home_view(
             f"<{links.url('/history')}|History> · <{links.url('/')}|Today on the web>"
         ),
     ]
+    if guest:
+        return _guest_home(head, current, links)
     # One block for the footer, one for the start buttons, and one for "…and N more".
     room = MAX_VIEW_BLOCKS - 1 - len(head) - 1 - len(tail) - 1 - (1 if upcoming else 0) - (0 if current else 1)
     blocks = list(head)

@@ -38,7 +38,7 @@ Keep the directory name `dinnerbell`, and run every command in this guide as the
 
 1. Go to [slack.com/get-started](https://slack.com/get-started).
 2. Create a new workspace for your household. The free plan is enough.
-3. Create a channel named `#dinnerbell`.
+3. Create a channel named `#dinnerbell`. Make it public: a private channel works too, but the Slack app then also needs the `groups:read` and `groups:history` scopes, which Dinnerbell uses to read who's in the channel.
 
 The free plan limits history to 90 days and the number of apps to 10. Neither matters: Dinnerbell is the system of record, and it is the only app.
 
@@ -313,7 +313,20 @@ Dinnerbell needs each member's Slack user to mention them, send them direct mess
 
 The email match links only full members of your workspace, never guests or people from other organizations. A link you set or clear by hand stays that way: the hourly match and sign-in leave it alone. To hand a member back to automatic linking, select **Back to automatic** on their edit page.
 
-The **Members** page shows who is linked. Someone who isn't linked gets a private "I don't know your Slack account yet" message when they tap a button.
+The **Members** page shows who is linked. Someone in the channel who isn't linked gets **Join Dinnerbell** when they tap a button (see below), or, with joining off, a private "I don't know your Slack account yet" message.
+
+### Guests and joining from the channel
+
+A guest eats with the household when a member invites them to a call: they answer In or Out and can pitch in, but never vote or suggest. See spec sections 3 and 5.5.
+
+**Join from the channel** is on by default. Anyone in the Dinnerbell channel who isn't in Dinnerbell can then join as a guest: from **Join Dinnerbell** in Slack, or by signing in on the web with Slack. Dinnerbell checks with Slack first that they're a real person of your workspace who's in the channel; bots, deactivated accounts, and people from other organizations can't join. You get a direct message for each join, with **Make member** and **Remove**. Joined guests appear in every member's **Invite a guest** list.
+
+- To add only the people you choose, turn **Join from the channel** off on **Members**. Do it right after upgrading if you don't want anyone to join on their own.
+- **Add people from the channel** on **Members** lists everyone in the channel who isn't in Dinnerbell, to add each as a guest or a member.
+- If someone you invited by email joins as a guest because their Slack email differs, select **Link to member** on their guest row: their Slack account moves to their membership. Anyone can take any name in Slack, so check the Slack account and the email Slack shares, shown in the join message and on the guest row. When that email isn't the member's, or they use a Slack guest account, the page shows both emails and asks you to type the member's name to link anyway. Admins aren't offered: an admin sets their own Slack member ID on their row.
+- **Remove** signs a guest out and stops them joining again until you select **Add back**.
+
+Joining needs no extra Slack scopes for a public channel: `channels:read` reads who's in it and `users:read` checks the person. A private channel needs `groups:read`.
 
 ## 12. Load the catalog
 

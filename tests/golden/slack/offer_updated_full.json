@@ -17,7 +17,7 @@
     },
     {
       "text": {
-        "text": "*Eating* · 4 people\n• <@U01ALEX>\n• <@U02SAM> · +1 guest\n• <@U03KIM>\n*Guests' dietary needs:* Vegetarian",
+        "text": "*Eating* · 4 people\n• <@U01ALEX>\n• <@U02SAM> · +1 guest\n• <@U03KIM>\n*Dietary needs:* Vegetarian",
         "type": "mrkdwn"
       },
       "type": "section"

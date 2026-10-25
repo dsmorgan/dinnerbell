@@ -1,0 +1,28 @@
+{
+  "blocks": [
+    {
+      "text": {
+        "text": "Hi Kim! Your guest Pat is *picking up* for dinner on Thursday, Oct 22: *Sam's Tacos* · Cook · Mexican.\n*When:* 6:45 PM · *Eating:* 3 people (1 guest)\n*Dietary needs:* Vegetarian\n*Also helping:* Sam (cooking), Alex (coordinating)",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "block_id": "more",
+      "elements": [
+        {
+          "action_id": "link_event",
+          "text": {
+            "emoji": true,
+            "text": "View on web",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "url": "https://dinnerbell.example.com/events/7"
+        }
+      ],
+      "type": "actions"
+    }
+  ],
+  "text": "Pat is picking up for dinner at 6:45 PM: Sam's Tacos."
+}

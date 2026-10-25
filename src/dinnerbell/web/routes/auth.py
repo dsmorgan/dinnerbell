@@ -11,8 +11,9 @@ from fastapi import APIRouter, Request
 from fastapi.responses import RedirectResponse
 from starlette.responses import Response
 
-from dinnerbell.domain.identity import Refusal, Refuse
+from dinnerbell.domain.identity import IdentityClaims, Refusal, Refuse
 from dinnerbell.services import auth as auth_service
+from dinnerbell.services import guests
 from dinnerbell.web.auth import (
     Context,
     CSRFCheckedIfSignedIn,
@@ -124,15 +125,58 @@ async def _complete(
         db,
         claims,
         required_team_id=context.settings.slack_team_id,
+        slack_sign_in=context.settings.slack_sign_in,
         now=context.clock(),
         replaces_token=request.cookies.get(context.cookies.session),
     )
+    if isinstance(outcome, Refuse) and await _join(context, db, claims, outcome):
+        # #38, option B: someone in the Dinnerbell channel joined as a guest; sign them in.
+        outcome = await auth_service.sign_in(
+            db,
+            claims,
+            required_team_id=context.settings.slack_team_id,
+            slack_sign_in=context.settings.slack_sign_in,
+            now=context.clock(),
+            replaces_token=request.cookies.get(context.cookies.session),
+        )
     if isinstance(outcome, Refuse):
         title, message = REFUSAL_MESSAGES[outcome.reason]
         return await render(request, "refused.html", {"title": title, "message": message}, status_code=403)
     response = RedirectResponse("/", status_code=303)
     response.headers.append("Set-Cookie", session_cookie_header(context.cookies, context.settings, outcome.token))
     return response
+
+
+JOINABLE = frozenset({Refusal.UNKNOWN_EMAIL, Refusal.EMAIL_NOT_VERIFIED})
+"""Refusals that joining from the channel can answer: Dinnerbell doesn't know this person yet."""
+
+
+async def _join(context: AppContext, db: Database, claims: IdentityClaims, refusal: Refuse) -> bool:
+    """Sign in with Slack works for anyone in the Dinnerbell channel (#38, option B): with Slack
+    as the provider, its workspace checked, and joining on, Slack is asked whether this is a
+    real person of the workspace in the channel, and if so they join as a guest. Rate-limited
+    per Slack user, and audited either way."""
+    slack_id = claims.slack_user_id
+    people = context.slack_people
+    if refusal.reason not in JOINABLE or people is None or not context.settings.slack_sign_in or not slack_id:
+        return False
+    now = context.clock()
+    if not context.join_limiter.allow(slack_id, now):
+        if context.join_limiter.first_refusal(slack_id):  # audited once per window
+            await guests.record_refusal(db, slack_id, guests.NotJoinable.TOO_MANY, via="web", now=now)
+        return False
+    if not await guests.joining_open(db):
+        await guests.record_refusal(db, slack_id, guests.NotJoinable.OFF, via="web", now=now)
+        return False
+    person = await people.person(slack_id)
+    if not isinstance(person, guests.SlackPerson):
+        await guests.record_refusal(db, slack_id, person, via="web", now=now)
+        return False
+    try:
+        await guests.join(db, person, via="web", now=now)
+    except guests.JoinRefused:
+        return False
+    return True
 
 
 async def _provider_problem(request: Request) -> Response:

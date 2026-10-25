@@ -21,7 +21,7 @@ from dinnerbell.db.repositories import MemberRepository
 from dinnerbell.domain.catalog import CatalogItem, TagKind
 from dinnerbell.domain.meals import MealInput, MealLog, MemberRef, TagRef, by_week, can_change, check_meal, week_start
 from dinnerbell.domain.members import Member
-from dinnerbell.services.common import audit
+from dinnerbell.services.common import audit, require_member
 from dinnerbell.services.errors import Forbidden, NotFound
 
 WEEKS_PER_PAGE = 8
@@ -46,11 +46,13 @@ class LogForm:
 
 
 async def log_form(db: AsyncSession, actor: Member, *, today: date) -> LogForm:
+    require_member(actor)
     items = sorted((i for i in await CatalogRepository(db).items(actor.household_id) if i.active), key=lambda i: i.key)
     return LogForm(today, actor.id, tuple(items), tuple(await participant_choices(db, actor)))
 
 
 async def get_meal(db: AsyncSession, actor: Member, meal_id: int) -> MealLog:
+    require_member(actor)
     meal = await MealLogRepository(db).get(actor.household_id, meal_id)
     if meal is None:
         raise NotFound("No such meal.")
@@ -61,6 +63,7 @@ async def participant_choices(db: AsyncSession, actor: Member, meal: MealLog | N
     """Who can be ticked as having eaten: active members, plus, when editing, everyone already
     on the meal, under the name they had then. Without the second group, editing a meal would
     silently drop a member who has since been deactivated."""
+    require_member(actor)
     return sorted(
         (MemberRef(i, name) for i, name in (await _eligible(db, actor, meal)).items()), key=lambda m: m.name.casefold()
     )
@@ -68,7 +71,8 @@ async def participant_choices(db: AsyncSession, actor: Member, meal: MealLog | N
 
 async def _eligible(db: AsyncSession, actor: Member, meal: MealLog | None) -> dict[int, str]:
     kept = {ref.id: ref.name for ref in meal.participants} if meal is not None else {}
-    active = {m.id: m.display_name for m in await MemberRepository(db).list(actor.household_id) if m.active}
+    # Members only: a guest (#38) is on a meal only from a call they were invited to.
+    active = {m.id: m.display_name for m in await MemberRepository(db).list(actor.household_id) if m.is_member}
     return kept | active  # active members appear under their current name
 
 
@@ -109,6 +113,7 @@ def _payload(data: MealInput) -> dict[str, object]:
 
 
 async def log_meal(db: AsyncSession, actor: Member, data: MealInput, *, today: date, now: datetime) -> MealLog:
+    require_member(actor)
     cuisines, participants = await _snapshots(db, actor, data, today)
     meal_id = await MealLogRepository(db).add(
         household_id=actor.household_id,
@@ -172,6 +177,7 @@ async def delete_meal(db: AsyncSession, actor: Member, meal_id: int, *, now: dat
 
 async def history(db: AsyncSession, actor: Member, *, today: date, page: int = 0) -> History:
     """Meals by week, ``WEEKS_PER_PAGE`` weeks per page, newest first."""
+    require_member(actor)
     page = max(page, 0)
     end = week_start(today) + timedelta(days=6) - timedelta(weeks=WEEKS_PER_PAGE * page)
     start = end - timedelta(weeks=WEEKS_PER_PAGE) + timedelta(days=1)

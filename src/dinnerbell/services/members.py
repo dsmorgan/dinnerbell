@@ -24,10 +24,23 @@ from dinnerbell.domain.members import (
     normalize_email,
     normalize_slack_user_id,
 )
+from dinnerbell.services import guests
 from dinnerbell.services.common import audit, require_admin
 from dinnerbell.services.errors import NotFound
 
 MANAGE_MEMBERS = "Only admins can manage members."
+
+
+class GuestHoldsEmail(MemberRuleViolation):
+    """A guest who joined from the channel has this email from Slack (#38): they're most
+    likely the person the admin means, so the page offers to promote them instead."""
+
+    def __init__(self, guest: Member) -> None:
+        super().__init__(
+            f"{guest.display_name} joined from the Slack channel as a guest with this email. "
+            f"Promote {guest.display_name} instead, so their Slack account and history come along."
+        )
+        self.guest = guest
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,7 +79,11 @@ async def invite_member(db: AsyncSession, actor: Member, data: MemberInput, *, n
     require_admin(actor, MANAGE_MEMBERS)
     clean = _clean(data)
     members = MemberRepository(db)
-    if await members.by_email(actor.household_id, clean.email) is not None:
+    guest = await members.guest_by_slack_email(actor.household_id, clean.email)
+    if guest is not None:
+        raise GuestHoldsEmail(guest)
+    holder = await members.by_email(actor.household_id, clean.email)
+    if holder is not None:
         raise MemberRuleViolation("A member with that email already exists.")
     async with _unique_email(db):
         member = await members.add(
@@ -87,10 +104,17 @@ async def update_member(db: AsyncSession, actor: Member, member_id: int, data: M
     clean = _clean(data)
     members = MemberRepository(db)
     target = await get_member(db, actor, member_id)
+    if target.is_guest:
+        raise MemberRuleViolation("That's a guest. Change them in the Guests section, or make them a member there.")
     everyone = await members.list(actor.household_id)
     check_role_change(actor, target, clean.role, everyone)
     check_email_change(target, clean.email)
-    if clean.email != target.email and await members.by_email(actor.household_id, clean.email) is not None:
+    if clean.email != target.email:
+        guest = await members.guest_by_slack_email(actor.household_id, clean.email)
+        if guest is not None:
+            raise GuestHoldsEmail(guest)
+    holder = await members.by_email(actor.household_id, clean.email) if clean.email != target.email else None
+    if holder is not None:
         raise MemberRuleViolation("A member with that email already exists.")
     async with _unique_email(db):
         updated = await members.update(
@@ -118,9 +142,13 @@ async def set_member_active(db: AsyncSession, actor: Member, member_id: int, act
     target = await get_member(db, actor, member_id)
     if target.active == active:
         return target
+    if target.is_guest and not active:  # with a guest's cleanup: open calls, roles, joins (#38)
+        return await guests.remove(db, actor, member_id, now=now)
     if not active:
         check_deactivation(actor, target, await members.list(actor.household_id))
-    updated = await members.update(actor.household_id, member_id, now, active=active)
+    # A guest added back may join from the channel again (#38).
+    extra = {"join_refused": False} if active and target.is_guest else {}
+    updated = await members.update(actor.household_id, member_id, now, active=active, **extra)
     await _ensure_an_admin_remains(db, actor.household_id)
     if not active:
         await SessionRepository(db).delete_for_member(target.id)
@@ -138,6 +166,8 @@ async def set_slack_user(
     afterward. Audited."""
     require_admin(actor, MANAGE_MEMBERS)
     target = await get_member(db, actor, member_id)
+    if target.is_guest:  # a guest's relink also signs out the old account (``guests.set_guest_slack_user``)
+        raise MemberRuleViolation("That's a guest. Link their Slack account in the Guests section.")
     value = normalize_slack_user_id(slack_user_id)
     if value == target.slack_user_id and target.slack_link_locked:
         return target

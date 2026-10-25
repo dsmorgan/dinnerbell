@@ -16,6 +16,7 @@ from starlette.responses import Response
 from dinnerbell.domain.catalog import ItemKind, tags_by_kind
 from dinnerbell.domain.members import Capabilities
 from dinnerbell.domain.preferences import LEVEL_LABELS, LEVELS, NEUTRAL, InvalidPreference, Stance, TargetType
+from dinnerbell.services import guests
 from dinnerbell.services import preferences as preference_service
 from dinnerbell.services.errors import NotFound
 from dinnerbell.web.auth import Context, CSRFChecked, Database, Principal, SignedIn
@@ -47,6 +48,7 @@ async def preferences_page(request: Request, principal: SignedIn, db: Database, 
             "TargetType": TargetType,
             "me": principal.member,
             "notice": NOTICES.get(notice),
+            "dietary_tags": await guests.dietary_tags(db, principal.member),
         },
     )
 
