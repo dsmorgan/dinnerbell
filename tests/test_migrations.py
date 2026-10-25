@@ -83,9 +83,9 @@ def test_creates_missing_data_directory(tmp_path: Path) -> None:
 def test_downgrade_then_upgrade(migrated: Settings) -> None:
     from alembic import command
 
-    from dinnerbell.db.migrate import _alembic_config
+    from dinnerbell.db.migrate import _alembic_config, migration_engine
 
-    engine = create_sync_engine(migrated.sync_database_url)
+    engine = migration_engine(migrated.sync_database_url)
     try:
         with engine.begin() as connection:
             command.downgrade(_alembic_config(connection), "base")
@@ -129,12 +129,13 @@ def test_database_errors_hide_bound_parameters(migrated: Settings) -> None:
 
 
 def _upgrade_to(settings: Settings, revision: str) -> None:
+    """Upgrade as ``run_migrations`` does, with foreign keys off, but only to ``revision``."""
     from alembic import command
 
-    from dinnerbell.db.migrate import _alembic_config
+    from dinnerbell.db.migrate import _alembic_config, migration_engine
 
     settings.database_path.parent.mkdir(parents=True, exist_ok=True)
-    engine = create_sync_engine(settings.sync_database_url)
+    engine = migration_engine(settings.sync_database_url)
     try:
         with engine.begin() as connection:
             command.upgrade(_alembic_config(connection), revision)
@@ -143,11 +144,12 @@ def _upgrade_to(settings: Settings, revision: str) -> None:
 
 
 def _downgrade_to(settings: Settings, revision: str) -> None:
+    """Downgrade with foreign keys off, so a batch rebuild can't cascade (#36)."""
     from alembic import command
 
-    from dinnerbell.db.migrate import _alembic_config
+    from dinnerbell.db.migrate import _alembic_config, migration_engine
 
-    engine = create_sync_engine(settings.sync_database_url)
+    engine = migration_engine(settings.sync_database_url)
     try:
         with engine.begin() as connection:
             command.downgrade(_alembic_config(connection), revision)
@@ -385,3 +387,137 @@ def test_0006_adds_who_called_a_call_off_and_downgrade_removes_it(settings: Sett
     finally:
         engine.dispose()
     run_migrations(settings.sync_database_url, settings.database_path)
+
+
+# 0007: event IDs are never reused (#60) -------------------------------------------------------
+
+EVENT_CHILDREN = ("response", "suggestion", "proposal", "vote", "assignment", "outbox", "meal_log")
+CALL_ROWS = [
+    "INSERT INTO household (id, name, timezone, settings, created_at) VALUES (1, 'H', 'UTC', '{}', :t)",
+    "INSERT INTO member (id, household_id, display_name, email, role, can_cook, can_pickup, can_order, "
+    "mute_dm_reminders, feedback_reminder, active, slack_link_locked, created_at, updated_at) "
+    "VALUES (1, 1, 'Sam', 'sam@example.com', 'admin', 1, 0, 0, 0, 0, 1, 0, :t, :t)",
+    "INSERT INTO catalog_item (id, household_id, kind, name, name_key, modes, active, created_at, updated_at) "
+    "VALUES (1, 1, 'restaurant', 'X', 'x', '[\"pickup\"]', 1, :t, :t)",
+    "INSERT INTO event (id, household_id, kind, slot, date, state, run, version, opens_at, respond_deadline, "
+    "reminder_minutes, vote_minutes, created_by, coordinator_id, decided_item_id, decided_mode, created_at, "
+    "updated_at) VALUES (1, 1, 'call', 'dinner', '2026-10-21', 'done', 1, 3, :t, :t, 15, 45, 1, 1, 1, 'pickup', "
+    ":t, :t)",
+    "INSERT INTO event (id, household_id, kind, slot, date, state, run, version, opens_at, respond_deadline, "
+    "reminder_minutes, vote_minutes, created_at, updated_at) "
+    "VALUES (2, 1, 'call', 'dinner', '2026-10-22', 'voting', 2, 1, :t, :t, 15, 45, :t, :t)",
+    "INSERT INTO response (household_id, event_id, member_id, status, guests, guest_needs, offers_cook, "
+    "offers_pickup, offers_order, maybe_at_deadline, responded_at, updated_at) "
+    "VALUES (1, 2, 1, 'in', 1, '[]', 0, 1, 0, 0, :t, :t), (1, 1, 1, 'in', 0, '[]', 0, 0, 0, 0, :t, :t)",
+    "INSERT INTO suggestion (household_id, event_id, member_id, free_text, created_at) VALUES (1, 2, 1, 'Soup', :t)",
+    "INSERT INTO proposal (id, household_id, event_id, item_id, mode, rank, reasons, source, created_at) "
+    "VALUES (1, 1, 2, 1, 'pickup', 1, '[]', 'system', :t)",
+    "INSERT INTO vote (household_id, event_id, proposal_id, member_id, created_at) VALUES (1, 2, 1, 1, :t)",
+    "INSERT INTO assignment (household_id, event_id, member_id, role, created_at) VALUES (1, 1, 1, 'pickup', :t)",
+    "INSERT INTO outbox (household_id, event_id, kind, payload, idempotency_key, message_key, created_at, "
+    "updated_at, available_at, attempts, delivered_at, ref_channel, ref_message) VALUES "
+    "(1, 2, 'call_opened', '{}', 'event:2:run2:call_opened', 'event:2:run2:call', :t, :t, :t, 1, :t, 'C1', '1.0'), "
+    "(1, 2, 'call_updated', '{}', 'event:2:run2:call_updated:1', 'event:2:run2:call', :t, :t, :t, 0, NULL, NULL, "
+    "NULL)",
+    "INSERT INTO meal_log (household_id, date, slot, item_id, cuisine_tags, participants, event_id, created_at, "
+    "updated_at) VALUES (1, '2026-10-21', 'dinner', 1, '[]', '[]', 1, :t, :t)",
+]
+
+
+def _populate_calls(settings: Settings) -> None:
+    engine = create_sync_engine(settings.sync_database_url)
+    try:
+        with engine.begin() as c:
+            for statement in CALL_ROWS:
+                c.execute(text(statement), {"t": STAMP})
+    finally:
+        engine.dispose()
+
+
+def _snapshot(settings: Settings) -> dict[str, object]:
+    """Every row of ``event`` and the tables that refer to it, and the event table's indexes
+    and constraints, for comparing across a rebuild."""
+    engine = create_engine(settings.sync_database_url)
+    try:
+        with engine.connect() as c:
+            rows = {t: c.execute(text(f"SELECT * FROM {t} ORDER BY rowid")).all() for t in ("event", *EVENT_CHILDREN)}  # noqa: S608
+            indexes = c.execute(
+                text("SELECT name, sql FROM sqlite_master WHERE type = 'index' AND sql IS NOT NULL ORDER BY name")
+            ).all()
+            table = c.execute(text("SELECT sql FROM sqlite_master WHERE name = 'event'")).scalar_one()
+            assert c.execute(text("PRAGMA foreign_key_check")).all() == []
+    finally:
+        engine.dispose()
+    # The primary key moves inline (``id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT``); the rest stay.
+    lines = (line.strip().rstrip(",") for line in table.splitlines())
+    constraints = sorted(line for line in lines if "CONSTRAINT" in line and "PRIMARY KEY" not in line)
+    return {"rows": rows, "indexes": indexes, "constraints": constraints}
+
+
+def _event_sql(settings: Settings) -> str:
+    engine = create_engine(settings.sync_database_url)
+    try:
+        with engine.connect() as c:
+            sql: str = c.execute(text("SELECT sql FROM sqlite_master WHERE name = 'event'")).scalar_one()
+    finally:
+        engine.dispose()
+    return sql
+
+
+def test_0007_rebuilds_event_without_losing_a_row(settings: Settings) -> None:
+    """Rebuilding ``event``, the parent of every call table, keeps every child row and every
+    reference, up and down and up again, along with the event table's indexes (the one-call-per-
+    slot partial index too) and constraints."""
+    _upgrade_to(settings, "0006_event_ended_by")
+    _populate_calls(settings)
+    before = _snapshot(settings)
+    assert all(before["rows"][t] for t in ("event", *EVENT_CHILDREN))  # type: ignore[index]
+    assert "AUTOINCREMENT" not in _event_sql(settings)
+
+    run_migrations(settings.sync_database_url, settings.database_path)
+    assert "AUTOINCREMENT" in _event_sql(settings)
+    assert _snapshot(settings) == before
+
+    _downgrade_to(settings, "0006_event_ended_by")
+    assert "AUTOINCREMENT" not in _event_sql(settings)
+    assert _snapshot(settings) == before
+
+    run_migrations(settings.sync_database_url, settings.database_path)
+    assert _snapshot(settings) == before
+    index = next(i for i in before["indexes"] if i[0] == "uq_event_call_per_slot")  # type: ignore[attr-defined]
+    assert index[1].endswith("WHERE kind = 'call'")
+
+
+def test_0007_never_reuses_an_event_id(settings: Settings, tmp_path: Path) -> None:
+    """After the upgrade, deleting the newest event doesn't free its ID, on a database that
+    already had events before migrating."""
+    _upgrade_to(settings, "0006_event_ended_by")
+    _populate_calls(settings)
+    run_migrations(settings.sync_database_url, settings.database_path)
+    engine = create_sync_engine(settings.sync_database_url)
+    try:
+        with engine.begin() as c:
+            c.execute(text("DELETE FROM event WHERE id = 2"))
+            c.execute(text(EVENT_INSERT), {"kind": "call", "t": STAMP})
+            assert c.execute(text("SELECT max(id) FROM event")).scalar() == 3
+            assert c.execute(text("SELECT count(*) FROM response WHERE event_id = 3")).scalar() == 0
+    finally:
+        engine.dispose()
+
+
+def test_0007_refuses_to_run_with_foreign_keys_on(settings: Settings) -> None:
+    """With foreign keys on, dropping the old event table would cascade, so 0007 refuses."""
+    from alembic import command
+
+    from dinnerbell.db.migrate import _alembic_config
+
+    _upgrade_to(settings, "0006_event_ended_by")
+    _populate_calls(settings)
+    engine = create_sync_engine(settings.sync_database_url)  # the app's engine: foreign keys on
+    try:
+        with pytest.raises(RuntimeError, match="foreign keys on"), engine.begin() as connection:
+            command.upgrade(_alembic_config(connection), "0007_event_autoincrement")
+        with engine.connect() as c:
+            assert c.execute(text("SELECT count(*) FROM response")).scalar() == 2
+    finally:
+        engine.dispose()
