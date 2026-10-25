@@ -731,9 +731,9 @@ A copy of production's data tests migrations and new features against real histo
    deploy/dinnerbell-test run --rm dinnerbell scrub-test --keep you@example.com
    ```
 
-   Before it changes anything, `scrub-test` prints the database path, the household name, its last activity, and counts of active members, enabled slots, open events, and unsent notifications. Check that the household and counts match the copy you restored, and that the last activity is from around when the backup was taken. Then type `scrub` to confirm. If it refuses because there's no terminal to ask on, check the same numbers in its output, and run the command again with `--yes` added.
+   Before it changes anything, `scrub-test` prints the database path, the household name, its last activity, and counts of active members, enabled slots, open events, unsent notifications, and feedback on meals. Check that the household and counts match the copy you restored, and that the last activity is from around when the backup was taken. Then type `scrub` to confirm. If it refuses because there's no terminal to ask on, check the same numbers in its output, and run the command again with `--yes` added.
 
-   `scrub-test` deactivates and unlinks from Slack every member you didn't keep, turns off every slot, ends open calls without notifying anyone, and empties the outbox. It leaves the meal log, catalog, and preferences alone. It refuses to run, and changes nothing, unless `DINNERBELL_INSTANCE_LABEL` is set. It migrates the database first, so run it with the same tag you start next: an older release refuses a database that a newer one migrated. Running it again changes nothing.
+   `scrub-test` deactivates and unlinks from Slack every member you didn't keep, turns off every slot, ends open calls without notifying anyone, empties the outbox, and deletes all feedback on meals, which says how each member rated them. It leaves the meal log, catalog, and preferences alone. It refuses to run, and changes nothing, unless `DINNERBELL_INSTANCE_LABEL` is set. It migrates the database first, so run it with the same tag you start next: an older release refuses a database that a newer one migrated. Running it again changes nothing.
 
 6. Start the test instance.
 
@@ -753,9 +753,9 @@ On production, a call that's decided, done, or past its meal time stays: history
   deploy/dinnerbell-test run --rm dinnerbell discard-call 12
   ```
 
-  `12` is the call's ID, from its page's address, `/events/12`. The command prints the call and how many answers, suggestions, proposals, votes, assignments, meal log entries, and unsent notifications it has, then asks you to type `discard`. Add `--yes` to skip the question. It works while test is running; the running instance sends the Slack edits.
+  `12` is the call's ID, from its page's address, `/events/12`. The command prints the call and how many answers, suggestions, proposals, votes, assignments, meal log entries, feedback on that meal, and unsent notifications it has, then asks you to type `discard`. Add `--yes` to skip the question. It works while test is running; the running instance sends the Slack edits.
 
-  Discarding deletes the call and everything in it, in one step: answers (with guests and role offers), suggestions, proposals, votes, the decision, assignments, the meal it logged, and its notifications that weren't sent yet. The call's messages in Slack change to "Discarded (test)", with no buttons. The audit log keeps an `event.discarded` row with the call's ID, slot, date, and counts. You can't undo a discard. Discarded IDs are never reused, so an old Slack button or link can't reach the next call.
+  Discarding deletes the call and everything in it, in one step: answers (with guests and role offers), suggestions, proposals, votes, the decision, assignments, the meal it logged and any feedback on it, and its notifications that weren't sent yet. The call's messages in Slack change to "Discarded (test)", with no buttons. The audit log keeps an `event.discarded` row with the call's ID, slot, date, and counts. You can't undo a discard. Discarded IDs are never reused, so an old Slack button or link can't reach the next call.
 
 - **Start a called-off call again at any time.** On production, **Start dinner again** after a call-off works only until the usual meal time plus two hours. On test, it works at any time that day, on the web, in App Home, and with `/dinnerbell-test call`.
 

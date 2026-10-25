@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from dinnerbell.db.models import (
     AssignmentRow,
     EventRow,
+    FeedbackRow,
     MealLogRow,
     ProposalRow,
     ResponseRow,
@@ -55,9 +56,16 @@ EVENT_ROWS: tuple[type[VoteRow | ProposalRow | SuggestionRow | ResponseRow | Ass
 before its proposal). Discarding a call (``EventRepository.discard``) deletes their rows; the
 outbox, which refers to events too, is ``OutboxRepository.discard_event``'s. A test fails when
 a table refers to ``event`` and isn't one of these or the outbox."""
-# TODO(m3a-feedback): the feedback tables refer to events. Whichever pull request lands second
-# adds them here; tests/test_discard.py::test_discard_handles_every_table_that_refers_to_an_event
-# fails until it does.
+FEEDBACK = "feedback"
+"""Feedback belongs to the meal a call logged, not to the event, so it isn't in ``EVENT_ROWS``.
+Discarding deletes it with the meal, explicitly rather than by the foreign key's cascade, so the
+count is right whatever the connection's ``PRAGMA foreign_keys``. Only the number is reported."""
+
+
+def _event_feedback(household_id: int, event_id: int) -> Any:
+    """Feedback on the meal ``event_id`` logged."""
+    meals = select(MealLogRow.id).where(MealLogRow.household_id == household_id, MealLogRow.event_id == event_id)
+    return (FeedbackRow.household_id == household_id) & FeedbackRow.meal_id.in_(meals)
 
 
 def _event(row: EventRow) -> Event:
@@ -109,8 +117,12 @@ class EventRepository:
         return int(getattr(result, "rowcount", 0) or 0) == 1
 
     async def linked_counts(self, household_id: int, event_id: int) -> dict[str, int]:
-        """How many rows of each ``EVENT_ROWS`` table belong to the event, by table name."""
-        counts: dict[str, int] = {}
+        """How many rows of each ``EVENT_ROWS`` table belong to the event, by table name, and
+        how many feedback rows are on its meal (only the number, never whose)."""
+        found = await self._session.scalar(
+            select(func.count()).select_from(FeedbackRow).where(_event_feedback(household_id, event_id))
+        )
+        counts: dict[str, int] = {FEEDBACK: int(found or 0)}
         for model in EVENT_ROWS:
             found = await self._session.scalar(
                 select(func.count())
@@ -124,7 +136,12 @@ class EventRepository:
         """Delete the event and its rows in every ``EVENT_ROWS`` table, including the meal it
         logged. Returns how many rows went from each table, by table name. The outbox is the
         caller's (``OutboxRepository.discard_event``), before this. For a test instance only."""
-        counts: dict[str, int] = {}
+        gone = await self._session.execute(
+            delete(FeedbackRow)
+            .where(_event_feedback(household_id, event_id))
+            .execution_options(synchronize_session=False)
+        )
+        counts: dict[str, int] = {FEEDBACK: int(getattr(gone, "rowcount", 0) or 0)}
         for model in EVENT_ROWS:
             result = await self._session.execute(
                 delete(model)

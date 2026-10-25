@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Modals and the App Home tab (spec section 10): the Details, Add proposal, Call it off, and
-Close now modals, and each member's Home with today's calls and those coming up.
+"""Modals and the App Home tab (spec section 10): the Details, Add proposal, Call it off, Close
+now, and feedback modals, and each member's Home with today's calls, those coming up, and meals
+awaiting feedback.
 
 Modals carry their event and origin in ``private_metadata`` (see ``ids.ViewOrigin``). Input
 blocks use fixed block and action IDs, which ``parse_details`` and ``parse_proposal`` read
@@ -9,7 +10,7 @@ back as untrusted input.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import date, time
 from typing import Any
@@ -55,8 +56,10 @@ from dinnerbell.domain.events import (
     Status,
     Window,
 )
+from dinnerbell.domain.feedback import COOK_NOTE_MAX, FeedbackInput, PlaceIssue, Rating
 from dinnerbell.domain.meals import Slot
 from dinnerbell.services.event_views import EventView, TodayView
+from dinnerbell.services.feedback import MAX_AWAITING, Awaiting, FeedbackForm
 
 VALUE = "value"
 """Every input's action ID; blocks are told apart by block ID."""
@@ -343,6 +346,91 @@ def close_modal(v: EventView, origin: ids.ViewOrigin) -> dict[str, Any]:
     return _modal(CLOSE_LABELS[window], ids.CLOSE_VIEW, origin, blocks, CLOSE_SUBMIT[window], close="Not yet")
 
 
+# Feedback (FR-45 to FR-49) -------------------------------------------------------------------------
+
+PRIVATE = "Only you see your ratings. The catalog shows only how many loved an item, never who."
+THANKS = "thanks"
+NO_ANSWER = option("No answer", "none")
+"""Slack can't unselect a radio button, so this is how a rating is cleared, as on the web."""
+
+
+def _rating_options() -> list[dict[str, Any]]:
+    return [*(option(r.label, r.value) for r in Rating), NO_ANSWER]
+
+
+def _radio(answer: Rating | None) -> Block:
+    initial = option(answer.label, answer.value) if answer is not None else NO_ANSWER
+    return {"type": "radio_buttons", "options": _rating_options(), "initial_option": initial}
+
+
+def feedback_modal(form: FeedbackForm, origin: ids.ViewOrigin) -> dict[str, Any]:
+    """How was it? The food, the place for a restaurant, and the cook for a home meal someone
+    else cooked, each optional and prefilled with the member's answers (FR-46). ``origin.run``
+    is the run of the call, which saving checks again."""
+    facts, mine = form.facts, form.mine or FeedbackInput()
+    intro = f"*{facts.slot.value.capitalize()} · {day_label(facts.day)}* · {escape(facts.item_name)}"
+    blocks: list[Block] = [context(intro), _input("food", "The food", _radio(mine.food))]
+    if facts.has_place:
+        blocks.append(_input("place", "The place", _radio(mine.place)))
+        chips: Block = {"type": "checkboxes", "options": [option(i.label, i.value) for i in PlaceIssue]}
+        chosen = [option(i.label, i.value) for i in PlaceIssue if i in mine.place_issues]
+        if chosen:
+            chips["initial_options"] = chosen
+        blocks.append(_input("place_issues", "Anything go wrong?", chips))
+    if form.thanks_cook and facts.cook is not None:
+        cook = facts.cook.name
+        thanks: Block = {"type": "checkboxes", "options": [option(f"Thanks, {cook}!", THANKS)]}
+        if mine.cook_thanks:
+            thanks["initial_options"] = thanks["options"]
+        blocks.append(_input("cook_thanks", "The cook", thanks))
+        note: Block = {"type": "plain_text_input", "max_length": COOK_NOTE_MAX, "multiline": True}
+        if mine.cook_note:
+            note["initial_value"] = mine.cook_note
+        blocks.append(_input("cook_note", f"A note for {cook}", note, hint=f"Only {cook} sees it."))
+    blocks.append(context(f"{PRIVATE} You can change it until {day_label(form.closes_on)}."))
+    return _modal("How was it?", ids.FEEDBACK_VIEW, origin, blocks, "Save")
+
+
+def _picked_rating(values: Any, block_id: str) -> Rating | None:
+    selected = _state(values, block_id).get("selected_option")
+    if selected is None:
+        return None
+    raw = selected.get("value") if isinstance(selected, dict) else None
+    if raw == NO_ANSWER["value"]:
+        return None
+    if raw not in {r.value for r in Rating}:
+        raise ids.BadValue("not a rating")
+    return Rating(str(raw))
+
+
+def _picked_values(values: Any, block_id: str) -> list[str]:
+    selected = _state(values, block_id).get("selected_options") or []
+    if not isinstance(selected, list) or not all(isinstance(o, dict) for o in selected):
+        raise ids.BadValue("bad selection")
+    return [str(o.get("value")) for o in selected]
+
+
+def parse_feedback(values: Any) -> FeedbackInput:
+    """The feedback modal's state as ``FeedbackInput``. Raises FormError or ids.BadValue.
+    ``feedback.give`` checks the subjects against the meal."""
+    issues = _picked_values(values, "place_issues")
+    if not set(issues) <= {i.value for i in PlaceIssue}:
+        raise ids.BadValue("not an issue")
+    thanks = _picked_values(values, "cook_thanks")
+    if not set(thanks) <= {THANKS}:
+        raise ids.BadValue("not a thank-you")
+    note = _text(values, "cook_note")
+    if len(note) > COOK_NOTE_MAX:  # Slack enforces max_length; this is a tampered payload
+        raise FormError("cook_note", f"Keep the note to {COOK_NOTE_MAX} characters.")
+    return FeedbackInput(
+        food=_picked_rating(values, "food"),
+        place=_picked_rating(values, "place"),
+        place_issues=frozenset(PlaceIssue(i) for i in issues),
+        cook_thanks=bool(thanks),
+        cook_note=note or None,
+    )
+
+
 # App Home ----------------------------------------------------------------------------------------
 
 
@@ -413,8 +501,33 @@ def _upcoming_card(v: EventView, links: HomeLinks) -> list[Block]:
     return [section(line, block_id=f"event-{v.id}"), actions(*buttons, block_id=f"event-actions-{v.id}")]
 
 
-def home_view(today: TodayView, links: HomeLinks, notice: str | None = None, *, label: str = "") -> dict[str, Any]:
-    """Each member's Home tab. ``label``, the instance label, prefixes the header when set."""
+def _awaiting(awaiting: Sequence[Awaiting], links: HomeLinks) -> list[Block]:
+    """Meals from done calls the member ate and hasn't said how they were (spec 5.9). At most
+    ``MAX_AWAITING``, one block each, so Home stays far under Slack's 100 blocks."""
+    if not awaiting:
+        return []
+    blocks: list[Block] = [section("*How was it?* Meals you ate in the last week. Only you see your ratings.")]
+    for meal in awaiting[:MAX_AWAITING]:
+        what = f"*{meal.slot.value.capitalize()} · {day_label(meal.day)}*: {escape(meal.item_name)}"
+        row = section(f"{what}\nOpen until {day_label(meal.closes_on)}", block_id=f"feedback-{meal.meal_id}")
+        row["accessory"] = button("How was it?", ids.FEEDBACK, ids.card_value(meal.event_id, meal.run))
+        blocks.append(row)
+    more = len(awaiting) - MAX_AWAITING
+    if more > 0:
+        blocks.append(context(f"…and {more} more on <{links.url('/history')}|History>."))
+    return blocks
+
+
+def home_view(
+    today: TodayView,
+    links: HomeLinks,
+    notice: str | None = None,
+    *,
+    label: str = "",
+    awaiting: Sequence[Awaiting] = (),
+) -> dict[str, Any]:
+    """Each member's Home tab. ``label``, the instance label, prefixes the header when set.
+    ``awaiting`` lists meals the member hasn't given feedback on yet."""
     title = f"Today · {day_label(today.today)}"
     blocks: list[Block] = [header(f"{label} · {title}" if label else title)]
     if notice:
@@ -437,6 +550,7 @@ def home_view(today: TodayView, links: HomeLinks, notice: str | None = None, *, 
         blocks.append(section("*Coming up*"))
         for v in today.upcoming:
             blocks += _upcoming_card(v, links)
+    blocks += _awaiting(awaiting, links)
     blocks += [
         divider(),
         context(

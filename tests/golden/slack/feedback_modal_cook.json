@@ -1,0 +1,96 @@
+{
+  "blocks": [
+    {
+      "elements": [
+        {
+          "text": "*Dinner · Thursday, Oct 22* · Sam's Tacos",
+          "type": "mrkdwn"
+        }
+      ],
+      "type": "context"
+    },
+    {
+      "block_id": "food",
+      "element": {
+        "action_id": "value",
+        "initial_option": {
+          "text": {
+            "emoji": true,
+            "text": "No answer",
+            "type": "plain_text"
+          },
+          "value": "none"
+        },
+        "options": [
+          {
+            "text": {
+              "emoji": true,
+              "text": "Loved it",
+              "type": "plain_text"
+            },
+            "value": "loved"
+          },
+          {
+            "text": {
+              "emoji": true,
+              "text": "Fine",
+              "type": "plain_text"
+            },
+            "value": "fine"
+          },
+          {
+            "text": {
+              "emoji": true,
+              "text": "Not again",
+              "type": "plain_text"
+            },
+            "value": "not_again"
+          },
+          {
+            "text": {
+              "emoji": true,
+              "text": "No answer",
+              "type": "plain_text"
+            },
+            "value": "none"
+          }
+        ],
+        "type": "radio_buttons"
+      },
+      "label": {
+        "emoji": true,
+        "text": "The food",
+        "type": "plain_text"
+      },
+      "optional": true,
+      "type": "input"
+    },
+    {
+      "elements": [
+        {
+          "text": "Only you see your ratings. The catalog shows only how many loved an item, never who. You can change it until Thursday, Oct 29.",
+          "type": "mrkdwn"
+        }
+      ],
+      "type": "context"
+    }
+  ],
+  "callback_id": "feedback_modal",
+  "close": {
+    "emoji": true,
+    "text": "Cancel",
+    "type": "plain_text"
+  },
+  "private_metadata": "{\"event\":7,\"channel\":\"C0DINNER\",\"home\":false,\"run\":1}",
+  "submit": {
+    "emoji": true,
+    "text": "Save",
+    "type": "plain_text"
+  },
+  "title": {
+    "emoji": true,
+    "text": "How was it?",
+    "type": "plain_text"
+  },
+  "type": "modal"
+}

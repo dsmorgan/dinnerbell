@@ -1,0 +1,51 @@
+{#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
+{#- How was it? Expects form (a FeedbackForm), answers (FeedbackInput), came_from, back, ratings,
+    issues, note_max, and optionally error. Every subject is optional (FR-46). -#}
+{% extends "base.html" %}
+{% set facts = form.facts %}
+{% block title %}How was it?{% endblock %}
+{% macro rating(name, legend, answer) -%}
+<fieldset class="field">
+  <legend>{{ legend }}</legend>
+  <div class="chip-picker">
+    {% for r in ratings %}
+    <label class="chip-toggle"><input type="radio" name="{{ name }}" value="{{ r.value }}"{% if answer == r %} checked{% endif %}><span>{{ r.label }}</span></label>
+    {% endfor %}
+    <label class="chip-toggle"><input type="radio" name="{{ name }}" value=""{% if answer is none %} checked{% endif %}><span>No answer</span></label>
+  </div>
+</fieldset>
+{%- endmacro %}
+{% block content %}
+<p><a href="{{ back }}">← {{ "The call" if came_from == "event" else "History" }}</a></p>
+<h1>How was it?</h1>
+<p class="muted">{{ facts.slot.value|capitalize }} · {{ facts.day|day }} · <strong>{{ facts.item_name }}</strong></p>
+{% if error %}<p class="alert error" role="alert">{{ error }}</p>{% endif %}
+<form method="post" action="/history/meals/{{ facts.meal_id }}/feedback" class="card stack">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <input type="hidden" name="from" value="{{ came_from }}">
+  {{ rating("food", "The food", answers.food) }}
+  {% if facts.has_place %}
+  {{ rating("place", "The place", answers.place) }}
+  <fieldset class="field">
+    <legend>Anything go wrong?</legend>
+    <div class="chip-picker">
+      {% for i in issues %}
+      <label class="chip-toggle"><input type="checkbox" name="place_issues" value="{{ i.value }}"{% if i in answers.place_issues %} checked{% endif %}><span>{{ i.label }}</span></label>
+      {% endfor %}
+    </div>
+  </fieldset>
+  {% endif %}
+  {% if form.thanks_cook %}
+  <fieldset class="field">
+    <legend>The cook</legend>
+    <label class="check"><input type="checkbox" name="cook_thanks" value="1"{% if answers.cook_thanks %} checked{% endif %}> Thanks, {{ facts.cook.name }}!</label>
+    <label class="field compact">
+      <span class="small muted">A note for {{ facts.cook.name }} (only {{ facts.cook.name }} sees it)</span>
+      <textarea name="cook_note" rows="3" maxlength="{{ note_max }}">{{ answers.cook_note or "" }}</textarea>
+    </label>
+  </fieldset>
+  {% endif %}
+  <p class="small muted">Only you see your ratings. The catalog shows only how many loved an item, never who. You can change this until {{ form.closes_on|day }}.</p>
+  <button type="submit" class="button primary block">Save</button>
+</form>
+{% endblock %}

@@ -8,6 +8,7 @@
 <h1>{% if item %}{{ item.name }}{% else %}Add a {{ kind.label|lower }}{% endif %}</h1>
 {% if notice %}<p class="alert ok" role="status">{{ notice }}</p>{% endif %}
 {% if error %}<p class="alert error" role="alert">{{ error }}</p>{% endif %}
+{% if item %}{% with c=counts %}{% include "_item_counts.html" %}{% endwith %}{% endif %}
 {% if item and not item.active %}<p class="alert">This item is inactive, so it's hidden from proposals. Its history stays.</p>{% endif %}
 <datalist id="tag-names">
   {% for kind_, group in tag_groups.items() %}{% for t in group %}<option value="{{ t.name }}">{% endfor %}{% endfor %}

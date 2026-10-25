@@ -153,7 +153,8 @@ def test_buttons_follow_the_state() -> None:
     assert action_ids("proposals_updated_closed") == ["link_event"]
     assert action_ids("decision_made") == ["mark_done", "link_event", "cancel_call"]
     assert action_ids("decision_made_by_vote") == ["mark_done", "link_item", "link_order", "link_event", "cancel_call"]
-    assert action_ids("decision_updated_done") == ["link_event"]
+    assert action_ids("decision_updated_done") == ["feedback", "link_event"]  # How was it? (FR-47)
+    assert action_ids("feedback_reminder") == ["feedback", "link_event"]
     assert action_ids("decision_updated_cancelled") == ["link_event"]
     for kind in ("call_updated_done", "call_updated_abandoned", "call_updated_cancelled"):
         assert {"call_menu", "cancel_call"}.isdisjoint(action_ids(kind))

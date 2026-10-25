@@ -1,0 +1,27 @@
+{#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
+{#- Feedback on one meal as the viewer may see it (FR-49). Expects meal, fb (a MealFeedback or
+    None), and optionally from_page ("event"). Shows the viewer's own answers, the thank-you
+    count, and, only to the cook they were written to, who thanked them and their notes. -#}
+{% if fb %}
+<div class="meal-feedback small">
+  {% set mine = fb.mine %}
+  {% if mine %}
+  <p>Your feedback:
+    {%- if mine.food %} food {{ mine.food.label|lower }}.{% endif %}
+    {%- if mine.place %} Place {{ mine.place.label|lower }}.{% endif %}
+    {%- if mine.place_issues %} {% for i in mine.place_issues|sort %}{{ i.label }}{{ ", " if not loop.last }}{% endfor %}.{% endif %}
+    {%- if mine.cook_thanks %} You said thanks{% if mine.cook_note %}: “{{ mine.cook_note }}”{% else %}.{% endif %}{% endif %}
+  </p>
+  {% endif %}
+  {% if fb.thanks.notes %}
+  <p>Thanks to you from {% for name, note in fb.thanks.notes %}{{ name }}{{ ", " if not loop.last }}{% endfor %}.</p>
+  {% set written = fb.thanks.notes|selectattr(1)|list %}
+  {% if written %}<ul class="thank-notes">{% for name, note in written %}<li><q>{{ note }}</q> · {{ name }}</li>{% endfor %}</ul>{% endif %}
+  {% elif fb.thanks.count and fb.thanks.cook %}
+  <p>{{ fb.thanks.count }} thank-you{{ "" if fb.thanks.count == 1 else "s" }} for {{ fb.thanks.cook.name }}.</p>
+  {% endif %}
+  {% if fb.can_give %}
+  <a class="button small{% if not mine %} primary{% endif %}" href="/history/meals/{{ meal.id }}/feedback{% if from_page == 'event' %}?from=event{% endif %}">{{ "Change your feedback" if mine else "How was it?" }}</a>
+  {% endif %}
+</div>
+{% endif %}

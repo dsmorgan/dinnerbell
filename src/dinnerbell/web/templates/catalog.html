@@ -73,6 +73,7 @@
         {% for tag_id in item.tag_ids|sort %}{% set t = tags[tag_id] %}<a class="chip tag-{{ t.kind.value }}" href="/catalog?tag={{ t.id }}">{{ t.name }}</a>{% endfor %}
       </div>
       <p class="muted small item-meta">{{ eaten[item.id] }}{% if item.default_servings %} · Serves {{ item.default_servings }}{% endif %}{% if item.cook_ids %} · Cooks: {% for c in item.cook_ids|sort %}{{ members[c].display_name if c in members else "?" }}{{ ", " if not loop.last }}{% endfor %}{% endif %}</p>
+      {% with c=feedback.get(item.id) %}{% include "_item_counts.html" %}{% endwith %}
       {% if item.notes %}<p class="item-notes small">{{ item.notes }}</p>{% endif %}
       <div class="item-actions">
         {% if item.url %}<a class="button small" href="{{ item.url }}" rel="noopener noreferrer external" target="_blank">{{ "Menu" if item.kind.value == "restaurant" else "Recipe" }}</a>{% endif %}

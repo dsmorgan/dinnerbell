@@ -31,6 +31,18 @@
       "block_id": "more",
       "elements": [
         {
+          "accessibility_label": "Say how dinner was: the food, the place, or thanks to the cook",
+          "action_id": "feedback",
+          "style": "primary",
+          "text": {
+            "emoji": true,
+            "text": "How was it?",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "7:1"
+        },
+        {
           "action_id": "link_event",
           "text": {
             "emoji": true,

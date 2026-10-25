@@ -3,7 +3,8 @@
 
 Any member logs a meal. Members edit and delete the meals they logged; the admin can change
 any. Each log snapshots the item's cuisine tags and the participants, so later catalog or
-member edits don't rewrite history.
+member edits don't rewrite history. Editing a meal's item drops its feedback, and taking someone
+off a meal drops theirs, since it was about a meal they no longer ate.
 """
 
 from __future__ import annotations
@@ -14,6 +15,7 @@ from datetime import date, datetime, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dinnerbell.db.catalog import CatalogRepository
+from dinnerbell.db.feedback import FeedbackRepository
 from dinnerbell.db.meals import MealLogRepository
 from dinnerbell.db.repositories import MemberRepository
 from dinnerbell.domain.catalog import TagKind
@@ -129,7 +131,12 @@ async def update_meal(
         participants=participants,
         now=now,
     )
-    await audit(db, actor.household_id, actor, "meal.updated", f"meal:{meal_id}", _payload(data), now)
+    # Feedback was about the meal as it was: a different item makes all of it wrong, and someone
+    # taken off the meal didn't eat it. Only the number removed is audited (FR-49).
+    keep = None if data.item_id != existing.item_id else {p.id for p in participants}
+    dropped = await FeedbackRepository(db).prune(actor.household_id, meal_id, keep)
+    payload = _payload(data) | ({"feedback_removed": dropped} if dropped else {})
+    await audit(db, actor.household_id, actor, "meal.updated", f"meal:{meal_id}", payload, now)
     await db.commit()
     return await get_meal(db, actor, meal_id)
 

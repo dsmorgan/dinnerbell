@@ -29,6 +29,7 @@ from dinnerbell.domain.events import (
     RoleOffer,
     Status,
     Step,
+    wants_feedback_reminder,
 )
 from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.members import Capabilities, Member, Role
@@ -837,3 +838,11 @@ def test_an_action_from_an_earlier_run_is_stale() -> None:
     with pytest.raises(ev.StaleRun, match=r"^That can't happen anymore\.$"):
         ev.check_run(second, 1)
     assert issubclass(ev.StaleRun, EventRuleViolation)  # surfaces that don't know it still show it kindly
+
+
+def test_muting_direct_messages_stops_the_feedback_reminder() -> None:
+    asked = replace(member(1), feedback_reminder=True)
+    assert wants_feedback_reminder(asked)
+    assert not wants_feedback_reminder(replace(asked, mute_dm_reminders=True))
+    assert not wants_feedback_reminder(replace(asked, active=False))
+    assert not wants_feedback_reminder(member(1))

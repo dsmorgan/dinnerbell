@@ -151,6 +151,8 @@ def _render(notification: note.Notification, ctx: RenderContext) -> Message:
             return schedule_changed_message(notification, ctx)
         case note.CallDiscarded():
             return discarded_message(notification)
+        case note.FeedbackReminder():
+            return feedback_reminder_message(notification, ctx)
     raise TypeError(f"no Slack rendering for {type(notification).__name__}")  # pragma: no cover
 
 
@@ -451,6 +453,8 @@ def decision_message(
     buttons: list[Block] = []
     if event.state is EventState.DECIDED:
         buttons.append(mark_done_button(event))
+    elif event.state is EventState.DONE:
+        buttons.append(feedback_button(event))
     buttons += _item_buttons(proposal.item, proposal.mode)
     buttons.append(_web_button(ctx, event))
     buttons += call_menu(event)
@@ -509,6 +513,18 @@ def posted_reply(event: note.EventInfo, *, channel_id: str, ctx: RenderContext) 
     return labelled(Message(text.replace("*", ""), [section(text)]), ctx)
 
 
+def feedback_button(event: note.EventInfo) -> Block:
+    """**How was it?**, which opens the feedback modal for the meal (FR-47). It names the run,
+    like a card button, and the service checks who ate and that feedback is still open."""
+    return button(
+        "How was it?",
+        ids.FEEDBACK,
+        ids.card_value(event.id, event.run),
+        style="primary",
+        accessibility_label=f"Say how {_slot(event)} was: the food, the place, or thanks to the cook",
+    )
+
+
 # Direct messages ---------------------------------------------------------------------------------
 
 
@@ -549,6 +565,19 @@ def reminder_message(
         ),
     ]
     return _finish(fallback, blocks)
+
+
+def feedback_reminder_message(notification: note.FeedbackReminder, ctx: RenderContext) -> Message:
+    """The feedback reminder (FR-48), sent only to members who turned it on."""
+    event = notification.event
+    when = f"{_slot(event)} on {day_label(event.day)}"
+    closes = day_label(notification.closes)
+    text = (
+        f"Hi {escape(notification.member.name)}! How was {when}: *{escape(notification.item)}*? "
+        f"Only you see your ratings, and you can change them until *{closes}*."
+    )
+    blocks = [section(text), actions(feedback_button(event), _web_button(ctx, event), block_id="more")]
+    return _finish(f"How was {when}? Tell us by {closes}.", blocks)
 
 
 # Your answer -------------------------------------------------------------------------------------

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import replace
-from datetime import UTC, date, datetime, time
+from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
 
 from dinnerbell.channels.slack import ids
@@ -29,6 +29,7 @@ from dinnerbell.channels.slack.views import (
     cancel_modal,
     close_modal,
     details_modal,
+    feedback_modal,
     home_view,
     proposal_modal,
 )
@@ -46,9 +47,11 @@ from dinnerbell.domain.events import (
     Status,
     Window,
 )
-from dinnerbell.domain.meals import Slot
+from dinnerbell.domain.feedback import FeedbackInput, MealFacts, PlaceIssue, Rating
+from dinnerbell.domain.meals import MemberRef, Slot
 from dinnerbell.domain.schedule import DEFAULT_SLOTS
 from dinnerbell.services.event_views import EventView, Permissions, ProposalView, TodayView
+from dinnerbell.services.feedback import Awaiting, FeedbackForm
 
 BASE_URL = "https://dinnerbell.example.com"
 ZONE = "America/Chicago"
@@ -210,6 +213,9 @@ NOTIFICATIONS: dict[str, Callable[[], note.Notification]] = {
         kept_today_at=time(15, 0),
     ),
     "call_discarded": lambda: note.CallDiscarded(DECIDED, "event:7:run1:call"),
+    "feedback_reminder": lambda: note.FeedbackReminder(
+        event(EventState.DONE, coordinator=ALEX), KIM, "Sam's Tacos", date(2026, 10, 29)
+    ),
 }
 
 
@@ -300,6 +306,17 @@ ORIGIN = ids.ViewOrigin(7, "C0DINNER")
 CALL_OFF_ORIGIN = replace(ORIGIN, run=1)
 """Call it off and Close now name the run they were opened for, as ``Interactions`` writes them."""
 
+EATERS = (MemberRef(1, "Alex"), MemberRef(2, "Sam"), MemberRef(3, "Kim"))
+CLOSES = date(2026, 10, 29)
+HOME_MEAL = MealFacts(51, DAY, Slot.DINNER, 11, "Sam's Tacos", ItemKind.HOME, Mode.COOK, MemberRef(2, "Sam"), EATERS, 7)
+TAKEOUT = MealFacts(52, DAY, Slot.DINNER, 13, TAQUERIA.name, ItemKind.RESTAURANT, Mode.DELIVERY, None, EATERS, 7)
+KIM_SAID = FeedbackInput(Rating.LOVED, Rating.NOT_AGAIN, frozenset({PlaceIssue.COLD, PlaceIssue.LATE}))
+AWAITING = tuple(
+    Awaiting(60 + n, 7 + n, 1, DAY - timedelta(days=n), Slot.DINNER, name, CLOSES - timedelta(days=n))
+    for n, name in enumerate(("Sam's Tacos", "Siam Garden", "Pho <Saigon>", "Taqueria", "Curry Night", "Pizza"))
+)
+FEEDBACK_ORIGIN = replace(ORIGIN, run=1)
+
 VIEWS: dict[str, Callable[[], dict[str, Any]]] = {
     "details_modal": lambda: details_modal(COLLECTING_VIEW, ORIGIN),
     "details_modal_empty": lambda: details_modal(
@@ -328,6 +345,19 @@ VIEWS: dict[str, Callable[[], dict[str, Any]]] = {
     "home_empty": lambda: home_view(TodayView(DAY, [], tuple(Slot)), HomeLinks(BASE_URL)),
     "home_upcoming": lambda: home_view(
         TodayView(DAY, [COLLECTING_VIEW, SCHEDULED_VIEW], tuple(Slot)), HomeLinks(BASE_URL)
+    ),
+    "home_feedback": lambda: home_view(TodayView(DAY, [], tuple(Slot)), HomeLinks(BASE_URL), awaiting=AWAITING),
+    "home_feedback_one": lambda: home_view(
+        TodayView(DAY, [DECIDED_VIEW], tuple(Slot)), HomeLinks(BASE_URL), awaiting=AWAITING[:1]
+    ),
+    "feedback_modal": lambda: feedback_modal(FeedbackForm(HOME_MEAL, KIM.id, None, CLOSES), FEEDBACK_ORIGIN),
+    "feedback_modal_cook": lambda: feedback_modal(FeedbackForm(HOME_MEAL, SAM.id, None, CLOSES), FEEDBACK_ORIGIN),
+    "feedback_modal_restaurant": lambda: feedback_modal(
+        FeedbackForm(TAKEOUT, KIM.id, KIM_SAID, CLOSES), replace(FEEDBACK_ORIGIN, home=True)
+    ),
+    "feedback_modal_thanked": lambda: feedback_modal(
+        FeedbackForm(HOME_MEAL, KIM.id, FeedbackInput(Rating.FINE, cook_thanks=True, cook_note="Best yet!"), CLOSES),
+        FEEDBACK_ORIGIN,
     ),
     # Interactions adds the footer to every Home tab it publishes.
     "home_version": lambda: with_version_footer(

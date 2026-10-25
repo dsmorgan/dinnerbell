@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""History: meals by week, cuisines in the variety window, and logging meals (FR-30, FR-32)."""
+"""History: meals by week, cuisines in the variety window, logging meals, and feedback on them
+(FR-30, FR-32, FR-45 to FR-49)."""
 
 from __future__ import annotations
 
@@ -7,13 +8,15 @@ from dataclasses import dataclass, field
 from datetime import date
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, Form, Request
+from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import RedirectResponse
 from starlette.responses import Response
 
 from dinnerbell.domain.catalog import ItemKind
+from dinnerbell.domain.feedback import COOK_NOTE_MAX, FeedbackInput, InvalidFeedback, PlaceIssue, Rating
 from dinnerbell.domain.meals import InvalidMeal, MealInput, MealLog, Slot, can_change
 from dinnerbell.services import catalog as catalog_service
+from dinnerbell.services import feedback as feedback_service
 from dinnerbell.services import meals as meal_service
 from dinnerbell.services.errors import Forbidden
 from dinnerbell.services.variety import household_today, variety_window
@@ -26,7 +29,13 @@ router = APIRouter(prefix="/history")
 
 MAX_PAGE = 520
 """Ten years of eight-week pages."""
-NOTICES = {"logged": "Meal logged.", "updated": "Meal updated.", "deleted": "Meal deleted."}
+NOTICES = {
+    "logged": "Meal logged.",
+    "updated": "Meal updated.",
+    "deleted": "Meal deleted.",
+    "feedback": "Thanks for the feedback! Only you see your ratings.",
+    "no_feedback": "Got it: no feedback from you on that meal.",
+}
 FormText = Annotated[str, Form(max_length=40)]
 
 
@@ -108,6 +117,8 @@ async def _history_page(
     today = _today(context, principal)
     history = await meal_service.history(db, principal.member, today=today, page=page)
     window = await variety_window(db, principal.household.id, today)
+    shown = [meal for _, meals in history.weeks for meal in meals]
+    feedback = await feedback_service.for_meals(db, principal.member, shown, today=today)
     blank = MealForm(day=today.isoformat(), participant_ids={principal.member.id})
     return await render(
         request,
@@ -120,6 +131,7 @@ async def _history_page(
             "error": error,
             "notice": notice,
             "can_change": lambda meal: can_change(principal.member, meal),
+            "feedback": feedback,
         }
         | await _choices(db, principal),
         status_code=status_code,
@@ -195,3 +207,108 @@ async def update_meal(
 async def delete_meal(principal: CSRFChecked, context: Context, db: Database, meal_id: RowId) -> Response:
     await meal_service.delete_meal(db, principal.member, meal_id, now=context.clock())
     return RedirectResponse("/history?notice=deleted", status_code=303)
+
+
+# Feedback (FR-45 to FR-49) -------------------------------------------------------------------------
+
+FROM_PAGES = {"history", "event"}
+
+
+def _rating(value: str) -> Rating | None:
+    """A posted rating; anything else, including the "no answer" choice, is no answer."""
+    return choice(Rating, value)
+
+
+def posted_feedback(
+    food: FormText = "",
+    place: FormText = "",
+    place_issues: Annotated[list[str] | None, Form()] = None,
+    cook_thanks: FormText = "",
+    cook_note: Annotated[str, Form(max_length=COOK_NOTE_MAX * 2)] = "",
+) -> FeedbackInput:
+    """The feedback form as posted. ``feedback.give`` checks it against the meal, including the
+    note's length after trimming."""
+    issues = frozenset(i for v in place_issues or [] if (i := choice(PlaceIssue, v)) is not None)
+    return FeedbackInput(_rating(food), _rating(place), issues, cook_thanks == "1", cook_note or None)
+
+
+PostedFeedback = Annotated[FeedbackInput, Depends(posted_feedback)]
+
+
+def _back(meal: MealLog, came_from: str) -> str:
+    """Where the form returns: the meal's event page when it came from there, else History."""
+    if came_from == "event" and meal.event_id is not None:
+        return f"/events/{meal.event_id}#feedback"
+    return f"/history#meal-{meal.id}"
+
+
+async def _feedback_page(
+    request: Request,
+    principal: Principal,
+    context: AppContext,
+    db: Database,
+    meal_id: int,
+    *,
+    came_from: str,
+    answers: FeedbackInput | None = None,
+    error: str | None = None,
+    status_code: int = 200,
+) -> Response:
+    try:
+        form = await feedback_service.form(db, principal.member, meal_id, now=context.clock())
+    except InvalidFeedback as exc:
+        page = {"title": "Can't give feedback", "message": str(exc)}
+        return await render(request, "error.html", page, status_code=403)
+    meal = await meal_service.get_meal(db, principal.member, meal_id)
+    return await render(
+        request,
+        "feedback.html",
+        {
+            "form": form,
+            "answers": answers or form.mine or FeedbackInput(),
+            "came_from": came_from if came_from in FROM_PAGES else "history",
+            "back": _back(meal, came_from),
+            "ratings": list(Rating),
+            "issues": list(PlaceIssue),
+            "note_max": COOK_NOTE_MAX,
+            "error": error,
+        },
+        status_code=status_code,
+    )
+
+
+@router.get("/meals/{meal_id}/feedback")
+async def feedback_page(
+    request: Request,
+    principal: SignedIn,
+    context: Context,
+    db: Database,
+    meal_id: RowId,
+    came_from: Annotated[str, Query(alias="from", max_length=10)] = "",
+) -> Response:
+    return await _feedback_page(request, principal, context, db, meal_id, came_from=came_from)
+
+
+@router.post("/meals/{meal_id}/feedback")
+async def give_feedback(
+    request: Request,
+    principal: CSRFChecked,
+    context: Context,
+    db: Database,
+    meal_id: RowId,
+    answers: PostedFeedback,
+    came_from: Annotated[str, Form(alias="from", max_length=10)] = "",
+) -> Response:
+    try:
+        saved = await feedback_service.give(db, principal.member, meal_id, answers, now=context.clock())
+    except InvalidFeedback as exc:
+        error = str(exc)
+        return await _feedback_page(
+            request, principal, context, db, meal_id, came_from=came_from, answers=answers, error=error, status_code=400
+        )
+    meal = await meal_service.get_meal(db, principal.member, meal_id)
+    back = _back(meal, came_from)
+    if back.startswith("/history"):
+        notice = "feedback" if saved is not None else "no_feedback"
+        back = f"/history?notice={notice}#meal-{meal.id}"
+    return RedirectResponse(back, status_code=303)
