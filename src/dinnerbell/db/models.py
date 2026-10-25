@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """ORM models. M0: household, member, session, audit. M1: the catalog, preferences, and meal log.
 M2: dinner calls (event, response, suggestion, proposal, vote, assignment) and the outbox.
-M3: feedback on meals, and offers (an event's ``capacity``).
+M3: feedback on meals, offers (an event's ``capacity``), and guests (a member's ``guest`` role
+and the ``invitation`` table, #38).
 
 Every table carries ``household_id`` (the household table's own key is that ID).
 Changing a model requires a new Alembic revision; see CLAUDE.md.
@@ -62,13 +63,15 @@ class MemberRow(Base):
         UniqueConstraint("household_id", "email"),
         UniqueConstraint("household_id", "oidc_subject"),
         UniqueConstraint("household_id", "slack_user_id"),
-        CheckConstraint("role IN ('admin', 'member')", name="role"),
+        CheckConstraint("role IN ('admin', 'member', 'guest')", name="role"),
+        CheckConstraint("role = 'guest' OR email IS NOT NULL", name="email"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     household_id: Mapped[int] = mapped_column(ForeignKey("household.id", ondelete="CASCADE"), index=True)
     display_name: Mapped[str] = mapped_column(String(80))
-    email: Mapped[str] = mapped_column(String(254))
+    email: Mapped[str | None] = mapped_column(String(254))
+    """Required for admins and members; a guest has none unless an admin gave one."""
     oidc_subject: Mapped[str | None] = mapped_column(String(255))
     slack_user_id: Mapped[str | None] = mapped_column(String(32))
     slack_link_locked: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
@@ -79,6 +82,10 @@ class MemberRow(Base):
     mute_dm_reminders: Mapped[bool] = mapped_column(Boolean, default=False)
     feedback_reminder: Mapped[bool] = mapped_column(Boolean, default=False)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
+    dietary_needs: Mapped[list[int]] = mapped_column(JSON, default=list, server_default=text("'[]'"))
+    """A guest's dietary tag IDs (#38). Empty for members, whose stances are preferences."""
+    join_refused: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    """An admin removed this guest, so joining from the channel is refused (#38)."""
     created_at: Mapped[datetime] = mapped_column(UTCDateTime())
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime())
 
@@ -401,6 +408,22 @@ class AssignmentRow(Base):
     event_id: Mapped[int] = mapped_column(ForeignKey("event.id", ondelete="CASCADE"))
     member_id: Mapped[int] = mapped_column(ForeignKey("member.id", ondelete="CASCADE"), index=True)
     role: Mapped[str] = mapped_column(String(16))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime())
+
+
+class InvitationRow(Base):
+    """A guest invited to one call (#38): they may answer it, and nothing else. ``invited_by``
+    is the member who invited them, who answers for a guest without Slack and breaks a tie
+    when the guest coordinates."""
+
+    __tablename__ = "invitation"
+    __table_args__ = (UniqueConstraint("event_id", "guest_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    household_id: Mapped[int] = mapped_column(ForeignKey("household.id", ondelete="CASCADE"))
+    event_id: Mapped[int] = mapped_column(ForeignKey("event.id", ondelete="CASCADE"))
+    guest_id: Mapped[int] = mapped_column(ForeignKey("member.id", ondelete="CASCADE"), index=True)
+    invited_by: Mapped[int | None] = mapped_column(ForeignKey("member.id", ondelete="SET NULL"))
     created_at: Mapped[datetime] = mapped_column(UTCDateTime())
 
 

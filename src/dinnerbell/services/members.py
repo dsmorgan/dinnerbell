@@ -87,6 +87,8 @@ async def update_member(db: AsyncSession, actor: Member, member_id: int, data: M
     clean = _clean(data)
     members = MemberRepository(db)
     target = await get_member(db, actor, member_id)
+    if target.is_guest:
+        raise MemberRuleViolation("That's a guest. Change them in the Guests section, or make them a member there.")
     everyone = await members.list(actor.household_id)
     check_role_change(actor, target, clean.role, everyone)
     check_email_change(target, clean.email)
@@ -120,7 +122,9 @@ async def set_member_active(db: AsyncSession, actor: Member, member_id: int, act
         return target
     if not active:
         check_deactivation(actor, target, await members.list(actor.household_id))
-    updated = await members.update(actor.household_id, member_id, now, active=active)
+    # A guest added back may join from the channel again (#38).
+    extra = {"join_refused": False} if active and target.is_guest else {}
+    updated = await members.update(actor.household_id, member_id, now, active=active, **extra)
     await _ensure_an_admin_remains(db, actor.household_id)
     if not active:
         await SessionRepository(db).delete_for_member(target.id)

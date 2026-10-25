@@ -59,6 +59,8 @@ class FakeSlack(AsyncWebClient):
         self.calls: list[Call] = []
         self.failures: dict[str, list[Failure]] = {}
         self.users_by_email: dict[str, dict[str, Any]] = {}
+        self.users: dict[str, dict[str, Any]] = {}
+        """``users.info``'s answers, by user ID; ``add_user`` and ``add_person`` fill it."""
         self.channel: dict[str, Any] = {"id": CHANNEL, "is_member": True, "is_archived": False}
         self.channel_members: list[str] = [BOT_USER]
         """``conversations.members``' answer, paged by the request's ``limit``."""
@@ -80,6 +82,26 @@ class FakeSlack(AsyncWebClient):
             "is_bot": False,
             **extra,
         }
+        self.users[user_id] = self.users_by_email[email]
+
+    def add_person(
+        self, user_id: str, name: str, *, email: str | None = None, in_channel: bool = True, **extra: Any
+    ) -> None:
+        """A workspace user ``users.info`` knows, in the channel unless ``in_channel`` is False."""
+        profile: dict[str, Any] = {"display_name": name, "real_name": name}
+        if email is not None:
+            profile["email"] = email
+        self.users[user_id] = {
+            "id": user_id,
+            "team_id": self.team_id,
+            "name": name.lower(),
+            "deleted": False,
+            "is_bot": False,
+            "profile": profile,
+            **extra,
+        }
+        if in_channel and user_id not in self.channel_members:
+            self.channel_members.append(user_id)
 
     # Reading -------------------------------------------------------------------------------------
 
@@ -112,6 +134,8 @@ class FakeSlack(AsyncWebClient):
             return _error(failure.error, failure.status, failure.headers)
         if method == "users.lookupByEmail" and args["email"] not in self.users_by_email:
             return _error("users_not_found")
+        if method == "users.info" and args["user"] not in self.users:
+            return _error("user_not_found")
         return {"data": {"ok": True, **self._answer(method, args)}, "headers": {}, "status_code": 200}
 
     def _answer(self, method: str, args: dict[str, Any]) -> dict[str, Any]:
@@ -148,6 +172,8 @@ class FakeSlack(AsyncWebClient):
                 return {"view": {"id": "V1"}}
             case "users.lookupByEmail":
                 return {"user": self.users_by_email[args["email"]]}
+            case "users.info":
+                return {"user": self.users[args["user"]]}
         raise AssertionError(f"FakeSlack doesn't know {method}")
 
     def webhook(self, url: str) -> AsyncWebhookClient:

@@ -12,7 +12,10 @@ Run it with test stopped, after restoring the backup. In one transaction it:
 - deletes the outbox, pending rows and the message refs of delivered posts alike, so test never
   sends production's queue or edits production's messages;
 - deletes all feedback on meals, which says how each member rated them (FR-49), so test, where
-  testers act as other people, never holds production's answers.
+  testers act as other people, never holds production's answers;
+- strips guests (#38) of what identifies them, as they're people outside the household: each is
+  renamed "Guest <ID>" and loses their Slack user, sign-in, and dietary needs, as well as being
+  deactivated like any member who isn't kept. Their invitations stay with the calls' history.
 
 It never touches the meal log, the catalog, preferences, or the history of past events. Running
 it again changes nothing but writes another audit row.
@@ -146,6 +149,7 @@ class ScrubSummary:
     outbox_pending_deleted: int
     outbox_rows_deleted: int
     feedback_deleted: int = 0
+    guests_scrubbed: int = 0
 
     def lines(self) -> list[str]:
         return [
@@ -157,6 +161,7 @@ class ScrubSummary:
             f"Decided calls cancelled: {self.events_cancelled}",
             f"Outbox rows deleted: {self.outbox_rows_deleted} ({self.outbox_pending_deleted} not yet sent)",
             f"Feedback rows deleted: {self.feedback_deleted}",
+            f"Guests made anonymous: {self.guests_scrubbed}",
         ]
 
 
@@ -196,7 +201,7 @@ async def _scrub(db: AsyncSession, *, instance_label: str, keep: Iterable[str], 
         raise ScrubRefused("Keep at least one active admin, or nobody can manage test. Nothing changed.")
 
     kept_ids = {m.id for m in kept}
-    deactivated = unlinked = 0
+    deactivated = unlinked = guests = 0
     sessions = SessionRepository(db)
     for member in members:
         if member.id in kept_ids:
@@ -210,6 +215,12 @@ async def _scrub(db: AsyncSession, *, instance_label: str, keep: Iterable[str], 
             unlinked += 1
         if not member.slack_link_locked:
             changes["slack_link_locked"] = True
+        if member.is_guest:
+            anonymous = f"Guest {member.id}"
+            wiped = member.display_name == anonymous and not member.dietary_needs and member.oidc_subject is None
+            if not wiped:
+                changes |= {"display_name": anonymous, "dietary_needs": frozenset(), "oidc_subject": None}
+                guests += 1
         if changes:
             await members_repo.update(household.id, member.id, now, **changes)
         await sessions.delete_for_member(member.id)
@@ -252,6 +263,7 @@ async def _scrub(db: AsyncSession, *, instance_label: str, keep: Iterable[str], 
         outbox_pending_deleted=pending,
         outbox_rows_deleted=rows,
         feedback_deleted=feedback_deleted,
+        guests_scrubbed=guests,
     )
     summary_payload = {"kept_member_ids": sorted(kept_ids), "instance_label": instance_label} | asdict(summary)
     target = f"household:{household.id}"

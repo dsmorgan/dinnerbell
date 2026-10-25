@@ -66,8 +66,9 @@ async def assign_coordinator(
     async with locked_event(db, actor.household_id, event_id, now) as event:
         check_assign_coordinator(event)
         if member_id is not None:
-            target = (await load(db, event)).members.get(member_id)
-            if target is None or not target.active:
+            ctx = await load(db, event)
+            target = ctx.members.get(member_id)
+            if target is None or not target.active or (target.is_guest and not ctx.invited(target.id)):
                 raise NotFound("No such member.")
         await set_coordinator(db, event, member_id, now=now)
         payload = {"from": event.coordinator_id, "to": member_id}

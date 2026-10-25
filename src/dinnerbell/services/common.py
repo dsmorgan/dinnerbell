@@ -20,6 +20,16 @@ def is_unique_violation(exc: IntegrityError) -> bool:
     return "UNIQUE constraint failed" in str(exc.orig)
 
 
+MEMBERS_ONLY = "That's for household members."
+
+
+def require_member(actor: Member, message: str = MEMBERS_ONLY) -> None:
+    """Raise Forbidden with ``message`` unless ``actor`` is an active member or admin: not a
+    guest (#38), who reaches only the calls they're invited to."""
+    if not actor.is_member:
+        raise Forbidden(message)
+
+
 def require_admin(actor: Member, message: str) -> None:
     """Raise Forbidden with ``message`` unless ``actor`` is an active admin."""
     if not (actor.active and actor.is_admin):

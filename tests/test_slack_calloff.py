@@ -743,7 +743,7 @@ async def test_slash_cancel_refuses_who_cant_and_explains_a_finished_call(slack:
 async def test_slash_cancel_by_a_stranger_is_refused(slack: Slack, house: House) -> None:
     await daily_call(house)
     await slack.command("U9STRANGER", "cancel")
-    assert "I don't know your Slack account yet" in slack.ephemerals("U9STRANGER")[0]
+    assert slack.ephemerals("U9STRANGER")[0].startswith("You're not in Dinnerbell yet")
 
 
 def test_help_lists_cancel() -> None:

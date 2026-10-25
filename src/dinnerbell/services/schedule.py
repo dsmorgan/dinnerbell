@@ -70,7 +70,7 @@ class ScheduleMoved(InvalidSchedule):
 
 
 def _require_member(actor: Member) -> None:
-    if not actor.active:
+    if not actor.is_member:  # deactivated members and guests (#38)
         raise Forbidden(MEMBERS_ONLY)
 
 

@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.testclient import TestClient
 from starlette.routing import Mount, Route
 
-from dinnerbell.web.auth import csrf_if_signed_in, require_admin, require_admin_csrf, require_csrf
+from dinnerbell.web.auth import csrf_if_signed_in, require_admin, require_admin_csrf, require_csrf, require_csrf_anyone
 
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGE = ROOT / "src" / "dinnerbell"
@@ -92,7 +92,7 @@ def test_every_source_file_has_spdx_header() -> None:
 
 
 SAFE = {"GET", "HEAD", "OPTIONS"}
-CSRF_CHECKS = {require_csrf, require_admin_csrf, csrf_if_signed_in}
+CSRF_CHECKS = {require_csrf, require_admin_csrf, csrf_if_signed_in, require_csrf_anyone}
 ADMIN_CHECKS = {require_admin, require_admin_csrf}
 
 

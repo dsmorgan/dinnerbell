@@ -322,6 +322,8 @@ class AssignmentMade(_Notification):
     member: PersonInfo
     roles: tuple[AssignmentRole, ...]
     decision: DecisionInfo
+    via: PersonInfo | None = None
+    """For a guest without Slack (#38), the member who invited them, who gets the message."""
 
     @property
     def idempotency_key(self) -> str:
@@ -329,7 +331,7 @@ class AssignmentMade(_Notification):
 
     @property
     def recipient_id(self) -> int | None:
-        return self.member.id
+        return self.via.id if self.via is not None else self.member.id
 
 
 @dataclass(frozen=True, slots=True)
@@ -372,6 +374,8 @@ class AssignmentCancelled(_Notification):
     decision: DecisionInfo
     cancelled_by: PersonInfo | None = None
     note: str | None = None
+    via: PersonInfo | None = None
+    """For a guest without Slack (#38), the member who invited them, who gets the message."""
 
     @property
     def idempotency_key(self) -> str:
@@ -379,7 +383,7 @@ class AssignmentCancelled(_Notification):
 
     @property
     def recipient_id(self) -> int | None:
-        return self.member.id
+        return self.via.id if self.via is not None else self.member.id
 
 
 @dataclass(frozen=True, slots=True)
@@ -546,6 +550,60 @@ class OfferFull(_Notification):
         return self.member.id
 
 
+@dataclass(frozen=True, slots=True)
+class GuestInvited(_Notification):
+    """A member invited a guest with Slack to a call (#38): one direct message to the guest,
+    with In and Out buttons that name the run, like the reminder's."""
+
+    kind: ClassVar[str] = "guest_invited"
+    event: EventInfo
+    member: PersonInfo
+    invited_by: PersonInfo
+
+    @property
+    def idempotency_key(self) -> str:
+        return f"{self.event.key}:{self.kind}:member{self.member.id}"
+
+    @property
+    def recipient_id(self) -> int | None:
+        return self.member.id
+
+
+@dataclass(frozen=True, slots=True)
+class GuestJoined:
+    """Someone joined from the channel as a guest (#38 addendum): one direct message to each
+    active admin (``admin``), with **Make member** and **Remove**. It's about the household, not
+    an event, like ``ScheduleChanged``. ``via`` is ``slack`` or ``web``."""
+
+    kind: ClassVar[str] = "guest_joined"
+    is_update: ClassVar[bool] = False
+    needs_thread: ClassVar[bool] = False
+    household_id: int
+    admin: PersonInfo
+    guest: PersonInfo
+    via: str
+
+    @property
+    def idempotency_key(self) -> str:
+        return f"join:{self.guest.id}:admin{self.admin.id}"
+
+    @property
+    def message_key(self) -> str | None:
+        return None
+
+    @property
+    def thread_key(self) -> str | None:
+        return None
+
+    @property
+    def recipient_id(self) -> int | None:
+        return self.admin.id
+
+    @property
+    def event_id(self) -> int | None:
+        return None
+
+
 Notification = Union[  # noqa: UP007 - a runtime union, used for isinstance checks and payload decoding
     CallOpened,
     CallUpdated,
@@ -566,6 +624,8 @@ Notification = Union[  # noqa: UP007 - a runtime union, used for isinstance chec
     OfferPosted,
     OfferUpdated,
     OfferFull,
+    GuestInvited,
+    GuestJoined,
 ]
 NOTIFICATION_TYPES: dict[str, type[Notification]] = {cls.kind: cls for cls in get_args(Notification)}
 UPDATE_KINDS = frozenset(kind for kind, cls in NOTIFICATION_TYPES.items() if cls.is_update)

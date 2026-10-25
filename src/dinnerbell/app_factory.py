@@ -77,6 +77,7 @@ def create_app(
             oidc=_oidc_client(settings, http, clock),
             scheduler_state=state,
             slack_state=slack_state,
+            slack_people=slack.people if slack else None,
         )
         jobs = JobContext(
             state=state,

@@ -21,5 +21,7 @@ async def today(request: Request, principal: MaybePrincipal, context: Context, d
         return await render(request, "signin.html")
     any_time = is_test_instance(context.settings.instance_label)  # #60: see routes/events.py
     view = await event_views.today_view(db, principal.member, now=context.clock(), any_time=any_time)
+    if principal.member.is_guest:  # only the calls they're invited to (#38)
+        return await render(request, "today.html", {"today": view, "from_page": "today", "guest": True})
     form = await offers.offer_form(db, principal.member, now=context.clock())
     return await render(request, "today.html", {"today": view, "from_page": "today", "offer_form": form})

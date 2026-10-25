@@ -58,7 +58,12 @@ async def sign_in(
     members = MemberRepository(db)
     by_subject = await members.by_subject(household.id, claims.subject)
     by_email = await _by_email(members, household.id, claims.email) if by_subject is None else None
-    decision = decide_sign_in(claims, by_subject=by_subject, by_email=by_email, required_team_id=required_team_id)
+    by_slack = None
+    if by_subject is None and required_team_id is not None and claims.slack_user_id:
+        by_slack = await members.by_slack_user_id(household.id, claims.slack_user_id)
+    decision = decide_sign_in(
+        claims, by_subject=by_subject, by_email=by_email, required_team_id=required_team_id, by_slack_user=by_slack
+    )
     if isinstance(decision, Refuse):
         await _record_refusal(db, household.id, claims, decision, now)
         return decision

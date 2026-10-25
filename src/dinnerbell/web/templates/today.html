@@ -3,6 +3,15 @@
 {% block title %}Today{% endblock %}
 {% block content %}
 <h1>Hi, {{ principal.member.display_name }}</h1>
+{% if guest %}
+{#- A guest sees only the calls they're invited to (#38). -#}
+<p class="muted">You're a guest. When someone in the household invites you to a meal, it shows here, and you can say whether you're in and how you can help.</p>
+{% for v in today.events %}
+{% include "_event.html" %}
+{% else %}
+<section class="card"><h2>No invitations right now</h2><p>Check back when someone invites you. You can set <a href="/me">your dietary needs</a> any time.</p></section>
+{% endfor %}
+{% else %}
 {% for v in today.current %}
 {% include "_event.html" %}
 {% else %}
@@ -77,5 +86,6 @@
     <a class="button" href="/schedule">Schedule</a>
   </div>
 </section>
+{% endif %}
 {% endif %}
 {% endblock %}

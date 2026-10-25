@@ -104,6 +104,8 @@ STALE_CALL = "That can't happen anymore."
 OFFER_JOIN_INSTEAD = "This is an offer: tap Count me in to join it."
 OFFER_CHANGE = "To change an offer, call it off and post a new one."
 NO_COORDINATOR = "An offer has no coordinator: whoever made it is in charge."
+GUESTS_DONT = "Guests can answer and pitch in, but not that."
+"""For a guest at a rule only members may use (#38). ``domain.guests`` has the full matrix."""
 
 
 class StaleRun(EventRuleViolation):
@@ -573,6 +575,8 @@ def check_handoff(event: Event, actor: Member, target: Member) -> None:
 
 
 def check_can_vote(event: Event, actor: Member, response: Response | None) -> None:
+    if actor.is_guest:
+        raise EventRuleViolation(GUESTS_DONT)
     if event.state is not EventState.VOTING:
         raise EventRuleViolation("Voting is closed.")
     if not actor.active or not ((response is not None and response.is_in) or is_coordinator(event, actor)):
@@ -580,6 +584,8 @@ def check_can_vote(event: Event, actor: Member, response: Response | None) -> No
 
 
 def check_can_propose(event: Event, actor: Member) -> None:
+    if actor.is_guest:
+        raise EventRuleViolation(GUESTS_DONT)
     if event.state is not EventState.VOTING:
         raise EventRuleViolation("You can add proposals only while voting is open.")
     if not actor.active:
@@ -596,7 +602,10 @@ def check_proposal_room(proposals: Iterable[Proposal], actor: Member) -> None:
 
 
 def check_can_lock(event: Event, actor: Member) -> None:
-    """FR-15: the coordinator, or the admin, locks a proposal during the vote window."""
+    """FR-15: the coordinator, or the admin, locks a proposal during the vote window. A guest
+    coordinator can't: picking between proposals isn't theirs (#38)."""
+    if actor.is_guest:
+        raise EventRuleViolation(GUESTS_DONT)
     if event.state is not EventState.VOTING:
         raise EventRuleViolation("Voting is closed.")
     if not actor.active or not (is_coordinator(event, actor) or actor.is_admin):
@@ -654,6 +663,8 @@ def check_can_cancel(event: Event, actor: Member) -> ActingAs:
     the one cooking or driving."""
     if not actor.active:
         raise EventRuleViolation("Only active members can call off a call.")
+    if actor.is_guest:
+        raise EventRuleViolation(GUESTS_DONT)
     if not event.state.is_open:
         raise EventRuleViolation(CALL_FINISHED)
     if event.is_offer:
@@ -798,6 +809,8 @@ def check_can_post_now(event: Event, actor: Member, *, now: datetime) -> bool:
     response window has passed (the scheduler expires it instead, FR-2), is refused."""
     if not actor.active:
         raise EventRuleViolation("Only active members can post a call.")
+    if actor.is_guest:
+        raise EventRuleViolation(GUESTS_DONT)
     if event.is_offer:
         raise EventRuleViolation("An offer is posted as soon as it's made.")
     if not event.state.is_open:

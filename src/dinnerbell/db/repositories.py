@@ -45,6 +45,8 @@ def to_member(row: MemberRow) -> Member:
         slack_link_locked=row.slack_link_locked,
         mute_dm_reminders=row.mute_dm_reminders,
         feedback_reminder=row.feedback_reminder,
+        dietary_needs=frozenset(int(t) for t in row.dietary_needs or []),
+        join_refused=row.join_refused,
     )
 
 
@@ -157,11 +159,44 @@ class MemberRepository:
         await self._session.flush()
         return to_member(row)
 
+    async def add_guest(
+        self,
+        *,
+        household_id: int,
+        display_name: str,
+        dietary_needs: frozenset[int],
+        now: datetime,
+        slack_user_id: str | None = None,
+    ) -> Member:
+        """A guest (#38): no email, no capabilities, and a Slack user only if they have one."""
+        row = MemberRow(
+            household_id=household_id,
+            display_name=display_name,
+            email=None,
+            slack_user_id=slack_user_id,
+            role=Role.GUEST.value,
+            can_cook=False,
+            can_pickup=False,
+            can_order=False,
+            mute_dm_reminders=False,
+            feedback_reminder=False,
+            active=True,
+            dietary_needs=sorted(dietary_needs),
+            join_refused=False,
+            created_at=now,
+            updated_at=now,
+        )
+        self._session.add(row)
+        await self._session.flush()
+        return to_member(row)
+
     async def update(self, household_id: int, member_id: int, now: datetime, **values: Any) -> Member:
         row = await self._row(household_id, member_id)
         if row is None:
             raise LookupError(member_id)
         for name, value in values.items():
+            if isinstance(value, frozenset):
+                value = sorted(value)  # dietary needs, stored as a JSON list
             setattr(row, name, value.value if isinstance(value, Role) else value)
         row.updated_at = now
         await self._session.flush()

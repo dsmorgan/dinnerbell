@@ -430,7 +430,7 @@ def test_a_card_left_open_cannot_act_on_a_newer_run(
     run 1's card, Pat's and an admin's, are refused and run 2 is untouched."""
     event_id = call_in(house, provider, clock, migrated, "collecting")
     card = house.get(f"/events/{event_id}").text
-    assert card.count('name="run" value="1"') == 2  # Close now and Call it off
+    assert card.count('name="run" value="1"') == 3  # Close now, Call it off, and Invite a guest
     assert submit(house, f"/events/{event_id}/cancel", {"run": "1"}).status_code == 303
     sign_in_as(house, provider, CREW["other"])
     assert 'name="run" value="1"' in house.get(f"/events/{event_id}").text  # Start dinner again

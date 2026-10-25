@@ -14,8 +14,8 @@ from dinnerbell.channels.slack import ids
 from dinnerbell.channels.slack.interactions import (
     BROKEN,
     CONFIRM,
+    JOIN_OFFER,
     STALE,
-    UNKNOWN_USER,
     UNVOTED,
     VOTED,
     parse_call_args,
@@ -399,7 +399,7 @@ async def test_home_buttons_act_and_republish_with_a_notice(slack: Slack, house:
 
 async def test_home_for_strangers_and_the_messages_tab(slack: Slack) -> None:
     await slack.open_home("U9STRANGER")
-    assert UNKNOWN_USER in json.dumps(slack.last_home("U9STRANGER"))
+    assert JOIN_OFFER in json.dumps(slack.last_home("U9STRANGER"))
     slack.fake.clear()
     await slack.open_home("Sam", tab="messages")
     assert slack.fake.calls == []

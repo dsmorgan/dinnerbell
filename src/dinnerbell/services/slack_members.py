@@ -66,8 +66,8 @@ async def unlinked_members(db: AsyncSession) -> tuple[int, list[Unlinked]]:
     link the admin set or cleared by hand."""
     household = await _household(db)
     members = await MemberRepository(db).list(household.id)
-    unlinked = [m for m in members if m.active and not m.slack_user_id and not m.slack_link_locked]
-    return household.id, [Unlinked(m.id, m.email) for m in unlinked]
+    unlinked = [m for m in members if m.is_member and not m.slack_user_id and not m.slack_link_locked and m.email]
+    return household.id, [Unlinked(m.id, m.email) for m in unlinked if m.email]
 
 
 async def link_slack_users(

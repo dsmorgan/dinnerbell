@@ -245,7 +245,7 @@ async def test_slash_schedule_falls_back_to_a_direct_message(slack: Slack) -> No
 async def test_slash_schedule_refuses_strangers(slack: Slack) -> None:
     await slack.command("U9STRANGER", "schedule")
     (refusal,) = slack.ephemerals("U9STRANGER")
-    assert refusal.startswith("I don") and "When calls go out" not in refusal
+    assert refusal.startswith("You're not in Dinnerbell yet") and "When calls go out" not in refusal
 
 
 # Today's call when it doesn't exist yet -----------------------------------------------------------

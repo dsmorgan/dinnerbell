@@ -166,6 +166,10 @@ def _render(notification: note.Notification, ctx: RenderContext) -> Message:
             return offer_message(notification, ctx)
         case note.OfferFull():
             return offer_full_message(notification, ctx)
+        case note.GuestInvited():
+            return guest_invited_message(notification, ctx)
+        case note.GuestJoined():
+            return guest_joined_message(notification, ctx)
     raise TypeError(f"no Slack rendering for {type(notification).__name__}")  # pragma: no cover
 
 
@@ -548,7 +552,11 @@ def feedback_button(event: note.EventInfo) -> Block:
 
 
 def reminder_message(
-    notification: note.ResponseReminder, ctx: RenderContext, *, mine: Response | None = None, run: int | None = None
+    notification: note.ResponseReminder | note.GuestInvited,
+    ctx: RenderContext,
+    *,
+    mine: Response | None = None,
+    run: int | None = None,
 ) -> Message:
     """The reminder (FR-11). Only its member sees it, so its buttons are card buttons: they name
     the run, and show the member's answer once there is one. After a tap on it, ``Interactions``
@@ -562,7 +570,14 @@ def reminder_message(
         text = f"*{MOVED_ON}* {why}"
         blocks = [section(text), actions(_web_button(ctx, event), block_id="more")]
         return _finish(f"The {_slot(event)} call for {day_label(event.day)} moved on.", blocks)
-    if mine is None:
+    guest = isinstance(notification, note.GuestInvited)
+    if mine is None and isinstance(notification, note.GuestInvited):
+        text = (
+            f"Hi {escape(notification.member.name)}! {escape(notification.invited_by.name)} invited you to "
+            f"{_slot(event)} on {day_label(event.day)}. Are you in? Answer by *{closes}*."
+        )
+        fallback = f"You're invited to {when}. Are you in? Answer by {closes}."
+    elif mine is None:
         text = (
             f"Hi {escape(notification.member.name)}! The {_slot(event)} call for {day_label(event.day)} "
             f"closes at *{closes}*. Are you in? A quick tap helps whoever's cooking plan ahead."
@@ -578,12 +593,47 @@ def reminder_message(
     blocks = [
         section(text),
         actions(
-            *_answer_buttons(value, mine),
+            *_answer_buttons(value, mine, guest=guest),
             _web_button(ctx, event),
             block_id="participation",
         ),
     ]
     return _finish(fallback, blocks)
+
+
+def guest_invited_message(notification: note.GuestInvited, ctx: RenderContext) -> Message:
+    """A registered guest's invitation (#38): In and Out, as card buttons that name the run.
+    A tap edits it in place, as on the reminder."""
+    return reminder_message(notification, ctx)
+
+
+def guest_joined_message(notification: note.GuestJoined, ctx: RenderContext) -> Message:
+    """To each admin when someone joins from the channel (#38 addendum): a guest until an admin
+    says otherwise."""
+    where = "Sign in with Slack" if notification.via == "web" else "the Dinnerbell channel"
+    name = escape(notification.guest.name.translate(MARKERS))  # it sits inside bold
+    lines = [
+        f"*{name}* joined Dinnerbell from {where}, as a guest. Guests answer only the calls a member "
+        "invites them to, and never vote.",
+        "Make them a member, remove them, or leave them as a guest.",
+    ]
+    guest = ids.event_value(notification.guest.id)
+    remove = confirm(
+        f"Remove {clip(notification.guest.name, 60)}?",
+        "They can't use Dinnerbell or join from the channel again, unless you add them back.",
+        "Remove",
+    )
+    members = button("Members page", f"{ids.LINK_PREFIX}members", url=ctx.url("/admin/members"))
+    blocks = [
+        section(join_lines(lines)),
+        actions(
+            button("Make member", ids.MAKE_MEMBER, guest, style="primary"),
+            button("Remove", ids.REMOVE_GUEST, guest, style="danger", confirm=remove),
+            members,
+            block_id="more",
+        ),
+    ]
+    return _finish(f"{notification.guest.name} joined Dinnerbell as a guest.", blocks)
 
 
 def feedback_reminder_message(notification: note.FeedbackReminder, ctx: RenderContext) -> Message:
@@ -608,12 +658,16 @@ def _moved_on(event: note.EventInfo, run: int | None) -> bool:
     return run is not None and (run != event.run or event.state is not EventState.COLLECTING)
 
 
-def _answer_buttons(value: str, mine: Response | None) -> list[Block]:
+GUEST_ANSWERS = (Status.IN, Status.OUT)
+"""A guest is in or out (#38)."""
+
+
+def _answer_buttons(value: str, mine: Response | None, *, guest: bool = False) -> list[Block]:
     return [
         choice_button(
             ANSWER_WORDS[s], ids.CARD_ACTION_FOR_STATUS[s], value, selected=mine is not None and mine.status is s
         )
-        for s in ANSWERS
+        for s in (GUEST_ANSWERS if guest else ANSWERS)
     ]
 
 
@@ -657,6 +711,44 @@ def your_answer_text(event: note.EventInfo, mine: Response | None, *, run: int |
     return f"{_title(event)}: your answer is {summary}"
 
 
+MAX_CARD_GUESTS = 5
+"""Guests without Slack a card shows buttons for; the web has the rest."""
+
+
+@dataclass(frozen=True)
+class CardGuest:
+    """A guest without Slack the card's member answers for (#38): their name and answer."""
+
+    id: int
+    name: str
+    answer: Response | None
+
+
+def _guest_rows(event: note.EventInfo, guests: tuple[CardGuest, ...]) -> list[Block]:
+    """In, Out, and the role offers for each guest the member answers for, on their card."""
+    blocks: list[Block] = []
+    for guest in guests[:MAX_CARD_GUESTS]:
+        mine = guest.answer
+        value = ids.guest_value(event.id, event.run, guest.id)
+        line = f"*{escape(guest.name)}*, your guest: " + (ANSWER_WORDS[mine.status] if mine else "no answer yet")
+        if mine is not None and mine.offers:
+            line += " · can " + " or ".join(OFFER_WORDS[o] for o in _offers(mine))
+        buttons = [
+            choice_button(
+                ANSWER_WORDS[s], ids.GUEST_ACTION_FOR_STATUS[s], value, selected=mine is not None and mine.status is s
+            )
+            for s in GUEST_ANSWERS
+        ]
+        for role in RoleOffer:
+            offered = mine is not None and role in mine.offers
+            action = (ids.GUEST_ACTION_FOR_WITHDRAW if offered else ids.GUEST_ACTION_FOR_OFFER)[role]
+            buttons.append(choice_button(OFFER_LABELS[role], action, value, selected=offered))
+        blocks += [section(line, block_id=f"guest-{guest.id}"), actions(*buttons, block_id=f"guest-actions-{guest.id}")]
+    if len(guests) > MAX_CARD_GUESTS:
+        blocks.append(context("Answer for your other guests on the web."))
+    return blocks
+
+
 def your_answer(
     event: note.EventInfo,
     mine: Response | None,
@@ -665,6 +757,9 @@ def your_answer(
     *,
     run: int | None = None,
     notice: str | None = None,
+    guest: bool = False,
+    can_invite: bool = False,
+    guests: tuple[CardGuest, ...] = (),
 ) -> Message:
     """The Your answer card: an ephemeral only ``member_id`` sees, with their answer and offers
     marked on the same buttons the call has (spec section 10). ``event`` is the call as it is now
@@ -696,7 +791,7 @@ def your_answer(
     that_day = " that day" if event.early else ""
     blocks.append(context(f"Only you can see this. Tap to change your answer until *{closes}*{that_day}."))
     value = ids.card_value(event.id, event.run)
-    blocks.append(actions(*_answer_buttons(value, mine), block_id="participation"))
+    blocks.append(actions(*_answer_buttons(value, mine, guest=guest), block_id="participation"))
     roles: list[Block] = []
     for role in RoleOffer:
         offered = mine is not None and role in mine.offers
@@ -705,7 +800,13 @@ def your_answer(
     if event.coordinator is None:
         roles.append(button("I'll coordinate", ids.CARD_COORDINATE, value))
     blocks.append(actions(*roles, block_id="roles"))
-    blocks.append(actions(button("Details", ids.CARD_DETAILS, value), _web_button(ctx, event), block_id="more"))
+    blocks += _guest_rows(event, guests)
+    more: list[Block] = []
+    if not guest:  # a guest's card has only In, Out, and the roles (#38)
+        more.append(button("Details", ids.CARD_DETAILS, value))
+    if can_invite:
+        more.append(button("Invite a guest", ids.INVITE_GUEST, value))
+    blocks.append(actions(*more, _web_button(ctx, event), block_id="more"))
     return labelled(_finish(text, blocks), ctx)
 
 
@@ -724,9 +825,14 @@ def assignment_message(notification: note.AssignmentMade, ctx: RenderContext) ->
     proposal = decision.proposal
     role = " and ".join(ROLE_PHRASES[r] for r in notification.roles) or "helping"
     when = local_clock(decision.meal_time, event.timezone)
+    who = (
+        f"Hi {escape(notification.via.name)}! Your guest {escape(notification.member.name)} is"
+        if notification.via is not None
+        else f"Thanks for pitching in, {escape(notification.member.name)}! You're"
+    )
     lines = [
-        f"Thanks for pitching in, {escape(notification.member.name)}! You're *{role}* for {_slot(event)} "
-        f"on {day_label(event.day)}: *{_item_name(proposal.item)}* · {_kind(proposal)}.",
+        f"{who} *{role}* for {_slot(event)} on {day_label(event.day)}: *{_item_name(proposal.item)}* · "
+        f"{_kind(proposal)}.",
         f"*When:* {when} · *Eating:* {_head_count(decision)}",
     ]
     if decision.dietary_notes:
@@ -738,7 +844,8 @@ def assignment_message(notification: note.AssignmentMade, ctx: RenderContext) ->
         )
     buttons = [*_item_buttons(proposal.item, proposal.mode), _web_button(ctx, event)]
     blocks = [section(join_lines(lines)), actions(*buttons, block_id="more")]
-    return _finish(f"You're {role} for {_slot(event)} at {when}: {proposal.item.name}.", blocks)
+    subject = f"{notification.member.name} is" if notification.via is not None else "You're"
+    return _finish(f"{subject} {role} for {_slot(event)} at {when}: {proposal.item.name}.", blocks)
 
 
 # Endings -----------------------------------------------------------------------------------------
@@ -802,13 +909,16 @@ def cancelled_message(notification: note.EventCancelled, ctx: RenderContext) -> 
 def assignment_cancelled_message(notification: note.AssignmentCancelled, ctx: RenderContext) -> Message:
     event, proposal = notification.event, notification.decision.proposal
     role = " and ".join(ROLE_PHRASES[r] for r in notification.roles) or "helping"
+    via = notification.via
+    reader, subject = (
+        (via.name, f"Your guest {notification.member.name} is") if via else (notification.member.name, "You're")
+    )
     lines = [
-        f"Change of plans, {escape(notification.member.name)}. "
-        + _reason(event, notification.cancelled_by, notification.note),
-        f"You're no longer {role}: ~{_item_name(proposal.item)}~. Thanks for being ready to pitch in!",
+        f"Change of plans, {escape(reader)}. " + _reason(event, notification.cancelled_by, notification.note),
+        f"{escape(subject)} no longer {role}: ~{_item_name(proposal.item)}~. Thanks for being ready to pitch in!",
     ]
     blocks = [section(join_lines(lines)), actions(_web_button(ctx, event), block_id="more")]
-    text = f"{_called_off(event, notification.cancelled_by, notification.note)} You're no longer {role}."
+    text = f"{_called_off(event, notification.cancelled_by, notification.note)} {subject} no longer {role}."
     return _finish(text, blocks)
 
 

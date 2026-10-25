@@ -1,5 +1,11 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Members, roles, and the rules that protect the household from locking itself out."""
+"""Members, guests, roles, and the rules that protect the household from locking itself out.
+
+A guest (#38) is a ``member`` row with the role ``guest``: someone who eats with the household
+when a member invites them. Registered guests have a Slack user; unregistered ones don't, and
+the member who invites them answers for them. Guests have no email unless an admin gives one
+when promoting them. ``domain.guests`` says what a guest may do.
+"""
 
 from __future__ import annotations
 
@@ -16,6 +22,7 @@ _EMAIL_PATTERN = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 class Role(StrEnum):
     ADMIN = "admin"
     MEMBER = "member"
+    GUEST = "guest"
 
 
 class MemberStatus(StrEnum):
@@ -44,7 +51,8 @@ class Member:
     id: int
     household_id: int
     display_name: str
-    email: str
+    email: str | None
+    """None only for a guest, who signs in with Slack if at all."""
     role: Role
     capabilities: Capabilities
     active: bool
@@ -54,10 +62,29 @@ class Member:
     """The admin set or cleared ``slack_user_id`` by hand; nothing automatic changes it."""
     mute_dm_reminders: bool = False
     feedback_reminder: bool = False
+    dietary_needs: frozenset[int] = frozenset()
+    """A guest's dietary tags: hard constraints whenever they're in or maybe, as a member's
+    guests' needs are (spec 5.5)."""
+    join_refused: bool = False
+    """An admin removed this guest: they can't join from the channel again (#38)."""
 
     @property
     def is_admin(self) -> bool:
         return self.role is Role.ADMIN
+
+    @property
+    def is_guest(self) -> bool:
+        return self.role is Role.GUEST
+
+    @property
+    def is_member(self) -> bool:
+        """An active member or admin of the household: not a guest, not deactivated."""
+        return self.active and not self.is_guest
+
+    @property
+    def is_registered_guest(self) -> bool:
+        """A guest with a Slack user, who taps their own buttons and gets their own messages."""
+        return self.is_guest and self.slack_user_id is not None
 
     @property
     def is_linked(self) -> bool:
@@ -139,7 +166,7 @@ def check_role_change(actor: Member, target: Member, new_role: Role, members: li
         raise MemberRuleViolation("You can't remove the last active admin.")
 
 
-def check_email_change(target: Member, new_email: str) -> None:
+def check_email_change(target: Member, new_email: str | None) -> None:
     if new_email != target.email and target.is_linked:
         raise MemberRuleViolation(
             "This member has already signed in, so their email can't change. "

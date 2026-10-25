@@ -16,6 +16,7 @@ from dinnerbell.domain.meals import Slot
 
 WHEN = datetime(2026, 10, 22, 21, 30, tzinfo=UTC)
 ALEX, SAM = n.PersonInfo(1, "Alex"), n.PersonInfo(2, "Sam")
+PAT = n.PersonInfo(9, "Pat")
 EVENT = n.EventInfo(
     id=7,
     household_id=1,
@@ -130,6 +131,15 @@ EXAMPLES: list[tuple[n.Notification, str, str | None, str | None, int | None]] =
     (n.OfferPosted(OFFER_EVENT, OFFER, ROSTER, 4), "event:7:run2:offer_posted", "event:7:run2:call", None, None),
     (n.OfferUpdated(OFFER_EVENT, OFFER, ROSTER, 4), "event:7:run2:offer_updated", "event:7:run2:call", None, None),
     (n.OfferFull(OFFER_EVENT, SAM, OFFER), "event:7:run2:offer_full", None, None, 2),
+    (n.GuestInvited(EVENT, PAT, ALEX), f"event:7:run2:guest_invited:member{PAT.id}", None, None, PAT.id),
+    (n.GuestJoined(1, ALEX, PAT, "slack"), f"join:{PAT.id}:admin{ALEX.id}", None, None, ALEX.id),
+    (
+        n.AssignmentMade(EVENT, 12, PAT, (AssignmentRole.PICKUP,), DECISION, via=SAM),
+        f"event:7:run2:assignment_made:member{PAT.id}:12",
+        None,
+        None,
+        SAM.id,  # a guest without Slack: the member who invited them gets it
+    ),
 ]
 
 

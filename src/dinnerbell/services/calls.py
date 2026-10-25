@@ -75,16 +75,17 @@ from dinnerbell.domain.events import (
     friendly,
     is_coordinator,
     transition,
-    veto_participants,
     with_details,
     with_offer,
     with_status,
 )
+from dinnerbell.domain.guests import GuestAction, answer_action
 from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.members import Member
 from dinnerbell.domain.notifications import CALL_OFF_SUPERSEDES, SUPERSEDED_BY_CALL_OFF
 from dinnerbell.domain.schedule import slot_schedule
 from dinnerbell.services import call_context as cc
+from dinnerbell.services import guests as guest_rules
 from dinnerbell.services import lifecycle
 from dinnerbell.services.call_context import CallContext, load, locked_event, publish
 from dinnerbell.services.common import audit, is_unique_violation, require_admin
@@ -112,6 +113,7 @@ async def start_call(
     restart_any_time = is_test_instance(instance_label)
     if not actor.active:
         raise EventRuleViolation("Only active members can start a call.")
+    guest_rules.refuse_guest(actor, GuestAction.START)
     household = await HouseholdRepository(db).get(actor.household_id)
     if household is None:  # pragma: no cover - members cascade with their household
         raise NotFound("No such household.")
@@ -148,6 +150,7 @@ async def restart_call(
     (``instance_label`` set, #60) the too-late rule doesn't apply."""
     if not actor.active:
         raise EventRuleViolation("Only active members can start a call.")
+    guest_rules.refuse_guest(actor, GuestAction.RESTART)
     event = await EventRepository(db).get(actor.household_id, event_id)
     if event is None:
         raise NotFound(cc.NO_SUCH_CALL)
@@ -176,6 +179,7 @@ async def post_now(db: AsyncSession, actor: Member, event_id: int, *, run: int |
     as ``event.opened`` by the actor, with when it was due. ``run``, when given, is the run the
     actor saw (``check_run``). Returns the call as it is now."""
     async with locked_event(db, actor.household_id, event_id, now) as event:
+        await guest_rules.gate(db, event, actor, GuestAction.POST_NOW)
         check_run(event, run)
         if check_can_post_now(event, actor, now=now):
             event = await lifecycle.open_call(db, event, now, actor=actor)
@@ -190,6 +194,7 @@ async def respond(
 ) -> None:
     """``run``, when given, is the run the actor saw (``check_run``), as on a Slack card."""
     async with locked_event(db, actor.household_id, event_id, now) as event:
+        await guest_rules.gate(db, event, actor, answer_action(status))
         check_run(event, run)
         check_can_respond(event, actor)
         ctx = await load(db, event)
@@ -209,6 +214,7 @@ async def offer_role(
     now: datetime,
 ) -> None:
     async with locked_event(db, actor.household_id, event_id, now) as event:
+        await guest_rules.gate(db, event, actor, GuestAction.OFFER_ROLE)
         check_run(event, run)
         check_can_respond(event, actor)
         ctx = await load(db, event)
@@ -224,6 +230,7 @@ async def toggle_role(db: AsyncSession, actor: Member, event_id: int, role: Role
     the event's lock. For buttons shared by everyone, such as on a Slack message. Returns
     whether the actor now offers the role."""
     async with locked_event(db, actor.household_id, event_id, now) as event:
+        await guest_rules.gate(db, event, actor, GuestAction.OFFER_ROLE)
         check_can_respond(event, actor)
         current = (await load(db, event)).response_of(actor.id)
         offered = current is None or role not in current.offers
@@ -239,6 +246,7 @@ async def save_details(
 ) -> None:
     """FR-8: guests, guest needs, eat window, suggestions, and a note."""
     async with locked_event(db, actor.household_id, event_id, now) as event:
+        await guest_rules.gate(db, event, actor, GuestAction.DETAILS)
         check_run(event, run)
         check_can_respond(event, actor)
         ctx = await load(db, event)
@@ -269,6 +277,7 @@ async def claim_coordinator(
     """The first member to claim coordinating gets it. Claiming it again, as from a double tap
     or a retried Slack delivery, changes nothing and isn't an error."""
     async with locked_event(db, actor.household_id, event_id, now) as event:
+        await guest_rules.gate(db, event, actor, GuestAction.COORDINATE)
         check_run(event, run)
         if actor.active and is_coordinator(event, actor):
             return
@@ -279,8 +288,10 @@ async def claim_coordinator(
 
 async def hand_off(db: AsyncSession, actor: Member, event_id: int, member_id: int, *, now: datetime) -> None:
     async with locked_event(db, actor.household_id, event_id, now) as event:
-        target = (await load(db, event)).members.get(member_id)
-        if target is None:
+        await guest_rules.gate(db, event, actor, GuestAction.HAND_OFF)
+        ctx = await load(db, event)
+        target = ctx.members.get(member_id)
+        if target is None or (target.is_guest and not ctx.invited(target.id)):
             raise NotFound(NO_SUCH_MEMBER)
         check_handoff(event, actor, target)
         await set_coordinator(db, event, member_id, now=now)
@@ -339,13 +350,14 @@ async def add_proposal(
     """FR-13: a catalog item, or free text with a cuisine, during the vote window. A proposal
     must pass the same filters ranking applies (ADR 0005: a veto is a guarantee)."""
     async with locked_event(db, actor.household_id, event_id, now) as event:
+        await guest_rules.gate(db, event, actor, GuestAction.PROPOSE)
         check_can_propose(event, actor)
         ctx = await load(db, event)
         check_proposal_room(ctx.proposals, actor)
         item = await _proposed_item(db, ctx, mode, item_id, free_text)
         candidate = _candidate(ctx, actor, mode, item, free_text, cuisine_id)
         _check_not_proposed(ctx, candidate)
-        group = await group_preferences(db, actor.household_id, veto_participants(ctx.responses))
+        group = await group_preferences(db, actor.household_id, ctx.veto_people)
         problem = lifecycle.misfit(ctx, candidate, group)
         if problem is not None:
             raise EventRuleViolation(problem)
@@ -424,6 +436,7 @@ def _proposal_in(ctx: CallContext, proposal_id: int) -> Proposal:
 async def vote(db: AsyncSession, actor: Member, event_id: int, proposal_id: int, *, now: datetime) -> None:
     """FR-14: one vote per member per proposal; voting twice changes nothing."""
     async with locked_event(db, actor.household_id, event_id, now) as event:
+        await guest_rules.gate(db, event, actor, GuestAction.VOTE)
         ctx = await load(db, event)
         check_can_vote(event, actor, ctx.response_of(actor.id))
         _proposal_in(ctx, proposal_id)
@@ -433,6 +446,7 @@ async def vote(db: AsyncSession, actor: Member, event_id: int, proposal_id: int,
 
 async def unvote(db: AsyncSession, actor: Member, event_id: int, proposal_id: int, *, now: datetime) -> None:
     async with locked_event(db, actor.household_id, event_id, now) as event:
+        await guest_rules.gate(db, event, actor, GuestAction.VOTE)
         ctx = await load(db, event)
         check_can_vote(event, actor, ctx.response_of(actor.id))
         _proposal_in(ctx, proposal_id)
@@ -445,6 +459,7 @@ async def toggle_vote(db: AsyncSession, actor: Member, event_id: int, proposal_i
     lock. For shared buttons, such as on a Slack message. Returns whether the actor now votes
     for it."""
     async with locked_event(db, actor.household_id, event_id, now) as event:
+        await guest_rules.gate(db, event, actor, GuestAction.VOTE)
         ctx = await load(db, event)
         check_can_vote(event, actor, ctx.response_of(actor.id))
         _proposal_in(ctx, proposal_id)
@@ -466,6 +481,7 @@ async def _votes_changed(db: AsyncSession, event: Event, now: datetime) -> None:
 async def lock(db: AsyncSession, actor: Member, event_id: int, proposal_id: int, *, now: datetime) -> None:
     """FR-15: the coordinator, or an admin, decides the call now. Audited (SEC-9)."""
     async with locked_event(db, actor.household_id, event_id, now) as event:
+        await guest_rules.gate(db, event, actor, GuestAction.LOCK)
         check_can_lock(event, actor)
         proposal = _proposal_in(await load(db, event), proposal_id)
         await lifecycle.decide(db, event, now, locked=proposal, actor=actor)
@@ -477,6 +493,7 @@ async def lock(db: AsyncSession, actor: Member, event_id: int, proposal_id: int,
 async def set_meal_time(db: AsyncSession, actor: Member, event_id: int, at: time, *, now: datetime) -> None:
     """FR-19: the coordinator (or an admin) changes the meal time, on the call's date."""
     async with locked_event(db, actor.household_id, event_id, now) as event:
+        await guest_rules.gate(db, event, actor, GuestAction.MANAGE_DECISION)
         check_can_manage_decision(event, actor)
         if event.state is not EventState.DECIDED:
             raise EventRuleViolation("This meal is already done.")
@@ -504,6 +521,7 @@ async def change_assignment(
     if role not in ROLE_CHANGES:
         raise EventRuleViolation("Change the coordinator with hand off instead.")
     async with locked_event(db, actor.household_id, event_id, now) as event:
+        await guest_rules.gate(db, event, actor, GuestAction.MANAGE_DECISION)
         check_can_manage_decision(event, actor)
         ctx = await load(db, event)
         mode = event.decided_mode
@@ -538,6 +556,7 @@ async def change_assignment(
 async def mark_done(db: AsyncSession, actor: Member, event_id: int, *, now: datetime) -> None:
     """FR-21: any participant, the coordinator, or an admin marks the meal done."""
     async with locked_event(db, actor.household_id, event_id, now) as event:
+        await guest_rules.gate(db, event, actor, GuestAction.MARK_DONE)
         ctx = await load(db, event)
         check_can_mark_done(event, actor, ctx.response_of(actor.id), now=now)
         await lifecycle.finish(db, event, now, actor=actor)
@@ -565,6 +584,7 @@ async def cancel_call(
     acted in, and the note. ``run``, when given, is the run the actor saw (``check_run``).
     """
     async with locked_event(db, actor.household_id, event_id, now) as event:
+        await guest_rules.gate(db, event, actor, GuestAction.CALL_OFF)
         check_run(event, run)
         capacity = check_can_cancel(event, actor)
         reason = clean_cancel_note(note)
@@ -609,16 +629,18 @@ def _called_off(before: CallContext, ctx: CallContext, actor: Member, reason: st
                 roles.setdefault(a.member_id, set()).add(a.role)
         for member_id, theirs in roles.items():
             mine = tuple(sorted(theirs, key=order.index))
-            sent.append(note.AssignmentCancelled(info, ctx.person(member_id), mine, decision, by, reason))
+            via = cc.answering_for(ctx, member_id)
+            sent.append(note.AssignmentCancelled(info, ctx.person(member_id), mine, decision, by, reason, via))
     return sent
 
 
 def _audience(ctx: CallContext) -> tuple[note.PersonInfo, ...]:
-    """Who a call-off reply mentions: active members who were in or maybe, and the coordinator."""
+    """Who a call-off reply mentions: active members and invited guests (#38) who were in or
+    maybe, and the coordinator."""
     who = {r.member_id for r in ctx.responses if r.status is not Status.OUT}
     if ctx.event.coordinator_id is not None:
         who.add(ctx.event.coordinator_id)
-    people = [m for m in ctx.active_members if m.id in who]
+    people = [m for m in [*ctx.active_members, *ctx.guests] if m.id in who]
     return tuple(ctx.person(m.id) for m in sorted(people, key=lambda m: m.display_name.casefold()))
 
 
@@ -638,6 +660,7 @@ async def close_window(
     (``check_expected_window``): if another is open, or that one already closed, nothing
     changes. Audited as ``event.window_closed``."""
     async with locked_event(db, actor.household_id, event_id, now) as event:
+        await guest_rules.gate(db, event, actor, GuestAction.CLOSE_WINDOW)
         check_run(event, run)
         window = check_can_close_window(event, actor)
         check_expected_window(event, window, expected_window, now=now)

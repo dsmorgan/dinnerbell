@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Iterable
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -28,6 +28,7 @@ from dinnerbell.db.catalog import CatalogRepository
 from dinnerbell.db.events import (
     AssignmentRepository,
     EventRepository,
+    InvitationRepository,
     ProposalRepository,
     ResponseRepository,
     SuggestionRepository,
@@ -54,6 +55,7 @@ from dinnerbell.domain.events import (
     head_count,
     posted_before_its_day,
     stale_after,
+    veto_participants,
 )
 from dinnerbell.domain.household import Household
 from dinnerbell.domain.members import Member
@@ -98,6 +100,37 @@ class CallContext:
     assignments: list[Assignment]
     items: dict[int, CatalogItem]
     tags: dict[int, Tag]
+    invitations: dict[int, int | None] = field(default_factory=dict)
+    """Guests invited to the call (#38), each with the member who invited them."""
+
+    def invited(self, member_id: int) -> bool:
+        return member_id in self.invitations
+
+    def is_guest(self, member_id: int) -> bool:
+        member = self.members.get(member_id)
+        return member is not None and member.is_guest
+
+    @property
+    def guests(self) -> list[Member]:
+        """Active guests invited to the call, by name."""
+        found = [m for m in self.members.values() if m.is_guest and m.active and m.id in self.invitations]
+        return sorted(found, key=lambda m: m.display_name.casefold())
+
+    @property
+    def veto_people(self) -> frozenset[int]:
+        """Whose vetoes and soft preferences apply (FR-28): members in or maybe. A guest's
+        stances never exist (#38); their dietary needs count through ``guest_needs``."""
+        return frozenset(m for m in veto_participants(self.responses) if not self.is_guest(m))
+
+    @property
+    def guest_needs(self) -> frozenset[int]:
+        """Dietary needs every pick must meet (spec 5.5, 7): those of the guests members bring,
+        and of guests themselves (#38), for everyone who might be eating (in, or maybe). Needs
+        left on a response with no guests don't count."""
+        who = veto_participants(self.responses)
+        brought = {tag for r in self.responses if r.member_id in who and r.guests for tag in r.guest_needs}
+        own = {tag for m in who if self.is_guest(m) for tag in self.members[m].dietary_needs}
+        return frozenset(brought | own)
 
     @property
     def zone(self) -> ZoneInfo:
@@ -123,7 +156,8 @@ class CallContext:
 
     @property
     def active_members(self) -> list[Member]:
-        return [m for m in self.members.values() if m.active]
+        """The household's active members and admins, not guests: whom a call asks and waits for."""
+        return [m for m in self.members.values() if m.is_member]
 
     @property
     def coverage(self) -> Coverage:
@@ -170,6 +204,7 @@ async def load(db: AsyncSession, event: Event) -> CallContext:
         assignments=await AssignmentRepository(db).for_event(household_id, event.id),
         items={i.id: i for i in await catalog.items(household_id)},
         tags={t.id: t for t in await catalog.tags(household_id)},
+        invitations=await InvitationRepository(db).for_event(household_id, event.id),
     )
 
 
@@ -292,8 +327,10 @@ def decision_info(ctx: CallContext) -> note.DecisionInfo | None:
 
 
 def guest_dietary_notes(ctx: CallContext) -> tuple[str, ...]:
-    """Dietary needs of the guests of everyone in (FR-8, FR-20)."""
-    return _tag_names(ctx, {tag for r in ctx.participants if r.guests for tag in r.guest_needs})
+    """Dietary needs of the guests of everyone in, and of guests who are in (FR-8, FR-20, #38)."""
+    brought = {tag for r in ctx.participants if r.guests for tag in r.guest_needs}
+    own = {tag for r in ctx.participants if ctx.is_guest(r.member_id) for tag in ctx.members[r.member_id].dietary_needs}
+    return _tag_names(ctx, brought | own)
 
 
 def offer_info(ctx: CallContext) -> note.OfferInfo:
@@ -366,7 +403,18 @@ def assignment_made(
     """The direct message to ``member_id`` about all their roles, prompted by ``assignment_id``."""
     order = list(AssignmentRole)
     roles = sorted({a.role for a in ctx.assignments if a.member_id == member_id}, key=order.index)
-    return note.AssignmentMade(event_info(ctx), assignment_id, ctx.person(member_id), tuple(roles), decision)
+    via = answering_for(ctx, member_id)
+    return note.AssignmentMade(event_info(ctx), assignment_id, ctx.person(member_id), tuple(roles), decision, via)
+
+
+def answering_for(ctx: CallContext, member_id: int) -> note.PersonInfo | None:
+    """Who gets a guest's direct messages when the guest has no Slack (#38): the member who
+    invited them. None for anyone who gets their own."""
+    member = ctx.members.get(member_id)
+    if member is None or not member.is_guest or member.is_registered_guest:
+        return None
+    inviter = ctx.invitations.get(member_id)
+    return ctx.person(inviter) if inviter is not None else None
 
 
 async def publish(db: AsyncSession, ctx: CallContext, *notifications: note.Notification, now: datetime) -> None:

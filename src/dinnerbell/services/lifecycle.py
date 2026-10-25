@@ -54,8 +54,8 @@ from dinnerbell.domain.events import (
     shifted_deadline,
     should_open_today,
     transition,
-    veto_participants,
 )
+from dinnerbell.domain.guests import tie_breaker
 from dinnerbell.domain.household import Household
 from dinnerbell.domain.meals import MemberRef, Slot, TagRef
 from dinnerbell.domain.members import Member
@@ -359,17 +359,15 @@ def rank_item(ctx: CallContext, item: CatalogItem) -> RankItem:
 
 
 def guest_needs(ctx: CallContext) -> frozenset[int]:
-    """Dietary needs of guests of everyone who might be eating (in, or maybe). Needs left on a
-    response with no guests don't count."""
-    who = veto_participants(ctx.responses)
-    return frozenset(tag for r in ctx.responses if r.member_id in who and r.guests for tag in r.guest_needs)
+    """``CallContext.guest_needs``: what every pick must meet for the guests who might eat."""
+    return ctx.guest_needs
 
 
 async def ranking_snapshot(db: AsyncSession, ctx: CallContext, group: GroupPreferences) -> RankingSnapshot:
     """Spec section 7's inputs for this call, as of the call's date."""
     household_id, day = ctx.event.household_id, ctx.event.day
     window = await variety_window(db, household_id, day)
-    who = veto_participants(ctx.responses)
+    who = ctx.veto_people
     suggesters: dict[int, dict[int, str]] = {}  # item -> {member ID: name}, credited once per member
     for suggestion in ctx.suggestions:
         if suggestion.item_id is not None and suggestion.member_id in who:
@@ -403,7 +401,7 @@ async def _close_responses(db: AsyncSession, event: Event, now: datetime) -> Non
         event = await EventRepository(db).save(replace(event, respond_deadline=now), now)
         await audit(db, event.household_id, None, "event.everyone_answered", _target(event), early, now)
     ctx = await load(db, event)
-    group = await group_preferences(db, event.household_id, veto_participants(ctx.responses))
+    group = await group_preferences(db, event.household_id, ctx.veto_people)
     attached = await _keep_attached(db, ctx, group, now)
     taken = {(p.item_id, p.mode) for p in attached}
     ranked = [r for r in rank(await ranking_snapshot(db, ctx, group)) if (r.item_id, r.mode) not in taken]
@@ -594,7 +592,7 @@ async def decide(
             raise EventRuleViolation("It's too late to decide: the meal would be after midnight.")
         await expire(db, event, now)
         return
-    group = await group_preferences(db, event.household_id, veto_participants(ctx.responses))
+    group = await group_preferences(db, event.household_id, ctx.veto_people)
     # Check free text as the catalog item it will become, if one by that name exists by now.
     checked = {p.id: await _as_catalog_item(db, ctx, p) for p in ctx.proposals}
     if locked is not None:
@@ -608,7 +606,10 @@ async def decide(
             for p in ctx.proposals
         ]
         admins = frozenset(m.id for m in ctx.active_members if m.is_admin)
-        chosen = choose_winner(tallies, coordinator_id=event.coordinator_id, admin_ids=admins)
+        # A guest coordinating doesn't break a tie: whoever invited them does, then an admin (#38).
+        coordinator = ctx.members.get(event.coordinator_id) if event.coordinator_id is not None else None
+        breaker = tie_breaker(coordinator, ctx.invitations.get(coordinator.id) if coordinator else None)
+        chosen = choose_winner(tallies, coordinator_id=breaker, admin_ids=admins)
         found = ctx.proposal(chosen.id) if chosen is not None else None
         if found is None:
             await abandon(db, event, EndReason.NO_COVERAGE, now)
