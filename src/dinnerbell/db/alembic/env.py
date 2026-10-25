@@ -2,7 +2,8 @@
 """Alembic environment.
 
 At runtime ``dinnerbell.db.migrate`` passes an open connection. For authoring revisions,
-``uv run alembic revision --autogenerate`` uses ``sqlalchemy.url`` from alembic.ini.
+``uv run alembic revision --autogenerate`` uses ``sqlalchemy.url`` from alembic.ini, through the
+same engine ``run_migrations`` uses: foreign keys off, so a batch rebuild can't cascade.
 """
 
 from __future__ import annotations
@@ -10,7 +11,7 @@ from __future__ import annotations
 from alembic import context
 from sqlalchemy import Connection
 
-from dinnerbell.db.engine import create_sync_engine
+from dinnerbell.db.migrate import migration_engine
 from dinnerbell.db.models import Base
 
 config = context.config
@@ -36,7 +37,7 @@ def run_migrations_online() -> None:
     url = config.get_main_option("sqlalchemy.url")
     if not url:
         raise RuntimeError("set sqlalchemy.url in alembic.ini to author migrations")
-    engine = create_sync_engine(url)
+    engine = migration_engine(url)
     try:
         with engine.begin() as new_connection:
             _run(new_connection)

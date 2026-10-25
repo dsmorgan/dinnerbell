@@ -244,4 +244,8 @@
     {% endif %}
   </details>
   {% endif %}
+  {#- Test instance only (#60); the route is a 404 anywhere else. -#}
+  {% if test_instance and v.can.admin %}
+  <p class="small"><a class="button small danger" href="{{ base }}/admin/discard">Discard (test)</a></p>
+  {% endif %}
 </section>

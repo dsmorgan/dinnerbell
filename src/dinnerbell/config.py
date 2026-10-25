@@ -31,6 +31,13 @@ IPNetwork = ipaddress.IPv4Network | ipaddress.IPv6Network
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR"]
 
 
+def is_test_instance(instance_label: str) -> bool:
+    """Whether ``DINNERBELL_INSTANCE_LABEL`` (``Settings.instance_label``) marks a labeled
+    instance, such as test (ADR 0006). The one gate for what only test may do: ``scrub-test``,
+    discarding a call, and starting a called-off call again at any time (#60)."""
+    return bool(instance_label)
+
+
 def _is_local_http(url: str) -> bool:
     parts = urlsplit(url)
     return parts.scheme == "http" and parts.hostname in LOCAL_HOSTS

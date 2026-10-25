@@ -431,6 +431,31 @@ class ScheduleChanged:
         return None
 
 
+@dataclass(frozen=True, slots=True)
+class CallDiscarded(_Notification):
+    """An admin discarded the call on a test instance (#60): one of its messages, the one whose
+    ``message_key`` is ``target``, now says so. ``event`` is the call as it was; it's gone, so
+    the outbox row refers to no event."""
+
+    kind: ClassVar[str] = "call_discarded"
+    is_update: ClassVar[bool] = True
+    event: EventInfo
+    target: str
+
+    @property
+    def idempotency_key(self) -> str:
+        return f"{self.target}:{self.kind}"
+
+    @property
+    def message_key(self) -> str | None:
+        return self.target
+
+    @property
+    def event_id(self) -> int | None:
+        """None: the call is gone, so the outbox row refers to no event (as ``ScheduleChanged``)."""
+        return None
+
+
 Notification = Union[  # noqa: UP007 - a runtime union, used for isinstance checks and payload decoding
     CallOpened,
     CallUpdated,
@@ -446,6 +471,7 @@ Notification = Union[  # noqa: UP007 - a runtime union, used for isinstance chec
     AssignmentCancelled,
     StartedCallCancelled,
     ScheduleChanged,
+    CallDiscarded,
 ]
 NOTIFICATION_TYPES: dict[str, type[Notification]] = {cls.kind: cls for cls in get_args(Notification)}
 UPDATE_KINDS = frozenset(kind for kind, cls in NOTIFICATION_TYPES.items() if cls.is_update)

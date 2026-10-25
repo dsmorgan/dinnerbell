@@ -313,7 +313,7 @@ def voting(admin: TestClient, clock: FakeClock, migrated: Settings) -> Settings:
 
 
 def test_every_m2_post_route_is_enumerated(client: TestClient) -> None:
-    assert len(m2_posts(client)) == 21
+    assert len(m2_posts(client)) == 22
 
 
 def test_every_admin_override_checks_for_an_admin_in_the_web_layer(client: TestClient) -> None:
@@ -336,9 +336,12 @@ def test_every_m2_post_refuses_a_missing_or_wrong_csrf_token(client: TestClient,
     before = snapshot(voting)
     body = {"status": "out", "slot": "dinner", "day": "2026-10-22", "mode": "pickup", "item_id": "1", "role": "cook"}
     for path in m2_posts(client):
-        assert client.post(path, data=body).status_code == 403, path
-        assert client.post(path, data=body | {"csrf_token": "0" * 64}).status_code == 403, path
-        assert client.post(path, data=body, headers={"X-CSRF-Token": "nope"}).status_code == 403, path
+        # Discarding exists only on a test instance; elsewhere it's a 404 before any other check.
+        # tests/test_discard.py checks its CSRF token on one.
+        refused = 404 if path.endswith("/admin/discard") else 403
+        assert client.post(path, data=body).status_code == refused, path
+        assert client.post(path, data=body | {"csrf_token": "0" * 64}).status_code == refused, path
+        assert client.post(path, data=body, headers={"X-CSRF-Token": "nope"}).status_code == refused, path
     assert snapshot(voting) == before
 
 

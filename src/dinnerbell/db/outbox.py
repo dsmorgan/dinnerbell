@@ -39,6 +39,19 @@ class OutboxEntry:
         return self.message_key is not None and not self.is_update
 
 
+@dataclass(frozen=True, slots=True)
+class DiscardedRows:
+    """What ``OutboxRepository.discard_event`` did with a discarded call's rows."""
+
+    pending: int
+    """Rows deleted that hadn't been delivered or given up on."""
+    deleted: int
+    message_keys: list[str]
+    """The kept posts' message keys, oldest first."""
+    in_flight: bool
+    """A deleted row was in a live drainer's hands, so its delivery may still land."""
+
+
 def _entry(row: OutboxRow) -> OutboxEntry:
     return OutboxEntry(
         id=row.id,
@@ -75,8 +88,17 @@ class OutboxRepository:
 
     # Writing ----------------------------------------------------------------------------------
 
-    async def enqueue(self, household_id: int, event_id: int | None, notification: Notification, now: datetime) -> None:
-        """Add ``notification`` to the current transaction's outbox.
+    async def enqueue(
+        self,
+        household_id: int,
+        event_id: int | None,
+        notification: Notification,
+        now: datetime,
+        *,
+        available_at: datetime | None = None,
+    ) -> None:
+        """Add ``notification`` to the current transaction's outbox, due now or at
+        ``available_at``.
 
         A key already stored is ignored, which makes every write idempotent. An update to a
         message replaces any undelivered, unclaimed update to the same message instead of
@@ -100,7 +122,7 @@ class OutboxRepository:
                 thread_key=notification.thread_key,
                 created_at=now,
                 updated_at=now,
-                available_at=now,
+                available_at=available_at or now,
                 attempts=0,
             )
             .on_conflict_do_nothing(index_elements=["household_id", "idempotency_key"])
@@ -336,6 +358,51 @@ class OutboxRepository:
             delete(OutboxRow).where(OutboxRow.household_id == household_id).execution_options(synchronize_session=False)
         )
         return int(pending or 0), _rowcount(result)
+
+    async def pending_for_event(self, household_id: int, event_id: int) -> int:
+        """How many of the event's rows are waiting for delivery, held ones included."""
+        found = await self._session.scalar(
+            select(func.count())
+            .select_from(OutboxRow)
+            .where(OutboxRow.household_id == household_id, OutboxRow.event_id == event_id, _pending())
+        )
+        return int(found or 0)
+
+    async def discard_event(self, household_id: int, event_id: int, now: datetime) -> DiscardedRows:
+        """For discarding a call on a test instance (#60): delete the event's rows, sent or not,
+        except the delivered posts that created a channel's message. Those are kept, detached
+        from the event (``event_id`` NULL), as the record of where each message landed, so an
+        update can still edit it. A row a drainer holds right now is deleted too; its delivery
+        then finds no row to record, and ``DiscardedRows.in_flight`` says it may still land.
+        """
+        mine = (OutboxRow.household_id == household_id, OutboxRow.event_id == event_id)
+        landed = (
+            OutboxRow.message_key.is_not(None),
+            OutboxRow.kind.not_in(UPDATE_KINDS),
+            OutboxRow.delivered_at.is_not(None),
+            OutboxRow.ref_message.is_not(None),
+            OutboxRow.ref_channel.is_not(None),
+            OutboxRow.ref_channel != NULL_CHANNEL_ID,
+        )
+        kept = list(
+            await self._session.scalars(select(OutboxRow.message_key).where(*mine, *landed).order_by(OutboxRow.id))
+        )
+        await self._session.execute(
+            update(OutboxRow).where(*mine, *landed).values(event_id=None).execution_options(synchronize_session=False)
+        )
+        pending = await self._session.scalar(select(func.count()).select_from(OutboxRow).where(*mine, _pending()))
+        held = await self._session.scalar(
+            select(func.count()).select_from(OutboxRow).where(*mine, _pending(), OutboxRow.claimed_until > now)
+        )
+        result = await self._session.execute(
+            delete(OutboxRow).where(*mine).execution_options(synchronize_session=False)
+        )
+        return DiscardedRows(
+            pending=int(pending or 0),
+            deleted=_rowcount(result),
+            message_keys=[key for key in dict.fromkeys(kept) if key is not None],
+            in_flight=bool(held),
+        )
 
     async def for_household(self, household_id: int) -> list[OutboxEntry]:
         rows = await self._session.scalars(

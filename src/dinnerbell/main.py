@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The ``dinnerbell`` command: ``serve``, ``migrate``, ``config``, ``catalog``, ``slack``, and ``scrub-test``."""
+"""The ``dinnerbell`` command: ``serve``, ``migrate``, ``config``, ``catalog``, ``slack``, and, on a
+test instance only, ``scrub-test`` and ``discard-call``."""
 
 from __future__ import annotations
 
@@ -9,13 +10,17 @@ import json
 import logging
 import os
 import sys
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
+from typing import TYPE_CHECKING
 
 from dinnerbell import __version__, catalog_cli
-from dinnerbell.config import ConfigError, Settings, load_settings
+from dinnerbell.config import ConfigError, Settings, is_test_instance, load_settings
 from dinnerbell.db.migrate import IntegrityCheckFailed, SchemaTooNewError, run_migrations
 from dinnerbell.logs import configure_logging
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
 
 log = logging.getLogger("dinnerbell")
 DEFAULT_PORT = 8013
@@ -63,6 +68,19 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="skip the typed confirmation, after checking the database it names; needed without a terminal",
     )
+    discard = commands.add_parser(
+        "discard-call",
+        help="on a test instance, delete one call and everything in it",
+        description="On a labeled instance (DINNERBELL_INSTANCE_LABEL), delete the call EVENT_ID and everything "
+        "in it, and mark its Slack messages discarded, so a fresh call can start for that slot and day. Shows "
+        "what it will delete first. The running instance sends the Slack edits.",
+    )
+    discard.add_argument("event_id", type=_event_id, metavar="EVENT_ID", help="the call's ID, as in /events/ID")
+    discard.add_argument(
+        "--yes",
+        action="store_true",
+        help="skip the typed confirmation, after checking the call it names; needed without a terminal",
+    )
     catalog_cli.add_parser(commands)
     slack = commands.add_parser("slack", help="Slack tools that need no workspace")
     slack_commands = slack.add_subparsers(dest="slack_command", required=True, metavar="COMMAND")
@@ -75,6 +93,16 @@ def _parser() -> argparse.ArgumentParser:
     preview.add_argument("kind", nargs="?", metavar="KIND", help="what to preview; omit to list the kinds")
     preview.add_argument("--base-url", default="https://dinnerbell.example.com", help="web app URL for links")
     return parser
+
+
+def _event_id(value: str) -> int:
+    try:
+        number = int(value)
+    except ValueError:
+        number = 0
+    if number < 1:
+        raise argparse.ArgumentTypeError("must be a call's ID, a whole number such as 12")
+    return number
 
 
 @contextmanager
@@ -220,6 +248,63 @@ def _scrub_test(settings: Settings, keep: list[str]) -> int:
     return 0
 
 
+DISCARD_WORD = "discard"
+
+
+def _discard_call(settings: Settings, event_id: int, yes: bool) -> int:
+    """Show what discarding ``event_id`` would delete, ask for a typed confirmation unless
+    ``--yes``, then discard it. The instance's label was checked before anything opened the
+    database."""
+    from dinnerbell.services import discard
+    from dinnerbell.services.clock import utc_now
+    from dinnerbell.services.database import open_database
+    from dinnerbell.services.errors import NotFound
+    from dinnerbell.services.household import NoHousehold, current_household
+
+    async def with_database(work: Callable[[AsyncSession, int], Awaitable[list[str]]]) -> list[str]:
+        database = open_database(settings.async_database_url)
+        try:
+            async with database.sessionmaker() as db:
+                household = await current_household(db)
+                return await work(db, household.id)
+        finally:
+            await database.close()
+
+    async def show(db: AsyncSession, household_id: int) -> list[str]:
+        return (await discard.preview(db, household_id, event_id)).lines()
+
+    async def act(db: AsyncSession, household_id: int) -> list[str]:
+        summary = await discard.discard_call(
+            db, household_id, event_id, actor=None, instance_label=settings.instance_label, now=utc_now()
+        )
+        return summary.lines()
+
+    try:
+        lines = asyncio.run(with_database(show))
+        print("discard-call will delete this call and everything in it:")
+        print("\n".join(f"  {line}" for line in [f"Database: {settings.database_path}", *lines]))
+        if not yes:
+            if not sys.stdin.isatty():
+                print("No terminal to confirm on. Check the call above, then run again with --yes.", file=sys.stderr)
+                return 1
+            try:
+                answer = input(f'Type "{DISCARD_WORD}" to discard it: ')
+            except EOFError:
+                answer = ""
+            if answer.strip() != DISCARD_WORD:
+                print("Not discarded. Nothing changed.", file=sys.stderr)
+                return 1
+        lines = asyncio.run(with_database(act))
+    except NoHousehold:
+        print("The database has no household yet, so there's no call to discard.", file=sys.stderr)
+        return 1
+    except NotFound:
+        print(f"There's no call with ID {event_id}. Nothing changed.", file=sys.stderr)
+        return 1
+    print("\n".join(lines))
+    return 0
+
+
 def _serve(settings: Settings, host: str, port: int) -> None:
     import uvicorn
 
@@ -254,11 +339,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         # open may create -wal and -shm files next to the database; keep them owner-only.
         os.umask(PRIVATE_UMASK)
         return catalog_cli.export(settings.database_path, args.output, force=args.force)
-    if args.command == "scrub-test" and not settings.instance_label:
+    if args.command == "scrub-test" and not is_test_instance(settings.instance_label):
         from dinnerbell.services.scrub import NOT_LABELED
 
         print(NOT_LABELED, file=sys.stderr)
         return 1  # before migrating: never touch a database that may be production's
+    if args.command == "discard-call" and not is_test_instance(settings.instance_label):
+        from dinnerbell.services.discard import NOT_LABELED as NOT_LABELED_FOR_DISCARD
+
+        print(NOT_LABELED_FOR_DISCARD, file=sys.stderr)
+        return 1  # the same: before anything opens the database
     configure_logging(settings.log_level, settings.instance_label)
     os.umask(PRIVATE_UMASK)
     if args.command == "scrub-test" and not _confirm_scrub(settings, args.yes):
@@ -269,6 +359,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         _serve(settings, args.host, args.port)
     if args.command == "scrub-test":
         return _scrub_test(settings, args.keep)
+    if args.command == "discard-call":
+        return _discard_call(settings, args.event_id, args.yes)
     return 0
 
 

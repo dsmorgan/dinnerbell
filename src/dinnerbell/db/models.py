@@ -223,7 +223,11 @@ class MealLogRow(Base):
 class EventRow(Base):
     """One coordination of one slot on one date (spec 4, 8). ``run`` counts admin re-runs; each
     run posts fresh messages. ``version`` changes on every write, which is how use cases take the
-    event's write lock first (see ``db.events.EventRepository.lock``)."""
+    event's write lock first (see ``db.events.EventRepository.lock``).
+
+    AUTOINCREMENT, because a test instance can discard a call (#60), and SQLite would otherwise
+    give its ID to the next call. Outbox keys, Slack buttons, and links name events by ID.
+    """
 
     __tablename__ = "event"
     __table_args__ = (
@@ -245,6 +249,7 @@ class EventRow(Base):
         ),
         CheckConstraint("decided_mode IS NULL OR decided_mode IN ('cook', 'pickup', 'delivery')", name="mode"),
         CheckConstraint("end_reason IS NULL OR end_reason IN ('too_few', 'no_coverage', 'missed')", name="end_reason"),
+        {"sqlite_autoincrement": True},
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

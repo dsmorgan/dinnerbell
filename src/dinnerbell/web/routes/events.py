@@ -5,6 +5,10 @@ a window now, and start a called-off call again (spec 11, FR-56).
 Every action posts a small form. With HTMX it swaps the event's card in place; without it, it
 redirects back to the page it came from. Admin overrides live under ``/events/{id}/admin/`` and
 check for an admin here as well as in the service.
+
+On a labeled instance (``config.is_test_instance``), such as test, an admin can also discard a
+call, and a called-off call can start again at any time (#60). Elsewhere the discard pages
+don't exist (404).
 """
 
 from __future__ import annotations
@@ -13,10 +17,11 @@ from collections.abc import Awaitable, Callable
 from datetime import time
 from typing import Annotated
 
-from fastapi import APIRouter, Form, Query, Request
+from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import RedirectResponse
 from starlette.responses import Response
 
+from dinnerbell.config import is_test_instance
 from dinnerbell.domain.catalog import Mode
 from dinnerbell.domain.events import (
     CALL_FINISHED,
@@ -33,8 +38,17 @@ from dinnerbell.domain.events import (
     WindowMoved,
 )
 from dinnerbell.domain.meals import Slot
-from dinnerbell.services import call_admin, calls, event_views
-from dinnerbell.web.auth import AdminCSRFChecked, Context, CSRFChecked, Database, Principal, SignedIn
+from dinnerbell.services import call_admin, calls, discard, event_views
+from dinnerbell.services.errors import NotFound
+from dinnerbell.web.auth import (
+    AdminCSRFChecked,
+    AdminPrincipal,
+    Context,
+    CSRFChecked,
+    Database,
+    Principal,
+    SignedIn,
+)
 from dinnerbell.web.context import AppContext
 from dinnerbell.web.forms import BadFormValue, RowId, choice, iso_date, optional_int, parse_id
 from dinnerbell.web.render import is_htmx, render
@@ -45,6 +59,11 @@ Field = Annotated[str, Form(max_length=200)]
 Many = Annotated[list[str] | None, Form()]
 STALE = "That can't happen anymore. Reload the page to see what changed."
 RULE_ERRORS = (EventRuleViolation, InvalidResponse, BadFormValue)
+
+
+def _any_time(context: AppContext) -> bool:
+    """Whether a called-off call may start again at any time: on a test instance only (#60)."""
+    return is_test_instance(context.settings.instance_label)
 
 
 def _back(event_id: int, came_from: str) -> str:
@@ -65,7 +84,9 @@ async def _card(
 ) -> Response:
     """The event's card for HTMX, or the event page with the error for a plain form post.
     An error is a 409 unless ``status_code`` says otherwise."""
-    view = await event_views.event_view(db, principal.member, event_id, now=context.clock())
+    view = await event_views.event_view(
+        db, principal.member, event_id, now=context.clock(), any_time=_any_time(context)
+    )
     status = status_code or (409 if error else 200)
     page = {"v": view, "from_page": came_from, "error": error}
     if is_htmx(request):
@@ -106,7 +127,9 @@ async def _run(
 async def event_page(
     request: Request, principal: SignedIn, context: Context, db: Database, event_id: RowId
 ) -> Response:
-    view = await event_views.event_view(db, principal.member, event_id, now=context.clock())
+    view = await event_views.event_view(
+        db, principal.member, event_id, now=context.clock(), any_time=_any_time(context)
+    )
     return await render(request, "event.html", {"v": view, "from_page": "event"})
 
 
@@ -120,7 +143,9 @@ async def event_card(
     came_from: Annotated[str, Query(alias="from", max_length=10)] = "",
 ) -> Response:
     """The event's card alone, for pages that refresh open calls in place (see app.js)."""
-    view = await event_views.event_view(db, principal.member, event_id, now=context.clock())
+    view = await event_views.event_view(
+        db, principal.member, event_id, now=context.clock(), any_time=_any_time(context)
+    )
     page = {"v": view, "from_page": "today" if came_from == "today" else "event"}
     return await render(request, "_event.html", page)
 
@@ -140,9 +165,11 @@ async def start_call(
         if chosen is None:
             raise BadFormValue("Pick lunch or dinner.")
         when = iso_date(day, "Enter the date as YYYY-MM-DD.")
-        event = await calls.start_call(db, principal.member, chosen, when, now=context.clock())
+        event = await calls.start_call(
+            db, principal.member, chosen, when, now=context.clock(), instance_label=context.settings.instance_label
+        )
     except RULE_ERRORS as exc:
-        view = await event_views.today_view(db, principal.member, now=context.clock())
+        view = await event_views.today_view(db, principal.member, now=context.clock(), any_time=_any_time(context))
         page = {"today": view, "from_page": "today", "start_error": str(exc)}
         return await render(request, "today.html", page, status_code=409)
     return RedirectResponse(f"/events/{event.id}", status_code=303)
@@ -512,13 +539,15 @@ async def restart(
     run: Run = "",
     came_from: Annotated[str, Form(alias="from", max_length=10)] = "",
 ) -> Response:
-    """Start a called-off call again: any member, until the usual meal time plus two hours."""
+    """Start a called-off call again: any member, until the usual meal time plus two hours, or at
+    any time on a test instance."""
     seen = parse_id(run)
     if seen is None:
         return await _malformed(request, principal, context, db, event_id, came_from)
 
     async def action() -> None:
-        await calls.restart_call(db, principal.member, event_id, run=seen, now=context.clock())
+        label = context.settings.instance_label
+        await calls.restart_call(db, principal.member, event_id, run=seen, now=context.clock(), instance_label=label)
 
     return await _run(request, principal, context, db, event_id, came_from, action)
 
@@ -580,3 +609,46 @@ async def assign_coordinator(
         await call_admin.assign_coordinator(db, principal.member, event_id, who, now=context.clock())
 
     return await _run(request, principal, context, db, event_id, came_from, action)
+
+
+# Discarding a call, on a test instance only (#60) ------------------------------------------------
+
+
+async def labeled_instance_only(context: Context) -> None:
+    """On an unlabeled instance these routes don't exist: 404, before the admin check."""
+    if not is_test_instance(context.settings.instance_label):
+        raise NotFound("That page doesn't exist.")
+
+
+TEST_ONLY = [Depends(labeled_instance_only)]
+ROW_LABELS = {
+    "vote": "Votes",
+    "proposal": "Proposals",
+    "suggestion": "Suggestions",
+    "response": "Answers",
+    "assignment": "Assignments",
+    "meal_log": "Meal log entries",
+}
+
+
+@router.get("/events/{event_id}/admin/discard", dependencies=TEST_ONLY)
+async def discard_page(
+    request: Request, principal: AdminPrincipal, context: Context, db: Database, event_id: RowId
+) -> Response:
+    """Confirm discarding a call, with what it would delete."""
+    found = await discard.preview(db, principal.member.household_id, event_id)
+    rows = [(ROW_LABELS.get(table, table), count) for table, count in found.rows.items()]
+    return await render(request, "event_discard.html", {"p": found, "rows": rows})
+
+
+@router.post("/events/{event_id}/admin/discard", dependencies=TEST_ONLY)
+async def discard_call(principal: AdminCSRFChecked, context: Context, db: Database, event_id: RowId) -> Response:
+    await discard.discard_call(
+        db,
+        principal.member.household_id,
+        event_id,
+        actor=principal.member,
+        instance_label=context.settings.instance_label,
+        now=context.clock(),
+    )
+    return RedirectResponse("/", status_code=303)

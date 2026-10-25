@@ -743,6 +743,22 @@ A copy of production's data tests migrations and new features against real histo
 
 Slots are off after a scrub. To rehearse a scheduled call, turn one on on the **Schedule** page, or start one with `/dinnerbell-test call`.
 
+### Discard a call and start again
+
+On production, a call that's decided, done, or past its meal time stays: history matters there, and "There's already a dinner call for that day" stops a second one. On test, you can throw a call away to test the same slot and day again. These controls work only while `DINNERBELL_INSTANCE_LABEL` is set, the same check `scrub-test` uses; on production they don't appear, the pages are a 404, and the command refuses.
+
+- **Discard a call.** As an admin, select **Discard (test)** on the call's card, check what the confirmation page says it deletes, and select **Discard (test)** again. In Slack, run `/dinnerbell-test discard`, which discards today's dinner call; add `lunch`, `tomorrow`, or a date such as `2026-10-24`. From the host, run:
+
+  ```sh
+  deploy/dinnerbell-test run --rm dinnerbell discard-call 12
+  ```
+
+  `12` is the call's ID, from its page's address, `/events/12`. The command prints the call and how many answers, suggestions, proposals, votes, assignments, meal log entries, and unsent notifications it has, then asks you to type `discard`. Add `--yes` to skip the question. It works while test is running; the running instance sends the Slack edits.
+
+  Discarding deletes the call and everything in it, in one step: answers (with guests and role offers), suggestions, proposals, votes, the decision, assignments, the meal it logged, and its notifications that weren't sent yet. The call's messages in Slack change to "Discarded (test)", with no buttons. The audit log keeps an `event.discarded` row with the call's ID, slot, date, and counts. You can't undo a discard. Discarded IDs are never reused, so an old Slack button or link can't reach the next call.
+
+- **Start a called-off call again at any time.** On production, **Start dinner again** after a call-off works only until the usual meal time plus two hours. On test, it works at any time that day, on the web, in App Home, and with `/dinnerbell-test call`.
+
 ### Promote a release
 
 Use this checklist for every release. It runs the exact release image and compose files on a fresh copy of production's data before your family sees it. Replace `X.Y.Z` with the new release, and note the release production runs now.

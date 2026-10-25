@@ -71,11 +71,11 @@ def run_migrations(sync_url: str, database_path: Path) -> None:
     Foreign keys are off while migrating: SQLite rebuilds a table to change it (Alembic's batch
     mode), and dropping the old copy with foreign keys on would cascade-delete or null out the
     rows that refer to it. Every reference is checked before committing instead, and any broken
-    one rolls the whole upgrade back, schema changes included (see ``_migration_engine``).
+    one rolls the whole upgrade back, schema changes included (see ``migration_engine``).
     Connections the app opens keep foreign keys on.
     """
     database_path.parent.mkdir(parents=True, exist_ok=True)
-    engine = _migration_engine(sync_url)
+    engine = migration_engine(sync_url)
     try:
         with engine.begin() as connection:
             config = _alembic_config(connection)
@@ -87,7 +87,7 @@ def run_migrations(sync_url: str, database_path: Path) -> None:
     log.info("database schema is current", extra={"revision": head_revision()})
 
 
-def _migration_engine(sync_url: str) -> Engine:
+def migration_engine(sync_url: str) -> Engine:
     """An engine whose transactions really contain DDL.
 
     pysqlite's default (legacy) transaction handling emits BEGIN only before INSERT, UPDATE, and

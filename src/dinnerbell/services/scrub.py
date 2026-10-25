@@ -26,6 +26,7 @@ from datetime import datetime
 from sqlalchemy import TextClause, bindparam, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from dinnerbell.config import is_test_instance
 from dinnerbell.db.engine import write_transaction
 from dinnerbell.db.events import EventRepository
 from dinnerbell.db.meals import household_settings
@@ -160,7 +161,7 @@ async def scrub_test(db: AsyncSession, *, instance_label: str, keep: Iterable[st
 
 
 async def _scrub(db: AsyncSession, *, instance_label: str, keep: Iterable[str], now: datetime) -> ScrubSummary:
-    if not instance_label:
+    if not is_test_instance(instance_label):
         raise ScrubRefused(NOT_LABELED)
     wanted: set[str] = set()
     for number, raw in enumerate(keep, start=1):

@@ -1,0 +1,24 @@
+{#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
+{#- Confirm discarding a call, on a test instance only (#60). Expects p (a DiscardPreview) and
+    rows, (label, count) pairs of what it would delete. -#}
+{% extends "base.html" %}
+{% block title %}Discard {{ p.slot.value }} {{ p.day|day }}{% endblock %}
+{% block content %}
+<p class="small"><a href="/events/{{ p.event_id }}">Back to the call</a></p>
+<section class="card stack" aria-labelledby="discard-title">
+  <h1 id="discard-title">Discard {{ p.slot.value }} for {{ p.day|day }}?</h1>
+  <p>This deletes the call and everything in it, for good. Its Slack messages change to “Discarded (test)”. Then anyone can start a fresh {{ p.slot.value }} call for that day.</p>
+  <p class="small muted">State: {{ p.state.label }}. Run {{ p.run }}.</p>
+  <ul class="small">
+    {%- for label, count in rows %}
+    <li>{{ label }}: {{ count }}</li>
+    {%- endfor %}
+    <li>Notifications not yet sent: {{ p.pending_outbox }}</li>
+  </ul>
+  <form method="post" action="/events/{{ p.event_id }}/admin/discard" class="button-row">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <button type="submit" class="button danger">Discard (test)</button>
+    <a class="button" href="/events/{{ p.event_id }}">Keep it</a>
+  </form>
+</section>
+{% endblock %}

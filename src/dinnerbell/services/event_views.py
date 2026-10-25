@@ -100,7 +100,9 @@ def _window(event: Event) -> Window | None:
     return Window.VOTE if event.state is EventState.VOTING else None
 
 
-def permissions(ctx: CallContext, actor: Member, today: date, now: datetime) -> Permissions:
+def permissions(ctx: CallContext, actor: Member, today: date, now: datetime, *, any_time: bool = False) -> Permissions:
+    """What ``actor`` may do. ``any_time``, on a test instance only (#60), lifts the too-late
+    rule for starting a called-off call again, as ``calls.start_call`` does there."""
     event, mine = ctx.event, ctx.response_of(actor.id)
     admin = actor.active and actor.is_admin
     return Permissions(
@@ -118,7 +120,7 @@ def permissions(ctx: CallContext, actor: Member, today: date, now: datetime) -> 
         move_window=_window(event) if admin else None,
         cancel=_allowed(lambda: rules.check_can_cancel(event, actor)),
         close_window=_closable(event, actor, now),
-        restart=actor.active and _allowed(lambda: _check_restart(ctx, today, now)),
+        restart=actor.active and _allowed(lambda: _check_restart(ctx, today, now, any_time)),
     )
 
 
@@ -134,13 +136,13 @@ def _closable(event: Event, actor: Member, now: datetime) -> Window | None:
     return window
 
 
-def _check_restart(ctx: CallContext, today: date, now: datetime) -> None:
+def _check_restart(ctx: CallContext, today: date, now: datetime, any_time: bool) -> None:
     """What ``calls.start_call`` checks before it starts a called-off call again."""
     rules.check_ad_hoc_day(ctx.event.day, today)
-    rules.check_restart(ctx.event, today, now=now, too_late_after=ctx.too_late_for(today))
+    rules.check_restart(ctx.event, today, now=now, too_late_after=ctx.too_late_for(today), any_time=any_time)
 
 
-def view(ctx: CallContext, actor: Member, today: date, now: datetime) -> EventView:
+def view(ctx: CallContext, actor: Member, today: date, now: datetime, *, any_time: bool = False) -> EventView:
     by_name = sorted(ctx.active_members, key=lambda m: m.display_name.casefold())
     mine = [s for s in ctx.suggestions if s.member_id == actor.id]
     tags = sorted(ctx.tags.values(), key=lambda t: t.key)
@@ -157,7 +159,7 @@ def view(ctx: CallContext, actor: Member, today: date, now: datetime) -> EventVi
             ProposalView(cc.proposal_info(ctx, p), actor.id in ctx.votes.get(p.id, [])) for p in ctx.proposals
         ),
         decision=cc.decision_info(ctx),
-        can=permissions(ctx, actor, today, now),
+        can=permissions(ctx, actor, today, now, any_time=any_time),
         members=tuple(ctx.person(m.id) for m in by_name),
         dietary_tags=tuple(t for t in tags if t.kind is TagKind.DIETARY),
         cuisine_tags=tuple(t for t in tags if t.kind is TagKind.CUISINE),
@@ -177,11 +179,14 @@ async def _today(db: AsyncSession, actor: Member, now: datetime) -> date:
     return household_today(household, now)
 
 
-async def event_view(db: AsyncSession, actor: Member, event_id: int, *, now: datetime) -> EventView:
+async def event_view(
+    db: AsyncSession, actor: Member, event_id: int, *, now: datetime, any_time: bool = False
+) -> EventView:
+    """``any_time``: see ``permissions``."""
     event = await EventRepository(db).get(actor.household_id, event_id)
     if event is None:
         raise NotFound(cc.NO_SUCH_CALL)
-    return view(await load(db, event), actor, await _today(db, actor, now), now)
+    return view(await load(db, event), actor, await _today(db, actor, now), now, any_time=any_time)
 
 
 async def calls_on(db: AsyncSession, actor: Member, day: date) -> list[Event]:
@@ -191,11 +196,12 @@ async def calls_on(db: AsyncSession, actor: Member, day: date) -> list[Event]:
     return [event for event in found if event is not None]
 
 
-async def today_view(db: AsyncSession, actor: Member, *, now: datetime) -> TodayView:
+async def today_view(db: AsyncSession, actor: Member, *, now: datetime, any_time: bool = False) -> TodayView:
+    """``any_time``: see ``permissions``."""
     today = await _today(db, actor, now)
     events = await EventRepository(db).for_today(actor.household_id, today)
     return TodayView(
         today=today,
-        events=[view(await load(db, event), actor, today, now) for event in events],
+        events=[view(await load(db, event), actor, today, now, any_time=any_time) for event in events],
         slots=tuple(Slot),
     )

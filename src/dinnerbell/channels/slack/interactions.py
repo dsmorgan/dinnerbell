@@ -68,6 +68,7 @@ from dinnerbell.channels.slack.views import (
     parse_proposal,
     proposal_modal,
 )
+from dinnerbell.config import is_test_instance
 from dinnerbell.domain.events import (
     STALE_CALL,
     EventRuleViolation,
@@ -86,7 +87,7 @@ from dinnerbell.domain.events import (
 from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.members import Member
 from dinnerbell.domain.notifications import MessageRef, PermanentDeliveryError, PersonInfo, ResponseReminder
-from dinnerbell.services import calls, event_views, slack_members
+from dinnerbell.services import calls, discard, event_views, slack_members
 from dinnerbell.services import schedule as schedule_service
 from dinnerbell.services.clock import Clock
 from dinnerbell.services.errors import Forbidden, NotFound
@@ -193,6 +194,11 @@ class Interactions:
         """Slack user ID to the bot's DM with them, as conversations.open reported it."""
         self.card_locks: dict[tuple[str, int], _CardLock] = {}
         """Per (Slack user, event), while a tap holds or waits for it; see ``_card_lock``."""
+
+    @property
+    def any_time(self) -> bool:
+        """On a test instance, a called-off call can start again at any time (#60)."""
+        return is_test_instance(self.instance_label)
 
     # Wiring ------------------------------------------------------------------------------------
 
@@ -337,7 +343,7 @@ class Interactions:
                 view["blocks"].insert(0, instance_banner(self.instance_label))
         else:
             async with self.sessionmaker() as db:
-                today = await event_views.today_view(db, member, now=self.clock())
+                today = await event_views.today_view(db, member, now=self.clock(), any_time=self.any_time)
             view = home_view(today, self.links, notice, label=self.instance_label)
         await self.api.publish_home(user_id, with_version_footer(view, self.version, self.instance_label))
 
@@ -450,7 +456,7 @@ class Interactions:
             if action_id in ids.START_CALL:
                 slot = ids.parse_slot(value)
                 day = await slack_members.today(db, member, now=now)
-                await calls.start_call(db, member, slot, day, now=now)
+                await calls.start_call(db, member, slot, day, now=now, instance_label=self.instance_label)
                 return f"Started the {slot.value} call. It's posted in the Dinnerbell channel."
             if action_id in {ids.DETAILS, ids.ADD_PROPOSAL}:
                 return await self._open_modal(db, member, source, action_id, ids.parse_event(value), trigger)
@@ -763,7 +769,8 @@ class Interactions:
             return
         words = str(body.get("text") or "").split()
         sub, args = (words[0].lower(), words[1:]) if words else ("help", [])
-        if sub not in {"call", "cancel", "schedule"}:
+        discards = sub == "discard" and is_test_instance(self.instance_label)  # #60: test only
+        if sub not in {"call", "cancel", "schedule"} and not discards:
             await ack(response_type="ephemeral", text=self.command_reply(sub))
             return
         user, channel = body.get("user_id"), body.get("channel_id")
@@ -774,6 +781,8 @@ class Interactions:
                 self._spawn(self._call(source, [word.lower() for word in args]))
             elif sub == "schedule":
                 self._spawn(self._schedule_command(source))
+            elif sub == "discard":
+                self._spawn(self._discard_command(source, [word.lower() for word in args]))
             else:
                 self._spawn(self._cancel_command(source, args))
 
@@ -792,8 +801,12 @@ class Interactions:
                 return f"Offers are coming soon. Until then, start a call with `{self.command} call`."
             case "version":
                 return self.version_reply()
+            case "discard":  # reached only on an unlabeled instance; see _command
+                return DISCARD_REFUSED
             case _:
                 help_text = HELP.format(command=self.command, today=url("/"))
+                if is_test_instance(self.instance_label):
+                    help_text += "\n" + DISCARD_HELP.format(command=self.command)
                 return f"{help_text}\n{version_line(self.version, self.instance_label)}"
 
     def version_reply(self) -> str:
@@ -812,7 +825,7 @@ class Interactions:
             async with self.sessionmaker() as db:
                 today = await slack_members.today(db, member, now=self.clock())
                 slot, day = parse_call_args(args, today, command=self.command)
-                await calls.start_call(db, member, slot, day, now=self.clock())
+                await calls.start_call(db, member, slot, day, now=self.clock(), instance_label=self.instance_label)
             when = "today" if day == today else f"for {day_label(day)}"
             return f"Started the {slot.value} call {when}. It's posted in the Dinnerbell channel."
 
@@ -867,7 +880,43 @@ class Interactions:
 
         await self._run(source, member, work)
 
+    async def _discard_command(self, source: Source, args: list[str]) -> None:
+        """``discard [lunch|dinner] [today|tomorrow|YYYY-MM-DD]``, on a test instance only (#60):
+        discard that call, dinner today by default. The service checks for an admin."""
+        member = await self._member(source)
+        if member is None:
+            return
 
+        async def work() -> str | None:
+            async with self.sessionmaker() as db:
+                today = await slack_members.today(db, member, now=self.clock())
+                try:
+                    slot, day = parse_call_args(args, today, command=self.command)
+                except EventRuleViolation:
+                    raise EventRuleViolation(DISCARD_USAGE.format(command=self.command)) from None
+                when = "today" if day == today else f"for {day_label(day)}"
+                found = [event for event in await event_views.calls_on(db, member, day) if event.slot is slot]
+                if not found:
+                    raise EventRuleViolation(f"There's no {slot.value} call {when}.")
+                await discard.discard_call(
+                    db,
+                    member.household_id,
+                    found[0].id,
+                    actor=member,
+                    instance_label=self.instance_label,
+                    now=self.clock(),
+                )
+            return f"Discarded the {slot.value} call {when}. Start a fresh one with `{self.command} call`."
+
+        await self._run(source, member, work)
+
+
+DISCARD_HELP = (
+    "• Test instance: `{command} discard` deletes today's dinner call and everything in it, so a fresh "
+    "one can start. Add `lunch` or a day. Admins only."
+)
+DISCARD_REFUSED = "Discarding a call works only on a test instance."
+DISCARD_USAGE = "Try `{command} discard`, `{command} discard lunch`, or `{command} discard dinner 2026-10-24`."
 HELP = (
     "*Dinnerbell* helps the household decide what to eat.\n"
     "• `{command} call` starts a dinner call for today. Add `lunch`, `tomorrow`, or a date "

@@ -149,6 +149,8 @@ def _render(notification: note.Notification, ctx: RenderContext) -> Message:
             return started_call_cancelled_message(notification, ctx)
         case note.ScheduleChanged():
             return schedule_changed_message(notification, ctx)
+        case note.CallDiscarded():
+            return discarded_message(notification)
     raise TypeError(f"no Slack rendering for {type(notification).__name__}")  # pragma: no cover
 
 
@@ -797,3 +799,17 @@ def _add(at: time, minutes: int) -> time:
     """``at`` plus ``minutes`` on the clock. Schedules end by midnight (``check_schedule``)."""
     total = (at.hour * 60 + at.minute + minutes) % (24 * 60)
     return time(total // 60, total % 60)
+
+
+DISCARDED = "Discarded (test)"
+
+
+def discarded_message(notification: note.CallDiscarded) -> Message:
+    """What every message of a call discarded on a test instance becomes (#60): no buttons and
+    no link, since the call and its page are gone."""
+    title = _title(notification.event)
+    blocks = [
+        section(f"~{escape(title)}~ · *{DISCARDED}*"),
+        context("An admin discarded this call on the test instance, with everything in it."),
+    ]
+    return _finish(f"{title}: {DISCARDED}", blocks)

@@ -9,6 +9,7 @@ from typing import Any
 from fastapi import Request
 from starlette.responses import Response
 
+from dinnerbell.config import is_test_instance
 from dinnerbell.services.household import current_household
 from dinnerbell.web import filters
 from dinnerbell.web.context import TEMPLATES, app_context
@@ -50,6 +51,7 @@ async def render(
         "htmx_file": HTMX_FILE,
         "provider_is_slack": settings.oidc_issuer.rstrip("/") == "https://slack.com",
         "instance_label": settings.instance_label,
+        "test_instance": is_test_instance(settings.instance_label),  # what only test may do (#60)
     }
     return TEMPLATES.TemplateResponse(request, template, base | (context or {}), status_code=status_code)
 
