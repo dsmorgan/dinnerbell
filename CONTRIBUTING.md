@@ -50,6 +50,7 @@ If you change `compose.yaml`, `deploy/`, or an env example, also run `scripts/ch
 CI runs the suite on every CPU with [pytest-xdist](https://pytest-xdist.readthedocs.io/) (`-n auto`), and the `check` job gates every merge, so keep each test quick and independent:
 
 - **Never wait a fixed time.** Move time with the `clock` fixture (`FakeClock`) or a `now=` argument. When a test must wait for a background task, poll for the state it expects, and give up after a generous deadline, such as 10 seconds: a passing test returns as soon as the state holds, so only a failing test pays for the deadline.
+- **Count work instead of timing it.** A test that asserts something finished within a time budget fails on a slow or busy runner. To show that code stops early, count the calls it makes instead, as `tests/test_catalog_file.py` does for the YAML loader.
 - **Keep tests xdist-safe.** Each worker is a separate process with its own temporary directories. Write files only under `tmp_path`, never bind a fixed port, and never rely on another test's leftovers or on running in a particular order.
 - **Take a database from the `migrated` fixture.** It copies a database that was migrated once per worker, which is much faster than migrating per test. Call `run_migrations` yourself only when the test is about migrations.
 
