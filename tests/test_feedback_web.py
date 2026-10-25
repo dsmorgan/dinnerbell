@@ -231,6 +231,7 @@ def test_the_event_page_takes_feedback_and_only_the_cook_sees_notes(
 def test_the_preferences_page_turns_the_reminder_on(
     client: TestClient, household: dict[str, int], migrated: Settings
 ) -> None:
-    assert "send me one direct message asking how it was" in page(client.get("/preferences"))
+    prefs = page(client.get("/preferences"))
+    assert "send me one direct message asking how it was. Muting direct messages also stops this." in prefs
     submit(client, "/preferences/settings", {"feedback_reminder": "on"})
     assert member(migrated, "admin@example.com").feedback_reminder

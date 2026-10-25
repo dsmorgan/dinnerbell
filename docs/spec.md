@@ -144,7 +144,7 @@ When an event is done, the decision message gains a **How was it?** button, and 
 - **Place** (restaurants only): loved it, fine, or not again, with optional chips such as "late," "wrong order," or "cold."
 - **Cook** (home meals only): a thank-you, with an optional short note.
 
-There's no nudge by default. A member who wants one turns on a feedback reminder in Preferences and gets one direct message per meal. Feedback stays open for 7 days after the meal: through the seventh day after its date, in the household's time zone. A cook doesn't thank themselves, and a logged meal has no cook on record, so it takes food feedback (and place feedback for a restaurant) but no thank-you. App Home lists meals from calls; logged meals take feedback on History.
+There's no nudge by default. A member who wants one turns on a feedback reminder in Preferences and gets one direct message per meal, unless they muted direct-message reminders, which stops every reminder. Feedback stays open for 7 days after the meal: through the seventh day after its date, in the household's time zone. A cook doesn't thank themselves, and a logged meal has no cook on record, so it takes food feedback (and place feedback for a restaurant) but no thank-you. App Home lists meals from calls; logged meals take feedback on History.
 
 In version 1, feedback is collected and displayed but doesn't affect ranking. After at least 8 weeks of data, a later milestone decides how feedback should influence proposals.
 
@@ -355,7 +355,7 @@ Catch-up stops where it would be too late to matter. An undecided call (schedule
 | Called off after the decision | Each member assigned to cook, pick up, or order | Direct message |
 | Unposted call called off by someone else | The member who started it | Direct message |
 | Schedule changed | Everyone | Channel post naming who changed it, what changed, and the first day it applies (FR-44). No mentions |
-| Feedback reminder | Participants who turned the reminder on | Direct message, once per meal |
+| Feedback reminder | Participants who turned the reminder on and haven't muted reminders | Direct message, once per meal |
 
 Each member can mute direct-message reminders in their preferences. Channel posts are never suppressed per member. The call, proposals, and decision messages are also edited in place as they change; see [docs/channels.md](channels.md).
 

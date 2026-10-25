@@ -417,6 +417,12 @@ def needs_reminder(member: Member, response: Response | None) -> bool:
     return member.active and response is None and not member.mute_dm_reminders
 
 
+def wants_feedback_reminder(member: Member) -> bool:
+    """FR-48: the feedback reminder goes to active members who turned it on. Muting direct-
+    message reminders wins: a muted member gets no reminder of any kind."""
+    return member.active and member.feedback_reminder and not member.mute_dm_reminders
+
+
 # Coverage (FR-17) -------------------------------------------------------------------------------
 
 

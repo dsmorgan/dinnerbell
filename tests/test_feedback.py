@@ -5,7 +5,8 @@ who may see what. Nobody ever sees who chose "not again"."""
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import pytest
 from sqlalchemy import select
@@ -13,6 +14,7 @@ from sqlalchemy import select
 from dinnerbell.config import Settings
 from dinnerbell.db.events import AssignmentRepository
 from dinnerbell.db.models import FeedbackRow
+from dinnerbell.db.repositories import MemberRepository
 from dinnerbell.domain.catalog import ItemKind, Mode
 from dinnerbell.domain.events import AssignmentRole, StaleRun
 from dinnerbell.domain.feedback import (
@@ -193,7 +195,10 @@ async def test_meals_await_feedback_until_given_or_closed(house: House) -> None:
 
 
 async def test_the_reminder_goes_once_to_those_who_turned_it_on(house: House) -> None:
-    await remind(house, "Kim", "Lee")  # Lee doesn't eat, so gets nothing
+    await remind(house, "Kim", "Lee", "Alex")  # Lee doesn't eat, so gets nothing
+    async with house.sessionmaker() as db:  # Alex muted direct messages, which wins
+        await MemberRepository(db).update(house.household.id, house["Alex"].id, house.clock(), mute_dm_reminders=True)
+        await db.commit()
     event_id = await done_dinner(house)
     sent = [e for e in await house.outbox() if e.kind == "feedback_reminder"]
     assert [(e.idempotency_key, e.payload["member"]["name"], e.payload["item"], e.payload["closes"]) for e in sent] == [
@@ -258,3 +263,17 @@ async def test_a_new_cook_never_sees_thanks_written_to_the_old_one(house: House)
     assert seen["Lee"] == CookThanks(1, lee, (("Alex", "For Lee"),))
     assert seen["Sam"] == CookThanks(1, lee, (("Kim", "For Sam"),))
     assert seen["Kim"] == CookThanks(1, lee)
+
+
+async def test_the_window_closes_at_midnight_in_the_households_time_zone(house: House) -> None:
+    """The household is in Chicago. A dinner on Thursday, Oct 22 takes feedback through Thursday,
+    Oct 29 local time, hours after that day has ended in UTC."""
+    meal_id = await meal_of(house, await done_dinner(house))
+    chicago = ZoneInfo("America/Chicago")
+    house.clock.now = datetime(2026, 10, 29, 23, 30, tzinfo=chicago).astimezone(UTC)  # Oct 30 04:30 UTC
+    assert await give(house, "Kim", meal_id, FeedbackInput(food=Rating.LOVED)) is not None
+    house.clock.now += timedelta(hours=1)  # 00:30 on Oct 30 in Chicago
+    with pytest.raises(InvalidFeedback, match="has closed"):
+        await give(house, "Kim", meal_id, FeedbackInput(food=Rating.FINE))
+    (row,) = await rows(house)
+    assert row.food == "loved"

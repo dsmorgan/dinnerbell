@@ -28,7 +28,7 @@ from dinnerbell.db.meals import MealLogRepository
 from dinnerbell.db.repositories import MemberRepository
 from dinnerbell.domain import notifications as note
 from dinnerbell.domain.catalog import ItemKind
-from dinnerbell.domain.events import AssignmentRole, EventState, check_run
+from dinnerbell.domain.events import AssignmentRole, EventState, check_run, wants_feedback_reminder
 from dinnerbell.domain.feedback import (
     FEEDBACK_DAYS,
     CookThanks,
@@ -281,13 +281,13 @@ async def item_counts(db: AsyncSession, actor: Member, item_ids: Iterable[int] |
 
 
 def reminders(ctx: CallContext, item_name: str) -> list[note.FeedbackReminder]:
-    """One direct message to each active member who ate a done call's meal and turned the
-    feedback reminder on. ``ctx`` is the call after it was marked done."""
+    """One direct message to each active member who ate a done call's meal, turned the feedback
+    reminder on, and hasn't muted direct-message reminders. ``ctx`` is the call after it was marked done."""
     info = cc.event_info(ctx)
     closes = closes_on(ctx.event.day)
     people = (ctx.members.get(r.member_id) for r in ctx.participants)
     return [
         note.FeedbackReminder(info, ctx.person(m.id), item_name, closes)
         for m in sorted((m for m in people if m is not None), key=lambda m: m.display_name.casefold())
-        if m.active and m.feedback_reminder
+        if wants_feedback_reminder(m)
     ]
