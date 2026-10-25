@@ -51,8 +51,10 @@ from dinnerbell.channels.slack.messages import (
     Message,
     RenderContext,
     labelled,
+    posted_reply,
     reminder_message,
     schedule_reply,
+    started_reply,
     your_answer,
     your_answer_text,
 )
@@ -92,6 +94,7 @@ from dinnerbell.services import schedule as schedule_service
 from dinnerbell.services.clock import Clock
 from dinnerbell.services.errors import Forbidden, NotFound
 from dinnerbell.services.event_views import EventView
+from dinnerbell.services.lifecycle import CallExists
 
 log = logging.getLogger(__name__)
 
@@ -150,6 +153,16 @@ class Tap:
     message_ts: str | None = None
     ephemeral: bool = False
     response_url: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class Reply:
+    """A reply with a channel link or buttons, such as the one to starting a later day's call:
+    ``message`` where the person acted, or ``notice``, plain words, on the Home tab, which
+    shows replies as a line of text."""
+
+    message: Message
+    notice: str
 
 
 @dataclass(slots=True)
@@ -333,6 +346,20 @@ class Interactions:
         except SLACK_ERRORS as exc:
             log.warning("slack reply failed", extra={"error": str(exc)})
 
+    async def _reply(self, source: Source, message: Message, member: Member) -> None:
+        """A private reply with blocks: an ephemeral in the household channel, where its
+        buttons work, or else a direct message, where they work too."""
+        try:
+            if source.channel_id == self.channel_id:
+                try:
+                    await self.api.ephemeral(source.channel_id, source.user_id, message.text, message.blocks)
+                    return
+                except SLACK_ERRORS:
+                    pass  # fall back to a direct message
+            await self.api.post(source.user_id, message.payload())
+        except SLACK_ERRORS as exc:
+            log.warning("slack reply failed", extra={"error": str(exc), "member_id": member.id})
+
     async def publish_home(self, user_id: str, member: Member | None, notice: str | None = None) -> None:
         if member is None:
             view: dict[str, Any] = {
@@ -347,11 +374,15 @@ class Interactions:
             view = home_view(today, self.links, notice, label=self.instance_label)
         await self.api.publish_home(user_id, with_version_footer(view, self.version, self.instance_label))
 
-    async def _run(self, source: Source, member: Member, work: Callable[[], Awaitable[str | None]]) -> None:
-        """Run one action and report how it went. ``work`` returns a confirmation or None."""
+    async def _run(self, source: Source, member: Member, work: Callable[[], Awaitable[str | Reply | None]]) -> None:
+        """Run one action and report how it went. ``work`` returns a confirmation, a ``Reply``, or None."""
         notice: str | None = None
         try:
-            notice = await work()
+            done = await work()
+            if isinstance(done, Reply) and not source.home:
+                await self._reply(source, done.message, member)
+            else:
+                notice = done.notice if isinstance(done, Reply) else done
         except SHOWN_ERRORS as exc:
             notice = str(exc)
         except IllegalTransition as exc:
@@ -400,14 +431,14 @@ class Interactions:
         )
         log.info("slack action", extra={"member_id": member.id, "action": str(action_id)[:40]})
 
-        async def work() -> str | None:
+        async def work() -> str | Reply | None:
             return await self._dispatch(member, source, str(action_id), value, trigger, tap)
 
         await self._run(source, member, work)
 
     async def _dispatch(
         self, member: Member, source: Source, action_id: str, value: object, trigger: object, tap: Tap
-    ) -> str | None:
+    ) -> str | Reply | None:
         if action_id in ids.CARD_ACTIONS:
             return await self._card_tap(member, source, action_id, value, trigger, tap)
         if action_id == ids.ANSWER:
@@ -421,6 +452,11 @@ class Interactions:
             if choice is not ids.MenuChoice.CANCEL:
                 raise ids.BadValue("not a call-off value")
             return await self._open_end(member, source, choice, event_id, run, trigger)
+        if action_id == ids.CALL_COORDINATE:
+            return await self._coordinate(member, source, value, tap)
+        if action_id == ids.POST_NOW:
+            event_id, run = ids.parse_card(value)
+            return await self._post_now(member, event_id, run)
         if action_id == ids.CLOSE_WINDOW:  # Slack asked them to confirm already
             window, event_id, run = ids.parse_window(value)
             return await self._close(member, event_id, window, run)
@@ -524,6 +560,16 @@ class Interactions:
             raise ids.BadValue("Answer is drawn only on the call message")
         async with self.sessionmaker() as db:
             await self._post_card(db, member, source, event_id, run=run)
+
+    async def _coordinate(self, member: Member, source: Source, value: object, tap: Tap) -> str | None:
+        """**I'll coordinate** on the call message while voting: claim it for the run the
+        message showed, so a message from before a restart can't claim the newer run (#54)."""
+        event_id, run = ids.parse_card(value)
+        if not self._on_call_message(source) or tap.ephemeral:
+            raise ids.BadValue("I'll coordinate with a run is drawn only on the call message")
+        async with self.sessionmaker() as db:
+            await calls.claim_coordinator(db, member, event_id, run=run, now=self.clock())
+            return await self._confirm(db, member, source, event_id, ids.COORDINATE)
 
     async def _send_card(self, source: Source, card: Message, member: Member, tap: Tap | None = None) -> None:
         """Replace the card ``tap`` was on, or post a new one when there's no card to replace,
@@ -648,6 +694,27 @@ class Interactions:
                 return "You can add proposals only while voting is open."
             await self.api.open_view(trigger, proposal_modal(view, origin))
         return None
+
+    # Starting a call and posting it now (issue #59) --------------------------------------------
+
+    async def _post_now(self, member: Member, event_id: int, run: int | None) -> Reply:
+        async with self.sessionmaker() as db:
+            await calls.post_now(db, member, event_id, run=run, now=self.clock())
+            view = await event_views.event_view(db, member, event_id, now=self.clock())
+        event = view.event
+        notice = f"The {event.slot.value} call for {day_label(event.day)} is posted in the Dinnerbell channel."
+        return Reply(posted_reply(view.info, channel_id=self.channel_id, ctx=self._context()), notice)
+
+    def _started(self, view: EventView, today: date) -> Reply:
+        """The reply to starting a call: posted, or scheduled with **Post it now**."""
+        event = view.event
+        message = started_reply(view.info, event.opens_at, today=today, channel_id=self.channel_id, ctx=self._context())
+        when = "today" if event.day == today else f"for {day_label(event.day)}"
+        if event.state is EventState.SCHEDULED:
+            notice = f"Scheduled the {event.slot.value} call {when}. It posts at its usual time."
+        else:
+            notice = f"Started the {event.slot.value} call {when}. It's posted in the Dinnerbell channel."
+        return Reply(message, notice)
 
     # Call it off and Close now (FR-56) ---------------------------------------------------------
 
@@ -821,13 +888,22 @@ class Interactions:
         if member is None:
             return
 
-        async def work() -> str | None:
+        async def work() -> str | Reply | None:
             async with self.sessionmaker() as db:
                 today = await slack_members.today(db, member, now=self.clock())
-                slot, day = parse_call_args(args, today, command=self.command)
-                await calls.start_call(db, member, slot, day, now=self.clock(), instance_label=self.instance_label)
-            when = "today" if day == today else f"for {day_label(day)}"
-            return f"Started the {slot.value} call {when}. It's posted in the Dinnerbell channel."
+                slot, day, early = parse_call_args(args, today, command=self.command)
+                try:
+                    event = await calls.start_call(
+                        db, member, slot, day, now=self.clock(), instance_label=self.instance_label
+                    )
+                except CallExists:
+                    scheduled = [e for e in await event_views.calls_on(db, member, day) if e.slot is slot]
+                    if not early or not scheduled or scheduled[0].state is not EventState.SCHEDULED:
+                        raise
+                    event = scheduled[0]  # posting a call that's scheduled already
+                if not early:
+                    return self._started(await event_views.event_view(db, member, event.id, now=self.clock()), today)
+            return await self._post_now(member, event.id, None)
 
         await self._run(source, member, work)
 
@@ -891,7 +967,9 @@ class Interactions:
             async with self.sessionmaker() as db:
                 today = await slack_members.today(db, member, now=self.clock())
                 try:
-                    slot, day = parse_call_args(args, today, command=self.command)
+                    slot, day, early = parse_call_args(args, today, command=self.command)
+                    if early:  # `now` means nothing to a discard
+                        raise EventRuleViolation(DISCARD_USAGE)
                 except EventRuleViolation:
                     raise EventRuleViolation(DISCARD_USAGE.format(command=self.command)) from None
                 when = "today" if day == today else f"for {day_label(day)}"
@@ -920,7 +998,7 @@ DISCARD_USAGE = "Try `{command} discard`, `{command} discard lunch`, or `{comman
 HELP = (
     "*Dinnerbell* helps the household decide what to eat.\n"
     "• `{command} call` starts a dinner call for today. Add `lunch`, `tomorrow`, or a date "
-    "like `2026-10-24`.\n"
+    "like `2026-10-24`. A later day's call posts at its usual time that day; add `now` to post it now.\n"
     "• `{command} cancel` calls off today's call. Add `lunch` or `dinner`, a day, and a reason, "
     "like `{command} cancel dinner Pizza at Grandma's`.\n"
     "• `{command} prefs` links to your preferences.\n"
@@ -930,7 +1008,12 @@ HELP = (
     "• `offer` and `log` are coming soon.\n"
     "Open the Dinnerbell app's Home tab for today's calls, or <{today}|the web app>."
 )
-CALL_USAGE = "Try `{command} call`, `{command} call lunch tomorrow`, or `{command} call dinner 2026-10-24`."
+CALL_USAGE = (
+    "Try `{command} call`, `{command} call lunch tomorrow`, `{command} call lunch tomorrow now`, "
+    "or `{command} call dinner 2026-10-24`."
+)
+POST_WORDS = frozenset({"now", "early"})
+"""Words in ``call`` that post a later day's call now instead of at its usual time (#59)."""
 CANCEL_USAGE = (
     "Try `{command} cancel`, `{command} cancel lunch`, or `{command} cancel dinner tomorrow Pizza at Grandma's`."
 )
@@ -944,12 +1027,15 @@ FORMS: dict[str, Callable[[Any], Any]] = {"details": parse_details, "proposal": 
 """Each modal's form parser, by kind. Close now's confirmation has no fields."""
 
 
-def parse_call_args(args: list[str], today: date, *, command: str = DEFAULT_COMMAND) -> tuple[Slot, date]:
-    """``call [lunch|dinner] [today|tomorrow|YYYY-MM-DD]``, in any order. Dinner today by default."""
-    slot, day = Slot.DINNER, today
+def parse_call_args(args: list[str], today: date, *, command: str = DEFAULT_COMMAND) -> tuple[Slot, date, bool]:
+    """``call [lunch|dinner] [today|tomorrow|YYYY-MM-DD] [now|early]``, in any order. Dinner
+    today by default. The flag is whether to post a later day's call now (#59)."""
+    slot, day, early = Slot.DINNER, today, False
     for word in args:
         if word in {s.value for s in Slot}:
             slot = Slot(word)
+        elif word in POST_WORDS:
+            early = True
         elif word == "today":
             day = today
         elif word == "tomorrow":
@@ -959,7 +1045,7 @@ def parse_call_args(args: list[str], today: date, *, command: str = DEFAULT_COMM
                 day = date.fromisoformat(word)
             except ValueError:
                 raise EventRuleViolation(CALL_USAGE.format(command=command)) from None
-    return slot, day
+    return slot, day, early
 
 
 def parse_cancel_args(

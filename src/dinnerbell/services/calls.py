@@ -59,6 +59,7 @@ from dinnerbell.domain.events import (
     check_can_lock,
     check_can_manage_decision,
     check_can_mark_done,
+    check_can_post_now,
     check_can_propose,
     check_can_respond,
     check_can_vote,
@@ -160,7 +161,23 @@ async def restart_call(
     return fresh
 
 
-# Responding (FR-7 to FR-9) --------------------------------------------------------------------
+async def post_now(db: AsyncSession, actor: Member, event_id: int, *, run: int | None = None, now: datetime) -> Event:
+    """Post the scheduled call ``event_id`` now instead of at its usual time (issue #59), such
+    as tomorrow's lunch the evening before. Anyone who could start the call may
+    (``check_can_post_now``). Responses open at once; the response deadline, the reminder, and
+    voting keep that day's times. It takes the same path as the scheduler's tick
+    (``lifecycle.open_call``) under the event's lock, so it races the tick safely: whichever
+    comes second finds the call posted and changes nothing, as does posting it twice. Audited
+    as ``event.opened`` by the actor, with when it was due. ``run``, when given, is the run the
+    actor saw (``check_run``). Returns the call as it is now."""
+    async with locked_event(db, actor.household_id, event_id, now) as event:
+        check_run(event, run)
+        if check_can_post_now(event, actor, now=now):
+            event = await lifecycle.open_call(db, event, now, actor=actor)
+        return event
+
+
+# Responding (FR-7 to FR-9)--------------------------------------------------------------------
 
 
 async def respond(

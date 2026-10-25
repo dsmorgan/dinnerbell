@@ -129,7 +129,12 @@ async def create_call(
 
 
 async def open_call(db: AsyncSession, event: Event, now: datetime, *, actor: Member | None = None) -> Event:
-    event = await EventRepository(db).save(replace(event, state=transition(event.state, EventState.COLLECTING)), now)
+    """Post ``event`` and open responses: the tick's ``Step.OPEN`` at the call's time, or a
+    member posting it early (``calls.post_now``), whose payload keeps when it was due. Either
+    way responses open now (``opens_at``), and the deadlines stay as scheduled."""
+    early = event.opens_at if now < event.opens_at else None
+    opened = replace(event, state=transition(event.state, EventState.COLLECTING), opens_at=min(event.opens_at, now))
+    event = await EventRepository(db).save(opened, now)
     ctx = await load(db, event)
     await publish(db, ctx, cc.call_opened(ctx), now=now)
     payload = {
@@ -137,6 +142,8 @@ async def open_call(db: AsyncSession, event: Event, now: datetime, *, actor: Mem
         "date": event.day.isoformat(),
         "respond_by": event.respond_deadline.isoformat(),
     }
+    if early is not None:
+        payload["scheduled_for"] = early.isoformat()
     await audit(db, event.household_id, actor, "event.opened", _target(event), payload, now)
     return event
 

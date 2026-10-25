@@ -3,7 +3,7 @@
 {% block title %}Today{% endblock %}
 {% block content %}
 <h1>Hi, {{ principal.member.display_name }}</h1>
-{% for v in today.events %}
+{% for v in today.current %}
 {% include "_event.html" %}
 {% else %}
 <section class="card">
@@ -11,6 +11,12 @@
   <p>No calls yet today. The dinner call arrives here and in Slack at its usual time, or start one now.</p>
 </section>
 {% endfor %}
+{% if today.upcoming %}
+<h2>Coming up</h2>
+{% for v in today.upcoming %}
+{% include "_event.html" %}
+{% endfor %}
+{% endif %}
 <details class="card"{% if start_error %} open{% endif %}>
   <summary><h2>Start a call</h2></summary>
   {% if start_error %}<p class="alert error" role="alert">{{ start_error }}</p>{% endif %}
@@ -22,6 +28,8 @@
       </label>
       <label class="field"><span>Day</span><input type="date" name="day" value="{{ today.today.isoformat() }}" min="{{ today.today.isoformat() }}" required></label>
     </div>
+    <p class="small muted">A call for a later day posts at its usual time that day.</p>
+    <label class="check"><input type="checkbox" name="post_now" value="1"> Post it now, so everyone can answer early</label>
     <button type="submit" class="button primary block">Start the call</button>
   </form>
 </details>

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass, replace
-from datetime import time
+from datetime import date, datetime, time
 from typing import Any
 
 from dinnerbell.channels.slack import ids
@@ -273,6 +273,9 @@ def _call_status(event: note.EventInfo) -> str:
     """Plain words with mrkdwn emphasis: escape before putting it in a block."""
     slot = _slot(event)
     match event.state:
+        case EventState.COLLECTING if event.early:  # posted the day before, or earlier (#59)
+            by = local_clock(event.respond_deadline, event.timezone)
+            return f"Who's in for {slot} on {day_label(event.day)}? Answer by *{by}* that day."
         case EventState.COLLECTING:
             return f"Who's in for {slot}? Answer by *{local_clock(event.respond_deadline, event.timezone)}*."
         case EventState.VOTING:
@@ -313,7 +316,9 @@ def call_message(
     ]
     if event.coordinator is None and event.state is EventState.VOTING:
         # Answering is over, so no card is offered, but someone can still take the vote in hand.
-        blocks.append(actions(button("I'll coordinate", ids.COORDINATE, ids.event_value(event.id)), block_id="roles"))
+        # It names the run, so a message from before a restart can't claim the newer one (#54).
+        claim = button("I'll coordinate", ids.CALL_COORDINATE, ids.card_value(event.id, event.run))
+        blocks.append(actions(claim, block_id="roles"))
     more: list[Block] = []
     if event.state is EventState.COLLECTING:
         # Everyone sees this message, so it offers no choices, only the way to your own card,
@@ -462,6 +467,48 @@ def mark_done_button(event: note.EventInfo) -> Block:
     return button("Mark done", ids.MARK_DONE, ids.event_value(event.id), style="primary", confirm=sure)
 
 
+# Starting and posting a call from Slack (issue #59) ---------------------------------------------
+
+POST_NOW = "Post it now"
+
+
+def started_reply(
+    event: note.EventInfo, opens_at: datetime, *, today: date, channel_id: str, ctx: RenderContext
+) -> Message:
+    """The private reply to starting a call from Slack. A call for today is posted at once. One
+    for a later day is scheduled: the reply says when it posts, and has **Post it now**.
+    ``opens_at`` is when it posts; ``channel_id`` is the household channel, which Slack shows
+    as a link."""
+    slot, channel = _slot(event), f"<#{channel_id}>"
+    if event.state is not EventState.SCHEDULED:
+        when = "today" if event.day == today else f"for {day_label(event.day)}"
+        text = f"Started the {slot} call {when}. It's posted in {channel}."
+        return labelled(Message(text, [section(text)]), ctx)
+    posts = local_clock(opens_at, event.timezone)
+    text = f"Scheduled the {slot} call for {day_label(event.day)}. It posts in {channel} at {posts} that day."
+    post = button(
+        POST_NOW,
+        ids.POST_NOW,
+        ids.card_value(event.id, event.run),
+        style="primary",
+        accessibility_label=f"Post the {slot} call for {day_label(event.day)} now",
+    )
+    blocks = [
+        section(f"{text}\nTo ask everyone now instead, tap *{POST_NOW}*. Answers are still due that day."),
+        actions(post, _web_button(ctx, event), block_id="more"),
+    ]
+    return labelled(Message(text, blocks), ctx)
+
+
+def posted_reply(event: note.EventInfo, *, channel_id: str, ctx: RenderContext) -> Message:
+    """The private reply to **Post it now**: the call is in the channel now, whoever posted it."""
+    text = f"The {_slot(event)} call for {day_label(event.day)} is posted in <#{channel_id}>."
+    if event.state is EventState.COLLECTING:
+        that_day = " that day" if event.early else ""
+        text += f" Answers are due by *{local_clock(event.respond_deadline, event.timezone)}*{that_day}."
+    return labelled(Message(text.replace("*", ""), [section(text)]), ctx)
+
+
 # Direct messages ---------------------------------------------------------------------------------
 
 
@@ -594,7 +641,8 @@ def your_answer(
         blocks.append(actions(_web_button(ctx, event), block_id="more"))
         return labelled(_finish(text, blocks), ctx)
     closes = local_clock(event.respond_deadline, event.timezone)
-    blocks.append(context(f"Only you can see this. Tap to change your answer until *{closes}*."))
+    that_day = " that day" if event.early else ""
+    blocks.append(context(f"Only you can see this. Tap to change your answer until *{closes}*{that_day}."))
     value = ids.card_value(event.id, event.run)
     blocks.append(actions(*_answer_buttons(value, mine), block_id="participation"))
     roles: list[Block] = []

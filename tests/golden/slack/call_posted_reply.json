@@ -1,0 +1,12 @@
+{
+  "blocks": [
+    {
+      "text": {
+        "text": "The lunch call for Friday, Oct 23 is posted in <#C0DINNER>. Answers are due by *11:30 AM* that day.",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    }
+  ],
+  "text": "The lunch call for Friday, Oct 23 is posted in <#C0DINNER>. Answers are due by 11:30 AM that day."
+}

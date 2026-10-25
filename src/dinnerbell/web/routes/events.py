@@ -158,8 +158,10 @@ async def start_call(
     db: Database,
     slot: Field = Slot.DINNER.value,
     day: Field = "",
+    post_now: Field = "",
 ) -> Response:
-    """FR-3: an ad-hoc call for a slot and date."""
+    """FR-3: an ad-hoc call for a slot and date. A later day's call posts at that day's usual
+    time, or now with ``post_now`` (issue #59)."""
     try:
         chosen = choice(Slot, slot)
         if chosen is None:
@@ -168,6 +170,8 @@ async def start_call(
         event = await calls.start_call(
             db, principal.member, chosen, when, now=context.clock(), instance_label=context.settings.instance_label
         )
+        if post_now:
+            await calls.post_now(db, principal.member, event.id, run=event.run, now=context.clock())
     except RULE_ERRORS as exc:
         view = await event_views.today_view(db, principal.member, now=context.clock(), any_time=_any_time(context))
         page = {"today": view, "from_page": "today", "start_error": str(exc)}
@@ -525,6 +529,27 @@ async def close(
     async def action() -> None:
         member = principal.member
         await calls.close_window(db, member, event_id, run=seen, expected_window=expected, now=context.clock())
+
+    return await _run(request, principal, context, db, event_id, came_from, action)
+
+
+@router.post("/events/{event_id}/post-now")
+async def post_now(
+    request: Request,
+    principal: CSRFChecked,
+    context: Context,
+    db: Database,
+    event_id: RowId,
+    run: Run = "",
+    came_from: Annotated[str, Form(alias="from", max_length=10)] = "",
+) -> Response:
+    """Post a scheduled call now instead of at its usual time (issue #59): any member."""
+    seen = parse_id(run)
+    if seen is None:
+        return await _malformed(request, principal, context, db, event_id, came_from)
+
+    async def action() -> None:
+        await calls.post_now(db, principal.member, event_id, run=seen, now=context.clock())
 
     return await _run(request, principal, context, db, event_id, came_from, action)
 

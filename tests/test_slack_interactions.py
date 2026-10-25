@@ -441,7 +441,7 @@ async def test_slash_call_starts_a_call(slack: Slack, house: House) -> None:
     assert response.status == 200 and body(response) == {}
     event_id = await dinner_id(house)
     assert (await house.event(event_id)).state is EventState.COLLECTING
-    assert slack.ephemerals("Kim") == ["Started the dinner call today. It's posted in the Dinnerbell channel."]
+    assert slack.ephemerals("Kim") == ["Started the dinner call today. It's posted in <#C0DINNER>."]
     await slack.command("Kim", "call")
     assert "already" in slack.ephemerals("Kim")[-1].lower()
 
@@ -450,7 +450,7 @@ async def test_slash_call_with_a_slot_and_day(slack: Slack, house: House) -> Non
     house.clock.now = OPENS
     await slack.command("Kim", "call lunch 2026-10-24")
     assert slack.ephemerals("Kim") == [
-        "Started the lunch call for Saturday, Oct 24. It's posted in the Dinnerbell channel."
+        "Scheduled the lunch call for Saturday, Oct 24. It posts in <#C0DINNER> at 10:30 AM that day."
     ]
     await slack.command("Kim", "call dinner soonish")
     assert slack.ephemerals("Kim")[-1].startswith("Try `/dinnerbell call`")
@@ -475,8 +475,10 @@ def test_parse_call_args() -> None:
     from datetime import date
 
     today = date(2026, 10, 22)
-    assert parse_call_args([], today) == (Slot.DINNER, today)
-    assert parse_call_args(["tomorrow", "lunch"], today) == (Slot.LUNCH, date(2026, 10, 23))
-    assert parse_call_args(["today"], today) == (Slot.DINNER, today)
+    assert parse_call_args([], today) == (Slot.DINNER, today, False)
+    assert parse_call_args(["tomorrow", "lunch"], today) == (Slot.LUNCH, date(2026, 10, 23), False)
+    assert parse_call_args(["today"], today) == (Slot.DINNER, today, False)
+    assert parse_call_args(["lunch", "now", "tomorrow"], today) == (Slot.LUNCH, date(2026, 10, 23), True)
+    assert parse_call_args(["early", "2026-10-24"], today) == (Slot.DINNER, date(2026, 10, 24), True)
     with pytest.raises(EventRuleViolation):
         parse_call_args(["2026-13-01"], today)

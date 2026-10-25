@@ -726,6 +726,22 @@ def check_window_change(event: Event, window: Window) -> datetime:
     raise EventRuleViolation("That window isn't open.")
 
 
+def check_can_post_now(event: Event, actor: Member, *, now: datetime) -> bool:
+    """Issue #59: any active member, who could start the call, posts a scheduled call now,
+    such as tomorrow's lunch the evening before. Returns whether there's anything to post: a
+    call that's posted already stays as it is. A finished call, or a scheduled one whose
+    response window has passed (the scheduler expires it instead, FR-2), is refused."""
+    if not actor.active:
+        raise EventRuleViolation("Only active members can post a call.")
+    if not event.state.is_open:
+        raise EventRuleViolation(CALL_FINISHED)
+    if event.state is not EventState.SCHEDULED:
+        return False
+    if now >= event.respond_deadline:
+        raise EventRuleViolation("It's too late to post this call.")
+    return True
+
+
 # Scheduler steps -------------------------------------------------------------------------------
 
 

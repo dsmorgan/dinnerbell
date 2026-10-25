@@ -48,6 +48,8 @@ class Permissions:
     passed."""
     restart: bool = False
     """Start a called-off call again (FR-56): ``calls.start_call`` for its slot and day."""
+    post_now: bool = False
+    """Post a scheduled call now instead of at its usual time (issue #59): ``calls.post_now``."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,6 +87,16 @@ class TodayView:
     events: list[EventView]
     slots: tuple[Slot, ...]
 
+    @property
+    def current(self) -> list[EventView]:
+        """Calls that are posted or over: today's, and any posted for another day."""
+        return [v for v in self.events if v.event.state is not EventState.SCHEDULED]
+
+    @property
+    def upcoming(self) -> list[EventView]:
+        """Calls scheduled and not posted yet, soonest first (issue #59)."""
+        return [v for v in self.events if v.event.state is EventState.SCHEDULED]
+
 
 def _allowed(check: Callable[[], object]) -> bool:
     try:
@@ -121,6 +133,8 @@ def permissions(ctx: CallContext, actor: Member, today: date, now: datetime, *, 
         cancel=_allowed(lambda: rules.check_can_cancel(event, actor)),
         close_window=_closable(event, actor, now),
         restart=actor.active and _allowed(lambda: _check_restart(ctx, today, now, any_time)),
+        post_now=event.state is EventState.SCHEDULED
+        and _allowed(lambda: rules.check_can_post_now(event, actor, now=now)),
     )
 
 

@@ -191,6 +191,7 @@ def event_info(ctx: CallContext) -> note.EventInfo:
         end_reason=event.end_reason,
         ended_by=ctx.person(event.ended_by) if event.ended_by is not None else None,
         end_note=event.end_note,
+        early=event.state is not EventState.SCHEDULED and event.opens_at.astimezone(ctx.zone).date() < event.day,
     )
 
 

@@ -20,7 +20,7 @@ import pytest
 from dinnerbell.channels.slack import ids
 from dinnerbell.channels.slack.api import WEBHOOK_LOG, SlackApi, SlackUnavailable
 from dinnerbell.channels.slack.blocks import section
-from dinnerbell.channels.slack.interactions import OUT_OF_DATE, Source, Tap
+from dinnerbell.channels.slack.interactions import OUT_OF_DATE, WRONG_PLACE, Source, Tap
 from dinnerbell.channels.slack.messages import MOVED_ON, Message
 from dinnerbell.config import Settings
 from dinnerbell.domain.events import EventState, RoleOffer, Status
@@ -173,10 +173,22 @@ async def test_answer_after_responses_close_says_the_call_moved_on(slack: Slack,
     [{"ephemeral": True}, {"home": True}, {"channel": "D03KIM"}, {"channel": "C0ELSEWHERE"}],
 )
 async def test_answer_works_only_on_the_call_message(slack: Slack, house: House, where: dict[str, Any]) -> None:
+    """Anywhere else it's refused, rather than falling through to a card or a direct message
+    with the card's text (#54)."""
     event_id = await open_call(house)
+    await slack.drain()
+    slack.fake.clear()
     await slack.click("Kim", "answer", ids.card_value(event_id, 1), **where)
     assert slack.cards("Kim") == []
     assert slack.fake.of("response_url") == []
+    if where.get("channel") == "C0ELSEWHERE":  # refused before it's read, by a direct message
+        assert [c.args["text"] for c in slack.fake.of("chat.postMessage")] == [WRONG_PLACE]
+        return
+    assert slack.fake.of("chat.postMessage") == []
+    if where.get("home"):
+        assert OUT_OF_DATE in json.dumps(slack.last_home("Kim"))
+    else:
+        assert slack.ephemerals("Kim") == [OUT_OF_DATE]
 
 
 @pytest.mark.parametrize("value", [None, "", "7", "7:0", "x:1", "1:1:1"])

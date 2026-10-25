@@ -1,0 +1,77 @@
+{
+  "blocks": [
+    {
+      "text": {
+        "emoji": true,
+        "text": "Dinner call · Friday, Oct 23",
+        "type": "plain_text"
+      },
+      "type": "header"
+    },
+    {
+      "text": {
+        "text": "Who's in for dinner on Friday, Oct 23? Answer by *4:30 PM* that day.\n<@U01ALEX> <@U03KIM> Lee <@U02SAM>",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "text": {
+        "text": "No answers yet. Be the first!\n_Still to answer: Alex, Kim, Lee, Sam_\n_No coordinator yet. Anyone can tap *Answer*, then *I'll coordinate*, to steer the vote._",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "block_id": "more",
+      "elements": [
+        {
+          "accessibility_label": "Answer the dinner call: in, maybe, or out, and how you can help",
+          "action_id": "answer",
+          "style": "primary",
+          "text": {
+            "emoji": true,
+            "text": "Answer",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "7:1"
+        },
+        {
+          "action_id": "link_event",
+          "text": {
+            "emoji": true,
+            "text": "View on web",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "url": "https://dinnerbell.example.com/events/7"
+        },
+        {
+          "action_id": "call_menu",
+          "options": [
+            {
+              "text": {
+                "emoji": true,
+                "text": "Call it off",
+                "type": "plain_text"
+              },
+              "value": "cancel:7:1"
+            },
+            {
+              "text": {
+                "emoji": true,
+                "text": "Start the vote now",
+                "type": "plain_text"
+              },
+              "value": "close:7:1"
+            }
+          ],
+          "type": "overflow"
+        }
+      ],
+      "type": "actions"
+    }
+  ],
+  "text": "Dinner call · Friday, Oct 23: Who's in for dinner on Friday, Oct 23? Answer by 4:30 PM that day."
+}

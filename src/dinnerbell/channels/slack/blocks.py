@@ -28,6 +28,7 @@ MAX_SECTION = 3000
 MAX_FIELD = 2000
 MAX_FIELDS = 10
 MAX_BUTTON_TEXT = 75
+MAX_ACCESSIBILITY_LABEL = 75
 MAX_BUTTON_VALUE = 2000
 MAX_URL = 3000
 MAX_ACTIONS = 25
@@ -209,7 +210,7 @@ def button(
     if confirm is not None:
         element["confirm"] = confirm
     if accessibility_label is not None:
-        element["accessibility_label"] = clip(accessibility_label, MAX_BUTTON_TEXT)
+        element["accessibility_label"] = clip(accessibility_label, MAX_ACCESSIBILITY_LABEL)
     return element
 
 

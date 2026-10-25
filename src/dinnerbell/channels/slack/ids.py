@@ -59,6 +59,13 @@ CARD_ACTIONS = frozenset({*CARD_RESPOND, *CARD_OFFER, *CARD_WITHDRAW, CARD_COORD
 ANSWER = "answer"
 """**Answer** on the call message while responses are open: posts the tapper's Your answer card.
 Its value is a ``card_value``, naming the run the message showed."""
+CALL_COORDINATE = "call_coordinate"
+"""**I'll coordinate** on the call message while voting with nobody coordinating. Its value is a
+``card_value``, so a message from before a restart can't claim the newer run (issue #54).
+``COORDINATE``, without a run, stays for call messages drawn before it."""
+POST_NOW = "post_now"
+"""**Post it now** on a scheduled call (issue #59): on the reply to starting a later day's call,
+and on the Home tab. Its value is a ``card_value``."""
 LINK_PREFIX = "link_"
 """URL buttons. Slack still sends their clicks, which the app acknowledges and ignores."""
 LINK_PATTERN = re.compile(r"^link_[a-z_]{1,40}$")
