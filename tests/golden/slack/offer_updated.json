@@ -1,0 +1,85 @@
+{
+  "blocks": [
+    {
+      "text": {
+        "emoji": true,
+        "text": "Lunch offer · Thursday, Oct 22",
+        "type": "plain_text"
+      },
+      "type": "header"
+    },
+    {
+      "text": {
+        "text": "Alex is picking up *<https://siam.example/menu|Siam Garden>* for lunch at *12:30 PM*.\n1 serving spare. Tap Count me in to join.",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "text": {
+        "text": "*Eating* · 3 people\n• <@U01ALEX>\n• <@U02SAM> · +1 guest\n*Guests' dietary needs:* Vegetarian",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "block_id": "more",
+      "elements": [
+        {
+          "accessibility_label": "Join Alex's lunch offer, or tap again to drop out",
+          "action_id": "join_offer",
+          "style": "primary",
+          "text": {
+            "emoji": true,
+            "text": "Count me in",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "9:1"
+        },
+        {
+          "action_id": "add_guest",
+          "text": {
+            "emoji": true,
+            "text": "+1 guest",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "9:1"
+        },
+        {
+          "action_id": "link_item",
+          "text": {
+            "emoji": true,
+            "text": "Website",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "url": "https://siam.example/menu"
+        },
+        {
+          "action_id": "link_event",
+          "text": {
+            "emoji": true,
+            "text": "View on web",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "url": "https://dinnerbell.example.com/events/9"
+        },
+        {
+          "action_id": "cancel_call",
+          "text": {
+            "emoji": true,
+            "text": "Call it off",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "cancel:9:1"
+        }
+      ],
+      "type": "actions"
+    }
+  ],
+  "text": "Alex is picking up Siam Garden for lunch at 12:30 PM. 1 serving spare. Tap Count me in to join."
+}

@@ -22,11 +22,47 @@
 <section class="card event state-{{ e.state.value }}" id="event-{{ e.id }}" aria-labelledby="event-{{ e.id }}-title"
   {%- if e.state.is_open %} data-poll="{{ base }}/card?from={{ from_page }}"{% endif %}>
   <div class="event-head">
-    <h2 id="event-{{ e.id }}-title"><a href="{{ base }}">{{ e.slot.value|capitalize }}</a> <span class="muted small">{{ e.day|day }}</span></h2>
+    <h2 id="event-{{ e.id }}-title"><a href="{{ base }}">{{ e.slot.value|capitalize }}{% if v.offer %} offer{% endif %}</a> <span class="muted small">{{ e.day|day }}</span></h2>
     <span class="badge state state-{{ e.state.value }}">{{ e.state.label }}</span>
   </div>
   {% if error %}<p class="alert error small" role="alert">{{ error }}</p>{% endif %}
 
+  {% if v.offer %}
+  {% set o = v.offer %}
+  <p class="event-when small">
+    {{ o.offerer.name }} {{ {"cook": "is making", "pickup": "is picking up", "delivery": "is ordering"}[o.mode.value] }}
+    <strong>{% if o.item.url %}<a href="{{ o.item.url }}" rel="noopener noreferrer" target="_blank">{{ o.item.name }}</a>{% else %}{{ o.item.name }}{% endif %}</strong>
+    at <strong>{{ o.at|clock(tz) }}</strong>.
+    {%- if e.state.value == "collecting" and o.full %} It's full.
+    {%- elif e.state.value == "collecting" %} {{ o.seats_left }} serving{{ "" if o.seats_left == 1 else "s" }} spare.
+    {%- elif e.state.value == "decided" %} It's on! No more seats.
+    {%- elif e.state.value == "done" %} Done. Thanks, {{ o.offerer.name }}!
+    {%- elif e.state.value == "cancelled" and v.info.ended_by %} Called off by {{ v.info.ended_by.name }}.{% if v.info.end_note %} <q class="end-note">{{ v.info.end_note }}</q>{% endif %}
+    {%- else %} This offer ended.
+    {%- endif %}
+  </p>
+  {% set mine_in = v.mine is not none and v.mine.status.value == "in" %}
+  {% if v.can.join or (mine_in and e.state.value == "collecting") %}
+  <form method="post" action="{{ base }}/join" hx-post="{{ base }}/join" {{ swap|safe }} class="stack">
+    {{ hidden() }}
+    <input type="hidden" name="run" value="{{ e.run }}">
+    <label class="field"><span>Guests you're bringing</span><input type="number" name="guests" min="0" max="20" inputmode="numeric" value="{{ v.mine.guests if mine_in else 0 }}"></label>
+    {% if v.dietary_tags %}
+    <fieldset class="field"><legend>Guests' dietary needs</legend>
+      <div class="chip-picker">
+        {% for tag in v.dietary_tags %}
+        <label class="chip-toggle"><input type="checkbox" name="guest_needs" value="{{ tag.id }}"{% if mine_in and tag.id in v.mine.guest_needs %} checked{% endif %}><span>{{ tag.name }}</span></label>
+        {% endfor %}
+      </div>
+    </fieldset>
+    {% endif %}
+    <button type="submit" class="button primary">{{ "Save guests" if mine_in else "Count me in" }}</button>
+  </form>
+  {% endif %}
+  {% if v.can.leave %}<div class="button-row">{{ act(e.id, base ~ "/leave", "Can't make it", "button small", {"run": e.run}) }}</div>{% endif %}
+  {% if o.dietary_notes %}<p class="small">Guests need: {{ o.dietary_notes|join(", ") }}.</p>{% endif %}
+  {% if v.can.mark_done %}<div class="button-row">{{ act(e.id, base ~ "/done", "Mark done", "button small", confirm="Mark this meal done? It goes into the history.") }}</div>{% endif %}
+  {% else %}
   <p class="event-when small">
     {%- if e.state.value == "scheduled" %}Posts {{ e.day|day }} at <strong>{{ e.opens_at|clock(tz) }}</strong>.
     {%- elif e.state.value == "collecting" %}Answer by <strong>{{ e.respond_deadline|clock(tz) }}</strong>{% if v.info.early %} {{ e.day|day }}{% endif %}.
@@ -39,6 +75,7 @@
     {%- endif %}
     {% if v.info.coordinator %}Coordinator: {{ v.info.coordinator.name }}.{% elif e.state.is_open %}No coordinator yet.{% endif %}
   </p>
+  {% endif %}
 
   {% if v.can.respond %}
   {% set mine = v.mine %}
@@ -224,7 +261,7 @@
   <div class="button-row">{{ act(e.id, base ~ "/restart", "Start " ~ e.slot.value ~ " again", "button small primary", {"run": e.run}) }}</div>
   {% endif %}
 
-  {% if v.can.admin and (e.state.is_open or rerun) %}
+  {% if v.can.admin and not v.offer and (e.state.is_open or rerun) %}
   <details class="details-form admin-controls">
     <summary class="small">Admin</summary>
     {% if v.can.move_window %}

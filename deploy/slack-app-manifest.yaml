@@ -27,7 +27,7 @@ features:
     # needed. Slack's manifest reference lists url as optional.
     - command: /dinnerbell
       description: Start or call off a call, or open your preferences, the catalog, or history
-      usage_hint: "[call | cancel | prefs | catalog | history | version | help]"
+      usage_hint: "[call | offer | log | cancel | prefs | catalog | history | version | help]"
       should_escape: false
 
 oauth_config:

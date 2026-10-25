@@ -32,7 +32,7 @@ from tests.support.web import add_item, htmx, submit
 from tests.test_architecture import audit_routes
 from tests.test_auth_flow import member, rows
 
-M2_PREFIXES = ("/events", "/admin/schedule")
+M2_PREFIXES = ("/events", "/admin/schedule", "/offers")
 
 
 @pytest.fixture
@@ -313,7 +313,7 @@ def voting(admin: TestClient, clock: FakeClock, migrated: Settings) -> Settings:
 
 
 def test_every_m2_post_route_is_enumerated(client: TestClient) -> None:
-    assert len(m2_posts(client)) == 23
+    assert len(m2_posts(client)) == 26
 
 
 def test_every_admin_override_checks_for_an_admin_in_the_web_layer(client: TestClient) -> None:
@@ -361,7 +361,7 @@ def test_another_households_call_is_not_found(admin: TestClient, migrated: Setti
     assert admin.get(f"/events/{event}").status_code == 404
     before = snapshot_other(migrated, event)
     for path in m2_posts(admin):
-        if path == "/events" or path.startswith("/admin"):
+        if path in {"/events", "/offers"} or path.startswith("/admin"):
             continue
         real = path.replace("/events/1", f"/events/{event}").replace("/proposals/1/", f"/proposals/{proposal}/")
         data = {"status": "in", "role": "cook", "offered": "1", "mode": "pickup", "item_id": str(ids["item"])}

@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from dinnerbell.config import is_test_instance
 from dinnerbell.db.catalog import CatalogRepository
+from dinnerbell.db.engine import write_transaction
 from dinnerbell.db.events import (
     AssignmentRepository,
     EventRepository,
@@ -119,10 +120,13 @@ async def start_call(
     schedule = slot_schedule(await household_settings(db, household.id), slot)
     opens_at = now if day == today else schedule.opens_at(day, ZoneInfo(household.timezone))
     try:
-        event = await lifecycle.create_call(
-            db, household, slot, day, opens_at=opens_at, actor=actor, now=now, restart_any_time=restart_any_time
-        )
-        await db.commit()
+        # Under the write lock, so a cooking offer posted at the same moment (FR-5) either sees
+        # this call or keeps it from starting.
+        async with write_transaction(db):
+            event = await lifecycle.create_call(
+                db, household, slot, day, opens_at=opens_at, actor=actor, now=now, restart_any_time=restart_any_time
+            )
+            await db.commit()
     except BaseException:
         await db.rollback()
         raise
@@ -153,8 +157,9 @@ async def restart_call(
     check_ad_hoc_day(event.day, household_today(household, now))
     try:
         any_time = is_test_instance(instance_label)
-        fresh = await lifecycle.restart(db, event, actor=actor, run=run, now=now, any_time=any_time)
-        await db.commit()
+        async with write_transaction(db):
+            fresh = await lifecycle.restart(db, event, actor=actor, run=run, now=now, any_time=any_time)
+            await db.commit()
     except BaseException:
         await db.rollback()
         raise
@@ -308,8 +313,9 @@ async def set_coordinator(db: AsyncSession, event: Event, member_id: int | None,
 
 
 def _messages_for_state(ctx: CallContext) -> list[note.Notification]:
-    """Updates for every message that shows the event: the call, and the proposals or decision."""
-    messages: list[note.Notification] = [cc.call_updated(ctx)]
+    """Updates for every message that shows the event: the call (or the offer), and the
+    proposals or decision."""
+    messages: list[note.Notification] = [cc.message_updated(ctx)]
     if ctx.proposals:
         messages.append(cc.proposals_updated(ctx))
     messages += cc.decision_updated(ctx)
@@ -588,7 +594,11 @@ def _called_off(before: CallContext, ctx: CallContext, actor: Member, reason: st
         return sent
     participants = tuple(ctx.person(r.member_id) for r in before.participants)
     sent.append(note.EventCancelled(info, participants, by, reason, _audience(before)))
-    sent += [cc.call_updated(ctx), *([cc.proposals_updated(ctx)] if ctx.proposals else []), *cc.decision_updated(ctx)]
+    sent += [
+        cc.message_updated(ctx),
+        *([cc.proposals_updated(ctx)] if ctx.proposals else []),
+        *cc.decision_updated(ctx),
+    ]
     decision = cc.decision_info(before)
     if before.event.state is EventState.DECIDED and decision is not None:
         order = list(AssignmentRole)

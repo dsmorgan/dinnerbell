@@ -33,6 +33,41 @@
     <button type="submit" class="button primary block">Start the call</button>
   </form>
 </details>
+{% if offer_form %}
+{% set f = offer_form %}
+<details class="card"{% if offer_error %} open{% endif %}>
+  <summary><h2>Make an offer</h2></summary>
+  {% if offer_error %}<p class="alert error" role="alert">{{ offer_error }}</p>{% endif %}
+  <p class="small muted">Making or getting a meal with servings to spare? Others join until it's full. If that meal's call is open already, your offer becomes a pick on it. A cooking offer stands in for that day's call.</p>
+  <form method="post" action="/offers" class="stack">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="pair">
+      <label class="field"><span>Meal</span>
+        <select name="slot">{% for slot in today.slots %}<option value="{{ slot.value }}"{% if slot == f.slot %} selected{% endif %}>{{ slot.value|capitalize }}</option>{% endfor %}</select>
+      </label>
+      <label class="field"><span>Day</span><input type="date" name="day" value="{{ f.today.isoformat() }}" min="{{ f.today.isoformat() }}" required></label>
+    </div>
+    <div class="pair">
+      <label class="field"><span>How</span>
+        <select name="mode">{% for mode, label in (("pickup", "Pickup"), ("delivery", "Delivery"), ("cook", "Cook")) %}<option value="{{ mode }}"{% if mode == f.defaults[f.slot].mode.value %} selected{% endif %}>{{ label }}</option>{% endfor %}</select>
+      </label>
+      <label class="field"><span>Time</span><input type="time" name="at" value="{{ f.defaults[f.slot].at|hhmm }}" required></label>
+    </div>
+    <label class="field"><span>From the catalog</span>
+      <select name="item_id"><option value="">Something new instead</option>{% for item in f.items %}<option value="{{ item.id }}">{{ item.name }}</option>{% endfor %}</select>
+    </label>
+    <div class="pair">
+      <label class="field"><span>New place or dish</span><input type="text" name="free_text" maxlength="100"></label>
+      <label class="field"><span>Cuisine</span>
+        <select name="cuisine_id"><option value="">Pick one</option>{% for tag in f.cuisine_tags %}<option value="{{ tag.id }}">{{ tag.name }}</option>{% endfor %}</select>
+      </label>
+    </div>
+    <label class="field"><span>Spare servings</span><input type="number" name="capacity" min="1" max="20" inputmode="numeric" value="{{ f.capacity }}" required></label>
+    <p class="small muted">Lunch offers start as pickup at the usual lunch time. Times are the household's.</p>
+    <button type="submit" class="button primary block">Post the offer</button>
+  </form>
+</details>
+{% endif %}
 {% if principal.member.is_admin %}
 <section class="card">
   <h2>Set up the household</h2>

@@ -94,6 +94,7 @@ def _event(row: EventRow) -> Event:
         locked_by=row.locked_by,
         ended_by=row.ended_by,
         end_note=row.end_note,
+        capacity=row.capacity,
     )
 
 
@@ -179,6 +180,60 @@ class EventRepository:
             .execution_options(**FRESH)
         )
         return None if row is None else _event(row)
+
+    async def offers_for(self, household_id: int, slot: Slot, day: date) -> list[Event]:
+        """The household's offers for ``slot`` on ``day``, oldest first, in any state."""
+        rows = await self._session.scalars(
+            select(EventRow)
+            .where(
+                EventRow.household_id == household_id,
+                EventRow.kind == EventKind.OFFER.value,
+                EventRow.slot == slot.value,
+                EventRow.date == day,
+            )
+            .order_by(EventRow.id)
+            .execution_options(**FRESH)
+        )
+        return [_event(row) for row in rows]
+
+    async def add_offer(
+        self,
+        *,
+        household_id: int,
+        slot: Slot,
+        day: date,
+        created_by: int,
+        item_id: int,
+        mode: Mode,
+        at: datetime,
+        capacity: int,
+        now: datetime,
+    ) -> Event:
+        """An open offer (FR-4): posted now, taking people until ``at``, its meal time."""
+        row = EventRow(
+            household_id=household_id,
+            kind=EventKind.OFFER.value,
+            slot=slot.value,
+            date=day,
+            state=EventState.COLLECTING.value,
+            run=1,
+            version=1,
+            created_by=created_by,
+            opens_at=now,
+            respond_deadline=at,
+            reminder_minutes=0,
+            vote_minutes=0,
+            reminder_sent_at=now,  # an offer sends no reminder
+            decided_item_id=item_id,
+            decided_mode=mode.value,
+            meal_time=at,
+            capacity=capacity,
+            created_at=now,
+            updated_at=now,
+        )
+        self._session.add(row)
+        await self._session.flush()
+        return _event(row)
 
     async def open_ids(self, household_id: int) -> list[int]:
         """Events the scheduler may still owe a step: not done, abandoned, or cancelled."""
@@ -470,6 +525,23 @@ class ProposalRepository:
             .where(ProposalRow.household_id == household_id, ProposalRow.id == proposal_id)
             .values(item_id=item_id, free_text=None, free_cuisine_id=None)
             .execution_options(synchronize_session=False)
+        )
+
+    async def set_rank(self, household_id: int, proposal_id: int, rank: int) -> None:
+        await self._session.execute(
+            update(ProposalRow)
+            .where(ProposalRow.household_id == household_id, ProposalRow.id == proposal_id)
+            .values(rank=rank)
+            .execution_options(synchronize_session=False)
+        )
+
+    async def delete(self, household_id: int, proposal_id: int) -> None:
+        """Delete one proposal and its votes, explicitly, whatever the connection's foreign keys."""
+        await self._session.execute(
+            delete(VoteRow).where(VoteRow.household_id == household_id, VoteRow.proposal_id == proposal_id)
+        )
+        await self._session.execute(
+            delete(ProposalRow).where(ProposalRow.household_id == household_id, ProposalRow.id == proposal_id)
         )
 
     async def clear(self, household_id: int, event_id: int) -> None:

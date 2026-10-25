@@ -33,17 +33,21 @@ from dinnerbell.channels.slack.blocks import (
     local_clock,
     option,
     plain,
+    plural,
     section,
 )
 from dinnerbell.channels.slack.messages import (
     ANSWER_WORDS,
     ANSWERS,
     CALL_OFF,
+    CANT_MAKE_IT,
     CLOSE_LABELS,
+    OFFER_VERBS,
     POST_NOW,
     choice_button,
     mark_done_button,
 )
+from dinnerbell.domain import notifications as note
 from dinnerbell.domain.catalog import CatalogItem, ItemKind, Mode, Tag
 from dinnerbell.domain.events import (
     CANCEL_NOTE_MAX,
@@ -57,9 +61,12 @@ from dinnerbell.domain.events import (
     Window,
 )
 from dinnerbell.domain.feedback import COOK_NOTE_MAX, FeedbackInput, PlaceIssue, Rating
-from dinnerbell.domain.meals import Slot
+from dinnerbell.domain.meals import MealInput, Slot
+from dinnerbell.domain.offers import MAX_CAPACITY, replaces_call
 from dinnerbell.services.event_views import EventView, TodayView
 from dinnerbell.services.feedback import MAX_AWAITING, Awaiting, FeedbackForm
+from dinnerbell.services.meals import LogForm
+from dinnerbell.services.offers import OfferForm, OfferInput
 
 VALUE = "value"
 """Every input's action ID; blocks are told apart by block ID."""
@@ -68,7 +75,12 @@ OFFER_WORDS = {RoleOffer.COOK: "cook", RoleOffer.PICKUP: "pick up", RoleOffer.OR
 
 
 def _modal(
-    title: str, callback_id: str, origin: ids.ViewOrigin, blocks: list[Block], submit: str, close: str = "Cancel"
+    title: str,
+    callback_id: str,
+    origin: ids.ViewOrigin | ids.FormOrigin,
+    blocks: list[Block],
+    submit: str,
+    close: str = "Cancel",
 ) -> dict[str, Any]:
     return {
         "type": "modal",
@@ -310,6 +322,8 @@ def cancel_modal(v: EventView, origin: ids.ViewOrigin) -> dict[str, Any]:
     what happens. Slack can't color a modal's submit button, so it isn't red."""
     slot = v.event.slot.value
     lines = [f"This ends the {slot} call for everyone, so nobody eats together this time."]
+    if v.offer is not None:
+        lines = [f"This calls off your {slot} offer, *{escape(v.offer.item.name)}*, for everyone who joined."]
     if v.decision is not None:
         lines.append(
             f"The plan, *{escape(v.decision.proposal.item.name)}*, is off, and whoever was cooking, "
@@ -431,6 +445,137 @@ def parse_feedback(values: Any) -> FeedbackInput:
     )
 
 
+# Offers and logging a meal (FR-4, spec 5.6) ---------------------------------------------------------
+
+SLOT_OPTIONS = {slot: option(slot.value.capitalize(), slot.value) for slot in (Slot.LUNCH, Slot.DINNER)}
+MODE_OPTIONS = {mode: option(mode.label, mode.value) for mode in Mode}
+
+
+def _select(options: Iterable[dict[str, Any]], initial: dict[str, Any] | None = None) -> Block:
+    element: Block = {"type": "static_select", "options": list(options)}
+    if initial is not None:
+        element["initial_option"] = initial
+    return element
+
+
+def offer_modal(form: OfferForm, origin: ids.FormOrigin) -> dict[str, Any]:
+    """Make an offer (spec 5.2): what, how, when, and how many servings are spare. It starts on
+    the slot most likely meant, with that slot's usual mode and meal time (FR-1), so a lunch
+    offer starts as pickup at its usual lunch time."""
+    defaults = form.defaults[form.slot]
+    blocks: list[Block] = [
+        context("Posts in the Dinnerbell channel. If that meal's call is open already, it's added there as a pick."),
+        _input("slot", "Meal", _select(SLOT_OPTIONS.values(), SLOT_OPTIONS[form.slot]), optional=False),
+        _input(
+            "day",
+            "Day",
+            {"type": "datepicker", "initial_date": form.today.isoformat()},
+            optional=False,
+        ),
+        _input("mode", "How", _select(MODE_OPTIONS.values(), MODE_OPTIONS[defaults.mode]), optional=False),
+    ]
+    groups, _ = _item_groups(form.items)
+    if groups:
+        blocks.append(_input("item", "From the catalog", {"type": "static_select", "option_groups": groups}))
+    blocks.append(
+        _input("free_text", "Or something new", {"type": "plain_text_input", "max_length": MAX_SUGGESTION_LENGTH})
+    )
+    if form.cuisine_tags:
+        cuisines = {"type": "static_select", "options": _tag_options(form.cuisine_tags)}
+        blocks.append(_input("cuisine", "Cuisine", cuisines, hint="Needed for something new."))
+    blocks.append(_input("at", "Time", {"type": "timepicker", **_hhmm(defaults.at)}, optional=False))
+    spare: Block = {
+        "type": "number_input",
+        "is_decimal_allowed": False,
+        "min_value": "1",
+        "max_value": str(MAX_CAPACITY),
+        "initial_value": str(form.capacity),
+    }
+    blocks.append(
+        _input("capacity", "Spare servings", spare, optional=False, hint="How many others can join, guests included.")
+    )
+    return _modal("Make an offer", ids.OFFER_VIEW, origin, blocks, "Post it")
+
+
+def _day(values: Any, block_id: str) -> date:
+    raw = _state(values, block_id).get("selected_date")
+    if not isinstance(raw, str) or len(raw) != 10:
+        raise FormError(block_id, "Pick a day.")
+    try:
+        return date.fromisoformat(raw)
+    except ValueError:
+        raise ids.BadValue("bad date") from None
+
+
+def _choice_of(values: Any, block_id: str, kinds: Iterable[str], message: str) -> str:
+    selected = _state(values, block_id).get("selected_option")
+    raw = selected.get("value") if isinstance(selected, dict) else None
+    if raw not in set(kinds):
+        raise FormError(block_id, message)
+    return str(raw)
+
+
+def parse_offer(values: Any) -> OfferInput:
+    """The offer modal's state as ``OfferInput``. Raises FormError or ids.BadValue; the service
+    checks the rest."""
+    slot = Slot(_choice_of(values, "slot", (s.value for s in Slot), "Pick lunch or dinner."))
+    mode = Mode(_choice_of(values, "mode", (m.value for m in Mode), "Pick how it arrives."))
+    at = _time(values, "at")
+    if at is None:
+        raise FormError("at", "Pick a time.")
+    raw = _text(values, "capacity").strip()
+    if not (raw.isascii() and raw.isdigit() and len(raw) <= 3) or not 1 <= int(raw) <= MAX_CAPACITY:
+        raise FormError("capacity", f"Enter a whole number from 1 to {MAX_CAPACITY}.")
+    item = _picked(values, "item")
+    text = _text(values, "free_text").strip() or None
+    cuisine = _picked(values, "cuisine")
+    if (item is None) == (text is None):
+        raise FormError("free_text", "Pick something from the catalog, or type something new, but not both.")
+    if text is not None and cuisine is None:
+        raise FormError("cuisine", "Pick a cuisine for it, so variety and vetoes still work.")
+    return OfferInput(
+        slot=slot,
+        day=_day(values, "day"),
+        mode=mode,
+        at=at,
+        capacity=int(raw),
+        item_id=item,
+        free_text=text,
+        cuisine_id=cuisine if text is not None else None,
+    )
+
+
+def log_modal(form: LogForm, origin: ids.FormOrigin) -> dict[str, Any]:
+    """Log a meal eaten outside Dinnerbell (spec 5.6): what, which meal and day, and who ate.
+    It starts with today's dinner and the member who opened it."""
+    groups, _ = _item_groups(form.items)
+    people = [option(p.name, str(p.id)) for p in form.people[:MAX_OPTIONS]]
+    who: Block = {"type": "multi_static_select", "options": people}
+    mine = [o for o in people if o["value"] == str(form.member_id)]
+    if mine:
+        who["initial_options"] = mine
+    blocks: list[Block] = [
+        context("Logged meals count for variety and history. Feedback on them is on the History page."),
+        _input("item", "What", {"type": "static_select", "option_groups": groups}, optional=False),
+        _input("slot", "Meal", _select(SLOT_OPTIONS.values(), SLOT_OPTIONS[Slot.DINNER]), optional=False),
+        _input("day", "Day", {"type": "datepicker", "initial_date": form.today.isoformat()}, optional=False),
+        _input("who", "Who ate", who, optional=False),
+    ]
+    return _modal("Log a meal", ids.LOG_VIEW, origin, blocks, "Log it")
+
+
+def parse_log(values: Any) -> MealInput:
+    """The log modal's state as ``MealInput``. ``meals.log_meal`` checks the rest."""
+    item = _picked(values, "item")
+    if item is None:
+        raise FormError("item", "Pick something from the catalog.")
+    slot = Slot(_choice_of(values, "slot", (s.value for s in Slot), "Pick lunch or dinner."))
+    who = _picked_many(values, "who")
+    if not who:
+        raise FormError("who", "Pick at least one person who ate.")
+    return MealInput(day=_day(values, "day"), slot=slot, item_id=item, participant_ids=who)
+
+
 # App Home ----------------------------------------------------------------------------------------
 
 
@@ -448,6 +593,8 @@ def _event_card(v: EventView, links: HomeLinks, today: date) -> list[Block]:
     lines = [f"*{v.event.slot.value.capitalize()}*{day} · {state.label}"]
     if v.mine is not None:
         mine = STATUS_WORDS[v.mine.status]
+        if v.mine.guests and v.mine.status is not Status.OUT:
+            mine += f" You're bringing {plural(v.mine.guests, 'guest')}."
         if v.mine.offers:
             mine += " You offered to " + " or ".join(OFFER_WORDS[o] for o in sorted(v.mine.offers)) + "."
         lines.append(mine)
@@ -482,6 +629,41 @@ def _event_card(v: EventView, links: HomeLinks, today: date) -> list[Block]:
         cancel = ids.menu_value(ids.MenuChoice.CANCEL, v.id, v.event.run)
         buttons.append(button(CALL_OFF, ids.CANCEL_CALL, cancel, style="danger"))
     buttons.append(button("Open", f"{ids.LINK_PREFIX}event", url=links.url(v.event.path)))
+    return [section("\n".join(lines), block_id=f"event-{v.id}"), actions(*buttons, block_id=f"event-actions-{v.id}")]
+
+
+def _offer_card(v: EventView, offer: note.OfferInfo, links: HomeLinks, today: date) -> list[Block]:
+    """An offer on Home (FR-4): what, when, seats left, and the member's own place in it, with
+    the buttons they may use."""
+    event = v.event
+    day = "" if event.day == today else f" · {day_label(event.day)}"
+    at = local_clock(offer.at, v.info.timezone)
+    what = f"{escape(offer.offerer.name)} {OFFER_VERBS[offer.mode]} *{escape(offer.item.name)}* at {at}"
+    lines = [f"*{event.slot.value.capitalize()} offer*{day} · {what}"]
+    if event.state is EventState.COLLECTING:
+        lines.append("It's full." if offer.full else f"{plural(offer.seats_left, 'serving')} spare.")
+    elif event.state is EventState.DECIDED:
+        lines.append("It's on! No more seats.")
+    else:
+        lines.append(event.state.label + ".")
+    mine = v.mine
+    if mine is not None and mine.is_in:
+        guests = f" with {plural(mine.guests, 'guest')}" if mine.guests else ""
+        lines.append(f"You're in{guests}.")
+    value = ids.card_value(v.id, event.run)
+    buttons: list[Block] = []
+    if v.can.join:
+        buttons.append(button("Count me in", ids.JOIN_OFFER, value, style="primary"))
+    if v.can.add_guest:
+        buttons.append(button("+1 guest", ids.ADD_GUEST, value))
+    if v.can.leave:
+        buttons.append(button(CANT_MAKE_IT, ids.LEAVE_OFFER, value))
+    if v.can.mark_done:
+        buttons.append(mark_done_button(v.info))
+    if v.can.cancel:
+        cancel = ids.menu_value(ids.MenuChoice.CANCEL, v.id, event.run)
+        buttons.append(button(CALL_OFF, ids.CANCEL_CALL, cancel, style="danger"))
+    buttons.append(button("Open", f"{ids.LINK_PREFIX}event", url=links.url(event.path)))
     return [section("\n".join(lines), block_id=f"event-{v.id}"), actions(*buttons, block_id=f"event-actions-{v.id}")]
 
 
@@ -527,35 +709,62 @@ def home_view(
     awaiting: Sequence[Awaiting] = (),
 ) -> dict[str, Any]:
     """Each member's Home tab. ``label``, the instance label, prefixes the header when set.
-    ``awaiting`` lists meals the member hasn't given feedback on yet."""
+    ``awaiting`` lists meals the member hasn't given feedback on yet.
+
+    It leaves room for the version footer (``blocks.with_version_footer``) within Slack's 100
+    blocks, and keeps the start buttons and the links at the bottom: when calls and offers
+    don't all fit, the ones that don't are left to the web, and a line says how many."""
     title = f"Today · {day_label(today.today)}"
-    blocks: list[Block] = [header(f"{label} · {title}" if label else title)]
+    head: list[Block] = [header(f"{label} · {title}" if label else title)]
     if notice:
-        blocks.append(section(f"*{escape(clip(notice, 500))}*"))
-    for v in today.current:
-        blocks += _event_card(v, links, today.today)
-    if not today.current:
-        blocks.append(section("No calls today yet."))
-    started = {v.event.slot for v in today.events if v.event.day == today.today}
+        head.append(section(f"*{escape(clip(notice, 500))}*"))
+    current = [
+        _offer_card(v, v.offer, links, today.today) if v.offer is not None else _event_card(v, links, today.today)
+        for v in today.current
+    ]
+    upcoming = [_upcoming_card(v, links) for v in today.upcoming]
+    todays = [v.event for v in today.events if v.event.day == today.today]
+    # A cooking offer stands in for that slot's call (FR-5), so there's no call to start.
+    started = {e.slot for e in todays if not e.is_offer or replaces_call(e)}
     called_off = {v.event.slot for v in today.events if v.event.day == today.today and v.can.restart}
-    starts: list[Block] = []
+    starts: list[Block] = [button("Make an offer", ids.MAKE_OFFER, ids.MAKE_OFFER)]
     for slot in (Slot.DINNER, Slot.LUNCH):
         if slot in called_off:  # starting it again takes the start button's path (FR-56)
             starts.append(button(f"Start {slot.value} again", ids.ACTION_FOR_START[slot], slot.value))
         elif slot not in started:
             starts.append(button(f"Start a {slot.value} call", ids.ACTION_FOR_START[slot], slot.value))
-    if starts:
-        blocks.append(actions(*starts, block_id="start"))
-    if today.upcoming:
-        blocks.append(section("*Coming up*"))
-        for v in today.upcoming:
-            blocks += _upcoming_card(v, links)
-    blocks += _awaiting(awaiting, links)
-    blocks += [
+    tail: list[Block] = [
+        *_awaiting(awaiting, links),
         divider(),
         context(
             f"<{links.url('/preferences')}|Your preferences> · <{links.url('/catalog')}|Catalog> · "
             f"<{links.url('/history')}|History> · <{links.url('/')}|Today on the web>"
         ),
     ]
-    return {"type": "home", "blocks": blocks[:MAX_VIEW_BLOCKS]}
+    # One block for the footer, one for the start buttons, and one for "…and N more".
+    room = MAX_VIEW_BLOCKS - 1 - len(head) - 1 - len(tail) - 1 - (1 if upcoming else 0) - (0 if current else 1)
+    blocks = list(head)
+    shown = 0
+    for card in current:
+        if len(card) > room:
+            break
+        blocks += card
+        room -= len(card)
+        shown += 1
+    if not current:
+        blocks.append(section("No calls today yet."))
+    blocks.append(actions(*starts, block_id="start"))
+    later: list[Block] = []
+    for card in upcoming:
+        if shown < len(current) or len(card) > room:
+            break
+        later += card
+        room -= len(card)
+        shown += 1
+    if later:
+        blocks += [section("*Coming up*"), *later]
+    hidden = len(current) + len(upcoming) - shown
+    if hidden:
+        blocks.append(context(f"…and {hidden} more on <{links.url('/')}|Today on the web>."))
+    blocks += tail
+    return {"type": "home", "blocks": blocks}

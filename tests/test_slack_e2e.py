@@ -143,7 +143,7 @@ async def test_a_dinner_decided_in_slack(slack: Slack) -> None:
         ("ephemeral", CHANNEL, "U01ALEX", "Vote counted. Tap Vote again to take it back."),
         ("ephemeral", CHANNEL, "U02SAM", "Vote counted. Tap Vote again to take it back."),
         ("ephemeral", CHANNEL, "U02SAM", "Only the coordinator or an admin can lock a proposal."),
-        ("ephemeral", CHANNEL, "U02SAM", "Dinner call · Thursday, Oct 22: your answer is In, can cook"),
+        ("ephemeral", CHANNEL, "U02SAM", "Dinner call · Thursday, Oct 22: your answer is In with 1 guest, can cook"),
         ("update", CHANNEL, picks_ts, "Picks for dinner on Thursday, Oct 22: Sa"),
         ("update", *call, "Dinner call · Thursday, Oct 22: Thanks f"),
         ("post", CHANNEL, thread, "Dinner on Thursday, Oct 22: Sam's Tacos "),

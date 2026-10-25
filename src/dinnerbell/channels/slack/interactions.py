@@ -66,9 +66,13 @@ from dinnerbell.channels.slack.views import (
     details_modal,
     feedback_modal,
     home_view,
+    log_modal,
+    offer_modal,
     parse_cancel,
     parse_details,
     parse_feedback,
+    parse_log,
+    parse_offer,
     parse_proposal,
     proposal_modal,
 )
@@ -89,10 +93,11 @@ from dinnerbell.domain.events import (
     friendly,
 )
 from dinnerbell.domain.feedback import InvalidFeedback
-from dinnerbell.domain.meals import Slot
+from dinnerbell.domain.meals import InvalidMeal, Slot
 from dinnerbell.domain.members import Member
 from dinnerbell.domain.notifications import MessageRef, PermanentDeliveryError, PersonInfo, ResponseReminder
-from dinnerbell.services import calls, discard, event_views, feedback, slack_members
+from dinnerbell.domain.offers import OfferPath
+from dinnerbell.services import calls, discard, event_views, feedback, meals, offers, slack_members
 from dinnerbell.services import schedule as schedule_service
 from dinnerbell.services.clock import Clock
 from dinnerbell.services.errors import Forbidden, NotFound
@@ -102,7 +107,7 @@ from dinnerbell.services.lifecycle import CallExists
 log = logging.getLogger(__name__)
 
 DEFAULT_COMMAND = "/dinnerbell"
-SHOWN_ERRORS = (EventRuleViolation, InvalidResponse, InvalidFeedback, NotFound, Forbidden)
+SHOWN_ERRORS = (EventRuleViolation, InvalidResponse, InvalidFeedback, InvalidMeal, NotFound, Forbidden)
 SLACK_ERRORS = (SlackUnavailable, PermanentDeliveryError)
 UNKNOWN_USER = (
     "I don't know your Slack account yet. Sign in to Dinnerbell on the web with Slack once, "
@@ -251,6 +256,12 @@ class Interactions:
         async def feedback_view(ack: Ack, body: dict[str, Any]) -> None:
             await self._submission(ack, body, "feedback")
 
+        async def offer_view(ack: Ack, body: dict[str, Any]) -> None:
+            await self._form_submission(ack, body, "offer")
+
+        async def log_view(ack: Ack, body: dict[str, Any]) -> None:
+            await self._form_submission(ack, body, "log")
+
         async def command(ack: Ack, body: dict[str, Any]) -> None:
             await self._command(ack, body)
 
@@ -265,6 +276,8 @@ class Interactions:
         app.view(ids.CANCEL_VIEW)(cancel)
         app.view(ids.CLOSE_VIEW)(close)
         app.view(ids.FEEDBACK_VIEW)(feedback_view)
+        app.view(ids.OFFER_VIEW)(offer_view)
+        app.view(ids.LOG_VIEW)(log_view)
         app.command(self.command)(command)
         app.event("app_home_opened")(home_opened)
 
@@ -479,6 +492,12 @@ class Interactions:
             return await self._close(member, event_id, window, run)
         if action_id == ids.FEEDBACK:
             return await self._open_feedback(member, source, value, trigger)
+        if action_id in ids.OFFER_ACTIONS:
+            return await self._offer_tap(member, action_id, value)
+        if action_id == ids.MAKE_OFFER:
+            if value != ids.MAKE_OFFER:
+                raise ids.BadValue("not a make-offer value")
+            return await self._open_offer(member, source, trigger)
         now = self.clock()
         async with self.sessionmaker() as db:
             if action_id in ids.RESPOND:
@@ -793,6 +812,73 @@ class Interactions:
             saved = await feedback.give_for_event(db, member, event_id, form, run=run, now=self.clock())
         return FEEDBACK_SAVED if saved is not None else FEEDBACK_NONE
 
+    # Offers and logging a meal (FR-4, spec 5.2 and 5.6) ----------------------------------------
+
+    async def _offer_tap(self, member: Member, action_id: str, value: object) -> str:
+        """**Count me in**, **+1 guest**, or **Can't make it** on an offer, on the shared message or
+        Home, for the run it names. The reply says where the member stands now."""
+        event_id, run = ids.parse_card(value)
+        use_case = {ids.JOIN_OFFER: offers.toggle_join, ids.ADD_GUEST: offers.add_guest, ids.LEAVE_OFFER: offers.leave}
+        async with self.sessionmaker() as db:
+            seat = await use_case[action_id](db, member, event_id, run=run, now=self.clock())
+        return seat_reply(seat)
+
+    async def _open_offer(self, member: Member, source: Source, trigger: object) -> str | None:
+        if not isinstance(trigger, str) or not trigger:
+            raise ids.BadValue("no trigger")
+        async with self.sessionmaker() as db:
+            form = await offers.offer_form(db, member, now=self.clock())
+        await self.api.open_view(trigger, offer_modal(form, ids.FormOrigin(source.channel_id, home=source.home)))
+        return None
+
+    async def _open_log(self, member: Member, source: Source, trigger: object) -> str | None:
+        if not isinstance(trigger, str) or not trigger:
+            raise ids.BadValue("no trigger")
+        async with self.sessionmaker() as db:
+            today = await slack_members.today(db, member, now=self.clock())
+            form = await meals.log_form(db, member, today=today)
+        if not form.items:
+            return f"The catalog is empty. Add something on <{self.links.url('/catalog')}|the catalog> first."
+        await self.api.open_view(trigger, log_modal(form, ids.FormOrigin(source.channel_id, home=source.home)))
+        return None
+
+    async def _form_submission(self, ack: Callable[..., Awaitable[None]], body: dict[str, Any], kind: str) -> None:
+        """The offer and log modals: check the fields before closing, then save."""
+        user = _get(body, "user", "id")
+        if not self._team_ok(_get(body, "team", "id")) or not isinstance(user, str):
+            await ack()
+            return
+        view = body.get("view") or {}
+        values = _get(view, "state", "values")
+        try:
+            origin = ids.FormOrigin.decode(view.get("private_metadata"))
+            form: Any = parse_offer(values) if kind == "offer" else parse_log(values)
+        except FormError as exc:
+            await ack(response_action="errors", errors={exc.block_id: str(exc)})
+            return
+        except ids.BadValue:
+            log.warning("slack modal with values this app didn't write")
+            await ack()
+            return
+        await ack()
+        source = Source(user, channel_id=origin.channel_id, home=origin.home)
+        self._spawn(self._save_form(source, kind, form))
+
+    async def _save_form(self, source: Source, kind: str, form: Any) -> None:
+        member = await self._member(source)
+        if member is None:
+            return
+
+        async def work() -> str:
+            async with self.sessionmaker() as db:
+                if kind == "offer":
+                    return posted_offer_reply(await offers.post_offer(db, member, form, now=self.clock()))
+                today = await slack_members.today(db, member, now=self.clock())
+                meal = await meals.log_meal(db, member, form, today=today, now=self.clock())
+            return f"Logged {meal.item_name} for {meal.slot.value} on {day_label(meal.day)}. Thanks!"
+
+        await self._run(source, member, work)
+
     # Modals ------------------------------------------------------------------------------------
 
     async def _submission(self, ack: Callable[..., Awaitable[None]], body: dict[str, Any], kind: str) -> None:
@@ -877,7 +963,7 @@ class Interactions:
         words = str(body.get("text") or "").split()
         sub, args = (words[0].lower(), words[1:]) if words else ("help", [])
         discards = sub == "discard" and is_test_instance(self.instance_label)  # #60: test only
-        if sub not in {"call", "cancel", "schedule"} and not discards:
+        if sub not in {"call", "cancel", "schedule", "offer", "log"} and not discards:
             await ack(response_type="ephemeral", text=self.command_reply(sub))
             return
         user, channel = body.get("user_id"), body.get("channel_id")
@@ -886,6 +972,8 @@ class Interactions:
             source = Source(user, channel_id=channel if ids.is_channel_id(channel) else None)
             if sub == "call":
                 self._spawn(self._call(source, [word.lower() for word in args]))
+            elif sub in {"offer", "log"}:
+                self._spawn(self._form_command(source, sub, body.get("trigger_id")))
             elif sub == "schedule":
                 self._spawn(self._schedule_command(source))
             elif sub == "discard":
@@ -902,10 +990,6 @@ class Interactions:
                 return f"Browse and add meals and restaurants: <{url('/catalog')}|the catalog>."
             case "history":
                 return f"See what the household ate lately: <{url('/history')}|history>."
-            case "log":
-                return f"Logging a meal from Slack is coming soon. For now, log it on <{url('/history')}|History>."
-            case "offer":
-                return f"Offers are coming soon. Until then, start a call with `{self.command} call`."
             case "version":
                 return self.version_reply()
             case "discard":  # reached only on an unlabeled instance; see _command
@@ -944,6 +1028,19 @@ class Interactions:
                 if not early:
                     return self._started(await event_views.event_view(db, member, event.id, now=self.clock()), today)
             return await self._post_now(member, event.id, None)
+
+        await self._run(source, member, work)
+
+    async def _form_command(self, source: Source, sub: str, trigger: object) -> None:
+        """``offer`` and ``log``: open the modal, as **Make an offer** on Home does."""
+        member = await self._member(source)
+        if member is None:
+            return
+
+        async def work() -> str | None:
+            if sub == "offer":
+                return await self._open_offer(member, source, trigger)
+            return await self._open_log(member, source, trigger)
 
         await self._run(source, member, work)
 
@@ -1045,7 +1142,9 @@ HELP = (
     "• `{command} catalog` and `{command} history` link to the catalog and meal history.\n"
     "• `{command} version` says which version of Dinnerbell is answering.\n"
     "• `{command} schedule` shows when calls go out, with a link to change it.\n"
-    "• `offer` and `log` are coming soon.\n"
+    "• `{command} offer` offers a meal you're making or getting, with seats to spare. Lunch offers start as "
+    "pickup at the usual lunch time.\n"
+    "• `{command} log` records a meal the household ate outside Dinnerbell.\n"
     "Open the Dinnerbell app's Home tab for today's calls, or <{today}|the web app>."
 )
 CALL_USAGE = (
@@ -1070,6 +1169,30 @@ FORMS: dict[str, Callable[[Any], Any]] = {
     "feedback": parse_feedback,
 }
 """Each modal's form parser, by kind. Close now's confirmation has no fields."""
+
+
+def seat_reply(seat: offers.Seat) -> str:
+    """Where a member stands on an offer after a tap on it."""
+    left = "It's full now." if seat.seats_left == 0 else f"{seat.seats_left} spare."
+    if seat.offerer:
+        guests = f", with {seat.guests} guest{'' if seat.guests == 1 else 's'}" if seat.guests else ""
+        return f"It's your offer, so you're in{guests}. {left}"
+    if not seat.joined:
+        return f"Got it: you're not joining {seat.item_name}. {left}"
+    guests = f" with {seat.guests} guest{'' if seat.guests == 1 else 's'}" if seat.guests else ""
+    return f"You're in for {seat.item_name}{guests}. {left} Tap Count me in again to drop out."
+
+
+def posted_offer_reply(posted: offers.Posted) -> str:
+    slot, day = posted.slot.value, day_label(posted.day)
+    if posted.path is OfferPath.ATTACH:
+        return (
+            f"The {slot} call for {day} is open, so {posted.item_name} is a pick on it now, and you're in to "
+            "make it happen. Thanks!"
+        )
+    if posted.path is OfferPath.REPLACE:
+        return f"Posted your {slot} offer for {day}. It replaces the {slot} call scheduled for that day. Thanks!"
+    return f"Posted your {slot} offer for {day} in the Dinnerbell channel. Thanks for sharing!"
 
 
 def parse_call_args(args: list[str], today: date, *, command: str = DEFAULT_COMMAND) -> tuple[Slot, date, bool]:

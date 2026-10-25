@@ -76,7 +76,7 @@ async def test_the_configured_command_is_the_one_registered(test_slack: Slack) -
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("text", ["", "help", "offer", "what"])
+@pytest.mark.parametrize("text", ["", "help", "what"])
 async def test_replies_name_the_configured_command(test_slack: Slack, text: str) -> None:
     reply = reply_text(await test_slack.command("Kim", text, command=TEST_COMMAND))
     assert f"`{TEST_COMMAND} call`" in reply

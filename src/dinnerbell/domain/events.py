@@ -72,7 +72,10 @@ STATE_LABELS = {
 TRANSITIONS: Mapping[EventState, frozenset[EventState]] = {
     # Scheduled to abandoned: its whole window passed while the server was down (missed).
     EventState.SCHEDULED: frozenset({EventState.COLLECTING, EventState.CANCELLED, EventState.ABANDONED}),
-    EventState.COLLECTING: frozenset({EventState.VOTING, EventState.ABANDONED, EventState.CANCELLED}),
+    # Collecting to decided: an offer is on once its time comes (FR-4); a call always votes first.
+    EventState.COLLECTING: frozenset(
+        {EventState.VOTING, EventState.DECIDED, EventState.ABANDONED, EventState.CANCELLED}
+    ),
     # Back to collecting (today) or scheduled (a later day) is the admin's re-run (FR-6).
     EventState.VOTING: frozenset(
         {EventState.DECIDED, EventState.ABANDONED, EventState.CANCELLED, EventState.COLLECTING, EventState.SCHEDULED}
@@ -98,6 +101,9 @@ class EventRuleViolation(Exception):
 
 CALL_FINISHED = "This call already finished."
 STALE_CALL = "That can't happen anymore."
+OFFER_JOIN_INSTEAD = "This is an offer: tap Count me in to join it."
+OFFER_CHANGE = "To change an offer, call it off and post a new one."
+NO_COORDINATOR = "An offer has no coordinator: whoever made it is in charge."
 
 
 class StaleRun(EventRuleViolation):
@@ -138,7 +144,9 @@ def transition(current: EventState, target: EventState) -> EventState:
 
 class EventKind(StrEnum):
     CALL = "call"
-    OFFER = "offer"  # M3
+    OFFER = "offer"
+    """Someone announcing a meal they're making or getting, with seats to spare (FR-4,
+    ``domain.offers``)."""
 
 
 class EndReason(StrEnum):
@@ -212,6 +220,15 @@ class Event:
     """Who called the call off (FR-56), or None. A restart or re-run clears it."""
     end_note: str | None = None
     """The reason they gave, if any (``clean_cancel_note``)."""
+    capacity: int | None = None
+    """An offer's spare servings: how many others, guests included, can join it (FR-4). None
+    for a call. An offer keeps its item, mode, and time in ``decided_item_id``,
+    ``decided_mode``, and ``meal_time`` from the start, and closes at ``respond_deadline``,
+    its time."""
+
+    @property
+    def is_offer(self) -> bool:
+        return self.kind is EventKind.OFFER
 
     @property
     def remind_at(self) -> datetime:
@@ -351,9 +368,12 @@ def check_details(details: Details, *, dietary_tag_ids: Iterable[int], active_it
 
 
 def check_can_respond(event: Event, actor: Member) -> None:
-    """FR-7: members respond while the response window is open."""
+    """FR-7: members respond while the response window is open. An offer is joined instead
+    (``domain.offers``), where seats are counted."""
     if not actor.active:
         raise EventRuleViolation("Only active members can respond.")
+    if event.is_offer:
+        raise EventRuleViolation(OFFER_JOIN_INSTEAD)
     if event.state is not EventState.COLLECTING:
         raise EventRuleViolation("Responses are closed for this call.")
 
@@ -525,13 +545,25 @@ def is_coordinator(event: Event, actor: Member) -> bool:
 def check_claim_coordinator(event: Event, actor: Member) -> None:
     if not actor.active:
         raise EventRuleViolation("Only active members can coordinate.")
+    if event.is_offer:
+        raise EventRuleViolation(NO_COORDINATOR)
     if event.state not in {EventState.COLLECTING, EventState.VOTING}:
         raise EventRuleViolation("You can claim coordinating only while the call is open.")
     if event.coordinator_id is not None:
         raise EventRuleViolation("Someone is already coordinating. They can hand it off to you.")
 
 
+def check_assign_coordinator(event: Event) -> None:
+    """FR-10: the admin assigns, replaces, or clears the coordinator of a posted, open call."""
+    if event.is_offer:
+        raise EventRuleViolation(NO_COORDINATOR)
+    if event.state not in OPEN_STATES - {EventState.SCHEDULED}:
+        raise EventRuleViolation("This call is over.")
+
+
 def check_handoff(event: Event, actor: Member, target: Member) -> None:
+    if event.is_offer:
+        raise EventRuleViolation(NO_COORDINATOR)
     if not is_coordinator(event, actor):
         raise EventRuleViolation("Only the coordinator can hand off coordinating.")
     if event.state not in {EventState.COLLECTING, EventState.VOTING, EventState.DECIDED}:
@@ -576,6 +608,8 @@ def check_can_manage_decision(event: Event, actor: Member) -> None:
     after the fact (spec 5.7)."""
     if not actor.active:
         raise EventRuleViolation("Only active members can change the decision.")
+    if event.is_offer:
+        raise EventRuleViolation(OFFER_CHANGE)
     if actor.is_admin and event.state in {EventState.DECIDED, EventState.DONE}:
         return
     if not is_coordinator(event, actor):
@@ -615,11 +649,19 @@ CLOSABLE_STATES = frozenset({EventState.COLLECTING, EventState.VOTING})
 def check_can_cancel(event: Event, actor: Member) -> ActingAs:
     """FR-56: who may call a call off. The coordinator and admins, in any open state; the
     member who started an ad-hoc call (``created_by``), until it's decided. Returns the
-    narrowest capacity that allows it, so an admin who coordinates is audited as coordinator."""
+    narrowest capacity that allows it, so an admin who coordinates is audited as coordinator.
+    Whoever made an offer may call it off until it's done, even once it has closed: they're
+    the one cooking or driving."""
     if not actor.active:
         raise EventRuleViolation("Only active members can call off a call.")
     if not event.state.is_open:
         raise EventRuleViolation(CALL_FINISHED)
+    if event.is_offer:
+        if event.created_by is not None and event.created_by == actor.id:
+            return ActingAs.STARTER
+        if actor.is_admin:
+            return ActingAs.ADMIN
+        raise EventRuleViolation("Only whoever made the offer, or an admin, can call it off.")
     if is_coordinator(event, actor):
         return ActingAs.COORDINATOR
     starter = event.created_by is not None and event.created_by == actor.id
@@ -639,6 +681,8 @@ def check_can_close_window(event: Event, actor: Member) -> Window:
         raise EventRuleViolation("Only active members can close a window.")
     if not event.state.is_open:
         raise EventRuleViolation(CALL_FINISHED)
+    if event.is_offer:
+        raise EventRuleViolation("An offer closes at its time. Call it off instead if plans changed.")
     if event.state not in CLOSABLE_STATES:
         raise EventRuleViolation("There's no open window to close.")
     if not (is_coordinator(event, actor) or actor.is_admin):
@@ -685,7 +729,9 @@ def check_ad_hoc_day(day: date, today: date) -> None:
 
 def check_rerun(event: Event, today: date, *, now: datetime, too_late_after: datetime) -> None:
     """``too_late_after`` is the usual meal time plus two hours on ``today``: past it, a re-run
-    of today's call would only be expired again."""
+    of today's call would only be expired again. Offers aren't re-run: post a new one."""
+    if event.is_offer:
+        raise EventRuleViolation("Only a call can be re-run. Post a new offer instead.")
     if event.state not in {EventState.VOTING, EventState.DECIDED, EventState.ABANDONED, EventState.CANCELLED}:
         raise EventRuleViolation("Only a call that's voting, decided, abandoned, or cancelled can be re-run.")
     if event.day < today:
@@ -699,6 +745,8 @@ def check_restart(
 ) -> None:
     """FR-56: any member starts a called-off call again, under the re-run's timing rules.
     ``any_time``, on a test instance only (#60), lifts the too-late rule."""
+    if event.is_offer:
+        raise EventRuleViolation("Only a call can start again. Post a new offer instead.")
     if event.state is not EventState.CANCELLED:
         raise EventRuleViolation(f"There's already a {event.slot.value} call for that day.")
     if event.day < today:  # pragma: no cover - start_call allows only today or later
@@ -724,7 +772,10 @@ def shifted_deadline(current: datetime, minutes: int | None, now: datetime, *, l
 
 
 def check_window_change(event: Event, window: Window) -> datetime:
-    """The deadline the admin may move right now, or EventRuleViolation."""
+    """The deadline the admin may move right now, or EventRuleViolation. An offer has no
+    windows: it closes at its time."""
+    if event.is_offer:
+        raise EventRuleViolation("An offer has no window to move. It closes at its time.")
     if window is Window.RESPOND and event.state is EventState.COLLECTING:
         return event.respond_deadline
     if window is Window.VOTE and event.state is EventState.VOTING and event.vote_deadline is not None:
@@ -747,6 +798,8 @@ def check_can_post_now(event: Event, actor: Member, *, now: datetime) -> bool:
     response window has passed (the scheduler expires it instead, FR-2), is refused."""
     if not actor.active:
         raise EventRuleViolation("Only active members can post a call.")
+    if event.is_offer:
+        raise EventRuleViolation("An offer is posted as soon as it's made.")
     if not event.state.is_open:
         raise EventRuleViolation(CALL_FINISHED)
     if event.state is not EventState.SCHEDULED:
@@ -830,6 +883,19 @@ def due_step(
     ``closes_early``, given the call's responses, the household's active members, and the
     responses' coverage; with none passed, they close at the deadline.
     """
+    if event.is_offer:
+        # An offer has no reminder and no early close: it takes people until its time (FR-4),
+        # then it's on, and done two hours after. Its plan was set when it was posted, so after
+        # downtime it catches up to done instead of expiring like an undecided call.
+        if event.state is EventState.COLLECTING and now >= event.respond_deadline:
+            return Step.CLOSE_RESPONSES
+        if (
+            event.state is EventState.DECIDED
+            and event.meal_time is not None
+            and now >= event.meal_time + DONE_AFTER_MEAL
+        ):
+            return Step.MARK_DONE
+        return None
     if event.state in UNDECIDED and now >= stale_after:
         return Step.EXPIRE
     if event.state is EventState.SCHEDULED:

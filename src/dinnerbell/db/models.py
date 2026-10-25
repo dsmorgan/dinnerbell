@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """ORM models. M0: household, member, session, audit. M1: the catalog, preferences, and meal log.
 M2: dinner calls (event, response, suggestion, proposal, vote, assignment) and the outbox.
-M3: feedback on meals.
+M3: feedback on meals, and offers (an event's ``capacity``).
 
 Every table carries ``household_id`` (the household table's own key is that ID).
 Changing a model requires a new Alembic revision; see CLAUDE.md.
@@ -227,8 +227,10 @@ class MealLogRow(Base):
 
 
 class EventRow(Base):
-    """One coordination of one slot on one date (spec 4, 8). ``run`` counts admin re-runs; each
-    run posts fresh messages. ``version`` changes on every write, which is how use cases take the
+    """One coordination of one slot on one date (spec 4, 8): a call, or an offer (FR-4), which
+    keeps its item, mode, and time in the ``decided_*`` and ``meal_time`` columns from the start
+    and its spare servings in ``capacity``. ``run`` counts admin re-runs; each run posts fresh
+    messages. ``version`` changes on every write, which is how use cases take the
     event's write lock first (see ``db.events.EventRepository.lock``).
 
     AUTOINCREMENT, because a test instance can discard a call (#60), and SQLite would otherwise
@@ -255,6 +257,11 @@ class EventRow(Base):
         ),
         CheckConstraint("decided_mode IS NULL OR decided_mode IN ('cook', 'pickup', 'delivery')", name="mode"),
         CheckConstraint("end_reason IS NULL OR end_reason IN ('too_few', 'no_coverage', 'missed')", name="end_reason"),
+        CheckConstraint(
+            "(kind = 'call' AND capacity IS NULL) OR "
+            "(kind = 'offer' AND capacity IS NOT NULL AND capacity BETWEEN 1 AND 20)",
+            name="capacity",
+        ),
         {"sqlite_autoincrement": True},
     )
 
@@ -283,6 +290,8 @@ class EventRow(Base):
     locked_by: Mapped[int | None] = mapped_column(ForeignKey("member.id", ondelete="SET NULL"))
     ended_by: Mapped[int | None] = mapped_column(ForeignKey("member.id", ondelete="SET NULL"))
     end_note: Mapped[str | None] = mapped_column(String(140))
+    capacity: Mapped[int | None] = mapped_column(Integer)
+    """An offer's spare servings (FR-4); NULL for a call."""
     created_at: Mapped[datetime] = mapped_column(UTCDateTime())
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime())
 

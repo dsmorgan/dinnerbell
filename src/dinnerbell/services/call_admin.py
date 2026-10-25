@@ -10,7 +10,7 @@ from datetime import datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from dinnerbell.domain.events import OPEN_STATES, Event, EventRuleViolation, EventState, Window, check_rerun
+from dinnerbell.domain.events import Event, Window, check_assign_coordinator, check_rerun
 from dinnerbell.domain.members import Member
 from dinnerbell.services import lifecycle
 from dinnerbell.services.call_context import load, locked_event
@@ -52,6 +52,7 @@ async def rerun(db: AsyncSession, actor: Member, event_id: int, *, now: datetime
         ctx = await load(db, event)
         today = household_today(ctx.household, now)
         check_rerun(event, today, now=now, too_late_after=ctx.too_late_for(today))
+        await lifecycle.check_no_cooking_offer(db, event.household_id, event.slot, event.day)  # FR-5
         fresh = await lifecycle.reopen(db, ctx, today=today, now=now)
         payload = {"from": event.state.value, "run": fresh.run, "respond_by": fresh.respond_deadline.isoformat()}
         await audit(db, actor.household_id, actor, "event.rerun", _target(event), payload, now)
@@ -63,8 +64,7 @@ async def assign_coordinator(
     """FR-10: the admin assigns or replaces the coordinator, or clears it with None."""
     require_admin(actor, ADMINS_ONLY)
     async with locked_event(db, actor.household_id, event_id, now) as event:
-        if event.state not in OPEN_STATES - {EventState.SCHEDULED}:
-            raise EventRuleViolation("This call is over.")
+        check_assign_coordinator(event)
         if member_id is not None:
             target = (await load(db, event)).members.get(member_id)
             if target is None or not target.active:

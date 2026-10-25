@@ -11,7 +11,7 @@ import pytest
 
 from dinnerbell.domain import notifications as n
 from dinnerbell.domain.catalog import ItemKind, Mode
-from dinnerbell.domain.events import AssignmentRole, EndReason, EventState, ProposalSource, RoleOffer, Status
+from dinnerbell.domain.events import AssignmentRole, EndReason, EventKind, EventState, ProposalSource, RoleOffer, Status
 from dinnerbell.domain.meals import Slot
 
 WHEN = datetime(2026, 10, 22, 21, 30, tzinfo=UTC)
@@ -46,6 +46,9 @@ DECISION = n.DecisionInfo(
     assignments=(n.AssignmentInfo(AssignmentRole.PICKUP, SAM), n.AssignmentInfo(AssignmentRole.COORDINATOR, ALEX)),
     dietary_notes=("Vegan",),
 )
+
+OFFER_EVENT = replace(EVENT, state=EventState.COLLECTING, coordinator=None, kind=EventKind.OFFER)
+OFFER = n.OfferInfo(SAM, ITEM, Mode.PICKUP, WHEN, capacity=3, taken=3, dietary_notes=("Vegan",))
 
 SCHEDULE = n.SlotScheduleInfo(True, time(15), 90, 45, 15, time(18, 30), (Mode.PICKUP, Mode.DELIVERY))
 
@@ -124,12 +127,27 @@ EXAMPLES: list[tuple[n.Notification, str, str | None, str | None, int | None]] =
         None,
         2,
     ),
+    (n.OfferPosted(OFFER_EVENT, OFFER, ROSTER, 4), "event:7:run2:offer_posted", "event:7:run2:call", None, None),
+    (n.OfferUpdated(OFFER_EVENT, OFFER, ROSTER, 4), "event:7:run2:offer_updated", "event:7:run2:call", None, None),
+    (n.OfferFull(OFFER_EVENT, SAM, OFFER), "event:7:run2:offer_full", None, None, 2),
 ]
+
+
+def test_an_offer_knows_its_seats() -> None:
+    assert OFFER.full and OFFER.seats_left == 0
+    assert replace(OFFER, taken=1).seats_left == 2 and not replace(OFFER, taken=1).full
+    assert replace(OFFER, taken=5).seats_left == 0  # never negative
 
 
 def test_every_notification_type_has_an_example() -> None:
     assert {type(example[0]) for example in EXAMPLES} == set(n.NOTIFICATION_TYPES.values())
-    assert {"call_updated", "proposals_updated", "decision_updated", "call_discarded"} == n.UPDATE_KINDS
+    assert {
+        "call_updated",
+        "proposals_updated",
+        "decision_updated",
+        "call_discarded",
+        "offer_updated",
+    } == n.UPDATE_KINDS
 
 
 @pytest.mark.parametrize(("notification", "key", "message", "thread", "recipient"), EXAMPLES)

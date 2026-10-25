@@ -18,7 +18,7 @@
     {
       "block_id": "event-7",
       "text": {
-        "text": "*Dinner* · Cancelled\nYou're in. You offered to cook.\nCalled off by Alex. “Pizza at Grandma's”",
+        "text": "*Dinner* · Cancelled\nYou're in. You're bringing 1 guest. You offered to cook.\nCalled off by Alex. “Pizza at Grandma's”",
         "type": "mrkdwn"
       },
       "type": "section"
@@ -42,6 +42,16 @@
     {
       "block_id": "start",
       "elements": [
+        {
+          "action_id": "make_offer",
+          "text": {
+            "emoji": true,
+            "text": "Make an offer",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "make_offer"
+        },
         {
           "action_id": "start_call_dinner",
           "text": {

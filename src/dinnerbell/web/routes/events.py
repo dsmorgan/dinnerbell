@@ -38,7 +38,8 @@ from dinnerbell.domain.events import (
     WindowMoved,
 )
 from dinnerbell.domain.meals import Slot
-from dinnerbell.services import call_admin, calls, discard, event_views, feedback
+from dinnerbell.domain.offers import MAX_CAPACITY
+from dinnerbell.services import call_admin, calls, discard, event_views, feedback, offers
 from dinnerbell.services.errors import NotFound
 from dinnerbell.services.lifecycle import CallExists
 from dinnerbell.web.auth import (
@@ -179,9 +180,7 @@ async def start_call(
                 raise
             event = scheduled  # posting a call that's scheduled already, as /dinnerbell call ... now does
     except RULE_ERRORS as exc:
-        view = await event_views.today_view(db, principal.member, now=context.clock(), any_time=_any_time(context))
-        page = {"today": view, "from_page": "today", "start_error": str(exc)}
-        return await render(request, "today.html", page, status_code=409)
+        return await _today_error(request, principal, context, db, start_error=str(exc))
     if post_now:
         # The call exists now, so a refusal shows on its card rather than as a failed start.
         member = principal.member
@@ -190,6 +189,16 @@ async def start_call(
         except RULE_ERRORS as exc:
             return await _card(request, principal, context, db, event.id, came_from="event", error=str(exc))
     return RedirectResponse(f"/events/{event.id}", status_code=303)
+
+
+async def _today_error(
+    request: Request, principal: Principal, context: AppContext, db: Database, **errors: str
+) -> Response:
+    """Today again, with a form's error (``start_error`` or ``offer_error``), as a 409."""
+    view = await event_views.today_view(db, principal.member, now=context.clock(), any_time=_any_time(context))
+    form = await offers.offer_form(db, principal.member, now=context.clock())
+    page = {"today": view, "from_page": "today", "offer_form": form} | errors
+    return await render(request, "today.html", page, status_code=409)
 
 
 # Responding -------------------------------------------------------------------------------------
@@ -586,6 +595,98 @@ async def restart(
     async def action() -> None:
         label = context.settings.instance_label
         await calls.restart_call(db, principal.member, event_id, run=seen, now=context.clock(), instance_label=label)
+
+    return await _run(request, principal, context, db, event_id, came_from, action)
+
+
+# Offers (FR-4, FR-5) ----------------------------------------------------------------------------
+
+
+@router.post("/offers")
+async def make_offer(
+    request: Request,
+    principal: CSRFChecked,
+    context: Context,
+    db: Database,
+    slot: Field = "",
+    day: Field = "",
+    mode: Field = "",
+    at: Field = "",
+    capacity: Field = "",
+    item_id: Field = "",
+    free_text: Field = "",
+    cuisine_id: Field = "",
+) -> Response:
+    """Post an offer. One for a slot whose call is open joins that call as a pick (FR-5), so
+    the page that follows is the call's."""
+    try:
+        chosen_slot, chosen_mode = choice(Slot, slot), choice(Mode, mode)
+        if chosen_slot is None or chosen_mode is None:
+            raise BadFormValue("Pick the meal and how it arrives.")
+        when = _wall_time(at, "Enter the time as HH:MM.")
+        if when is None:
+            raise BadFormValue("Enter the time as HH:MM.")
+        seats = optional_int(capacity, f"Spare servings is a whole number from 1 to {MAX_CAPACITY}.")
+        item = parse_id(item_id)
+        data = offers.OfferInput(
+            slot=chosen_slot,
+            day=iso_date(day, "Enter the date as YYYY-MM-DD."),
+            mode=chosen_mode,
+            at=when,
+            capacity=seats if seats is not None else 0,
+            item_id=item,
+            free_text=free_text or None,  # with an item too, the service refuses, as Slack's form does
+            cuisine_id=parse_id(cuisine_id),
+        )
+        posted = await offers.post_offer(db, principal.member, data, now=context.clock())
+    except RULE_ERRORS as exc:
+        return await _today_error(request, principal, context, db, offer_error=str(exc))
+    return RedirectResponse(f"/events/{posted.event_id}", status_code=303)
+
+
+@router.post("/events/{event_id}/join")
+async def join_offer(
+    request: Request,
+    principal: CSRFChecked,
+    context: Context,
+    db: Database,
+    event_id: RowId,
+    guests: Field = "0",
+    guest_needs: Many = None,
+    run: Run = "",
+    came_from: Annotated[str, Form(alias="from", max_length=10)] = "",
+) -> Response:
+    """Join an offer, or change how many guests you bring and what they need (FR-4, FR-8)."""
+    seen = parse_id(run)
+    if seen is None:
+        return await _malformed(request, principal, context, db, event_id, came_from)
+
+    async def action() -> None:
+        count = optional_int(guests, f"Guests is a whole number from 0 to {MAX_GUESTS}.") or 0
+        needs = frozenset(i for v in guest_needs or [] if (i := parse_id(v)) is not None)
+        member = principal.member
+        await offers.join(db, member, event_id, guests=count, guest_needs=needs, run=seen, now=context.clock())
+
+    return await _run(request, principal, context, db, event_id, came_from, action)
+
+
+@router.post("/events/{event_id}/leave")
+async def leave_offer(
+    request: Request,
+    principal: CSRFChecked,
+    context: Context,
+    db: Database,
+    event_id: RowId,
+    run: Run = "",
+    came_from: Annotated[str, Form(alias="from", max_length=10)] = "",
+) -> Response:
+    """Drop out of an offer, with any guests."""
+    seen = parse_id(run)
+    if seen is None:
+        return await _malformed(request, principal, context, db, event_id, came_from)
+
+    async def action() -> None:
+        await offers.leave(db, principal.member, event_id, run=seen, now=context.clock())
 
     return await _run(request, principal, context, db, event_id, came_from, action)
 

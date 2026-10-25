@@ -1,0 +1,28 @@
+{
+  "blocks": [
+    {
+      "text": {
+        "text": "Your lunch offer is full, Alex: *3 people* joining you for *<https://siam.example/menu|Siam Garden>* at 12:30 PM. Thanks for sharing!\n*Guests' dietary needs:* Vegetarian",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "block_id": "more",
+      "elements": [
+        {
+          "action_id": "link_event",
+          "text": {
+            "emoji": true,
+            "text": "View on web",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "url": "https://dinnerbell.example.com/events/9"
+        }
+      ],
+      "type": "actions"
+    }
+  ],
+  "text": "Your lunch offer is full: 3 people joining you."
+}

@@ -21,12 +21,14 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from dinnerbell.db.catalog import CatalogRepository, ItemValues
+from dinnerbell.db.engine import write_transaction
 from dinnerbell.db.events import AssignmentRepository, EventRepository, ProposalRepository, ResponseRepository
 from dinnerbell.db.meals import MealLogRepository, household_settings
-from dinnerbell.db.repositories import HouseholdRepository
+from dinnerbell.db.repositories import HouseholdRepository, MemberRepository
 from dinnerbell.domain import notifications as note
 from dinnerbell.domain.catalog import CatalogItem, ItemKind, Mode
 from dinnerbell.domain.events import (
+    MAX_PROPOSALS,
     MIN_HEAD_COUNT,
     MODE_ROLE,
     EndReason,
@@ -56,6 +58,7 @@ from dinnerbell.domain.events import (
 from dinnerbell.domain.household import Household
 from dinnerbell.domain.meals import MemberRef, Slot, TagRef
 from dinnerbell.domain.members import Member
+from dinnerbell.domain.offers import replaces_call
 from dinnerbell.domain.ranking import GroupPreferences, RankingSnapshot, RankItem, rank
 from dinnerbell.domain.schedule import proposal_count, slot_schedule, slot_schedules, weights
 from dinnerbell.services import call_context as cc
@@ -73,6 +76,29 @@ MAX_STEPS = 10
 
 class CallExists(EventRuleViolation):
     pass
+
+
+class OfferedInstead(EventRuleViolation):
+    """A cooking offer stands in for that slot's call on that day (FR-5)."""
+
+
+async def cooking_offer(db: AsyncSession, household_id: int, slot: Slot, day: date) -> Event | None:
+    """The live cooking offer that replaces ``slot``'s call on ``day``, if there is one (FR-5)."""
+    offers = await EventRepository(db).offers_for(household_id, slot, day)
+    return next((o for o in offers if replaces_call(o)), None)
+
+
+async def check_no_cooking_offer(db: AsyncSession, household_id: int, slot: Slot, day: date) -> None:
+    """Refuse a call for ``slot`` on ``day`` while a live cooking offer stands in for it (FR-5):
+    starting one, starting a called-off one again, or an admin's re-run."""
+    offer = await cooking_offer(db, household_id, slot, day)
+    if offer is not None:
+        cook = await MemberRepository(db).get(household_id, offer.created_by) if offer.created_by else None
+        who = cook.display_name if cook is not None else "Someone"
+        raise OfferedInstead(
+            f"{who} is cooking {slot.value} that day, so there's no call. Join the offer instead, "
+            "or ask them to call it off first."
+        )
 
 
 def _target(event: Event) -> str:
@@ -101,6 +127,8 @@ async def create_call(
     schedule = slot_schedule(await household_settings(db, household.id), slot)
     events = EventRepository(db)
     existing = await events.call_for(household.id, slot, day)
+    if actor is not None and existing is None:  # ``restart`` checks a called-off one
+        await check_no_cooking_offer(db, household.id, slot, day)
     if existing is not None:
         if existing.state is EventState.CANCELLED and actor is not None:
             return await restart(db, existing, actor=actor, now=now, any_time=restart_any_time)
@@ -161,21 +189,27 @@ async def open_due_calls(db: AsyncSession, household: Household, now: datetime) 
     opened: list[Event] = []
     for slot, schedule in slot_schedules(await household_settings(db, household.id)).items():
         opens_at = schedule.opens_at(today, zone)
-        exists = await EventRepository(db).call_for(household.id, slot, today) is not None
-        due = should_open_today(
-            enabled=schedule.enabled,
-            opens_at=opens_at,
-            respond_deadline=opens_at + schedule.response_window,
-            now=now,
-            exists=exists,
-        )
-        if not due:
-            continue
-        try:
-            opened.append(await create_call(db, household, slot, today, opens_at=opens_at, actor=None, now=now))
-            await db.commit()
-        except CallExists:
-            await db.rollback()
+        # Check and create under the write lock, so a cooking offer posted at the same moment
+        # (``offers.post_offer`` takes it too) either sees the call or keeps it from opening.
+        async with write_transaction(db):
+            exists = await EventRepository(db).call_for(household.id, slot, today) is not None
+            # A cooking offer stands in for the call (FR-5). Called off before the response
+            # deadline, it frees the slot, and the next tick posts the call after all.
+            exists = exists or await cooking_offer(db, household.id, slot, today) is not None
+            due = should_open_today(
+                enabled=schedule.enabled,
+                opens_at=opens_at,
+                respond_deadline=opens_at + schedule.response_window,
+                now=now,
+                exists=exists,
+            )
+            if not due:
+                continue
+            try:
+                opened.append(await create_call(db, household, slot, today, opens_at=opens_at, actor=None, now=now))
+                await db.commit()
+            except CallExists:
+                await db.rollback()
     return opened
 
 
@@ -195,6 +229,7 @@ async def restart(
         raise CallExists(f"There's already a {event.slot.value} call for that day.")
     today = household_today(ctx.household, now)
     check_restart(ctx.event, today, now=now, too_late_after=ctx.too_late_for(today), any_time=any_time)
+    await check_no_cooking_offer(db, event.household_id, event.slot, event.day)
     fresh = await reopen(db, ctx, today=today, now=now, started_by=actor)
     payload = {"from": EventState.CANCELLED.value, "run": fresh.run, "respond_by": fresh.respond_deadline.isoformat()}
     await audit(db, event.household_id, actor, "event.restarted", _target(event), payload, now)
@@ -339,7 +374,8 @@ async def ranking_snapshot(db: AsyncSession, ctx: CallContext, group: GroupPrefe
 
 async def _close_responses(db: AsyncSession, event: Event, now: datetime) -> None:
     """The response deadline: rank with everyone who might eat, turn maybes out and tell them,
-    then abandon (fewer than two, or nothing fits) or open voting. Before the deadline,
+    then abandon (fewer than two, or nothing fits) or open voting. Picks that offers added while
+    responses were open (FR-5) stay if they still fit, after the ranked ones. Before the deadline,
     because everyone answered (FR-56), the deadline moves to now first, so voting gets its
     usual length from now, as when the coordinator closes the window."""
     if now < event.respond_deadline:
@@ -348,7 +384,10 @@ async def _close_responses(db: AsyncSession, event: Event, now: datetime) -> Non
         await audit(db, event.household_id, None, "event.everyone_answered", _target(event), early, now)
     ctx = await load(db, event)
     group = await group_preferences(db, event.household_id, veto_participants(ctx.responses))
-    ranked = rank(await ranking_snapshot(db, ctx, group))
+    attached = await _keep_attached(db, ctx, group, now)
+    taken = {(p.item_id, p.mode) for p in attached}
+    ranked = [r for r in rank(await ranking_snapshot(db, ctx, group)) if (r.item_id, r.mode) not in taken]
+    ranked = ranked[: max(MAX_PROPOSALS - len(attached), 0)]  # FR-13: at most 10 picks in all
     resolved = resolve_maybes(ctx.responses)
     for response in resolved:
         await ResponseRepository(db).save(event.household_id, event.id, response, now)
@@ -357,10 +396,12 @@ async def _close_responses(db: AsyncSession, event: Event, now: datetime) -> Non
     if head_count(ctx.responses) < MIN_HEAD_COUNT:  # maybes never count toward the head count
         await abandon(db, event, EndReason.TOO_FEW, now)
         return
-    if not ranked:
+    if not ranked and not attached:
         await abandon(db, event, EndReason.NO_COVERAGE, now)
         return
     proposals = ProposalRepository(db)
+    for position, offered in enumerate(attached, start=len(ranked) + 1):
+        await proposals.set_rank(event.household_id, offered.id, position)  # after the ranked picks
     for position, choice in enumerate(ranked, start=1):
         await proposals.add(
             household_id=event.household_id,
@@ -383,6 +424,42 @@ async def _close_responses(db: AsyncSession, event: Event, now: datetime) -> Non
     await audit(db, event.household_id, None, "event.voting", _target(event), payload, now)
 
 
+async def _keep_attached(db: AsyncSession, ctx: CallContext, group: GroupPreferences, now: datetime) -> list[Proposal]:
+    """Picks offers added while responses were open (FR-5) that can still be decided. Each passed
+    every check when it was offered, but since then people who answered may veto it or bring a
+    guest it doesn't suit, its offerer may have said out, or its item may have left the catalog.
+    Those go, as ranking would never propose them (FR-29). Audited as ``event.pick_dropped``,
+    without saying why."""
+    kept: list[Proposal] = []
+    for proposal in ctx.proposals:
+        offerer = ctx.response_of(proposal.proposed_by) if proposal.proposed_by is not None else None
+        if offerer is None or not offerer.is_in or misfit(ctx, proposal, group) is not None:
+            await ProposalRepository(db).delete(ctx.event.household_id, proposal.id)
+            payload = {"proposal_id": proposal.id, "item_id": proposal.item_id, "mode": proposal.mode.value}
+            await audit(db, ctx.event.household_id, None, "event.pick_dropped", _target(ctx.event), payload, now)
+        else:
+            kept.append(proposal)
+    return kept
+
+
+async def _close_offer(db: AsyncSession, event: Event, now: datetime) -> None:
+    """An offer's time: it stops taking people and it's on (FR-4). Nobody else joining doesn't
+    end it: whoever made it still eats."""
+    closed = replace(event, state=transition(event.state, EventState.DECIDED), decided_at=now)
+    closed = await EventRepository(db).save(closed, now)
+    ctx = await load(db, closed)
+    await publish(db, ctx, cc.offer_updated(ctx), now=now)
+    payload = {"head_count": ctx.head_count}
+    await audit(db, event.household_id, None, "event.offer_closed", _target(event), payload, now)
+
+
+async def _close(db: AsyncSession, event: Event, now: datetime) -> None:
+    if event.is_offer:
+        await _close_offer(db, event, now)
+    else:
+        await _close_responses(db, event, now)
+
+
 async def expire(db: AsyncSession, event: Event, now: datetime) -> None:
     """End a call it's too late to finish (``EndReason.MISSED``), quietly: no new channel post
     and no direct messages. A call that was posted gets its messages updated to show it ended;
@@ -392,7 +469,9 @@ async def expire(db: AsyncSession, event: Event, now: datetime) -> None:
     ended = await EventRepository(db).save(ended, now)
     if posted:
         ctx = await load(db, ended)
-        await publish(db, ctx, cc.call_updated(ctx), *([cc.proposals_updated(ctx)] if ctx.proposals else []), now=now)
+        await publish(
+            db, ctx, cc.message_updated(ctx), *([cc.proposals_updated(ctx)] if ctx.proposals else []), now=now
+        )
     payload = {"reason": EndReason.MISSED.value, "from": event.state.value}
     await audit(db, event.household_id, None, "event.abandoned", _target(event), payload, now)
 
@@ -582,7 +661,7 @@ async def finish(db: AsyncSession, event: Event, now: datetime, *, actor: Member
         )
     ctx = await load(db, done)
     reminders = feedback.reminders(ctx, item.name) if item is not None else []  # FR-48: only those who asked
-    await publish(db, ctx, *cc.decision_updated(ctx), cc.call_updated(ctx), *reminders, now=now)
+    await publish(db, ctx, *cc.decision_updated(ctx), cc.message_updated(ctx), *reminders, now=now)
     await audit(db, event.household_id, actor, "event.done", _target(event), {"item_id": event.decided_item_id}, now)
 
 
@@ -607,7 +686,7 @@ HANDLERS: dict[Step, Handler] = {
     Step.EXPIRE: expire,
     Step.OPEN: open_call,
     Step.REMIND: _remind,
-    Step.CLOSE_RESPONSES: _close_responses,
+    Step.CLOSE_RESPONSES: _close,
     Step.CLOSE_VOTING: _decide_by_vote,
     Step.MARK_DONE: _mark_done,
 }

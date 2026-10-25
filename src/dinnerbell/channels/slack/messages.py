@@ -43,7 +43,16 @@ from dinnerbell.channels.slack.blocks import (
 )
 from dinnerbell.domain import notifications as note
 from dinnerbell.domain.catalog import Mode
-from dinnerbell.domain.events import AssignmentRole, EndReason, EventState, Response, RoleOffer, Status, Window
+from dinnerbell.domain.events import (
+    AssignmentRole,
+    EndReason,
+    EventKind,
+    EventState,
+    Response,
+    RoleOffer,
+    Status,
+    Window,
+)
 from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.schedule import SlotSchedule
 
@@ -153,6 +162,10 @@ def _render(notification: note.Notification, ctx: RenderContext) -> Message:
             return discarded_message(notification)
         case note.FeedbackReminder():
             return feedback_reminder_message(notification, ctx)
+        case note.OfferPosted() | note.OfferUpdated():
+            return offer_message(notification, ctx)
+        case note.OfferFull():
+            return offer_full_message(notification, ctx)
     raise TypeError(f"no Slack rendering for {type(notification).__name__}")  # pragma: no cover
 
 
@@ -166,7 +179,13 @@ def _slot(event: note.EventInfo) -> str:
 
 
 def _title(event: note.EventInfo) -> str:
-    return f"{event.slot.value.capitalize()} call · {day_label(event.day)}"
+    kind = "offer" if event.kind is EventKind.OFFER else "call"
+    return f"{event.slot.value.capitalize()} {kind} · {day_label(event.day)}"
+
+
+def _what(event: note.EventInfo) -> str:
+    """What was called off: "dinner" for a call, "the dinner offer" for an offer."""
+    return f"the {_slot(event)} offer" if event.kind is EventKind.OFFER else _slot(event)
 
 
 def _web_button(ctx: RenderContext, event: note.EventInfo, text: str = "View on web") -> Block:
@@ -608,6 +627,8 @@ def _mine_lines(event: note.EventInfo, mine: Response | None, member_id: int) ->
     lines: list[str] = []
     if mine is not None:
         line = f"Your answer: *{ANSWER_WORDS[mine.status]}*"
+        if mine.guests and mine.status is not Status.OUT:
+            line += f" · +{plural(mine.guests, 'guest')}"
         if mine.offers:
             line += " · can " + " or ".join(OFFER_WORDS[o] for o in _offers(mine))
         lines.append(line)
@@ -629,6 +650,8 @@ def your_answer_text(event: note.EventInfo, mine: Response | None, *, run: int |
     if mine is None:
         return f"{_title(event)}: you haven't answered yet"
     summary = ANSWER_WORDS[mine.status]
+    if mine.guests and mine.status is not Status.OUT:
+        summary += f" with {plural(mine.guests, 'guest')}"
     if mine.offers:
         summary += ", can " + " or ".join(OFFER_WORDS[o] for o in _offers(mine))
     return f"{_title(event)}: your answer is {summary}"
@@ -753,14 +776,14 @@ def _called_off(event: note.EventInfo, by: note.PersonInfo | None, reason: str |
     Grandma's." Escape before putting it in a block."""
     who = by.name if by is not None else "An admin"
     said = f": {reason}{_stop(reason)}" if reason else "."
-    return f"{who} called off {_slot(event)} for {day_label(event.day)}{said}"
+    return f"{who} called off {_what(event)} for {day_label(event.day)}{said}"
 
 
 def _reason(event: note.EventInfo, by: note.PersonInfo | None, reason: str | None) -> str:
     """``_called_off`` as mrkdwn, with the reason in bold."""
     who = escape(by.name) if by is not None else "An admin"
     said = f": *{escape(reason)}*{_stop(reason)}" if reason else "."
-    return f"{who} called off {_slot(event)} for {day_label(event.day)}{said}"
+    return f"{who} called off {_what(event)} for {day_label(event.day)}{said}"
 
 
 def cancelled_message(notification: note.EventCancelled, ctx: RenderContext) -> Message:
@@ -876,6 +899,111 @@ def _add(at: time, minutes: int) -> time:
     """``at`` plus ``minutes`` on the clock. Schedules end by midnight (``check_schedule``)."""
     total = (at.hour * 60 + at.minute + minutes) % (24 * 60)
     return time(total // 60, total % 60)
+
+
+# Offers (FR-4) -----------------------------------------------------------------------------------
+
+OFFER_VERBS = {Mode.COOK: "is making", Mode.PICKUP: "is picking up", Mode.DELIVERY: "is ordering"}
+CANT_MAKE_IT = "Can't make it"
+
+
+def _offer_line(event: note.EventInfo, offer: note.OfferInfo, *, rich: bool) -> str:
+    """ "Sam is picking up Siam Garden for lunch at 12:30 PM." With ``rich``, mrkdwn with the
+    item linked and the time in bold; otherwise plain words, unescaped."""
+    at = local_clock(offer.at, event.timezone)
+    if not rich:
+        return f"{offer.offerer.name} {OFFER_VERBS[offer.mode]} {offer.item.name} for {_slot(event)} at {at}."
+    who = escape(offer.offerer.name)
+    return f"{who} {OFFER_VERBS[offer.mode]} *{_item_name(offer.item)}* for {_slot(event)} at *{at}*."
+
+
+def _offer_status(event: note.EventInfo, offer: note.OfferInfo) -> str:
+    """Plain words: escape before putting it in a block."""
+    match event.state:
+        case EventState.COLLECTING if offer.full:
+            return "It's full. Thanks, everyone!"
+        case EventState.COLLECTING:
+            return f"{plural(offer.seats_left, 'serving')} spare. Tap Count me in to join."
+        case EventState.DECIDED:
+            return "It's on! No more seats."
+        case EventState.DONE:
+            return f"Done. Thanks, {offer.offerer.name}!"
+        case EventState.CANCELLED if event.ended_by is not None:
+            reason = f" “{event.end_note}”" if event.end_note else ""
+            return f"Called off by {event.ended_by.name}.{reason}"
+        case _:
+            return "This offer ended."
+
+
+def _offer_roster(roster: tuple[note.RosterEntry, ...], offer: note.OfferInfo, ctx: RenderContext) -> str:
+    eating = [e for e in roster if e.status is Status.IN]
+    people = sum(1 + e.guests for e in eating)
+    lines = [f"*Eating* · {plural(people, 'person', 'people')}"]
+    for entry in eating:
+        line = f"• {ctx.directory.mention(entry.member)}"
+        if entry.guests:
+            line += f" · +{plural(entry.guests, 'guest')}"
+        lines.append(line)
+    if offer.dietary_notes:
+        lines.append(f"*Guests' dietary needs:* {escape(', '.join(offer.dietary_notes))}")
+    return join_lines(lines)
+
+
+def offer_buttons(event: note.EventInfo, offer: note.OfferInfo) -> list[Block]:
+    """The offer message's buttons. Everyone sees the same message, so they name no one's own
+    state: **Count me in** joins or drops out, and **+1 guest** adds one, while seats are left;
+    once it's full only **Can't make it** stays, to free a seat (spec section 10)."""
+    value = ids.card_value(event.id, event.run)
+    if event.state is EventState.COLLECTING and not offer.full:
+        return [
+            button(
+                "Count me in",
+                ids.JOIN_OFFER,
+                value,
+                style="primary",
+                accessibility_label=f"Join {offer.offerer.name}'s {_slot(event)} offer, or tap again to drop out",
+            ),
+            button("+1 guest", ids.ADD_GUEST, value),
+        ]
+    if event.state is EventState.COLLECTING:
+        return [button(CANT_MAKE_IT, ids.LEAVE_OFFER, value)]
+    if event.state is EventState.DECIDED:
+        return [mark_done_button(event)]
+    if event.state is EventState.DONE:
+        return [feedback_button(event)]
+    return []
+
+
+def offer_message(notification: note.OfferPosted | note.OfferUpdated, ctx: RenderContext) -> Message:
+    """The offer message (spec section 10): offerer, item, mode, time, spare servings, and who's
+    eating, with **Count me in** and **+1 guest** until it's full or its time."""
+    event, offer = notification.event, notification.offer
+    status = _offer_status(event, offer)
+    top = _offer_line(event, offer, rich=True) + "\n" + escape(status)
+    if event.state is EventState.CANCELLED:
+        top = f"~{_offer_line(event, offer, rich=True)}~\n{escape(status)}"
+    blocks: list[Block] = [header(_title(event)), section(top), section(_offer_roster(notification.roster, offer, ctx))]
+    buttons = offer_buttons(event, offer)
+    buttons += _item_buttons(offer.item, offer.mode)
+    buttons.append(_web_button(ctx, event))
+    if event.state in {EventState.COLLECTING, EventState.DECIDED}:
+        buttons.append(button(CALL_OFF, ids.CANCEL_CALL, ids.menu_value(ids.MenuChoice.CANCEL, event.id, event.run)))
+    blocks.append(actions(*buttons, block_id="more"))
+    return _finish(f"{_offer_line(event, offer, rich=False)} {status}", blocks)
+
+
+def offer_full_message(notification: note.OfferFull, ctx: RenderContext) -> Message:
+    """To whoever made the offer, once, when the last seat goes (spec section 9)."""
+    event, offer = notification.event, notification.offer
+    eating = plural(offer.taken, "person", "people")
+    lines = [
+        f"Your {_slot(event)} offer is full, {escape(notification.member.name)}: *{eating}* joining you for "
+        f"*{_item_name(offer.item)}* at {local_clock(offer.at, event.timezone)}. Thanks for sharing!"
+    ]
+    if offer.dietary_notes:
+        lines.append(f"*Guests' dietary needs:* {escape(', '.join(offer.dietary_notes))}")
+    blocks = [section(join_lines(lines)), actions(_web_button(ctx, event), block_id="more")]
+    return _finish(f"Your {_slot(event)} offer is full: {eating} joining you.", blocks)
 
 
 DISCARDED = "Discarded (test)"

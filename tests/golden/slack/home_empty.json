@@ -19,6 +19,16 @@
       "block_id": "start",
       "elements": [
         {
+          "action_id": "make_offer",
+          "text": {
+            "emoji": true,
+            "text": "Make an offer",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "make_offer"
+        },
+        {
           "action_id": "start_call_dinner",
           "text": {
             "emoji": true,

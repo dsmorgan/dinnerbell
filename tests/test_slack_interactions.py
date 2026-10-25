@@ -373,7 +373,15 @@ async def test_home_shows_todays_calls_and_quick_buttons(slack: Slack, house: Ho
     text = json.dumps(home)
     assert "You're in." in text
     actions = [e["action_id"] for b in home["blocks"] if b["type"] == "actions" for e in b["elements"]]
-    assert actions == ["respond_in", "respond_maybe", "respond_out", "details", "link_event", "start_call_lunch"]
+    assert actions == [
+        "respond_in",
+        "respond_maybe",
+        "respond_out",
+        "details",
+        "link_event",
+        "make_offer",
+        "start_call_lunch",
+    ]
 
 
 async def test_home_buttons_act_and_republish_with_a_notice(slack: Slack, house: House) -> None:
@@ -422,8 +430,6 @@ async def test_home_republish_failure_after_an_action_is_logged(
         ("prefs", "https://dinnerbell.test/preferences"),
         ("catalog", "https://dinnerbell.test/catalog"),
         ("history", "https://dinnerbell.test/history"),
-        ("log", "coming soon"),
-        ("offer", "coming soon"),
         ("what", "`/dinnerbell call` starts a dinner call"),
     ],
 )
