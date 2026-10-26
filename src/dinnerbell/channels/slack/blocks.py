@@ -252,9 +252,13 @@ def version_link(version: str) -> str:
     return link(f"{REPO_URL}/releases/tag/v{release}", "release notes")
 
 
+FOOTER_BLOCKS = 1
+"""How many blocks ``with_version_footer`` adds, which a Home tab leaves room for."""
+
+
 def with_version_footer(view: dict[str, Any], version: str, label: str = "") -> dict[str, Any]:
     """``view``, a Home tab, with the version at the bottom. A view that's already full is
     returned as it is: its last block may be a call's buttons."""
-    if len(view["blocks"]) >= MAX_VIEW_BLOCKS:
+    if len(view["blocks"]) > MAX_VIEW_BLOCKS - FOOTER_BLOCKS:
         return view
     return {**view, "blocks": [*view["blocks"], context(version_line(version, label))]}

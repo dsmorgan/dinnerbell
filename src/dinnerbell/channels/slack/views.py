@@ -17,6 +17,7 @@ from typing import Any
 
 from dinnerbell.channels.slack import ids
 from dinnerbell.channels.slack.blocks import (
+    FOOTER_BLOCKS,
     MAX_MODAL_TITLE,
     MAX_OPTIONS,
     MAX_VIEW_BLOCKS,
@@ -75,6 +76,9 @@ VALUE = "value"
 """Every input's action ID; blocks are told apart by block ID."""
 STATUS_WORDS = {Status.IN: "You're in.", Status.MAYBE: "You said maybe.", Status.OUT: "You're out this time."}
 OFFER_WORDS = {RoleOffer.COOK: "cook", RoleOffer.PICKUP: "pick up", RoleOffer.ORDER: "order"}
+MAX_OLDER_CALLS = 3
+"""Calls still open from earlier days that Home shows below today's (#51). They're rare, since
+the scheduler closes old calls, so the rest are left to the web."""
 
 
 def _modal(
@@ -747,17 +751,50 @@ def _awaiting(awaiting: Sequence[Awaiting], links: HomeLinks) -> list[Block]:
     return blocks
 
 
-def _guest_home(head: list[Block], current: list[list[Block]], links: HomeLinks) -> dict[str, Any]:
-    blocks = list(head)
-    for card in current[: (MAX_VIEW_BLOCKS - len(head) - 4) // 2]:
-        blocks += card
-    if not current:
+def _fit(cards: Sequence[list[Block]], room: int, heading: str = "") -> tuple[list[Block], int]:
+    """As many of ``cards`` as fit in ``room`` blocks, whole and in order, under ``heading`` if
+    any fit: their blocks, and how many cards that is. A card never loses its buttons."""
+    blocks: list[Block] = []
+    for shown, card in enumerate(cards):
+        title = [section(heading)] if heading and not blocks else []
+        if len(title) + len(card) > room:
+            return blocks, shown
+        blocks += [*title, *card]
+        room -= len(title) + len(card)
+    return blocks, len(cards)
+
+
+def _older(cards: Sequence[list[Block]], room: int, web: str) -> list[Block]:
+    """Calls still open from earlier days (#51): at most ``MAX_OLDER_CALLS`` of them, as many as
+    fit in ``room`` blocks, and a line linking ``web`` for the rest. ``room`` leaves out that line."""
+    blocks, shown = _fit(cards[:MAX_OLDER_CALLS], room, "*Still open from earlier days*")
+    more = len(cards) - shown
+    if more and shown:
+        blocks.append(context(f"…and {plural(more, 'more open call')} on {web}."))
+    elif more:
+        blocks.append(
+            context(f"{plural(more, 'open call')} from earlier days {'is' if more == 1 else 'are'} on {web}.")
+        )
+    return blocks
+
+
+def _guest_home(
+    head: list[Block], current: list[list[Block]], older: list[list[Block]], links: HomeLinks
+) -> dict[str, Any]:
+    web = f"<{links.url('/')}|Your invitations on the web>"
+    tail = [divider(), context(f"<{links.url('/me')}|Your dietary needs> · {web}")]
+    empty = not current and not older
+    # Room for the version footer, the empty line, and a line for each "…and N more".
+    room = MAX_VIEW_BLOCKS - FOOTER_BLOCKS - len(head) - len(tail) - (1 if empty else 0) - 1 - (1 if older else 0)
+    now, shown = _fit(current, room)
+    blocks = [*head, *now]
+    if empty:
         blocks.append(section("No invitations right now. When a member invites you to a meal, it shows here."))
-    blocks += [
-        divider(),
-        context(f"<{links.url('/me')}|Your dietary needs> · <{links.url('/')}|Your invitations on the web>"),
-    ]
-    return {"type": "home", "blocks": blocks}
+    hidden = len(current) - shown
+    if hidden:
+        blocks.append(context(f"…and {hidden} more on {web}."))
+    blocks += _older(older, 0 if hidden else room - len(now), web)
+    return {"type": "home", "blocks": [*blocks, *tail]}
 
 
 def home_view(
@@ -774,19 +811,27 @@ def home_view(
     shows only the calls they're invited to, with In, Out, and what they may do, and none of
     the household's buttons or links (#38).
 
-    It leaves room for the version footer (``blocks.with_version_footer``) within Slack's 100
-    blocks, and keeps the start buttons and the links at the bottom: when calls and offers
-    don't all fit, the ones that don't are left to the web, and a line says how many."""
+    Today's calls and offers come first, then the start buttons, the calls coming up, and at
+    most ``MAX_OLDER_CALLS`` calls still open from earlier days, newest first (#51). It leaves
+    room for the version footer (``blocks.with_version_footer``) within Slack's 100 blocks, and
+    keeps the start buttons and the links: when cards don't all fit, the least important ones
+    are left to the web, whole, and a line says how many."""
     title = f"Today · {day_label(today.today)}"
     head: list[Block] = [header(f"{label} · {title}" if label else title)]
     if notice:
         head.append(section(f"*{escape(clip(notice, 500))}*"))
-    current = [
-        _offer_card(v, v.offer, links, today.today)
-        if v.offer is not None
-        else _event_card(v, links, today.today, guest=guest)
-        for v in today.current
-    ]
+
+    def card(v: EventView) -> list[Block]:
+        if v.offer is not None:
+            return _offer_card(v, v.offer, links, today.today)
+        return _event_card(v, links, today.today, guest=guest)
+
+    # Today's, and any posted early for a later day (#59), in the order they came.
+    current = [card(v) for v in today.current if v.event.day >= today.today]
+    left_over = [v for v in today.current if v.event.day < today.today]
+    older = [card(v) for v in sorted(left_over, key=lambda v: v.event.day, reverse=True)]
+    if guest:
+        return _guest_home(head, current, older, links)
     upcoming = [_upcoming_card(v, links) for v in today.upcoming]
     todays = [v.event for v in today.events if v.event.day == today.today]
     # A cooking offer stands in for that slot's call (FR-5), so there's no call to start.
@@ -798,40 +843,32 @@ def home_view(
             starts.append(button(f"Start {slot.value} again", ids.ACTION_FOR_START[slot], slot.value))
         elif slot not in started:
             starts.append(button(f"Start a {slot.value} call", ids.ACTION_FOR_START[slot], slot.value))
+    web = f"<{links.url('/')}|Today on the web>"
     tail: list[Block] = [
         *_awaiting(awaiting, links),
         divider(),
         context(
             f"<{links.url('/preferences')}|Your preferences> · <{links.url('/catalog')}|Catalog> · "
-            f"<{links.url('/history')}|History> · <{links.url('/')}|Today on the web>"
+            f"<{links.url('/history')}|History> · {web}"
         ),
     ]
-    if guest:
-        return _guest_home(head, current, links)
-    # One block for the footer, one for the start buttons, and one for "…and N more".
-    room = MAX_VIEW_BLOCKS - 1 - len(head) - 1 - len(tail) - 1 - (1 if upcoming else 0) - (0 if current else 1)
-    blocks = list(head)
-    shown = 0
-    for card in current:
-        if len(card) > room:
-            break
-        blocks += card
-        room -= len(card)
-        shown += 1
+    # Room for the version footer, the start buttons, "No calls today yet.", and a line for
+    # each "…and N more".
+    fixed = FOOTER_BLOCKS + len(head) + 1 + len(tail) + (0 if current else 1) + 1 + (1 if older else 0)
+    room = MAX_VIEW_BLOCKS - fixed
+    now, shown = _fit(current, room)
+    room -= len(now)
+    blocks = [*head, *now]
     if not current:
         blocks.append(section("No calls today yet."))
     blocks.append(actions(*starts, block_id="start"))
-    later: list[Block] = []
-    for card in upcoming:
-        if shown < len(current) or len(card) > room:
-            break
-        later += card
-        room -= len(card)
-        shown += 1
-    if later:
-        blocks += [section("*Coming up*"), *later]
-    hidden = len(current) + len(upcoming) - shown
+    # Nothing less important shows while something more important is left out.
+    later, shown_later = _fit(upcoming, room, "*Coming up*") if shown == len(current) else ([], 0)
+    room -= len(later)
+    blocks += later
+    hidden = len(current) + len(upcoming) - shown - shown_later
     if hidden:
-        blocks.append(context(f"…and {hidden} more on <{links.url('/')}|Today on the web>."))
+        blocks.append(context(f"…and {hidden} more on {web}."))
+    blocks += _older(older, 0 if hidden else room, web)
     blocks += tail
     return {"type": "home", "blocks": blocks}
