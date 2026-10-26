@@ -420,7 +420,10 @@ async def test_a_card_value_this_app_didnt_write_is_refused(slack: Slack, house:
 # A card for a call that has moved on ----------------------------------------------------------------
 
 
-async def test_a_card_after_responses_close_says_the_call_moved_on(slack: Slack, house: House) -> None:
+async def test_a_card_after_responses_close_says_the_call_moved_on(
+    slack: Slack, house: House, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO, logger="dinnerbell")
     event_id = await open_call(house)
     await slack.click("Alex", "offer_pickup", str(event_id))
     await slack.click("Kim", "respond_in", str(event_id))
@@ -437,6 +440,16 @@ async def test_a_card_after_responses_close_says_the_call_moved_on(slack: Slack,
     assert "Your answer: *In*" in text_of(replaced.args)
     assert action_ids(replaced.args) == ["link_event"]
     assert "closed" not in text_of(replaced.args)  # the card says it once, not with the rule's words too
+    # #74: why the tap changed nothing isn't swallowed: it's a private line of its own, and logged.
+    assert slack.ephemerals("Kim") == ["Responses are closed for this call."]
+    (refused,) = [r for r in caplog.records if r.getMessage() == "slack card tap refused"]
+    assert (refused.levelno, refused.member_id, refused.event_id, refused.reason, refused.refusal) == (  # type: ignore[attr-defined]
+        logging.INFO,
+        house["Kim"].id,
+        event_id,
+        "moved_on",
+        "Responses are closed for this call.",
+    )
 
 
 async def test_a_card_from_before_a_restart_doesnt_answer_the_new_run(slack: Slack, house: House) -> None:
@@ -551,7 +564,7 @@ async def test_a_reminder_tapped_after_the_call_moved_on_says_so(slack: Slack, h
     assert await response(house, event_id, "Lee") == (None, frozenset())
     (update,) = slack.fake.of("chat.update")
     assert f"*{MOVED_ON}*" in text_of(update.args) and action_ids(update.args) == ["link_event"]
-    assert slack.fake.of("chat.postEphemeral") == []
+    assert slack.ephemerals("Lee") == ["Responses are closed for this call."]  # not swallowed (#74)
 
 
 async def test_a_reminder_slack_wont_edit_still_answers(slack: Slack, house: House) -> None:

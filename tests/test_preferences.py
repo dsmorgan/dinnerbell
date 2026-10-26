@@ -135,6 +135,10 @@ def test_settings(client: TestClient, provider: FakeProvider, migrated: Settings
     me = member(migrated, "admin@example.com")
     assert (me.can_cook, me.can_order, me.mute_dm_reminders, me.feedback_reminder) == (False, False, True, False)
     assert 'name="mute_dm_reminders" checked' in client.get("/preferences").text
+    # Pick up doesn't read as volunteering for today's call (#74): only an offer on the call does.
+    assert "this doesn't volunteer you: to pick up for a call, tap I can pick up on it" in page(
+        client.get("/preferences")
+    )
 
 
 # Privacy (FR-29) ------------------------------------------------------------------------------------

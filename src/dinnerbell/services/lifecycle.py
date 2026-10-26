@@ -30,7 +30,6 @@ from dinnerbell.domain.catalog import CatalogItem, ItemKind, Mode
 from dinnerbell.domain.events import (
     MAX_PROPOSALS,
     MIN_HEAD_COUNT,
-    MODE_ROLE,
     EndReason,
     Event,
     EventRuleViolation,
@@ -367,8 +366,11 @@ def guest_needs(ctx: CallContext) -> frozenset[int]:
     return ctx.guest_needs
 
 
-async def ranking_snapshot(db: AsyncSession, ctx: CallContext, group: GroupPreferences) -> RankingSnapshot:
-    """Spec section 7's inputs for this call, as of the call's date."""
+async def ranking_snapshot(
+    db: AsyncSession, ctx: CallContext, group: GroupPreferences, *, taken: frozenset[int] = frozenset()
+) -> RankingSnapshot:
+    """Spec section 7's inputs for this call, as of the call's date. ``taken`` holds the items
+    that are picks already, which ranking leaves out (#77)."""
     household_id, day = ctx.event.household_id, ctx.event.day
     window = await variety_window(db, household_id, day)
     who = ctx.veto_people
@@ -391,13 +393,15 @@ async def ranking_snapshot(db: AsyncSession, ctx: CallContext, group: GroupPrefe
         member_names={m.id: m.display_name for m in ctx.members.values()},
         cuisine_names={t.id: t.name for t in ctx.tags.values()},
         limit=proposal_count(ctx.settings),
+        taken=taken,
     )
 
 
 async def _close_responses(db: AsyncSession, event: Event, now: datetime) -> None:
     """The response deadline: rank with everyone who might eat, turn maybes out and tell them,
     then abandon (fewer than two, or nothing fits) or open voting. Picks that offers added while
-    responses were open (FR-5) stay if they still fit, after the ranked ones. Before the deadline,
+    responses were open (FR-5) stay if they still fit, after the ranked ones; ranking leaves their
+    places out and still proposes its usual number (#77). Before the deadline,
     because everyone answered (FR-56), the deadline moves to now first, so voting gets its
     usual length from now, as when the coordinator closes the window."""
     if now < event.respond_deadline:
@@ -407,10 +411,9 @@ async def _close_responses(db: AsyncSession, event: Event, now: datetime) -> Non
     ctx = await load(db, event)
     group = await group_preferences(db, event.household_id, ctx.veto_people)
     attached = await _keep_attached(db, ctx, group, now)
-    taken = {(p.item_id, p.mode) for p in attached}
-    snapshot = await ranking_snapshot(db, ctx, group)
-    ranked = [r for r in rank(snapshot) if (r.item_id, r.mode) not in taken]
-    ranked = ranked[: max(MAX_PROPOSALS - len(attached), 0)]  # FR-13: at most 10 picks in all
+    taken = frozenset(p.item_id for p in attached if p.item_id is not None)
+    snapshot = await ranking_snapshot(db, ctx, group, taken=taken)
+    ranked = rank(snapshot)[: max(MAX_PROPOSALS - len(attached), 0)]  # FR-13: at most 10 picks in all
     resolved = resolve_maybes(ctx.responses)
     for response in resolved:
         await ResponseRepository(db).save(event.household_id, event.id, response, now)
@@ -545,8 +548,13 @@ def misfit(ctx: CallContext, proposal: Proposal, group: GroupPreferences) -> str
             return DOESNT_FIT
         cooks = frozenset()
     if not ctx.coverage.covers(proposal.mode, cooks):
-        return f"Nobody who's in offered to {MODE_ROLE[proposal.mode].value} for that."
+        return not_covered(proposal.mode)
     return None
+
+
+def not_covered(mode: Mode) -> str:
+    """``misfit``'s reason when nobody who's in can take ``mode``'s role (FR-17)."""
+    return f"Nobody who's in offered to {mode.verb} for that."
 
 
 async def _as_catalog_item(db: AsyncSession, ctx: CallContext, proposal: Proposal) -> Proposal:
@@ -583,7 +591,9 @@ async def _catalog_free_text(db: AsyncSession, ctx: CallContext, proposal: Propo
         item = await repo.add_item(household_id, values, created_by=proposal.proposed_by, now=now)
         payload = {"name": name, "kind": kind.value, "from_proposal": proposal.id}
         await audit(db, household_id, None, "catalog.item_created", f"item:{item.id}", payload, now)
-    if not any(p.item_id == item.id and p.mode is proposal.mode for p in ctx.proposals):
+    # One pick per place (#77). Defensive: a call can hold a pick for this item besides the
+    # free text only from 0.5.0 or earlier, since adding either one now refuses the other.
+    if not any(p.item_id == item.id for p in ctx.proposals):
         await ProposalRepository(db).link_item(household_id, proposal.id, item.id)
     return item
 

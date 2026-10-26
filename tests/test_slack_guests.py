@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -13,15 +14,16 @@ import pytest
 
 from dinnerbell.channels.slack import ids
 from dinnerbell.channels.slack.interactions import JOIN_OFFER, JOINED, UNKNOWN_USER
+from dinnerbell.channels.slack.messages import MOVED_ON
 from dinnerbell.config import Settings
 from dinnerbell.db.repositories import MemberRepository
-from dinnerbell.domain.events import GUESTS_DONT, RoleOffer, Status
+from dinnerbell.domain.events import GUESTS_DONT, EventState, RoleOffer, Status
 from dinnerbell.domain.guests import REFUSED, GuestAction
 from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.members import Member, Role
 from dinnerbell.services import calls, guests
 from dinnerbell.services.database import Database, open_database
-from tests.support.calls import OPENS, House, dinner_id, furnish, make_house
+from tests.support.calls import OPENS, RESPOND_BY, House, dinner_id, furnish, make_house
 from tests.support.clock import FakeClock
 from tests.support.fake_slack import CHANNEL, OTHER_TEAM, send, state, view_submission
 from tests.support.slack import SLACK_IDS, Slack, wire
@@ -291,6 +293,37 @@ async def test_a_member_invites_from_the_card_and_answers_for_their_guest(slack:
     assert (await house.context(event_id)).response_of(house["Jo"].id).status is Status.IN  # type: ignore[union-attr]
     await slack.click("Kim", "guest_out", ids.guest_value(event_id, 2, house["Jo"].id), ephemeral=True)  # another run
     assert (await house.context(event_id)).response_of(house["Jo"].id).status is Status.IN  # type: ignore[union-attr]
+
+
+async def test_a_guest_tap_on_a_card_after_responses_close_shows_why(
+    slack: Slack, house: House, caplog: pytest.LogCaptureFixture
+) -> None:
+    """#74: the card says the call moved on, and the refusal it used to swallow follows in a
+    private line, logged at info."""
+    caplog.set_level(logging.INFO, logger="dinnerbell")
+    event_id = await open_dinner(house)
+    for name in ("Alex", "Kim"):
+        await slack.click(name, "respond_in", str(event_id))
+    await slack.click("Alex", "offer_pickup", str(event_id))
+    async with house.sessionmaker() as db:
+        await guests.invite(db, house["Kim"], event_id, guest_id=house["Jo"].id, now=house.clock())
+    house.clock.now = RESPOND_BY
+    await house.tick()
+    assert (await house.event(event_id)).state is EventState.VOTING
+    slack.fake.clear()
+    await slack.click("Kim", "guest_out", ids.guest_value(event_id, 1, house["Jo"].id), ephemeral=True)
+    assert (await house.context(event_id)).response_of(house["Jo"].id).status is Status.IN  # type: ignore[union-attr]
+    assert f"*{MOVED_ON}*" in json.dumps(slack.cards("Kim")[-1])
+    refusal = slack.ephemerals("Kim")[-1]
+    assert refusal == "Responses are closed for this call."
+    (logged,) = [r for r in caplog.records if r.getMessage() == "slack card tap refused"]
+    assert (logged.levelno, logged.member_id, logged.event_id, logged.reason, logged.refusal) == (  # type: ignore[attr-defined]
+        logging.INFO,
+        house["Kim"].id,
+        event_id,
+        "moved_on",
+        refusal,
+    )
 
 
 async def test_an_invite_modal_naming_someone_new(slack: Slack, house: House) -> None:

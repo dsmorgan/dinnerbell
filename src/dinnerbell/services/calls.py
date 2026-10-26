@@ -38,7 +38,6 @@ from dinnerbell.domain.catalog import (
     ItemKind,
     Mode,
     TagKind,
-    name_key,
     normalize_item_name,
 )
 from dinnerbell.domain.events import (
@@ -55,6 +54,7 @@ from dinnerbell.domain.events import (
     RoleOffer,
     Status,
     Window,
+    can_do,
     check_ad_hoc_day,
     check_can_cancel,
     check_can_close_window,
@@ -69,12 +69,14 @@ from dinnerbell.domain.events import (
     check_details,
     check_expected_window,
     check_handoff,
+    check_in_to_add,
     check_proposal_room,
     check_run,
     check_skip_day,
     clean_cancel_note,
     friendly,
     is_coordinator,
+    not_on_cook_list,
     transition,
     with_details,
     with_offer,
@@ -87,7 +89,7 @@ from dinnerbell.domain.notifications import CALL_OFF_SUPERSEDES, SUPERSEDED_BY_C
 from dinnerbell.domain.schedule import slot_schedule
 from dinnerbell.services import call_context as cc
 from dinnerbell.services import guests as guest_rules
-from dinnerbell.services import lifecycle
+from dinnerbell.services import lifecycle, picks
 from dinnerbell.services.call_context import CallContext, load, locked_event, publish
 from dinnerbell.services.common import audit, is_unique_violation, require_admin
 from dinnerbell.services.errors import NotFound
@@ -355,17 +357,29 @@ async def add_proposal(
     now: datetime,
 ) -> Proposal:
     """FR-13: a catalog item, or free text with a cuisine, during the vote window. A proposal
-    must pass the same filters ranking applies (ADR 0005: a veto is a guarantee)."""
+    must pass the same filters ranking applies (ADR 0005: a veto is a guarantee). Whoever adds it
+    does it (#74): they must be in, and they offer the role its mode needs before it's checked,
+    as an offer does (``picks.volunteer``). The exception is a home meal whose cook list they're
+    not on: it's added if a cook on the list who's in offered to cook, and they take no role. A
+    call has one pick per place, in any mode (#77)."""
     async with locked_event(db, actor.household_id, event_id, now) as event:
         await guest_rules.gate(db, event, actor, GuestAction.PROPOSE)
         check_can_propose(event, actor)
         ctx = await load(db, event)
+        check_in_to_add(ctx.response_of(actor.id))
         check_proposal_room(ctx.proposals, actor)
         item = await _proposed_item(db, ctx, mode, item_id, free_text)
         candidate = _candidate(ctx, actor, mode, item, free_text, cuisine_id)
-        _check_not_proposed(ctx, candidate)
+        existing = picks.picked(ctx, candidate)
+        if existing is not None:
+            raise picks.already_a_pick(ctx, existing)
+        doer = can_do(item, mode, actor.id)
+        if doer:
+            ctx = await picks.volunteer(db, ctx, actor, mode, join=False, now=now)
         group = await group_preferences(db, actor.household_id, ctx.veto_people)
         problem = lifecycle.misfit(ctx, candidate, group)
+        if problem is not None and item is not None and not doer and problem == lifecycle.not_covered(mode):
+            problem = not_on_cook_list(item, "Ask a cook on it to add it")
         if problem is not None:
             raise EventRuleViolation(problem)
         proposal = await ProposalRepository(db).add(
@@ -381,8 +395,7 @@ async def add_proposal(
             proposed_by=actor.id,
             now=now,
         )
-        ctx = await load(db, event)
-        await publish(db, ctx, cc.proposals_updated(ctx), now=now)
+        await picks.announce(db, event, now=now)
         return proposal
 
 
@@ -419,18 +432,6 @@ def _candidate(
         raise EventRuleViolation("Pick a cuisine for it, so variety and vetoes still work.")
     name = _free_name(free_text)
     return Proposal(0, ctx.event.id, mode, 0, source, free_text=name, free_cuisine_id=tag.id, reasons=reasons)
-
-
-def _check_not_proposed(ctx: CallContext, candidate: Proposal) -> None:
-    for existing in ctx.proposals:
-        if existing.mode is not candidate.mode:
-            continue
-        same_item = candidate.item_id is not None and existing.item_id == candidate.item_id
-        same_text = candidate.free_text is not None and name_key(existing.free_text or "") == name_key(
-            candidate.free_text
-        )
-        if same_item or same_text:
-            raise EventRuleViolation("That's already proposed. Vote for it instead.")
 
 
 def _proposal_in(ctx: CallContext, proposal_id: int) -> Proposal:

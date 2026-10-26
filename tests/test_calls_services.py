@@ -275,27 +275,31 @@ async def test_a_decision_skips_proposals_vetoed_since_ranking(house: House) -> 
 
 
 async def test_members_add_catalog_and_free_text_proposals(house: House) -> None:
-    event_id = await to_voting(house)
+    event_id = await to_voting(house)  # Alex and Sam are in; Siam Garden and Taqueria are picks, for pickup
     taqueria = house.items["Taqueria"].id
-    with pytest.raises(EventRuleViolation, match="already proposed"):
+    with pytest.raises(EventRuleViolation, match="You're not in for this call"):
         await act(house, calls.add_proposal, house["Kim"], event_id, Mode.PICKUP, item_id=taqueria)
-    with pytest.raises(EventRuleViolation, match="isn't available by delivery"):
-        await act(house, calls.add_proposal, house["Kim"], event_id, Mode.DELIVERY, item_id=taqueria)
-    with pytest.raises(EventRuleViolation, match="Nobody who's in offered to order"):
+    with pytest.raises(EventRuleViolation, match=r"^Taqueria is already a pick \(pickup\). Vote for it instead.$"):
+        await act(house, calls.add_proposal, house["Sam"], event_id, Mode.PICKUP, item_id=taqueria)
+    # One pick per place, whatever the mode (#77).
+    with pytest.raises(EventRuleViolation, match=r"^Siam Garden is already a pick \(pickup\)"):
         await act(
-            house, calls.add_proposal, house["Kim"], event_id, Mode.DELIVERY, item_id=house.items["Siam Garden"].id
+            house, calls.add_proposal, house["Sam"], event_id, Mode.DELIVERY, item_id=house.items["Siam Garden"].id
         )
+    noodles = await house.add_item("Noodle Bar", Mode.PICKUP, cuisine="Thai")
+    with pytest.raises(EventRuleViolation, match="isn't available by delivery"):
+        await act(house, calls.add_proposal, house["Sam"], event_id, Mode.DELIVERY, item_id=noodles.id)
     with pytest.raises(EventRuleViolation, match="Pick a cuisine"):
-        await act(house, calls.add_proposal, house["Kim"], event_id, Mode.PICKUP, free_text="Pho Place")
+        await act(house, calls.add_proposal, house["Sam"], event_id, Mode.PICKUP, free_text="Pho Place")
     with pytest.raises(EventRuleViolation, match="Enter a name"):
-        await act(house, calls.add_proposal, house["Kim"], event_id, Mode.PICKUP, free_text="  ", cuisine_id=1)
+        await act(house, calls.add_proposal, house["Sam"], event_id, Mode.PICKUP, free_text="  ", cuisine_id=1)
     with pytest.raises(EventRuleViolation, match="isn't in the catalog"):
-        await act(house, calls.add_proposal, house["Kim"], event_id, Mode.PICKUP, item_id=999_999)
+        await act(house, calls.add_proposal, house["Sam"], event_id, Mode.PICKUP, item_id=999_999)
     vietnamese = await house.tag("Vietnamese")
     added = await act(
         house,
         calls.add_proposal,
-        house["Kim"],
+        house["Sam"],
         event_id,
         Mode.PICKUP,
         free_text=" Pho  Place ",
@@ -304,25 +308,26 @@ async def test_members_add_catalog_and_free_text_proposals(house: House) -> None
     assert (added.free_text, added.rank, added.reasons, added.proposed_by) == (
         "Pho Place",
         3,
-        ("Added by Kim.",),
-        house["Kim"].id,
+        ("Added by Sam.",),
+        house["Sam"].id,
     )
-    with pytest.raises(EventRuleViolation, match="already proposed"):
-        await act(
-            house,
-            calls.add_proposal,
-            house["Sam"],
-            event_id,
-            Mode.PICKUP,
-            free_text="pho place",
-            cuisine_id=vietnamese.id,
-        )
+    for mode in (Mode.PICKUP, Mode.DELIVERY):
+        with pytest.raises(EventRuleViolation, match=r"^Pho Place is already a pick \(pickup\)"):
+            await act(
+                house,
+                calls.add_proposal,
+                house["Alex"],
+                event_id,
+                mode,
+                free_text="pho place",
+                cuisine_id=vietnamese.id,
+            )
     # Free text naming a catalog item proposes that item.
-    with pytest.raises(EventRuleViolation, match="already proposed"):
+    with pytest.raises(EventRuleViolation, match="Taqueria is already a pick"):
         await act(
             house,
             calls.add_proposal,
-            house["Sam"],
+            house["Alex"],
             event_id,
             Mode.PICKUP,
             free_text="taqueria",
@@ -383,7 +388,7 @@ async def test_proposals_respect_vetoes_and_guest_needs_without_naming_anyone(
         (house["Alex"], {"free_text": "Jade", "cuisine_id": house.tags["Thai"].id}),  # free text with a guest need
         (house["Alex"], {"item_id": house.items["Kimchi House"].id}),  # Kim's tag veto
         (house["Kim"], {"item_id": house.items["Leaf"].id}),  # Lee's item veto
-        (house["Sam"], {"free_text": "Bibim", "cuisine_id": korean.id}),  # Kim's veto, on free text
+        (house["Lee"], {"free_text": "Bibim", "cuisine_id": korean.id}),  # Kim's veto, on free text
     ]
     messages = set()
     for proposer, target in refusals:
@@ -395,9 +400,9 @@ async def test_proposals_respect_vetoes_and_guest_needs_without_naming_anyone(
     for name in ("Kim", "Lee", "Korean", "Vegan", "Leaf"):
         assert name not in " ".join(messages)
         assert name not in ours
-    # Coverage reasons stay specific: they reveal nothing private.
-    curry = await house.add_item("Sprout Curry", Mode.COOK, cuisine="Thai", tags=("Vegan",))
-    with pytest.raises(EventRuleViolation, match="Nobody who's in offered to cook"):
+    # A cook list's refusal stays specific: it reveals nothing private.
+    curry = await house.add_item("Sprout Curry", Mode.COOK, cuisine="Thai", tags=("Vegan",), cooks=("Sam",))
+    with pytest.raises(EventRuleViolation, match="Sprout Curry has a cook list, and you're not on it"):
         await act(house, calls.add_proposal, house["Alex"], event_id, Mode.COOK, item_id=curry.id)
 
 
@@ -1040,7 +1045,7 @@ async def test_rerun_is_refused_late_in_the_evening_and_keeps_a_later_days_timin
 
 async def test_proposals_are_capped_per_call_and_per_member(house: House) -> None:
     """Regression: nothing stopped one member, or everyone, from flooding a call with proposals."""
-    event_id = await to_voting(house)  # two ranked proposals
+    event_id = await to_voting(house, eaters=("Alex", "Sam", "Kim", "Lee"))  # two ranked proposals
     thai = house.tags["Thai"].id
 
     async def propose(name: str, text: str) -> Any:

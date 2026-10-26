@@ -40,7 +40,7 @@
   <fieldset class="field">
     <legend>I can usually</legend>
     <label class="check"><input type="checkbox" name="can_cook"{% if me.capabilities.can_cook %} checked{% endif %}> Cook</label>
-    <label class="check"><input type="checkbox" name="can_pickup"{% if me.capabilities.can_pickup %} checked{% endif %}> Pick up</label>
+    <label class="check"><input type="checkbox" name="can_pickup"{% if me.capabilities.can_pickup %} checked{% endif %}> Pick up <span class="small muted">(this doesn't volunteer you: to pick up for a call, tap I can pick up on it, or add a pickup pick)</span></label>
     <label class="check"><input type="checkbox" name="can_order"{% if me.capabilities.can_order %} checked{% endif %}> Order delivery</label>
   </fieldset>
   <fieldset class="field">

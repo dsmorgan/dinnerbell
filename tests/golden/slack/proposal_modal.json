@@ -10,6 +10,15 @@
       "type": "context"
     },
     {
+      "elements": [
+        {
+          "text": "You'll be the one to pick it up, cook it, or order it, whichever way you choose. A home meal with a cook list you're not on needs one of its cooks to have offered to cook.",
+          "type": "mrkdwn"
+        }
+      ],
+      "type": "context"
+    },
+    {
       "block_id": "mode",
       "element": {
         "action_id": "value",
@@ -64,7 +73,7 @@
               {
                 "text": {
                   "emoji": true,
-                  "text": "Sam's Tacos",
+                  "text": "Sam's Tacos (already a pick)",
                   "type": "plain_text"
                 },
                 "value": "11"
@@ -81,7 +90,7 @@
               {
                 "text": {
                   "emoji": true,
-                  "text": "Siam Garden",
+                  "text": "Siam Garden (already a pick)",
                   "type": "plain_text"
                 },
                 "value": "12"

@@ -34,6 +34,8 @@ class Component(StrEnum):
 
 
 COMPONENT_ORDER = tuple(Component)
+MODE_COMPONENTS = (Component.DEFAULT_MODE, Component.VOLUNTEER_FIT)
+"""The components that depend on the mode. The rest score the item, whichever way it comes."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -89,6 +91,9 @@ class RankingSnapshot:
     member_names: Mapping[int, str] = field(default_factory=dict)
     cuisine_names: Mapping[int, str] = field(default_factory=dict)
     limit: int = 3
+    taken: frozenset[int] = frozenset()
+    """Items that are picks on the call already, such as an offer's (FR-5). Ranking leaves them
+    out and fills ``limit`` from the rest, since a call has one pick per place (#77)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,12 +107,15 @@ class Ranked:
 
 
 def candidates(snapshot: RankingSnapshot) -> list[tuple[RankItem, Mode]]:
-    """Steps 1 and 2: every (item, mode) pair that passes the hard filters. Every slot allows
-    every mode in version 1; the slot's default modes earn a bonus instead."""
+    """Steps 1 and 2: every (item, mode) pair that passes the hard filters, leaving out items
+    already taken. Every slot allows every mode in version 1; the slot's default modes earn a
+    bonus instead."""
     pairs = [
         (item, mode)
         for item in snapshot.items
-        if not snapshot.preferences.vetoes(item) and snapshot.guest_needs <= item.tag_ids
+        if item.id not in snapshot.taken
+        and not snapshot.preferences.vetoes(item)
+        and snapshot.guest_needs <= item.tag_ids
         for mode in MODE_ORDER
         if mode in item.modes and snapshot.coverage.covers(mode, item.cook_ids)
     ]
@@ -144,7 +152,7 @@ def components(item: RankItem, mode: Mode, snapshot: RankingSnapshot) -> dict[Co
 def _order_key(
     item: RankItem, mode: Mode, score: float, snapshot: RankingSnapshot
 ) -> tuple[float, float, str, int, int]:
-    """Step 4: score descending, then the item eaten longest ago (never eaten first), then
+    """Step 5: score descending, then the item eaten longest ago (never eaten first), then
     name. Mode order and item ID only make the order total, so equal inputs always give equal
     output."""
     since = snapshot.last_eaten_days.get(item.id)
@@ -157,11 +165,23 @@ def _order_key(
     )
 
 
+def _mode_key(mode: Mode, parts: Mapping[Component, float]) -> tuple[float, int]:
+    """Step 4: how one way of getting an item compares with another, by the mode's own components,
+    best first, then ``MODE_ORDER``."""
+    return (-round(sum(parts[c] for c in MODE_COMPONENTS), SCORE_PLACES), MODE_ORDER.index(mode))
+
+
 def rank(snapshot: RankingSnapshot) -> list[Ranked]:
-    """The top ``snapshot.limit`` proposals, best first, each with its reasons."""
-    scored = []
+    """The top ``snapshot.limit`` proposals, best first, each with its reasons. Each item is
+    proposed once, in its best mode (``_mode_key``), so the picks are different places (#77)."""
+    best: dict[int, tuple[RankItem, Mode, dict[Component, float]]] = {}
     for item, mode in candidates(snapshot):
         parts = components(item, mode, snapshot)
+        kept = best.get(item.id)
+        if kept is None or _mode_key(mode, parts) < _mode_key(kept[1], kept[2]):
+            best[item.id] = (item, mode, parts)
+    scored = []
+    for item, mode, parts in best.values():
         score = sum(parts.values())
         scored.append((_order_key(item, mode, score, snapshot), item, mode, score, parts))
     scored.sort(key=lambda entry: entry[0])
@@ -178,13 +198,18 @@ def rank(snapshot: RankingSnapshot) -> list[Ranked]:
     ]
 
 
-# Reasons (step 5) ------------------------------------------------------------------------------
+# Reasons (step 6) ------------------------------------------------------------------------------
 
 
 def join_names(names: tuple[str, ...] | list[str]) -> str:
     if len(names) <= 2:
         return " and ".join(names)
     return f"{', '.join(names[:-1])}, and {names[-1]}"
+
+
+def usual_choice(mode: Mode) -> str:
+    """The default-mode reason, which stops being true when an offer changes a pick's mode."""
+    return f"{mode.label} is a usual choice."
 
 
 def _days_ago(days: int) -> str:
@@ -201,7 +226,7 @@ def _sentence(component: Component, item: RankItem, mode: Mode, value: float, sn
     if component is Component.NOVELTY:
         return "New to the household."
     if component is Component.DEFAULT_MODE:
-        return f"{mode.label} is a usual choice."
+        return usual_choice(mode)
     if component is Component.VOLUNTEER_FIT:
         cooks = [snapshot.member_names.get(c, "A volunteer") for c in snapshot.coverage.cooks if c in item.cook_ids]
         return f"{join_names(cooks)} offered to cook and knows this one."

@@ -288,7 +288,7 @@ async def test_add_proposal_modal_and_submission(slack: Slack, house: House) -> 
 
     # The same again is refused by the service after the modal closed.
     await slack.submit("Sam", ids.PROPOSAL_VIEW, good, event_id)
-    assert slack.ephemerals("Sam")[-1] == "That's already proposed. Vote for it instead."
+    assert slack.ephemerals("Sam")[-1] == "Enchiladas is already a pick (pickup). Vote for it instead."
 
 
 async def test_add_proposal_outside_voting_is_explained(slack: Slack, house: House) -> None:
