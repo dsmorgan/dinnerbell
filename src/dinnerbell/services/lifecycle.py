@@ -548,8 +548,13 @@ def misfit(ctx: CallContext, proposal: Proposal, group: GroupPreferences) -> str
             return DOESNT_FIT
         cooks = frozenset()
     if not ctx.coverage.covers(proposal.mode, cooks):
-        return f"Nobody who's in offered to {proposal.mode.verb} for that."
+        return not_covered(proposal.mode)
     return None
+
+
+def not_covered(mode: Mode) -> str:
+    """``misfit``'s reason when nobody who's in can take ``mode``'s role (FR-17)."""
+    return f"Nobody who's in offered to {mode.verb} for that."
 
 
 async def _as_catalog_item(db: AsyncSession, ctx: CallContext, proposal: Proposal) -> Proposal:
@@ -586,7 +591,9 @@ async def _catalog_free_text(db: AsyncSession, ctx: CallContext, proposal: Propo
         item = await repo.add_item(household_id, values, created_by=proposal.proposed_by, now=now)
         payload = {"name": name, "kind": kind.value, "from_proposal": proposal.id}
         await audit(db, household_id, None, "catalog.item_created", f"item:{item.id}", payload, now)
-    if not any(p.item_id == item.id for p in ctx.proposals):  # one pick per place (#77)
+    # One pick per place (#77). Defensive: a call can hold a pick for this item besides the
+    # free text only from 0.5.0 or earlier, since adding either one now refuses the other.
+    if not any(p.item_id == item.id for p in ctx.proposals):
         await ProposalRepository(db).link_item(household_id, proposal.id, item.id)
     return item
 

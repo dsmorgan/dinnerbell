@@ -54,6 +54,7 @@ from dinnerbell.domain.events import (
     RoleOffer,
     Status,
     Window,
+    can_do,
     check_ad_hoc_day,
     check_can_cancel,
     check_can_close_window,
@@ -65,7 +66,6 @@ from dinnerbell.domain.events import (
     check_can_respond,
     check_can_vote,
     check_claim_coordinator,
-    check_cook_list,
     check_details,
     check_expected_window,
     check_handoff,
@@ -76,6 +76,7 @@ from dinnerbell.domain.events import (
     clean_cancel_note,
     friendly,
     is_coordinator,
+    not_on_cook_list,
     transition,
     with_details,
     with_offer,
@@ -358,7 +359,9 @@ async def add_proposal(
     """FR-13: a catalog item, or free text with a cuisine, during the vote window. A proposal
     must pass the same filters ranking applies (ADR 0005: a veto is a guarantee). Whoever adds it
     does it (#74): they must be in, and they offer the role its mode needs before it's checked,
-    as an offer does (``picks.volunteer``). A call has one pick per place, in any mode (#77)."""
+    as an offer does (``picks.volunteer``). The exception is a home meal whose cook list they're
+    not on: it's added if a cook on the list who's in offered to cook, and they take no role. A
+    call has one pick per place, in any mode (#77)."""
     async with locked_event(db, actor.household_id, event_id, now) as event:
         await guest_rules.gate(db, event, actor, GuestAction.PROPOSE)
         check_can_propose(event, actor)
@@ -370,11 +373,13 @@ async def add_proposal(
         existing = picks.picked(ctx, candidate)
         if existing is not None:
             raise picks.already_a_pick(ctx, existing)
-        if item is not None:
-            check_cook_list(item, mode, actor, ask="Ask a cook on it to add it")
-        ctx = await picks.volunteer(db, ctx, actor, mode, join=False, now=now)
+        doer = can_do(item, mode, actor.id)
+        if doer:
+            ctx = await picks.volunteer(db, ctx, actor, mode, join=False, now=now)
         group = await group_preferences(db, actor.household_id, ctx.veto_people)
         problem = lifecycle.misfit(ctx, candidate, group)
+        if problem is not None and item is not None and not doer and problem == lifecycle.not_covered(mode):
+            problem = not_on_cook_list(item, "Ask a cook on it to add it")
         if problem is not None:
             raise EventRuleViolation(problem)
         proposal = await ProposalRepository(db).add(

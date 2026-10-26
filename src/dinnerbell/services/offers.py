@@ -300,10 +300,12 @@ async def _attach(db: AsyncSession, actor: Member, call: Event, item: CatalogIte
     person's vetoes would change what the picks must pass (FR-29). The pick passes the same
     checks as an added proposal.
 
-    A call has one pick per place (#77). An offer for a place that's a pick in another mode
-    takes that pick over: its mode becomes the offer's, the offerer is its proposer, and its
-    votes stay, since they're for the place. An offer in the same mode is refused, as an added
-    proposal is. Audited as ``event.offer_attached``, with ``took_over`` naming the mode a pick
+    A call has one pick per place (#77). An offer for a place that ranking proposed, or that the
+    offerer added, in another mode takes that pick over: its mode becomes the offer's, the
+    offerer is its proposer, and its votes stay, since they're for the place. Another member's
+    pick isn't taken over, since it would then depend on the offerer being in
+    (``lifecycle._keep_attached``) instead of on them; that, and an offer in the same mode, is
+    refused, as an added proposal is. Audited as ``event.offer_attached``, with ``took_over`` naming the mode a pick
     had before."""
     events = EventRepository(db)
     if not await events.lock(call.household_id, call.id, now):  # pragma: no cover - just read
@@ -319,11 +321,11 @@ async def _attach(db: AsyncSession, actor: Member, call: Event, item: CatalogIte
     reasons = (f"{actor.display_name} offered to {DOING[mode]}.",)
     candidate = Proposal(0, call.id, mode, 0, source, item_id=item.id, reasons=reasons, proposed_by=actor.id)
     existing = picks.picked(ctx, candidate)
-    if existing is not None and existing.mode is mode:
+    if existing is not None and (existing.mode is mode or existing.proposed_by not in (None, actor.id)):
         raise picks.already_a_pick(ctx, existing)
-    if existing is None:
-        check_proposal_room(ctx.proposals, actor)
-    else:
+    # A pick taken over adds no row, but becomes the offerer's (MAX_ADDED_PER_MEMBER).
+    check_proposal_room([p for p in ctx.proposals if existing is None or p.id != existing.id], actor)
+    if existing is not None:
         candidate = replace(
             existing,
             mode=mode,

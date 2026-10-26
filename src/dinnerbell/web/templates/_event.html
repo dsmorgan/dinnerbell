@@ -244,7 +244,7 @@
           <select name="cuisine_id"><option value="">Pick one</option>{% for tag in v.cuisine_tags %}<option value="{{ tag.id }}">{{ tag.name }}</option>{% endfor %}</select>
         </label>
       </div>
-      <p class="small muted">You'll be the one to pick it up, cook it, or order it, whichever way you choose.</p>
+      <p class="small muted">You'll be the one to pick it up, cook it, or order it, whichever way you choose. A home meal with a cook list you're not on needs one of its cooks to have offered to cook.</p>
       <button type="submit" class="button primary">Propose</button>
     </form>
   </details>

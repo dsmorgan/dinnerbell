@@ -633,21 +633,33 @@ def check_in_to_add(mine: Response | None) -> None:
 
 def with_pick_role(current: Response | None, member_id: int, mode: Mode, now: datetime, *, join: bool) -> Response:
     """The answer of whoever adds a pick in ``mode``, offering the role it needs: whoever adds a
-    pick does it (#74), so it's covered (FR-17). It skips ``check_can_respond``, because a pick
-    can be added after responses close. While responses are open (``join``), adding one counts
-    you in, as offering a role does; after that, only someone already in can (``check_in_to_add``)."""
+    pick does it (#74), so it's covered (FR-17). The caller checks they can (``can_do``). It
+    skips ``check_can_respond``, because a pick can be added after responses close. While
+    responses are open (``join``), adding one counts you in, as offering a role does; after
+    that, only someone already in can (``check_in_to_add``)."""
     if not join:
         check_in_to_add(current)
     base = with_status(current, member_id, Status.IN, now)
     return replace(base, offers=base.offers | {MODE_OFFER[mode]})
 
 
+def can_do(item: CatalogItem | None, mode: Mode, member_id: int) -> bool:
+    """FR-17: whether a member can take ``mode``'s role for ``item``. Anyone can pick up or
+    order; someone can cook an item when it has no cook list or they're on it. Something new
+    (``item`` None) has no cook list."""
+    return mode is not Mode.COOK or item is None or not item.cook_ids or member_id in item.cook_ids
+
+
+def not_on_cook_list(item: CatalogItem, ask: str) -> str:
+    """Why someone off ``item``'s cook list can't cook it; ``ask`` says who to ask instead."""
+    return f"{item.name} has a cook list, and you're not on it. {ask}."
+
+
 def check_cook_list(item: CatalogItem, mode: Mode, actor: Member, *, ask: str) -> None:
-    """FR-17: someone can cook an item when it has no cook list or they're on it. Whoever adds
-    a pick cooks it, so nobody else can add one for an item whose cook list they're not on.
-    ``ask`` ends the refusal, such as "Ask a cook to offer it"."""
-    if mode is Mode.COOK and item.cook_ids and actor.id not in item.cook_ids:
-        raise EventRuleViolation(f"{item.name} has a cook list, and you're not on it. {ask}.")
+    """An offer to cook ``item`` means the offerer cooks it, so they must be able to
+    (``can_do``). ``ask`` ends the refusal, such as "Ask a cook to offer it"."""
+    if not can_do(item, mode, actor.id):
+        raise EventRuleViolation(not_on_cook_list(item, ask))
 
 
 def check_can_lock(event: Event, actor: Member) -> None:

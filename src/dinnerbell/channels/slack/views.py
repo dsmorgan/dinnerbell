@@ -295,7 +295,10 @@ def proposal_modal(v: EventView, origin: ids.ViewOrigin) -> dict[str, Any]:
     return _modal("Add a pick", ids.PROPOSAL_VIEW, origin, blocks, "Add")
 
 
-ADD_PICK_NOTE = "You'll be the one to pick it up, cook it, or order it, whichever way you choose."
+ADD_PICK_NOTE = (
+    "You'll be the one to pick it up, cook it, or order it, whichever way you choose. "
+    "A home meal with a cook list you're not on needs one of its cooks to have offered to cook."
+)
 
 
 @dataclass(frozen=True, slots=True)

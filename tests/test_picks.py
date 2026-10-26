@@ -151,19 +151,38 @@ async def test_someone_not_in_cant_add_a_pick_yet(house: House, answer: object) 
     assert await offers_of(house, event_id, "Kim") == frozenset()
 
 
-async def test_cook_picks_respect_the_cook_list(house: House) -> None:
-    event_id = await to_voting(house, "Alex", "Sam", "Kim", "Lee")
-    tacos = house.items["Sam's Tacos"].id  # Sam is on its cook list
+async def test_someone_off_a_cook_list_adds_a_pick_only_a_cook_on_it_covers(house: House) -> None:
+    """Whoever can cook it takes the role. Someone off the item's cook list can't, so they add it
+    without one, and it needs a cook on the list who's in and offered to cook."""
+    event_id = await to_voting(house, "Alex", "Sam", "Kim", "Lee")  # Sam is in, but didn't offer to cook
+    lasagna = await house.add_item("Lasagna", Mode.COOK, cuisine="Thai", cooks=("Sam",))  # added after ranking
     with pytest.raises(EventRuleViolation) as refused:
-        await act(house, calls.add_proposal, house["Kim"], event_id, Mode.COOK, item_id=tacos)
-    assert str(refused.value) == "Sam's Tacos has a cook list, and you're not on it. Ask a cook on it to add it."
+        await act(house, calls.add_proposal, house["Kim"], event_id, Mode.COOK, item_id=lasagna.id)
+    assert str(refused.value) == "Lasagna has a cook list, and you're not on it. Ask a cook on it to add it."
     assert await offers_of(house, event_id, "Kim") == frozenset()
-    await act(house, calls.add_proposal, house["Sam"], event_id, Mode.COOK, item_id=tacos)
+    await act(house, calls.add_proposal, house["Sam"], event_id, Mode.COOK, item_id=lasagna.id)
     assert RoleOffer.COOK in await offers_of(house, event_id, "Sam")
     # Something new has no cook list, so whoever adds it can cook it.
     mexican = house.tags["Mexican"].id
     await act(house, calls.add_proposal, house["Kim"], event_id, Mode.COOK, free_text="Kim's Chili", cuisine_id=mexican)
     assert await offers_of(house, event_id, "Kim") == {RoleOffer.COOK}
+
+
+async def test_someone_off_a_cook_list_adds_a_pick_a_cook_on_it_covers(house: House) -> None:
+    """The path main had: Sam offered to cook and is on Lasagna's list, so Kim can add it."""
+    event_id = await open_dinner(house)
+    for name in ("Alex", "Sam", "Kim"):
+        await act(house, calls.respond, house[name], event_id, Status.IN)
+    await act(house, calls.offer_role, house["Sam"], event_id, RoleOffer.COOK, True)
+    house.clock.now = RESPOND_BY
+    await house.tick()
+    lasagna = await house.add_item("Lasagna", Mode.COOK, cuisine="Thai", cooks=("Sam",))
+    added = await act(house, calls.add_proposal, house["Kim"], event_id, Mode.COOK, item_id=lasagna.id)
+    assert (added.item_id, added.mode, added.proposed_by) == (lasagna.id, Mode.COOK, house["Kim"].id)
+    assert await offers_of(house, event_id, "Kim") == frozenset()  # Kim can't cook it, so takes no role
+    await act(house, calls.lock, house["Alex"], event_id, added.id)
+    ctx = await house.context(event_id)
+    assert {(a.role.value, a.member_id) for a in ctx.assignments} == {("cook", house["Sam"].id)}
 
 
 async def test_a_delivery_pick_makes_its_adder_the_orderer(house: House) -> None:
@@ -261,19 +280,61 @@ async def test_an_offer_takes_over_a_pick_for_its_place_and_keeps_its_votes(hous
     assert (await house.kinds())[-1] == "proposals_updated"
 
 
-async def test_an_offer_takes_over_a_free_text_pick_of_the_same_name(house: House) -> None:
+async def test_an_offer_takes_over_its_offerers_own_free_text_pick(house: House) -> None:
     event_id = await to_voting(house, "Alex", "Kim", "Lee", offers_pickup=("Alex",))
     viet = await house.tag("Vietnamese")
     pho = await act(
-        house, calls.add_proposal, house["Alex"], event_id, Mode.PICKUP, free_text="Pho Place", cuisine_id=viet.id
+        house, calls.add_proposal, house["Kim"], event_id, Mode.PICKUP, free_text="Pho Place", cuisine_id=viet.id
     )
     data = offer(house, Mode.DELIVERY, free_text="pho place", cuisine_id=viet.id)
     await act(house, offers.post_offer, house["Kim"], data)
     ctx = await house.context(event_id)
     (taken,) = [p for p in ctx.proposals if p.id == pho.id]
     item = ctx.items[taken.item_id or 0]
-    assert (item.name, taken.free_text, taken.mode) == ("pho place", None, Mode.DELIVERY)
+    assert (item.name, taken.free_text, taken.mode, taken.proposed_by) == (
+        "pho place",
+        None,
+        Mode.DELIVERY,
+        house["Kim"].id,
+    )
     assert len(ctx.proposals) == len({picks.place(ctx, p) for p in ctx.proposals})
+
+
+async def test_an_offer_doesnt_take_over_another_members_pick(house: House) -> None:
+    """Taking it over would make the pick depend on the offerer staying in, not on whoever added
+    it, so it could be dropped while they're still in."""
+    event_id = await open_dinner(house)
+    for name in ("Alex", "Kim"):
+        await act(house, calls.respond, house[name], event_id, Status.IN)
+    siam = house.items["Siam Garden"].id
+    await act(house, offers.post_offer, house["Lee"], offer(house, Mode.DELIVERY, item_id=siam))
+    with pytest.raises(EventRuleViolation) as refused:
+        await act(house, offers.post_offer, house["Kim"], offer(house, Mode.PICKUP, item_id=siam))
+    assert str(refused.value) == "Siam Garden is already a pick (delivery). Vote for it instead."
+    (pick,) = (await house.context(event_id)).proposals
+    assert (pick.mode, pick.proposed_by) == (Mode.DELIVERY, house["Lee"].id)
+    # Lee's own offer in the other mode takes it over: it's still Lee's.
+    await act(house, offers.post_offer, house["Lee"], offer(house, Mode.PICKUP, item_id=siam))
+    (pick,) = (await house.context(event_id)).proposals
+    assert (pick.mode, pick.proposed_by, pick.reasons) == (
+        Mode.PICKUP,
+        house["Lee"].id,
+        ("Lee offered to pick it up.",),
+    )
+
+
+async def test_a_taken_over_pick_counts_toward_the_offerers_three(house: House) -> None:
+    event_id = await to_voting(house, "Alex", "Kim", "Lee", offers_pickup=("Alex",))
+    thai = house.tags["Thai"].id
+    for n in range(3):
+        await act(
+            house, calls.add_proposal, house["Kim"], event_id, Mode.PICKUP, free_text=f"Kim's {n}", cuisine_id=thai
+        )
+    siam = house.items["Siam Garden"].id
+    with pytest.raises(EventRuleViolation, match="You've added 3 proposals"):
+        await act(house, offers.post_offer, house["Kim"], offer(house, Mode.DELIVERY, item_id=siam))
+    pick = next(p for p in (await house.context(event_id)).proposals if p.item_id == siam)
+    assert (pick.mode, pick.proposed_by) == (Mode.PICKUP, None)
 
 
 async def test_the_repository_never_adds_a_second_pick_for_a_place(house: House) -> None:
