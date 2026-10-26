@@ -6,6 +6,10 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ## [Unreleased]
 
+### Fixed
+
+- App Home shows today's calls and offers first, with their buttons, then the start buttons and the calls coming up (#51). Calls and offers still open from earlier days, for example after the scheduler was down, come last: the three most recent, and a line such as "…and 47 more from earlier days on Today on the web" for the rest. A call from an earlier day that never posted shows there too, not under **Coming up** with a time that's past. Before, enough of them pushed today's calls, the start buttons, and the links off the tab. A guest's Home lists today's invitations first in the same way.
+
 ## [0.5.0] - 2026-10-25
 
 ### Added

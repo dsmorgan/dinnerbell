@@ -10,10 +10,11 @@ them and review the diff:
 
 from __future__ import annotations
 
+import itertools
 import json
 import os
 from dataclasses import replace
-from datetime import UTC, date, datetime, time
+from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 
 import pytest
@@ -28,7 +29,7 @@ from dinnerbell.domain.catalog import ItemKind, Mode
 from dinnerbell.domain.events import EventState, ProposalSource, RoleOffer, Status
 from dinnerbell.domain.meals import Slot
 from dinnerbell.main import main
-from dinnerbell.services.event_views import TodayView
+from dinnerbell.services.event_views import EventView, TodayView
 from tests.support.blockkit import check_message, check_view
 
 GOLDEN = Path(__file__).parent / "golden" / "slack"
@@ -417,3 +418,161 @@ def test_messages_offering_a_link_show_the_slack_account_and_its_email() -> None
     assert "<!channel>" not in json.dumps(forged.payload()) and "an unknown Slack account" in json.dumps(
         forged.payload()
     )
+
+
+def _ids(blocks: list[dict[str, object]]) -> list[str]:
+    return [str(b.get("block_id", "")) for b in blocks]
+
+
+def _no_orphans(blocks: list[dict[str, object]]) -> None:
+    """Every card on Home keeps its buttons: an ``event-N`` section has its ``event-actions-N``."""
+    shown = _ids(blocks)
+    for block_id in shown:
+        if block_id.startswith("event-") and not block_id.startswith("event-actions-"):
+            assert block_id.replace("event-", "event-actions-") in shown, block_id
+
+
+def test_home_puts_todays_call_before_fifty_left_over_ones() -> None:
+    """Open calls the scheduler left from earlier days (#51) come after today's call, its
+    buttons, and the start buttons, newest first and only a few, with a line for the rest."""
+    from dinnerbell.channels.slack.views import MAX_OLDER_CALLS
+    from dinnerbell.domain.meals import Slot
+
+    left_over = [samples.left_over(n) for n in range(50, 0, -1)]  # oldest first, as listed
+    today = TodayView(samples.DAY, [*left_over, samples.COLLECTING_VIEW, samples.SCHEDULED_VIEW], tuple(Slot))
+    home = home_view(today, HomeLinks(samples.BASE_URL), notice="Hi", awaiting=samples.AWAITING)
+    view = bk.with_version_footer(home, "0.5.0")
+    check_view(view)
+    blocks = view["blocks"]
+    assert len(blocks) <= bk.MAX_VIEW_BLOCKS
+    assert blocks[-1]["elements"][0]["text"].startswith("Dinnerbell 0.5.0")
+    assert "Today on the web" in json.dumps(blocks[-2]) and "Your preferences" in json.dumps(blocks[-2])
+    shown = _ids(blocks)
+    assert shown.index("event-7") < shown.index("event-actions-7") < shown.index("start") < shown.index("event-8")
+    assert shown.index("event-8") < shown.index("event-201")  # coming up, then earlier days
+    older = [b for b in shown if b.startswith("event-2") and not b.startswith("event-actions")]
+    assert older == [f"event-{200 + n}" for n in range(1, MAX_OLDER_CALLS + 1)]  # newest first
+    assert (
+        f"…and {50 - MAX_OLDER_CALLS} more from earlier days on <{samples.BASE_URL}/|Today on the web>."
+        in json.dumps(blocks, ensure_ascii=False)
+    )
+    _no_orphans(blocks)
+
+
+def test_home_full_of_todays_offers_counts_the_left_over_calls_without_showing_them() -> None:
+    from dinnerbell.domain.meals import Slot
+
+    offers = [replace(samples.OFFER_VIEW, event=replace(samples.OFFER_VIEW.event, id=100 + n)) for n in range(60)]
+    left_over = [samples.left_over(n) for n in range(50, 0, -1)]
+    today = TodayView(samples.DAY, [*left_over, *offers], tuple(Slot))
+    view = bk.with_version_footer(home_view(today, HomeLinks(samples.BASE_URL), notice="Hi"), "0.5.0")
+    check_view(view)
+    blocks = view["blocks"]
+    assert bk.MAX_VIEW_BLOCKS - 2 <= len(blocks) <= bk.MAX_VIEW_BLOCKS
+    assert blocks[-1]["elements"][0]["text"].startswith("Dinnerbell 0.5.0")
+    assert "start" in _ids(blocks) and not any(b.startswith("event-2") for b in _ids(blocks))
+    text = json.dumps(blocks, ensure_ascii=False)
+    shown = sum(1 for b in _ids(blocks) if b.startswith("event-actions-"))
+    assert f"…and {60 - shown} more on" in text
+    assert "50 still open from earlier days on" in text
+    _no_orphans(blocks)
+
+
+def test_a_guests_home_shows_todays_invitation_before_left_over_ones() -> None:
+    from dinnerbell.channels.slack.views import MAX_OLDER_CALLS
+    from dinnerbell.domain.meals import Slot
+    from dinnerbell.services.event_views import Permissions
+
+    def as_guest(v: EventView) -> EventView:
+        return replace(v, mine=None, can=Permissions(respond=v.event.day == samples.DAY))
+
+    left_over = [as_guest(samples.left_over(n)) for n in range(50, 0, -1)]
+    today = TodayView(samples.DAY, [*left_over, as_guest(samples.COLLECTING_VIEW)], tuple(Slot))
+    view = bk.with_version_footer(home_view(today, HomeLinks(samples.BASE_URL), guest=True), "0.5.0")
+    check_view(view)
+    blocks = view["blocks"]
+    assert len(blocks) <= bk.MAX_VIEW_BLOCKS
+    assert blocks[-1]["elements"][0]["text"].startswith("Dinnerbell 0.5.0")
+    assert "Your dietary needs" in json.dumps(blocks[-2])
+    shown = _ids(blocks)
+    assert shown[1:3] == ["event-7", "event-actions-7"] and "start" not in shown
+    assert shown.index("event-actions-7") < shown.index("event-201")
+    text = json.dumps(blocks, ensure_ascii=False)
+    assert (
+        f"…and {50 - MAX_OLDER_CALLS} more from earlier days on <{samples.BASE_URL}/|Your invitations on the web>."
+        in text
+    )
+    assert "No invitations right now" not in text
+    _no_orphans(blocks)
+
+
+def test_a_guests_home_with_only_left_over_invitations_isnt_empty() -> None:
+    from dinnerbell.domain.meals import Slot
+    from dinnerbell.services.event_views import Permissions
+
+    left_over = replace(samples.left_over(1), mine=None, can=Permissions())
+    home = home_view(TodayView(samples.DAY, [left_over], tuple(Slot)), HomeLinks(samples.BASE_URL), guest=True)
+    check_view(home)
+    assert _ids(home["blocks"])[1:4] == ["", "event-201", "event-actions-201"]
+    assert "No invitations right now" not in json.dumps(home)
+
+
+def _at(view: EventView, event_id: int, day: date) -> EventView:
+    """``view`` as event ``event_id`` on ``day``."""
+    return replace(
+        view,
+        event=replace(view.event, id=event_id, day=day),
+        info=replace(view.info, id=event_id, day=day, path=f"/events/{event_id}"),
+    )
+
+
+def test_a_call_from_an_earlier_day_that_never_posted_is_left_over_not_coming_up() -> None:
+    """With the scheduler down, a scheduled call's day can pass before it posts (#51). It's left
+    over with the rest, and capped, rather than coming up with a time that's past."""
+    from dinnerbell.channels.slack.views import MAX_OLDER_CALLS
+    from dinnerbell.domain.meals import Slot
+
+    unposted = [_at(samples.SCHEDULED_VIEW, 300 + n, samples.DAY - timedelta(days=n)) for n in range(5, 0, -1)]
+    today = TodayView(samples.DAY, [*unposted, samples.COLLECTING_VIEW], tuple(Slot))
+    home = home_view(today, HomeLinks(samples.BASE_URL))
+    check_view(home)
+    shown, text = _ids(home["blocks"]), json.dumps(home, ensure_ascii=False)
+    assert "*Coming up*" not in text and "posts at" not in text
+    assert "*Still open from earlier days*" in text
+    left = [b for b in shown if b.startswith("event-3") and not b.startswith("event-actions")]
+    assert left == [f"event-{300 + n}" for n in range(1, MAX_OLDER_CALLS + 1)]
+    assert shown.index("start") < shown.index("event-301")
+    assert f"…and {5 - MAX_OLDER_CALLS} more from earlier days on" in text
+    _no_orphans(home["blocks"])
+
+
+SWEEP = [(False, notice, awaiting) for notice in (None, "Hi") for awaiting in (0, 1, 6)] + [
+    (True, notice, 0) for notice in (None, "Hi")
+]
+
+
+@pytest.mark.parametrize(("guest", "notice", "awaiting"), SWEEP)
+def test_home_keeps_its_footer_links_and_buttons_at_every_size(guest: bool, notice: str | None, awaiting: int) -> None:
+    """Pins Home's block budget (#51) around the point where cards stop fitting. The notice and
+    the awaiting meals change the room's parity (every card is two blocks), so a budget off by
+    one block shows up as a view past 100 blocks or one that loses its footer."""
+    from dinnerbell.domain.meals import Slot
+
+    for todays, coming, left in itertools.product(range(36, 51), (0,) if guest else (0, 1, 2, 3), (0, 1, 4)):
+        events = [
+            *(_at(samples.DECIDED_VIEW, 500 + n, samples.DAY - timedelta(days=n + 1)) for n in range(left)),
+            *(
+                _at(samples.OFFER_VIEW if n % 2 else samples.COLLECTING_VIEW, 1000 + n, samples.DAY)
+                for n in range(todays)
+            ),
+            *(_at(samples.SCHEDULED_VIEW, 2000 + n, samples.DAY + timedelta(days=1)) for n in range(coming)),
+        ]
+        today = TodayView(samples.DAY, events, tuple(Slot))
+        home = home_view(today, HomeLinks(samples.BASE_URL), notice, awaiting=samples.AWAITING[:awaiting], guest=guest)
+        blocks = bk.with_version_footer(home, "0.5.0")["blocks"]
+        case = f"{todays} today, {coming} coming up, {left} left over: {len(blocks)} blocks"
+        assert len(blocks) <= bk.MAX_VIEW_BLOCKS, case
+        assert blocks[-1]["elements"][0]["text"].startswith("Dinnerbell 0.5.0"), case
+        assert ("Your dietary needs" if guest else "Your preferences") in json.dumps(blocks[-2]), case
+        assert guest or "start" in _ids(blocks), case
+        _no_orphans(blocks)

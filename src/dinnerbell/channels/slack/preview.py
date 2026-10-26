@@ -440,6 +440,17 @@ def guest_home(label: str = "") -> dict[str, Any]:
     return home_view(TodayView(DAY, [view], tuple(Slot)), HomeLinks(BASE_URL), label=label, guest=True)
 
 
+def left_over(days_ago: int) -> EventView:
+    """A decided dinner from ``days_ago`` days before ``DAY``, still open because the scheduler
+    was down (#51)."""
+    day, event_id = DAY - timedelta(days=days_ago), 200 + days_ago
+    return replace(
+        DECIDED_VIEW,
+        event=replace(DECIDED_VIEW.event, id=event_id, day=day),
+        info=replace(DECIDED_VIEW.info, id=event_id, day=day, path=f"/events/{event_id}"),
+    )
+
+
 LOG_FORM = LogForm(DAY, SAM.id, ITEMS, (MemberRef(1, "Alex"), MemberRef(3, "Kim"), MemberRef(2, "Sam")))
 
 VIEWS: dict[str, Callable[[], dict[str, Any]]] = {
@@ -492,6 +503,10 @@ VIEWS: dict[str, Callable[[], dict[str, Any]]] = {
         replace(COLLECTING_VIEW, can=Permissions(respond=True, invite=True)), SAVED_GUESTS, CALL_OFF_ORIGIN
     ),
     "home_guest": lambda: guest_home(),
+    # Open calls the scheduler left from earlier days, oldest first as the repository lists them.
+    "home_left_over": lambda: home_view(
+        TodayView(DAY, [*(left_over(n) for n in range(5, 0, -1)), COLLECTING_VIEW], tuple(Slot)), HomeLinks(BASE_URL)
+    ),
     "home_guest_empty": lambda: home_view(TodayView(DAY, [], tuple(Slot)), HomeLinks(BASE_URL), guest=True),
     "cancel_modal_offer": lambda: cancel_modal(
         replace(OFFER_VIEW, can=Permissions(cancel=True)), replace(CALL_OFF_ORIGIN, event_id=9)
