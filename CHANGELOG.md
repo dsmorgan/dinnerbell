@@ -6,6 +6,18 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ## [Unreleased]
 
+### Fixed
+
+- Adding a proposal while voting no longer fails with "Nobody who's in offered to pickup for that." when nobody had offered to pick up (#74). Whoever adds a proposal does it: adding one offers the role its mode needs (pick up, cook, or order) on your answer, so it's covered, and the call's roster shows it. The Add proposal form, on the web and in Slack, says so. You need to be in: until joining late arrives (#76), someone who isn't is told "You're not in for this call. Joining late is coming soon. Ask someone who's in to add it." For a home meal with a cook list, only someone on the list can add it for cooking. Assignments work as before: the winning pick's role goes to whoever offered it first, which can be you even when another pick in that mode wins.
+- A refusal that names a mode says "pick up", "cook", or "order" instead of a role's code, such as "Nobody who's in offered to pick up for that."
+- The **Pick up** checkbox on Preferences says it doesn't volunteer you for a call. It never did: only offering on the call, or adding a pickup pick, does.
+- A tap on a Slack answer card or reminder for a call that moved on no longer swallows why it changed nothing: the card says the call moved on, and the reason, such as "Responses are closed for this call.", follows in a private line. It's logged at `info` with the member and call IDs.
+- A vote no longer offers the same place twice, such as once for pickup and once for delivery (#77). A call has one pick per place, in any mode:
+  - Ranking proposes each place once, in its best mode: the one that's a usual choice, or that a volunteer cook knows, with ties going to cook, then pickup, then delivery.
+  - Picks that offers added before voting no longer take the place of ranked picks: the vote still gets its usual number of ranked picks, then the offers'.
+  - Adding a place that's already a pick, in any mode, is refused: "Pho Place is already a pick (delivery). Vote for it instead." The Add proposal list marks those places "(already a pick)".
+  - An offer for a place that's already a pick in another mode takes that pick over: it switches to the offer's mode, says "Kim offered to order it.", and keeps its votes. An offer for a pick in the same mode is refused, as before.
+
 ## [0.5.0] - 2026-10-25
 
 ### Added

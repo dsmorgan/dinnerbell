@@ -114,7 +114,7 @@ Lunch has no scheduled call by default, so offers are the normal path for lunch.
 
 Any member can make an offer for dinner too: "I'm making tacos tonight, 6 servings." A cooking offer posted before the dinner call replaces that day's call: a call scheduled for that day is called off quietly, and its starter is told, and a daily call not created yet doesn't go out while the offer stands. If the offer is called off before that call's responses would have closed, the call goes out after all. Members join, add guests within capacity, and the cook sees the head count and guests' dietary needs. The cook earns the cook contribution when the event completes.
 
-An offer for a slot whose call is already open (collecting or voting) doesn't post on its own. It becomes a pick on the call, as an added proposal (FR-13): the offerer is counted in and offers the role it takes, and it must pass the same vetoes and guest needs. While voting, only someone who's in can add one, because a new person's vetoes would change what the picks must pass. If someone who answers later can't eat it, it's dropped when voting starts (FR-29). Once a call is decided or over, an offer stands on its own.
+An offer for a slot whose call is already open (collecting or voting) doesn't post on its own. It becomes a pick on the call, as an added proposal (FR-13): the offerer is counted in and offers the role it takes, and it must pass the same vetoes and guest needs. While voting, only someone who's in can add one, because a new person's vetoes would change what the picks must pass. If someone who answers later can't eat it, it's dropped when voting starts (FR-29). A call has one pick per place (FR-13): an offer for a place that's already a pick in another mode takes that pick over, which switches it to the offer's mode and keeps its votes, and an offer in the same mode is refused. Once a call is decided or over, an offer stands on its own.
 
 ### 5.4 Nobody answers
 
@@ -187,12 +187,12 @@ Requirements use "must" for version 1 and "should" for items that can slip to a 
 
 | ID | Requirement |
 |---|---|
-| FR-12 | At the response deadline the ranking engine produces the top N proposals (default 3) from the catalog, filtered and scored as described in section 7, each with a human-readable reason. |
-| FR-13 | The coordinator and any member can add a proposal from the catalog or as free text during the vote window. A free-text proposal needs a cuisine, and creates a catalog item on decision. A call holds at most 10 proposals, and each member adds at most 3. Added proposals pass the same vetoes, guest needs, and coverage checks as ranked ones; a refusal for a veto or a guest need always reads "That doesn't work for everyone who's in tonight." so it can't reveal whose stance it was (FR-29). |
+| FR-12 | At the response deadline the ranking engine produces the top N proposals (default 3) from the catalog, filtered and scored as described in section 7, each with a human-readable reason. Each is a different place, and none is a place an offer already made a pick (FR-5); those picks come after the N. |
+| FR-13 | The coordinator and any member can add a proposal from the catalog or as free text during the vote window. A free-text proposal needs a cuisine, and creates a catalog item on decision. A call holds at most 10 proposals, and each member adds at most 3. A call has one proposal per place, whatever the mode: a place is a catalog item, or free text, by its kind and name, so adding a place that's already a pick is refused with "Pho Place is already a pick (delivery). Vote for it instead." Whoever adds a proposal does it: they must be in, and adding it offers the role its mode needs (pick up, cook, or order), so it's covered (FR-17); for an item with a cook list, only someone on it can add it for cooking. Someone who isn't in is told "You're not in for this call. Joining late is coming soon. Ask someone who's in to add it." Added proposals pass the same vetoes, guest needs, and coverage checks as ranked ones; a refusal for a veto or a guest need always reads "That doesn't work for everyone who's in tonight." so it can't reveal whose stance it was (FR-29). |
 | FR-14 | Each member casts at most one vote per proposal and can change it until the vote closes. Votes are visible. |
 | FR-15 | The coordinator can lock any proposal at any time during the vote window. |
 | FR-16 | At the vote deadline the system decides: highest votes, coordinator breaks ties, admin breaks ties when there is no coordinator, ranking order breaks ties otherwise. At the deadline, "breaks ties" means the tied proposal the coordinator (or, with no coordinator, an admin) voted for wins; either can also lock a proposal before then. |
-| FR-17 | A proposal is only eligible if its fulfillment mode is covered: cook requires a member who offered to cook and can cook the item, pickup requires a member who offered to pick up, delivery requires any participating member who can order. Only active members who are in count. A member can cook an item when it has no cook list or they are on it. The first volunteer is assigned; the coordinator or admin can change it. |
+| FR-17 | A proposal is only eligible if its fulfillment mode is covered: cook requires a member who offered to cook and can cook the item, pickup requires a member who offered to pick up, delivery requires any participating member who can order. Adding a proposal or an offer to a call counts as offering its role (FR-5, FR-13). The member's usual **Cook** and **Pick up** settings in Preferences don't count; usually ordering does. Only active members who are in count. A member can cook an item when it has no cook list or they are on it. The first volunteer is assigned; the coordinator or admin can change it. |
 
 ### 6.4 Decisions and assignments
 
@@ -286,7 +286,7 @@ Requirements use "must" for version 1 and "should" for items that can slip to a 
 
 Ranking is deterministic and explainable. Given a Call with participants P (in and maybe), roles offered R, and guest needs G:
 
-1. **Candidate set.** All active catalog items, expanded into (item, mode) pairs for each mode the item supports. In version 1 every slot allows every mode; the slot's default modes earn the default-mode bonus.
+1. **Candidate set.** All active catalog items that aren't already picks (an offer's, FR-5), expanded into (item, mode) pairs for each mode the item supports. In version 1 every slot allows every mode; the slot's default modes earn the default-mode bonus.
 2. **Hard filters.** Drop a pair if:
    - Any member in P vetoes the item or any of its tags. P counts maybes, so ranking runs before the deadline turns them out.
    - Guest needs in G include a dietary tag the item lacks.
@@ -303,8 +303,9 @@ Ranking is deterministic and explainable. Given a Call with participants P (in a
 | Default mode | +0.5 if the mode is one of the slot's default fulfillment modes | 1.0 |
 | Volunteer fit | +0.5 if the mode is cook and the volunteer cook is on the item's cook list | 1.0 |
 
-4. **Order** by score descending. Break ties by the item eaten longest ago, with never-eaten items first, then by name.
-5. **Explain.** Each proposal carries the top two positive components and any penalty as a sentence: "Suggested by Alex. Nobody has had Ethiopian in 3 weeks."
+4. **One mode per item.** An item is proposed once, in its best mode: the one whose mode components (default mode, volunteer fit) score higher, with ties going to cook, then pickup, then delivery. So the picks are N different places.
+5. **Order** by score descending. Break ties by the item eaten longest ago, with never-eaten items first, then by name.
+6. **Explain.** Each proposal carries the top two positive components and any penalty as a sentence: "Suggested by Alex. Nobody has had Ethiopian in 3 weeks."
 
 Feedback is not an input in version 1; FR-55 adds it once there is enough data. Weights are household settings. The engine is a pure function over a snapshot, so it is unit-testable without a database.
 

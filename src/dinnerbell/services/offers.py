@@ -42,8 +42,8 @@ from dinnerbell.domain.events import (
     EventState,
     Proposal,
     ProposalSource,
-    RoleOffer,
     Status,
+    check_cook_list,
     check_proposal_room,
     check_run,
     clean_cancel_note,
@@ -66,9 +66,11 @@ from dinnerbell.domain.offers import (
     offer_time,
     seats_left,
 )
+from dinnerbell.domain.ranking import usual_choice
 from dinnerbell.domain.schedule import slot_schedules
 from dinnerbell.services import call_context as cc
 from dinnerbell.services import guests as guest_rules
+from dinnerbell.services import picks
 from dinnerbell.services.call_context import CallContext, load, locked_event, publish
 from dinnerbell.services.common import audit
 from dinnerbell.services.errors import NotFound
@@ -77,8 +79,6 @@ from dinnerbell.services.preferences import group_preferences
 from dinnerbell.services.variety import household_today
 
 NO_SUCH_OFFER = "No such offer."
-MODE_OFFER = {Mode.COOK: RoleOffer.COOK, Mode.PICKUP: RoleOffer.PICKUP, Mode.DELIVERY: RoleOffer.ORDER}
-"""The role a member offers by offering a meal in ``mode``, when the offer joins a call."""
 DOING = {Mode.COOK: "cook it", Mode.PICKUP: "pick it up", Mode.DELIVERY: "order it"}
 
 
@@ -176,12 +176,6 @@ async def post_offer(db: AsyncSession, actor: Member, data: OfferInput, *, now: 
     return posted
 
 
-def _cook_list_allows(item: CatalogItem, mode: Mode, actor: Member) -> None:
-    """FR-17: someone can cook an item when it has no cook list or they're on it."""
-    if mode is Mode.COOK and item.cook_ids and actor.id not in item.cook_ids:
-        raise EventRuleViolation(f"{item.name} has a cook list, and you're not on it. Ask a cook to offer it.")
-
-
 async def _offered_item(db: AsyncSession, actor: Member, data: OfferInput, now: datetime) -> CatalogItem:
     """The catalog item offered: one picked, one that already has the typed name, or a new one
     made from the name and cuisine, audited as ``catalog.item_created``."""
@@ -224,7 +218,7 @@ async def _offered_item(db: AsyncSession, actor: Member, data: OfferInput, now: 
         item = found
     if data.mode not in item.modes:
         raise EventRuleViolation(f"{item.name} isn't available by {data.mode.label.lower()}.")
-    _cook_list_allows(item, data.mode, actor)
+    check_cook_list(item, data.mode, actor, ask="Ask a cook to offer it")
     return item
 
 
@@ -301,57 +295,80 @@ async def _replace(db: AsyncSession, actor: Member, call: Event, offer: Event, n
 
 async def _attach(db: AsyncSession, actor: Member, call: Event, item: CatalogItem, mode: Mode, now: datetime) -> Posted:
     """FR-5: an offer for a slot with an open call becomes a pick on it. The offerer is in and
-    offers the role it takes. While responses are open that's an answer like any other; once
-    voting has started, only someone already in can add one, since a new person's vetoes would
-    change what the picks must pass (FR-29). The pick passes the same checks as an added
-    proposal. Audited as ``event.offer_attached``."""
+    offers the role it takes (``picks.volunteer``). While responses are open that's an answer
+    like any other; once voting has started, only someone already in can add one, since a new
+    person's vetoes would change what the picks must pass (FR-29). The pick passes the same
+    checks as an added proposal.
+
+    A call has one pick per place (#77). An offer for a place that's a pick in another mode
+    takes that pick over: its mode becomes the offer's, the offerer is its proposer, and its
+    votes stay, since they're for the place. An offer in the same mode is refused, as an added
+    proposal is. Audited as ``event.offer_attached``, with ``took_over`` naming the mode a pick
+    had before."""
     events = EventRepository(db)
     if not await events.lock(call.household_id, call.id, now):  # pragma: no cover - just read
         raise NotFound(cc.NO_SUCH_CALL)
     ctx = await load(db, call)
     mine = ctx.response_of(actor.id)
-    role = MODE_OFFER[mode]
-    slot = call.slot.value
-    if call.state is EventState.VOTING:
-        if mine is None or not mine.is_in:
-            raise EventRuleViolation(
-                f"Voting has started on the {slot} call, and you're not in it, so your offer can't join it."
-            )
-        answer = replace(mine, offers=mine.offers | {role})
-    else:
-        answer = replace(
-            with_status(mine, actor.id, Status.IN, now), offers=(mine.offers if mine else frozenset()) | {role}
+    voting = call.state is EventState.VOTING
+    if voting and (mine is None or not mine.is_in):
+        raise EventRuleViolation(
+            f"Voting has started on the {call.slot.value} call, and you're not in it, so your offer can't join it."
         )
-    await ResponseRepository(db).save(call.household_id, call.id, answer, now)
-    ctx = await load(db, call)
-    check_proposal_room(ctx.proposals, actor)
-    if any(p.item_id == item.id and p.mode is mode for p in ctx.proposals):
-        raise EventRuleViolation("That's already a pick on the call. Vote for it instead.")
     source = ProposalSource.COORDINATOR if is_coordinator(call, actor) else ProposalSource.MEMBER
     reasons = (f"{actor.display_name} offered to {DOING[mode]}.",)
     candidate = Proposal(0, call.id, mode, 0, source, item_id=item.id, reasons=reasons, proposed_by=actor.id)
+    existing = picks.picked(ctx, candidate)
+    if existing is not None and existing.mode is mode:
+        raise picks.already_a_pick(ctx, existing)
+    if existing is None:
+        check_proposal_room(ctx.proposals, actor)
+    else:
+        candidate = replace(
+            existing,
+            mode=mode,
+            item_id=item.id,
+            free_text=None,
+            free_cuisine_id=None,
+            reasons=reasons + _still_true(existing),
+            proposed_by=actor.id,
+        )
+    ctx = await picks.volunteer(db, ctx, actor, mode, join=not voting, now=now)
     group = await group_preferences(db, call.household_id, ctx.veto_people)
     problem = misfit(ctx, candidate, group)
     if problem is not None:
         raise EventRuleViolation(problem)
     proposals = ProposalRepository(db)
-    proposal = await proposals.add(
-        household_id=call.household_id,
-        event_id=call.id,
-        item_id=item.id,
-        mode=mode,
-        rank=await proposals.next_rank(call.household_id, call.id),
-        source=source,
-        reasons=reasons,
-        proposed_by=actor.id,
-        now=now,
-    )
-    ctx = await load(db, call)
-    voting = [cc.proposals_updated(ctx)] if call.state is EventState.VOTING else []
-    await publish(db, ctx, cc.call_updated(ctx), *voting, now=now)
-    payload = {"proposal_id": proposal.id, "item_id": item.id, "mode": mode.value}
+    if existing is None:
+        proposal = await proposals.add(
+            household_id=call.household_id,
+            event_id=call.id,
+            item_id=item.id,
+            mode=mode,
+            rank=await proposals.next_rank(call.household_id, call.id),
+            source=source,
+            reasons=reasons,
+            proposed_by=actor.id,
+            now=now,
+        )
+    else:
+        proposal = candidate
+        await proposals.take_over(
+            call.household_id, existing.id, mode=mode, item_id=item.id, reasons=candidate.reasons, proposed_by=actor.id
+        )
+    await picks.announce(db, call, now=now)
+    payload: dict[str, object] = {"proposal_id": proposal.id, "item_id": item.id, "mode": mode.value}
+    if existing is not None:
+        payload["took_over"] = existing.mode.value
     await audit(db, call.household_id, actor, "event.offer_attached", f"event:{call.id}", payload, now)
     return Posted(OfferPath.ATTACH, call.id, call.slot, call.day, item.name)
+
+
+def _still_true(existing: Proposal) -> tuple[str, ...]:
+    """``existing``'s reasons that stay true when an offer changes its mode: not that its old
+    mode is a usual choice, nor that someone offered to get it that way."""
+    stale = (usual_choice(existing.mode), f" offered to {DOING[existing.mode]}.")
+    return tuple(r for r in existing.reasons if r != stale[0] and not r.endswith(stale[1]))
 
 
 # Joining -------------------------------------------------------------------------------------

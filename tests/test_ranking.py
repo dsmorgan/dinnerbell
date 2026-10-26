@@ -9,14 +9,16 @@ from dataclasses import replace
 
 import pytest
 
-from dinnerbell.domain.catalog import Mode
+from dinnerbell.domain.catalog import MODE_ORDER, Mode
 from dinnerbell.domain.events import Coverage
 from dinnerbell.domain.ranking import (
+    MODE_COMPONENTS,
     Component,
     GroupPreferences,
     RankingSnapshot,
     RankItem,
     candidates,
+    components,
     join_names,
     rank,
 )
@@ -145,9 +147,30 @@ def test_ordering_and_tie_breaks() -> None:
     assert rank(replace(snap, limit=0)) == []
 
 
-def test_modes_of_one_item_are_ordered_and_both_listed() -> None:
+def test_each_item_is_proposed_once_in_its_best_mode() -> None:
+    """#77: one pick per place. The mode with the better mode components wins; a tie goes to
+    ``MODE_ORDER``."""
     siam = item(1, "Siam", Mode.DELIVERY, Mode.PICKUP)
-    assert [(r.item_id, r.mode) for r in rank(snapshot(siam))] == [(1, Mode.PICKUP), (1, Mode.DELIVERY)]
+    assert [(r.item_id, r.mode) for r in rank(snapshot(siam))] == [(1, Mode.PICKUP)]
+    usual = snapshot(siam, default_modes=frozenset({Mode.DELIVERY}))
+    assert [(r.item_id, r.mode) for r in rank(usual)] == [(1, Mode.DELIVERY)]
+    nobody_drives = snapshot(siam, coverage=Coverage(orderers=(1,)))
+    assert [(r.item_id, r.mode) for r in rank(nobody_drives)] == [(1, Mode.DELIVERY)]
+
+
+def test_places_that_allow_pickup_and_delivery_give_three_different_picks() -> None:
+    """#77's report: every restaurant allows both, and both are covered."""
+    places = [item(n, f"Place {n}", Mode.PICKUP, Mode.DELIVERY) for n in range(1, 6)]
+    ranked = rank(snapshot(*places, default_modes=frozenset({Mode.PICKUP})))
+    assert [(r.item_id, r.mode) for r in ranked] == [(1, Mode.PICKUP), (2, Mode.PICKUP), (3, Mode.PICKUP)]
+
+
+def test_taken_items_are_left_out_and_the_limit_still_filled() -> None:
+    """#77: an offer's pick doesn't shrink the ranked picks."""
+    places = [item(n, f"Place {n}", Mode.PICKUP, Mode.DELIVERY) for n in range(1, 6)]
+    ranked = rank(snapshot(*places, taken=frozenset({1, 3})))
+    assert [r.item_id for r in ranked] == [2, 4, 5]
+    assert rank(snapshot(*places[:2], taken=frozenset({1, 2}))) == []
 
 
 def test_join_names() -> None:
@@ -197,6 +220,7 @@ def random_snapshot(rng: random.Random) -> RankingSnapshot:
         member_names={1: "Alex", 2: "Sam", 3: "Kim", 4: "Lee"},
         cuisine_names={c: f"Cuisine {c}" for c in CUISINES},
         limit=rng.randint(1, 5),
+        taken=pick(ids, 3),
     )
 
 
@@ -222,11 +246,27 @@ def check_properties(seed: int) -> None:
         (i, m)
         for i in snap.items
         for m in i.modes
-        if not snap.preferences.vetoes(i) and snap.guest_needs <= i.tag_ids and snap.coverage.covers(m, i.cook_ids)
+        if i.id not in snap.taken
+        and not snap.preferences.vetoes(i)
+        and snap.guest_needs <= i.tag_ids
+        and snap.coverage.covers(m, i.cook_ids)
     ]
     fresh_exists = any(i.id not in snap.recent_items for i, _ in eligible_any)
+    # One pick per place (#77), none of them taken already, and as many as the limit allows.
+    pool = {i.id for i, _ in eligible_any if i.id not in snap.recent_items or not fresh_exists}
+    assert len({p.item_id for p in ranked}) == len(ranked) == min(snap.limit, len(pool))
     for proposal in ranked:
         chosen = items[proposal.item_id]
+        assert proposal.item_id not in snap.taken
+        # The item's best mode by its mode components, ties going to the earlier mode.
+        modes = [m for i, m in eligible_any if i.id == chosen.id]
+        mode_score = {m: round(sum(components(chosen, m, snap)[c] for c in MODE_COMPONENTS), 6) for m in modes}
+        assert mode_score[proposal.mode] == max(mode_score.values())
+        assert all(
+            MODE_ORDER.index(proposal.mode) < MODE_ORDER.index(m)
+            for m in modes
+            if m is not proposal.mode and mode_score[m] == mode_score[proposal.mode]
+        )
         # No vetoed item or tag ever appears.
         assert proposal.item_id not in snap.preferences.vetoed_items
         assert not chosen.tag_ids & snap.preferences.vetoed_tags

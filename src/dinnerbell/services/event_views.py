@@ -114,6 +114,11 @@ class EventView:
     def id(self) -> int:
         return self.event.id
 
+    @property
+    def picked_item_ids(self) -> frozenset[int]:
+        """Catalog items that are picks already, which the Add a proposal list marks (#77)."""
+        return frozenset(p.info.item.id for p in self.proposals if p.info.item.id is not None)
+
 
 @dataclass(frozen=True)
 class TodayView:

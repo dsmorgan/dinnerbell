@@ -236,7 +236,7 @@
         <select name="mode"><option value="pickup">Pickup</option><option value="delivery">Delivery</option><option value="cook">Cook</option></select>
       </label>
       <label class="field"><span>From the catalog</span>
-        <select name="item_id"><option value="">Something new instead</option>{% for item in v.items %}<option value="{{ item.id }}">{{ item.name }}</option>{% endfor %}</select>
+        <select name="item_id"><option value="">Something new instead</option>{% for item in v.items %}<option value="{{ item.id }}">{{ item.name }}{% if item.id in v.picked_item_ids %} (already a pick){% endif %}</option>{% endfor %}</select>
       </label>
       <div class="pair">
         <label class="field"><span>New place or dish</span><input type="text" name="free_text" maxlength="100"></label>
@@ -244,6 +244,7 @@
           <select name="cuisine_id"><option value="">Pick one</option>{% for tag in v.cuisine_tags %}<option value="{{ tag.id }}">{{ tag.name }}</option>{% endfor %}</select>
         </label>
       </div>
+      <p class="small muted">You'll be the one to pick it up, cook it, or order it, whichever way you choose.</p>
       <button type="submit" class="button primary">Propose</button>
     </form>
   </details>

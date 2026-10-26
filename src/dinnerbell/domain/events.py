@@ -14,7 +14,7 @@ from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, time, timedelta, tzinfo
 from enum import StrEnum
 
-from dinnerbell.domain.catalog import Mode
+from dinnerbell.domain.catalog import CatalogItem, Mode
 from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.members import Member
 
@@ -99,6 +99,11 @@ class EventRuleViolation(Exception):
     """An action the call rules forbid right now. The message is written for the person who tried it."""
 
 
+class DuplicatePick(EventRuleViolation):
+    """A second pick for a place the call already has (#77). The use cases refuse it first,
+    naming the pick; this is the backstop where every pick is written."""
+
+
 CALL_FINISHED = "This call already finished."
 STALE_CALL = "That can't happen anymore."
 OFFER_JOIN_INSTEAD = "This is an offer: tap Count me in to join it."
@@ -107,6 +112,9 @@ NO_COORDINATOR = "An offer has no coordinator: whoever made it is in charge."
 GUESTS_DONT = "Guests can answer and pitch in, but not that."
 GUEST_NOT_INVITED = "You haven't been invited to this one. Ask a household member to invite you."
 """For a guest at a rule only members may use (#38). ``domain.guests`` has the full matrix."""
+NOT_IN_TO_ADD = "You're not in for this call. Joining late is coming soon. Ask someone who's in to add it."
+"""Only someone who's in can add a pick once voting has started (#74); joining late is #76."""
+ALREADY_A_PICK = "That's already a pick on the call. Vote for it instead."
 
 
 class StaleRun(EventRuleViolation):
@@ -187,6 +195,8 @@ class ProposalSource(StrEnum):
 
 
 MODE_ROLE = {Mode.COOK: AssignmentRole.COOK, Mode.PICKUP: AssignmentRole.PICKUP, Mode.DELIVERY: AssignmentRole.ORDER}
+MODE_OFFER = {Mode.COOK: RoleOffer.COOK, Mode.PICKUP: RoleOffer.PICKUP, Mode.DELIVERY: RoleOffer.ORDER}
+"""The role a member offers by adding a pick in ``mode``: whoever adds a pick does it (#74)."""
 
 
 class Window(StrEnum):
@@ -612,6 +622,32 @@ def check_proposal_room(proposals: Iterable[Proposal], actor: Member) -> None:
         raise EventRuleViolation(f"This call already has {MAX_PROPOSALS} proposals. Vote for one of them.")
     if sum(1 for p in existing if p.proposed_by == actor.id) >= MAX_ADDED_PER_MEMBER:
         raise EventRuleViolation(f"You've added {MAX_ADDED_PER_MEMBER} proposals to this call already.")
+
+
+def check_in_to_add(mine: Response | None) -> None:
+    """Once voting has started, only someone who's in can add a pick: they'll do it (#74), and a
+    new person's vetoes would change what the picks must pass (FR-29)."""
+    if mine is None or not mine.is_in:
+        raise EventRuleViolation(NOT_IN_TO_ADD)
+
+
+def with_pick_role(current: Response | None, member_id: int, mode: Mode, now: datetime, *, join: bool) -> Response:
+    """The answer of whoever adds a pick in ``mode``, offering the role it needs: whoever adds a
+    pick does it (#74), so it's covered (FR-17). It skips ``check_can_respond``, because a pick
+    can be added after responses close. While responses are open (``join``), adding one counts
+    you in, as offering a role does; after that, only someone already in can (``check_in_to_add``)."""
+    if not join:
+        check_in_to_add(current)
+    base = with_status(current, member_id, Status.IN, now)
+    return replace(base, offers=base.offers | {MODE_OFFER[mode]})
+
+
+def check_cook_list(item: CatalogItem, mode: Mode, actor: Member, *, ask: str) -> None:
+    """FR-17: someone can cook an item when it has no cook list or they're on it. Whoever adds
+    a pick cooks it, so nobody else can add one for an item whose cook list they're not on.
+    ``ask`` ends the refusal, such as "Ask a cook to offer it"."""
+    if mode is Mode.COOK and item.cook_ids and actor.id not in item.cook_ids:
+        raise EventRuleViolation(f"{item.name} has a cook list, and you're not on it. {ask}.")
 
 
 def check_can_lock(event: Event, actor: Member) -> None:

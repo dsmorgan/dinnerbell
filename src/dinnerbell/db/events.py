@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from dinnerbell.db.models import (
     AssignmentRow,
+    CatalogItemRow,
     EventRow,
     FeedbackRow,
     InvitationRow,
@@ -25,11 +26,13 @@ from dinnerbell.db.models import (
     SuggestionRow,
     VoteRow,
 )
-from dinnerbell.domain.catalog import Mode
+from dinnerbell.domain.catalog import Mode, kind_for, name_key
 from dinnerbell.domain.events import (
+    ALREADY_A_PICK,
     OPEN_STATES,
     Assignment,
     AssignmentRole,
+    DuplicatePick,
     EndReason,
     Event,
     EventKind,
@@ -496,6 +499,9 @@ class ProposalRepository:
         score: float | None = None,
         proposed_by: int | None = None,
     ) -> Proposal:
+        """Add a pick. Raises ``DuplicatePick`` when the call has one for the same place already,
+        in any mode (#77): the use cases refuse that first, with the pick's name."""
+        await self._check_new_place(household_id, event_id, mode, item_id, free_text)
         row = ProposalRow(
             household_id=household_id,
             event_id=event_id,
@@ -513,6 +519,62 @@ class ProposalRepository:
         self._session.add(row)
         await self._session.flush()
         return _proposal(row)
+
+    async def _check_new_place(
+        self, household_id: int, event_id: int, mode: Mode, item_id: int | None, free_text: str | None
+    ) -> None:
+        """A place is a catalog item, or free text, by its kind and ``name_key``, so free text
+        matches the catalog item of the same name, whichever was added first."""
+        place = await self._place(household_id, mode, item_id, free_text)
+        rows = await self._session.execute(
+            select(ProposalRow.mode, ProposalRow.item_id, ProposalRow.free_text).where(
+                ProposalRow.household_id == household_id, ProposalRow.event_id == event_id
+            )
+        )
+        for other_mode, other_item, other_text in rows:
+            if await self._place(household_id, Mode(other_mode), other_item, other_text) == place:
+                raise DuplicatePick(ALREADY_A_PICK)
+
+    async def _place(
+        self, household_id: int, mode: Mode, item_id: int | None, free_text: str | None
+    ) -> tuple[str, str]:
+        if item_id is None:
+            return kind_for(mode).value, name_key(free_text or "")
+        item = (
+            await self._session.execute(
+                select(CatalogItemRow.kind, CatalogItemRow.name_key).where(
+                    CatalogItemRow.household_id == household_id, CatalogItemRow.id == item_id
+                )
+            )
+        ).one()
+        return item.kind, item.name_key
+
+    async def take_over(
+        self,
+        household_id: int,
+        proposal_id: int,
+        *,
+        mode: Mode,
+        item_id: int,
+        reasons: tuple[str, ...],
+        proposed_by: int,
+    ) -> None:
+        """An offer for a place that's a pick in another mode takes the pick over (#77): its mode,
+        reasons, and proposer change, and free text becomes the offer's catalog item. Its votes
+        and place in the order stay."""
+        await self._session.execute(
+            update(ProposalRow)
+            .where(ProposalRow.household_id == household_id, ProposalRow.id == proposal_id)
+            .values(
+                mode=mode.value,
+                item_id=item_id,
+                free_text=None,
+                free_cuisine_id=None,
+                reasons=list(reasons),
+                proposed_by=proposed_by,
+            )
+            .execution_options(synchronize_session=False)
+        )
 
     async def next_rank(self, household_id: int, event_id: int) -> int:
         top = await self._session.scalar(

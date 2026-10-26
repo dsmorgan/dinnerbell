@@ -801,9 +801,14 @@ class Interactions:
             view = await event_views.event_view(db, member, event_id, now=self.clock())
         moved_on = view.event.run != run or view.event.state is not EventState.COLLECTING
         if moved_on:
-            notice = None  # the card or reminder says so itself
+            _log_stale_refusal(member, event_id, notice)
         if in_dm:
             return await self._update_reminder(view, member, source, tap, run, notice)
+        if moved_on:
+            # The card says only that the call moved on, so why the tap changed nothing goes in
+            # a private line of its own (#74).
+            await self._send_card(source, self._card(view, member, run=run), member, tap)
+            return notice
         await self._send_card(source, self._card(view, member, run=run, notice=notice), member, tap)
         return None
 
@@ -1069,7 +1074,9 @@ class Interactions:
                     notice = str(friendly(exc))
                 view = await event_views.event_view(db, member, event_id, now=self.clock())
             if view.event.run != run or view.event.state is not EventState.COLLECTING:
-                notice = None
+                _log_stale_refusal(member, event_id, notice)
+                await self._send_card(source, self._card(view, member, run=run), member, tap)
+                return notice  # in a line of its own, as on a member's own card
             await self._send_card(source, self._card(view, member, run=run, notice=notice), member, tap)
         return None
 
@@ -1523,3 +1530,13 @@ def _get(data: object, *path: str) -> object:
             return None
         data = data.get(key)
     return data
+
+
+def _log_stale_refusal(member: Member, event_id: int, refusal: str | None) -> None:
+    """Log a refusal of a tap on a card or reminder for a call that moved on (#74, #75). Refusals
+    are normal, so it's info."""
+    if refusal is not None:
+        log.info(
+            "slack card tap refused",
+            extra={"member_id": member.id, "event_id": event_id, "reason": "moved_on", "refusal": refusal},
+        )

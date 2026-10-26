@@ -10,7 +10,7 @@ back as untrusted input.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Collection, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import date, time
 from typing import Any
@@ -18,6 +18,7 @@ from typing import Any
 from dinnerbell.channels.slack import ids
 from dinnerbell.channels.slack.blocks import (
     MAX_MODAL_TITLE,
+    MAX_OPTION_TEXT,
     MAX_OPTIONS,
     MAX_VIEW_BLOCKS,
     Block,
@@ -113,21 +114,29 @@ def _hhmm(at: time | None) -> dict[str, str]:
     return {"initial_time": f"{at.hour:02d}:{at.minute:02d}"} if at else {}
 
 
-def _item_label(item: CatalogItem) -> str:
+PICKED = " (already a pick)"
+
+
+def _item_label(item: CatalogItem, picked: Collection[int] = ()) -> str:
+    """The item's name, marked when it's a pick on the call already (#77)."""
+    if item.id in picked:
+        return clip(item.name, MAX_OPTION_TEXT - len(PICKED)) + PICKED
     return item.name
 
 
-def _item_groups(items: Iterable[CatalogItem], keep: Iterable[int] = ()) -> tuple[list[Block], list[dict[str, Any]]]:
+def _item_groups(
+    items: Iterable[CatalogItem], keep: Iterable[int] = (), picked: Collection[int] = ()
+) -> tuple[list[Block], list[dict[str, Any]]]:
     """Catalog items as option groups (home meals, restaurants), at most 100 each. Items in
-    ``keep`` are always listed, so a saved choice survives a big catalog. Returns the groups
-    and the options for ``keep``."""
+    ``keep`` are always listed, so a saved choice survives a big catalog; items in ``picked``
+    are marked. Returns the groups and the options for ``keep``."""
     keep_ids = set(keep)
     groups: list[Block] = []
     chosen: list[dict[str, Any]] = []
     for kind, label in ((ItemKind.HOME, "Home meals"), (ItemKind.RESTAURANT, "Restaurants")):
         of_kind = [i for i in items if i.kind is kind]
         ordered = [i for i in of_kind if i.id in keep_ids] + [i for i in of_kind if i.id not in keep_ids]
-        options = [option(_item_label(i), str(i.id)) for i in ordered[:MAX_OPTIONS]]
+        options = [option(_item_label(i, picked), str(i.id)) for i in ordered[:MAX_OPTIONS]]
         chosen += [o for o, i in zip(options, ordered, strict=False) if i.id in keep_ids]
         if options:
             groups.append({"label": plain(label, 75), "options": options})
@@ -265,13 +274,15 @@ def parse_details(values: Any) -> Details:
 
 
 def proposal_modal(v: EventView, origin: ids.ViewOrigin) -> dict[str, Any]:
-    """FR-13: a catalog item, or something new with a cuisine, and how to get it."""
+    """FR-13: a catalog item, or something new with a cuisine, and how to get it. Whoever adds
+    it does it (#74), so the modal says so; items that are picks already are marked (#77)."""
     modes = [option(m.label, m.value) for m in Mode]
     blocks: list[Block] = [
         _intro(v),
+        context(ADD_PICK_NOTE),
         _input("mode", "How", {"type": "static_select", "options": modes}, optional=False),
     ]
-    groups, _ = _item_groups(v.items)
+    groups, _ = _item_groups(v.items, picked=v.picked_item_ids)
     if groups:
         blocks.append(_input("item", "From the catalog", {"type": "static_select", "option_groups": groups}))
     blocks.append(
@@ -282,6 +293,9 @@ def proposal_modal(v: EventView, origin: ids.ViewOrigin) -> dict[str, Any]:
         hint = "Needed for something new, so variety and vetoes still work."
         blocks.append(_input("cuisine", "Cuisine", cuisines, hint=hint))
     return _modal("Add a pick", ids.PROPOSAL_VIEW, origin, blocks, "Add")
+
+
+ADD_PICK_NOTE = "You'll be the one to pick it up, cook it, or order it, whichever way you choose."
 
 
 @dataclass(frozen=True, slots=True)

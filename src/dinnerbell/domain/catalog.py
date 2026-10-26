@@ -47,6 +47,11 @@ class Mode(StrEnum):
     def label(self) -> str:
         return {"cook": "Cook", "pickup": "Pickup", "delivery": "Delivery"}[self.value]
 
+    @property
+    def verb(self) -> str:
+        """What the member doing it does: "Nobody who's in offered to pick up for that." """
+        return {"cook": "cook", "pickup": "pick up", "delivery": "order"}[self.value]
+
 
 ALLOWED_MODES: dict[ItemKind, frozenset[Mode]] = {
     ItemKind.HOME: frozenset({Mode.COOK}),
@@ -57,6 +62,11 @@ DEFAULT_MODES: dict[ItemKind, frozenset[Mode]] = {
     ItemKind.RESTAURANT: frozenset({Mode.PICKUP}),
 }
 MODE_ORDER = (Mode.COOK, Mode.PICKUP, Mode.DELIVERY)
+
+
+def kind_for(mode: Mode) -> ItemKind:
+    """The kind of item ``mode`` gets: cooking is a home meal; pickup and delivery, a restaurant."""
+    return ItemKind.HOME if mode is Mode.COOK else ItemKind.RESTAURANT
 
 
 class InvalidCatalogInput(ValueError):

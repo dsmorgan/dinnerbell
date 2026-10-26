@@ -174,8 +174,12 @@ def test_adding_a_catalog_proposal(admin: TestClient, clock: FakeClock, migrated
     to_voting(admin, clock, event_id)
     add_item(admin, "Late Night", cuisines="Thai")  # added after ranking, so not yet proposed
     late = next(i.id for i in rows(migrated, CatalogItemRow) if i.name == "Late Night")
+    form = admin.get(f"/events/{event_id}").text
+    assert "the one to pick it up, cook it, or order it" in form  # whoever adds a pick does it (#74)
+    assert "Siam Garden (already a pick)</option>" in form and "Late Night</option>" in form  # #77
     response = htmx(admin, f"/events/{event_id}/proposals", {"mode": "pickup", "item_id": str(late)})
     assert response.status_code == 200 and "Added by admin." in page(response)
+    assert "Late Night (already a pick)</option>" in response.text
     assert late in {p.item_id for p in rows(migrated, ProposalRow)}
 
 
