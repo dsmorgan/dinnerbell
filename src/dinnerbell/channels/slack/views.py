@@ -769,12 +769,9 @@ def _older(cards: Sequence[list[Block]], room: int, web: str) -> list[Block]:
     fit in ``room`` blocks, and a line linking ``web`` for the rest. ``room`` leaves out that line."""
     blocks, shown = _fit(cards[:MAX_OLDER_CALLS], room, "*Still open from earlier days*")
     more = len(cards) - shown
-    if more and shown:
-        blocks.append(context(f"…and {plural(more, 'more open call')} on {web}."))
-    elif more:
-        blocks.append(
-            context(f"{plural(more, 'open call')} from earlier days {'is' if more == 1 else 'are'} on {web}.")
-        )
+    if more:  # calls and offers alike
+        what = f"…and {more} more from earlier days" if shown else f"{more} still open from earlier days"
+        blocks.append(context(f"{what} on {web}."))
     return blocks
 
 
@@ -826,13 +823,14 @@ def home_view(
             return _offer_card(v, v.offer, links, today.today)
         return _event_card(v, links, today.today, guest=guest)
 
-    # Today's, and any posted early for a later day (#59), in the order they came.
+    # Today's, and any posted early for a later day (#59), in the order they came. Anything
+    # open from an earlier day, even a call that never posted, is left over.
     current = [card(v) for v in today.current if v.event.day >= today.today]
-    left_over = [v for v in today.current if v.event.day < today.today]
+    left_over = [v for v in today.events if v.event.day < today.today]
     older = [card(v) for v in sorted(left_over, key=lambda v: v.event.day, reverse=True)]
     if guest:
         return _guest_home(head, current, older, links)
-    upcoming = [_upcoming_card(v, links) for v in today.upcoming]
+    upcoming = [_upcoming_card(v, links) for v in today.upcoming if v.event.day >= today.today]
     todays = [v.event for v in today.events if v.event.day == today.today]
     # A cooking offer stands in for that slot's call (FR-5), so there's no call to start.
     started = {e.slot for e in todays if not e.is_offer or replaces_call(e)}
