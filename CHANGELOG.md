@@ -6,6 +6,8 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-27
+
 ### Added
 
 - Catalog items say which meals they're for: breakfast, lunch, dinner, or any mix (#72). Most places aren't breakfast places, so the default is lunch and dinner, for new items, items imported without the field, and every item you already have.
@@ -222,7 +224,8 @@ The source-built version, never published as an image. It covers milestones M0 t
 - **M1:** the catalog with file import, preferences and vetoes, meal history, and the members admin page.
 - **M2:** dinner calls in Slack: the scheduled call, reminders, ranked proposals and votes, the decision, assignments, the abandon path, admin overrides, App Home, and `/dinnerbell call`.
 
-[Unreleased]: https://github.com/dsmorgan/dinnerbell/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/dsmorgan/dinnerbell/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/dsmorgan/dinnerbell/releases/tag/v0.6.0
 [0.5.0]: https://github.com/dsmorgan/dinnerbell/releases/tag/v0.5.0
 [0.4.0]: https://github.com/dsmorgan/dinnerbell/releases/tag/v0.4.0
 [0.3.0]: https://github.com/dsmorgan/dinnerbell/releases/tag/v0.3.0
