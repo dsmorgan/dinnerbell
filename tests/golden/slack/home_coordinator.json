@@ -20,7 +20,7 @@
       "block_id": "event-actions-7",
       "elements": [
         {
-          "action_id": "respond_in",
+          "action_id": "card_in",
           "style": "primary",
           "text": {
             "emoji": true,
@@ -28,37 +28,68 @@
             "type": "plain_text"
           },
           "type": "button",
-          "value": "7"
+          "value": "7:1"
         },
         {
-          "action_id": "respond_maybe",
+          "action_id": "card_maybe",
           "text": {
             "emoji": true,
             "text": "Maybe",
             "type": "plain_text"
           },
           "type": "button",
-          "value": "7"
+          "value": "7:1"
         },
         {
-          "action_id": "respond_out",
+          "action_id": "card_out",
           "text": {
             "emoji": true,
             "text": "Out",
             "type": "plain_text"
           },
           "type": "button",
-          "value": "7"
+          "value": "7:1"
         },
         {
-          "action_id": "details",
+          "action_id": "card_withdraw_cook",
+          "style": "primary",
+          "text": {
+            "emoji": true,
+            "text": "✓ I can cook",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "7:1"
+        },
+        {
+          "action_id": "card_offer_pickup",
+          "text": {
+            "emoji": true,
+            "text": "I can pick up",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "7:1"
+        },
+        {
+          "action_id": "card_offer_order",
+          "text": {
+            "emoji": true,
+            "text": "I'll order",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "7:1"
+        },
+        {
+          "action_id": "card_details",
           "text": {
             "emoji": true,
             "text": "Details",
             "type": "plain_text"
           },
           "type": "button",
-          "value": "7"
+          "value": "7:1"
         },
         {
           "action_id": "close_window",

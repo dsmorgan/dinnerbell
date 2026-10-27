@@ -403,6 +403,43 @@ def test_cards_show_only_the_persons_own_choices_and_escape_what_people_typed() 
     assert "style" not in json.dumps(card["blocks"])  # nothing chosen, nothing marked
 
 
+HOME_ONLY = {"link_event", "mark_done", "close_window", "cancel_call"}
+"""Buttons Home's call card has that the Your answer card doesn't: its own, not answers."""
+
+
+@pytest.mark.parametrize("guest", [False, True], ids=["member", "guest"])
+@pytest.mark.parametrize("coordinator", [samples.ALEX, None], ids=["coordinated", "no coordinator"])
+@pytest.mark.parametrize("mine", [samples.SAM_RESPONSE, None], ids=["answered", "not answered"])
+def test_home_and_the_card_offer_the_same_answer_actions(
+    guest: bool, coordinator: note.PersonInfo | None, mine: note.Response | None
+) -> None:
+    """Home's call card and the Your answer card draw their answers from one builder (#84): the
+    same buttons, IDs, values, and selected state (#42), in the same order, for a member and a
+    guest. A member also invites; the card puts that in its last row, Home at the end of one."""
+    from dinnerbell.channels.slack.messages import your_answer
+    from dinnerbell.services.event_views import Permissions
+
+    info = replace(samples.COLLECTING_VIEW.info, coordinator=coordinator)
+    view = replace(samples.COLLECTING_VIEW, info=info, mine=mine, can=Permissions(respond=True, invite=not guest))
+    home = home_view(TodayView(samples.DAY, [view], tuple(Slot)), HomeLinks(samples.BASE_URL), guest=guest)
+    check_view(home)
+    (row,) = [b for b in home["blocks"] if b.get("block_id") == "event-actions-7"]
+    card = your_answer(info, mine, samples.SAM.id, CTX, run=1, guest=guest, can_invite=not guest).payload()
+    check_message(card)
+    on_card = [e for b in card["blocks"] if b["type"] == "actions" for e in b["elements"] if "url" not in e]
+    on_home = [e for e in row["elements"] if e["action_id"] not in HOME_ONLY]
+    assert on_home == on_card
+    assert len(row["elements"]) <= bk.MAX_ACTIONS
+    ids_shown = [e["action_id"] for e in on_home]
+    answers = ["card_in", "card_out"] if guest else ["card_in", "card_maybe", "card_out"]
+    assert ids_shown[: len(answers)] == answers  # first, then the roles
+    assert ids_shown[len(answers)] == ("card_withdraw_cook" if mine else "card_offer_cook")
+    assert ("card_coordinate" in ids_shown) is (coordinator is None)
+    assert ("card_details" in ids_shown) is ("invite_guest" in ids_shown) is (not guest)
+    chosen = [e["text"]["text"] for e in on_home if e.get("style") == "primary"]
+    assert chosen == (["✓ In", "✓ I can cook"] if mine else [])
+
+
 def test_messages_offering_a_link_show_the_slack_account_and_its_email() -> None:
     """A display name proves nothing (#38): wherever an admin might link a Slack account, the
     message shows the account itself and the email Slack shares, and never offers an admin."""

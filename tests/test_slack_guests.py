@@ -202,10 +202,22 @@ async def test_a_guest_sees_only_their_invitations_and_answers_in_or_out(slack: 
     }
     await slack.open_home(PAT)
     home = buttons(slack.last_home(PAT)["blocks"])
-    assert ids.ACTION_FOR_STATUS[Status.MAYBE] not in home and ids.DETAILS not in home and ids.MAKE_OFFER not in home
-    await slack.click(PAT, ids.ACTION_FOR_STATUS[Status.IN], str(event_id), home=True)
-    ctx = await house.context(event_id)
-    assert ctx.response_of(house["Pat"].id).status is Status.IN  # type: ignore[union-attr]
+    # Home offers what their card does (#84): In, Out, and the roles, and nothing a member has.
+    assert set(home) == {
+        ids.CARD_ACTION_FOR_STATUS[Status.IN],
+        ids.CARD_ACTION_FOR_STATUS[Status.OUT],
+        *ids.CARD_OFFER,
+        ids.CARD_COORDINATE,
+        "link_event",
+    }
+    await slack.click(PAT, ids.CARD_ACTION_FOR_STATUS[Status.IN], ids.card_value(event_id, 1), home=True)
+    await slack.click(PAT, "card_offer_order", ids.card_value(event_id, 1), home=True)
+    mine = (await house.context(event_id)).response_of(house["Pat"].id)
+    assert mine is not None and mine.status is Status.IN and mine.offers == {RoleOffer.ORDER}
+    assert "card_withdraw_order" in buttons(slack.last_home(PAT)["blocks"])
+    await slack.click(PAT, ids.ACTION_FOR_STATUS[Status.OUT], str(event_id), home=True)  # a Home from before #84
+    assert (await house.context(event_id)).response_of(house["Pat"].id).status is Status.OUT  # type: ignore[union-attr]
+    await slack.click(PAT, ids.CARD_ACTION_FOR_STATUS[Status.IN], ids.card_value(event_id, 1), home=True)
 
     await slack.click(PAT, ids.ANSWER, ids.card_value(event_id, 1))
     card = slack.cards(PAT)[-1]

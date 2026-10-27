@@ -858,8 +858,39 @@ def your_answer(
     closes = local_clock(event.respond_deadline, event.timezone)
     that_day = " that day" if event.early else ""
     blocks.append(context(f"Only you can see this. Tap to change your answer until *{closes}*{that_day}."))
+    answer = answer_actions(event, mine, guest=guest, can_invite=can_invite)
+    blocks.append(actions(*answer.participation, block_id="participation"))
+    blocks.append(actions(*answer.roles, block_id="roles"))
+    blocks += _guest_rows(event, guests)
+    blocks.append(actions(*answer.more, _web_button(ctx, event), block_id="more"))
+    return labelled(_finish(text, blocks), ctx)
+
+
+@dataclass(frozen=True)
+class AnswerActions:
+    """A call's answer buttons for one person, with their own choices selected: what the Your
+    answer card shows in three rows and App Home's call card shows in one (#84)."""
+
+    participation: list[Block]
+    """**In**, **Maybe**, and **Out**; a guest's are **In** and **Out** (#38)."""
+    roles: list[Block]
+    """The role offers, each saying which way it goes, and **I'll coordinate** while nobody is."""
+    more: list[Block]
+    """**Details**, for members, and **Invite a guest** for whoever may."""
+
+    @property
+    def row(self) -> list[Block]:
+        """Every button, in order, for a surface that shows them in one row."""
+        return [*self.participation, *self.roles, *self.more]
+
+
+def answer_actions(
+    event: note.EventInfo, mine: Response | None, *, guest: bool = False, can_invite: bool = False
+) -> AnswerActions:
+    """The answer buttons for ``event`` as it is now, drawn for its run (``ids.card_value``), with
+    ``mine`` selected. The Your answer card and App Home both draw them here, so the two offer
+    the same actions with the same IDs and can't drift apart (#84)."""
     value = ids.card_value(event.id, event.run)
-    blocks.append(actions(*_answer_buttons(value, mine, guest=guest), block_id="participation"))
     roles: list[Block] = []
     for role in RoleOffer:
         offered = mine is not None and role in mine.offers
@@ -867,15 +898,12 @@ def your_answer(
         roles.append(choice_button(OFFER_LABELS[role], action, value, selected=offered))
     if event.coordinator is None:
         roles.append(button("I'll coordinate", ids.CARD_COORDINATE, value))
-    blocks.append(actions(*roles, block_id="roles"))
-    blocks += _guest_rows(event, guests)
     more: list[Block] = []
-    if not guest:  # a guest's card has only In, Out, and the roles (#38)
+    if not guest:  # a guest has only In, Out, and the roles (#38)
         more.append(button("Details", ids.CARD_DETAILS, value))
     if can_invite:
         more.append(button("Invite a guest", ids.INVITE_GUEST, value))
-    blocks.append(actions(*more, _web_button(ctx, event), block_id="more"))
-    return labelled(_finish(text, blocks), ctx)
+    return AnswerActions(_answer_buttons(value, mine, guest=guest), roles, more)
 
 
 def maybe_resolved_message(notification: note.MaybeResolved, ctx: RenderContext) -> Message:

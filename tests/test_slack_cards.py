@@ -398,13 +398,12 @@ async def test_a_response_url_that_isnt_slacks_is_never_called(slack: Slack, hou
 
 
 async def test_card_buttons_work_only_on_a_card(slack: Slack, house: House) -> None:
-    """A card button arriving from the call message, or from Home, isn't something this app drew."""
+    """A card button arriving from the call message isn't something this app drew. Home draws
+    them too (#84), so they work there; see test_slack_interactions."""
     event_id = await open_call(house)
     value = ids.card_value(event_id, 1)
     await slack.click("Kim", "card_in", value)  # not ephemeral: the call message
     assert slack.ephemerals("Kim") == [OUT_OF_DATE]
-    await slack.click("Kim", "card_in", value, home=True)
-    assert OUT_OF_DATE in json.dumps(slack.last_home("Kim"))
     assert slack.fake.of("response_url") == []
     assert await response(house, event_id, "Kim") == (None, frozenset())
 

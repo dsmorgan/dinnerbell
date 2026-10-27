@@ -777,15 +777,41 @@ class Interactions:
     async def _card_tap(
         self, member: Member, source: Source, action_id: str, value: object, trigger: object, tap: Tap
     ) -> str | None:
-        """A button on a Your answer card or a reminder: act on the run it names, then show the
-        person where they stand on that same message. A card or reminder for a call that has
-        moved on says so instead of acting on what came after."""
+        """A button on a Your answer card, a reminder, or App Home's call card: act on the run it
+        names, then show the person where they stand on that same surface. A card or reminder
+        for a call that has moved on says so instead of acting on what came after."""
         event_id, run = ids.parse_card(value)
         in_dm = source.channel_id is not None and not self._on_call_message(source)
-        if source.home or (not in_dm and not tap.ephemeral):
-            raise ids.BadValue("card buttons are drawn only on cards and reminders")
+        if not source.home and not in_dm and not tap.ephemeral:
+            raise ids.BadValue("card buttons are drawn only on cards, reminders, and Home")
         async with self._card_lock(source.user_id, event_id):
+            if source.home:
+                return await self._home_card_tap(member, source, action_id, event_id, run, trigger)
             return await self._card_tap_locked(member, source, action_id, event_id, run, trigger, tap, in_dm=in_dm)
+
+    async def _home_card_tap(
+        self, member: Member, source: Source, action_id: str, event_id: int, run: int, trigger: object
+    ) -> str | None:
+        """A card button on App Home (#84): the same service call as on the card, for the run
+        Home was drawn for. ``_run`` then republishes Home, which shows the new selection, with
+        a line saying what changed, or why nothing did, such as the call having moved on. A
+        refusal is logged once, here, as on the card (#75)."""
+        refusal: Exception | None = None
+        async with self.sessionmaker() as db:
+            try:
+                if action_id == ids.CARD_DETAILS:
+                    return await self._card_details(db, member, source, event_id, run, trigger)
+                await self._card_change(db, member, action_id, event_id, run)
+            except SHOWN_ERRORS as exc:
+                refusal = exc
+            except IllegalTransition as exc:
+                refusal = friendly(exc)
+            view = await event_views.event_view(db, member, event_id, now=self.clock())
+        if refusal is not None:
+            moved_on = view.event.run != run or view.event.state is not EventState.COLLECTING
+            _refused(refusal, str(refusal), member, event_id, action_id, moved_on=moved_on)
+            return str(refusal)
+        return home_done(action_id, view.event.slot.value)
 
     async def _card_tap_locked(
         self,
@@ -838,13 +864,15 @@ class Interactions:
     async def _card_details(
         self, db: AsyncSession, member: Member, source: Source, event_id: int, run: int, trigger: object
     ) -> str | None:
-        """Details from a card: the modal names the card's run, which saving checks again."""
+        """Details from a card or Home: the modal names the run it was drawn for, which saving
+        checks again."""
         if not isinstance(trigger, str) or not trigger:
             raise ids.BadValue("no trigger")
         view = await event_views.event_view(db, member, event_id, now=self.clock())
         check_run(view.event, run)
         check_can_respond(view.event, member)
-        await self.api.open_view(trigger, details_modal(view, ids.ViewOrigin(event_id, source.channel_id, run=run)))
+        origin = ids.ViewOrigin(event_id, source.channel_id, home=source.home, run=run)
+        await self.api.open_view(trigger, details_modal(view, origin))
         return None
 
     async def _update_reminder(
@@ -1537,6 +1565,17 @@ def parse_cancel_args(
         rest.pop(0)
     reason = " ".join(rest).replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
     return slot, day, reason or None
+
+
+def home_done(action_id: str, slot: str) -> str:
+    """The line Home shows after a card button there worked (#84), as its older buttons did."""
+    if action_id in ids.CARD_RESPOND:
+        return CONFIRM[ids.ACTION_FOR_STATUS[ids.CARD_RESPOND[action_id]]].format(slot=slot)
+    if action_id in ids.CARD_OFFER:
+        return OFFERED[ids.CARD_OFFER[action_id]]
+    if action_id in ids.CARD_WITHDRAW:
+        return WITHDRAWN[ids.CARD_WITHDRAW[action_id]]
+    return CONFIRM[ids.COORDINATE].format(slot=slot)
 
 
 def _get(data: object, *path: str) -> object:

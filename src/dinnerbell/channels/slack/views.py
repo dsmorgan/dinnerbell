@@ -39,15 +39,12 @@ from dinnerbell.channels.slack.blocks import (
     section,
 )
 from dinnerbell.channels.slack.messages import (
-    ANSWER_WORDS,
-    ANSWERS,
     CALL_OFF,
     CANT_MAKE_IT,
     CLOSE_LABELS,
-    GUEST_ANSWERS,
     OFFER_VERBS,
     POST_NOW,
-    choice_button,
+    answer_actions,
     mark_done_button,
 )
 from dinnerbell.domain import notifications as note
@@ -683,18 +680,14 @@ def _event_card(v: EventView, links: HomeLinks, today: date, *, guest: bool = Fa
     if state is EventState.CANCELLED and v.info.ended_by is not None:
         reason = f" “{escape(v.info.end_note)}”" if v.info.end_note else ""
         lines.append(f"Called off by {escape(v.info.ended_by.name)}.{reason}")
-    value = ids.event_value(v.id)
     buttons: list[Block] = []
     if v.can.respond:
-        # Home is per member, so their answer shows as selected (spec section 10). A guest is
-        # in or out, with no details (#38).
-        answer = v.mine.status if v.mine is not None else None
-        choices = GUEST_ANSWERS if guest else ANSWERS
-        buttons += [
-            choice_button(ANSWER_WORDS[s], ids.ACTION_FOR_STATUS[s], value, selected=s is answer) for s in choices
-        ]
-        if not guest:
-            buttons.append(button("Details", ids.DETAILS, value))
+        # Home is per member, so it offers what their Your answer card does, with their choices
+        # selected, from the same builder (#84). A guest is in or out, with no details (#38).
+        # They come first, in one row with the rest: the block budget counts every card as two
+        # blocks (#51), and Slack folds what doesn't fit on screen into "+ N more", so the
+        # least-used buttons go last. Rows for a member's guests without Slack stay on the card.
+        buttons += answer_actions(v.info, v.mine, guest=guest, can_invite=v.can.invite).row
     if v.can.mark_done:
         buttons.append(mark_done_button(v.info))
     # Home is per member, so these show only to people allowed to use them (FR-56).
