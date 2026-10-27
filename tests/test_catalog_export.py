@@ -40,6 +40,7 @@ from dinnerbell.domain.catalog import (
     CatalogItem,
     InvalidCatalogInput,
     ItemKind,
+    Meal,
     Mode,
     Tag,
     TagKind,
@@ -129,6 +130,7 @@ ITEMS = [
         cook_ids=frozenset({7}),
         default_servings=4,
         active=False,
+        meals=frozenset({Meal.DINNER, Meal.BREAKFAST}),
     ),
 ]
 EXPECTED = """\
@@ -145,6 +147,7 @@ restaurants:
     cuisine: [Lao, Thai]
     tags: [spicy]
     modes: [pickup, delivery]
+    meals: [lunch, dinner]
     url: https://example.com/menu
     order_url: null
     notes: |-
@@ -155,6 +158,7 @@ home_meals:
   - name: chicken larb
     cuisine: [Lao]
     tags: [chicken]
+    meals: [breakfast, dinner]
     servings: 4
     url: null
     notes: null
@@ -336,6 +340,9 @@ async def test_seed_export_import_export_is_byte_identical(databases: dict[str, 
     await apply(source, EDGES, clock)
     first = await export(source)
     assert (first.restaurants, first.home_meals) == (6, 5)
+    # Which meals each item is for travels too (#72): the example's own, and the default.
+    assert "    meals: [lunch]\n" in first.text and "    meals: [breakfast, lunch, dinner]\n" in first.text
+    assert "    meals: [lunch, dinner]\n" in first.text
 
     created = await apply(copy, first.data, clock)
     assert created.summary()["items_created"] == 11 and created.unknown_cooks == ()
@@ -491,7 +498,7 @@ async def test_an_export_holds_no_personal_data(migrated: Settings, clock: FakeC
     document = yaml.safe_load(text)
     assert list(document) == ["version", "tags", "restaurants", "home_meals"]
     fields = {key for section in ("restaurants", "home_meals") for entry in document[section] for key in entry}
-    assert fields == {"name", "cuisine", "tags", "modes", "servings", "url", "order_url", "notes", "active"}
+    assert fields == {"name", "cuisine", "tags", "modes", "meals", "servings", "url", "order_url", "notes", "active"}
 
 
 # The web ------------------------------------------------------------------------------------------

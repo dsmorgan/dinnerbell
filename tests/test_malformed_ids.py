@@ -84,6 +84,7 @@ def test_form_ids_are_ignored_or_refused(lenient: TestClient, migrated: Settings
             "name": f"Z{len(bad)}",
             "new_cuisines": "Thai",
             "modes": ["pickup"],
+            "meals": ["dinner"],
             "tag_ids": [bad],
             "csrf_token": token,
         },

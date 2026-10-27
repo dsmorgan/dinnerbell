@@ -42,6 +42,24 @@
           "description": "Any other tags.",
           "title": "Tags"
         },
+        "meals": {
+          "default": [
+            "lunch",
+            "dinner"
+          ],
+          "description": "Which meals it's for: breakfast, lunch, dinner, or any mix. Default: lunch and dinner.",
+          "items": {
+            "enum": [
+              "breakfast",
+              "lunch",
+              "dinner"
+            ],
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Meals",
+          "type": "array"
+        },
         "servings": {
           "anyOf": [
             {
@@ -172,6 +190,24 @@
           },
           "minItems": 1,
           "title": "Modes",
+          "type": "array"
+        },
+        "meals": {
+          "default": [
+            "lunch",
+            "dinner"
+          ],
+          "description": "Which meals it's for: breakfast, lunch, dinner, or any mix. Default: lunch and dinner.",
+          "items": {
+            "enum": [
+              "breakfast",
+              "lunch",
+              "dinner"
+            ],
+            "type": "string"
+          },
+          "minItems": 1,
+          "title": "Meals",
           "type": "array"
         },
         "url": {

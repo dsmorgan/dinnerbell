@@ -350,6 +350,7 @@ async def test_a_winning_free_text_proposal_joins_the_catalog(house: House) -> N
         proposal = await db.get(ProposalRow, pho.id)
     assert row is not None and proposal is not None
     assert (row.kind, row.modes, row.created_by) == ("restaurant", ["pickup"], house["Sam"].id)
+    assert row.meals == 6  # the call's meal and the default: lunch and dinner (#72)
     assert (proposal.item_id, proposal.free_text) == (row.id, None)
     event = await house.event(event_id)
     assert (event.decided_item_id, event.decided_mode) == (row.id, Mode.PICKUP)

@@ -18,7 +18,7 @@ from dinnerbell.db.events import EventRepository
 from dinnerbell.db.models import AuditRow, MealLogRow, MemberRow
 from dinnerbell.db.outbox import OutboxEntry, OutboxRepository
 from dinnerbell.db.repositories import MemberRepository, to_member
-from dinnerbell.domain.catalog import CatalogItem, ItemKind, Mode, Tag, TagKind
+from dinnerbell.domain.catalog import DEFAULT_MEALS, CatalogItem, ItemKind, Meal, Mode, Tag, TagKind
 from dinnerbell.domain.events import Event
 from dinnerbell.domain.household import Household
 from dinnerbell.domain.meals import Slot
@@ -129,6 +129,7 @@ class House:
         tags: tuple[str, ...] = (),
         cooks: tuple[str, ...] = (),
         url: str | None = None,
+        meals: frozenset[Meal] = DEFAULT_MEALS,
     ) -> CatalogItem:
         for tag_name in (cuisine, *tags):
             if tag_name not in self.tags:
@@ -139,6 +140,7 @@ class House:
             kind=kind,
             name=name,
             modes=frozenset(modes),
+            meals=meals,
             tag_ids=frozenset(self.tags[t].id for t in (cuisine, *tags)),
             cook_ids=frozenset(self.people[c].id for c in cooks),
             url=url,

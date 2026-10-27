@@ -29,6 +29,12 @@
         {% for m in modes %}<option value="{{ m.value }}"{% if search.mode == m %} selected{% endif %}>{{ m.label }}</option>{% endfor %}
       </select>
     </label>
+    <label class="field"><span class="small muted">Meal</span>
+      <select name="meal">
+        <option value="">Any meal</option>
+        {% for m in meals %}<option value="{{ m.value }}"{% if search.meal == m %} selected{% endif %}>{{ m.label }}</option>{% endfor %}
+      </select>
+    </label>
     <label class="field"><span class="small muted">Tag</span>
       <select name="tag">
         <option value="">Any tag</option>
@@ -69,6 +75,7 @@
         {% if not item.active %}<span class="badge">Inactive</span>{% endif %}
       </div>
       <div class="chips">
+        {% for m in sorted_meals(item.meals) %}<a class="chip meal" href="/catalog?meal={{ m.value }}">{{ m.label }}</a>{% endfor %}
         {% for m in sorted_modes(item.modes) %}<span class="chip mode">{{ m.label }}</span>{% endfor %}
         {% for tag_id in item.tag_ids|sort %}{% set t = tags[tag_id] %}<a class="chip tag-{{ t.kind.value }}" href="/catalog?tag={{ t.id }}">{{ t.name }}</a>{% endfor %}
       </div>

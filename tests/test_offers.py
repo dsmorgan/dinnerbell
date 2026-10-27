@@ -352,6 +352,7 @@ async def test_something_new_joins_the_catalog_and_a_known_name_reuses_it(house:
     async with database.sessionmaker() as db:
         made = list(await db.scalars(select(CatalogItemRow).where(CatalogItemRow.name == "Pho Real")))
     assert len(made) == 1 and made[0].created_by == house["Kim"].id and made[0].modes == ["pickup"]
+    assert made[0].meals == 6  # the offer's meal, lunch, and the default: lunch and dinner (#72)
     assert first.item_name == second.item_name == "Pho Real"
     (created,) = await house.audits("catalog.item_created")
     assert created.payload["from_offer"] is True

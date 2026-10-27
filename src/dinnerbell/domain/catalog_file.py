@@ -75,6 +75,10 @@ Notes = Annotated[
 CookEmail = Annotated[str, AfterValidator(_cook_email), WithJsonSchema({"type": "string", "format": "email"})]
 
 
+MealName = Literal["breakfast", "lunch", "dinner"]
+MEALS_FIELD = "Which meals it's for: breakfast, lunch, dinner, or any mix. Default: lunch and dinner."
+
+
 class _Strict(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, coerce_numbers_to_str=True, frozen=True)
 
@@ -97,6 +101,7 @@ class RestaurantEntry(_Strict):
     modes: list[Literal["pickup", "delivery"]] = Field(
         default=["pickup"], min_length=1, description="pickup, delivery, or both."
     )
+    meals: list[MealName] = Field(default=["lunch", "dinner"], min_length=1, description=MEALS_FIELD)
     url: WebURL | None = Field(default=None, description="Menu or website link.")
     order_url: WebURL | None = Field(default=None, description="Link to order online, such as a delivery app page.")
     notes: Notes | None = Field(default=None, description=f"Free text up to {MAX_NOTES_LENGTH} characters.")
@@ -109,6 +114,7 @@ class HomeMealEntry(_Strict):
     name: ItemName = Field(description="What's being made. Unique among home meals, ignoring case.")
     cuisine: TagList = Field(min_length=1, description="One or more cuisine tags.")
     tags: TagList | None = Field(default=None, description="Any other tags.")
+    meals: list[MealName] = Field(default=["lunch", "dinner"], min_length=1, description=MEALS_FIELD)
     servings: int | None = Field(
         default=None, ge=1, le=MAX_SERVINGS, description="Typical number of servings one batch makes."
     )

@@ -26,7 +26,7 @@ from dinnerbell.db.events import AssignmentRepository, EventRepository, Proposal
 from dinnerbell.db.meals import MealLogRepository, household_settings
 from dinnerbell.db.repositories import HouseholdRepository, MemberRepository
 from dinnerbell.domain import notifications as note
-from dinnerbell.domain.catalog import CatalogItem, ItemKind, Mode
+from dinnerbell.domain.catalog import DEFAULT_MEALS, CatalogItem, ItemKind, Mode
 from dinnerbell.domain.events import (
     MAX_PROPOSALS,
     MIN_HEAD_COUNT,
@@ -362,6 +362,7 @@ def rank_item(ctx: CallContext, item: CatalogItem) -> RankItem:
         tag_ids=item.tag_ids,
         cuisine_ids=frozenset(ctx.cuisine_ids(item.tag_ids)),
         cook_ids=item.cook_ids,
+        meals=item.meals,
     )
 
 
@@ -388,6 +389,7 @@ async def ranking_snapshot(
         coverage=ctx.coverage,
         weights=weights(ctx.settings),
         window_days=window.days,
+        meal=ctx.event.slot.meal,
         guest_needs=guest_needs(ctx),
         default_modes=ctx.schedule.modes,
         recent_items={i.item_id: i.days_since for i in window.items},
@@ -575,7 +577,8 @@ async def _as_catalog_item(db: AsyncSession, ctx: CallContext, proposal: Proposa
 
 
 async def _catalog_free_text(db: AsyncSession, ctx: CallContext, proposal: Proposal, now: datetime) -> CatalogItem:
-    """FR-13: a free-text proposal becomes a catalog item when it wins."""
+    """FR-13: a free-text proposal becomes a catalog item when it wins. It's for the call's meal
+    and the default meals (#72), since it was proposed for this one."""
     household_id = ctx.event.household_id
     kind = ItemKind.HOME if proposal.mode is Mode.COOK else ItemKind.RESTAURANT
     repo = CatalogRepository(db)
@@ -587,6 +590,7 @@ async def _catalog_free_text(db: AsyncSession, ctx: CallContext, proposal: Propo
             kind=kind,
             name=name,
             modes=frozenset({proposal.mode}),
+            meals=DEFAULT_MEALS | {ctx.event.slot.meal},
             tag_ids=tags,
             cook_ids=frozenset(),
             url=None,

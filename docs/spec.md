@@ -76,7 +76,7 @@ Each member declares capability flags: can cook, can pick up, can order. The fla
 | Offer | One person announcing a meal they are already getting or making, with spare capacity: "I'm picking up Thai at 12:30, three servings spare." Others join until it's full. |
 | Response | A member's answer to an event: in, out, or maybe; guest count; the window when they can eat; roles they can fill; a suggestion. |
 | Coordinator | The member who owns a Call's decision. Self-nominated. The admin can assign or override. Defaults to nobody, in which case the system's top-ranked option is proposed and the admin can lock it. |
-| Catalog item | Something the household can eat. Kind: home meal or restaurant. Carries tags and supported fulfillment modes. |
+| Catalog item | Something the household can eat. Kind: home meal or restaurant. Carries tags, supported fulfillment modes, and the meals it's for (breakfast, lunch, dinner). |
 | Fulfillment mode | How the food arrives: cook, pickup, or delivery. |
 | Tag | A label on catalog items: cuisine (Thai, Mexican), protein (chicken, vegetarian), dietary (gluten-free option), or other. |
 | Preference | A member's stance on a tag or item: a hard veto, or a soft score from −2 to +2. |
@@ -187,8 +187,8 @@ Requirements use "must" for version 1 and "should" for items that can slip to a 
 
 | ID | Requirement |
 |---|---|
-| FR-12 | At the response deadline the ranking engine produces the top N proposals (default 3) from the catalog, filtered and scored as described in section 7, each with a human-readable reason. Each is a different place, and none is a place an offer already made a pick (FR-5); those picks come after the N. |
-| FR-13 | The coordinator and any member can add a proposal from the catalog or as free text during the vote window. A free-text proposal needs a cuisine, and creates a catalog item on decision. A call holds at most 10 proposals, and each member adds at most 3. A call has one proposal per place, whatever the mode: a place is a catalog item, or free text, by its kind and name, so adding a place that's already a pick is refused with "Pho Place is already a pick (delivery). Vote for it instead." Whoever adds a proposal does it: they must be in, and adding it offers the role its mode needs (pick up, cook, or order), so it's covered (FR-17). The exception is an item with a cook list the adder isn't on: they take no role, and it's added only if a cook on the list who's in offered to cook; otherwise it's refused because they aren't on the list. Someone who isn't in is told "You're not in for this call. Joining late is coming soon. Ask someone who's in to add it." Added proposals pass the same vetoes, guest needs, and coverage checks as ranked ones; a refusal for a veto or a guest need always reads "That doesn't work for everyone who's in tonight." so it can't reveal whose stance it was (FR-29). |
+| FR-12 | At the response deadline the ranking engine produces the top N proposals (default 3) from the catalog, filtered and scored as described in section 7, each with a human-readable reason. Each is a different place, and none is a place an offer already made a pick (FR-5); those picks come after the N. Items for the call's meal come first; items for other meals fill the N only when too few for the meal fit, and their first reason says what they're usually for, such as "Usually for dinner." |
+| FR-13 | The coordinator and any member can add a proposal from the catalog or as free text during the vote window. A free-text proposal needs a cuisine, and creates a catalog item on decision. A call holds at most 10 proposals, and each member adds at most 3. A call has one proposal per place, whatever the mode: a place is a catalog item, or free text, by its kind and name, so adding a place that's already a pick is refused with "Pho Place is already a pick (delivery). Vote for it instead." Whoever adds a proposal does it: they must be in, and adding it offers the role its mode needs (pick up, cook, or order), so it's covered (FR-17). The exception is an item with a cook list the adder isn't on: they take no role, and it's added only if a cook on the list who's in offered to cook; otherwise it's refused because they aren't on the list. Someone who isn't in is told "You're not in for this call. Joining late is coming soon. Ask someone who's in to add it." Added proposals pass the same vetoes, guest needs, and coverage checks as ranked ones; a refusal for a veto or a guest need always reads "That doesn't work for everyone who's in tonight." so it can't reveal whose stance it was (FR-29). The meals an item is for never refuse a pick, because people know better than the catalog: the catalog list shows items for the call's meal first, then the rest marked such as "(usually dinner)". A free-text proposal's catalog item is for the call's meal and the default meals, lunch and dinner. |
 | FR-14 | Each member casts at most one vote per proposal and can change it until the vote closes. Votes are visible. |
 | FR-15 | The coordinator can lock any proposal at any time during the vote window. |
 | FR-16 | At the vote deadline the system decides: highest votes, coordinator breaks ties, admin breaks ties when there is no coordinator, ranking order breaks ties otherwise. At the deadline, "breaks ties" means the tied proposal the coordinator (or, with no coordinator, an admin) voted for wins; either can also lock a proposal before then. |
@@ -209,7 +209,7 @@ Requirements use "must" for version 1 and "should" for items that can slip to a 
 | ID | Requirement |
 |---|---|
 | FR-23 | Any member can add, edit, and deactivate catalog items. Deactivation hides an item without deleting history. |
-| FR-24 | A catalog item has: kind (home meal or restaurant), name, tags, supported fulfillment modes, optional URL (menu or recipe link), optional order URL (restaurants), optional notes, optional default servings (home meals), optional list of members who can cook it (home meals). |
+| FR-24 | A catalog item has: kind (home meal or restaurant), name, tags, supported fulfillment modes, the meals it's for (at least one of breakfast, lunch, and dinner; default lunch and dinner), optional URL (menu or recipe link), optional order URL (restaurants), optional notes, optional default servings (home meals), optional list of members who can cook it (home meals). |
 | FR-25 | Tags are shared across the household. Any member can add a tag; the admin can merge and rename tags. Tag kinds: cuisine, protein, dietary, other. A cuisine tag merges only into another cuisine tag, so every item keeps a cuisine. Merging moves the tag's items, preferences, and meal-log references to the surviving tag; when a member has a stance on both, a veto wins, otherwise the lower score. |
 | FR-26 | Any member can bulk-import tags and catalog items from a file in the format defined in [catalog-format.md](catalog-format.md), by paste or upload, with a validated preview before anything is saved. The same file can seed the catalog at first run. Imports never delete. |
 
@@ -287,11 +287,13 @@ Requirements use "must" for version 1 and "should" for items that can slip to a 
 Ranking is deterministic and explainable. Given a Call with participants P (in and maybe), roles offered R, and guest needs G:
 
 1. **Candidate set.** All active catalog items that aren't already picks (an offer's, FR-5), expanded into (item, mode) pairs for each mode the item supports. In version 1 every slot allows every mode; the slot's default modes earn the default-mode bonus.
-2. **Hard filters.** Drop a pair if:
+2. **Hard filters.** Keep only items for the call's meal: a lunch call's candidates are items whose meals include lunch. Then drop a pair if:
    - Any member in P vetoes the item or any of its tags. P counts maybes, so ranking runs before the deadline turns them out.
    - Guest needs in G include a dietary tag the item lacks.
    - The mode is not covered by R (FR-17).
    - The item was eaten within the variety window, unless that empties the set.
+
+   An item "fits" a call when it passes all of these.
 3. **Score.** For each remaining pair, sum:
 
 | Component | Formula | Default weight |
@@ -304,8 +306,9 @@ Ranking is deterministic and explainable. Given a Call with participants P (in a
 | Volunteer fit | +0.5 if the mode is cook and the volunteer cook is on the item's cook list | 1.0 |
 
 4. **One mode per item.** An item is proposed once, in its best mode: the one whose mode components (default mode, volunteer fit) score higher, with ties going to cook, then pickup, then delivery. So the picks are N different places.
-5. **Order** by score descending. Break ties by the item eaten longest ago, with never-eaten items first, then by name.
-6. **Explain.** Each proposal carries the top two positive components and any penalty as a sentence: "Suggested by Alex. Nobody has had Ethiopian in 3 weeks."
+5. **Order** by score descending. Break ties by the item eaten longest ago, with never-eaten items first, then by name. Take the top N.
+6. **Top up.** If fewer than N items fit, repeat steps 2 to 5 for the items that aren't for the call's meal, with the same vetoes, guest needs, coverage, and variety window (applied to that set on its own), and take the best of them to fill the N. They rank after every item for the meal, whatever their scores, so a lunch call never proposes a dinner-only place while N lunch places fit. A catalog with too few items for a meal still produces a vote.
+7. **Explain.** Each proposal carries the top two positive components and any penalty as a sentence: "Suggested by Alex. Nobody has had Ethiopian in 3 weeks." A top-up's first sentence says what it's usually for: "Usually for dinner."
 
 Feedback is not an input in version 1; FR-55 adds it once there is enough data. Weights are household settings. The engine is a pure function over a snapshot, so it is unit-testable without a database.
 
@@ -500,7 +503,7 @@ Every table carries `household_id`. Timestamps are UTC; the household time zone 
 | household | name, timezone, settings (JSON: slots, weights, variety window, badge thresholds, slack channel) |
 | member | display name, email (members sign in with it; a guest never has one), slack_email (a joined guest's Slack email, never used to sign in), slack_guest_account, oidc_subject, slack_user_id, slack_link_locked, role (admin, member, guest), can_cook, can_pickup, can_order, mute_dm_reminders, feedback_reminder, dietary_needs (a guest's dietary tags), join_refused (an admin removed this guest), active |
 | tag | kind (cuisine, protein, dietary, other), name |
-| catalog_item | kind (home, restaurant), name, notes, url, order_url, modes (cook, pickup, delivery), default_servings, created_by, active |
+| catalog_item | kind (home, restaurant), name, notes, url, order_url, modes (cook, pickup, delivery), meals (bits: breakfast 1, lunch 2, dinner 4; 1 to 7, default 6), default_servings, created_by, active |
 | catalog_item_tag | item, tag |
 | catalog_item_cook | item, member |
 | preference | member, tag (nullable), item (nullable), veto, score (−2 to +2). Exactly one of tag and item is set (check constraint); both are foreign keys. A veto has score 0, and neutral stances aren't stored. |

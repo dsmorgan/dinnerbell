@@ -35,6 +35,12 @@ restaurants:
     cuisine: [Italian]
     tags: [comfort]
     modes: [pickup]
+    meals: [dinner]
+
+  - name: Bagel Barn
+    cuisine: [American]
+    tags: [quick]
+    meals: [breakfast, lunch]
 
 home_meals:
   - name: Chicken tacos
@@ -71,6 +77,7 @@ A complete starter file is in [seed/example.yaml](../seed/example.yaml).
 | `cuisine` | Yes | One or more cuisine tags. Variety tracking uses these. |
 | `tags` | No | Any other tags: protein, dietary, or other. |
 | `modes` | No | `pickup`, `delivery`, or both. Default: `[pickup]`. |
+| `meals` | No | Which meals it's for: `breakfast`, `lunch`, `dinner`, or any mix. Default: `[lunch, dinner]`. See [Meals](#meals). |
 | `url` | No | Menu or website link. |
 | `order_url` | No | Link to order online, such as a delivery app page. |
 | `notes` | No | Free text up to 500 characters. |
@@ -83,11 +90,18 @@ A complete starter file is in [seed/example.yaml](../seed/example.yaml).
 | `name` | Yes | What's being made. Unique among home meals, ignoring case. |
 | `cuisine` | Yes | One or more cuisine tags. |
 | `tags` | No | Any other tags. |
+| `meals` | No | Same as for restaurants. Default: `[lunch, dinner]`. |
 | `servings` | No | Typical number of servings one batch makes. Used to warn before over-inviting. |
 | `cooks` | No | Email addresses of active members who can make it. Emails that don't match an active member are reported in the preview and skipped. |
 | `url` | No | Recipe link. |
 | `notes` | No | Free text up to 500 characters. |
 | `active` | No | Same as for restaurants. |
+
+## Meals
+
+`meals` says which meals an item is for. Ranking proposes items for the call's meal, and fills the vote from items for other meals only when too few fit; those say so, such as "Usually for dinner." **Add a proposal** and **Make an offer** list items for the meal first and mark the rest "(usually dinner)", but you can still pick them.
+
+Most places aren't breakfast places, so an entry without `meals` is for lunch and dinner. List `breakfast` for a place that serves it, and drop `lunch` or `dinner` for a place that doesn't. A list needs at least one meal, so `meals: []` and `meals: null` are errors.
 
 ## Rules
 
@@ -97,7 +111,7 @@ A complete starter file is in [seed/example.yaml](../seed/example.yaml).
 - **Undeclared tags are created.** A tag used in an entry but missing from `tags` is created with kind `cuisine` if it appears in a `cuisine` list, otherwise `other`. The preview lists every tag it will create so you can catch typos.
 - **Names are unique within a file.** Two restaurants, or two home meals, whose names match ignoring case are an error.
 - **Unknown fields are errors.** A misspelled field such as `mode:`, or a field that belongs to the other kind, such as `servings` on a restaurant, is reported rather than ignored.
-- **Imports never delete.** An entry whose name matches an existing item of the same kind updates it: fields present in the file replace the stored values, and fields left out stay as they are. Items missing from the file are left alone. To retire an item, set `active: false`.
+- **Imports never delete.** An entry whose name matches an existing item of the same kind updates it: fields present in the file replace the stored values, and fields left out stay as they are. A default applies only to a new item: an update without `meals` or `modes` keeps the item's own. Items missing from the file are left alone. To retire an item, set `active: false`.
 - **An explicit empty value clears a field.** On an update, `notes: null`, `url: ""`, or `tags: []` removes the stored value, while leaving the field out keeps it.
 - **Imports are all or nothing.** If any entry fails validation, nothing is saved and the preview lists every error with its location, such as `restaurants[3].modes[0]: "drive-thru" is not one of pickup, delivery`. List positions count from 0, so `restaurants[3]` is the fourth restaurant.
 - **Plain YAML only.** Anchors and aliases (`&name`, `*name`), repeated keys in one mapping, nesting deeper than 20 levels, and more than 50,000 values are refused, as are files over 1 MB.
@@ -112,11 +126,13 @@ An export is a catalog file of the household's whole catalog: every tag, and eve
 
 An export follows these rules, so it imports cleanly:
 
-- **Every field is written.** Empty values are `null` or `[]`, and `active` is always there. Because an explicit empty value clears a field, importing an export makes each matching item exactly what the export says.
+- **Every field is written.** Empty values are `null` or `[]`, and `active` and `meals` are always there. Because an explicit empty value clears a field, importing an export makes each matching item exactly what the export says.
 - **Everything is sorted.** Tags are sorted by name within each kind, and items by name, so two exports of the same catalog are identical and a diff shows only real changes.
 - **Cooks aren't exported.** They're member emails. An import of an export leaves each item's cooks as they are, so set cooks in the app on each instance.
 - **Nothing personal is exported.** No members, emails, Slack IDs, preferences, vetoes, meal history, or audit records.
 - **Import's limits apply.** Import refuses files over 1 MB or with more than 50,000 values, about 2,000 items. If an export is over either limit, the command warns you; split the file and import each part.
+
+An export has `meals`, which Dinnerbell 0.5.0 and earlier refuse as an unknown field, so copy a catalog only to an instance on the same release or later.
 
 Importing an export into the catalog it came from previews as "The catalog already matches this file." Importing it into another catalog adds the items and tags that are missing, updates the items that match by name, and, like every import, deletes nothing: items that exist only in the target stay.
 

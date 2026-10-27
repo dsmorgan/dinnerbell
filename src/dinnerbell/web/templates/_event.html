@@ -236,7 +236,7 @@
         <select name="mode"><option value="pickup">Pickup</option><option value="delivery">Delivery</option><option value="cook">Cook</option></select>
       </label>
       <label class="field"><span>From the catalog</span>
-        <select name="item_id"><option value="">Something new instead</option>{% for item in v.items %}<option value="{{ item.id }}">{{ item.name }}{% if item.id in v.picked_item_ids %} (already a pick){% endif %}</option>{% endfor %}</select>
+        <select name="item_id"><option value="">Something new instead</option>{% for item in v.items %}{% set hint = v.meal_hint(item) %}<option value="{{ item.id }}">{{ item.name }}{% if hint %} ({{ hint }}){% endif %}{% if item.id in v.picked_item_ids %} (already a pick){% endif %}</option>{% endfor %}</select>
       </label>
       <div class="pair">
         <label class="field"><span>New place or dish</span><input type="text" name="free_text" maxlength="100"></label>

@@ -6,6 +6,16 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ## [Unreleased]
 
+### Added
+
+- Catalog items say which meals they're for: breakfast, lunch, dinner, or any mix (#72). Most places aren't breakfast places, so the default is lunch and dinner, for new items, items imported without the field, and every item you already have.
+  - Ranking proposes items for the call's meal: a lunch call never proposes a dinner-only place while enough lunch places fit everyone who's in. When too few do, items for other meals fill the rest of the vote, after every lunch pick, with "Usually for dinner." as their first reason. Vetoes, guest needs, coverage, and the variety window apply to both.
+  - The Catalog page has **Breakfast**, **Lunch**, and **Dinner** checkboxes on the add and edit forms (at least one; new items start with Lunch and Dinner), shows each item's meals, and filters by meal.
+  - **Add a proposal** and **Make an offer**, on the web and in Slack, list items for the meal first. The rest stay pickable, marked such as "(usually dinner)", because people know better than the catalog. The Details suggestion list puts the call's meal first too.
+  - Catalog files have an optional `meals` list, such as `meals: [breakfast]`. Leaving it out of a new entry means lunch and dinner; leaving it out of an update keeps what the item has. Exports always write it, so copying the catalog from production to test carries it. The format stays version 1: older files import as before, but an export from this release has a field that 0.5.0 and earlier refuse.
+  - A free-text pick that wins a call, or something new offered, joins the catalog for that meal and the default: lunch and dinner.
+  - The `catalog item created` log line, and a new `catalog item updated` line, carry the item's name and its `meals`.
+
 ### Changed
 
 - The logs tell the story of a call (#75). Every action on a call or offer writes one `info` line, from Slack, the web, the command line, or the scheduler, with the same fields: the call (`event_id`, `run`, `slot`, `day`), its state before and after, who acted by ID and display name (`member`), the place (`item`, `mode`), and the `channel`. The scheduler logs each step, such as `voting`, `decided`, and `abandoned` with its `end_reason`. A refusal is logged once, at `info`, with a stable `reason` code, such as `not_in`, `responses_closed`, or `cook_list`, and the message the member saw. Each Slack tap and scheduler run has a `request_id`, as web requests do, so one tap's lines group together. Deliveries to Slack log the notification's call and kind, and the posted message's channel and timestamp. Notes and call-off reasons appear only as their length. See "Read the logs" in [docs/setup.md](docs/setup.md#read-the-logs).
@@ -22,6 +32,11 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
   - Picks that offers added before voting no longer take the place of ranked picks: the vote still gets its usual number of ranked picks, then the offers'.
   - Adding a place that's already a pick, in any mode, is refused: "Pho Place is already a pick (delivery). Vote for it instead." The Add proposal list marks those places "(already a pick)".
   - An offer for a place that Dinnerbell proposed, or that you added, in another mode takes that pick over: it switches to the offer's mode, says "Kim offered to order it.", keeps its votes, and counts toward your 3 added picks. An offer for another member's pick, or for a pick in the same mode, is refused.
+
+### Upgrade notes
+
+- The database migrates to revision `0012_catalog_meals` when Dinnerbell starts. It rebuilds the `catalog_item` table to add `meals`, the meals each item is for, stored as bits (breakfast 1, lunch 2, dinner 4) with a check that at least one is set. Every item gets lunch and dinner, so proposals stay as they were until you change an item. Every row, and every row that refers to an item, is kept. Like 0011, it must run with foreign keys off, as `dinnerbell serve` and `dinnerbell migrate` do; run any other way, it refuses. To go back, restore your backup; downgrading the schema instead drops which meals each item is for.
+- Copy the catalog between production and test only between instances on this release or later: an older instance refuses an export's `meals` field as an unknown field.
 
 ## [0.5.0] - 2026-10-25
 

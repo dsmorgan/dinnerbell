@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """ORM models. M0: household, member, session, audit. M1: the catalog, preferences, and meal log.
 M2: dinner calls (event, response, suggestion, proposal, vote, assignment) and the outbox.
-M3: feedback on meals, offers (an event's ``capacity``), and guests (a member's ``guest`` role
-and the ``invitation`` table, #38).
+M3: feedback on meals, offers (an event's ``capacity``), guests (a member's ``guest`` role
+and the ``invitation`` table, #38), and the meals each catalog item is for (#72).
 
 Every table carries ``household_id`` (the household table's own key is that ID).
 Changing a model requires a new Alembic revision; see CLAUDE.md.
@@ -144,12 +144,17 @@ class TagRow(Base):
 
 
 class CatalogItemRow(Base):
-    """A restaurant or home meal. Items are never deleted, only deactivated, so history keeps them."""
+    """A restaurant or home meal. Items are never deleted, only deactivated, so history keeps them.
+
+    ``meals`` is the meals it's for (#72), as bits: breakfast 1, lunch 2, dinner 4. At least one
+    is set; the default is lunch and dinner (6).
+    """
 
     __tablename__ = "catalog_item"
     __table_args__ = (
         UniqueConstraint("household_id", "kind", "name_key"),
         CheckConstraint("kind IN ('home', 'restaurant')", name="kind"),
+        CheckConstraint("meals BETWEEN 1 AND 7", name="meals"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -158,6 +163,7 @@ class CatalogItemRow(Base):
     name: Mapped[str] = mapped_column(String(100))
     name_key: Mapped[str] = mapped_column(String(100))
     modes: Mapped[list[str]] = mapped_column(JSON)
+    meals: Mapped[int] = mapped_column(Integer, server_default=text("6"))
     url: Mapped[str | None] = mapped_column(String(2000))
     order_url: Mapped[str | None] = mapped_column(String(2000))
     notes: Mapped[str | None] = mapped_column(String(500))

@@ -31,7 +31,8 @@ def add_item(
     cuisines: str = "Thai",
     **fields: Any,
 ) -> httpx.Response:
-    data: dict[str, Any] = {"kind": kind, "name": name, "new_cuisines": cuisines}
+    # The form starts with Lunch and Dinner ticked (#72), so a browser sends them.
+    data: dict[str, Any] = {"kind": kind, "name": name, "new_cuisines": cuisines, "meals": ["lunch", "dinner"]}
     if kind == "restaurant":
         data["modes"] = ["pickup"]
     data.update(fields)

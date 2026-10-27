@@ -19,10 +19,13 @@ from dinnerbell.domain.catalog import (
     DEFAULT_MODES,
     CatalogItem,
     ItemKind,
+    Meal,
     Mode,
     Tag,
     TagKind,
+    meal_words,
     name_key,
+    sorted_meals,
     sorted_modes,
 )
 from dinnerbell.domain.catalog_file import (
@@ -66,12 +69,14 @@ class ItemState:
     notes: str | None
     default_servings: int | None
     active: bool
+    meals: frozenset[Meal]
 
     def as_json(self) -> dict[str, Any]:
         return {
             "kind": self.kind.value,
             "name": self.name,
             "modes": [m.value for m in sorted_modes(self.modes)],
+            "meals": [m.value for m in sorted_meals(self.meals)],
             "tags": sorted(self.tag_keys),
             "cooks": sorted(self.cook_ids),
             "url": self.url,
@@ -311,6 +316,7 @@ class _Planner:
             notes=entry.notes,
             default_servings=home.servings if home else None,
             active=entry.active,
+            meals=frozenset(Meal(m) for m in entry.meals),
         )
 
     def _state_of(self, item: CatalogItem) -> ItemState:
@@ -325,6 +331,7 @@ class _Planner:
             notes=item.notes,
             default_servings=item.default_servings,
             active=item.active,
+            meals=item.meals,
         )
 
     def _merge(
@@ -342,6 +349,8 @@ class _Planner:
         for name in ("url", "notes", "active"):
             if name in given:
                 values[name] = getattr(entry, name)
+        if "meals" in given:
+            values["meals"] = frozenset(Meal(m) for m in entry.meals)
         if isinstance(entry, RestaurantEntry):
             if "modes" in given:
                 values["modes"] = frozenset(Mode(m) for m in entry.modes)
@@ -366,6 +375,7 @@ class _Planner:
             "cuisine": lambda s: tags(s, True),
             "tags": lambda s: tags(s, False),
             "modes": lambda s: _list(m.value for m in sorted_modes(s.modes)),
+            "meals": lambda s: meal_words(s.meals),
             "url": lambda s: s.url or "none",
             "order_url": lambda s: s.order_url or "none",
             "notes": lambda s: s.notes or "none",

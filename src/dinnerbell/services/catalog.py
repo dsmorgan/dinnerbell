@@ -38,6 +38,7 @@ from dinnerbell.domain.catalog import (
     clean_item,
     name_key,
     normalize_tag_name,
+    sorted_meals,
 )
 from dinnerbell.domain.catalog_export import CatalogExport, export_catalog
 from dinnerbell.domain.catalog_file import parse_catalog
@@ -147,6 +148,7 @@ def _values(clean: CleanItem, tag_ids: frozenset[int], active: bool) -> ItemValu
         kind=clean.kind,
         name=clean.name,
         modes=clean.modes,
+        meals=clean.meals,
         tag_ids=tag_ids,
         cook_ids=clean.cook_ids,
         url=clean.url,
@@ -162,6 +164,7 @@ def _describe(item: CatalogItem, tag_names: dict[int, str]) -> dict[str, object]
         "kind": item.kind.value,
         "name": item.name,
         "modes": sorted(m.value for m in item.modes),
+        "meals": [m.value for m in sorted_meals(item.meals)],
         "tags": sorted(tag_names.get(i, str(i)) for i in item.tag_ids),
         "cooks": sorted(item.cook_ids),
         "url": item.url,
@@ -170,6 +173,11 @@ def _describe(item: CatalogItem, tag_names: dict[int, str]) -> dict[str, object]
         "default_servings": item.default_servings,
         "active": item.active,
     }
+
+
+def _log_fields(item: CatalogItem) -> dict[str, object]:
+    """An item's log line: its ID, its name (not sensitive, SEC-5), and the meals it's for (#72)."""
+    return {"item_id": item.id, "item": item.name, "meals": [m.value for m in sorted_meals(item.meals)]}
 
 
 async def create_item(db: AsyncSession, actor: Member, data: ItemInput, *, now: datetime) -> CatalogItem:
@@ -187,7 +195,7 @@ async def create_item(db: AsyncSession, actor: Member, data: ItemInput, *, now: 
         payload = _describe(item, names) | {"tags_created": [t.name for t in created]}
         await audit(db, actor.household_id, actor, "catalog.item_created", f"item:{item.id}", payload, now)
         await db.commit()
-    log.info("catalog item created", extra={"item_id": item.id})
+    log.info("catalog item created", extra=_log_fields(item))
     return item
 
 
@@ -212,6 +220,7 @@ async def update_item(db: AsyncSession, actor: Member, item_id: int, data: ItemI
         payload = changes | {"tags_created": [t.name for t in created]}
         await audit(db, actor.household_id, actor, "catalog.item_updated", f"item:{item.id}", payload, now)
         await db.commit()
+    log.info("catalog item updated", extra=_log_fields(item))
     return item
 
 
@@ -400,6 +409,7 @@ def _state_values(state: ItemState, tag_ids: dict[str, int]) -> ItemValues:
         kind=state.kind,
         name=state.name,
         modes=state.modes,
+        meals=state.meals,
         tag_ids=frozenset(tag_ids[key] for key in state.tag_keys),
         cook_ids=state.cook_ids,
         url=state.url,

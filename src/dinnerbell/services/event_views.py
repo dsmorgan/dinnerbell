@@ -19,7 +19,7 @@ from dinnerbell.db.repositories import HouseholdRepository
 from dinnerbell.domain import events as rules
 from dinnerbell.domain import notifications as note
 from dinnerbell.domain import offers
-from dinnerbell.domain.catalog import CatalogItem, Tag, TagKind
+from dinnerbell.domain.catalog import CatalogItem, Tag, TagKind, for_meal_first, meal_hint
 from dinnerbell.domain.events import Event, EventRuleViolation, EventState, Response, Window
 from dinnerbell.domain.guests import GuestAction, can_answer_for, check_can_invite, check_guest
 from dinnerbell.domain.meals import Slot
@@ -113,6 +113,11 @@ class EventView:
     @property
     def id(self) -> int:
         return self.event.id
+
+    def meal_hint(self, item: CatalogItem) -> str | None:
+        """ "usually dinner" beside an item that isn't for the call's meal (#72). ``items`` lists
+        those last, and still offers them: people know better than the catalog."""
+        return meal_hint(item, self.event.slot.meal)
 
     @property
     def picked_item_ids(self) -> frozenset[int]:
@@ -277,6 +282,7 @@ def view(ctx: CallContext, actor: Member, today: date, now: datetime, *, any_tim
     by_name = sorted([*ctx.active_members, *ctx.guests], key=lambda m: m.display_name.casefold())
     mine = [s for s in ctx.suggestions if s.member_id == actor.id]
     tags = sorted(ctx.tags.values(), key=lambda t: t.key)
+    active = sorted((i for i in ctx.items.values() if i.active), key=lambda i: i.key)
     return EventView(
         event=ctx.event,
         info=cc.event_info(ctx),
@@ -294,7 +300,7 @@ def view(ctx: CallContext, actor: Member, today: date, now: datetime, *, any_tim
         members=tuple(ctx.person(m.id) for m in by_name),
         dietary_tags=tuple(t for t in tags if t.kind is TagKind.DIETARY),
         cuisine_tags=tuple(t for t in tags if t.kind is TagKind.CUISINE),
-        items=tuple(sorted((i for i in ctx.items.values() if i.active), key=lambda i: i.key)),
+        items=tuple(for_meal_first(active, ctx.event.slot.meal)),  # for the call's meal first (#72)
         offer=cc.offer_info(ctx) if ctx.event.is_offer else None,
         guests=_guest_views(ctx, actor),
         invitable=_invitable(ctx, actor),
