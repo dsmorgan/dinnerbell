@@ -112,13 +112,13 @@ def seats_left(offer: Event, responses: Iterable[Response]) -> int:
 def check_can_join(offer: Event, actor: Member) -> None:
     """Joining, leaving, and bringing guests: active members, while the offer is open."""
     if not offer.is_offer:  # pragma: no cover - callers look up offers
-        raise EventRuleViolation("That isn't an offer.")
+        raise EventRuleViolation("That isn't an offer.", code="not_an_offer")
     if not actor.active:
-        raise EventRuleViolation("Only active members can join an offer.")
+        raise EventRuleViolation("Only active members can join an offer.", code="inactive")
     if actor.is_guest:  # a member brings a guest with +1 guest (#38)
-        raise EventRuleViolation("Ask a household member to bring you along as their guest.")
+        raise EventRuleViolation("Ask a household member to bring you along as their guest.", code="guests_dont")
     if offer.state is not EventState.COLLECTING:
-        raise EventRuleViolation("This offer isn't taking people anymore.")
+        raise EventRuleViolation("This offer isn't taking people anymore.", code="offer_closed")
 
 
 def joined(
@@ -142,7 +142,7 @@ def joined(
     wanted = guests + (0 if offerer else 1)
     held = 0 if current is None else current.head_count - (1 if offerer and current.is_in else 0)
     if wanted > held and wanted - held > seats_left(offer, responses):
-        raise EventRuleViolation(FULL)
+        raise EventRuleViolation(FULL, code="offer_full")
     base = current or Response(member_id=member_id, status=Status.IN, responded_at=now)
     return replace(base, status=Status.IN, guests=guests, guest_needs=guest_needs if guests else frozenset())
 
@@ -150,4 +150,4 @@ def joined(
 def check_can_leave(offer: Event, actor: Member) -> None:
     check_can_join(offer, actor)
     if offer.created_by == actor.id:
-        raise EventRuleViolation("It's your offer. Call it off if you can't make it.")
+        raise EventRuleViolation("It's your offer. Call it off if you can't make it.", code="own_offer")

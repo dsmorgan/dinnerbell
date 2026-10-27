@@ -918,3 +918,39 @@ Each member is linked to the account they first signed in with. After you switch
 | Production starts with an empty database after an upgrade | Compose created a new volume, because you ran it from a different directory, with a different project name, or as a different user. | See "Switch a source-built install to the prebuilt image". Your data is still in the old volume. |
 | The test port, 8014, accepts connections but never answers | The test container is in a restart loop: Dinnerbell stops at start, usually on a missing or invalid setting in `.env.test`, and compose restarts it. Port forwarding keeps the port open in between. | Run `podman ps -a --filter name=dinnerbell-test`, and look for `Restarting` or a recent `Exited`. Read why with `deploy/dinnerbell-test logs dinnerbell`. Fix `.env.test`, then run `deploy/dinnerbell-test down` and `deploy/dinnerbell-test up -d`; the configuration check names any setting that's still wrong. |
 | Rate limiting blocks everyone at once | Dinnerbell sees the proxy's address for every request. | Set `DINNERBELL_TRUSTED_PROXIES` to the proxy's single address, then recreate with `podman-compose down && podman-compose up -d`. A restart doesn't re-read `.env`. |
+
+### Read the logs
+
+Dinnerbell writes one JSON line per log entry to standard output. Every state-changing action on a call or offer writes one `info` line, wherever it came from, and so does every refusal. To see what happened to a call, and why something was refused, follow its lines.
+
+Each line has these fields:
+
+| Field | What it holds |
+|---|---|
+| `msg` | What happened: an action such as `answer`, `offer_role`, `propose`, `vote`, `lock`, `assign`, `call_off`, `offer_posted`, or `join`; a scheduler step such as `opened`, `voting`, `decided`, `abandoned`, or `stale_closed`; or `refused`. Deliveries to Slack are `notification delivered`, `notification delivery failed` (it retries), `notification delivery gave up`, and `notification closed` (superseded, such as by a call-off). |
+| `event_id`, `run`, `slot`, `day` | The call or offer. `run` goes up each time a call starts again. |
+| `state_before`, `state_after` | The call's state before and after the action. A refusal has `state` instead. |
+| `member_id`, `member` | Who acted, by ID and display name. The scheduler's lines have neither. |
+| `item_id`, `item`, `mode` | The place, when there is one, such as the pick proposed, voted for, or decided. |
+| `channel` | Where the action came from: `slack`, `web`, `cli`, or `scheduler`. |
+| `request_id` | One tap, request, or scheduler run. Every line it writes has the same ID, and the web returns it in the `X-Request-ID` header. |
+| `reason`, `refusal` | On a refusal: a short code, such as `not_in`, `responses_closed`, `cook_list`, or `stale_run`, and the message the member saw. |
+| `kind`, `channel_id`, `message_ts` | On a delivery: the notification, and where Slack posted it. `message_ts` is the message's Slack timestamp. |
+| `end_reason` | Why a call ended on its own: `too_few`, `no_coverage`, or `missed`. |
+
+Logs never contain emails, tokens, sign-in subjects, or calendar URLs. Notes and call-off reasons that members write appear only as their length, `note_length`.
+
+To follow call 12, filter on its ID:
+
+```sh
+podman-compose logs dinnerbell 2>&1 | grep '"event_id": 12,'
+```
+
+With `jq`, show just the story. `grep -o` drops anything compose puts before each line's JSON:
+
+```sh
+podman-compose logs dinnerbell 2>&1 | grep -o '{.*}' \
+  | jq -c 'select(.event_id == 12) | {ts, msg, member, item, state_after, reason, refusal}'
+```
+
+To see everything one tap did, filter on its `request_id` instead: `jq -c 'select(.request_id == "…")'`.

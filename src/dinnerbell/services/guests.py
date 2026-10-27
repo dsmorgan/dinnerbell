@@ -58,6 +58,7 @@ from dinnerbell.domain.members import (
     normalize_email,
     normalize_slack_user_id,
 )
+from dinnerbell.services import activity
 from dinnerbell.services import call_context as cc
 from dinnerbell.services.call_context import load, locked_event, publish
 from dinnerbell.services.common import audit, require_admin
@@ -142,7 +143,7 @@ async def invite(
                 raise NotFound(NO_SUCH_GUEST)
             guest = found
         if not await InvitationRepository(db).add(actor.household_id, event.id, guest.id, actor.id, now):
-            raise EventRuleViolation(f"{guest.display_name} is invited already.")
+            raise EventRuleViolation(f"{guest.display_name} is invited already.", code="already_invited")
         ctx = await load(db, event)
         sent: list[note.Notification] = []
         if guest.is_registered_guest:
@@ -154,6 +155,7 @@ async def invite(
         await publish(db, ctx, cc.call_updated(ctx), *sent, now=now)
         invited: dict[str, object] = {"guest_id": guest.id, "registered": guest.is_registered_guest, "new": created}
         await audit(db, actor.household_id, actor, "event.guest_invited", f"event:{event.id}", invited, now)
+        activity.action(db, "invite", event, actor, guest_id=guest.id, guest=guest.display_name, new_guest=created)
         return Invited(guest, created)
 
 
@@ -172,6 +174,7 @@ async def uninvite(db: AsyncSession, actor: Member, event_id: int, guest_id: int
         await audit(
             db, actor.household_id, actor, "event.guest_uninvited", f"event:{event.id}", {"guest_id": guest_id}, now
         )
+        activity.action(db, "uninvite", event, actor, guest_id=guest_id, guest=ctx.name(guest_id))
 
 
 async def answer_for(
@@ -191,7 +194,7 @@ async def answer_for(
     if (status is None) == (role is None):
         raise InvalidMemberInput("Pick an answer or a role.")
     if status is Status.MAYBE:
-        raise EventRuleViolation("A guest is in or out.")
+        raise EventRuleViolation("A guest is in or out.", code="bad_answer")
     async with locked_event(db, actor.household_id, event_id, now) as event:
         check_run(event, run)
         ctx = await load(db, event)
@@ -212,6 +215,10 @@ async def answer_for(
         await ResponseRepository(db).save(actor.household_id, event.id, answer, now)
         ctx = await load(db, event)
         await publish(db, ctx, cc.call_updated(ctx), now=now)
+        what: dict[str, Any] = {"answer": status.value} if status is not None else {"offered": offered}
+        if role is not None:
+            what["role"] = role.value
+        activity.action(db, "answer_for", event, actor, guest_id=guest.id, guest=guest.display_name, **what)
 
 
 async def _drop_from_call(db: AsyncSession, event: Event, guest_id: int, now: datetime) -> None:
@@ -323,7 +330,8 @@ async def set_my_needs(db: AsyncSession, actor: Member, needs: frozenset[int], *
                 continue
             raise EventRuleViolation(
                 "A call you're in is voting now, and its picks already fit your needs as they were. "
-                "Change them once it's decided."
+                "Change them once it's decided.",
+                code="voting_needs",
             )
     updated = await MemberRepository(db).update(actor.household_id, actor.id, now, dietary_needs=needs)
     payload = {"dietary_needs": sorted(needs)}

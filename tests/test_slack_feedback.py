@@ -99,10 +99,12 @@ async def test_how_was_it_from_the_reminder_and_the_decision(slack: Slack, house
     origin = ids.ViewOrigin.decode(view["private_metadata"])
     assert origin == ids.ViewOrigin(event_id, "D03KIM", run=1)
 
-    values = state(food=NOT_AGAIN, cook_thanks={"selected_options": [{"value": "thanks"}]}, cook_note={"value": "Ty!"})
+    values = state(
+        food=NOT_AGAIN, cook_thanks={"selected_options": [{"value": "thanks"}]}, cook_note={"value": "TyZq7x!"}
+    )
     await slack.submit("Kim", ids.FEEDBACK_VIEW, values, event_id, origin=origin)
     (row,) = await rows(house)
-    assert (row.member_id, row.food, row.cook_thanks, row.cook_note) == (house["Kim"].id, "not_again", True, "Ty!")
+    assert (row.member_id, row.food, row.cook_thanks, row.cook_note) == (house["Kim"].id, "not_again", True, "TyZq7x!")
     assert slack.ephemerals("Kim")[-1] == FEEDBACK_SAVED
 
     # From the channel's decision message, the modal comes back with Kim's answers.
@@ -110,7 +112,7 @@ async def test_how_was_it_from_the_reminder_and_the_decision(slack: Slack, house
     await slack.click("Kim", ids.FEEDBACK, value)
     prefilled = fields(modal(slack))
     assert prefilled["food"]["initial_option"]["value"] == "not_again"
-    assert prefilled["cook_note"]["initial_value"] == "Ty!"
+    assert prefilled["cook_note"]["initial_value"] == "TyZq7x!"
     # The shared decision message never changes with anyone's feedback.
     assert slack.fake.of("chat.update") == []
 

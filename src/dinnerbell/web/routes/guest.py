@@ -12,7 +12,7 @@ from starlette.responses import Response
 
 from dinnerbell.domain.events import EventRuleViolation
 from dinnerbell.domain.members import InvalidMemberInput
-from dinnerbell.services import guests
+from dinnerbell.services import activity, guests
 from dinnerbell.web.auth import Context, Database, GuestCSRFChecked, GuestOrMember
 from dinnerbell.web.forms import parse_id
 from dinnerbell.web.render import render
@@ -38,6 +38,7 @@ async def save_my_needs(
     try:
         await guests.set_my_needs(db, principal.member, chosen, now=context.clock())
     except (InvalidMemberInput, EventRuleViolation) as exc:
+        activity.refused(exc, str(exc), principal.member, path=request.url.path)
         tags = await guests.dietary_tags(db, principal.member)
         page = {"tags": tags, "mine": chosen, "error": str(exc)}
         return await render(request, "me.html", page, status_code=400)

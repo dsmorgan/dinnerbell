@@ -396,10 +396,17 @@ async def test_proposals_respect_vetoes_and_guest_needs_without_naming_anyone(
             await act(house, calls.add_proposal, proposer, event_id, Mode.PICKUP, **target)
         messages.add(str(caught.value))
     assert messages == {"That doesn't work for everyone who's in tonight."}
-    ours = " ".join(r.getMessage() + str(r.__dict__) for r in caplog.records if r.name.startswith("dinnerbell"))
+    # Action lines name who acted (#75; SEC-5 allows display names), but no line says who
+    # vetoed what: no line names a vetoed tag or item, and none names Kim or Lee except as the
+    # member acting.
+    ours = [r for r in caplog.records if r.name.startswith("dinnerbell")]
+    logged = " ".join(r.getMessage() + str(r.__dict__) for r in ours)
+    actors_blank = " ".join(r.getMessage() + str(vars(r) | {"member": "", "member_id": ""}) for r in ours)
     for name in ("Kim", "Lee", "Korean", "Vegan", "Leaf"):
         assert name not in " ".join(messages)
-        assert name not in ours
+        assert name not in actors_blank
+    for name in ("Korean", "Vegan", "Leaf"):
+        assert name not in logged
     # A cook list's refusal stays specific: it reveals nothing private.
     curry = await house.add_item("Sprout Curry", Mode.COOK, cuisine="Thai", tags=("Vegan",), cooks=("Sam",))
     with pytest.raises(EventRuleViolation, match="Sprout Curry has a cook list, and you're not on it"):
@@ -429,14 +436,14 @@ async def test_responses_and_details(house: House) -> None:
         eat_until=time(19, 30),
         suggestion_item_ids=(house.items["Taqueria"].id,),
         suggestion_texts=("Ramen",),
-        note="running late",
+        note="running late Zq7x",
     )
     await act(house, calls.save_details, sam, event_id, details)
     await act(house, calls.save_details, sam, event_id, details)  # suggestions replace, not pile up
     ctx = await house.context(event_id)
     mine = ctx.response_of(sam.id)
     assert mine is not None
-    assert (mine.status, mine.offers, mine.guests, mine.note) == (Status.IN, {RoleOffer.COOK}, 2, "running late")
+    assert (mine.status, mine.offers, mine.guests, mine.note) == (Status.IN, {RoleOffer.COOK}, 2, "running late Zq7x")
     assert [(s.item_id, s.free_text) for s in ctx.suggestions] == [(house.items["Taqueria"].id, None), (None, "Ramen")]
     call = next(e for e in await house.outbox() if e.kind == "call_updated")
     (entry,) = call.payload["roster"]

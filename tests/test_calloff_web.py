@@ -206,11 +206,11 @@ def test_the_starter_calls_it_off_with_a_reason(
     html = house.get(f"/events/{event_id}").text
     assert '<summary class="small">Call it off</summary>' in html and 'name="reason" maxlength="140"' in html
     assert 'hx-confirm="Call off dinner for everyone?"' in html
-    reason = 'Pizza at <b>Grandma\'s</b> & "cake"'
+    reason = 'Pizza at <b>GrandmaZq7x\'s</b> & "cake"'
     card = htmx(house, f"/events/{event_id}/cancel", {"reason": reason, "run": "1", "from": "event"})
     assert card.status_code == 200 and "Called off by Sam." in card.text
-    assert "Pizza at &lt;b&gt;Grandma&#39;s&lt;/b&gt; &amp; &#34;cake&#34;" in card.text
-    assert "<b>Grandma" not in card.text
+    assert "Pizza at &lt;b&gt;GrandmaZq7x&#39;s&lt;/b&gt; &amp; &#34;cake&#34;" in card.text
+    assert "<b>GrandmaZq7x" not in card.text
     assert "data-poll" not in card.text and not offers_cancel(card.text, event_id)
     row = event_row(migrated, event_id)
     assert (row.state, row.end_note, row.ended_by) == ("cancelled", reason, member(migrated, CREW["starter"]).id)
@@ -462,17 +462,24 @@ def test_an_admin_skips_a_later_day(
 ) -> None:
     html = house.get("/admin/schedule").text
     assert 'action="/admin/schedule/skip"' in html and 'min="2026-10-22" max="2026-10-29"' in html
-    skipped = submit(house, "/admin/schedule/skip", {"slot": "dinner", "day": "2026-10-24", "reason": "<i>Away</i>"})
+    skipped = submit(
+        house, "/admin/schedule/skip", {"slot": "dinner", "day": "2026-10-24", "reason": "<i>AwayZq7x</i>"}
+    )
     assert (skipped.status_code, skipped.headers["location"]) == (303, "/admin/schedule?notice=skipped")
     assert "Skipped." in house.get("/admin/schedule?notice=skipped").text
     (row,) = rows(migrated, EventRow)
-    assert (str(row.date), row.slot, row.state, row.end_note) == ("2026-10-24", "dinner", "cancelled", "<i>Away</i>")
+    assert (str(row.date), row.slot, row.state, row.end_note) == (
+        "2026-10-24",
+        "dinner",
+        "cancelled",
+        "<i>AwayZq7x</i>",
+    )
     (audit,) = audits(migrated, "event.skipped")
-    assert audit.payload == {"slot": "dinner", "date": "2026-10-24", "note": "<i>Away</i>"}
+    assert audit.payload == {"slot": "dinner", "date": "2026-10-24", "note": "<i>AwayZq7x</i>"}
     clock.advance(timedelta(days=2))  # the skipped day: it shows on Today, and anyone can start it
     sign_in_as(house, provider, CREW["other"])
     today = house.get("/").text
-    assert "Called off by admin." in today and "&lt;i&gt;Away&lt;/i&gt;" in today and "<i>Away" not in today
+    assert "Called off by admin." in today and "&lt;i&gt;AwayZq7x&lt;/i&gt;" in today and "<i>AwayZq7x" not in today
     assert "Start dinner again" in today
 
 
@@ -489,9 +496,9 @@ def test_an_admin_skips_a_later_day(
 def test_skipping_a_day_explains_refusals(
     house: TestClient, form: dict[str, str], status: int, message: str, migrated: Settings
 ) -> None:
-    refused = submit(house, "/admin/schedule/skip", form | {"reason": "Trip"})
+    refused = submit(house, "/admin/schedule/skip", form | {"reason": "TripZq7x"})
     assert refused.status_code == status and message in page(refused)
-    assert 'value="Trip"' in refused.text and f'value="{form["day"]}"' in refused.text  # as typed
+    assert 'value="TripZq7x"' in refused.text and f'value="{form["day"]}"' in refused.text  # as typed
     assert rows(migrated, EventRow) == [] and audits(migrated, "event.skipped") == []
 
 

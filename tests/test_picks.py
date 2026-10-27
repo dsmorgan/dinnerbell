@@ -211,7 +211,9 @@ async def test_an_uncovered_mode_is_named_in_words(house: House) -> None:
         ctx = await cc.load(db, await house.event(event_id))
         group = await group_preferences(db, house.household.id, ctx.veto_people)
     candidate = Proposal(0, event_id, Mode.PICKUP, 0, ProposalSource.MEMBER, item_id=house.items["Taqueria"].id)
-    assert lifecycle.misfit(ctx, candidate, group) == "Nobody who's in offered to pick up for that."
+    problem = lifecycle.misfit(ctx, candidate, group)
+    assert problem is not None
+    assert (str(problem), problem.code) == ("Nobody who's in offered to pick up for that.", "no_coverage")
 
 
 # One pick per place (#77) -------------------------------------------------------------------------

@@ -31,6 +31,7 @@ from dinnerbell.domain import notifications as note
 from dinnerbell.domain.events import EventState
 from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.members import Member
+from dinnerbell.services import activity
 from dinnerbell.services import call_context as cc
 from dinnerbell.services.call_context import load, locked_event
 from dinnerbell.services.common import audit, require_admin
@@ -161,4 +162,5 @@ async def discard_call(
             "instance_label": instance_label,
         }
         await audit(db, household_id, actor, "event.discarded", f"event:{event.id}", payload, now)
+        activity.action(db, "discard", event, actor, rows=rows)
     return summary

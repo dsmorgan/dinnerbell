@@ -102,14 +102,14 @@ def check_guest(event: Event | None, actor: Member, action: GuestAction, *, invi
     # An event the guest isn't invited to reads the same whatever they tried, so no refusal
     # can tell them it exists or what it's doing.
     if event is not None and (event.kind is not EventKind.CALL or not invited):
-        raise EventRuleViolation(NOT_INVITED)
+        raise EventRuleViolation(NOT_INVITED, code="not_invited")
     allowed = GUEST_RULES.get(action)
     if allowed is None:
-        raise EventRuleViolation(REFUSED.get(action, NOT_NOW))
+        raise EventRuleViolation(REFUSED.get(action, NOT_NOW), code="guests_dont")
     if event is None:
-        raise EventRuleViolation(NOT_INVITED)
+        raise EventRuleViolation(NOT_INVITED, code="not_invited")
     if event.state not in allowed:
-        raise EventRuleViolation(NOT_NOW)
+        raise EventRuleViolation(NOT_NOW, code="guest_not_now")
 
 
 def answer_action(status: Status) -> GuestAction:
@@ -121,11 +121,11 @@ def check_can_invite(event: Event, actor: Member) -> None:
     """Rule 5 of #38: any active member invites guests to a call while answers are open, one
     call at a time. A guest can't invite anyone."""
     if not actor.is_member:
-        raise EventRuleViolation(REFUSED[GuestAction.INVITE])
+        raise EventRuleViolation(REFUSED[GuestAction.INVITE], code="guests_dont")
     if event.kind is not EventKind.CALL:
-        raise EventRuleViolation("Guests come to calls. On an offer, tap +1 guest instead.")
+        raise EventRuleViolation("Guests come to calls. On an offer, tap +1 guest instead.", code="is_offer")
     if event.state is not EventState.COLLECTING:
-        raise EventRuleViolation("Invite guests while answers are open.")
+        raise EventRuleViolation("Invite guests while answers are open.", code="responses_closed")
 
 
 def can_answer_for(guest: Member, actor: Member, inviter_id: int | None) -> bool:

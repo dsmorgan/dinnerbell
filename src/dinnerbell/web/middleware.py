@@ -17,7 +17,7 @@ from starlette.requests import ClientDisconnect
 from starlette.responses import PlainTextResponse, Response
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from dinnerbell.logs import member_id_var, request_id_var
+from dinnerbell.logs import member_id_var, start_unit
 from dinnerbell.web.clientip import IPNetwork, resolve_client_ip
 from dinnerbell.web.ratelimit import SlidingWindowLimiter, client_key
 
@@ -76,8 +76,7 @@ class RequestContextMiddleware:
         forwarded = ", ".join(Headers(scope=scope).getlist("x-forwarded-for")) or None
         client_ip = resolve_client_ip(peer, forwarded, self.trusted_proxies)
         _state(scope).update(request_id=request_id, client_ip=client_ip)
-        request_token = request_id_var.set(request_id)
-        member_token = member_id_var.set(None)
+        end = start_unit("web", request_id)
         status = 500
         started = time.perf_counter()
         log.debug("client address", extra={"peer_ip": peer, "client_ip": client_ip})
@@ -93,8 +92,7 @@ class RequestContextMiddleware:
             await self.app(scope, receive, send_with_id)
         finally:
             self._log(scope, status, started, client_ip)
-            request_id_var.reset(request_token)
-            member_id_var.reset(member_token)
+            end()
 
     def _log(self, scope: Scope, status: int, started: float, client_ip: str) -> None:
         member_id = _state(scope).get("member_id")

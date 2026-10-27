@@ -219,7 +219,7 @@ def test_call_off_metadata_carries_its_run_and_window_and_nothing_else() -> None
 
 
 def test_the_reason_field() -> None:
-    assert parse_cancel(reason("Pizza at Grandma's")) == "Pizza at Grandma's"
+    assert parse_cancel(reason("Pizza at GrandmaZq7x's")) == "Pizza at GrandmaZq7x's"
     assert parse_cancel(reason(None)) is None
     assert parse_cancel(reason("")) is None
     assert parse_cancel({}) is None
@@ -234,10 +234,10 @@ def test_parse_cancel_args() -> None:
     assert parse_cancel_args([], today) == (None, None, None)
     assert parse_cancel_args(["Lunch"], today) == (Slot.LUNCH, None, None)
     assert parse_cancel_args(["tomorrow", "dinner"], today) == (Slot.DINNER, date(2026, 10, 23), None)
-    assert parse_cancel_args(["dinner", "2026-10-24", "Pizza", "at", "Grandma's"], today) == (
+    assert parse_cancel_args(["dinner", "2026-10-24", "Pizza", "at", "GrandmaZq7x's"], today) == (
         Slot.DINNER,
         date(2026, 10, 24),
-        "Pizza at Grandma's",
+        "Pizza at GrandmaZq7x's",
     )
     # Only the first slot and day count, so a reason can start with one; it keeps its case.
     assert parse_cancel_args(["dinner", "Lunch", "ran", "LATE"], today) == (Slot.DINNER, None, "Lunch ran LATE")
@@ -362,16 +362,16 @@ async def test_a_finished_call_says_so(slack: Slack, house: House) -> None:
 
 async def test_calling_it_off_with_a_reason(slack: Slack, house: House) -> None:
     event_id = await kims_call(slack)
-    response = await call_off(slack, "Kim", reason("  Pizza at   Grandma's "), event_id)
+    response = await call_off(slack, "Kim", reason("  Pizza at   GrandmaZq7x's "), event_id)
     assert response.status == 200 and body(response) == {}
     event = await house.event(event_id)
     assert (event.state, event.ended_by, event.end_note) == (
         EventState.CANCELLED,
         house["Kim"].id,
-        "Pizza at Grandma's",
+        "Pizza at GrandmaZq7x's",
     )
     (audit,) = await house.audits("event.cancelled")
-    assert audit.payload == {"from": "collecting", "as": "starter", "note": "Pizza at Grandma's"}
+    assert audit.payload == {"from": "collecting", "as": "starter", "note": "Pizza at GrandmaZq7x's"}
     assert slack.ephemerals("Kim")[-1] == CALLED_OFF.format(slot="dinner", day="Thursday, Oct 22")
 
 
@@ -674,10 +674,10 @@ async def test_home_hides_start_again_once_its_too_late(slack: Slack, house: Hou
 
 async def test_slash_cancel_calls_off_todays_only_open_call(slack: Slack, house: House) -> None:
     event_id = await kims_call(slack)
-    response = await slack.command("Kim", "cancel Pizza at Grandma's &amp; Co")
+    response = await slack.command("Kim", "cancel Pizza at GrandmaZq7x's &amp; Co")
     assert response.status == 200 and body(response) == {}
     event = await house.event(event_id)
-    assert (event.state, event.end_note) == (EventState.CANCELLED, "Pizza at Grandma's & Co")
+    assert (event.state, event.end_note) == (EventState.CANCELLED, "Pizza at GrandmaZq7x's & Co")
     assert slack.ephemerals("Kim")[-1] == CALLED_OFF.format(slot="dinner", day="Thursday, Oct 22")
 
 

@@ -29,7 +29,7 @@ from dinnerbell.domain.schedule import (
     parse_hhmm,
     slot_fingerprint,
 )
-from dinnerbell.services import calls, event_views
+from dinnerbell.services import activity, calls, event_views
 from dinnerbell.services import schedule as schedule_service
 from dinnerbell.services.errors import NotFound
 from dinnerbell.services.schedule import RankingSettings, ScheduleMoved
@@ -265,6 +265,7 @@ async def skip_day(
         when: date = iso_date(day, "Enter the date as YYYY-MM-DD.")
         await calls.skip_day(db, principal.member, chosen, when, note=reason or None, now=context.clock())
     except (EventRuleViolation, BadFormValue) as exc:
+        activity.refused(exc, str(exc), principal.member, path=request.url.path)
         stored = await schedule_service.ranking_settings(db, principal.member)
         typed = {"slot": slot, "day": day, "reason": reason}
         page = await _page(db, principal, context, _stored(stored), skip_error=str(exc))

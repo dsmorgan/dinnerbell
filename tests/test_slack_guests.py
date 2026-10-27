@@ -316,14 +316,9 @@ async def test_a_guest_tap_on_a_card_after_responses_close_shows_why(
     assert f"*{MOVED_ON}*" in json.dumps(slack.cards("Kim")[-1])
     refusal = slack.ephemerals("Kim")[-1]
     assert refusal == "Responses are closed for this call."
-    (logged,) = [r for r in caplog.records if r.getMessage() == "slack card tap refused"]
-    assert (logged.levelno, logged.member_id, logged.event_id, logged.reason, logged.refusal) == (  # type: ignore[attr-defined]
-        logging.INFO,
-        house["Kim"].id,
-        event_id,
-        "moved_on",
-        refusal,
-    )
+    (logged,) = [r for r in caplog.records if r.getMessage() == "refused"]
+    fields = (logged.levelno, logged.member_id, logged.event_id, logged.reason, logged.refusal, logged.moved_on)  # type: ignore[attr-defined]
+    assert fields == (logging.INFO, house["Kim"].id, event_id, "responses_closed", refusal, True)
 
 
 async def test_an_invite_modal_naming_someone_new(slack: Slack, house: House) -> None:

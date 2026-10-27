@@ -87,9 +87,9 @@ from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.members import Member
 from dinnerbell.domain.notifications import CALL_OFF_SUPERSEDES, SUPERSEDED_BY_CALL_OFF
 from dinnerbell.domain.schedule import slot_schedule
+from dinnerbell.services import activity, lifecycle, picks
 from dinnerbell.services import call_context as cc
 from dinnerbell.services import guests as guest_rules
-from dinnerbell.services import lifecycle, picks
 from dinnerbell.services.call_context import CallContext, load, locked_event, publish
 from dinnerbell.services.common import audit, is_unique_violation, require_admin
 from dinnerbell.services.errors import NotFound
@@ -115,7 +115,7 @@ async def start_call(
     call starts again even after the usual meal time plus two hours."""
     restart_any_time = is_test_instance(instance_label)
     if not actor.active:
-        raise EventRuleViolation("Only active members can start a call.")
+        raise EventRuleViolation("Only active members can start a call.", code="inactive")
     guest_rules.refuse_guest(actor, GuestAction.START)
     household = await HouseholdRepository(db).get(actor.household_id)
     if household is None:  # pragma: no cover - members cascade with their household
@@ -131,6 +131,7 @@ async def start_call(
             event = await lifecycle.create_call(
                 db, household, slot, day, opens_at=opens_at, actor=actor, now=now, restart_any_time=restart_any_time
             )
+            activity.action(db, "start", event, actor, started=True)
             await db.commit()
     except BaseException:
         await db.rollback()
@@ -152,7 +153,7 @@ async def restart_call(
     across a restart and a second call-off doesn't start the newer run again. On a test instance
     (``instance_label`` set, #60) the too-late rule doesn't apply."""
     if not actor.active:
-        raise EventRuleViolation("Only active members can start a call.")
+        raise EventRuleViolation("Only active members can start a call.", code="inactive")
     guest_rules.refuse_guest(actor, GuestAction.RESTART)
     event = await EventRepository(db).get(actor.household_id, event_id)
     if event is None:
@@ -165,6 +166,7 @@ async def restart_call(
         any_time = is_test_instance(instance_label)
         async with write_transaction(db):
             fresh = await lifecycle.restart(db, event, actor=actor, run=run, now=now, any_time=any_time)
+            activity.action(db, "restart", fresh, actor, before=EventState.CANCELLED)
             await db.commit()
     except BaseException:
         await db.rollback()
@@ -185,7 +187,9 @@ async def post_now(db: AsyncSession, actor: Member, event_id: int, *, run: int |
         await guest_rules.gate(db, event, actor, GuestAction.POST_NOW)
         check_run(event, run)
         if check_can_post_now(event, actor, now=now):
-            event = await lifecycle.open_call(db, event, now, actor=actor)
+            opened = await lifecycle.open_call(db, event, now, actor=actor)
+            activity.action(db, "post_now", event, actor, after=opened.state)
+            event = opened
         return event
 
 
@@ -204,6 +208,7 @@ async def respond(
         new = with_status(ctx.response_of(actor.id), actor.id, status, now)
         await ResponseRepository(db).save(actor.household_id, event.id, new, now)
         await _roster_changed(db, event, now)
+        activity.action(db, "answer", event, actor, answer=status.value)
 
 
 async def offer_role(
@@ -226,6 +231,7 @@ async def offer_role(
             return
         await ResponseRepository(db).save(actor.household_id, event.id, new, now)
         await _roster_changed(db, event, now)
+        activity.action(db, "offer_role", event, actor, role=role.value, offered=offered)
 
 
 async def toggle_role(db: AsyncSession, actor: Member, event_id: int, role: RoleOffer, *, now: datetime) -> bool:
@@ -241,6 +247,7 @@ async def toggle_role(db: AsyncSession, actor: Member, event_id: int, role: Role
         if new is not None:
             await ResponseRepository(db).save(actor.household_id, event.id, new, now)
             await _roster_changed(db, event, now)
+            activity.action(db, "offer_role", event, actor, role=role.value, offered=offered)
         return offered
 
 
@@ -264,6 +271,11 @@ async def save_details(
             actor.household_id, event.id, actor.id, clean.suggestion_item_ids, clean.suggestion_texts, now
         )
         await _roster_changed(db, event, now)
+        suggestions = len(clean.suggestion_item_ids) + len(clean.suggestion_texts)
+        note_length = len(clean.note or "")  # the note is theirs to write, so only its length (SEC-5)
+        activity.action(
+            db, "details", event, actor, guests=clean.guests, suggestions=suggestions, note_length=note_length
+        )
 
 
 async def _invited(db: AsyncSession, event: Event, actor: Member) -> bool:
@@ -293,6 +305,7 @@ async def claim_coordinator(
         check_claim_coordinator(event, actor, invited=await _invited(db, event, actor))
         await set_coordinator(db, event, actor.id, now=now)
         await audit(db, actor.household_id, actor, "event.coordinator_claimed", _target(event), {}, now)
+        activity.action(db, "coordinate", event, actor)
 
 
 async def hand_off(db: AsyncSession, actor: Member, event_id: int, member_id: int, *, now: datetime) -> None:
@@ -307,6 +320,7 @@ async def hand_off(db: AsyncSession, actor: Member, event_id: int, member_id: in
         await audit(
             db, actor.household_id, actor, "event.coordinator_handed_off", _target(event), {"to": member_id}, now
         )
+        activity.action(db, "hand_off", event, actor, to_member_id=target.id, to_member=target.display_name)
 
 
 async def set_coordinator(db: AsyncSession, event: Event, member_id: int | None, *, now: datetime) -> None:
@@ -366,6 +380,8 @@ async def add_proposal(
         await guest_rules.gate(db, event, actor, GuestAction.PROPOSE)
         check_can_propose(event, actor)
         ctx = await load(db, event)
+        named = ctx.items.get(item_id) if item_id is not None else free_text
+        activity.about(item=named, item_id=item_id, mode=mode)
         check_in_to_add(ctx.response_of(actor.id))
         check_proposal_room(ctx.proposals, actor)
         item = await _proposed_item(db, ctx, mode, item_id, free_text)
@@ -378,10 +394,10 @@ async def add_proposal(
             ctx = await picks.volunteer(db, ctx, actor, mode, join=False, now=now)
         group = await group_preferences(db, actor.household_id, ctx.veto_people)
         problem = lifecycle.misfit(ctx, candidate, group)
-        if problem is not None and item is not None and not doer and problem == lifecycle.not_covered(mode):
-            problem = not_on_cook_list(item, "Ask a cook on it to add it")
+        if problem is not None and item is not None and not doer and problem.code == lifecycle.NO_COVERAGE:
+            problem = EventRuleViolation(not_on_cook_list(item, "Ask a cook on it to add it"), code="cook_list")
         if problem is not None:
-            raise EventRuleViolation(problem)
+            raise problem
         proposal = await ProposalRepository(db).add(
             household_id=actor.household_id,
             event_id=event.id,
@@ -396,6 +412,7 @@ async def add_proposal(
             now=now,
         )
         await picks.announce(db, event, now=now)
+        activity.action(db, "propose", event, actor, **activity.pick(ctx.items, proposal), does_it=doer)
         return proposal
 
 
@@ -405,7 +422,9 @@ async def _proposed_item(
     """The catalog item proposed, including free text that names one. None for new free text."""
     if item_id is not None:
         if item_id not in ctx.items:
-            raise EventRuleViolation("That isn't in the catalog anymore. Reload the page and try again.")
+            raise EventRuleViolation(
+                "That isn't in the catalog anymore. Reload the page and try again.", code="not_in_catalog"
+            )
         return ctx.items[item_id]
     kind = ItemKind.HOME if mode is Mode.COOK else ItemKind.RESTAURANT
     # A match counts even when inactive, so its tags and item vetoes are checked (and an inactive
@@ -417,7 +436,7 @@ def _free_name(free_text: str | None) -> str:
     try:
         return normalize_item_name(free_text or "")
     except InvalidCatalogInput as exc:
-        raise EventRuleViolation(str(exc)) from None
+        raise EventRuleViolation(str(exc), code="invalid_name") from None
 
 
 def _candidate(
@@ -429,7 +448,7 @@ def _candidate(
         return Proposal(0, ctx.event.id, mode, 0, source, item_id=item.id, reasons=reasons)
     tag = ctx.tags.get(cuisine_id) if cuisine_id is not None else None
     if tag is None or tag.kind is not TagKind.CUISINE:
-        raise EventRuleViolation("Pick a cuisine for it, so variety and vetoes still work.")
+        raise EventRuleViolation("Pick a cuisine for it, so variety and vetoes still work.", code="no_cuisine")
     name = _free_name(free_text)
     return Proposal(0, ctx.event.id, mode, 0, source, free_text=name, free_cuisine_id=tag.id, reasons=reasons)
 
@@ -447,9 +466,10 @@ async def vote(db: AsyncSession, actor: Member, event_id: int, proposal_id: int,
         await guest_rules.gate(db, event, actor, GuestAction.VOTE)
         ctx = await load(db, event)
         check_can_vote(event, actor, ctx.response_of(actor.id))
-        _proposal_in(ctx, proposal_id)
+        proposal = _proposal_in(ctx, proposal_id)
         if await VoteRepository(db).add(actor.household_id, event.id, proposal_id, actor.id, now):
             await _votes_changed(db, event, now)
+            activity.action(db, "vote", event, actor, **activity.pick(ctx.items, proposal))
 
 
 async def unvote(db: AsyncSession, actor: Member, event_id: int, proposal_id: int, *, now: datetime) -> None:
@@ -457,9 +477,10 @@ async def unvote(db: AsyncSession, actor: Member, event_id: int, proposal_id: in
         await guest_rules.gate(db, event, actor, GuestAction.VOTE)
         ctx = await load(db, event)
         check_can_vote(event, actor, ctx.response_of(actor.id))
-        _proposal_in(ctx, proposal_id)
+        proposal = _proposal_in(ctx, proposal_id)
         if await VoteRepository(db).remove(actor.household_id, proposal_id, actor.id):
             await _votes_changed(db, event, now)
+            activity.action(db, "unvote", event, actor, **activity.pick(ctx.items, proposal))
 
 
 async def toggle_vote(db: AsyncSession, actor: Member, event_id: int, proposal_id: int, *, now: datetime) -> bool:
@@ -470,7 +491,7 @@ async def toggle_vote(db: AsyncSession, actor: Member, event_id: int, proposal_i
         await guest_rules.gate(db, event, actor, GuestAction.VOTE)
         ctx = await load(db, event)
         check_can_vote(event, actor, ctx.response_of(actor.id))
-        _proposal_in(ctx, proposal_id)
+        proposal = _proposal_in(ctx, proposal_id)
         votes = VoteRepository(db)
         voted = actor.id not in ctx.votes.get(proposal_id, [])
         if voted:
@@ -478,6 +499,7 @@ async def toggle_vote(db: AsyncSession, actor: Member, event_id: int, proposal_i
         else:
             await votes.remove(actor.household_id, proposal_id, actor.id)
         await _votes_changed(db, event, now)
+        activity.action(db, "vote" if voted else "unvote", event, actor, **activity.pick(ctx.items, proposal))
         return voted
 
 
@@ -491,8 +513,11 @@ async def lock(db: AsyncSession, actor: Member, event_id: int, proposal_id: int,
     async with locked_event(db, actor.household_id, event_id, now) as event:
         await guest_rules.gate(db, event, actor, GuestAction.LOCK)
         check_can_lock(event, actor)
-        proposal = _proposal_in(await load(db, event), proposal_id)
+        ctx = await load(db, event)
+        proposal = _proposal_in(ctx, proposal_id)
+        activity.about(**activity.pick(ctx.items, proposal))
         await lifecycle.decide(db, event, now, locked=proposal, actor=actor)
+        activity.action(db, "lock", event, actor, after=EventState.DECIDED, **activity.pick(ctx.items, proposal))
 
 
 # After the decision (FR-19 to FR-21) ----------------------------------------------------------
@@ -504,16 +529,17 @@ async def set_meal_time(db: AsyncSession, actor: Member, event_id: int, at: time
         await guest_rules.gate(db, event, actor, GuestAction.MANAGE_DECISION)
         check_can_manage_decision(event, actor)
         if event.state is not EventState.DECIDED:
-            raise EventRuleViolation("This meal is already done.")
+            raise EventRuleViolation("This meal is already done.", code="not_decided")
         ctx = await load(db, event)
         meal = datetime.combine(event.day, at, tzinfo=ctx.zone).astimezone(UTC)
         if event.decided_at is not None and meal < event.decided_at:
-            raise EventRuleViolation("Pick a meal time after the decision. Check AM and PM.")
+            raise EventRuleViolation("Pick a meal time after the decision. Check AM and PM.", code="bad_time")
         event = await EventRepository(db).save(replace(event, meal_time=meal), now)
         ctx = await load(db, event)
         await publish(db, ctx, *cc.decision_updated(ctx), now=now)
         payload = {"meal_time": meal.isoformat()}
         await audit(db, actor.household_id, actor, "event.meal_time_changed", _target(event), payload, now)
+        activity.action(db, "meal_time", event, actor, meal_time=meal.isoformat())
 
 
 ROLE_CHANGES = (AssignmentRole.COOK, AssignmentRole.PICKUP, AssignmentRole.ORDER)
@@ -527,16 +553,18 @@ async def change_assignment(
     mode's role, and only someone who's in. Giving a role to whoever has it already changes
     nothing and sends nothing. Audited."""
     if role not in ROLE_CHANGES:
-        raise EventRuleViolation("Change the coordinator with hand off instead.")
+        raise EventRuleViolation("Change the coordinator with hand off instead.", code="wrong_role")
     async with locked_event(db, actor.household_id, event_id, now) as event:
         await guest_rules.gate(db, event, actor, GuestAction.MANAGE_DECISION)
         check_can_manage_decision(event, actor)
         ctx = await load(db, event)
         mode = event.decided_mode
         if mode is None:  # pragma: no cover - a decided or done call always has a mode
-            raise EventRuleViolation("There's no decision to change.")
+            raise EventRuleViolation("There's no decision to change.", code="not_decided")
         if role is not MODE_ROLE[mode]:
-            raise EventRuleViolation(f"This meal is {mode.label.lower()}, so only {MODE_ROLE[mode].value} is assigned.")
+            raise EventRuleViolation(
+                f"This meal is {mode.label.lower()}, so only {MODE_ROLE[mode].value} is assigned.", code="wrong_role"
+            )
         current = next((a.member_id for a in ctx.assignments if a.role is role), None)
         if member_id == current:
             return
@@ -550,7 +578,7 @@ async def change_assignment(
                 raise NotFound(NO_SUCH_MEMBER)
             response = ctx.response_of(member_id)
             if response is None or not response.is_in:
-                raise EventRuleViolation("Pick someone who's in.")
+                raise EventRuleViolation("Pick someone who's in.", code="not_in")
             assigned = await repo.assign(actor.household_id, event.id, role, member_id, now)
         ctx = await load(db, event)
         decision = cc.decision_info(ctx)
@@ -559,6 +587,16 @@ async def change_assignment(
             await publish(db, ctx, cc.assignment_made(ctx, assigned.member_id, assigned.id, decision), now=now)
         payload = {"role": role.value, "member_id": member_id}
         await audit(db, actor.household_id, actor, "event.assignment_changed", _target(event), payload, now)
+        to = ctx.members.get(member_id) if member_id is not None else None
+        activity.action(
+            db,
+            "assign",
+            event,
+            actor,
+            role=role.value,
+            to_member_id=member_id,
+            to_member=to.display_name if to else None,
+        )
 
 
 async def mark_done(db: AsyncSession, actor: Member, event_id: int, *, now: datetime) -> None:
@@ -568,6 +606,7 @@ async def mark_done(db: AsyncSession, actor: Member, event_id: int, *, now: date
         ctx = await load(db, event)
         check_can_mark_done(event, actor, ctx.response_of(actor.id), now=now)
         await lifecycle.finish(db, event, now, actor=actor)
+        activity.action(db, "mark_done", event, actor, after=EventState.DONE)
 
 
 # Calling it off and closing early (FR-56) -----------------------------------------------------
@@ -609,6 +648,10 @@ async def cancel_call(
         await publish(db, ctx, *_called_off(before, ctx, actor, reason), now=now)
         payload = {"from": before.event.state.value, "as": capacity.value, "note": reason}
         await audit(db, actor.household_id, actor, "event.cancelled", _target(event), payload, now)
+        note_length = len(reason or "")  # the reason is theirs to write, so only its length (SEC-5)
+        activity.action(
+            db, "call_off", before.event, actor, after=state, capacity=capacity.value, note_length=note_length
+        )
 
 
 def _called_off(before: CallContext, ctx: CallContext, actor: Member, reason: str | None) -> list[note.Notification]:
@@ -676,6 +719,7 @@ async def close_window(
         capacity = ActingAs.COORDINATOR if is_coordinator(event, actor) else ActingAs.ADMIN
         payload = {"window": window.value, "from": current.isoformat(), "to": moved.isoformat(), "as": capacity.value}
         await audit(db, actor.household_id, actor, "event.window_closed", _target(event), payload, now)
+        activity.action(db, "close_window", event, actor, window=window.value, capacity=capacity.value)
     await lifecycle.advance(db, actor.household_id, event_id, now)
 
 
@@ -699,9 +743,9 @@ async def skip_day(
     try:
         existing = await events.call_for(household.id, slot, day)
         if existing is not None:
-            raise EventRuleViolation(_not_skippable(existing))
+            raise EventRuleViolation(_not_skippable(existing), code="call_exists")
         if not schedule.enabled:  # no daily call to skip; checked second, as an ad-hoc call can still exist
-            raise EventRuleViolation(f"{slot.value.capitalize()} is off in the schedule.")
+            raise EventRuleViolation(f"{slot.value.capitalize()} is off in the schedule.", code="slot_off")
         opens_at = schedule.opens_at(day, ZoneInfo(household.timezone))
         event = await events.add(
             household_id=household.id,
@@ -719,13 +763,16 @@ async def skip_day(
         )
         payload = {"slot": slot.value, "date": day.isoformat(), "note": reason}
         await audit(db, household.id, actor, "event.skipped", _target(event), payload, now)
+        activity.action(db, "skip_day", event, actor, started=True, note_length=len(reason or ""))
         await db.commit()
     except IntegrityError as exc:
         await db.rollback()
         if not is_unique_violation(exc):
             raise
         # Whoever won the race, the scheduler or a member, just opened or scheduled the call.
-        raise EventRuleViolation(f"There's already a {slot.value} call for that day. Call it off instead.") from None
+        raise EventRuleViolation(
+            f"There's already a {slot.value} call for that day. Call it off instead.", code="call_exists"
+        ) from None
     except BaseException:
         await db.rollback()
         raise
