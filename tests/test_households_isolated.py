@@ -62,7 +62,9 @@ def test_foreign_tags_are_not_found(client: TestClient, migrated: Settings, two:
 def test_foreign_tag_ids_in_item_forms_are_refused(client: TestClient, migrated: Settings, two: dict[str, Any]) -> None:
     tags = [str(two["tag"]), str(two["thai"])]
     created = submit(
-        client, "/catalog/items", {"kind": "restaurant", "name": "X2", "tag_ids": tags, "modes": ["pickup"]}
+        client,
+        "/catalog/items",
+        {"kind": "restaurant", "name": "X2", "tag_ids": tags, "modes": ["pickup"], "meals": ["dinner"]},
     )
     assert created.status_code == 400 and "no longer exists" in page(created)
     edited = submit(client, f"/catalog/items/{two['mine']}", {"name": "Mine", "tag_ids": tags, "modes": ["pickup"]})

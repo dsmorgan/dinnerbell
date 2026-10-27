@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import logging
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
@@ -945,3 +947,122 @@ def test_0011_refuses_to_run_with_foreign_keys_on(settings: Settings) -> None:
             assert c.execute(text("SELECT count(*) FROM response")).scalar() == 2
     finally:
         engine.dispose()
+
+
+# 0012: the meals each catalog item is for (#72) --------------------------------------------------
+
+CATALOG_ROWS = [
+    "INSERT INTO catalog_item (id, household_id, kind, name, name_key, modes, active, created_at, updated_at) "
+    "VALUES (2, 1, 'home', 'Pancakes', 'pancakes', '[\"cook\"]', 0, :t, :t)",
+    "INSERT INTO tag (id, household_id, kind, name, name_key, created_at) VALUES (1, 1, 'cuisine', 'Thai', 'thai', :t)",
+    "INSERT INTO catalog_item_tag (household_id, item_id, tag_id) VALUES (1, 1, 1), (1, 2, 1)",
+    "INSERT INTO catalog_item_cook (household_id, item_id, member_id) VALUES (1, 2, 1)",
+    "INSERT INTO preference (household_id, member_id, item_id, veto, score, updated_at) VALUES (1, 1, 2, 0, 2, :t)",
+    "INSERT INTO suggestion (household_id, event_id, member_id, item_id, created_at) VALUES (1, 2, 1, 2, :t)",
+]
+CATALOG_CHILDREN = ("catalog_item_tag", "catalog_item_cook", "preference")
+
+
+@pytest.fixture
+def migrate_command(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """``dinnerbell migrate``'s environment, pointed at ``settings``' database."""
+    from tests.test_config import REQUIRED
+
+    for key, value in REQUIRED.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.delenv("DINNERBELL_INSTANCE_LABEL", raising=False)
+    monkeypatch.setenv("DINNERBELL_DATABASE_URL", settings.sync_database_url)
+    root = logging.getLogger()
+    saved = root.handlers[:], root.level
+    try:
+        yield
+    finally:
+        root.handlers[:], level = saved
+        root.setLevel(level)
+
+
+def _populate_catalog(settings: Settings) -> None:
+    _populate_calls(settings)
+    engine = create_sync_engine(settings.sync_database_url)
+    try:
+        with engine.begin() as c:
+            for statement in CATALOG_ROWS:
+                c.execute(text(statement), {"t": STAMP})
+    finally:
+        engine.dispose()
+
+
+def _catalog(settings: Settings) -> dict[str, object]:
+    """Every catalog item, and every row of the tables that refer to one."""
+    engine = create_engine(settings.sync_database_url)
+    try:
+        with engine.connect() as c:
+            rows = {t: c.execute(text(f"SELECT * FROM {t} ORDER BY rowid")).all() for t in CATALOG_CHILDREN}  # noqa: S608
+            items = [tuple(r) for r in c.execute(text("SELECT * FROM catalog_item ORDER BY id")).all()]
+            assert c.execute(text("PRAGMA foreign_key_check")).all() == []
+    finally:
+        engine.dispose()
+    return {"items": items, "children": rows}
+
+
+def _catalog_columns(settings: Settings) -> list[str]:
+    return [c["name"] for c in inspect(create_engine(settings.sync_database_url)).get_columns("catalog_item")]
+
+
+def test_0012_gives_every_item_lunch_and_dinner_and_downgrade_drops_the_column(
+    settings: Settings, migrate_command: None
+) -> None:
+    """``dinnerbell migrate`` on a populated 0011 database rebuilds ``catalog_item`` without losing
+    an item or a row that refers to one, and every item is for lunch and dinner (6). Afterward
+    at least one meal is required. Down and up again gives the same."""
+    from dinnerbell import main as cli
+    from dinnerbell.db.catalog import meals_from_bits
+    from dinnerbell.domain.catalog import DEFAULT_MEALS
+
+    _upgrade_to(settings, "0011_guests")
+    _populate_catalog(settings)
+    before, calls = _catalog(settings), _snapshot(settings)["rows"]
+    assert "meals" not in _catalog_columns(settings)
+
+    assert cli.main(["migrate"]) == 0
+    after = _catalog(settings)
+    assert after["children"] == before["children"] and _snapshot(settings)["rows"] == calls
+    assert _catalog_columns(settings)[-1] == "meals"
+    assert [i[:-1] for i in after["items"]] == before["items"]  # type: ignore[attr-defined]
+    assert {i[-1] for i in after["items"]} == {6}  # type: ignore[attr-defined]
+    assert meals_from_bits(6) == DEFAULT_MEALS
+    engine = create_sync_engine(settings.sync_database_url)
+    try:
+        for bits in (0, 8, -1):
+            with pytest.raises(IntegrityError, match="CHECK"), engine.begin() as c:
+                c.execute(text("UPDATE catalog_item SET meals = :m WHERE id = 1"), {"m": bits})
+        with engine.begin() as c:
+            c.execute(text("UPDATE catalog_item SET meals = 1 WHERE id = 2"))  # breakfast only
+    finally:
+        engine.dispose()
+
+    _downgrade_to(settings, "0011_guests")
+    assert "meals" not in _catalog_columns(settings)
+    assert _catalog(settings) == before and _snapshot(settings)["rows"] == calls
+
+    assert cli.main(["migrate"]) == 0
+    assert {i[-1] for i in _catalog(settings)["items"]} == {6}  # type: ignore[attr-defined]
+
+
+def test_0012_refuses_to_run_with_foreign_keys_on(settings: Settings) -> None:
+    """Rebuilding ``catalog_item`` with foreign keys on would cascade to its tags, cooks, and
+    preferences, and the proposals and meals that refer to it would refuse the drop."""
+    from alembic import command
+
+    from dinnerbell.db.migrate import _alembic_config
+
+    _upgrade_to(settings, "0011_guests")
+    _populate_catalog(settings)
+    before = _catalog(settings)
+    engine = create_sync_engine(settings.sync_database_url)
+    try:
+        with pytest.raises(RuntimeError, match="foreign keys on"), engine.begin() as connection:
+            command.upgrade(_alembic_config(connection), "0012_catalog_meals")
+    finally:
+        engine.dispose()
+    assert _catalog(settings) == before

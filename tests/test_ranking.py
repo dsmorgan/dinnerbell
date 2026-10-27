@@ -9,7 +9,7 @@ from dataclasses import replace
 
 import pytest
 
-from dinnerbell.domain.catalog import MODE_ORDER, Mode
+from dinnerbell.domain.catalog import DEFAULT_MEALS, MODE_ORDER, Meal, Mode
 from dinnerbell.domain.events import Coverage
 from dinnerbell.domain.ranking import (
     MODE_COMPONENTS,
@@ -35,6 +35,7 @@ def item(
     cuisine: int = THAI,
     tags: frozenset[int] = frozenset(),
     cooks: frozenset[int] = frozenset(),
+    meals: frozenset[Meal] = DEFAULT_MEALS,
 ) -> RankItem:
     return RankItem(
         id=item_id,
@@ -43,6 +44,7 @@ def item(
         tag_ids=frozenset({cuisine}) | tags,
         cuisine_ids=frozenset({cuisine}),
         cook_ids=cooks,
+        meals=meals,
     )
 
 
@@ -53,6 +55,7 @@ def snapshot(*items: RankItem, **changes: object) -> RankingSnapshot:
         coverage=Coverage(cooks=(1,), pickups=(1,), orderers=(1,)),
         weights=Weights(),
         window_days=7,
+        meal=Meal.DINNER,
         cuisine_names=NAMES,
         member_names={1: "Alex", 2: "Sam"},
     )
@@ -173,6 +176,86 @@ def test_taken_items_are_left_out_and_the_limit_still_filled() -> None:
     assert rank(snapshot(*places[:2], taken=frozenset({1, 2}))) == []
 
 
+DINNER_ONLY = frozenset({Meal.DINNER})
+
+
+def test_a_lunch_call_never_proposes_a_dinner_place_while_enough_lunch_places_fit() -> None:
+    """#72: the meal is a hard filter. A dinner-only place, however well it scores, stays out
+    while ``limit`` places for lunch pass every other filter."""
+    steakhouse = item(1, "Steakhouse", meals=DINNER_ONLY)
+    lunch = [item(n, f"Lunch {n}") for n in range(2, 5)]
+    favored = GroupPreferences(item_scores={1: 2})
+    snap = snapshot(steakhouse, *lunch, meal=Meal.LUNCH, preferences=favored, suggesters={1: ("Alex",)})
+    ranked = rank(snap)
+    assert [r.item_id for r in ranked] == [2, 3, 4]
+    assert all(r.for_meal for r in ranked)
+    assert {i.id for i, _ in candidates(snap)} == {2, 3, 4}
+    assert {i.id for i, _ in candidates(snap, for_meal=False)} == {1}
+    # For dinner it's in, and it wins.
+    assert rank(replace(snap, meal=Meal.DINNER))[0].item_id == 1
+
+
+def test_a_top_up_fills_the_rest_and_ranks_after_the_meals_own_picks() -> None:
+    """Too few lunch places fit, so the best of the rest fill the vote, after every lunch pick
+    whatever their scores, each saying what it's usually for."""
+    bagels = item(1, "Bagels", meals=frozenset({Meal.BREAKFAST}))
+    steakhouse = item(2, "Steakhouse", meals=DINNER_ONLY)
+    diner = item(3, "Diner", meals=frozenset({Meal.BREAKFAST, Meal.DINNER}))
+    deli = item(4, "Deli", meals=frozenset({Meal.LUNCH}))
+    favored = GroupPreferences(item_scores={2: 2, 3: 1})
+    snap = snapshot(bagels, steakhouse, diner, deli, meal=Meal.LUNCH, preferences=favored, last_eaten_days={4: 30})
+    ranked = rank(snap)
+    assert [(r.item_id, r.for_meal) for r in ranked] == [(4, True), (2, False), (3, False)]
+    assert ranked[0].score < ranked[1].score  # the lunch place first anyway
+    assert ranked[1].reasons == ("Usually for dinner.", "A favorite with tonight's group.", "New to the household.")
+    assert ranked[2].reasons[0] == "Usually for breakfast and dinner."
+    assert [r.item_id for r in rank(replace(snap, limit=5))] == [4, 2, 3, 1]
+    # Nothing fits lunch: the vote is all top-ups.
+    assert [r.item_id for r in rank(replace(snap, items=(bagels, steakhouse)))] == [2, 1]
+
+
+def test_a_top_up_passes_every_hard_filter() -> None:
+    """Vetoes, guest needs, and coverage hold for a top-up too."""
+    vegan = frozenset({VEGAN})
+    deli = item(1, "Deli", tags=vegan, meals=frozenset({Meal.LUNCH}))
+    vetoed = item(2, "Vetoed", tags=vegan, meals=DINNER_ONLY)
+    not_vegan = item(3, "Not vegan", meals=DINNER_ONLY)
+    uncovered = item(4, "Uncovered", Mode.COOK, tags=vegan, cooks=frozenset({2}), meals=DINNER_ONLY)
+    fresh = item(5, "Fresh", tags=vegan, meals=DINNER_ONLY)
+    snap = snapshot(
+        deli,
+        vetoed,
+        not_vegan,
+        uncovered,
+        fresh,
+        meal=Meal.LUNCH,
+        guest_needs=vegan,
+        preferences=GroupPreferences(vetoed_items=frozenset({2})),
+    )
+    assert [(r.item_id, r.for_meal) for r in rank(snap)] == [(1, True), (5, False)]
+
+
+def test_the_variety_window_applies_once_across_meals_before_the_meal_order() -> None:
+    """FR-31 holds as written: a repeat only when nothing else fits, for any meal. So fresh beats
+    meal fit, and meal fit beats score."""
+    eaten = {"recent_items": {1: 1}, "last_eaten_days": {1: 1}}
+    deli = item(1, "Deli", meals=frozenset({Meal.LUNCH}))
+    dinners = [item(n, f"Dinner {n}", meals=DINNER_ONLY) for n in (2, 3, 4)]
+    # Case A: the only lunch place was eaten yesterday; fresh dinner places fill the vote.
+    only = snapshot(deli, *dinners, meal=Meal.LUNCH, **eaten)
+    assert [(r.item_id, r.for_meal) for r in rank(only)] == [(2, False), (3, False), (4, False)]
+    assert candidates(only) == []
+    # Case B: two fresh lunch places and the recent one: the fresh two, then a dinner top-up.
+    lunches = [item(n, f"Lunch {n}", meals=frozenset({Meal.LUNCH})) for n in (5, 6)]
+    two = snapshot(deli, *lunches, *dinners, meal=Meal.LUNCH, **eaten)
+    assert [(r.item_id, r.for_meal) for r in rank(two)] == [(5, True), (6, True), (2, False)]
+    # Everything was eaten inside the window: repeats come back, the meal's first.
+    recent = dict.fromkeys(range(1, 7), 1)
+    again = replace(two, recent_items=recent, last_eaten_days=recent)
+    assert [(r.item_id, r.for_meal) for r in rank(again)] == [(1, True), (5, True), (6, True)]
+    assert [(r.item_id, r.for_meal) for r in rank(replace(again, limit=4))][-1] == (2, False)
+
+
 def test_join_names() -> None:
     assert join_names(["A"]) == "A"
     assert join_names(["A", "B"]) == "A and B"
@@ -195,7 +278,8 @@ def random_snapshot(rng: random.Random) -> RankingSnapshot:
         cuisine = rng.choice(CUISINES)
         tags = frozenset({cuisine, *rng.sample(TAGS, rng.randint(0, 3))})
         cooks = frozenset(rng.sample([1, 2, 3, 4], rng.randint(0, 2)))
-        items.append(RankItem(item_id, f"Item {rng.randint(0, 5)}", modes, tags, frozenset({cuisine}), cooks))
+        meals = frozenset(rng.sample(list(Meal), rng.randint(1, 3)))
+        items.append(RankItem(item_id, f"Item {rng.randint(0, 5)}", modes, tags, frozenset({cuisine}), cooks, meals))
     ids = [i.id for i in items]
     pick = lambda pool, k: frozenset(rng.sample(pool, min(len(pool), rng.randint(0, k))))  # noqa: E731
     return RankingSnapshot(
@@ -211,6 +295,7 @@ def random_snapshot(rng: random.Random) -> RankingSnapshot:
         ),
         weights=Weights(*(rng.choice([0.0, 0.5, 1.0, 2.0, 3.0]) for _ in range(6))),
         window_days=rng.randint(1, 14),
+        meal=rng.choice(list(Meal)),
         guest_needs=pick(DIETARY, 1),
         default_modes=pick(list(Mode), 2),
         recent_items={i: rng.randint(0, 6) for i in pick(ids, 4)},
@@ -251,10 +336,19 @@ def check_properties(seed: int) -> None:
         and snap.guest_needs <= i.tag_ids
         and snap.coverage.covers(m, i.cook_ids)
     ]
+    # Items for the call's meal, then a top-up from the rest (#72), after the variety window,
+    # which applies once across every meal (FR-31).
     fresh_exists = any(i.id not in snap.recent_items for i, _ in eligible_any)
-    # One pick per place (#77), none of them taken already, and as many as the limit allows.
     pool = {i.id for i, _ in eligible_any if i.id not in snap.recent_items or not fresh_exists}
-    assert len({p.item_id for p in ranked}) == len(ranked) == min(snap.limit, len(pool))
+    pools = {fm: {i for i in pool if (snap.meal in items[i].meals) is fm} for fm in (True, False)}
+    matched = min(snap.limit, len(pools[True]))
+    topped = min(snap.limit - matched, len(pools[False]))
+    # One pick per place (#77), none of them taken already, and as many as the limit allows.
+    assert len({p.item_id for p in ranked}) == len(ranked) == matched + topped
+    # The meal's picks come first, and a top-up only when too few of them fit.
+    assert [p.for_meal for p in ranked] == [True] * matched + [False] * topped
+    assert all(p.item_id in pools[p.for_meal] for p in ranked)
+    assert all((snap.meal in items[p.item_id].meals) is p.for_meal for p in ranked)
     for proposal in ranked:
         chosen = items[proposal.item_id]
         assert proposal.item_id not in snap.taken
@@ -275,9 +369,11 @@ def check_properties(seed: int) -> None:
         assert snap.coverage.covers(proposal.mode, chosen.cook_ids)
         # Guest dietary needs are always satisfied.
         assert snap.guest_needs <= chosen.tag_ids
-        # A same-window repeat appears only when nothing else is eligible.
+        # A same-window repeat appears only when nothing else is eligible, for any meal.
         if proposal.item_id in snap.recent_items:
             assert not fresh_exists
+        # A top-up says what the item is usually for, first.
+        assert proposal.for_meal or proposal.reasons[0].startswith("Usually for ")
         # Every proposal explains itself, and reasons never name a veto.
         assert proposal.reasons and all("veto" not in r.lower() for r in proposal.reasons)
     # Something eligible always yields at least one proposal.
@@ -286,9 +382,10 @@ def check_properties(seed: int) -> None:
     reorder = random.Random(seed + 1)  # noqa: S311 - reproducible test data
     shuffled = replace(snap, items=tuple(reorder.sample(snap.items, len(snap.items))))
     assert rank(shuffled) == ranked == rank(snap)
-    # Ordered by score, descending.
-    scores = [p.score for p in ranked]
-    assert scores == sorted(scores, reverse=True)
+    # Ordered by score, descending, within each part.
+    for for_meal in (True, False):
+        scores = [p.score for p in ranked if p.for_meal is for_meal]
+        assert scores == sorted(scores, reverse=True)
 
 
 @pytest.mark.parametrize("seed", range(20))

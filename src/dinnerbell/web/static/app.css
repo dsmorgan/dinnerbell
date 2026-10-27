@@ -293,7 +293,7 @@ h3 { font-size: 1rem; margin: 1rem 0 0.4rem; }
 /* Catalog filters */
 .filters { display: grid; gap: 0.6rem; }
 .filter-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.5rem; }
-@media (min-width: 40rem) { .filter-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+@media (min-width: 40rem) { .filter-grid { grid-template-columns: repeat(auto-fit, minmax(7.5rem, 1fr)); } }
 
 /* Catalog items */
 .items, .tag-list, .meals, .prefs, .plan-list, .problems, .summary { list-style: none; padding: 0; margin: 0; }
@@ -311,7 +311,8 @@ h3 { font-size: 1rem; margin: 1rem 0 0.4rem; }
 .item-notes { margin: 0.35rem 0 0; white-space: pre-line; overflow-wrap: anywhere; }
 .item-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.6rem; }
 a.chip { text-decoration: none; }
-.chip.mode { background: var(--bg); }
+.chip.mode, .chip.meal { background: var(--bg); }
+.chip.meal { font-style: italic; }
 .chip.tag-cuisine { background: var(--accent-soft); border-color: transparent; color: var(--accent); }
 ul.chips { list-style: none; padding: 0; margin: 0.35rem 0 0.75rem; }
 

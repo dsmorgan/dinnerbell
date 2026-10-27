@@ -40,6 +40,7 @@ from dinnerbell.domain.catalog import (
     CatalogItem,
     InvalidCatalogInput,
     ItemKind,
+    Meal,
     Mode,
     Tag,
     TagKind,
@@ -129,6 +130,7 @@ ITEMS = [
         cook_ids=frozenset({7}),
         default_servings=4,
         active=False,
+        meals=frozenset({Meal.DINNER, Meal.BREAKFAST}),
     ),
 ]
 EXPECTED = """\
@@ -145,6 +147,7 @@ restaurants:
     cuisine: [Lao, Thai]
     tags: [spicy]
     modes: [pickup, delivery]
+    meals: [lunch, dinner]
     url: https://example.com/menu
     order_url: null
     notes: |-
@@ -155,6 +158,7 @@ home_meals:
   - name: chicken larb
     cuisine: [Lao]
     tags: [chicken]
+    meals: [breakfast, dinner]
     servings: 4
     url: null
     notes: null
@@ -336,6 +340,9 @@ async def test_seed_export_import_export_is_byte_identical(databases: dict[str, 
     await apply(source, EDGES, clock)
     first = await export(source)
     assert (first.restaurants, first.home_meals) == (6, 5)
+    # Which meals each item is for travels too (#72): the example's own, and the default.
+    assert "    meals: [lunch]\n" in first.text and "    meals: [breakfast, lunch, dinner]\n" in first.text
+    assert "    meals: [lunch, dinner]\n" in first.text
 
     created = await apply(copy, first.data, clock)
     assert created.summary()["items_created"] == 11 and created.unknown_cooks == ()
@@ -491,7 +498,7 @@ async def test_an_export_holds_no_personal_data(migrated: Settings, clock: FakeC
     document = yaml.safe_load(text)
     assert list(document) == ["version", "tags", "restaurants", "home_meals"]
     fields = {key for section in ("restaurants", "home_meals") for entry in document[section] for key in entry}
-    assert fields == {"name", "cuisine", "tags", "modes", "servings", "url", "order_url", "notes", "active"}
+    assert fields == {"name", "cuisine", "tags", "modes", "meals", "servings", "url", "order_url", "notes", "active"}
 
 
 # The web ------------------------------------------------------------------------------------------
@@ -560,6 +567,7 @@ def cli_db(cli_env_only: Path, clock: FakeClock) -> Path:
         await database.close()
 
     asyncio.run(seed())
+    path.chmod(0o600)  # as the app leaves it: it creates the database under an owner-only umask
     return path
 
 
@@ -641,13 +649,16 @@ def test_a_wal_database_gets_private_sidecar_files_the_app_can_use(
     cli_db: Path, capsys: pytest.CaptureFixture[str], clock: FakeClock
 ) -> None:
     """With the app stopped, a WAL database has no -wal or -shm file. A read-only open creates
-    them; they must be owner-only, and the app must still open and write the database after."""
+    them with the database's own mode, so they're owner-only like it, and the app must still
+    open and write the database after."""
     with closing(sqlite3.connect(cli_db)) as db:
         assert db.execute("PRAGMA journal_mode").fetchone() == ("wal",)
     assert sorted(p.name for p in cli_db.parent.iterdir()) == ["dinnerbell.db"]
     assert cli.main(["catalog", "export"]) == 0
+    # SQLite gives the sidecars the database file's own mode, not one from the umask.
     sidecars = {p.name: p.stat().st_mode & 0o777 for p in cli_db.parent.iterdir() if p != cli_db}
     assert sidecars == {"dinnerbell.db-wal": 0o600, "dinnerbell.db-shm": 0o600}
+    assert cli_db.stat().st_mode & 0o777 == 0o600
 
     async def write() -> None:
         database = open_database(f"sqlite+aiosqlite:///{cli_db}")

@@ -117,6 +117,7 @@ def simulate_apply(result: ImportPlan) -> CatalogSnapshot:
             notes=c.state.notes,
             default_servings=c.state.default_servings,
             active=c.state.active,
+            meals=c.state.meals,
         )
         for i, c in enumerate(result.items_to_create)
     ]

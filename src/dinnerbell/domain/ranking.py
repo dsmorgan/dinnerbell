@@ -12,7 +12,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 
-from dinnerbell.domain.catalog import MODE_ORDER, Mode
+from dinnerbell.domain.catalog import DEFAULT_MEALS, MODE_ORDER, Meal, Mode, meal_words
 from dinnerbell.domain.events import Coverage
 from dinnerbell.domain.schedule import Weights
 
@@ -48,6 +48,7 @@ class RankItem:
     tag_ids: frozenset[int]
     cuisine_ids: frozenset[int]
     cook_ids: frozenset[int] = frozenset()
+    meals: frozenset[Meal] = DEFAULT_MEALS
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,7 +75,7 @@ class RankingSnapshot:
     ``recent_items`` and ``recent_cuisines`` hold what was eaten inside the variety window;
     ``last_eaten_days`` holds every item ever eaten. ``suggesters`` and ``member_names`` hold
     names for the reasons; both name only participants, whose suggestions and offers the roster
-    already shows.
+    already shows. ``meal`` is the call's: items for it rank first (#72).
     """
 
     items: tuple[RankItem, ...]
@@ -82,6 +83,7 @@ class RankingSnapshot:
     coverage: Coverage
     weights: Weights
     window_days: int
+    meal: Meal
     guest_needs: frozenset[int] = frozenset()
     default_modes: frozenset[Mode] = frozenset()
     recent_items: Mapping[int, int] = field(default_factory=dict)
@@ -104,12 +106,14 @@ class Ranked:
     score: float
     components: Mapping[Component, float]
     reasons: tuple[str, ...]
+    for_meal: bool = True
+    """False for a top-up: an item for other meals, proposed because too few for this one fit."""
 
 
-def candidates(snapshot: RankingSnapshot) -> list[tuple[RankItem, Mode]]:
-    """Steps 1 and 2: every (item, mode) pair that passes the hard filters, leaving out items
-    already taken. Every slot allows every mode in version 1; the slot's default modes earn a
-    bonus instead."""
+def _eligible(snapshot: RankingSnapshot) -> list[tuple[RankItem, Mode]]:
+    """Every (item, mode) pair that passes the hard filters other than the meal, for any meal.
+    The variety window applies once, across every meal: a repeat only when nothing fresh fits
+    for any meal (FR-31), so a fresh place for another meal beats a repeat for this one."""
     pairs = [
         (item, mode)
         for item in snapshot.items
@@ -121,6 +125,16 @@ def candidates(snapshot: RankingSnapshot) -> list[tuple[RankItem, Mode]]:
     ]
     fresh = [(item, mode) for item, mode in pairs if item.id not in snapshot.recent_items]
     return fresh or pairs  # a repeat inside the window only when nothing else fits
+
+
+def candidates(snapshot: RankingSnapshot, *, for_meal: bool = True) -> list[tuple[RankItem, Mode]]:
+    """Steps 1 and 2: every (item, mode) pair that passes the hard filters, leaving out items
+    already taken. Every slot allows every mode in version 1; the slot's default modes earn a
+    bonus instead.
+
+    The meal filter comes last, after the variety window: it keeps the items for the call's
+    meal, and ``for_meal=False`` keeps the others instead, the top-up's candidates (step 6)."""
+    return [(item, mode) for item, mode in _eligible(snapshot) if (snapshot.meal in item.meals) is for_meal]
 
 
 def _variety(item: RankItem, snapshot: RankingSnapshot) -> float:
@@ -171,11 +185,11 @@ def _mode_key(mode: Mode, parts: Mapping[Component, float]) -> tuple[float, int]
     return (-round(sum(parts[c] for c in MODE_COMPONENTS), SCORE_PLACES), MODE_ORDER.index(mode))
 
 
-def rank(snapshot: RankingSnapshot) -> list[Ranked]:
-    """The top ``snapshot.limit`` proposals, best first, each with its reasons. Each item is
+def _ranked(snapshot: RankingSnapshot, *, for_meal: bool) -> list[Ranked]:
+    """Steps 3 to 5 and 7 over one candidate set, best first, every candidate. Each item is
     proposed once, in its best mode (``_mode_key``), so the picks are different places (#77)."""
     best: dict[int, tuple[RankItem, Mode, dict[Component, float]]] = {}
-    for item, mode in candidates(snapshot):
+    for item, mode in candidates(snapshot, for_meal=for_meal):
         parts = components(item, mode, snapshot)
         kept = best.get(item.id)
         if kept is None or _mode_key(mode, parts) < _mode_key(kept[1], kept[2]):
@@ -192,19 +206,36 @@ def rank(snapshot: RankingSnapshot) -> list[Ranked]:
             mode=mode,
             score=round(score, SCORE_PLACES),
             components=parts,
-            reasons=explain(item, mode, parts, snapshot),
+            reasons=explain(item, mode, parts, snapshot, for_meal=for_meal),
+            for_meal=for_meal,
         )
-        for _, item, mode, score, parts in scored[: max(snapshot.limit, 0)]
+        for _, item, mode, score, parts in scored
     ]
 
 
-# Reasons (step 6) ------------------------------------------------------------------------------
+def rank(snapshot: RankingSnapshot) -> list[Ranked]:
+    """The top ``snapshot.limit`` proposals, best first, each with its reasons: items for the
+    call's meal, then, only when too few of those fit, a top-up of items for other meals (#72).
+    The hard filters apply to both, so a top-up is never a veto or an uncovered mode."""
+    limit = max(snapshot.limit, 0)
+    picks = _ranked(snapshot, for_meal=True)[:limit]
+    if len(picks) < limit:  # step 6: the top-up, ranked after every pick for the meal
+        picks += _ranked(snapshot, for_meal=False)[: limit - len(picks)]
+    return picks
+
+
+# Reasons (step 7) ------------------------------------------------------------------------------
 
 
 def join_names(names: tuple[str, ...] | list[str]) -> str:
     if len(names) <= 2:
         return " and ".join(names)
     return f"{', '.join(names[:-1])}, and {names[-1]}"
+
+
+def other_meal(meals: frozenset[Meal]) -> str:
+    """A top-up's first reason, since it's why the pick may not suit (#72)."""
+    return f"Usually for {meal_words(meals)}."
 
 
 def usual_choice(mode: Mode) -> str:
@@ -236,12 +267,16 @@ def _sentence(component: Component, item: RankItem, mode: Mode, value: float, sn
     return f"Had {name} {_days_ago(snapshot.recent_cuisines[latest])}."
 
 
-def explain(item: RankItem, mode: Mode, parts: Mapping[Component, float], snapshot: RankingSnapshot) -> tuple[str, ...]:
-    """The top two positive components and every penalty, as sentences. A pair with no
-    standout component still gets a reason, because it passed every filter."""
+def explain(
+    item: RankItem, mode: Mode, parts: Mapping[Component, float], snapshot: RankingSnapshot, *, for_meal: bool = True
+) -> tuple[str, ...]:
+    """The top two positive components and every penalty, as sentences, after a top-up's meal
+    note. A pair with no standout component still gets a reason, because it passed every filter."""
     positive = sorted(
         (c for c in COMPONENT_ORDER if parts[c] > 0), key=lambda c: (-parts[c], COMPONENT_ORDER.index(c))
     )[:REASONS_SHOWN]
     penalties = [c for c in COMPONENT_ORDER if parts[c] < 0]
     sentences = tuple(_sentence(c, item, mode, parts[c], snapshot) for c in [*positive, *penalties])
+    if not for_meal:
+        return (other_meal(item.meals), *sentences)
     return sentences or ("Works for everyone who's in.",)

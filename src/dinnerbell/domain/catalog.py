@@ -64,6 +64,24 @@ DEFAULT_MODES: dict[ItemKind, frozenset[Mode]] = {
 MODE_ORDER = (Mode.COOK, Mode.PICKUP, Mode.DELIVERY)
 
 
+class Meal(StrEnum):
+    """A meal of the day that a catalog item is for (#72). A call's ``Slot`` maps to one, and
+    breakfast is here before it's a slot (#58), so a breakfast call needs no migration."""
+
+    BREAKFAST = "breakfast"
+    LUNCH = "lunch"
+    DINNER = "dinner"
+
+    @property
+    def label(self) -> str:
+        return self.value.capitalize()
+
+
+MEAL_ORDER = (Meal.BREAKFAST, Meal.LUNCH, Meal.DINNER)
+DEFAULT_MEALS = frozenset({Meal.LUNCH, Meal.DINNER})
+"""What an item is for unless someone says otherwise: most places aren't breakfast places."""
+
+
 def kind_for(mode: Mode) -> ItemKind:
     """The kind of item ``mode`` gets: cooking is a home meal; pickup and delivery, a restaurant."""
     return ItemKind.HOME if mode is Mode.COOK else ItemKind.RESTAURANT
@@ -166,6 +184,42 @@ def sorted_modes(modes: Iterable[Mode]) -> list[Mode]:
     return [mode for mode in MODE_ORDER if mode in chosen]
 
 
+def check_meals(meals: Iterable[Meal]) -> frozenset[Meal]:
+    chosen = frozenset(meals)
+    if not chosen:
+        raise InvalidCatalogInput("Pick at least one meal it's for: breakfast, lunch, or dinner.")
+    return chosen
+
+
+def sorted_meals(meals: Iterable[Meal]) -> list[Meal]:
+    chosen = set(meals)
+    return [meal for meal in MEAL_ORDER if meal in chosen]
+
+
+def meal_words(meals: Iterable[Meal]) -> str:
+    """Meals in words, in order: "dinner", "breakfast and lunch", "breakfast, lunch, and dinner"."""
+    names = [meal.value for meal in sorted_meals(meals)]
+    return " and ".join(names) if len(names) <= 2 else f"{', '.join(names[:-1])}, and {names[-1]}"
+
+
+def usually(meals: Iterable[Meal]) -> str:
+    """The hint beside an item listed for a meal it isn't for: "usually dinner"."""
+    return f"usually {meal_words(meals)}"
+
+
+def meal_hint(item: CatalogItem, meal: Meal) -> str | None:
+    """The hint beside an item that isn't for ``meal``, such as "usually dinner"; None when it is.
+    Lists for a call or an offer show every item, because people know better than the catalog,
+    and mark the ones it says are for other meals (#72)."""
+    return None if meal in item.meals else usually(item.meals)
+
+
+def for_meal_first(items: Iterable[CatalogItem], meal: Meal) -> list[CatalogItem]:
+    """``items`` for ``meal`` first, then the rest, each part in the order given (#72)."""
+    listed = list(items)
+    return [i for i in listed if meal in i.meals] + [i for i in listed if meal not in i.meals]
+
+
 @dataclass(frozen=True, slots=True)
 class Tag:
     id: int
@@ -193,6 +247,8 @@ class CatalogItem:
     default_servings: int | None = None
     active: bool = True
     created_by: int | None = None
+    meals: frozenset[Meal] = DEFAULT_MEALS
+    """The meals it's for (#72). Ranking proposes it for those first."""
 
     @property
     def key(self) -> str:
@@ -225,6 +281,7 @@ class ItemInput:
     order_url: str | None = None
     notes: str | None = None
     default_servings: int | None = None
+    meals: frozenset[Meal] = DEFAULT_MEALS
 
 
 @dataclass(frozen=True, slots=True)
@@ -241,6 +298,7 @@ class CleanItem:
     order_url: str | None
     notes: str | None
     default_servings: int | None
+    meals: frozenset[Meal]
 
 
 def clean_item(data: ItemInput, tags: Iterable[Tag], member_ids: Iterable[int]) -> CleanItem:
@@ -256,6 +314,7 @@ def clean_item(data: ItemInput, tags: Iterable[Tag], member_ids: Iterable[int]) 
     name = normalize_item_name(data.name)
     is_home = data.kind is ItemKind.HOME
     modes = DEFAULT_MODES[ItemKind.HOME] if is_home else check_modes(data.kind, data.modes)
+    meals = check_meals(data.meals)
     unknown_ids = data.tag_ids - known.keys()
     if unknown_ids:
         raise InvalidCatalogInput("One of the chosen tags no longer exists. Reload the page and try again.")
@@ -297,6 +356,7 @@ def clean_item(data: ItemInput, tags: Iterable[Tag], member_ids: Iterable[int]) 
         order_url=None if is_home else normalize_url(data.order_url),
         notes=normalize_notes(data.notes),
         default_servings=normalize_servings(data.default_servings) if is_home else None,
+        meals=meals,
     )
 
 
@@ -318,11 +378,12 @@ class Status(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class ItemFilter:
-    """The Catalog page's search: text, kind, mode, tag, and active status."""
+    """The Catalog page's search: text, kind, mode, meal, tag, and active status."""
 
     query: str = ""
     kind: ItemKind | None = None
     mode: Mode | None = None
+    meal: Meal | None = None
     tag_id: int | None = None
     status: Status = Status.ACTIVE
 
@@ -334,6 +395,8 @@ class ItemFilter:
         if self.kind is not None and item.kind is not self.kind:
             return False
         if self.mode is not None and self.mode not in item.modes:
+            return False
+        if self.meal is not None and self.meal not in item.meals:
             return False
         if self.tag_id is not None and self.tag_id not in item.tag_ids:
             return False

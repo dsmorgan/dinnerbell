@@ -10,7 +10,7 @@ back as untrusted input.
 
 from __future__ import annotations
 
-from collections.abc import Collection, Iterable, Sequence
+from collections.abc import Callable, Collection, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import date, time
 from typing import Any
@@ -121,26 +121,37 @@ def _hhmm(at: time | None) -> dict[str, str]:
 PICKED = " (already a pick)"
 
 
-def _item_label(item: CatalogItem, picked: Collection[int] = ()) -> str:
-    """The item's name, marked when it's a pick on the call already (#77)."""
-    if item.id in picked:
-        return clip(item.name, MAX_OPTION_TEXT - len(PICKED)) + PICKED
-    return item.name
+def _no_hint(item: CatalogItem) -> str | None:
+    return None
+
+
+def _item_label(
+    item: CatalogItem, picked: Collection[int] = (), hint: Callable[[CatalogItem], str | None] = _no_hint
+) -> str:
+    """The item's name, marked when the catalog says it's for other meals, "(usually dinner)"
+    (#72), and when it's a pick on the call already (#77)."""
+    note = hint(item)
+    marks = (f" ({note})" if note else "") + (PICKED if item.id in picked else "")
+    return clip(item.name, MAX_OPTION_TEXT - len(marks)) + marks if marks else item.name
 
 
 def _item_groups(
-    items: Iterable[CatalogItem], keep: Iterable[int] = (), picked: Collection[int] = ()
+    items: Iterable[CatalogItem],
+    keep: Iterable[int] = (),
+    picked: Collection[int] = (),
+    hint: Callable[[CatalogItem], str | None] = _no_hint,
 ) -> tuple[list[Block], list[dict[str, Any]]]:
-    """Catalog items as option groups (home meals, restaurants), at most 100 each. Items in
-    ``keep`` are always listed, so a saved choice survives a big catalog; items in ``picked``
-    are marked. Returns the groups and the options for ``keep``."""
+    """Catalog items as option groups (home meals, restaurants), at most 100 each, in the order
+    given. Items in ``keep`` are always listed, so a saved choice survives a big catalog; items
+    in ``picked`` are marked, and so is any item ``hint`` has a note for. Returns the groups and
+    the options for ``keep``."""
     keep_ids = set(keep)
     groups: list[Block] = []
     chosen: list[dict[str, Any]] = []
     for kind, label in ((ItemKind.HOME, "Home meals"), (ItemKind.RESTAURANT, "Restaurants")):
         of_kind = [i for i in items if i.kind is kind]
         ordered = [i for i in of_kind if i.id in keep_ids] + [i for i in of_kind if i.id not in keep_ids]
-        options = [option(_item_label(i, picked), str(i.id)) for i in ordered[:MAX_OPTIONS]]
+        options = [option(_item_label(i, picked, hint), str(i.id)) for i in ordered[:MAX_OPTIONS]]
         chosen += [o for o, i in zip(options, ordered, strict=False) if i.id in keep_ids]
         if options:
             groups.append({"label": plain(label, 75), "options": options})
@@ -286,7 +297,7 @@ def proposal_modal(v: EventView, origin: ids.ViewOrigin) -> dict[str, Any]:
         context(ADD_PICK_NOTE),
         _input("mode", "How", {"type": "static_select", "options": modes}, optional=False),
     ]
-    groups, _ = _item_groups(v.items, picked=v.picked_item_ids)
+    groups, _ = _item_groups(v.items, picked=v.picked_item_ids, hint=v.meal_hint)
     if groups:
         blocks.append(_input("item", "From the catalog", {"type": "static_select", "option_groups": groups}))
     blocks.append(
@@ -498,7 +509,7 @@ def offer_modal(form: OfferForm, origin: ids.FormOrigin) -> dict[str, Any]:
         ),
         _input("mode", "How", _select(MODE_OPTIONS.values(), MODE_OPTIONS[defaults.mode]), optional=False),
     ]
-    groups, _ = _item_groups(form.items)
+    groups, _ = _item_groups(form.items, hint=form.meal_hint)
     if groups:
         blocks.append(_input("item", "From the catalog", {"type": "static_select", "option_groups": groups}))
     blocks.append(

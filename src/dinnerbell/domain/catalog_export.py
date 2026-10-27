@@ -20,7 +20,7 @@ from typing import Any
 import yaml
 
 from dinnerbell.domain import catalog_file
-from dinnerbell.domain.catalog import CatalogItem, ItemKind, Tag, TagKind, sorted_modes
+from dinnerbell.domain.catalog import CatalogItem, ItemKind, Tag, TagKind, sorted_meals, sorted_modes
 from dinnerbell.domain.catalog_file import FORMAT_VERSION
 
 HEADER = (
@@ -59,7 +59,7 @@ class CatalogExport:
 
 
 class _Inline(list[str]):
-    """A list of tag names or modes, written on one line: ``[Thai, Lao]``."""
+    """A list of tag names, modes, or meals, written on one line: ``[Thai, Lao]``."""
 
 
 class _Dumper(yaml.SafeDumper):
@@ -135,7 +135,8 @@ def _entry(item: CatalogItem, tags: list[Tag]) -> dict[str, Any]:
     }
     if item.kind is ItemKind.RESTAURANT:
         entry["modes"] = _Inline(mode.value for mode in sorted_modes(item.modes))
-    else:
+    entry["meals"] = _Inline(meal.value for meal in sorted_meals(item.meals))
+    if item.kind is ItemKind.HOME:
         entry["servings"] = item.default_servings
     entry["url"] = item.url
     if item.kind is ItemKind.RESTAURANT:

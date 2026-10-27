@@ -26,12 +26,15 @@ from dinnerbell.db.meals import household_settings
 from dinnerbell.db.repositories import HouseholdRepository
 from dinnerbell.domain import notifications as note
 from dinnerbell.domain.catalog import (
+    DEFAULT_MEALS,
     CatalogItem,
     InvalidCatalogInput,
     ItemKind,
     Mode,
     Tag,
     TagKind,
+    for_meal_first,
+    meal_hint,
     normalize_item_name,
     sorted_modes,
 )
@@ -118,7 +121,8 @@ class SlotDefaults:
 @dataclass(frozen=True, slots=True)
 class OfferForm:
     """What the offer form starts with: today, the slot most likely meant, each slot's usual
-    mode and meal time (FR-1), and the catalog to pick from."""
+    mode and meal time (FR-1), and the catalog to pick from, items for that slot's meal first
+    (#72)."""
 
     today: date
     slot: Slot
@@ -126,6 +130,11 @@ class OfferForm:
     capacity: int
     items: tuple[CatalogItem, ...]
     cuisine_tags: tuple[Tag, ...]
+
+    def meal_hint(self, item: CatalogItem) -> str | None:
+        """ "usually dinner" beside an item that isn't for the slot the form starts on. It's
+        still offerable: people know better than the catalog (#72)."""
+        return meal_hint(item, self.slot.meal)
 
 
 async def offer_form(db: AsyncSession, actor: Member, *, now: datetime) -> OfferForm:
@@ -143,7 +152,9 @@ async def offer_form(db: AsyncSession, actor: Member, *, now: datetime) -> Offer
     local = now.astimezone(ZoneInfo(household.timezone))
     slot = Slot.LUNCH if local.time() < schedules[Slot.LUNCH].meal_time else Slot.DINNER
     catalog = CatalogRepository(db)
-    items = sorted((i for i in await catalog.items(household.id) if i.active), key=lambda i: i.key)
+    items = for_meal_first(
+        sorted((i for i in await catalog.items(household.id) if i.active), key=lambda i: i.key), slot.meal
+    )
     cuisines = sorted((t for t in await catalog.tags(household.id) if t.kind is TagKind.CUISINE), key=lambda t: t.key)
     return OfferForm(local.date(), slot, defaults, DEFAULT_CAPACITY, tuple(items), tuple(cuisines))
 
@@ -207,6 +218,7 @@ async def _offered_item(db: AsyncSession, actor: Member, data: OfferInput, now: 
                 kind=kind,
                 name=name,
                 modes=frozenset({data.mode}),
+                meals=DEFAULT_MEALS | {data.slot.meal},  # offered for this meal (#72)
                 tag_ids=frozenset({cuisine.id}),
                 cook_ids=frozenset(),
                 url=None,

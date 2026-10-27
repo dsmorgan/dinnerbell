@@ -16,6 +16,9 @@ from tests.support.web import add_item, submit
 from tests.test_admin import sign_in_as
 from tests.test_auth_flow import member, rows
 
+LUNCH_AND_DINNER = ["lunch", "dinner"]
+"""What the item form starts with ticked, so what a browser sends (#72)."""
+
 
 def item_row(settings: Settings, name: str) -> CatalogItemRow:
     return next(i for i in rows(settings, CatalogItemRow) if i.name == name)
@@ -172,7 +175,14 @@ def test_edit_item(client: TestClient, provider: FakeProvider, migrated: Setting
     response = submit(
         client,
         f"/catalog/items/{siam.id}",
-        {"kind": "home", "name": "Siam Garden Thai", "tag_ids": [str(thai.id)], "modes": ["delivery"], "notes": ""},
+        {
+            "meals": LUNCH_AND_DINNER,
+            "kind": "home",
+            "name": "Siam Garden Thai",
+            "tag_ids": [str(thai.id)],
+            "modes": ["delivery"],
+            "notes": "",
+        },
     )
     assert response.status_code == 303, page(response)
     updated = item_row(migrated, "Siam Garden Thai")
@@ -188,11 +198,23 @@ def test_edit_validation_and_duplicates(client: TestClient, provider: FakeProvid
     add_item(client, "One")
     add_item(client, "Two")
     one = item_row(migrated, "One")
-    response = submit(client, f"/catalog/items/{one.id}", {"name": "two", "new_cuisines": "Thai", "modes": ["pickup"]})
+    response = submit(
+        client,
+        f"/catalog/items/{one.id}",
+        {"meals": LUNCH_AND_DINNER, "name": "two", "new_cuisines": "Thai", "modes": ["pickup"]},
+    )
     assert response.status_code == 400 and "already exists" in page(response)
-    response = submit(client, f"/catalog/items/{one.id}", {"name": "", "new_cuisines": "Thai", "modes": ["pickup"]})
+    response = submit(
+        client,
+        f"/catalog/items/{one.id}",
+        {"meals": LUNCH_AND_DINNER, "name": "", "new_cuisines": "Thai", "modes": ["pickup"]},
+    )
     assert response.status_code == 400 and "Enter a name." in page(response)
-    same = submit(client, f"/catalog/items/{one.id}", {"name": "ONE", "new_cuisines": "Thai", "modes": ["pickup"]})
+    same = submit(
+        client,
+        f"/catalog/items/{one.id}",
+        {"meals": LUNCH_AND_DINNER, "name": "ONE", "new_cuisines": "Thai", "modes": ["pickup"]},
+    )
     assert same.status_code == 303  # renaming to a different case of itself is fine
     assert item_row(migrated, "ONE").id == one.id
 
@@ -223,7 +245,9 @@ def test_any_member_maintains_the_catalog(client: TestClient, provider: FakeProv
     item = item_row(migrated, "Sam's Pick")
     assert item.created_by == member(migrated, "sam@example.com").id
     edit = submit(
-        client, f"/catalog/items/{item.id}", {"name": "Sam's Pick", "new_cuisines": "Greek", "modes": ["pickup"]}
+        client,
+        f"/catalog/items/{item.id}",
+        {"meals": LUNCH_AND_DINNER, "name": "Sam's Pick", "new_cuisines": "Greek", "modes": ["pickup"]},
     )
     assert edit.status_code == 303
     assert submit(client, f"/catalog/items/{item.id}/deactivate").status_code == 303
@@ -310,11 +334,15 @@ def test_cooks_must_be_active_but_existing_cooks_stay(
     assert f'name="cook_ids" value="{sam}" checked' in form  # an existing cook stays listed
     assert f'name="cook_ids" value="{kim}"' not in form
     keep = submit(
-        client, f"/catalog/items/{pie.id}", {"name": "Pie", "new_cuisines": "American", "cook_ids": [str(sam)]}
+        client,
+        f"/catalog/items/{pie.id}",
+        {"meals": LUNCH_AND_DINNER, "name": "Pie", "new_cuisines": "American", "cook_ids": [str(sam)]},
     )
     assert keep.status_code == 303
     add = submit(
-        client, f"/catalog/items/{pie.id}", {"name": "Pie", "new_cuisines": "American", "cook_ids": [str(kim)]}
+        client,
+        f"/catalog/items/{pie.id}",
+        {"meals": LUNCH_AND_DINNER, "name": "Pie", "new_cuisines": "American", "cook_ids": [str(kim)]},
     )
     assert add.status_code == 400 and "isn't an active member" in page(add)
     new = add_item(client, "Cake", kind="home", cuisines="American", cook_ids=[str(sam)])

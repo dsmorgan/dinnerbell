@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 from enum import StrEnum
 
+from dinnerbell.domain.catalog import Meal
 from dinnerbell.domain.members import Member
 
 MAX_MEAL_AGE = timedelta(days=730)
@@ -17,6 +18,11 @@ MAX_MEAL_AGE = timedelta(days=730)
 class Slot(StrEnum):
     LUNCH = "lunch"
     DINNER = "dinner"
+
+    @property
+    def meal(self) -> Meal:
+        """The meal catalog items say they're for (#72). Every slot is a meal."""
+        return Meal(self.value)
 
 
 class InvalidMeal(ValueError):

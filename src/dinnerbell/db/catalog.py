@@ -12,7 +12,18 @@ from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dinnerbell.db.models import CatalogItemCookRow, CatalogItemRow, CatalogItemTagRow, TagRow
-from dinnerbell.domain.catalog import CatalogItem, ItemKind, Mode, Tag, TagKind, name_key
+from dinnerbell.domain.catalog import MEAL_ORDER, CatalogItem, ItemKind, Meal, Mode, Tag, TagKind, name_key
+
+MEAL_BITS = {meal: 1 << index for index, meal in enumerate(MEAL_ORDER)}
+"""``catalog_item.meals`` stores the meals an item is for as bits: breakfast 1, lunch 2, dinner 4."""
+
+
+def meals_to_bits(meals: frozenset[Meal]) -> int:
+    return sum(MEAL_BITS[meal] for meal in meals)
+
+
+def meals_from_bits(bits: int) -> frozenset[Meal]:
+    return frozenset(meal for meal, bit in MEAL_BITS.items() if bits & bit)
 
 
 def _tag(row: TagRow) -> Tag:
@@ -26,6 +37,7 @@ class ItemValues:
     kind: ItemKind
     name: str
     modes: frozenset[Mode]
+    meals: frozenset[Meal]
     tag_ids: frozenset[int]
     cook_ids: frozenset[int]
     url: str | None
@@ -189,6 +201,7 @@ class CatalogRepository:
                 default_servings=row.default_servings,
                 active=row.active,
                 created_by=row.created_by,
+                meals=meals_from_bits(row.meals),
             )
             for row in rows
         ]
@@ -225,6 +238,7 @@ class CatalogRepository:
         row.kind = values.kind.value
         row.name, row.name_key = values.name, name_key(values.name)
         row.modes = sorted(m.value for m in values.modes)
+        row.meals = meals_to_bits(values.meals)
         row.url, row.order_url, row.notes = values.url, values.order_url, values.notes
         row.default_servings = values.default_servings
         row.active = values.active

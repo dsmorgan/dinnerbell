@@ -14,15 +14,19 @@ from starlette.datastructures import UploadFile as StarletteUploadFile
 from starlette.responses import Response
 
 from dinnerbell.domain.catalog import (
+    DEFAULT_MEALS,
+    MEAL_ORDER,
     CatalogItem,
     CatalogRuleViolation,
     InvalidCatalogInput,
     ItemFilter,
     ItemInput,
     ItemKind,
+    Meal,
     Mode,
     Status,
     TagKind,
+    sorted_meals,
     sorted_modes,
     tags_by_kind,
 )
@@ -79,6 +83,7 @@ async def catalog_page(
     q: str = "",
     kind: str = "",
     mode: str = "",
+    meal: str = "",
     tag: str = "",
     status: str = "",
     notice: str = "",
@@ -92,6 +97,7 @@ async def catalog_page(
         query=q[:100],
         kind=choice(ItemKind, kind),
         mode=choice(Mode, mode),
+        meal=choice(Meal, meal),
         tag_id=tag_id,
         status=choice(Status, status) or Status.ACTIVE,
     )
@@ -114,8 +120,10 @@ async def catalog_page(
             "eaten": {i.id: last_eaten_label(data.last_eaten.get(i.id), today) for i in items},
             "feedback": await feedback_service.item_counts(db, principal.member),
             "sorted_modes": sorted_modes,
+            "sorted_meals": sorted_meals,
             "kinds": list(ItemKind),
             "modes": list(Mode),
+            "meals": MEAL_ORDER,
             "statuses": list(Status),
             "notice": message,
         },
@@ -135,6 +143,7 @@ class ItemForm:
     new_tags: str = ""
     new_tags_kind: str = TagKind.OTHER.value
     modes: set[str] = field(default_factory=lambda: {Mode.PICKUP.value})
+    meals: set[str] = field(default_factory=lambda: {m.value for m in DEFAULT_MEALS})
     cook_ids: set[int] = field(default_factory=set)
     url: str = ""
     order_url: str = ""
@@ -147,6 +156,7 @@ class ItemForm:
             name=item.name,
             tag_ids=set(item.tag_ids),
             modes={m.value for m in item.modes},
+            meals={m.value for m in item.meals},
             cook_ids=set(item.cook_ids),
             url=item.url or "",
             order_url=item.order_url or "",
@@ -158,10 +168,14 @@ class ItemForm:
         modes = {choice(Mode, m) for m in self.modes}
         if None in modes:
             raise BadFormValue("Pick pickup, delivery, or both.")
+        meals = {choice(Meal, m) for m in self.meals}
+        if None in meals:
+            raise BadFormValue("Pick breakfast, lunch, dinner, or a mix.")
         return ItemInput(
             kind=kind,
             name=self.name,
             modes=frozenset(m for m in modes if m is not None),
+            meals=frozenset(m for m in meals if m is not None),
             tag_ids=frozenset(self.tag_ids),
             new_cuisines=split_names(self.new_cuisines),
             new_tags=split_names(self.new_tags),
@@ -185,6 +199,7 @@ def posted_item(
     new_tags: FormText = "",
     new_tags_kind: FormText = TagKind.OTHER.value,
     modes: FormList = None,
+    meals: FormList = None,
     cook_ids: FormList = None,
     url: FormText = "",
     order_url: FormText = "",
@@ -198,6 +213,7 @@ def posted_item(
         new_tags=new_tags,
         new_tags_kind=new_tags_kind,
         modes=set(modes or []),
+        meals=set(meals or []),
         cook_ids=_ids(cook_ids),
         url=url,
         order_url=order_url,
@@ -237,6 +253,7 @@ async def _item_page(
             "tag_kinds": list(TagKind),
             "cooks": cooks,
             "restaurant_modes": [Mode.PICKUP, Mode.DELIVERY],
+            "meals": MEAL_ORDER,
             "counts": counts.get(item.id) if item else None,
         },
         status_code=status_code,

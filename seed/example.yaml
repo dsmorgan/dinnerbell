@@ -2,7 +2,8 @@
 #
 # Starter catalog for Dinnerbell. Replace the examples with your household's
 # places and meals, then import it from the Catalog page or set
-# DINNERBELL_SEED_FILE to this path before first start.
+# DINNERBELL_SEED_FILE to this path before first start. Entries without
+# meals are for lunch and dinner.
 # Format: docs/catalog-format.md
 
 version: 1
@@ -56,11 +57,14 @@ restaurants:
     cuisine: [Mexican]
     tags: [chicken, beef, gluten-free option]
     modes: [pickup]
+    meals: [breakfast, lunch, dinner]
+    notes: Breakfast burritos until 11.
 
   - name: Example Pho House
     cuisine: [Vietnamese]
     tags: [beef, healthy]
     modes: [pickup]
+    meals: [lunch]
 
 home_meals:
   - name: Chicken tacos
@@ -72,6 +76,7 @@ home_meals:
   - name: Spaghetti and meatballs
     cuisine: [Italian]
     tags: [beef, comfort]
+    meals: [dinner]
     servings: 6
 
   - name: Sheet-pan chicken shawarma

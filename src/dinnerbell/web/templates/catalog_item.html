@@ -1,5 +1,5 @@
 {#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
-{#- Add or edit one catalog item. Expects: kind, form, item (None when adding), tag_groups, tag_kinds, cooks. -#}
+{#- Add or edit one catalog item. Expects: kind, form, item (None when adding), tag_groups, tag_kinds, cooks, meals. -#}
 {% extends "base.html" %}
 {% set is_home = kind.value == "home" %}
 {% block title %}{% if item %}Edit {{ item.name }}{% else %}Add {{ kind.label|lower }}{% endif %}{% endblock %}
@@ -20,6 +20,14 @@
     <span>Name</span>
     <input name="name" required maxlength="100" autocomplete="off" value="{{ form.name }}">
   </label>
+
+  <fieldset class="field">
+    <legend>Meals it's for</legend>
+    {% for m in meals %}
+    <label class="check"><input type="checkbox" name="meals" value="{{ m.value }}"{% if m.value in form.meals %} checked{% endif %}> {{ m.label }}</label>
+    {% endfor %}
+    <p class="small muted">Proposals for a meal come from the items for it first. Pick at least one.</p>
+  </fieldset>
 
   <fieldset class="field">
     <legend>Cuisine</legend>
