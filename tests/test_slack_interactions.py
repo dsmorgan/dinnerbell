@@ -5,7 +5,7 @@ the Home tab, and /dinnerbell, each mapped to one service call (docs/channels.md
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from datetime import time
 
 import pytest
@@ -28,7 +28,7 @@ from dinnerbell.services import calls
 from dinnerbell.services.database import Database, open_database
 from tests.support.calls import OPENS, RESPOND_BY, House, dinner_id, furnish, make_house
 from tests.support.clock import FakeClock
-from tests.support.fake_slack import Failure, state
+from tests.support.fake_slack import Failure, block_action, send, state
 from tests.support.slack import Slack, wire
 
 pytestmark = pytest.mark.anyio
@@ -417,6 +417,11 @@ async def test_home_offers_roles_coordinating_and_inviting_and_shows_the_choice(
     assert (await house.event(event_id)).coordinator_id == house["Kim"].id
     assert CONFIRM[ids.COORDINATE].format(slot="dinner") in json.dumps(slack.last_home("Kim"))
     assert "card_coordinate" not in home_buttons(slack, "Kim")
+    await slack.open_home("Kim")  # no notice: the card's own line says so
+    assert "You're coordinating. Thanks for steering!" in json.dumps(slack.last_home("Kim"))
+    await slack.open_home("Sam")
+    assert "*Coordinator:* Kim" in json.dumps(slack.last_home("Sam"))
+    assert "card_coordinate" not in home_buttons(slack, "Sam")
     await slack.click("Kim", "card_maybe", value, home=True)
     assert await status_of(house, event_id, "Kim") is Status.MAYBE
     assert selected(slack.last_home("Kim")) == ["✓ Maybe"]
@@ -460,6 +465,11 @@ async def test_a_home_tap_after_the_call_moved_on_is_refused_and_logged_once(
     assert refused.__dict__["moved_on"] is True and refused.__dict__["action"] == "card_offer_pickup"
     assert refused.__dict__["refusal"] in json.dumps(slack.last_home("Kim"))
     assert home_buttons(slack, "Kim")["card_offer_pickup"] == ids.card_value(event_id, 2)  # redrawn for run 2
+    caplog.clear()
+    await slack.click("Kim", ids.INVITE_GUEST, value, home=True)  # run 1's Invite a guest
+    (refused,) = [r for r in caplog.records if r.getMessage() == "refused"]
+    assert (refused.__dict__["event_id"], refused.__dict__["action"]) == (event_id, ids.INVITE_GUEST)
+    assert refused.__dict__["moved_on"] is True and slack.fake.of("views.open") == []
 
     house.clock.now = RESPOND_BY
     await house.tick()
@@ -596,3 +606,34 @@ async def test_a_lost_race_on_home_or_a_card_says_so_and_is_logged_once(
     assert refused.__dict__["reason"] == "call_finished"
     shown = json.dumps(slack.last_home("Kim")) if home else json.dumps(slack.cards("Kim")[-1])
     assert "This call already finished." in shown
+
+
+async def test_two_quick_taps_on_home_land_in_order(slack: Slack, house: House) -> None:
+    """The first tap's Home publish is held up in Slack; the second tap waits for it under the
+    card lock, so the Home the person ends up with shows their last answer (#84)."""
+    import asyncio
+
+    event_id = await open_call(house)
+    value = ids.card_value(event_id, 1)
+    slack.fake.clear()
+    gate = slack.fake.gates["views.publish"] = asyncio.Event()
+    locks = slack.conn.interactions.card_locks
+    key = ("U03KIM", event_id)
+
+    async def until(condition: Callable[[], bool]) -> None:
+        for _ in range(1000):  # up to 10 seconds on a slow runner
+            if condition():
+                return
+            await asyncio.sleep(0.01)
+        raise AssertionError("timed out")
+
+    await send(slack.conn.app, "interactive", block_action("U03KIM", "card_maybe", value, home=True))
+    await until(lambda: bool(slack.fake.of("views.publish")))  # the first holds the lock, publishing
+    await send(slack.conn.app, "interactive", block_action("U03KIM", "card_out", value, home=True))
+    await until(lambda: key in locks and locks[key].users == 2)  # the second waits for it
+    assert await status_of(house, event_id, "Kim") is Status.MAYBE  # the second hasn't run
+    gate.set()
+    await slack.conn.interactions.settle()
+    assert [selected(c.args["view"]) for c in slack.fake.of("views.publish")] == [["✓ Maybe"], ["✓ Out"]]
+    assert await status_of(house, event_id, "Kim") is Status.OUT
+    assert locks == {}

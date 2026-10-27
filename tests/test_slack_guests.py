@@ -268,6 +268,50 @@ async def test_every_other_button_is_refused_to_a_guest(
     assert await house.kinds() == before and slack.fake.of("views.open") == []
 
 
+MAX_ROW = 5
+"""Slack folds an actions row past about five buttons into "+ N more" (#84)."""
+
+
+async def test_no_home_row_has_more_buttons_than_slack_shows(slack: Slack, house: House) -> None:
+    """Every Home an admin, the coordinator, a member, and a guest see, as a call goes from
+    answers to done and another is called off, keeps each row to five buttons (#84)."""
+    event_id = await open_dinner(house)
+    async with house.sessionmaker() as db:
+        await guests.invite(db, house["Kim"], event_id, guest_id=house["Pat"].id, now=house.clock())
+    await slack.click("Sam", "respond_in", str(event_id))
+    await slack.click("Sam", "coordinate", str(event_id))
+    await slack.click("Alex", "offer_pickup", str(event_id))
+    await slack.click("Kim", "respond_in", str(event_id))
+    await slack.click(PAT, "respond_in", str(event_id))
+    seen: set[tuple[EventState, str]] = set()
+
+    async def check(call: int, state: EventState) -> None:
+        assert (await house.event(call)).state is state
+        for who in ("Alex", "Sam", "Kim", PAT):
+            await slack.open_home(who)
+            rows = {b["block_id"]: b["elements"] for b in slack.last_home(who)["blocks"] if b["type"] == "actions"}
+            for block_id, elements in rows.items():
+                assert len(elements) <= MAX_ROW, (state, who, block_id, [e["action_id"] for e in elements])
+            seen.add((state, who))
+
+    await check(event_id, EventState.COLLECTING)
+    assert "close_window" in buttons(slack.last_home("Sam")["blocks"])  # Close now still shows
+    house.clock.now = RESPOND_BY
+    await house.tick()
+    await check(event_id, EventState.VOTING)
+    first = (await house.context(event_id)).proposals[0].id
+    await slack.click("Alex", "lock", ids.proposal_value(event_id, first))
+    await check(event_id, EventState.DECIDED)
+    async with house.sessionmaker() as db:
+        await calls.mark_done(db, house["Alex"], event_id, now=house.clock())
+    await check(event_id, EventState.DONE)
+    async with house.sessionmaker() as db:
+        lunch = await calls.start_call(db, house["Kim"], Slot.LUNCH, house.clock().date(), now=house.clock())
+        await calls.cancel_call(db, house["Kim"], lunch.id, now=house.clock())
+    await check(lunch.id, EventState.CANCELLED)
+    assert len(seen) == 20
+
+
 # A member inviting, and answering for a guest without Slack ------------------------------------------
 
 

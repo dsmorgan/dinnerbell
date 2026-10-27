@@ -18,7 +18,7 @@
     {
       "block_id": "event-7",
       "text": {
-        "text": "*Dinner* · Decided\nYou're in. You're bringing 1 guest. You offered to cook.\nThe plan: *Sam's Tacos*",
+        "text": "*Dinner* · Decided\nYou're in. You're bringing 1 guest. You offered to cook.\n*Coordinator:* Alex\nThe plan: *Sam's Tacos*",
         "type": "mrkdwn"
       },
       "type": "section"

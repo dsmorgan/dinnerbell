@@ -45,6 +45,7 @@ from dinnerbell.channels.slack.messages import (
     OFFER_VERBS,
     POST_NOW,
     answer_actions,
+    coordinator_line,
     mark_done_button,
 )
 from dinnerbell.domain import notifications as note
@@ -660,7 +661,15 @@ class HomeLinks:
         return f"{self.base_url}{path}"
 
 
-def _event_card(v: EventView, links: HomeLinks, today: date, *, guest: bool = False) -> list[Block]:
+OPEN_STATES = frozenset({EventState.COLLECTING, EventState.VOTING, EventState.DECIDED})
+"""States in which Home says who's coordinating (#84)."""
+
+
+def _event_card(
+    v: EventView, links: HomeLinks, today: date, *, guest: bool = False, member_id: int | None = None
+) -> list[Block]:
+    """A call on Home: two blocks, or four while answers are open, when the member's Your answer
+    card buttons take two rows of their own above the call's other buttons (#84)."""
     state = v.event.state
     day = "" if v.event.day == today else f" · {day_label(v.event.day)}"  # posted early (#59)
     lines = [f"*{v.event.slot.value.capitalize()}*{day} · {state.label}"]
@@ -673,6 +682,9 @@ def _event_card(v: EventView, links: HomeLinks, today: date, *, guest: bool = Fa
         lines.append(mine)
     elif state is EventState.COLLECTING:
         lines.append("Are you in? Tap below.")
+    coordinating = coordinator_line(v.info, member_id) if state in OPEN_STATES else None
+    if coordinating is not None:
+        lines.append(coordinating)
     if v.decision is not None:
         lines.append(f"The plan: *{escape(v.decision.proposal.item.name)}*")
     elif state is EventState.VOTING:
@@ -680,14 +692,20 @@ def _event_card(v: EventView, links: HomeLinks, today: date, *, guest: bool = Fa
     if state is EventState.CANCELLED and v.info.ended_by is not None:
         reason = f" “{escape(v.info.end_note)}”" if v.info.end_note else ""
         lines.append(f"Called off by {escape(v.info.ended_by.name)}.{reason}")
+    rows: list[Block] = []
     buttons: list[Block] = []
     if v.can.respond:
         # Home is per member, so it offers what their Your answer card does, with their choices
-        # selected, from the same builder (#84). A guest is in or out, with no details (#38).
-        # They come first, in one row with the rest: the block budget counts every card as two
-        # blocks (#51), and Slack folds what doesn't fit on screen into "+ N more", so the
-        # least-used buttons go last. Rows for a member's guests without Slack stay on the card.
-        buttons += answer_actions(v.info, v.mine, guest=guest, can_invite=v.can.invite).row
+        # selected, from the same builder and in the same rows (#84), each short enough that
+        # Slack doesn't fold it into "+ N more". A guest is in or out, with no details (#38).
+        # Rows for a member's guests without Slack stay on the card: Home's budget (#51) has
+        # no room for two blocks per guest.
+        answer = answer_actions(v.info, v.mine, guest=guest, can_invite=v.can.invite)
+        rows = [
+            actions(*answer.participation, block_id=f"answer-{v.id}"),
+            actions(*answer.roles, block_id=f"roles-{v.id}"),
+        ]
+        buttons += answer.more
     if v.can.mark_done:
         buttons.append(mark_done_button(v.info))
     # Home is per member, so these show only to people allowed to use them (FR-56).
@@ -701,7 +719,11 @@ def _event_card(v: EventView, links: HomeLinks, today: date, *, guest: bool = Fa
         cancel = ids.menu_value(ids.MenuChoice.CANCEL, v.id, v.event.run)
         buttons.append(button(CALL_OFF, ids.CANCEL_CALL, cancel, style="danger"))
     buttons.append(button("Open", f"{ids.LINK_PREFIX}event", url=links.url(v.event.path)))
-    return [section("\n".join(lines), block_id=f"event-{v.id}"), actions(*buttons, block_id=f"event-actions-{v.id}")]
+    return [
+        section("\n".join(lines), block_id=f"event-{v.id}"),
+        *rows,
+        actions(*buttons, block_id=f"event-actions-{v.id}"),
+    ]
 
 
 def _offer_card(v: EventView, offer: note.OfferInfo, links: HomeLinks, today: date) -> list[Block]:
@@ -823,8 +845,10 @@ def home_view(
     label: str = "",
     awaiting: Sequence[Awaiting] = (),
     guest: bool = False,
+    member_id: int | None = None,
 ) -> dict[str, Any]:
     """Each member's Home tab. ``label``, the instance label, prefixes the header when set.
+    ``member_id`` is whose it is, so a call they coordinate says so.
     ``awaiting`` lists meals the member hasn't given feedback on yet. A guest's Home (``guest``)
     shows only the calls they're invited to, with In, Out, and what they may do, and none of
     the household's buttons or links (#38).
@@ -842,7 +866,7 @@ def home_view(
     def card(v: EventView) -> list[Block]:
         if v.offer is not None:
             return _offer_card(v, v.offer, links, today.today)
-        return _event_card(v, links, today.today, guest=guest)
+        return _event_card(v, links, today.today, guest=guest, member_id=member_id)
 
     # Today's, and any posted early for a later day (#59), in the order they came. Anything
     # open from an earlier day, even a call that never posted, is left over.

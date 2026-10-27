@@ -753,12 +753,21 @@ def _mine_lines(event: note.EventInfo, mine: Response | None, member_id: int) ->
         lines.append(line)
     elif event.state is EventState.COLLECTING:
         lines.append("You haven't answered yet.")
-    coordinator = event.coordinator
-    if coordinator is not None and coordinator.id == member_id:
-        lines.append("You're coordinating. Thanks for steering!")
-    elif coordinator is not None:
-        lines.append(f"*Coordinator:* {escape(coordinator.name)}")
+    coordinating = coordinator_line(event, member_id)
+    if coordinating is not None:
+        lines.append(coordinating)
     return lines
+
+
+def coordinator_line(event: note.EventInfo, member_id: int | None) -> str | None:
+    """Who's coordinating, as mrkdwn for ``member_id``'s eyes only: on their card and their Home
+    (#84). None while nobody is."""
+    coordinator = event.coordinator
+    if coordinator is None:
+        return None
+    if coordinator.id == member_id:
+        return "You're coordinating. Thanks for steering!"
+    return f"*Coordinator:* {escape(coordinator.name)}"
 
 
 def your_answer_text(event: note.EventInfo, mine: Response | None, *, run: int | None = None) -> str:
@@ -868,19 +877,21 @@ def your_answer(
 
 @dataclass(frozen=True)
 class AnswerActions:
-    """A call's answer buttons for one person, with their own choices selected: what the Your
-    answer card shows in three rows and App Home's call card shows in one (#84)."""
+    """A call's answer buttons for one person, with their own choices selected, in the rows the
+    Your answer card and App Home's call card both show (#84). Slack folds a row past about
+    five buttons into "+ N more", so no row here has more than four."""
 
     participation: list[Block]
     """**In**, **Maybe**, and **Out**; a guest's are **In** and **Out** (#38)."""
     roles: list[Block]
     """The role offers, each saying which way it goes, and **I'll coordinate** while nobody is."""
     more: list[Block]
-    """**Details**, for members, and **Invite a guest** for whoever may."""
+    """**Details**, for members, and **Invite a guest** for whoever may: the start of a last
+    row that each surface fills with its own buttons."""
 
     @property
-    def row(self) -> list[Block]:
-        """Every button, in order, for a surface that shows them in one row."""
+    def all(self) -> list[Block]:
+        """Every button, in order."""
         return [*self.participation, *self.roles, *self.more]
 
 

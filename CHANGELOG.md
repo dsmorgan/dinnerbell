@@ -12,7 +12,8 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
   - A tap on Home works as a tap on the card does, and Home shows your new choice at once, with a line saying what changed.
   - Home's buttons name the call's run, like the card's. A Home left open since the call started again, or since answers closed, changes nothing and says why, as the card does.
   - Answering for a guest without Slack stays on the card (tap **Answer** on the call).
-  - Slack shows a long row of buttons with the last ones under **+ N more**. The ones you use most come first.
+  - The buttons come in short rows, as on the card, so Slack doesn't hide any under **+ N more**.
+  - Home says who's coordinating a call, or that you are.
 
 ## [0.6.0] - 2026-10-27
 
