@@ -41,7 +41,7 @@ from dinnerbell.domain.guests import GuestInput
 from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.members import InvalidMemberInput
 from dinnerbell.domain.offers import MAX_CAPACITY
-from dinnerbell.services import call_admin, calls, discard, event_views, feedback, guests, offers
+from dinnerbell.services import activity, call_admin, calls, discard, event_views, feedback, guests, offers
 from dinnerbell.services.errors import Forbidden, NotFound
 from dinnerbell.services.lifecycle import CallExists
 from dinnerbell.web.auth import (
@@ -114,16 +114,24 @@ async def _run(
 ) -> Response:
     try:
         await action()
-    except (StaleRun, WindowMoved):
+    except (StaleRun, WindowMoved) as exc:
+        _refused(request, principal, exc, STALE, event_id=event_id)
         return await _card(request, principal, context, db, event_id, came_from=came_from, error=STALE)
     except RULE_ERRORS as exc:
+        _refused(request, principal, exc, str(exc), event_id=event_id)
         return await _card(request, principal, context, db, event_id, came_from=came_from, error=str(exc))
     except IllegalTransition as exc:
         error = STALE if exc.current.is_open else CALL_FINISHED
+        _refused(request, principal, exc, error, event_id=event_id)
         return await _card(request, principal, context, db, event_id, came_from=came_from, error=error)
     if is_htmx(request):
         return await _card(request, principal, context, db, event_id, came_from=came_from)
     return _back(event_id, came_from)
+
+
+def _refused(request: Request, principal: Principal, exc: Exception, shown: str, **extra: object) -> None:
+    """Log a refusal once, with what the member saw (#75)."""
+    activity.refused(exc, shown, principal.member, path=request.url.path, **extra)
 
 
 # Pages ------------------------------------------------------------------------------------------
@@ -184,6 +192,7 @@ async def start_call(
                 raise
             event = scheduled  # posting a call that's scheduled already, as /dinnerbell call ... now does
     except RULE_ERRORS as exc:
+        _refused(request, principal, exc, str(exc))
         return await _today_error(request, principal, context, db, start_error=str(exc))
     if post_now:
         # The call exists now, so a refusal shows on its card rather than as a failed start.
@@ -191,6 +200,7 @@ async def start_call(
         try:
             await calls.post_now(db, member, event.id, run=event.run, now=context.clock())
         except RULE_ERRORS as exc:
+            _refused(request, principal, exc, str(exc), event_id=event.id)
             return await _card(request, principal, context, db, event.id, came_from="event", error=str(exc))
     return local_redirect("/events/{}", event.id)
 
@@ -644,6 +654,7 @@ async def make_offer(
         )
         posted = await offers.post_offer(db, principal.member, data, now=context.clock())
     except RULE_ERRORS as exc:
+        _refused(request, principal, exc, str(exc))
         return await _today_error(request, principal, context, db, offer_error=str(exc))
     return local_redirect("/events/{}", posted.event_id)
 

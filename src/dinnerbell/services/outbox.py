@@ -134,7 +134,7 @@ async def _deliver(
     try:
         notification = from_payload(entry.kind, entry.payload)
     except PayloadError as exc:
-        log.error("undeliverable notification", extra={"outbox_id": entry.id, "kind": entry.kind})
+        log.error("undeliverable notification", extra=_about(entry))
         await _record_failure(db, entry, token, str(exc), clock, result, final=True)
         return True
     if entry.is_update and await repo.newer_update_exists(entry):
@@ -142,6 +142,7 @@ async def _deliver(
         await repo.delivered(entry.id, token, now=clock(), ref=None, note=SUPERSEDED)
         await db.commit()
         result.superseded += 1
+        log.info("notification closed", extra=_about(entry, note=SUPERSEDED))
         return True
     if notification.kind in CALL_OFF_SUPERSEDES and await _overtaken(db, notification):
         # Called off (or started again) since this row was queued, perhaps while a drainer held
@@ -149,6 +150,7 @@ async def _deliver(
         await repo.delivered(entry.id, token, now=clock(), ref=None, note=SUPERSEDED_BY_CALL_OFF)
         await db.commit()
         result.superseded += 1
+        log.info("notification closed", extra=_about(entry, note=SUPERSEDED_BY_CALL_OFF))
         return True
     try:
         ref, skipped = await _send(repo, channel, entry, notification)
@@ -159,7 +161,7 @@ async def _deliver(
         if released:
             result.held += 1
         else:
-            log.warning("outbox claim expired during delivery", extra={"outbox_id": entry.id, "kind": entry.kind})
+            log.warning("outbox claim expired during delivery", extra=_about(entry))
         return False
     except Exception as exc:
         result.stopped = isinstance(exc, ChannelUnavailable)
@@ -171,10 +173,19 @@ async def _deliver(
         return final
     note = (NO_MESSAGE if notification.is_update else NO_THREAD) if skipped else None
     if not await repo.delivered(entry.id, token, now=clock(), ref=ref, note=note):
-        log.warning("outbox claim expired during delivery", extra={"outbox_id": entry.id, "kind": entry.kind})
+        log.warning("outbox claim expired during delivery", extra=_about(entry))
     await db.commit()
     result.delivered += 1
+    where = {"channel_id": ref.channel_id, "message_ts": ref.message_id} if ref is not None else {}
+    log.info("notification delivered", extra=_about(entry, note=note, **where))
     return True
+
+
+def _about(entry: OutboxEntry, **more: object) -> dict[str, object]:
+    """A delivery line's fields (#75): the row, its call, its kind, and ``more``. A posted
+    message's ``channel_id`` and ``message_ts`` (Slack's ``ts``) match the line to the message."""
+    fields = {"outbox_id": entry.id, "event_id": entry.event_id, "kind": entry.kind, **more}
+    return {key: value for key, value in fields.items() if value is not None}
 
 
 async def _overtaken(db: AsyncSession, notification: Notification) -> bool:
@@ -225,11 +236,7 @@ async def _record_failure(
     await db.commit()
     if final:
         result.failed += 1
-        log.error(
-            "notification delivery gave up", extra={"outbox_id": entry.id, "kind": entry.kind, "attempts": attempts}
-        )
+        log.error("notification delivery gave up", extra=_about(entry, attempts=attempts))
     else:
         result.retrying += 1
-        log.warning(
-            "notification delivery failed", extra={"outbox_id": entry.id, "kind": entry.kind, "attempts": attempts}
-        )
+        log.warning("notification delivery failed", extra=_about(entry, attempts=attempts))

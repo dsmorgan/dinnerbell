@@ -155,7 +155,7 @@ class SlackChannel:
             ref = await self.api.post(thread.channel_id, message, thread_ts=thread.message_id)
         else:
             ref = await self.api.post(self.channel_id, message)
-        log.info(
+        log.debug(  # the outbox logs "notification delivered" at info, with the channel and ts
             "slack message posted",
             extra={"kind": notification.kind, "event_id": notification.event_id, "recipient_id": recipient},
         )

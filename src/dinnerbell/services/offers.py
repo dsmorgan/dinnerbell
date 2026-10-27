@@ -68,9 +68,9 @@ from dinnerbell.domain.offers import (
 )
 from dinnerbell.domain.ranking import usual_choice
 from dinnerbell.domain.schedule import slot_schedules
+from dinnerbell.services import activity, picks
 from dinnerbell.services import call_context as cc
 from dinnerbell.services import guests as guest_rules
-from dinnerbell.services import picks
 from dinnerbell.services.call_context import CallContext, load, locked_event, publish
 from dinnerbell.services.common import audit
 from dinnerbell.services.errors import NotFound
@@ -154,7 +154,8 @@ async def offer_form(db: AsyncSession, actor: Member, *, now: datetime) -> Offer
 async def post_offer(db: AsyncSession, actor: Member, data: OfferInput, *, now: datetime) -> Posted:
     """Post ``data`` for ``actor`` (FR-4, FR-5), and commit. Audited."""
     if not actor.active:
-        raise EventRuleViolation("Only active members can make an offer.")
+        raise EventRuleViolation("Only active members can make an offer.", code="inactive")
+    activity.about(item=data.free_text, item_id=data.item_id, mode=data.mode)
     guest_rules.refuse_guest(actor, GuestAction.OFFER)
     async with write_transaction(db):
         household = await HouseholdRepository(db).get(actor.household_id)
@@ -181,25 +182,27 @@ async def _offered_item(db: AsyncSession, actor: Member, data: OfferInput, now: 
     made from the name and cuisine, audited as ``catalog.item_created``."""
     catalog, household_id = CatalogRepository(db), actor.household_id
     if (data.item_id is None) == (not (data.free_text or "").strip()):
-        raise EventRuleViolation("Pick something from the catalog, or type something new, but not both.")
+        raise EventRuleViolation(
+            "Pick something from the catalog, or type something new, but not both.", code="both_given"
+        )
     if data.item_id is not None:
         item = await catalog.item(household_id, data.item_id)
         if item is None or not item.active:
-            raise EventRuleViolation("That isn't in the catalog anymore. Reload and try again.")
+            raise EventRuleViolation("That isn't in the catalog anymore. Reload and try again.", code="not_in_catalog")
     else:
         kind = ItemKind.HOME if data.mode is Mode.COOK else ItemKind.RESTAURANT
         try:
             name = normalize_item_name(data.free_text or "")
         except InvalidCatalogInput as exc:
-            raise EventRuleViolation(str(exc)) from None
+            raise EventRuleViolation(str(exc), code="invalid_name") from None
         found = await catalog.item_by_name(household_id, kind, name)
         if found is not None and not found.active:
-            raise EventRuleViolation("That isn't in the catalog anymore. Reload and try again.")
+            raise EventRuleViolation("That isn't in the catalog anymore. Reload and try again.", code="not_in_catalog")
         if found is None:
             tags = {t.id: t for t in await catalog.tags(household_id)}
             cuisine = tags.get(data.cuisine_id) if data.cuisine_id is not None else None
             if cuisine is None or cuisine.kind is not TagKind.CUISINE:
-                raise EventRuleViolation("Pick a cuisine for it, so variety and vetoes still work.")
+                raise EventRuleViolation("Pick a cuisine for it, so variety and vetoes still work.", code="no_cuisine")
             values = ItemValues(
                 kind=kind,
                 name=name,
@@ -217,7 +220,7 @@ async def _offered_item(db: AsyncSession, actor: Member, data: OfferInput, now: 
             await audit(db, household_id, actor, "catalog.item_created", f"item:{found.id}", payload, now)
         item = found
     if data.mode not in item.modes:
-        raise EventRuleViolation(f"{item.name} isn't available by {data.mode.label.lower()}.")
+        raise EventRuleViolation(f"{item.name} isn't available by {data.mode.label.lower()}.", code="unavailable")
     check_cook_list(item, data.mode, actor, ask="Ask a cook to offer it")
     return item
 
@@ -239,7 +242,8 @@ async def _post(
     mine = [o for o in await events.offers_for(actor.household_id, data.slot, data.day) if o.created_by == actor.id]
     if sum(1 for o in mine if o.state.is_open) >= MAX_OPEN_OFFERS:
         raise EventRuleViolation(
-            f"You have {MAX_OPEN_OFFERS} {data.slot.value} offers on for that day already. Call one off first."
+            f"You have {MAX_OPEN_OFFERS} {data.slot.value} offers on for that day already. Call one off first.",
+            code="too_many_offers",
         )
     offer = await events.add_offer(
         household_id=actor.household_id,
@@ -269,6 +273,10 @@ async def _post(
         "replaced": replacing.id if replacing is not None else None,
     }
     await audit(db, actor.household_id, actor, "event.offered", f"event:{offer.id}", payload, now)
+    replaced = replacing.id if replacing is not None else None
+    activity.action(
+        db, "offer_posted", offer, actor, started=True, item=item, mode=data.mode, capacity=capacity, replaced=replaced
+    )
     path = OfferPath.REPLACE if replacing is not None else OfferPath.NEW
     return Posted(path, offer.id, data.slot, data.day, item.name)
 
@@ -315,7 +323,8 @@ async def _attach(db: AsyncSession, actor: Member, call: Event, item: CatalogIte
     voting = call.state is EventState.VOTING
     if voting and (mine is None or not mine.is_in):
         raise EventRuleViolation(
-            f"Voting has started on the {call.slot.value} call, and you're not in it, so your offer can't join it."
+            f"Voting has started on the {call.slot.value} call, and you're not in it, so your offer can't join it.",
+            code="not_in",
         )
     source = ProposalSource.COORDINATOR if is_coordinator(call, actor) else ProposalSource.MEMBER
     reasons = (f"{actor.display_name} offered to {DOING[mode]}.",)
@@ -339,7 +348,7 @@ async def _attach(db: AsyncSession, actor: Member, call: Event, item: CatalogIte
     group = await group_preferences(db, call.household_id, ctx.veto_people)
     problem = misfit(ctx, candidate, group)
     if problem is not None:
-        raise EventRuleViolation(problem)
+        raise problem
     proposals = ProposalRepository(db)
     if existing is None:
         proposal = await proposals.add(
@@ -363,6 +372,8 @@ async def _attach(db: AsyncSession, actor: Member, call: Event, item: CatalogIte
     if existing is not None:
         payload["took_over"] = existing.mode.value
     await audit(db, call.household_id, actor, "event.offer_attached", f"event:{call.id}", payload, now)
+    took_over = existing.mode.value if existing is not None else None
+    activity.action(db, "offer_attached", call, actor, item=item, mode=mode, took_over=took_over)
     return Posted(OfferPath.ATTACH, call.id, call.slot, call.day, item.name)
 
 
@@ -437,6 +448,7 @@ async def _join_locked(
     )
     await ResponseRepository(db).save(actor.household_id, event.id, answer, now)
     await _changed(db, before, actor, now)
+    activity.action(db, "join", event, actor, guests=guests)
     return await _seat(db, event, actor.id)
 
 
@@ -448,6 +460,7 @@ async def _leave_locked(db: AsyncSession, actor: Member, before: CallContext, no
         out = replace(with_status(mine, actor.id, Status.OUT, now), guests=0, guest_needs=frozenset())
         await ResponseRepository(db).save(actor.household_id, event.id, out, now)
         await _changed(db, before, actor, now)
+        activity.action(db, "leave", event, actor)
     return await _seat(db, event, actor.id)
 
 

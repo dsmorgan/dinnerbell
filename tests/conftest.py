@@ -4,6 +4,8 @@ __Host- cookies, CSRF, and Origin checks all on. Browsers send Origin; so does t
 
 from __future__ import annotations
 
+import logging
+import re
 import shutil
 from collections.abc import Iterator
 from pathlib import Path
@@ -18,6 +20,7 @@ from joserfc.jwk import RSAKey
 from dinnerbell.app_factory import create_app
 from dinnerbell.config import Settings
 from dinnerbell.db.migrate import run_migrations
+from dinnerbell.logs import JsonFormatter
 from tests.support.clock import FakeClock
 from tests.support.fake_oidc import CLIENT_ID, CLIENT_SECRET, ISSUER, FakeProvider, generate_key
 from tests.support.flags import disagreements, features_for, item_problems
@@ -48,6 +51,27 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
     problems = [problem for item in items for problem in item_problems(item)]
     if problems:
         raise pytest.UsageError("Bad feature flag marks:\n" + "\n".join(problems))
+
+
+SECRET_SHAPES = re.compile(
+    r"(?<![\\\w.+-])[\w.+-]+@[\w-]+\.[\w.-]+"  # an email, but not an escaped newline before a @decorator
+    r"|xox[a-z]-\w|xapp-\w"  # a Slack token, but not a hint naming the kind, such as "(xoxb-)"
+    r"|hooks\.slack\.com"  # a Slack response_url, a bearer capability for its message
+    r"|[?&](code|state)=|__Host-"  # an OIDC code or state, or a session cookie
+)
+"""What no log line in the suite may contain (SEC-5, #75)."""
+
+
+@pytest.fixture(autouse=True)
+def _no_secrets_in_logs(caplog: pytest.LogCaptureFixture) -> Iterator[None]:
+    """SEC-5 in every test: Dinnerbell logs everything down to debug, and no line, formatted as
+    production writes it, has an email, a token, or a capability URL."""
+    caplog.set_level(logging.DEBUG, logger="dinnerbell")
+    yield
+    for when in ("setup", "call"):
+        for record in caplog.get_records(when):
+            line = JsonFormatter().format(record)
+            assert not SECRET_SHAPES.search(line), f"a log line leaks a secret: {line}"
 
 
 @pytest.fixture(autouse=True)

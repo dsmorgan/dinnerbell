@@ -61,6 +61,7 @@ from dinnerbell.domain.household import Household
 from dinnerbell.domain.members import Member
 from dinnerbell.domain.offers import seats_taken
 from dinnerbell.domain.schedule import SlotSchedule, slot_schedule
+from dinnerbell.services import activity
 from dinnerbell.services.errors import NotFound
 
 NO_SUCH_CALL = "No such call."
@@ -78,6 +79,7 @@ async def locked_event(db: AsyncSession, household_id: int, event_id: int, now: 
         event = await events.get(household_id, event_id) if await events.lock(household_id, event_id, now) else None
         if event is None:
             raise NotFound(NO_SUCH_CALL)
+        activity.about(event)  # for the refusal's log line, if the rules refuse it
         yield event
         await db.commit()
     except BaseException:

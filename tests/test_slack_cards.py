@@ -442,14 +442,17 @@ async def test_a_card_after_responses_close_says_the_call_moved_on(
     assert "closed" not in text_of(replaced.args)  # the card says it once, not with the rule's words too
     # #74: why the tap changed nothing isn't swallowed: it's a private line of its own, and logged.
     assert slack.ephemerals("Kim") == ["Responses are closed for this call."]
-    (refused,) = [r for r in caplog.records if r.getMessage() == "slack card tap refused"]
-    assert (refused.levelno, refused.member_id, refused.event_id, refused.reason, refused.refusal) == (  # type: ignore[attr-defined]
+    (refused,) = [r for r in caplog.records if r.getMessage() == "refused"]
+    logged = (refused.levelno, refused.member_id, refused.event_id, refused.reason, refused.refusal, refused.moved_on)  # type: ignore[attr-defined]
+    assert logged == (
         logging.INFO,
         house["Kim"].id,
         event_id,
-        "moved_on",
+        "responses_closed",
         "Responses are closed for this call.",
+        True,
     )
+    assert (refused.action, refused.state) == ("card_out", "voting")  # type: ignore[attr-defined]
 
 
 async def test_a_card_from_before_a_restart_doesnt_answer_the_new_run(slack: Slack, house: House) -> None:

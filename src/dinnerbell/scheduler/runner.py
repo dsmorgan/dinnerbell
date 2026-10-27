@@ -21,6 +21,7 @@ from apscheduler.triggers.interval import IntervalTrigger
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from dinnerbell.domain.notifications import Channel
+from dinnerbell.logs import start_unit
 from dinnerbell.services import auth, backups, lifecycle, outbox
 from dinnerbell.services.clock import Clock
 from dinnerbell.services.health import HEARTBEAT_INTERVAL, SchedulerState
@@ -63,9 +64,11 @@ def _tracked(job: Job) -> Job:
         task = asyncio.current_task()
         if task is not None:
             ctx.running.add(task)
+        end = start_unit("scheduler")  # one request ID per run, on every line it logs (#75)
         try:
             await job(ctx)
         finally:
+            end()
             if task is not None:
                 ctx.running.discard(task)
 

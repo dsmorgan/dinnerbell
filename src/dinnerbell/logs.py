@@ -1,8 +1,10 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Structured JSON logs on stdout.
 
-Log member IDs, never emails, tokens, or secrets (SEC-5). Request and member IDs come from
-context variables that the web middleware and auth dependencies set.
+Log member IDs and display names, never emails, tokens, or secrets (SEC-5). Request and member
+IDs, and the channel the work came from, come from context variables that each entry point
+sets (``start_unit``): the web middleware and auth dependencies, Slack handlers, scheduler jobs,
+and the command line.
 """
 
 from __future__ import annotations
@@ -10,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import sys
+import uuid
 from collections.abc import Callable
 from contextvars import ContextVar
 from datetime import UTC, datetime
@@ -17,6 +20,33 @@ from typing import Any
 
 request_id_var: ContextVar[str | None] = ContextVar("request_id", default=None)
 member_id_var: ContextVar[int | None] = ContextVar("member_id", default=None)
+channel_var: ContextVar[str | None] = ContextVar("channel", default=None)
+"""Where the current work came from: ``slack``, ``web``, ``cli``, or ``scheduler`` (#75)."""
+subject_var: ContextVar[dict[str, Any] | None] = ContextVar("subject", default=None)
+"""What the current work is about, such as the call and the place, for a refusal's log line
+(``services.activity``)."""
+
+
+def start_unit(channel: str, request_id: str | None = None) -> Callable[[], None]:
+    """Begin one unit of work, such as a web request, a Slack tap, or a scheduler job: a request
+    ID (a new one unless given), ``channel``, and no member or subject yet. Every line it logs
+    carries the request ID and channel, so one tap's lines group together. Returns a function
+    that restores the context as it was."""
+    tokens = (
+        request_id_var.set(request_id or uuid.uuid4().hex),
+        member_id_var.set(None),
+        channel_var.set(channel),
+        subject_var.set(None),
+    )
+
+    def end() -> None:
+        request_id_var.reset(tokens[0])
+        member_id_var.reset(tokens[1])
+        channel_var.reset(tokens[2])
+        subject_var.reset(tokens[3])
+
+    return end
+
 
 _STANDARD_ATTRS = frozenset(vars(logging.LogRecord("", 0, "", 0, "", None, None))) | {
     "message",
@@ -26,13 +56,14 @@ _STANDARD_ATTRS = frozenset(vars(logging.LogRecord("", 0, "", 0, "", None, None)
 
 
 def _stamp_context(factory: Callable[..., logging.LogRecord]) -> Callable[..., logging.LogRecord]:
-    """Copy the request and member IDs onto each record when it is created, so they survive
-    handlers that format later (queues, test capture) after the request context is gone."""
+    """Copy the request and member IDs and the channel onto each record when it is created, so
+    they survive handlers that format later (queues, test capture) after the context is gone."""
 
     def make(*args: Any, **kwargs: Any) -> logging.LogRecord:
         record = factory(*args, **kwargs)
         record._request_id = request_id_var.get()
         record._member_id = member_id_var.get()
+        record._channel = channel_var.get()
         return record
 
     make.dinnerbell_context = True  # type: ignore[attr-defined]
@@ -60,6 +91,8 @@ class JsonFormatter(logging.Formatter):
             entry["request_id"] = request_id
         if (member_id := getattr(record, "_member_id", None)) is not None:
             entry["member_id"] = member_id
+        if (channel := getattr(record, "_channel", None)) is not None:
+            entry["channel"] = channel
         for key, value in vars(record).items():
             if key not in _STANDARD_ATTRS and not key.startswith("_"):
                 entry[key] = value

@@ -396,7 +396,13 @@ async def test_proposals_respect_vetoes_and_guest_needs_without_naming_anyone(
             await act(house, calls.add_proposal, proposer, event_id, Mode.PICKUP, **target)
         messages.add(str(caught.value))
     assert messages == {"That doesn't work for everyone who's in tonight."}
-    ours = " ".join(r.getMessage() + str(r.__dict__) for r in caplog.records if r.name.startswith("dinnerbell"))
+    # Action lines name who acted (#75; SEC-5 allows display names), but no line says who
+    # vetoed what: nothing names a vetoed tag or item, or Kim or Lee outside their own actions.
+    ours = " ".join(
+        r.getMessage() + str(r.__dict__)
+        for r in caplog.records
+        if r.name.startswith("dinnerbell") and getattr(r, "member", None) not in {"Kim", "Lee"}
+    )
     for name in ("Kim", "Lee", "Korean", "Vegan", "Leaf"):
         assert name not in " ".join(messages)
         assert name not in ours

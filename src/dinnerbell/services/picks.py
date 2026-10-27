@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from dinnerbell.db.events import ResponseRepository
 from dinnerbell.domain.catalog import ItemKind, Mode, kind_for, name_key
-from dinnerbell.domain.events import Event, EventRuleViolation, EventState, Proposal, with_pick_role
+from dinnerbell.domain.events import DuplicatePick, Event, EventState, Proposal, with_pick_role
 from dinnerbell.domain.members import Member
 from dinnerbell.services import call_context as cc
 from dinnerbell.services.call_context import CallContext, load, publish
@@ -50,10 +50,10 @@ def picked(ctx: CallContext, candidate: Proposal) -> Proposal | None:
     return next((p for p in ctx.proposals if place(ctx, p) == where), None)
 
 
-def already_a_pick(ctx: CallContext, existing: Proposal) -> EventRuleViolation:
+def already_a_pick(ctx: CallContext, existing: Proposal) -> DuplicatePick:
     """The refusal for a second pick of ``existing``'s place, naming it and its mode."""
     name = cc.item_info(ctx, existing).name
-    return EventRuleViolation(f"{name} is already a pick ({existing.mode.label.lower()}). Vote for it instead.")
+    return DuplicatePick(f"{name} is already a pick ({existing.mode.label.lower()}). Vote for it instead.")
 
 
 async def announce(db: AsyncSession, event: Event, *, now: datetime) -> CallContext:

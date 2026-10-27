@@ -61,8 +61,8 @@ from dinnerbell.domain.members import Member
 from dinnerbell.domain.offers import replaces_call
 from dinnerbell.domain.ranking import GroupPreferences, RankingSnapshot, RankItem, rank
 from dinnerbell.domain.schedule import proposal_count, slot_schedule, slot_schedules, weights
+from dinnerbell.services import activity, feedback
 from dinnerbell.services import call_context as cc
-from dinnerbell.services import feedback
 from dinnerbell.services.call_context import CallContext, load, locked_event, publish
 from dinnerbell.services.common import audit, is_unique_violation
 from dinnerbell.services.errors import NotFound
@@ -75,11 +75,13 @@ MAX_STEPS = 10
 
 
 class CallExists(EventRuleViolation):
-    pass
+    code = "call_exists"
 
 
 class OfferedInstead(EventRuleViolation):
     """A cooking offer stands in for that slot's call on that day (FR-5)."""
+
+    code = "offered_instead"
 
 
 async def cooking_offer(db: AsyncSession, household_id: int, slot: Slot, day: date) -> Event | None:
@@ -206,8 +208,10 @@ async def open_due_calls(db: AsyncSession, household: Household, now: datetime) 
             if not due:
                 continue
             try:
-                opened.append(await create_call(db, household, slot, today, opens_at=opens_at, actor=None, now=now))
+                event = await create_call(db, household, slot, today, opens_at=opens_at, actor=None, now=now)
+                activity.action(db, "opened", event, None, started=True)
                 await db.commit()
+                opened.append(event)
             except CallExists:
                 await db.rollback()
     return opened
@@ -526,35 +530,38 @@ vetoed attribute, or how many people object, so a proposer can't probe proposal 
 learn who vetoed what (FR-29)."""
 
 
-def misfit(ctx: CallContext, proposal: Proposal, group: GroupPreferences) -> str | None:
-    """Why ``proposal`` can't be decided for this call (FR-17, FR-28), or None if it can.
+NO_COVERAGE = "no_coverage"
+"""``misfit``'s code when nobody who's in can take the pick's role (FR-17)."""
 
-    Private reasons (vetoes and guests' dietary needs) all give ``DOESNT_FIT``. Coverage and
-    availability reasons stay specific, because they reveal nothing private.
+
+def misfit(ctx: CallContext, proposal: Proposal, group: GroupPreferences) -> EventRuleViolation | None:
+    """Why ``proposal`` can't be decided for this call (FR-17, FR-28), as the refusal to raise,
+    or None if it can.
+
+    Private reasons (vetoes and guests' dietary needs) all give ``DOESNT_FIT``, coded
+    ``doesnt_fit``. Coverage and availability reasons stay specific, because they reveal
+    nothing private.
     """
     needs = guest_needs(ctx)
     if proposal.item_id is not None:
         item = ctx.items.get(proposal.item_id)
         if item is None or not item.active:
-            return "That isn't in the catalog anymore."
+            return EventRuleViolation("That isn't in the catalog anymore.", code="not_in_catalog")
         if group.vetoes(rank_item(ctx, item)) or not needs <= item.tag_ids:
-            return DOESNT_FIT
+            return EventRuleViolation(DOESNT_FIT, code="doesnt_fit")
         if proposal.mode not in item.modes:
-            return f"{item.name} isn't available by {proposal.mode.label.lower()}."
+            return EventRuleViolation(
+                f"{item.name} isn't available by {proposal.mode.label.lower()}.", code="unavailable"
+            )
         cooks = item.cook_ids
     else:
         # A new item's only known tag is its cuisine, so it can't show it meets a dietary need.
         if proposal.free_cuisine_id in group.vetoed_tags or needs:
-            return DOESNT_FIT
+            return EventRuleViolation(DOESNT_FIT, code="doesnt_fit")
         cooks = frozenset()
     if not ctx.coverage.covers(proposal.mode, cooks):
-        return not_covered(proposal.mode)
+        return EventRuleViolation(f"Nobody who's in offered to {proposal.mode.verb} for that.", code=NO_COVERAGE)
     return None
-
-
-def not_covered(mode: Mode) -> str:
-    """``misfit``'s reason when nobody who's in can take ``mode``'s role (FR-17)."""
-    return f"Nobody who's in offered to {mode.verb} for that."
 
 
 async def _as_catalog_item(db: AsyncSession, ctx: CallContext, proposal: Proposal) -> Proposal:
@@ -609,7 +616,7 @@ async def decide(
     meal = meal_time(ctx.responses, day=event.day, zone=ctx.zone, default=ctx.schedule.meal_time, not_before=now)
     if meal.astimezone(ctx.zone).date() != event.day:
         if locked is not None:
-            raise EventRuleViolation("It's too late to decide: the meal would be after midnight.")
+            raise EventRuleViolation("It's too late to decide: the meal would be after midnight.", code="too_late")
         await expire(db, event, now)
         return
     group = await group_preferences(db, event.household_id, ctx.veto_people)
@@ -618,7 +625,7 @@ async def decide(
     if locked is not None:
         problem = misfit(ctx, checked.get(locked.id, locked), group)
         if problem is not None:
-            raise EventRuleViolation(problem)
+            raise problem
         winner = locked
     else:
         tallies = [
@@ -734,6 +741,48 @@ HANDLERS: dict[Step, Handler] = {
 }
 
 
+STEP_LINES = {
+    EventState.COLLECTING: "opened",
+    EventState.VOTING: "voting",
+    EventState.DECIDED: "decided",
+    EventState.DONE: "done",
+    EventState.ABANDONED: "abandoned",
+    EventState.CANCELLED: "replaced_by_offer",
+}
+"""Each step's log line, by the state it leaves the call in (#75)."""
+
+
+async def _log_step(db: AsyncSession, step: Step, before: Event) -> None:
+    """One line for the step the scheduler (or a deadline moved to now) just took: the
+    transition, with why a call ended and what it decided."""
+    after = await EventRepository(db).get(before.household_id, before.id)
+    if after is None:  # pragma: no cover - the step holds the event's lock
+        return
+    if step is Step.EXPIRE:
+        name = "stale_closed"
+    elif before.is_offer and after.state is EventState.DECIDED:
+        name = "offer_closed"
+    elif after.state is before.state:
+        name = "reminded" if step is Step.REMIND else step.value
+    else:
+        name = STEP_LINES.get(after.state, step.value)
+    item_id = after.decided_item_id if after.state is EventState.DECIDED else None
+    item = await CatalogRepository(db).item(after.household_id, item_id) if item_id is not None else None
+    end_reason = after.end_reason.value if after.end_reason is not None else None
+    activity.action(
+        db,
+        name,
+        before,
+        None,
+        after=after.state,
+        item=item,
+        item_id=item_id,
+        mode=after.decided_mode if item_id is not None else None,
+        step=step.value,
+        end_reason=end_reason,
+    )
+
+
 async def advance(db: AsyncSession, household_id: int, event_id: int, now: datetime) -> list[Step]:
     """Apply every step ``event_id`` owes at ``now``, each in its own transaction.
 
@@ -750,6 +799,7 @@ async def advance(db: AsyncSession, household_id: int, event_id: int, now: datet
                 step = await cc.due(db, event, now)
                 if step is not None:
                     await HANDLERS[step](db, event, now)
+                    await _log_step(db, step, event)
         except NotFound:
             if await EventRepository(db).get(household_id, event_id) is None:
                 break  # discarded since the read, on a test instance (#60): nothing is owed

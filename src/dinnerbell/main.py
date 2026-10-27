@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING
 from dinnerbell import __version__, catalog_cli
 from dinnerbell.config import ConfigError, Settings, is_test_instance, load_settings
 from dinnerbell.db.migrate import IntegrityCheckFailed, SchemaTooNewError, run_migrations
-from dinnerbell.logs import configure_logging
+from dinnerbell.logs import configure_logging, start_unit
 
 if TYPE_CHECKING:
     from sqlalchemy.ext.asyncio import AsyncSession
@@ -468,6 +468,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(NOT_LABELED_FOR_DISCARD, file=sys.stderr)
         return 1  # the same: before anything opens the database
     configure_logging(settings.log_level, settings.instance_label)
+    if args.command == "serve":  # the server's requests, taps, and jobs each start their own unit
+        return _command(args, settings)
+    end = start_unit("cli")
+    try:
+        return _command(args, settings)
+    finally:
+        end()
+
+
+def _command(args: argparse.Namespace, settings: Settings) -> int:
+    """Run a command that needs the database, once logging is configured."""
     os.umask(PRIVATE_UMASK)
     if args.command == "scrub-test" and not _confirm_scrub(settings, args.yes):
         return 1

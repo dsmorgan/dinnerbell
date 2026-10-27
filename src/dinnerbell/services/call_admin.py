@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from dinnerbell.domain.events import Event, Window, check_assign_coordinator, check_rerun
 from dinnerbell.domain.members import Member
-from dinnerbell.services import lifecycle
+from dinnerbell.services import activity, lifecycle
 from dinnerbell.services.call_context import load, locked_event
 from dinnerbell.services.calls import set_coordinator
 from dinnerbell.services.common import audit, require_admin
@@ -37,6 +37,7 @@ async def move_deadline(
         current, moved = await lifecycle.move_window(db, event, window, minutes, now)
         payload = {"window": window.value, "from": current.isoformat(), "to": moved.isoformat()}
         await audit(db, actor.household_id, actor, "event.deadline_moved", _target(event), payload, now)
+        activity.action(db, "move_deadline", event, actor, window=window.value, to=moved.isoformat())
     await lifecycle.advance(db, actor.household_id, event_id, now)
 
 
@@ -56,6 +57,7 @@ async def rerun(db: AsyncSession, actor: Member, event_id: int, *, now: datetime
         fresh = await lifecycle.reopen(db, ctx, today=today, now=now)
         payload = {"from": event.state.value, "run": fresh.run, "respond_by": fresh.respond_deadline.isoformat()}
         await audit(db, actor.household_id, actor, "event.rerun", _target(event), payload, now)
+        activity.action(db, "rerun", fresh, actor, before=event.state)
 
 
 async def assign_coordinator(
@@ -73,3 +75,4 @@ async def assign_coordinator(
         await set_coordinator(db, event, member_id, now=now)
         payload = {"from": event.coordinator_id, "to": member_id}
         await audit(db, actor.household_id, actor, "event.coordinator_assigned", _target(event), payload, now)
+        activity.action(db, "assign_coordinator", event, actor, to_member_id=member_id)

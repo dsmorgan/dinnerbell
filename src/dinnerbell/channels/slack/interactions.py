@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import contextvars
 import logging
 import re
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
@@ -112,7 +113,8 @@ from dinnerbell.domain.notifications import (
     ResponseReminder,
 )
 from dinnerbell.domain.offers import OfferPath
-from dinnerbell.services import calls, discard, event_views, feedback, guests, meals, offers, slack_members
+from dinnerbell.logs import member_id_var, start_unit
+from dinnerbell.services import activity, calls, discard, event_views, feedback, guests, meals, offers, slack_members
 from dinnerbell.services import schedule as schedule_service
 from dinnerbell.services.clock import Clock
 from dinnerbell.services.errors import Forbidden, NotFound
@@ -305,7 +307,11 @@ class Interactions:
         app.event("app_home_opened")(home_opened)
 
     def _spawn(self, work: Coroutine[Any, Any, None]) -> None:
-        task = asyncio.get_running_loop().create_task(work)
+        """Run ``work`` as its own task, with its own request ID and the ``slack`` channel on
+        every line it logs, so one tap's lines group together (#75)."""
+        context = contextvars.copy_context()
+        context.run(start_unit, "slack")
+        task = asyncio.get_running_loop().create_task(work, context=context)
         self.tasks.add(task)
         task.add_done_callback(self.tasks.discard)
 
@@ -347,6 +353,7 @@ class Interactions:
             log.info("slack user refused", extra={"member_id": member.id})
             await self.tell(source, INACTIVE, member=None)
             return None
+        member_id_var.set(member.id)  # on every line this tap logs from here on
         return member
 
     # Joining from the channel (#38, option A) ---------------------------------------------------
@@ -523,8 +530,10 @@ class Interactions:
                 notice = done
         except SHOWN_ERRORS as exc:
             notice = str(exc)
+            activity.refused(exc, notice, member)
         except IllegalTransition as exc:
             notice = str(friendly(exc))
+            activity.refused(exc, notice, member)
         except ids.BadValue:
             log.warning("slack action with a value this app didn't write", extra={"member_id": member.id})
             notice = OUT_OF_DATE
@@ -789,19 +798,20 @@ class Interactions:
         in_dm: bool,
     ) -> str | None:
         notice: str | None = None
+        refusal: Exception | None = None
         async with self.sessionmaker() as db:
             try:
                 if action_id == ids.CARD_DETAILS:
                     return await self._card_details(db, member, source, event_id, run, trigger)
                 await self._card_change(db, member, action_id, event_id, run)
             except SHOWN_ERRORS as exc:
-                notice = str(exc)
+                notice, refusal = str(exc), exc
             except IllegalTransition as exc:
-                notice = str(friendly(exc))
+                notice, refusal = str(friendly(exc)), exc
             view = await event_views.event_view(db, member, event_id, now=self.clock())
         moved_on = view.event.run != run or view.event.state is not EventState.COLLECTING
-        if moved_on:
-            _log_stale_refusal(member, event_id, notice)
+        if refusal is not None and notice is not None:
+            _refused(refusal, notice, member, event_id, action_id, moved_on=moved_on)
         if in_dm:
             return await self._update_reminder(view, member, source, tap, run, notice)
         if moved_on:
@@ -1055,6 +1065,7 @@ class Interactions:
             raise ids.BadValue("guest buttons are drawn only on cards")
         async with self._card_lock(source.user_id, event_id):
             notice: str | None = None
+            refusal: Exception | None = None
             async with self.sessionmaker() as db:
                 try:
                     if action_id in ids.GUEST_RESPOND:
@@ -1069,12 +1080,14 @@ class Interactions:
                             db, member, event_id, guest_id, role=role, offered=offered, run=run, now=self.clock()
                         )
                 except SHOWN_ERRORS as exc:
-                    notice = str(exc)
+                    notice, refusal = str(exc), exc
                 except IllegalTransition as exc:
-                    notice = str(friendly(exc))
+                    notice, refusal = str(friendly(exc)), exc
                 view = await event_views.event_view(db, member, event_id, now=self.clock())
-            if view.event.run != run or view.event.state is not EventState.COLLECTING:
-                _log_stale_refusal(member, event_id, notice)
+            moved_on = view.event.run != run or view.event.state is not EventState.COLLECTING
+            if refusal is not None and notice is not None:
+                _refused(refusal, notice, member, event_id, action_id, moved_on=moved_on)
+            if moved_on:
                 await self._send_card(source, self._card(view, member, run=run), member, tap)
                 return notice  # in a line of its own, as on a member's own card
             await self._send_card(source, self._card(view, member, run=run, notice=notice), member, tap)
@@ -1532,11 +1545,7 @@ def _get(data: object, *path: str) -> object:
     return data
 
 
-def _log_stale_refusal(member: Member, event_id: int, refusal: str | None) -> None:
-    """Log a refusal of a tap on a card or reminder for a call that moved on (#74, #75). Refusals
-    are normal, so it's info."""
-    if refusal is not None:
-        log.info(
-            "slack card tap refused",
-            extra={"member_id": member.id, "event_id": event_id, "reason": "moved_on", "refusal": refusal},
-        )
+def _refused(exc: Exception, notice: str, member: Member, event_id: int, action_id: str, *, moved_on: bool) -> None:
+    """Log a refused tap on a card or reminder once (#74, #75), saying whether the call had
+    moved on, when the card shows only that and the refusal follows in a line of its own."""
+    activity.refused(exc, notice, member, event_id=event_id, action=action_id, moved_on=moved_on or None)
