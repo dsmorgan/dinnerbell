@@ -34,7 +34,7 @@ from sqlalchemy.orm import Session, SessionTransaction
 from dinnerbell.domain.catalog import CatalogItem, Mode
 from dinnerbell.domain.events import Event, EventState, Proposal
 from dinnerbell.domain.members import Member
-from dinnerbell.logs import subject_var
+from dinnerbell.logs import RESERVED_FIELDS, subject_var
 
 log = logging.getLogger(__name__)
 
@@ -70,7 +70,7 @@ def action(
         **extra,
     }
     pending: list[tuple[contextvars.Context, str, Fields]] = db.info.setdefault(_PENDING, [])
-    pending.append((contextvars.copy_context(), name, _present(fields)))
+    pending.append((contextvars.copy_context(), name, _checked(_present(fields))))
 
 
 def pick(items: Mapping[int, CatalogItem], proposal: Proposal) -> Fields:
@@ -100,7 +100,7 @@ def refused(exc: BaseException, shown: str, actor: Member | None, **extra: Any) 
     the member saw (``refusal``), and what the action was about (``about``). Refusals are
     normal, so it's ``info``."""
     fields = (subject_var.get() or {}) | _who(actor) | {"reason": reason(exc), "refusal": shown} | extra
-    log.info("refused", extra=_present(fields))
+    log.info("refused", extra=_checked(_present(fields)))
 
 
 def reason(exc: BaseException) -> str:
@@ -130,12 +130,29 @@ def _present(fields: Fields) -> Fields:
     return {key: value for key, value in fields.items() if value is not None}
 
 
+def _checked(fields: Fields) -> Fields:
+    """``fields``, or ValueError for a key a log record can't carry (``logs.RESERVED_FIELDS``),
+    so a misnamed field fails where it's written, not in the commit hook."""
+    clashes = sorted(RESERVED_FIELDS & fields.keys())
+    if clashes:
+        raise ValueError(f"log fields can't be named {', '.join(clashes)}")
+    return fields
+
+
 @sa_event.listens_for(Session, "after_commit")
 def _write(session: Session) -> None:
     """Write the committed transaction's lines, each in the context it was noted in, so it keeps
-    that unit's request ID, member, and channel."""
+    that unit's request ID, member, and channel. The action took effect whatever happens here,
+    so a line that can't be written is logged and skipped, never raised into the commit."""
+    if session.in_nested_transaction():
+        # Releasing a savepoint isn't the transaction's commit: the lines wait for the
+        # outermost commit, or go with its rollback.
+        return
     for context, name, fields in session.info.pop(_PENDING, ()):
-        context.run(log.info, name, extra=fields)
+        try:
+            context.run(log.info, name, extra=fields)
+        except Exception:
+            log.exception("activity line failed", extra={"line": name})
 
 
 @sa_event.listens_for(Session, "after_transaction_end")

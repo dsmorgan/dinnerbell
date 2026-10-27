@@ -53,6 +53,9 @@ _STANDARD_ATTRS = frozenset(vars(logging.LogRecord("", 0, "", 0, "", None, None)
     "asctime",
     "color_message",  # uvicorn's ANSI-colored duplicate of msg
 }
+RESERVED_FIELDS = _STANDARD_ATTRS | {"ts", "level", "logger", "msg", "request_id", "channel", "instance", "exc"}
+"""Keys an ``extra`` must not use: a LogRecord attribute makes ``logging`` raise KeyError, and
+one of ``JsonFormatter``'s own fields would be replaced (#75)."""
 
 
 def _stamp_context(factory: Callable[..., logging.LogRecord]) -> Callable[..., logging.LogRecord]:

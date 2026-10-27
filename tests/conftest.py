@@ -53,25 +53,39 @@ def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
         raise pytest.UsageError("Bad feature flag marks:\n" + "\n".join(problems))
 
 
+MEMBER_TEXT = "Zq7x"
+"""A marker in test data members write: notes, call-off and skip reasons, and feedback comments.
+Logs carry their length, never their text (SEC-5, #75), so no log line may contain it."""
 SECRET_SHAPES = re.compile(
-    r"(?<![\\\w.+-])[\w.+-]+@[\w-]+\.[\w.-]+"  # an email, but not an escaped newline before a @decorator
+    r"(?<![\w.+-])[\w.+-]+@[\w-]+\.[\w.-]+"  # an email
     r"|xox[a-z]-\w|xapp-\w"  # a Slack token, but not a hint naming the kind, such as "(xoxb-)"
     r"|hooks\.slack\.com"  # a Slack response_url, a bearer capability for its message
+    r"|1234\.5678\.trigger"  # the test trigger_id, which opens a modal for that person
     r"|[?&](code|state)=|__Host-"  # an OIDC code or state, or a session cookie
+    r"|subject-admin"  # the test OIDC subject
+    rf"|{MEMBER_TEXT}"
 )
 """What no log line in the suite may contain (SEC-5, #75)."""
+
+
+def leaks(line: str) -> bool:
+    """Whether a formatted log line has something ``SECRET_SHAPES`` forbids. JSON escapes a
+    newline as \\n; it's read as the space it is, so "\\nkim@example.com" still reads as an
+    email, and "\\n@app.command" in a library's hint doesn't."""
+    plain = line.replace("\\n", " ").replace("\\t", " ").replace("\\r", " ")
+    return SECRET_SHAPES.search(plain) is not None
 
 
 @pytest.fixture(autouse=True)
 def _no_secrets_in_logs(caplog: pytest.LogCaptureFixture) -> Iterator[None]:
     """SEC-5 in every test: Dinnerbell logs everything down to debug, and no line, formatted as
-    production writes it, has an email, a token, or a capability URL."""
+    production writes it, has an email, a token, a capability, or text a member wrote."""
     caplog.set_level(logging.DEBUG, logger="dinnerbell")
     yield
     for when in ("setup", "call"):
         for record in caplog.get_records(when):
             line = JsonFormatter().format(record)
-            assert not SECRET_SHAPES.search(line), f"a log line leaks a secret: {line}"
+            assert not leaks(line), f"a log line leaks a secret: {line}"
 
 
 @pytest.fixture(autouse=True)

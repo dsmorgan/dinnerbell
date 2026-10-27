@@ -532,8 +532,9 @@ class Interactions:
             notice = str(exc)
             activity.refused(exc, notice, member)
         except IllegalTransition as exc:
-            notice = str(friendly(exc))
-            activity.refused(exc, notice, member)
+            lost = friendly(exc)
+            notice = str(lost)
+            activity.refused(lost, notice, member)
         except ids.BadValue:
             log.warning("slack action with a value this app didn't write", extra={"member_id": member.id})
             notice = OUT_OF_DATE
@@ -580,7 +581,8 @@ class Interactions:
             ephemeral=container.get("is_ephemeral") is True,
             response_url=ids.response_url(body.get("response_url")),
         )
-        log.info("slack action", extra={"member_id": member.id, "action": str(action_id)[:40]})
+        # Debug: the action's own line, or its refusal, says what came of it at info (#75).
+        log.debug("slack action", extra={"member_id": member.id, "action": str(action_id)[:40]})
 
         async def work() -> Done:
             return await self._dispatch(member, source, str(action_id), value, trigger, tap)
@@ -592,7 +594,7 @@ class Interactions:
     ) -> Done:
         if member.is_guest and action_id not in GUEST_TAPS:
             # Guests answer, offer roles, and coordinate logistics; the services check again (#38).
-            raise EventRuleViolation(GUESTS_DONT)
+            raise EventRuleViolation(GUESTS_DONT, code="guests_dont")
         if action_id in ids.GUEST_ACTIONS:
             return await self._guest_tap(member, source, action_id, value, tap)
         if action_id == ids.INVITE_GUEST:
@@ -807,7 +809,7 @@ class Interactions:
             except SHOWN_ERRORS as exc:
                 notice, refusal = str(exc), exc
             except IllegalTransition as exc:
-                notice, refusal = str(friendly(exc)), exc
+                notice, refusal = str(friendly(exc)), friendly(exc)
             view = await event_views.event_view(db, member, event_id, now=self.clock())
         moved_on = view.event.run != run or view.event.state is not EventState.COLLECTING
         if refusal is not None and notice is not None:
@@ -1041,7 +1043,7 @@ class Interactions:
             view = await event_views.event_view(db, member, event_id, now=self.clock())
             check_run(view.event, run)
             if not view.can.invite:
-                raise EventRuleViolation("Invite guests while answers are open.")
+                raise EventRuleViolation("Invite guests while answers are open.", code="responses_closed")
             saved = await guests.saved_guests(db, member)
         origin = ids.ViewOrigin(event_id, source.channel_id, home=source.home, run=run)
         await self.api.open_view(trigger, invite_modal(view, saved, origin))
@@ -1082,7 +1084,7 @@ class Interactions:
                 except SHOWN_ERRORS as exc:
                     notice, refusal = str(exc), exc
                 except IllegalTransition as exc:
-                    notice, refusal = str(friendly(exc)), exc
+                    notice, refusal = str(friendly(exc)), friendly(exc)
                 view = await event_views.event_view(db, member, event_id, now=self.clock())
             moved_on = view.event.run != run or view.event.state is not EventState.COLLECTING
             if refusal is not None and notice is not None:
@@ -1326,11 +1328,11 @@ class Interactions:
             if slot is not None:
                 found = [event for event in found if event.slot is slot]
                 if not found:
-                    raise EventRuleViolation(f"There's no {slot.value} call {when}.")
+                    raise EventRuleViolation(f"There's no {slot.value} call {when}.", code="no_call")
             else:
                 found = [event for event in found if event.state.is_open]
                 if not found:
-                    raise EventRuleViolation(NO_OPEN_CALL.format(when=when))
+                    raise EventRuleViolation(NO_OPEN_CALL.format(when=when), code="no_call")
                 if len(found) > 1:
                     named = "" if on == today else f" {on.isoformat()}"
                     return WHICH_CALL.format(when=when, command=self.command, day=named)
@@ -1354,13 +1356,13 @@ class Interactions:
                 try:
                     slot, day, early = parse_call_args(args, today, command=self.command)
                     if early:  # `now` means nothing to a discard
-                        raise EventRuleViolation(DISCARD_USAGE)
+                        raise EventRuleViolation(DISCARD_USAGE, code="usage")
                 except EventRuleViolation:
-                    raise EventRuleViolation(DISCARD_USAGE.format(command=self.command)) from None
+                    raise EventRuleViolation(DISCARD_USAGE.format(command=self.command), code="usage") from None
                 when = "today" if day == today else f"for {day_label(day)}"
                 found = [event for event in await event_views.calls_on(db, member, day) if event.slot is slot]
                 if not found:
-                    raise EventRuleViolation(f"There's no {slot.value} call {when}.")
+                    raise EventRuleViolation(f"There's no {slot.value} call {when}.", code="no_call")
                 await discard.discard_call(
                     db,
                     member.household_id,
@@ -1505,7 +1507,7 @@ def parse_call_args(args: list[str], today: date, *, command: str = DEFAULT_COMM
             try:
                 day = date.fromisoformat(word)
             except ValueError:
-                raise EventRuleViolation(CALL_USAGE.format(command=command)) from None
+                raise EventRuleViolation(CALL_USAGE.format(command=command), code="usage") from None
     return slot, day, early
 
 
@@ -1529,7 +1531,7 @@ def parse_cancel_args(
             try:
                 day = date.fromisoformat(word)
             except ValueError:
-                raise EventRuleViolation(CANCEL_USAGE.format(command=command)) from None
+                raise EventRuleViolation(CANCEL_USAGE.format(command=command), code="usage") from None
         else:
             break
         rest.pop(0)

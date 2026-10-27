@@ -36,6 +36,7 @@ from dinnerbell.domain.events import (
     Status,
     Window,
     WindowMoved,
+    friendly,
 )
 from dinnerbell.domain.guests import GuestInput
 from dinnerbell.domain.meals import Slot
@@ -122,7 +123,7 @@ async def _run(
         return await _card(request, principal, context, db, event_id, came_from=came_from, error=str(exc))
     except IllegalTransition as exc:
         error = STALE if exc.current.is_open else CALL_FINISHED
-        _refused(request, principal, exc, error, event_id=event_id)
+        _refused(request, principal, friendly(exc), error, event_id=event_id)
         return await _card(request, principal, context, db, event_id, came_from=came_from, error=error)
     if is_htmx(request):
         return await _card(request, principal, context, db, event_id, came_from=came_from)

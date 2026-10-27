@@ -90,7 +90,7 @@ async def test_feedback_on_a_home_meal_snapshots_it_and_an_edit_replaces_it(hous
     assert form.facts.item_kind is ItemKind.HOME and form.facts.cook == MemberRef(house["Sam"].id, "Sam")
     assert form.thanks_cook and form.mine is None and form.closes_on == date(2026, 10, 29)
 
-    saved = await give(house, "Kim", meal_id, FeedbackInput(food=Rating.LOVED, cook_note="Best tacos yet"))
+    saved = await give(house, "Kim", meal_id, FeedbackInput(food=Rating.LOVED, cook_note="Best tacos Zq7x"))
     assert saved is not None and saved.answers.cook_thanks
     assert (saved.item_id, saved.item_kind, saved.mode) == (house.items["Sam's Tacos"].id, ItemKind.HOME, Mode.COOK)
     assert saved.cook == MemberRef(house["Sam"].id, "Sam")

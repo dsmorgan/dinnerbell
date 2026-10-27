@@ -278,6 +278,10 @@ def test_the_command_previews_then_discards_with_yes(
     path, event_id = labeled_cli
     assert cli.main(["discard-call", str(event_id), "--yes"]) == 0
     out = capsys.readouterr().out
+    # #75: the discard's log line, on stdout as JSON, says the command line did it.
+    (line,) = [json.loads(o) for o in out.splitlines() if o.startswith("{") and '"msg": "discard"' in o]
+    assert (line["channel"], line["event_id"], line["state_before"]) == ("cli", event_id, "collecting")
+    assert line["request_id"]
     assert f"Database: {path}" in out and f"Call: dinner on 2026-10-22 (ID {event_id}, run 1)" in out
     assert (
         "Notifications not yet sent: 1" in out and f"Discarded the dinner call for 2026-10-22 (ID {event_id})." in out

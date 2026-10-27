@@ -125,22 +125,22 @@ async def test_the_starter_calls_off_their_ad_hoc_call(house: House) -> None:
     await act(house, calls.respond, house["Alex"], event.id, Status.OUT)
     await house.drain(RecordingChannel())  # so the call-off's update gets its own row
     before = len(await house.outbox())
-    await act(house, calls.cancel_call, house["Kim"], event.id, note="  Pizza at\nGrandma's ")
+    await act(house, calls.cancel_call, house["Kim"], event.id, note="  Pizza at\nGrandmaZq7x's ")
     stored = await house.event(event.id)
     assert (stored.state, stored.ended_by, stored.end_note) == (
         EventState.CANCELLED,
         house["Kim"].id,
-        "Pizza at Grandma's",
+        "Pizza at GrandmaZq7x's",
     )
     sent = (await rows_for(house, event.id))[before:]
     assert [s.kind for s in sent] == ["event_cancelled", "call_updated"]
     cancelled = sent[0]
     assert isinstance(cancelled, n.EventCancelled)
-    assert (cancelled.note, cancelled.cancelled_by) == ("Pizza at Grandma's", n.PersonInfo(house["Kim"].id, "Kim"))
+    assert (cancelled.note, cancelled.cancelled_by) == ("Pizza at GrandmaZq7x's", n.PersonInfo(house["Kim"].id, "Kim"))
     assert [p.name for p in cancelled.audience] == ["Lee", "Sam"]  # in or maybe; Alex is out
     assert [p.name for p in cancelled.participants] == ["Sam"]
     assert cancelled.event.ended_by == n.PersonInfo(house["Kim"].id, "Kim")
-    assert await cancel_audits(house) == [{"from": "collecting", "as": "starter", "note": "Pizza at Grandma's"}]
+    assert await cancel_audits(house) == [{"from": "collecting", "as": "starter", "note": "Pizza at GrandmaZq7x's"}]
     assert await house.meals() == []
     house.clock.now = DONE_AT
     assert await house.tick() == []  # nothing left for the scheduler
