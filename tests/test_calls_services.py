@@ -31,8 +31,12 @@ from dinnerbell.domain.events import (
 from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.members import Member
 from dinnerbell.domain.preferences import Stance, TargetType
-from dinnerbell.services import call_admin, calls, event_views
+from dinnerbell.domain.ranking import RankingSnapshot, rank, ranking_seed
+from dinnerbell.domain.schedule import Weights
+from dinnerbell.services import call_admin, calls, event_views, lifecycle
 from dinnerbell.services import catalog as catalog_service
+from dinnerbell.services import schedule as schedule_service
+from dinnerbell.services.call_context import CallContext
 from dinnerbell.services.database import Database, open_database
 from dinnerbell.services.errors import Forbidden, NotFound
 from dinnerbell.services.preferences import group_preferences, set_my_preference
@@ -684,6 +688,30 @@ async def test_rerun_a_decided_call_clears_the_decision(house: House) -> None:
     house.clock.now = ctx.event.respond_deadline
     await house.tick()
     assert (await house.event(event_id)).state is EventState.VOTING
+
+
+async def ranked_with(house: House, ctx: CallContext) -> RankingSnapshot:
+    async with house.sessionmaker() as db:
+        group = await group_preferences(db, ctx.event.household_id, ctx.veto_people)
+        return await lifecycle.ranking_snapshot(db, ctx, group)
+
+
+async def test_ranking_draws_with_the_runs_seed_and_the_households_temperature(house: House) -> None:
+    """#78: the snapshot carries a seed from the call and its run, so ranking the run again
+    gives the same picks, and a re-run draws again. The temperature is the household's."""
+    async with house.sessionmaker() as db:
+        values = schedule_service.RankingSettings(Weights(), 3, 7, temperature=0.5)
+        await schedule_service.update_ranking(db, house["Alex"], values, now=house.clock())
+    event_id = await to_voting(house)
+    ctx = await house.context(event_id)
+    snapshot = await ranked_with(house, ctx)
+    assert (snapshot.seed, snapshot.temperature) == (ranking_seed(ctx.event.household_id, event_id, 1), 0.5)
+    stored = sorted(ctx.proposals, key=lambda p: p.rank)
+    assert [(p.item_id, p.rank) for p in stored] == [(r.item_id, n) for n, r in enumerate(rank(snapshot), start=1)]
+    await act(house, call_admin.rerun, house["Alex"], event_id)
+    ctx = await house.context(event_id)
+    again = await ranked_with(house, ctx)
+    assert again.seed == ranking_seed(ctx.event.household_id, event_id, 2) != snapshot.seed
 
 
 async def test_rerun_rules(house: House) -> None:

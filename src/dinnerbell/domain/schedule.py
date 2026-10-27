@@ -25,6 +25,7 @@ from dinnerbell.domain.meals import Slot
 SLOTS_KEY = "slots"
 WEIGHTS_KEY = "ranking_weights"
 PROPOSAL_COUNT_KEY = "proposal_count"
+TEMPERATURE_KEY = "ranking_temperature"
 
 MIN_WINDOW_MINUTES = 5
 MAX_WINDOW_MINUTES = 6 * 60
@@ -36,6 +37,11 @@ MINUTES_PER_DAY = 24 * 60
 LATEST_MEAL_TIME = time(23, 45)
 """A call ends at midnight after its day, so its windows and meal must fit in that day."""
 MAX_PROPOSAL_COUNT = 5
+MIN_TEMPERATURE = 0.0
+MAX_TEMPERATURE = 3.0
+DEFAULT_TEMPERATURE = 1.0
+"""How far ranking strays from score order (spec section 7): 0 always takes the best scores, and
+1 makes a place one point better about 2.7 times as likely to be picked."""
 
 
 class InvalidSchedule(ValueError):
@@ -181,6 +187,19 @@ def weights(settings: Mapping[str, Any]) -> Weights:
 def proposal_count(settings: Mapping[str, Any]) -> int:
     value = _minutes(settings.get(PROPOSAL_COUNT_KEY), 1, MAX_PROPOSAL_COUNT)
     return DEFAULT_PROPOSAL_COUNT if value is None else value
+
+
+def temperature(settings: Mapping[str, Any]) -> float:
+    value = settings.get(TEMPERATURE_KEY)
+    if isinstance(value, bool) or not isinstance(value, int | float):
+        return DEFAULT_TEMPERATURE
+    return float(value) if MIN_TEMPERATURE <= value <= MAX_TEMPERATURE else DEFAULT_TEMPERATURE
+
+
+def check_temperature(value: float) -> float:
+    if not MIN_TEMPERATURE <= value <= MAX_TEMPERATURE:
+        raise InvalidSchedule(f"Randomness runs from {MIN_TEMPERATURE:g} to {MAX_TEMPERATURE:g}.")
+    return value
 
 
 def _wall(value: time) -> str:

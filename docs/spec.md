@@ -187,11 +187,11 @@ Requirements use "must" for version 1 and "should" for items that can slip to a 
 
 | ID | Requirement |
 |---|---|
-| FR-12 | At the response deadline the ranking engine produces the top N proposals (default 3) from the catalog, filtered and scored as described in section 7, each with a human-readable reason. Each is a different place, and none is a place an offer already made a pick (FR-5); those picks come after the N. Items for the call's meal come first; items for other meals fill the N only when too few for the meal fit, and their first reason says what they're usually for, such as "Usually for dinner." |
+| FR-12 | At the response deadline the ranking engine produces N proposals (default 3) from the catalog, filtered, scored, and drawn as described in section 7, each with a human-readable reason. Places suggested for the call are always among them when they fit; the rest are a weighted random draw, so a better score makes a place more likely without always winning. Each is a different place, and none is a place an offer already made a pick (FR-5); those picks come after the N. Items for the call's meal come first; items for other meals fill the N only when too few for the meal fit, and their first reason says what they're usually for, such as "Usually for dinner." |
 | FR-13 | The coordinator and any member can add a proposal from the catalog or as free text during the vote window. A free-text proposal needs a cuisine, and creates a catalog item on decision. A call holds at most 10 proposals, and each member adds at most 3. A call has one proposal per place, whatever the mode: a place is a catalog item, or free text, by its kind and name, so adding a place that's already a pick is refused with "Pho Place is already a pick (delivery). Vote for it instead." Whoever adds a proposal does it: they must be in, and adding it offers the role its mode needs (pick up, cook, or order), so it's covered (FR-17). The exception is an item with a cook list the adder isn't on: they take no role, and it's added only if a cook on the list who's in offered to cook; otherwise it's refused because they aren't on the list. Someone who isn't in is told "You're not in for this call. Joining late is coming soon. Ask someone who's in to add it." Added proposals pass the same vetoes, guest needs, and coverage checks as ranked ones; a refusal for a veto or a guest need always reads "That doesn't work for everyone who's in tonight." so it can't reveal whose stance it was (FR-29). The meals an item is for never refuse a pick, because people know better than the catalog: the catalog list shows items for the call's meal first, then the rest marked such as "(usually dinner)". A free-text proposal's catalog item is for the call's meal and the default meals, lunch and dinner. |
 | FR-14 | Each member casts at most one vote per proposal and can change it until the vote closes. Votes are visible. |
 | FR-15 | The coordinator can lock any proposal at any time during the vote window. |
-| FR-16 | At the vote deadline the system decides: highest votes, coordinator breaks ties, admin breaks ties when there is no coordinator, ranking order breaks ties otherwise. At the deadline, "breaks ties" means the tied proposal the coordinator (or, with no coordinator, an admin) voted for wins; either can also lock a proposal before then. |
+| FR-16 | At the vote deadline the system decides: highest votes, coordinator breaks ties, admin breaks ties when there is no coordinator, ranking order breaks ties otherwise. Ranking order is the order the proposals were drawn in (section 7), stored as each proposal's rank, with picks added later after them. At the deadline, "breaks ties" means the tied proposal the coordinator (or, with no coordinator, an admin) voted for wins; either can also lock a proposal before then. |
 | FR-17 | A proposal is only eligible if its fulfillment mode is covered: cook requires a member who offered to cook and can cook the item, pickup requires a member who offered to pick up, delivery requires any participating member who can order. Adding a proposal or an offer to a call counts as offering its role (FR-5, FR-13). The member's usual **Cook** and **Pick up** settings in Preferences don't count; usually ordering does. Only active members who are in count. A member can cook an item when it has no cook list or they are on it. The first volunteer is assigned; the coordinator or admin can change it. |
 
 ### 6.4 Decisions and assignments
@@ -268,8 +268,8 @@ Requirements use "must" for version 1 and "should" for items that can slip to a 
 |---|---|
 | FR-41 | The admin invites a member by email. The member's first sign-in with that email activates the account and links the identity. Unknown emails are refused with a message to ask the admin. |
 | FR-42 | The admin maps or confirms each member's Slack user ID. Default mapping is by email match. |
-| FR-43 | The admin edits time zone, variety window, ranking weights, and badge thresholds in the web app. |
-| FR-44 | Any active member can edit the standing schedule for a slot, on the web app's Schedule page: call enabled, call time, window lengths, reminder lead time, usual meal time, and default fulfillment modes (everything in FR-1). Times are wall-clock times in the household's time zone. Windows run 5 to 360 minutes, the reminder comes before responses close, the call's windows end by midnight, and, while the slot is on, voting closes before the usual meal time; a slot can always be turned off. Each change is written to the audit log with who changed what, old and new, and announced in the channel with the member's name, what changed, and the first day it applies. A save that changes nothing posts nothing, and a save over someone else's newer change is refused. A change applies from the next call: a call that's open, or already scheduled for a later day, keeps the times it was created with, and so does a day an admin skipped. A call started again, by a re-run or after a call-off, gets fresh windows from the current schedule. When today's call hasn't been created yet, today follows the new schedule if its call can still open today; if it can't, but the old schedule would still have opened one, today's call is scheduled at the old time, and the announcement says so. Turning a slot off applies today. `/dinnerbell schedule` shows each slot's schedule and links to the page; editing stays on the web. Ranking weights, the proposal count, the variety window, and skipping a day stay admin-only (FR-43, FR-6). |
+| FR-43 | The admin edits time zone, variety window, ranking weights, ranking randomness (the temperature in section 7), and badge thresholds in the web app. |
+| FR-44 | Any active member can edit the standing schedule for a slot, on the web app's Schedule page: call enabled, call time, window lengths, reminder lead time, usual meal time, and default fulfillment modes (everything in FR-1). Times are wall-clock times in the household's time zone. Windows run 5 to 360 minutes, the reminder comes before responses close, the call's windows end by midnight, and, while the slot is on, voting closes before the usual meal time; a slot can always be turned off. Each change is written to the audit log with who changed what, old and new, and announced in the channel with the member's name, what changed, and the first day it applies. A save that changes nothing posts nothing, and a save over someone else's newer change is refused. A change applies from the next call: a call that's open, or already scheduled for a later day, keeps the times it was created with, and so does a day an admin skipped. A call started again, by a re-run or after a call-off, gets fresh windows from the current schedule. When today's call hasn't been created yet, today follows the new schedule if its call can still open today; if it can't, but the old schedule would still have opened one, today's call is scheduled at the old time, and the announcement says so. Turning a slot off applies today. `/dinnerbell schedule` shows each slot's schedule and links to the page; editing stays on the web. Ranking weights and randomness, the proposal count, the variety window, and skipping a day stay admin-only (FR-43, FR-6). |
 
 ### 6.13 Later phases
 
@@ -284,7 +284,7 @@ Requirements use "must" for version 1 and "should" for items that can slip to a 
 
 ## 7. Ranking
 
-Ranking is deterministic and explainable. Given a Call with participants P (in and maybe), roles offered R, and guest needs G:
+Ranking is explainable and reproducible: hard filters decide what can be picked, a score decides how likely each place is, and a seeded draw decides among them. Given a Call with participants P (in and maybe), roles offered R, and guest needs G:
 
 1. **Candidate set.** All active catalog items that aren't already picks (an offer's, FR-5), expanded into (item, mode) pairs for each mode the item supports. In version 1 every slot allows every mode; the slot's default modes earn the default-mode bonus.
 2. **Hard filters.** Drop a pair if:
@@ -293,7 +293,7 @@ Ranking is deterministic and explainable. Given a Call with participants P (in a
    - The mode is not covered by R (FR-17).
    - The item was eaten within the variety window, unless that empties the set. This applies once, across items for every meal (FR-31): a repeat comes back only when nothing fresh is left for any meal.
 
-   Then keep only items for the call's meal: a lunch call's candidates are items whose meals include lunch. The rest are the top-up's candidates (step 6). An item "fits" a call when it passes all of these. So a fresh item beats meal fit, and meal fit beats score: when the only lunch place was eaten yesterday and fresh dinner places pass, the vote is dinner places, each marked as one.
+   Then keep only items for the call's meal: a lunch call's candidates are items whose meals include lunch. These are the **meal group**. The rest are the **top-up group** (step 8). An item "fits" a call when it passes all of these. So a fresh item beats meal fit, and meal fit beats score: when the only lunch place was eaten yesterday and fresh dinner places pass, the vote is dinner places, each marked as one. Nothing later in ranking can bring back a pair these filters dropped.
 3. **Score.** For each remaining pair, sum:
 
 | Component | Formula | Default weight |
@@ -305,12 +305,19 @@ Ranking is deterministic and explainable. Given a Call with participants P (in a
 | Default mode | +0.5 if the mode is one of the slot's default fulfillment modes | 1.0 |
 | Volunteer fit | +0.5 if the mode is cook and the volunteer cook is on the item's cook list | 1.0 |
 
+   Scores are rounded to 6 decimal places, so sums that a person would call equal tie.
 4. **One mode per item.** An item is proposed once, in its best mode: the one whose mode components (default mode, volunteer fit) score higher, with ties going to cook, then pickup, then delivery. So the picks are N different places.
-5. **Order** by score descending. Break ties by the item eaten longest ago, with never-eaten items first, then by name. Take the top N.
-6. **Top up.** If fewer than N items fit, score, collapse, and order (steps 3 to 5) the top-up's candidates from step 2, which passed the same vetoes, guest needs, coverage, and variety window, and take the best of them to fill the N. They rank after every item for the meal, whatever their scores, so a lunch call never proposes a dinner-only place while N lunch places fit. A catalog with too few items for a meal still produces a vote.
-7. **Explain.** Each proposal carries the top two positive components and any penalty as a sentence: "Suggested by Alex. Nobody has had Ethiopian in 3 weeks." A top-up's first sentence says what it's usually for: "Usually for dinner."
+5. **Suggestions first.** A place a participant suggested for this call, and that passed step 2, is always proposed, before any draw. When more suggestions fit than there are places in the vote, the highest-scoring ones go in, with ties drawn as in step 6 at temperature 0. A suggested place for another meal is in the top-up group, so it's proposed only when the top-up has room.
+6. **Draw.** Fill the rest of the N by weighted random sampling without replacement from the group's other candidates. Each candidate's weight is `exp((score − best) / T)`, where `best` is the best score left in the group and `T` is the household's **ranking temperature**: default 1.0, from 0 to 3, set on Admin. So equal scores always have equal chances, and at T = 1 a place one point better is about 2.7 times as likely. At T = 0 only the best score left has any weight: the picks are in score order, and ties are drawn at random, never by name. Each draw is one step of the Efraimidis–Spirakis method, with keys compared as logarithms so that no weight overflows.
+7. **Variety within the vote.** After each pick, including a suggestion, every candidate sharing one of its cuisines has its weight multiplied by 0.3, a fixed constant. So a vote rarely holds three taco places when other cuisines fit. At T = 0 this only changes the chances among tied scores.
+8. **Top up.** If the meal group runs out before N picks, steps 5 to 7 run again over the top-up group, from step 2, to fill the N. Top-ups come after every pick for the meal, whatever their scores, so a lunch call never proposes a dinner-only place while N lunch places fit. A catalog with too few items for a meal still produces a vote.
+9. **Explain.** Each proposal carries the top two positive components and any penalty as a sentence: "Suggested by Alex. Nobody has had Ethiopian in 3 weeks." A top-up's first sentence says what it's usually for: "Usually for dinner." Winning a draw isn't a reason and isn't mentioned. Ranking also reports each proposal's score, which is stored with it, and how many candidates in its group had the same score, which isn't stored yet.
 
-Feedback is not an input in version 1; FR-55 adds it once there is enough data. Weights are household settings. The engine is a pure function over a snapshot, so it is unit-testable without a database.
+The proposals are stored in the order steps 5 to 8 produced them. That order is each proposal's rank, the one FR-16 uses to break a tie at the deadline when no coordinator or admin voted.
+
+**The seed.** The draw uses a seed derived with SHA-256 from the household, the call, and the call's run, passed in with the snapshot. Ranking the same run again, with the same inputs, gives the same picks. A re-run or a restart after a call-off (FR-6, FR-56) is a new run and draws again.
+
+Feedback is not an input in version 1; FR-55 adds it once there is enough data. Weights and the temperature are household settings. The engine is a pure function over a snapshot that includes its seed, so it is unit-testable without a database ([ADR 0007](adr/0007-seeded-weighted-ranking.md)). [Ranking](ranking.md) explains it for the household, with a worked example.
 
 ## 8. Event lifecycle
 
@@ -416,7 +423,7 @@ Mobile-first server-rendered pages with HTMX for in-place updates. No JavaScript
 | History | Meals by week. Cuisines in the current variety window. Give or edit feedback on recent meals. |
 | Stats | Contribution counts, badges with progress to the next tier, household recap. |
 | Schedule | Each slot's standing schedule, which any member can change (FR-44). |
-| Admin | Members and invitations, Slack mapping, guests (add, edit, link Slack, link to a member, promote, remove), **Join from the channel**, **Add people from the channel**, skipping a day's call (FR-6), time zone, ranking weights, badge thresholds, backup status. |
+| Admin | Members and invitations, Slack mapping, guests (add, edit, link Slack, link to a member, promote, remove), **Join from the channel**, **Add people from the channel**, skipping a day's call (FR-6), time zone, ranking weights and randomness, badge thresholds, backup status. |
 
 ## 12. Metrics and badges
 
@@ -500,7 +507,7 @@ Every table carries `household_id`. Timestamps are UTC; the household time zone 
 
 | Table | Key fields |
 |---|---|
-| household | name, timezone, settings (JSON: slots, weights, variety window, badge thresholds, slack channel) |
+| household | name, timezone, settings (JSON: slots, weights, ranking temperature, variety window, badge thresholds, slack channel) |
 | member | display name, email (members sign in with it; a guest never has one), slack_email (a joined guest's Slack email, never used to sign in), slack_guest_account, oidc_subject, slack_user_id, slack_link_locked, role (admin, member, guest), can_cook, can_pickup, can_order, mute_dm_reminders, feedback_reminder, dietary_needs (a guest's dietary tags), join_refused (an admin removed this guest), active |
 | tag | kind (cuisine, protein, dietary, other), name |
 | catalog_item | kind (home, restaurant), name, notes, url, order_url, modes (cook, pickup, delivery), meals (bits: breakfast 1, lunch 2, dinner 4; 1 to 7, default 6), default_servings, created_by, active |
@@ -683,3 +690,4 @@ M0 through M2 are the minimum for the household to switch over. M3 and M4 follow
 | [0004](adr/0004-stack.md) | Python, FastAPI, HTMX, SQLite, one container |
 | [0005](adr/0005-deterministic-ranking-first.md) | Deterministic, explainable ranking before any LLM |
 | [0006](adr/0006-test-instance.md) | Test in a second instance of the same image, not a second channel |
+| [0007](adr/0007-seeded-weighted-ranking.md) | Ranking draws at random among the places that pass every filter, weighted by score, from an explicit seed |

@@ -4,6 +4,7 @@
 |---|---|
 | Status | Accepted |
 | Date | 2026-10-21 |
+| Amended by | [ADR 0007](0007-seeded-weighted-ranking.md): picks are a seeded, weighted draw among the places that pass every filter, not the top N by score |
 
 ## Context
 
