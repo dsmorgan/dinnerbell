@@ -567,6 +567,7 @@ def cli_db(cli_env_only: Path, clock: FakeClock) -> Path:
         await database.close()
 
     asyncio.run(seed())
+    path.chmod(0o600)  # as the app leaves it: it creates the database under an owner-only umask
     return path
 
 
@@ -648,13 +649,16 @@ def test_a_wal_database_gets_private_sidecar_files_the_app_can_use(
     cli_db: Path, capsys: pytest.CaptureFixture[str], clock: FakeClock
 ) -> None:
     """With the app stopped, a WAL database has no -wal or -shm file. A read-only open creates
-    them; they must be owner-only, and the app must still open and write the database after."""
+    them with the database's own mode, so they're owner-only like it, and the app must still
+    open and write the database after."""
     with closing(sqlite3.connect(cli_db)) as db:
         assert db.execute("PRAGMA journal_mode").fetchone() == ("wal",)
     assert sorted(p.name for p in cli_db.parent.iterdir()) == ["dinnerbell.db"]
     assert cli.main(["catalog", "export"]) == 0
+    # SQLite gives the sidecars the database file's own mode, not one from the umask.
     sidecars = {p.name: p.stat().st_mode & 0o777 for p in cli_db.parent.iterdir() if p != cli_db}
     assert sidecars == {"dinnerbell.db-wal": 0o600, "dinnerbell.db-shm": 0o600}
+    assert cli_db.stat().st_mode & 0o777 == 0o600
 
     async def write() -> None:
         database = open_database(f"sqlite+aiosqlite:///{cli_db}")

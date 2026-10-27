@@ -454,7 +454,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
     if args.command == "catalog":
         # Before logging is configured: logs go to stdout, where the export goes. The read-only
-        # open may create -wal and -shm files next to the database; keep them owner-only.
+        # open may create -wal and -shm files next to the database; SQLite gives them the
+        # database file's own mode, whatever the umask, so they're as private as the database,
+        # which the app creates owner-only. The umask covers anything else this creates.
         os.umask(PRIVATE_UMASK)
         return catalog_cli.export(settings.database_path, args.output, force=args.force)
     if args.command == "scrub-test" and not is_test_instance(settings.instance_label):

@@ -215,30 +215,45 @@ def test_a_top_up_fills_the_rest_and_ranks_after_the_meals_own_picks() -> None:
 
 
 def test_a_top_up_passes_every_hard_filter() -> None:
-    """Vetoes, guest needs, coverage, and the variety window hold for a top-up too. The variety
-    window applies to each part on its own, so the only lunch place still comes first though
-    it was eaten yesterday, and a dinner place eaten yesterday stays out while another fits."""
+    """Vetoes, guest needs, and coverage hold for a top-up too."""
     vegan = frozenset({VEGAN})
     deli = item(1, "Deli", tags=vegan, meals=frozenset({Meal.LUNCH}))
     vetoed = item(2, "Vetoed", tags=vegan, meals=DINNER_ONLY)
     not_vegan = item(3, "Not vegan", meals=DINNER_ONLY)
     uncovered = item(4, "Uncovered", Mode.COOK, tags=vegan, cooks=frozenset({2}), meals=DINNER_ONLY)
-    recent = item(5, "Recent", tags=vegan, meals=DINNER_ONLY)
-    fresh = item(6, "Fresh", tags=vegan, meals=DINNER_ONLY)
+    fresh = item(5, "Fresh", tags=vegan, meals=DINNER_ONLY)
     snap = snapshot(
         deli,
         vetoed,
         not_vegan,
         uncovered,
-        recent,
         fresh,
         meal=Meal.LUNCH,
         guest_needs=vegan,
         preferences=GroupPreferences(vetoed_items=frozenset({2})),
-        recent_items={1: 1, 5: 1},
-        last_eaten_days={1: 1, 5: 1},
     )
-    assert [(r.item_id, r.for_meal) for r in rank(snap)] == [(1, True), (6, False)]
+    assert [(r.item_id, r.for_meal) for r in rank(snap)] == [(1, True), (5, False)]
+
+
+def test_the_variety_window_applies_once_across_meals_before_the_meal_order() -> None:
+    """FR-31 holds as written: a repeat only when nothing else fits, for any meal. So fresh beats
+    meal fit, and meal fit beats score."""
+    eaten = {"recent_items": {1: 1}, "last_eaten_days": {1: 1}}
+    deli = item(1, "Deli", meals=frozenset({Meal.LUNCH}))
+    dinners = [item(n, f"Dinner {n}", meals=DINNER_ONLY) for n in (2, 3, 4)]
+    # Case A: the only lunch place was eaten yesterday; fresh dinner places fill the vote.
+    only = snapshot(deli, *dinners, meal=Meal.LUNCH, **eaten)
+    assert [(r.item_id, r.for_meal) for r in rank(only)] == [(2, False), (3, False), (4, False)]
+    assert candidates(only) == []
+    # Case B: two fresh lunch places and the recent one: the fresh two, then a dinner top-up.
+    lunches = [item(n, f"Lunch {n}", meals=frozenset({Meal.LUNCH})) for n in (5, 6)]
+    two = snapshot(deli, *lunches, *dinners, meal=Meal.LUNCH, **eaten)
+    assert [(r.item_id, r.for_meal) for r in rank(two)] == [(5, True), (6, True), (2, False)]
+    # Everything was eaten inside the window: repeats come back, the meal's first.
+    recent = dict.fromkeys(range(1, 7), 1)
+    again = replace(two, recent_items=recent, last_eaten_days=recent)
+    assert [(r.item_id, r.for_meal) for r in rank(again)] == [(1, True), (5, True), (6, True)]
+    assert [(r.item_id, r.for_meal) for r in rank(replace(again, limit=4))][-1] == (2, False)
 
 
 def test_join_names() -> None:
@@ -321,13 +336,11 @@ def check_properties(seed: int) -> None:
         and snap.guest_needs <= i.tag_ids
         and snap.coverage.covers(m, i.cook_ids)
     ]
-    # Items for the call's meal, then a top-up from the rest (#72); the variety window applies
-    # to each part on its own.
-    pools: dict[bool, set[int]] = {}
-    for for_meal in (True, False):
-        part = [(i, m) for i, m in eligible_any if (snap.meal in i.meals) is for_meal]
-        fresh = any(i.id not in snap.recent_items for i, _ in part)
-        pools[for_meal] = {i.id for i, _ in part if i.id not in snap.recent_items or not fresh}
+    # Items for the call's meal, then a top-up from the rest (#72), after the variety window,
+    # which applies once across every meal (FR-31).
+    fresh_exists = any(i.id not in snap.recent_items for i, _ in eligible_any)
+    pool = {i.id for i, _ in eligible_any if i.id not in snap.recent_items or not fresh_exists}
+    pools = {fm: {i for i in pool if (snap.meal in items[i].meals) is fm} for fm in (True, False)}
     matched = min(snap.limit, len(pools[True]))
     topped = min(snap.limit - matched, len(pools[False]))
     # One pick per place (#77), none of them taken already, and as many as the limit allows.
@@ -356,9 +369,9 @@ def check_properties(seed: int) -> None:
         assert snap.coverage.covers(proposal.mode, chosen.cook_ids)
         # Guest dietary needs are always satisfied.
         assert snap.guest_needs <= chosen.tag_ids
-        # A same-window repeat appears only when nothing else in its part is eligible.
+        # A same-window repeat appears only when nothing else is eligible, for any meal.
         if proposal.item_id in snap.recent_items:
-            assert pools[proposal.for_meal] <= snap.recent_items.keys()
+            assert not fresh_exists
         # A top-up says what the item is usually for, first.
         assert proposal.for_meal or proposal.reasons[0].startswith("Usually for ")
         # Every proposal explains itself, and reasons never name a veto.

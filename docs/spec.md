@@ -287,13 +287,13 @@ Requirements use "must" for version 1 and "should" for items that can slip to a 
 Ranking is deterministic and explainable. Given a Call with participants P (in and maybe), roles offered R, and guest needs G:
 
 1. **Candidate set.** All active catalog items that aren't already picks (an offer's, FR-5), expanded into (item, mode) pairs for each mode the item supports. In version 1 every slot allows every mode; the slot's default modes earn the default-mode bonus.
-2. **Hard filters.** Keep only items for the call's meal: a lunch call's candidates are items whose meals include lunch. Then drop a pair if:
+2. **Hard filters.** Drop a pair if:
    - Any member in P vetoes the item or any of its tags. P counts maybes, so ranking runs before the deadline turns them out.
    - Guest needs in G include a dietary tag the item lacks.
    - The mode is not covered by R (FR-17).
-   - The item was eaten within the variety window, unless that empties the set.
+   - The item was eaten within the variety window, unless that empties the set. This applies once, across items for every meal (FR-31): a repeat comes back only when nothing fresh is left for any meal.
 
-   An item "fits" a call when it passes all of these.
+   Then keep only items for the call's meal: a lunch call's candidates are items whose meals include lunch. The rest are the top-up's candidates (step 6). An item "fits" a call when it passes all of these. So a fresh item beats meal fit, and meal fit beats score: when the only lunch place was eaten yesterday and fresh dinner places pass, the vote is dinner places, each marked as one.
 3. **Score.** For each remaining pair, sum:
 
 | Component | Formula | Default weight |
@@ -307,7 +307,7 @@ Ranking is deterministic and explainable. Given a Call with participants P (in a
 
 4. **One mode per item.** An item is proposed once, in its best mode: the one whose mode components (default mode, volunteer fit) score higher, with ties going to cook, then pickup, then delivery. So the picks are N different places.
 5. **Order** by score descending. Break ties by the item eaten longest ago, with never-eaten items first, then by name. Take the top N.
-6. **Top up.** If fewer than N items fit, repeat steps 2 to 5 for the items that aren't for the call's meal, with the same vetoes, guest needs, coverage, and variety window (applied to that set on its own), and take the best of them to fill the N. They rank after every item for the meal, whatever their scores, so a lunch call never proposes a dinner-only place while N lunch places fit. A catalog with too few items for a meal still produces a vote.
+6. **Top up.** If fewer than N items fit, score, collapse, and order (steps 3 to 5) the top-up's candidates from step 2, which passed the same vetoes, guest needs, coverage, and variety window, and take the best of them to fill the N. They rank after every item for the meal, whatever their scores, so a lunch call never proposes a dinner-only place while N lunch places fit. A catalog with too few items for a meal still produces a vote.
 7. **Explain.** Each proposal carries the top two positive components and any penalty as a sentence: "Suggested by Alex. Nobody has had Ethiopian in 3 weeks." A top-up's first sentence says what it's usually for: "Usually for dinner."
 
 Feedback is not an input in version 1; FR-55 adds it once there is enough data. Weights are household settings. The engine is a pure function over a snapshot, so it is unit-testable without a database.

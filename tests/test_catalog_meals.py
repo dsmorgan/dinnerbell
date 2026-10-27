@@ -197,6 +197,9 @@ def test_the_item_form_starts_on_lunch_and_dinner_and_needs_a_meal(
     assert refused.status_code == 400 and "Pick at least one meal it" in page(refused)
     assert checked_meals(page(refused)) == set()  # the form keeps what was posted
     assert add_item(client, "Bagel Barn", meals=["brunch"]).status_code == 400
+    bogus = add_item(client, "Bagel Barn", meals=["lunch", "bogus"])  # refused, not saved as lunch
+    assert bogus.status_code == 400 and "Pick breakfast, lunch, dinner, or a mix." in page(bogus)
+    assert not [i for i in rows(migrated, CatalogItemRow) if i.name == "Bagel Barn"]
 
     assert add_item(client, "Bagel Barn", meals=["breakfast"]).status_code == 303
     assert (

@@ -110,19 +110,14 @@ class Ranked:
     """False for a top-up: an item for other meals, proposed because too few for this one fit."""
 
 
-def candidates(snapshot: RankingSnapshot, *, for_meal: bool = True) -> list[tuple[RankItem, Mode]]:
-    """Steps 1 and 2: every (item, mode) pair that passes the hard filters, leaving out items
-    already taken. Every slot allows every mode in version 1; the slot's default modes earn a
-    bonus instead.
-
-    The meal filter keeps the items for the call's meal; ``for_meal=False`` keeps the others
-    instead, the top-up's candidates (step 6). The variety window applies to each set apart, so
-    a repeat for this meal still ranks before anything for other meals."""
+def _eligible(snapshot: RankingSnapshot) -> list[tuple[RankItem, Mode]]:
+    """Every (item, mode) pair that passes the hard filters other than the meal, for any meal.
+    The variety window applies once, across every meal: a repeat only when nothing fresh fits
+    for any meal (FR-31), so a fresh place for another meal beats a repeat for this one."""
     pairs = [
         (item, mode)
         for item in snapshot.items
-        if (snapshot.meal in item.meals) is for_meal
-        and item.id not in snapshot.taken
+        if item.id not in snapshot.taken
         and not snapshot.preferences.vetoes(item)
         and snapshot.guest_needs <= item.tag_ids
         for mode in MODE_ORDER
@@ -130,6 +125,16 @@ def candidates(snapshot: RankingSnapshot, *, for_meal: bool = True) -> list[tupl
     ]
     fresh = [(item, mode) for item, mode in pairs if item.id not in snapshot.recent_items]
     return fresh or pairs  # a repeat inside the window only when nothing else fits
+
+
+def candidates(snapshot: RankingSnapshot, *, for_meal: bool = True) -> list[tuple[RankItem, Mode]]:
+    """Steps 1 and 2: every (item, mode) pair that passes the hard filters, leaving out items
+    already taken. Every slot allows every mode in version 1; the slot's default modes earn a
+    bonus instead.
+
+    The meal filter comes last, after the variety window: it keeps the items for the call's
+    meal, and ``for_meal=False`` keeps the others instead, the top-up's candidates (step 6)."""
+    return [(item, mode) for item, mode in _eligible(snapshot) if (snapshot.meal in item.meals) is for_meal]
 
 
 def _variety(item: RankItem, snapshot: RankingSnapshot) -> float:
