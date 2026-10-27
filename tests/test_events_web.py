@@ -251,7 +251,7 @@ def test_members_cannot_use_admin_overrides(admin: TestClient, provider: FakePro
 
 
 def ranking_form(**changes: Any) -> dict[str, Any]:
-    form: dict[str, Any] = {"proposal_count": "3", "variety_window_days": "7"}
+    form: dict[str, Any] = {"proposal_count": "3", "variety_window_days": "7", "temperature": "1"}
     form |= {f"weight_{n}": v for n, v in (("soft_preference", "1"), ("cuisine_variety", "3"), ("novelty", "1"))}
     form |= {f"weight_{n}": v for n, v in (("suggested", "2"), ("default_mode", "1"), ("volunteer_fit", "1"))}
     return form | changes
@@ -263,14 +263,19 @@ def test_ranking_page_saves_and_audits(admin: TestClient, migrated: Settings) ->
     assert "dinner_call_time" not in html  # call times moved to the Schedule page
     assert submit(admin, "/admin/schedule", ranking_form()).status_code == 303
     assert [a for a in rows(migrated, AuditRow) if a.action == "household.ranking_updated"] == []  # no change
-    saved = submit(admin, "/admin/schedule", ranking_form(weight_novelty="2.5", variety_window_days="10"))
+    assert 'name="temperature" value="1"' in html
+    changes = {"weight_novelty": "2.5", "variety_window_days": "10", "temperature": "0.5"}
+    saved = submit(admin, "/admin/schedule", ranking_form(**changes))
     assert (saved.status_code, saved.headers["location"]) == (303, "/admin/schedule?notice=saved")
     assert "Ranking saved" in admin.get("/admin/schedule?notice=saved").text
     settings = rows(migrated, HouseholdRow)[0].settings
     assert settings["ranking_weights"]["novelty"] == 2.5 and settings["variety_window_days"] == 10
+    assert settings["ranking_temperature"] == 0.5
     assert settings["slots"]["dinner"]["call_time"] == "15:00"  # untouched
     (audit,) = [a for a in rows(migrated, AuditRow) if a.action == "household.ranking_updated"]
-    assert set(audit.payload) == {"ranking_weights", "variety_window_days"}
+    assert set(audit.payload) == {"ranking_weights", "variety_window_days", "ranking_temperature"}
+    assert audit.payload["ranking_temperature"] == {"from": 1.0, "to": 0.5}
+    assert 'name="temperature" value="0.5"' in admin.get("/admin/schedule").text
 
 
 @pytest.mark.parametrize(
@@ -282,6 +287,9 @@ def test_ranking_page_saves_and_audits(admin: TestClient, migrated: Settings) ->
         ({"proposal_count": "9"}, "proposals"),
         ({"proposal_count": ""}, "Enter the number of proposals"),
         ({"variety_window_days": "0"}, "variety window"),
+        ({"temperature": "3.5"}, "Randomness runs from 0 to 3."),
+        ({"temperature": "-1"}, "Randomness runs from 0 to 3."),
+        ({"temperature": "inf"}, "Randomness must be a number."),
     ],
 )
 def test_ranking_page_rejects_bad_values(admin: TestClient, changes: dict[str, Any], message: str) -> None:

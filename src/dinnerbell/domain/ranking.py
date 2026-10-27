@@ -1,20 +1,27 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Ranking: a deterministic, explainable choice of proposals for a call (spec section 7, ADR 0005).
+"""Ranking: an explainable, seeded choice of proposals for a call (spec section 7, ADR 0005,
+ADR 0007).
 
-``rank`` is a pure function over a ``RankingSnapshot``. The snapshot carries only combined
-preferences for the people eating, never one member's stances, so nothing ranking produces can
-say who vetoed or disliked what (FR-29).
+``rank`` is a pure function over a ``RankingSnapshot``. Hard filters decide what can be picked;
+scores decide how likely each place is; the snapshot's seed decides the draw, so the same
+snapshot always gives the same picks. The snapshot carries only combined preferences for the
+people eating, never one member's stances, so nothing ranking produces can say who vetoed or
+disliked what (FR-29).
 """
 
 from __future__ import annotations
 
+import hashlib
+import math
+import random
+from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 
 from dinnerbell.domain.catalog import DEFAULT_MEALS, MODE_ORDER, Meal, Mode, meal_words
 from dinnerbell.domain.events import Coverage
-from dinnerbell.domain.schedule import Weights
+from dinnerbell.domain.schedule import DEFAULT_TEMPERATURE, Weights
 
 TAG_SCORE_FACTOR = 0.5
 DEFAULT_MODE_BONUS = 0.5
@@ -22,6 +29,9 @@ VOLUNTEER_FIT_BONUS = 0.5
 REASONS_SHOWN = 2
 SCORE_PLACES = 6
 """Scores are compared after rounding, so 0.1 + 0.2 ties with 0.3 the way a person expects."""
+SAME_CUISINE_FACTOR = 0.3
+"""Step 7: once a place is picked, each place sharing one of its cuisines keeps this share of its
+weight, so a vote rarely has three taco places when other cuisines fit."""
 
 
 class Component(StrEnum):
@@ -96,6 +106,11 @@ class RankingSnapshot:
     taken: frozenset[int] = frozenset()
     """Items that are picks on the call already, such as an offer's (FR-5). Ranking leaves them
     out and fills ``limit`` from the rest, since a call has one pick per place (#77)."""
+    temperature: float = DEFAULT_TEMPERATURE
+    """How far the draw strays from score order (step 6). 0 takes the best scores in order."""
+    seed: int = 0
+    """Seeds the draw: ``ranking_seed`` of the call and run, so a call always ranks the same and
+    a restart draws again (#78)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,6 +123,16 @@ class Ranked:
     reasons: tuple[str, ...]
     for_meal: bool = True
     """False for a top-up: an item for other meals, proposed because too few for this one fit."""
+    equals: int = 1
+    """How many candidates in its group (the meal's, or the top-up) had exactly this score, this
+    one included. With 4, it was chosen at random among 4 equally good options."""
+
+
+def ranking_seed(household_id: int, event_id: int, run: int) -> int:
+    """The draw's seed for one run of a call. A digest, not ``hash()``, so it's the same in every
+    process and on every restart of the app."""
+    digest = hashlib.sha256(f"dinnerbell ranking {household_id} {event_id} {run}".encode()).digest()
+    return int.from_bytes(digest[:8], "big")
 
 
 def _eligible(snapshot: RankingSnapshot) -> list[tuple[RankItem, Mode]]:
@@ -133,7 +158,7 @@ def candidates(snapshot: RankingSnapshot, *, for_meal: bool = True) -> list[tupl
     bonus instead.
 
     The meal filter comes last, after the variety window: it keeps the items for the call's
-    meal, and ``for_meal=False`` keeps the others instead, the top-up's candidates (step 6)."""
+    meal, and ``for_meal=False`` keeps the others instead, the top-up's candidates (step 8)."""
     return [(item, mode) for item, mode in _eligible(snapshot) if (snapshot.meal in item.meals) is for_meal]
 
 
@@ -163,68 +188,96 @@ def components(item: RankItem, mode: Mode, snapshot: RankingSnapshot) -> dict[Co
     return {name: value * getattr(w, name.value) for name, value in raw.items()}
 
 
-def _order_key(
-    item: RankItem, mode: Mode, score: float, snapshot: RankingSnapshot
-) -> tuple[float, float, str, int, int]:
-    """Step 5: score descending, then the item eaten longest ago (never eaten first), then
-    name. Mode order and item ID only make the order total, so equal inputs always give equal
-    output."""
-    since = snapshot.last_eaten_days.get(item.id)
-    return (
-        -round(score, SCORE_PLACES),
-        float("-inf") if since is None else -since,
-        item.name.casefold(),
-        MODE_ORDER.index(mode),
-        item.id,
-    )
-
-
 def _mode_key(mode: Mode, parts: Mapping[Component, float]) -> tuple[float, int]:
     """Step 4: how one way of getting an item compares with another, by the mode's own components,
     best first, then ``MODE_ORDER``."""
     return (-round(sum(parts[c] for c in MODE_COMPONENTS), SCORE_PLACES), MODE_ORDER.index(mode))
 
 
-def _ranked(snapshot: RankingSnapshot, *, for_meal: bool) -> list[Ranked]:
-    """Steps 3 to 5 and 7 over one candidate set, best first, every candidate. Each item is
-    proposed once, in its best mode (``_mode_key``), so the picks are different places (#77)."""
+_Scored = tuple[RankItem, Ranked]
+"""A candidate with its score: the item, for its cuisines, and the proposal it would be."""
+
+
+def _scored(snapshot: RankingSnapshot, *, for_meal: bool) -> list[_Scored]:
+    """Steps 3, 4, and 9 over one group, every candidate, by item ID. Each item is proposed once,
+    in its best mode (``_mode_key``), so the picks are different places (#77). The ID order only
+    fixes which random number goes to which candidate; it never favors one."""
     best: dict[int, tuple[RankItem, Mode, dict[Component, float]]] = {}
     for item, mode in candidates(snapshot, for_meal=for_meal):
         parts = components(item, mode, snapshot)
         kept = best.get(item.id)
         if kept is None or _mode_key(mode, parts) < _mode_key(kept[1], kept[2]):
             best[item.id] = (item, mode, parts)
-    scored = []
-    for item, mode, parts in best.values():
-        score = sum(parts.values())
-        scored.append((_order_key(item, mode, score, snapshot), item, mode, score, parts))
-    scored.sort(key=lambda entry: entry[0])
+    scores = {item_id: round(sum(parts.values()), SCORE_PLACES) for item_id, (_, _, parts) in best.items()}
+    equals = Counter(scores.values())
     return [
-        Ranked(
-            item_id=item.id,
-            name=item.name,
-            mode=mode,
-            score=round(score, SCORE_PLACES),
-            components=parts,
-            reasons=explain(item, mode, parts, snapshot, for_meal=for_meal),
-            for_meal=for_meal,
+        (
+            item,
+            Ranked(
+                item_id=item.id,
+                name=item.name,
+                mode=mode,
+                score=scores[item.id],
+                components=parts,
+                reasons=explain(item, mode, parts, snapshot, for_meal=for_meal),
+                for_meal=for_meal,
+                equals=equals[scores[item.id]],
+            ),
         )
-        for _, item, mode, score, parts in scored
+        for item, mode, parts in (best[item_id] for item_id in sorted(best))
     ]
 
 
+def _log_weight(score: float, best: float, temperature: float) -> float:
+    """The log of ``exp((score - best) / temperature)``, so no weight overflows or rounds to 0.
+    At temperature 0 only the best score has any weight: score order, ties drawn at random."""
+    if temperature > 0:
+        return (score - best) / temperature
+    return 0.0 if score == best else -math.inf
+
+
+def _draw(pool: list[_Scored], picks: list[_Scored], limit: int, temperature: float, rng: random.Random) -> None:
+    """Step 6: weighted sampling without replacement, adding to ``picks`` until it holds ``limit``
+    or ``pool`` runs out. Each draw is one step of the Efraimidis-Spirakis method: every place
+    left gets a key ``u ** (1 / weight)`` and the highest key wins. Keys are compared as logs,
+    ``log(weight) - log(E)`` with ``E = -log(u)``, which orders them the same way without
+    overflow. Weights are relative to the best score left, which changes nothing above 0 and
+    keeps the next best in play at 0. Keys are drawn afresh for each pick, because step 7
+    changes the weights."""
+    left = list(pool)
+    while left and len(picks) < limit:
+        best = max(ranked.score for _, ranked in left)
+        keys = []
+        for item, ranked in left:
+            shared = sum(1 for picked, _ in picks if picked.cuisine_ids & item.cuisine_ids)
+            log_weight = _log_weight(ranked.score, best, temperature) + shared * math.log(SAME_CUISINE_FACTOR)
+            exponential = rng.expovariate(1.0)
+            keys.append(log_weight - math.log(exponential) if exponential > 0 else math.inf)  # u = 1: a sure win
+        chosen = max(range(len(left)), key=keys.__getitem__)
+        picks.append(left.pop(chosen))
+
+
 def rank(snapshot: RankingSnapshot) -> list[Ranked]:
-    """The top ``snapshot.limit`` proposals, best first, each with its reasons: items for the
-    call's meal, then, only when too few of those fit, a top-up of items for other meals (#72).
-    The hard filters apply to both, so a top-up is never a veto or an uncovered mode."""
+    """Up to ``snapshot.limit`` proposals, each with its reasons, in the order drawn: items for
+    the call's meal, then, only when too few of those fit, a top-up of items for other meals
+    (#72). Within each group, places suggested for the call come first, then a weighted draw
+    from the rest. The hard filters apply to both groups, so no pick is ever a veto, an unmet
+    guest need, an uncovered mode, or a needless repeat; chance only orders what passed them."""
     limit = max(snapshot.limit, 0)
-    picks = _ranked(snapshot, for_meal=True)[:limit]
-    if len(picks) < limit:  # step 6: the top-up, ranked after every pick for the meal
-        picks += _ranked(snapshot, for_meal=False)[: limit - len(picks)]
-    return picks
+    rng = random.Random(snapshot.seed)  # noqa: S311 - a reproducible draw, not a secret
+    picks: list[_Scored] = []
+    for for_meal in (True, False):  # step 8: the top-up, drawn after every pick for the meal
+        if len(picks) >= limit:
+            break
+        pool = _scored(snapshot, for_meal=for_meal)
+        suggested = [entry for entry in pool if snapshot.suggesters.get(entry[0].id)]
+        _draw(suggested, picks, limit, 0.0, rng)  # step 5: always in, the best of them when too many
+        drawn = {ranked.item_id for _, ranked in picks}
+        _draw([entry for entry in pool if entry[1].item_id not in drawn], picks, limit, snapshot.temperature, rng)
+    return [ranked for _, ranked in picks]
 
 
-# Reasons (step 7) ------------------------------------------------------------------------------
+# Reasons (step 9) ------------------------------------------------------------------------------
 
 
 def join_names(names: tuple[str, ...] | list[str]) -> str:

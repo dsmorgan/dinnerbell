@@ -11,12 +11,14 @@
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   <fieldset class="card">
     <legend><h2>Ranking</h2></legend>
-    <p class="small muted">How much each reason counts when Dinnerbell picks proposals. 0 turns a reason off.</p>
+    <p class="small muted">How much each reason counts toward a place's score when Dinnerbell picks proposals. 0 turns a reason off.</p>
     <div class="weights">
       {% for name, label in weights %}
       <label class="field"><span>{{ label }}</span><input type="number" inputmode="decimal" step="0.5" min="0" max="10" name="weight_{{ name }}" value="{{ values['weight_' ~ name] }}" required></label>
       {% endfor %}
     </div>
+    <label class="field"><span>Randomness</span><input type="number" inputmode="decimal" step="0.1" min="0" max="3" name="temperature" value="{{ values['temperature'] }}" aria-describedby="temperature-help" required></label>
+    <p class="small muted" id="temperature-help">Proposals are drawn at random, and a better score makes a place more likely. Randomness sets how far the draw strays from the best scores. At 1, the default, a place 1 point better is about 2.7 times as likely to be picked. Lower sticks closer to the best scores: 0 always picks them, with a coin toss between equals. Higher, up to 3, mixes the picks up more. Vetoes, guests' needs, and the variety window always hold, and a place someone suggested for the call is always in when it fits.</p>
     <div class="pair">
       <label class="field"><span>Proposals per call</span><input type="number" inputmode="numeric" min="1" max="5" name="proposal_count" value="{{ values['proposal_count'] }}" required></label>
       <label class="field"><span>Variety window (days)</span><input type="number" inputmode="numeric" min="1" max="60" name="variety_window_days" value="{{ values['variety_window_days'] }}" required></label>

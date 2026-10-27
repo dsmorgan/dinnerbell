@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The Schedule page, where any member changes a slot's standing schedule (FR-44), and Admin >
-Ranking: ranking weights, proposal count, and variety window (FR-43), and skipping a day's call
+Ranking: ranking weights, randomness, proposal count, and variety window (FR-43), and skipping a day's call
 before it opens (FR-6)."""
 
 from __future__ import annotations
@@ -172,14 +172,18 @@ async def save_slot(request: Request, slot: str, principal: CSRFChecked, context
 def _stored(values: RankingSettings) -> dict[str, Any]:
     """Form values for the stored ranking settings, keyed by input name."""
     form: dict[str, Any] = {f"weight_{name}": f"{getattr(values.weights, name):g}" for name in WEIGHT_NAMES}
-    return form | {"proposal_count": str(values.proposal_count), "variety_window_days": str(values.variety_window_days)}
+    return form | {
+        "temperature": f"{values.temperature:g}",
+        "proposal_count": str(values.proposal_count),
+        "variety_window_days": str(values.variety_window_days),
+    }
 
 
 def _posted(form: FormData) -> dict[str, Any]:
     """The form as typed, to redisplay after an error."""
     return {
         name: _text(form, name)
-        for name in (*(f"weight_{w}" for w in WEIGHT_NAMES), "proposal_count", "variety_window_days")
+        for name in (*(f"weight_{w}" for w in WEIGHT_NAMES), "temperature", "proposal_count", "variety_window_days")
     }
 
 
@@ -199,6 +203,7 @@ def _parse(posted: dict[str, Any]) -> RankingSettings:
         weights=weights,
         proposal_count=_whole(posted["proposal_count"], "The number of proposals"),
         variety_window_days=_whole(posted["variety_window_days"], "The variety window"),
+        temperature=_weight(posted["temperature"], "Randomness"),
     )
 
 

@@ -59,8 +59,8 @@ from dinnerbell.domain.household import Household
 from dinnerbell.domain.meals import MemberRef, Slot, TagRef
 from dinnerbell.domain.members import Member
 from dinnerbell.domain.offers import replaces_call
-from dinnerbell.domain.ranking import GroupPreferences, RankingSnapshot, RankItem, rank
-from dinnerbell.domain.schedule import proposal_count, slot_schedule, slot_schedules, weights
+from dinnerbell.domain.ranking import GroupPreferences, RankingSnapshot, RankItem, rank, ranking_seed
+from dinnerbell.domain.schedule import proposal_count, slot_schedule, slot_schedules, temperature, weights
 from dinnerbell.services import activity, feedback
 from dinnerbell.services import call_context as cc
 from dinnerbell.services.call_context import CallContext, load, locked_event, publish
@@ -375,7 +375,8 @@ async def ranking_snapshot(
     db: AsyncSession, ctx: CallContext, group: GroupPreferences, *, taken: frozenset[int] = frozenset()
 ) -> RankingSnapshot:
     """Spec section 7's inputs for this call, as of the call's date. ``taken`` holds the items
-    that are picks already, which ranking leaves out (#77)."""
+    that are picks already, which ranking leaves out (#77). The seed is this run's, so ranking
+    the run again gives the same picks and a restart draws again (#78)."""
     household_id, day = ctx.event.household_id, ctx.event.day
     window = await variety_window(db, household_id, day)
     who = ctx.veto_people
@@ -400,6 +401,8 @@ async def ranking_snapshot(
         cuisine_names={t.id: t.name for t in ctx.tags.values()},
         limit=proposal_count(ctx.settings),
         taken=taken,
+        temperature=temperature(ctx.settings),
+        seed=ranking_seed(household_id, ctx.event.id, ctx.event.run),
     )
 
 

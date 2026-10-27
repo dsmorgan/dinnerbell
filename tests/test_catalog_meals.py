@@ -257,8 +257,8 @@ def select_options(html: str, name: str) -> list[str]:
 def test_add_a_proposal_lists_the_calls_meal_first_and_marks_the_rest(
     client: TestClient, provider: FakeProvider, clock: FakeClock, migrated: Settings
 ) -> None:
-    """A dinner call: two dinner places fit, so a breakfast place tops up the vote and says so.
-    Add a proposal lists dinner places first, and still offers the rest, marked."""
+    """A dinner call: two dinner places fit, so a breakfast or lunch place tops up the vote and
+    says so. Add a proposal lists dinner places first, and still offers the rest, marked."""
     sign_in(client, provider)
     add_item(client, "Bagel Barn", meals=["breakfast"])
     add_item(client, "Deli", meals=["lunch"])
@@ -268,22 +268,25 @@ def test_add_a_proposal_lists_the_calls_meal_first_and_marks_the_rest(
     to_voting(client, clock, event_id)
     by_id = {i.id: i.name for i in rows(migrated, CatalogItemRow)}
     ranked = sorted(rows(migrated, ProposalRow), key=lambda p: p.rank)
-    assert [by_id[p.item_id] for p in ranked] == ["Siam Garden", "Taqueria", "Bagel Barn"]
-    assert ranked[2].reasons[0] == "Usually for breakfast."
+    names = [by_id[p.item_id] for p in ranked]
+    assert sorted(names[:2]) == ["Siam Garden", "Taqueria"]  # in a seeded random order (#78)
+    usually = {"Bagel Barn": "breakfast", "Deli": "lunch"}
+    topped = names[2]
+    assert ranked[2].reasons[0] == f"Usually for {usually[topped]}."
 
     html = page(client.get(f"/events/{event_id}"))
-    assert "Usually for breakfast." in html
+    assert f"Usually for {usually[topped]}." in html
+    marked = {name: f"{name} (usually {meal})" for name, meal in usually.items()}
     assert select_options(html, "item_id") == [
         "Something new instead",
         "Siam Garden (already a pick)",
         "Taqueria (already a pick)",
-        "Bagel Barn (usually breakfast) (already a pick)",
-        "Deli (usually lunch)",
+        *(f"{marked[name]} (already a pick)" if name == topped else marked[name] for name in usually),
     ]
-    deli = next(i for i, name in by_id.items() if name == "Deli")
-    added = submit(client, f"/events/{event_id}/proposals", {"mode": "pickup", "item_id": str(deli)})
+    other = next(i for i, name in by_id.items() if name in usually and name != topped)
+    added = submit(client, f"/events/{event_id}/proposals", {"mode": "pickup", "item_id": str(other)})
     assert added.status_code == 303, page(added)  # people know better than the catalog
-    assert deli in {p.item_id for p in rows(migrated, ProposalRow)}
+    assert other in {p.item_id for p in rows(migrated, ProposalRow)}
 
 
 def test_the_offer_form_lists_its_meal_first_and_marks_the_rest(client: TestClient, provider: FakeProvider) -> None:

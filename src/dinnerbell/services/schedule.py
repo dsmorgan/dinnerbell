@@ -27,14 +27,17 @@ from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.members import Member
 from dinnerbell.domain.notifications import PersonInfo, ScheduleChanged, SlotScheduleInfo
 from dinnerbell.domain.schedule import (
+    DEFAULT_TEMPERATURE,
     PROPOSAL_COUNT_KEY,
     SLOTS_KEY,
+    TEMPERATURE_KEY,
     WEIGHTS_KEY,
     InvalidSchedule,
     SlotSchedule,
     Weights,
     can_open_today,
     check_schedule,
+    check_temperature,
     check_weights,
     first_day_using,
     format_hhmm,
@@ -43,6 +46,7 @@ from dinnerbell.domain.schedule import (
     slot_fingerprint,
     slot_schedules,
     slot_to_json,
+    temperature,
     weights,
     weights_to_json,
 )
@@ -186,6 +190,7 @@ class RankingSettings:
     weights: Weights
     proposal_count: int
     variety_window_days: int
+    temperature: float = DEFAULT_TEMPERATURE
 
 
 async def ranking_settings(db: AsyncSession, actor: Member) -> RankingSettings:
@@ -195,6 +200,7 @@ async def ranking_settings(db: AsyncSession, actor: Member) -> RankingSettings:
         weights=weights(stored),
         proposal_count=proposal_count(stored),
         variety_window_days=variety_window_days(stored),
+        temperature=temperature(stored),
     )
 
 
@@ -203,6 +209,7 @@ def _to_json(values: RankingSettings) -> dict[str, Any]:
         WEIGHTS_KEY: weights_to_json(values.weights),
         PROPOSAL_COUNT_KEY: values.proposal_count,
         SETTINGS_KEY: values.variety_window_days,
+        TEMPERATURE_KEY: values.temperature,
     }
 
 
@@ -210,6 +217,7 @@ async def update_ranking(db: AsyncSession, actor: Member, values: RankingSetting
     """Validate and store the ranking settings, keeping the household's other settings."""
     require_admin(actor, ADMINS_ONLY)
     check_weights(values.weights, values.proposal_count)
+    check_temperature(values.temperature)
     if not MIN_VARIETY_WINDOW_DAYS <= values.variety_window_days <= MAX_VARIETY_WINDOW_DAYS:
         raise InvalidSchedule(f"The variety window runs {MIN_VARIETY_WINDOW_DAYS} to {MAX_VARIETY_WINDOW_DAYS} days.")
     async with write_transaction(db):  # read and write under one lock, so no save is lost

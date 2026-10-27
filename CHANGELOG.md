@@ -18,6 +18,14 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ### Changed
 
+- Proposals are drawn at random, weighted by score, instead of the top scores with ties broken by name (#78). With a fresh catalog most places score the same, so every call used to propose the same three places, first in alphabetical order. See [How Dinnerbell picks proposals](docs/ranking.md), with a worked example.
+  - Vetoes, guest needs, coverage, the variety window, meal fit, and one pick per place still apply first, and absolutely. The draw only chooses among places that pass all of them, and the vote still gets its usual number of picks.
+  - Places with the same score have the same chance, whatever their names. A place 1 point better is about 2.7 times as likely to be picked, so the best place usually makes the vote but not every time.
+  - A place someone suggested for the call is always proposed when it fits, ahead of the draw.
+  - After each pick, places sharing its cuisine become less likely, so a vote rarely has three of one cuisine when others fit.
+  - The same call always draws the same picks. A re-run, or starting a called-off call again, draws again. The order drawn is the proposals' rank, which still breaks a tied vote when neither the coordinator nor an admin voted for a tied place.
+  - **Admin > Ranking** has a new **Randomness** setting, from 0 to 3, default 1. Lower sticks closer to the best scores, and 0 always picks them in order, with ties drawn at random. Higher mixes the picks up more. Changing it is audited with the other ranking settings.
+
 - The logs tell the story of a call (#75). Every action on a call or offer writes one `info` line, from Slack, the web, the command line, or the scheduler, with the same fields: the call (`event_id`, `run`, `slot`, `day`), its state before and after, who acted by ID and display name (`member`), the place (`item`, `mode`), and the `channel`. The scheduler logs each step, such as `voting`, `decided`, and `abandoned` with its `end_reason`. A refusal is logged once, at `info`, with a stable `reason` code, such as `not_in`, `responses_closed`, or `cook_list`, and the message the member saw. Each Slack tap and scheduler run has a `request_id`, as web requests do, so one tap's lines group together. Deliveries to Slack log the notification's call and kind, and the posted message's channel and timestamp. Notes and call-off reasons appear only as their length. See "Read the logs" in [docs/setup.md](docs/setup.md#read-the-logs).
 
 ### Fixed
@@ -35,6 +43,7 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ### Upgrade notes
 
+- Proposals change from this release: the same catalog and people now give varied picks from call to call (#78). No migration is needed; Randomness starts at 1 until an admin saves another value. To keep score order, set **Randomness** to 0 on **Admin > Ranking**; ties are then drawn at random rather than by name.
 - The database migrates to revision `0012_catalog_meals` when Dinnerbell starts. It rebuilds the `catalog_item` table to add `meals`, the meals each item is for, stored as bits (breakfast 1, lunch 2, dinner 4) with a check that at least one is set. Every item gets lunch and dinner, so proposals stay as they were until you change an item. Every row, and every row that refers to an item, is kept. Like 0011, it must run with foreign keys off, as `dinnerbell serve` and `dinnerbell migrate` do; run any other way, it refuses. To go back, restore your backup; downgrading the schema instead drops which meals each item is for.
 - Copy the catalog between production and test only between instances on this release or later: an older instance refuses an export's `meals` field as an unknown field.
 

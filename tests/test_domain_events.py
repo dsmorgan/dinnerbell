@@ -534,6 +534,7 @@ def test_settings_round_trip_and_bad_values_fall_back() -> None:
     assert sched.slot_schedules(sched.default_settings()) == sched.DEFAULT_SLOTS
     assert sched.weights(sched.default_settings()) == sched.Weights()
     assert sched.proposal_count(sched.default_settings()) == 3
+    assert sched.temperature(sched.default_settings()) == 1.0  # not stored until the admin saves
     garbage = {
         "slots": {
             "dinner": {
@@ -549,6 +550,7 @@ def test_settings_round_trip_and_bad_values_fall_back() -> None:
         },
         "ranking_weights": {"novelty": "lots", "suggested": 11, "soft_preference": True, "cuisine_variety": 2},
         "proposal_count": 9,
+        "ranking_temperature": 3.5,
     }
     assert sched.slot_schedules(garbage) == sched.DEFAULT_SLOTS
     assert sched.weights(garbage) == sched.Weights(cuisine_variety=2.0)
@@ -556,6 +558,8 @@ def test_settings_round_trip_and_bad_values_fall_back() -> None:
     assert sched.slot_schedules({"slots": []}) == sched.DEFAULT_SLOTS
     assert sched.slot_schedules({"slots": {"dinner": {"modes": "pickup"}}}) == sched.DEFAULT_SLOTS
     assert sched.weights({"ranking_weights": 3}) == sched.Weights()
+    assert sched.temperature(garbage) == 1.0
+    assert [sched.temperature({"ranking_temperature": v}) for v in (True, "0", -0.1, 0, 2.5)] == [1, 1, 1, 0, 2.5]
     custom = {"slots": {"lunch": {"enabled": True, "call_time": "11:05", "modes": ["cook"], "meal_time": "12:00"}}}
     lunch = sched.slot_schedule(custom, Slot.LUNCH)
     assert (lunch.enabled, lunch.call_time, lunch.modes, lunch.meal_time) == (True, time(11, 5), {Mode.COOK}, time(12))
@@ -577,6 +581,10 @@ def test_check_schedule_and_weights() -> None:
         sched.check_weights(sched.Weights(novelty=10.5), 3)
     with pytest.raises(sched.InvalidSchedule, match="proposals"):
         sched.check_weights(sched.Weights(), 6)
+    assert [sched.check_temperature(v) for v in (0.0, 3.0)] == [0.0, 3.0]
+    for bad in (-0.5, 3.1):
+        with pytest.raises(sched.InvalidSchedule, match="Randomness runs from 0 to 3"):
+            sched.check_temperature(bad)
     assert sched.parse_hhmm(" 07:05 ", "call time") == time(7, 5)
     for bad in ("7:05", "ab:cd", "24:00", "12:60", "\uff11\uff12:\uff10\uff10"):
         with pytest.raises(sched.InvalidSchedule, match="HH:MM"):
