@@ -202,10 +202,22 @@ async def test_a_guest_sees_only_their_invitations_and_answers_in_or_out(slack: 
     }
     await slack.open_home(PAT)
     home = buttons(slack.last_home(PAT)["blocks"])
-    assert ids.ACTION_FOR_STATUS[Status.MAYBE] not in home and ids.DETAILS not in home and ids.MAKE_OFFER not in home
-    await slack.click(PAT, ids.ACTION_FOR_STATUS[Status.IN], str(event_id), home=True)
-    ctx = await house.context(event_id)
-    assert ctx.response_of(house["Pat"].id).status is Status.IN  # type: ignore[union-attr]
+    # Home offers what their card does (#84): In, Out, and the roles, and nothing a member has.
+    assert set(home) == {
+        ids.CARD_ACTION_FOR_STATUS[Status.IN],
+        ids.CARD_ACTION_FOR_STATUS[Status.OUT],
+        *ids.CARD_OFFER,
+        ids.CARD_COORDINATE,
+        "link_event",
+    }
+    await slack.click(PAT, ids.CARD_ACTION_FOR_STATUS[Status.IN], ids.card_value(event_id, 1), home=True)
+    await slack.click(PAT, "card_offer_order", ids.card_value(event_id, 1), home=True)
+    mine = (await house.context(event_id)).response_of(house["Pat"].id)
+    assert mine is not None and mine.status is Status.IN and mine.offers == {RoleOffer.ORDER}
+    assert "card_withdraw_order" in buttons(slack.last_home(PAT)["blocks"])
+    await slack.click(PAT, ids.ACTION_FOR_STATUS[Status.OUT], str(event_id), home=True)  # a Home from before #84
+    assert (await house.context(event_id)).response_of(house["Pat"].id).status is Status.OUT  # type: ignore[union-attr]
+    await slack.click(PAT, ids.CARD_ACTION_FOR_STATUS[Status.IN], ids.card_value(event_id, 1), home=True)
 
     await slack.click(PAT, ids.ANSWER, ids.card_value(event_id, 1))
     card = slack.cards(PAT)[-1]
@@ -254,6 +266,50 @@ async def test_every_other_button_is_refused_to_a_guest(
     expected = REFUSED[GuestAction.MAYBE] if action_id == ids.ACTION_FOR_STATUS[Status.MAYBE] else GUESTS_DONT
     assert slack.ephemerals(PAT)[-1] == expected
     assert await house.kinds() == before and slack.fake.of("views.open") == []
+
+
+MAX_ROW = 5
+"""Slack folds an actions row past about five buttons into "+ N more" (#84)."""
+
+
+async def test_no_home_row_has_more_buttons_than_slack_shows(slack: Slack, house: House) -> None:
+    """Every Home an admin, the coordinator, a member, and a guest see, as a call goes from
+    answers to done and another is called off, keeps each row to five buttons (#84)."""
+    event_id = await open_dinner(house)
+    async with house.sessionmaker() as db:
+        await guests.invite(db, house["Kim"], event_id, guest_id=house["Pat"].id, now=house.clock())
+    await slack.click("Sam", "respond_in", str(event_id))
+    await slack.click("Sam", "coordinate", str(event_id))
+    await slack.click("Alex", "offer_pickup", str(event_id))
+    await slack.click("Kim", "respond_in", str(event_id))
+    await slack.click(PAT, "respond_in", str(event_id))
+    seen: set[tuple[EventState, str]] = set()
+
+    async def check(call: int, state: EventState) -> None:
+        assert (await house.event(call)).state is state
+        for who in ("Alex", "Sam", "Kim", PAT):
+            await slack.open_home(who)
+            rows = {b["block_id"]: b["elements"] for b in slack.last_home(who)["blocks"] if b["type"] == "actions"}
+            for block_id, elements in rows.items():
+                assert len(elements) <= MAX_ROW, (state, who, block_id, [e["action_id"] for e in elements])
+            seen.add((state, who))
+
+    await check(event_id, EventState.COLLECTING)
+    assert "close_window" in buttons(slack.last_home("Sam")["blocks"])  # Close now still shows
+    house.clock.now = RESPOND_BY
+    await house.tick()
+    await check(event_id, EventState.VOTING)
+    first = (await house.context(event_id)).proposals[0].id
+    await slack.click("Alex", "lock", ids.proposal_value(event_id, first))
+    await check(event_id, EventState.DECIDED)
+    async with house.sessionmaker() as db:
+        await calls.mark_done(db, house["Alex"], event_id, now=house.clock())
+    await check(event_id, EventState.DONE)
+    async with house.sessionmaker() as db:
+        lunch = await calls.start_call(db, house["Kim"], Slot.LUNCH, house.clock().date(), now=house.clock())
+        await calls.cancel_call(db, house["Kim"], lunch.id, now=house.clock())
+    await check(lunch.id, EventState.CANCELLED)
+    assert len(seen) == 20
 
 
 # A member inviting, and answering for a guest without Slack ------------------------------------------

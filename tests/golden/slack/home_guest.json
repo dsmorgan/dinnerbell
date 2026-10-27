@@ -11,34 +11,76 @@
     {
       "block_id": "event-7",
       "text": {
-        "text": "*Dinner* · Who's in?\nAre you in? Tap below.",
+        "text": "*Dinner* · Who's in?\nAre you in? Tap below.\n*Coordinator:* Alex",
         "type": "mrkdwn"
       },
       "type": "section"
     },
     {
-      "block_id": "event-actions-7",
+      "block_id": "answer-7",
       "elements": [
         {
-          "action_id": "respond_in",
+          "action_id": "card_in",
           "text": {
             "emoji": true,
             "text": "In",
             "type": "plain_text"
           },
           "type": "button",
-          "value": "7"
+          "value": "7:1"
         },
         {
-          "action_id": "respond_out",
+          "action_id": "card_out",
           "text": {
             "emoji": true,
             "text": "Out",
             "type": "plain_text"
           },
           "type": "button",
-          "value": "7"
+          "value": "7:1"
+        }
+      ],
+      "type": "actions"
+    },
+    {
+      "block_id": "roles-7",
+      "elements": [
+        {
+          "action_id": "card_offer_cook",
+          "text": {
+            "emoji": true,
+            "text": "I can cook",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "7:1"
         },
+        {
+          "action_id": "card_offer_pickup",
+          "text": {
+            "emoji": true,
+            "text": "I can pick up",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "7:1"
+        },
+        {
+          "action_id": "card_offer_order",
+          "text": {
+            "emoji": true,
+            "text": "I'll order",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "7:1"
+        }
+      ],
+      "type": "actions"
+    },
+    {
+      "block_id": "event-actions-7",
+      "elements": [
         {
           "action_id": "link_event",
           "text": {

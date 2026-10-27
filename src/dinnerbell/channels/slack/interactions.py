@@ -31,6 +31,7 @@ import re
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
 from dataclasses import dataclass, replace
 from datetime import date, timedelta
+from enum import Enum
 from typing import Any
 
 from slack_bolt.async_app import AsyncApp
@@ -192,9 +193,15 @@ class Reply:
     notice: str
 
 
-Done = str | Message | Reply | None
+class Published(Enum):
+    """An action that published Home itself, inside its card lock, so ``_run`` doesn't again."""
+
+    HOME = "home"
+
+
+Done = str | Message | Reply | Published | None
 """What an action replies: a line of text, a message with a channel link or buttons (never
-from Home), a ``Reply`` for both places, or nothing."""
+from Home), a ``Reply`` for both places, ``Published.HOME``, or nothing."""
 
 
 @dataclass(slots=True)
@@ -513,7 +520,13 @@ class Interactions:
                 today = await event_views.today_view(db, member, now=self.clock(), any_time=self.any_time)
                 awaiting = await feedback.awaiting(db, member, now=self.clock())
             view = home_view(
-                today, self.links, notice, label=self.instance_label, awaiting=awaiting, guest=member.is_guest
+                today,
+                self.links,
+                notice,
+                label=self.instance_label,
+                awaiting=awaiting,
+                guest=member.is_guest,
+                member_id=member.id,
             )
         await self.api.publish_home(user_id, with_version_footer(view, self.version, self.instance_label))
 
@@ -522,6 +535,8 @@ class Interactions:
         notice: str | None = None
         try:
             done = await work()
+            if done is Published.HOME:
+                return
             if isinstance(done, Reply):
                 done = done.notice if source.home else done.message
             if isinstance(done, Message):
@@ -542,12 +557,17 @@ class Interactions:
             log.exception("slack action failed", extra={"member_id": member.id})
             notice = BROKEN
         if source.home:
-            try:
-                await self.publish_home(source.user_id, member, notice)
-            except Exception:
-                log.exception("slack home publish failed", extra={"member_id": member.id})
+            await self._republish_home(source, member, notice)
         elif notice:
             await self.tell(source, notice, member=member)
+
+    async def _republish_home(self, source: Source, member: Member, notice: str | None) -> None:
+        """Home after a tap there, with ``notice`` at the top. A failure is logged, not raised:
+        the tap itself is done."""
+        try:
+            await self.publish_home(source.user_id, member, notice)
+        except Exception:
+            log.exception("slack home publish failed", extra={"member_id": member.id})
 
     # Buttons -----------------------------------------------------------------------------------
 
@@ -776,16 +796,45 @@ class Interactions:
 
     async def _card_tap(
         self, member: Member, source: Source, action_id: str, value: object, trigger: object, tap: Tap
-    ) -> str | None:
-        """A button on a Your answer card or a reminder: act on the run it names, then show the
-        person where they stand on that same message. A card or reminder for a call that has
-        moved on says so instead of acting on what came after."""
+    ) -> str | Published | None:
+        """A button on a Your answer card, a reminder, or App Home's call card: act on the run it
+        names, then show the person where they stand on that same surface. A card or reminder
+        for a call that has moved on says so instead of acting on what came after. Home is
+        published inside the lock too, so two quick taps there land in order."""
         event_id, run = ids.parse_card(value)
         in_dm = source.channel_id is not None and not self._on_call_message(source)
-        if source.home or (not in_dm and not tap.ephemeral):
-            raise ids.BadValue("card buttons are drawn only on cards and reminders")
+        if not source.home and not in_dm and not tap.ephemeral:
+            raise ids.BadValue("card buttons are drawn only on cards, reminders, and Home")
         async with self._card_lock(source.user_id, event_id):
+            if source.home:
+                notice = await self._home_card_tap(member, source, action_id, event_id, run, trigger)
+                await self._republish_home(source, member, notice)
+                return Published.HOME
             return await self._card_tap_locked(member, source, action_id, event_id, run, trigger, tap, in_dm=in_dm)
+
+    async def _home_card_tap(
+        self, member: Member, source: Source, action_id: str, event_id: int, run: int, trigger: object
+    ) -> str | None:
+        """A card button on App Home (#84): the same service call as on the card, for the run
+        Home was drawn for. Returns the line Home shows above the new selection: what changed,
+        or why nothing did, such as the call having moved on. A refusal is logged once, here,
+        as on the card (#75)."""
+        refusal: Exception | None = None
+        async with self.sessionmaker() as db:
+            try:
+                if action_id == ids.CARD_DETAILS:
+                    return await self._card_details(db, member, source, event_id, run, trigger)
+                await self._card_change(db, member, action_id, event_id, run)
+            except SHOWN_ERRORS as exc:
+                refusal = exc
+            except IllegalTransition as exc:
+                refusal = friendly(exc)
+            view = await event_views.event_view(db, member, event_id, now=self.clock())
+        if refusal is not None:
+            moved_on = view.event.run != run or view.event.state is not EventState.COLLECTING
+            _refused(refusal, str(refusal), member, event_id, action_id, moved_on=moved_on)
+            return str(refusal)
+        return home_done(action_id, view.event.slot.value)
 
     async def _card_tap_locked(
         self,
@@ -838,13 +887,15 @@ class Interactions:
     async def _card_details(
         self, db: AsyncSession, member: Member, source: Source, event_id: int, run: int, trigger: object
     ) -> str | None:
-        """Details from a card: the modal names the card's run, which saving checks again."""
+        """Details from a card or Home: the modal names the run it was drawn for, which saving
+        checks again."""
         if not isinstance(trigger, str) or not trigger:
             raise ids.BadValue("no trigger")
         view = await event_views.event_view(db, member, event_id, now=self.clock())
         check_run(view.event, run)
         check_can_respond(view.event, member)
-        await self.api.open_view(trigger, details_modal(view, ids.ViewOrigin(event_id, source.channel_id, run=run)))
+        origin = ids.ViewOrigin(event_id, source.channel_id, home=source.home, run=run)
+        await self.api.open_view(trigger, details_modal(view, origin))
         return None
 
     async def _update_reminder(
@@ -1035,15 +1086,21 @@ class Interactions:
     # Guests (#38) ------------------------------------------------------------------------------
 
     async def _open_invite(self, member: Member, source: Source, value: object, trigger: object) -> str | None:
-        """**Invite a guest** on a member's card: the modal names the run, which inviting checks."""
+        """**Invite a guest** on a member's card or Home: the modal names the run, which inviting
+        checks. A refusal is logged once with the call and the action, as a card tap's is."""
         event_id, run = ids.parse_card(value)
         if not isinstance(trigger, str) or not trigger:
             raise ids.BadValue("no trigger")
         async with self.sessionmaker() as db:
             view = await event_views.event_view(db, member, event_id, now=self.clock())
-            check_run(view.event, run)
-            if not view.can.invite:
-                raise EventRuleViolation("Invite guests while answers are open.", code="responses_closed")
+            try:
+                check_run(view.event, run)
+                if not view.can.invite:
+                    raise EventRuleViolation("Invite guests while answers are open.", code="responses_closed")
+            except EventRuleViolation as exc:
+                moved_on = view.event.run != run or view.event.state is not EventState.COLLECTING
+                _refused(exc, str(exc), member, event_id, ids.INVITE_GUEST, moved_on=moved_on)
+                return str(exc)
             saved = await guests.saved_guests(db, member)
         origin = ids.ViewOrigin(event_id, source.channel_id, home=source.home, run=run)
         await self.api.open_view(trigger, invite_modal(view, saved, origin))
@@ -1537,6 +1594,17 @@ def parse_cancel_args(
         rest.pop(0)
     reason = " ".join(rest).replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
     return slot, day, reason or None
+
+
+def home_done(action_id: str, slot: str) -> str:
+    """The line Home shows after a card button there worked (#84), as its older buttons did."""
+    if action_id in ids.CARD_RESPOND:
+        return CONFIRM[ids.ACTION_FOR_STATUS[ids.CARD_RESPOND[action_id]]].format(slot=slot)
+    if action_id in ids.CARD_OFFER:
+        return OFFERED[ids.CARD_OFFER[action_id]]
+    if action_id in ids.CARD_WITHDRAW:
+        return WITHDRAWN[ids.CARD_WITHDRAW[action_id]]
+    return CONFIRM[ids.COORDINATE].format(slot=slot)
 
 
 def _get(data: object, *path: str) -> object:

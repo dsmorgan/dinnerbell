@@ -403,6 +403,46 @@ def test_cards_show_only_the_persons_own_choices_and_escape_what_people_typed() 
     assert "style" not in json.dumps(card["blocks"])  # nothing chosen, nothing marked
 
 
+HOME_ONLY = {"link_event", "mark_done", "close_window", "cancel_call"}
+"""Buttons Home's call card has that the Your answer card doesn't: its own, not answers."""
+
+
+@pytest.mark.parametrize("guest", [False, True], ids=["member", "guest"])
+@pytest.mark.parametrize("coordinator", [samples.ALEX, None], ids=["coordinated", "no coordinator"])
+@pytest.mark.parametrize("mine", [samples.SAM_RESPONSE, None], ids=["answered", "not answered"])
+def test_home_and_the_card_offer_the_same_answer_actions(
+    guest: bool, coordinator: note.PersonInfo | None, mine: note.Response | None
+) -> None:
+    """Home's call card and the Your answer card draw their answers from one builder (#84): the
+    same buttons, IDs, values, and selected state (#42), in the same rows, for a member and a
+    guest."""
+    from dinnerbell.channels.slack.messages import your_answer
+    from dinnerbell.services.event_views import Permissions
+
+    info = replace(samples.COLLECTING_VIEW.info, coordinator=coordinator)
+    view = replace(samples.COLLECTING_VIEW, info=info, mine=mine, can=Permissions(respond=True, invite=not guest))
+    home = home_view(TodayView(samples.DAY, [view], tuple(Slot)), HomeLinks(samples.BASE_URL), guest=guest)
+    check_view(home)
+    home_rows = {b["block_id"]: b["elements"] for b in home["blocks"] if b["type"] == "actions"}
+    card = your_answer(info, mine, samples.SAM.id, CTX, run=1, guest=guest, can_invite=not guest).payload()
+    check_message(card)
+    card_rows = {b["block_id"]: b["elements"] for b in card["blocks"] if b["type"] == "actions"}
+    # Row for row: In, Maybe, Out; the roles; then Details and Invite a guest before each's own.
+    assert home_rows["answer-7"] == card_rows["participation"]
+    assert home_rows["roles-7"] == card_rows["roles"]
+    mine_too = [e for e in home_rows["event-actions-7"] if e["action_id"] not in HOME_ONLY]
+    assert mine_too == [e for e in card_rows["more"] if "url" not in e]
+    on_home = [*home_rows["answer-7"], *home_rows["roles-7"], *mine_too]
+    ids_shown = [e["action_id"] for e in on_home]
+    answers = ["card_in", "card_out"] if guest else ["card_in", "card_maybe", "card_out"]
+    assert ids_shown[: len(answers)] == answers  # first, then the roles
+    assert ids_shown[len(answers)] == ("card_withdraw_cook" if mine else "card_offer_cook")
+    assert ("card_coordinate" in ids_shown) is (coordinator is None)
+    assert ("card_details" in ids_shown) is ("invite_guest" in ids_shown) is (not guest)
+    chosen = [e["text"]["text"] for e in on_home if e.get("style") == "primary"]
+    assert chosen == (["✓ In", "✓ I can cook"] if mine else [])
+
+
 def test_messages_offering_a_link_show_the_slack_account_and_its_email() -> None:
     """A display name proves nothing (#38): wherever an admin might link a Slack account, the
     message shows the account itself and the email Slack shares, and never offers an admin."""
@@ -425,11 +465,16 @@ def _ids(blocks: list[dict[str, object]]) -> list[str]:
 
 
 def _no_orphans(blocks: list[dict[str, object]]) -> None:
-    """Every card on Home keeps its buttons: an ``event-N`` section has its ``event-actions-N``."""
+    """Every card on Home keeps its buttons: an ``event-N`` section has its ``event-actions-N``,
+    and a call's answer rows (``answer-N``, ``roles-N``) come whole, between the two (#84)."""
     shown = _ids(blocks)
     for block_id in shown:
         if block_id.startswith("event-") and not block_id.startswith("event-actions-"):
             assert block_id.replace("event-", "event-actions-") in shown, block_id
+        if block_id.startswith("answer-"):
+            n = block_id.removeprefix("answer-")
+            at = shown.index(block_id)
+            assert shown[at - 1 : at + 3] == [f"event-{n}", block_id, f"roles-{n}", f"event-actions-{n}"], block_id
 
 
 def test_home_puts_todays_call_before_fifty_left_over_ones() -> None:
@@ -495,7 +540,7 @@ def test_a_guests_home_shows_todays_invitation_before_left_over_ones() -> None:
     assert blocks[-1]["elements"][0]["text"].startswith("Dinnerbell 0.5.0")
     assert "Your dietary needs" in json.dumps(blocks[-2])
     shown = _ids(blocks)
-    assert shown[1:3] == ["event-7", "event-actions-7"] and "start" not in shown
+    assert shown[1:5] == ["event-7", "answer-7", "roles-7", "event-actions-7"] and "start" not in shown
     assert shown.index("event-actions-7") < shown.index("event-201")
     text = json.dumps(blocks, ensure_ascii=False)
     assert (
@@ -554,8 +599,9 @@ SWEEP = [(False, notice, awaiting) for notice in (None, "Hi") for awaiting in (0
 @pytest.mark.parametrize(("guest", "notice", "awaiting"), SWEEP)
 def test_home_keeps_its_footer_links_and_buttons_at_every_size(guest: bool, notice: str | None, awaiting: int) -> None:
     """Pins Home's block budget (#51) around the point where cards stop fitting. The notice and
-    the awaiting meals change the room's parity (every card is two blocks), so a budget off by
-    one block shows up as a view past 100 blocks or one that loses its footer."""
+    the awaiting meals change the room's parity (every card is an even number of blocks: two,
+    or four for a call taking answers, #84), so a budget off by one block shows up as a view
+    past 100 blocks or one that loses its footer."""
     from dinnerbell.domain.meals import Slot
 
     for todays, coming, left in itertools.product(range(36, 51), (0,) if guest else (0, 1, 2, 3), (0, 1, 4)):

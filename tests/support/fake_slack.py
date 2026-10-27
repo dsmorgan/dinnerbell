@@ -125,6 +125,9 @@ class FakeSlack(AsyncWebClient):
                 args.update(req_args[part])
         args.pop("token", None)
         self.calls.append(Call(method, args))
+        gate = self.gates.pop(method, None)
+        if gate is not None:
+            await gate.wait()
         await asyncio.sleep(0)
         queued = self.failures.get(method)
         if queued:
