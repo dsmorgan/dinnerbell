@@ -225,7 +225,8 @@ async def ensure_backfilled(db: AsyncSession, household_id: int, *, now: datetim
     """Count the meals already in the log on the first start after the upgrade, and on every
     start after it count any done call that has no counts, which only a failure while it was
     finished can leave (``lifecycle.finish`` keeps counting from blocking Mark done). Returns
-    whether it counted anything or made the first run.
+    whether it made the first run or counted anything. A done call with nothing to credit is
+    looked at again on each start, which costs one indexed query, and counts for nothing.
 
     The badges these counts reach are ``skipped``, never pending, so an upgrade doesn't flood the
     channel and a missed one isn't announced late. The first run counts calls and feedback only: a
@@ -245,7 +246,9 @@ async def ensure_backfilled(db: AsyncSession, household_id: int, *, now: datetim
     for start in range(0, len(events), BATCH):
         async with write_transaction(db):
             for event in events[start : start + BATCH]:
-                counted += len(await _count_event(db, event, members, items, history, now))
+                # Under the lock: a call discarded since the list was read is skipped, not counted.
+                if await EventRepository(db).get(household_id, event.id) is not None:
+                    counted += len(await _count_event(db, event, members, items, history, now))
             await db.commit()
     awards: list[Award] = []
     async with write_transaction(db):
@@ -267,4 +270,4 @@ async def ensure_backfilled(db: AsyncSession, household_id: int, *, now: datetim
         "contributions backfilled",
         extra={"events": len(events), "credits": counted, "badges": len(awards), "first": first},
     )
-    return True
+    return first or counted > 0

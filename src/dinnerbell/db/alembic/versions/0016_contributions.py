@@ -70,6 +70,7 @@ def upgrade() -> None:
         sa.UniqueConstraint("member_id", "kind", "meal_id", name=op.f("uq_contribution_member_id_kind_meal_id")),
     )
     op.create_index("ix_contribution_household_day", "contribution", ["household_id", "day"], unique=False)
+    op.create_index("ix_contribution_event", "contribution", ["event_id"], unique=False)
     op.create_index(op.f("ix_contribution_member_id"), "contribution", ["member_id"], unique=False)
 
     op.create_table(

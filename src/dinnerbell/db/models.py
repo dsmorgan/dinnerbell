@@ -550,6 +550,7 @@ class ContributionRow(Base):
         UniqueConstraint("member_id", "kind", "meal_id"),
         UniqueConstraint("kind", "item_id"),
         Index("ix_contribution_household_day", "household_id", "day"),
+        Index("ix_contribution_event", "event_id"),
         CheckConstraint(
             "kind IN ('cooked', 'picked_up', 'ordered', 'coordinated', 'participated', 'responded_on_time', "
             "'suggested', 'added_item', 'explored', 'hosted', 'gave_feedback')",

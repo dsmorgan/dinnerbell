@@ -21,7 +21,7 @@ from sqlalchemy import func, select, text
 
 from dinnerbell.config import Settings
 from dinnerbell.db.contributions import BadgeRepository, ContributionRepository
-from dinnerbell.db.events import ResponseRepository
+from dinnerbell.db.events import EventRepository, ResponseRepository
 from dinnerbell.db.models import (
     AssignmentRow,
     BadgeAwardRow,
@@ -683,10 +683,8 @@ async def test_a_failure_while_counting_never_blocks_mark_done_and_the_next_star
         assert await contributions.ensure_backfilled(db, house.household.id, now=house.clock()) is False
 
 
-async def test_a_long_history_backfills_in_linear_time_and_batches(house: House) -> None:
-    """2,000 done dinners, each with a meal, a cook, and two answers, are counted with a handful of
-    queries per call, not one that rereads the whole log, and the write lock is taken per batch."""
-    n = 2_000
+async def make_history(house: House, n: int) -> None:
+    """``n`` done dinners on as many days, each with a meal, a pickup, and one answer In."""
     first = date(2020, 1, 1)
     sam, alex = house["Sam"].id, house["Alex"].id
     item_ids = [i.id for i in house.items.values()]
@@ -717,6 +715,24 @@ async def test_a_long_history_backfills_in_linear_time_and_batches(house: House)
                 )
             )  # fmt: skip
         await db.commit()
+
+
+async def counted_events(house: House) -> int:
+    async with house.sessionmaker() as db:
+        return int(await db.scalar(select(func.count(func.distinct(ContributionRow.event_id)))) or 0)
+
+
+async def marker(house: House) -> bool:
+    async with house.sessionmaker() as db:
+        stored = await db.scalar(select(HouseholdRow.settings))
+    return contributions.BACKFILLED_KEY in (stored or {})
+
+
+async def test_a_long_history_backfills_in_linear_time_and_batches(house: House) -> None:
+    """2,000 done dinners, each with a meal, a cook, and two answers, are counted with a handful of
+    queries per call, not one that rereads the whole log, and the write lock is taken per batch."""
+    n = 2_000
+    await make_history(house, n)
     statements: list[str] = []
 
     def count(conn: Any, cursor: Any, statement: str, *rest: Any) -> None:
@@ -737,3 +753,88 @@ async def test_a_long_history_backfills_in_linear_time_and_batches(house: House)
     assert not [s for s in statements if "FROM meal_log" in s and "JOIN" in s][1:]  # the log is read once
     assert sum("BEGIN IMMEDIATE" in s for s in statements) <= n // contributions.BATCH + 2  # a lock per batch
     assert elapsed < 30
+
+
+async def test_a_log_line_does_not_outlive_counting_that_was_rolled_back(
+    house: House, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The failure comes after the lines were noted, so only rewinding them keeps the log honest."""
+    real = contributions.record_done
+
+    async def noted_then_failed(*args: Any, **kwargs: Any) -> Any:
+        await real(*args, **kwargs)
+        raise RuntimeError("boom")
+
+    caplog.set_level(logging.INFO)
+    monkeypatch.setattr(contributions, "record_done", noted_then_failed)
+    event_id = await dinner(house)
+    assert (await house.event(event_id)).state is EventState.DONE and await rows(house) == 0
+    told = {r.getMessage() for r in caplog.records}
+    assert "counting contributions failed" in told and "done" in told
+    assert not told & {"contributions_recorded", "badge_earned"}
+
+
+async def test_calls_with_nothing_to_credit_settle_after_the_first_start(house: House) -> None:
+    async with house.sessionmaker() as db:
+        db.add(
+            EventRow(
+                household_id=house.household.id, kind="call", slot="dinner", date=DAY, state="done", run=1, version=1,
+                opens_at=MORNING, respond_deadline=MORNING, reminder_minutes=15, vote_minutes=45,
+                created_at=MORNING, updated_at=MORNING,
+            )
+        )  # fmt: skip
+        await db.commit()
+    seen = []
+    for _ in range(3):
+        async with house.sessionmaker() as db:
+            seen.append(await contributions.ensure_backfilled(db, house.household.id, now=house.clock()))
+    assert seen == [True, False, False]
+
+
+async def test_a_backfill_killed_halfway_resumes_and_sets_its_marker_last(
+    house: House, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await make_history(house, 30)
+    monkeypatch.setattr(contributions, "BATCH", 2)
+    real = contributions._count_event
+    calls = 0
+
+    async def killed(*args: Any, **kwargs: Any) -> Any:
+        nonlocal calls
+        calls += 1
+        if calls == 4:
+            raise KeyboardInterrupt("killed")
+        return await real(*args, **kwargs)
+
+    monkeypatch.setattr(contributions, "_count_event", killed)
+    async with house.sessionmaker() as db:
+        with pytest.raises(KeyboardInterrupt):
+            await contributions.ensure_backfilled(db, house.household.id, now=house.clock())
+    assert not await marker(house)
+    assert await counted_events(house) == 2  # the first batch committed; the second went back
+
+    monkeypatch.setattr(contributions, "_count_event", real)
+    async with house.sessionmaker() as db:
+        assert await contributions.ensure_backfilled(db, house.household.id, now=house.clock()) is True
+    assert await marker(house) and await counted_events(house) == 30
+    assert (await counts(house, "Alex"))[Kind.PICKED_UP] == 30
+    assert {a[3] for a in await awards(house)} == {Announcement.SKIPPED}
+
+
+async def test_a_call_discarded_while_the_backfill_waits_is_skipped(
+    house: House, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await make_history(house, 5)
+    real = EventRepository.done
+
+    async def then_discarded(self: EventRepository, household_id: int, **kw: Any) -> Any:
+        found = await real(self, household_id, **kw)
+        async with house.sessionmaker() as other:  # a test instance's discard, between the list and the batch
+            await EventRepository(other).discard(household_id, found[2].id)
+            await other.commit()
+        return found
+
+    monkeypatch.setattr(EventRepository, "done", then_discarded)
+    async with house.sessionmaker() as db:
+        assert await contributions.ensure_backfilled(db, house.household.id, now=house.clock()) is True
+    assert await counted_events(house) == 4 and await marker(house)

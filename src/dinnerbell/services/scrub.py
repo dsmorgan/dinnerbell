@@ -21,6 +21,10 @@ Run it with test stopped, after restoring the backup. In one transaction it:
   hand-set Slack links of guests (``GUEST_SLACK_AUDIT``). Their
   invitations stay with the calls' history.
 
+The other contribution counts and badges stay on a test copy, because they derive from what the
+scrub keeps (names, calls, and assignments); ``gave_feedback`` and its badge go because feedback is
+deleted, so nothing could derive them again.
+
 It never touches the meal log, the catalog, preferences, or the history of past events. Running
 it again changes nothing but writes another audit row.
 """
