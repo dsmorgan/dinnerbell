@@ -45,6 +45,7 @@ from dinnerbell.domain.events import (
     check_window_change,
     choose_winner,
     clean_cancel_note,
+    counted_votes,
     head_count,
     meal_time,
     needs_reminder,
@@ -455,7 +456,7 @@ async def _close_responses(db: AsyncSession, event: Event, now: datetime) -> Non
     voting = replace(event, state=transition(event.state, EventState.VOTING), vote_deadline=vote_deadline)
     voting = await EventRepository(db).save(voting, now)
     ctx = await load(db, voting)
-    await publish(db, ctx, note.ProposalsReady(cc.event_info(ctx), cc.proposals(ctx), ctx.head_count), now=now)
+    await publish(db, ctx, cc.proposals_ready(ctx), now=now)
     await publish(db, ctx, cc.call_updated(ctx), now=now)
     payload = {"proposals": [{"item_id": r.item_id, "mode": r.mode.value, "score": r.score} for r in ranked]}
     await audit(db, event.household_id, None, "event.voting", _target(event), payload, now)
@@ -635,8 +636,9 @@ async def decide(
             raise problem
         winner = locked
     else:
+        counted = counted_votes(ctx.votes, ctx.responses)  # a late joiner's only if the coordinator says (#76)
         tallies = [
-            ProposalTally(p.id, p.rank, misfit(ctx, checked[p.id], group) is None, frozenset(ctx.votes.get(p.id, [])))
+            ProposalTally(p.id, p.rank, misfit(ctx, checked[p.id], group) is None, counted.get(p.id, frozenset()))
             for p in ctx.proposals
         ]
         admins = frozenset(m.id for m in ctx.active_members if m.is_admin)

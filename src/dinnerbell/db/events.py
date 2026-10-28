@@ -349,6 +349,8 @@ def _response(row: ResponseRow) -> Response:
         maybe_at_deadline=row.maybe_at_deadline,
         responded_at=row.responded_at,
         updated_at=row.updated_at,
+        late=row.late,
+        vote_counts=row.vote_counts,
     )
 
 
@@ -392,11 +394,36 @@ class ResponseRepository:
         row.offers_order = RoleOffer.ORDER in response.offers
         row.note = response.note
         row.maybe_at_deadline = response.maybe_at_deadline
+        row.responded_at = response.responded_at or row.responded_at
+        row.late = response.late
+        row.vote_counts = response.vote_counts
         row.updated_at = now
         await self._session.flush()
 
     async def restore_maybes(self, household_id: int, event_id: int, now: datetime) -> None:
-        """For a re-run: maybes the deadline turned out are maybes again."""
+        """For a re-run: maybes the deadline turned out are maybes again, and whoever joined
+        late answers like anyone (#76): a late joiner taking part is in, one the coordinator
+        switched off is out, and a maybe who joined late is in rather than a maybe again."""
+        where = (ResponseRow.household_id == household_id, ResponseRow.event_id == event_id)
+        late = (*where, ResponseRow.late.is_(True))
+        await self._session.execute(
+            update(ResponseRow)
+            .where(*late, ResponseRow.status == Status.IN.value)
+            .values(maybe_at_deadline=False)
+            .execution_options(synchronize_session=False)
+        )
+        await self._session.execute(
+            update(ResponseRow)
+            .where(*late, ResponseRow.status == Status.OUT.value)
+            .values(offers_cook=False, offers_pickup=False, offers_order=False)
+            .execution_options(synchronize_session=False)
+        )
+        await self._session.execute(
+            update(ResponseRow)
+            .where(*late)
+            .values(late=False, vote_counts=False)
+            .execution_options(synchronize_session=False)
+        )
         await self._session.execute(
             update(ResponseRow)
             .where(

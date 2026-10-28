@@ -56,6 +56,8 @@ from dinnerbell.channels.slack.messages import (
     CardGuest,
     Message,
     RenderContext,
+    card_live,
+    join_late_vote_prompt,
     labelled,
     posted_reply,
     reminder_message,
@@ -93,6 +95,7 @@ from dinnerbell.domain.events import (
     EventState,
     IllegalTransition,
     InvalidResponse,
+    JoinLateFirst,
     RoleOffer,
     Window,
     check_can_cancel,
@@ -156,6 +159,18 @@ WITHDRAWN = {
 CALLED_OFF = "You called off {slot} for {day}."
 CLOSED = {Window.RESPOND: "Responses are closed for {slot}.", Window.VOTE: "Voting is closed for {slot}."}
 VOTED = "Vote counted. Tap Vote again to take it back."
+JOINED_LATE = "You're in for {slot}, joining late. Your vote shows, but counts only if the coordinator says so."
+ALREADY_IN = "You're in for {slot} already."
+LATE_VOTED = (
+    "You're in for {slot}, joining late, and your vote is in. It counts only if the coordinator says so. "
+    "Tap Vote again to take it back."
+)
+LATE_SWITCHED = {
+    (ids.LateSwitch.TAKING_PART, True): "{name} is taking part again.",
+    (ids.LateSwitch.TAKING_PART, False): "{name} is out for this call now, and they've been told.",
+    (ids.LateSwitch.VOTE_COUNTS, True): "{name}'s vote counts now.",
+    (ids.LateSwitch.VOTE_COUNTS, False): "{name}'s vote doesn't count now.",
+}
 UNVOTED = "Vote taken back."
 FEEDBACK_SAVED = "Thanks for the feedback! Only you see your ratings."
 FEEDBACK_NONE = "Got it: no feedback from you on this meal."
@@ -592,7 +607,7 @@ class Interactions:
         if member is None:
             return
         action_id, value = acts[0].get("action_id"), acts[0].get("value")
-        if action_id == ids.CALL_MENU:  # an overflow menu sends the option it picked, not a value
+        if action_id in {ids.CALL_MENU, ids.LATE_MENU}:  # an overflow menu sends the option it picked
             value = _get(acts[0], "selected_option", "value")
         trigger = body.get("trigger_id")
         container = body.get("container") or {}
@@ -636,6 +651,10 @@ class Interactions:
             return await self._open_end(member, source, choice, event_id, run, trigger)
         if action_id == ids.CALL_COORDINATE:
             return await self._coordinate(member, source, value, tap)
+        if action_id == ids.JOIN_LATE:
+            return await self._join_late(member, source, value, tap)
+        if action_id == ids.LATE_MENU:
+            return await self._switch_late(member, value)
         if action_id == ids.POST_NOW:
             event_id, run = ids.parse_card(value)
             return await self._post_now(member, event_id, run)
@@ -670,8 +689,18 @@ class Interactions:
                 return await self._confirm(db, member, source, event_id, action_id)
             if action_id == ids.VOTE:
                 event_id, proposal_id = ids.parse_proposal(value)
-                voted = await calls.toggle_vote(db, member, event_id, proposal_id, now=now)
+                try:
+                    voted = await calls.toggle_vote(db, member, event_id, proposal_id, now=now)
+                except JoinLateFirst as exc:  # they missed the answers: ask first (#76)
+                    prompt = join_late_vote_prompt(event_id, proposal_id)
+                    activity.refused(exc, prompt.text, member, event_id=event_id, action=action_id)
+                    return prompt
                 return VOTED if voted else UNVOTED
+            if action_id == ids.JOIN_LATE_VOTE:  # they said yes to joining late (#76)
+                event_id, proposal_id = ids.parse_proposal(value)
+                await calls.vote(db, member, event_id, proposal_id, join_late=True, now=now)
+                view = await event_views.event_view(db, member, event_id, now=now)
+                return LATE_VOTED.format(slot=view.event.slot.value)
             if action_id == ids.LOCK:
                 event_id, proposal_id = ids.parse_proposal(value)
                 await calls.lock(db, member, event_id, proposal_id, now=now)
@@ -700,6 +729,41 @@ class Interactions:
             return None
         view = await event_views.event_view(db, member, event_id, now=self.clock())
         return CONFIRM[action_id].format(slot=view.event.slot.value)
+
+    # Joining late (#76) ------------------------------------------------------------------------
+
+    async def _join_late(self, member: Member, source: Source, value: object, tap: Tap) -> str | None:
+        """**I'm in (late)** for the run it was drawn for. In the channel, from the call message
+        or a card, the reply is their Your answer card, where they can offer a role; on Home and
+        anywhere else, a line."""
+        event_id, run = ids.parse_card(value)
+        async with self.sessionmaker() as db, self._card_lock(source.user_id, event_id):
+            joined = await calls.join_late(db, member, event_id, run=run, now=self.clock())
+            view = await event_views.event_view(db, member, event_id, now=self.clock())
+            if self._on_call_message(source):
+                await self._send_card(source, self._card(view, member, run=run), member, tap)
+                return None
+        return (JOINED_LATE if joined else ALREADY_IN).format(slot=view.event.slot.value)
+
+    async def _switch_late(self, member: Member, value: object) -> str:
+        """A pick from the ⋯ beside a late joiner on the proposals message: the coordinator's
+        switches. The service checks who picked it, and the run the message showed."""
+        switch, on, event_id, run, member_id = ids.parse_late(value)
+        part = switch is ids.LateSwitch.TAKING_PART
+        async with self.sessionmaker() as db:
+            await calls.switch_late_joiner(
+                db,
+                member,
+                event_id,
+                member_id,
+                taking_part=on if part else None,
+                vote_counts=None if part else on,
+                run=run,
+                now=self.clock(),
+            )
+            view = await event_views.event_view(db, member, event_id, now=self.clock())
+        name = next((late.member.name for late in view.late if late.member.id == member_id), "They")
+        return LATE_SWITCHED[(switch, on)].format(name=name)
 
     # Your answer cards and the reminder (spec section 10) --------------------------------------
 
@@ -833,7 +897,7 @@ class Interactions:
                 refusal = friendly(exc)
             view = await event_views.event_view(db, member, event_id, now=self.clock())
         if refusal is not None:
-            moved_on = view.event.run != run or view.event.state is not EventState.COLLECTING
+            moved_on = view.event.run != run or not card_live(view.info, view.mine)
             _refused(refusal, str(refusal), member, event_id, action_id, moved_on=moved_on)
             return str(refusal)
         return home_done(action_id, view.event.slot.value)
@@ -862,7 +926,7 @@ class Interactions:
             except IllegalTransition as exc:
                 notice, refusal = str(friendly(exc)), friendly(exc)
             view = await event_views.event_view(db, member, event_id, now=self.clock())
-        moved_on = view.event.run != run or view.event.state is not EventState.COLLECTING
+        moved_on = view.event.run != run or not card_live(view.info, view.mine)
         if refusal is not None and notice is not None:
             _refused(refusal, notice, member, event_id, action_id, moved_on=moved_on)
         if in_dm:
@@ -936,7 +1000,9 @@ class Interactions:
         else:
             if not view.can.propose:
                 return "You can add proposals only while voting is open."
-            await self.api.open_view(trigger, proposal_modal(view, origin))
+            # Someone who isn't in is asked to join late on the modal, which names the run (#76).
+            late = replace(origin, run=view.event.run) if view.can.join_late else origin
+            await self.api.open_view(trigger, proposal_modal(view, late))
         return None
 
     # Starting a call and posting it now (issue #59) --------------------------------------------
@@ -1193,10 +1259,8 @@ class Interactions:
             origin = ids.ViewOrigin.decode(view.get("private_metadata"))
             if (origin.window is not None) != (kind == "close"):
                 raise ids.BadValue("bad metadata")  # only Close now's confirmation names a window
-            if (origin.run is None and kind in {"cancel", "close", "feedback"}) or (
-                origin.run is not None and kind == "proposal"
-            ):
-                raise ids.BadValue("bad metadata")  # these name a run, Details from a card may
+            if origin.run is None and kind in {"cancel", "close", "feedback"}:
+                raise ids.BadValue("bad metadata")  # these name a run; Details and a join-late pick may
             form: Any = origin.window if kind == "close" else FORMS[kind](values)
         except FormError as exc:
             await ack(response_action="errors", errors={exc.block_id: str(exc)})
@@ -1236,6 +1300,8 @@ class Interactions:
                     item_id=form.item_id,
                     free_text=form.free_text,
                     cuisine_id=form.cuisine_id,
+                    join_late=origin.run is not None,  # only the modal that asked names a run (#76)
+                    run=origin.run,
                     now=self.clock(),
                 )
                 return None

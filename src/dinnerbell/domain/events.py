@@ -126,9 +126,20 @@ NO_COORDINATOR = "An offer has no coordinator: whoever made it is in charge."
 GUESTS_DONT = "Guests can answer and pitch in, but not that."
 GUEST_NOT_INVITED = "You haven't been invited to this one. Ask a household member to invite you."
 """For a guest at a rule only members may use (#38). ``domain.guests`` has the full matrix."""
-NOT_IN_TO_ADD = "You're not in for this call. Joining late is coming soon. Ask someone who's in to add it."
-"""Only someone who's in can add a pick once voting has started (#74); joining late is #76."""
+JOIN_LATE_PROMPT = "You missed the answers. Join late?"
+"""What a surface asks before a vote or a pick from someone who isn't in joins them late (#76)."""
+NOT_IN_JOIN_LATE = "You missed the answers, so you're not in for this call. Tap I'm in (late) to join, then try again."
+"""Why a vote or a pick from someone who isn't in did nothing, when nobody asked them to join late."""
+TAKEN_OFF = "The coordinator has you out for this one. Ask them if you can take part after all."
+LATE_TOO_LATE = "It's decided already, so it's too late to join. Ask the coordinator, or make an offer."
 ALREADY_A_PICK = "That's already a pick on the call. Vote for it instead."
+
+
+class JoinLateFirst(EventRuleViolation):
+    """Someone who isn't in voted or added a pick while voting, without saying they'd join late
+    (#76). A surface that can ask asks ``JOIN_LATE_PROMPT``, then tries again with ``join_late``."""
+
+    code = "not_in"
 
 
 class StaleRun(EventRuleViolation):
@@ -291,10 +302,20 @@ class Response:
     responded_at: datetime | None = None
     updated_at: datetime | None = None
     """The last change to the response, for the early close (``closes_early``)."""
+    late: bool = False
+    """They joined while voting, after missing the answers (#76). While ``late``, ``status`` says
+    whether they're taking part: in, or out because the coordinator switched them off."""
+    vote_counts: bool = False
+    """The coordinator counts a late joiner's votes like anyone's (``counts_vote``)."""
 
     @property
     def is_in(self) -> bool:
         return self.status is Status.IN
+
+    @property
+    def taken_off(self) -> bool:
+        """A late joiner the coordinator switched off: out for this call, and can't rejoin."""
+        return self.late and self.status is Status.OUT
 
     @property
     def head_count(self) -> int:
@@ -463,8 +484,17 @@ def head_count(responses: Iterable[Response]) -> int:
 
 def veto_participants(responses: Iterable[Response]) -> frozenset[int]:
     """Whose vetoes apply (FR-9, FR-28): members in, and maybes, including maybes the deadline
-    turned out, because they might still turn up."""
-    return frozenset(r.member_id for r in responses if r.status is not Status.OUT or r.maybe_at_deadline)
+    turned out, because they might still turn up. Not someone who joined late (#76): their
+    stances and dietary needs warn about picks instead of removing them (``late_people``),
+    unless they were a maybe at the deadline, whose stances applied on time."""
+    return frozenset(
+        r.member_id for r in responses if r.maybe_at_deadline or (r.status is not Status.OUT and not r.late)
+    )
+
+
+def late_people(responses: Iterable[Response]) -> frozenset[int]:
+    """Late joiners taking part (#76), whose stances and dietary needs only warn."""
+    return frozenset(r.member_id for r in responses if r.late and r.is_in)
 
 
 def needs_reminder(member: Member, response: Response | None) -> bool:
@@ -651,10 +681,10 @@ def check_proposal_room(proposals: Iterable[Proposal], actor: Member) -> None:
 
 
 def check_in_to_add(mine: Response | None) -> None:
-    """Once voting has started, only someone who's in can add a pick: they'll do it (#74), and a
-    new person's vetoes would change what the picks must pass (FR-29)."""
+    """Once voting has started, only someone who's in can add a pick: they'll do it (#74).
+    Someone who isn't joins late first (#76, ``join_late``)."""
     if mine is None or not mine.is_in:
-        raise EventRuleViolation(NOT_IN_TO_ADD, code="not_in")
+        raise JoinLateFirst(NOT_IN_JOIN_LATE)
 
 
 def with_pick_role(current: Response | None, member_id: int, mode: Mode, now: datetime, *, join: bool) -> Response:
@@ -667,6 +697,102 @@ def with_pick_role(current: Response | None, member_id: int, mode: Mode, now: da
         check_in_to_add(current)
     base = with_status(current, member_id, Status.IN, now)
     return replace(base, offers=base.offers | {MODE_OFFER[mode]})
+
+
+# Joining late (#76) -------------------------------------------------------------------------------
+
+
+def check_can_join_late(event: Event, actor: Member, mine: Response | None) -> bool:
+    """Whether ``actor`` may join ``event`` late: a member who's out, or never answered, while
+    it's voting. A maybe the deadline turned out is out. Returns False when they're in already,
+    so there's nothing to do. A guest comes only by invitation, while answers are open (#38),
+    and someone the coordinator switched off stays off. Joining after the decision isn't
+    offered: they ask the coordinator, or make an offer."""
+    if not actor.active:
+        raise EventRuleViolation("Only active members can join a call.", code="inactive")
+    if actor.is_guest:
+        raise EventRuleViolation(GUESTS_DONT, code="guests_dont")
+    if event.is_offer:
+        raise EventRuleViolation(OFFER_JOIN_INSTEAD, code="is_offer")
+    if event.state is EventState.COLLECTING:
+        raise EventRuleViolation("Answers are still open, so just tap In.", code="responses_open")
+    if event.state is EventState.DECIDED:
+        raise EventRuleViolation(LATE_TOO_LATE, code="too_late")
+    if event.state is EventState.SCHEDULED:
+        raise EventRuleViolation("Answers haven't opened yet.", code="not_open")
+    if event.state is not EventState.VOTING:
+        raise EventRuleViolation(CALL_FINISHED, code="call_finished")
+    if mine is not None and mine.taken_off:
+        raise EventRuleViolation(TAKEN_OFF, code="taken_off")
+    return mine is None or not mine.is_in
+
+
+def with_late_join(current: Response | None, member_id: int, now: datetime) -> Response:
+    """``member_id``'s answer once they join late: in, marked late, with their vote not counted
+    until the coordinator says so. Their place in line for a role (``coverage``) starts now, after
+    everyone who answered on time. Anything else on their answer, such as guests, stays."""
+    base = with_status(current, member_id, Status.IN, now)
+    return replace(base, late=True, vote_counts=False, responded_at=now)
+
+
+def with_late_switches(
+    current: Response, *, taking_part: bool | None = None, vote_counts: bool | None = None
+) -> Response:
+    """A late joiner's answer after the coordinator flips a switch. Taking part off makes them
+    out for this call; their role offers stay, unused, so switching it back on restores them."""
+    changed = current
+    if taking_part is not None:
+        changed = replace(changed, status=Status.IN if taking_part else Status.OUT)
+    if vote_counts is not None:
+        changed = replace(changed, vote_counts=vote_counts)
+    return changed
+
+
+LATE_SWITCHERS = "Only the coordinator, or an admin when nobody's coordinating, can change that."
+
+
+def check_can_switch_late(event: Event, actor: Member, coordinator: Member | None) -> ActingAs:
+    """Who flips a late joiner's switches, taking part and vote counts (#76): the coordinator,
+    or an admin when nobody is, or when a guest is, since choosing whose vote counts is picking
+    the plan, not logistics (#38). Only while voting, the only time anyone joins late. Returns
+    the capacity they act in, for the audit row."""
+    if not actor.active:
+        raise EventRuleViolation("Only active members can change that.", code="inactive")
+    if actor.is_guest:
+        raise EventRuleViolation(GUESTS_DONT, code="guests_dont")
+    if event.state is not EventState.VOTING:
+        raise EventRuleViolation("You can change that only while voting is open.", code="voting_closed")
+    if is_coordinator(event, actor):
+        return ActingAs.COORDINATOR
+    if actor.is_admin and (coordinator is None or coordinator.is_guest):
+        return ActingAs.ADMIN
+    raise EventRuleViolation(LATE_SWITCHERS, code="not_coordinator")
+
+
+def check_can_offer_role(event: Event, actor: Member, mine: Response | None, *, invited: bool = False) -> None:
+    """FR-8 and #76: role offers go with answering, while answers are open; a late joiner who's
+    taking part can still offer one while voting, as part of their late answer."""
+    if event.state is EventState.VOTING and mine is not None and mine.late and mine.is_in and actor.active:
+        return
+    check_can_respond(event, actor, invited=invited)
+
+
+def counts_vote(response: Response | None) -> bool:
+    """Whether a vote counts toward the tally, ties, and the decision (FR-16, #76). Votes of
+    people who answered on time always count, as does the vote of a coordinator who isn't in
+    (``response`` None). A late joiner's counts only while they're taking part and the
+    coordinator has turned on "vote counts"; otherwise it's shown, marked as not counting."""
+    return response is None or not response.late or (response.is_in and response.vote_counts)
+
+
+def counted_votes(votes: Mapping[int, Iterable[int]], responses: Iterable[Response]) -> dict[int, frozenset[int]]:
+    """Each proposal's voters whose votes count (``counts_vote``), by proposal ID. The one place
+    the decision, its ties, and every surface's tally get their counts from."""
+    by_member = {r.member_id: r for r in responses}
+    return {
+        proposal_id: frozenset(m for m in voters if counts_vote(by_member.get(m)))
+        for proposal_id, voters in votes.items()
+    }
 
 
 def can_do(item: CatalogItem | None, mode: Mode, member_id: int) -> bool:

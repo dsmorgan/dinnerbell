@@ -1,0 +1,278 @@
+{
+  "blocks": [
+    {
+      "text": {
+        "text": "*Here are the picks for 4 people.* Vote for any you'd enjoy. Voting closes at *5:15 PM*.",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "block_id": "proposal-21",
+      "text": {
+        "text": "*1. Sam's Tacos* · Cook · Mexican\n_Suggested by Sam. New to the household._\n1 vote: <@U01ALEX> · not counted: Lee (late)",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "block_id": "proposal-actions-21",
+      "elements": [
+        {
+          "action_id": "vote",
+          "style": "primary",
+          "text": {
+            "emoji": true,
+            "text": "Vote",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "7:21"
+        },
+        {
+          "action_id": "lock",
+          "confirm": {
+            "confirm": {
+              "emoji": true,
+              "text": "Lock it in",
+              "type": "plain_text"
+            },
+            "deny": {
+              "emoji": true,
+              "text": "Not yet",
+              "type": "plain_text"
+            },
+            "text": {
+              "emoji": true,
+              "text": "Sam's Tacos becomes the plan right away, and voting closes.",
+              "type": "plain_text"
+            },
+            "title": {
+              "emoji": true,
+              "text": "Lock this in?",
+              "type": "plain_text"
+            }
+          },
+          "text": {
+            "emoji": true,
+            "text": "Lock this",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "7:21"
+        }
+      ],
+      "type": "actions"
+    },
+    {
+      "block_id": "proposal-22",
+      "text": {
+        "text": "*2. <https://siam.example/menu|Siam Garden>* · Pickup · Thai\n_Alex can pick up._\n1 vote: <@U02SAM>\n⚠ Someone who joined late needs Vegetarian, and this isn't marked that way.",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "block_id": "proposal-actions-22",
+      "elements": [
+        {
+          "action_id": "vote",
+          "style": "primary",
+          "text": {
+            "emoji": true,
+            "text": "Vote",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "7:22"
+        },
+        {
+          "action_id": "lock",
+          "confirm": {
+            "confirm": {
+              "emoji": true,
+              "text": "Lock it in",
+              "type": "plain_text"
+            },
+            "deny": {
+              "emoji": true,
+              "text": "Not yet",
+              "type": "plain_text"
+            },
+            "text": {
+              "emoji": true,
+              "text": "Siam Garden becomes the plan right away, and voting closes.",
+              "type": "plain_text"
+            },
+            "title": {
+              "emoji": true,
+              "text": "Lock this in?",
+              "type": "plain_text"
+            }
+          },
+          "text": {
+            "emoji": true,
+            "text": "Lock this",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "7:22"
+        }
+      ],
+      "type": "actions"
+    },
+    {
+      "block_id": "proposal-23",
+      "text": {
+        "text": "*3. Taqueria &lt;Lupita&gt; &amp; Co* · Delivery · Mexican\n_Added by Kim._\nNo votes yet",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "block_id": "proposal-actions-23",
+      "elements": [
+        {
+          "action_id": "vote",
+          "style": "primary",
+          "text": {
+            "emoji": true,
+            "text": "Vote",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "7:23"
+        },
+        {
+          "action_id": "lock",
+          "confirm": {
+            "confirm": {
+              "emoji": true,
+              "text": "Lock it in",
+              "type": "plain_text"
+            },
+            "deny": {
+              "emoji": true,
+              "text": "Not yet",
+              "type": "plain_text"
+            },
+            "text": {
+              "emoji": true,
+              "text": "Taqueria <Lupita> & Co becomes the plan right away, and voting closes.",
+              "type": "plain_text"
+            },
+            "title": {
+              "emoji": true,
+              "text": "Lock this in?",
+              "type": "plain_text"
+            }
+          },
+          "text": {
+            "emoji": true,
+            "text": "Lock this",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "7:23"
+        }
+      ],
+      "type": "actions"
+    },
+    {
+      "elements": [
+        {
+          "text": "Joined late: their votes show, but count only if the coordinator says so, with ⋯ beside each name.",
+          "type": "mrkdwn"
+        }
+      ],
+      "type": "context"
+    },
+    {
+      "accessory": {
+        "action_id": "late_menu",
+        "options": [
+          {
+            "text": {
+              "emoji": true,
+              "text": "Put Kim back on",
+              "type": "plain_text"
+            },
+            "value": "part:on:7:1:3"
+          },
+          {
+            "text": {
+              "emoji": true,
+              "text": "Count Kim's vote",
+              "type": "plain_text"
+            },
+            "value": "vote:on:7:1:3"
+          }
+        ],
+        "type": "overflow"
+      },
+      "block_id": "late-3",
+      "text": {
+        "text": "<@U03KIM> joined late · not taking part · vote doesn't count",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "accessory": {
+        "action_id": "late_menu",
+        "options": [
+          {
+            "text": {
+              "emoji": true,
+              "text": "Take Lee off this call",
+              "type": "plain_text"
+            },
+            "value": "part:off:7:1:4"
+          },
+          {
+            "text": {
+              "emoji": true,
+              "text": "Count Lee's vote",
+              "type": "plain_text"
+            },
+            "value": "vote:on:7:1:4"
+          }
+        ],
+        "type": "overflow"
+      },
+      "block_id": "late-4",
+      "text": {
+        "text": "Lee joined late · taking part · vote doesn't count",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "block_id": "more",
+      "elements": [
+        {
+          "action_id": "add_proposal",
+          "text": {
+            "emoji": true,
+            "text": "Add proposal",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "7"
+        },
+        {
+          "action_id": "link_event",
+          "text": {
+            "emoji": true,
+            "text": "View on web",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "url": "https://dinnerbell.example.com/events/7"
+        }
+      ],
+      "type": "actions"
+    }
+  ],
+  "text": "Picks for dinner on Thursday, Oct 22: Sam's Tacos, Siam Garden, Taqueria &lt;Lupita&gt; &amp; Co"
+}

@@ -2,7 +2,7 @@
   "blocks": [
     {
       "text": {
-        "text": "The dinner call for Thursday, Oct 22 closed while you were a maybe, so you're counted out this time. If your plans change, let the coordinator know in the thread.",
+        "text": "The dinner call for Thursday, Oct 22 closed while you were a maybe, so you're counted out this time. If your plans change, tap *I'm in (late)* on the call while the vote is open.",
         "type": "mrkdwn"
       },
       "type": "section"

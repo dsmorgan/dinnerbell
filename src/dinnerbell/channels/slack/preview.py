@@ -175,6 +175,28 @@ OFFER_ROSTER = (
 FULL_OFFER = replace(OFFER, taken=3, dietary_notes=("Vegetarian",))
 FULL_ROSTER = (*OFFER_ROSTER, note.RosterEntry(KIM, Status.IN))
 
+# Joining late (#76): Lee joined late and takes part; Kim joined late, and Alex took her off.
+LATE_ROSTER = (
+    *ROSTER[:2],
+    note.RosterEntry(LEE, Status.IN, offers=(RoleOffer.ORDER,), late=True),
+    note.RosterEntry(KIM, Status.OUT, late=True),
+)
+LATE_JOINERS = (note.LateJoinerInfo(KIM, taking_part=False), note.LateJoinerInfo(LEE))
+LATE_PROPOSALS = (
+    replace(PROPOSALS[0], voters=(ALEX, LEE), uncounted=(LEE.id,)),
+    replace(
+        PROPOSALS[1],
+        voters=(SAM,),
+        warnings=("⚠ Someone who joined late needs Vegetarian, and this isn't marked that way.",),
+    ),
+    PROPOSALS[2],
+)
+LATE_DECISION = replace(
+    DECISION,
+    head_count=4,
+    participants=(*DECISION.participants, note.ParticipantInfo(LEE, late=True)),
+)
+
 DINNER_SCHEDULE = note.SlotScheduleInfo(
     enabled=True,
     call_time=time(15, 0),
@@ -294,6 +316,12 @@ NOTIFICATIONS: dict[str, Callable[[], note.Notification]] = {
     "assignment_cancelled_for_guest": lambda: note.AssignmentCancelled(
         CANCELLED, PAT, (AssignmentRole.PICKUP,), DECISION, cancelled_by=ALEX, note=REASON, via=KIM
     ),
+    "call_updated_voting_late": lambda: note.CallUpdated(VOTING, LATE_ROSTER, (), head_count=4),
+    "proposals_updated_late": lambda: note.ProposalsUpdated(VOTING, LATE_PROPOSALS, 4, LATE_JOINERS),
+    "proposals_updated_late_closed": lambda: note.ProposalsUpdated(DECIDED, LATE_PROPOSALS, 4, LATE_JOINERS[1:]),
+    "decision_made_late": lambda: note.DecisionMade(DECIDED, LATE_DECISION),
+    "late_join_changed": lambda: note.LateJoinChanged(VOTING, KIM, False, ALEX, VOTING.respond_deadline),
+    "late_join_changed_back": lambda: note.LateJoinChanged(VOTING, KIM, True, ALEX, VOTING.respond_deadline),
     "feedback_reminder": lambda: note.FeedbackReminder(
         event(EventState.DONE, coordinator=ALEX), KIM, "Sam's Tacos", date(2026, 10, 29)
     ),
@@ -346,6 +374,8 @@ def _event_view(state: EventState, mine: Response | None, can: Permissions) -> E
     )
 
 
+KIM_LATE = Response(member_id=KIM.id, status=Status.IN, offers=frozenset({RoleOffer.PICKUP}), late=True)
+"""Kim joined late and offered to pick up (#76)."""
 SAM_RESPONSE = Response(
     member_id=SAM.id,
     status=Status.IN,
@@ -468,6 +498,17 @@ VIEWS: dict[str, Callable[[], dict[str, Any]]] = {
         _event_view(EventState.COLLECTING, None, Permissions(respond=True)), ORIGIN
     ),
     "proposal_modal": lambda: proposal_modal(VOTING_VIEW, ORIGIN),
+    "proposal_modal_join_late": lambda: proposal_modal(
+        replace(VOTING_VIEW, mine=None, can=Permissions(propose=True, join_late=True)), replace(ORIGIN, run=1)
+    ),
+    "home_voting_join_late": lambda: home_view(
+        TodayView(DAY, [replace(VOTING_VIEW, mine=None, can=Permissions(propose=True, join_late=True))], tuple(Slot)),
+        HomeLinks(BASE_URL),
+    ),
+    "home_voting_late": lambda: home_view(
+        TodayView(DAY, [replace(VOTING_VIEW, mine=KIM_LATE, can=Permissions(vote=True, late_roles=True))], tuple(Slot)),
+        HomeLinks(BASE_URL),
+    ),
     "cancel_modal": lambda: cancel_modal(COLLECTING_VIEW, CALL_OFF_ORIGIN),
     "cancel_modal_decided": lambda: cancel_modal(DECIDED_VIEW, replace(CALL_OFF_ORIGIN, home=True)),
     "close_modal": lambda: close_modal(COLLECTING_VIEW, replace(CALL_OFF_ORIGIN, window=Window.RESPOND)),
@@ -580,6 +621,10 @@ CARDS: dict[str, CardSample] = {
     "your_answer_voting": _card(VOTING, KIM_OFFERS),
     "your_answer_moved_on": _card(VOTING, KIM_OFFERS, run=1),
     "your_answer_called_off": _card(CANCELLED, KIM_IN, run=1),
+    "your_answer_join_late": _card(event(EventState.VOTING), replace(KIM_IN, status=Status.OUT), run=1),
+    "your_answer_late": _card(VOTING, KIM_LATE, run=1),
+    "your_answer_late_counts": _card(event(EventState.VOTING), replace(KIM_LATE, vote_counts=True)),
+    "your_answer_taken_off": _card(VOTING, replace(KIM_LATE, status=Status.OUT), run=1),
     "your_answer_started_again": _card(replace(event(), run=2), KIM_IN, run=1),
     "response_reminder_answered": _reminder(event(), replace(KIM_IN, status=Status.MAYBE), run=1),
     "response_reminder_moved_on": _reminder(VOTING, KIM_IN, run=1),

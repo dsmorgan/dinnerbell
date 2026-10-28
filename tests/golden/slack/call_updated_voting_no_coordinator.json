@@ -10,7 +10,7 @@
     },
     {
       "text": {
-        "text": "Thanks for answering! Vote on the picks in the thread by *5:15 PM*.",
+        "text": "Thanks for answering! Vote on the picks in the thread by *5:15 PM*.\nMissed the answers? Tap *I'm in (late)* to join.",
         "type": "mrkdwn"
       },
       "type": "section"
@@ -25,6 +25,16 @@
     {
       "block_id": "roles",
       "elements": [
+        {
+          "action_id": "join_late",
+          "text": {
+            "emoji": true,
+            "text": "I'm in (late)",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "7:1"
+        },
         {
           "action_id": "call_coordinate",
           "text": {

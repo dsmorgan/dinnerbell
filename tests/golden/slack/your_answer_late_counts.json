@@ -1,0 +1,84 @@
+{
+  "blocks": [
+    {
+      "text": {
+        "text": "*Dinner call · Thursday, Oct 22*\nYour answer: *In (joined late)* · can pick up\nYour vote counts.",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "elements": [
+        {
+          "text": "Only you can see this. Offer to pitch in until voting closes at *5:15 PM*.",
+          "type": "mrkdwn"
+        }
+      ],
+      "type": "context"
+    },
+    {
+      "block_id": "roles",
+      "elements": [
+        {
+          "action_id": "card_offer_cook",
+          "text": {
+            "emoji": true,
+            "text": "I can cook",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "7:1"
+        },
+        {
+          "action_id": "card_withdraw_pickup",
+          "style": "primary",
+          "text": {
+            "emoji": true,
+            "text": "✓ I can pick up",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "7:1"
+        },
+        {
+          "action_id": "card_offer_order",
+          "text": {
+            "emoji": true,
+            "text": "I'll order",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "7:1"
+        },
+        {
+          "action_id": "card_coordinate",
+          "text": {
+            "emoji": true,
+            "text": "I'll coordinate",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "7:1"
+        }
+      ],
+      "type": "actions"
+    },
+    {
+      "block_id": "more",
+      "elements": [
+        {
+          "action_id": "link_event",
+          "text": {
+            "emoji": true,
+            "text": "View on web",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "url": "https://dinnerbell.example.com/events/7"
+        }
+      ],
+      "type": "actions"
+    }
+  ],
+  "text": "Dinner call · Thursday, Oct 22: your answer is In (joined late), can pick up"
+}

@@ -17,6 +17,8 @@ The rules, as David confirmed them on 2026-10-24:
    admin.
 3. Nor can a guest start, schedule, post, call off, or re-run a call, make or join an offer, give
    feedback, invite anyone, or change anything but their own dietary needs.
+4. A guest doesn't join a call late (#76): they come by invitation while answers are open. Nor
+   does a guest coordinating flip a late joiner's switches; an admin does.
 """
 
 from __future__ import annotations
@@ -51,6 +53,8 @@ class GuestAction(StrEnum):
     JOIN_OFFER = "join_offer"
     FEEDBACK = "feedback"
     INVITE = "invite"
+    JOIN_LATE = "join_late"
+    LATE_SWITCHES = "late_switches"
 
 
 ANSWERING = frozenset({EventState.COLLECTING})
@@ -86,6 +90,8 @@ REFUSED: dict[GuestAction, str] = {
     GuestAction.JOIN_OFFER: "Ask a household member to bring you along as their guest.",
     GuestAction.FEEDBACK: "Thanks! Feedback is for household members.",
     GuestAction.INVITE: "Only a household member can invite a guest.",
+    GuestAction.JOIN_LATE: "Guests come by invitation while answers are open. Ask whoever invited you.",
+    GuestAction.LATE_SWITCHES: "Guests don't decide that. Whoever invited you, or an admin, can.",
 }
 NOT_INVITED = GUEST_NOT_INVITED
 NOT_NOW = "That isn't open to guests right now."

@@ -1009,6 +1009,13 @@ def _catalog_columns(settings: Settings) -> list[str]:
     return [c["name"] for c in inspect(create_engine(settings.sync_database_url)).get_columns("catalog_item")]
 
 
+def _calls_before_late_join(settings: Settings) -> object:
+    """The call rows, without the columns 0014 adds to ``response`` at the end (#76), for
+    comparing with rows read before ``dinnerbell migrate`` took the database to the head."""
+    rows: dict[str, list[tuple[object, ...]]] = _snapshot(settings)["rows"]  # type: ignore[assignment]
+    return rows | {"response": [tuple(r)[: -len(LATE_COLUMNS)] for r in rows["response"]]}
+
+
 def test_0012_gives_every_item_lunch_and_dinner_and_downgrade_drops_the_column(
     settings: Settings, migrate_command: None
 ) -> None:
@@ -1026,7 +1033,7 @@ def test_0012_gives_every_item_lunch_and_dinner_and_downgrade_drops_the_column(
 
     assert cli.main(["migrate"]) == 0
     after = _catalog(settings)
-    assert after["children"] == before["children"] and _snapshot(settings)["rows"] == calls
+    assert after["children"] == before["children"] and _calls_before_late_join(settings) == calls
     assert _catalog_columns(settings)[-1] == "meals"
     assert [i[:-1] for i in after["items"]] == before["items"]  # type: ignore[attr-defined]
     assert {i[-1] for i in after["items"]} == {6}  # type: ignore[attr-defined]
@@ -1138,7 +1145,7 @@ def test_0013_lets_calls_and_meals_be_breakfast_and_downgrade_refuses_while_any_
 
     assert cli.main(["migrate"]) == 0
     after = _snapshot(settings)
-    assert after["rows"] == before["rows"] and after["indexes"] == before["indexes"]
+    assert _calls_before_late_join(settings) == before["rows"] and after["indexes"] == before["indexes"]
     assert _event_foreign_keys(settings) == fks and _sequences(settings) == sequences
     assert "AUTOINCREMENT" in _event_sql(settings)
     assert _slot_checks(settings) == [
@@ -1165,7 +1172,7 @@ def test_0013_lets_calls_and_meals_be_breakfast_and_downgrade_refuses_while_any_
     assert _snapshot(settings)["rows"] == before["rows"] and _event_foreign_keys(settings) == fks
     assert "slot IN ('lunch', 'dinner')" in _slot_checks(settings)[0]
     assert cli.main(["migrate"]) == 0
-    assert _snapshot(settings)["rows"] == before["rows"]
+    assert _calls_before_late_join(settings) == before["rows"]
     assert _next_event_id(settings) == 5
 
 
@@ -1186,3 +1193,63 @@ def test_0013_refuses_to_run_with_foreign_keys_on(settings: Settings) -> None:
     finally:
         engine.dispose()
     assert _snapshot(settings) == before
+
+
+# 0014: joining a call late (#76) -----------------------------------------------------------------
+
+LATE_COLUMNS = ("late", "vote_counts")
+
+
+def _response_table(settings: Settings) -> tuple[list[str], str]:
+    engine = create_engine(settings.sync_database_url)
+    try:
+        columns = [c["name"] for c in inspect(engine).get_columns("response")]
+        with engine.connect() as c:
+            table = c.execute(text("SELECT sql FROM sqlite_master WHERE name = 'response'")).scalar_one()
+    finally:
+        engine.dispose()
+    return columns, table
+
+
+def test_0014_marks_every_answer_on_time_and_downgrade_drops_the_columns(
+    settings: Settings, migrate_command: None
+) -> None:
+    """``dinnerbell migrate`` on a populated 0013 database adds ``late`` and ``vote_counts`` to
+    every answer, both false, in place: no other row or constraint changes. Down drops them and
+    gives back the 0013 table exactly; up again gives the same."""
+    from dinnerbell import main as cli
+
+    _upgrade_to(settings, BREAKFAST)
+    _populate_catalog(settings)
+    before, catalog = _snapshot(settings), _catalog(settings)
+    columns, table = _response_table(settings)
+    assert not set(LATE_COLUMNS) & set(columns)
+    assert before["rows"]["response"]  # type: ignore[index]
+
+    assert cli.main(["migrate"]) == 0
+    after, _ = _response_table(settings)
+    assert after == [*columns, *LATE_COLUMNS]
+    assert _calls_before_late_join(settings) == before["rows"] and _catalog(settings) == catalog
+    engine = create_sync_engine(settings.sync_database_url)
+    try:
+        with engine.begin() as c:
+            assert set(c.execute(text("SELECT late, vote_counts FROM response")).all()) == {(0, 0)}
+            c.execute(text("UPDATE response SET late = 1, vote_counts = 1 WHERE id = 1"))
+            with pytest.raises(IntegrityError, match="CHECK"):  # the 0003 checks are still there
+                c.execute(text("UPDATE response SET status = 'late' WHERE id = 1"))
+    finally:
+        engine.dispose()
+
+    _downgrade_to(settings, BREAKFAST)
+    assert _response_table(settings) == (columns, table)
+    assert _snapshot(settings) == before and _catalog(settings) == catalog
+
+    assert cli.main(["migrate"]) == 0
+    assert _response_table(settings)[0] == [*columns, *LATE_COLUMNS]
+    assert _calls_before_late_join(settings) == before["rows"]
+    engine = create_sync_engine(settings.sync_database_url)
+    try:
+        with engine.connect() as c:
+            assert set(c.execute(text("SELECT late, vote_counts FROM response")).all()) == {(0, 0)}
+    finally:
+        engine.dispose()

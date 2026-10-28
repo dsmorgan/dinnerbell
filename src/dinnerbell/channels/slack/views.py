@@ -46,12 +46,14 @@ from dinnerbell.channels.slack.messages import (
     POST_NOW,
     answer_actions,
     coordinator_line,
+    join_late_button,
     mark_done_button,
 )
 from dinnerbell.domain import notifications as note
 from dinnerbell.domain.catalog import CatalogItem, ItemKind, Mode, Tag
 from dinnerbell.domain.events import (
     CANCEL_NOTE_MAX,
+    JOIN_LATE_PROMPT,
     MAX_GUESTS,
     MAX_NOTE_LENGTH,
     MAX_SUGGESTION_LENGTH,
@@ -288,10 +290,14 @@ def parse_details(values: Any) -> Details:
 
 def proposal_modal(v: EventView, origin: ids.ViewOrigin) -> dict[str, Any]:
     """FR-13: a catalog item, or something new with a cuisine, and how to get it. Whoever adds
-    it does it (#74), so the modal says so; items that are picks already are marked (#77)."""
+    it does it (#74), so the modal says so; items that are picks already are marked (#77). For
+    someone who isn't in, it asks first whether they'll join late (#76): adding it does that,
+    and the modal names the run it asked about (``origin.run``)."""
     modes = [option(m.label, m.value) for m in Mode]
+    late = origin.run is not None
     blocks: list[Block] = [
         _intro(v),
+        *([section(f"*{JOIN_LATE_PROMPT}* {JOIN_LATE_TO_ADD}")] if late else []),
         context(ADD_PICK_NOTE),
         _input("mode", "How", {"type": "static_select", "options": modes}, optional=False),
     ]
@@ -305,9 +311,12 @@ def proposal_modal(v: EventView, origin: ids.ViewOrigin) -> dict[str, Any]:
         cuisines = {"type": "static_select", "options": _tag_options(v.cuisine_tags)}
         hint = "Needed for something new, so variety and vetoes still work."
         blocks.append(_input("cuisine", "Cuisine", cuisines, hint=hint))
-    return _modal("Add a pick", ids.PROPOSAL_VIEW, origin, blocks, "Add")
+    return _modal("Add a pick", ids.PROPOSAL_VIEW, origin, blocks, "Join late and add" if late else "Add")
 
 
+JOIN_LATE_TO_ADD = (
+    "Adding a pick joins you late: you're in, and your vote shows, but counts only if the coordinator says so."
+)
 ADD_PICK_NOTE = (
     "You'll be the one to pick it up, cook it, or order it, whichever way you choose. "
     "A home meal with a cook list you're not on needs one of its cooks to have offered to cook."
@@ -673,7 +682,12 @@ def _event_card(
     state = v.event.state
     day = "" if v.event.day == today else f" · {day_label(v.event.day)}"  # posted early (#59)
     lines = [f"*{v.event.slot.value.capitalize()}*{day} · {state.label}"]
-    if v.mine is not None:
+    if v.mine is not None and v.mine.late:  # #76
+        mine = "You joined late." if v.mine.is_in else "You joined late, and the coordinator has you out."
+        if v.mine.offers and v.mine.is_in:
+            mine += " You offered to " + " or ".join(OFFER_WORDS[o] for o in sorted(v.mine.offers)) + "."
+        lines.append(mine)
+    elif v.mine is not None:
         mine = STATUS_WORDS[v.mine.status]
         if v.mine.guests and v.mine.status is not Status.OUT:
             mine += f" You're bringing {plural(v.mine.guests, 'guest')}."
@@ -706,6 +720,11 @@ def _event_card(
             actions(*answer.roles, block_id=f"roles-{v.id}"),
         ]
         buttons += answer.more
+    elif v.can.late_roles:  # a late joiner pitches in while voting (#76)
+        roles = answer_actions(v.info, v.mine, guest=guest).roles
+        rows = [actions(*roles, block_id=f"roles-{v.id}")]
+    if v.can.join_late:
+        buttons.append(join_late_button(v.info))
     if v.can.mark_done:
         buttons.append(mark_done_button(v.info))
     # Home is per member, so these show only to people allowed to use them (FR-56).

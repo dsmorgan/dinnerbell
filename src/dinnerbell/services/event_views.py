@@ -62,6 +62,13 @@ class Permissions:
     """Drop out of an open offer they're in, unless it's theirs: ``offers.leave``."""
     invite: bool = False
     """Invite a guest to the call (#38): ``guests.invite``."""
+    join_late: bool = False
+    """Join while voting after missing the answers (#76): ``calls.join_late``. A vote or a pick
+    from them joins them late too, once they say yes (``join_late=True``)."""
+    late_roles: bool = False
+    """Offer a role as a late joiner taking part, while voting (#76): ``calls.offer_role``."""
+    switch_late: bool = False
+    """Flip late joiners' switches (#76): ``calls.switch_late_joiner``."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,6 +116,8 @@ class EventView:
     """Guests invited to the call (#38)."""
     invitable: tuple[note.PersonInfo, ...] = ()
     """Saved guests the viewer could invite: only for a member who may invite (#38)."""
+    late: tuple[note.LateJoinerInfo, ...] = ()
+    """Who joined late (#76), with the coordinator's switches."""
 
     @property
     def id(self) -> int:
@@ -180,7 +189,7 @@ def _guest_permissions(base: Permissions, ctx: CallContext, actor: Member) -> Pe
     """``base`` cut down to what ``domain.guests`` lets an invited guest do (#38)."""
     may = functools.partial(_guest_may, ctx, actor)
     return Permissions(
-        respond=base.respond and may(GuestAction.ANSWER),
+        respond=base.respond and may(GuestAction.ANSWER),  # never joins late, or switches (#76)
         claim=base.claim and may(GuestAction.COORDINATE),
         hand_off=base.hand_off and may(GuestAction.HAND_OFF),
         manage=base.manage and may(GuestAction.MANAGE_DECISION),
@@ -224,7 +233,25 @@ def _member_permissions(
         post_now=event.state is EventState.SCHEDULED
         and _allowed(lambda: rules.check_can_post_now(event, actor, now=now)),
         invite=_allowed(lambda: check_can_invite(event, actor)),
+        join_late=_joins_late(event, actor, mine),
+        late_roles=mine is not None
+        and mine.late
+        and _allowed(lambda: rules.check_can_offer_role(event, actor, mine))
+        and event.state is EventState.VOTING,
+        switch_late=_allowed(lambda: rules.check_can_switch_late(event, actor, _coordinator(ctx))),
     )
+
+
+def _joins_late(event: Event, actor: Member, mine: Response | None) -> bool:
+    try:
+        return rules.check_can_join_late(event, actor, mine)
+    except EventRuleViolation:
+        return False
+
+
+def _coordinator(ctx: CallContext) -> Member | None:
+    coordinator_id = ctx.event.coordinator_id
+    return ctx.members.get(coordinator_id) if coordinator_id is not None else None
 
 
 def _closable(event: Event, actor: Member, now: datetime) -> Window | None:
@@ -304,6 +331,7 @@ def view(ctx: CallContext, actor: Member, today: date, now: datetime, *, any_tim
         offer=cc.offer_info(ctx) if ctx.event.is_offer else None,
         guests=_guest_views(ctx, actor),
         invitable=_invitable(ctx, actor),
+        late=cc.late_joiners(ctx),
     )
 
 
