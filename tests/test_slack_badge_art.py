@@ -110,11 +110,17 @@ async def test_two_asks_at_once_share_one_upload(house: House) -> None:
     uploads = Uploads()
     uploads.gate = asyncio.Event()
     badges = files(house, uploads)
-    first = asyncio.create_task(badges.file_ids(house.household.id, [CHEF]))
-    second = asyncio.create_task(badges.file_ids(house.household.id, [CHEF]))
-    await uploads.started.wait()
-    uploads.gate.set()
-    assert await first == await second == {CHEF: "F1"}
+
+    async def release() -> dict[tuple[str, str], str]:
+        await uploads.started.wait()
+        assert uploads.gate is not None
+        uploads.gate.set()
+        return {}
+
+    first, second, _ = await asyncio.gather(
+        badges.file_ids(house.household.id, [CHEF]), badges.file_ids(house.household.id, [CHEF]), release()
+    )
+    assert first == second == {CHEF: "F1"}
     assert len(uploads.calls) == 1
 
 
@@ -157,6 +163,25 @@ async def test_a_failed_upload_gives_nothing_logs_one_line_and_waits_before_tryi
     uploads.error = None
     house.clock.advance(COOLDOWN + timedelta(seconds=1))
     assert await badges.file_ids(house.household.id, [CHEF]) == {CHEF: "F2"}
+
+
+async def test_a_cooldown_pauses_new_uploads_but_not_files_already_uploaded(house: House) -> None:
+    uploads = Uploads()
+    badges = files(house, uploads)
+    await badges.file_ids(house.household.id, [CHEF])
+    uploads.error = RuntimeError("x" * 500)
+    assert await badges.file_ids(house.household.id, [SCOUT]) == {}  # fails, and starts the cooldown
+    assert await badges.file_ids(house.household.id, [CHEF, SCOUT]) == {CHEF: "F1"}
+    assert len(uploads.calls) == 2  # no third try while cooling
+
+
+async def test_the_logged_error_is_cut_short(house: House, caplog: pytest.LogCaptureFixture) -> None:
+    uploads = Uploads()
+    uploads.error = RuntimeError("x" * 500)
+    with caplog.at_level(logging.WARNING):
+        await files(house, uploads).file_ids(house.household.id, [CHEF])
+    (line,) = [r for r in caplog.records if r.levelno == logging.WARNING]
+    assert len(line.error) == 200  # type: ignore[attr-defined]
 
 
 async def test_a_slow_upload_gives_up_instead_of_holding_the_caller(house: House) -> None:
@@ -247,6 +272,16 @@ async def test_slack_refusing_a_file_posts_text_and_forgets_the_file(house: Hous
         assert await BadgeFileRepository(db).all(house.household.id) == {}
 
 
+async def test_a_refusal_that_is_not_about_blocks_keeps_the_cached_files(house: House) -> None:
+    slack = await wire(house)
+    slack.fake.fail("chat.postMessage", Failure("channel_not_found"))
+    await earn(house)
+    result = await slack.drain()
+    assert result.failed == 1 and len(slack.fake.of("chat.postMessage")) == 1  # no text retry
+    async with house.sessionmaker() as db:
+        assert len(await BadgeFileRepository(db).all(house.household.id)) == 2
+
+
 async def test_an_announcement_with_only_quiet_or_unknown_badges_has_no_art(house: House) -> None:
     slack = await wire(house)
     post = note.BadgesEarned(
@@ -290,3 +325,28 @@ async def test_home_keeps_a_quiet_badge_as_text(house: House) -> None:
     blocks = slack.last_home("Alex")["blocks"]
     assert [b["accessory"]["alt_text"] for b in blocks if "accessory" in b] == ["Chef, Gold"]
     assert tag("Food Critic", "First") in json.dumps(blocks, ensure_ascii=False)
+
+
+async def test_slack_refusing_a_file_on_home_publishes_text_and_forgets_the_file(house: House) -> None:
+    await dinner(house)
+    slack = await wire(house)
+    slack.fake.fail("views.publish", Failure("invalid_blocks"))
+    await slack.open_home("Alex")
+    first, second = slack.fake.of("views.publish")
+    assert "slack_file" in json.dumps(first.args["view"])
+    text = json.dumps(second.args["view"], ensure_ascii=False)
+    assert "slack_file" not in text and tag("Full Table", "First") in text
+    async with house.sessionmaker() as db:
+        assert await BadgeFileRepository(db).all(house.household.id) == {}
+    await slack.open_home("Alex")  # the next view uploads again
+    assert "slack_file" in json.dumps(slack.last_home("Alex"))
+
+
+async def test_a_home_refusal_that_is_not_about_blocks_is_not_retried_and_keeps_the_files(house: House) -> None:
+    await dinner(house)
+    slack = await wire(house)
+    slack.fake.fail("views.publish", Failure("user_not_found"))
+    await slack.open_home("Alex")
+    assert len(slack.fake.of("views.publish")) == 1
+    async with house.sessionmaker() as db:
+        assert await BadgeFileRepository(db).all(house.household.id)

@@ -26,7 +26,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from dinnerbell.channels.slack.api import SlackApi
+from dinnerbell.channels.slack.api import SlackApi, refused_blocks
 from dinnerbell.channels.slack.badge_text import ArtIds, wanted
 from dinnerbell.channels.slack.blocks import Directory
 from dinnerbell.channels.slack.messages import RenderContext, render
@@ -165,9 +165,9 @@ class SlackChannel:
         message = render(notification, self._context(directory, art)).payload()
         try:
             ref = await self._send(message, slack_user, thread)
-        except PermanentDeliveryError:
-            if not art or self.badge_files is None:
-                raise
+        except PermanentDeliveryError as exc:
+            if not art or self.badge_files is None or not refused_blocks(exc):
+                raise  # not about the blocks, so not about the art: the cache stays
             # Slack may refuse a file ID, such as one deleted in Slack. Forget the files and send
             # the text instead, so the post still goes out and the next one uploads again.
             log.warning("slack refused badge art; posting text badges", extra={"event_id": notification.event_id})

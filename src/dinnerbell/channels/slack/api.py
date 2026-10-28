@@ -103,6 +103,15 @@ class SlackUnavailable(ChannelUnavailable):
     on it, so an outage costs one timeout per drain, not one per row."""
 
 
+BLOCK_ERRORS = frozenset({"invalid_blocks", "invalid_blocks_format", "invalid_arguments"})
+"""Slack's codes for blocks it won't take, which a badge file ID it can't find causes."""
+
+
+def refused_blocks(exc: BaseException) -> bool:
+    """Whether Slack refused a message or view over its blocks, so badge art may be the cause."""
+    return isinstance(exc, PermanentDeliveryError) and exc.code in BLOCK_ERRORS
+
+
 class SlackAuthError(SlackUnavailable):
     """Slack refused the token. ``code`` is Slack's error code, such as ``invalid_auth``."""
 
@@ -151,7 +160,7 @@ def translate(method: str, exc: BaseException) -> Exception:
             seconds = int(wait.total_seconds())
             return SlackRateLimited(f"Slack rate-limited {method}; retry after {seconds}s", retry_after=seconds)
         if code in PERMANENT:
-            return PermanentDeliveryError(f"Slack {method} failed: {code}")
+            return PermanentDeliveryError(f"Slack {method} failed: {code}", code=code)
         if code in AUTH:
             return SlackAuthError(f"Slack {method} failed: {code}", code=code)
         return SlackUnavailable(f"Slack {method} failed: {code}")

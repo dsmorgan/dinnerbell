@@ -7,10 +7,11 @@ remembered (``slack_badge_file``) with a hash of the PNG, so a restart reuses it
 uploads again. The PNG comes from an ``ArtSource`` and the upload from an ``Uploader``, both
 passed in: this module knows neither the built-in drawing nor Slack.
 
-Art is a nicety, so nothing here may hold up or break what shows it. ``file_ids`` never raises
-and gives up after ``timeout`` seconds, and returns only the tiers it has: the caller shows text
-for the rest. After a failure, such as a missing ``files:write`` scope, it logs one line and
-doesn't try again for ``COOLDOWN``, so a broken setup costs one slow call, not one per message.
+Art is a nicety, so nothing here may break what shows it, and it holds it up only briefly:
+``file_ids`` never raises and gives up after ``timeout`` seconds (``INLINE_TIMEOUT_SECONDS``). It
+returns only the tiers it has: the caller shows text for the rest. After a failure, such as a
+missing ``files:write`` scope, it logs one line and uploads nothing new for ``COOLDOWN``, so a
+broken setup costs one slow call, not one per message; files already uploaded still show.
 Two callers wanting the same new tier at once share one upload. Food Critic is never shown
 (``QUIET_BADGES``).
 """
@@ -34,9 +35,11 @@ log = logging.getLogger(__name__)
 
 Uploader = Callable[[str, bytes, str], Awaitable[str]]
 """Uploads a PNG (file name, bytes, alt text) and returns the file's ID."""
-TIMEOUT_SECONDS = 20.0
-"""The longest a caller waits for art. The first use of a household uploads up to sixty files in
-the worst case, but a message only wants the few it shows."""
+INLINE_TIMEOUT_SECONDS = 3.0
+"""The longest a message or view waits for art. A new tier's upload is three Slack calls; past this,
+the caller shows text. What was uploaded stays cached, so a later ask finishes the rest."""
+MAX_ERROR = 200
+"""Characters of an error that the log line keeps."""
 COOLDOWN = timedelta(minutes=15)
 """How long after a failure before art is tried again."""
 
@@ -56,7 +59,7 @@ class BadgeFiles:
         art_for: ArtSource,
         upload: Uploader,
         clock: Clock,
-        timeout: float = TIMEOUT_SECONDS,
+        timeout: float = INLINE_TIMEOUT_SECONDS,
     ) -> None:
         self.sessionmaker = sessionmaker
         self.art_for = art_for
@@ -71,7 +74,7 @@ class BadgeFiles:
         can't get is left out. Never raises."""
         asked = {w for w in wanted if _valid(w)}
         found: dict[Wanted, str] = {}
-        if not asked or self.clock() < self._retry_at:
+        if not asked:
             return found
         try:
             async with asyncio.timeout(self.timeout):
@@ -95,13 +98,14 @@ class BadgeFiles:
     async def _resolve(self, household_id: int, asked: set[Wanted], found: dict[Wanted, str]) -> None:
         async with self.sessionmaker() as db:
             known = await BadgeFileRepository(db).all(household_id)
+        cooling = self.clock() < self._retry_at  # a failure pauses new uploads, never files already uploaded
         for want in sorted(asked):
             key, tier = want
             png = self.art_for(key, Tier(tier))
             row = known.get(want)
             if row is not None and row.content_hash == _hash(png):
                 found[want] = row.file_id
-            else:
+            elif not cooling:
                 found[want] = await self._upload(household_id, want, png)
 
     async def _upload(self, household_id: int, want: Wanted, png: bytes) -> str:
@@ -114,15 +118,19 @@ class BadgeFiles:
             if row is not None and row.content_hash == digest:
                 return row.file_id
             file_id = await self.upload(f"{key}-{tier}.png", png, f"{BY_KEY[BadgeKey(key)].name}, {Tier(tier).label}")
-            async with self.sessionmaker() as db:
-                await BadgeFileRepository(db).save(household_id, BadgeFile(key, tier, digest, file_id), self.clock())
-                await db.commit()
+            # Shielded: if the caller gives up now, the file is already in Slack, so the save still lands.
+            await asyncio.shield(self._save(household_id, BadgeFile(key, tier, digest, file_id)))
             log.info("badge art uploaded", extra={"household_id": household_id, "badge": key, "tier": tier})
             return file_id
 
+    async def _save(self, household_id: int, file: BadgeFile) -> None:
+        async with self.sessionmaker() as db:
+            await BadgeFileRepository(db).save(household_id, file, self.clock())
+            await db.commit()
+
     def _failed(self, household_id: int, exc: BaseException) -> None:
         self._retry_at = self.clock() + COOLDOWN
-        reason = "timed out" if isinstance(exc, TimeoutError) else str(exc) or type(exc).__name__
+        reason = "timed out" if isinstance(exc, TimeoutError) else (str(exc) or type(exc).__name__)[:MAX_ERROR]
         log.warning(
             "badge art not available, showing text badges "
             "(a missing_scope error means the Slack app needs the files:write scope: reinstall it)",
