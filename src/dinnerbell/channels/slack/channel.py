@@ -26,7 +26,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from dinnerbell.channels.slack.api import SlackApi, refused_blocks
+from dinnerbell.channels.slack.api import SlackApi, refusal, refused_blocks
 from dinnerbell.channels.slack.badge_text import ArtIds, wanted
 from dinnerbell.channels.slack.blocks import Directory
 from dinnerbell.channels.slack.messages import RenderContext, render
@@ -39,7 +39,7 @@ from dinnerbell.domain.notifications import (
     PermanentDeliveryError,
 )
 from dinnerbell.services import slack_members
-from dinnerbell.services.badge_files import BadgeFiles
+from dinnerbell.services.badge_files import RETRY_PAUSE_SECONDS, BadgeFiles
 from dinnerbell.services.health import SlackState
 
 log = logging.getLogger(__name__)
@@ -136,12 +136,14 @@ class SlackChannel:
     def _context(self, directory: Directory, art: ArtIds | None = None) -> RenderContext:
         return RenderContext(self.base_url, self.audience.directory(directory), self.instance_label, art or {})
 
-    async def _art(self, notification: Notification) -> ArtIds:
-        """The uploaded art a badge post shows, or none: art never holds up or fails a delivery."""
+    async def _art(self, notification: Notification) -> tuple[ArtIds, set[str]]:
+        """The uploaded art a badge post shows, and which of its files were uploaded just now, or
+        none: art never holds up or fails a delivery."""
+        fresh: set[str] = set()
         if self.badge_files is None or not isinstance(notification, note.BadgesEarned):
-            return {}
+            return {}, fresh
         asked = {w for n in notification.news for b in n.badges if (w := wanted(b.name, b.tier))}
-        return await self.badge_files.file_ids(notification.household_id, asked)
+        return await self.badge_files.file_ids(notification.household_id, asked, fresh), fresh
 
     async def deliver(self, notification: Notification, *, thread: MessageRef | None = None) -> DeliveryResult:
         self.hold.check(direct=notification.recipient_id is not None)
@@ -161,19 +163,44 @@ class SlackChannel:
                 if self.state is not None and self.state.dms_dropped is not None:
                     self.state.dms_dropped += 1
                 return DeliveryResult(None)
-        art = await self._art(notification)
+        art, fresh = await self._art(notification)
         message = render(notification, self._context(directory, art)).payload()
         try:
             ref = await self._send(message, slack_user, thread)
         except PermanentDeliveryError as exc:
             if not art or self.badge_files is None or not refused_blocks(exc):
                 raise  # not about the blocks, so not about the art: the cache stays
-            # Slack may refuse a file ID, such as one deleted in Slack. Forget the files and send
-            # the text instead, so the post still goes out and the next one uploads again.
-            log.warning("slack refused badge art; posting text badges", extra={"event_id": notification.event_id})
-            await self.badge_files.forget(notification.household_id, art.values())
-            message = render(notification, self._context(directory)).payload()
-            ref = await self._send(message, slack_user, thread)
+            # Slack may refuse a file ID, such as one deleted in Slack, or one it hasn't finished
+            # processing. A file uploaded just now gets one more try after a pause, with the cache
+            # untouched. Otherwise forget the files and send the text instead, so the post still
+            # goes out and the next one uploads again.
+            extra: dict[str, Any] = {"event_id": notification.event_id}
+            log.warning(
+                "slack refused badge art (%s: %s)%s",
+                exc.code,
+                exc.detail,
+                "; retrying" if fresh else "",
+                extra=extra | refusal(exc),
+            )
+            retried: MessageRef | None = None
+            if fresh:
+                await self.badge_files.pause(RETRY_PAUSE_SECONDS)
+                try:
+                    retried = await self._send(message, slack_user, thread)
+                except PermanentDeliveryError as again:
+                    if not refused_blocks(again):
+                        raise
+                    log.warning(
+                        "slack refused badge art again (%s: %s); posting text badges",
+                        again.code,
+                        again.detail,
+                        extra=extra | refusal(again),
+                    )
+            if retried is None:
+                await self.badge_files.forget(notification.household_id, art.values())
+                message = render(notification, self._context(directory)).payload()
+                retried = await self._send(message, slack_user, thread)
+            ref = retried
         log.debug(  # the outbox logs "notification delivered" at info, with the channel and ts
             "slack message posted",
             extra={"kind": notification.kind, "event_id": notification.event_id, "recipient_id": recipient},

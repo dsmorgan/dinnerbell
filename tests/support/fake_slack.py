@@ -51,6 +51,8 @@ class Failure:
     error: str | None = None
     status: int = 200
     headers: dict[str, str] = field(default_factory=dict)
+    messages: list[str] = field(default_factory=list)
+    """Slack's ``response_metadata.messages``, which explain an error."""
     raises: BaseException | None = None
 
 
@@ -70,6 +72,9 @@ class FakeSlack(AsyncWebClient):
         """Calls to a method named here wait until its event is set: to hold one call mid-flight."""
         self.files: dict[str, dict[str, Any]] = {}
         """Files uploaded with ``files_upload_v2``, by file ID: ``filename``, ``length``, and ``alt_txt``."""
+        self.processing_polls = 0
+        """``files.info`` calls for a file before Slack has processed it (no mimetype or thumbnails)."""
+        self._polls: dict[str, int] = {}
         self._ts = itertools.count(1)
         self._file_ids = itertools.count(1)
         self._ephemeral_ts = itertools.count(1)
@@ -139,7 +144,7 @@ class FakeSlack(AsyncWebClient):
             failure = queued.pop(0)
             if failure.raises is not None:
                 raise failure.raises
-            return _error(failure.error, failure.status, failure.headers)
+            return _error(failure.error, failure.status, failure.headers, failure.messages)
         if method == "users.lookupByEmail" and args["email"] not in self.users_by_email:
             return _error("users_not_found")
         if method == "users.info" and args["user"] not in self.users:
@@ -190,6 +195,15 @@ class FakeSlack(AsyncWebClient):
                     "alt_txt": args.get("alt_txt"),
                 }
                 return {"upload_url": f"https://files.slack.invalid/upload/{file_id}", "file_id": file_id}
+            case "files.info":
+                polls = self._polls[args["file"]] = self._polls.get(args["file"], 0) + 1
+                if args["file"] not in self.files:
+                    raise AssertionError("files.info for a file the fake never made")
+                if polls <= self.processing_polls:
+                    return {"file": {"id": args["file"], "url_private": "https://files.slack.invalid/x"}}
+                return {
+                    "file": {"id": args["file"], "mimetype": "image/png", "thumb_64": "https://x/t", "original_w": 1}
+                }
             case "files.completeUploadExternal":
                 files = json.loads(args["files"]) if isinstance(args["files"], str) else args["files"]
                 return {"files": [{"id": f["id"]} for f in files]}
@@ -235,8 +249,13 @@ class FakeWebhook(AsyncWebhookClient):
         return WebhookResponse(url=self.url, status_code=200, body="ok", headers={})
 
 
-def _error(code: str | None, status: int = 200, headers: dict[str, str] | None = None) -> dict[str, Any]:
-    return {"data": {"ok": False, "error": code}, "headers": headers or {}, "status_code": status}
+def _error(
+    code: str | None, status: int = 200, headers: dict[str, str] | None = None, messages: list[str] | None = None
+) -> dict[str, Any]:
+    data: dict[str, Any] = {"ok": False, "error": code}
+    if messages:
+        data["response_metadata"] = {"messages": messages}
+    return {"data": data, "headers": headers or {}, "status_code": status}
 
 
 class FakeSocket:

@@ -209,7 +209,9 @@ class SlackConnection:
         self.state = state
         self.hold = Hold()
         self.audience = Audience(limited=bool(instance_label))
-        self.badge_files = BadgeFiles(sessionmaker, art_for=art_for, upload=self.api.upload_file, clock=clock)
+        self.badge_files = BadgeFiles(
+            sessionmaker, art_for=art_for, upload=self.api.upload_file, clock=clock, file_info=self.api.file_info
+        )
         self._audience_error: str | None = None
         if self.audience.limited:
             state.dms_dropped = 0
