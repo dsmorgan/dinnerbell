@@ -88,6 +88,10 @@ class RosterEntry:
     offers: tuple[RoleOffer, ...] = ()
     suggestions: tuple[str, ...] = ()
     note: str | None = None
+    late: bool = False
+    """They joined while voting (#76). Out (``status``) means the coordinator switched them off."""
+    vote_counts: bool = False
+    """A late joiner whose votes the coordinator counts."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,16 +104,42 @@ class ProposalInfo:
     source: ProposalSource
     proposed_by: PersonInfo | None = None
     voters: tuple[PersonInfo, ...] = ()
+    """Everyone who voted for it, counted or not: votes are visible (FR-14)."""
+    uncounted: tuple[int, ...] = ()
+    """Voters whose votes don't count: late joiners, unless the coordinator says (#76). Show
+    them marked, such as "Kim (late)", and leave them out of the count."""
+    warnings: tuple[str, ...] = ()
+    """Why it may not suit someone who joined late (#76), ready to show. They never say who."""
+
+    @property
+    def counted(self) -> tuple[PersonInfo, ...]:
+        return tuple(p for p in self.voters if p.id not in self.uncounted)
+
+    @property
+    def not_counted(self) -> tuple[PersonInfo, ...]:
+        return tuple(p for p in self.voters if p.id in self.uncounted)
 
     @property
     def votes(self) -> int:
-        return len(self.voters)
+        """The votes that count."""
+        return len(self.counted)
+
+
+@dataclass(frozen=True, slots=True)
+class LateJoinerInfo:
+    """Someone who joined while voting (#76), with the coordinator's two switches."""
+
+    member: PersonInfo
+    taking_part: bool = True
+    vote_counts: bool = False
 
 
 @dataclass(frozen=True, slots=True)
 class ParticipantInfo:
     member: PersonInfo
     guests: int = 0
+    late: bool = False
+    """They joined while voting (#76)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -270,6 +300,8 @@ class ProposalsReady(_Notification):
     event: EventInfo
     proposals: tuple[ProposalInfo, ...]
     head_count: int = 0
+    late: tuple[LateJoinerInfo, ...] = ()
+    """Who joined late (#76), for the coordinator's switches."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -282,6 +314,8 @@ class ProposalsUpdated(_Notification):
     event: EventInfo
     proposals: tuple[ProposalInfo, ...]
     head_count: int = 0
+    late: tuple[LateJoinerInfo, ...] = ()
+    """Who joined late (#76), for the coordinator's switches."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -556,6 +590,28 @@ class OfferFull(_Notification):
 
 
 @dataclass(frozen=True, slots=True)
+class LateJoinChanged(_Notification):
+    """The coordinator (``by``) switched a late joiner's taking part off or back on (#76): one
+    direct message to ``member``. ``changed_at`` keeps each change its own row."""
+
+    kind: ClassVar[str] = "late_join_changed"
+    event: EventInfo
+    member: PersonInfo
+    taking_part: bool
+    by: PersonInfo
+    changed_at: datetime
+
+    @property
+    def idempotency_key(self) -> str:
+        stamp = int(self.changed_at.timestamp() * 1_000_000)
+        return f"{self.event.key}:{self.kind}:member{self.member.id}:{stamp}"
+
+    @property
+    def recipient_id(self) -> int | None:
+        return self.member.id
+
+
+@dataclass(frozen=True, slots=True)
 class GuestInvited(_Notification):
     """A member invited a guest with Slack to a call (#38): one direct message to the guest,
     with In and Out buttons that name the run, like the reminder's."""
@@ -703,6 +759,7 @@ Notification = Union[  # noqa: UP007 - a runtime union, used for isinstance chec
     GuestJoined,
     RoleVacated,
     LinkNeeded,
+    LateJoinChanged,
 ]
 NOTIFICATION_TYPES: dict[str, type[Notification]] = {cls.kind: cls for cls in get_args(Notification)}
 UPDATE_KINDS = frozenset(kind for kind, cls in NOTIFICATION_TYPES.items() if cls.is_update)

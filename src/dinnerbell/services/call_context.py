@@ -48,11 +48,14 @@ from dinnerbell.domain.events import (
     EventState,
     Proposal,
     Response,
+    Status,
     Step,
     Suggestion,
+    counted_votes,
     coverage,
     due_step,
     head_count,
+    late_people,
     posted_before_its_day,
     stale_after,
     veto_participants,
@@ -60,9 +63,11 @@ from dinnerbell.domain.events import (
 from dinnerbell.domain.household import Household
 from dinnerbell.domain.members import Member
 from dinnerbell.domain.offers import seats_taken
+from dinnerbell.domain.ranking import GroupPreferences
 from dinnerbell.domain.schedule import SlotSchedule, slot_schedule
 from dinnerbell.services import activity
 from dinnerbell.services.errors import NotFound
+from dinnerbell.services.preferences import group_preferences
 
 NO_SUCH_CALL = "No such call."
 
@@ -104,6 +109,9 @@ class CallContext:
     tags: dict[int, Tag]
     invitations: dict[int, int | None] = field(default_factory=dict)
     """Guests invited to the call (#38), each with the member who invited them."""
+    late_preferences: dict[int, GroupPreferences] = field(default_factory=dict)
+    """Each late joiner's own stances, while they take part (#76). They never filter, and only
+    that late joiner may see what they rule out (``fits_late_joiner``, FR-29)."""
 
     def invited(self, member_id: int) -> bool:
         return member_id in self.invitations
@@ -129,11 +137,31 @@ class CallContext:
         """Dietary needs every pick must meet (spec 5.5, 7): those of the guests members bring,
         and people's own (#38: a guest's, and a promoted guest's, which they keep), for everyone
         who might be eating (in, or maybe). Needs left on a response with no guests don't count."""
+        return frozenset(self.settled_guest_needs | self.late_guest_needs)
+
+    @property
+    def settled_guest_needs(self) -> frozenset[int]:
+        """``guest_needs`` without those of guests that late joiners bring: what picks already
+        proposed were held to. They warn instead (``late_warnings``, #76)."""
         who = veto_participants(self.responses)
         brought = {tag for r in self.responses if r.member_id in who and r.guests for tag in r.guest_needs}
         people = [self.members[m] for m in who if m in self.members]
         own = {tag for m in people if m.active for tag in m.dietary_needs}
         return frozenset(brought | own)
+
+    @property
+    def late_guest_needs(self) -> frozenset[int]:
+        """Dietary needs of guests that late joiners taking part bring (#76). Like any guest's,
+        they filter picks drawn or added from now on, and the roster shows them, so a pick
+        already proposed that misses them warns everyone (``late_warnings``). A late joiner's
+        own needs are not here: they stay private (FR-29)."""
+        late = late_people(self.responses)
+        return frozenset(tag for r in self.responses if r.member_id in late and r.guests for tag in r.guest_needs)
+
+    def counted(self, proposal_id: int) -> frozenset[int]:
+        """Who voted for ``proposal_id`` and counts (``domain.events.counts_vote``)."""
+        votes = {proposal_id: self.votes.get(proposal_id, [])}
+        return counted_votes(votes, self.responses)[proposal_id]
 
     @property
     def zone(self) -> ZoneInfo:
@@ -195,12 +223,14 @@ async def load(db: AsyncSession, event: Event) -> CallContext:
         raise NotFound(NO_SUCH_CALL)
     catalog = CatalogRepository(db)
     fresh = await EventRepository(db).get(household_id, event.id)
+    responses = await ResponseRepository(db).for_event(household_id, event.id)
+    late = late_people(responses)
     return CallContext(
         household=household,
         settings=await household_settings(db, household_id),
         event=fresh or event,
         members={m.id: m for m in await MemberRepository(db).list(household_id)},
-        responses=await ResponseRepository(db).for_event(household_id, event.id),
+        responses=responses,
         suggestions=await SuggestionRepository(db).for_event(household_id, event.id),
         proposals=await ProposalRepository(db).for_event(household_id, event.id),
         votes=await VoteRepository(db).for_event(household_id, event.id),
@@ -208,6 +238,7 @@ async def load(db: AsyncSession, event: Event) -> CallContext:
         items={i.id: i for i in await catalog.items(household_id)},
         tags={t.id: t for t in await catalog.tags(household_id)},
         invitations=await InvitationRepository(db).for_event(household_id, event.id),
+        late_preferences={m: await group_preferences(db, household_id, frozenset({m})) for m in late},
     )
 
 
@@ -265,12 +296,63 @@ def roster(ctx: CallContext) -> tuple[note.RosterEntry, ...]:
             guest_needs=_tag_names(ctx, r.guest_needs),
             eat_from=r.eat_from,
             eat_until=r.eat_until,
-            offers=tuple(sorted(r.offers)),
+            # A late joiner switched off keeps their offers for when they're back on (#76).
+            offers=tuple(sorted(r.offers)) if r.status is not Status.OUT else (),
             suggestions=_picks_of(ctx, r.member_id),
             note=r.note,
+            late=r.late,
+            vote_counts=r.late and r.vote_counts,
         )
         for r in ctx.responses
     )
+
+
+def late_joiners(ctx: CallContext) -> tuple[note.LateJoinerInfo, ...]:
+    """Everyone who joined late (#76), by name, with the coordinator's switches."""
+    late = sorted((r for r in ctx.responses if r.late), key=lambda r: ctx.name(r.member_id).casefold())
+    return tuple(note.LateJoinerInfo(ctx.person(r.member_id), r.is_in, r.vote_counts) for r in late)
+
+
+LATE_GUEST_NEEDS = "⚠ A guest of someone who joined late needs {needs}, and this isn't marked that way."
+NOT_FOR_YOU = "⚠ This pick doesn't fit your preferences."
+
+
+WARNING_STATES = frozenset({EventState.VOTING, EventState.DECIDED, EventState.DONE})
+"""While voting, and on the decision, which keeps the warning."""
+
+
+def late_warnings(ctx: CallContext, proposal: Proposal) -> tuple[str, ...]:
+    """What everyone may see about ``proposal`` and the late joiners taking part (#76): only
+    whether it misses the dietary needs of guests they bring, which the roster shows anyway. A
+    late joiner's own stances and dietary needs never show here, nor to the coordinator: with
+    one late joiner, a warning on a shared message would say what that person vetoes (FR-29).
+    Only they see that (``fits_late_joiner``)."""
+    needs = ctx.late_guest_needs
+    if not needs:
+        return ()
+    item = ctx.items.get(proposal.item_id) if proposal.item_id is not None else None
+    # Something new is known only by its cuisine, so it can't show it meets a need.
+    missing = needs - item.tag_ids if item is not None else needs
+    return (LATE_GUEST_NEEDS.format(needs=_or(_tag_names(ctx, missing))),) if missing else ()
+
+
+def fits_late_joiner(ctx: CallContext, proposal: Proposal, member_id: int) -> bool:
+    """Whether ``proposal`` suits ``member_id``, a late joiner taking part, by their own vetoes
+    and dietary needs (#76). For their eyes only: it tells them nothing new, and anyone else
+    would learn their stances (FR-29). True for anyone else."""
+    preferences, member = ctx.late_preferences.get(member_id), ctx.members.get(member_id)
+    if preferences is None or member is None:
+        return True
+    needs = member.dietary_needs
+    item = ctx.items.get(proposal.item_id) if proposal.item_id is not None else None
+    if item is not None:
+        vetoed = item.id in preferences.vetoed_items or bool(item.tag_ids & preferences.vetoed_tags)
+        return not vetoed and needs <= item.tag_ids
+    return proposal.free_cuisine_id not in preferences.vetoed_tags and not needs
+
+
+def _or(names: tuple[str, ...]) -> str:
+    return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " or " + names[-1]
 
 
 def waiting_on(ctx: CallContext) -> tuple[note.PersonInfo, ...]:
@@ -303,6 +385,8 @@ def item_info(ctx: CallContext, proposal: Proposal) -> note.ItemInfo:
 
 
 def proposal_info(ctx: CallContext, proposal: Proposal) -> note.ProposalInfo:
+    voters = ctx.votes.get(proposal.id, [])
+    counted = ctx.counted(proposal.id)
     return note.ProposalInfo(
         id=proposal.id,
         rank=proposal.rank,
@@ -311,7 +395,9 @@ def proposal_info(ctx: CallContext, proposal: Proposal) -> note.ProposalInfo:
         reasons=proposal.reasons,
         source=proposal.source,
         proposed_by=ctx.person(proposal.proposed_by) if proposal.proposed_by is not None else None,
-        voters=tuple(ctx.person(m) for m in ctx.votes.get(proposal.id, [])),
+        voters=tuple(ctx.person(m) for m in voters),
+        uncounted=tuple(m for m in voters if m not in counted),
+        warnings=late_warnings(ctx, proposal) if ctx.event.state in WARNING_STATES else (),
     )
 
 
@@ -323,17 +409,18 @@ def decision_info(ctx: CallContext) -> note.DecisionInfo | None:
         proposal=proposal_info(ctx, winner),
         meal_time=meal_time,
         head_count=ctx.head_count,
-        participants=tuple(note.ParticipantInfo(ctx.person(r.member_id), r.guests) for r in ctx.participants),
+        participants=tuple(note.ParticipantInfo(ctx.person(r.member_id), r.guests, r.late) for r in ctx.participants),
         assignments=tuple(note.AssignmentInfo(a.role, ctx.person(a.member_id)) for a in ctx.assignments),
         dietary_notes=guest_dietary_notes(ctx),
     )
 
 
 def guest_dietary_notes(ctx: CallContext) -> tuple[str, ...]:
-    """Dietary needs of the guests of everyone in, and of everyone in who has their own (FR-8,
-    FR-20, #38). Only the needs, never whose."""
+    """Dietary needs of the guests of everyone in, and of everyone in who has their own, except
+    late joiners' own (FR-8, FR-20, #38, #76). Only the needs, never whose."""
     brought = {tag for r in ctx.participants if r.guests for tag in r.guest_needs}
-    people = [ctx.members[r.member_id] for r in ctx.participants if r.member_id in ctx.members]
+    # A late joiner's own needs stay private: with one, subtracting the guests' would show them (#76).
+    people = [ctx.members[r.member_id] for r in ctx.participants if r.member_id in ctx.members and not r.late]
     own = {tag for m in people if m.active for tag in m.dietary_needs}
     return _tag_names(ctx, brought | own)
 
@@ -390,7 +477,11 @@ def proposals(ctx: CallContext) -> tuple[note.ProposalInfo, ...]:
 
 
 def proposals_updated(ctx: CallContext) -> note.ProposalsUpdated:
-    return note.ProposalsUpdated(event_info(ctx), proposals(ctx), ctx.head_count)
+    return note.ProposalsUpdated(event_info(ctx), proposals(ctx), ctx.head_count, late_joiners(ctx))
+
+
+def proposals_ready(ctx: CallContext) -> note.ProposalsReady:
+    return note.ProposalsReady(event_info(ctx), proposals(ctx), ctx.head_count, late_joiners(ctx))
 
 
 def locked_by(ctx: CallContext) -> note.PersonInfo | None:

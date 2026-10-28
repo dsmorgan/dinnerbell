@@ -1,0 +1,91 @@
+{
+  "blocks": [
+    {
+      "text": {
+        "text": "*Dinner is decided: Sam's Tacos* · Cook · Mexican",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "fields": [
+        {
+          "text": "*When*\n6:45 PM",
+          "type": "mrkdwn"
+        },
+        {
+          "text": "*Eating*\n4 people (1 guest)",
+          "type": "mrkdwn"
+        }
+      ],
+      "type": "section"
+    },
+    {
+      "text": {
+        "text": "*Cooking:* <@U02SAM>\n*Coordinating:* <@U01ALEX>\n*Joined late:* Lee\n⚠ A guest of someone who joined late needs Vegetarian, and this isn't marked that way.\n*Dietary needs:* Vegetarian",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "block_id": "more",
+      "elements": [
+        {
+          "action_id": "mark_done",
+          "confirm": {
+            "confirm": {
+              "emoji": true,
+              "text": "Mark done",
+              "type": "plain_text"
+            },
+            "deny": {
+              "emoji": true,
+              "text": "Not yet",
+              "type": "plain_text"
+            },
+            "text": {
+              "emoji": true,
+              "text": "This ends the meal and adds it to the history.",
+              "type": "plain_text"
+            },
+            "title": {
+              "emoji": true,
+              "text": "Mark dinner done?",
+              "type": "plain_text"
+            }
+          },
+          "style": "primary",
+          "text": {
+            "emoji": true,
+            "text": "Mark done",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "7"
+        },
+        {
+          "action_id": "link_event",
+          "text": {
+            "emoji": true,
+            "text": "View on web",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "url": "https://dinnerbell.example.com/events/7"
+        },
+        {
+          "action_id": "cancel_call",
+          "text": {
+            "emoji": true,
+            "text": "Call it off",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "cancel:7:1"
+        }
+      ],
+      "type": "actions"
+    }
+  ],
+  "text": "Dinner on Thursday, Oct 22: Sam's Tacos at 6:45 PM"
+}

@@ -17,6 +17,7 @@ from dinnerbell.domain.meals import Slot
 WHEN = datetime(2026, 10, 22, 21, 30, tzinfo=UTC)
 ALEX, SAM = n.PersonInfo(1, "Alex"), n.PersonInfo(2, "Sam")
 PAT = n.PersonInfo(9, "Pat")
+KIM = n.PersonInfo(3, "Kim")
 EVENT = n.EventInfo(
     id=7,
     household_id=1,
@@ -153,6 +154,13 @@ EXAMPLES: list[tuple[n.Notification, str, str | None, str | None, int | None]] =
         None,
         None,
         SAM.id,  # a guest without Slack: the member who invited them gets it
+    ),
+    (
+        n.LateJoinChanged(EVENT, KIM, False, ALEX, WHEN),
+        f"event:7:run2:late_join_changed:member{KIM.id}:{int(WHEN.timestamp() * 1_000_000)}",
+        None,
+        None,
+        KIM.id,  # each switch is its own message, so off, on, and off again all arrive (#76)
     ),
 ]
 

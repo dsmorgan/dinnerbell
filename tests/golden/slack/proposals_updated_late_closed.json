@@ -1,0 +1,61 @@
+{
+  "blocks": [
+    {
+      "text": {
+        "text": "*The picks for 4 people.* Voting is closed.",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "block_id": "proposal-21",
+      "text": {
+        "text": "*1. Sam's Tacos* · Cook · Mexican\n_Suggested by Sam. New to the household._\n1 vote: <@U01ALEX> · not counted: Lee (late)",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "block_id": "proposal-22",
+      "text": {
+        "text": "*2. <https://siam.example/menu|Siam Garden>* · Pickup · Thai\n_Alex can pick up._\n1 vote: <@U02SAM>\n⚠ A guest of someone who joined late needs Vegetarian, and this isn't marked that way.",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "block_id": "proposal-23",
+      "text": {
+        "text": "*3. Taqueria &lt;Lupita&gt; &amp; Co* · Delivery · Mexican\n_Added by Kim._\nNo votes yet",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "elements": [
+        {
+          "text": "Joined late: Lee",
+          "type": "mrkdwn"
+        }
+      ],
+      "type": "context"
+    },
+    {
+      "block_id": "more",
+      "elements": [
+        {
+          "action_id": "link_event",
+          "text": {
+            "emoji": true,
+            "text": "View on web",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "url": "https://dinnerbell.example.com/events/7"
+        }
+      ],
+      "type": "actions"
+    }
+  ],
+  "text": "Picks for dinner on Thursday, Oct 22: Sam's Tacos, Siam Garden, Taqueria &lt;Lupita&gt; &amp; Co"
+}

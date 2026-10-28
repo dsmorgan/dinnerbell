@@ -23,6 +23,7 @@ from dinnerbell.domain.events import (
     EventRuleViolation,
     EventState,
     InvalidResponse,
+    JoinLateFirst,
     RoleOffer,
     Status,
     Step,
@@ -220,7 +221,7 @@ async def test_most_votes_win_and_unvoting_counts(house: House) -> None:
 async def test_who_may_vote(house: House) -> None:
     event_id = await to_voting(house)
     ids = await proposal_ids(house, event_id)
-    with pytest.raises(EventRuleViolation, match="Only people who are in"):
+    with pytest.raises(JoinLateFirst, match="You missed the answers"):  # #76: unless she joins late
         await act(house, calls.vote, house["Kim"], event_id, ids["Taqueria"])
     with pytest.raises(NotFound, match="proposal"):
         await act(house, calls.vote, house["Alex"], event_id, 999_999)
@@ -281,7 +282,7 @@ async def test_a_decision_skips_proposals_vetoed_since_ranking(house: House) -> 
 async def test_members_add_catalog_and_free_text_proposals(house: House) -> None:
     event_id = await to_voting(house)  # Alex and Sam are in; Siam Garden and Taqueria are picks, for pickup
     taqueria = house.items["Taqueria"].id
-    with pytest.raises(EventRuleViolation, match="You're not in for this call"):
+    with pytest.raises(JoinLateFirst, match="you're not in for this call"):
         await act(house, calls.add_proposal, house["Kim"], event_id, Mode.PICKUP, item_id=taqueria)
     with pytest.raises(EventRuleViolation, match=r"^Taqueria is already a pick \(pickup\). Vote for it instead.$"):
         await act(house, calls.add_proposal, house["Sam"], event_id, Mode.PICKUP, item_id=taqueria)
@@ -1115,7 +1116,7 @@ async def test_toggles_flip_the_actors_own_state(house: House) -> None:
     assert await act(house, calls.toggle_vote, house["Alex"], event_id, ids["Taqueria"]) is True
     assert await act(house, calls.toggle_vote, house["Sam"], event_id, ids["Taqueria"]) is False
     assert (await house.context(event_id)).votes == {ids["Taqueria"]: [house["Alex"].id]}
-    with pytest.raises(EventRuleViolation, match="Only people who are in"):
+    with pytest.raises(JoinLateFirst):  # #76: a shared button asks first
         await act(house, calls.toggle_vote, house["Kim"], event_id, ids["Taqueria"])
     with pytest.raises(EventRuleViolation, match="closed"):
         await act(house, calls.toggle_role, house["Kim"], event_id, RoleOffer.COOK)

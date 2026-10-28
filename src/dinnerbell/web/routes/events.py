@@ -64,6 +64,9 @@ router = APIRouter()
 
 Field = Annotated[str, Form(max_length=200)]
 Many = Annotated[list[str] | None, Form()]
+Run = Annotated[str, Form(max_length=20)]
+"""The run of the call the card showed, so a card left open across a restart can't act on the
+newer run. Required: every card that posts here writes it."""
 STALE = "That can't happen anymore. Reload the page to see what changed."
 RULE_ERRORS = (EventRuleViolation, InvalidResponse, BadFormValue, InvalidMemberInput, Forbidden)
 
@@ -358,9 +361,11 @@ async def add_proposal(
     item_id: Field = "",
     free_text: Field = "",
     cuisine_id: Field = "",
+    join_late: Field = "",
     came_from: Annotated[str, Form(alias="from", max_length=10)] = "",
 ) -> Response:
-    """FR-13: a catalog item, or a new place or dish by name with its cuisine."""
+    """FR-13: a catalog item, or a new place or dish by name with its cuisine. ``join_late`` is
+    "1" from a form that asked someone who isn't in to join late first (#76)."""
 
     async def action() -> None:
         chosen = choice(Mode, mode)
@@ -377,6 +382,7 @@ async def add_proposal(
             item_id=item,
             free_text=None if item is not None else free_text,
             cuisine_id=parse_id(cuisine_id),
+            join_late=join_late == "1",
             now=context.clock(),
         )
 
@@ -410,9 +416,17 @@ async def vote(
     db: Database,
     event_id: RowId,
     proposal_id: RowId,
+    join_late: Field = "",
     came_from: Annotated[str, Form(alias="from", max_length=10)] = "",
 ) -> Response:
-    return await _on_proposal(request, principal, context, db, event_id, proposal_id, came_from, calls.vote)
+    """FR-14. ``join_late`` is "1" from the button that asked someone who isn't in to join late
+    and vote (#76)."""
+
+    async def action() -> None:
+        late = join_late == "1"
+        await calls.vote(db, principal.member, event_id, proposal_id, join_late=late, now=context.clock())
+
+    return await _run(request, principal, context, db, event_id, came_from, action)
 
 
 @router.post("/events/{event_id}/proposals/{proposal_id}/unvote")
@@ -440,6 +454,68 @@ async def lock(
 ) -> Response:
     """FR-15: the coordinator or an admin; the service checks which."""
     return await _on_proposal(request, principal, context, db, event_id, proposal_id, came_from, calls.lock)
+
+
+# Joining late (#76) -----------------------------------------------------------------------------
+
+
+@router.post("/events/{event_id}/join-late")
+async def join_late(
+    request: Request,
+    principal: CSRFChecked,
+    context: Context,
+    db: Database,
+    event_id: RowId,
+    run: Run = "",
+    came_from: Annotated[str, Form(alias="from", max_length=10)] = "",
+) -> Response:
+    """**I'm in (late)**: join while voting, after missing the answers, on the run the page showed."""
+    seen = parse_id(run)
+    if seen is None:
+        return await _malformed(request, principal, context, db, event_id, came_from)
+
+    async def action() -> None:
+        await calls.join_late(db, principal.member, event_id, run=seen, now=context.clock())
+
+    return await _run(request, principal, context, db, event_id, came_from, action)
+
+
+@router.post("/events/{event_id}/late/{member_id}")
+async def switch_late_joiner(
+    request: Request,
+    principal: CSRFChecked,
+    context: Context,
+    db: Database,
+    event_id: RowId,
+    member_id: RowId,
+    switch: Field = "",
+    on: Field = "",
+    run: Run = "",
+    came_from: Annotated[str, Form(alias="from", max_length=10)] = "",
+) -> Response:
+    """The coordinator's switches for a late joiner: ``switch`` is ``part`` (taking part) or
+    ``vote`` (vote counts), and ``on`` is "1" or "0", on the run the page showed. The service
+    checks who may."""
+    seen = parse_id(run)
+    if seen is None:
+        return await _malformed(request, principal, context, db, event_id, came_from)
+
+    async def action() -> None:
+        if switch not in {"part", "vote"} or on not in {"0", "1"}:
+            raise BadFormValue("Pick taking part or vote counts, on or off.")
+        value = on == "1"
+        await calls.switch_late_joiner(
+            db,
+            principal.member,
+            event_id,
+            member_id,
+            taking_part=value if switch == "part" else None,
+            vote_counts=value if switch == "vote" else None,
+            run=seen,
+            now=context.clock(),
+        )
+
+    return await _run(request, principal, context, db, event_id, came_from, action)
 
 
 # After the decision -----------------------------------------------------------------------------
@@ -506,9 +582,6 @@ async def done(
 
 Reason = Annotated[str, Form(max_length=400)]
 """A call-off reason. The service cuts it to 140 characters rather than refusing a longer one."""
-Run = Annotated[str, Form(max_length=20)]
-"""The run of the call the card showed, so a card left open across a restart can't act on the
-newer run. Required: every card that posts here writes it."""
 WindowField = Annotated[str, Form(max_length=10)]
 """The window Close now's button closes (``respond`` or ``vote``), so a confirmation that arrives
 after the call moved on, or races another, closes nothing. Required, like ``run``."""

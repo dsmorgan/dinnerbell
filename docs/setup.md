@@ -927,7 +927,7 @@ Each line has these fields:
 
 | Field | What it holds |
 |---|---|
-| `msg` | What happened: an action such as `answer`, `offer_role`, `propose`, `vote`, `lock`, `assign`, `call_off`, `offer_posted`, or `join`; a scheduler step such as `opened`, `voting`, `decided`, `abandoned`, or `stale_closed`; or `refused`. Deliveries to Slack are `notification delivered`, `notification delivery failed` (it retries), `notification delivery gave up`, and `notification closed` (superseded, such as by a call-off). |
+| `msg` | What happened: an action such as `answer`, `offer_role`, `propose`, `vote`, `lock`, `assign`, `call_off`, `offer_posted`, `join`, `join_late`, or `late_switch`; a scheduler step such as `opened`, `voting`, `decided`, `abandoned`, or `stale_closed`; or `refused`. Deliveries to Slack are `notification delivered`, `notification delivery failed` (it retries), `notification delivery gave up`, and `notification closed` (superseded, such as by a call-off). |
 | `event_id`, `run`, `slot`, `day` | The call or offer. `run` goes up each time a call starts again. |
 | `state_before`, `state_after` | The call's state before and after the action. A refusal has `state` instead. |
 | `member_id`, `member` | Who acted, by ID and display name. The scheduler's lines have neither. |

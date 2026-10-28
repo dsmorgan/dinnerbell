@@ -18,7 +18,7 @@ from dinnerbell.channels.slack import ids
 from dinnerbell.config import Settings
 from dinnerbell.domain.catalog import Mode
 from dinnerbell.domain.events import (
-    NOT_IN_TO_ADD,
+    NOT_IN_JOIN_LATE,
     AssignmentRole,
     EventRuleViolation,
     EventState,
@@ -93,9 +93,9 @@ async def test_a_call_tells_its_story_one_line_per_action(
     assert (await house.event(event_id)).state is EventState.VOTING
     mexican = house.tags["Mexican"].id
     await slack.submit("Sam", ids.PROPOSAL_VIEW, proposal_form("pickup", "Burrito Barn", mexican), event_id)
-    # #74: Kim isn't in, so her pickup pick is refused, and the line says why and for what.
+    # #74, #76: Kim isn't in and wasn't asked to join late, so her pick is refused, and the line says why.
     await slack.submit("Kim", ids.PROPOSAL_VIEW, proposal_form("pickup", "Noodle Hut", mexican), event_id)
-    assert slack.ephemerals("Kim")[-1] == NOT_IN_TO_ADD
+    assert slack.ephemerals("Kim")[-1] == NOT_IN_JOIN_LATE
     ctx = await house.context(event_id)
     (burritos,) = [p for p in ctx.proposals if p.free_text == "Burrito Barn"]
     await slack.click("Sam", "vote", ids.proposal_value(event_id, burritos.id))
@@ -141,7 +141,7 @@ async def test_a_call_tells_its_story_one_line_per_action(
     assert call_off["note_length"] == len(NOTE)
     refused = by_name["refused"]
     assert refused["level"] == "INFO"
-    assert (refused["reason"], refused["refusal"], refused["member"]) == ("not_in", NOT_IN_TO_ADD, "Kim")
+    assert (refused["reason"], refused["refusal"], refused["member"]) == ("not_in", NOT_IN_JOIN_LATE, "Kim")
     assert (refused["event_id"], refused["state"], refused["item"], refused["mode"]) == (
         event_id,
         "voting",

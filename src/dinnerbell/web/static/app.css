@@ -426,6 +426,10 @@ ins { color: var(--ok); text-decoration: none; }
 .decision h3 { margin-top: 0; }
 .assignments { list-style: none; padding: 0; margin: 0.3rem 0 0.7rem; }
 .chip.role { background: var(--ok-soft); border-color: transparent; color: var(--ok); }
+/* Joining late (#76): who joined late, and picks that may not suit them. */
+.chip.late { font-style: italic; }
+.proposal .warning { color: var(--danger); margin: 0.2rem 0; }
+.join-late { margin: 0.5rem 0; }
 .details-form { margin: 0.4rem 0 0.6rem; }
 .details-form > summary { color: var(--muted); min-height: 40px; display: flex; align-items: center; }
 .details-form form { margin-top: 0.5rem; }

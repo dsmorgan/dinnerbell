@@ -63,6 +63,15 @@ CALL_COORDINATE = "call_coordinate"
 """**I'll coordinate** on the call message while voting with nobody coordinating. Its value is a
 ``card_value``, so a message from before a restart can't claim the newer run (issue #54).
 ``COORDINATE``, without a run, stays for call messages drawn before it."""
+JOIN_LATE = "join_late"
+"""**I'm in (late)** (#76): on the call message while voting, on a Your answer card, and on Home.
+Its value is a ``card_value``, naming the run it was drawn for."""
+JOIN_LATE_VOTE = "join_late_vote"
+"""**Join late and vote** (#76), on the private reply to a vote from someone who isn't in. Its
+value is a ``proposal_value``."""
+LATE_MENU = "late_menu"
+"""The ⋯ menu beside a late joiner on the proposals message (#76): the coordinator's switches.
+Each option's value is a ``late_value``."""
 POST_NOW = "post_now"
 """**Post it now** on a scheduled call (issue #59): on the reply to starting a later day's call,
 and on the Home tab. Its value is a ``card_value``."""
@@ -125,6 +134,7 @@ _MENU = re.compile(r"(cancel|close):([1-9][0-9]{0,18}):([1-9][0-9]{0,18})")
 _WINDOW = re.compile(r"(respond|vote):([1-9][0-9]{0,18}):([1-9][0-9]{0,18})")
 _CARD = re.compile(r"([1-9][0-9]{0,18}):([1-9][0-9]{0,18})")
 _GUEST = re.compile(r"([1-9][0-9]{0,18}):([1-9][0-9]{0,18}):([1-9][0-9]{0,18})")
+_LATE = re.compile(r"(part|vote):(on|off):([1-9][0-9]{0,18}):([1-9][0-9]{0,18}):([1-9][0-9]{0,18})")
 _CHANNEL = re.compile(r"^[CDG][A-Z0-9]{2,31}$")
 _MESSAGE_TS = re.compile(r"[0-9]{1,12}\.[0-9]{1,8}")
 _RESPONSE_URL = re.compile(r"https://hooks\.slack(-gov)?\.com/actions/[A-Za-z0-9]+/[0-9]+/[A-Za-z0-9]+")
@@ -207,6 +217,28 @@ def parse_card(value: object) -> tuple[int, int]:
     if match is None:
         raise BadValue("not a card value")
     return _row_id(match.group(1)), _row_id(match.group(2))
+
+
+class LateSwitch(StrEnum):
+    """A late joiner's switches (#76): taking part, and whether their vote counts."""
+
+    TAKING_PART = "part"
+    VOTE_COUNTS = "vote"
+
+
+def late_value(switch: LateSwitch, on: bool, event_id: int, run: int, member_id: int) -> str:
+    """``<switch>:<on|off>:<id>:<run>:<member>``: turn ``switch`` on or off for a late joiner, on
+    the run the proposals message showed."""
+    return f"{switch.value}:{'on' if on else 'off'}:{event_id}:{run}:{member_id}"
+
+
+def parse_late(value: object) -> tuple[LateSwitch, bool, int, int, int]:
+    """``<switch>:<on|off>:<id>:<run>:<member>``, exactly as ``late_value`` writes it."""
+    match = _LATE.fullmatch(value) if isinstance(value, str) else None
+    if match is None:
+        raise BadValue("not a late joiner value")
+    switch, on = LateSwitch(match.group(1)), match.group(2) == "on"
+    return switch, on, _row_id(match.group(3)), _row_id(match.group(4)), _row_id(match.group(5))
 
 
 def guest_value(event_id: int, run: int, guest_id: int) -> str:

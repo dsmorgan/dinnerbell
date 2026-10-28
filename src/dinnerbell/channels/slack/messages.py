@@ -44,6 +44,7 @@ from dinnerbell.channels.slack.blocks import (
 from dinnerbell.domain import notifications as note
 from dinnerbell.domain.catalog import Mode
 from dinnerbell.domain.events import (
+    JOIN_LATE_PROMPT,
     AssignmentRole,
     EndReason,
     EventKind,
@@ -175,6 +176,8 @@ def _render(notification: note.Notification, ctx: RenderContext) -> Message:
             return role_vacated_message(notification, ctx)
         case note.LinkNeeded():
             return link_needed_message(notification, ctx)
+        case note.LateJoinChanged():
+            return late_join_changed_message(notification, ctx)
     raise TypeError(f"no Slack rendering for {type(notification).__name__}")  # pragma: no cover
 
 
@@ -249,8 +252,20 @@ def _window(entry: note.RosterEntry) -> str | None:
     return f"eats by {clock(end)}" if end else None
 
 
+LATE_IN = "I'm in (late)"
+LATE = "joined late"
+
+
+def join_late_button(event: note.EventInfo) -> Block:
+    """**I'm in (late)** (#76), for the run ``event`` shows: everyone who missed the answers can
+    still join while the call is voting. The service says why not to anyone who can't."""
+    return button(LATE_IN, ids.JOIN_LATE, ids.card_value(event.id, event.run))
+
+
 def _entry_line(entry: note.RosterEntry, ctx: RenderContext) -> str:
     parts: list[str] = []
+    if entry.late:
+        parts.append(f"{LATE}, vote counts" if entry.vote_counts else LATE)
     if entry.guests:
         guests = f"+{plural(entry.guests, 'guest')}"
         if entry.guest_needs:
@@ -278,7 +293,9 @@ def _roster(
     head_count: int,
     ctx: RenderContext,
 ) -> str:
-    by_status = {status: [e for e in roster if e.status is status] for status in Status}
+    by_status = {status: [e for e in roster if e.status is status and not e.late] for status in Status}
+    by_status[Status.IN] = [e for e in roster if e.status is Status.IN]  # late joiners taking part too (#76)
+    taken_off = [e for e in roster if e.late and e.status is Status.OUT]
     lines: list[str] = []
     if by_status[Status.IN]:
         lines.append(f"*In* · {plural(head_count, 'person', 'people')} eating")
@@ -286,6 +303,8 @@ def _roster(
     for status, label in ((Status.MAYBE, "Maybe"), (Status.OUT, "Out")):
         if by_status[status]:
             lines.append(f"*{label}:* {ctx.directory.mentions(e.member for e in by_status[status])}")
+    if taken_off:
+        lines.append(f"*Joined late, not taking part:* {ctx.directory.mentions(e.member for e in taken_off)}")
     if not roster:
         lines.append("No answers yet. Be the first!")
     if waiting_on and event.state is EventState.COLLECTING:
@@ -339,16 +358,21 @@ def call_message(
     status = escape(plain_status)
     if mentions and event.state is EventState.COLLECTING:
         status += "\n" + " ".join(ctx.directory.mention(p) for p in mentions)
+    if event.state is EventState.VOTING:
+        status += f"\nMissed the answers? Tap *{LATE_IN}* to join."
     blocks: list[Block] = [
         header(_title(event)),
         section(status),
         section(_roster(event, notification.roster, notification.waiting_on, notification.head_count, ctx)),
     ]
-    if event.coordinator is None and event.state is EventState.VOTING:
-        # Answering is over, so no card is offered, but someone can still take the vote in hand.
-        # It names the run, so a message from before a restart can't claim the newer one (#54).
-        claim = button("I'll coordinate", ids.CALL_COORDINATE, ids.card_value(event.id, event.run))
-        blocks.append(actions(claim, block_id="roles"))
+    if event.state is EventState.VOTING:
+        # Answering is over, but anyone who missed it can still join late (#76), and someone can
+        # still take the vote in hand. Each names the run, so a message from before a restart
+        # can't act on the newer one (#54).
+        late = [join_late_button(event)]
+        if event.coordinator is None:
+            late.append(button("I'll coordinate", ids.CALL_COORDINATE, ids.card_value(event.id, event.run)))
+        blocks.append(actions(*late, block_id="roles"))
     more: list[Block] = []
     if event.state is EventState.COLLECTING:
         # Everyone sees this message, so it offers no choices, only the way to your own card,
@@ -377,11 +401,59 @@ def _proposal_text(proposal: note.ProposalInfo, number: int, ctx: RenderContext)
     lines = [f"*{number}. {_item_name(proposal.item)}* · {_kind(proposal)}"]
     if proposal.reasons:
         lines.append("_" + escape(" ".join(proposal.reasons)) + "_")
-    if proposal.voters:
-        lines.append(f"{plural(proposal.votes, 'vote')}: {ctx.directory.mentions(proposal.voters)}")
-    else:
-        lines.append("No votes yet")
+    votes = plural(proposal.votes, "vote")
+    if proposal.counted:
+        votes += f": {ctx.directory.mentions(proposal.counted)}"
+    if proposal.not_counted:  # late joiners' votes show, marked, and don't count (#76)
+        late = ", ".join(f"{ctx.directory.mention(p)} (late)" for p in proposal.not_counted)
+        votes += f" · not counted: {late}"
+    lines.append(votes if proposal.voters else "No votes yet")
+    lines += [escape(w) for w in proposal.warnings]
     return join_lines(lines)
+
+
+MAX_LATE_SHOWN = 8
+"""Late joiners the proposals message lists with their switches; the web has the rest."""
+
+
+def _late_line(late: note.LateJoinerInfo, ctx: RenderContext) -> str:
+    part = "taking part" if late.taking_part else "not taking part"
+    vote = "vote counts" if late.vote_counts else "vote doesn't count"
+    return f"{ctx.directory.mention(late.member)} joined late · {part} · {vote}"
+
+
+def late_menu(event: note.EventInfo, late: note.LateJoinerInfo) -> Block:
+    """The coordinator's two switches for one late joiner (#76). Everyone sees the menu, so the
+    server checks who picked it; each option names the run, and turns its switch the other way."""
+    who, member = clip(late.member.name, 40), late.member.id
+    part = ids.late_value(ids.LateSwitch.TAKING_PART, not late.taking_part, event.id, event.run, member)
+    vote = ids.late_value(ids.LateSwitch.VOTE_COUNTS, not late.vote_counts, event.id, event.run, member)
+    return overflow(
+        ids.LATE_MENU,
+        [
+            option(f"Take {who} off this call" if late.taking_part else f"Put {who} back on", part),
+            option(f"Don't count {who}'s vote" if late.vote_counts else f"Count {who}'s vote", vote),
+        ],
+    )
+
+
+def _late_blocks(notification: note.ProposalsReady | note.ProposalsUpdated, ctx: RenderContext) -> list[Block]:
+    """Who joined late, and, while voting, the coordinator's switches beside each one (#76)."""
+    if not notification.late:
+        return []
+    event = notification.event
+    if event.state is not EventState.VOTING:
+        return [context("Joined late: " + ctx.directory.mentions(late.member for late in notification.late))]
+    blocks: list[Block] = [
+        context("Joined late: their votes show, but count only if the coordinator says so, with ⋯ beside each name.")
+    ]
+    shown = notification.late[:MAX_LATE_SHOWN]
+    for late in shown:
+        block = section(_late_line(late, ctx), block_id=f"late-{late.member.id}")
+        blocks.append(block | {"accessory": late_menu(event, late)})
+    if len(notification.late) > len(shown):
+        blocks.append(context(f"…and {plural(len(notification.late) - len(shown), 'more')} on the web."))
+    return blocks
 
 
 def proposals_message(notification: note.ProposalsReady | note.ProposalsUpdated, ctx: RenderContext) -> Message:
@@ -417,6 +489,7 @@ def proposals_message(notification: note.ProposalsReady | note.ProposalsUpdated,
     hidden = len(notification.proposals) - len(shown)
     if hidden:
         blocks.append(context(f"…and {plural(hidden, 'more pick')} on the web."))
+    blocks += _late_blocks(notification, ctx)
     footer: list[Block] = []
     if voting:
         footer.append(button("Add proposal", ids.ADD_PROPOSAL, ids.event_value(event.id)))
@@ -475,6 +548,10 @@ def decision_message(
         ),
     ]
     lines = _assignments(decision.assignments, ctx) or ["_Nobody is assigned yet._"]
+    late = [p.member for p in decision.participants if p.late]
+    if late:
+        lines.append(f"*Joined late:* {ctx.directory.mentions(late)}")
+    lines += [escape(w) for w in proposal.warnings]  # the needs of a late joiner's guests (#76)
     if decision.dietary_notes:
         lines.append(f"*Dietary needs:* {escape(', '.join(decision.dietary_notes))}")
     blocks.append(section(join_lines(lines)))
@@ -717,10 +794,27 @@ def feedback_reminder_message(notification: note.FeedbackReminder, ctx: RenderCo
 # Your answer -------------------------------------------------------------------------------------
 
 
-def _moved_on(event: note.EventInfo, run: int | None) -> bool:
+def _moved_on(event: note.EventInfo, run: int | None, mine: Response | None = None) -> bool:
     """Whether a card drawn for ``run`` (None: no card was tapped) is out of date: the call has
-    started again since, or responses have closed."""
-    return run is not None and (run != event.run or event.state is not EventState.COLLECTING)
+    started again since, or responses have closed, unless ``mine`` is a late joiner's answer
+    while voting, which they can still add roles to (#76)."""
+    return run is not None and (run != event.run or not card_live(event, mine))
+
+
+def card_live(event: note.EventInfo, mine: Response | None) -> bool:
+    """Whether a Your answer card for ``event`` as it is now still takes taps: while answers are
+    open, and for a late joiner taking part, while voting (#76)."""
+    return event.state is EventState.COLLECTING or (late_answer(event, mine) and mine is not None and mine.is_in)
+
+
+def late_answer(event: note.EventInfo, mine: Response | None) -> bool:
+    return event.state is EventState.VOTING and mine is not None and mine.late
+
+
+def can_join_late(event: note.EventInfo, mine: Response | None, *, guest: bool = False) -> bool:
+    """Whether to offer **I'm in (late)** on someone's own card: while voting, to a member who
+    isn't in and wasn't switched off (``domain.events.check_can_join_late``)."""
+    return event.state is EventState.VOTING and not guest and (mine is None or (not mine.is_in and not mine.late))
 
 
 GUEST_ANSWERS = (Status.IN, Status.OUT)
@@ -744,7 +838,9 @@ def _mine_lines(event: note.EventInfo, mine: Response | None, member_id: int) ->
     """The member's own answer, offers, and coordinating, for their eyes only. Mentions would
     look the same as names here, so names are plain."""
     lines: list[str] = []
-    if mine is not None:
+    if mine is not None and mine.late:
+        lines.append(_late_answer_line(mine))
+    elif mine is not None:
         line = f"Your answer: *{ANSWER_WORDS[mine.status]}*"
         if mine.guests and mine.status is not Status.OUT:
             line += f" · +{plural(mine.guests, 'guest')}"
@@ -757,6 +853,22 @@ def _mine_lines(event: note.EventInfo, mine: Response | None, member_id: int) ->
     if coordinating is not None:
         lines.append(coordinating)
     return lines
+
+
+def not_for_you_line(names: tuple[str, ...]) -> str:
+    """For a late joiner's eyes only (#76): picks that miss their own stances or needs."""
+    return f"⚠ Not a fit for your preferences: {escape(', '.join(names))}"
+
+
+def _late_answer_line(mine: Response) -> str:
+    """A late joiner's own answer, for their eyes only (#76)."""
+    if not mine.is_in:
+        return "You joined late, and the coordinator has you out for this one."
+    line = "Your answer: *In (joined late)*"
+    if mine.offers:
+        line += " · can " + " or ".join(OFFER_WORDS[o] for o in _offers(mine))
+    vote = "Your vote counts." if mine.vote_counts else "Your vote shows, but counts only if the coordinator says so."
+    return f"{line}\n{vote}"
 
 
 def coordinator_line(event: note.EventInfo, member_id: int | None) -> str | None:
@@ -777,7 +889,7 @@ def your_answer_text(event: note.EventInfo, mine: Response | None, *, run: int |
         return f"{_title(event)}: {MOVED_ON}"
     if mine is None:
         return f"{_title(event)}: you haven't answered yet"
-    summary = ANSWER_WORDS[mine.status]
+    summary = ANSWER_WORDS[mine.status] + (" (joined late)" if mine.late else "")
     if mine.guests and mine.status is not Status.OUT:
         summary += f" with {plural(mine.guests, 'guest')}"
     if mine.offers:
@@ -837,12 +949,15 @@ def your_answer(
     guest: bool = False,
     can_invite: bool = False,
     guests: tuple[CardGuest, ...] = (),
+    not_for_you: tuple[str, ...] = (),
 ) -> Message:
     """The Your answer card: an ephemeral only ``member_id`` sees, with their answer and offers
     marked on the same buttons the call has (spec section 10). ``event`` is the call as it is now
     and ``mine`` their response to it. A tap in the channel posts a card; a tap on the card
     replaces it, so ``run`` is the run the tapped card named, or None after a channel tap.
-    ``notice`` is why a tap changed nothing, such as someone else coordinating already."""
+    ``notice`` is why a tap changed nothing, such as someone else coordinating already.
+    ``not_for_you`` names the picks that miss a late joiner's own stances or needs (#76): only
+    they see it (FR-29)."""
     title = f"*{_title(event)}*"
     if run is not None and run != event.run:
         # Another run's answers aren't what this card was about; don't mix them in.
@@ -852,16 +967,27 @@ def your_answer(
         ]
         return labelled(_finish(your_answer_text(event, mine, run=run), gone), ctx)
     lines = [title]
-    live = not _moved_on(event, run) and event.state is EventState.COLLECTING
+    moved_on = _moved_on(event, run, mine)
+    live = not moved_on and card_live(event, mine)
     if not live:
         status = escape(_call_status(event))
-        lines.append(f"*{MOVED_ON}* {status}" if _moved_on(event, run) else status)
+        lines.append(f"*{MOVED_ON}* {status}" if moved_on else status)
     lines += _mine_lines(event, mine, member_id)
+    if not_for_you and late_answer(event, mine):
+        lines.append(not_for_you_line(not_for_you))
     blocks: list[Block] = [section(join_lines(lines))]
     if notice:
         blocks.append(context(escape(notice)))
     text = your_answer_text(event, mine, run=run)
     if not live:
+        more = [join_late_button(event)] if can_join_late(event, mine, guest=guest) else []
+        blocks.append(actions(*more, _web_button(ctx, event), block_id="more"))
+        return labelled(_finish(text, blocks), ctx)
+    if event.state is EventState.VOTING:  # a late joiner adds roles while voting (#76)
+        closes = local_clock(event.vote_deadline, event.timezone) if event.vote_deadline else None
+        until = f" until voting closes at *{closes}*" if closes else ""
+        blocks.append(context(f"Only you can see this. Offer to pitch in{until}."))
+        blocks.append(actions(*answer_actions(event, mine, guest=guest).roles, block_id="roles"))
         blocks.append(actions(_web_button(ctx, event), block_id="more"))
         return labelled(_finish(text, blocks), ctx)
     closes = local_clock(event.respond_deadline, event.timezone)
@@ -921,10 +1047,38 @@ def maybe_resolved_message(notification: note.MaybeResolved, ctx: RenderContext)
     event = notification.event
     text = (
         f"The {_slot(event)} call for {day_label(event.day)} closed while you were a maybe, so you're "
-        "counted out this time. If your plans change, let the coordinator know in the thread."
+        f"counted out this time. If your plans change, tap *{LATE_IN}* on the call while the vote is open."
     )
     blocks = [section(text), actions(_web_button(ctx, event), block_id="more")]
     return _finish(f"You're counted out for {_slot(event)} on {day_label(event.day)}.", blocks)
+
+
+LATE_VOTE = "Join late and vote"
+
+
+def join_late_vote_prompt(event_id: int, proposal_id: int) -> Message:
+    """The private reply to **Vote** from someone who isn't in (#76): it asks first, and its
+    button joins them late and casts that vote."""
+    text = (
+        f"*{JOIN_LATE_PROMPT}* Voting joins you late: you're in, and your vote shows, but counts only "
+        "if the coordinator says so."
+    )
+    join = button(LATE_VOTE, ids.JOIN_LATE_VOTE, ids.proposal_value(event_id, proposal_id), style="primary")
+    return _finish(JOIN_LATE_PROMPT, [section(text), actions(join, block_id="join-late")])
+
+
+def late_join_changed_message(notification: note.LateJoinChanged, ctx: RenderContext) -> Message:
+    """To a late joiner (#76): the coordinator took them off the call, kindly, or put them back."""
+    event, by = notification.event, escape(notification.by.name)
+    slot, day = _slot(event), day_label(event.day)
+    if notification.taking_part:
+        text = f"Good news: {by} has you back in for {slot} on {day}. Thanks for joining!"
+        plain = f"You're back in for {slot} on {day}."
+    else:
+        text = f"Thanks for wanting to join {slot} on {day}! {by} has you out for this one. See you next time."
+        plain = f"You're out for {slot} on {day} this time."
+    blocks = [section(text), actions(_web_button(ctx, event), block_id="more")]
+    return _finish(plain, blocks)
 
 
 def assignment_message(notification: note.AssignmentMade, ctx: RenderContext) -> Message:

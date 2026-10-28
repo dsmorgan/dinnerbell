@@ -62,6 +62,13 @@ class Permissions:
     """Drop out of an open offer they're in, unless it's theirs: ``offers.leave``."""
     invite: bool = False
     """Invite a guest to the call (#38): ``guests.invite``."""
+    join_late: bool = False
+    """Join while voting after missing the answers (#76): ``calls.join_late``. A vote or a pick
+    from them joins them late too, once they say yes (``join_late=True``)."""
+    late_roles: bool = False
+    """Offer a role as a late joiner taking part, while voting (#76): ``calls.offer_role``."""
+    switch_late: bool = False
+    """Flip late joiners' switches (#76): ``calls.switch_late_joiner``."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,6 +91,9 @@ class GuestView:
 class ProposalView:
     info: note.ProposalInfo
     voted: bool
+    not_for_me: bool = False
+    """The viewer joined late and this pick misses their own vetoes or dietary needs (#76).
+    Only they see it (FR-29)."""
 
 
 @dataclass(frozen=True)
@@ -109,6 +119,8 @@ class EventView:
     """Guests invited to the call (#38)."""
     invitable: tuple[note.PersonInfo, ...] = ()
     """Saved guests the viewer could invite: only for a member who may invite (#38)."""
+    late: tuple[note.LateJoinerInfo, ...] = ()
+    """Who joined late (#76), with the coordinator's switches."""
 
     @property
     def id(self) -> int:
@@ -118,6 +130,11 @@ class EventView:
         """ "usually dinner" beside an item that isn't for the call's meal (#72). ``items`` lists
         those last, and still offers them: people know better than the catalog."""
         return meal_hint(item, self.event.slot.meal)
+
+    @property
+    def not_for_me(self) -> tuple[str, ...]:
+        """The picks that don't fit the viewer, a late joiner, by name (#76): for their eyes only."""
+        return tuple(p.info.item.name for p in self.proposals if p.not_for_me)
 
     @property
     def picked_item_ids(self) -> frozenset[int]:
@@ -180,7 +197,7 @@ def _guest_permissions(base: Permissions, ctx: CallContext, actor: Member) -> Pe
     """``base`` cut down to what ``domain.guests`` lets an invited guest do (#38)."""
     may = functools.partial(_guest_may, ctx, actor)
     return Permissions(
-        respond=base.respond and may(GuestAction.ANSWER),
+        respond=base.respond and may(GuestAction.ANSWER),  # never joins late, or switches (#76)
         claim=base.claim and may(GuestAction.COORDINATE),
         hand_off=base.hand_off and may(GuestAction.HAND_OFF),
         manage=base.manage and may(GuestAction.MANAGE_DECISION),
@@ -224,7 +241,25 @@ def _member_permissions(
         post_now=event.state is EventState.SCHEDULED
         and _allowed(lambda: rules.check_can_post_now(event, actor, now=now)),
         invite=_allowed(lambda: check_can_invite(event, actor)),
+        join_late=_joins_late(event, actor, mine),
+        late_roles=mine is not None
+        and mine.late
+        and _allowed(lambda: rules.check_can_offer_role(event, actor, mine))
+        and event.state is EventState.VOTING,
+        switch_late=_allowed(lambda: rules.check_can_switch_late(event, actor, _coordinator(ctx))),
     )
+
+
+def _joins_late(event: Event, actor: Member, mine: Response | None) -> bool:
+    try:
+        return rules.check_can_join_late(event, actor, mine)
+    except EventRuleViolation:
+        return False
+
+
+def _coordinator(ctx: CallContext) -> Member | None:
+    coordinator_id = ctx.event.coordinator_id
+    return ctx.members.get(coordinator_id) if coordinator_id is not None else None
 
 
 def _closable(event: Event, actor: Member, now: datetime) -> Window | None:
@@ -283,6 +318,7 @@ def view(ctx: CallContext, actor: Member, today: date, now: datetime, *, any_tim
     mine = [s for s in ctx.suggestions if s.member_id == actor.id]
     tags = sorted(ctx.tags.values(), key=lambda t: t.key)
     active = sorted((i for i in ctx.items.values() if i.active), key=lambda i: i.key)
+    voting = ctx.event.state is EventState.VOTING
     return EventView(
         event=ctx.event,
         info=cc.event_info(ctx),
@@ -293,7 +329,12 @@ def view(ctx: CallContext, actor: Member, today: date, now: datetime, *, any_tim
         my_suggestion_ids=tuple(s.item_id for s in mine if s.item_id is not None),
         my_suggestion_texts=tuple(s.free_text for s in mine if s.free_text is not None),
         proposals=tuple(
-            ProposalView(cc.proposal_info(ctx, p), actor.id in ctx.votes.get(p.id, [])) for p in ctx.proposals
+            ProposalView(
+                cc.proposal_info(ctx, p),
+                actor.id in ctx.votes.get(p.id, []),
+                not_for_me=voting and not cc.fits_late_joiner(ctx, p, actor.id),
+            )
+            for p in ctx.proposals
         ),
         decision=cc.decision_info(ctx),
         can=permissions(ctx, actor, today, now, any_time=any_time),
@@ -304,6 +345,7 @@ def view(ctx: CallContext, actor: Member, today: date, now: datetime, *, any_tim
         offer=cc.offer_info(ctx) if ctx.event.is_offer else None,
         guests=_guest_views(ctx, actor),
         invitable=_invitable(ctx, actor),
+        late=cc.late_joiners(ctx),
     )
 
 

@@ -1,0 +1,122 @@
+{
+  "blocks": [
+    {
+      "text": {
+        "emoji": true,
+        "text": "Today · Thursday, Oct 22",
+        "type": "plain_text"
+      },
+      "type": "header"
+    },
+    {
+      "block_id": "event-7",
+      "text": {
+        "text": "*Dinner* · Voting\nYou joined late. You offered to pick up.\n⚠ Not a fit for your preferences: Siam Garden\n*Coordinator:* Alex\nVoting is open in the channel thread.",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "block_id": "roles-7",
+      "elements": [
+        {
+          "action_id": "card_offer_cook",
+          "text": {
+            "emoji": true,
+            "text": "I can cook",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "7:1"
+        },
+        {
+          "action_id": "card_withdraw_pickup",
+          "style": "primary",
+          "text": {
+            "emoji": true,
+            "text": "✓ I can pick up",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "7:1"
+        },
+        {
+          "action_id": "card_offer_order",
+          "text": {
+            "emoji": true,
+            "text": "I'll order",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "7:1"
+        }
+      ],
+      "type": "actions"
+    },
+    {
+      "block_id": "event-actions-7",
+      "elements": [
+        {
+          "action_id": "link_event",
+          "text": {
+            "emoji": true,
+            "text": "Open",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "url": "https://dinnerbell.example.com/events/7"
+        }
+      ],
+      "type": "actions"
+    },
+    {
+      "block_id": "start",
+      "elements": [
+        {
+          "action_id": "make_offer",
+          "text": {
+            "emoji": true,
+            "text": "Make an offer",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "make_offer"
+        },
+        {
+          "action_id": "start_call_lunch",
+          "text": {
+            "emoji": true,
+            "text": "Start a lunch call",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "lunch"
+        },
+        {
+          "action_id": "start_call_breakfast",
+          "text": {
+            "emoji": true,
+            "text": "Start a breakfast call",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "breakfast"
+        }
+      ],
+      "type": "actions"
+    },
+    {
+      "type": "divider"
+    },
+    {
+      "elements": [
+        {
+          "text": "<https://dinnerbell.example.com/preferences|Your preferences> · <https://dinnerbell.example.com/catalog|Catalog> · <https://dinnerbell.example.com/history|History> · <https://dinnerbell.example.com/|Today on the web>",
+          "type": "mrkdwn"
+        }
+      ],
+      "type": "context"
+    }
+  ],
+  "type": "home"
+}

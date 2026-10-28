@@ -18,7 +18,7 @@ from dinnerbell.config import Settings
 from dinnerbell.db.events import ProposalRepository
 from dinnerbell.domain.catalog import Mode
 from dinnerbell.domain.events import (
-    NOT_IN_TO_ADD,
+    NOT_IN_JOIN_LATE,
     DuplicatePick,
     EventRuleViolation,
     EventState,
@@ -130,8 +130,9 @@ async def test_a_pickup_picks_winner_is_picked_up_by_whoever_added_it(house: Hou
 
 
 @pytest.mark.parametrize("answer", ["never", Status.OUT, Status.MAYBE, "coordinating"])
-async def test_someone_not_in_cant_add_a_pick_yet(house: House, answer: object) -> None:
-    """Joining late is #76; until then they're told why, whatever they'd add."""
+async def test_someone_not_in_adds_a_pick_only_by_joining_late(house: House, answer: object) -> None:
+    """Someone who isn't in is told to join late first (#76), whatever they'd add, unless they
+    said yes to joining late; a coordinator who isn't in too."""
     event_id = await open_dinner(house)
     for name in ("Alex", "Lee"):
         await act(house, calls.respond, house[name], event_id, Status.IN)
@@ -147,7 +148,7 @@ async def test_someone_not_in_cant_add_a_pick_yet(house: House, answer: object) 
     ]:
         with pytest.raises(EventRuleViolation) as refused:
             await act(house, calls.add_proposal, house["Kim"], event_id, mode, **target)
-        assert str(refused.value) == NOT_IN_TO_ADD
+        assert str(refused.value) == NOT_IN_JOIN_LATE
     assert await offers_of(house, event_id, "Kim") == frozenset()
 
 

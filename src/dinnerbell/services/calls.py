@@ -42,6 +42,7 @@ from dinnerbell.domain.catalog import (
 )
 from dinnerbell.domain.events import (
     MODE_ROLE,
+    NOT_IN_JOIN_LATE,
     ActingAs,
     AssignmentRole,
     Details,
@@ -49,6 +50,7 @@ from dinnerbell.domain.events import (
     EventRuleViolation,
     EventState,
     IllegalTransition,
+    JoinLateFirst,
     Proposal,
     ProposalSource,
     RoleOffer,
@@ -58,12 +60,15 @@ from dinnerbell.domain.events import (
     check_ad_hoc_day,
     check_can_cancel,
     check_can_close_window,
+    check_can_join_late,
     check_can_lock,
     check_can_manage_decision,
     check_can_mark_done,
+    check_can_offer_role,
     check_can_post_now,
     check_can_propose,
     check_can_respond,
+    check_can_switch_late,
     check_can_vote,
     check_claim_coordinator,
     check_details,
@@ -79,6 +84,8 @@ from dinnerbell.domain.events import (
     not_on_cook_list,
     transition,
     with_details,
+    with_late_join,
+    with_late_switches,
     with_offer,
     with_status,
 )
@@ -98,6 +105,7 @@ from dinnerbell.services.variety import household_today
 
 NO_SUCH_PROPOSAL = "No such proposal."
 NO_SUCH_MEMBER = "No such member."
+NOT_LATE = "They answered on time, so there's nothing to switch."
 
 
 def _target(event: Event) -> str:
@@ -224,8 +232,8 @@ async def offer_role(
     async with locked_event(db, actor.household_id, event_id, now) as event:
         await guest_rules.gate(db, event, actor, GuestAction.OFFER_ROLE)
         check_run(event, run)
-        check_can_respond(event, actor, invited=await _invited(db, event, actor))
         ctx = await load(db, event)
+        check_can_offer_role(event, actor, ctx.response_of(actor.id), invited=await _invited(db, event, actor))
         new = with_offer(ctx.response_of(actor.id), actor.id, role, offered, now)
         if new is None:
             return
@@ -240,8 +248,8 @@ async def toggle_role(db: AsyncSession, actor: Member, event_id: int, role: Role
     whether the actor now offers the role."""
     async with locked_event(db, actor.household_id, event_id, now) as event:
         await guest_rules.gate(db, event, actor, GuestAction.OFFER_ROLE)
-        check_can_respond(event, actor, invited=await _invited(db, event, actor))
         current = (await load(db, event)).response_of(actor.id)
+        check_can_offer_role(event, actor, current, invited=await _invited(db, event, actor))
         offered = current is None or role not in current.offers
         new = with_offer(current, actor.id, role, offered, now)
         if new is not None:
@@ -275,6 +283,112 @@ async def save_details(
         note_length = len(clean.note or "")  # the note is theirs to write, so only its length (SEC-5)
         activity.action(
             db, "details", event, actor, guests=clean.guests, suggestions=suggestions, note_length=note_length
+        )
+
+
+# Joining late (#76) -------------------------------------------------------------------------------
+
+
+async def join_late(db: AsyncSession, actor: Member, event_id: int, *, run: int | None = None, now: datetime) -> bool:
+    """**I'm in (late)**: a member who missed the answers joins while the call is voting
+    (``check_can_join_late``). They're in, marked late, and their vote shows but doesn't count
+    until the coordinator says so. Returns whether they joined; someone already in changes
+    nothing. ``run``, when given, is the run the actor saw (``check_run``)."""
+    async with locked_event(db, actor.household_id, event_id, now) as event:
+        await guest_rules.gate(db, event, actor, GuestAction.JOIN_LATE)
+        check_run(event, run)
+        ctx = await load(db, event)
+        return await _joined_late(db, ctx, actor, now=now) is not ctx
+
+
+async def _joined_late(db: AsyncSession, ctx: CallContext, actor: Member, *, now: datetime) -> CallContext:
+    """Join ``actor`` to ``ctx``'s call late, under the event's lock, and return the call read
+    again; or ``ctx`` itself when they're in already."""
+    mine = ctx.response_of(actor.id)
+    if not check_can_join_late(ctx.event, actor, mine):
+        return ctx
+    await ResponseRepository(db).save(actor.household_id, ctx.event.id, with_late_join(mine, actor.id, now), now)
+    joined = await load(db, ctx.event)
+    await publish(db, joined, cc.call_updated(joined), cc.proposals_updated(joined), now=now)
+    before = "never" if mine is None else ("maybe" if mine.maybe_at_deadline else mine.status.value)
+    activity.action(db, "join_late", ctx.event, actor, answer_before=before)
+    return joined
+
+
+async def _in_or_join_late(
+    db: AsyncSession, ctx: CallContext, actor: Member, *, join_late: bool, coordinator_ok: bool, now: datetime
+) -> CallContext:
+    """For a vote or a pick while voting: someone who isn't in joins late first, once they've
+    said yes to ``JOIN_LATE_PROMPT`` (``join_late``); otherwise ``JoinLateFirst`` says why
+    nothing happened. ``coordinator_ok``: a coordinator who isn't in may act without joining,
+    as they always could vote."""
+    mine = ctx.response_of(actor.id)
+    if (mine is not None and mine.is_in) or (coordinator_ok and actor.active and is_coordinator(ctx.event, actor)):
+        return ctx
+    if ctx.event.state is not EventState.VOTING:
+        return ctx  # the use case's own check says why
+    check_can_join_late(ctx.event, actor, mine)
+    if not join_late:
+        raise JoinLateFirst(NOT_IN_JOIN_LATE)
+    return await _joined_late(db, ctx, actor, now=now)
+
+
+async def switch_late_joiner(
+    db: AsyncSession,
+    actor: Member,
+    event_id: int,
+    member_id: int,
+    *,
+    taking_part: bool | None = None,
+    vote_counts: bool | None = None,
+    run: int | None = None,
+    now: datetime,
+) -> None:
+    """The coordinator's switches for a late joiner (#76; ``check_can_switch_late``): **taking
+    part**, on by default, and **vote counts**, off by default. Switching taking part off makes
+    them out for this call, and they're told. A switch already where it's asked changes nothing.
+    Otherwise it's audited as ``event.late_joiner_changed`` and the call and proposals messages
+    are updated."""
+    async with locked_event(db, actor.household_id, event_id, now) as event:
+        await guest_rules.gate(db, event, actor, GuestAction.LATE_SWITCHES)
+        check_run(event, run)
+        ctx = await load(db, event)
+        coordinator = ctx.members.get(event.coordinator_id) if event.coordinator_id is not None else None
+        capacity = check_can_switch_late(event, actor, coordinator)
+        target = ctx.response_of(member_id)
+        if member_id not in ctx.members:
+            raise NotFound(NO_SUCH_MEMBER)
+        if target is None or not target.late:
+            raise EventRuleViolation(NOT_LATE, code="not_late")
+        new = with_late_switches(target, taking_part=taking_part, vote_counts=vote_counts)
+        if new == target:
+            return
+        await ResponseRepository(db).save(actor.household_id, event.id, new, now)
+        ctx = await load(db, event)
+        sent: list[note.Notification] = [cc.call_updated(ctx), cc.proposals_updated(ctx)]
+        person = ctx.members[member_id]
+        if new.is_in != target.is_in and person.active and member_id != actor.id:
+            sent.append(
+                note.LateJoinChanged(cc.event_info(ctx), ctx.person(member_id), new.is_in, ctx.person(actor.id), now)
+            )
+        await publish(db, ctx, *sent, now=now)
+        payload = {
+            "member_id": member_id,
+            "taking_part": new.is_in,
+            "vote_counts": new.vote_counts,
+            "as": capacity.value,
+        }
+        await audit(db, actor.household_id, actor, "event.late_joiner_changed", _target(event), payload, now)
+        activity.action(
+            db,
+            "late_switch",
+            event,
+            actor,
+            to_member_id=member_id,
+            to_member=person.display_name,
+            taking_part=new.is_in,
+            vote_counts=new.vote_counts,
+            capacity=capacity.value,
         )
 
 
@@ -368,6 +482,8 @@ async def add_proposal(
     item_id: int | None = None,
     free_text: str | None = None,
     cuisine_id: int | None = None,
+    join_late: bool = False,
+    run: int | None = None,
     now: datetime,
 ) -> Proposal:
     """FR-13: a catalog item, or free text with a cuisine, during the vote window. A proposal
@@ -375,13 +491,21 @@ async def add_proposal(
     does it (#74): they must be in, and they offer the role its mode needs before it's checked,
     as an offer does (``picks.volunteer``). The exception is a home meal whose cook list they're
     not on: it's added if a cook on the list who's in offered to cook, and they take no role. A
-    call has one pick per place, in any mode (#77)."""
+    call has one pick per place, in any mode (#77).
+
+    Someone who isn't in joins late first when ``join_late`` says they agreed to (#76), and is
+    refused with ``JoinLateFirst`` otherwise. A late joiner's pick passes the stances and needs
+    of everyone who answered on time; one that misses only their own is added, with a warning.
+    ``run``, when given, is the run the actor saw (``check_run``), as on the Slack modal that
+    asked them to join late."""
     async with locked_event(db, actor.household_id, event_id, now) as event:
         await guest_rules.gate(db, event, actor, GuestAction.PROPOSE)
+        check_run(event, run)
         check_can_propose(event, actor)
         ctx = await load(db, event)
         named = ctx.items.get(item_id) if item_id is not None else free_text
         activity.about(item=named, item_id=item_id, mode=mode)
+        ctx = await _in_or_join_late(db, ctx, actor, join_late=join_late, coordinator_ok=False, now=now)
         check_in_to_add(ctx.response_of(actor.id))
         check_proposal_room(ctx.proposals, actor)
         item = await _proposed_item(db, ctx, mode, item_id, free_text)
@@ -460,11 +584,17 @@ def _proposal_in(ctx: CallContext, proposal_id: int) -> Proposal:
     return proposal
 
 
-async def vote(db: AsyncSession, actor: Member, event_id: int, proposal_id: int, *, now: datetime) -> None:
-    """FR-14: one vote per member per proposal; voting twice changes nothing."""
+async def vote(
+    db: AsyncSession, actor: Member, event_id: int, proposal_id: int, *, join_late: bool = False, now: datetime
+) -> None:
+    """FR-14: one vote per member per proposal; voting twice changes nothing. Someone who isn't
+    in joins late first when ``join_late`` says they agreed to (#76), and is refused with
+    ``JoinLateFirst`` otherwise."""
     async with locked_event(db, actor.household_id, event_id, now) as event:
         await guest_rules.gate(db, event, actor, GuestAction.VOTE)
         ctx = await load(db, event)
+        _proposal_in(ctx, proposal_id)
+        ctx = await _in_or_join_late(db, ctx, actor, join_late=join_late, coordinator_ok=True, now=now)
         check_can_vote(event, actor, ctx.response_of(actor.id))
         proposal = _proposal_in(ctx, proposal_id)
         if await VoteRepository(db).add(actor.household_id, event.id, proposal_id, actor.id, now):
@@ -486,10 +616,13 @@ async def unvote(db: AsyncSession, actor: Member, event_id: int, proposal_id: in
 async def toggle_vote(db: AsyncSession, actor: Member, event_id: int, proposal_id: int, *, now: datetime) -> bool:
     """Vote for the proposal, or take the vote back, reading the actor's vote under the event's
     lock. For shared buttons, such as on a Slack message. Returns whether the actor now votes
-    for it."""
+    for it. Someone who isn't in gets ``JoinLateFirst``: joining late takes their yes, and a
+    toggle can't be retried safely, so they join and vote with ``vote(..., join_late=True)``."""
     async with locked_event(db, actor.household_id, event_id, now) as event:
         await guest_rules.gate(db, event, actor, GuestAction.VOTE)
         ctx = await load(db, event)
+        _proposal_in(ctx, proposal_id)
+        await _in_or_join_late(db, ctx, actor, join_late=False, coordinator_ok=True, now=now)
         check_can_vote(event, actor, ctx.response_of(actor.id))
         proposal = _proposal_in(ctx, proposal_id)
         votes = VoteRepository(db)
