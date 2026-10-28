@@ -240,7 +240,12 @@ BADGE_NEWS = (
     note.BadgeNews(SAM, (CHEF_BRONZE,)),
 )
 MANY_BADGES = (
-    note.BadgeNews(KIM, tuple(note.BadgeTier(b.name, "Gold") for b in BADGES[:6]), more=6),
+    note.BadgeNews(
+        KIM,
+        tuple(note.BadgeTier(b.name, "Gold") for b in BADGES[:6]),
+        more=6,
+        rest=tuple(note.BadgeTier(b.name, "Gold") for b in BADGES[6:12]),
+    ),
     *(note.BadgeNews(note.PersonInfo(20 + n, f"Member {n}"), (FIRST_SCOUT,)) for n in range(9)),
 )
 THANKS = (

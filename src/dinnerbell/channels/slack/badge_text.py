@@ -26,9 +26,10 @@ TIER_MARKS = {
 """A mark for each tier by its label. Each differs by shape as well as color, so none relies on color."""
 
 
-def tag(name: str, tier: str) -> str:
-    """``🥇 Chef · Gold``, with the name and tier as given (already safe to show once escaped)."""
-    return f"{TIER_MARKS.get(tier, '')} {name} · {tier}".strip()
+def tag(name: str, tier: str, *, mark: bool = True) -> str:
+    """``🥇 Chef · Gold``, with the name and tier as given (already safe to show once escaped).
+    ``mark=False`` leaves the emoji off, for a line that shows the badge's art beside it."""
+    return f"{TIER_MARKS.get(tier, '') if mark else ''} {name} · {tier}".strip()
 
 
 ArtIds = Mapping[tuple[str, str], str]
@@ -47,6 +48,12 @@ def art_element(file_id: str, alt: str) -> dict[str, Any]:
     """The image element that shows an uploaded badge. The only place that decides how art is
     referenced: a Slack file by ID. If Slack won't show a channel-less upload to every member,
     this is what changes, to an image URL (#105)."""
+    return {"type": "image", "slack_file": {"id": file_id}, "alt_text": alt}
+
+
+def image_block(file_id: str, alt: str) -> Block:
+    """A full image block for an uploaded picture, such as a member's composite badges on Home. Like
+    ``art_element``, the one place that decides how a file is referenced."""
     return {"type": "image", "slack_file": {"id": file_id}, "alt_text": alt}
 
 

@@ -13,6 +13,9 @@ drift apart:
 - ``standalone_svg`` is a complete, still SVG file with the stars drawn in.
 - ``png_for`` renders that SVG to a PNG. It is the built-in ``ArtSource``: what
   ``services.badge_files`` uploads to Slack unless it is given another source.
+- ``composite_png`` draws many badges in one grid PNG (#114), from the same standalone drawing. It is
+  the built-in ``CompositeSource``: what ``services.badge_files`` uploads for App Home unless it is
+  given another.
 - ``icon_file`` and ``frame_file`` produce the files under ``static/badges/``. A test checks that
   the committed files match.
 
@@ -24,13 +27,13 @@ from __future__ import annotations
 import functools
 import itertools
 import math
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 
 import resvg_py
 from markupsafe import Markup, escape
 
-from dinnerbell.domain.badges import BY_KEY, Tier
+from dinnerbell.domain.badges import BADGES, BY_KEY, QUIET_BADGES, BadgeKey, Tier
 
 SVG_NS = "http://www.w3.org/2000/svg"
 VIEW_WIDTH, VIEW_HEIGHT = 120, 140
@@ -232,13 +235,19 @@ def _document(inner: str, view: str, title: str, size: str) -> str:
     )
 
 
+def _standalone_body(key: str, tier: Tier, uid: str = "") -> str:
+    """What a still badge draws inside its 120x140 box. ``uid`` keeps clip path ids apart when
+    several badges share one SVG (the composite)."""
+    defs, shape, stars = _frame_parts(tier, animated=False, uid=uid)
+    return f"{defs}{shape}{_icon(key, tier)}{stars}"
+
+
 def standalone_svg(key: str, tier: Tier | str) -> str:
     """A complete, still SVG of ``key`` at ``tier``: the stars are drawn in and nothing moves.
     This is what a PNG render for Slack starts from."""
     tier = Tier(tier)
-    defs, shape, stars = _frame_parts(tier, animated=False)
     return _document(
-        f"{defs}{shape}{_icon(key, tier)}{stars}",
+        _standalone_body(key, tier),
         f"0 0 {VIEW_WIDTH} {VIEW_HEIGHT}",
         f"{badge_name(key)}, {tier.label}",
         f'width="{VIEW_WIDTH}" height="{VIEW_HEIGHT}"',
@@ -284,5 +293,71 @@ def png_for(key: str, tier: Tier) -> bytes:
             width=VIEW_WIDTH * PNG_SCALE,
             height=VIEW_HEIGHT * PNG_SCALE,
             skip_system_fonts=True,  # the art has no text; this skips scanning the system's fonts
+        )
+    )
+
+
+Held = tuple[str, Tier]
+"""A badge key and the highest tier a member holds of it."""
+CompositeSource = Callable[[Sequence[Held]], bytes]
+"""Where App Home's picture of a member's badges comes from: the held badges, in order, to one PNG.
+``composite_png`` is the built-in one. A source that draws from other art changes the PNG, so the
+hash changes and the picture uploads again."""
+COMPOSITE_COLUMNS = 7
+"""Badges to a row: 13 badges make two rows."""
+CELL_WIDTH, CELL_HEIGHT = 64, 75
+"""One badge's cell, in the composite's own units: the 120x140 drawing at about 64 px wide."""
+CELL_GAP = 6
+
+
+def held_list(held: Mapping[BadgeKey, Tier]) -> tuple[Held, ...]:
+    """The composite's badges for ``held`` (each badge's highest tier): in ``BADGES`` order, and
+    never Food Critic, whose badge is private to its owner and stays text."""
+    return tuple((b.key.value, held[b.key]) for b in BADGES if b.key in held and b.key not in QUIET_BADGES)
+
+
+def cell_origin(index: int) -> tuple[int, int]:
+    """Where the ``index``-th badge's cell starts: left to right, ``COMPOSITE_COLUMNS`` to a row."""
+    row, column = divmod(index, COMPOSITE_COLUMNS)
+    return column * (CELL_WIDTH + CELL_GAP), row * (CELL_HEIGHT + CELL_GAP)
+
+
+def composite_size(count: int) -> tuple[int, int]:
+    """The composite's width and height for ``count`` badges: only as wide as its first row."""
+    columns = min(count, COMPOSITE_COLUMNS)
+    rows = -(-count // COMPOSITE_COLUMNS)
+    return columns * CELL_WIDTH + (columns - 1) * CELL_GAP, rows * CELL_HEIGHT + (rows - 1) * CELL_GAP
+
+
+def composite_svg(held: Sequence[Held]) -> str:
+    """The badges in ``held`` as one still SVG: each is the standalone drawing, nested in its cell,
+    on a transparent background."""
+    width, height = composite_size(len(held))
+    cells = []
+    for index, (key, tier) in enumerate(held):
+        x, y = cell_origin(index)
+        cells.append(
+            f'<svg x="{x}" y="{y}" width="{CELL_WIDTH}" height="{CELL_HEIGHT}"'
+            f' viewBox="0 0 {VIEW_WIDTH} {VIEW_HEIGHT}">{_standalone_body(key, Tier(tier), f"-{index}")}</svg>'
+        )
+    return (
+        f'<svg xmlns="{SVG_NS}" viewBox="0 0 {width} {height}" width="{width}" height="{height}">{"".join(cells)}</svg>'
+    )
+
+
+def composite_png(held: Sequence[Held]) -> bytes:
+    """The built-in ``CompositeSource``: ``composite_svg`` drawn as a transparent PNG."""
+    return _composite_png(tuple(held))
+
+
+@functools.lru_cache(maxsize=64)
+def _composite_png(held: tuple[Held, ...]) -> bytes:
+    width, height = composite_size(len(held))
+    return bytes(
+        resvg_py.svg_to_bytes(
+            svg_string=composite_svg(held),
+            width=width * PNG_SCALE,
+            height=height * PNG_SCALE,
+            skip_system_fonts=True,
         )
     )

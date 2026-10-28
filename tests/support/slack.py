@@ -74,13 +74,16 @@ class Slack:
     conn: SlackConnection
 
     async def drain(self) -> outbox.DrainResult:
-        return await outbox.drain(self.house.sessionmaker, self.conn.channel, self.house.clock)
+        result = await outbox.drain(self.house.sessionmaker, self.conn.channel, self.house.clock)
+        await self.conn.badge_files.idle()  # the composite pictures a delivery starts in the background
+        return result
 
     async def _send(self, kind: str, payload: dict[str, Any]) -> BoltResponse:
         response = await send(self.conn.app, kind, payload)
         for _ in range(3):  # Bolt runs auto-acknowledged event listeners in its own future
             await asyncio.sleep(0)
         await self.conn.interactions.settle()
+        await self.conn.badge_files.idle()  # and the pictures a Home view starts
         return response
 
     async def click(self, who: str, action_id: str, value: str | None, **kwargs: Any) -> BoltResponse:

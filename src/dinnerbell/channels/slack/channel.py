@@ -22,6 +22,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from enum import StrEnum
+from functools import partial
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -29,6 +30,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from dinnerbell.channels.slack.api import SlackApi, refusal, refused_blocks
 from dinnerbell.channels.slack.badge_text import ArtIds, wanted
 from dinnerbell.channels.slack.blocks import Directory
+from dinnerbell.channels.slack.composites import held_of_member
 from dinnerbell.channels.slack.messages import RenderContext, render
 from dinnerbell.domain import notifications as note
 from dinnerbell.domain.notifications import (
@@ -142,7 +144,7 @@ class SlackChannel:
         fresh: set[str] = set()
         if self.badge_files is None or not isinstance(notification, note.BadgesEarned):
             return {}, fresh
-        asked = {w for n in notification.news for b in n.badges if (w := wanted(b.name, b.tier))}
+        asked = {w for n in notification.news for b in (*n.badges, *n.rest) if (w := wanted(b.name, b.tier))}
         return await self.badge_files.file_ids(notification.household_id, asked, fresh), fresh
 
     async def deliver(self, notification: Notification, *, thread: MessageRef | None = None) -> DeliveryResult:
@@ -205,11 +207,28 @@ class SlackChannel:
                 message = render(notification, self._context(directory)).payload()
                 retried = await self._send(message, slack_user, thread)
             ref = retried
+        await self._pictures_soon(notification)
         log.debug(  # the outbox logs "notification delivered" at info, with the channel and ts
             "slack message posted",
             extra={"kind": notification.kind, "event_id": notification.event_id, "recipient_id": recipient},
         )
         return DeliveryResult(ref)
+
+    async def _pictures_soon(self, notification: Notification) -> None:
+        """After a badge post goes out, start making each mentioned member's composite picture for App
+        Home (#114), so it is ready before they open it. It runs in the background and never raises,
+        so it can't delay or fail the delivery."""
+        if self.badge_files is None or not isinstance(notification, note.BadgesEarned):
+            return
+        try:
+            household_id = notification.household_id
+            members = [
+                (n.person.id, partial(held_of_member, self.sessionmaker, household_id, n.person.id))
+                for n in notification.news
+            ]
+            await self.badge_files.composites_soon(household_id, members)
+        except Exception:
+            log.exception("badge pictures could not be started", extra={"event_id": notification.event_id})
 
     async def _send(self, message: dict[str, Any], slack_user: str | None, thread: MessageRef | None) -> MessageRef:
         if slack_user is not None:

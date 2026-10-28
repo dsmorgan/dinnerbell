@@ -16,7 +16,7 @@ from datetime import date, time
 from typing import Any
 
 from dinnerbell.channels.slack import ids
-from dinnerbell.channels.slack.badge_text import ArtIds, art_element, icon_rows, tag
+from dinnerbell.channels.slack.badge_text import ArtIds, art_element, icon_rows, image_block, tag
 from dinnerbell.channels.slack.blocks import (
     FOOTER_BLOCKS,
     MAX_MODAL_TITLE,
@@ -52,7 +52,7 @@ from dinnerbell.channels.slack.messages import (
     not_for_you_line,
 )
 from dinnerbell.domain import notifications as note
-from dinnerbell.domain.badges import BADGES, TIERS, BadgeKey, Tier, next_up
+from dinnerbell.domain.badges import BADGES, QUIET_BADGES, BadgeKey, Tier, highest_tiers, next_up
 from dinnerbell.domain.catalog import CatalogItem, ItemKind, Mode, Tag
 from dinnerbell.domain.events import (
     CANCEL_NOTE_MAX,
@@ -919,11 +919,7 @@ def _guest_home(
 
 def held_badges(stats: MemberStats) -> dict[BadgeKey, Tier]:
     """The highest tier the member holds of each badge they have."""
-    held: dict[BadgeKey, Tier] = {}
-    for award in stats.earned:
-        if award.badge not in held or TIERS.index(award.tier) > TIERS.index(held[award.badge]):
-            held[award.badge] = award.tier
-    return held
+    return highest_tiers(stats.earned)
 
 
 def art_wanted(stats: MemberStats) -> set[tuple[str, str]]:
@@ -936,16 +932,21 @@ def art_wanted(stats: MemberStats) -> set[tuple[str, str]]:
     return wanted
 
 
-def _badges(stats: MemberStats, art: ArtIds, links: HomeLinks) -> list[Block]:
+def _badges(stats: MemberStats, art: ArtIds, links: HomeLinks, composite: str | None = None) -> list[Block]:
     """The member's own badges and the next one in reach. With no art (``art``, from ``BadgeFiles``)
     it is a heading with the badges as text tags, then the "Next" line: two blocks. With art, the
     heading, the held badges (art, at their highest tier) as compact rows of small icons, ``ICONS_PER_BLOCK``
     to a block, a line of text tags for held badges without art (Food Critic is always one), a link to the
     Stats page for the names (when there is a web address), and the "Next" line with its badge's icon: at
-    most six blocks, which the budget in ``home_view`` counts as part of its tail. Only their own: it
-    never mentions anyone else's."""
+    most six blocks, which the budget in ``home_view`` counts as part of its tail. With a ``composite``
+    (the file of the one picture of every held badge but Food Critic, once Slack has had it a while), the
+    picture stands in for the icon rows: five blocks at most. The "Next" line leaves the tier emoji off
+    when it shows its badge's icon (#114). Only their own: it never mentions anyone else's."""
     held = held_badges(stats)
-    shown = [b for b in BADGES if b.key in held and (b.key.value, held[b.key].value) in art]
+    if composite:
+        shown = [b for b in BADGES if b.key in held and b.key not in QUIET_BADGES]
+    else:
+        shown = [b for b in BADGES if b.key in held and (b.key.value, held[b.key].value) in art]
     tags = [tag(escape(b.name), held[b.key].label) for b in BADGES if b.key in held and b not in shown]
     line = "   ".join(tags) if tags else "None yet. Pitch in on a meal and your first one is on its way."
     step = next_up(stats.progress)
@@ -953,9 +954,9 @@ def _badges(stats: MemberStats, art: ArtIds, links: HomeLinks) -> list[Block]:
     if step is None or step.next_tier is None or step.next_at is None:
         hint = "You hold every badge at the top tier. Thank you!"
     else:
-        mark = tag(f"*{escape(step.badge.name)}*", step.next_tier.label)
-        hint = f"Next: {mark}, {step.remaining} to go ({step.count} of {step.next_at} {step.badge.earned_by})"
         icon_id = art.get((step.badge.key.value, step.next_tier.value))
+        mark = tag(f"*{escape(step.badge.name)}*", step.next_tier.label, mark=icon_id is None)
+        hint = f"Next: {mark}, {step.remaining} to go ({step.count} of {step.next_at} {step.badge.earned_by})"
         if icon_id:
             icon = art_element(icon_id, f"{step.badge.name}, {step.next_tier.label}")
     next_line = context(hint)
@@ -964,8 +965,12 @@ def _badges(stats: MemberStats, art: ArtIds, links: HomeLinks) -> list[Block]:
     if not shown:
         return [section(f"*Your badges*\n{line}"), next_line]
     blocks = [section("*Your badges*")]
-    icons = [art_element(art[(b.key.value, held[b.key].value)], f"{b.name}, {held[b.key].label}") for b in shown]
-    blocks += icon_rows(icons)
+    if composite:
+        names = ", ".join(f"{b.name} ({held[b.key].label})" for b in shown)
+        blocks.append(image_block(composite, f"Your badges: {names}"))
+    else:
+        icons = [art_element(art[(b.key.value, held[b.key].value)], f"{b.name}, {held[b.key].label}") for b in shown]
+        blocks += icon_rows(icons)
     if tags:
         blocks.append(context(f"Also: {line}"))
     if links.base_url:
@@ -984,13 +989,14 @@ def home_view(
     member_id: int | None = None,
     badges: MemberStats | None = None,
     badge_art: ArtIds | None = None,
+    badge_composite: str | None = None,
 ) -> dict[str, Any]:
     """Each member's Home tab. ``label``, the instance label, prefixes the header when set.
     ``member_id`` is whose it is, so a call they coordinate says so.
     ``awaiting`` lists meals the member hasn't given feedback on yet. ``badges``, the member's own
     stats, adds a "Your badges" section above the links: two blocks, or up to six with art
-    (``badge_art``, from ``BadgeFiles``; see ``_badges``). A guest's Home (``guest``)
-    shows only the calls they're invited to, with In, Out, and what they may do, and none of
+    (``badge_art``, from ``BadgeFiles``) or the picture of them all (``badge_composite``); see ``_badges``.
+    A guest's Home (``guest``) shows only the calls they're invited to, with In, Out, and what they may do, and none of
     the household's buttons or links (#38).
 
     Today's calls and offers come first, then the start buttons, the calls coming up, and at
@@ -1029,7 +1035,7 @@ def home_view(
     web = f"<{links.url('/')}|Today on the web>"
     tail: list[Block] = [
         *_awaiting(awaiting, links),
-        *(_badges(badges, badge_art or {}, links) if badges is not None else []),
+        *(_badges(badges, badge_art or {}, links, badge_composite) if badges is not None else []),
         divider(),
         context(
             f"<{links.url('/preferences')}|Your preferences> · <{links.url('/catalog')}|Catalog> · "

@@ -26,12 +26,14 @@ from dinnerbell.domain.badges import (
     Award,
     Progress,
     Tier,
+    highest_tiers,
     longest_streak,
     progress,
     thresholds_from,
 )
 from dinnerbell.domain.contributions import PITCHING_IN, Kind
 from dinnerbell.domain.members import Member
+from dinnerbell.services.badge_art import Held, held_list
 from dinnerbell.services.common import require_member
 from dinnerbell.services.errors import Forbidden
 
@@ -128,3 +130,13 @@ async def household_stats(db: AsyncSession, actor: Member) -> HouseholdStats:
         badges_earned=await badges.count(household_id, without=QUIET_BADGES),
         recent=recent,
     )
+
+
+async def picture_badges(db: AsyncSession, household_id: int, member_id: int) -> tuple[Held, ...] | None:
+    """The badges to draw on a member's Home picture (#114): each they hold at its highest tier, in
+    ``BADGES`` order, without Food Critic. None for someone who gets no picture: a guest, a member
+    who left or was deactivated, or one who isn't there."""
+    member = await MemberRepository(db).get(household_id, member_id)
+    if member is None or not member.is_member:
+        return None
+    return held_list(highest_tiers(await BadgeRepository(db).for_member(household_id, member_id)))

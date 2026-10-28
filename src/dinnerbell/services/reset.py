@@ -76,6 +76,7 @@ CLEAR: Final = frozenset(
         "outbox",  # notifications, sent and unsent, and where each Slack message landed
         "contribution",  # what each member did for those meals (M4) ...
         "badge_award",  # ... and the badges it earned
+        "slack_badge_composite",  # the picture of those badges on App Home: drawn from the awards just cleared (#114)
     }
 )
 """Tables the reset empties."""

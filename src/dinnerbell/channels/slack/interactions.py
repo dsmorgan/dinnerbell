@@ -76,6 +76,7 @@ from dinnerbell.channels.slack.views import (
     close_modal,
     details_modal,
     feedback_modal,
+    held_badges,
     home_view,
     invite_modal,
     log_modal,
@@ -136,6 +137,7 @@ from dinnerbell.services import (
     stats,
 )
 from dinnerbell.services import schedule as schedule_service
+from dinnerbell.services.badge_art import held_list
 from dinnerbell.services.badge_files import RETRY_PAUSES, BadgeFiles
 from dinnerbell.services.clock import Clock
 from dinnerbell.services.errors import Forbidden, NotFound
@@ -563,8 +565,9 @@ class Interactions:
                 badges = await self._badges(db, member)
             fresh: set[str] = set()
             art = await self._badge_art(member, badges, fresh)
+            picture = await self._badge_picture(member, badges, fresh)
 
-            def build(art: dict[tuple[str, str], str]) -> dict[str, Any]:
+            def build(art: dict[tuple[str, str], str], picture: str | None) -> dict[str, Any]:
                 return home_view(
                     today,
                     self.links,
@@ -575,12 +578,15 @@ class Interactions:
                     member_id=member.id,
                     badges=badges,
                     badge_art=art,
+                    badge_composite=picture,
                 )
 
             try:
-                await self.api.publish_home(user_id, with_version_footer(build(art), self.version, self.instance_label))
+                await self.api.publish_home(
+                    user_id, with_version_footer(build(art, picture), self.version, self.instance_label)
+                )
             except PermanentDeliveryError as exc:
-                if not art or self.badge_files is None or not refused_blocks(exc):
+                if not (art or picture) or self.badge_files is None or not refused_blocks(exc):
                     raise
                 # Slack may refuse a file ID, such as one deleted in Slack, or one it hasn't
                 # finished processing. A file uploaded just now gets up to two more tries after a pause,
@@ -598,7 +604,7 @@ class Interactions:
                     await self.badge_files.pause(pause)
                     try:
                         await self.api.publish_home(
-                            user_id, with_version_footer(build(art), self.version, self.instance_label)
+                            user_id, with_version_footer(build(art, picture), self.version, self.instance_label)
                         )
                     except PermanentDeliveryError as again:
                         if not refused_blocks(again):
@@ -613,8 +619,9 @@ class Interactions:
                         )
                     else:
                         return
-                await self.badge_files.forget(member.household_id, art.values(), cool=bool(fresh))
-                view = build({})
+                shown = [*art.values(), *([picture] if picture else [])]
+                await self.badge_files.forget(member.household_id, shown, cool=bool(fresh))
+                view = build({}, None)
             else:
                 return
         await self.api.publish_home(user_id, with_version_footer(view, self.version, self.instance_label))
@@ -626,6 +633,15 @@ class Interactions:
         if self.badge_files is None or badges is None:
             return {}
         return await self.badge_files.file_ids(member.household_id, art_wanted(badges), fresh)
+
+    async def _badge_picture(self, member: Member, badges: MemberStats | None, fresh: set[str]) -> str | None:
+        """The file of the member's composite badge picture (#114) if it is uploaded and has settled in
+        Slack, else None: Home shows the small icons meanwhile. A missing or old picture starts being made
+        in the background. It never raises or waits."""
+        if self.badge_files is None or badges is None:
+            return None
+        held = held_list(held_badges(badges))
+        return await self.badge_files.composite(member.household_id, member.id, held, fresh)
 
     @staticmethod
     async def _badges(db: AsyncSession, member: Member) -> MemberStats | None:

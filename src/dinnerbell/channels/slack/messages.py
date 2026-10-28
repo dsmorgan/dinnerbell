@@ -8,7 +8,7 @@ same notification and directory always give the same JSON, which the golden test
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, time
 from typing import Any
@@ -1580,7 +1580,7 @@ def badges_earned_message(notification: note.BadgesEarned, ctx: RenderContext) -
         blocks = [section("*New badges!* 🎉")]
         for news, art in zip(notification.news, drawn, strict=True):
             if _is_many(news):
-                blocks.append(section(_many_line(news, ctx)))
+                blocks.append(section(_many_line(news, ctx, art)))
                 blocks += icon_rows([art_element(f, f"{b.name}, {b.tier}") for b, f in art.items()])
                 continue
             text = [tag(f"*{escape(b.name)}*", b.tier) for b in news.badges if b not in art]
@@ -1605,23 +1605,40 @@ def _is_many(news: note.BadgeNews) -> bool:
     return len(news.badges) + news.more > THUMBNAIL_CUTOFF
 
 
-def _many_line(news: note.BadgeNews, ctx: RenderContext) -> str:
-    """``@Kim earned 7 badges: 🥇 *Chef* · Gold, ... and 1 more badge.``: the same tags, caps and
-    wording as the text-only post, with the count first. Food Critic never gets here (it isn't announced)."""
-    return f"{ctx.directory.mention(news.person)} earned {len(news.badges) + news.more} badges: {_and(_tags(news))}."
+def _many_line(news: note.BadgeNews, ctx: RenderContext, art: Mapping[note.BadgeTier, str]) -> str:
+    """``@Kim earned 8 badges: Chef, Scout, ... and 2 more badges.`` With art for some of the badges,
+    each of those is named plain, since its icon shows the tier in the row below (#114); the rest keep
+    their tag. Every badge is named when the post has them (``news.rest``). Without art for any, it is
+    the text-only post's wording, with the count first. Food Critic never gets here (it isn't announced)."""
+    who = f"{ctx.directory.mention(news.person)} earned {len(news.badges) + news.more} badges:"
+    if not art:
+        return f"{who} {_and(_tags(news))}."
+    names = [
+        f"*{escape(b.name)}*" if b in art else tag(f"*{escape(b.name)}*", b.tier) for b in (*news.badges, *news.rest)
+    ]
+    if left := news.more - len(news.rest):  # a post queued before ``rest`` existed
+        names.append(plural(left, "more badge"))
+    return f"{who} {_and(names)}."
 
 
 def _drawn(news: tuple[note.BadgeNews, ...], art: ArtIds) -> list[dict[note.BadgeTier, str]]:
     """For each member in ``news``, the badges to show as art with their file IDs, in order: those
     ``art`` has, until ``MAX_ART`` are used up in the post. A member shown as a compact row of icons
-    (``_is_many``) uses none of that room: the row is two blocks at most, whatever the size."""
+    (``_is_many``) uses none of that room, and gets every badge they earned, not only those named in the
+    text (#114).
+
+    The post stays within Slack's 50 blocks (``MAX_MESSAGE_BLOCKS``). Three are fixed: the heading, the
+    line about members left off, and the closing line. At most ``MAX_PEOPLE`` (10) members follow, and
+    each takes at most 3 blocks. A member shown as a row of icons has their line and at most 12 badges
+    in two blocks of 10. Any other member has at most three badges (counting those left off): a block
+    for each with art, and one line for the rest, 3 together. So 3 + 10 x 3 = 33."""
     room = MAX_ART
     drawn: list[dict[note.BadgeTier, str]] = []
     for n in news:
         mine: dict[note.BadgeTier, str] = {}
-        for badge in n.badges:
+        many = _is_many(n)
+        for badge in (*n.badges, *n.rest) if many else n.badges:
             file_id = art.get(wanted(badge.name, badge.tier) or ("", ""))
-            many = _is_many(n)
             if file_id and (many or room > 0):
                 mine[badge] = file_id
                 room -= 0 if many else 1

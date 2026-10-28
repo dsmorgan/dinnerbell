@@ -21,6 +21,14 @@ refuses its post, retries up to twice after ``RETRY_PAUSES``. Cached files get n
 
 Better still, nothing is new when it's wanted: ``prewarm`` uploads every tier in the background after
 startup (#112), gently and once, so the first announcement finds files Slack finished processing long ago.
+
+App Home can show one picture of all a member's badges (#114). ``composite`` answers "which file is
+this member's picture?" from the cache only, and only once it has been in Slack for
+``COMPOSITE_SETTLE``: a picture Home shows is never new, so the first view has no broken image.
+When it's missing or out of date, ``composites_soon`` draws and uploads it in the background, one
+member at a time, bounded by ``COMPOSITE_TIMEOUT``, and never raises: it shares the failure cooldown,
+the per-key lock and the refusal handling above. A picture is current while its hash, of the PNG
+a ``CompositeSource`` draws from the badges held, matches: a new tier or new art draws another.
 """
 
 from __future__ import annotations
@@ -28,14 +36,14 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
-from collections.abc import Awaitable, Callable, Iterable
+from collections.abc import Awaitable, Callable, Iterable, Sequence
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from dinnerbell.db.badge_files import BadgeFile, BadgeFileRepository
+from dinnerbell.db.badge_files import BadgeComposite, BadgeFile, BadgeFileRepository
 from dinnerbell.domain.badges import BADGES, BY_KEY, QUIET_BADGES, TIERS, BadgeKey, Tier
-from dinnerbell.services.badge_art import ArtSource
+from dinnerbell.services.badge_art import ArtSource, CompositeSource, Held
 from dinnerbell.services.clock import Clock
 
 log = logging.getLogger(__name__)
@@ -63,7 +71,16 @@ PREWARM_UPLOAD_TIMEOUT = 60.0
 PREWARM_FAILURES = 3
 """Failures in a row after which ``prewarm`` gives up. First use uploads what's left, as ever."""
 
+COMPOSITE_SETTLE = timedelta(seconds=30)
+"""How long a member's composite picture must have been in Slack before App Home shows it. Until then
+Home shows the compact icon row, so a first view never has a picture Slack hasn't finished processing."""
+COMPOSITE_TIMEOUT = 60.0
+"""The longest drawing and uploading one member's composite takes (three Slack calls) before it counts as a failure."""
+
 Pause = Callable[[float], Awaitable[None]]
+HeldOf = Callable[[], Awaitable[Sequence[Held] | None]]
+"""What a member holds now, in composite order, or None when they should get no picture (not an
+active member). Read in the background, so a change since the ask is the one drawn."""
 
 Wanted = tuple[str, str]
 """A badge key and a tier value, such as ``("chef", "gold")``."""
@@ -79,6 +96,7 @@ class BadgeFiles:
         sessionmaker: async_sessionmaker[AsyncSession],
         *,
         art_for: ArtSource,
+        composite_for: CompositeSource,
         upload: Uploader,
         clock: Clock,
         timeout: float = INLINE_TIMEOUT_SECONDS,
@@ -86,6 +104,7 @@ class BadgeFiles:
     ) -> None:
         self.sessionmaker = sessionmaker
         self.art_for = art_for
+        self.composite_for = composite_for
         self.upload = upload
         self.clock = clock
         self.timeout = timeout
@@ -95,6 +114,9 @@ class BadgeFiles:
         self._retry_at = datetime.min.replace(tzinfo=UTC)
         self._uploaded_at: dict[str, datetime] = {}
         self._saves: set[asyncio.Future[None]] = set()
+        self._composite_locks: dict[tuple[int, int], asyncio.Lock] = {}
+        self._composite_busy: set[tuple[int, int]] = set()
+        self._composite_tasks: set[asyncio.Task[None]] = set()
 
     async def file_ids(
         self, household_id: int, wanted: Iterable[Wanted], fresh: set[str] | None = None
@@ -113,10 +135,14 @@ class BadgeFiles:
         return found
 
     async def settle(self, within: float) -> None:
-        """Wait up to ``within`` seconds for saves of files already uploaded to Slack, so a shutdown
-        cancelling an upload doesn't lose its row or race the database closing. Never raises."""
-        if self._saves:
-            await asyncio.wait(set(self._saves), timeout=within)
+        """Wait up to ``within`` seconds for saves of files already uploaded to Slack, and for pictures
+        being made, so a shutdown cancelling an upload doesn't lose its row or race the database
+        closing. Cancels the pictures left. Never raises."""
+        pending: set[asyncio.Future[None]] = {*self._saves, *self._composite_tasks}
+        if pending:
+            await asyncio.wait(pending, timeout=within)
+        for task in set(self._composite_tasks):
+            task.cancel()  # a picture still drawing is made again on the next view
 
     async def forget(self, household_id: int, file_ids: Iterable[str], *, cool: bool = False) -> None:
         """Drop remembered files Slack refused, so the next use uploads them again. Never raises.
@@ -172,6 +198,96 @@ class BadgeFiles:
             await asyncio.shield(saving)
             log.info("badge art uploaded", extra={"household_id": household_id, "badge": key, "tier": tier})
             return file_id
+
+    async def composite(
+        self, household_id: int, member_id: int, held: Sequence[Held], fresh: set[str] | None = None
+    ) -> str | None:
+        """The Slack file of the member's picture of ``held``, or None: there's nothing to draw, it
+        isn't uploaded yet, or it has been in Slack for less than ``COMPOSITE_SETTLE``. A picture
+        that's missing or out of date is made in the background. Reads the cache only, and never
+        raises. The ID goes in ``fresh`` if it counts as new (it can't, while ``COMPOSITE_SETTLE``
+        outlasts ``FRESH_FOR``, but a caller that retries on ``fresh`` stays right if that changes)."""
+        if not held:
+            return None
+        try:
+            digest = _hash(self.composite_for(held))
+            async with self.sessionmaker() as db:
+                row = await BadgeFileRepository(db).composite(household_id, member_id)
+        except Exception:
+            log.exception("badge composite could not be checked", extra={"household_id": household_id})
+            return None
+        if row is None or row.content_hash != digest:
+            await self.composites_soon(household_id, [(member_id, _held_now(held))])
+            return None
+        if self.clock() - row.uploaded_at < COMPOSITE_SETTLE:
+            return None
+        if self._is_recent(row.file_id) and fresh is not None:
+            fresh.add(row.file_id)
+        return row.file_id
+
+    async def composites_soon(self, household_id: int, members: Sequence[tuple[int, HeldOf]]) -> None:
+        """Start making the pictures of ``members`` (an ID and what they hold), one after another,
+        in the background, and return at once. Skips a member whose picture is already being made,
+        and everyone while a failure's ``COOLDOWN`` runs. Never raises."""
+        if self.clock() < self._retry_at:
+            return
+        todo = [(m, held_of) for m, held_of in members if (household_id, m) not in self._composite_busy]
+        if not todo:
+            return
+        self._composite_busy.update((household_id, m) for m, _ in todo)
+        task = asyncio.ensure_future(self._make_composites(household_id, todo))
+        self._composite_tasks.add(task)
+        task.add_done_callback(self._composite_tasks.discard)
+
+    async def idle(self) -> None:
+        """Wait for the pictures being made. For tests, and for a shutdown that wants them done."""
+        while self._composite_tasks:
+            await asyncio.wait(set(self._composite_tasks))
+
+    async def _make_composites(self, household_id: int, todo: Sequence[tuple[int, HeldOf]]) -> None:
+        try:
+            for member_id, held_of in todo:
+                try:
+                    async with asyncio.timeout(COMPOSITE_TIMEOUT):
+                        held = await held_of()
+                        if held:
+                            await self._upload_composite(household_id, member_id, held)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as exc:
+                    self._failed(household_id, exc)
+                    return  # the cooldown covers everyone else; the next view or award tries again
+                finally:
+                    self._composite_busy.discard((household_id, member_id))
+        finally:
+            self._composite_busy.difference_update((household_id, m) for m, _ in todo)
+
+    async def _upload_composite(self, household_id: int, member_id: int, held: Sequence[Held]) -> None:
+        png = self.composite_for(held)
+        digest = _hash(png)
+        lock = self._composite_locks.setdefault((household_id, member_id), asyncio.Lock())
+        async with lock:
+            async with self.sessionmaker() as db:
+                row = await BadgeFileRepository(db).composite(household_id, member_id)
+            if row is not None and row.content_hash == digest:
+                return
+            names = ", ".join(f"{BY_KEY[BadgeKey(key)].name} ({Tier(tier).label})" for key, tier in held)
+            file_id = await self.upload(f"badges-{digest[:12]}.png", png, f"Badges: {names}")
+            now = self.clock()
+            self._uploaded_at = {i: t for i, t in self._uploaded_at.items() if now - t < FRESH_FOR}
+            self._uploaded_at[file_id] = now
+            saving = asyncio.ensure_future(
+                self._save_composite(household_id, member_id, BadgeComposite(digest, file_id, now))
+            )
+            self._saves.add(saving)
+            saving.add_done_callback(self._saves.discard)
+            await asyncio.shield(saving)
+            log.info("badge composite uploaded", extra={"household_id": household_id, "member_id": member_id})
+
+    async def _save_composite(self, household_id: int, member_id: int, file: BadgeComposite) -> None:
+        async with self.sessionmaker() as db:
+            await BadgeFileRepository(db).save_composite(household_id, member_id, file)
+            await db.commit()
 
     async def prewarm(self, household_id: int, *, spacing: float = PREWARM_SPACING) -> bool:
         """Upload every badge tier that isn't cached yet (all but Food Critic), one at a time,
@@ -238,6 +354,13 @@ class BadgeFiles:
             "(a missing_scope error means the Slack app needs the files:write scope: reinstall it)",
             extra={"household_id": household_id, "error": reason, "retry_minutes": COOLDOWN // timedelta(minutes=1)},
         )
+
+
+def _held_now(held: Sequence[Held]) -> HeldOf:
+    async def read() -> Sequence[Held]:
+        return held
+
+    return read
 
 
 def _valid(want: Wanted) -> bool:

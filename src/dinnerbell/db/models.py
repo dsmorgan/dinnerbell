@@ -610,3 +610,20 @@ class SlackBadgeFileRow(Base):
     content_hash: Mapped[str] = mapped_column(String(64))
     file_id: Mapped[str] = mapped_column(String(64))
     uploaded_at: Mapped[datetime] = mapped_column(UTCDateTime())
+
+
+class SlackBadgeCompositeRow(Base):
+    """The Slack file that holds one member's composite badge picture for App Home (#114): one row
+    per member, replaced when ``content_hash`` (SHA-256 of the PNG bytes, which covers the badges,
+    their tiers, and the art) no longer matches what the member holds. ``uploaded_at`` says when
+    Slack got it: Home waits for it to settle before showing it."""
+
+    __tablename__ = "slack_badge_composite"
+    __table_args__ = (UniqueConstraint("household_id", "member_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    household_id: Mapped[int] = mapped_column(ForeignKey("household.id", ondelete="CASCADE"))
+    member_id: Mapped[int] = mapped_column(ForeignKey("member.id", ondelete="CASCADE"))
+    content_hash: Mapped[str] = mapped_column(String(64))
+    file_id: Mapped[str] = mapped_column(String(64))
+    uploaded_at: Mapped[datetime] = mapped_column(UTCDateTime())
