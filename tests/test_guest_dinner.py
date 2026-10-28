@@ -10,9 +10,10 @@ from collections.abc import AsyncIterator
 import pytest
 
 from dinnerbell.config import Settings
+from dinnerbell.db.outbox import OutboxEntry
 from dinnerbell.domain.catalog import Mode, TagKind
 from dinnerbell.domain.events import Details, EventState, RoleOffer, Status
-from dinnerbell.domain.notifications import AssignmentMade, DecisionMade, from_payload
+from dinnerbell.domain.notifications import AssignmentMade, DecisionMade, PersonInfo, ProposalsReady, from_payload
 from dinnerbell.domain.preferences import Stance, TargetType
 from dinnerbell.services import call_context as cc
 from dinnerbell.services import calls
@@ -38,6 +39,12 @@ async def house(database: Database, clock: FakeClock, migrated: Settings) -> Hou
     await house.add_item("Green Leaf", Mode.PICKUP, cuisine="Indian", tags=("Vegetarian",))
     await house.add_item("Veggie Pizza", Mode.PICKUP, cuisine="Italian", tags=("Vegetarian",))
     return house
+
+
+def made_picks(entries: dict[str, OutboxEntry]) -> tuple[PersonInfo, ...]:
+    ready = from_payload("proposals_ready", entries["proposals_ready"].payload)
+    assert isinstance(ready, ProposalsReady)
+    return ready.participants
 
 
 async def test_a_dinner_with_two_guests_one_vegetarian(house: House) -> None:
@@ -77,6 +84,8 @@ async def test_a_dinner_with_two_guests_one_vegetarian(house: House) -> None:
     assert isinstance(made, DecisionMade)
     assert (made.decision.head_count, made.decision.dietary_notes) == (5, ("Vegetarian",))
     assert [(p.member.name, p.guests) for p in made.decision.participants if p.guests] == [("Sam", 2)]
+    # Everyone who's in is mentioned at the top level, not only those with a role (#92).
+    assert [p.name for p in made_picks(entries)] == ["Alex", "Kim", "Sam"]
     dm = from_payload("assignment_made", entries["assignment_made"].payload)
     assert isinstance(dm, AssignmentMade) and dm.member.id == house["Alex"].id
     assert (dm.decision.head_count, dm.decision.dietary_notes) == (5, ("Vegetarian",))

@@ -151,7 +151,7 @@ async def test_a_full_call_from_open_to_done(house: House, clock: FakeClock) -> 
     ]
     assert all(e.attempts == 1 for e in entries)
 
-    # The channel saw posts, then updates to them, and threads under the call.
+    # The channel saw posts, then updates to them, and nothing threaded under the call.
     call_ref = channel.sent[0].ref
     assert [(s.op, s.kind) for s in channel.sent] == [
         ("deliver", "call_opened"),
@@ -169,8 +169,9 @@ async def test_a_full_call_from_open_to_done(house: House, clock: FakeClock) -> 
         ("update", "call_updated"),
     ]
     by_kind = {s.kind: s for s in channel.sent if s.op == "deliver"}
-    assert by_kind["proposals_ready"].thread == call_ref
-    assert by_kind["decision_made"].thread == call_ref
+    # The picks and the decision are top-level posts (#92); only a call-off replies in the thread.
+    assert by_kind["proposals_ready"].thread is None
+    assert by_kind["decision_made"].thread is None
     assert by_kind["response_reminder"].recipient == house["Lee"].id
     assert by_kind["assignment_made"].recipient == house["Sam"].id
     assert {s.ref for s in channel.sent if s.kind == "call_updated"} == {call_ref}

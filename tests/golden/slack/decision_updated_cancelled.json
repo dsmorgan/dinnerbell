@@ -2,7 +2,7 @@
   "blocks": [
     {
       "text": {
-        "text": "~Sam's Tacos~ Called off by Alex. “Pizza at Grandma's”",
+        "text": "*Dinner decision · Thursday, Oct 22*\n~Sam's Tacos~ Called off by Alex. “Pizza at Grandma's”",
         "type": "mrkdwn"
       },
       "type": "section"
@@ -23,6 +23,13 @@
     {
       "text": {
         "text": "*Cooking:* <@U02SAM>\n*Coordinating:* <@U01ALEX>\n*Dietary needs:* Vegetarian",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "text": {
+        "text": "*In:* Alex, Sam",
         "type": "mrkdwn"
       },
       "type": "section"

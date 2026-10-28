@@ -421,7 +421,7 @@ async def test_the_channel_shows_who_called_it_off_and_strikes_the_decision(slac
     assert call["blocks"][1]["text"]["text"] == "Called off by Alex. “&lt;!channel&gt; Pizza &amp; &lt;@U02SAM&gt;”"
     assert "call_menu" not in json.dumps(call) and "cancel_call" not in json.dumps(call)  # nothing left
     decision = updates["Dinner on Thursday, Oct 22"]
-    assert decision["blocks"][0]["text"]["text"].startswith("~")
+    assert decision["blocks"][0]["text"]["text"].split("\n")[1].startswith("~")
     assert "Called off by Alex." in decision["blocks"][0]["text"]["text"]
     reply = [c.args for c in slack.fake.of("chat.postMessage") if c.args.get("thread_ts")]
     assert reply and "&lt;!channel&gt;" in reply[0]["blocks"][0]["text"]["text"]

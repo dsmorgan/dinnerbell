@@ -119,15 +119,33 @@ async def test_mentions_in_a_thread_reply_and_a_dm_body_are_filtered(house: Hous
         ),
     )
     decided = replace(event(house), state=preview.DECIDED.state)
-    thread = note.MessageRef(CHANNEL, "1.000100")
-    await conn.channel.deliver(note.DecisionMade(decided, decision, locked_by=kim), thread=thread)
+    await conn.channel.deliver(note.DecisionMade(decided, decision, locked_by=kim))
     await conn.channel.deliver(note.AssignmentMade(decided, 1, sam, (note.AssignmentRole.COOK,), decision))
     (reply, dm) = fake.of("chat.postMessage")
-    assert reply.args["thread_ts"] == "1.000100"
+    assert "thread_ts" not in reply.args  # a top-level post since #92
     assert f"<@{SLACK_IDS['Sam']}>" in str(reply.args["blocks"])
     for call in (reply, dm):
         assert SLACK_IDS["Kim"] not in str(call.args) and "Kim" in str(call.args["blocks"])
     assert dm.args["channel"] == SLACK_IDS["Sam"]
+
+
+async def test_the_picks_and_the_decision_mention_only_people_in_the_channel(house: House) -> None:
+    """On the test instance (#92): everyone in is named, but only channel members are pinged."""
+    fake = FakeSlack()
+    conn = await checked(house, fake, limited=True)
+    everyone = tuple(person(house, name) for name in ("Alex", "Kim", "Sam", "Lee"))
+    voting = replace(event(house), state=note.EventState.VOTING)
+    await conn.channel.deliver(note.ProposalsReady(voting, (), 3, participants=everyone))
+    from dinnerbell.channels.slack import preview
+
+    decision = replace(preview.DECISION, participants=tuple(note.ParticipantInfo(p) for p in everyone), assignments=())
+    await conn.channel.deliver(note.DecisionMade(replace(voting, state=preview.DECIDED.state), decision))
+    for call in fake.of("chat.postMessage"):
+        assert "thread_ts" not in call.args
+        text = str(call.args["blocks"])
+        assert f"<@{SLACK_IDS['Alex']}>" in text and f"<@{SLACK_IDS['Sam']}>" in text
+        assert SLACK_IDS["Kim"] not in text and SLACK_IDS["Lee"] not in text
+        assert "Kim" in text and "Lee" in text  # still named, as plain text
 
 
 async def test_a_reminder_round_reaches_only_the_channel(house: House) -> None:

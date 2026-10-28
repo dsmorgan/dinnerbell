@@ -150,7 +150,9 @@ TWO_ROLES = replace(
 )
 WAITING = (KIM, LEE)
 VOTING = event(EventState.VOTING, coordinator=ALEX)
-DECIDED = event(EventState.DECIDED, coordinator=ALEX)
+DECIDED = replace(
+    event(EventState.DECIDED, coordinator=ALEX), plan=note.PlanInfo("Sam's Tacos", Mode.COOK, DECISION.meal_time)
+)
 REASON = "Pizza at Grandma's"
 CANCELLED = replace(event(EventState.CANCELLED, coordinator=ALEX), ended_by=ALEX, end_note=REASON)
 EARLY = replace(
@@ -226,9 +228,11 @@ NOTIFICATIONS: dict[str, Callable[[], note.Notification]] = {
     "call_updated_cancelled": lambda: note.CallUpdated(CANCELLED, ROSTER, (LEE,), 3),
     "response_reminder": lambda: note.ResponseReminder(event(), KIM),
     "maybe_resolved": lambda: note.MaybeResolved(VOTING, KIM),
-    "proposals_ready": lambda: note.ProposalsReady(VOTING, tuple(replace(p, voters=()) for p in PROPOSALS), 3),
-    "proposals_updated": lambda: note.ProposalsUpdated(VOTING, PROPOSALS, 3),
-    "proposals_updated_closed": lambda: note.ProposalsUpdated(DECIDED, PROPOSALS, 3),
+    "proposals_ready": lambda: note.ProposalsReady(
+        VOTING, tuple(replace(p, voters=()) for p in PROPOSALS), 3, participants=(ALEX, SAM)
+    ),
+    "proposals_updated": lambda: note.ProposalsUpdated(VOTING, PROPOSALS, 3, participants=(ALEX, SAM)),
+    "proposals_updated_closed": lambda: note.ProposalsUpdated(DECIDED, PROPOSALS, 3, participants=(ALEX, SAM)),
     "decision_made": lambda: note.DecisionMade(DECIDED, DECISION, locked_by=ALEX),
     "decision_made_by_vote": lambda: note.DecisionMade(DECIDED, DELIVERY),
     "decision_updated": lambda: note.DecisionUpdated(DECIDED, DECISION, locked_by=ALEX),
@@ -321,8 +325,10 @@ NOTIFICATIONS: dict[str, Callable[[], note.Notification]] = {
         CANCELLED, PAT, (AssignmentRole.PICKUP,), DECISION, cancelled_by=ALEX, note=REASON, via=KIM
     ),
     "call_updated_voting_late": lambda: note.CallUpdated(VOTING, LATE_ROSTER, (), head_count=4),
-    "proposals_updated_late": lambda: note.ProposalsUpdated(VOTING, LATE_PROPOSALS, 4, LATE_JOINERS),
-    "proposals_updated_late_closed": lambda: note.ProposalsUpdated(DECIDED, LATE_PROPOSALS, 4, LATE_JOINERS[1:]),
+    "proposals_updated_late": lambda: note.ProposalsUpdated(VOTING, LATE_PROPOSALS, 4, LATE_JOINERS, (ALEX, SAM, KIM)),
+    "proposals_updated_late_closed": lambda: note.ProposalsUpdated(
+        DECIDED, LATE_PROPOSALS, 4, LATE_JOINERS[1:], (ALEX, SAM, KIM)
+    ),
     "decision_made_late": lambda: note.DecisionMade(DECIDED, LATE_DECISION),
     "late_join_changed": lambda: note.LateJoinChanged(VOTING, KIM, False, ALEX, VOTING.respond_deadline),
     "late_join_changed_back": lambda: note.LateJoinChanged(VOTING, KIM, True, ALEX, VOTING.respond_deadline),

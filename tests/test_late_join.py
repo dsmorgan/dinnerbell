@@ -235,6 +235,8 @@ async def test_someone_who_missed_the_answers_joins_in_and_marked_late(house: Ho
     await house.drain(channel)
     assert sorted(channel.kinds) == ["call_updated", "proposals_updated"]
     assert await act(house, calls.join_late, house["Kim"], event_id) is False  # in already: nothing to do
+    # The picks message keeps the joiner among the people it mentions (#92).
+    assert "Kim" in {p.name for p in cc.who_is_in(ctx)}
 
 
 async def test_joining_late_is_only_while_voting(house: House) -> None:

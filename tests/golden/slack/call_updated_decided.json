@@ -10,7 +10,7 @@
     },
     {
       "text": {
-        "text": "It's decided! The plan is in the thread.",
+        "text": "It's decided: Sam's Tacos, cook, at 6:45 PM",
         "type": "mrkdwn"
       },
       "type": "section"
@@ -49,5 +49,5 @@
       "type": "actions"
     }
   ],
-  "text": "Dinner call · Thursday, Oct 22: It's decided! The plan is in the thread."
+  "text": "Dinner call · Thursday, Oct 22: It's decided: Sam's Tacos, cook, at 6:45 PM"
 }

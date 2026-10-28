@@ -2,7 +2,14 @@
   "blocks": [
     {
       "text": {
-        "text": "*The picks for 4 people.* Voting is closed.",
+        "text": "*Dinner picks · Thursday, Oct 22* for 4 people\nVoting is closed.",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "text": {
+        "text": "*In:* Alex, Sam, Kim",
         "type": "mrkdwn"
       },
       "type": "section"

@@ -141,7 +141,9 @@ def _render(notification: note.Notification, ctx: RenderContext) -> Message:
         case note.ProposalsReady() | note.ProposalsUpdated():
             return proposals_message(notification, ctx)
         case note.DecisionMade():
-            return decision_message(notification.event, notification.decision, ctx, notification.locked_by)
+            return decision_message(
+                notification.event, notification.decision, ctx, notification.locked_by, mention=True
+            )
         case note.DecisionUpdated():
             return decision_message(notification.event, notification.decision, ctx, notification.locked_by)
         case note.ResponseReminder():
@@ -193,6 +195,12 @@ def _slot(event: note.EventInfo) -> str:
 def _title(event: note.EventInfo) -> str:
     kind = "offer" if event.kind is EventKind.OFFER else "call"
     return f"{event.slot.value.capitalize()} {kind} · {day_label(event.day)}"
+
+
+def _post_title(event: note.EventInfo, what: str) -> str:
+    """The first line of the picks and decision posts, which stand alone in the channel (#92):
+    the slot and the day tell posts from different calls apart."""
+    return f"{event.slot.value.capitalize()} {what} · {day_label(event.day)}"
 
 
 def _what(event: note.EventInfo) -> str:
@@ -318,8 +326,9 @@ def _roster(
     return join_lines(lines)
 
 
-def _call_status(event: note.EventInfo) -> str:
-    """Plain words with mrkdwn emphasis: escape before putting it in a block."""
+def _call_status(event: note.EventInfo, *, picks: str = "posted below") -> str:
+    """Plain words with mrkdwn emphasis: escape before putting it in a block. ``picks`` says
+    where the picks are, for a reader who isn't looking at the call message."""
     slot = _slot(event)
     match event.state:
         case EventState.COLLECTING if event.early:  # posted the day before, or earlier (#59)
@@ -328,10 +337,14 @@ def _call_status(event: note.EventInfo) -> str:
         case EventState.COLLECTING:
             return f"Who's in for {slot}? Answer by *{local_clock(event.respond_deadline, event.timezone)}*."
         case EventState.VOTING:
-            closes = f" by *{local_clock(event.vote_deadline, event.timezone)}*" if event.vote_deadline else ""
-            return f"Thanks for answering! Vote on the picks in the thread{closes}."
+            closes = f" Vote by *{local_clock(event.vote_deadline, event.timezone)}*." if event.vote_deadline else ""
+            return f"Thanks for answering! Voting is open: the picks are {picks}.{closes}"
+        case EventState.DECIDED if event.plan is not None:
+            plan = event.plan
+            at = local_clock(plan.meal_time, event.timezone)
+            return f"It's decided: {plan.item}, {plan.mode.label.lower()}, at {at}"
         case EventState.DECIDED:
-            return "It's decided! The plan is in the thread."
+            return f"It's decided! The plan is {picks}."
         case EventState.DONE:
             return f"{slot.capitalize()} is done. Thanks, everyone!"
         case EventState.ABANDONED if event.end_reason is EndReason.MISSED:
@@ -386,6 +399,35 @@ def call_message(
 
 
 # Proposals ---------------------------------------------------------------------------------------
+
+
+MAX_IN_SECTIONS = 3
+"""Sections of "In:" names a post shows; the web has the rest."""
+IN_CHUNK = 2800
+
+
+def _in_blocks(people: tuple[note.PersonInfo, ...], ctx: RenderContext, *, mention: bool) -> list[Block]:
+    """Who's in, as mentions when ``mention`` (a post's first rendering) and plain names
+    otherwise: an edit must not add a mention, because Slack may notify it. Split across
+    sections so none passes Slack's limit, and cut off after ``MAX_IN_SECTIONS``."""
+    if not people:
+        return []
+    items = [ctx.directory.mention(p) if mention else escape(p.name) for p in people]
+    chunks: list[list[str]] = [[]]
+    size = len("*In:* ")
+    for item in items:
+        if chunks[-1] and size + len(item) + 2 > IN_CHUNK:
+            chunks.append([])
+            size = 0
+        chunks[-1].append(item)
+        size += len(item) + 2
+    shown = chunks[:MAX_IN_SECTIONS]
+    blocks = [section(", ".join(chunk)) for chunk in shown]
+    blocks[0] = section("*In:* " + ", ".join(shown[0]))
+    left = sum(len(c) for c in chunks[MAX_IN_SECTIONS:])
+    if left:
+        blocks.append(context(f"…and {plural(left, 'more person', 'more people')} on the web."))
+    return blocks
 
 
 def _item_name(item: note.ItemInfo) -> str:
@@ -464,10 +506,13 @@ def proposals_message(notification: note.ProposalsReady | note.ProposalsUpdated,
         closes = (
             f" Voting closes at *{local_clock(event.vote_deadline, event.timezone)}*." if event.vote_deadline else ""
         )
-        intro = f"*Here are the picks for {people}.* Vote for any you'd enjoy.{closes}"
+        intro = f"Vote for any you'd enjoy.{closes}"
     else:
-        intro = f"*The picks for {people}.* Voting is closed."
-    blocks: list[Block] = [section(intro)]
+        intro = "Voting is closed."
+    blocks: list[Block] = [section(f"*{_post_title(event, 'picks')}* for {people}\n{intro}")]
+    # Only the first post mentions anyone (an edit that added a mention might ping it), and the
+    # list comes after the instructions, so a big household can't push them out.
+    blocks += _in_blocks(notification.participants, ctx, mention=isinstance(notification, note.ProposalsReady))
     shown = notification.proposals[:MAX_PROPOSALS]
     for number, proposal in enumerate(shown, start=1):
         blocks.append(section(_proposal_text(proposal, number, ctx), block_id=f"proposal-{proposal.id}"))
@@ -524,7 +569,12 @@ def _item_buttons(item: note.ItemInfo, mode: Mode) -> list[Block]:
 
 
 def decision_message(
-    event: note.EventInfo, decision: note.DecisionInfo, ctx: RenderContext, locked_by: note.PersonInfo | None = None
+    event: note.EventInfo,
+    decision: note.DecisionInfo,
+    ctx: RenderContext,
+    locked_by: note.PersonInfo | None = None,
+    *,
+    mention: bool = False,
 ) -> Message:
     proposal = decision.proposal
     item = _item_name(proposal.item)
@@ -536,6 +586,7 @@ def decision_message(
         top = f"~{item}~ {escape(_call_status(replace(event, end_note=reason)))}"
     else:
         top = f"*{_slot(event).capitalize()} is decided: {item}* · {_kind(proposal)}"
+    top = f"*{_post_title(event, 'decision')}*\n{top}"
     if locked_by is not None and event.state is not EventState.CANCELLED:
         top += f"\nLocked in by {ctx.directory.mention(locked_by)}."
     blocks: list[Block] = [
@@ -555,6 +606,8 @@ def decision_message(
     if decision.dietary_notes:
         lines.append(f"*Dietary needs:* {escape(', '.join(decision.dietary_notes))}")
     blocks.append(section(join_lines(lines)))
+    # Everyone in, not only those with a role (#92), after the lines that matter more.
+    blocks += _in_blocks(tuple(p.member for p in decision.participants), ctx, mention=mention)
     buttons: list[Block] = []
     if event.state is EventState.DECIDED:
         buttons.append(mark_done_button(event))
@@ -648,7 +701,7 @@ def reminder_message(
     closes = local_clock(event.respond_deadline, event.timezone)
     when = f"{_slot(event)} on {day_label(event.day)}"
     if _moved_on(event, run):
-        why = STARTED_AGAIN if run != event.run else escape(_call_status(event))
+        why = STARTED_AGAIN if run != event.run else escape(_call_status(event, picks="posted in the channel"))
         text = f"*{MOVED_ON}* {why}"
         blocks = [section(text), actions(_web_button(ctx, event), block_id="more")]
         return _finish(f"The {_slot(event)} call for {day_label(event.day)} moved on.", blocks)
@@ -970,7 +1023,7 @@ def your_answer(
     moved_on = _moved_on(event, run, mine)
     live = not moved_on and card_live(event, mine)
     if not live:
-        status = escape(_call_status(event))
+        status = escape(_call_status(event, picks="posted in the channel"))
         lines.append(f"*{MOVED_ON}* {status}" if moved_on else status)
     lines += _mine_lines(event, mine, member_id)
     if not_for_you and late_answer(event, mine):

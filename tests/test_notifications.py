@@ -63,7 +63,7 @@ EXAMPLES: list[tuple[n.Notification, str, str | None, str | None, int | None]] =
         n.ProposalsReady(EVENT, (PROPOSAL, FREE), 3),
         "event:7:run2:proposals_ready",
         "event:7:run2:proposals",
-        "event:7:run2:call",
+        None,  # top level since #92
         None,
     ),
     (n.ProposalsUpdated(EVENT, (PROPOSAL,), 3), "event:7:run2:proposals_updated", "event:7:run2:proposals", None, None),
@@ -71,7 +71,7 @@ EXAMPLES: list[tuple[n.Notification, str, str | None, str | None, int | None]] =
         n.DecisionMade(EVENT, DECISION, ALEX),
         "event:7:run2:decision_made",
         "event:7:run2:decision",
-        "event:7:run2:call",
+        None,  # top level since #92
         None,
     ),
     (n.DecisionUpdated(EVENT, DECISION, ALEX), "event:7:run2:decision_updated", "event:7:run2:decision", None, None),

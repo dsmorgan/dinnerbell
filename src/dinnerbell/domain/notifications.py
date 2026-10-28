@@ -35,6 +35,15 @@ class PersonInfo:
 
 
 @dataclass(frozen=True, slots=True)
+class PlanInfo:
+    """The result of a decided call: what, how, and when. The call message names it."""
+
+    item: str
+    mode: Mode
+    meal_time: datetime
+
+
+@dataclass(frozen=True, slots=True)
 class EventInfo:
     """The event a notification is about. ``path`` is the event page, relative to the base
     URL (FR-37). Times are UTC; ``timezone`` is the household's, for display."""
@@ -59,6 +68,8 @@ class EventInfo:
     """Posted before its day (issue #59), so messages say which day its deadline is on."""
     kind: EventKind = EventKind.CALL
     """A call or an offer (FR-4)."""
+    plan: PlanInfo | None = None
+    """The result, once a call is decided, so the call message can name it."""
 
     @property
     def key(self) -> str:
@@ -292,16 +303,19 @@ class MaybeResolved(_Notification):
 
 @dataclass(frozen=True, slots=True)
 class ProposalsReady(_Notification):
-    """Proposals ready: a post threaded under the call, with a vote button per proposal."""
+    """Proposals ready: a top-level channel post (#92) with a vote button per proposal, mentioning
+    everyone who's in (``participants``)."""
 
     kind: ClassVar[str] = "proposals_ready"
     message_suffix: ClassVar[str | None] = "proposals"
-    thread_suffix: ClassVar[str | None] = "call"
     event: EventInfo
     proposals: tuple[ProposalInfo, ...]
     head_count: int = 0
     late: tuple[LateJoinerInfo, ...] = ()
     """Who joined late (#76), for the coordinator's switches."""
+    participants: tuple[PersonInfo, ...] = ()
+    """Everyone who's in, guests who are Slack users and late joiners included. Empty on rows
+    queued before it existed."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -316,16 +330,18 @@ class ProposalsUpdated(_Notification):
     head_count: int = 0
     late: tuple[LateJoinerInfo, ...] = ()
     """Who joined late (#76), for the coordinator's switches."""
+    participants: tuple[PersonInfo, ...] = ()
+    """As on ``ProposalsReady``: an edit pings nobody, but it keeps the mentions in the text."""
 
 
 @dataclass(frozen=True, slots=True)
 class DecisionMade(_Notification):
-    """Decision made: a post threaded under the call. ``locked_by`` is who locked it (FR-15),
-    or None when the vote decided."""
+    """Decision made: a top-level channel post (#92) mentioning everyone who's in
+    (``decision.participants``). ``locked_by`` is who locked it (FR-15), or None when the vote
+    decided."""
 
     kind: ClassVar[str] = "decision_made"
     message_suffix: ClassVar[str | None] = "decision"
-    thread_suffix: ClassVar[str | None] = "call"
     event: EventInfo
     decision: DecisionInfo
     locked_by: PersonInfo | None = None

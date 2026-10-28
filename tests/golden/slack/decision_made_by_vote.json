@@ -2,7 +2,7 @@
   "blocks": [
     {
       "text": {
-        "text": "*Dinner is decided: <https://siam.example/menu|Siam Garden>* · Delivery · Thai",
+        "text": "*Dinner decision · Thursday, Oct 22*\n*Dinner is decided: <https://siam.example/menu|Siam Garden>* · Delivery · Thai",
         "type": "mrkdwn"
       },
       "type": "section"
@@ -23,6 +23,13 @@
     {
       "text": {
         "text": "*Ordering:* Lee",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "text": {
+        "text": "*In:* <@U01ALEX>, <@U02SAM>",
         "type": "mrkdwn"
       },
       "type": "section"

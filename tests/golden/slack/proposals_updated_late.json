@@ -2,7 +2,14 @@
   "blocks": [
     {
       "text": {
-        "text": "*Here are the picks for 4 people.* Vote for any you'd enjoy. Voting closes at *5:15 PM*.",
+        "text": "*Dinner picks · Thursday, Oct 22* for 4 people\nVote for any you'd enjoy. Voting closes at *5:15 PM*.",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "text": {
+        "text": "*In:* Alex, Sam, Kim",
         "type": "mrkdwn"
       },
       "type": "section"

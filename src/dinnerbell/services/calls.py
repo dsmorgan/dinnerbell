@@ -669,7 +669,8 @@ async def set_meal_time(db: AsyncSession, actor: Member, event_id: int, at: time
             raise EventRuleViolation("Pick a meal time after the decision. Check AM and PM.", code="bad_time")
         event = await EventRepository(db).save(replace(event, meal_time=meal), now)
         ctx = await load(db, event)
-        await publish(db, ctx, *cc.decision_updated(ctx), now=now)
+        # The call message names the result, time included.
+        await publish(db, ctx, *cc.decision_updated(ctx), cc.message_updated(ctx), now=now)
         payload = {"meal_time": meal.isoformat()}
         await audit(db, actor.household_id, actor, "event.meal_time_changed", _target(event), payload, now)
         activity.action(db, "meal_time", event, actor, meal_time=meal.isoformat())

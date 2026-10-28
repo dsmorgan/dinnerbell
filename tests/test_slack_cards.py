@@ -435,7 +435,9 @@ async def test_a_card_after_responses_close_says_the_call_moved_on(
     await slack.tap_card("Kim", "card_out", card)
     assert await response(house, event_id, "Kim") == (Status.IN, frozenset())
     (replaced,) = slack.fake.of("response_url")
-    assert f"*{MOVED_ON}* Thanks for answering! Vote on the picks" in text_of(replaced.args)
+    assert f"*{MOVED_ON}* Thanks for answering! Voting is open: the picks are posted in the channel" in text_of(
+        replaced.args
+    )
     assert "Your answer: *In*" in text_of(replaced.args)
     assert action_ids(replaced.args) == ["link_event"]
     assert "closed" not in text_of(replaced.args)  # the card says it once, not with the rule's words too
