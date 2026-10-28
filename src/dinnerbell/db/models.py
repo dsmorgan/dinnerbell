@@ -313,6 +313,16 @@ class EventRow(Base):
     end_note: Mapped[str | None] = mapped_column(String(140))
     capacity: Mapped[int | None] = mapped_column(Integer)
     """An offer's spare servings (FR-4); NULL for a call."""
+    shuffles: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    """How many times the coordinator shuffled this run's picks (#87)."""
+    shuffle_note: Mapped[str | None] = mapped_column(String(200))
+    """The picks message's context line after a shuffle."""
+    roles_due_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    """While set, the coordinator is choosing roles until then (#87)."""
+    tie_how: Mapped[str | None] = mapped_column(String(24))
+    """How a tie for the most votes was broken (FR-16), a ``TieHow`` value."""
+    tie_by: Mapped[int | None] = mapped_column(Integer)
+    """The member whose choice or vote broke it. Not a foreign key: it is only a name to show."""
     created_at: Mapped[datetime] = mapped_column(UTCDateTime())
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime())
 

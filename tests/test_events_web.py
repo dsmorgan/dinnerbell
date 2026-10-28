@@ -251,7 +251,12 @@ def test_members_cannot_use_admin_overrides(admin: TestClient, provider: FakePro
 
 
 def ranking_form(**changes: Any) -> dict[str, Any]:
-    form: dict[str, Any] = {"proposal_count": "3", "variety_window_days": "7", "temperature": "1"}
+    form: dict[str, Any] = {
+        "proposal_count": "3",
+        "variety_window_days": "7",
+        "temperature": "1",
+        "roles_choice_minutes": "15",
+    }
     form |= {f"weight_{n}": v for n, v in (("soft_preference", "1"), ("cuisine_variety", "3"), ("novelty", "1"))}
     form |= {f"weight_{n}": v for n, v in (("suggested", "2"), ("default_mode", "1"), ("volunteer_fit", "1"))}
     return form | changes
@@ -326,7 +331,7 @@ def voting(admin: TestClient, clock: FakeClock, migrated: Settings) -> Settings:
 
 
 def test_every_m2_post_route_is_enumerated(client: TestClient) -> None:
-    assert len(m2_posts(client)) == 31  # #76 added join-late and the late joiner's switches
+    assert len(m2_posts(client)) == 34  # #87 added shuffle, break-tie, and roles
 
 
 def test_every_admin_override_checks_for_an_admin_in_the_web_layer(client: TestClient) -> None:

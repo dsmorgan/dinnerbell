@@ -1,0 +1,38 @@
+{
+  "blocks": [
+    {
+      "text": {
+        "text": "Hi Alex! You're coordinating dinner on Thursday, Oct 22: *Sam's Tacos* · Cook · Mexican. Nobody has a clear claim on the cook, so it's yours to choose. Tap *Assign roles* by *6:00 PM*. After that, the first person who offered does it.",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "block_id": "more",
+      "elements": [
+        {
+          "action_id": "assign_roles",
+          "text": {
+            "emoji": true,
+            "text": "Assign roles",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "7:1"
+        },
+        {
+          "action_id": "link_event",
+          "text": {
+            "emoji": true,
+            "text": "View on web",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "url": "https://dinnerbell.example.com/events/7"
+        }
+      ],
+      "type": "actions"
+    }
+  ],
+  "text": "Choose who will cook Sam's Tacos by 6:00 PM."
+}

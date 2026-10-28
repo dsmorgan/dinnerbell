@@ -42,7 +42,7 @@ from dinnerbell.domain.guests import GuestInput
 from dinnerbell.domain.meals import PICK_SLOT, Slot
 from dinnerbell.domain.members import InvalidMemberInput
 from dinnerbell.domain.offers import MAX_CAPACITY
-from dinnerbell.services import activity, call_admin, calls, discard, event_views, feedback, guests, offers
+from dinnerbell.services import activity, call_admin, calls, coordinator, discard, event_views, feedback, guests, offers
 from dinnerbell.services.errors import Forbidden, NotFound
 from dinnerbell.services.lifecycle import CallExists
 from dinnerbell.web.auth import (
@@ -454,6 +454,86 @@ async def lock(
 ) -> Response:
     """FR-15: the coordinator or an admin; the service checks which."""
     return await _on_proposal(request, principal, context, db, event_id, proposal_id, came_from, calls.lock)
+
+
+# The coordinator's powers (FR-16, FR-61) -------------------------------------------------------
+
+
+@router.post("/events/{event_id}/shuffle")
+async def shuffle_picks(
+    request: Request,
+    principal: CSRFChecked,
+    context: Context,
+    db: Database,
+    event_id: RowId,
+    run: Run = "",
+    came_from: Annotated[str, Form(alias="from", max_length=10)] = "",
+) -> Response:
+    """**Shuffle picks**: the coordinator, or an admin with no coordinator, on the run the page showed."""
+    seen = parse_id(run)
+    if seen is None:
+        return await _malformed(request, principal, context, db, event_id, came_from)
+
+    async def action() -> None:
+        await coordinator.shuffle(db, principal.member, event_id, run=seen, now=context.clock())
+
+    return await _run(request, principal, context, db, event_id, came_from, action)
+
+
+@router.post("/events/{event_id}/proposals/{proposal_id}/break-tie")
+async def break_tie(
+    request: Request,
+    principal: CSRFChecked,
+    context: Context,
+    db: Database,
+    event_id: RowId,
+    proposal_id: RowId,
+    run: Run = "",
+    came_from: Annotated[str, Form(alias="from", max_length=10)] = "",
+) -> Response:
+    """**Break the tie**: choose this pick among those tied for the most votes."""
+    seen = parse_id(run)
+    if seen is None:
+        return await _malformed(request, principal, context, db, event_id, came_from)
+
+    async def action() -> None:
+        await coordinator.break_tie(db, principal.member, event_id, proposal_id, run=seen, now=context.clock())
+
+    return await _run(request, principal, context, db, event_id, came_from, action)
+
+
+@router.post("/events/{event_id}/roles")
+async def choose_roles(
+    request: Request,
+    principal: GuestCSRFChecked,
+    context: Context,
+    db: Database,
+    event_id: RowId,
+    mode: Field = "",
+    member_id: Field = "",
+    run: Run = "",
+    came_from: Annotated[str, Form(alias="from", max_length=10)] = "",
+) -> Response:
+    """**Assign roles**: the decided pick's mode and who does its role. A guest coordinating may."""
+    seen = parse_id(run)
+    if seen is None:
+        return await _malformed(request, principal, context, db, event_id, came_from)
+
+    async def action() -> None:
+        chosen = choice(Mode, mode)
+        if chosen is None:
+            raise BadFormValue("Pick how to get it.")
+        await coordinator.choose_roles(
+            db,
+            principal.member,
+            event_id,
+            mode=chosen,
+            member_id=_member_id(member_id) if member_id else None,
+            run=seen,
+            now=context.clock(),
+        )
+
+    return await _run(request, principal, context, db, event_id, came_from, action)
 
 
 # Joining late (#76) -----------------------------------------------------------------------------

@@ -176,6 +176,7 @@ def _stored(values: RankingSettings) -> dict[str, Any]:
         "temperature": f"{values.temperature:g}",
         "proposal_count": str(values.proposal_count),
         "variety_window_days": str(values.variety_window_days),
+        "roles_choice_minutes": str(values.roles_choice_minutes),
     }
 
 
@@ -183,7 +184,13 @@ def _posted(form: FormData) -> dict[str, Any]:
     """The form as typed, to redisplay after an error."""
     return {
         name: _text(form, name)
-        for name in (*(f"weight_{w}" for w in WEIGHT_NAMES), "temperature", "proposal_count", "variety_window_days")
+        for name in (
+            *(f"weight_{w}" for w in WEIGHT_NAMES),
+            "temperature",
+            "proposal_count",
+            "variety_window_days",
+            "roles_choice_minutes",
+        )
     }
 
 
@@ -204,6 +211,7 @@ def _parse(posted: dict[str, Any]) -> RankingSettings:
         proposal_count=_whole(posted["proposal_count"], "The number of proposals"),
         variety_window_days=_whole(posted["variety_window_days"], "The variety window"),
         temperature=_weight(posted["temperature"], "Randomness"),
+        roles_choice_minutes=_whole(posted["roles_choice_minutes"], "The time to choose roles"),
     )
 
 

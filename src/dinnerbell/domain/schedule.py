@@ -20,12 +20,16 @@ from datetime import UTC, date, datetime, time, timedelta, tzinfo
 from typing import Any
 
 from dinnerbell.domain.catalog import Mode, sorted_modes
+from dinnerbell.domain.events import DEFAULT_ROLES_CHOICE_MINUTES
 from dinnerbell.domain.meals import Slot
 
 SLOTS_KEY = "slots"
 WEIGHTS_KEY = "ranking_weights"
 PROPOSAL_COUNT_KEY = "proposal_count"
 TEMPERATURE_KEY = "ranking_temperature"
+ROLES_CHOICE_KEY = "roles_choice_minutes"
+MIN_ROLES_CHOICE_MINUTES = 1
+MAX_ROLES_CHOICE_MINUTES = 120
 
 MIN_WINDOW_MINUTES = 5
 MAX_WINDOW_MINUTES = 6 * 60
@@ -198,6 +202,12 @@ def weights(settings: Mapping[str, Any]) -> Weights:
 def proposal_count(settings: Mapping[str, Any]) -> int:
     value = _minutes(settings.get(PROPOSAL_COUNT_KEY), 1, MAX_PROPOSAL_COUNT)
     return DEFAULT_PROPOSAL_COUNT if value is None else value
+
+
+def roles_choice_minutes(settings: Mapping[str, Any]) -> int:
+    """How long the coordinator has to choose roles before the automatic assignment stands (FR-61)."""
+    value = _minutes(settings.get(ROLES_CHOICE_KEY), MIN_ROLES_CHOICE_MINUTES, MAX_ROLES_CHOICE_MINUTES)
+    return DEFAULT_ROLES_CHOICE_MINUTES if value is None else value
 
 
 def temperature(settings: Mapping[str, Any]) -> float:

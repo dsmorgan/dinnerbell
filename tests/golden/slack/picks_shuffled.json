@@ -1,0 +1,12 @@
+{
+  "blocks": [
+    {
+      "text": {
+        "text": "Alex shuffled the picks for dinner (2 replaced). See the new set in the picks message.",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    }
+  ],
+  "text": "Alex shuffled the picks for dinner (2 replaced). See the new set in the picks message."
+}

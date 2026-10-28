@@ -72,6 +72,14 @@ value is a ``proposal_value``."""
 LATE_MENU = "late_menu"
 """The ⋯ menu beside a late joiner on the proposals message (#76): the coordinator's switches.
 Each option's value is a ``late_value``."""
+SHUFFLE = "shuffle"
+"""**Shuffle picks** in the proposals message footer (#87): the coordinator's. Its value is a
+``card_value``, naming the run the message showed."""
+BREAK_TIE = "break_tie"
+"""**Break the tie** beside a pick tied for the most votes (#87). Its value is a ``proposal_value``."""
+ASSIGN_ROLES = "assign_roles"
+"""**Assign roles** on the decision message and the coordinator's direct message (#87): opens the
+modal. Its value is a ``card_value``."""
 POST_NOW = "post_now"
 """**Post it now** on a scheduled call (issue #59): on the reply to starting a later day's call,
 and on the Home tab. Its value is a ``card_value``."""
@@ -126,6 +134,7 @@ FEEDBACK_VIEW = "feedback_modal"
 OFFER_VIEW = "offer_modal"
 INVITE_VIEW = "invite_modal"
 LOG_VIEW = "log_modal"
+ASSIGN_VIEW = "assign_modal"
 
 MAX_ID = 2**63 - 1
 _DIGITS = re.compile(r"^[0-9]{1,19}$")

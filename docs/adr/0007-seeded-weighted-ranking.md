@@ -41,5 +41,5 @@ Ranking keeps ADR 0005's hard filters and score, and replaces "take the top N" w
 - The same inputs and run still give the same picks, so a bug report with the call and run reproduces.
 - Tests that assumed alphabetical order now assert sets, or set T = 0, or check frequencies over 2,000 seeds with loose bounds.
 - Ranking reports how many candidates shared each pick's score, so the event page can later say "chosen at random among 4 equally good options". It isn't stored or shown yet.
-- A **Shuffle picks** button for the coordinator, before any votes, could draw again with the next seed. It's a separate change.
+- A **Shuffle picks** button for the coordinator draws again with the next seed, a shuffle counter in the seed's derivation (#87, spec FR-61). The first draw keeps its seed.
 - Feedback-informed ranking (M7) can add a score component without touching the draw.

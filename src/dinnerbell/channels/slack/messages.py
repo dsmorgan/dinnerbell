@@ -180,6 +180,10 @@ def _render(notification: note.Notification, ctx: RenderContext) -> Message:
             return link_needed_message(notification, ctx)
         case note.LateJoinChanged():
             return late_join_changed_message(notification, ctx)
+        case note.RolesToChoose():
+            return roles_to_choose_message(notification, ctx)
+        case note.PicksShuffled():
+            return picks_shuffled_message(notification)
     raise TypeError(f"no Slack rendering for {type(notification).__name__}")  # pragma: no cover
 
 
@@ -510,6 +514,10 @@ def proposals_message(notification: note.ProposalsReady | note.ProposalsUpdated,
     else:
         intro = "Voting is closed."
     blocks: list[Block] = [section(f"*{_post_title(event, 'picks')}* for {people}\n{intro}")]
+    if voting and event.shuffle_note:  # plain words: an edit pings nobody (#92)
+        blocks.append(context(escape(event.shuffle_note)))
+    if voting and any(p.tied for p in notification.proposals):
+        blocks.append(context("Tied for the most votes. The coordinator can break the tie."))
     # Only the first post mentions anyone (an edit that added a mention might ping it), and the
     # list comes after the instructions, so a big household can't push them out.
     blocks += _in_blocks(notification.participants, ctx, mention=isinstance(notification, note.ProposalsReady))
@@ -524,13 +532,13 @@ def proposals_message(notification: note.ProposalsReady | note.ProposalsUpdated,
                 f"{name} becomes the plan right away, and voting closes.",
                 "Lock it in",
             )
-            blocks.append(
-                actions(
-                    button("Vote", ids.VOTE, value, style="primary"),
-                    button("Lock this", ids.LOCK, value, confirm=lock),
-                    block_id=f"proposal-actions-{proposal.id}",
+            row = [button("Vote", ids.VOTE, value, style="primary"), button("Lock this", ids.LOCK, value, confirm=lock)]
+            if proposal.tied:
+                choose = confirm(
+                    "Break the tie?", f"{name} becomes the plan right away, and voting closes.", "Choose it"
                 )
-            )
+                row.append(button("Break the tie", ids.BREAK_TIE, value, confirm=choose))
+            blocks.append(actions(*row, block_id=f"proposal-actions-{proposal.id}"))
     hidden = len(notification.proposals) - len(shown)
     if hidden:
         blocks.append(context(f"…and {plural(hidden, 'more pick')} on the web."))
@@ -538,6 +546,13 @@ def proposals_message(notification: note.ProposalsReady | note.ProposalsUpdated,
     footer: list[Block] = []
     if voting:
         footer.append(button("Add proposal", ids.ADD_PROPOSAL, ids.event_value(event.id)))
+        if notification.shuffles_left:
+            shuffle = confirm(
+                "Shuffle the picks?",
+                "Picks nobody has voted for are replaced. Picks with votes, and ones added or suggested, stay.",
+                "Shuffle",
+            )
+            footer.append(button("Shuffle picks", ids.SHUFFLE, ids.card_value(event.id, event.run), confirm=shuffle))
     footer.append(_web_button(ctx, event))
     blocks.append(actions(*footer, block_id="more"))
     text = f"Picks for {_slot(event)} on {day_label(event.day)}: " + ", ".join(
@@ -589,6 +604,8 @@ def decision_message(
     top = f"*{_post_title(event, 'decision')}*\n{top}"
     if locked_by is not None and event.state is not EventState.CANCELLED:
         top += f"\nLocked in by {ctx.directory.mention(locked_by)}."
+    if decision.tie_note and event.state is not EventState.CANCELLED:
+        top += f"\n_{escape(decision.tie_note)}._"
     blocks: list[Block] = [
         section(top),
         fields_section(
@@ -599,6 +616,8 @@ def decision_message(
         ),
     ]
     lines = _assignments(decision.assignments, ctx) or ["_Nobody is assigned yet._"]
+    if decision.roles_due_at and event.state is EventState.DECIDED:
+        lines.append(_roles_pending(event, decision))
     late = [p.member for p in decision.participants if p.late]
     if late:
         lines.append(f"*Joined late:* {ctx.directory.mentions(late)}")
@@ -611,6 +630,8 @@ def decision_message(
     buttons: list[Block] = []
     if event.state is EventState.DECIDED:
         buttons.append(mark_done_button(event))
+        if decision.assign_roles:
+            buttons.append(assign_roles_button(event))
     elif event.state is EventState.DONE:
         buttons.append(feedback_button(event))
     buttons += _item_buttons(proposal.item, proposal.mode)
@@ -621,6 +642,20 @@ def decision_message(
         decision.meal_time, event.timezone
     )
     return _finish(text, blocks)
+
+
+def assign_roles_button(event: note.EventInfo) -> Block:
+    """**Assign roles** (#87): opens the modal for the coordinator, or an admin standing in. Everyone
+    sees the button; the service checks who tapped it."""
+    return button("Assign roles", ids.ASSIGN_ROLES, ids.card_value(event.id, event.run))
+
+
+def _roles_pending(event: note.EventInfo, decision: note.DecisionInfo) -> str:
+    """While the coordinator chooses: who does the role is theirs to say until the time shown."""
+    verb = {Mode.COOK: "cooks", Mode.PICKUP: "picks up", Mode.DELIVERY: "orders"}[decision.proposal.mode]
+    until = local_clock(decision.roles_due_at, event.timezone) if decision.roles_due_at else ""
+    who = escape(event.coordinator.name) if event.coordinator else "The coordinator"  # plain: an edit pings nobody
+    return f"_{who} is choosing who {verb}, until {until}. If they don't, the first person who offered does._"
 
 
 def mark_done_button(event: note.EventInfo) -> Block:
@@ -1149,6 +1184,12 @@ def assignment_message(notification: note.AssignmentMade, ctx: RenderContext) ->
         f"{_kind(proposal)}.",
         f"*When:* {when} · *Eating:* {_head_count(decision)}",
     ]
+    if notification.assigned_by is not None:  # they hadn't offered: say who asked, and whom to tell
+        lines.insert(
+            1,
+            f"{escape(notification.assigned_by.name)} assigned you this. If it doesn't work for you, "
+            f"tell {escape(notification.assigned_by.name)}.",
+        )
     if decision.dietary_notes:
         lines.append(f"*Dietary needs:* {escape(', '.join(decision.dietary_notes))}")
     others = [a for a in decision.assignments if a.member.id != notification.member.id]
@@ -1160,6 +1201,34 @@ def assignment_message(notification: note.AssignmentMade, ctx: RenderContext) ->
     blocks = [section(join_lines(lines)), actions(*buttons, block_id="more")]
     subject = f"{notification.member.name} is" if notification.via is not None else "You're"
     return _finish(f"{subject} {role} for {_slot(event)} at {when}: {proposal.item.name}.", blocks)
+
+
+def roles_to_choose_message(notification: note.RolesToChoose, ctx: RenderContext) -> Message:
+    """To the coordinator (#87): the decision left the role without a clear owner, so they pick
+    the mode and who does it, until ``due_at``; after that the first volunteer does."""
+    event, decision = notification.event, notification.decision
+    proposal = decision.proposal
+    until = local_clock(notification.due_at, event.timezone)
+    name = _item_name(proposal.item)
+    reader = notification.via.name if notification.via else notification.member.name
+    who = f"Your guest {escape(notification.member.name)} is" if notification.via else "You're"
+    text = (
+        f"Hi {escape(reader)}! {who} coordinating {_slot(event)} on {day_label(event.day)}: *{name}* · "
+        f"{_kind(proposal)}. Nobody has a clear claim on the {proposal.mode.verb}, so it's yours to choose. "
+        f"Tap *Assign roles* by *{until}*. After that, the first person who offered does it."
+    )
+    blocks = [section(text), actions(assign_roles_button(event), _web_button(ctx, event), block_id="more")]
+    return _finish(f"Choose who will {proposal.mode.verb} {proposal.item.name} by {until}.", blocks)
+
+
+def picks_shuffled_message(notification: note.PicksShuffled) -> Message:
+    """The note in the call's thread after a shuffle (#87): plain words, and no mention."""
+    event = notification.event
+    text = (
+        f"{notification.by.name} shuffled the picks for {_slot(event)} ({notification.replaced} replaced). "
+        "See the new set in the picks message."
+    )
+    return _finish(text, [section(escape(text))])
 
 
 # Endings -----------------------------------------------------------------------------------------

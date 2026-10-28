@@ -393,6 +393,61 @@ def parse_cancel(values: Any) -> str | None:
     return reason or None
 
 
+# Assign roles (FR-61) -----------------------------------------------------------------------------
+
+MAX_ASSIGN_PEOPLE = 100
+"""Slack's most options in a select; a household has far fewer."""
+
+
+@dataclass(frozen=True, slots=True)
+class AssignInput:
+    mode: Mode
+    member_id: int
+
+
+def assign_modal(v: EventView, origin: ids.ViewOrigin) -> dict[str, Any]:
+    """**Assign roles** (#87): how to get the winning pick, for a place that allows more than one
+    way, and who does it, from the people who are in. A volunteer is preselected. The modal names
+    the run (``origin.run``), which submitting checks."""
+    choice = v.roles
+    if choice is None:
+        raise ValueError("an Assign roles modal needs a decided call")
+    item = v.decision.proposal.item.name if v.decision else "the pick"
+    blocks: list[Block] = [
+        _intro(v),
+        section(
+            f"*{escape(item)}*: pick how to get it and who does it. Anyone who's in can. "
+            "Someone who didn't offer is told you assigned them."
+        ),
+    ]
+    modes = [option(m.label, m.value) for m in choice.modes]
+    current = next(o for o in modes if o["value"] == choice.mode.value)
+    how: Block = {"type": "static_select", "options": modes, "initial_option": current}
+    blocks.append(_input("mode", "How", how, optional=False))
+    people = [option(p.name, str(p.id)) for p in choice.people[:MAX_ASSIGN_PEOPLE]]
+    volunteers = choice.volunteers.get(choice.mode, ())
+    preselected = next((o for o in people if volunteers and o["value"] == str(volunteers[0])), None)
+    element: Block = {"type": "static_select", "options": people}
+    if preselected is not None:
+        element["initial_option"] = preselected
+    blocks.append(_input("who", "Who", element, optional=False))
+    return _modal("Assign roles", ids.ASSIGN_VIEW, origin, blocks, "Assign")
+
+
+def parse_assign(values: Any) -> AssignInput:
+    """The Assign roles modal's state. ``coordinator.choose_roles`` checks both choices against
+    the call."""
+    selected = _state(values, "mode").get("selected_option")
+    raw = selected.get("value") if isinstance(selected, dict) else None
+    if raw not in {m.value for m in Mode}:
+        raise FormError("mode", "Pick how to get it.")
+    mode = Mode(str(raw))
+    member = _picked(values, "who")
+    if member is None:
+        raise FormError("who", "Pick who does it.")
+    return AssignInput(mode, member)
+
+
 def close_modal(v: EventView, origin: ids.ViewOrigin) -> dict[str, Any]:
     """Close now's confirmation from the ⋯ menu, which can't confirm one option and not the
     other. ``origin.window`` is the window it closes; the submission checks it's still open."""

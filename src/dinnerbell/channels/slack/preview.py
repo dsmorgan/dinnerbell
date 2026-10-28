@@ -27,6 +27,7 @@ from dinnerbell.channels.slack.messages import (
 )
 from dinnerbell.channels.slack.views import (
     HomeLinks,
+    assign_modal,
     cancel_modal,
     close_modal,
     details_modal,
@@ -55,7 +56,7 @@ from dinnerbell.domain.feedback import FeedbackInput, MealFacts, PlaceIssue, Rat
 from dinnerbell.domain.meals import MemberRef, Slot
 from dinnerbell.domain.members import Capabilities, Member, Role
 from dinnerbell.domain.schedule import DEFAULT_SLOTS
-from dinnerbell.services.event_views import EventView, Permissions, ProposalView, TodayView
+from dinnerbell.services.event_views import EventView, Permissions, ProposalView, RolesChoice, TodayView
 from dinnerbell.services.feedback import Awaiting, FeedbackForm
 from dinnerbell.services.meals import LogForm
 from dinnerbell.services.offers import OfferForm, SlotDefaults
@@ -203,6 +204,23 @@ LATE_DECISION = replace(
     participants=(*DECISION.participants, note.ParticipantInfo(LEE, late=True)),
 )
 
+# Coordinator powers (#87): a tie, a shuffle, and the coordinator's choice of roles.
+TIED_PROPOSALS = (
+    replace(PROPOSALS[0], voters=(ALEX,), tied=True),
+    replace(PROPOSALS[1], voters=(SAM,), tied=True),
+    replace(PROPOSALS[2], voters=()),
+)
+SHUFFLED_VOTING = replace(VOTING, shuffle_note="Alex shuffled the picks (2 replaced).")
+TIE_DECISION = replace(DELIVERY, tie_note="Tied; Alex (coordinator) chose")
+ROLES_DUE = datetime(2026, 10, 22, 23, 0, tzinfo=UTC)
+PENDING_DECISION = replace(
+    DECISION,
+    assignments=(note.AssignmentInfo(AssignmentRole.COORDINATOR, ALEX),),
+    tie_note="Tied; least recently eaten",
+    roles_due_at=ROLES_DUE,
+    assign_roles=True,
+)
+
 DINNER_SCHEDULE = note.SlotScheduleInfo(
     enabled=True,
     call_time=time(15, 0),
@@ -332,6 +350,22 @@ NOTIFICATIONS: dict[str, Callable[[], note.Notification]] = {
     "decision_made_late": lambda: note.DecisionMade(DECIDED, LATE_DECISION),
     "late_join_changed": lambda: note.LateJoinChanged(VOTING, KIM, False, ALEX, VOTING.respond_deadline),
     "late_join_changed_back": lambda: note.LateJoinChanged(VOTING, KIM, True, ALEX, VOTING.respond_deadline),
+    "proposals_updated_tied": lambda: note.ProposalsUpdated(
+        VOTING, TIED_PROPOSALS, 3, participants=(ALEX, SAM), shuffles_left=3
+    ),
+    "proposals_updated_shuffled": lambda: note.ProposalsUpdated(
+        SHUFFLED_VOTING, PROPOSALS, 3, participants=(ALEX, SAM), shuffles_left=2
+    ),
+    "decision_made_tie": lambda: note.DecisionMade(DECIDED, TIE_DECISION),
+    "decision_made_roles_pending": lambda: note.DecisionMade(DECIDED, PENDING_DECISION),
+    "decision_updated_assign_roles": lambda: note.DecisionUpdated(
+        event(EventState.DECIDED), replace(DECISION, assign_roles=True)
+    ),
+    "assignment_made_assigned": lambda: note.AssignmentMade(
+        DECIDED, 35, SAM, (AssignmentRole.COOK,), DECISION, assigned_by=ALEX
+    ),
+    "roles_to_choose": lambda: note.RolesToChoose(DECIDED, ALEX, PENDING_DECISION, ROLES_DUE),
+    "picks_shuffled": lambda: note.PicksShuffled(SHUFFLED_VOTING, ALEX, 2, 1),
     "feedback_reminder": lambda: note.FeedbackReminder(
         event(EventState.DONE, coordinator=ALEX), KIM, "Sam's Tacos", date(2026, 10, 29)
     ),
@@ -399,6 +433,16 @@ SAM_RESPONSE = Response(
 COLLECTING_VIEW = _event_view(EventState.COLLECTING, SAM_RESPONSE, Permissions(respond=True, claim=False))
 VOTING_VIEW = _event_view(EventState.VOTING, SAM_RESPONSE, Permissions(vote=True, propose=True))
 DECIDED_VIEW = _event_view(EventState.DECIDED, SAM_RESPONSE, Permissions(mark_done=True))
+ROLES_CHOICE = RolesChoice(
+    mode=Mode.COOK,
+    modes=(Mode.COOK, Mode.PICKUP),
+    people=(ALEX, SAM),
+    volunteers={Mode.COOK: (SAM.id, ALEX.id), Mode.PICKUP: (ALEX.id,)},
+    due_at=ROLES_DUE,
+)
+ROLES_VIEW = replace(
+    DECIDED_VIEW, can=Permissions(mark_done=True, choose_roles=True), roles=ROLES_CHOICE, decision=PENDING_DECISION
+)
 CALLED_OFF_VIEW = _event_view(EventState.CANCELLED, SAM_RESPONSE, Permissions(restart=True))
 TOMORROW = date(2026, 10, 23)
 _LUNCH = _event_view(EventState.SCHEDULED, None, Permissions(post_now=True, cancel=True))
@@ -530,6 +574,7 @@ VIEWS: dict[str, Callable[[], dict[str, Any]]] = {
         ),
         HomeLinks(BASE_URL),
     ),
+    "assign_modal": lambda: assign_modal(ROLES_VIEW, CALL_OFF_ORIGIN),
     "cancel_modal": lambda: cancel_modal(COLLECTING_VIEW, CALL_OFF_ORIGIN),
     "cancel_modal_decided": lambda: cancel_modal(DECIDED_VIEW, replace(CALL_OFF_ORIGIN, home=True)),
     "close_modal": lambda: close_modal(COLLECTING_VIEW, replace(CALL_OFF_ORIGIN, window=Window.RESPOND)),

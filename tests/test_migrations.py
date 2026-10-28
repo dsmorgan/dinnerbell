@@ -1010,10 +1010,14 @@ def _catalog_columns(settings: Settings) -> list[str]:
 
 
 def _calls_before_late_join(settings: Settings) -> object:
-    """The call rows, without the columns 0014 adds to ``response`` at the end (#76), for
-    comparing with rows read before ``dinnerbell migrate`` took the database to the head."""
+    """The call rows, without the columns 0014 adds to ``response`` at the end (#76) and 0015
+    adds to ``event`` (#87), for comparing with rows read before ``dinnerbell migrate`` took the
+    database to the head."""
     rows: dict[str, list[tuple[object, ...]]] = _snapshot(settings)["rows"]  # type: ignore[assignment]
-    return rows | {"response": [tuple(r)[: -len(LATE_COLUMNS)] for r in rows["response"]]}
+    return rows | {
+        "response": [tuple(r)[: -len(LATE_COLUMNS)] for r in rows["response"]],
+        "event": [tuple(r)[: -len(COORDINATOR_COLUMNS)] for r in rows["event"]],
+    }
 
 
 def test_0012_gives_every_item_lunch_and_dinner_and_downgrade_drops_the_column(
@@ -1253,3 +1257,80 @@ def test_0014_marks_every_answer_on_time_and_downgrade_drops_the_columns(
             assert set(c.execute(text("SELECT late, vote_counts FROM response")).all()) == {(0, 0)}
     finally:
         engine.dispose()
+
+
+# 0015: coordinator powers (#87) ------------------------------------------------------------------
+
+COORDINATOR_COLUMNS = ("shuffles", "shuffle_note", "roles_due_at", "tie_how", "tie_by")
+LATE_JOIN = "0014_late_join"
+
+
+def _event_columns(settings: Settings) -> list[str]:
+    engine = create_engine(settings.sync_database_url)
+    try:
+        return [c["name"] for c in inspect(engine).get_columns("event")]
+    finally:
+        engine.dispose()
+
+
+def test_0015_adds_the_coordinator_columns_and_downgrade_drops_them(settings: Settings, migrate_command: None) -> None:
+    """``dinnerbell migrate`` on a populated 0014 database adds the five coordinator columns to
+    every call in place: ``shuffles`` is 0 and the rest are NULL, and no other row or constraint
+    changes. Down drops them and gives back the 0014 table exactly; up again gives the same."""
+    from dinnerbell import main as cli
+
+    _upgrade_to(settings, LATE_JOIN)
+    _populate_calls(settings)
+    before = _snapshot(settings)
+    columns, table = _event_columns(settings), _event_sql(settings)
+    assert not set(COORDINATOR_COLUMNS) & set(columns)
+    assert before["rows"]["event"]  # type: ignore[index]
+
+    assert cli.main(["migrate"]) == 0
+    assert _event_columns(settings) == [*columns, *COORDINATOR_COLUMNS]
+    after = _snapshot(settings)
+    assert [tuple(r)[: -len(COORDINATOR_COLUMNS)] for r in after["rows"]["event"]] == before["rows"]["event"]  # type: ignore[index]
+    assert {tuple(r)[-len(COORDINATOR_COLUMNS) :] for r in after["rows"]["event"]} == {(0, None, None, None, None)}  # type: ignore[index]
+    assert after["indexes"] == before["indexes"] and after["constraints"] == before["constraints"]
+    engine = create_sync_engine(settings.sync_database_url)
+    try:
+        with engine.begin() as c:  # a call in flight can use them
+            c.execute(
+                text("UPDATE event SET shuffles = 2, shuffle_note = 'x', tie_how = 'chose', tie_by = 1"), {"t": STAMP}
+            )
+    finally:
+        engine.dispose()
+
+    _downgrade_to(settings, LATE_JOIN)
+    assert _event_columns(settings) == columns and _event_sql(settings) == table
+    assert _snapshot(settings) == before
+
+    assert cli.main(["migrate"]) == 0
+    assert _event_columns(settings) == [*columns, *COORDINATOR_COLUMNS]
+    assert {tuple(r)[-len(COORDINATOR_COLUMNS) :] for r in _snapshot(settings)["rows"]["event"]} == {  # type: ignore[index]
+        (0, None, None, None, None)
+    }
+
+
+def test_0015_downgrade_refuses_while_a_role_choice_is_pending(settings: Settings, migrate_command: None) -> None:
+    """A call waiting on the coordinator has nobody assigned to its role, and an older release would
+    never assign one, so the downgrade refuses, naming how many, and changes nothing."""
+    from dinnerbell import main as cli
+
+    _upgrade_to(settings, LATE_JOIN)
+    _populate_calls(settings)
+    assert cli.main(["migrate"]) == 0
+    engine = create_sync_engine(settings.sync_database_url)
+    try:
+        with engine.begin() as c:
+            c.execute(text("UPDATE event SET roles_due_at = :t WHERE id = 1"), {"t": STAMP})
+        columns = _event_columns(settings)
+        with pytest.raises(RuntimeError, match=r"1 call\(s\) are waiting"):
+            _downgrade_to(settings, LATE_JOIN)
+        assert _event_columns(settings) == columns
+        with engine.begin() as c:
+            c.execute(text("UPDATE event SET roles_due_at = NULL"))
+    finally:
+        engine.dispose()
+    _downgrade_to(settings, LATE_JOIN)
+    assert not set(COORDINATOR_COLUMNS) & set(_event_columns(settings))

@@ -42,7 +42,18 @@ Each call has its own draw, so two calls with the same people and the same catal
 
 The draw isn't redrawn behind your back. Dinnerbell seeds it from the call itself, so the same call always gets the same picks. If an admin re-runs a call, or someone starts a called-off call again, that's a new run, and it draws again.
 
-The order of the proposals is the order they were drawn, suggestions first. It matters once: if a vote ties and neither the coordinator nor an admin voted for one of the tied places, the one drawn first wins.
+The order of the proposals is the order they were drawn, suggestions first. It matters once: if a vote ties and nothing else breaks the tie, the one drawn first wins. The tie rules are the coordinator's choice, then their vote, then an admin's vote when nobody coordinates, then the place you ate at longest ago (one you never ate at counts as longest), and only then the draw. The decision says which one decided it.
+
+## Shuffling the picks
+
+If the picks don't appeal, the coordinator can tap **Shuffle picks** while voting, or an admin can when nobody coordinates (or a guest does). Dinnerbell draws again with the next seed for the call, so a shuffle is as reproducible as the first draw. It can be used 3 times a call.
+
+- **Nobody has voted yet:** every drawn pick is replaced.
+- **Someone has voted:** only picks with no votes are replaced. A vote that doesn't count yet, such as a late joiner's, still keeps its pick, because it is someone's choice.
+- **Never replaced:** picks a member added, picks from an offer, and places someone suggested.
+- **The same rules hold.** The new picks pass everything in "What can never be picked", including a late joiner's guests' needs. A place that was just shuffled out doesn't come back unless nothing else fits. If nothing else fits at all, the shuffle is refused and doesn't count.
+
+The picks message says who shuffled and how many were replaced, such as "Kim shuffled the picks (2 replaced).", and the call's thread gets a short note. Nobody is mentioned again.
 
 ## A worked example
 

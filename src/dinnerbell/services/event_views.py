@@ -19,7 +19,7 @@ from dinnerbell.db.repositories import HouseholdRepository
 from dinnerbell.domain import events as rules
 from dinnerbell.domain import notifications as note
 from dinnerbell.domain import offers
-from dinnerbell.domain.catalog import CatalogItem, Tag, TagKind, for_meal_first, meal_hint
+from dinnerbell.domain.catalog import CatalogItem, Mode, Tag, TagKind, for_meal_first, meal_hint
 from dinnerbell.domain.events import Event, EventRuleViolation, EventState, Response, Window
 from dinnerbell.domain.guests import GuestAction, can_answer_for, check_can_invite, check_guest
 from dinnerbell.domain.meals import Slot
@@ -69,6 +69,27 @@ class Permissions:
     """Offer a role as a late joiner taking part, while voting (#76): ``calls.offer_role``."""
     switch_late: bool = False
     """Flip late joiners' switches (#76): ``calls.switch_late_joiner``."""
+    shuffle: bool = False
+    """Shuffle the picks (FR-61): ``coordinator.shuffle``. Only while a shuffle is left and would
+    change something."""
+    break_tie: bool = False
+    """Choose among picks tied for the most votes (FR-16): ``coordinator.break_tie``."""
+    choose_roles: bool = False
+    """Switch the decided pick's mode and assign its role (FR-61): ``coordinator.choose_roles``."""
+
+
+@dataclass(frozen=True, slots=True)
+class RolesChoice:
+    """What the coordinator chooses from when assigning roles (FR-61): the pick's ways of getting
+    it, who's in, and who offered for each."""
+
+    mode: Mode
+    modes: tuple[Mode, ...]
+    people: tuple[note.PersonInfo, ...]
+    volunteers: dict[Mode, tuple[int, ...]]
+    """Who offered for each way, best first, to preselect."""
+    due_at: datetime | None = None
+    """While set, the automatic assignment waits for the choice until then."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,6 +142,10 @@ class EventView:
     """Saved guests the viewer could invite: only for a member who may invite (#38)."""
     late: tuple[note.LateJoinerInfo, ...] = ()
     """Who joined late (#76), with the coordinator's switches."""
+    shuffles_left: int = 0
+    """Shuffles a call has left (FR-61); 0 when none would change anything."""
+    roles: RolesChoice | None = None
+    """What **Assign roles** offers, for someone who may use it."""
 
     @property
     def id(self) -> int:
@@ -203,6 +228,7 @@ def _guest_permissions(base: Permissions, ctx: CallContext, actor: Member) -> Pe
         manage=base.manage and may(GuestAction.MANAGE_DECISION),
         mark_done=base.mark_done and may(GuestAction.MARK_DONE),
         close_window=base.close_window if may(GuestAction.CLOSE_WINDOW) else None,
+        choose_roles=base.choose_roles and may(GuestAction.MANAGE_DECISION),
     )
 
 
@@ -247,6 +273,11 @@ def _member_permissions(
         and _allowed(lambda: rules.check_can_offer_role(event, actor, mine))
         and event.state is EventState.VOTING,
         switch_late=_allowed(lambda: rules.check_can_switch_late(event, actor, _coordinator(ctx))),
+        shuffle=bool(cc.shuffles_left(ctx))
+        and _allowed(lambda: rules.check_can_shuffle(event, actor, _coordinator(ctx))),
+        break_tie=bool(cc.tied_ids(ctx))
+        and _allowed(lambda: rules.check_can_break_tie(event, actor, _coordinator(ctx))),
+        choose_roles=event.state is EventState.DECIDED and _allowed(lambda: rules.check_can_choose_roles(event, actor)),
     )
 
 
@@ -312,6 +343,23 @@ def _invitable(ctx: CallContext, actor: Member) -> tuple[note.PersonInfo, ...]:
     return tuple(ctx.person(m.id) for m in sorted(saved, key=lambda m: m.display_name.casefold()))
 
 
+def _roles_choice(ctx: CallContext) -> RolesChoice | None:
+    """The decided pick's ways of getting it and the people to assign, for **Assign roles**."""
+    event = ctx.event
+    item = ctx.items.get(event.decided_item_id) if event.decided_item_id is not None else None
+    if event.is_offer or item is None or event.decided_mode is None:
+        return None
+    modes = tuple(m for m in Mode if m in item.modes)
+    people = [ctx.members[r.member_id] for r in ctx.participants if r.member_id in ctx.members]
+    return RolesChoice(
+        mode=event.decided_mode,
+        modes=modes,
+        people=tuple(ctx.person(m.id) for m in sorted(people, key=lambda m: m.display_name.casefold()) if m.active),
+        volunteers={m: ctx.coverage.volunteers(m, item.cook_ids) for m in modes},
+        due_at=event.roles_due_at,
+    )
+
+
 def view(ctx: CallContext, actor: Member, today: date, now: datetime, *, any_time: bool = False) -> EventView:
     # Who can be handed coordinating or assigned a role: members, and guests invited to the call.
     by_name = sorted([*ctx.active_members, *ctx.guests], key=lambda m: m.display_name.casefold())
@@ -346,6 +394,8 @@ def view(ctx: CallContext, actor: Member, today: date, now: datetime, *, any_tim
         guests=_guest_views(ctx, actor),
         invitable=_invitable(ctx, actor),
         late=cc.late_joiners(ctx),
+        shuffles_left=cc.shuffles_left(ctx),
+        roles=_roles_choice(ctx) if ctx.event.state is EventState.DECIDED else None,
     )
 
 

@@ -30,6 +30,8 @@ from dinnerbell.domain.catalog import DEFAULT_MEALS, CatalogItem, ItemKind, Mode
 from dinnerbell.domain.events import (
     MAX_PROPOSALS,
     MIN_HEAD_COUNT,
+    MODE_ROLE,
+    AssignmentRole,
     EndReason,
     Event,
     EventRuleViolation,
@@ -38,19 +40,21 @@ from dinnerbell.domain.events import (
     ProposalSource,
     ProposalTally,
     Step,
+    TieHow,
     Window,
     assign_roles,
     check_restart,
     check_run,
     check_window_change,
-    choose_winner,
     clean_cancel_note,
     counted_votes,
+    decide_winner,
     head_count,
     meal_time,
     needs_reminder,
     posted_before_its_day,
     resolve_maybes,
+    roles_unclear,
     shifted_deadline,
     should_open_today,
     transition,
@@ -61,7 +65,14 @@ from dinnerbell.domain.meals import MemberRef, Slot, TagRef
 from dinnerbell.domain.members import Member
 from dinnerbell.domain.offers import replaces_call
 from dinnerbell.domain.ranking import GroupPreferences, RankingSnapshot, RankItem, rank, ranking_seed
-from dinnerbell.domain.schedule import proposal_count, slot_schedule, slot_schedules, temperature, weights
+from dinnerbell.domain.schedule import (
+    proposal_count,
+    roles_choice_minutes,
+    slot_schedule,
+    slot_schedules,
+    temperature,
+    weights,
+)
 from dinnerbell.services import activity, feedback
 from dinnerbell.services import call_context as cc
 from dinnerbell.services.call_context import CallContext, load, locked_event, publish
@@ -285,6 +296,11 @@ async def reopen(
         locked_by=None,
         ended_by=None,
         end_note=None,
+        shuffles=0,
+        shuffle_note=None,
+        roles_due_at=None,
+        tie_how=None,
+        tie_by=None,
     )
     fresh = await EventRepository(db).save(fresh, now)
     if not scheduled:  # a scheduled call is posted when the tick opens it
@@ -373,11 +389,17 @@ def guest_needs(ctx: CallContext) -> frozenset[int]:
 
 
 async def ranking_snapshot(
-    db: AsyncSession, ctx: CallContext, group: GroupPreferences, *, taken: frozenset[int] = frozenset()
+    db: AsyncSession,
+    ctx: CallContext,
+    group: GroupPreferences,
+    *,
+    taken: frozenset[int] = frozenset(),
+    shuffle: int = 0,
 ) -> RankingSnapshot:
     """Spec section 7's inputs for this call, as of the call's date. ``taken`` holds the items
     that are picks already, which ranking leaves out (#77). The seed is this run's, so ranking
-    the run again gives the same picks and a restart draws again (#78)."""
+    the run again gives the same picks and a restart draws again (#78). ``shuffle`` is the
+    coordinator's shuffle count (#87): each shuffle draws with the next seed."""
     household_id, day = ctx.event.household_id, ctx.event.day
     window = await variety_window(db, household_id, day)
     who = ctx.veto_people
@@ -403,7 +425,7 @@ async def ranking_snapshot(
         limit=proposal_count(ctx.settings),
         taken=taken,
         temperature=temperature(ctx.settings),
-        seed=ranking_seed(household_id, ctx.event.id, ctx.event.run),
+        seed=ranking_seed(household_id, ctx.event.id, ctx.event.run, shuffle),
     )
 
 
@@ -620,10 +642,21 @@ async def _catalog_free_text(db: AsyncSession, ctx: CallContext, proposal: Propo
 
 
 async def decide(
-    db: AsyncSession, event: Event, now: datetime, *, locked: Proposal | None = None, actor: Member | None = None
+    db: AsyncSession,
+    event: Event,
+    now: datetime,
+    *,
+    locked: Proposal | None = None,
+    actor: Member | None = None,
+    tie_chosen: bool = False,
 ) -> None:
     """FR-15 and FR-16: decide the call, by ``locked`` or by the vote, and assign roles.
-    Abandons the call when no proposal can be covered (spec 5.4)."""
+    ``tie_chosen`` says ``locked`` is the coordinator's choice among tied picks (#87), not a lock.
+    Abandons the call when no proposal can be covered (spec 5.4).
+
+    When the winning pick's role has no clear owner and someone coordinates, the coordinator is
+    asked to choose (FR-61): the automatic assignment waits until they do, or until the household's
+    time to choose runs out (``assign_due_roles``)."""
     ctx = await load(db, event)
     # First, before anything is written: a meal that would land after the call's day can't be
     # decided. A lock says so; the vote deadline ends the call quietly instead.
@@ -636,16 +669,25 @@ async def decide(
     group = await group_preferences(db, event.household_id, ctx.veto_people)
     # Check free text as the catalog item it will become, if one by that name exists by now.
     checked = {p.id: await _as_catalog_item(db, ctx, p) for p in ctx.proposals}
+    tie: TieHow | None = None
+    tie_by: int | None = None
     if locked is not None:
         problem = misfit(ctx, checked.get(locked.id, locked), group, settled=True)
         if problem is not None:
             raise problem
         winner = locked
+        if tie_chosen and actor is not None:
+            tie, tie_by = TieHow.CHOSE, actor.id
     else:
         counted = counted_votes(ctx.votes, ctx.responses)  # a late joiner's only if the coordinator says (#76)
+        eaten = await last_eaten(db, event.household_id)
         tallies = [
             ProposalTally(
-                p.id, p.rank, misfit(ctx, checked[p.id], group, settled=True) is None, counted.get(p.id, frozenset())
+                p.id,
+                p.rank,
+                misfit(ctx, checked[p.id], group, settled=True) is None,
+                counted.get(p.id, frozenset()),
+                days_since_eaten=_days_since(event, eaten, checked[p.id]),
             )
             for p in ctx.proposals
         ]
@@ -654,13 +696,21 @@ async def decide(
         coordinator = ctx.members.get(event.coordinator_id) if event.coordinator_id is not None else None
         breaker = tie_breaker(coordinator, ctx.invitations.get(coordinator.id) if coordinator else None)
         guest_coordinating = coordinator is not None and coordinator.is_guest
-        chosen = choose_winner(tallies, coordinator_id=breaker, admin_ids=admins, admins_next=guest_coordinating)
-        found = ctx.proposal(chosen.id) if chosen is not None else None
-        if found is None:
+        chosen = decide_winner(tallies, coordinator_id=breaker, admin_ids=admins, admins_next=guest_coordinating)
+        found = ctx.proposal(chosen.tally.id) if chosen is not None else None
+        if chosen is None or found is None:
             await abandon(db, event, EndReason.NO_COVERAGE, now)
             return
-        winner = found
+        winner, tie, tie_by = found, chosen.tie, chosen.by
     item = ctx.items[winner.item_id] if winner.item_id is not None else await _catalog_free_text(db, ctx, winner, now)
+    volunteers = ctx.coverage.volunteers(winner.mode, item.cook_ids)
+    roles = assign_roles(winner.mode, volunteers, event.coordinator_id)
+    coordinator_member = ctx.members.get(event.coordinator_id) if event.coordinator_id is not None else None
+    asking = coordinator_member is not None and coordinator_member.active and roles_unclear(volunteers)
+    # The choice never outlasts the time to choose, nor the meal itself.
+    due = min(now + timedelta(minutes=roles_choice_minutes(ctx.settings)), meal) if asking else None
+    if asking:  # the role waits for the coordinator's choice
+        roles = {role: who for role, who in roles.items() if role is AssignmentRole.COORDINATOR}
     decided = replace(
         event,
         state=transition(event.state, EventState.DECIDED),
@@ -668,25 +718,38 @@ async def decide(
         decided_mode=winner.mode,
         meal_time=meal,
         decided_at=now,
-        locked_by=actor.id if locked is not None and actor is not None else None,
+        locked_by=actor.id if locked is not None and actor is not None and not tie_chosen else None,
+        roles_due_at=due,
+        tie_how=tie,
+        tie_by=tie_by,
     )
     decided = await EventRepository(db).save(decided, now)
-    roles = assign_roles(winner.mode, ctx.coverage.volunteers(winner.mode, item.cook_ids), event.coordinator_id)
     repo = AssignmentRepository(db)
     assigned = [await repo.assign(event.household_id, event.id, role, who, now) for role, who in roles.items()]
-    await _announce_decision(db, decided, assigned_ids=[a.id for a in assigned], now=now)
+    await _announce_decision(db, decided, assigned_ids=[a.id for a in assigned], now=now, asking=asking)
     payload = {
-        "how": "locked" if locked else "vote",
+        "how": "tie_break" if tie_chosen else "locked" if locked else "vote",
         "proposal_id": winner.id,
         "item_id": item.id,
         "mode": winner.mode.value,
         "meal_time": meal.isoformat(),
         "assignments": {role.value: who for role, who in roles.items()},
+        "tie": tie.value if tie is not None else None,
+        "roles_pending": asking,
     }
     await audit(db, event.household_id, actor if locked else None, "event.decided", _target(event), payload, now)
 
 
-async def _announce_decision(db: AsyncSession, event: Event, *, assigned_ids: list[int], now: datetime) -> None:
+def _days_since(event: Event, eaten: dict[int, date], proposal: Proposal) -> int | None:
+    """Whole days from when the household last ate the pick's place to the call's day, or None
+    if it never has (FR-16's least recently eaten rule)."""
+    last = eaten.get(proposal.item_id) if proposal.item_id is not None else None
+    return None if last is None else max((event.day - last).days, 0)
+
+
+async def _announce_decision(
+    db: AsyncSession, event: Event, *, assigned_ids: list[int], now: datetime, asking: bool = False
+) -> None:
     ctx = await load(db, event)
     decision = cc.decision_info(ctx)
     if decision is None:  # pragma: no cover - decide() always stores a winner and a meal time
@@ -695,9 +758,38 @@ async def _announce_decision(db: AsyncSession, event: Event, *, assigned_ids: li
     for a in sorted(ctx.assignments, key=lambda a: a.id):
         if a.id in assigned_ids:
             first.setdefault(a.member_id, a.id)
+    if asking:  # the coordinator's message below says they coordinate
+        first.pop(event.coordinator_id or 0, None)
     dms = [cc.assignment_made(ctx, member_id, assignment_id, decision) for member_id, assignment_id in first.items()]
+    ask = cc.roles_to_choose(ctx, decision, event.roles_due_at) if asking and event.roles_due_at else None
     await publish(db, ctx, note.DecisionMade(cc.event_info(ctx), decision, cc.locked_by(ctx)), *dms, now=now)
+    if ask is not None:
+        await publish(db, ctx, ask, now=now)
     await publish(db, ctx, cc.proposals_updated(ctx), cc.call_updated(ctx), now=now)
+
+
+async def assign_due_roles(db: AsyncSession, event: Event, now: datetime) -> None:
+    """The coordinator's time to choose roles ran out (FR-61, ``Step.ASSIGN_ROLES``): the automatic
+    assignment stands, as it would have at the decision. The first volunteer takes the role, and
+    is told. Audited as ``event.roles_assigned`` with ``by`` None."""
+    ctx = await load(db, event)
+    mode, item = event.decided_mode, ctx.items.get(event.decided_item_id) if event.decided_item_id else None
+    cleared = await EventRepository(db).save(replace(event, roles_due_at=None), now)
+    assigned = None
+    if mode is not None and item is not None:
+        volunteers = ctx.coverage.volunteers(mode, item.cook_ids)
+        if volunteers:
+            assigned = await AssignmentRepository(db).assign(
+                event.household_id, event.id, MODE_ROLE[mode], volunteers[0], now
+            )
+    ctx = await load(db, cleared)
+    decision = cc.decision_info(ctx)
+    messages: list[note.Notification] = [*cc.decision_updated(ctx), cc.call_updated(ctx)]
+    if assigned is not None and decision is not None:
+        messages.append(cc.assignment_made(ctx, assigned.member_id, assigned.id, decision))
+    await publish(db, ctx, *messages, now=now)
+    payload = {"role": MODE_ROLE[mode].value if mode else None, "member_id": assigned.member_id if assigned else None}
+    await audit(db, event.household_id, None, "event.roles_assigned", _target(event), payload | {"by": None}, now)
 
 
 # Done -------------------------------------------------------------------------------------------
@@ -705,6 +797,9 @@ async def _announce_decision(db: AsyncSession, event: Event, *, assigned_ids: li
 
 async def finish(db: AsyncSession, event: Event, now: datetime, *, actor: Member | None = None) -> None:
     """FR-21: mark the call done and log the meal, linked by ``event_id``, at most once."""
+    if event.roles_due_at is not None:  # marking done ends the coordinator's time to choose: the automatic one stands
+        await assign_due_roles(db, event, now)
+        event = await EventRepository(db).get(event.household_id, event.id) or event
     ctx = await load(db, event)
     done = await EventRepository(db).save(
         replace(event, state=transition(event.state, EventState.DONE), done_at=now), now
@@ -754,6 +849,7 @@ HANDLERS: dict[Step, Handler] = {
     Step.REMIND: _remind,
     Step.CLOSE_RESPONSES: _close,
     Step.CLOSE_VOTING: _decide_by_vote,
+    Step.ASSIGN_ROLES: assign_due_roles,
     Step.MARK_DONE: _mark_done,
 }
 

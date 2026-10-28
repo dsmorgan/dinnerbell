@@ -227,6 +227,13 @@
 
   {% if v.proposals and e.state.value == "voting" %}
   <h3>Proposals</h3>
+  {#- The coordinator's context line after a shuffle (FR-61): plain words, a name and no more. -#}
+  {% if v.info.shuffle_note %}<p class="small muted shuffle-note">{{ v.info.shuffle_note }}</p>{% endif %}
+  {% if v.can.break_tie %}<p class="small">Tied for the most votes. As coordinator, you can choose one of the tied picks.</p>{% endif %}
+  {% if v.can.shuffle %}
+  <div class="button-row">{{ act(e.id, base ~ "/shuffle", "Shuffle picks", "button small", {"run": e.run}, confirm="Replace picks nobody has voted for, and keep the rest?") }}
+    <span class="small muted">{{ v.shuffles_left }} left</span></div>
+  {% endif %}
   <ol class="proposals">
     {% for p in v.proposals %}
     <li class="proposal">
@@ -248,6 +255,7 @@
         {% elif v.can.join_late %}
         {{ act(e.id, base ~ "/proposals/" ~ p.info.id ~ "/vote", "Join late and vote", "button small", {"join_late": "1"}, confirm=late_prompt) }}
         {% endif %}
+        {% if v.can.break_tie and p.info.tied %}{{ act(e.id, base ~ "/proposals/" ~ p.info.id ~ "/break-tie", "Break the tie: this one", "button small primary", {"run": e.run}, confirm="Choose " ~ p.info.item.name ~ " and decide now?") }}{% endif %}
         {% if v.can.lock %}{{ act(e.id, base ~ "/proposals/" ~ p.info.id ~ "/lock", "Lock this", "button small primary", confirm="Decide on " ~ p.info.item.name ~ " now?") }}{% endif %}
       </div>
     </li>
@@ -307,10 +315,35 @@
     <h3>{% if d.proposal.item.url %}<a href="{{ d.proposal.item.url }}" rel="noopener noreferrer" target="_blank">{{ d.proposal.item.name }}</a>{% else %}{{ d.proposal.item.name }}{% endif %} <span class="chip mode">{{ d.proposal.mode.label }}</span></h3>
     <p class="small">{{ d.head_count }} eating: {% for p in d.participants %}{{ p.member.name }}{% if p.late %} (late){% endif %}{% if p.guests %} +{{ p.guests }}{% endif %}{{ ", " if not loop.last }}{% endfor %}{% if d.dietary_notes %}. Dietary needs: {{ d.dietary_notes|join(", ") }}{% endif %}.</p>
     {% for w in d.proposal.warnings %}<p class="small warning">{{ w }}</p>{% endfor %}
+    {% if d.tie_note %}<p class="small tie-note">{{ d.tie_note }}.</p>{% endif %}
     <ul class="chips assignments">
       {% for a in d.assignments %}<li class="chip role">{{ {"cook": "Cooking", "pickup": "Picking up", "order": "Ordering", "coordinator": "Coordinating"}[a.role.value] }}: {{ a.member.name }}</li>{% endfor %}
     </ul>
+    {% if d.roles_due_at %}<p class="small">{% if v.info.coordinator %}{{ v.info.coordinator.name }} is choosing who {{ {"cook": "cooks", "pickup": "picks up", "delivery": "orders"}[d.proposal.mode.value] }} until {{ d.roles_due_at|clock(tz) }}. If they don't, the first person who offered does.{% endif %}</p>{% endif %}
     {% if v.can.mark_done %}<div class="button-row">{{ act(e.id, base ~ "/done", "Mark done", "button small", confirm="Mark this meal done? It goes into the history.") }}</div>{% endif %}
+    {% if v.can.choose_roles and v.roles %}
+    {% set r = v.roles %}
+    <details class="details-form"{% if d.assign_roles %} open{% endif %}>
+      <summary class="small">Assign roles</summary>
+      <form method="post" action="{{ base }}/roles" hx-post="{{ base }}/roles" {{ swap|safe }} class="stack">
+        {{ hidden() }}
+        <input type="hidden" name="run" value="{{ e.run }}">
+        <p class="small muted">Pick how to get it and who does it. Anyone who's in can, and whoever you assign without their offering is told you did.</p>
+        {% if r.modes|length > 1 %}
+        <label class="field"><span>How</span>
+          <select name="mode">{% for m in r.modes %}<option value="{{ m.value }}"{% if m == r.mode %} selected{% endif %}>{{ m.label }}</option>{% endfor %}</select>
+        </label>
+        {% else %}
+        <input type="hidden" name="mode" value="{{ r.mode.value }}">
+        {% endif %}
+        {% set chosen = r.volunteers[r.mode][0] if r.volunteers[r.mode] else none %}
+        <label class="field"><span>Who</span>
+          <select name="member_id">{% for m in r.people %}<option value="{{ m.id }}"{% if m.id == chosen %} selected{% endif %}>{{ m.name }}{% if m.id in r.volunteers[r.mode] %} (offered){% endif %}</option>{% endfor %}</select>
+        </label>
+        <button type="submit" class="button small primary">Assign</button>
+      </form>
+    </details>
+    {% endif %}
     {% if v.can.manage %}
     <details class="details-form">
       <summary class="small">Change the time or who does what</summary>
