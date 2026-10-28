@@ -7,6 +7,8 @@ from __future__ import annotations
 import logging
 import re
 import shutil
+import threading
+import time
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -14,6 +16,7 @@ from urllib.parse import parse_qsl, urlsplit
 
 import httpx
 import pytest
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi.testclient import TestClient
 from joserfc.jwk import RSAKey
 
@@ -86,6 +89,43 @@ def _no_secrets_in_logs(caplog: pytest.LogCaptureFixture) -> Iterator[None]:
         for record in caplog.get_records(when):
             line = JsonFormatter().format(record)
             assert not leaks(line), f"a log line leaks a secret: {line}"
+
+
+@pytest.fixture(autouse=True)
+def _no_leaked_scheduler_or_connection(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Fail the test that leaks, naming what it leaked, not whichever test runs when the leak
+    dies (#93). A scheduler left running, or an aiosqlite connection left open, outlives its
+    event loop: its thread or timer then fails with "Event loop is closed" in a later test, where
+    pytest reports it as an unhandled thread exception. Cheap: one list and a thread scan."""
+    started: list[AsyncIOScheduler] = []
+    real_start = AsyncIOScheduler.start
+
+    def recording_start(self: AsyncIOScheduler, *args: Any, **kwargs: Any) -> None:
+        started.append(self)
+        real_start(self, *args, **kwargs)
+
+    monkeypatch.setattr(AsyncIOScheduler, "start", recording_start)
+    yield
+    leaks = [
+        f"a scheduler still running, with jobs {sorted(job.id for job in s.get_jobs())}; stop it with "
+        "stop_scheduler() or scheduler.shutdown() before the loop closes"
+        for s in started
+        if s.running
+    ]
+    deadline = time.monotonic() + 2  # a connection stopping on its own takes a moment
+    while (threads := _connection_threads()) and time.monotonic() < deadline:
+        time.sleep(0.01)
+    leaks += [
+        f"an aiosqlite connection still open ({t.name}); await Database.close() or engine.dispose() "
+        "on the loop that opened it"
+        for t in threads
+    ]
+    if leaks:
+        pytest.fail("this test leaked:\n  " + "\n  ".join(leaks), pytrace=False)
+
+
+def _connection_threads() -> list[threading.Thread]:
+    return [t for t in threading.enumerate() if t.is_alive() and "_connection_worker_thread" in t.name]
 
 
 @pytest.fixture(autouse=True)

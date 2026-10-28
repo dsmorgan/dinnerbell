@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from dinnerbell.channels.base import Channel, NullChannel
 from dinnerbell.channels.slack.connection import BoltSocket, SlackConnection, SocketFactory
 from dinnerbell.config import Settings
-from dinnerbell.scheduler.runner import JobContext, build_scheduler, stop_scheduler
+from dinnerbell.scheduler.runner import CANCEL_UNWIND_SECONDS, JobContext, build_scheduler, stop_scheduler
 from dinnerbell.services import catalog as catalog_service
 from dinnerbell.services.bootstrap import bootstrap
 from dinnerbell.services.clock import Clock, utc_now
@@ -101,7 +101,7 @@ def create_app(
             # One deadline for both, inside podman's 10-second stop timeout: the scheduler's jobs
             # first (a drain may be mid-delivery), then Slack, with whatever time is left.
             deadline = asyncio.get_running_loop().time() + SHUTDOWN_SECONDS
-            await stop_scheduler(scheduler, jobs, grace=SHUTDOWN_SECONDS)
+            await stop_scheduler(scheduler, jobs, grace=SHUTDOWN_SECONDS - CANCEL_UNWIND_SECONDS)
             if slack is not None:
                 await slack.stop(deadline)
             await http.aclose()

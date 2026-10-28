@@ -32,6 +32,8 @@ BACKUP_HOUR = 3
 BACKUP_MINUTE = 30
 BACKUP_CATCH_UP_AFTER = timedelta(hours=24)
 SHUTDOWN_GRACE_SECONDS = 10.0
+CANCEL_UNWIND_SECONDS = 1.0
+"""How long shutdown waits for a job it cancelled to finish cleaning up."""
 CALL_TICK_INTERVAL = timedelta(seconds=30)
 """How often calls are opened and advanced. One idempotent job, not one job per deadline: the
 database is the schedule, so a restart or downtime catches up on the next tick."""
@@ -57,22 +59,36 @@ Job = Callable[[JobContext], Awaitable[None]]
 
 
 def _tracked(job: Job) -> Job:
-    """Record the job's task so shutdown can wait for it to unwind before the database closes."""
+    """Run the job as its own task, shielded from APScheduler's cancel, and record the task so
+    shutdown can wait for it to finish before the database closes.
+
+    APScheduler cancels asyncio jobs on shutdown. Cancelled mid-query, a job leaves aiosqlite's
+    worker thread running a query or a close whose result it then delivers to a loop that may
+    have closed, and the thread dies with "Event loop is closed". The shield lets a job that
+    is mid-query finish instead; ``stop_scheduler`` cancels only what outlasts its grace.
+    """
 
     @functools.wraps(job)
     async def run(ctx: JobContext) -> None:
-        task = asyncio.current_task()
-        if task is not None:
-            ctx.running.add(task)
         end = start_unit("scheduler")  # one request ID per run, on every line it logs (#75)
         try:
-            await job(ctx)
+            task = asyncio.ensure_future(job(ctx))  # copies the context, request ID included
+            ctx.running.add(task)
+            task.add_done_callback(ctx.running.discard)
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                task.add_done_callback(_log_late_failure)  # nobody awaits it now
+                raise
         finally:
             end()
-            if task is not None:
-                ctx.running.discard(task)
 
     return run
+
+
+def _log_late_failure(task: asyncio.Task[object]) -> None:
+    if not task.cancelled() and (error := task.exception()) is not None:
+        log.error("scheduled job failed during shutdown", exc_info=error)
 
 
 async def heartbeat(ctx: JobContext) -> None:
@@ -122,14 +138,19 @@ async def drain_outbox(ctx: JobContext) -> None:
 async def stop_scheduler(
     scheduler: AsyncIOScheduler, ctx: JobContext, *, grace: float = SHUTDOWN_GRACE_SECONDS
 ) -> None:
-    """Stop scheduling, cancel running jobs, and wait for them to finish cleaning up.
+    """Stop scheduling, let running jobs finish for up to ``grace`` seconds, then cancel what is
+    left and wait for it to unwind.
 
-    APScheduler cancels asyncio jobs on shutdown but does not wait for them. Without the wait,
-    a cancelled job can still be rolling back its database session when the engine is disposed.
+    The wait matters: a job still holding a database connection when the engine is disposed
+    leaves aiosqlite's worker thread to outlive the event loop (see ``_tracked``).
     """
     scheduler.shutdown(wait=False)
     if ctx.running:
-        await asyncio.wait(set(ctx.running), timeout=grace)
+        _, unfinished = await asyncio.wait(set(ctx.running), timeout=grace)
+        for task in unfinished:
+            task.cancel()
+        if unfinished:
+            await asyncio.wait(unfinished, timeout=CANCEL_UNWIND_SECONDS)
 
 
 def build_scheduler(ctx: JobContext) -> AsyncIOScheduler:
