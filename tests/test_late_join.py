@@ -23,7 +23,7 @@ from dinnerbell.channels.slack.blocks import Directory
 from dinnerbell.channels.slack.messages import RenderContext, render, your_answer
 from dinnerbell.channels.slack.views import HomeLinks, home_view
 from dinnerbell.config import Settings
-from dinnerbell.db.events import ResponseRepository
+from dinnerbell.db.events import ProposalRepository, ResponseRepository
 from dinnerbell.db.models import ResponseRow, TagRow
 from dinnerbell.domain.catalog import Mode, TagKind
 from dinnerbell.domain.events import (
@@ -40,6 +40,7 @@ from dinnerbell.domain.events import (
     EventRuleViolation,
     EventState,
     JoinLateFirst,
+    ProposalSource,
     Response,
     RoleOffer,
     Status,
@@ -893,3 +894,89 @@ def test_web_decision_leaves_a_late_joiners_own_needs_off_the_page(
         html = page(admin.get(url))
         assert "Kim (late)" in html and "eating" in html, url
         assert "Dietary needs:" not in html, url
+
+
+# Decisions still enforce on-time guests' needs (settled=True only exempts a late joiner's guests) ----
+
+
+async def _gluten_free_vote(house: House) -> tuple[int, int, int]:
+    """Sam brings a Gluten-free guest on time, so ranking proposes only GF Place. Taqueria lacks
+    the tag, and is put on the ballot directly, as a pick that stopped fitting would be. Returns
+    the event and the two proposals' IDs (GF Place, Taqueria)."""
+    gf = await house.tag("Gluten-free", TagKind.DIETARY)
+    gf_place = await house.add_item("GF Place", Mode.PICKUP, cuisine="Thai", tags=("Gluten-free",))
+    event_id = await open_dinner(house)
+    for name in ("Alex", "Sam", "Lee"):
+        await act(house, calls.respond, house[name], event_id, Status.IN)
+    await act(house, calls.save_details, house["Sam"], event_id, Details(guests=1, guest_needs=frozenset({gf.id})))
+    await act(house, calls.offer_role, house["Alex"], event_id, RoleOffer.PICKUP, True)
+    house.clock.now = RESPOND_BY
+    await house.tick()
+    assert set(await picks(house, event_id)) == {"GF Place"}
+    async with house.sessionmaker() as db:
+        added = await ProposalRepository(db).add(
+            household_id=house.household.id,
+            event_id=event_id,
+            item_id=house.items["Taqueria"].id,
+            free_text=None,
+            free_cuisine_id=None,
+            mode=Mode.PICKUP,
+            rank=9,
+            source=ProposalSource.MEMBER,
+            reasons=(),
+            proposed_by=None,
+            now=house.clock(),
+        )
+        await db.commit()
+    assert gf_place.id
+    return event_id, (await picks(house, event_id))["GF Place"], added.id
+
+
+async def test_locking_a_pick_that_misses_an_on_time_guests_need_is_refused(house: House) -> None:
+    event_id, _gf, taqueria = await _gluten_free_vote(house)
+    with pytest.raises(EventRuleViolation, match=DOESNT_FIT):
+        await act(house, calls.lock, house["Alex"], event_id, taqueria)
+    assert (await house.event(event_id)).state is EventState.VOTING
+
+
+async def test_the_deadline_never_picks_a_pick_that_misses_an_on_time_guests_need(house: House) -> None:
+    event_id, gf_place, taqueria = await _gluten_free_vote(house)
+    for name in ("Alex", "Sam", "Lee"):
+        await act(house, calls.vote, house[name], event_id, taqueria)
+    await act(house, calls.vote, house["Alex"], event_id, gf_place)
+    house.clock.now = VOTE_BY
+    await house.tick()
+    ctx = await house.context(event_id)
+    assert ctx.event.state is EventState.DECIDED and ctx.winner is not None and ctx.winner.id == gf_place
+
+
+async def test_only_a_late_guests_need_is_exempt_for_a_pick_already_proposed(house: House) -> None:
+    """Sam's on-time guest needs Gluten-free, and a late joiner's guest needs Vegetarian. A pick
+    with Gluten-free but not Vegetarian can still win (it warns); one with Vegetarian but not
+    Gluten-free can't."""
+    veg = await house.tag("Vegetarian", TagKind.DIETARY)
+    event_id, gf_place, taqueria = await _gluten_free_vote(house)
+    await _late_with_guest(house, event_id, veg.id)
+    veg_place = await house.add_item("Veg Place", Mode.PICKUP, cuisine="Thai", tags=("Vegetarian",))
+    async with house.sessionmaker() as db:
+        veg_pick = await ProposalRepository(db).add(
+            household_id=house.household.id,
+            event_id=event_id,
+            item_id=veg_place.id,
+            free_text=None,
+            free_cuisine_id=None,
+            mode=Mode.PICKUP,
+            rank=10,
+            source=ProposalSource.MEMBER,
+            reasons=(),
+            proposed_by=None,
+            now=house.clock(),
+        )
+        await db.commit()
+    with pytest.raises(EventRuleViolation, match=DOESNT_FIT):  # misses the on-time need
+        await act(house, calls.lock, house["Alex"], event_id, veg_pick.id)
+    with pytest.raises(EventRuleViolation, match=DOESNT_FIT):
+        await act(house, calls.lock, house["Alex"], event_id, taqueria)
+    assert (await info(house, event_id, gf_place)).warnings != ()  # misses only the late guest's
+    await act(house, calls.lock, house["Alex"], event_id, gf_place)
+    assert (await house.event(event_id)).state is EventState.DECIDED
