@@ -78,10 +78,10 @@ jobs:
           uv export --frozen --all-groups --format requirements-txt --no-emit-project -o "$RUNNER_TEMP/requirements.txt"
           uv run pip-audit --strict --require-hashes --disable-pip -r "$RUNNER_TEMP/requirements.txt"
 
-  # The suite split eight ways. tests/support/shard.py gives each shard every eighth test in sorted
-  # order, so the slow, similar tests spread out. Each shard runs one pytest worker per vCPU (4 on
-  # GitHub's runners) and saves its coverage data; `check` merges the eight and enforces the floor.
-  # A shard can't enforce it: it sees only a quarter of the tests.
+  # The suite split eight ways. tests/support/shard.py gives each shard about an eighth of the test
+  # files, by size, and a shard imports only its own files: under coverage the imports are a large
+  # part of a short run. Each shard runs one pytest worker per vCPU (4 on GitHub's runners) and
+  # saves its coverage data. `check` merges the eight and enforces the floor, which no shard can.
   test:
     name: test (${{ matrix.shard }}/8)
     runs-on: ubuntu-24.04
@@ -91,7 +91,6 @@ jobs:
       matrix:
         shard: [1, 2, 3, 4, 5, 6, 7, 8]
     env:
-      DINNERBELL_TEST_SHARD: ${{ matrix.shard }}/8
       COVERAGE_FILE: coverage-shard-${{ matrix.shard }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -115,7 +114,10 @@ jobs:
         run: uv sync --locked
       # The slowest tests are listed so a regression in test time shows up in the log.
       - name: Pytest with coverage
-        run: uv run pytest -n auto --dist worksteal --cov --cov-report= --cov-fail-under=0 --durations=20
+        run: |
+          mapfile -t files < <(uv run python -m tests.support.shard "${{ matrix.shard }}/8")
+          test "${#files[@]}" -gt 0 # with no files, pytest would run the whole suite
+          uv run pytest -n auto --cov --cov-report= --cov-fail-under=0 --durations=20 "${files[@]}"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: coverage-shard-${{ matrix.shard }}
