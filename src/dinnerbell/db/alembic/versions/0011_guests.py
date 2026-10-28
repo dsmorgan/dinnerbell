@@ -30,6 +30,7 @@ import sqlalchemy as sa
 from alembic import op
 
 import dinnerbell.db.types
+from dinnerbell.db.migrate import UpgradeBlocked
 
 revision: str = "0011_guests"
 down_revision: str | None = "0010_offers"
@@ -41,10 +42,23 @@ FOREIGN_KEYS_ON = (
     "answers, and feedback. Run migrations with `dinnerbell migrate`, which turns them off."
 )
 
+EMPTY_EMAIL = (
+    "Member {id} has an empty email, which this release's upgrade (0011_guests) doesn't allow, so nothing "
+    "was changed. Set a real email on that member (or remove them) in the database, then start again."
+)
+
 
 def _require_foreign_keys_off() -> None:
     if op.get_bind().exec_driver_sql("PRAGMA foreign_keys").scalar():
         raise RuntimeError(FOREIGN_KEYS_ON)
+
+
+def _require_emails() -> None:
+    """The new check refuses an empty email. Name the first such member instead of failing the
+    rebuild with a raw IntegrityError (the upgrade would roll back safely either way)."""
+    row = op.get_bind().exec_driver_sql("SELECT id FROM member WHERE email = '' ORDER BY id LIMIT 1").first()
+    if row is not None:
+        raise UpgradeBlocked(EMPTY_EMAIL.format(id=row[0]))
 
 
 def _sequence(table: str) -> int | None:
@@ -65,6 +79,7 @@ def _restore_sequence(table: str, before: int | None) -> None:
 
 def upgrade() -> None:
     _require_foreign_keys_off()
+    _require_emails()
     before = _sequence("member")
     with op.batch_alter_table("member", recreate="always") as batch_op:
         batch_op.alter_column("email", existing_type=sa.String(length=254), nullable=True)

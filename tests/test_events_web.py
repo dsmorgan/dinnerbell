@@ -283,6 +283,18 @@ def test_ranking_page_saves_and_audits(admin: TestClient, migrated: Settings) ->
     assert 'name="temperature" value="0.5"' in admin.get("/admin/schedule").text
 
 
+def test_saving_the_ranking_page_untouched_changes_nothing_even_with_long_values(
+    admin: TestClient, migrated: Settings
+) -> None:
+    """The form shows a value in full, so saving it as shown isn't a change (``:g`` rounded to 6 digits)."""
+    long = {"weight_novelty": "2.123456789", "temperature": "0.1234567891"}
+    submit(admin, "/admin/schedule", ranking_form(**long))
+    html = admin.get("/admin/schedule").text
+    assert 'name="weight_novelty" value="2.123456789"' in html and 'name="temperature" value="0.1234567891"' in html
+    assert submit(admin, "/admin/schedule", ranking_form(**long)).status_code == 303
+    assert len([a for a in rows(migrated, AuditRow) if a.action == "household.ranking_updated"]) == 1
+
+
 @pytest.mark.parametrize(
     ("changes", "message"),
     [

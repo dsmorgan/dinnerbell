@@ -206,6 +206,18 @@ async def test_a_refused_pick_leaves_the_answer_as_it_was(house: House) -> None:
     assert await offers_of(house, event_id, "Kim") == frozenset()
 
 
+async def test_a_vetoed_pick_off_a_cook_list_keeps_the_veto_wording(house: House) -> None:
+    """Lasagna has a cook list Kim isn't on, and Lee vetoed it. The refusal is the veto's, which is
+    the one that holds for everyone, not the cook-list message that only suits Kim's gap."""
+    event_id = await to_voting(house, "Alex", "Sam", "Kim", "Lee")
+    lasagna = await house.add_item("Lasagna", Mode.COOK, cuisine="Thai", cooks=("Sam",))
+    await act(house, set_my_preference, house["Lee"], TargetType.ITEM, lasagna.id, Stance(veto=True))
+    with pytest.raises(EventRuleViolation) as refused:
+        await act(house, calls.add_proposal, house["Kim"], event_id, Mode.COOK, item_id=lasagna.id)
+    assert "doesn't work for everyone" in str(refused.value)
+    assert "cook list" not in str(refused.value) and refused.value.code != "cook_list"
+
+
 async def test_an_uncovered_mode_is_named_in_words(house: House) -> None:
     event_id = await to_voting(house, "Alex", "Kim", "Lee")
     async with house.sessionmaker() as db:
@@ -338,6 +350,22 @@ async def test_a_taken_over_pick_counts_toward_the_offerers_three(house: House) 
         await act(house, offers.post_offer, house["Kim"], offer(house, Mode.DELIVERY, item_id=siam))
     pick = next(p for p in (await house.context(event_id)).proposals if p.item_id == siam)
     assert (pick.mode, pick.proposed_by) == (Mode.PICKUP, None)
+
+
+async def test_switching_ones_own_pick_to_another_mode_stays_at_three(house: House) -> None:
+    """The pick being taken over leaves the count (``check_proposal_room``): Kim has 3 picks and
+    switches one of them to delivery with an offer, which adds no row, so it's allowed."""
+    event_id = await to_voting(house, "Alex", "Kim", "Lee", offers_pickup=("Alex",))
+    thai = house.tags["Thai"].id
+    for n in range(3):
+        await act(
+            house, calls.add_proposal, house["Kim"], event_id, Mode.PICKUP, free_text=f"Kim's {n}", cuisine_id=thai
+        )
+    await act(house, offers.post_offer, house["Kim"], offer(house, Mode.DELIVERY, free_text="kim's 1", cuisine_id=thai))
+    ctx = await house.context(event_id)
+    mine = [p for p in ctx.proposals if p.proposed_by == house["Kim"].id]
+    assert len(mine) == 3
+    assert [p.mode for p in mine].count(Mode.DELIVERY) == 1
 
 
 async def test_the_repository_never_adds_a_second_pick_for_a_place(house: House) -> None:

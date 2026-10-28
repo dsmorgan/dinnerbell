@@ -238,34 +238,47 @@ def _log_weight(score: float, best: float, temperature: float) -> float:
     return 0.0 if score == best else -math.inf
 
 
+def _exponential(rng: random.Random) -> float:
+    """A draw from the exponential distribution with rate 1, ``-log(1 - u)`` for ``u`` in [0, 1).
+    It's what ``rng.expovariate(1)`` computes, but built on ``random()``, which Python guarantees
+    to be reproducible for a seed, so picks don't depend on the Python version's ``expovariate``."""
+    return -math.log(1.0 - rng.random())
+
+
 def _draw(pool: list[_Scored], picks: list[_Scored], limit: int, temperature: float, rng: random.Random) -> None:
     """Step 6: weighted sampling without replacement, adding to ``picks`` until it holds ``limit``
     or ``pool`` runs out. Each draw is one step of the Efraimidis-Spirakis method: every place
     left gets a key ``u ** (1 / weight)`` and the highest key wins. Keys are compared as logs,
     ``log(weight) - log(E)`` with ``E = -log(u)``, which orders them the same way without
     overflow. Weights are relative to the best score left, which changes nothing above 0 and
-    keeps the next best in play at 0. Keys are drawn afresh for each pick, because step 7
-    changes the weights."""
+    keeps the next best in play at 0. A place with no weight (a worse score at temperature 0) is
+    never drawn while another is left, even when ``E`` is exactly 0. Keys are drawn afresh for
+    each pick, because step 7 changes the weights."""
     left = list(pool)
     while left and len(picks) < limit:
         best = max(ranked.score for _, ranked in left)
-        keys = []
-        for item, ranked in left:
+        keys: dict[int, float] = {}
+        for index, (item, ranked) in enumerate(left):
             shared = sum(1 for picked, _ in picks if picked.cuisine_ids & item.cuisine_ids)
             log_weight = _log_weight(ranked.score, best, temperature) + shared * math.log(SAME_CUISINE_FACTOR)
-            exponential = rng.expovariate(1.0)
-            keys.append(log_weight - math.log(exponential) if exponential > 0 else math.inf)  # u = 1: a sure win
-        chosen = max(range(len(left)), key=keys.__getitem__)
+            exponential = _exponential(rng)  # drawn for every place, so skipping one shifts no one else's number
+            if log_weight == -math.inf:
+                continue
+            keys[index] = log_weight - math.log(exponential) if exponential > 0 else math.inf  # u = 1: a sure win
+        chosen = max(keys, key=keys.__getitem__)
         picks.append(left.pop(chosen))
 
 
 def rank(snapshot: RankingSnapshot) -> list[Ranked]:
     """Up to ``snapshot.limit`` proposals, each with its reasons, in the order drawn: items for
     the call's meal, then, only when too few of those fit, a top-up of items for other meals
-    (#72). Within each group, places suggested for the call come first, then a weighted draw
-    from the rest. The hard filters apply to both groups, so no pick is ever a veto, an unmet
-    guest need, an uncovered mode, or a needless repeat; chance only orders what passed them."""
+    (#72). Within each group, places suggested for the call come first, but at most ``limit - 1``
+    of them across both groups, then a weighted draw from the rest, so at least one place in the
+    vote is always drawn. The hard filters apply to both groups, so no pick is ever a veto, an
+    unmet guest need, an uncovered mode, or a needless repeat; chance only orders what passed
+    them."""
     limit = max(snapshot.limit, 0)
+    guaranteed = max(limit - 1, 0)  # step 5: suggestions can't fill the whole vote
     rng = random.Random(snapshot.seed)  # noqa: S311 - a reproducible draw, not a secret
     picks: list[_Scored] = []
     for for_meal in (True, False):  # step 8: the top-up, drawn after every pick for the meal
@@ -273,7 +286,9 @@ def rank(snapshot: RankingSnapshot) -> list[Ranked]:
             break
         pool = _scored(snapshot, for_meal=for_meal)
         suggested = [entry for entry in pool if snapshot.suggesters.get(entry[0].id)]
-        _draw(suggested, picks, limit, 0.0, rng)  # step 5: always in, the best of them when too many
+        before = len(picks)
+        _draw(suggested, picks, min(limit, before + guaranteed), 0.0, rng)  # the best of them when too many
+        guaranteed -= len(picks) - before
         drawn = {ranked.item_id for _, ranked in picks}
         _draw([entry for entry in pool if entry[1].item_id not in drawn], picks, limit, snapshot.temperature, rng)
     return [ranked for _, ranked in picks]

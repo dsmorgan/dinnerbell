@@ -28,6 +28,10 @@ class IntegrityCheckFailed(Exception):
     """After migrating, some rows refer to rows that don't exist. Nothing was changed."""
 
 
+class UpgradeBlocked(Exception):
+    """A migration found data it can't carry over, and says which row. Nothing was changed."""
+
+
 def _alembic_config(connection: Connection) -> Config:
     config = Config()
     config.set_main_option("script_location", str(SCRIPT_LOCATION))

@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 
 from dinnerbell import __version__, catalog_cli
 from dinnerbell.config import ConfigError, Settings, is_test_instance, load_settings
-from dinnerbell.db.migrate import IntegrityCheckFailed, SchemaTooNewError, run_migrations
+from dinnerbell.db.migrate import IntegrityCheckFailed, SchemaTooNewError, UpgradeBlocked, run_migrations
 from dinnerbell.logs import configure_logging, start_unit
 
 if TYPE_CHECKING:
@@ -181,7 +181,7 @@ def _slack_preview(kind: str | None, base_url: str) -> int:
 def _migrate(settings: Settings) -> bool:
     try:
         run_migrations(settings.sync_database_url, settings.database_path)
-    except (SchemaTooNewError, IntegrityCheckFailed) as exc:
+    except (SchemaTooNewError, IntegrityCheckFailed, UpgradeBlocked) as exc:
         log.critical(str(exc))
         return False
     return True
