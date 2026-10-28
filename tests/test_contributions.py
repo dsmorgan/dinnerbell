@@ -558,7 +558,7 @@ async def test_the_backfill_of_an_empty_household_does_nothing_but_remember_it(h
 # What members see ------------------------------------------------------------------------------
 
 
-async def test_a_member_sees_their_own_counts_and_all_twelve_badges(house: House) -> None:
+async def test_a_member_sees_their_own_counts_and_all_thirteen_badges(house: House) -> None:
     await dinner(house)
     mine = await act_stats(house, "Alex")
     assert mine.member_id == house["Alex"].id
@@ -857,3 +857,207 @@ async def test_a_call_discarded_while_the_backfill_waits_is_skipped(
     async with house.sessionmaker() as db:
         assert await contributions.ensure_backfilled(db, house.household.id, now=house.clock()) is True
     assert await counted_events(house) == 4 and await marker(house)
+
+
+# Gambler (#108): every pick or none ---------------------------------------------------------------
+
+
+async def three_picks(house: House, event_id: int) -> None:
+    """Tops the call up to three picks: the catalog fixture draws only two."""
+    cuisine = await house.tag("Vietnamese")
+    for name in ("Pho House", "Banh Mi Bar"):
+        if len((await house.context(event_id)).proposals) < 3:
+            await act(
+                house, calls.add_proposal, house["Alex"], event_id, Mode.PICKUP, free_text=name, cuisine_id=cuisine.id
+            )
+    assert len((await house.context(event_id)).proposals) >= 3
+
+
+async def votes_of(house: House, event_id: int, name: str) -> None:
+    """``name`` votes for every pick."""
+    for pick in (await house.context(event_id)).proposals:
+        await act(house, calls.vote, house[name], event_id, pick.id)
+
+
+async def test_voting_for_every_pick_or_none_earns_gambler_and_some_does_not(house: House) -> None:
+    """Alex votes for nothing, Kim for every pick, and Sam for one. The call has three picks."""
+
+    async def kim_votes_all(event_id: int) -> None:
+        await three_picks(house, event_id)
+        await votes_of(house, event_id, "Kim")
+
+    await dinner(house, ins=("Alex", "Sam", "Kim"), while_voting=kim_votes_all)
+    assert (await counts(house, "Alex"))[Kind.GAMBLED] == 1
+    assert (await counts(house, "Kim"))[Kind.GAMBLED] == 1
+    assert Kind.GAMBLED not in await counts(house, "Sam")
+    assert Kind.GAMBLED not in await counts(house, "Lee")  # never answered: no vote to leave
+    found = await awards(house)
+    assert ("Alex", BadgeKey.GAMBLER, Tier.FIRST, Announcement.PENDING) in found  # announced like most badges
+    assert not [a for a in found if a[0] == "Sam" and a[1] is BadgeKey.GAMBLER]
+
+
+async def test_a_vote_counts_as_it_stood_when_the_call_was_done_after_an_unvote(house: House) -> None:
+    async def vote_then_undo(event_id: int) -> None:
+        await three_picks(house, event_id)
+        await votes_of(house, event_id, "Kim")  # all of them, then...
+        await act(house, calls.unvote, house["Kim"], event_id, (await house.context(event_id)).proposals[0].id)
+        first = (await house.context(event_id)).proposals[0].id
+        await act(house, calls.vote, house["Alex"], event_id, first)  # a vote taken back leaves none...
+        await act(house, calls.unvote, house["Alex"], event_id, first)
+
+    await dinner(house, ins=("Alex", "Sam", "Kim"), while_voting=vote_then_undo)
+    assert Kind.GAMBLED not in await counts(house, "Kim")  # ...two of three is a choice
+    assert (await counts(house, "Alex"))[Kind.GAMBLED] == 1  # ...and none is not
+
+
+async def test_a_late_joiner_never_earns_gambler_for_a_call_and_a_guest_never_does(house: House) -> None:
+    async def invite(event_id: int) -> None:
+        invited = await act(house, guests.invite, house["Sam"], event_id, new_guest=GuestInput("Riley"))
+        await act(house, guests.answer_for, house["Sam"], event_id, invited.guest.id, status=Status.IN)
+
+    async def join_and_vote_all(event_id: int) -> None:
+        await three_picks(house, event_id)
+        await act(house, calls.join_late, house["Kim"], event_id)
+        await votes_of(house, event_id, "Kim")
+
+    await dinner(house, while_answering=invite, while_voting=join_and_vote_all)
+    assert await counts(house, "Kim") == {Kind.PARTICIPATED: 1}
+    async with house.sessionmaker() as db:
+        kinds = set(await db.scalars(select(ContributionRow.kind).where(ContributionRow.member_id != house["Alex"].id)))
+    assert Kind.GAMBLED not in kinds  # neither Kim, late, nor Riley, a guest
+    assert (await counts(house, "Alex"))[Kind.GAMBLED] == 1
+
+
+async def test_a_call_with_two_picks_gives_no_gambler_for_all_or_none(house: House) -> None:
+    async def down_to_two(event_id: int) -> None:
+        assert len((await house.context(event_id)).proposals) == 2  # what the fixture draws
+        await votes_of(house, event_id, "Kim")
+
+    await dinner(house, ins=("Alex", "Sam", "Kim"), while_voting=down_to_two)
+    assert Kind.GAMBLED not in await counts(house, "Alex") and Kind.GAMBLED not in await counts(house, "Kim")
+
+
+async def test_the_backfill_counts_gambler_for_history(house: House) -> None:
+    async def kim_votes_all(event_id: int) -> None:
+        await three_picks(house, event_id)
+        await votes_of(house, event_id, "Kim")
+
+    await dinner(house, ins=("Alex", "Sam", "Kim"), while_voting=kim_votes_all)
+    counted = await snapshot(house)
+    assert any(row[1] == Kind.GAMBLED.value for row in counted)
+    await forget_everything(house)
+    async with house.sessionmaker() as db:
+        assert await contributions.ensure_backfilled(db, house.household.id, now=house.clock()) is True
+    assert await snapshot(house) == counted
+    assert {a[3] for a in await awards(house) if a[1] is BadgeKey.GAMBLER} == {Announcement.SKIPPED}
+    async with house.sessionmaker() as db:
+        stored = await db.scalar(select(HouseholdRow.settings))
+    assert stored is not None and contributions.GAMBLER_KEY in stored  # a new household needs no catch-up
+
+
+async def before_gambler(house: House) -> list[tuple[Any, ...]]:
+    """The database of a household that ran the 0016 backfill before Gambler: every other count
+    and badge is there, and the gambled counts, their badges, and the catch-up marker are not.
+    Returns the counts it still has."""
+    async with house.sessionmaker() as db:
+        await db.execute(text("DELETE FROM badge_award WHERE badge_key = 'gambler'"))
+        await db.execute(text("DELETE FROM contribution WHERE kind = 'gambled'"))
+        stored = (await db.scalar(select(HouseholdRow.settings))) or {}
+        await db.execute(
+            text("UPDATE household SET settings = :s"),
+            {"s": json.dumps({k: v for k, v in stored.items() if k != contributions.GAMBLER_KEY})},
+        )
+        await db.commit()
+    return await snapshot(house)
+
+
+async def test_a_household_that_ran_the_backfill_before_gambler_is_caught_up_once_and_quietly(house: House) -> None:
+    async def kim_votes_all(event_id: int) -> None:
+        await three_picks(house, event_id)
+        await votes_of(house, event_id, "Kim")
+
+    await dinner(house, n=0, ins=("Alex", "Sam", "Kim"), while_voting=kim_votes_all)
+    await dinner(house, n=1)
+    async with house.sessionmaker() as db:  # the household has been through the first start
+        await contributions.ensure_backfilled(db, house.household.id, now=house.clock())
+    full = await snapshot(house)
+    others = await before_gambler(house)
+    assert len(others) < len(full)
+    others_awards = await awards(house)
+    async with house.sessionmaker() as db:
+        waiting = await contributions.pending_announcements(db, house.household.id)
+
+    async with house.sessionmaker() as db:
+        assert await contributions.ensure_backfilled(db, house.household.id, now=house.clock()) is True
+    assert await snapshot(house) == full  # Gambler is back, and nothing else moved
+    found = [a for a in await awards(house) if a[1] is BadgeKey.GAMBLER]
+    assert {(a[0], a[2], a[3]) for a in found} == {
+        ("Alex", Tier.FIRST, Announcement.SKIPPED),
+        ("Kim", Tier.FIRST, Announcement.SKIPPED),
+    }
+    assert [a for a in await awards(house) if a[1] is not BadgeKey.GAMBLER] == others_awards
+    async with house.sessionmaker() as db:
+        assert await contributions.pending_announcements(db, house.household.id) == waiting  # nothing new to tell
+        stored = await db.scalar(select(HouseholdRow.settings))
+        assert stored is not None and stored[contributions.GAMBLER_KEY] == house.clock.now.isoformat()
+        assert await contributions.ensure_backfilled(db, house.household.id, now=house.clock()) is False  # once
+    assert await snapshot(house) == full
+
+
+async def test_the_gambler_catch_up_survives_a_start_that_dies_and_counts_an_uncounted_call_in_full(
+    house: House, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await dinner(house, n=0)
+    async with house.sessionmaker() as db:
+        await contributions.ensure_backfilled(db, house.household.id, now=house.clock())
+    full = await snapshot(house)
+    await before_gambler(house)
+
+    real = contributions._award
+
+    async def dies(*args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError("killed")
+
+    monkeypatch.setattr(contributions, "_award", dies)
+    async with house.sessionmaker() as db:
+        with pytest.raises(RuntimeError):
+            await contributions.ensure_backfilled(db, house.household.id, now=house.clock())
+    async with house.sessionmaker() as db:
+        stored = await db.scalar(select(HouseholdRow.settings))
+    assert stored is not None and contributions.GAMBLER_KEY not in stored  # marked last, so it runs again
+    monkeypatch.setattr(contributions, "_award", real)
+    async with house.sessionmaker() as db:
+        assert await contributions.ensure_backfilled(db, house.household.id, now=house.clock()) is True
+    assert await snapshot(house) == full
+
+    # A call with no counts at all, during a catch-up, still gets every kind.
+    await dinner(house, n=1)
+    await before_gambler(house)
+    async with house.sessionmaker() as db:
+        await db.execute(text("DELETE FROM contribution WHERE event_id = (SELECT max(id) FROM event)"))
+        await db.commit()
+        await contributions.ensure_backfilled(db, house.household.id, now=house.clock())
+    assert (await counts(house, "Alex"))[Kind.PICKED_UP] == 2
+
+
+async def test_gambler_reads_every_calls_votes_in_one_query_not_one_per_member(house: House) -> None:
+    async def kim_votes_all(event_id: int) -> None:
+        await three_picks(house, event_id)
+        await votes_of(house, event_id, "Kim")
+
+    event_id = await dinner(house, ins=("Alex", "Sam", "Kim", "Lee"), while_voting=kim_votes_all)
+    statements: list[str] = []
+
+    def record(conn: Any, cursor: Any, statement: str, *rest: Any) -> None:
+        statements.append(statement)
+
+    event = await house.event(event_id)
+    engine = house.sessionmaker.kw["bind"].sync_engine
+    sa_event.listen(engine, "before_cursor_execute", record)
+    try:
+        async with house.sessionmaker() as db:
+            await contributions.record_done(db, event, now=house.clock())
+            await db.commit()
+    finally:
+        sa_event.remove(engine, "before_cursor_execute", record)
+    assert len([s for s in statements if "FROM vote" in s]) == 1

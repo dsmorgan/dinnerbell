@@ -76,6 +76,7 @@ ICONS = {
     "good_host": "M7 4v16 M7 4h3v8 M7 12h10 M17 12v8",
     "food_critic": "M12 3l2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1L3.2 9.8l6.1-.9z",
     "on_a_roll": "M12 21c-4 0-6-2.7-6-6 0-4 4-6 4-10 3 2 5 4.5 5 7 1-1 1.5-2 1.5-3 1.5 1.5 1.5 3.5 1.5 5 0 4-2.5 7-6 7z",  # noqa: E501
+    "gambler": "M12 3l8 4.5v9L12 21l-8-4.5v-9z M4 7.5l8 4.5 8-4.5 M12 12v9 M8.6 7.5h.01 M12 7.5h.01 M15.4 7.5h.01",
 }
 """Each badge's icon as one stroked path on a 24x24 grid, keyed by ``BadgeKey`` value."""
 

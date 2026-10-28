@@ -1506,3 +1506,40 @@ def test_0017_adds_the_badge_file_table_and_downgrade_removes_it(settings: Setti
     assert _rows_outside_m4(settings) == before
     _upgrade_to(settings, "0017_slack_badge_file")
     assert "slack_badge_file" in _tables(settings)
+
+
+# 0018: Gambler (#108) --------------------------------------------------------------------------------
+
+GAMBLED_ROW = (
+    "INSERT INTO contribution (household_id, member_id, kind, day, event_id, created_at) "
+    "VALUES (1, 1, :kind, '2026-10-22', 1, :t)"
+)
+
+
+def test_0018_lets_a_contribution_be_gambled_and_downgrade_refuses_while_any_are(settings: Settings) -> None:
+    """Up keeps every row and accepts ``gambled``; down refuses while one exists, restores the old
+    check once none do, and up again gives the same."""
+    _upgrade_to(settings, "0017_slack_badge_file")
+    _populate_calls(settings)
+    _execute(settings, GAMBLED_ROW.replace(":kind", "'cooked'"))
+    with pytest.raises(IntegrityError, match="ck_contribution_kind"):
+        _execute(settings, GAMBLED_ROW.replace(":kind", "'gambled'"))
+
+    _upgrade_to(settings, "0018_gambler")
+    _execute(settings, GAMBLED_ROW.replace(":kind", "'gambled'"))
+    engine = create_sync_engine(settings.sync_database_url)
+    try:
+        with engine.connect() as c:
+            kinds = sorted(c.execute(text("SELECT kind FROM contribution")).scalars())
+    finally:
+        engine.dispose()
+    assert kinds == ["cooked", "gambled"]
+
+    with pytest.raises(RuntimeError, match="1 gambled"):
+        _downgrade_to(settings, "0017_slack_badge_file")
+    _execute(settings, "DELETE FROM contribution WHERE kind = 'gambled'")
+    _downgrade_to(settings, "0017_slack_badge_file")
+    with pytest.raises(IntegrityError, match="ck_contribution_kind"):
+        _execute(settings, GAMBLED_ROW.replace(":kind", "'gambled'"))
+    _upgrade_to(settings, "0018_gambler")
+    _execute(settings, GAMBLED_ROW.replace(":kind", "'gambled'"))

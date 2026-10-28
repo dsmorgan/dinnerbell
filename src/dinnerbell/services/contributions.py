@@ -28,6 +28,7 @@ from dinnerbell.db.events import (
     InvitationRepository,
     ProposalRepository,
     ResponseRepository,
+    VoteRepository,
 )
 from dinnerbell.db.feedback import FeedbackRepository
 from dinnerbell.db.meals import MealLogRepository, household_settings
@@ -55,6 +56,10 @@ log = logging.getLogger(__name__)
 
 BACKFILLED_KEY = "contributions_backfilled"
 """The household setting that says the meal log has been counted: an ISO timestamp."""
+GAMBLER_KEY = "gambler_backfilled"
+"""The household setting that says history has been counted for ``CATCH_UP_KINDS`` (Gambler, #108):
+an ISO timestamp. Households that ran the first backfill before the kind existed get one run."""
+CATCH_UP_KINDS = frozenset({Kind.GAMBLED})
 ADMINS_ONLY = "Only an admin changes the badge counts."
 
 
@@ -120,12 +125,19 @@ async def _count_event(
     items: dict[int, CatalogItem],
     history: _History,
     now: datetime,
+    kinds: frozenset[Kind] | None = None,
 ) -> list[Credit]:
+    """Record what ``event`` earned: every kind, or only ``kinds`` when catching up one."""
     household_id = event.household_id
     meal = history.by_event.get(event.id)
     item = items.get(meal.item_id) if meal is not None else None
     proposals = await ProposalRepository(db).for_event(household_id, event.id)
     winner = next((p for p in proposals if p.item_id == event.decided_item_id and p.mode is event.decided_mode), None)
+    voted: dict[int, set[int]] = {}
+    for proposal_id, voters in (await VoteRepository(db).for_event(household_id, event.id)).items():
+        for voter in voters:
+            voted.setdefault(voter, set()).add(proposal_id)
+    votes = {member_id: frozenset(ids) for member_id, ids in voted.items()}
     facts = DoneFacts(
         event=event,
         assignments=tuple(
@@ -137,8 +149,10 @@ async def _count_event(
         winner=winner if meal is not None else None,
         newness=history.fresh[meal.id] if meal is not None else None,
         item_creator=item.created_by if item is not None and item.created_by in members else None,
+        picks=frozenset(p.id for p in proposals),
+        votes=votes,
     )
-    credits = [c for c in credits_for_done(facts) if c.member_id in members]
+    credits = [c for c in credits_for_done(facts) if c.member_id in members and (kinds is None or c.kind in kinds)]
     return await ContributionRepository(db).add(household_id, credits, day=event.day, now=now, event_id=event.id)
 
 
@@ -233,12 +247,21 @@ async def ensure_backfilled(db: AsyncSession, household_id: int, *, now: datetim
     meal someone logged by hand has no roles or answers to count. It uses members' current roles,
     so someone who was a guest then and is a member now counts as a member.
 
+    A household that ran the first run before Gambler existed has no ``gambler_backfilled``, so its
+    next start counts ``gambled`` for every done call, quietly, and sets it. Other kinds are left
+    as they were.
+
     It commits every ``BATCH`` calls and sets ``contributions_backfilled`` last, so a start that
     is killed halfway counts the rest next time: every insert ignores a repeat."""
-    first = BACKFILLED_KEY not in await household_settings(db, household_id)
-    events = await EventRepository(db).done(household_id, uncounted=not first)
-    if not events and not first:
+    stored = await household_settings(db, household_id)
+    first = BACKFILLED_KEY not in stored
+    catching_up = not first and GAMBLER_KEY not in stored
+    events = await EventRepository(db).done(household_id, uncounted=not first and not catching_up)
+    if not events and not first and not catching_up:
         return False
+    # A household that ran the first backfill before a kind existed counts every done call for
+    # just that kind. A call with no counts at all still gets all of them.
+    fully = {e.id for e in await EventRepository(db).done(household_id, uncounted=True)} if catching_up else set()
     members = {m.id: m for m in await MemberRepository(db).list(household_id)}
     items = {i.id: i for i in await CatalogRepository(db).items(household_id)}
     history = _History(await MealLogRepository(db).between(household_id, None, None))
@@ -248,7 +271,8 @@ async def ensure_backfilled(db: AsyncSession, household_id: int, *, now: datetim
             for event in events[start : start + BATCH]:
                 # Under the lock: a call discarded since the list was read is skipped, not counted.
                 if await EventRepository(db).get(household_id, event.id) is not None:
-                    counted += len(await _count_event(db, event, members, items, history, now))
+                    only = CATCH_UP_KINDS if catching_up and event.id not in fully else None
+                    counted += len(await _count_event(db, event, members, items, history, now, only))
             await db.commit()
     awards: list[Award] = []
     async with write_transaction(db):
@@ -262,12 +286,15 @@ async def ensure_backfilled(db: AsyncSession, household_id: int, *, now: datetim
                     counted += len(added)
         everyone = set(await ContributionRepository(db).members(household_id))
         awards = await _award(db, household_id, everyone, now, Announcement.SKIPPED, None)
-        if first:
+        if first or catching_up:
+            marks = {GAMBLER_KEY: now.isoformat()}  # the first run counts every kind, Gambler included
             stored = await household_settings(db, household_id)
-            await HouseholdRepository(db).update_settings(household_id, stored | {BACKFILLED_KEY: now.isoformat()})
+            await HouseholdRepository(db).update_settings(
+                household_id, stored | marks | ({BACKFILLED_KEY: now.isoformat()} if first else {})
+            )
         await db.commit()
     log.info(
         "contributions backfilled",
         extra={"events": len(events), "credits": counted, "badges": len(awards), "first": first},
     )
-    return first or counted > 0
+    return first or catching_up or counted > 0

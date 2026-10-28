@@ -25,6 +25,7 @@ from dinnerbell.domain.badges import (
 )
 from dinnerbell.domain.catalog import Mode
 from dinnerbell.domain.contributions import (
+    GAMBLER_MIN_PICKS,
     ON_TIME,
     Credit,
     DoneFacts,
@@ -195,6 +196,50 @@ def test_a_member_has_each_kind_once() -> None:
 # Newness ---------------------------------------------------------------------------------------
 
 
+PICKS = frozenset({101, 102, 103})
+
+
+def gamble(
+    votes: dict[int, set[int]], *answers: Response, picks: frozenset[int] = PICKS, **changes: object
+) -> set[int]:
+    """The members who earn ``gambled`` for a call with ``picks`` and these final ``votes``."""
+    found = credits_for_done(
+        facts(
+            picks=picks,
+            votes={m: frozenset(v) for m, v in votes.items()},
+            responses=answers,
+            **changes,  # type: ignore[arg-type]
+        )
+    )
+    return {c.member_id for c in found if c.kind is Kind.GAMBLED}
+
+
+def test_voting_for_every_pick_or_for_none_leaves_the_choice_to_others() -> None:
+    everyone = (answer(ALEX), answer(SAM), answer(KIM))
+    votes = {ALEX: {101, 102, 103}, SAM: {102}}  # Kim voted for none; Sam made a choice
+    assert gamble(votes, *everyone) == {ALEX, KIM}
+    assert gamble({ALEX: {101, 102}}, answer(ALEX)) == set()  # some is a choice
+
+
+def test_a_call_needs_three_picks_for_all_or_none_to_be_a_gamble() -> None:
+    assert GAMBLER_MIN_PICKS == 3
+    for picks in (frozenset(), frozenset({101}), frozenset({101, 102})):
+        assert gamble({ALEX: set(picks)}, answer(ALEX), picks=picks) == set()
+    four = frozenset({101, 102, 103, 104})
+    assert gamble({}, answer(ALEX), picks=four) == {ALEX}
+
+
+def test_only_a_member_who_was_in_on_time_gambles() -> None:
+    assert gamble({}, answer(ALEX, status=Status.OUT), answer(SAM, status=Status.MAYBE)) == set()
+    assert gamble({}, answer(ALEX, late=True)) == set()  # a late joiner's votes don't count
+    assert gamble({KIM: {101, 102, 103}}, answer(GUEST), answer(KIM), guest_ids=frozenset({GUEST})) == {KIM}
+    assert gamble({}, answer(ALEX), event=event(EventKind.OFFER)) == set()
+
+
+def test_a_vote_for_a_proposal_that_is_not_a_pick_counts_for_nothing() -> None:
+    assert gamble({ALEX: {999}}, answer(ALEX)) == {ALEX}  # none of the real picks
+
+
 def meal(
     meal_id: int, day: date, item: int, *cuisines: int, slot: Slot = Slot.DINNER, event_id: int | None = 1
 ) -> MealLog:
@@ -229,10 +274,10 @@ def test_a_meal_logged_by_hand_makes_an_item_old_but_not_first_used() -> None:
 # Thresholds and tiers --------------------------------------------------------------------------
 
 
-def test_the_ladder_has_five_tiers_and_twelve_badges() -> None:
+def test_the_ladder_has_five_tiers_and_thirteen_badges() -> None:
     assert [t.value for t in TIERS] == ["first", "bronze", "silver", "gold", "diamond"]
     assert DEFAULT_THRESHOLDS == (1, 10, 50, 100, 200)
-    assert len(BADGES) == 12 and len(BY_KEY) == 12 and {b.key for b in BADGES} == set(BadgeKey)
+    assert len(BADGES) == 13 and len(BY_KEY) == 13 and {b.key for b in BADGES} == set(BadgeKey)
     assert [b.kind for b in BADGES if b.kind is None] == [None]  # only On a Roll counts weeks
 
 

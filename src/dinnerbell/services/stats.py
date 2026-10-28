@@ -49,7 +49,7 @@ class MemberStats:
     member_id: int
     counts: dict[Kind, int]
     progress: tuple[Progress, ...]
-    """All twelve badges, in the order of ``domain.badges.BADGES``."""
+    """Every badge, in the order of ``domain.badges.BADGES``."""
     earned: tuple[Award, ...]
     """Oldest first."""
 

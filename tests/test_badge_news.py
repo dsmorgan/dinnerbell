@@ -203,6 +203,19 @@ async def test_food_critic_is_never_announced_and_is_marked_quiet(house: House) 
     assert await pending(house) == []
 
 
+async def test_gambler_is_announced_by_name_because_votes_are_visible_on_the_call(house: House) -> None:
+    from dinnerbell.domain.badges import QUIET_BADGES
+
+    assert BadgeKey.GAMBLER not in QUIET_BADGES
+    await award(house, "Kim", BadgeKey.GAMBLER, Tier.FIRST)
+    assert await announce(house) == 1
+    (post,) = await posts(house, "badges_earned")
+    assert isinstance(post, note.BadgesEarned)
+    (news,) = post.news
+    assert news.person.name == "Kim" and [(b.name, b.tier) for b in news.badges] == [("Gambler", "First")]
+    assert await pending(house) == [] and await states(house) == {"announced"}
+
+
 async def test_a_gave_feedback_badge_from_real_feedback_stays_quiet(house: House) -> None:
     from dinnerbell.domain.feedback import FeedbackInput, Rating
     from dinnerbell.services import feedback
@@ -281,8 +294,8 @@ async def test_a_big_backlog_is_capped_in_people_and_badges(house: House) -> Non
     assert len(post.news) == announcements.MAX_PEOPLE and post.more_people == 15 - announcements.MAX_PEOPLE
     kim = next(n for n in post.news if n.person.name == "Kim")
     assert (
-        len(kim.badges) == announcements.MAX_BADGES and kim.more == 11 - announcements.MAX_BADGES
-    )  # twelve badges, less the quiet Food Critic
+        len(kim.badges) == announcements.MAX_BADGES and kim.more == 12 - announcements.MAX_BADGES
+    )  # thirteen badges, less the quiet Food Critic
     assert {b.tier for b in kim.badges} == {"Diamond"}  # five tiers at once show as the highest
     assert await pending(house) == []  # all of it is marked announced, shown or not
 

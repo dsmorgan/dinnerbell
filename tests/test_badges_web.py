@@ -185,10 +185,10 @@ def check_structure(html: str) -> None:
     assert all(b - a <= 1 for a, b in zip(parsed.headings, parsed.headings[1:], strict=False)), parsed.headings
 
 
-def test_a_member_with_no_badges_sees_all_twelve_softly(house: Settings, client: TestClient) -> None:
+def test_a_member_with_no_badges_sees_all_thirteen_softly(house: Settings, client: TestClient) -> None:
     html = client.get("/stats").text
-    assert html.count('class="badge-row locked"') == 12
-    assert html.count("Not earned yet") == 12
+    assert html.count('class="badge-row locked"') == 13
+    assert html.count("Not earned yet") == 13
     assert "Meals cooked: 0 of 1 for First." in page(client.get("/stats"))
     assert "Newly earned" not in html and "Lately earned" in html and "No new badges yet" in html
     assert inline_code(html)[1] == []
@@ -207,7 +207,7 @@ def test_a_member_sees_tiers_progress_and_new_badges(house: Settings, client: Te
     assert "Chef · Bronze" in new and "Chef · First" not in new  # a month old
     assert "Scout" not in new  # earned quietly
     assert 'Scout<span class="badge-tier"> · First' in html  # but it is held
-    assert html.count('class="badge-row locked"') == 10
+    assert html.count('class="badge-row locked"') == 11
     check_structure(html)
 
 
@@ -240,7 +240,7 @@ def test_a_member_never_sees_another_members_private_standing(
     html = page(client.get("/stats"))
     # Lee's badges are household news, with a name; Lee's progress and counts are not shown.
     assert "Lee" in html and "Chef · Silver" in html
-    assert 'class="badge-row locked"' in html and html.count("badge-row") == 12
+    assert 'class="badge-row locked"' in html and html.count("badge-row") == 13
     own = html[html.index('id="badges-title"') : html.index('id="counts-title"')]
     assert "Lee" not in own and 'Chef<span class="badge-tier"> · Silver' not in own
 

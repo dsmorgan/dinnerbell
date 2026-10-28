@@ -15,11 +15,12 @@ Who earns what:
 - A late joiner (#76) who is taking part earned ``participated`` like anyone. They never earn
   ``responded_on_time``: they missed the answers.
 - A meal logged by hand has no assignments or answers, so it records nothing.
+- ``gambled`` is the one kind that reads votes. See ``credits_for_done``.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import StrEnum
@@ -29,6 +30,9 @@ from dinnerbell.domain.meals import MealLog, newest_first
 
 ON_TIME = timedelta(minutes=15)
 """How soon after a call opens an answer is on time (``responded_on_time``)."""
+GAMBLER_MIN_PICKS = 3
+"""The fewest picks a call needs for ``gambled``: with one or two, voting for all of them isn't a
+gamble and voting for none isn't a choice."""
 
 
 class Kind(StrEnum):
@@ -45,6 +49,8 @@ class Kind(StrEnum):
     eaten. The Explorer badge counts these (spec 12)."""
     HOSTED = "hosted"
     GAVE_FEEDBACK = "gave_feedback"
+    GAMBLED = "gambled"
+    """Left the choice to others: voted for every pick or for none (``GAMBLER_MIN_PICKS``)."""
 
 
 ROLE_KIND = {
@@ -116,10 +122,20 @@ class DoneFacts:
     newness: Newness | None = None
     """None when the call logged no meal."""
     item_creator: int | None = None
+    picks: frozenset[int] = frozenset()
+    """The IDs of the call's proposals."""
+    votes: Mapping[int, frozenset[int]] = field(default_factory=dict)
+    """Each member's final votes: the proposal IDs they voted for when the call was done. A member
+    with no votes has no entry."""
 
 
 def credits_for_done(facts: DoneFacts) -> list[Credit]:
-    """Every contribution a done event earns, once per member and kind."""
+    """Every contribution a done event earns, once per member and kind.
+
+    ``gambled`` goes to a member of a call with at least ``GAMBLER_MIN_PICKS`` picks who was in
+    on time and whose final votes (after any they took back) were every pick or none of them. A
+    late joiner (#76), who missed the voting, and a guest never earn it, and a member who was out
+    or didn't answer gave no vote to leave. An offer has no picks to vote on."""
     event = facts.event
     found: dict[tuple[int, Kind], Credit] = {}
 
@@ -141,6 +157,8 @@ def credits_for_done(facts: DoneFacts) -> list[Credit]:
                 add(response.member_id, Kind.HOSTED)
         if _on_time(event, response):
             add(response.member_id, Kind.RESPONDED_ON_TIME)
+        if _gambled(facts, response):
+            add(response.member_id, Kind.GAMBLED)
     winner, fresh = facts.winner, facts.newness
     pitcher = winner.proposed_by if winner is not None and winner.source is not ProposalSource.SYSTEM else None
     if pitcher is not None and pitcher not in facts.guest_ids:
@@ -152,6 +170,16 @@ def credits_for_done(facts: DoneFacts) -> list[Credit]:
     if first and creator is not None and creator not in facts.guest_ids and item_id is not None:
         add(creator, Kind.ADDED_ITEM, item_id)
     return list(found.values())
+
+
+def _gambled(facts: DoneFacts, response: Response) -> bool:
+    picks = facts.picks
+    if facts.event.kind is not EventKind.CALL or len(picks) < GAMBLER_MIN_PICKS:
+        return False
+    if not response.is_in or response.late:
+        return False
+    voted = facts.votes.get(response.member_id, frozenset()) & picks
+    return not voted or voted == picks
 
 
 def _on_time(event: Event, response: Response) -> bool:
