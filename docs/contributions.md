@@ -11,23 +11,26 @@ A call or offer counts the moment it is done. Each person gets one count per kin
 - **Answered quickly.** An answer, any answer, within 15 minutes of the call opening.
 - **Ideas.** The person whose pick won; the person whose pick was new to the household; and the person who added a catalog item the first time it was chosen.
 - **Hosting.** The member who brought guests.
+- **Leaving the choice to others.** On a call with at least three picks, a member who was in (not a late joiner) and whose votes, when the call was done, were every pick or none of them. Voting for none counts only when another member voted, so someone else decided; a call nobody voted on gives no one the badge. A guest's votes are ignored. Votes you took back don't count. A late joiner, a guest, and a member who was out or didn't answer don't earn it, and offers have no picks to vote on.
 - **Feedback.** The first time you give feedback on a meal. Changing it, or taking it back and giving it again, doesn't count again.
 
 Finishing a call twice, or two people tapping **Mark done** together, counts it once. A call that is called off or discarded counts for nothing. Meals someone logged by hand don't count: they have no roles or answers.
 
-Only members earn the "at the table", "answered quickly", idea, hosting, and feedback counts. A guest doesn't choose the meal or give feedback.
+Only members earn the "at the table", "answered quickly", idea, hosting, feedback, and Gambler counts. A guest doesn't choose the meal or give feedback.
 
 ## Badges and tiers
 
-Twelve badges share one ladder: **First** (1), **Bronze** (10), **Silver** (50), **Gold** (100), **Diamond** (200). A badge tier is earned once per person. **On a Roll** counts weeks in a row, Monday to Sunday in your time zone, with at least one cooked, picked up, or ordered meal.
+Thirteen badges share one ladder: **First** (1), **Bronze** (10), **Silver** (50), **Gold** (100), **Diamond** (200). A badge tier is earned once per person. **On a Roll** counts weeks in a row, Monday to Sunday in your time zone, with at least one cooked, picked up, or ordered meal.
 
 The counts are a household setting. The admin changes them with `badge_thresholds` in the household settings, five whole numbers that rise from 1 to 10,000. Raising a count takes nothing away. Lowering one awards the tiers people already have the counts for, without an announcement.
 
+Gambler arrived after the first backfill, so a household that already ran it gets one catch-up: on the next start, Dinnerbell counts Gambler for every done call, awards the tiers it reaches as `skipped` (never announced), and records `gambler_backfilled` in the household settings. It changes no other count, and a start that stops halfway runs the rest next time. A new household's first backfill counts Gambler with everything else.
+
 ## The badge art
 
-Each badge is a tier frame plus its own icon: Chef (chef hat), Road Runner (car), Order Up (takeout bag), Quarterback (dinner bell), Full Table (fork and knife), Early Bird (alarm clock), Bright Idea (lightbulb), Scout (recipe card), Explorer (compass), Good Host (extra chair), Food Critic (star), On a Roll (flame). Tiers differ in outline and lightness, so they stay distinct in grayscale: First is a teal ribbon rosette, Bronze, Silver and Gold are medals on a navy strap, and Diamond is a faceted gem. Gold and Diamond sparkle on the web: twinkling four-point stars and a sheen that sweeps every few seconds. The sparkle is CSS, and it stops under "reduce motion". Every page also writes the badge's name and tier in text.
+Each badge is a tier frame plus its own icon: Chef (chef hat), Road Runner (car), Order Up (takeout bag), Quarterback (dinner bell), Full Table (fork and knife), Early Bird (alarm clock), Bright Idea (lightbulb), Scout (recipe card), Explorer (compass), Good Host (extra chair), Food Critic (star), On a Roll (flame), Gambler (a single die). Tiers differ in outline and lightness, so they stay distinct in grayscale: First is a teal ribbon rosette, Bronze, Silver and Gold are medals on a navy strap, and Diamond is a faceted gem. Gold and Diamond sparkle on the web: twinkling four-point stars and a sheen that sweeps every few seconds. The sparkle is CSS, and it stops under "reduce motion". Every page also writes the badge's name and tier in text.
 
-The art lives in `services/badge_art.py`, and pages draw it with the `badge_art`, `badge_chip`, and `badge_row` macros in `web/templates/_badge.html`. `src/dinnerbell/web/static/badges/` holds the same art as plain files: `icons/<badge>.svg` (12) and `frames/<tier>.svg` (5, with the stars drawn in). A test checks that the files match the code and pass the SVG allowlist.
+The art lives in `services/badge_art.py`, and pages draw it with the `badge_art`, `badge_chip`, and `badge_row` macros in `web/templates/_badge.html`. `src/dinnerbell/web/static/badges/` holds the same art as plain files: `icons/<badge>.svg` (13) and `frames/<tier>.svg` (5, with the stars drawn in). A test checks that the files match the code and pass the SVG allowlist.
 
 ### Badge art in Slack
 

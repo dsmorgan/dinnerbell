@@ -553,7 +553,7 @@ class ContributionRow(Base):
         Index("ix_contribution_event", "event_id"),
         CheckConstraint(
             "kind IN ('cooked', 'picked_up', 'ordered', 'coordinated', 'participated', 'responded_on_time', "
-            "'suggested', 'added_item', 'explored', 'hosted', 'gave_feedback')",
+            "'suggested', 'added_item', 'explored', 'hosted', 'gave_feedback', 'gambled')",
             name="kind",
         ),
         CheckConstraint("(event_id IS NULL) <> (meal_id IS NULL)", name="one_source"),

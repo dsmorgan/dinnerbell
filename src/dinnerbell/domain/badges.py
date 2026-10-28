@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Badges (spec 12, FR-39, FR-43): twelve badges that share one ladder of five tiers.
+"""Badges (spec 12, FR-39, FR-43): thirteen badges that share one ladder of five tiers.
 
 The ladder is the same for every badge and its counts are the household's setting
 (``badge_thresholds``), 1, 10, 50, 100, and 200 by default. A badge is earned once per member and
@@ -59,6 +59,7 @@ class BadgeKey(StrEnum):
     GOOD_HOST = "good_host"
     FOOD_CRITIC = "food_critic"
     ON_A_ROLL = "on_a_roll"
+    GAMBLER = "gambler"
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,6 +85,7 @@ BADGES = (
     Badge(BadgeKey.GOOD_HOST, "Good Host", "meals with guests", Kind.HOSTED),
     Badge(BadgeKey.FOOD_CRITIC, "Food Critic", "meals you gave feedback on", Kind.GAVE_FEEDBACK),
     Badge(BadgeKey.ON_A_ROLL, "On a Roll", "weeks in a row of pitching in", None),
+    Badge(BadgeKey.GAMBLER, "Gambler", "calls where you left the choice to others", Kind.GAMBLED),
 )
 BY_KEY = {b.key: b for b in BADGES}
 QUIET_BADGES = frozenset({BadgeKey.FOOD_CRITIC})
