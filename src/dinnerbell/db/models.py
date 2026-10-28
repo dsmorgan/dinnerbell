@@ -2,7 +2,7 @@
 """ORM models. M0: household, member, session, audit. M1: the catalog, preferences, and meal log.
 M2: dinner calls (event, response, suggestion, proposal, vote, assignment) and the outbox.
 M3: feedback on meals, offers (an event's ``capacity``), guests (a member's ``guest`` role
-and the ``invitation`` table, #38), and the meals each catalog item is for (#72).
+and the ``invitation`` table, #38), and the meals each catalog item is for (#72). M4: contributions and badge awards.
 
 Every table carries ``household_id`` (the household table's own key is that ID).
 Changing a model requires a new Alembic revision; see CLAUDE.md.
@@ -528,3 +528,67 @@ class FeedbackRow(Base):
     participants: Mapped[list[dict[str, Any]]] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime())
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime())
+
+
+class ContributionRow(Base):
+    """One thing a member did for a meal (FR-38): a role on a done call, a place at its table,
+    a pick that won, or feedback on a meal. Counts are rows.
+
+    A row comes from a done call (``event_id``) or, for feedback, a meal (``meal_id``), never
+    both, and ``(member_id, kind, event_id)`` and ``(member_id, kind, meal_id)`` are unique, so
+    recording a call twice, or two at once, counts once. ``day`` is the meal's day in the
+    household's zone, for On a Roll's weeks and the monthly recap. ``item_id`` is set only for
+    ``added_item``, and ``(kind, item_id)`` is unique, so an item is credited once.
+
+    Rows go when their call or meal is deleted (a discarded call, ``reset-history``); the
+    badges they earned stay.
+    """
+
+    __tablename__ = "contribution"
+    __table_args__ = (
+        UniqueConstraint("member_id", "kind", "event_id"),
+        UniqueConstraint("member_id", "kind", "meal_id"),
+        UniqueConstraint("kind", "item_id"),
+        Index("ix_contribution_household_day", "household_id", "day"),
+        CheckConstraint(
+            "kind IN ('cooked', 'picked_up', 'ordered', 'coordinated', 'participated', 'responded_on_time', "
+            "'suggested', 'added_item', 'explored', 'hosted', 'gave_feedback')",
+            name="kind",
+        ),
+        CheckConstraint("(event_id IS NULL) <> (meal_id IS NULL)", name="one_source"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    household_id: Mapped[int] = mapped_column(ForeignKey("household.id", ondelete="CASCADE"))
+    member_id: Mapped[int] = mapped_column(ForeignKey("member.id", ondelete="CASCADE"), index=True)
+    kind: Mapped[str] = mapped_column(String(24))
+    day: Mapped[date] = mapped_column(Date)
+    event_id: Mapped[int | None] = mapped_column(ForeignKey("event.id", ondelete="CASCADE"))
+    meal_id: Mapped[int | None] = mapped_column(ForeignKey("meal_log.id", ondelete="CASCADE"))
+    item_id: Mapped[int | None] = mapped_column(ForeignKey("catalog_item.id", ondelete="CASCADE"))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime())
+
+
+class BadgeAwardRow(Base):
+    """A badge tier a member earned, once (``member_id``, ``badge_key``, ``tier`` are unique).
+    ``announcement`` says whether the channel has been told: ``pending`` until a post goes out
+    (``announced_at``), or ``skipped`` for an award made quietly, such as the backfill. The call
+    that earned it is ``event_id``, cleared if the call is deleted; the award stays."""
+
+    __tablename__ = "badge_award"
+    __table_args__ = (
+        UniqueConstraint("member_id", "badge_key", "tier"),
+        CheckConstraint("tier IN ('first', 'bronze', 'silver', 'gold', 'diamond')", name="tier"),
+        CheckConstraint("announcement IN ('pending', 'announced', 'skipped')", name="announcement"),
+        Index("ix_badge_award_household_announcement", "household_id", "announcement"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    household_id: Mapped[int] = mapped_column(ForeignKey("household.id", ondelete="CASCADE"))
+    member_id: Mapped[int] = mapped_column(ForeignKey("member.id", ondelete="CASCADE"), index=True)
+    badge_key: Mapped[str] = mapped_column(String(24))
+    tier: Mapped[str] = mapped_column(String(16))
+    event_id: Mapped[int | None] = mapped_column(ForeignKey("event.id", ondelete="SET NULL"))
+    awarded_at: Mapped[datetime] = mapped_column(UTCDateTime())
+    announcement: Mapped[str] = mapped_column(String(16))
+    announced_at: Mapped[datetime | None] = mapped_column(UTCDateTime())

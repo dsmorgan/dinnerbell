@@ -5,13 +5,13 @@ services decide who may see what of them."""
 from __future__ import annotations
 
 from collections.abc import Iterable
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from dinnerbell.db.models import FeedbackRow
+from dinnerbell.db.models import FeedbackRow, MealLogRow
 from dinnerbell.domain.catalog import ItemKind, Mode
 from dinnerbell.domain.feedback import Feedback, FeedbackInput, MealFacts, PlaceIssue, Rating
 from dinnerbell.domain.meals import MemberRef
@@ -110,6 +110,16 @@ class FeedbackRepository:
         )
         await self._session.execute(delete(FeedbackRow).where(FeedbackRow.household_id == household_id))
         return int(found or 0)
+
+    async def given(self, household_id: int) -> list[tuple[int, int, date]]:
+        """Who gave feedback on which meal, and that meal's day, and nothing of what they said."""
+        rows = await self._session.execute(
+            select(FeedbackRow.member_id, FeedbackRow.meal_id, MealLogRow.date)
+            .join(MealLogRow, MealLogRow.id == FeedbackRow.meal_id)
+            .where(FeedbackRow.household_id == household_id)
+            .order_by(FeedbackRow.id)
+        )
+        return [(m, meal, day) for m, meal, day in rows]
 
     async def for_meals(self, household_id: int, meal_ids: Iterable[int]) -> list[Feedback]:
         """Everyone's feedback on these meals, oldest first. Services must filter it."""

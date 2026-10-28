@@ -73,7 +73,7 @@ from dinnerbell.domain.schedule import (
     temperature,
     weights,
 )
-from dinnerbell.services import activity, feedback
+from dinnerbell.services import activity, contributions, feedback
 from dinnerbell.services import call_context as cc
 from dinnerbell.services.call_context import CallContext, load, locked_event, publish
 from dinnerbell.services.common import audit, is_unique_violation
@@ -820,6 +820,7 @@ async def finish(db: AsyncSession, event: Event, now: datetime, *, actor: Member
             now=now,
             event_id=event.id,
         )
+    await contributions.record_done(db, done, now=now)
     ctx = await load(db, done)
     reminders = feedback.reminders(ctx, item.name) if item is not None else []  # FR-48: only those who asked
     await publish(db, ctx, *cc.decision_updated(ctx), cc.message_updated(ctx), *reminders, now=now)

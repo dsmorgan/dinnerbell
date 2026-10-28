@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import Iterator
 from pathlib import Path
@@ -22,6 +23,7 @@ M0_TABLES = {"household", "member", "session", "audit"}
 M1_TABLES = {"tag", "catalog_item", "catalog_item_tag", "catalog_item_cook", "preference", "meal_log"}
 M2_TABLES = {"event", "response", "suggestion", "proposal", "vote", "assignment", "outbox"}
 M3_TABLES = {"feedback", "invitation"}
+M4_TABLES = {"contribution", "badge_award"}
 
 
 def test_migrates_an_empty_database(settings: Settings) -> None:
@@ -30,7 +32,7 @@ def test_migrates_an_empty_database(settings: Settings) -> None:
     engine = create_engine(settings.sync_database_url)
     try:
         inspector = inspect(engine)
-        everything = M0_TABLES | M1_TABLES | M2_TABLES | M3_TABLES
+        everything = M0_TABLES | M1_TABLES | M2_TABLES | M3_TABLES | M4_TABLES
         assert set(inspector.get_table_names()) == everything | {"alembic_version"}
         for table in everything - {"household"}:
             assert "household_id" in {c["name"] for c in inspector.get_columns(table)}, table
@@ -453,7 +455,10 @@ def _snapshot(settings: Settings) -> dict[str, object]:
         with engine.connect() as c:
             rows = {t: c.execute(text(f"SELECT * FROM {t} ORDER BY rowid")).all() for t in ("event", *EVENT_CHILDREN)}  # noqa: S608
             indexes = c.execute(
-                text("SELECT name, sql FROM sqlite_master WHERE type = 'index' AND sql IS NOT NULL ORDER BY name")
+                text(
+                    "SELECT name, sql FROM sqlite_master WHERE type = 'index' AND sql IS NOT NULL "
+                    "AND tbl_name NOT IN ('contribution', 'badge_award') ORDER BY name"  # 0016's tables
+                )
             ).all()
             table = c.execute(text("SELECT sql FROM sqlite_master WHERE name = 'event'")).scalar_one()
             assert c.execute(text("PRAGMA foreign_key_check")).all() == []
@@ -1363,3 +1368,109 @@ def test_0015_downgrade_refuses_while_a_role_choice_is_pending(settings: Setting
         engine.dispose()
     _downgrade_to(settings, LATE_JOIN)
     assert not set(COORDINATOR_COLUMNS) & set(_event_columns(settings))
+
+
+# 0016: contributions and badges (M4) -------------------------------------------------------------
+
+COORDINATOR = "0015_coordinator"
+
+
+def _tables(settings: Settings) -> set[str]:
+    engine = create_engine(settings.sync_database_url)
+    try:
+        return set(inspect(engine).get_table_names())
+    finally:
+        engine.dispose()
+
+
+def _rows_outside_m4(settings: Settings) -> dict[str, list[object]]:
+    """Every row of every table that existed at 0015, for comparing across the migration."""
+    engine = create_engine(settings.sync_database_url)
+    try:
+        with engine.connect() as c:
+            names = sorted(inspect(engine).get_table_names())
+            return {
+                t: list(c.execute(text(f"SELECT * FROM {t} ORDER BY rowid")).all())  # noqa: S608
+                for t in names
+                if t not in {"contribution", "badge_award", "alembic_version"}
+            }
+    finally:
+        engine.dispose()
+
+
+def test_0016_adds_contributions_and_badges_without_touching_a_row_and_downgrade_removes_them(
+    settings: Settings, migrate_command: None
+) -> None:
+    """``dinnerbell migrate`` on a populated 0015 database adds two empty tables and changes no
+    row. The tables refuse a duplicate count, a count with neither or both sources, a kind or tier
+    they don't know, and an award made twice. Down drops them, clears the backfill marker, and
+    gives back the 0015 database exactly; up again gives the same."""
+    from dinnerbell import main as cli
+
+    _upgrade_to(settings, COORDINATOR)
+    _populate_calls(settings)
+    _execute(settings, 'UPDATE household SET settings = \'{"contributions_backfilled": "x", "keep": 1}\'')
+    before = _rows_outside_m4(settings)
+    assert before["event"] and not {"contribution", "badge_award"} & _tables(settings)
+
+    assert cli.main(["migrate"]) == 0
+    assert {"contribution", "badge_award"} <= _tables(settings)
+    assert _rows_outside_m4(settings) == before
+    engine = create_sync_engine(settings.sync_database_url)
+    try:
+        with engine.connect() as c:
+            assert c.execute(text("SELECT count(*) FROM contribution")).scalar_one() == 0
+            assert c.execute(text("SELECT count(*) FROM badge_award")).scalar_one() == 0
+            assert c.execute(text("PRAGMA foreign_key_check")).all() == []
+        credit = (
+            "INSERT INTO contribution (household_id, member_id, kind, day, {sources}, created_at) "
+            "VALUES (1, 1, '{kind}', '2026-10-21', {values}, :t)"
+        )
+
+        def count(kind: str, sources: str = "event_id", values: str = "1") -> str:
+            return credit.format(kind=kind, sources=sources, values=values)
+
+        with engine.begin() as c:
+            c.execute(text(count("picked_up")), {"t": STAMP})
+        for bad, why in (
+            (count("picked_up"), "UNIQUE"),  # the same call counted twice
+            (count("juggled"), "CHECK"),
+            (count("cooked", "event_id, meal_id", "1, 1"), "CHECK"),  # from a call and a meal
+        ):
+            with pytest.raises(IntegrityError, match=why), engine.begin() as c:
+                c.execute(text(bad), {"t": STAMP})
+        award = (
+            "INSERT INTO badge_award (household_id, member_id, badge_key, tier, awarded_at, announcement) "
+            "VALUES (1, 1, 'chef', '{tier}', :t, '{state}')"
+        )
+        with engine.begin() as c:
+            c.execute(text(award.format(tier="first", state="pending")), {"t": STAMP})
+        for bad, why in (
+            (award.format(tier="first", state="skipped"), "UNIQUE"),  # the same tier twice
+            (award.format(tier="platinum", state="pending"), "CHECK"),
+            (award.format(tier="bronze", state="maybe"), "CHECK"),
+        ):
+            with pytest.raises(IntegrityError, match=why), engine.begin() as c:
+                c.execute(text(bad), {"t": STAMP})
+        with engine.begin() as c:  # leave a row of each for the downgrade to drop
+            c.execute(text("PRAGMA foreign_keys = ON"))
+            c.execute(text("UPDATE badge_award SET event_id = 1"))
+            c.execute(text("DELETE FROM contribution"))
+    finally:
+        engine.dispose()
+
+    _downgrade_to(settings, COORDINATOR)
+    assert not {"contribution", "badge_award"} & _tables(settings)
+    assert _rows_outside_m4(settings)["event"] == before["event"]
+    engine = create_sync_engine(settings.sync_database_url)
+    try:
+        with engine.connect() as c:
+            assert json.loads(c.execute(text("SELECT settings FROM household")).scalar_one()) == {"keep": 1}
+    finally:
+        engine.dispose()
+
+    assert cli.main(["migrate"]) == 0
+    assert {"contribution", "badge_award"} <= _tables(settings)
+    assert {k: v for k, v in _rows_outside_m4(settings).items() if k != "household"} == {
+        k: v for k, v in before.items() if k != "household"
+    }

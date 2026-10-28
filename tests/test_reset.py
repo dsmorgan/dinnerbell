@@ -141,6 +141,8 @@ EXPECTED_CLEAR = {
     "meal_log",
     "feedback",
     "outbox",
+    "contribution",
+    "badge_award",
 }
 
 
@@ -348,7 +350,9 @@ async def test_the_preview_counts_by_table(house: House) -> None:
     assert found.open_calls == () and found.pending_outbox > 0
     lines = found.lines()
     assert lines[0] == "Household: Home"
-    assert lines[1].startswith("Deletes: assignment 0, event 1, feedback 0, invitation 0,")
+    assert lines[1].startswith(
+        "Deletes: assignment 0, badge_award 0, contribution 0, event 1, feedback 0, invitation 0,"
+    )
     assert lines[2].startswith("Keeps: audit ")
     assert lines[4] == "Days off kept: dinner on 2026-10-22"
     assert found.posts_again == ()  # it stays called off
@@ -502,7 +506,10 @@ def test_the_command_backs_up_then_resets_production(production: Path, capsys: p
     assert cli.main(["reset-history", "--yes"]) == 0
     out = capsys.readouterr().out
     assert f"Database: {production}" in out and "Household: Home" in out
-    assert re.search(r"Deletes: assignment \d+, event 1, feedback 0, invitation 0, meal_log 1,", out)
+    assert re.search(
+        r"Deletes: assignment \d+, badge_award \d+, contribution \d+, event 1, feedback 0, invitation 0, meal_log 1,",
+        out,
+    )
     assert "Keeps: audit " in out and "catalog_item 3," in out and "member 4," in out
     assert "Reset the history." in out
 
