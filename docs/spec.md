@@ -450,7 +450,7 @@ A contribution is one thing a member did for a meal. They are counted when a cal
 | explored | Made a pick that won and was new to the household: an item or a cuisine it had never eaten before that meal |
 | hosted | Brought one or more guests to a done event: a head count on their answer, or an invited guest who is in |
 | gave_feedback | Gave feedback on a meal, once per meal (FR-45's window applies) |
-| gambled | In on time (not a late joiner, not a guest) on a done call with at least 3 picks, and the final votes (after any taken back) were every pick or none of them (#108). Offers never earn it |
+| gambled | In (not a late joiner, not a guest) on a done call with at least 3 picks, and the final votes (after any taken back) were every pick, or none of them while another member's final votes are on the call, so someone else decided (#108). Offers never earn it |
 
 **Who earns what.** Pitching in (cooked, picked_up, ordered, coordinated) goes to whoever the event assigned, a guest included: a guest who picks up picked up. Everything else goes to members only, because a guest comes by invitation, never chooses what is eaten, and gives no feedback (#38); the member who brought them earns hosted. Their badges are kept and announced like anyone's. A guest's App Home has no badge section, but they see their own pitching-in badges on the Stats page (Your badges in the navigation), and nothing of the household's or the members'. History stays under the guest record (it is not merged when an admin links a guest to a member). "Never eaten" counts every meal in the log, including meals logged by hand, ordered by day, then slot, then the order logged.
 

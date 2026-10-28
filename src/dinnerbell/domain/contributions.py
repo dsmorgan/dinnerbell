@@ -132,10 +132,13 @@ class DoneFacts:
 def credits_for_done(facts: DoneFacts) -> list[Credit]:
     """Every contribution a done event earns, once per member and kind.
 
-    ``gambled`` goes to a member of a call with at least ``GAMBLER_MIN_PICKS`` picks who was in
-    on time and whose final votes (after any they took back) were every pick or none of them. A
-    late joiner (#76), who missed the voting, and a guest never earn it, and a member who was out
-    or didn't answer gave no vote to leave. An offer has no picks to vote on."""
+    ``gambled`` goes to a member of a call with at least ``GAMBLER_MIN_PICKS`` picks who was in,
+    and not a late joiner (#76), and whose final votes (after any they took back) were every pick
+    or none of them. Voting for none counts only when another member's final votes are on the call,
+    so someone else decided; a call nobody voted on (a lock, an automatic decision) gives no one the
+    badge. Voting for every pick needs no one else. A guest's votes are ignored, and a guest never
+    earns it. A member who was out or didn't answer gave no vote to leave, and an offer has no picks
+    to vote on."""
     event = facts.event
     found: dict[tuple[int, Kind], Credit] = {}
 
@@ -179,7 +182,13 @@ def _gambled(facts: DoneFacts, response: Response) -> bool:
     if not response.is_in or response.late:
         return False
     voted = facts.votes.get(response.member_id, frozenset()) & picks
-    return not voted or voted == picks
+    if voted:
+        return voted == picks
+    # None: only a gamble when someone else's votes decided the call.
+    return any(
+        member_id != response.member_id and member_id not in facts.guest_ids and ids & picks
+        for member_id, ids in facts.votes.items()
+    )
 
 
 def _on_time(event: Event, response: Response) -> bool:

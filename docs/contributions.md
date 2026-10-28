@@ -11,7 +11,7 @@ A call or offer counts the moment it is done. Each person gets one count per kin
 - **Answered quickly.** An answer, any answer, within 15 minutes of the call opening.
 - **Ideas.** The person whose pick won; the person whose pick was new to the household; and the person who added a catalog item the first time it was chosen.
 - **Hosting.** The member who brought guests.
-- **Leaving the choice to others.** On a call with at least three picks, a member who was in on time and whose votes, when the call was done, were every pick or none of them. Votes you took back don't count. A late joiner, a guest, and a member who was out or didn't answer don't earn it, and offers have no picks to vote on.
+- **Leaving the choice to others.** On a call with at least three picks, a member who was in (not a late joiner) and whose votes, when the call was done, were every pick or none of them. Voting for none counts only when another member voted, so someone else decided; a call nobody voted on gives no one the badge. A guest's votes are ignored. Votes you took back don't count. A late joiner, a guest, and a member who was out or didn't answer don't earn it, and offers have no picks to vote on.
 - **Feedback.** The first time you give feedback on a meal. Changing it, or taking it back and giving it again, doesn't count again.
 
 Finishing a call twice, or two people tapping **Mark done** together, counts it once. A call that is called off or discarded counts for nothing. Meals someone logged by hand don't count: they have no roles or answers.

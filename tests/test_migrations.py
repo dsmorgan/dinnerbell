@@ -1538,8 +1538,19 @@ def test_0018_lets_a_contribution_be_gambled_and_downgrade_refuses_while_any_are
     with pytest.raises(RuntimeError, match="1 gambled"):
         _downgrade_to(settings, "0017_slack_badge_file")
     _execute(settings, "DELETE FROM contribution WHERE kind = 'gambled'")
+    _execute(settings, 'UPDATE household SET settings = \'{"gambler_backfilled": "x", "keep": 1}\'')
     _downgrade_to(settings, "0017_slack_badge_file")
+    assert _household_settings(settings) == {"keep": 1}  # upgrading again counts Gambler afresh
     with pytest.raises(IntegrityError, match="ck_contribution_kind"):
         _execute(settings, GAMBLED_ROW.replace(":kind", "'gambled'"))
     _upgrade_to(settings, "0018_gambler")
     _execute(settings, GAMBLED_ROW.replace(":kind", "'gambled'"))
+
+
+def _household_settings(settings: Settings) -> dict[str, object]:
+    engine = create_sync_engine(settings.sync_database_url)
+    try:
+        with engine.connect() as c:
+            return dict(json.loads(c.execute(text("SELECT settings FROM household")).scalar_one()))
+    finally:
+        engine.dispose()

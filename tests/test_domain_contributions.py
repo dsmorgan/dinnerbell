@@ -226,18 +226,28 @@ def test_a_call_needs_three_picks_for_all_or_none_to_be_a_gamble() -> None:
     for picks in (frozenset(), frozenset({101}), frozenset({101, 102})):
         assert gamble({ALEX: set(picks)}, answer(ALEX), picks=picks) == set()
     four = frozenset({101, 102, 103, 104})
-    assert gamble({}, answer(ALEX), picks=four) == {ALEX}
+    assert gamble({SAM: {101}}, answer(ALEX), picks=four) == {ALEX}
 
 
-def test_only_a_member_who_was_in_on_time_gambles() -> None:
-    assert gamble({}, answer(ALEX, status=Status.OUT), answer(SAM, status=Status.MAYBE)) == set()
-    assert gamble({}, answer(ALEX, late=True)) == set()  # a late joiner's votes don't count
+def test_only_a_member_who_was_in_and_not_a_late_joiner_gambles() -> None:
+    sam = {SAM: {101}}
+    assert gamble(sam, answer(ALEX, status=Status.OUT), answer(KIM, status=Status.MAYBE)) == set()
+    assert gamble(sam, answer(ALEX, late=True)) == set()  # a late joiner's votes don't count
     assert gamble({KIM: {101, 102, 103}}, answer(GUEST), answer(KIM), guest_ids=frozenset({GUEST})) == {KIM}
-    assert gamble({}, answer(ALEX), event=event(EventKind.OFFER)) == set()
+    assert gamble(sam, answer(ALEX), event=event(EventKind.OFFER)) == set()
+
+
+def test_voting_for_none_needs_another_members_votes_on_the_call() -> None:
+    assert gamble({}, answer(ALEX), answer(SAM)) == set()  # nobody voted (a lock, an automatic decision)
+    assert gamble({ALEX: {101, 102, 103}}, answer(ALEX)) == {ALEX}  # all needs no one else
+    assert gamble({SAM: {101}}, answer(ALEX), answer(SAM)) == {ALEX}  # someone else decided
+    assert gamble({ALEX: {101}}, answer(ALEX)) == set()  # their own vote isn't someone else's
+    assert gamble({GUEST: {101}}, answer(ALEX), guest_ids=frozenset({GUEST})) == set()  # a guest's votes are ignored
+    assert gamble({SAM: {999}}, answer(ALEX)) == set()  # not a vote for any pick
 
 
 def test_a_vote_for_a_proposal_that_is_not_a_pick_counts_for_nothing() -> None:
-    assert gamble({ALEX: {999}}, answer(ALEX)) == {ALEX}  # none of the real picks
+    assert gamble({ALEX: {999}, SAM: {101}}, answer(ALEX), answer(SAM)) == {ALEX}  # none of the real picks
 
 
 def meal(

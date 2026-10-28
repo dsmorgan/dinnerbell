@@ -17,7 +17,7 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 - Badge art in Slack (#105). Badge announcements and **Your badges** on App Home show the same art as the Stats page, instead of text tags. Dinnerbell draws each badge and tier as a PNG, uploads it to Slack the first time it's needed, and reuses it after that. If the upload fails, or the app lacks the new scope, you see the text tags as before. The first use of a badge waits at most 3 seconds for its upload, and a failure never fails a post or a Home view. Food Critic stays private.
 
-- Gambler badge (#108). You earn **Gambler** for a call where you left the choice to others: you were in on time and voted for every pick, or for none of them, when the call had at least three picks. A vote you took back doesn't count, and a late joiner or a guest never earns it. Votes are visible on the call, so the badge is announced and shown like most badges. It uses the same five tiers, with a single die as its icon.
+- Gambler badge (#108). You earn **Gambler** for a call where you left the choice to others: you were in (and not a late joiner) and voted for every pick, or for none of them when someone else voted, on a call with at least three picks. A vote you took back doesn't count, and a late joiner or a guest never earns it. Votes are visible on the call, so the badge is announced and shown like most badges. It uses the same five tiers, with a single die as its icon.
 
 ### Upgrade notes
 

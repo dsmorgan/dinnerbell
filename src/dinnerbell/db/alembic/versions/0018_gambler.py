@@ -11,7 +11,8 @@ SQLite changes a check constraint only by rebuilding the table. Nothing referenc
 they are.
 
 A downgrade refuses while any ``gambled`` row exists, rather than delete counts the old check
-can't store. Production never downgrades; it rolls back by restoring the backup taken before
+can't store, and it clears the household's ``gambler_backfilled`` marker so that upgrading again
+counts Gambler afresh. Production never downgrades; it rolls back by restoring the backup taken before
 the upgrade (docs/setup.md, "Roll back").
 
 Revision ID: 0018_gambler
@@ -55,3 +56,5 @@ def downgrade() -> None:
     if rows:
         raise RuntimeError(GAMBLED_LEFT.format(rows=rows, revision=down_revision))
     _replace_kind_check(KINDS)
+    # Upgrading again counts Gambler afresh, as 0016 does for its marker.
+    op.execute("UPDATE household SET settings = json_remove(settings, '$.gambler_backfilled')")
