@@ -1296,7 +1296,7 @@ def test_0015_adds_the_coordinator_columns_and_downgrade_drops_them(settings: Se
     try:
         with engine.begin() as c:  # a call in flight can use them
             c.execute(
-                text("UPDATE event SET shuffles = 2, roles_due_at = :t, tie_how = 'chose', tie_by = 1"), {"t": STAMP}
+                text("UPDATE event SET shuffles = 2, shuffle_note = 'x', tie_how = 'chose', tie_by = 1"), {"t": STAMP}
             )
     finally:
         engine.dispose()
@@ -1310,3 +1310,27 @@ def test_0015_adds_the_coordinator_columns_and_downgrade_drops_them(settings: Se
     assert {tuple(r)[-len(COORDINATOR_COLUMNS) :] for r in _snapshot(settings)["rows"]["event"]} == {  # type: ignore[index]
         (0, None, None, None, None)
     }
+
+
+def test_0015_downgrade_refuses_while_a_role_choice_is_pending(settings: Settings, migrate_command: None) -> None:
+    """A call waiting on the coordinator has nobody assigned to its role, and an older release would
+    never assign one, so the downgrade refuses, naming how many, and changes nothing."""
+    from dinnerbell import main as cli
+
+    _upgrade_to(settings, LATE_JOIN)
+    _populate_calls(settings)
+    assert cli.main(["migrate"]) == 0
+    engine = create_sync_engine(settings.sync_database_url)
+    try:
+        with engine.begin() as c:
+            c.execute(text("UPDATE event SET roles_due_at = :t WHERE id = 1"), {"t": STAMP})
+        columns = _event_columns(settings)
+        with pytest.raises(RuntimeError, match=r"1 call\(s\) are waiting"):
+            _downgrade_to(settings, LATE_JOIN)
+        assert _event_columns(settings) == columns
+        with engine.begin() as c:
+            c.execute(text("UPDATE event SET roles_due_at = NULL"))
+    finally:
+        engine.dispose()
+    _downgrade_to(settings, LATE_JOIN)
+    assert not set(COORDINATOR_COLUMNS) & set(_event_columns(settings))

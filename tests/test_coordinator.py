@@ -1512,3 +1512,90 @@ async def test_the_picks_buttons_are_for_members_only(slack: Slack, house: House
 
     assert ids.ASSIGN_ROLES in GUEST_TAPS  # a guest coordinating assigns roles (FR-58)
     assert not {ids.SHUFFLE, ids.BREAK_TIE} & GUEST_TAPS
+
+
+# Review follow-ups ---------------------------------------------------------------------------------
+
+
+async def test_marking_done_ends_a_pending_role_choice_with_the_automatic_assignment(house: House) -> None:
+    event_id = await two_pickups_decided(house)
+    assert (await house.event(event_id)).roles_due_at is not None
+    await act(house, calls.mark_done, house["Alex"], event_id)
+    event, ctx = await house.event(event_id), await house.context(event_id)
+    assert (event.state, event.roles_due_at) == (EventState.DONE, None)
+    assert assigned(ctx)[AssignmentRole.PICKUP] == house["Alex"].id  # the first to offer
+    assert len(await sent(house, "assignment_made")) == 1
+
+
+async def test_the_time_to_choose_never_passes_the_meal(house: House) -> None:
+    async with house.sessionmaker() as db:
+        stored = await household_settings(db, house.household.id)
+        await HouseholdRepository(db).update_settings(house.household.id, stored | {"roles_choice_minutes": 120})
+        await db.commit()
+    event_id = await two_pickups_decided(house)
+    event = await house.event(event_id)
+    assert event.meal_time is not None and event.roles_due_at == event.meal_time < VOTE_BY + timedelta(minutes=120)
+
+
+def test_a_zero_vote_decision_reports_no_tie() -> None:
+    won = decide_winner([tally(1, 2), tally(2, 1)], coordinator_id=None, admin_ids=ADMINS)
+    assert won is not None and (won.tally.id, won.tie, won.by) == (2, None, None)
+
+
+async def test_nobody_voting_leaves_no_tie_note(house: House) -> None:
+    event_id = await to_voting(house, "Sam")
+    event = await at_deadline(house, event_id)
+    assert (event.tie_how, event.tie_by) == (None, None)
+    (made,) = await sent(house, "decision_made")
+    assert made.decision.tie_note is None
+
+
+async def test_an_admin_is_refused_the_picks_powers_while_a_member_coordinates(house: House) -> None:
+    event_id = await with_many_places(house, "Sam", "Lee", coordinator_name="Sam")
+    picks = await pick_ids(house, event_id)
+    first = next(iter(picks.values()))
+    await vote(house, "Sam", event_id, first)
+    await vote(house, "Lee", event_id, list(picks.values())[1])
+    assert house["Alex"].is_admin
+    for use in (
+        lambda: coordinator.shuffle(db, house["Alex"], event_id, now=house.clock()),
+        lambda: coordinator.break_tie(db, house["Alex"], event_id, first, now=house.clock()),
+    ):
+        async with house.sessionmaker() as db:
+            with pytest.raises(EventRuleViolation) as refused:
+                await use()
+        assert refused.value.code == "not_coordinator"
+    event = await house.event(event_id)
+    assert (event.state, event.shuffles) == (EventState.VOTING, 0)
+
+
+async def test_another_households_call_is_not_found(house: House, migrated: Settings) -> None:
+    from tests.support.households import other_call, other_household
+
+    other = other_call(migrated, other_household(migrated))
+    event_id = other["event"]
+    for use in (
+        lambda: coordinator.shuffle(db, house["Alex"], event_id, now=house.clock()),
+        lambda: coordinator.break_tie(db, house["Alex"], event_id, other["proposal"], now=house.clock()),
+        lambda: coordinator.choose_roles(db, house["Alex"], event_id, now=house.clock()),
+    ):
+        async with house.sessionmaker() as db:
+            with pytest.raises(NotFound):
+                await use()
+
+
+async def test_concurrent_shuffles_give_three_successes_and_the_rest_refused(house: House) -> None:
+    import asyncio
+
+    event_id = await with_many_places(house, "Sam")
+
+    async def one() -> str:
+        try:
+            await shuffle(house, "Alex", event_id)
+        except EventRuleViolation as exc:
+            return exc.code
+        return "ok"
+
+    results = await asyncio.gather(*(one() for _ in range(5)))
+    assert sorted(results) == ["ok", "ok", "ok", "shuffle_limit", "shuffle_limit"]
+    assert (await house.event(event_id)).shuffles == 3

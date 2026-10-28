@@ -648,6 +648,8 @@ def decide_winner(
             tied, how, by = oldest, TieHow.LEAST_RECENT, None
     if len(tied) > 1:
         tied, how, by = [min(tied, key=lambda t: t.rank)], TieHow.RANDOM, None
+    if top == 0:  # nobody voted: the rules still pick, but there is no tie to report
+        return Winner(tied[0])
     return Winner(tied[0], how, by)
 
 

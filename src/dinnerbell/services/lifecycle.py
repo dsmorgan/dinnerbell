@@ -707,7 +707,8 @@ async def decide(
     roles = assign_roles(winner.mode, volunteers, event.coordinator_id)
     coordinator_member = ctx.members.get(event.coordinator_id) if event.coordinator_id is not None else None
     asking = coordinator_member is not None and coordinator_member.active and roles_unclear(volunteers)
-    due = now + timedelta(minutes=roles_choice_minutes(ctx.settings)) if asking else None
+    # The choice never outlasts the time to choose, nor the meal itself.
+    due = min(now + timedelta(minutes=roles_choice_minutes(ctx.settings)), meal) if asking else None
     if asking:  # the role waits for the coordinator's choice
         roles = {role: who for role, who in roles.items() if role is AssignmentRole.COORDINATOR}
     decided = replace(
@@ -796,6 +797,9 @@ async def assign_due_roles(db: AsyncSession, event: Event, now: datetime) -> Non
 
 async def finish(db: AsyncSession, event: Event, now: datetime, *, actor: Member | None = None) -> None:
     """FR-21: mark the call done and log the meal, linked by ``event_id``, at most once."""
+    if event.roles_due_at is not None:  # marking done ends the coordinator's time to choose: the automatic one stands
+        await assign_due_roles(db, event, now)
+        event = await EventRepository(db).get(event.household_id, event.id) or event
     ctx = await load(db, event)
     done = await EventRepository(db).save(
         replace(event, state=transition(event.state, EventState.DONE), done_at=now), now

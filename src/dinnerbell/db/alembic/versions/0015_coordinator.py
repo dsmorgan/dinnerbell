@@ -5,8 +5,10 @@ for the coordinator's choice of roles, and how a tie was broken.
 ``event.shuffles`` starts at 0 (every existing call has been drawn once, with its original
 seed). The other four columns are NULL until they are used. SQLite adds each column in place, so
 nothing is rebuilt. A downgrade drops them in place too (SQLite 3.35 or later): a call in flight
-loses its shuffle count, its pending role choice (the automatic assignment is already stored, so
-nothing is unassigned), and its note on how a tie was broken.
+loses its shuffle count and its note on how a tie was broken. It refuses while any call is still
+waiting on the coordinator's choice of roles (``roles_due_at`` set): that call has no one
+assigned to its role yet, and an older release would never assign one. Let the choice finish, or
+restore your backup.
 
 Revision ID: 0015_coordinator
 Revises: 0014_late_join
@@ -37,5 +39,11 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    pending = op.get_bind().execute(sa.text("SELECT count(*) FROM event WHERE roles_due_at IS NOT NULL")).scalar_one()
+    if pending:
+        raise RuntimeError(
+            f"{pending} call(s) are waiting for the coordinator to choose roles, and an older release would never "
+            "assign them. Wait for the choice (or its time limit), or restore your backup, then downgrade."
+        )
     for name in reversed(COLUMNS):
         op.execute(f"ALTER TABLE event DROP COLUMN {name}")
