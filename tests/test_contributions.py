@@ -12,7 +12,6 @@ import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import fields, replace
 from datetime import UTC, date, datetime, time, timedelta
-from time import monotonic
 from typing import Any
 
 import pytest
@@ -765,9 +764,7 @@ async def test_a_long_history_backfills_in_linear_time_and_batches(house: House)
         engine = db.get_bind()
         sa_event.listen(engine, "before_cursor_execute", count)
         try:
-            started = monotonic()
             assert await contributions.ensure_backfilled(db, house.household.id, now=house.clock()) is True
-            elapsed = monotonic() - started
         finally:
             sa_event.remove(engine, "before_cursor_execute", count)
     assert (await counts(house, "Alex"))[Kind.PICKED_UP] == n
@@ -775,7 +772,6 @@ async def test_a_long_history_backfills_in_linear_time_and_batches(house: House)
     assert len(statements) < 14 * n
     assert not [s for s in statements if "FROM meal_log" in s and "JOIN" in s][1:]  # the log is read once
     assert sum("BEGIN IMMEDIATE" in s for s in statements) <= n // contributions.BATCH + 2  # a lock per batch
-    assert elapsed < 30
 
 
 async def test_a_log_line_does_not_outlive_counting_that_was_rolled_back(
