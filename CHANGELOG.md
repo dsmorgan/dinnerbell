@@ -6,6 +6,20 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ## [Unreleased]
 
+### Added
+
+- Contributions and badges, behind the scenes (M4, #15). When a call or offer is done, Dinnerbell now counts what each person did: cooked, picked up, ordered, coordinated, at the table, an answer within 15 minutes, a pick that won, a new place or cuisine that won, a catalog item that was chosen, guests brought, and feedback given. Twelve badges (Chef, Road Runner, Order Up, Quarterback, Full Table, Early Bird, Bright Idea, Scout, Explorer, Good Host, Food Critic, On a Roll) share one ladder of five tiers: First, Bronze, Silver, Gold, and Diamond at 1, 10, 50, 100, and 200. A badge is earned once per person and tier, and records whether the channel has been told. See [docs/contributions.md](docs/contributions.md).
+  - Nothing shows these yet. The Stats page, the channel announcements, App Home, and the monthly recap come in later releases.
+  - Counting is exact: finishing a call twice, or two people tapping **Mark done** at once, counts it once. Guests count for the roles they take; only members count for the rest.
+  - The tier counts are a household setting (FR-43), changeable by an admin through the service. The Admin page for it comes later.
+
+### Upgrade notes
+
+- The database migrates to revision `0016_contributions` when Dinnerbell starts. It adds two empty tables, `contribution` and `badge_award`, and changes no existing row.
+- On that first start, Dinnerbell counts the meals already in your log. It awards the badges they reach as already announced: nothing posts to the channel for old meals. A second start doesn't count again. It counts in batches, so a large log doesn't hold the database for long, and a start that is stopped halfway finishes next time. **`dinnerbell reset-history` now also deletes every contribution count and every badge earned**, along with the history; they don't come back.
+- To go back, restore your backup. Downgrading the schema instead drops both tables, so every count and badge is lost, and a later upgrade counts the meal log afresh.
+- No settings or Slack changes, and no reinstall.
+
 ## [0.7.0] - 2026-10-28
 
 ### Fixed

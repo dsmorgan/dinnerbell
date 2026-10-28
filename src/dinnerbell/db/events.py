@@ -16,7 +16,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from dinnerbell.db.models import (
     AssignmentRow,
+    BadgeAwardRow,
     CatalogItemRow,
+    ContributionRow,
     EventRow,
     FeedbackRow,
     InvitationRow,
@@ -50,7 +52,17 @@ from dinnerbell.domain.meals import Slot
 FRESH: dict[str, Any] = {"populate_existing": True}
 
 EVENT_ROWS: tuple[
-    type[VoteRow | ProposalRow | SuggestionRow | ResponseRow | AssignmentRow | InvitationRow | MealLogRow], ...
+    type[
+        VoteRow
+        | ProposalRow
+        | SuggestionRow
+        | ResponseRow
+        | AssignmentRow
+        | InvitationRow
+        | ContributionRow
+        | MealLogRow
+    ],
+    ...,
 ] = (
     VoteRow,
     ProposalRow,
@@ -58,12 +70,14 @@ EVENT_ROWS: tuple[
     ResponseRow,
     AssignmentRow,
     InvitationRow,
+    ContributionRow,
     MealLogRow,
 )
 """Every table whose rows belong to one event, by ``event_id``, children before parents (a vote
 before its proposal). Discarding a call (``EventRepository.discard``) deletes their rows; the
 outbox, which refers to events too, is ``OutboxRepository.discard_event``'s. A test fails when
-a table refers to ``event`` and isn't one of these or the outbox."""
+a table refers to ``event`` and isn't one of these, the outbox, or ``badge_award``, which keeps
+its rows and only forgets the call (``EventRepository.discard``)."""
 FEEDBACK = "feedback"
 """Feedback belongs to the meal a call logged, not to the event, so it isn't in ``EVENT_ROWS``.
 Discarding deletes it with the meal, explicitly rather than by the foreign key's cascade, so the
@@ -156,6 +170,20 @@ class EventRepository:
             .execution_options(synchronize_session=False)
         )
         counts: dict[str, int] = {FEEDBACK: int(getattr(gone, "rowcount", 0) or 0)}
+        # Feedback counts as a contribution of its meal, not of the call (``ContributionRow``).
+        meals = select(MealLogRow.id).where(MealLogRow.household_id == household_id, MealLogRow.event_id == event_id)
+        credits = await self._session.execute(
+            delete(ContributionRow)
+            .where(ContributionRow.household_id == household_id, ContributionRow.meal_id.in_(meals))
+            .execution_options(synchronize_session=False)
+        )
+        # A badge earned stays earned; it only forgets the call that earned it.
+        await self._session.execute(
+            update(BadgeAwardRow)
+            .where(BadgeAwardRow.household_id == household_id, BadgeAwardRow.event_id == event_id)
+            .values(event_id=None)
+            .execution_options(synchronize_session=False)
+        )
         for model in EVENT_ROWS:
             result = await self._session.execute(
                 delete(model)
@@ -163,6 +191,7 @@ class EventRepository:
                 .execution_options(synchronize_session=False)
             )
             counts[model.__tablename__] = int(getattr(result, "rowcount", 0) or 0)
+        counts["contribution"] += int(getattr(credits, "rowcount", 0) or 0)
         await self._session.execute(
             delete(EventRow)
             .where(EventRow.household_id == household_id, EventRow.id == event_id)
@@ -256,6 +285,16 @@ class EventRepository:
             .order_by(EventRow.id)
         )
         return list(rows)
+
+    async def done(self, household_id: int, *, uncounted: bool = False) -> list[Event]:
+        """Every done event, oldest meal first, for counting contributions from history. With
+        ``uncounted``, only those with no contribution row at all."""
+        query = select(EventRow).where(EventRow.household_id == household_id, EventRow.state == EventState.DONE.value)
+        if uncounted:
+            counted = select(ContributionRow.id).where(ContributionRow.event_id == EventRow.id)
+            query = query.where(~counted.exists())
+        rows = await self._session.scalars(query.order_by(EventRow.date, EventRow.id))
+        return [_event(row) for row in rows]
 
     async def for_today(self, household_id: int, today: date) -> list[Event]:
         """Today's events, plus any still open from other days."""

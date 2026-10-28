@@ -17,7 +17,7 @@ from sqlalchemy import func, select, text
 
 from dinnerbell.config import Settings, is_test_instance
 from dinnerbell.db.events import EVENT_ROWS
-from dinnerbell.db.models import Base, EventRow, FeedbackRow, OutboxRow
+from dinnerbell.db.models import BadgeAwardRow, Base, ContributionRow, EventRow, FeedbackRow, OutboxRow
 from dinnerbell.domain import notifications as n
 from dinnerbell.domain.events import EventRuleViolation, EventState, RoleOffer, Status, Step
 from dinnerbell.domain.feedback import FeedbackInput, Rating
@@ -129,7 +129,7 @@ def test_discard_handles_every_table_that_refers_to_an_event() -> None:
     """A new table that refers to events must be added to ``EVENT_ROWS`` (or be the outbox), so
     discarding a call can't leave its rows behind. Feedback refers to the meal log, not the event;
     ``test_discarding_a_done_call_deletes_its_feedback`` covers it."""
-    handled = {model.__tablename__ for model in EVENT_ROWS} | {"outbox"}
+    handled = {model.__tablename__ for model in EVENT_ROWS} | {"outbox", "badge_award"}
     assert event_linked_tables() == handled
 
 
@@ -208,6 +208,12 @@ async def test_discarding_a_done_call_deletes_its_feedback(house: House) -> None
     audit = next(a for a in await house.audits() if a.action == "event.discarded")
     assert audit.payload["rows"]["feedback"] == 2
     assert "not_again" not in str(audit.payload) and "loved" not in str(audit.payload)
+    # What the call and the feedback counted goes with them; the badges they earned stay, forgetting the call.
+    assert summary.rows["contribution"] >= 4
+    async with house.sessionmaker() as db:
+        assert await db.scalar(select(func.count()).select_from(ContributionRow)) == 0
+        awarded = list(await db.scalars(select(BadgeAwardRow)))
+    assert awarded and {a.event_id for a in awarded} == {None}
 
 
 async def act_no_clock(house: House, use_case: Any, *args: Any) -> Any:

@@ -23,6 +23,7 @@ from dinnerbell.channels.slack.connection import BoltSocket, SlackConnection, So
 from dinnerbell.config import Settings
 from dinnerbell.scheduler.runner import CANCEL_UNWIND_SECONDS, JobContext, build_scheduler, stop_scheduler
 from dinnerbell.services import catalog as catalog_service
+from dinnerbell.services import contributions
 from dinnerbell.services.bootstrap import bootstrap
 from dinnerbell.services.clock import Clock, utc_now
 from dinnerbell.services.database import open_database
@@ -61,6 +62,7 @@ def create_app(
                 now=clock(),
             )
             await catalog_service.seed_from_file(db, household, settings.seed_file, now=clock())
+            await contributions.ensure_backfilled(db, household.id, now=clock())
         http = httpx.AsyncClient(transport=oidc_transport, timeout=OIDC_TIMEOUT_SECONDS, follow_redirects=False)
         secret = settings.secret_key.get_secret_value()
         state = SchedulerState(started_at=clock())

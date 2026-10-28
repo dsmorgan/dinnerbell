@@ -73,6 +73,8 @@ CLEAR: Final = frozenset(
         "meal_log",  # what the household ate
         "feedback",  # and how it was
         "outbox",  # notifications, sent and unsent, and where each Slack message landed
+        "contribution",  # what each member did for those meals (M4) ...
+        "badge_award",  # ... and the badges it earned
     }
 )
 """Tables the reset empties."""

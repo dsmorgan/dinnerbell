@@ -122,7 +122,7 @@ A call with fewer than two people in at the response deadline ends with the on-y
 
 ### 5.5 Guests
 
-A member adds guests to their own response: a head count and, optionally, dietary needs chosen from the dietary tags. Guest needs act as required tags in ranking. Guests count toward capacity on offers and toward the head count in the decision message. The member who brought guests earns the host contribution.
+A member adds guests to their own response: a head count and, optionally, dietary needs chosen from the dietary tags. Guest needs act as required tags in ranking. Guests count toward capacity on offers and toward the head count in the decision message. The member who brought guests earns the hosted contribution (section 12).
 
 A guest can also be a person in their own right (#38, section 3): a guest record with a name, dietary needs, and, for a registered guest, a Slack user. Any active member invites one to a call while answers are open, from **Invite a guest** on their Your answer card or on the web: a saved guest, or someone new with their dietary needs. A registered guest gets a direct message with **In** and **Out**; an unregistered guest is counted in at once, and the member who invited them answers and offers roles for them on their card or the web, and gets their assignment messages. A guest's dietary needs apply whenever they're in or maybe, as a member's guests' needs do, and their own stances never count. When a guest coordinates, a tied vote goes to whoever invited them, then to an admin.
 
@@ -264,8 +264,8 @@ Requirements use "must" for version 1 and "should" for items that can slip to a 
 
 | ID | Requirement |
 |---|---|
-| FR-38 | Contributions in section 12 are counted per member on event completion. |
-| FR-39 | Badges in section 12 are awarded when thresholds are met, announced once in the channel, and shown on the member's Stats page and App Home. |
+| FR-38 | Contributions in section 12 are counted per member when an event is done (feedback, when it is given), exactly once however often the event is finished. The first start after the upgrade counts the meal log already there, in batches, and every start counts a done call that has none. A failure while counting never blocks marking a call done. |
+| FR-39 | Badges in section 12 are awarded when thresholds are met, once per member and tier, announced once in the channel (never for a badge earned while catching up), and shown on the member's Stats page and App Home. |
 | FR-40 | A monthly recap posts on the first day of the month: meals coordinated, cuisines tried, new catalog items, badges earned. It never ranks members from worst to best. |
 
 ### 6.12 Administration
@@ -435,38 +435,54 @@ Mobile-first server-rendered pages with HTMX for in-place updates. No JavaScript
 
 ### Contributions
 
+A contribution is one thing a member did for a meal. They are counted when a call or offer reaches done (FR-38), except feedback, which counts when it is given. Counting is idempotent: a call counts once per member and kind however many times it is finished, re-run, or finished at the same moment from two places, and the first answer to a feedback form counts once however often it is changed. Nothing is counted for a call that was called off, abandoned, or discarded, and a meal someone logged by hand has no roles or answers to count.
+
 | Kind | Recorded when |
 |---|---|
 | cooked | Assigned cook on a done event, or offerer of a done cooking offer |
 | picked_up | Assigned pickup on a done event, or offerer of a done pickup offer |
-| ordered | Assigned order on a done event |
-| coordinated | Coordinator of a decided event |
-| participated | In on a done event |
-| responded_on_time | Responded within 15 minutes of a call opening |
-| suggested | Made a suggestion that became the decision |
-| added_item | Created a catalog item that was later chosen at least once |
-| hosted | Brought one or more guests to a done event |
-| gave_feedback | Gave feedback on a meal within the window |
+| ordered | Assigned order on a done event, or offerer of a done delivery offer |
+| coordinated | Coordinator of a done call |
+| participated | In on a done event, including a late joiner (#76) who is taking part |
+| responded_on_time | Answered a call (in, maybe, or out) within 15 minutes of it opening, and the call is done. Offers and late joiners never earn it |
+| suggested | Made a pick (a member's or the coordinator's, not one the system drew) that became the decision |
+| added_item | Created a catalog item that was first chosen on this event (counted once per item, to its creator) |
+| explored | Made a pick that won and was new to the household: an item or a cuisine it had never eaten before that meal |
+| hosted | Brought one or more guests to a done event: a head count on their answer, or an invited guest who is in |
+| gave_feedback | Gave feedback on a meal, once per meal (FR-45's window applies) |
+
+**Who earns what.** Pitching in (cooked, picked_up, ordered, coordinated) goes to whoever the event assigned, a guest included: a guest who picks up picked up. Everything else goes to members only, because a guest comes by invitation, never chooses what is eaten, and gives no feedback (#38); the member who brought them earns hosted. A guest has no Stats page, so their badges are kept and announced like anyone's but they see none until promoted to a member. History stays under the guest record (it is not merged when an admin links a guest to a member). "Never eaten" counts every meal in the log, including meals logged by hand, ordered by day, then slot, then the order logged.
 
 ### Badges
 
-Badges have tiers at 1, 10, and 50 unless noted. Thresholds are settings.
+Every badge uses one ladder of five tiers, with a different shape for each so tiers differ without color:
 
-| Badge | Earned by |
-|---|---|
-| First Flame / Home Chef / Head Chef | cooked ×1 / ×10 / ×50 |
-| Road Runner | picked_up ×1 / ×10 / ×50 |
-| Order Up | ordered ×1 / ×10 / ×50 |
-| Quarterback | coordinated ×1 / ×10 / ×50 |
-| Early Bird | responded_on_time ×10 / ×50 / ×200 |
-| Scout | added_item ×3 / ×10 / ×25 |
-| Explorer | suggested an item or cuisine the household had never eaten, and it was chosen, ×1 / ×5 / ×15 |
-| Good Host | hosted ×1 / ×5 / ×20 |
-| Full Table | participated ×10 / ×50 / ×200 |
-| Food Critic | gave_feedback ×5 / ×25 / ×100 |
-| On a Roll | cooked, picked_up, or ordered in each of 3 / 8 / 20 consecutive weeks |
+| Count | Tier | Shape |
+|---|---|---|
+| 1st | First | Ribbon rosette (teal) |
+| 10th | Bronze | Medal |
+| 50th | Silver | Medal |
+| 100th | Gold | Medal with a sparkle |
+| 200th | Diamond | Faceted gem with a sparkle |
 
-Rules: every slot's events count alike, so a breakfast cooked counts toward Home Chef as a dinner does. Badges announce once in the channel when earned. The Stats page shows progress toward the next tier. Nothing in the app ranks members against each other or names who did the least.
+The five counts are the household's **badge thresholds** (FR-43), 1, 10, 50, 100, and 200 by default. They must be whole numbers from 1 to 10,000, each higher than the one before, and an admin saves all five together. Raising a threshold takes no badge away; lowering one awards the tiers members already have the counts for, quietly (below).
+
+| Badge | Icon | Counts |
+|---|---|---|
+| Chef | Chef hat | cooked |
+| Road Runner | Car | picked_up |
+| Order Up | Takeout bag | ordered |
+| Quarterback | Dinner bell | coordinated |
+| Full Table | Fork and knife | participated |
+| Early Bird | Alarm clock | responded_on_time |
+| Bright Idea | Lightbulb | suggested |
+| Scout | Recipe card | added_item |
+| Explorer | Compass | explored |
+| Good Host | Extra chair | hosted |
+| Food Critic | Star | gave_feedback |
+| On a Roll | Flame | the most calendar weeks (Monday to Sunday, in the household's time zone) in a row with at least one cooked, picked_up, or ordered |
+
+Rules: every slot's events count alike, so a breakfast cooked counts toward Chef as a dinner does. A member earns each badge tier once. A badge earned live starts pending announcement; the channel is told once (FR-39), and an award records when it was earned and whether and when it was announced. A badge earned while catching up, which is the first start after the upgrade that counts the meal log and a lowered threshold, is never announced. The Stats page shows progress toward the next tier; a tier already earned stays reached even if the admin later raises its threshold. Nothing in the app ranks members against each other or names who did the least: a member sees only their own counts, the household sees totals and the newest badges, and no view orders members by a count.
 
 ## 13. Architecture
 
@@ -529,8 +545,8 @@ Every table carries `household_id`. Timestamps are UTC; the household time zone 
 | assignment | event, member, role (cook, pickup, order, coordinator) |
 | meal_log | date, slot, item, cuisine_tags snapshot, participants snapshot, event (nullable, unique), logged_by |
 | feedback | meal_log (deleting the meal deletes its feedback), member, food (loved, fine, not_again, null), place (same, null), place_issues (JSON), cook_thanks (bool), cook_note, and a snapshot of the meal when saved: item, item name, item kind, mode (null for a logged meal), cook_member and cook name (nullable), participants (JSON); created_at, updated_at. One per member per meal |
-| contribution | member, kind, event, created_at |
-| badge_award | member, badge_key, tier, event, awarded_at |
+| contribution | member, kind, day, event or meal (exactly one: a call for most kinds, a meal for feedback), item (added_item only), created_at. Unique per member, kind, and source, and per kind and item, so counting twice counts once. Deleted with its call or meal |
+| badge_award | member, badge_key, tier, event (cleared if the call is deleted), awarded_at, announcement (pending, announced, or skipped), announced_at. Unique per member, badge, and tier |
 | outbox | event, notification type, payload (JSON), idempotency_key, message_key, thread_key, available_at, claim_token, claimed_until, attempts, last_error, delivered_at, failed_at, and the delivered message's reference |
 | session | id, member, created_at, expires_at, last_seen |
 | audit | actor, action, target, payload, created_at |

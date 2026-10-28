@@ -17,12 +17,24 @@ from sqlalchemy import select
 
 from dinnerbell import main as cli
 from dinnerbell.config import Settings
+from dinnerbell.db.contributions import BadgeRepository, ContributionRepository
 from dinnerbell.db.events import EventRepository
 from dinnerbell.db.feedback import FeedbackRepository
 from dinnerbell.db.meals import MealLogRepository, household_settings
-from dinnerbell.db.models import AuditRow, EventRow, FeedbackRow, MemberRow, OutboxRow, SessionRow
+from dinnerbell.db.models import (
+    AuditRow,
+    BadgeAwardRow,
+    ContributionRow,
+    EventRow,
+    FeedbackRow,
+    MemberRow,
+    OutboxRow,
+    SessionRow,
+)
 from dinnerbell.db.outbox import OutboxRepository
 from dinnerbell.db.repositories import MemberRepository, SessionRepository
+from dinnerbell.domain.badges import Announcement, BadgeKey, Tier
+from dinnerbell.domain.contributions import Credit, Kind
 from dinnerbell.domain.events import EndReason, EventState
 from dinnerbell.domain.feedback import FeedbackInput, MealFacts, Rating
 from dinnerbell.domain.meals import MemberRef, Slot
@@ -196,6 +208,18 @@ async def test_scrub_deletes_all_feedback_and_counts_it(house: House) -> None:
         await FeedbackRepository(db).save(
             house.household.id, house["Kim"].id, FeedbackInput(Rating.NOT_AGAIN), facts, house.clock()
         )
+        await ContributionRepository(db).add(  # what giving it counted
+            house.household.id,
+            [Credit(house["Kim"].id, Kind.GAVE_FEEDBACK)],
+            day=meal.date,
+            now=house.clock(),
+            meal_id=meal.id,
+        )
+        for badge in ("food_critic", "chef"):  # Kim's feedback badge, and one that has nothing to do with it
+            await BadgeRepository(db).add(
+                house.household.id, house["Kim"].id, BadgeKey(badge), Tier.FIRST,
+                now=house.clock(), announcement=Announcement.PENDING,
+            )  # fmt: skip
         await db.commit()
         shown = await scrub_preview(db)
     assert shown is not None and shown.feedback == 1 and "Feedback on meals: 1" in shown.lines(house.clock())
@@ -205,6 +229,9 @@ async def test_scrub_deletes_all_feedback_and_counts_it(house: House) -> None:
     assert summary.feedback_deleted == 1 and "Feedback rows deleted: 1" in summary.lines()
     async with house.sessionmaker() as db:
         assert list(await db.scalars(select(FeedbackRow))) == []
+        assert list(await db.scalars(select(ContributionRow).where(ContributionRow.kind == "gave_feedback"))) == []
+        left = {a.badge_key for a in await db.scalars(select(BadgeAwardRow))}
+        assert "food_critic" not in left and "chef" in left  # other badges stay
     assert [m.id for m in await house.meals()] == [meal.id]
     (row,) = await house.audits("instance.")
     assert row.payload["feedback_deleted"] == 1 and "not_again" not in str(row.payload)

@@ -73,6 +73,17 @@ def action(
     pending.append((contextvars.copy_context(), name, _checked(_present(fields))))
 
 
+def mark(db: AsyncSession) -> int:
+    """How many lines are waiting for ``db``'s transaction, for ``rewind``."""
+    return len(db.info.get(_PENDING, ()))
+
+
+def rewind(db: AsyncSession, marked: int) -> None:
+    """Drop the lines noted since ``mark`` returned ``marked``, for work a savepoint undid: a
+    line must not say something happened that was rolled back."""
+    del db.info.get(_PENDING, [])[marked:]
+
+
 def pick(items: Mapping[int, CatalogItem], proposal: Proposal) -> Fields:
     """``item``, ``item_id``, and ``mode`` for ``action`` or ``about``, for a pick on a call
     whose catalog is ``items``."""
