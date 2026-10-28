@@ -28,6 +28,8 @@ from tests.support.clock import FakeClock
 from tests.support.fake_oidc import CLIENT_ID, CLIENT_SECRET, ISSUER, FakeProvider, generate_key
 from tests.support.flags import disagreements, features_for, item_problems
 
+pytest_plugins = ["tests.support.shard"]
+
 BASE_URL = "https://dinnerbell.test"
 ADMIN_EMAIL = "admin@example.com"
 SECRET_KEY = "test-secret-key-that-is-long-enough-to-pass-validation"
