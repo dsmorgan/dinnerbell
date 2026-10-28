@@ -42,6 +42,7 @@ GUEST_ROUTES = {
     ("GET", "/"),
     ("HEAD", "/"),
     ("GET", "/me"),
+    ("GET", "/stats"),  # a guest's own badges (#15)
     ("POST", "/me"),
     ("GET", "/events/{event_id}"),
     ("GET", "/events/{event_id}/card"),
@@ -480,3 +481,38 @@ def test_linking_a_slack_guest_account_always_asks_for_the_members_name(admin: T
     assert next(m for m in rows(migrated, MemberRow) if m.id == kim.id).slack_user_id is None
     linked = submit(admin, f"/admin/guests/{ola.id}/link", {"member_id": str(kim.id), "confirm": "Kim"})
     assert linked.status_code == 303
+
+
+def test_a_guest_sees_only_their_own_badges(admin: TestClient, provider: FakeProvider, migrated: Settings) -> None:
+    """The Stats page for a guest (#15): their pitching-in badges, no counts that guests can't
+    earn, no household view, and none of the members' names."""
+    from datetime import UTC, datetime
+
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session
+
+    from dinnerbell.db.models import BadgeAwardRow, HouseholdRow
+
+    add_guest(admin, "Riley", slack="U07PAT")
+    as_guest(admin, provider)
+    engine = create_engine(migrated.sync_database_url)
+    with Session(engine) as db:
+        guest = next(m for m in rows(migrated, MemberRow) if m.slack_user_id == "U07PAT")
+        db.add(
+            BadgeAwardRow(
+                household_id=db.query(HouseholdRow).one().id,
+                member_id=guest.id,
+                badge_key="road_runner",
+                tier="first",
+                awarded_at=datetime.now(UTC),
+                announcement="pending",
+            )
+        )
+        db.commit()
+    engine.dispose()
+    html = page(admin.get("/stats"))
+    assert "<h1>Your badges</h1>" in html and 'aria-current="page">Your badges' in html
+    assert html.count("badge-row") == 5 and "Road Runner<span" in html and "Newly earned" in html
+    for hidden in ("Full Table", "Food Critic", "Meals shared", "The household", "Lately earned", "Stats</a>"):
+        assert hidden not in html
+    assert "Meals cooked" in html

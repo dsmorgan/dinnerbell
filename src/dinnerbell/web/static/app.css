@@ -468,3 +468,48 @@ fieldset.card > legend h2 { margin: 0; }
   letter-spacing: 0.04em;
   text-align: center;
 }
+
+/* Badges (M4, #15). The art is inline SVG from web/badge_art.py. Colors live in the SVG; a tier is
+   told apart by its outline (rosette, medal, gem) and by the text beside it, never by color alone. */
+.badge-art { display: inline-flex; flex: none; line-height: 0; }
+.badge-svg { width: 56px; height: 65px; }
+.badge-svg-locked { filter: grayscale(1); opacity: 0.35; }
+.badge-list { list-style: none; margin: 0 0 0.75rem; padding: 0; display: grid; gap: 0.5rem; }
+.badge-chip { display: inline-flex; align-items: center; gap: 0.5rem; vertical-align: middle; }
+.badge-chip .badge-svg { width: 36px; height: 42px; }
+.badge-name { font-weight: 600; }
+.badge-grid { list-style: none; margin: 0; padding: 0; display: grid; gap: 0.9rem; }
+.badge-row { display: flex; align-items: center; gap: 0.9rem; }
+.badge-row.locked .badge-title { color: var(--muted); }
+.badge-info { flex: 1 1 auto; min-width: 0; }
+.badge-title { font-size: 1rem; margin: 0 0 0.25rem; }
+.badge-tier { font-weight: 400; color: var(--muted); }
+.badge-info progress { width: 100%; height: 8px; accent-color: #1e8c8a; }
+.badge-info p { margin: 0.25rem 0 0; }
+.counts { margin: 0; display: grid; gap: 0.25rem; }
+.counts > div { display: flex; justify-content: space-between; gap: 1rem; border-bottom: 1px solid var(--line); padding: 0.25rem 0; }
+.counts dd { margin: 0; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+/* Gold and Diamond sparkle: twinkling stars and a sheen that sweeps every few seconds. Without
+   motion the stars sit still and the sheen is off. */
+.badge-tw { transform-box: fill-box; transform-origin: center; animation: badge-twinkle 2.4s ease-in-out infinite; }
+.badge-tw2 { animation-delay: 0.8s; }
+.badge-tw3 { animation-delay: 1.6s; }
+.badge-tw4 { animation-delay: 1.2s; }
+.badge-fast { animation-duration: 1.8s; }
+.badge-sheen { animation: badge-sheen 4.2s ease-in-out infinite; }
+@keyframes badge-twinkle {
+  0%, 100% { transform: scale(0.2); opacity: 0; }
+  45% { transform: scale(1.15); opacity: 1; }
+  60% { transform: scale(1); opacity: 1; }
+}
+@keyframes badge-sheen {
+  0% { transform: translateX(-70px); }
+  45% { transform: translateX(110px); }
+  100% { transform: translateX(110px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .badge-tw, .badge-sheen { animation: none; }
+  .badge-tw { opacity: 1; transform: none; }
+  .badge-sheen { opacity: 0; }
+}

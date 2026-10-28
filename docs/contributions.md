@@ -23,6 +23,24 @@ Twelve badges share one ladder: **First** (1), **Bronze** (10), **Silver** (50),
 
 The counts are a household setting. The admin changes them with `badge_thresholds` in the household settings, five whole numbers that rise from 1 to 10,000. Raising a count takes nothing away. Lowering one awards the tiers people already have the counts for, without an announcement.
 
+## The badge art
+
+Each badge is a tier frame plus its own icon: Chef (chef hat), Road Runner (car), Order Up (takeout bag), Quarterback (dinner bell), Full Table (fork and knife), Early Bird (alarm clock), Bright Idea (lightbulb), Scout (recipe card), Explorer (compass), Good Host (extra chair), Food Critic (star), On a Roll (flame). Tiers differ in outline and lightness, so they stay distinct in grayscale: First is a teal ribbon rosette, Bronze, Silver and Gold are medals on a navy strap, and Diamond is a faceted gem. Gold and Diamond sparkle on the web: twinkling four-point stars and a sheen that sweeps every few seconds. The sparkle is CSS, and it stops under "reduce motion". Every page also writes the badge's name and tier in text.
+
+The art lives in `web/badge_art.py`, and pages draw it with the `badge_art`, `badge_chip`, and `badge_row` macros in `web/templates/_badge.html`. `src/dinnerbell/web/static/badges/` holds the same art as plain files: `icons/<badge>.svg` (12) and `frames/<tier>.svg` (5, with the stars drawn in). A test checks that the files match the code and pass the SVG allowlist.
+
+Slack and App Home can use `badge_art.standalone_svg(key, tier)`, which returns one still SVG (frame, icon, and stars) to render as a PNG, with the badge keys (`chef`, `road_runner`, ...) and tier values (`first` ... `diamond`) as stable names.
+
+## The Stats page
+
+**Stats** in the navigation opens `/stats`. You see each badge at your tier, with progress to the next ("Meals cooked: 63 of 100 for Gold"), the badges you earned in the last two weeks, and your counts. Badges you haven't earned yet show softly, with the count that earns the first tier. Members also see the household: totals, and the newest badges with the names of who earned them, newest first. Badges earned by catching up are held but never listed as new. Nobody is ranked, and one member never sees another's counts.
+
+A guest sees **Your badges**: only the four pitching-in badges and On a Roll, and no household section.
+
+## Changing the counts
+
+Admins open **Admin > Badges** and set the five tier counts. Each must be a whole number from 1 to 10,000, and each higher than the one before. Saving writes an audit row; saving the form unchanged does nothing. Lowering a count awards the tier to anyone who already has that count, quietly. Raising one takes nothing away.
+
 ## Announcements
 
 Every award records when it was earned and whether the channel has been told: `pending`, `announced`, or `skipped`. A badge earned when a meal is done is `pending`. On every scheduler tick (30 seconds), Dinnerbell posts the pending badges and marks them `announced` in one transaction, so a restart, a retry, or two ticks at once never post one twice, and a crash never loses one. A badge earned by catching up (the backfill and a lowered count) is `skipped` and is never announced. The awards are marked `announced` when the post is queued, not when it lands: if Slack then refuses the post for good (the outbox gives up after its retries), the award stays `announced` and that post is lost. Nothing posts it again.

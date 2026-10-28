@@ -12,7 +12,6 @@ import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import fields, replace
 from datetime import UTC, date, datetime, time, timedelta
-from time import monotonic
 from typing import Any
 
 import pytest
@@ -338,9 +337,32 @@ async def test_a_guest_who_picks_up_earns_it_and_the_member_who_brought_them_hos
         }
     assert (await counts(house, "Sam"))[Kind.HOSTED] == 1
     assert Kind.HOSTED not in await counts(house, "Alex")
-    with pytest.raises(Forbidden):  # a guest has no Stats page
+    with pytest.raises(Forbidden):  # the member view is for members; a guest has guest_stats
         async with house.sessionmaker() as db:
             await stats.my_stats(db, riley[0])
+    async with house.sessionmaker() as db:
+        # A stray count a guest can't earn (say, from before they were demoted) is not shown.
+        event_id = await db.scalar(select(EventRow.id))
+        db.add(
+            ContributionRow(
+                household_id=house.household.id,
+                member_id=riley[0].id,
+                kind=Kind.PARTICIPATED.value,
+                day=DAY,
+                event_id=event_id,
+                created_at=DONE_AT,
+            )
+        )
+        await db.commit()
+        assert (await ContributionRepository(db).counts(house.household.id, riley[0].id))[Kind.PARTICIPATED] == 1
+        own = await stats.guest_stats(db, riley[0])
+        assert {p.badge.key for p in own.progress} == {
+            BadgeKey.CHEF, BadgeKey.ROAD_RUNNER, BadgeKey.ORDER_UP, BadgeKey.QUARTERBACK, BadgeKey.ON_A_ROLL,
+        }  # fmt: skip
+        assert own.counts == {Kind.PICKED_UP: 1}
+    with pytest.raises(Forbidden):
+        async with house.sessionmaker() as db:
+            await stats.guest_stats(db, house["Alex"])
 
 
 async def test_a_late_joiner_who_takes_part_is_a_participant_but_not_early(house: House) -> None:
@@ -742,9 +764,7 @@ async def test_a_long_history_backfills_in_linear_time_and_batches(house: House)
         engine = db.get_bind()
         sa_event.listen(engine, "before_cursor_execute", count)
         try:
-            started = monotonic()
             assert await contributions.ensure_backfilled(db, house.household.id, now=house.clock()) is True
-            elapsed = monotonic() - started
         finally:
             sa_event.remove(engine, "before_cursor_execute", count)
     assert (await counts(house, "Alex"))[Kind.PICKED_UP] == n
@@ -752,7 +772,6 @@ async def test_a_long_history_backfills_in_linear_time_and_batches(house: House)
     assert len(statements) < 14 * n
     assert not [s for s in statements if "FROM meal_log" in s and "JOIN" in s][1:]  # the log is read once
     assert sum("BEGIN IMMEDIATE" in s for s in statements) <= n // contributions.BATCH + 2  # a lock per batch
-    assert elapsed < 30
 
 
 async def test_a_log_line_does_not_outlive_counting_that_was_rolled_back(

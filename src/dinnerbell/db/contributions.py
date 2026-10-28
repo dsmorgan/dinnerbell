@@ -4,7 +4,7 @@ failing, so recording the same call twice, or two at once, is safe and says how 
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Collection, Iterable
 from datetime import date, datetime
 
 from sqlalchemy import delete, func, select, update
@@ -183,7 +183,7 @@ class BadgeRepository:
 
     async def recent(self, household_id: int, limit: int) -> list[Award]:
         """The newest awards in the household, newest first. Quiet awards (``skipped``: the
-        backfill, a lowered threshold) are not news, so they are left out."""
+        backfill, a lowered threshold) are not news, so they are left out, and so are ``QUIET_BADGES``."""
         rows = await self._session.scalars(
             select(BadgeAwardRow)
             .where(
@@ -212,9 +212,14 @@ class BadgeRepository:
         )
         return [_award(r) for r in rows]
 
-    async def count(self, household_id: int) -> int:
+    async def count(self, household_id: int, *, without: Collection[BadgeKey] = ()) -> int:
         n = await self._session.scalar(
-            select(func.count()).select_from(BadgeAwardRow).where(BadgeAwardRow.household_id == household_id)
+            select(func.count())
+            .select_from(BadgeAwardRow)
+            .where(
+                BadgeAwardRow.household_id == household_id,
+                BadgeAwardRow.badge_key.not_in([k.value for k in without]),
+            )
         )
         return int(n or 0)
 

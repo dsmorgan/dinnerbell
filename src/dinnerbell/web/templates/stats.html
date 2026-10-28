@@ -1,0 +1,46 @@
+{#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
+{% extends "base.html" %}
+{% from "_badge.html" import badge_chip, badge_row %}
+{% block title %}{% if guest %}Your badges{% else %}Stats{% endif %}{% endblock %}
+{% block content %}
+<h1>{% if guest %}Your badges{% else %}Stats{% endif %}</h1>
+{% if fresh %}
+<section class="card" aria-labelledby="new-title">
+  <h2 id="new-title">Newly earned</h2>
+  <ul class="badge-list">
+    {% for award in fresh %}<li>{{ badge_chip(award.badge.value, award.tier.value) }}</li>{% endfor %}
+  </ul>
+</section>
+{% endif %}
+<section class="card" aria-labelledby="badges-title">
+  <h2 id="badges-title">Your badges</h2>
+  {% if guest %}<p class="small muted">Guests earn badges for cooking, picking up, ordering, and coordinating.</p>{% endif %}
+  <ul class="badge-grid">
+    {% for p in mine.progress %}{{ badge_row(p) }}{% endfor %}
+  </ul>
+</section>
+<section class="card" aria-labelledby="counts-title">
+  <h2 id="counts-title">Your counts</h2>
+  <dl class="counts">
+    {% for label, n in kinds %}<div><dt>{{ label }}</dt><dd>{{ n }}</dd></div>{% endfor %}
+  </dl>
+</section>
+{% if household %}
+<section class="card" aria-labelledby="house-title">
+  <h2 id="house-title">The household</h2>
+  <p>{{ household.meals }} {{ "meal" if household.meals == 1 else "meals" }} on record, and {{ household.badges_earned }} {{ "badge" if household.badges_earned == 1 else "badges" }} earned together.</p>
+  <dl class="counts">
+    {% for kind, label in kind_labels.items() %}{% if household.totals.get(kind) %}<div><dt>{{ label }}</dt><dd>{{ household.totals[kind] }}</dd></div>{% endif %}{% endfor %}
+  </dl>
+  <h3>Lately earned</h3>
+  {% if household.recent %}
+  <ul class="badge-list">
+    {% for r in household.recent %}<li><strong>{{ r.member_name }}</strong> {{ badge_chip(r.award.badge.value, r.award.tier.value) }}</li>{% endfor %}
+  </ul>
+  <p class="small muted">Newest first.</p>
+  {% else %}
+  <p class="small muted">No new badges yet. The next one is a meal away.</p>
+  {% endif %}
+</section>
+{% endif %}
+{% endblock %}
