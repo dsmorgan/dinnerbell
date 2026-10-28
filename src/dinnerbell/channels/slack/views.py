@@ -705,7 +705,7 @@ def _event_card(
     if v.decision is not None:
         lines.append(f"The plan: *{escape(v.decision.proposal.item.name)}*")
     elif state is EventState.VOTING:
-        lines.append("Voting is open in the channel thread.")
+        lines.append("The picks are posted in the channel.")
     if state is EventState.CANCELLED and v.info.ended_by is not None:
         reason = f" “{escape(v.info.end_note)}”" if v.info.end_note else ""
         lines.append(f"Called off by {escape(v.info.ended_by.name)}.{reason}")

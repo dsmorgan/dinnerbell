@@ -31,6 +31,7 @@ from dinnerbell.domain.events import (
 )
 from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.members import Member
+from dinnerbell.domain.notifications import CallUpdated, from_payload
 from dinnerbell.domain.preferences import Stance, TargetType
 from dinnerbell.domain.ranking import RankingSnapshot, rank, ranking_seed
 from dinnerbell.domain.schedule import Weights
@@ -540,6 +541,17 @@ async def decided(house: House) -> int:
     house.clock.now = VOTE_BY
     await house.tick()
     return event_id
+
+
+async def test_a_new_meal_time_updates_the_call_message_that_names_the_result(house: House) -> None:
+    event_id = await decided(house)
+    await act(house, calls.set_meal_time, house["Sam"], event_id, time(19, 10))
+    latest = [e for e in await house.outbox() if e.kind == "call_updated"][-1]
+    update = from_payload("call_updated", latest.payload)
+    assert isinstance(update, CallUpdated)
+    assert update.event.plan is not None and update.event.plan.meal_time == (await house.event(event_id)).meal_time
+    assert update.event.plan.meal_time.minute == 10
+    assert "decision_updated" in await house.kinds()
 
 
 async def test_meal_time_and_assignment_changes(house: House) -> None:

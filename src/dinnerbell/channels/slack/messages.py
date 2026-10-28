@@ -141,7 +141,9 @@ def _render(notification: note.Notification, ctx: RenderContext) -> Message:
         case note.ProposalsReady() | note.ProposalsUpdated():
             return proposals_message(notification, ctx)
         case note.DecisionMade():
-            return decision_message(notification.event, notification.decision, ctx, notification.locked_by)
+            return decision_message(
+                notification.event, notification.decision, ctx, notification.locked_by, mention=True
+            )
         case note.DecisionUpdated():
             return decision_message(notification.event, notification.decision, ctx, notification.locked_by)
         case note.ResponseReminder():
@@ -399,6 +401,35 @@ def call_message(
 # Proposals ---------------------------------------------------------------------------------------
 
 
+MAX_IN_SECTIONS = 3
+"""Sections of "In:" names a post shows; the web has the rest."""
+IN_CHUNK = 2800
+
+
+def _in_blocks(people: tuple[note.PersonInfo, ...], ctx: RenderContext, *, mention: bool) -> list[Block]:
+    """Who's in, as mentions when ``mention`` (a post's first rendering) and plain names
+    otherwise: an edit must not add a mention, because Slack may notify it. Split across
+    sections so none passes Slack's limit, and cut off after ``MAX_IN_SECTIONS``."""
+    if not people:
+        return []
+    items = [ctx.directory.mention(p) if mention else escape(p.name) for p in people]
+    chunks: list[list[str]] = [[]]
+    size = len("*In:* ")
+    for item in items:
+        if chunks[-1] and size + len(item) + 2 > IN_CHUNK:
+            chunks.append([])
+            size = 0
+        chunks[-1].append(item)
+        size += len(item) + 2
+    shown = chunks[:MAX_IN_SECTIONS]
+    blocks = [section(", ".join(chunk)) for chunk in shown]
+    blocks[0] = section("*In:* " + ", ".join(shown[0]))
+    left = sum(len(c) for c in chunks[MAX_IN_SECTIONS:])
+    if left:
+        blocks.append(context(f"…and {plural(left, 'more person', 'more people')} on the web."))
+    return blocks
+
+
 def _item_name(item: note.ItemInfo) -> str:
     return link(item.url, item.name) if item.url else escape(item.name)
 
@@ -471,16 +502,17 @@ def proposals_message(notification: note.ProposalsReady | note.ProposalsUpdated,
     event = notification.event
     voting = event.state is EventState.VOTING
     people = plural(notification.head_count, "person", "people")
-    # The mentions ping only in the first post; an edit keeps them in the text.
-    who = ctx.directory.mentions(notification.participants)
     if voting:
         closes = (
             f" Voting closes at *{local_clock(event.vote_deadline, event.timezone)}*." if event.vote_deadline else ""
         )
-        intro = f"{who}: vote for any you'd enjoy.{closes}" if who else f"Vote for any you'd enjoy.{closes}"
+        intro = f"Vote for any you'd enjoy.{closes}"
     else:
-        intro = f"{who}: voting is closed." if who else "Voting is closed."
+        intro = "Voting is closed."
     blocks: list[Block] = [section(f"*{_post_title(event, 'picks')}* for {people}\n{intro}")]
+    # Only the first post mentions anyone (an edit that added a mention might ping it), and the
+    # list comes after the instructions, so a big household can't push them out.
+    blocks += _in_blocks(notification.participants, ctx, mention=isinstance(notification, note.ProposalsReady))
     shown = notification.proposals[:MAX_PROPOSALS]
     for number, proposal in enumerate(shown, start=1):
         blocks.append(section(_proposal_text(proposal, number, ctx), block_id=f"proposal-{proposal.id}"))
@@ -537,7 +569,12 @@ def _item_buttons(item: note.ItemInfo, mode: Mode) -> list[Block]:
 
 
 def decision_message(
-    event: note.EventInfo, decision: note.DecisionInfo, ctx: RenderContext, locked_by: note.PersonInfo | None = None
+    event: note.EventInfo,
+    decision: note.DecisionInfo,
+    ctx: RenderContext,
+    locked_by: note.PersonInfo | None = None,
+    *,
+    mention: bool = False,
 ) -> Message:
     proposal = decision.proposal
     item = _item_name(proposal.item)
@@ -562,8 +599,6 @@ def decision_message(
         ),
     ]
     lines = _assignments(decision.assignments, ctx) or ["_Nobody is assigned yet._"]
-    if decision.participants:  # everyone in, not only those with a role (#92)
-        lines.insert(0, f"*In:* {ctx.directory.mentions(p.member for p in decision.participants)}")
     late = [p.member for p in decision.participants if p.late]
     if late:
         lines.append(f"*Joined late:* {ctx.directory.mentions(late)}")
@@ -571,6 +606,8 @@ def decision_message(
     if decision.dietary_notes:
         lines.append(f"*Dietary needs:* {escape(', '.join(decision.dietary_notes))}")
     blocks.append(section(join_lines(lines)))
+    # Everyone in, not only those with a role (#92), after the lines that matter more.
+    blocks += _in_blocks(tuple(p.member for p in decision.participants), ctx, mention=mention)
     buttons: list[Block] = []
     if event.state is EventState.DECIDED:
         buttons.append(mark_done_button(event))

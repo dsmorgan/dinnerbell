@@ -2,7 +2,14 @@
   "blocks": [
     {
       "text": {
-        "text": "*Dinner picks · Thursday, Oct 22* for 3 people\n<@U01ALEX>, <@U02SAM>: vote for any you'd enjoy. Voting closes at *5:15 PM*.",
+        "text": "*Dinner picks · Thursday, Oct 22* for 3 people\nVote for any you'd enjoy. Voting closes at *5:15 PM*.",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "text": {
+        "text": "*In:* <@U01ALEX>, <@U02SAM>",
         "type": "mrkdwn"
       },
       "type": "section"

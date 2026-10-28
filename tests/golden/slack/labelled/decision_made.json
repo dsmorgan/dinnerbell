@@ -31,7 +31,14 @@
     },
     {
       "text": {
-        "text": "*In:* <@U01ALEX>, <@U02SAM>\n*Cooking:* <@U02SAM>\n*Coordinating:* <@U01ALEX>\n*Dietary needs:* Vegetarian",
+        "text": "*Cooking:* <@U02SAM>\n*Coordinating:* <@U01ALEX>\n*Dietary needs:* Vegetarian",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "text": {
+        "text": "*In:* <@U01ALEX>, <@U02SAM>",
         "type": "mrkdwn"
       },
       "type": "section"

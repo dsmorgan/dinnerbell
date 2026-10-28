@@ -401,7 +401,7 @@ def test_views_for_an_empty_catalog_and_a_busy_day() -> None:
     home = home_view(TodayView(samples.DAY, [voting, lunch], tuple(Slot)), HomeLinks(samples.BASE_URL))
     check_view(home)
     text = json.dumps(home)
-    assert "Voting is open in the channel thread." in text and "Are you in? Tap below." in text
+    assert "The picks are posted in the channel." in text and "Are you in? Tap below." in text
     assert "start_call_lunch" not in text and "start_call_dinner" not in text  # both calls exist already
     assert "start_call_breakfast" in text
 
@@ -668,12 +668,16 @@ def test_the_picks_and_the_decision_open_with_a_title_that_names_the_slot_and_da
 def test_the_picks_mention_everyone_in_including_guests_and_late_joiners() -> None:
     people = (samples.ALEX, samples.SAM, samples.KIM, samples.LEE)  # Lee has no Slack user: a plain name
     picks = render(note.ProposalsReady(samples.VOTING, samples.PROPOSALS, 4, participants=people), CTX)
-    assert "<@U01ALEX>, <@U02SAM>, <@U03KIM>, Lee: vote for any you'd enjoy." in picks.blocks[0]["text"]["text"]
-    edited = render(note.ProposalsUpdated(samples.DECIDED, samples.PROPOSALS, 4, participants=people), CTX)
-    assert "<@U03KIM>, Lee: voting is closed." in edited.blocks[0]["text"]["text"]
-    # Rows queued before the mentions existed render without a mention line.
-    old = render(note.ProposalsReady(samples.VOTING, samples.PROPOSALS, 3), CTX)
-    assert "<@" not in old.blocks[0]["text"]["text"]
+    assert picks.blocks[0]["text"]["text"].endswith("Vote for any you'd enjoy. Voting closes at *5:15 PM*.")
+    assert picks.blocks[1]["text"]["text"] == "*In:* <@U01ALEX>, <@U02SAM>, <@U03KIM>, Lee"
+    # An edit never adds a mention, which Slack might notify: the same people show as names.
+    edited = render(note.ProposalsUpdated(samples.VOTING, samples.PROPOSALS, 4, participants=people), CTX)
+    assert edited.blocks[1]["text"]["text"] == "*In:* Alex, Sam, Kim, Lee"
+    closed = render(note.ProposalsUpdated(samples.DECIDED, samples.PROPOSALS, 4, participants=people), CTX)
+    assert "<@U03KIM>" not in closed.blocks[1]["text"]["text"]
+    # Rows queued before the list existed render without it.
+    old = render(note.ProposalsUpdated(samples.VOTING, samples.PROPOSALS, 3), CTX)
+    assert "In:" not in text_blocks(old)
 
 
 def test_the_decision_mentions_everyone_in_not_only_those_with_a_role() -> None:
@@ -683,7 +687,39 @@ def test_the_decision_mentions_everyone_in_not_only_those_with_a_role() -> None:
         assignments=(note.AssignmentInfo(note.AssignmentRole.COOK, samples.SAM),),
     )
     message = render(note.DecisionMade(samples.DECIDED, decision), CTX)
-    assert "*In:* <@U01ALEX>, <@U03KIM>\n*Cooking:* <@U02SAM>" in text_blocks(message)
+    assert text_blocks(message).endswith(
+        "*Cooking:* <@U02SAM>\n*Joined late:* <@U03KIM>\n*Dietary needs:* Vegetarian\n*In:* <@U01ALEX>, <@U03KIM>"
+    )
+    edited = render(note.DecisionUpdated(samples.DECIDED, decision), CTX)  # no new mentions on an edit
+    assert text_blocks(edited).endswith("*In:* Alex, Kim")
+
+
+def test_a_big_household_cant_push_out_the_instructions_assignments_or_notes() -> None:
+    members = [note.PersonInfo(1000 + i, f"Member {i}") for i in range(250)]
+    ctx = RenderContext(samples.BASE_URL, bk.Directory({m.id: f"U{m.id:09d}" for m in members}))
+    ready = render(note.ProposalsReady(samples.VOTING, samples.PROPOSALS, 250, participants=tuple(members)), ctx)
+    check_message(ready.payload())
+    first = ready.blocks[0]["text"]["text"]
+    assert "Vote for any you'd enjoy." in first and "Voting closes at *5:15 PM*." in first
+    assert all(f"<@U{m.id:09d}>" in json.dumps(ready.blocks) for m in members)  # all pinged, in several sections
+    assert ready.blocks[-1]["type"] == "actions" and "Add proposal" in json.dumps(ready.blocks[-1])
+    decision = replace(samples.DECISION, participants=tuple(note.ParticipantInfo(m) for m in members))
+    made = render(note.DecisionMade(samples.DECIDED, decision, locked_by=samples.ALEX), ctx)
+    check_message(made.payload())
+    body = text_blocks(made)
+    assert "*Cooking:* Sam" in body
+    assert "*Dietary needs:* Vegetarian" in body and "Locked in by" in body
+    assert body.index("*Dietary needs:*") < body.index("*In:*")
+    assert "<@U000001249>" in body and made.blocks[-1]["type"] == "actions"
+    huge = [note.PersonInfo(5000 + i, f"Person with a long name {i}") for i in range(2000)]
+    capped = render(
+        note.DecisionUpdated(
+            samples.DECIDED, replace(samples.DECISION, participants=tuple(note.ParticipantInfo(m) for m in huge))
+        ),
+        ctx,
+    )
+    check_message(capped.payload())
+    assert "on the web." in json.dumps(capped.blocks) and "Dietary needs" in text_blocks(capped)
 
 
 def test_the_call_message_points_to_the_picks_and_then_names_the_result() -> None:

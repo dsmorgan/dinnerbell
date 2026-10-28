@@ -165,7 +165,7 @@ async def test_a_dinner_decided_in_slack(slack: Slack) -> None:
     assert "*In* · 3 people eating" in roster and "<@U02SAM> · +1 guest · can cook" in roster
     assert "*Maybe:* <@U03KIM>" in roster and "Still to answer: Lee" in roster
     assert "*Out:* <@U03KIM>, <@U04LEE>" in block_text(updates[2], 2)
-    assert "2 votes: <@U01ALEX>, <@U02SAM>" in block_text(updates[3], 1)
+    assert "2 votes: <@U01ALEX>, <@U02SAM>" in block_text(updates[3], 2)
     assert "*Coordinator:* <@U02SAM>" in block_text(updates[4], 2)
     decision = posts[4]
     assert "Locked in by <@U02SAM>." in block_text(decision, 0)

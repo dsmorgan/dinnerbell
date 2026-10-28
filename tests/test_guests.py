@@ -1315,3 +1315,29 @@ async def test_a_joined_guests_slack_email_signs_in_no_one(house: House) -> None
             await MemberRepository(db).update(
                 house.household.id, joined.member.id, house.clock(), email="x@example.com"
             )
+
+
+async def test_the_picks_mention_only_people_who_are_in(house: House) -> None:
+    """Regression guard for #92: ``who_is_in`` lists in answers only. A maybe, an out, a late
+    joiner the coordinator switched off, and a guest who hasn't answered are left out; a guest
+    with Slack and one without are listed when in."""
+    from dinnerbell.services import call_context as cc
+
+    event_id = await open_dinner(house)
+    await act(house, calls.respond, house["Alex"], event_id, Status.IN)
+    await act(house, calls.respond, house["Sam"], event_id, Status.MAYBE)
+    await act(house, calls.respond, house["Lee"], event_id, Status.OUT)
+    await invite(house, "Alex", "Pat", event_id)
+    await invite(house, "Alex", "Jo", event_id)
+    await act(house, calls.respond, house["Pat"], event_id, Status.IN)
+    await act(house, calls.offer_role, house["Alex"], event_id, RoleOffer.PICKUP, True)
+    house.clock.now = RESPOND_BY
+    await house.tick()
+    assert (await house.event(event_id)).state is EventState.VOTING
+    assert [p.name for p in cc.who_is_in(await house.context(event_id))] == ["Alex", "Jo", "Pat"]
+
+    await act(house, calls.join_late, house["Kim"], event_id)
+    assert [p.name for p in cc.who_is_in(await house.context(event_id))] == ["Alex", "Jo", "Kim", "Pat"]
+    await act(house, calls.claim_coordinator, house["Alex"], event_id)
+    await act(house, calls.switch_late_joiner, house["Alex"], event_id, house["Kim"].id, taking_part=False)
+    assert [p.name for p in cc.who_is_in(await house.context(event_id))] == ["Alex", "Jo", "Pat"]

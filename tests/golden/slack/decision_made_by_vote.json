@@ -22,7 +22,14 @@
     },
     {
       "text": {
-        "text": "*In:* <@U01ALEX>, <@U02SAM>\n*Ordering:* Lee",
+        "text": "*Ordering:* Lee",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "text": {
+        "text": "*In:* <@U01ALEX>, <@U02SAM>",
         "type": "mrkdwn"
       },
       "type": "section"
