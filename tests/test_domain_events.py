@@ -592,13 +592,17 @@ def test_check_schedule_and_weights() -> None:
 
 
 def test_migration_writes_the_same_defaults_as_the_domain() -> None:
-    """Migration 0003 carries its own copy of the defaults; it must match the domain's."""
+    """Migration 0003 carries its own copy of the defaults; it must match the domain's. Breakfast
+    came later (#58), and a household without its schedule reads the default: no daily call."""
     path = Path(__file__).parents[1] / "src/dinnerbell/db/alembic/versions/0003_dinner_calls.py"
     spec = importlib.util.spec_from_file_location("migration_0003", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
-    assert sched.default_settings() == module.DEFAULT_SETTINGS
+    defaults = sched.default_settings()
+    assert defaults["slots"].pop("breakfast") == sched.slot_to_json(sched.DEFAULT_SLOTS[Slot.BREAKFAST])
+    assert defaults == module.DEFAULT_SETTINGS
+    assert sched.slot_schedules(module.DEFAULT_SETTINGS)[Slot.BREAKFAST].enabled is False
 
 
 def test_windows_count_elapsed_time_across_a_daylight_saving_change() -> None:

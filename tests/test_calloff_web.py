@@ -489,7 +489,7 @@ def test_an_admin_skips_a_later_day(
         ({"slot": "dinner", "day": "2026-10-21"}, 409, "You can skip today's call or a later day's."),
         ({"slot": "dinner", "day": "2026-10-30"}, 409, "You can skip a call up to 7 days ahead."),
         ({"slot": "lunch", "day": "2026-10-23"}, 409, "Lunch is off in the schedule."),
-        ({"slot": "brunch", "day": "2026-10-23"}, 400, "Pick lunch or dinner."),
+        ({"slot": "brunch", "day": "2026-10-23"}, 400, "Pick breakfast, lunch, or dinner."),
         ({"slot": "dinner", "day": "Friday"}, 400, "YYYY-MM-DD"),
     ],
 )

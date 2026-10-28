@@ -16,6 +16,10 @@ MAX_MEAL_AGE = timedelta(days=730)
 
 
 class Slot(StrEnum):
+    """A meal of the day that has calls, in the order of the day. Breakfast (#58) has no daily
+    call unless someone turns its schedule on; members start one when they want it."""
+
+    BREAKFAST = "breakfast"
     LUNCH = "lunch"
     DINNER = "dinner"
 
@@ -23,6 +27,14 @@ class Slot(StrEnum):
     def meal(self) -> Meal:
         """The meal catalog items say they're for (#72). Every slot is a meal."""
         return Meal(self.value)
+
+
+CALL_ORDER = (Slot.DINNER, Slot.LUNCH, Slot.BREAKFAST)
+"""How the start buttons and the schedule list slots: most used first, so dinner and lunch keep
+their places and breakfast, the rarest, comes last."""
+_OF_THE_DAY = {slot: n for n, slot in enumerate(Slot)}
+PICK_SLOT = "Pick breakfast, lunch, or dinner."
+"""What a form says when its meal is missing or unknown."""
 
 
 class InvalidMeal(ValueError):
@@ -97,16 +109,22 @@ def can_change(actor: Member, meal: MealLog) -> bool:
     return actor.active and (actor.is_admin or meal.logged_by == actor.id)
 
 
+def newest_first(meal: MealLog) -> tuple[date, int, int]:
+    """A sort key that, reversed, puts the newest meal first: later days, then later meals of
+    the day, then the one logged last."""
+    return meal.day, _OF_THE_DAY[meal.slot], meal.id
+
+
 def week_start(day: date) -> date:
     """The Monday that starts ``day``'s week."""
     return day - timedelta(days=day.weekday())
 
 
 def by_week(meals: Iterable[MealLog]) -> list[tuple[date, list[MealLog]]]:
-    """Group meals by week, newest week first; within a week, newest meal first, dinner
-    before lunch on the same day."""
+    """Group meals by week, newest week first; within a week, newest meal first: dinner, then
+    lunch, then breakfast on the same day."""
     weeks: dict[date, list[MealLog]] = {}
-    ordered = sorted(meals, key=lambda m: (m.day, m.slot is Slot.DINNER, m.id), reverse=True)
+    ordered = sorted(meals, key=newest_first, reverse=True)
     for meal in ordered:
         weeks.setdefault(week_start(meal.day), []).append(meal)
     return list(weeks.items())

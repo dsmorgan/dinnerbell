@@ -16,7 +16,7 @@ from starlette.responses import Response
 
 from dinnerbell.domain.catalog import MODE_ORDER, Mode
 from dinnerbell.domain.events import AD_HOC_DAYS_AHEAD, EventRuleViolation
-from dinnerbell.domain.meals import Slot
+from dinnerbell.domain.meals import CALL_ORDER, PICK_SLOT, Slot
 from dinnerbell.domain.schedule import (
     MAX_REMINDER_MINUTES,
     MAX_WINDOW_MINUTES,
@@ -57,7 +57,7 @@ MINUTE_FIELDS = (
 """Each minutes field: its name, label, and the range the domain accepts (``check_schedule``)."""
 OUT_OF_DATE = "This form is out of date. Here's the schedule now; make your change again."
 MAX_FIELD = 40
-SLOTS = (Slot.DINNER, Slot.LUNCH)
+SLOTS = CALL_ORDER
 
 
 def _text(form: FormData, name: str) -> str:
@@ -266,7 +266,7 @@ async def skip_day(
     try:
         chosen = choice(Slot, slot)
         if chosen is None:
-            raise BadFormValue("Pick lunch or dinner.")
+            raise BadFormValue(PICK_SLOT)
         when: date = iso_date(day, "Enter the date as YYYY-MM-DD.")
         await calls.skip_day(db, principal.member, chosen, when, note=reason or None, now=context.clock())
     except (EventRuleViolation, BadFormValue) as exc:

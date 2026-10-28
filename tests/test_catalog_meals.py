@@ -59,8 +59,9 @@ def catalog_item(item_id: int, name: str, meals: frozenset[Meal] = DEFAULT_MEALS
 # Domain -------------------------------------------------------------------------------------------
 
 
-def test_every_slot_is_a_meal_and_breakfast_is_ready_for_58() -> None:
-    assert {slot.meal for slot in Slot} == {Meal.LUNCH, Meal.DINNER}
+def test_every_slot_is_a_meal() -> None:
+    assert [slot.meal for slot in Slot] == list(MEAL_ORDER)
+    assert Slot.BREAKFAST.meal is Meal.BREAKFAST
     assert all(slot.meal.value == slot.value for slot in Slot)
     assert MEAL_ORDER == (Meal.BREAKFAST, Meal.LUNCH, Meal.DINNER)
     assert {Meal.LUNCH, Meal.DINNER} == DEFAULT_MEALS

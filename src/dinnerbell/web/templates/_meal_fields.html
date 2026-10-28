@@ -7,7 +7,7 @@
   </label>
   <fieldset class="field compact">
     <legend>Meal</legend>
-    <div class="segments two">
+    <div class="segments three">
       {% for s in slots %}
       <label class="segment"><input type="radio" name="slot" value="{{ s.value }}"{% if form.slot == s.value %} checked{% endif %}><span>{{ s.value|capitalize }}</span></label>
       {% endfor %}

@@ -229,7 +229,7 @@ class MealLogRow(Base):
     __tablename__ = "meal_log"
     __table_args__ = (
         Index("ix_meal_log_household_date", "household_id", "date"),
-        CheckConstraint("slot IN ('lunch', 'dinner')", name="slot"),
+        CheckConstraint("slot IN ('breakfast', 'lunch', 'dinner')", name="slot"),
         UniqueConstraint("event_id"),
         {"sqlite_autoincrement": True},
     )
@@ -271,7 +271,7 @@ class EventRow(Base):
         ),
         Index("ix_event_household_state", "household_id", "state"),
         CheckConstraint("kind IN ('call', 'offer')", name="kind"),
-        CheckConstraint("slot IN ('lunch', 'dinner')", name="slot"),
+        CheckConstraint("slot IN ('breakfast', 'lunch', 'dinner')", name="slot"),
         CheckConstraint(
             "state IN ('scheduled', 'collecting', 'voting', 'decided', 'done', 'abandoned', 'cancelled')",
             name="state",

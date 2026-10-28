@@ -982,7 +982,7 @@ def abandoned_message(notification: note.CallAbandoned, ctx: RenderContext) -> M
     return _finish(text, blocks)
 
 
-ENJOY = {Slot.LUNCH: "Enjoy your day!", Slot.DINNER: "Enjoy your evening!"}
+ENJOY = {Slot.BREAKFAST: "Enjoy your morning!", Slot.LUNCH: "Enjoy your day!", Slot.DINNER: "Enjoy your evening!"}
 
 
 def _stop(reason: str) -> str:

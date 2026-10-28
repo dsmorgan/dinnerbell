@@ -385,7 +385,8 @@ def test_views_for_an_empty_catalog_and_a_busy_day() -> None:
     check_view(home)
     text = json.dumps(home)
     assert "Voting is open in the channel thread." in text and "Are you in? Tap below." in text
-    assert "start_call" not in text  # both calls exist already
+    assert "start_call_lunch" not in text and "start_call_dinner" not in text  # both calls exist already
+    assert "start_call_breakfast" in text
 
 
 def test_cards_show_only_the_persons_own_choices_and_escape_what_people_typed() -> None:
