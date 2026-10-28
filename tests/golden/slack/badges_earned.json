@@ -1,0 +1,21 @@
+{
+  "blocks": [
+    {
+      "text": {
+        "text": "*New badges!* 🎉\n<@U01ALEX> earned 🎗️ *Full Table* · First and 🎗️ *Quarterback* · First.\n<@U02SAM> earned 🥉 *Chef* · Bronze.",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "elements": [
+        {
+          "text": "Thank you for all you do to get a meal on the table.",
+          "type": "mrkdwn"
+        }
+      ],
+      "type": "context"
+    }
+  ],
+  "text": "New badges for Alex, Sam."
+}

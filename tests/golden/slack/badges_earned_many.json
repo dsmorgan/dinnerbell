@@ -1,0 +1,21 @@
+{
+  "blocks": [
+    {
+      "text": {
+        "text": "*New badges!* 🎉\n<@U03KIM> earned 🥇 *Chef* · Gold, 🥇 *Road Runner* · Gold, 🥇 *Order Up* · Gold, 🥇 *Quarterback* · Gold, 🥇 *Full Table* · Gold, 🥇 *Early Bird* · Gold, and 6 more badges.\nMember 0 earned 🎗️ *Scout* · First.\nMember 1 earned 🎗️ *Scout* · First.\nMember 2 earned 🎗️ *Scout* · First.\nMember 3 earned 🎗️ *Scout* · First.\nMember 4 earned 🎗️ *Scout* · First.\nMember 5 earned 🎗️ *Scout* · First.\nMember 6 earned 🎗️ *Scout* · First.\nMember 7 earned 🎗️ *Scout* · First.\nMember 8 earned 🎗️ *Scout* · First.\n…and 3 more members earned badges too.",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "elements": [
+        {
+          "text": "Thank you for all you do to get a meal on the table.",
+          "type": "mrkdwn"
+        }
+      ],
+      "type": "context"
+    }
+  ],
+  "text": "New badges for Kim, Member 0, Member 1, Member 2, Member 3, Member 4, Member 5, Member 6, Member 7, Member 8."
+}

@@ -14,6 +14,7 @@ from datetime import date, datetime, time
 from typing import Any
 
 from dinnerbell.channels.slack import ids
+from dinnerbell.channels.slack.badge_text import tag
 from dinnerbell.channels.slack.blocks import (
     MAX_FALLBACK,
     MAX_MESSAGE_BLOCKS,
@@ -184,6 +185,10 @@ def _render(notification: note.Notification, ctx: RenderContext) -> Message:
             return roles_to_choose_message(notification, ctx)
         case note.PicksShuffled():
             return picks_shuffled_message(notification)
+        case note.BadgesEarned():
+            return badges_earned_message(notification, ctx)
+        case note.MonthlyRecap():
+            return monthly_recap_message(notification)
     raise TypeError(f"no Slack rendering for {type(notification).__name__}")  # pragma: no cover
 
 
@@ -1516,3 +1521,92 @@ def discarded_message(notification: note.CallDiscarded) -> Message:
         context("An admin discarded this call on the test instance, with everything in it."),
     ]
     return _finish(f"{title}: {DISCARDED}", blocks)
+
+
+# Badges and the monthly recap (M4, FR-39, FR-40) ---------------------------------------------------
+
+
+MONTHS = (
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+)
+
+
+def _and(items: list[str]) -> str:
+    """``a``, ``a and b``, or ``a, b, and c``."""
+    if len(items) <= 2:
+        return " and ".join(items)
+    return ", ".join(items[:-1]) + f", and {items[-1]}"
+
+
+def _tags(news: note.BadgeNews) -> list[str]:
+    tags = [tag(f"*{escape(b.name)}*", b.tier) for b in news.badges]
+    if news.more:
+        tags.append(f"{plural(news.more, 'more badge')}")
+    return tags
+
+
+def badges_earned_message(notification: note.BadgesEarned, ctx: RenderContext) -> Message:
+    """FR-39: one post for the badges a done call earned. It mentions each member by name order
+    (never by what they earned) and only celebrates: no counts against anyone else's."""
+    lines = [f"{ctx.directory.mention(n.person)} earned {_and(_tags(n))}." for n in notification.news]
+    if notification.more_people:
+        lines.append(f"…and {plural(notification.more_people, 'more member')} earned badges too.")
+    blocks = [
+        section(join_lines(["*New badges!* 🎉", *lines])),
+        context("Thank you for all you do to get a meal on the table."),
+    ]
+    who = ", ".join(n.person.name for n in notification.news)
+    return _finish(f"New badges for {who}.", blocks)
+
+
+THANKED_AS = {"cooked": "Cooked", "picked_up": "Picked up", "ordered": "Ordered", "coordinated": "Coordinated"}
+
+
+def monthly_recap_message(notification: note.MonthlyRecap) -> Message:
+    """FR-40: the month in review. Household totals first, then a thank-you for each member who
+    pitched in, in name order, then badges. It names no one for doing less and ranks no one."""
+    month = MONTHS[notification.month.month - 1]
+    lines = [f"*{month} in review* 🍽️", f"Together you put *{plural(notification.meals, 'meal')}* on the table."]
+    if notification.cuisines:
+        first = [escape(c) for c in notification.first_cuisines]
+        new = f" (new to you: {_and(first)})" if first else ""
+        lines.append(f"*Cuisines:* {', '.join(escape(c) for c in notification.cuisines)}{new}")
+    if notification.new_items:
+        added = [escape(n) for n in notification.new_item_names]
+        rest = notification.new_items - len(added)
+        names_ = _and([*added, f"{rest} more"] if rest else added)
+        lines.append(f"*New in the catalog:* {notification.new_items} ({names_})")
+    blocks = [section(join_lines(lines))]
+    if notification.thanks:
+        groups = []
+        for group in notification.thanks:
+            who = [escape(p.name) for p in group.people]
+            if group.more:
+                who.append(plural(group.more, "more person", "more people"))
+            groups.append(f"• *{THANKED_AS[group.kind]}:* {_and(who)}")
+        thanks = [
+            "*Thank you*",
+            "Every meal takes a team, and everyone here is part of it.",
+            *groups,
+            "And thank you to everyone who answered a call or pulled up a chair.",
+        ]
+        blocks.append(section(join_lines(thanks)))
+    if notification.badges:
+        earned = [f"• {escape(n.person.name)}: {', '.join(_tags(n))}" for n in notification.badges]
+        if notification.more_badges:
+            earned.append(f"…and {plural(notification.more_badges, 'more member')} earned badges too.")
+        blocks.append(section(join_lines(["*Badges earned*", *earned])))
+    following = MONTHS[notification.month.month % 12]
+    blocks.append(context(f"Here's to a tasty {following}!"))
+    return _finish(f"{month} in review: {plural(notification.meals, 'meal')} together.", blocks)

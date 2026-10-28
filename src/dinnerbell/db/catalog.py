@@ -144,6 +144,19 @@ class CatalogRepository:
         )
         return await self._with_links(household_id, rows)
 
+    async def names_created_between(self, household_id: int, start: datetime, end: datetime) -> list[str]:
+        """Names of the items created from ``start`` up to, not including, ``end``, A to Z."""
+        rows = await self._session.scalars(
+            select(CatalogItemRow.name)
+            .where(
+                CatalogItemRow.household_id == household_id,
+                CatalogItemRow.created_at >= start,
+                CatalogItemRow.created_at < end,
+            )
+            .order_by(CatalogItemRow.name_key, CatalogItemRow.id)
+        )
+        return list(rows)
+
     async def item(self, household_id: int, item_id: int) -> CatalogItem | None:
         row = await self._item_row(household_id, item_id)
         if row is None:

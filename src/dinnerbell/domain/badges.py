@@ -86,6 +86,10 @@ BADGES = (
     Badge(BadgeKey.ON_A_ROLL, "On a Roll", "weeks in a row of pitching in", None),
 )
 BY_KEY = {b.key: b for b in BADGES}
+QUIET_BADGES = frozenset({BadgeKey.FOOD_CRITIC})
+"""Badges the household never hears about: Food Critic counts feedback, and who gave feedback is
+as private as what they said (FR-49). They are earned and shown to the member, but never announced
+in the channel, recapped, or listed among the household's newest badges."""
 ROLL_KINDS = frozenset({Kind.COOKED, Kind.PICKED_UP, Kind.ORDERED})
 """Pitching in for On a Roll: a week counts when the member cooked, picked up, or ordered."""
 
@@ -171,3 +175,14 @@ def longest_streak(days: Iterable[date]) -> int:
         run = run + 1 if previous is not None and week - previous == timedelta(weeks=1) else 1
         best, previous = max(best, run), week
     return best
+
+
+def next_up(steps: Iterable[Progress]) -> Progress | None:
+    """The badge to point a member at: among those they have started, the one closest to its next
+    tier (ties go to the earlier badge in ``BADGES``); with none started, the first badge. None
+    once every badge is at the top tier."""
+    open_steps = [p for p in steps if p.next_tier is not None]
+    started = [p for p in open_steps if p.count > 0]
+    if started:
+        return min(started, key=lambda p: p.remaining or 0)  # min keeps the first of equals
+    return open_steps[0] if open_steps else None

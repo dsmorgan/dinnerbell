@@ -16,6 +16,7 @@ from datetime import date, time
 from typing import Any
 
 from dinnerbell.channels.slack import ids
+from dinnerbell.channels.slack.badge_text import tag
 from dinnerbell.channels.slack.blocks import (
     FOOTER_BLOCKS,
     MAX_MODAL_TITLE,
@@ -51,6 +52,7 @@ from dinnerbell.channels.slack.messages import (
     not_for_you_line,
 )
 from dinnerbell.domain import notifications as note
+from dinnerbell.domain.badges import BADGES, TIERS, BadgeKey, Tier, next_up
 from dinnerbell.domain.catalog import CatalogItem, ItemKind, Mode, Tag
 from dinnerbell.domain.events import (
     CANCEL_NOTE_MAX,
@@ -73,6 +75,7 @@ from dinnerbell.services.event_views import EventView, TodayView
 from dinnerbell.services.feedback import MAX_AWAITING, Awaiting, FeedbackForm
 from dinnerbell.services.meals import LogForm
 from dinnerbell.services.offers import OfferForm, OfferInput
+from dinnerbell.services.stats import MemberStats
 
 VALUE = "value"
 """Every input's action ID; blocks are told apart by block ID."""
@@ -914,6 +917,25 @@ def _guest_home(
     return {"type": "home", "blocks": [*blocks, *tail]}
 
 
+def _badges(stats: MemberStats) -> list[Block]:
+    """The member's own badges and the next one in reach: a heading and a line of text tags, then
+    a context line: always two blocks, which the budget in ``home_view`` counts as part of its tail. Badge art
+    replaces the text tags later. Only their own: it never mentions anyone else's."""
+    held: dict[BadgeKey, Tier] = {}
+    for award in stats.earned:
+        if award.badge not in held or TIERS.index(award.tier) > TIERS.index(held[award.badge]):
+            held[award.badge] = award.tier
+    tags = [tag(escape(badge.name), held[badge.key].label) for badge in BADGES if badge.key in held]
+    line = "   ".join(tags) if tags else "None yet. Pitch in on a meal and your first one is on its way."
+    step = next_up(stats.progress)
+    if step is None or step.next_tier is None or step.next_at is None:
+        hint = "You hold every badge at the top tier. Thank you!"
+    else:
+        mark = tag(f"*{escape(step.badge.name)}*", step.next_tier.label)
+        hint = f"Next: {mark}, {step.remaining} to go ({step.count} of {step.next_at} {step.badge.earned_by})"
+    return [section(f"*Your badges*\n{line}"), context(hint)]
+
+
 def home_view(
     today: TodayView,
     links: HomeLinks,
@@ -923,10 +945,12 @@ def home_view(
     awaiting: Sequence[Awaiting] = (),
     guest: bool = False,
     member_id: int | None = None,
+    badges: MemberStats | None = None,
 ) -> dict[str, Any]:
     """Each member's Home tab. ``label``, the instance label, prefixes the header when set.
     ``member_id`` is whose it is, so a call they coordinate says so.
-    ``awaiting`` lists meals the member hasn't given feedback on yet. A guest's Home (``guest``)
+    ``awaiting`` lists meals the member hasn't given feedback on yet. ``badges``, the member's own
+    stats, adds a compact "Your badges" section of two blocks above the links. A guest's Home (``guest``)
     shows only the calls they're invited to, with In, Out, and what they may do, and none of
     the household's buttons or links (#38).
 
@@ -966,6 +990,7 @@ def home_view(
     web = f"<{links.url('/')}|Today on the web>"
     tail: list[Block] = [
         *_awaiting(awaiting, links),
+        *(_badges(badges) if badges is not None else []),
         divider(),
         context(
             f"<{links.url('/preferences')}|Your preferences> · <{links.url('/catalog')}|Catalog> · "

@@ -22,7 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from dinnerbell.domain.notifications import Channel
 from dinnerbell.logs import start_unit
-from dinnerbell.services import auth, backups, lifecycle, outbox
+from dinnerbell.services import announcements, auth, backups, lifecycle, outbox, recap
 from dinnerbell.services.clock import Clock
 from dinnerbell.services.health import HEARTBEAT_INTERVAL, SchedulerState
 
@@ -114,11 +114,20 @@ async def purge_sessions(ctx: JobContext) -> None:
 
 async def call_tick(ctx: JobContext) -> None:
     """Open due calls and walk every open call through the steps it owes, in each household's
-    time zone, then deliver what that produced. Replaces one job per deadline (ADR 0004)."""
+    time zone, queue the news (new badges, the monthly recap), then deliver what that produced.
+    Replaces one job per deadline (ADR 0004)."""
     try:
         await lifecycle.tick(ctx.sessionmaker, ctx.clock())
     except Exception:
         log.exception("call tick failed")
+    try:
+        await announcements.announce_badges(ctx.sessionmaker, ctx.clock())
+    except Exception:
+        log.exception("badge announcements failed")
+    try:
+        await recap.post_recaps(ctx.sessionmaker, ctx.clock())
+    except Exception:
+        log.exception("monthly recap failed")
     # Never wait behind a drain that's already running: a hung channel call would otherwise
     # stall every later tick (reminders, deadlines, decisions). The 5-second drain job catches up.
     if not ctx.drain_lock.locked():

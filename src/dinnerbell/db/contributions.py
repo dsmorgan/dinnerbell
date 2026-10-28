@@ -12,7 +12,7 @@ from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dinnerbell.db.models import BadgeAwardRow, ContributionRow
-from dinnerbell.domain.badges import Announcement, Award, BadgeKey, Tier
+from dinnerbell.domain.badges import QUIET_BADGES, Announcement, Award, BadgeKey, Tier
 from dinnerbell.domain.contributions import Credit, Kind
 
 
@@ -79,6 +79,23 @@ class ContributionRepository:
             .group_by(ContributionRow.kind)
         )
         return {Kind(kind): n for kind, n in rows}
+
+    async def between(
+        self, household_id: int, start: date, end: date, kinds: Iterable[Kind]
+    ) -> dict[tuple[int, Kind], int]:
+        """Each member's count of each of ``kinds`` on days from ``start`` up to, not including,
+        ``end``, for the monthly recap."""
+        rows = await self._session.execute(
+            select(ContributionRow.member_id, ContributionRow.kind, func.count())
+            .where(
+                ContributionRow.household_id == household_id,
+                ContributionRow.kind.in_([k.value for k in kinds]),
+                ContributionRow.day >= start,
+                ContributionRow.day < end,
+            )
+            .group_by(ContributionRow.member_id, ContributionRow.kind)
+        )
+        return {(member_id, Kind(kind)): n for member_id, kind, n in rows}
 
     async def clear_feedback(self, household_id: int) -> int:
         """Delete the household's ``gave_feedback`` counts, for ``scrub-test``: they say who gave
@@ -172,9 +189,26 @@ class BadgeRepository:
             .where(
                 BadgeAwardRow.household_id == household_id,
                 BadgeAwardRow.announcement != Announcement.SKIPPED.value,
+                BadgeAwardRow.badge_key.not_in([b.value for b in QUIET_BADGES]),
             )
             .order_by(BadgeAwardRow.awarded_at.desc(), BadgeAwardRow.id.desc())
             .limit(limit)
+        )
+        return [_award(r) for r in rows]
+
+    async def earned_between(self, household_id: int, start: datetime, end: datetime) -> list[Award]:
+        """Awards made from ``start`` up to, not including, ``end`` that the household hears about:
+        not the quiet ones (``skipped``) and not ``QUIET_BADGES``. Oldest first."""
+        rows = await self._session.scalars(
+            select(BadgeAwardRow)
+            .where(
+                BadgeAwardRow.household_id == household_id,
+                BadgeAwardRow.awarded_at >= start,
+                BadgeAwardRow.awarded_at < end,
+                BadgeAwardRow.announcement != Announcement.SKIPPED.value,
+                BadgeAwardRow.badge_key.not_in([b.value for b in QUIET_BADGES]),
+            )
+            .order_by(BadgeAwardRow.awarded_at, BadgeAwardRow.id)
         )
         return [_award(r) for r in rows]
 
@@ -207,5 +241,32 @@ class BadgeRepository:
                 BadgeAwardRow.announcement == Announcement.PENDING.value,
             )
             .values(announcement=Announcement.ANNOUNCED.value, announced_at=now)
+        )
+        return int(result.rowcount)  # type: ignore[attr-defined]
+
+    async def mark_skipped(self, household_id: int, award_ids: Iterable[int]) -> int:
+        """Mark pending awards skipped: the channel will never be told. Those already announced
+        or skipped stay as they are."""
+        result = await self._session.execute(
+            update(BadgeAwardRow)
+            .where(
+                BadgeAwardRow.household_id == household_id,
+                BadgeAwardRow.id.in_(list(award_ids)),
+                BadgeAwardRow.announcement == Announcement.PENDING.value,
+            )
+            .values(announcement=Announcement.SKIPPED.value)
+        )
+        return int(result.rowcount)  # type: ignore[attr-defined]
+
+    async def skip_all_pending(self, household_id: int) -> int:
+        """Mark every pending award skipped, for ``scrub-test``: a copy of production must not
+        announce what production hadn't yet. Returns how many."""
+        result = await self._session.execute(
+            update(BadgeAwardRow)
+            .where(
+                BadgeAwardRow.household_id == household_id,
+                BadgeAwardRow.announcement == Announcement.PENDING.value,
+            )
+            .values(announcement=Announcement.SKIPPED.value)
         )
         return int(result.rowcount)  # type: ignore[attr-defined]
