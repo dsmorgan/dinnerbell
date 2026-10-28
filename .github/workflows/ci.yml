@@ -2,7 +2,7 @@
 # One workflow on purpose: `needs:` works only inside a workflow, and a red build must never
 # publish. `check` and `image` run everywhere; `publish` runs only after both pass, on a push to
 # main, a vX.Y.Z tag, or a manual run on main; `scan-published` then scans the pushed digest.
-# `check` itself only gathers `lint` and the six `test` shards, which run in parallel.
+# `check` itself only gathers `lint` and the eight `test` shards, which run in parallel.
 name: CI
 
 on:
@@ -78,20 +78,20 @@ jobs:
           uv export --frozen --all-groups --format requirements-txt --no-emit-project -o "$RUNNER_TEMP/requirements.txt"
           uv run pip-audit --strict --require-hashes --disable-pip -r "$RUNNER_TEMP/requirements.txt"
 
-  # The suite split six ways. tests/support/shard.py gives each shard every sixth test in sorted
+  # The suite split eight ways. tests/support/shard.py gives each shard every eighth test in sorted
   # order, so the slow, similar tests spread out. Each shard runs one pytest worker per vCPU (4 on
-  # GitHub's runners) and saves its coverage data; `check` merges the six and enforces the floor.
+  # GitHub's runners) and saves its coverage data; `check` merges the eight and enforces the floor.
   # A shard can't enforce it: it sees only a quarter of the tests.
   test:
-    name: test (${{ matrix.shard }}/6)
+    name: test (${{ matrix.shard }}/8)
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
     env:
-      DINNERBELL_TEST_SHARD: ${{ matrix.shard }}/6
+      DINNERBELL_TEST_SHARD: ${{ matrix.shard }}/8
       COVERAGE_FILE: coverage-shard-${{ matrix.shard }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -168,7 +168,7 @@ jobs:
       # coverage reads fail_under (90) from pyproject.toml. The count catches a missing shard file.
       - name: Merge the coverage data and enforce the floor
         run: |
-          test "$(find shards -type f | wc -l)" -eq 6
+          test "$(find shards -type f | wc -l)" -eq 8
           uv run coverage combine shards/*
           uv run coverage report
 

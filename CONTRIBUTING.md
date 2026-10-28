@@ -54,7 +54,7 @@ CI runs the suite on every CPU with [pytest-xdist](https://pytest-xdist.readthed
 - **Keep tests xdist-safe.** Each worker is a separate process with its own temporary directories. Write files only under `tmp_path`, never bind a fixed port, and never rely on another test's leftovers or on running in a particular order.
 - **Take a database from the `migrated` fixture.** It copies a database that was migrated once per worker, which is much faster than migrating per test. Call `run_migrations` yourself only when the test is about migrations.
 
-CI splits the suite into six shards that run in parallel jobs, then merges their coverage in `check`. To run one shard yourself, set `DINNERBELL_TEST_SHARD=2/6` (shard 2 of 6); the coverage floor applies only to the merged total, so add `--cov-fail-under=0` to a single shard with `--cov`.
+CI splits the suite into eight shards that run in parallel jobs, then merges their coverage in `check`. To run one shard yourself, set `DINNERBELL_TEST_SHARD=2/8` (shard 2 of 8); the coverage floor applies only to the merged total, so add `--cov-fail-under=0` to a single shard with `--cov`.
 
 To debug a single test with `breakpoint()` or `--pdb`, run it without workers: `uv run pytest -n 0 tests/test_x.py::test_y`. To find slow tests, add `--durations=20`.
 
