@@ -264,7 +264,7 @@ Requirements use "must" for version 1 and "should" for items that can slip to a 
 
 | ID | Requirement |
 |---|---|
-| FR-38 | Contributions in section 12 are counted per member when an event is done (feedback, when it is given), exactly once however often the event is finished. The first start after the upgrade counts the meal log already there. |
+| FR-38 | Contributions in section 12 are counted per member when an event is done (feedback, when it is given), exactly once however often the event is finished. The first start after the upgrade counts the meal log already there, in batches, and every start counts a done call that has none. A failure while counting never blocks marking a call done. |
 | FR-39 | Badges in section 12 are awarded when thresholds are met, once per member and tier, announced once in the channel (never for a badge earned while catching up), and shown on the member's Stats page and App Home. |
 | FR-40 | A monthly recap posts on the first day of the month: meals coordinated, cuisines tried, new catalog items, badges earned. It never ranks members from worst to best. |
 

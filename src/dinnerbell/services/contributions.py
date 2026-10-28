@@ -43,7 +43,8 @@ from dinnerbell.domain.badges import (
     thresholds_from,
     tiers_reached,
 )
-from dinnerbell.domain.contributions import Credit, DoneFacts, Kind, credits_for_done, newness
+from dinnerbell.domain.catalog import CatalogItem
+from dinnerbell.domain.contributions import Credit, DoneFacts, Kind, credits_for_done, newness_by_meal
 from dinnerbell.domain.events import Event
 from dinnerbell.domain.meals import MealLog
 from dinnerbell.domain.members import Member
@@ -63,9 +64,12 @@ ADMINS_ONLY = "Only an admin changes the badge counts."
 async def record_done(db: AsyncSession, event: Event, *, now: datetime) -> list[Award]:
     """Count a done call's contributions and award the badges they reach. Safe to run again for
     the same call. Returns the awards this run made, which are pending announcement."""
-    members = {m.id: m for m in await MemberRepository(db).list(event.household_id)}
-    added = await _count_event(db, event, members, now)
-    awards = await _award(db, event.household_id, {c.member_id for c in added}, now, Announcement.PENDING, event.id)
+    household_id = event.household_id
+    members = {m.id: m for m in await MemberRepository(db).list(household_id)}
+    items = {i.id: i for i in await CatalogRepository(db).items(household_id)}
+    meals = await MealLogRepository(db).between(household_id, None, None)
+    added = await _count_event(db, event, members, items, _History(meals), now)
+    awards = await _award(db, household_id, {c.member_id for c in added}, now, Announcement.PENDING, event.id)
     if added or awards:
         activity.action(db, "contributions_recorded", event, None, credits=len(added), badges=len(awards))
     for award in awards:
@@ -101,12 +105,25 @@ async def record_feedback(db: AsyncSession, member: Member, meal: MealLog, *, no
     return awards
 
 
-async def _count_event(db: AsyncSession, event: Event, members: dict[int, Member], now: datetime) -> list[Credit]:
+class _History:
+    """The meal log, read once: each call's meal, and how new every meal was to the household."""
+
+    def __init__(self, meals: list[MealLog]) -> None:
+        self.by_event = {m.event_id: m for m in meals if m.event_id is not None}
+        self.fresh = newness_by_meal(meals)
+
+
+async def _count_event(
+    db: AsyncSession,
+    event: Event,
+    members: dict[int, Member],
+    items: dict[int, CatalogItem],
+    history: _History,
+    now: datetime,
+) -> list[Credit]:
     household_id = event.household_id
-    meals = MealLogRepository(db)
-    meal_id = await meals.for_event(household_id, event.id)
-    meal = await meals.get(household_id, meal_id) if meal_id is not None else None
-    item = await CatalogRepository(db).item(household_id, meal.item_id) if meal is not None else None
+    meal = history.by_event.get(event.id)
+    item = items.get(meal.item_id) if meal is not None else None
     proposals = await ProposalRepository(db).for_event(household_id, event.id)
     winner = next((p for p in proposals if p.item_id == event.decided_item_id and p.mode is event.decided_mode), None)
     facts = DoneFacts(
@@ -118,7 +135,7 @@ async def _count_event(db: AsyncSession, event: Event, members: dict[int, Member
         guest_ids=frozenset(m.id for m in members.values() if m.is_guest),
         invitations=await InvitationRepository(db).for_event(household_id, event.id),
         winner=winner if meal is not None else None,
-        newness=newness(meal, await meals.between(household_id, None, None)) if meal is not None else None,
+        newness=history.fresh[meal.id] if meal is not None else None,
         item_creator=item.created_by if item is not None and item.created_by in members else None,
     )
     credits = [c for c in credits_for_done(facts) if c.member_id in members]
@@ -200,29 +217,54 @@ def _target(actor: Member) -> str:
 # History ---------------------------------------------------------------------------------------
 
 
+BATCH = 200
+"""Events counted per transaction while catching up, so startup holds the write lock for moments."""
+
+
 async def ensure_backfilled(db: AsyncSession, household_id: int, *, now: datetime) -> bool:
-    """Count the meals already in the log, once, on the first start after the upgrade. Returns
-    whether it ran. The badges those counts reach are ``skipped``, never pending, so an upgrade
-    doesn't flood the channel. Calls and feedback only: a meal someone logged by hand has no
-    roles or answers to count."""
+    """Count the meals already in the log on the first start after the upgrade, and on every
+    start after it count any done call that has no counts, which only a failure while it was
+    finished can leave (``lifecycle.finish`` keeps counting from blocking Mark done). Returns
+    whether it counted anything or made the first run.
+
+    The badges these counts reach are ``skipped``, never pending, so an upgrade doesn't flood the
+    channel and a missed one isn't announced late. The first run counts calls and feedback only: a
+    meal someone logged by hand has no roles or answers to count. It uses members' current roles,
+    so someone who was a guest then and is a member now counts as a member.
+
+    It commits every ``BATCH`` calls and sets ``contributions_backfilled`` last, so a start that
+    is killed halfway counts the rest next time: every insert ignores a repeat."""
+    first = BACKFILLED_KEY not in await household_settings(db, household_id)
+    events = await EventRepository(db).done(household_id, uncounted=not first)
+    if not events and not first:
+        return False
+    members = {m.id: m for m in await MemberRepository(db).list(household_id)}
+    items = {i.id: i for i in await CatalogRepository(db).items(household_id)}
+    history = _History(await MealLogRepository(db).between(household_id, None, None))
+    counted = 0
+    for start in range(0, len(events), BATCH):
+        async with write_transaction(db):
+            for event in events[start : start + BATCH]:
+                counted += len(await _count_event(db, event, members, items, history, now))
+            await db.commit()
+    awards: list[Award] = []
     async with write_transaction(db):
-        stored = await household_settings(db, household_id)
-        if BACKFILLED_KEY in stored:
-            return False
-        members = {m.id: m for m in await MemberRepository(db).list(household_id)}
-        events = await EventRepository(db).done(household_id)
-        counted = 0
-        for event in events:
-            counted += len(await _count_event(db, event, members, now))
-        for member_id, meal_id, day in await FeedbackRepository(db).given(household_id):
-            if member_id in members and members[member_id].is_member:
-                credit = Credit(member_id, Kind.GAVE_FEEDBACK)
-                counted += len(
-                    await ContributionRepository(db).add(household_id, [credit], day=day, now=now, meal_id=meal_id)
-                )
+        if first:
+            for member_id, meal_id, day in await FeedbackRepository(db).given(household_id):
+                if member_id in members and members[member_id].is_member:
+                    credit = Credit(member_id, Kind.GAVE_FEEDBACK)
+                    added = await ContributionRepository(db).add(
+                        household_id, [credit], day=day, now=now, meal_id=meal_id
+                    )
+                    counted += len(added)
         everyone = set(await ContributionRepository(db).members(household_id))
         awards = await _award(db, household_id, everyone, now, Announcement.SKIPPED, None)
-        await HouseholdRepository(db).update_settings(household_id, stored | {BACKFILLED_KEY: now.isoformat()})
+        if first:
+            stored = await household_settings(db, household_id)
+            await HouseholdRepository(db).update_settings(household_id, stored | {BACKFILLED_KEY: now.isoformat()})
         await db.commit()
-    log.info("contributions backfilled", extra={"events": len(events), "credits": counted, "badges": len(awards)})
+    log.info(
+        "contributions backfilled",
+        extra={"events": len(events), "credits": counted, "badges": len(awards), "first": first},
+    )
     return True

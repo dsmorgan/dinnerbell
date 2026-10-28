@@ -29,7 +29,11 @@ Every award records when it was earned and whether the channel has been told: `p
 
 ## The first start after the upgrade
 
-The first start after the upgrade (revision `0016_contributions`) counts the meals already in your log, once. It adds up the done calls and the feedback you already gave, and awards every badge those counts reach as `skipped`, so the channel doesn't hear about old meals. It writes `contributions_backfilled` in the household settings when it finishes, and doesn't run again. After `dinnerbell reset-history`, the counts and badges go with the history they came from.
+The first start after the upgrade (revision `0016_contributions`) counts the meals already in your log, once. It adds up the done calls and the feedback you already gave, and awards every badge those counts reach as `skipped`, so the channel doesn't hear about old meals, and the Stats page doesn't list them as new. It uses members' current roles, so someone who was a guest then and is a member now counts as a member. It works in batches of 200 calls and writes `contributions_backfilled` in the household settings last, so a start that is stopped halfway finishes the rest next time.
+
+On every later start, Dinnerbell also counts any done call that has no counts. That can only happen if counting failed while the call was being marked done; marking it done is never blocked by that. A call counted late this way earns its badges as `skipped`.
+
+`dinnerbell reset-history` deletes the counts and the badges earned from them, along with the history. The badges don't come back.
 
 ## Privacy
 

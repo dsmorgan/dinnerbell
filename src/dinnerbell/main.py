@@ -85,7 +85,8 @@ def _parser() -> argparse.ArgumentParser:
     reset = commands.add_parser(
         "reset-history",
         help="before going live, delete calls, meals, and feedback, and keep the setup",
-        description="Delete every call and everything in it, the meal log, feedback on meals, and the outbox. "
+        description="Delete every call and everything in it, the meal log, feedback on meals, the outbox, and the "
+        "contribution counts and badges earned from them. "
         "Keep the catalog, members and roles, Slack links, preferences and vetoes, the schedule and settings, "
         "sign-ins, and the audit log. Shows what it will delete first, backs up the database to "
         "backups/pre-reset-VERSION-TIME.db, and refuses while a call is open. Works on production; run it in "

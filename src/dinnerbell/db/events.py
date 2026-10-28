@@ -286,13 +286,14 @@ class EventRepository:
         )
         return list(rows)
 
-    async def done(self, household_id: int) -> list[Event]:
-        """Every done event, oldest meal first, for counting contributions from history."""
-        rows = await self._session.scalars(
-            select(EventRow)
-            .where(EventRow.household_id == household_id, EventRow.state == EventState.DONE.value)
-            .order_by(EventRow.date, EventRow.id)
-        )
+    async def done(self, household_id: int, *, uncounted: bool = False) -> list[Event]:
+        """Every done event, oldest meal first, for counting contributions from history. With
+        ``uncounted``, only those with no contribution row at all."""
+        query = select(EventRow).where(EventRow.household_id == household_id, EventRow.state == EventState.DONE.value)
+        if uncounted:
+            counted = select(ContributionRow.id).where(ContributionRow.event_id == EventRow.id)
+            query = query.where(~counted.exists())
+        rows = await self._session.scalars(query.order_by(EventRow.date, EventRow.id))
         return [_event(row) for row in rows]
 
     async def for_today(self, household_id: int, today: date) -> list[Event]:

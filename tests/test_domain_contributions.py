@@ -31,7 +31,7 @@ from dinnerbell.domain.contributions import (
     Kind,
     Newness,
     credits_for_done,
-    newness,
+    newness_by_meal,
 )
 from dinnerbell.domain.events import (
     AssignmentRole,
@@ -113,6 +113,16 @@ def test_any_quick_answer_is_on_time_even_out_but_a_late_joiner_and_an_offer_nev
     assert (KIM, Kind.PARTICIPATED) in kinds(credits_for_done(facts(responses=(late,))))  # late joiners take part
     offer = replace(facts(), event=event(EventKind.OFFER), responses=(answer(ALEX, 1),))
     assert (ALEX, Kind.RESPONDED_ON_TIME) not in kinds(credits_for_done(offer))
+
+
+def test_answers_from_before_a_rerun_opened_the_call_again_are_not_quick() -> None:
+    """A re-run moves the opening to now and keeps the old answers (``responded_at`` before it)."""
+    rerun = replace(event(), opens_at=OPENED + timedelta(hours=3))
+    old = answer(ALEX, 1)  # an hour into the first run
+    fresh = Response(SAM, Status.IN, responded_at=OPENED + timedelta(hours=3, minutes=2))
+    found = kinds(credits_for_done(replace(facts(), event=rerun, responses=(old, fresh))))
+    assert (ALEX, Kind.RESPONDED_ON_TIME) not in found and (ALEX, Kind.PARTICIPATED) in found
+    assert (SAM, Kind.RESPONDED_ON_TIME) in found
 
 
 def test_a_late_joiner_the_coordinator_switched_off_earns_nothing() -> None:
@@ -197,20 +207,22 @@ def meal(
 def test_newness_looks_only_at_meals_before_it_whatever_order_they_are_given_in() -> None:
     mon, tue, wed = date(2026, 10, 19), date(2026, 10, 20), date(2026, 10, 21)
     meals = [meal(1, mon, 10, 1), meal(2, tue, 10, 1), meal(3, wed, 11, 1), meal(4, wed, 12, 2, slot=Slot.LUNCH)]
-    assert newness(meals[0], meals) == Newness(item_new=True, cuisine_new=True, first_use=True)
-    assert newness(meals[1], meals) == Newness(item_new=False, cuisine_new=False, first_use=False)
-    assert newness(meals[2], meals[::-1]) == Newness(item_new=True, cuisine_new=False, first_use=True)
+    found = newness_by_meal(meals)
+    assert found == newness_by_meal(meals[::-1])
+    assert found[1] == Newness(item_new=True, cuisine_new=True, first_use=True)
+    assert found[2] == Newness(item_new=False, cuisine_new=False, first_use=False)
+    assert found[3] == Newness(item_new=True, cuisine_new=False, first_use=True)
     # Lunch comes before dinner on the same day, so a lunch on Wednesday is before Wednesday's dinner.
-    assert newness(meals[3], meals).cuisine_new
+    assert found[4].cuisine_new
     later_dinner = meal(5, wed, 12, 2)
-    assert not newness(later_dinner, [*meals, later_dinner]).item_new
+    assert not newness_by_meal([*meals, later_dinner])[5].item_new
 
 
 def test_a_meal_logged_by_hand_makes_an_item_old_but_not_first_used() -> None:
     mon, tue = date(2026, 10, 19), date(2026, 10, 20)
     by_hand = meal(1, mon, 10, 1, event_id=None)
     chosen = meal(2, tue, 10, 1)
-    found = newness(chosen, [by_hand, chosen])
+    found = newness_by_meal([by_hand, chosen])[2]
     assert (found.item_new, found.first_use) == (False, True)
 
 

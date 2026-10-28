@@ -7,7 +7,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from datetime import date, datetime
 
-from sqlalchemy import func, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -80,6 +80,16 @@ class ContributionRepository:
         )
         return {Kind(kind): n for kind, n in rows}
 
+    async def clear_feedback(self, household_id: int) -> int:
+        """Delete the household's ``gave_feedback`` counts, for ``scrub-test``: they say who gave
+        feedback, as the feedback rows do. Returns how many rows."""
+        result = await self._session.execute(
+            delete(ContributionRow).where(
+                ContributionRow.household_id == household_id, ContributionRow.kind == Kind.GAVE_FEEDBACK.value
+            )
+        )
+        return int(result.rowcount)  # type: ignore[attr-defined]
+
     async def members(self, household_id: int) -> list[int]:
         """Everyone with at least one contribution."""
         rows = await self._session.scalars(
@@ -146,10 +156,14 @@ class BadgeRepository:
         return [_award(r) for r in rows]
 
     async def recent(self, household_id: int, limit: int) -> list[Award]:
-        """The newest awards in the household, newest first."""
+        """The newest awards in the household, newest first. Quiet awards (``skipped``: the
+        backfill, a lowered threshold) are not news, so they are left out."""
         rows = await self._session.scalars(
             select(BadgeAwardRow)
-            .where(BadgeAwardRow.household_id == household_id)
+            .where(
+                BadgeAwardRow.household_id == household_id,
+                BadgeAwardRow.announcement != Announcement.SKIPPED.value,
+            )
             .order_by(BadgeAwardRow.awarded_at.desc(), BadgeAwardRow.id.desc())
             .limit(limit)
         )

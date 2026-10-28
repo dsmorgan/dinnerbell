@@ -16,7 +16,7 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 ### Upgrade notes
 
 - The database migrates to revision `0016_contributions` when Dinnerbell starts. It adds two empty tables, `contribution` and `badge_award`, and changes no existing row.
-- On that first start, Dinnerbell counts the meals already in your log. It awards the badges they reach as already announced: nothing posts to the channel for old meals. A second start doesn't count again. `dinnerbell reset-history` clears the counts and badges along with the history.
+- On that first start, Dinnerbell counts the meals already in your log. It awards the badges they reach as already announced: nothing posts to the channel for old meals. A second start doesn't count again. It counts in batches, so a large log doesn't hold the database for long, and a start that is stopped halfway finishes next time. **`dinnerbell reset-history` now also deletes every contribution count and every badge earned**, along with the history; they don't come back.
 - To go back, restore your backup. Downgrading the schema instead drops both tables, so every count and badge is lost, and a later upgrade counts the meal log afresh.
 - No settings or Slack changes, and no reinstall.
 

@@ -80,16 +80,25 @@ class Newness:
         return self.item_new or self.cuisine_new
 
 
-def newness(meal: MealLog, meals: Iterable[MealLog]) -> Newness:
-    """``meal`` against the meals before it (by day, then slot, then ID), so replaying history
-    in any order gives each meal the same answer."""
-    before = [m for m in meals if m.id != meal.id and newest_first(m) < newest_first(meal)]
-    eaten = {c.id for m in before for c in m.cuisines}
-    return Newness(
-        item_new=all(m.item_id != meal.item_id for m in before),
-        cuisine_new=any(c.id not in eaten for c in meal.cuisines),
-        first_use=all(m.item_id != meal.item_id for m in before if m.event_id is not None),
-    )
+def newness_by_meal(meals: Iterable[MealLog]) -> dict[int, Newness]:
+    """Each meal's ``Newness`` against the meals before it (by day, then slot, then ID), in one
+    pass over the log in that order, so replaying history in any order gives each meal the same
+    answer and a long log costs no more than its length."""
+    items: set[int] = set()
+    chosen: set[int] = set()
+    cuisines: set[int] = set()
+    found: dict[int, Newness] = {}
+    for meal in sorted(meals, key=newest_first):
+        found[meal.id] = Newness(
+            item_new=meal.item_id not in items,
+            cuisine_new=any(c.id not in cuisines for c in meal.cuisines),
+            first_use=meal.item_id not in chosen,
+        )
+        items.add(meal.item_id)
+        cuisines.update(c.id for c in meal.cuisines)
+        if meal.event_id is not None:
+            chosen.add(meal.item_id)
+    return found
 
 
 @dataclass(frozen=True, slots=True)
@@ -150,8 +159,9 @@ def _on_time(event: Event, response: Response) -> bool:
     opening, and a late joiner missed the answers."""
     if event.kind is not EventKind.CALL or response.late or response.responded_at is None:
         return False
+    # A re-run moves the opening to now and keeps the old answers; they were not quick to this opening.
     return _within(event.opens_at, response.responded_at)
 
 
 def _within(opened: datetime, answered: datetime) -> bool:
-    return answered <= opened + ON_TIME
+    return opened <= answered <= opened + ON_TIME

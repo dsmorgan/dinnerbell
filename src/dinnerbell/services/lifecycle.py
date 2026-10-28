@@ -820,7 +820,12 @@ async def finish(db: AsyncSession, event: Event, now: datetime, *, actor: Member
             now=now,
             event_id=event.id,
         )
-    await contributions.record_done(db, done, now=now)
+    try:
+        async with db.begin_nested():  # a failure here undoes only its own counts
+            await contributions.record_done(db, done, now=now)
+    except Exception:
+        # Counting must never block Mark done. The next start counts this call (``ensure_backfilled``).
+        log.exception("counting contributions failed", extra={"event_id": done.id})
     ctx = await load(db, done)
     reminders = feedback.reminders(ctx, item.name) if item is not None else []  # FR-48: only those who asked
     await publish(db, ctx, *cc.decision_updated(ctx), cc.message_updated(ctx), *reminders, now=now)

@@ -12,15 +12,25 @@ import logging
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import fields, replace
 from datetime import UTC, date, datetime, time, timedelta
+from time import monotonic
 from typing import Any
 
 import pytest
+from sqlalchemy import event as sa_event
 from sqlalchemy import func, select, text
 
 from dinnerbell.config import Settings
 from dinnerbell.db.contributions import BadgeRepository, ContributionRepository
 from dinnerbell.db.events import ResponseRepository
-from dinnerbell.db.models import BadgeAwardRow, ContributionRow, HouseholdRow
+from dinnerbell.db.models import (
+    AssignmentRow,
+    BadgeAwardRow,
+    ContributionRow,
+    EventRow,
+    HouseholdRow,
+    MealLogRow,
+    ResponseRow,
+)
 from dinnerbell.domain.badges import (
     DEFAULT_THRESHOLDS,
     Announcement,
@@ -632,3 +642,98 @@ async def test_the_story_of_a_finished_call_names_ids_and_badges_and_no_email(
         await contributions.record_done(db, event, now=house.clock())
         await db.commit()
     assert [r for r in caplog.records if r.getMessage() in {"contributions_recorded", "badge_earned"}] == []
+
+
+# Catching up, and counting that fails -----------------------------------------------------------
+
+
+async def test_badges_earned_while_catching_up_are_not_news(house: House) -> None:
+    await dinner(house)
+    await forget_everything(house)
+    async with house.sessionmaker() as db:
+        await contributions.ensure_backfilled(db, house.household.id, now=house.clock())
+        view = await stats.household_stats(db, house["Kim"])
+        assert view.recent == () and view.badges_earned > 0  # earned, but not the newest
+
+
+async def test_a_failure_while_counting_never_blocks_mark_done_and_the_next_start_counts_the_call(
+    house: House, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    real = contributions._award
+
+    async def broken(*args: Any, **kwargs: Any) -> Any:
+        await real(*args, **kwargs)
+        raise RuntimeError("boom")
+
+    async with house.sessionmaker() as db:  # the household has been through the first start already
+        await contributions.ensure_backfilled(db, house.household.id, now=house.clock())
+    monkeypatch.setattr(contributions, "_award", broken)
+    event_id = await dinner(house)
+    assert (await house.event(event_id)).state is EventState.DONE  # the transition committed
+    assert await rows(house) == 0 and await awards(house) == []  # and the savepoint took the half-done counts back
+    assert any(r.getMessage() == "counting contributions failed" and r.exc_info for r in caplog.records)
+
+    monkeypatch.undo()
+    async with house.sessionmaker() as db:
+        assert await contributions.ensure_backfilled(db, house.household.id, now=house.clock()) is True
+    assert (await counts(house, "Alex"))[Kind.PICKED_UP] == 1
+    found = await awards(house)
+    assert found and {a[3] for a in found} == {Announcement.SKIPPED}  # a missed award is never announced late
+    async with house.sessionmaker() as db:
+        assert await contributions.ensure_backfilled(db, house.household.id, now=house.clock()) is False
+
+
+async def test_a_long_history_backfills_in_linear_time_and_batches(house: House) -> None:
+    """2,000 done dinners, each with a meal, a cook, and two answers, are counted with a handful of
+    queries per call, not one that rereads the whole log, and the write lock is taken per batch."""
+    n = 2_000
+    first = date(2020, 1, 1)
+    sam, alex = house["Sam"].id, house["Alex"].id
+    item_ids = [i.id for i in house.items.values()]
+    stamp = datetime(2026, 10, 1, tzinfo=UTC)
+    async with house.sessionmaker() as db:
+        for i in range(n):
+            day = first + timedelta(days=i)
+            event = EventRow(
+                household_id=house.household.id, kind="call", slot="dinner", date=day, state="done", run=1, version=1,
+                opens_at=stamp, respond_deadline=stamp, reminder_minutes=15, vote_minutes=45,
+                decided_item_id=item_ids[i % 3], decided_mode="pickup", created_at=stamp, updated_at=stamp,
+            )  # fmt: skip
+            db.add(event)
+            await db.flush()
+            hid = house.household.id
+            db.add(AssignmentRow(household_id=hid, event_id=event.id, member_id=alex, role="pickup", created_at=stamp))
+            db.add(
+                ResponseRow(
+                    household_id=hid, event_id=event.id, member_id=sam, status="in", guests=0, guest_needs=[],
+                    offers_cook=False, offers_pickup=False, offers_order=False, maybe_at_deadline=False,
+                    responded_at=stamp, updated_at=stamp,
+                )
+            )  # fmt: skip
+            db.add(
+                MealLogRow(
+                    household_id=hid, date=day, slot="dinner", item_id=item_ids[i % 3], cuisine_tags=[],
+                    participants=[], event_id=event.id, created_at=stamp, updated_at=stamp,
+                )
+            )  # fmt: skip
+        await db.commit()
+    statements: list[str] = []
+
+    def count(conn: Any, cursor: Any, statement: str, *rest: Any) -> None:
+        statements.append(statement)
+
+    async with house.sessionmaker() as db:
+        engine = db.get_bind()
+        sa_event.listen(engine, "before_cursor_execute", count)
+        try:
+            started = monotonic()
+            assert await contributions.ensure_backfilled(db, house.household.id, now=house.clock()) is True
+            elapsed = monotonic() - started
+        finally:
+            sa_event.remove(engine, "before_cursor_execute", count)
+    assert (await counts(house, "Alex"))[Kind.PICKED_UP] == n
+    # About 5 reads and 2 inserts per call; rereading the whole log for each call would add 2,000 big reads.
+    assert len(statements) < 14 * n
+    assert not [s for s in statements if "FROM meal_log" in s and "JOIN" in s][1:]  # the log is read once
+    assert sum("BEGIN IMMEDIATE" in s for s in statements) <= n // contributions.BATCH + 2  # a lock per batch
+    assert elapsed < 30

@@ -11,7 +11,8 @@ Run it with test stopped, after restoring the backup. In one transaction it:
   abandoned and finishing it would write to the meal log;
 - deletes the outbox, pending rows and the message refs of delivered posts alike, so test never
   sends production's queue or edits production's messages;
-- deletes all feedback on meals, which says how each member rated them (FR-49), so test, where
+- deletes all feedback on meals, which says how each member rated them (FR-49), and the counts of who
+  gave it, so test, where
   testers act as other people, never holds production's answers;
 - strips guests (#38) of what identifies them, as they're people outside the household: each is
   renamed "Guest <ID>" and loses their email, Slack user, sign-in, and dietary needs, as well as
@@ -35,6 +36,7 @@ from sqlalchemy import TextClause, bindparam, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dinnerbell.config import is_test_instance
+from dinnerbell.db.contributions import ContributionRepository
 from dinnerbell.db.engine import write_transaction
 from dinnerbell.db.events import EventRepository
 from dinnerbell.db.feedback import FeedbackRepository
@@ -277,6 +279,7 @@ async def _scrub(db: AsyncSession, *, instance_label: str, keep: Iterable[str], 
     redacted += await AuditRepository(db).redact_about(household.id, GUEST_SLACK_AUDIT, about_guests, scrubbed)
     pending, rows = await OutboxRepository(db).clear(household.id)
     feedback_deleted = await FeedbackRepository(db).clear(household.id)
+    await ContributionRepository(db).clear_feedback(household.id)  # who gave feedback is as private as what
 
     summary = ScrubSummary(
         members_kept=len(kept),
