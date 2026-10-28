@@ -193,6 +193,10 @@ LATE_PROPOSALS = (
 )
 LATE_DECISION = replace(
     DECISION,
+    proposal=replace(
+        DECISION.proposal,
+        warnings=("⚠ A guest of someone who joined late needs Vegetarian, and this isn't marked that way.",),
+    ),
     head_count=4,
     participants=(*DECISION.participants, note.ParticipantInfo(LEE, late=True)),
 )

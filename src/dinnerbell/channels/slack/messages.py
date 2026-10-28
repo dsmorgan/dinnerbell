@@ -551,6 +551,7 @@ def decision_message(
     late = [p.member for p in decision.participants if p.late]
     if late:
         lines.append(f"*Joined late:* {ctx.directory.mentions(late)}")
+    lines += [escape(w) for w in proposal.warnings]  # the needs of a late joiner's guests (#76)
     if decision.dietary_notes:
         lines.append(f"*Dietary needs:* {escape(', '.join(decision.dietary_notes))}")
     blocks.append(section(join_lines(lines)))

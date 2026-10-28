@@ -11,17 +11,19 @@ from __future__ import annotations
 import json
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import replace
-from datetime import date
+from datetime import date, time
 from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
 from dinnerbell.channels.slack import ids
 from dinnerbell.channels.slack.blocks import Directory
 from dinnerbell.channels.slack.messages import RenderContext, render, your_answer
 from dinnerbell.channels.slack.views import HomeLinks, home_view
 from dinnerbell.config import Settings
+from dinnerbell.db.events import ResponseRepository
 from dinnerbell.db.models import ResponseRow, TagRow
 from dinnerbell.domain.catalog import Mode, TagKind
 from dinnerbell.domain.events import (
@@ -54,13 +56,13 @@ from dinnerbell.domain.members import Capabilities, Member, Role
 from dinnerbell.domain.notifications import from_payload
 from dinnerbell.domain.preferences import Stance, TargetType
 from dinnerbell.logs import JsonFormatter
-from dinnerbell.services import activity, call_admin, calls, event_views, guests
+from dinnerbell.services import activity, call_admin, calls, event_views, guests, lifecycle
 from dinnerbell.services import call_context as cc
 from dinnerbell.services.database import Database, open_database
 from dinnerbell.services.errors import NotFound
 from dinnerbell.services.event_views import TodayView
 from dinnerbell.services.lifecycle import DOESNT_FIT
-from dinnerbell.services.preferences import set_my_preference
+from dinnerbell.services.preferences import group_preferences, set_my_preference
 from tests.conftest import invite, page, sign_in
 from tests.support.calls import OPENS, RESPOND_BY, VOTE_BY, House, RecordingChannel, dinner_id, furnish, make_house
 from tests.support.clock import FakeClock
@@ -447,7 +449,7 @@ async def _kim_vegetarian_vetoes_thai(house: House) -> None:
 
 
 def _rendered(notification: Any) -> str:
-    return json.dumps(render(notification, RenderContext(BASE_URL, Directory())).payload())
+    return json.dumps(render(notification, RenderContext(BASE_URL, Directory())).payload(), ensure_ascii=False)
 
 
 async def test_only_the_late_joiner_sees_which_picks_miss_their_own_stances(house: House) -> None:
@@ -472,45 +474,146 @@ async def test_only_the_late_joiner_sees_which_picks_miss_their_own_stances(hous
     ctx = await house.context(event_id)
     for name in ("Alex", "Sam", "Lee", "Kim"):
         view = event_views.view(ctx, house[name], ctx.event.day, house.clock())
-        home = json.dumps(home_view(TodayView(ctx.event.day, [view], tuple(Slot)), HomeLinks(BASE_URL)))
+        home = json.dumps(
+            home_view(TodayView(ctx.event.day, [view], tuple(Slot)), HomeLinks(BASE_URL)), ensure_ascii=False
+        )
         card = your_answer(
             view.info, view.mine, house[name].id, RenderContext(BASE_URL, Directory()), not_for_you=view.not_for_me
         ).payload()
         if name == "Kim":
             assert view.not_for_me == ("Siam Garden", "Taqueria")
             assert "Not a fit for your preferences: Siam Garden, Taqueria" in home
-            assert "Not a fit for your preferences: Siam Garden, Taqueria" in json.dumps(card)
+            assert "Not a fit for your preferences: Siam Garden, Taqueria" in json.dumps(card, ensure_ascii=False)
         else:
-            assert view.not_for_me == () and "⚠" not in home and "⚠" not in json.dumps(card), name
+            assert view.not_for_me == () and "⚠" not in home and "⚠" not in json.dumps(card, ensure_ascii=False), name
         assert all(not p.info.warnings for p in view.proposals)
 
     await act(house, calls.lock, house["Alex"], event_id, found["Siam Garden"])  # the coordinator may still lock it
     ctx = await house.context(event_id)
     decision = cc.decision_info(ctx)
-    assert decision is not None and decision.dietary_notes == ("Vegetarian",)  # her needs go with the plan
+    assert decision is not None and decision.dietary_notes == ()  # hers stay off it: M1, FR-29
     assert "⚠" not in _rendered(cc.decision_updated(ctx)[0])
 
 
-async def test_a_late_joiners_guests_needs_warn_everyone(house: House) -> None:
-    """Guests' dietary needs are on the roster for everyone already, so a pick that misses the
-    needs of a guest a late joiner brings warns on the shared messages, without saying whose."""
+async def _late_with_guest(house: House, event_id: int, tag_id: int) -> None:
+    """Kim joins late with a guest who needs ``tag_id``. Joining clears a stale guest, and details
+    are closed while voting, so this saves the answer as a restored one would be."""
+    await act(house, calls.join_late, house["Kim"], event_id)
+    kim = await mine(house, event_id, "Kim")
+    assert kim is not None
+    async with house.sessionmaker() as db:
+        await ResponseRepository(db).save(
+            house.household.id, event_id, replace(kim, guests=1, guest_needs=frozenset({tag_id})), house.clock()
+        )
+        await db.commit()
+
+
+async def test_a_late_joiners_guests_needs_filter_new_picks_and_warn_on_existing_ones(house: House) -> None:
+    """Guests' needs are public and safety-relevant (allergies), so they are held to as any
+    guest's: picks added or drawn from now on must meet them, picks already proposed warn
+    everyone, and the warning stays on the decision."""
     veg = await house.tag("Vegetarian", TagKind.DIETARY)
+    event_id = await to_voting(house, "Alex", "Sam")
+    found = await picks(house, event_id)
+    pho = await house.add_item("Pho Place", Mode.PICKUP, cuisine="Thai")
+    await _late_with_guest(house, event_id, veg.id)
+    ctx = await house.context(event_id)
+    assert ctx.guest_needs == {veg.id}  # the filter new picks pass
+    needs = cc.LATE_GUEST_NEEDS.format(needs="Vegetarian")
+    for name in found:  # already proposed: kept, with a warning for everyone
+        warned = await info(house, event_id, found[name])
+        assert warned.warnings == (needs,) and "Kim" not in warned.warnings[0]
+    with pytest.raises(EventRuleViolation, match=DOESNT_FIT):  # new: refused
+        await act(house, calls.add_proposal, house["Sam"], event_id, Mode.PICKUP, item_id=pho.id)
+    meatless = await house.add_item("Green Leaf", Mode.PICKUP, cuisine="Thai", tags=("Vegetarian",))
+    await act(house, calls.add_proposal, house["Sam"], event_id, Mode.PICKUP, item_id=meatless.id)
+    assert (await info(house, event_id, (await picks(house, event_id))["Green Leaf"])).warnings == ()
+
+    await act(house, calls.lock, house["Alex"], event_id, found["Siam Garden"])  # a kept pick can still win
+    ctx = await house.context(event_id)
+    decision = cc.decision_info(ctx)
+    assert decision is not None
+    assert decision.proposal.warnings == (needs,) and decision.dietary_notes == ("Vegetarian",)
+    assert needs in _rendered(cc.decision_updated(ctx)[0])
+
+
+async def test_ranking_holds_picks_to_the_guests_needs_of_a_re_run_late_joiner(house: House) -> None:
+    """Newly drawn picks meet them too: ranking reads the same ``guest_needs``."""
+    veg = await house.tag("Vegetarian", TagKind.DIETARY)
+    event_id = await to_voting(house, "Alex", "Sam")
+    await _late_with_guest(house, event_id, veg.id)
+    assert (await house.context(event_id)).guest_needs == {veg.id}
+    ctx = await house.context(event_id)
+    async with house.sessionmaker() as db:
+        snapshot = await lifecycle.ranking_snapshot(db, ctx, await group_preferences(db, 1, ctx.veto_people))
+    assert snapshot.guest_needs == {veg.id}
+
+
+async def test_a_late_joiners_own_needs_stay_off_the_decision_for_everyone_else(house: House) -> None:
+    """With one late joiner, subtracting the guests' needs from the decision's line would give
+    hers away (FR-29). Guests' needs, Sam's here, stay."""
+    veg = await house.tag("Vegetarian", TagKind.DIETARY)
+    gf = await house.tag("Gluten-free", TagKind.DIETARY)
+    await house.add_item("GF Place", Mode.PICKUP, cuisine="Thai", tags=("Gluten-free",))
+    async with house.sessionmaker() as db:
+        house.people["Kim"] = await guests.set_my_needs(db, house["Kim"], frozenset({veg.id}), now=house.clock())
     event_id = await open_dinner(house)
-    await act(house, calls.respond, house["Kim"], event_id, Status.MAYBE)
-    await act(house, calls.save_details, house["Kim"], event_id, Details(guests=1, guest_needs=frozenset({veg.id})))
-    await act(house, calls.respond, house["Kim"], event_id, Status.OUT)
-    for name in ("Alex", "Sam"):
-        await act(house, calls.respond, house[name], event_id, Status.IN)
+    await act(house, calls.respond, house["Alex"], event_id, Status.IN)
+    await act(house, calls.respond, house["Sam"], event_id, Status.IN)
+    await act(house, calls.save_details, house["Sam"], event_id, Details(guests=1, guest_needs=frozenset({gf.id})))
     await act(house, calls.offer_role, house["Alex"], event_id, RoleOffer.PICKUP, True)
     house.clock.now = RESPOND_BY
     await house.tick()
-    siam = (await picks(house, event_id))["Siam Garden"]
+    found = await picks(house, event_id)
     await act(house, calls.join_late, house["Kim"], event_id)
-    warned = await info(house, event_id, siam)
-    assert warned.warnings == (cc.LATE_GUEST_NEEDS.format(needs="Vegetarian"),)
-    assert "Kim" not in warned.warnings[0]
-    await act(house, calls.switch_late_joiner, house["Alex"], event_id, house["Kim"].id, taking_part=False)
-    assert (await info(house, event_id, siam)).warnings == ()  # switched off: her guest isn't coming
+    await act(house, calls.claim_coordinator, house["Alex"], event_id)
+    await act(house, calls.lock, house["Alex"], event_id, next(iter(found.values())))
+    ctx = await house.context(event_id)
+    decision = cc.decision_info(ctx)
+    assert decision is not None and decision.dietary_notes == ("Gluten-free",)
+    channel = RecordingChannel()
+    await house.drain(channel)
+    for notification in [from_payload(e.kind, e.payload) for e in await house.outbox()]:
+        assert "Vegetarian" not in _rendered(notification), notification.kind
+    assert "Vegetarian" not in _rendered(cc.assignment_made(ctx, house["Alex"].id, 1, decision))
+
+
+def test_joining_late_clears_what_an_earlier_answer_left() -> None:
+    from dinnerbell.domain.events import with_late_join
+
+    stale = Response(
+        3,
+        Status.OUT,
+        guests=2,
+        guest_needs=frozenset({7}),
+        eat_from=time(19, 0),
+        eat_until=time(20, 0),
+        note="Out, sorry",
+    )
+    joined = with_late_join(stale, 3, OPENS)
+    assert (joined.status, joined.late, joined.vote_counts) == (Status.IN, True, False)
+    assert (joined.guests, joined.guest_needs, joined.eat_from, joined.eat_until) == (0, frozenset(), None, None)
+    assert joined.head_count == 1
+
+
+async def test_joining_late_changes_neither_the_head_count_nor_the_meal_time_beyond_the_joiner(house: House) -> None:
+    event_id = await open_dinner(house)
+    await act(house, calls.respond, house["Alex"], event_id, Status.IN)
+    await act(house, calls.respond, house["Sam"], event_id, Status.IN)
+    await act(house, calls.save_details, house["Kim"], event_id, Details(guests=3, eat_from=time(19, 45)))
+    await act(house, calls.respond, house["Kim"], event_id, Status.OUT)  # out keeps the details
+    await act(house, calls.offer_role, house["Alex"], event_id, RoleOffer.PICKUP, True)
+    house.clock.now = RESPOND_BY
+    await house.tick()
+    before = (await house.context(event_id)).head_count
+    await act(house, calls.join_late, house["Kim"], event_id)
+    kim = await mine(house, event_id, "Kim")
+    assert kim is not None and (kim.guests, kim.eat_from) == (0, None)
+    ctx = await house.context(event_id)
+    assert ctx.head_count == before + 1
+    await act(house, calls.lock, house["Alex"], event_id, ctx.proposals[0].id)
+    meal = (await house.event(event_id)).meal_time
+    assert meal is not None and meal.hour == 23 and meal.minute == 30  # the usual 18:30, not Kim's 19:45
 
 
 async def test_a_late_joiners_pick_passes_everyone_on_time_but_not_their_own_stances(house: House) -> None:
@@ -746,3 +849,47 @@ def test_web_join_late_vote_and_switches(
     assert (late.status, late.vote_counts) == ("in", True)
     assert "not counted" not in page(admin.get(f"/events/{event_id}"))
     assert submit(admin, f"/events/{event_id}/join-late", {"run": "1"}).status_code == 303  # in already
+
+
+def test_web_decision_leaves_a_late_joiners_own_needs_off_the_page(
+    admin: TestClient, provider: FakeProvider, clock: FakeClock, migrated: Settings
+) -> None:
+    """The decision's "Dietary needs" line on the event page names guests' needs, never the
+    late joiner's own (FR-29)."""
+    from datetime import UTC, datetime
+
+    from sqlalchemy import update
+    from sqlalchemy.orm import Session
+
+    from dinnerbell.db.engine import create_sync_engine
+    from dinnerbell.db.models import MemberRow
+
+    invite(admin, "kim@example.com", "Kim")
+    engine = create_sync_engine(migrated.sync_database_url)
+    try:
+        with Session(engine) as db, db.begin():
+            household_id = db.scalars(select(MemberRow.household_id)).first()
+            tag = TagRow(
+                household_id=household_id,
+                kind="dietary",
+                name="Vegetarian",
+                name_key="vegetarian",
+                created_at=datetime(2026, 10, 22, tzinfo=UTC),
+            )
+            db.add(tag)
+            db.flush()
+            db.execute(update(MemberRow).where(MemberRow.email == "kim@example.com").values(dietary_needs=[tag.id]))
+    finally:
+        engine.dispose()
+    event_id = start(admin)
+    web_to_voting(admin, clock, event_id)
+    first, _second = proposal_ids(migrated)
+    sign_in_as(admin, provider, "kim@example.com")
+    assert submit(admin, f"/events/{event_id}/proposals/{first}/vote", {"join_late": "1"}).status_code == 303
+    admin.cookies.clear()
+    sign_in(admin, provider)
+    assert submit(admin, f"/events/{event_id}/proposals/{first}/lock", {}).status_code == 303
+    for url in (f"/events/{event_id}", "/"):
+        html = page(admin.get(url))
+        assert "Kim (late)" in html and "eating" in html, url
+        assert "Dietary needs:" not in html, url

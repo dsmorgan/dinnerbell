@@ -730,9 +730,20 @@ def check_can_join_late(event: Event, actor: Member, mine: Response | None) -> b
 def with_late_join(current: Response | None, member_id: int, now: datetime) -> Response:
     """``member_id``'s answer once they join late: in, marked late, with their vote not counted
     until the coordinator says so. Their place in line for a role (``coverage``) starts now, after
-    everyone who answered on time. Anything else on their answer, such as guests, stays."""
+    everyone who answered on time. Details left from an earlier answer, such as guests, their
+    needs, and an eat window, are cleared, so joining never changes the head count or meal time
+    on its own."""
     base = with_status(current, member_id, Status.IN, now)
-    return replace(base, late=True, vote_counts=False, responded_at=now)
+    return replace(
+        base,
+        late=True,
+        vote_counts=False,
+        responded_at=now,
+        guests=0,
+        guest_needs=frozenset(),
+        eat_from=None,
+        eat_until=None,
+    )
 
 
 def with_late_switches(

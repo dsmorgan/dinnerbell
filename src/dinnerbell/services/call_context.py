@@ -137,6 +137,12 @@ class CallContext:
         """Dietary needs every pick must meet (spec 5.5, 7): those of the guests members bring,
         and people's own (#38: a guest's, and a promoted guest's, which they keep), for everyone
         who might be eating (in, or maybe). Needs left on a response with no guests don't count."""
+        return frozenset(self.settled_guest_needs | self.late_guest_needs)
+
+    @property
+    def settled_guest_needs(self) -> frozenset[int]:
+        """``guest_needs`` without those of guests that late joiners bring: what picks already
+        proposed were held to. They warn instead (``late_warnings``, #76)."""
         who = veto_participants(self.responses)
         brought = {tag for r in self.responses if r.member_id in who and r.guests for tag in r.guest_needs}
         people = [self.members[m] for m in who if m in self.members]
@@ -145,8 +151,10 @@ class CallContext:
 
     @property
     def late_guest_needs(self) -> frozenset[int]:
-        """Dietary needs of guests that late joiners taking part bring (#76). The roster shows
-        guests' needs already, so a pick that misses them may warn everyone (``late_warnings``)."""
+        """Dietary needs of guests that late joiners taking part bring (#76). Like any guest's,
+        they filter picks drawn or added from now on, and the roster shows them, so a pick
+        already proposed that misses them warns everyone (``late_warnings``). A late joiner's
+        own needs are not here: they stay private (FR-29)."""
         late = late_people(self.responses)
         return frozenset(tag for r in self.responses if r.member_id in late and r.guests for tag in r.guest_needs)
 
@@ -309,6 +317,10 @@ LATE_GUEST_NEEDS = "⚠ A guest of someone who joined late needs {needs}, and th
 NOT_FOR_YOU = "⚠ This pick doesn't fit your preferences."
 
 
+WARNING_STATES = frozenset({EventState.VOTING, EventState.DECIDED, EventState.DONE})
+"""While voting, and on the decision, which keeps the warning."""
+
+
 def late_warnings(ctx: CallContext, proposal: Proposal) -> tuple[str, ...]:
     """What everyone may see about ``proposal`` and the late joiners taking part (#76): only
     whether it misses the dietary needs of guests they bring, which the roster shows anyway. A
@@ -374,6 +386,7 @@ def item_info(ctx: CallContext, proposal: Proposal) -> note.ItemInfo:
 
 def proposal_info(ctx: CallContext, proposal: Proposal) -> note.ProposalInfo:
     voters = ctx.votes.get(proposal.id, [])
+    counted = ctx.counted(proposal.id)
     return note.ProposalInfo(
         id=proposal.id,
         rank=proposal.rank,
@@ -383,8 +396,8 @@ def proposal_info(ctx: CallContext, proposal: Proposal) -> note.ProposalInfo:
         source=proposal.source,
         proposed_by=ctx.person(proposal.proposed_by) if proposal.proposed_by is not None else None,
         voters=tuple(ctx.person(m) for m in voters),
-        uncounted=tuple(m for m in voters if m not in ctx.counted(proposal.id)),
-        warnings=late_warnings(ctx, proposal) if ctx.event.state is EventState.VOTING else (),
+        uncounted=tuple(m for m in voters if m not in counted),
+        warnings=late_warnings(ctx, proposal) if ctx.event.state in WARNING_STATES else (),
     )
 
 
@@ -403,10 +416,11 @@ def decision_info(ctx: CallContext) -> note.DecisionInfo | None:
 
 
 def guest_dietary_notes(ctx: CallContext) -> tuple[str, ...]:
-    """Dietary needs of the guests of everyone in, and of everyone in who has their own (FR-8,
-    FR-20, #38). Only the needs, never whose."""
+    """Dietary needs of the guests of everyone in, and of everyone in who has their own, except
+    late joiners' own (FR-8, FR-20, #38, #76). Only the needs, never whose."""
     brought = {tag for r in ctx.participants if r.guests for tag in r.guest_needs}
-    people = [ctx.members[r.member_id] for r in ctx.participants if r.member_id in ctx.members]
+    # A late joiner's own needs stay private: with one, subtracting the guests' would show them (#76).
+    people = [ctx.members[r.member_id] for r in ctx.participants if r.member_id in ctx.members and not r.late]
     own = {tag for m in people if m.active for tag in m.dietary_needs}
     return _tag_names(ctx, brought | own)
 

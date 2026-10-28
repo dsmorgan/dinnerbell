@@ -22,7 +22,7 @@
     },
     {
       "text": {
-        "text": "*Cooking:* <@U02SAM>\n*Coordinating:* <@U01ALEX>\n*Joined late:* Lee\n*Dietary needs:* Vegetarian",
+        "text": "*Cooking:* <@U02SAM>\n*Coordinating:* <@U01ALEX>\n*Joined late:* Lee\n⚠ A guest of someone who joined late needs Vegetarian, and this isn't marked that way.\n*Dietary needs:* Vegetarian",
         "type": "mrkdwn"
       },
       "type": "section"

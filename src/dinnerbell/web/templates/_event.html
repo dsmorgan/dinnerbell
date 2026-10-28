@@ -306,6 +306,7 @@
   <div class="decision">
     <h3>{% if d.proposal.item.url %}<a href="{{ d.proposal.item.url }}" rel="noopener noreferrer" target="_blank">{{ d.proposal.item.name }}</a>{% else %}{{ d.proposal.item.name }}{% endif %} <span class="chip mode">{{ d.proposal.mode.label }}</span></h3>
     <p class="small">{{ d.head_count }} eating: {% for p in d.participants %}{{ p.member.name }}{% if p.late %} (late){% endif %}{% if p.guests %} +{{ p.guests }}{% endif %}{{ ", " if not loop.last }}{% endfor %}{% if d.dietary_notes %}. Dietary needs: {{ d.dietary_notes|join(", ") }}{% endif %}.</p>
+    {% for w in d.proposal.warnings %}<p class="small warning">{{ w }}</p>{% endfor %}
     <ul class="chips assignments">
       {% for a in d.assignments %}<li class="chip role">{{ {"cook": "Cooking", "pickup": "Picking up", "order": "Ordering", "coordinator": "Coordinating"}[a.role.value] }}: {{ a.member.name }}</li>{% endfor %}
     </ul>

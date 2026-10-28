@@ -540,15 +540,21 @@ NO_COVERAGE = "no_coverage"
 """``misfit``'s code when nobody who's in can take the pick's role (FR-17)."""
 
 
-def misfit(ctx: CallContext, proposal: Proposal, group: GroupPreferences) -> EventRuleViolation | None:
+def misfit(
+    ctx: CallContext, proposal: Proposal, group: GroupPreferences, *, settled: bool = False
+) -> EventRuleViolation | None:
     """Why ``proposal`` can't be decided for this call (FR-17, FR-28), as the refusal to raise,
     or None if it can.
 
     Private reasons (vetoes and guests' dietary needs) all give ``DOESNT_FIT``, coded
     ``doesnt_fit``. Coverage and availability reasons stay specific, because they reveal
     nothing private.
+
+    ``settled`` checks a pick that exists already, as a decision does: the needs of guests that
+    late joiners bring warn on it instead of ruling it out (``call_context.late_warnings``, #76).
+    A pick being added or drawn is held to them, as to any guest's.
     """
-    needs = guest_needs(ctx)
+    needs = ctx.settled_guest_needs if settled else guest_needs(ctx)
     if proposal.item_id is not None:
         item = ctx.items.get(proposal.item_id)
         if item is None or not item.active:
@@ -631,14 +637,16 @@ async def decide(
     # Check free text as the catalog item it will become, if one by that name exists by now.
     checked = {p.id: await _as_catalog_item(db, ctx, p) for p in ctx.proposals}
     if locked is not None:
-        problem = misfit(ctx, checked.get(locked.id, locked), group)
+        problem = misfit(ctx, checked.get(locked.id, locked), group, settled=True)
         if problem is not None:
             raise problem
         winner = locked
     else:
         counted = counted_votes(ctx.votes, ctx.responses)  # a late joiner's only if the coordinator says (#76)
         tallies = [
-            ProposalTally(p.id, p.rank, misfit(ctx, checked[p.id], group) is None, counted.get(p.id, frozenset()))
+            ProposalTally(
+                p.id, p.rank, misfit(ctx, checked[p.id], group, settled=True) is None, counted.get(p.id, frozenset())
+            )
             for p in ctx.proposals
         ]
         admins = frozenset(m.id for m in ctx.active_members if m.is_admin)
