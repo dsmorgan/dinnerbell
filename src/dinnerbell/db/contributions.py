@@ -147,6 +147,15 @@ class BadgeRepository:
             return None
         return Award(award_id, household_id, member_id, badge, tier, now, announcement, None, event_id)
 
+    async def clear(self, household_id: int, badges: Iterable[BadgeKey]) -> int:
+        """Delete the household's awards of ``badges``, for ``scrub-test``. Returns how many rows."""
+        result = await self._session.execute(
+            delete(BadgeAwardRow).where(
+                BadgeAwardRow.household_id == household_id, BadgeAwardRow.badge_key.in_([b.value for b in badges])
+            )
+        )
+        return int(result.rowcount)  # type: ignore[attr-defined]
+
     async def for_member(self, household_id: int, member_id: int) -> list[Award]:
         rows = await self._session.scalars(
             select(BadgeAwardRow)

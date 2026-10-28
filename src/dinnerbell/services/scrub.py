@@ -11,8 +11,8 @@ Run it with test stopped, after restoring the backup. In one transaction it:
   abandoned and finishing it would write to the meal log;
 - deletes the outbox, pending rows and the message refs of delivered posts alike, so test never
   sends production's queue or edits production's messages;
-- deletes all feedback on meals, which says how each member rated them (FR-49), and the counts of who
-  gave it, so test, where
+- deletes all feedback on meals, which says how each member rated them (FR-49), and the counts and badges
+  that show who gave it, so test, where
   testers act as other people, never holds production's answers;
 - strips guests (#38) of what identifies them, as they're people outside the household: each is
   renamed "Guest <ID>" and loses their email, Slack user, sign-in, and dietary needs, as well as
@@ -36,7 +36,7 @@ from sqlalchemy import TextClause, bindparam, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dinnerbell.config import is_test_instance
-from dinnerbell.db.contributions import ContributionRepository
+from dinnerbell.db.contributions import BadgeRepository, ContributionRepository
 from dinnerbell.db.engine import write_transaction
 from dinnerbell.db.events import EventRepository
 from dinnerbell.db.feedback import FeedbackRepository
@@ -44,6 +44,8 @@ from dinnerbell.db.meals import household_settings
 from dinnerbell.db.outbox import OutboxRepository
 from dinnerbell.db.repositories import AuditRepository, HouseholdRepository, MemberRepository, SessionRepository
 from dinnerbell.db.types import UTCDateTime
+from dinnerbell.domain.badges import BADGES
+from dinnerbell.domain.contributions import Kind
 from dinnerbell.domain.events import OPEN_STATES, EndReason, EventState, transition
 from dinnerbell.domain.members import InvalidMemberInput, normalize_email
 from dinnerbell.domain.schedule import SLOTS_KEY, slot_schedules, slot_to_json
@@ -279,7 +281,9 @@ async def _scrub(db: AsyncSession, *, instance_label: str, keep: Iterable[str], 
     redacted += await AuditRepository(db).redact_about(household.id, GUEST_SLACK_AUDIT, about_guests, scrubbed)
     pending, rows = await OutboxRepository(db).clear(household.id)
     feedback_deleted = await FeedbackRepository(db).clear(household.id)
-    await ContributionRepository(db).clear_feedback(household.id)  # who gave feedback is as private as what
+    # Who gave feedback is as private as what they said: the counts, and the badges that show it.
+    await ContributionRepository(db).clear_feedback(household.id)
+    await BadgeRepository(db).clear(household.id, [b.key for b in BADGES if b.kind is Kind.GAVE_FEEDBACK])
 
     summary = ScrubSummary(
         members_kept=len(kept),
