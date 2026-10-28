@@ -45,7 +45,7 @@ def connection(
     house: House, fake: FakeSlack, *, team_id: str | None = TEAM, state: SlackState | None = None, **options: Any
 ) -> SlackConnection:
     """``options`` go to ``SlackConnection``, such as ``command`` and ``instance_label``."""
-    return SlackConnection(
+    conn = SlackConnection(
         bot_token=BOT_TOKEN,
         app_token=APP_TOKEN,
         channel_id=CHANNEL,
@@ -59,6 +59,12 @@ def connection(
         socket_factory=FakeSocket,
         **({"schema_revision": schema_revision()} | options),
     )
+    conn.badge_files.pause = no_pause  # badge art waits and retries without real time passing
+    return conn
+
+
+async def no_pause(seconds: float) -> None:
+    await asyncio.sleep(0)
 
 
 @dataclass

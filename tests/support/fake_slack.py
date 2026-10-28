@@ -51,6 +51,8 @@ class Failure:
     error: str | None = None
     status: int = 200
     headers: dict[str, str] = field(default_factory=dict)
+    messages: list[str] = field(default_factory=list)
+    """Slack's ``response_metadata.messages``, which explain an error."""
     raises: BaseException | None = None
 
 
@@ -139,7 +141,7 @@ class FakeSlack(AsyncWebClient):
             failure = queued.pop(0)
             if failure.raises is not None:
                 raise failure.raises
-            return _error(failure.error, failure.status, failure.headers)
+            return _error(failure.error, failure.status, failure.headers, failure.messages)
         if method == "users.lookupByEmail" and args["email"] not in self.users_by_email:
             return _error("users_not_found")
         if method == "users.info" and args["user"] not in self.users:
@@ -235,8 +237,13 @@ class FakeWebhook(AsyncWebhookClient):
         return WebhookResponse(url=self.url, status_code=200, body="ok", headers={})
 
 
-def _error(code: str | None, status: int = 200, headers: dict[str, str] | None = None) -> dict[str, Any]:
-    return {"data": {"ok": False, "error": code}, "headers": headers or {}, "status_code": status}
+def _error(
+    code: str | None, status: int = 200, headers: dict[str, str] | None = None, messages: list[str] | None = None
+) -> dict[str, Any]:
+    data: dict[str, Any] = {"ok": False, "error": code}
+    if messages:
+        data["response_metadata"] = {"messages": messages}
+    return {"data": data, "headers": headers or {}, "status_code": status}
 
 
 class FakeSocket:

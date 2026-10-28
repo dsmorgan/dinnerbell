@@ -1000,11 +1000,13 @@ class Channel(Protocol):
 class PermanentDeliveryError(Exception):
     """Raised by a channel when retrying can't help, such as a deleted channel or a member who
     left the workspace. The outbox gives up on the row at once instead of retrying. ``code`` is
-    the channel's own reason code, when it has one."""
+    the channel's own reason code, when it has one, and ``detail`` its explanation, when it gives
+    one (Slack's ``response_metadata.messages``), cut short and safe to log."""
 
-    def __init__(self, message: str = "", *, code: str | None = None) -> None:
+    def __init__(self, message: str = "", *, code: str | None = None, detail: str | None = None) -> None:
         super().__init__(message)
         self.code = code
+        self.detail = detail
 
 
 class ChannelUnavailable(Exception):

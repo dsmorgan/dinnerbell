@@ -139,6 +139,28 @@ def error_code(exc: SlackApiError) -> str:
     return f"http_{getattr(response, 'status_code', 'unknown')}"
 
 
+MAX_DETAIL = 300
+"""Characters of Slack's ``response_metadata.messages`` that an error keeps."""
+
+
+def error_detail(exc: SlackApiError) -> str | None:
+    """Slack's explanation of an error (``response_metadata.messages``, such as
+    ``[ERROR] invalid file id [json-pointer:/blocks/1/accessory/slack_file]``), cut short, or None."""
+    data = getattr(exc.response, "data", None)
+    meta = data.get("response_metadata") if isinstance(data, dict) else None
+    messages = meta.get("messages") if isinstance(meta, dict) else None
+    if not isinstance(messages, list):
+        return None
+    text = "; ".join(str(m) for m in messages if isinstance(m, str))
+    text = "".join(c if c.isprintable() else " " for c in text)
+    return text[:MAX_DETAIL] or None
+
+
+def refusal(exc: PermanentDeliveryError) -> dict[str, str | None]:
+    """Log fields for a refusal: Slack's error code and its explanation."""
+    return {"slack_error": exc.code, "slack_messages": exc.detail}
+
+
 def _retry_after(exc: SlackApiError) -> timedelta:
     headers = getattr(exc.response, "headers", None) or {}
     for name, value in dict(headers).items():
@@ -160,7 +182,7 @@ def translate(method: str, exc: BaseException) -> Exception:
             seconds = int(wait.total_seconds())
             return SlackRateLimited(f"Slack rate-limited {method}; retry after {seconds}s", retry_after=seconds)
         if code in PERMANENT:
-            return PermanentDeliveryError(f"Slack {method} failed: {code}", code=code)
+            return PermanentDeliveryError(f"Slack {method} failed: {code}", code=code, detail=error_detail(exc))
         if code in AUTH:
             return SlackAuthError(f"Slack {method} failed: {code}", code=code)
         return SlackUnavailable(f"Slack {method} failed: {code}")

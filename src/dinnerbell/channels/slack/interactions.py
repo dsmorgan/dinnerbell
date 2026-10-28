@@ -39,7 +39,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from dinnerbell import __version__
 from dinnerbell.channels.slack import ids
-from dinnerbell.channels.slack.api import SlackApi, SlackUnavailable, refused_blocks
+from dinnerbell.channels.slack.api import SlackApi, SlackUnavailable, refusal, refused_blocks
 from dinnerbell.channels.slack.blocks import (
     Directory,
     actions,
@@ -136,7 +136,7 @@ from dinnerbell.services import (
     stats,
 )
 from dinnerbell.services import schedule as schedule_service
-from dinnerbell.services.badge_files import BadgeFiles
+from dinnerbell.services.badge_files import RETRY_PAUSES, BadgeFiles
 from dinnerbell.services.clock import Clock
 from dinnerbell.services.errors import Forbidden, NotFound
 from dinnerbell.services.event_views import EventView
@@ -561,7 +561,8 @@ class Interactions:
                 today = await event_views.today_view(db, member, now=self.clock(), any_time=self.any_time)
                 awaiting = await feedback.awaiting(db, member, now=self.clock())
                 badges = await self._badges(db, member)
-            art = await self._badge_art(member, badges)
+            fresh: set[str] = set()
+            art = await self._badge_art(member, badges, fresh)
 
             def build(art: dict[tuple[str, str], str]) -> dict[str, Any]:
                 return home_view(
@@ -581,21 +582,51 @@ class Interactions:
             except PermanentDeliveryError as exc:
                 if not art or self.badge_files is None or not refused_blocks(exc):
                     raise
-                # Slack may refuse a file ID, such as one deleted in Slack. Forget the files and
-                # show the text instead, so Home still draws and the next view uploads again.
-                log.warning("slack refused badge art; publishing text badges", extra={"member_id": member.id})
-                await self.badge_files.forget(member.household_id, art.values())
+                # Slack may refuse a file ID, such as one deleted in Slack, or one it hasn't
+                # finished processing. A file uploaded just now gets up to two more tries after a pause,
+                # with the cache untouched. Otherwise forget the files and show the text instead,
+                # so Home still draws and the next view uploads again.
+                extra: dict[str, Any] = {"member_id": member.id}
+                log.warning(
+                    "slack refused badge art (%s: %s)%s",
+                    exc.code,
+                    exc.detail,
+                    "; retrying" if fresh else "",
+                    extra=extra | refusal(exc),
+                )
+                for attempt, pause in enumerate(RETRY_PAUSES if fresh else (), 1):
+                    await self.badge_files.pause(pause)
+                    try:
+                        await self.api.publish_home(
+                            user_id, with_version_footer(build(art), self.version, self.instance_label)
+                        )
+                    except PermanentDeliveryError as again:
+                        if not refused_blocks(again):
+                            raise
+                        log.warning(
+                            "slack refused badge art again (retry %d of %d: %s: %s)",
+                            attempt,
+                            len(RETRY_PAUSES),
+                            again.code,
+                            again.detail,
+                            extra=extra | refusal(again),
+                        )
+                    else:
+                        return
+                await self.badge_files.forget(member.household_id, art.values(), cool=bool(fresh))
                 view = build({})
             else:
                 return
         await self.api.publish_home(user_id, with_version_footer(view, self.version, self.instance_label))
 
-    async def _badge_art(self, member: Member, badges: MemberStats | None) -> dict[tuple[str, str], str]:
+    async def _badge_art(
+        self, member: Member, badges: MemberStats | None, fresh: set[str]
+    ) -> dict[tuple[str, str], str]:
         """The uploaded art for the badges Home shows, or none. It never raises or waits long."""
         if self.badge_files is None or badges is None:
             return {}
         held = {(key.value, tier.value) for key, tier in held_badges(badges).items()}
-        return await self.badge_files.file_ids(member.household_id, held)
+        return await self.badge_files.file_ids(member.household_id, held, fresh)
 
     @staticmethod
     async def _badges(db: AsyncSession, member: Member) -> MemberStats | None:
