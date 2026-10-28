@@ -155,6 +155,15 @@ class Progress:
     remaining: int | None
 
 
+def highest_tiers(awards: Iterable[Award]) -> dict[BadgeKey, Tier]:
+    """The highest tier among ``awards`` of each badge they cover."""
+    held: dict[BadgeKey, Tier] = {}
+    for award in awards:
+        if award.badge not in held or TIERS.index(award.tier) > TIERS.index(held[award.badge]):
+            held[award.badge] = award.tier
+    return held
+
+
 def progress(badge: Badge, count: int, thresholds: Sequence[int], *, earned: Iterable[Tier] = ()) -> Progress:
     """``badge`` at ``count``. A tier earned earlier counts as reached even if the admin has
     since raised its threshold, so progress never goes backward."""

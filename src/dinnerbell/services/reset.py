@@ -58,6 +58,7 @@ KEEP: Final = frozenset(
         "catalog_item_cook",
         "preference",  # likes, dislikes, and vetoes
         "slack_badge_file",  # the badge art uploaded to Slack: not history, and reusable (#105)
+        "slack_badge_composite",  # members' badge pictures: a cache Home checks by hash (#114)
     }
 )
 """Tables the reset leaves alone."""

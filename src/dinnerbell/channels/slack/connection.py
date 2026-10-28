@@ -54,7 +54,7 @@ from dinnerbell.channels.slack.people import ChannelPeople
 from dinnerbell.domain.members import SLACK_USER_ID_PATTERN
 from dinnerbell.domain.notifications import PermanentDeliveryError
 from dinnerbell.services import slack_members
-from dinnerbell.services.badge_art import ArtSource, png_for
+from dinnerbell.services.badge_art import ArtSource, CompositeSource, composite_png, png_for
 from dinnerbell.services.badge_files import BadgeFiles
 from dinnerbell.services.clock import Clock
 from dinnerbell.services.health import SlackState
@@ -197,6 +197,7 @@ class SlackConnection:
         version: str = __version__,
         schema_revision: str,
         art_for: ArtSource = png_for,
+        composite_for: CompositeSource = composite_png,
     ) -> None:
         """A non-empty ``instance_label`` (``DINNERBELL_INSTANCE_LABEL``, such as test's) also
         limits DMs and mentions to the channel's members. ``version`` is
@@ -213,7 +214,9 @@ class SlackConnection:
         self.state = state
         self.hold = Hold()
         self.audience = Audience(limited=bool(instance_label))
-        self.badge_files = BadgeFiles(sessionmaker, art_for=art_for, upload=self.api.upload_file, clock=clock)
+        self.badge_files = BadgeFiles(
+            sessionmaker, art_for=art_for, composite_for=composite_for, upload=self.api.upload_file, clock=clock
+        )
         self._audience_error: str | None = None
         if self.audience.limited:
             state.dms_dropped = 0
@@ -329,8 +332,8 @@ class SlackConnection:
                 await asyncio.wait_for(self.socket.close(), left(SOCKET_CLOSE_SECONDS))
             except Exception:
                 log.warning("slack socket did not close cleanly", exc_info=True)
+        await self.interactions.settle(left(SETTLE_SECONDS))  # first: a Home view may start a picture
         await self.badge_files.settle(left(SETTLE_SECONDS))  # a cancelled upload's row still lands
-        await self.interactions.settle(left(SETTLE_SECONDS))
         await self.interactions.cancel_pending()
 
     async def _supervise(self) -> None:

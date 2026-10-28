@@ -168,6 +168,8 @@ def check_blocks(blocks: Any, surface: str = "message") -> None:
             if "hint" in block:
                 check_text(block["hint"], 2000, f"{where}.hint", plain_only=True)
             check_element(block["element"], where, action_ids)
+        elif kind == "image":
+            check_image(block, where)
         elif kind == "divider":
             pass
         else:

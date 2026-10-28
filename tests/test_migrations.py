@@ -23,7 +23,7 @@ M0_TABLES = {"household", "member", "session", "audit"}
 M1_TABLES = {"tag", "catalog_item", "catalog_item_tag", "catalog_item_cook", "preference", "meal_log"}
 M2_TABLES = {"event", "response", "suggestion", "proposal", "vote", "assignment", "outbox"}
 M3_TABLES = {"feedback", "invitation"}
-M4_TABLES = {"contribution", "badge_award", "slack_badge_file"}
+M4_TABLES = {"contribution", "badge_award", "slack_badge_file", "slack_badge_composite"}
 
 
 def test_migrates_an_empty_database(settings: Settings) -> None:
@@ -457,7 +457,8 @@ def _snapshot(settings: Settings) -> dict[str, object]:
             indexes = c.execute(
                 text(
                     "SELECT name, sql FROM sqlite_master WHERE type = 'index' AND sql IS NOT NULL "
-                    "AND tbl_name NOT IN ('contribution', 'badge_award', 'slack_badge_file') ORDER BY name"
+                    "AND tbl_name NOT IN ('contribution', 'badge_award', 'slack_badge_file', 'slack_badge_composite') "
+                    "ORDER BY name"
                 )
             ).all()
             table = c.execute(text("SELECT sql FROM sqlite_master WHERE name = 'event'")).scalar_one()
@@ -1392,7 +1393,8 @@ def _rows_outside_m4(settings: Settings) -> dict[str, list[object]]:
             return {
                 t: list(c.execute(text(f"SELECT * FROM {t} ORDER BY rowid")).all())  # noqa: S608
                 for t in names
-                if t not in {"contribution", "badge_award", "slack_badge_file", "alembic_version"}
+                if t
+                not in {"contribution", "badge_award", "slack_badge_file", "slack_badge_composite", "alembic_version"}
             }
     finally:
         engine.dispose()
@@ -1554,3 +1556,34 @@ def _household_settings(settings: Settings) -> dict[str, object]:
             return dict(json.loads(c.execute(text("SELECT settings FROM household")).scalar_one()))
     finally:
         engine.dispose()
+
+
+# 0019: composite badge pictures (#114) -----------------------------------------------------------------
+
+
+def test_0019_adds_the_composite_table_and_downgrade_removes_it(settings: Settings) -> None:
+    """Up adds one empty table that refuses a second picture for the same member; down drops it
+    and leaves the 0018 database as it was; up again gives the same."""
+    _upgrade_to(settings, "0018_gambler")
+    _populate_calls(settings)
+    before = _rows_outside_m4(settings)
+    assert "slack_badge_composite" not in _tables(settings)
+
+    _upgrade_to(settings, "0019_slack_badge_composite")
+    assert _rows_outside_m4(settings) == before
+    row = (
+        "INSERT INTO slack_badge_composite (household_id, member_id, content_hash, file_id, uploaded_at) "
+        "VALUES (1, 1, 'abc', 'F1', :t)"
+    )
+    _execute(settings, row)
+    engine = create_sync_engine(settings.sync_database_url)
+    try:
+        with pytest.raises(IntegrityError, match="UNIQUE"), engine.begin() as c:
+            c.execute(text(row), {"t": STAMP})
+    finally:
+        engine.dispose()
+
+    _downgrade_to(settings, "0018_gambler")
+    assert "slack_badge_composite" not in _tables(settings)
+    _upgrade_to(settings, "0019_slack_badge_composite")
+    assert "slack_badge_composite" in _tables(settings)

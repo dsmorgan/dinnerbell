@@ -37,7 +37,7 @@ log = logging.getLogger(__name__)
 MAX_PEOPLE = 10
 """Members mentioned in one post. Slack posts of this size are the most that stay readable."""
 MAX_BADGES = 6
-"""Badges listed for one member in one post."""
+"""Badges named for one member in one post. The rest are counted in the text, and drawn when art is shown."""
 
 
 def news_for(awards: Iterable[Award], members: dict[int, Member]) -> tuple[list[BadgeNews], int]:
@@ -57,7 +57,8 @@ def news_for(awards: Iterable[Award], members: dict[int, Member]) -> tuple[list[
         earned = sorted(best[member_id].values(), key=lambda a: order[a.badge])
         shown = tuple(BadgeTier(BY_KEY[a.badge].name, a.tier.label) for a in earned[:MAX_BADGES])
         person = PersonInfo(member_id, members[member_id].display_name)
-        people.append(BadgeNews(person, shown, more=len(earned) - len(shown)))
+        rest = tuple(BadgeTier(BY_KEY[a.badge].name, a.tier.label) for a in earned[MAX_BADGES:])
+        people.append(BadgeNews(person, shown, more=len(rest), rest=rest))
     return people[:MAX_PEOPLE], max(len(people) - MAX_PEOPLE, 0)
 
 
