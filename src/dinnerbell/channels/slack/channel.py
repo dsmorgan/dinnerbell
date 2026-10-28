@@ -39,7 +39,7 @@ from dinnerbell.domain.notifications import (
     PermanentDeliveryError,
 )
 from dinnerbell.services import slack_members
-from dinnerbell.services.badge_files import RETRY_PAUSE_SECONDS, BadgeFiles
+from dinnerbell.services.badge_files import RETRY_PAUSES, BadgeFiles
 from dinnerbell.services.health import SlackState
 
 log = logging.getLogger(__name__)
@@ -171,9 +171,9 @@ class SlackChannel:
             if not art or self.badge_files is None or not refused_blocks(exc):
                 raise  # not about the blocks, so not about the art: the cache stays
             # Slack may refuse a file ID, such as one deleted in Slack, or one it hasn't finished
-            # processing. A file uploaded just now gets one more try after a pause, with the cache
-            # untouched. Otherwise forget the files and send the text instead, so the post still
-            # goes out and the next one uploads again.
+            # processing. A file uploaded just now gets up to two more tries after a pause, with the
+            # cache untouched. Otherwise forget the files and send the text instead, so the post
+            # still goes out and the next one uploads again.
             extra: dict[str, Any] = {"event_id": notification.event_id}
             log.warning(
                 "slack refused badge art (%s: %s)%s",
@@ -183,19 +183,21 @@ class SlackChannel:
                 extra=extra | refusal(exc),
             )
             retried: MessageRef | None = None
-            if fresh:
-                await self.badge_files.pause(RETRY_PAUSE_SECONDS)
+            for pause in RETRY_PAUSES if fresh else ():
+                await self.badge_files.pause(pause)
                 try:
                     retried = await self._send(message, slack_user, thread)
                 except PermanentDeliveryError as again:
                     if not refused_blocks(again):
                         raise
                     log.warning(
-                        "slack refused badge art again (%s: %s); posting text badges",
+                        "slack refused badge art again (%s: %s)",
                         again.code,
                         again.detail,
                         extra=extra | refusal(again),
                     )
+                else:
+                    break
             if retried is None:
                 await self.badge_files.forget(notification.household_id, art.values())
                 message = render(notification, self._context(directory)).payload()

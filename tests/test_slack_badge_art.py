@@ -19,7 +19,7 @@ from dinnerbell.db.badge_files import BadgeFileRepository
 from dinnerbell.domain import notifications as note
 from dinnerbell.domain.badges import BadgeKey, Tier
 from dinnerbell.services import badge_art
-from dinnerbell.services.badge_files import COOLDOWN, RETRY_PAUSE_SECONDS, BadgeFiles, is_ready
+from dinnerbell.services.badge_files import COOLDOWN, RETRY_PAUSES, BadgeFiles
 from dinnerbell.services.database import Database, open_database
 from tests.support.calls import House, furnish, make_house
 from tests.support.clock import FakeClock
@@ -262,12 +262,12 @@ async def test_a_missing_scope_posts_the_text_badges_and_does_not_fail_the_outbo
 
 async def test_slack_refusing_a_file_posts_text_and_forgets_the_file(house: House) -> None:
     slack = await wire(house)
-    slack.fake.fail("chat.postMessage", Failure("invalid_blocks"), Failure("invalid_blocks"))  # and again on the retry
+    slack.fake.fail("chat.postMessage", Failure("invalid_blocks"), Failure("invalid_blocks"), Failure("invalid_blocks"))
     await earn(house)
     await slack.drain()
-    first, second, third = slack.fake.of("chat.postMessage")
-    assert any("accessory" in b for b in first.args["blocks"]) and any("accessory" in b for b in second.args["blocks"])
-    assert not any("accessory" in b for b in third.args["blocks"])
+    *tried, text = slack.fake.of("chat.postMessage")
+    assert len(tried) == 3 and all(any("accessory" in b for b in c.args["blocks"]) for c in tried)
+    assert not any("accessory" in b for b in text.args["blocks"])
     async with house.sessionmaker() as db:
         assert await BadgeFileRepository(db).all(house.household.id) == {}
 
@@ -330,11 +330,11 @@ async def test_home_keeps_a_quiet_badge_as_text(house: House) -> None:
 async def test_slack_refusing_a_file_on_home_publishes_text_and_forgets_the_file(house: House) -> None:
     await dinner(house)
     slack = await wire(house)
-    slack.fake.fail("views.publish", Failure("invalid_blocks"), Failure("invalid_blocks"))  # and again on the retry
+    slack.fake.fail("views.publish", Failure("invalid_blocks"), Failure("invalid_blocks"), Failure("invalid_blocks"))
     await slack.open_home("Alex")
-    first, second, third = slack.fake.of("views.publish")
-    assert "slack_file" in json.dumps(first.args["view"]) and "slack_file" in json.dumps(second.args["view"])
-    text = json.dumps(third.args["view"], ensure_ascii=False)
+    *tried, last = slack.fake.of("views.publish")
+    assert len(tried) == 3 and all("slack_file" in json.dumps(c.args["view"]) for c in tried)
+    text = json.dumps(last.args["view"], ensure_ascii=False)
     assert "slack_file" not in text and tag("Full Table", "First") in text
     async with house.sessionmaker() as db:
         assert await BadgeFileRepository(db).all(house.household.id) == {}
@@ -373,16 +373,17 @@ class Pauses:
 async def test_a_refusal_logs_slacks_error_code_and_explanation(house: House, caplog: pytest.LogCaptureFixture) -> None:
     slack = await wire(house)
     why = Failure("invalid_blocks", messages=["[ERROR] invalid file [json-pointer:/blocks/1/accessory]", "x" * 500])
-    slack.fake.fail("chat.postMessage", why, why)
+    slack.fake.fail("chat.postMessage", why, why, why)
     await earn(house)
     with caplog.at_level(logging.INFO):
         await slack.drain()
-    first, again = refusals(caplog)
+    first, again, last = refusals(caplog)
     assert first.slack_error == "invalid_blocks"  # type: ignore[attr-defined]
     assert first.slack_messages.startswith("[ERROR] invalid file")  # type: ignore[attr-defined]
     assert len(first.slack_messages) == 300  # type: ignore[attr-defined]
     assert "invalid_blocks" in first.getMessage() and "retrying" in first.getMessage()
-    assert again.slack_error == "invalid_blocks" and "posting text badges" in again.getMessage()  # type: ignore[attr-defined]
+    assert again.slack_error == last.slack_error == "invalid_blocks"  # type: ignore[attr-defined]
+    assert "again" in again.getMessage() and "again" in last.getMessage()
 
 
 async def test_a_home_refusal_logs_slacks_error_code_and_explanation(
@@ -391,12 +392,12 @@ async def test_a_home_refusal_logs_slacks_error_code_and_explanation(
     await dinner(house)
     slack = await wire(house)
     why = Failure("invalid_blocks", messages=["[ERROR] invalid file"])
-    slack.fake.fail("views.publish", why, why)
+    slack.fake.fail("views.publish", why, why, why)
     with caplog.at_level(logging.INFO):
         await slack.open_home("Alex")
-    first, again = refusals(caplog)
+    first, again, last = refusals(caplog)
     assert first.slack_error == "invalid_blocks" and first.slack_messages == "[ERROR] invalid file"  # type: ignore[attr-defined]
-    assert "publishing text badges" in again.getMessage()
+    assert "again" in again.getMessage() and "again" in last.getMessage()
 
 
 async def test_a_refusal_without_an_explanation_logs_the_code_alone(
@@ -411,7 +412,7 @@ async def test_a_refusal_without_an_explanation_logs_the_code_alone(
     assert first.slack_error == "invalid_arguments" and first.slack_messages is None  # type: ignore[attr-defined]
 
 
-async def test_a_refused_post_with_a_new_file_is_retried_once_after_a_pause(house: House) -> None:
+async def test_a_refused_post_with_a_new_file_is_retried_after_a_pause(house: House) -> None:
     slack = await wire(house)
     pauses = Pauses()
     slack.conn.badge_files.pause = pauses
@@ -421,19 +422,37 @@ async def test_a_refused_post_with_a_new_file_is_retried_once_after_a_pause(hous
     assert (result.delivered, result.failed) == (1, 0)
     first, second = slack.fake.of("chat.postMessage")
     assert first.args["blocks"] == second.args["blocks"] and any("accessory" in b for b in second.args["blocks"])
-    assert pauses.waits[-1] == RETRY_PAUSE_SECONDS
+    assert pauses.waits == [RETRY_PAUSES[0]]
     async with house.sessionmaker() as db:
         assert len(await BadgeFileRepository(db).all(house.household.id)) == 2  # the cache stays
 
 
-async def test_a_retry_that_is_refused_too_forgets_the_files_and_posts_text(house: House) -> None:
+async def test_a_second_retry_follows_a_refused_first_one_after_a_longer_pause(house: House) -> None:
     slack = await wire(house)
+    pauses = Pauses()
+    slack.conn.badge_files.pause = pauses
     slack.fake.fail("chat.postMessage", Failure("invalid_blocks"), Failure("invalid_blocks_format"))
     await earn(house)
     result = await slack.drain()
     assert (result.delivered, result.failed) == (1, 0)
     *_, last = slack.fake.of("chat.postMessage")
-    assert len(slack.fake.of("chat.postMessage")) == 3 and not any("accessory" in b for b in last.args["blocks"])
+    assert len(slack.fake.of("chat.postMessage")) == 3 and any("accessory" in b for b in last.args["blocks"])
+    assert pauses.waits == list(RETRY_PAUSES)
+    async with house.sessionmaker() as db:
+        assert len(await BadgeFileRepository(db).all(house.household.id)) == 2  # the cache stays
+
+
+async def test_three_refusals_forget_the_files_and_post_text(house: House) -> None:
+    slack = await wire(house)
+    pauses = Pauses()
+    slack.conn.badge_files.pause = pauses
+    slack.fake.fail("chat.postMessage", *[Failure("invalid_blocks") for _ in range(3)])
+    await earn(house)
+    result = await slack.drain()
+    assert (result.delivered, result.failed) == (1, 0)
+    *_, last = slack.fake.of("chat.postMessage")
+    assert len(slack.fake.of("chat.postMessage")) == 4 and not any("accessory" in b for b in last.args["blocks"])
+    assert pauses.waits == list(RETRY_PAUSES)
     async with house.sessionmaker() as db:
         assert await BadgeFileRepository(db).all(house.household.id) == {}
 
@@ -468,13 +487,16 @@ async def test_a_refusal_with_only_cached_files_is_not_retried_and_forgets_them(
         assert list(await BadgeFileRepository(db).all(house.household.id)) == [SCOUT]  # only the one shown is forgotten
 
 
-async def test_a_home_refusal_with_a_new_file_is_retried_once(house: House) -> None:
+async def test_a_home_refusal_with_a_new_file_is_retried_up_to_twice(house: House) -> None:
     await dinner(house)
     slack = await wire(house)
-    slack.fake.fail("views.publish", Failure("invalid_blocks"))
+    pauses = Pauses()
+    slack.conn.badge_files.pause = pauses
+    slack.fake.fail("views.publish", Failure("invalid_blocks"), Failure("invalid_blocks"))
     await slack.open_home("Alex")
-    first, second = slack.fake.of("views.publish")
-    assert first.args["view"] == second.args["view"] and "slack_file" in json.dumps(second.args["view"])
+    first, _, third = slack.fake.of("views.publish")
+    assert first.args["view"] == third.args["view"] and "slack_file" in json.dumps(third.args["view"])
+    assert pauses.waits == list(RETRY_PAUSES)
     async with house.sessionmaker() as db:
         assert await BadgeFileRepository(db).all(house.household.id)
 
@@ -485,100 +507,3 @@ async def test_a_home_retry_that_fails_for_another_reason_is_not_hidden(house: H
     slack.fake.fail("views.publish", Failure("invalid_blocks"), Failure("user_not_found"))
     await slack.open_home("Alex")
     assert len(slack.fake.of("views.publish")) == 2
-
-
-# Waiting until Slack has processed a new file ----------------------------------------------------
-
-
-def info_after(polls: int, asked: list[str]) -> Any:
-    """A ``files.info`` that says "not processed yet" for the first ``polls`` calls per file."""
-    seen: dict[str, int] = {}
-
-    async def info(file_id: str) -> dict[str, Any]:
-        asked.append(file_id)
-        seen[file_id] = seen.get(file_id, 0) + 1
-        if seen[file_id] <= polls:
-            return {"id": file_id, "url_private": "https://example.com/f"}
-        return {"id": file_id, "mimetype": "image/png", "thumb_64": "https://example.com/t"}
-
-    return info
-
-
-def test_a_file_is_ready_with_a_type_and_dimensions_or_a_thumbnail() -> None:
-    assert is_ready({"mimetype": "image/png", "original_w": 512})
-    assert is_ready({"mimetype": "image/png", "thumb_360": "https://example.com/t"})
-    assert not is_ready({"mimetype": "image/png"})
-    assert not is_ready({"url_private": "https://example.com/f", "thumb_64": "https://example.com/t"})
-    assert not is_ready({"mimetype": "image/png", "thumb_64": ""})
-    assert not is_ready({})
-
-
-async def test_a_new_file_is_returned_only_once_slack_has_processed_it(house: House) -> None:
-    pauses, asked = Pauses(), []
-    badges = files(house, Uploads(), file_info=info_after(2, asked), pause=pauses)
-    fresh: set[str] = set()
-    assert await badges.file_ids(house.household.id, [CHEF], fresh) == {CHEF: "F1"}
-    assert fresh == {"F1"} and asked == ["F1"] * 3 and len(pauses.waits) == 2
-
-
-async def test_several_new_files_wait_together(house: House) -> None:
-    pauses, asked = Pauses(), []
-    badges = files(house, Uploads(), file_info=info_after(1, asked), pause=pauses)
-    fresh: set[str] = set()
-    assert await badges.file_ids(house.household.id, [CHEF, SCOUT], fresh) == {CHEF: "F1", SCOUT: "F2"}
-    assert fresh == {"F1", "F2"} and len(asked) == 4
-
-
-async def test_a_file_that_never_gets_ready_times_out_to_text_but_stays_cached(house: House) -> None:
-    block = asyncio.Event()  # never set: the wait for the next check ends only at the timeout
-
-    async def stuck(seconds: float) -> None:
-        await block.wait()
-
-    asked: list[str] = []
-    badges = files(house, Uploads(), file_info=info_after(10**6, asked), pause=stuck, timeout=0.05)
-    fresh: set[str] = set()
-    assert await badges.file_ids(house.household.id, [CHEF], fresh) == {}
-    assert fresh == set()
-    async with house.sessionmaker() as db:
-        assert len(await BadgeFileRepository(db).all(house.household.id)) == 1  # a later ask finds it cached
-
-
-async def test_cached_files_skip_the_readiness_check(house: House) -> None:
-    asked: list[str] = []
-    uploads = Uploads()
-    badges = files(house, uploads, file_info=info_after(0, asked), pause=Pauses())
-    await badges.file_ids(house.household.id, [CHEF])
-    asked.clear()
-    fresh: set[str] = set()
-    assert await badges.file_ids(house.household.id, [CHEF], fresh) == {CHEF: "F1"}
-    assert asked == [] and fresh == set()
-
-
-async def test_an_unreadable_file_status_trusts_the_file_and_warns_once(
-    house: House, caplog: pytest.LogCaptureFixture
-) -> None:
-    async def denied(file_id: str) -> dict[str, Any]:
-        raise RuntimeError("Slack files.info failed: missing_scope")
-
-    badges = files(house, Uploads(), file_info=denied, pause=Pauses())
-    with caplog.at_level(logging.INFO):
-        assert await badges.file_ids(house.household.id, [CHEF, SCOUT]) == {CHEF: "F1", SCOUT: "F2"}
-    (line,) = [r for r in caplog.records if r.levelno == logging.WARNING]
-    assert "files:read" in line.getMessage() and "missing_scope" in line.error  # type: ignore[attr-defined]
-
-
-async def test_the_announcement_waits_for_slack_to_process_the_new_files(house: House) -> None:
-    slack = await wire(house)
-    slack.fake.processing_polls = 2
-    pauses = Pauses()
-    slack.conn.badge_files.pause = pauses
-    await earn(house)
-    await slack.drain()
-    assert len(slack.fake.of("files.info")) == 6  # two files, three checks each
-    assert len(pauses.waits) == 4 and any("accessory" in b for b in announcement(slack))
-    slack.fake.clear()
-    await award(house, "Alex", BadgeKey.CHEF, Tier.GOLD)
-    await announce(house)
-    await slack.drain()
-    assert slack.fake.of("files.info") == []  # cached files aren't checked again

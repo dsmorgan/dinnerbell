@@ -136,7 +136,7 @@ from dinnerbell.services import (
     stats,
 )
 from dinnerbell.services import schedule as schedule_service
-from dinnerbell.services.badge_files import RETRY_PAUSE_SECONDS, BadgeFiles
+from dinnerbell.services.badge_files import RETRY_PAUSES, BadgeFiles
 from dinnerbell.services.clock import Clock
 from dinnerbell.services.errors import Forbidden, NotFound
 from dinnerbell.services.event_views import EventView
@@ -583,7 +583,7 @@ class Interactions:
                 if not art or self.badge_files is None or not refused_blocks(exc):
                     raise
                 # Slack may refuse a file ID, such as one deleted in Slack, or one it hasn't
-                # finished processing. A file uploaded just now gets one more try after a pause,
+                # finished processing. A file uploaded just now gets up to two more tries after a pause,
                 # with the cache untouched. Otherwise forget the files and show the text instead,
                 # so Home still draws and the next view uploads again.
                 extra: dict[str, Any] = {"member_id": member.id}
@@ -594,8 +594,8 @@ class Interactions:
                     "; retrying" if fresh else "",
                     extra=extra | refusal(exc),
                 )
-                if fresh:
-                    await self.badge_files.pause(RETRY_PAUSE_SECONDS)
+                for pause in RETRY_PAUSES if fresh else ():
+                    await self.badge_files.pause(pause)
                     try:
                         await self.api.publish_home(
                             user_id, with_version_footer(build(art), self.version, self.instance_label)
@@ -604,7 +604,7 @@ class Interactions:
                         if not refused_blocks(again):
                             raise
                         log.warning(
-                            "slack refused badge art again (%s: %s); publishing text badges",
+                            "slack refused badge art again (%s: %s)",
                             again.code,
                             again.detail,
                             extra=extra | refusal(again),

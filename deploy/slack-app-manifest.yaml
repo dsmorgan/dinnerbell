@@ -40,7 +40,6 @@ oauth_config:
       - channels:read       # check the bot is in the household channel (conversations.info)
       - channels:history    # reserved for reading threads; unused in version 1
       - files:write         # upload the badge art PNGs (files.upload); never shared in a channel
-      - files:read          # check an uploaded badge PNG is processed before a post uses it (files.info)
       - im:write            # direct messages; also checks a DM button came from the member's own DM
       - users:read          # needed by users:read.email
       - users:read.email    # link members by email (users.lookupByEmail)

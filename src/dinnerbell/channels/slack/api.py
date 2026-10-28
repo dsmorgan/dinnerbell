@@ -303,12 +303,6 @@ class SlackApi:
             raise SlackUnavailable("Slack files.upload returned no file ID")
         return file_id
 
-    async def file_info(self, file_id: str) -> dict[str, Any]:
-        """What Slack knows about a file (``files.info``; needs ``files:read``)."""
-        response = await self._call("files.info", lambda: self.client.files_info(file=file_id))
-        file = response.get("file")
-        return dict(file) if isinstance(file, dict) else {}
-
     async def identity(self) -> Identity:
         response = await self._call("auth.test", self.client.auth_test)
         return Identity(team_id=str(response["team_id"]), bot_user_id=str(response["user_id"]))
