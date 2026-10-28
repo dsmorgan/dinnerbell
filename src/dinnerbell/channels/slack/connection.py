@@ -292,7 +292,7 @@ class SlackConnection:
         """Wait until Slack is connected and nothing is held back, then let ``BadgeFiles.prewarm``
         upload the art. With no connection nothing is tried, so nothing is logged or hammered."""
         try:
-            while not (self.hold.scope is HoldScope.NONE and await self.is_connected()):
+            while not await self._ready_for_art():
                 await self.sleep(PREWARM_POLL)
             await self.sleep(PREWARM_DELAY)
             await self.badge_files.prewarm(household_id)
@@ -300,6 +300,16 @@ class SlackConnection:
             raise
         except Exception:
             log.exception("badge art prewarm failed")
+
+    async def _ready_for_art(self) -> bool:
+        """Whether Slack is connected and nothing is held back. A failed look counts as not yet."""
+        if self.hold.scope is not HoldScope.NONE:
+            return False
+        try:
+            return await self.is_connected()
+        except Exception:
+            log.debug("badge art prewarm could not check the connection", exc_info=True)
+            return False
 
     async def stop(self, deadline: float | None = None) -> None:
         """Shut down by ``deadline`` (the event loop's clock), or within the default waits."""
@@ -319,6 +329,7 @@ class SlackConnection:
                 await asyncio.wait_for(self.socket.close(), left(SOCKET_CLOSE_SECONDS))
             except Exception:
                 log.warning("slack socket did not close cleanly", exc_info=True)
+        await self.badge_files.settle(left(SETTLE_SECONDS))  # a cancelled upload's row still lands
         await self.interactions.settle(left(SETTLE_SECONDS))
         await self.interactions.cancel_pending()
 

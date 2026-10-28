@@ -61,7 +61,7 @@ PREWARM_SPACING = 2.0
 PREWARM_UPLOAD_TIMEOUT = 60.0
 """The longest ``prewarm`` waits for one upload (three Slack calls) before counting a failure."""
 PREWARM_FAILURES = 3
-"""Failures after which ``prewarm`` gives up. First use uploads what's left, as ever."""
+"""Failures in a row after which ``prewarm`` gives up. First use uploads what's left, as ever."""
 
 Pause = Callable[[float], Awaitable[None]]
 
@@ -94,6 +94,7 @@ class BadgeFiles:
         self._locks: dict[tuple[int, Wanted], asyncio.Lock] = {}
         self._retry_at = datetime.min.replace(tzinfo=UTC)
         self._uploaded_at: dict[str, datetime] = {}
+        self._saves: set[asyncio.Future[None]] = set()
 
     async def file_ids(
         self, household_id: int, wanted: Iterable[Wanted], fresh: set[str] | None = None
@@ -110,6 +111,12 @@ class BadgeFiles:
         except Exception as exc:
             self._failed(household_id, exc)
         return found
+
+    async def settle(self, within: float) -> None:
+        """Wait up to ``within`` seconds for saves of files already uploaded to Slack, so a shutdown
+        cancelling an upload doesn't lose its row or race the database closing. Never raises."""
+        if self._saves:
+            await asyncio.wait(set(self._saves), timeout=within)
 
     async def forget(self, household_id: int, file_ids: Iterable[str], *, cool: bool = False) -> None:
         """Drop remembered files Slack refused, so the next use uploads them again. Never raises.
@@ -159,7 +166,10 @@ class BadgeFiles:
             self._uploaded_at = {i: t for i, t in self._uploaded_at.items() if now - t < FRESH_FOR}
             self._uploaded_at[file_id] = now
             # Shielded: if the caller gives up now, the file is already in Slack, so the save still lands.
-            await asyncio.shield(self._save(household_id, BadgeFile(key, tier, digest, file_id)))
+            saving = asyncio.ensure_future(self._save(household_id, BadgeFile(key, tier, digest, file_id)))
+            self._saves.add(saving)
+            saving.add_done_callback(self._saves.discard)
+            await asyncio.shield(saving)
             log.info("badge art uploaded", extra={"household_id": household_id, "badge": key, "tier": tier})
             return file_id
 
@@ -198,6 +208,7 @@ class BadgeFiles:
                     continue
                 todo.pop(0)
                 uploaded += 1
+                failures = 0  # PREWARM_FAILURES counts failures in a row
                 await self.pause(spacing)
         except asyncio.CancelledError:
             raise

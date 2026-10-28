@@ -783,3 +783,70 @@ async def test_home_without_art_keeps_the_text_layout_byte_for_byte(house: House
     assert blocks[start]["type"] == "section" and blocks[start]["text"]["text"].startswith("*Your badges*\n")
     assert blocks[start + 1]["type"] == "context" and len(blocks[start + 1]["elements"]) == 1
     assert "slack_file" not in json.dumps(blocks) and "All badges on the web" not in json.dumps(blocks)
+
+
+# Shutdown (#112) ----------------------------------------------------------------------------------
+
+
+async def test_a_failed_connection_look_does_not_end_the_prewarm(house: House) -> None:
+    from tests.support.fake_slack import FakeSlack
+
+    conn = connection(house, FakeSlack())
+    looks = 0
+
+    async def flaky() -> bool:
+        nonlocal looks
+        looks += 1
+        if looks == 1:
+            raise RuntimeError("socket gone")
+        return True
+
+    conn.is_connected = flaky  # type: ignore[method-assign]
+    conn.sleep = no_wait
+    await conn._prewarm(house.household.id)
+    assert looks == 2 and len(conn.api.client.files) == ALL_BUT_FOOD_CRITIC  # type: ignore[attr-defined]
+
+
+async def no_wait(seconds: float) -> None:
+    await asyncio.sleep(0)
+
+
+async def test_prewarm_failures_count_in_a_row_not_in_all(house: House) -> None:
+    uploads = Uploads()
+    calls = 0
+    original = uploads.__call__
+
+    async def every_other(filename: str, png: bytes, alt: str) -> str:
+        nonlocal calls
+        calls += 1
+        if calls % 2:
+            raise RuntimeError("blip")
+        return await original(filename, png, alt)
+
+    badges = files(house, uploads, pause=Pauses())
+    badges.upload = every_other
+    assert await badges.prewarm(house.household.id) is True
+
+
+async def test_stopping_during_an_upload_still_saves_its_row(house: House) -> None:
+    uploads = Uploads()
+    badges = files(house, uploads, pause=Pauses())
+    save = badges._save
+    release, saving = asyncio.Event(), asyncio.Event()
+
+    async def slow_save(household_id: int, file: Any) -> None:
+        saving.set()
+        await release.wait()
+        await save(household_id, file)
+
+    badges._save = slow_save  # type: ignore[method-assign]
+    task = asyncio.ensure_future(badges.prewarm(house.household.id))
+    await asyncio.wait_for(saving.wait(), 5)  # the first upload is in flight, its save waiting
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    release.set()
+    await badges.settle(5)
+    async with house.sessionmaker() as db:
+        assert len(await BadgeFileRepository(db).all(house.household.id)) == 1
+    assert not badges._saves
