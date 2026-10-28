@@ -124,13 +124,15 @@ jobs:
           path: coverage-shard-${{ matrix.shard }}
           if-no-files-found: error
           retention-days: 1
+          overwrite: true # a re-run of one shard replaces that shard's file, and only that one
 
   check:
     name: check
     needs: [lint, test]
-    # Run even when a needed job failed, so that `check` fails. A skipped job counts as passing
-    # for a required status check.
-    if: ${{ !cancelled() }}
+    # Run even when a needed job failed or the run was cancelled, so that `check` fails. A skipped
+    # job counts as passing for a required status check. The first step fails on any result but
+    # `success`, and a cancelled one is `cancelled`.
+    if: ${{ always() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -167,11 +169,28 @@ jobs:
           pattern: coverage-shard-*
           path: shards
           merge-multiple: true
-      # coverage reads fail_under (90) from pyproject.toml. The count catches a missing shard file.
+      # coverage reads fail_under (90) from pyproject.toml. Before it runs, every one of the eight
+      # files must exist, differ from the others (a duplicate is a shard counted twice), hold measured
+      # files (not empty), and be combined, not skipped (a damaged file is skipped).
       - name: Merge the coverage data and enforce the floor
         run: |
           test "$(find shards -type f | wc -l)" -eq 8
-          uv run coverage combine shards/*
+          if [[ -n "$(sha256sum shards/* | cut -d' ' -f1 | sort | uniq -d)" ]]; then
+            echo "::error::Two shards saved identical coverage data."
+            exit 1
+          fi
+          # coverage combines an empty file without complaint, so look inside each one.
+          for file in shards/*; do
+            uv run python -c 'import sqlite3, sys; sys.exit(0 if sqlite3.connect(sys.argv[1]).execute("select count(*) from file").fetchone()[0] else 1)' "$file" || {
+              echo "::error::$file holds no coverage data."
+              exit 1
+            }
+          done
+          uv run coverage combine shards/* 2>&1 | tee combine.log
+          if grep -qi skipped combine.log || ! grep -qx "Combined 8 files" combine.log; then
+            echo "::error::coverage combine didn't use all eight shard files."
+            exit 1
+          fi
           uv run coverage report
 
   image:
