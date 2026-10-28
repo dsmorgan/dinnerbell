@@ -854,6 +854,11 @@ def _mine_lines(event: note.EventInfo, mine: Response | None, member_id: int) ->
     return lines
 
 
+def not_for_you_line(names: tuple[str, ...]) -> str:
+    """For a late joiner's eyes only (#76): picks that miss their own stances or needs."""
+    return f"⚠ Not a fit for your preferences: {escape(', '.join(names))}"
+
+
 def _late_answer_line(mine: Response) -> str:
     """A late joiner's own answer, for their eyes only (#76)."""
     if not mine.is_in:
@@ -943,12 +948,15 @@ def your_answer(
     guest: bool = False,
     can_invite: bool = False,
     guests: tuple[CardGuest, ...] = (),
+    not_for_you: tuple[str, ...] = (),
 ) -> Message:
     """The Your answer card: an ephemeral only ``member_id`` sees, with their answer and offers
     marked on the same buttons the call has (spec section 10). ``event`` is the call as it is now
     and ``mine`` their response to it. A tap in the channel posts a card; a tap on the card
     replaces it, so ``run`` is the run the tapped card named, or None after a channel tap.
-    ``notice`` is why a tap changed nothing, such as someone else coordinating already."""
+    ``notice`` is why a tap changed nothing, such as someone else coordinating already.
+    ``not_for_you`` names the picks that miss a late joiner's own stances or needs (#76): only
+    they see it (FR-29)."""
     title = f"*{_title(event)}*"
     if run is not None and run != event.run:
         # Another run's answers aren't what this card was about; don't mix them in.
@@ -964,6 +972,8 @@ def your_answer(
         status = escape(_call_status(event))
         lines.append(f"*{MOVED_ON}* {status}" if moved_on else status)
     lines += _mine_lines(event, mine, member_id)
+    if not_for_you and late_answer(event, mine):
+        lines.append(not_for_you_line(not_for_you))
     blocks: list[Block] = [section(join_lines(lines))]
     if notice:
         blocks.append(context(escape(notice)))

@@ -239,6 +239,8 @@
       <p class="small votes">{{ p.info.votes }} vote{{ "" if p.info.votes == 1 else "s" }}{% if p.info.counted %}: {{ p.info.counted|map(attribute="name")|join(", ") }}{% endif %}
         {%- if p.info.not_counted %} · not counted: {% for n in p.info.not_counted %}{{ n.name }} (late){{ ", " if not loop.last }}{% endfor %}{% endif %}</p>
       {% for w in p.info.warnings %}<p class="small warning">{{ w }}</p>{% endfor %}
+      {#- Only the late joiner sees which picks miss their own stances or needs (FR-29). -#}
+      {% if p.not_for_me %}<p class="small warning">⚠ This pick doesn't fit your preferences.</p>{% endif %}
       <div class="button-row">
         {% if v.can.vote %}
         {% if p.voted %}{{ act(e.id, base ~ "/proposals/" ~ p.info.id ~ "/unvote", "Voted", "button small choice", pressed=true) }}
@@ -281,7 +283,7 @@
 
   {% if v.late and e.state.value == "voting" %}
   <h3>Joined late</h3>
-  <p class="small muted">Their votes show, but count only if the coordinator says so. Their needs and stances warn about picks instead of ruling them out.</p>
+  <p class="small muted">Their votes show, but count only if the coordinator says so. Their own needs and stances don't rule out picks.</p>
   <ul class="roster late">
     {% for l in v.late %}
     <li>

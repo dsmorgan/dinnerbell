@@ -787,6 +787,7 @@ class Interactions:
             guest=member.is_guest,
             can_invite=view.can.invite,
             guests=mine,
+            not_for_you=view.not_for_me,
         )
 
     @contextlib.asynccontextmanager

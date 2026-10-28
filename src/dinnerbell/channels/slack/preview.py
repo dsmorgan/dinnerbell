@@ -187,7 +187,7 @@ LATE_PROPOSALS = (
     replace(
         PROPOSALS[1],
         voters=(SAM,),
-        warnings=("⚠ Someone who joined late needs Vegetarian, and this isn't marked that way.",),
+        warnings=("⚠ A guest of someone who joined late needs Vegetarian, and this isn't marked that way.",),
     ),
     PROPOSALS[2],
 )
@@ -506,7 +506,18 @@ VIEWS: dict[str, Callable[[], dict[str, Any]]] = {
         HomeLinks(BASE_URL),
     ),
     "home_voting_late": lambda: home_view(
-        TodayView(DAY, [replace(VOTING_VIEW, mine=KIM_LATE, can=Permissions(vote=True, late_roles=True))], tuple(Slot)),
+        TodayView(
+            DAY,
+            [
+                replace(
+                    VOTING_VIEW,
+                    mine=KIM_LATE,
+                    can=Permissions(vote=True, late_roles=True),
+                    proposals=(ProposalView(PROPOSALS[1], voted=False, not_for_me=True), *VOTING_VIEW.proposals[2:]),
+                )
+            ],
+            tuple(Slot),
+        ),
         HomeLinks(BASE_URL),
     ),
     "cancel_modal": lambda: cancel_modal(COLLECTING_VIEW, CALL_OFF_ORIGIN),
@@ -623,6 +634,9 @@ CARDS: dict[str, CardSample] = {
     "your_answer_called_off": _card(CANCELLED, KIM_IN, run=1),
     "your_answer_join_late": _card(event(EventState.VOTING), replace(KIM_IN, status=Status.OUT), run=1),
     "your_answer_late": _card(VOTING, KIM_LATE, run=1),
+    "your_answer_late_not_for_you": lambda ctx: your_answer(
+        VOTING, KIM_LATE, KIM.id, ctx, run=1, not_for_you=("Siam Garden", "Taqueria <Lupita> & Co")
+    ).payload(),
     "your_answer_late_counts": _card(event(EventState.VOTING), replace(KIM_LATE, vote_counts=True)),
     "your_answer_taken_off": _card(VOTING, replace(KIM_LATE, status=Status.OUT), run=1),
     "your_answer_started_again": _card(replace(event(), run=2), KIM_IN, run=1),

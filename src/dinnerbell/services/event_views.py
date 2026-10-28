@@ -91,6 +91,9 @@ class GuestView:
 class ProposalView:
     info: note.ProposalInfo
     voted: bool
+    not_for_me: bool = False
+    """The viewer joined late and this pick misses their own vetoes or dietary needs (#76).
+    Only they see it (FR-29)."""
 
 
 @dataclass(frozen=True)
@@ -127,6 +130,11 @@ class EventView:
         """ "usually dinner" beside an item that isn't for the call's meal (#72). ``items`` lists
         those last, and still offers them: people know better than the catalog."""
         return meal_hint(item, self.event.slot.meal)
+
+    @property
+    def not_for_me(self) -> tuple[str, ...]:
+        """The picks that don't fit the viewer, a late joiner, by name (#76): for their eyes only."""
+        return tuple(p.info.item.name for p in self.proposals if p.not_for_me)
 
     @property
     def picked_item_ids(self) -> frozenset[int]:
@@ -310,6 +318,7 @@ def view(ctx: CallContext, actor: Member, today: date, now: datetime, *, any_tim
     mine = [s for s in ctx.suggestions if s.member_id == actor.id]
     tags = sorted(ctx.tags.values(), key=lambda t: t.key)
     active = sorted((i for i in ctx.items.values() if i.active), key=lambda i: i.key)
+    voting = ctx.event.state is EventState.VOTING
     return EventView(
         event=ctx.event,
         info=cc.event_info(ctx),
@@ -320,7 +329,12 @@ def view(ctx: CallContext, actor: Member, today: date, now: datetime, *, any_tim
         my_suggestion_ids=tuple(s.item_id for s in mine if s.item_id is not None),
         my_suggestion_texts=tuple(s.free_text for s in mine if s.free_text is not None),
         proposals=tuple(
-            ProposalView(cc.proposal_info(ctx, p), actor.id in ctx.votes.get(p.id, [])) for p in ctx.proposals
+            ProposalView(
+                cc.proposal_info(ctx, p),
+                actor.id in ctx.votes.get(p.id, []),
+                not_for_me=voting and not cc.fits_late_joiner(ctx, p, actor.id),
+            )
+            for p in ctx.proposals
         ),
         decision=cc.decision_info(ctx),
         can=permissions(ctx, actor, today, now, any_time=any_time),

@@ -48,6 +48,7 @@ from dinnerbell.channels.slack.messages import (
     coordinator_line,
     join_late_button,
     mark_done_button,
+    not_for_you_line,
 )
 from dinnerbell.domain import notifications as note
 from dinnerbell.domain.catalog import CatalogItem, ItemKind, Mode, Tag
@@ -687,6 +688,8 @@ def _event_card(
         if v.mine.offers and v.mine.is_in:
             mine += " You offered to " + " or ".join(OFFER_WORDS[o] for o in sorted(v.mine.offers)) + "."
         lines.append(mine)
+        if v.not_for_me:  # Home is theirs alone (FR-29)
+            lines.append(not_for_you_line(v.not_for_me))
     elif v.mine is not None:
         mine = STATUS_WORDS[v.mine.status]
         if v.mine.guests and v.mine.status is not Status.OUT:

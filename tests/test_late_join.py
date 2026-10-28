@@ -18,8 +18,11 @@ import pytest
 from fastapi.testclient import TestClient
 
 from dinnerbell.channels.slack import ids
+from dinnerbell.channels.slack.blocks import Directory
+from dinnerbell.channels.slack.messages import RenderContext, render, your_answer
+from dinnerbell.channels.slack.views import HomeLinks, home_view
 from dinnerbell.config import Settings
-from dinnerbell.db.models import ResponseRow
+from dinnerbell.db.models import ResponseRow, TagRow
 from dinnerbell.domain.catalog import Mode, TagKind
 from dinnerbell.domain.events import (
     JOIN_LATE_PROMPT,
@@ -29,6 +32,7 @@ from dinnerbell.domain.events import (
     TAKEN_OFF,
     ActingAs,
     AssignmentRole,
+    Details,
     Event,
     EventKind,
     EventRuleViolation,
@@ -47,12 +51,14 @@ from dinnerbell.domain.events import (
 from dinnerbell.domain.guests import REFUSED, GuestAction, GuestInput
 from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.members import Capabilities, Member, Role
+from dinnerbell.domain.notifications import from_payload
 from dinnerbell.domain.preferences import Stance, TargetType
 from dinnerbell.logs import JsonFormatter
-from dinnerbell.services import activity, call_admin, calls, guests
+from dinnerbell.services import activity, call_admin, calls, event_views, guests
 from dinnerbell.services import call_context as cc
 from dinnerbell.services.database import Database, open_database
 from dinnerbell.services.errors import NotFound
+from dinnerbell.services.event_views import TodayView
 from dinnerbell.services.lifecycle import DOESNT_FIT
 from dinnerbell.services.preferences import set_my_preference
 from tests.conftest import invite, page, sign_in
@@ -68,6 +74,7 @@ from tests.test_events_web import proposal_ids, sign_in_as, start
 from tests.test_events_web import to_voting as web_to_voting
 
 pytestmark = pytest.mark.anyio
+BASE_URL = "https://dinnerbell.example.com"
 
 
 @pytest.fixture
@@ -432,40 +439,78 @@ async def test_a_late_joiner_taking_part_can_be_assigned_the_role(house: House) 
 # Warnings, not refusals (FR-29) -------------------------------------------------------------------
 
 
-async def test_picks_that_conflict_with_a_late_joiner_warn_and_stay(house: House) -> None:
-    """Kim needs vegetarian and vetoes Thai. Neither applied to the picks, which were drawn
-    before she joined, so each warns, without saying whose stance or which tag it was."""
+async def _kim_vegetarian_vetoes_thai(house: House) -> None:
     veg = await house.tag("Vegetarian", TagKind.DIETARY)
     async with house.sessionmaker() as db:
         house.people["Kim"] = await guests.set_my_needs(db, house["Kim"], frozenset({veg.id}), now=house.clock())
     await act(house, set_my_preference, house["Kim"], TargetType.TAG, house.tags["Thai"].id, Stance(veto=True))
+
+
+def _rendered(notification: Any) -> str:
+    return json.dumps(render(notification, RenderContext(BASE_URL, Directory())).payload())
+
+
+async def test_only_the_late_joiner_sees_which_picks_miss_their_own_stances(house: House) -> None:
+    """Kim alone joins late, needs vegetarian, and vetoes Thai; Siam Garden (Thai) and Taqueria
+    are the picks. Nothing is removed, and no surface anyone else sees says a pick misses
+    anything: with one late joiner, that would say what Kim vetoes (FR-29). Kim sees it on her
+    card, her Home, and her event page."""
+    await _kim_vegetarian_vetoes_thai(house)
     event_id = await to_voting(house, "Alex", "Sam")
     found = await picks(house, event_id)
     assert set(found) == {"Siam Garden", "Taqueria"}
-    assert [(await info(house, event_id, p)).warnings for p in found.values()] == [(), ()]
-
     await act(house, calls.join_late, house["Kim"], event_id)
+    await act(house, calls.vote, house["Kim"], event_id, found["Siam Garden"])
     assert set(await picks(house, event_id)) == {"Siam Garden", "Taqueria"}  # nothing is removed
-    siam, taqueria = [await info(house, event_id, found[name]) for name in ("Siam Garden", "Taqueria")]
-    needs = cc.LATE_NEEDS.format(needs="Vegetarian")
-    assert (siam.warnings, taqueria.warnings) == ((cc.LATE_VETO, needs), (needs,))
-    for warning in (*siam.warnings, *taqueria.warnings):
-        assert "Kim" not in warning and "Thai" not in warning  # not whose, nor what they vetoed
+
+    # Every message the call sends, in the channel or to anyone.
+    sent = [from_payload(e.kind, e.payload) for e in await house.outbox()]
+    assert {n.kind for n in sent} >= {"call_updated", "proposals_updated"}
+    for notification in sent:
+        assert "⚠" not in _rendered(notification) and "fit" not in _rendered(notification), notification.kind
+
+    ctx = await house.context(event_id)
+    for name in ("Alex", "Sam", "Lee", "Kim"):
+        view = event_views.view(ctx, house[name], ctx.event.day, house.clock())
+        home = json.dumps(home_view(TodayView(ctx.event.day, [view], tuple(Slot)), HomeLinks(BASE_URL)))
+        card = your_answer(
+            view.info, view.mine, house[name].id, RenderContext(BASE_URL, Directory()), not_for_you=view.not_for_me
+        ).payload()
+        if name == "Kim":
+            assert view.not_for_me == ("Siam Garden", "Taqueria")
+            assert "Not a fit for your preferences: Siam Garden, Taqueria" in home
+            assert "Not a fit for your preferences: Siam Garden, Taqueria" in json.dumps(card)
+        else:
+            assert view.not_for_me == () and "⚠" not in home and "⚠" not in json.dumps(card), name
+        assert all(not p.info.warnings for p in view.proposals)
 
     await act(house, calls.lock, house["Alex"], event_id, found["Siam Garden"])  # the coordinator may still lock it
     ctx = await house.context(event_id)
     decision = cc.decision_info(ctx)
-    assert decision is not None and decision.dietary_notes == ("Vegetarian",)  # her needs apply to the plan
+    assert decision is not None and decision.dietary_notes == ("Vegetarian",)  # her needs go with the plan
+    assert "⚠" not in _rendered(cc.decision_updated(ctx)[0])
 
 
-async def test_a_switched_off_late_joiner_warns_about_nothing(house: House) -> None:
-    await act(house, set_my_preference, house["Kim"], TargetType.TAG, house.tags["Thai"].id, Stance(veto=True))
-    event_id = await to_voting(house, "Alex", "Sam")
+async def test_a_late_joiners_guests_needs_warn_everyone(house: House) -> None:
+    """Guests' dietary needs are on the roster for everyone already, so a pick that misses the
+    needs of a guest a late joiner brings warns on the shared messages, without saying whose."""
+    veg = await house.tag("Vegetarian", TagKind.DIETARY)
+    event_id = await open_dinner(house)
+    await act(house, calls.respond, house["Kim"], event_id, Status.MAYBE)
+    await act(house, calls.save_details, house["Kim"], event_id, Details(guests=1, guest_needs=frozenset({veg.id})))
+    await act(house, calls.respond, house["Kim"], event_id, Status.OUT)
+    for name in ("Alex", "Sam"):
+        await act(house, calls.respond, house[name], event_id, Status.IN)
+    await act(house, calls.offer_role, house["Alex"], event_id, RoleOffer.PICKUP, True)
+    house.clock.now = RESPOND_BY
+    await house.tick()
     siam = (await picks(house, event_id))["Siam Garden"]
     await act(house, calls.join_late, house["Kim"], event_id)
-    assert (await info(house, event_id, siam)).warnings == (cc.LATE_VETO,)
+    warned = await info(house, event_id, siam)
+    assert warned.warnings == (cc.LATE_GUEST_NEEDS.format(needs="Vegetarian"),)
+    assert "Kim" not in warned.warnings[0]
     await act(house, calls.switch_late_joiner, house["Alex"], event_id, house["Kim"].id, taking_part=False)
-    assert (await info(house, event_id, siam)).warnings == ()
+    assert (await info(house, event_id, siam)).warnings == ()  # switched off: her guest isn't coming
 
 
 async def test_a_late_joiners_pick_passes_everyone_on_time_but_not_their_own_stances(house: House) -> None:
@@ -497,7 +542,9 @@ async def test_a_late_joiners_pick_passes_everyone_on_time_but_not_their_own_sta
         cuisine_id=thai,
         join_late=True,
     )
-    assert (await info(house, event_id, thai_pick.id)).warnings == (cc.LATE_VETO,)
+    ctx = await house.context(event_id)
+    assert not cc.fits_late_joiner(ctx, thai_pick, house["Kim"].id)  # her own veto: only she is told
+    assert (await info(house, event_id, thai_pick.id)).warnings == ()
 
 
 async def test_a_maybe_who_joins_late_keeps_their_stances_applying(house: House) -> None:
@@ -665,7 +712,10 @@ def test_web_join_late_vote_and_switches(
     first, _second = proposal_ids(migrated)
 
     sign_in_as(admin, provider, "kim@example.com")
+    thai = next(t for t in rows(migrated, TagRow) if t.name == "Thai")
+    assert submit(admin, "/preferences/stance", {"target": f"tag:{thai.id}", "level": "veto"}).status_code < 400
     html = page(admin.get(f"/events/{event_id}"))
+    assert "fit your preferences" not in html  # not until she's in (#76)
     assert "I'm in (late)" in html and "Join late and vote" in html and "Join late and propose" in html
     assert 'hx-confirm="You missed the answers. Join late?"' in admin.get(f"/events/{event_id}").text
     assert submit(admin, f"/events/{event_id}/join-late", {}).status_code == 400  # it names the run
@@ -676,6 +726,7 @@ def test_web_join_late_vote_and_switches(
     assert (late.status, late.late, late.vote_counts) == ("in", True, False)
     html = page(admin.get(f"/events/{event_id}"))
     assert "Joined late" in html and "Kim (late)" in html and "Taking part" in html
+    assert html.count("⚠ This pick doesn't fit your preferences.") == 1  # Siam Garden, Thai: hers to see
     assert f"/events/{event_id}/late/" not in html  # her own switches aren't hers to flip
     refused = submit(admin, f"/events/{event_id}/late/{kim.id}", {"switch": "vote", "on": "1", "run": "1"})
     assert refused.status_code == 409 and LATE_SWITCHERS in page(refused)
@@ -684,6 +735,8 @@ def test_web_join_late_vote_and_switches(
     sign_in(admin, provider)  # the admin again
     html = page(admin.get(f"/events/{event_id}"))
     assert f"/events/{event_id}/late/{kim.id}" in html  # the admin, with nobody coordinating
+    assert "⚠" not in html and "fit your preferences" not in html  # her stances are hers (FR-29)
+    assert "⚠" not in page(admin.get("/"))
     assert (
         submit(admin, f"/events/{event_id}/late/{kim.id}", {"switch": "vote", "on": "1", "run": "1"}).status_code == 303
     )
