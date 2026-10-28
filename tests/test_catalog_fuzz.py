@@ -117,9 +117,11 @@ def random_value(rng: random.Random, depth: int = 0) -> object:
     return rng.choice(choices)
 
 
-def test_random_structures_never_raise() -> None:
-    rng = random.Random(7)
-    for _ in range(2000):
+# Slices of one run, so the workers share the loop. Each slice has its own seed and the same size.
+@pytest.mark.parametrize("slice_", range(5))
+def test_random_structures_never_raise(slice_: int) -> None:
+    rng = random.Random(7 + 1000 * slice_)
+    for _ in range(400):
         document = {
             "version": rng.choice([1, 1, 1, 2, "1", None]),
             rng.choice(["restaurants", "home_meals", "tags"]): random_value(rng),
@@ -128,9 +130,10 @@ def test_random_structures_never_raise() -> None:
         plan(yaml.safe_dump(document))
 
 
-def test_mutated_example_never_raises() -> None:
-    rng = random.Random(11)
-    for _ in range(1500):
+@pytest.mark.parametrize("slice_", range(5))
+def test_mutated_example_never_raises(slice_: int) -> None:
+    rng = random.Random(11 + 1000 * slice_)
+    for _ in range(300):
         chars = list(EXAMPLE)
         for _ in range(rng.randint(1, 8)):
             position = rng.randrange(len(chars))

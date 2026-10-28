@@ -230,7 +230,7 @@ def _many(count: int, notes: str | None) -> list[CatalogItem]:
     ]
 
 
-def test_an_export_over_the_import_limits_says_so() -> None:
+def test_an_export_over_the_size_limit_says_so() -> None:
     big = export_catalog(TAGS, _many(2_100, "n" * 480))
     assert len(big.data) > 1_000_000 and big.values < 50_000
     assert (
@@ -239,6 +239,8 @@ def test_an_export_over_the_import_limits_says_so() -> None:
     )
     assert parse_catalog(big.data).errors[0].message.startswith("The file is larger than 1 MB")
 
+
+def test_an_export_over_the_value_limit_says_so() -> None:
     many = export_catalog(TAGS, _many(2_700, None))
     assert len(many.data) < 1_000_000 and many.values > 50_000
     assert many.too_big_to_import == (
