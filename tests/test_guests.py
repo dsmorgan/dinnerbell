@@ -6,6 +6,7 @@ removal, sign-in by Slack user, and scrubbing guests on a test instance."""
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
@@ -740,6 +741,28 @@ async def test_relinking_a_guests_slack_signs_out_the_old_account(house: House) 
         await act(house, guests.set_guest_slack_user, house["Alex"], house["Jo"].id, "U07OTHER")
 
 
+async def test_relinking_a_guests_slack_forgets_what_the_old_account_said(house: House) -> None:
+    """The link picker's "same email" label and the confirmation page read ``slack_email`` and
+    ``slack_guest_account``; after a hand relink they must not describe the old account."""
+    pat = house["Pat"]
+    async with house.sessionmaker() as db:
+        await MemberRepository(db).update(
+            house.household.id, pat.id, house.clock(), slack_email="old@example.com", slack_guest_account=True
+        )
+        await db.commit()
+    same = await act(house, guests.set_guest_slack_user, house["Alex"], pat.id, pat.slack_user_id or "")
+    assert (same.slack_email, same.slack_guest_account) == ("old@example.com", True)  # not a change of account
+    updated = await act(house, guests.set_guest_slack_user, house["Alex"], pat.id, "U07OTHER")
+    assert (updated.slack_email, updated.slack_guest_account) == (None, False)
+    async with house.sessionmaker() as db:
+        await MemberRepository(db).update(
+            house.household.id, pat.id, house.clock(), slack_email="other@example.com", slack_guest_account=True
+        )
+        await db.commit()
+    cleared = await act(house, guests.set_guest_slack_user, house["Alex"], pat.id, "")
+    assert (cleared.slack_user_id, cleared.slack_email, cleared.slack_guest_account) == (None, None, False)
+
+
 async def test_a_guests_needs_hold_still_while_their_call_votes(house: House) -> None:
     veg = house.tags["Vegetarian"].id
     event_id = await open_dinner(house)
@@ -1010,6 +1033,27 @@ async def test_linking_refuses_retired_guests_and_anyone_but_an_active_member(ho
         with pytest.raises(NotFound, match="No such member"):
             await act(house, guests.link_to_member, house["Alex"], pat.id, target, confirm=name)
     assert (await house.refresh("Pat")).slack_user_id == "U07PAT"
+
+
+async def test_two_links_running_at_the_same_time_link_once(house: House) -> None:
+    """``link_to_member`` holds the write lock from its first read (``write_transaction``). Two
+    admins linking the same guest to the same member at once must give one link and one refusal;
+    without the lock, both read an active guest and an unlinked Kim, and both succeed."""
+    from dinnerbell.domain.members import MemberRuleViolation
+
+    pat, kim = house["Pat"], house["Kim"]
+
+    async def link(admin: str) -> Member:
+        async with house.sessionmaker() as db:
+            return await guests.link_to_member(db, house[admin], pat.id, kim.id, confirm="Kim", now=house.clock())
+
+    results = await asyncio.gather(link("Alex"), link("Alex"), return_exceptions=True)
+    refused = [r for r in results if isinstance(r, MemberRuleViolation)]
+    linked = [r for r in results if not isinstance(r, BaseException)]
+    assert (len(linked), len(refused)) == (1, 1), results
+    assert "isn't active" in str(refused[0])
+    assert len(await house.audits("guest.linked_to_member")) == 1
+    assert (await house.refresh("Kim")).slack_user_id == "U07PAT"
 
 
 async def test_two_links_at_once_refuse_the_second_like_a_replay(house: House, monkeypatch: pytest.MonkeyPatch) -> None:

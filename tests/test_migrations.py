@@ -931,6 +931,35 @@ def test_0011_adds_guests_and_invitations_without_losing_a_row(settings: Setting
     run_migrations(settings.sync_database_url, settings.database_path)
 
 
+def test_0011_names_a_member_with_an_empty_email_and_changes_nothing(
+    settings: Settings, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The new email check would fail the rebuild with a raw IntegrityError. The upgrade says
+    which member instead (by ID, never the email), logs the usual critical line, and rolls back."""
+    from dinnerbell import main as cli
+    from dinnerbell.db.migrate import UpgradeBlocked
+
+    _upgrade_to(settings, "0010_offers")
+    _populate_calls(settings)
+    _execute(settings, "UPDATE member SET email = '' WHERE id = 1")
+    before = _members(settings)
+    with pytest.raises(UpgradeBlocked, match=r"Member 1 has an empty email"):
+        run_migrations(settings.sync_database_url, settings.database_path)
+    assert _members(settings) == before
+    engine = create_engine(settings.sync_database_url)
+    try:
+        with engine.connect() as c:
+            assert MigrationContext.configure(c).get_current_heads() == ("0010_offers",)
+    finally:
+        engine.dispose()
+    with caplog.at_level(logging.CRITICAL):
+        assert cli._migrate(settings) is False
+    assert [r.levelno for r in caplog.records] == [logging.CRITICAL]
+    assert "Member 1 has an empty email" in caplog.records[0].getMessage()
+    _execute(settings, "UPDATE member SET email = 'sam@example.com' WHERE id = 1")
+    run_migrations(settings.sync_database_url, settings.database_path)
+
+
 def test_0011_refuses_to_run_with_foreign_keys_on(settings: Settings) -> None:
     """Rebuilding ``member`` with foreign keys on would cascade to nearly every table."""
     from alembic import command

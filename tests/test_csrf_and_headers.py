@@ -149,10 +149,34 @@ def test_pages_have_no_inline_script(client: TestClient, provider: FakeProvider)
         '<p STYLE="color: red">',
         '<button ONCLICK="go()">',
         '<img src="/static/x.png" onerror="go()"/>',
+        '<script src="/static/x.js"/>alert(1)</script>',
+        '<script src="/static/x.js"/>',
+        "<style>p { color: red }</style>",
+        "<STYLE >p { color: red }</STYLE>",
+        '<button hx-on:click="go()">',
+        '<button HX-ON--after-request="go()">',
+        '<a href="javascript:alert(1)">x</a>',
+        '<a href=" JavaScript:alert(1)">x</a>',
+        '<a href="java\tscript:alert(1)">x</a>',
+        '<form action="javascript:go()">',
     ],
 )
 def test_inline_code_check_catches_what_a_browser_runs(html: str) -> None:
     assert inline_code(html)[1], html
+
+
+@pytest.mark.parametrize(
+    "html",
+    [
+        '<script src="/static/htmx-2.0.11.min.js"></script>',
+        '<a href="/javascript:x">x</a>',
+        '<a href="https://example.com/?next=javascript:x">x</a>',
+        '<button hx-post="/x" hx-target="#y">',
+        "<p>javascript: is a word here</p>",
+    ],
+)
+def test_inline_code_check_passes_what_the_csp_allows(html: str) -> None:
+    assert inline_code(html)[1] == [], html
 
 
 def test_vendored_htmx_is_served(client: TestClient) -> None:

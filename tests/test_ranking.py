@@ -17,12 +17,16 @@ from dinnerbell.domain.events import Coverage
 from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.ranking import (
     MODE_COMPONENTS,
-    SAME_CUISINE_FACTOR,
     Component,
     GroupPreferences,
     Ranked,
     RankingSnapshot,
     RankItem,
+    _draw,
+    _exponential,
+    _log_weight,
+    _Scored,
+    _scored,
     candidates,
     components,
     join_names,
@@ -190,7 +194,8 @@ def test_equals_counts_the_candidates_with_the_same_score() -> None:
 
 def test_suggestions_always_make_the_vote() -> None:
     """A suggestion is an explicit request: it's in whenever it passes the hard filters, ahead
-    of the draw, however it scores. With more than ``limit`` of them, the best of them."""
+    of the draw, however it scores. With more than ``limit - 1`` of them, the best of them fill
+    ``limit - 1`` places and the rest compete in the draw."""
     places = [item(n, f"Place {n}", cuisine=n) for n in range(1, 9)]
     scores = GroupPreferences(item_scores={1: -6, 2: 3, 3: 3, 4: 3})
     snap = snapshot(*places, preferences=scores, suggesters={1: ("Alex",)})
@@ -201,8 +206,98 @@ def test_suggestions_always_make_the_vote() -> None:
     many = replace(snap, suggesters=dict.fromkeys((1, 2, 3, 5, 6), ("Alex",)), limit=3)
     for seed in range(50):
         picked = ids(rank(replace(many, seed=seed)))
-        assert picked[:2] == [2, 3] or picked[:2] == [3, 2]
-        assert picked[2] in {5, 6}  # the next best suggestions, tied, drawn at random
+        assert sorted(picked[:2]) == [2, 3]  # the two best suggestions
+        assert picked[2] not in {2, 3}  # the third place is a draw, not a guaranteed suggestion
+
+
+def test_suggestions_cant_fill_the_whole_vote() -> None:
+    """Step 5: at most ``limit - 1`` guaranteed suggestion places, so one member's three
+    suggestions don't fill a vote of 3 with no draw. At temperature 0 the draw takes the best
+    score, here a place nobody suggested, so the third place shows the cap."""
+    places = [item(n, f"Place {n}", cuisine=n) for n in range(1, 8)]
+    snap = snapshot(
+        *places,
+        preferences=GroupPreferences(item_scores={7: 6}),  # 7 scores 7; each suggested place scores 3
+        suggesters=dict.fromkeys((1, 2, 3), ("Alex",)),
+        temperature=0.0,
+    )
+    for seed in range(30):
+        picked = ids(rank(replace(snap, seed=seed)))
+        assert len(picked) == 3 and set(picked[:2]) <= {1, 2, 3}
+        assert picked[2] == 7  # drawn: the best score left, though the third suggestion fits
+    firsts = {tuple(ids(rank(replace(snap, seed=seed)))[:2]) for seed in range(30)}
+    assert len(firsts) > 1  # the tied suggestions that make the cap are chosen at random
+    # The cap is limit - 1, whatever the limit: 1 for a vote of 2, none for a vote of 1.
+    assert sum(1 in ids(rank(replace(snap, limit=2, seed=seed))) for seed in range(30)) < 30
+    for seed in range(30):
+        two = ids(rank(replace(snap, limit=2, seed=seed)))
+        assert two[0] in {1, 2, 3} and two[1] == 7
+        assert ids(rank(replace(snap, limit=1, seed=seed))) == [7]
+    # Fewer suggestions than the cap are all in, and a candidate set too small to draw from is
+    # still filled: the last place is drawn when there's anything left to draw.
+    few = replace(snap, suggesters={1: ("Alex",)})
+    assert all(ids(rank(replace(few, seed=seed)))[:2] == [1, 7] for seed in range(10))
+    only = snapshot(places[0], places[1], suggesters=dict.fromkeys((1, 2), ("Alex",)), limit=3)
+    assert sorted(ids(rank(only))) == [1, 2]
+
+
+def test_the_suggestion_cap_spans_the_meal_and_the_top_up() -> None:
+    """Both groups share the ``limit - 1`` guaranteed places: two suggested places for the meal
+    leave none for a suggestion in the top-up, which is drawn like the rest of it."""
+    lunch = frozenset({Meal.LUNCH})
+    dinner_a, dinner_b = item(1, "Dinner A", cuisine=1), item(2, "Dinner B", cuisine=2)
+    other_suggested = item(3, "Lunch suggested", cuisine=3, meals=lunch)
+    other_favorite = item(4, "Lunch favorite", cuisine=4, meals=lunch)
+    snap = snapshot(
+        dinner_a,
+        dinner_b,
+        other_suggested,
+        other_favorite,
+        preferences=GroupPreferences(item_scores={4: 6}),
+        suggesters=dict.fromkeys((1, 2, 3), ("Alex",)),
+        temperature=0.0,
+    )
+    for seed in range(20):
+        ranked = rank(replace(snap, seed=seed))
+        assert sorted(ids(ranked)[:2]) == [1, 2] and ids(ranked)[2] == 4
+        assert [r.for_meal for r in ranked] == [True, True, False]
+    # With one suggestion for the meal, the other guaranteed place is the top-up's.
+    one = replace(snap, suggesters={1: ("Alex",), 3: ("Alex",)})
+    for seed in range(20):
+        assert ids(rank(replace(one, seed=seed))) == [1, 2, 3] or ids(rank(replace(one, seed=seed))) == [1, 2, 4]
+    assert all(ids(rank(replace(one, seed=seed)))[0] == 1 for seed in range(20))
+
+
+def test_the_exponential_draw_is_the_one_python_makes() -> None:
+    """Seed stability (#85): ``-log(1 - random())`` is what ``expovariate(1)`` computes, built on
+    ``random()``, whose output Python guarantees for a seed. These values pin it."""
+    pinned = {
+        0: 1.8606071110652234,
+        1: 0.1442910641095092,
+        42: 1.020060287274801,
+        2**64 - 1: 0.022067399266534695,
+    }
+    for seed, expected in pinned.items():
+        assert _exponential(random.Random(seed)) == expected  # noqa: S311 - reproducible test data
+        assert random.Random(seed).expovariate(1.0) == expected  # noqa: S311
+
+
+def test_a_place_with_no_weight_is_never_drawn_over_one_with_weight() -> None:
+    """At temperature 0 a worse score has log weight -inf. Its key was +inf when the exponential
+    came out exactly 0 (about 2**-53); skipping such places keeps it out."""
+    assert _log_weight(1.0, 2.0, 0.0) == -math.inf
+    places = [item(1, "Worse", cuisine=1), item(2, "Best", cuisine=2)]  # the worse one is tried first
+    snap = snapshot(*places, preferences=GroupPreferences(item_scores={2: 1}), limit=1, temperature=0.0)
+
+    class Zero(random.Random):
+        """``random()`` is 0.0, so every exponential is exactly 0 and every key would be +inf."""
+
+        def random(self) -> float:
+            return 0.0
+
+    picks: list[_Scored] = []
+    _draw(_scored(snap, for_meal=True), picks, 1, 0.0, Zero())
+    assert [ranked.item_id for _, ranked in picks] == [2]
 
 
 def test_each_item_is_proposed_once_in_its_best_mode() -> None:
@@ -462,13 +557,16 @@ def check_properties(seed: int) -> None:
     reorder = random.Random(seed + 1)  # noqa: S311 - reproducible test data
     shuffled = replace(snap, items=tuple(reorder.sample(snap.items, len(snap.items))))
     assert rank(shuffled) == ranked == rank(snap)
+    guaranteed = max(snap.limit - 1, 0)  # suggestions can't fill the whole vote (step 5)
     for for_meal in (True, False):
         group = [p for p in ranked if p.for_meal is for_meal]
-        # Suggestions that pass every filter come first, as many as there's room for.
+        # Suggestions that pass every filter come first, as many as there's room for, which is
+        # ``limit - 1`` across both groups. The rest of them join the draw.
         suggested = {i for i in pools[for_meal] if snap.suggesters.get(i)}
-        lead = [p for p in group if p.item_id in suggested]
-        assert group[: len(lead)] == lead
-        assert len(lead) == min(len(group), len(suggested))
+        count = min(len(group), len(suggested), guaranteed)
+        lead = group[:count]
+        assert all(p.item_id in suggested for p in lead)
+        guaranteed -= count
         # The best suggestions, by score.
         left_out = [p.score for p in rank(replace(snap, limit=99)) if p.item_id in suggested and p not in lead]
         assert all(p.score >= max(left_out, default=-math.inf) for p in lead)
@@ -550,16 +648,78 @@ def test_a_two_point_gap_in_a_crowd() -> None:
     assert sum(1 in result for result in results) / DRAWS > 0.75
 
 
+def vote_odds(
+    cuisines: dict[int, frozenset[int]], picks: int, picked: tuple[int, ...] = ()
+) -> dict[tuple[int, ...], float]:
+    """Exactly how likely each ordered vote is when every candidate scores the same: each draw
+    gives a candidate weight 0.3 for every earlier pick it shares a cuisine with (step 7),
+    0.3 written out here so a changed ``SAME_CUISINE_FACTOR`` fails the tests. ``picked`` are
+    earlier picks from another group; they count for the damping but aren't candidates."""
+    found: dict[tuple[int, ...], float] = {}
+
+    def draw(votes: tuple[int, ...], chance: float) -> None:
+        if len(votes) == picks:
+            found[votes] = chance
+            return
+        weights = {
+            i: 0.3 ** sum(1 for p in (*picked, *votes) if cuisines[p] & cuisines[i])
+            for i in cuisines
+            if i not in votes and i not in picked
+        }
+        total = sum(weights.values())
+        for i, weight in weights.items():
+            draw((*votes, i), chance * weight / total)
+
+    draw((), 1.0)
+    return found
+
+
 def test_a_vote_rarely_repeats_a_cuisine_when_others_fit() -> None:
-    """After a pick, places sharing its cuisine keep ``SAME_CUISINE_FACTOR`` of their weight.
-    Three Thai and three Mexican places, all equal, two picks: without the damping the second
-    pick would share the first's cuisine 2 times in 5."""
+    """After a pick, places sharing its cuisine keep 0.3 of their weight. Three Thai and three
+    Mexican places, all equal, two picks: without the damping the second pick would share the
+    first's cuisine 2 times in 5."""
     thai = [item(n, f"Thai {n}", cuisine=THAI) for n in (1, 2, 3)]
     mexican = [item(n, f"Mexican {n}", cuisine=MEXICAN) for n in (4, 5, 6)]
     results = draws(snapshot(*thai, *mexican, limit=2))
     same = sum((a <= 3) == (b <= 3) for a, b in results) / DRAWS
-    expected = 2 * SAME_CUISINE_FACTOR / (2 * SAME_CUISINE_FACTOR + 3)  # about 0.17
+    expected = 2 * 0.3 / (2 * 0.3 + 3)  # about 0.17, with the factor written out
     assert abs(same - expected) < 0.04
+
+
+def test_damping_compounds_for_each_pick_a_place_shares_a_cuisine_with() -> None:
+    """Three picks, three cuisines: a place in all three cuisines shares one with each of the first
+    two picks, so its weight is 0.3 squared by the third draw. Damping it once, or not at all, gives
+    a very different chance of it coming last (0.151 and 0.25 against 0.054)."""
+    everything = RankItem(9, "Everything", frozenset({Mode.PICKUP}), frozenset(), frozenset({1, 2, 3}))
+    singles = [item(n, f"Single {n}", cuisine=n) for n in (1, 2, 3)]
+    cuisines = {i.id: i.cuisine_ids for i in (*singles, everything)}
+    exact = vote_odds(cuisines, 3)
+    where = [sum(p for votes, p in exact.items() if 9 in votes and votes.index(9) == n) for n in range(3)]
+    absent = 1 - sum(where)
+    assert [round(w, 3) for w in where] == [0.25, 0.098, 0.054] and round(absent, 3) == 0.598
+    results = draws(snapshot(*singles, everything, limit=3))
+    for n in range(3):
+        assert abs(sum(r.index(9) == n for r in results if 9 in r) / DRAWS - where[n]) < 0.03
+    assert abs(sum(9 not in r for r in results) / DRAWS - absent) < 0.04
+
+
+def test_the_top_up_damps_places_sharing_a_cuisine_with_a_pick_for_the_meal() -> None:
+    """One dinner place, Thai, then a top-up of lunch places: two Thai and two Mexican. The
+    top-up's first draw damps the Thai ones for sharing the dinner pick's cuisine, so a Thai one
+    comes first 2 * 0.3 times in (2 * 0.3 + 2), not 1 time in 2."""
+    lunch = frozenset({Meal.LUNCH})
+    dinner = item(1, "Thai dinner", cuisine=THAI)
+    thai = [item(n, f"Thai lunch {n}", cuisine=THAI, meals=lunch) for n in (2, 3)]
+    mexican = [item(n, f"Mexican lunch {n}", cuisine=MEXICAN, meals=lunch) for n in (4, 5)]
+    cuisines = {i.id: i.cuisine_ids for i in (dinner, *thai, *mexican)}
+    exact = vote_odds(cuisines, 2, picked=(1,))
+    first_thai = sum(p for votes, p in exact.items() if votes[0] in (2, 3))
+    assert round(first_thai, 4) == round(2 * 0.3 / (2 * 0.3 + 2), 4)  # 0.2308
+    results = draws(snapshot(dinner, *thai, *mexican, limit=3))
+    assert all(r[0] == 1 for r in results)
+    assert abs(sum(r[1] in (2, 3) for r in results) / DRAWS - first_thai) < 0.04
+    both_thai = sum(p for votes, p in exact.items() if set(votes) == {2, 3})
+    assert abs(sum({r[1], r[2]} == {2, 3} for r in results) / DRAWS - both_thai) < 0.03
 
 
 def test_no_weight_overflows_or_vanishes() -> None:

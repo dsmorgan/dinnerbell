@@ -43,10 +43,15 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
   - Answering for a guest without Slack stays on the card (tap **Answer** on the call).
   - The buttons come in short rows, as on the card, so Slack doesn't hide any under **+ N more**.
   - Home says who's coordinating a call, or that you are.
+- Suggestions can no longer fill the whole vote (#85). A place someone suggested is still proposed ahead of the draw, but at most one fewer than the number of proposals are guaranteed that way, so at least one place is always drawn: with the default 3 proposals, one member's three suggestions give 2 guaranteed places and a draw for the third. When more places were suggested, the best-scoring ones go in (equal scores are chosen at random), and the rest stay in the draw, where a suggestion makes them much more likely. With 1 proposal per call, a suggestion no longer skips the draw.
 
 ### Fixed
 
 - Shutting down no longer cancels a scheduler job in the middle of a database query (#93). A job that is running when Dinnerbell stops now finishes, up to the shutdown deadline, and only a job that outlasts it is cancelled. Cancelling mid-query could leave a database worker thread to fail with "Event loop is closed" as the process exited.
+- Linking a guest to a different Slack user by hand (Admin > Members) clears the Slack email and the "Slack guest account" mark that came from the old account, so the link picker's "same email" label and the confirmation page no longer describe the old account (#70).
+- An upgrade that stops at migration 0011 because a member has an empty email now says which member (by ID) and logs the usual critical line, instead of failing with a raw database error. It still changes nothing (#70).
+- Saving **Admin > Ranking** without changing anything no longer writes an audit entry when a weight or the randomness was hand-edited to more than 6 digits. The form now shows such values in full (#85).
+- Ranking can no longer propose a place with no chance of being drawn at randomness 0, however unlikely the random number (#85). Draws also use a random-number method Python guarantees stays the same for a seed, so a Python upgrade can't change which places a call proposes.
 
 ### Upgrade notes
 

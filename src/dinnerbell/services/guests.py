@@ -354,8 +354,11 @@ async def set_guest_slack_user(
         raise MemberRuleViolation(f"{holder.display_name} is already linked to that Slack user.")
     changes: dict[str, Any] = {"slack_user_id": value, "slack_link_locked": True}
     if value != guest.slack_user_id:
-        # Whoever signed in with the old Slack account isn't this guest any more.
+        # Whoever signed in with the old Slack account isn't this guest any more, and what
+        # Slack said about that account (its email, a guest account) isn't about the new one.
         changes["oidc_subject"] = None
+        changes["slack_email"] = None
+        changes["slack_guest_account"] = False
         await SessionRepository(db).delete_for_member(guest.id)
     updated = await members.update(actor.household_id, guest.id, now, **changes)
     action = "member.slack_user_set" if value else "member.slack_user_cleared"

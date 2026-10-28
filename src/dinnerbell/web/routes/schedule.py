@@ -169,11 +169,18 @@ async def save_slot(request: Request, slot: str, principal: CSRFChecked, context
 # Admin > Ranking (FR-43) and Skip a day (FR-6) -------------------------------------------------
 
 
+def _shown(number: float) -> str:
+    """A setting as the form shows it: "1" and "0.5", and every digit of a hand-edited value.
+    ``:g`` stops at 6 digits, so saving the page untouched would change such a value and write
+    an audit row for a change nobody made."""
+    return str(int(number)) if number == int(number) else repr(float(number))
+
+
 def _stored(values: RankingSettings) -> dict[str, Any]:
     """Form values for the stored ranking settings, keyed by input name."""
-    form: dict[str, Any] = {f"weight_{name}": f"{getattr(values.weights, name):g}" for name in WEIGHT_NAMES}
+    form: dict[str, Any] = {f"weight_{name}": _shown(getattr(values.weights, name)) for name in WEIGHT_NAMES}
     return form | {
-        "temperature": f"{values.temperature:g}",
+        "temperature": _shown(values.temperature),
         "proposal_count": str(values.proposal_count),
         "variety_window_days": str(values.variety_window_days),
         "roles_choice_minutes": str(values.roles_choice_minutes),
