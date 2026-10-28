@@ -57,6 +57,12 @@ class MealLogRepository:
         found = (await self._session.execute(self._select(household_id).where(MealLogRow.id == meal_id))).first()
         return None if found is None else _meal(found[0], found[1])
 
+    async def count(self, household_id: int) -> int:
+        n = await self._session.scalar(
+            select(func.count()).select_from(MealLogRow).where(MealLogRow.household_id == household_id)
+        )
+        return int(n or 0)
+
     async def between(self, household_id: int, start: date | None, end: date | None) -> list[MealLog]:
         """Meals from ``start`` to ``end`` inclusive; None leaves that side open."""
         query = self._select(household_id)

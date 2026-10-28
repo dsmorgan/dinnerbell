@@ -342,6 +342,20 @@ async def test_a_guest_who_picks_up_earns_it_and_the_member_who_brought_them_hos
         async with house.sessionmaker() as db:
             await stats.my_stats(db, riley[0])
     async with house.sessionmaker() as db:
+        # A stray count a guest can't earn (say, from before they were demoted) is not shown.
+        event_id = await db.scalar(select(EventRow.id))
+        db.add(
+            ContributionRow(
+                household_id=house.household.id,
+                member_id=riley[0].id,
+                kind=Kind.PARTICIPATED.value,
+                day=DAY,
+                event_id=event_id,
+                created_at=DONE_AT,
+            )
+        )
+        await db.commit()
+        assert (await ContributionRepository(db).counts(house.household.id, riley[0].id))[Kind.PARTICIPATED] == 1
         own = await stats.guest_stats(db, riley[0])
         assert {p.badge.key for p in own.progress} == {
             BadgeKey.CHEF, BadgeKey.ROAD_RUNNER, BadgeKey.ORDER_UP, BadgeKey.QUARTERBACK, BadgeKey.ON_A_ROLL,

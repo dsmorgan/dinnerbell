@@ -20,6 +20,7 @@ from dinnerbell.db.meals import MealLogRepository, household_settings
 from dinnerbell.db.repositories import MemberRepository
 from dinnerbell.domain.badges import (
     BADGES,
+    QUIET_BADGES,
     ROLL_KINDS,
     Announcement,
     Award,
@@ -122,8 +123,8 @@ async def household_stats(db: AsyncSession, actor: Member) -> HouseholdStats:
         for a in await badges.recent(household_id, RECENT_BADGES)
     )
     return HouseholdStats(
-        meals=len(await MealLogRepository(db).between(household_id, None, None)),
+        meals=await MealLogRepository(db).count(household_id),
         totals=await ContributionRepository(db).totals(household_id),
-        badges_earned=await badges.count(household_id),
+        badges_earned=await badges.count(household_id, without=QUIET_BADGES),
         recent=recent,
     )

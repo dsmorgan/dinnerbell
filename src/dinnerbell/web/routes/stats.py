@@ -38,7 +38,11 @@ KIND_LABELS = {
     Kind.HOSTED: "Meals with guests",
     Kind.GAVE_FEEDBACK: "Meals you gave feedback on",
 }
-"""Every kind's label, in the order the page lists them."""
+"""Every kind's label for the person's own page, in the order it lists them."""
+HOUSEHOLD_LABELS = KIND_LABELS | {
+    Kind.GAVE_FEEDBACK: "Feedback given",
+}
+"""The same kinds for the household's totals, worded for nobody in particular."""
 
 
 @router.get("/stats")
@@ -54,7 +58,7 @@ async def stats_page(request: Request, principal: GuestOrMember, context: Contex
             (label, mine.counts.get(kind, 0)) for kind, label in KIND_LABELS.items() if not guest or kind in PITCHING_IN
         ],
         "household": None if guest else await stats.household_stats(db, member),
-        "kind_labels": KIND_LABELS,
+        "kind_labels": HOUSEHOLD_LABELS,
     }
     return await render(request, "stats.html", page)
 

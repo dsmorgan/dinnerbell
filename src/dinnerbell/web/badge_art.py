@@ -20,6 +20,7 @@ Nothing here takes user input. Every value is a constant from this module.
 
 from __future__ import annotations
 
+import itertools
 import math
 from dataclasses import dataclass
 
@@ -75,9 +76,13 @@ ICONS = {
 """Each badge's icon as one stroked path on a 24x24 grid, keyed by ``BadgeKey`` value."""
 
 STAR = "M0 -7 C1 -1 1 -1 7 0 C1 1 1 1 0 7 C-1 1 -1 1 -7 0 C-1 -1 -1 -1 0 -7Z"
-MEDAL_CLIP = '<clipPath id="badge-medal-clip"><circle cx="60" cy="84" r="35"/></clipPath>'
 GEM_OUTLINE = "M34 30 L86 30 L108 60 L60 128 L12 60 Z"
-GEM_CLIP = f'<clipPath id="badge-gem-clip"><path d="{GEM_OUTLINE}"/></clipPath>'
+CLIPS = {
+    Tier.GOLD: ("badge-medal-clip", '<circle cx="60" cy="84" r="35"/>'),
+    Tier.DIAMOND: ("badge-gem-clip", f'<path d="{GEM_OUTLINE}"/>'),
+}
+"""Each sparkling tier's clip path: its id, and the shape the sheen is cut to."""
+_instances = itertools.count(1)
 
 Star = tuple[int, int, float, str]
 """x, y, scale, and the CSS classes that time its twinkle."""
@@ -101,9 +106,9 @@ STARS = {
     ),
 }
 SHEEN = {
-    # rotate origin, y, width, height, opacity
-    Tier.GOLD: ('<g clip-path="url(#badge-medal-clip)"><g transform="rotate(20 60 84)">', 10, 14, 150, "0.55"),
-    Tier.DIAMOND: ('<g clip-path="url(#badge-gem-clip)"><g transform="rotate(20 60 76)">', 0, 16, 160, "0.7"),
+    # rotation, y, width, height, opacity
+    Tier.GOLD: ("rotate(20 60 84)", 10, 14, 150, "0.55"),
+    Tier.DIAMOND: ("rotate(20 60 76)", 0, 16, 160, "0.7"),
 }
 
 
@@ -158,18 +163,22 @@ def _stars(tier: Tier, *, animated: bool) -> str:
     return "".join(out)
 
 
-def _frame_parts(tier: Tier, *, animated: bool) -> tuple[str, str, str]:
-    """(defs, shape plus sheen, stars): the icon goes between the last two."""
+def _frame_parts(tier: Tier, *, animated: bool, uid: str = "") -> tuple[str, str, str]:
+    """(defs, shape plus sheen, stars): the icon goes between the last two. ``uid`` is added to the
+    clip path's id, so a page with many inline badges never repeats an id."""
     art = TIER_ART[tier]
-    defs = {Tier.GOLD: MEDAL_CLIP, Tier.DIAMOND: GEM_CLIP}.get(tier, "")
+    clip_id, clip_shape = CLIPS.get(tier, ("", ""))
+    clip_id += uid
+    defs = f'<defs><clipPath id="{clip_id}">{clip_shape}</clipPath></defs>' if clip_shape else ""
     shape = _shape(art)
     if animated and tier in SHEEN:
-        open_group, y, width, height, opacity = SHEEN[tier]
+        rotation, y, width, height, opacity = SHEEN[tier]
         shape += (
-            f'{open_group}<rect class="badge-sheen" x="20" y="{y}" width="{width}" height="{height}"'
+            f'<g clip-path="url(#{clip_id})"><g transform="{rotation}">'
+            f'<rect class="badge-sheen" x="20" y="{y}" width="{width}" height="{height}"'
             f' fill="#FFFFFF" opacity="{opacity}"/></g></g>'
         )
-    return f"<defs>{defs}</defs>" if defs else "", shape, _stars(tier, animated=animated)
+    return defs, shape, _stars(tier, animated=animated)
 
 
 def _icon(key: str, tier: Tier) -> str:
@@ -198,7 +207,7 @@ def badge_svg(
     classes = " ".join(
         ["badge-svg", f"badge-svg-{'locked' if locked else drawn.value}", *([extra_class] if extra_class else [])]
     )
-    defs, shape, stars = _frame_parts(drawn, animated=not locked)
+    defs, shape, stars = _frame_parts(drawn, animated=not locked, uid=f"-{next(_instances)}")
     if decorative:
         label = 'aria-hidden="true" focusable="false"'
     else:

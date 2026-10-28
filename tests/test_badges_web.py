@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 from dinnerbell.config import Settings
 from dinnerbell.db.models import AuditRow, BadgeAwardRow, HouseholdRow
 from dinnerbell.domain.badges import BADGES, DEFAULT_THRESHOLDS, TIERS, Announcement, Tier
+from dinnerbell.domain.contributions import Kind
 from dinnerbell.web import badge_art
 from tests.conftest import csrf_from, invite, page, sign_in
 from tests.support.fake_oidc import FakeProvider
@@ -339,3 +340,55 @@ def test_the_badges_form_checks_csrf_and_origin(admin: TestClient, migrated: Set
     )
     assert foreign.status_code == 403
     assert audits(migrated) == []
+
+
+# Review fixes ------------------------------------------------------------------------------------------
+
+
+def test_household_labels_have_no_you() -> None:
+    from dinnerbell.web.routes.stats import HOUSEHOLD_LABELS, KIND_LABELS
+
+    assert set(HOUSEHOLD_LABELS) == set(KIND_LABELS)
+    assert not [label for label in HOUSEHOLD_LABELS.values() if re.search(r"\byou", label, re.I)]
+    assert HOUSEHOLD_LABELS[Kind.GAVE_FEEDBACK] == "Feedback given"
+
+
+def test_the_household_view_leaves_out_feedback_badges_but_the_owner_keeps_theirs(
+    house: Settings, provider: FakeProvider, client: TestClient
+) -> None:
+    kim = member(house, "kim@example.com").id
+    award(house, kim, "food_critic", Tier.FIRST, ago=timedelta(hours=1))
+    award(house, kim, "chef", Tier.FIRST, ago=timedelta(hours=2))
+    html = page(client.get("/stats"))  # signed in as the admin
+    lately = html[html.index("Lately earned") :]
+    assert "Chef · First" in lately and "Food Critic" not in lately
+    assert "1 badge earned together" in html
+    sign_in_as(client, provider, "kim@example.com")
+    mine = page(client.get("/stats"))
+    assert "Food Critic<span" in mine[: mine.index("Lately earned")]
+    assert "Food Critic · First" not in mine[mine.index("Lately earned") :]
+
+
+def test_no_page_repeats_an_id(house: Settings, client: TestClient) -> None:
+    me = member(house, "admin@example.com").id
+    for key in ("chef", "scout", "explorer"):
+        award(house, me, key, Tier.GOLD)
+        award(house, me, key, Tier.DIAMOND)
+    html = client.get("/stats").text
+    found = re.findall(r'\bid="([^"]+)"', html)
+    assert len(found) == len(set(found)), sorted(i for i in found if found.count(i) > 1)
+    assert sum(i.startswith("badge-") for i in found) >= 6
+
+
+def test_a_hostile_member_name_is_escaped_on_the_stats_page(house: Settings, admin: TestClient) -> None:
+    from dinnerbell.db.models import MemberRow
+
+    kim = member(house, "kim@example.com")
+    engine = create_engine(house.sync_database_url)
+    with Session(engine) as db:
+        db.get(MemberRow, kim.id).display_name = "<b>x</b>"  # type: ignore[union-attr]
+        db.commit()
+    engine.dispose()
+    award(house, kim.id, "chef", Tier.FIRST)
+    html = admin.get("/stats").text
+    assert "<b>x</b>" not in html and "&lt;b&gt;x&lt;/b&gt;" in html
