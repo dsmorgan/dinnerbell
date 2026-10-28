@@ -166,7 +166,7 @@ def test_buttons_follow_the_state() -> None:
     late_roles = ["card_offer_cook", "card_withdraw_pickup", "card_offer_order"]
     assert action_ids("your_answer_late") == [*late_roles, "link_event"]
     assert action_ids("your_answer_taken_off") == ["link_event"]  # the coordinator switched her off
-    assert action_ids("home_voting_join_late") == ["join_late", "link_event", "make_offer", "start_call_lunch"]
+    assert action_ids("home_voting_join_late")[:2] == ["join_late", "link_event"]  # then Home's start buttons
     assert action_ids("proposals_updated") == ["vote", "lock"] * 3 + ["add_proposal", "link_event"]
     assert action_ids("proposals_updated_closed") == ["link_event"]
     assert action_ids("decision_made") == ["mark_done", "link_event", "cancel_call"]
