@@ -38,7 +38,7 @@ docker build -f Containerfile -t dinnerbell .
 ## Conventions
 
 - Every source file starts with `# SPDX-License-Identifier: AGPL-3.0-or-later` (`{#- ... -#}` in templates, `/* ... */` in CSS). A test checks this.
-- Dependencies must be AGPL-compatible (MIT, BSD, Apache-2.0, LGPL, 0BSD). Prefer the standard library.
+- Dependencies must be AGPL-compatible (MIT, BSD, Apache-2.0, LGPL, MPL-2.0, 0BSD). Prefer the standard library.
 - Times are UTC-aware `datetime`s everywhere; `UTCDateTime` handles SQLite. Get "now" from the injected clock.
 - Log member IDs, never emails, tokens, or secrets (SEC-5). Secrets are `SecretStr`.
 - Pages: no inline `<script>`, `style=`, or `on*=` attributes; the CSP forbids them. HTMX is vendored at `web/static/htmx-2.0.11.min.js` (npm `htmx.org@2.0.11`, sha256 `d6fdc75f204e6bdefa99b69bf1e6d4ac69b8a364f77929f45c13476b4000f717`).

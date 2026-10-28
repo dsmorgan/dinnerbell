@@ -103,6 +103,15 @@ class SlackUnavailable(ChannelUnavailable):
     on it, so an outage costs one timeout per drain, not one per row."""
 
 
+BLOCK_ERRORS = frozenset({"invalid_blocks", "invalid_blocks_format", "invalid_arguments"})
+"""Slack's codes for blocks it won't take, which a badge file ID it can't find causes."""
+
+
+def refused_blocks(exc: BaseException) -> bool:
+    """Whether Slack refused a message or view over its blocks, so badge art may be the cause."""
+    return isinstance(exc, PermanentDeliveryError) and exc.code in BLOCK_ERRORS
+
+
 class SlackAuthError(SlackUnavailable):
     """Slack refused the token. ``code`` is Slack's error code, such as ``invalid_auth``."""
 
@@ -151,7 +160,7 @@ def translate(method: str, exc: BaseException) -> Exception:
             seconds = int(wait.total_seconds())
             return SlackRateLimited(f"Slack rate-limited {method}; retry after {seconds}s", retry_after=seconds)
         if code in PERMANENT:
-            return PermanentDeliveryError(f"Slack {method} failed: {code}")
+            return PermanentDeliveryError(f"Slack {method} failed: {code}", code=code)
         if code in AUTH:
             return SlackAuthError(f"Slack {method} failed: {code}", code=code)
         return SlackUnavailable(f"Slack {method} failed: {code}")
@@ -258,6 +267,19 @@ class SlackApi:
 
     async def publish_home(self, user: str, view: dict[str, Any]) -> None:
         await self._call("views.publish", lambda: self.client.views_publish(user_id=user, view=view))
+
+    async def upload_file(self, filename: str, content: bytes, alt_text: str) -> str:
+        """Upload a file to the workspace without sharing it in a channel (``files.upload``, the
+        v2 flow: three calls), and return its Slack file ID. Needs the ``files:write`` scope."""
+        response = await self._call(
+            "files.upload",
+            lambda: self.client.files_upload_v2(file=content, filename=filename, title=alt_text, alt_txt=alt_text),
+        )
+        file = response.get("file")
+        file_id = file.get("id") if isinstance(file, dict) else None
+        if not isinstance(file_id, str):
+            raise SlackUnavailable("Slack files.upload returned no file ID")
+        return file_id
 
     async def identity(self) -> Identity:
         response = await self._call("auth.test", self.client.auth_test)

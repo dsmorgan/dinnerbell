@@ -18,7 +18,7 @@ from dinnerbell.config import Settings
 from dinnerbell.db.models import AuditRow, BadgeAwardRow, HouseholdRow
 from dinnerbell.domain.badges import BADGES, DEFAULT_THRESHOLDS, TIERS, Announcement, Tier
 from dinnerbell.domain.contributions import Kind
-from dinnerbell.web import badge_art
+from dinnerbell.services import badge_art
 from tests.conftest import csrf_from, invite, page, sign_in
 from tests.support.fake_oidc import FakeProvider
 from tests.support.pages import inline_code

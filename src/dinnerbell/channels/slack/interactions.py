@@ -39,7 +39,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from dinnerbell import __version__
 from dinnerbell.channels.slack import ids
-from dinnerbell.channels.slack.api import SlackApi, SlackUnavailable
+from dinnerbell.channels.slack.api import SlackApi, SlackUnavailable, refused_blocks
 from dinnerbell.channels.slack.blocks import (
     Directory,
     actions,
@@ -75,6 +75,7 @@ from dinnerbell.channels.slack.views import (
     close_modal,
     details_modal,
     feedback_modal,
+    held_badges,
     home_view,
     invite_modal,
     log_modal,
@@ -135,6 +136,7 @@ from dinnerbell.services import (
     stats,
 )
 from dinnerbell.services import schedule as schedule_service
+from dinnerbell.services.badge_files import BadgeFiles
 from dinnerbell.services.clock import Clock
 from dinnerbell.services.errors import Forbidden, NotFound
 from dinnerbell.services.event_views import EventView
@@ -260,8 +262,10 @@ class Interactions:
         version: str = __version__,
         schema_revision: str,
         people: guests.SlackPeople | None = None,
+        badge_files: BadgeFiles | None = None,
     ) -> None:
         self.api = api
+        self.badge_files = badge_files
         self.people = people
         """Who may join from the channel (#38); None leaves joining to the web and the admin."""
         self.join_limiter = guests.JoinLimiter()
@@ -557,17 +561,41 @@ class Interactions:
                 today = await event_views.today_view(db, member, now=self.clock(), any_time=self.any_time)
                 awaiting = await feedback.awaiting(db, member, now=self.clock())
                 badges = await self._badges(db, member)
-            view = home_view(
-                today,
-                self.links,
-                notice,
-                label=self.instance_label,
-                awaiting=awaiting,
-                guest=member.is_guest,
-                member_id=member.id,
-                badges=badges,
-            )
+            art = await self._badge_art(member, badges)
+
+            def build(art: dict[tuple[str, str], str]) -> dict[str, Any]:
+                return home_view(
+                    today,
+                    self.links,
+                    notice,
+                    label=self.instance_label,
+                    awaiting=awaiting,
+                    guest=member.is_guest,
+                    member_id=member.id,
+                    badges=badges,
+                    badge_art=art,
+                )
+
+            try:
+                await self.api.publish_home(user_id, with_version_footer(build(art), self.version, self.instance_label))
+            except PermanentDeliveryError as exc:
+                if not art or self.badge_files is None or not refused_blocks(exc):
+                    raise
+                # Slack may refuse a file ID, such as one deleted in Slack. Forget the files and
+                # show the text instead, so Home still draws and the next view uploads again.
+                log.warning("slack refused badge art; publishing text badges", extra={"member_id": member.id})
+                await self.badge_files.forget(member.household_id, art.values())
+                view = build({})
+            else:
+                return
         await self.api.publish_home(user_id, with_version_footer(view, self.version, self.instance_label))
+
+    async def _badge_art(self, member: Member, badges: MemberStats | None) -> dict[tuple[str, str], str]:
+        """The uploaded art for the badges Home shows, or none. It never raises or waits long."""
+        if self.badge_files is None or badges is None:
+            return {}
+        held = {(key.value, tier.value) for key, tier in held_badges(badges).items()}
+        return await self.badge_files.file_ids(member.household_id, held)
 
     @staticmethod
     async def _badges(db: AsyncSession, member: Member) -> MemberStats | None:

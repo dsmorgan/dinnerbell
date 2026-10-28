@@ -54,6 +54,8 @@ from dinnerbell.channels.slack.people import ChannelPeople
 from dinnerbell.domain.members import SLACK_USER_ID_PATTERN
 from dinnerbell.domain.notifications import PermanentDeliveryError
 from dinnerbell.services import slack_members
+from dinnerbell.services.badge_art import ArtSource, png_for
+from dinnerbell.services.badge_files import BadgeFiles
 from dinnerbell.services.clock import Clock
 from dinnerbell.services.health import SlackState
 
@@ -190,6 +192,7 @@ class SlackConnection:
         instance_label: str = "",
         version: str = __version__,
         schema_revision: str,
+        art_for: ArtSource = png_for,
     ) -> None:
         """A non-empty ``instance_label`` (``DINNERBELL_INSTANCE_LABEL``, such as test's) also
         limits DMs and mentions to the channel's members. ``version`` is
@@ -206,6 +209,7 @@ class SlackConnection:
         self.state = state
         self.hold = Hold()
         self.audience = Audience(limited=bool(instance_label))
+        self.badge_files = BadgeFiles(sessionmaker, art_for=art_for, upload=self.api.upload_file, clock=clock)
         self._audience_error: str | None = None
         if self.audience.limited:
             state.dms_dropped = 0
@@ -226,6 +230,7 @@ class SlackConnection:
             instance_label=instance_label,
             audience=self.audience,
             state=state,
+            badge_files=self.badge_files,
         )
         self.people = ChannelPeople(self.api, channel_id=channel_id, team_id=lambda: self.team_id)
         """Who may join from the channel (#38), for the Slack adapter and the web app."""
@@ -240,6 +245,7 @@ class SlackConnection:
             instance_label=instance_label,
             version=version,
             schema_revision=schema_revision,
+            badge_files=self.badge_files,
         )
 
         async def authorize(team_id: str | None) -> AuthorizeResult:

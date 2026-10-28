@@ -27,9 +27,15 @@ The counts are a household setting. The admin changes them with `badge_threshold
 
 Each badge is a tier frame plus its own icon: Chef (chef hat), Road Runner (car), Order Up (takeout bag), Quarterback (dinner bell), Full Table (fork and knife), Early Bird (alarm clock), Bright Idea (lightbulb), Scout (recipe card), Explorer (compass), Good Host (extra chair), Food Critic (star), On a Roll (flame). Tiers differ in outline and lightness, so they stay distinct in grayscale: First is a teal ribbon rosette, Bronze, Silver and Gold are medals on a navy strap, and Diamond is a faceted gem. Gold and Diamond sparkle on the web: twinkling four-point stars and a sheen that sweeps every few seconds. The sparkle is CSS, and it stops under "reduce motion". Every page also writes the badge's name and tier in text.
 
-The art lives in `web/badge_art.py`, and pages draw it with the `badge_art`, `badge_chip`, and `badge_row` macros in `web/templates/_badge.html`. `src/dinnerbell/web/static/badges/` holds the same art as plain files: `icons/<badge>.svg` (12) and `frames/<tier>.svg` (5, with the stars drawn in). A test checks that the files match the code and pass the SVG allowlist.
+The art lives in `services/badge_art.py`, and pages draw it with the `badge_art`, `badge_chip`, and `badge_row` macros in `web/templates/_badge.html`. `src/dinnerbell/web/static/badges/` holds the same art as plain files: `icons/<badge>.svg` (12) and `frames/<tier>.svg` (5, with the stars drawn in). A test checks that the files match the code and pass the SVG allowlist.
 
-Slack and App Home can use `badge_art.standalone_svg(key, tier)`, which returns one still SVG (frame, icon, and stars) to render as a PNG, with the badge keys (`chef`, `road_runner`, ...) and tier values (`first` ... `diamond`) as stable names.
+### Badge art in Slack
+
+Slack shows the same art as PNGs. `badge_art.png_for(key, tier)` draws `standalone_svg(key, tier)` (one still SVG: frame, icon, and stars) at 240 by 280 pixels with [resvg](https://github.com/RazrFalcon/resvg), through the `resvg-py` wheel, which carries the renderer and needs no system library. The badge keys (`chef`, `road_runner`, ...) and tier values (`first` ... `diamond`) are the stable names.
+
+`services/badge_files.py` uploads a tier's PNG the first time a message or view wants it (`files.upload`, shared nowhere) and remembers the Slack file ID and a SHA-256 of the PNG in the `slack_badge_file` table. Restarts reuse the IDs; art that draws differently hashes differently, so it uploads again. Two requests for the same new tier share one upload. `BadgeFiles` takes the art from an `ArtSource` (a badge key and a tier to PNG bytes), and `png_for` is the only one today: another source needs no change to the upload or the cache.
+
+The badge announcement and **Your badges** on App Home reference the files in Slack image elements. Food Critic is never uploaded or shown as art. If an upload fails or the app lacks the `files:write` scope, Dinnerbell logs one `badge art not available` line, shows the text tags as before, uploads nothing new for 15 minutes (files already uploaded still show), and never fails a post or a Home view. A post or Home view waits at most 3 seconds for a new upload, then shows text. If Slack refuses blocks because of a file, such as one deleted in Slack, Dinnerbell forgets the cached files and shows the text; other refusals leave the cache alone. Old files aren't deleted from Slack when art changes, and a `resvg-py` upgrade that draws differently uploads every tier again.
 
 ## The Stats page
 

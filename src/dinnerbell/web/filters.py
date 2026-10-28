@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 
 from jinja2 import Environment
 
-from dinnerbell.web.badge_art import badge_name, badge_svg
+from dinnerbell.services.badge_art import badge_name, badge_svg
 
 
 def clock(moment: datetime | None, timezone: str) -> str:

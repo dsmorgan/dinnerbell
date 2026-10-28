@@ -469,7 +469,7 @@ fieldset.card > legend h2 { margin: 0; }
   text-align: center;
 }
 
-/* Badges (M4, #15). The art is inline SVG from web/badge_art.py. Colors live in the SVG; a tier is
+/* Badges (M4, #15). The art is inline SVG from services/badge_art.py. Colors live in the SVG; a tier is
    told apart by its outline (rosette, medal, gem) and by the text beside it, never by color alone. */
 .badge-art { display: inline-flex; flex: none; line-height: 0; }
 .badge-svg { width: 56px; height: 65px; }

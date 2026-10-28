@@ -999,7 +999,12 @@ class Channel(Protocol):
 
 class PermanentDeliveryError(Exception):
     """Raised by a channel when retrying can't help, such as a deleted channel or a member who
-    left the workspace. The outbox gives up on the row at once instead of retrying."""
+    left the workspace. The outbox gives up on the row at once instead of retrying. ``code`` is
+    the channel's own reason code, when it has one."""
+
+    def __init__(self, message: str = "", *, code: str | None = None) -> None:
+        super().__init__(message)
+        self.code = code
 
 
 class ChannelUnavailable(Exception):

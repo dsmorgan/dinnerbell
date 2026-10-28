@@ -593,3 +593,20 @@ class BadgeAwardRow(Base):
     awarded_at: Mapped[datetime] = mapped_column(UTCDateTime())
     announcement: Mapped[str] = mapped_column(String(16))
     announced_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+
+
+class SlackBadgeFileRow(Base):
+    """The Slack file that holds one badge tier's PNG (#105), uploaded once and reused. A file is
+    current while ``content_hash`` (SHA-256 of the PNG bytes) matches the art now: other art, from
+    any source, uploads again and replaces the row."""
+
+    __tablename__ = "slack_badge_file"
+    __table_args__ = (UniqueConstraint("household_id", "badge_key", "tier"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    household_id: Mapped[int] = mapped_column(ForeignKey("household.id", ondelete="CASCADE"))
+    badge_key: Mapped[str] = mapped_column(String(24))
+    tier: Mapped[str] = mapped_column(String(16))
+    content_hash: Mapped[str] = mapped_column(String(64))
+    file_id: Mapped[str] = mapped_column(String(64))
+    uploaded_at: Mapped[datetime] = mapped_column(UTCDateTime())

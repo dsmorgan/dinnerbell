@@ -9,12 +9,12 @@ same notification and directory always give the same JSON, which the golden test
 from __future__ import annotations
 
 from collections.abc import Iterable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime, time
 from typing import Any
 
 from dinnerbell.channels.slack import ids
-from dinnerbell.channels.slack.badge_text import tag
+from dinnerbell.channels.slack.badge_text import ArtIds, art_element, tag, wanted
 from dinnerbell.channels.slack.blocks import (
     MAX_FALLBACK,
     MAX_MESSAGE_BLOCKS,
@@ -113,6 +113,8 @@ class RenderContext:
     directory: Directory
     label: str = ""
     """The instance label (``DINNERBELL_INSTANCE_LABEL``). Set, it heads every message."""
+    art: ArtIds = field(default_factory=dict)
+    """Uploaded badge art. A badge it has shows its art; any other shows as text."""
 
     def url(self, path: str) -> str:
         return f"{self.base_url}{path}"
@@ -1556,18 +1558,58 @@ def _tags(news: note.BadgeNews) -> list[str]:
     return tags
 
 
+MAX_ART = 12
+"""Badges shown as art in one post: each is its own block, and a post holds 50."""
+
+
 def badges_earned_message(notification: note.BadgesEarned, ctx: RenderContext) -> Message:
     """FR-39: one post for the badges a done call earned. It mentions each member by name order
-    (never by what they earned) and only celebrates: no counts against anyone else's."""
-    lines = [f"{ctx.directory.mention(n.person)} earned {_and(_tags(n))}." for n in notification.news]
-    if notification.more_people:
-        lines.append(f"…and {plural(notification.more_people, 'more member')} earned badges too.")
-    blocks = [
-        section(join_lines(["*New badges!* 🎉", *lines])),
-        context("Thank you for all you do to get a meal on the table."),
-    ]
+    (never by what they earned) and only celebrates: no counts against anyone else's. A badge with
+    uploaded art (``ctx.art``) gets a line with its art beside it; the rest stay text. With no art,
+    the post is one text block."""
     who = ", ".join(n.person.name for n in notification.news)
+    drawn = _drawn(notification.news, ctx.art)
+    tail = []
+    if notification.more_people:
+        tail.append(f"…and {plural(notification.more_people, 'more member')} earned badges too.")
+    if not any(drawn):
+        lines = [f"{ctx.directory.mention(n.person)} earned {_and(_tags(n))}." for n in notification.news]
+        blocks = [section(join_lines(["*New badges!* 🎉", *lines, *tail]))]
+    else:
+        blocks = [section("*New badges!* 🎉")]
+        for news, art in zip(notification.news, drawn, strict=True):
+            text = [tag(f"*{escape(b.name)}*", b.tier) for b in news.badges if b not in art]
+            if news.more:
+                text.append(plural(news.more, "more badge"))
+            lead = f"{ctx.directory.mention(news.person)} earned"
+            for i, (badge, file_id) in enumerate(art.items()):
+                last = i == len(art) - 1 and not text
+                line = section(
+                    f"{lead if i == 0 else 'and'} *{escape(badge.name)}* · {badge.tier}{'.' if last else ''}"
+                )
+                line["accessory"] = art_element(file_id, f"{badge.name}, {badge.tier}")
+                blocks.append(line)
+            if text:
+                blocks.append(section(f"{'Also earned' if art else lead} {_and(text)}."))
+        blocks += [section(t) for t in tail]
+    blocks.append(context("Thank you for all you do to get a meal on the table."))
     return _finish(f"New badges for {who}.", blocks)
+
+
+def _drawn(news: tuple[note.BadgeNews, ...], art: ArtIds) -> list[dict[note.BadgeTier, str]]:
+    """For each member in ``news``, the badges to show as art with their file IDs, in order: those
+    ``art`` has, until ``MAX_ART`` are used up in the post."""
+    room = MAX_ART
+    drawn: list[dict[note.BadgeTier, str]] = []
+    for n in news:
+        mine: dict[note.BadgeTier, str] = {}
+        for badge in n.badges:
+            file_id = art.get(wanted(badge.name, badge.tier) or ("", ""))
+            if file_id and room > 0:
+                mine[badge] = file_id
+                room -= 1
+        drawn.append(mine)
+    return drawn
 
 
 THANKED_AS = {"cooked": "Cooked", "picked_up": "Picked up", "ordered": "Ordered", "coordinated": "Coordinated"}
