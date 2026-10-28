@@ -14,6 +14,7 @@ import pytest
 
 from dinnerbell.domain.catalog import DEFAULT_MEALS, MODE_ORDER, Meal, Mode
 from dinnerbell.domain.events import Coverage
+from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.ranking import (
     MODE_COMPONENTS,
     SAME_CUISINE_FACTOR,
@@ -268,6 +269,25 @@ def test_a_top_up_fills_the_rest_and_ranks_after_the_meals_own_picks() -> None:
     assert [r.item_id for r in rank(replace(snap, limit=5))] == [4, 2, 3, 1]
     # Nothing fits lunch: the vote is all top-ups.
     assert [r.item_id for r in rank(replace(snap, items=(bagels, steakhouse)))] == [2, 1]
+
+
+def test_a_breakfast_call_proposes_breakfast_places_then_tops_up() -> None:
+    """#58: a breakfast call's meal is breakfast. Places for breakfast come first, however well
+    the others score, and with too few, places for other meals fill the vote after them."""
+    bagels = item(1, "Bagels", meals=frozenset({Meal.BREAKFAST}))
+    diner = item(2, "Diner", cuisine=MEXICAN, meals=frozenset({Meal.BREAKFAST, Meal.LUNCH, Meal.DINNER}))
+    steakhouse = item(3, "Steakhouse", meals=DINNER_ONLY)
+    deli = item(4, "Deli", cuisine=ETHIOPIAN, meals=frozenset({Meal.LUNCH}))
+    favored = GroupPreferences(item_scores={3: 2, 4: 2})
+    snap = snapshot(bagels, diner, steakhouse, deli, meal=Slot.BREAKFAST.meal, preferences=favored)
+    ranked = rank(snap)
+    assert sorted(ids(ranked[:2])) == [1, 2] and all(r.for_meal for r in ranked[:2])
+    assert ranked[2].item_id in {3, 4} and not ranked[2].for_meal
+    assert ranked[2].reasons[0] in {"Usually for dinner.", "Usually for lunch."}
+    assert {i.id for i, _ in candidates(snap)} == {1, 2}
+    # Enough breakfast places: no top-up.
+    more = (bagels, diner, item(5, "Cafe", cuisine=ETHIOPIAN, meals=frozenset({Meal.BREAKFAST})), steakhouse)
+    assert sorted(ids(rank(replace(snap, items=more)))) == [1, 2, 5]
 
 
 def test_a_top_up_passes_every_hard_filter() -> None:

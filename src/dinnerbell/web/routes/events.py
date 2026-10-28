@@ -39,7 +39,7 @@ from dinnerbell.domain.events import (
     friendly,
 )
 from dinnerbell.domain.guests import GuestInput
-from dinnerbell.domain.meals import Slot
+from dinnerbell.domain.meals import PICK_SLOT, Slot
 from dinnerbell.domain.members import InvalidMemberInput
 from dinnerbell.domain.offers import MAX_CAPACITY
 from dinnerbell.services import activity, call_admin, calls, discard, event_views, feedback, guests, offers
@@ -181,7 +181,7 @@ async def start_call(
     try:
         chosen = choice(Slot, slot)
         if chosen is None:
-            raise BadFormValue("Pick lunch or dinner.")
+            raise BadFormValue(PICK_SLOT)
         when = iso_date(day, "Enter the date as YYYY-MM-DD.")
         try:
             event = await calls.start_call(

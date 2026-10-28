@@ -6,6 +6,15 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ## [Unreleased]
 
+### Added
+
+- Breakfast calls, started when you want one (#58). Breakfast works like lunch and dinner: in, maybe, or out, roles, offers, proposals, a vote, a decision, and who does what.
+  - No breakfast call ever posts on its own. The breakfast schedule starts off; any member can turn it on from the **Schedule** page if the household ever wants a daily one. Its defaults: the call at 7:00 AM, 30 minutes to answer, 15 to vote, the reminder 10 minutes before answers close, cook and pickup as the usual ways to get it, and 8:00 AM as the usual meal time. All of them can be changed there, like lunch's and dinner's.
+  - Start one with `/dinnerbell call breakfast` (add `tomorrow` or a date), from **Start a call** on the web's Today page, or with **Start a breakfast call** on App Home. A breakfast called off today shows **Start breakfast again**, on Home and the web.
+  - Ranking proposes places whose meals include breakfast, and tops up with others, marked such as "Usually for lunch and dinner.", when too few fit.
+  - Everything that names a meal knows breakfast: `/dinnerbell cancel breakfast`, the "which one?" reply when more than one call is open ("Breakfast, lunch, and dinner are all open today."), offers, logging a meal on the web and in Slack, History, **Admin > Ranking**'s Skip a day (once breakfast's schedule is on), `/dinnerbell schedule`, and, on a test instance, `/dinnerbell-test discard breakfast`.
+  - App Home's start buttons read **Make an offer**, then dinner, breakfast, and lunch: dinner, the daily call, first, then the others in the order of the day. The Schedule page and `/dinnerbell schedule` use the same order. History lists a day's meals newest first: dinner, then lunch, then breakfast.
+
 ### Changed
 
 - A call on App Home has the same buttons as your Your answer card, so you can do everything from Home without going back to the channel (#84): **In**, **Maybe**, and **Out**, then **I can cook**, **I can pick up**, **I'll order**, **I'll coordinate** while nobody is, **Details**, and **Invite a guest**, with your choices marked as on the card ("✓ I can cook"). A guest's Home has their **In**, **Out**, the role offers, and **I'll coordinate**. Home and the card draw these buttons from the same code, so they can't drift apart again.
@@ -14,6 +23,11 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
   - Answering for a guest without Slack stays on the card (tap **Answer** on the call).
   - The buttons come in short rows, as on the card, so Slack doesn't hide any under **+ N more**.
   - Home says who's coordinating a call, or that you are.
+
+### Upgrade notes
+
+- The database migrates to revision `0013_breakfast` when Dinnerbell starts. It rebuilds the `event` and `meal_log` tables so a call, an offer, or a logged meal can be breakfast. Every row is kept, along with the tables' indexes and foreign keys, and call and meal IDs are still never reused. Like 0012, it must run with foreign keys off, as `dinnerbell serve` and `dinnerbell migrate` do; run any other way, it refuses. To go back, restore your backup. Downgrading the schema instead refuses while any breakfast call, offer, or meal exists, rather than delete them.
+- No settings or Slack changes. Households keep their lunch and dinner schedules; breakfast's starts off, so nothing new posts until someone starts a breakfast call.
 
 ## [0.6.0] - 2026-10-27
 

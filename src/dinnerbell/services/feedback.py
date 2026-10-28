@@ -44,7 +44,7 @@ from dinnerbell.domain.feedback import (
     count,
     thanks_for,
 )
-from dinnerbell.domain.meals import MealLog, MemberRef, Slot
+from dinnerbell.domain.meals import MealLog, MemberRef, Slot, newest_first
 from dinnerbell.domain.members import Member
 from dinnerbell.services import call_context as cc
 from dinnerbell.services.call_context import NO_SUCH_CALL, CallContext
@@ -225,7 +225,7 @@ async def awaiting(db: AsyncSession, actor: Member, *, now: datetime) -> list[Aw
     given = await FeedbackRepository(db).given_by(actor.household_id, actor.id, (m.id for m in mine))
     events = EventRepository(db)
     found: list[Awaiting] = []
-    for meal in sorted(mine, key=lambda m: (m.day, m.slot is Slot.DINNER, m.id), reverse=True):
+    for meal in sorted(mine, key=newest_first, reverse=True):
         event = await events.get(actor.household_id, meal.event_id) if meal.event_id is not None else None
         if meal.id in given or event is None or event.state is not EventState.DONE:
             continue

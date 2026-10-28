@@ -2,7 +2,7 @@
   "blocks": [
     {
       "text": {
-        "text": "*Dinner:* the call goes out at *3:00 PM*. Answers close at 4:30 PM, voting at 5:15 PM, and the usual meal time is 6:30 PM.\n*Lunch:* no daily call.",
+        "text": "*Dinner:* the call goes out at *3:00 PM*. Answers close at 4:30 PM, voting at 5:15 PM, and the usual meal time is 6:30 PM.\n*Breakfast:* no daily call.\n*Lunch:* no daily call.",
         "type": "mrkdwn"
       },
       "type": "section"
@@ -33,5 +33,5 @@
       "type": "context"
     }
   ],
-  "text": "When calls go out: Dinner: the call goes out at 3:00 PM. Answers close at 4:30 PM, voting at 5:15 PM, and the usual meal time is 6:30 PM. Lunch: no daily call."
+  "text": "When calls go out: Dinner: the call goes out at 3:00 PM. Answers close at 4:30 PM, voting at 5:15 PM, and the usual meal time is 6:30 PM. Breakfast: no daily call. Lunch: no daily call."
 }

@@ -385,6 +385,7 @@ async def test_home_shows_todays_calls_and_quick_buttons(slack: Slack, house: Ho
         "invite_guest",
         "link_event",
         "make_offer",
+        "start_call_breakfast",
         "start_call_lunch",
     ]
     assert selected(home) == ["✓ In"]

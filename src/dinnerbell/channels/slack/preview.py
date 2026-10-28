@@ -221,6 +221,9 @@ NOTIFICATIONS: dict[str, Callable[[], note.Notification]] = {
     "event_cancelled": lambda: note.EventCancelled(
         CANCELLED, (ALEX, SAM), cancelled_by=ALEX, note=REASON, audience=(ALEX, KIM, SAM)
     ),
+    "event_cancelled_breakfast": lambda: note.EventCancelled(
+        replace(event(EventState.CANCELLED), slot=Slot.BREAKFAST), (ALEX, SAM), cancelled_by=ALEX, audience=(ALEX, SAM)
+    ),
     "event_cancelled_no_reason": lambda: note.EventCancelled(
         event(EventState.CANCELLED), (ALEX, SAM), cancelled_by=ALEX, audience=(ALEX, KIM, LEE, SAM)
     ),
@@ -380,6 +383,12 @@ SCHEDULED_VIEW = replace(
     ),
 )
 """Tomorrow's lunch, scheduled for 10:30 AM, which Sam may post now or call off."""
+BREAKFAST_CALLED_OFF = replace(
+    CALLED_OFF_VIEW,
+    event=replace(CALLED_OFF_VIEW.event, id=9, slot=Slot.BREAKFAST),
+    info=replace(CALLED_OFF_VIEW.info, id=9, slot=Slot.BREAKFAST, path="/events/9"),
+)
+"""Today's breakfast, called off, which anyone may start again (#58)."""
 ORIGIN = ids.ViewOrigin(7, "C0DINNER")
 CALL_OFF_ORIGIN = replace(ORIGIN, run=1)
 """Call it off and Close now name the run they were opened for, as ``Interactions`` writes them."""
@@ -477,6 +486,9 @@ VIEWS: dict[str, Callable[[], dict[str, Any]]] = {
     ),
     "home_called_off": lambda: home_view(
         TodayView(DAY, [CALLED_OFF_VIEW], tuple(Slot)), HomeLinks(BASE_URL), notice="You called off dinner."
+    ),
+    "home_breakfast_called_off": lambda: home_view(
+        TodayView(DAY, [BREAKFAST_CALLED_OFF, COLLECTING_VIEW], tuple(Slot)), HomeLinks(BASE_URL)
     ),
     "home_empty": lambda: home_view(TodayView(DAY, [], tuple(Slot)), HomeLinks(BASE_URL)),
     "home_upcoming": lambda: home_view(

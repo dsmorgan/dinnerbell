@@ -23,8 +23,8 @@ from dinnerbell.channels.slack.interactions import (
     HELP,
     NO_OPEN_CALL,
     OUT_OF_DATE,
-    WHICH_CALL,
     parse_cancel_args,
+    which_call,
 )
 from dinnerbell.channels.slack.views import FormError, parse_cancel
 from dinnerbell.config import Settings
@@ -583,15 +583,15 @@ async def test_home_shows_call_it_off_and_close_now_only_to_who_can(slack: Slack
     # Sam coordinates, so nobody is offered I'll coordinate (#84).
     common = ["card_in", "card_maybe", "card_out", "card_offer_cook", "card_offer_pickup", "card_offer_order"]
     common += ["card_details", "invite_guest"]
-    assert home_actions(slack, "Kim") == [*common, "link_event", "make_offer", "start_call_lunch"]
+    starts = ["make_offer", "start_call_breakfast", "start_call_lunch"]
+    assert home_actions(slack, "Kim") == [*common, "link_event", *starts]
     for who in ("Alex", "Sam"):  # an admin, and the coordinator
         assert home_actions(slack, who) == [
             *common,
             "close_window",
             "cancel_call",
             "link_event",
-            "make_offer",
-            "start_call_lunch",
+            *starts,
         ]
     buttons = {
         e["action_id"]: e for b in slack.last_home("Sam")["blocks"] if b["type"] == "actions" for e in b["elements"]
@@ -651,9 +651,20 @@ async def test_home_offers_to_start_a_called_off_slot_again(slack: Slack, house:
     await call_off(slack, "Kim", reason(None), event_id)
     for who in ("Sam", "Lee"):  # any member, not only whoever called it off
         await slack.open_home(who)
-        assert home_actions(slack, who) == ["link_event", "make_offer", "start_call_dinner", "start_call_lunch"]
+        assert home_actions(slack, who) == [
+            "link_event",
+            "make_offer",
+            "start_call_dinner",
+            "start_call_breakfast",
+            "start_call_lunch",
+        ]
         starts = next(b for b in slack.last_home(who)["blocks"] if b.get("block_id") == "start")["elements"]
-        assert [e["text"]["text"] for e in starts] == ["Make an offer", "Start dinner again", "Start a lunch call"]
+        assert [e["text"]["text"] for e in starts] == [
+            "Make an offer",
+            "Start dinner again",
+            "Start a breakfast call",
+            "Start a lunch call",
+        ]
     await slack.click("Lee", ids.ACTION_FOR_START[Slot.DINNER], "dinner", home=True)
     event = await house.event(event_id)
     assert (event.state, event.run, event.created_by) == (EventState.COLLECTING, 2, house["Lee"].id)
@@ -687,7 +698,10 @@ async def test_slash_cancel_asks_which_when_both_are_open(slack: Slack, house: H
     dinner = await daily_call(house)
     await slack.command("Kim", "call lunch")
     await slack.command("Alex", "cancel")
-    assert slack.ephemerals("Alex") == [WHICH_CALL.format(when="today", command="/dinnerbell", day="")]
+    assert slack.ephemerals("Alex") == [
+        "Lunch and dinner are both open today. Which one? Try `/dinnerbell cancel lunch` or "
+        "`/dinnerbell cancel dinner`, and add a reason after it if you like."
+    ]
     assert "`/dinnerbell cancel lunch`" in slack.ephemerals("Alex")[0]
     assert (await house.event(dinner)).state is EventState.COLLECTING
     await slack.command("Alex", "cancel lunch Nobody's home")
@@ -706,8 +720,8 @@ async def test_slash_cancel_names_the_configured_command_and_a_later_day(house: 
         await slack.command("Kim", "call lunch tomorrow", command="/dinnerbell-test")
         await slack.command("Kim", "call dinner tomorrow", command="/dinnerbell-test")
         await slack.command("Kim", "cancel tomorrow", command="/dinnerbell-test")
-        assert slack.ephemerals("Kim")[-1] == WHICH_CALL.format(
-            when="on Friday, Oct 23", command="/dinnerbell-test", day=" 2026-10-23"
+        assert slack.ephemerals("Kim")[-1] == which_call(
+            [Slot.LUNCH, Slot.DINNER], when="on Friday, Oct 23", command="/dinnerbell-test", day=" 2026-10-23"
         )
         await slack.command("Kim", "cancel dinner tomorrow", command="/dinnerbell-test")
         assert slack.ephemerals("Kim")[-1] == CALLED_OFF.format(slot="dinner", day="Friday, Oct 23")

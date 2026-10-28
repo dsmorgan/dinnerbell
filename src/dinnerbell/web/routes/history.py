@@ -14,7 +14,7 @@ from starlette.responses import Response
 
 from dinnerbell.domain.catalog import ItemKind
 from dinnerbell.domain.feedback import COOK_NOTE_MAX, FeedbackInput, InvalidFeedback, PlaceIssue, Rating
-from dinnerbell.domain.meals import InvalidMeal, MealInput, MealLog, Slot, can_change
+from dinnerbell.domain.meals import PICK_SLOT, InvalidMeal, MealInput, MealLog, Slot, can_change
 from dinnerbell.services import catalog as catalog_service
 from dinnerbell.services import feedback as feedback_service
 from dinnerbell.services import meals as meal_service
@@ -60,7 +60,7 @@ class MealForm:
     def to_input(self) -> MealInput:
         slot = choice(Slot, self.slot)
         if slot is None:
-            raise BadFormValue("Pick lunch or dinner.")
+            raise BadFormValue(PICK_SLOT)
         item_id = parse_id(self.item_id)
         if item_id is None:
             raise BadFormValue("Pick something from the catalog.")

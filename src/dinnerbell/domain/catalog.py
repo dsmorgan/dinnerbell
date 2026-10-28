@@ -65,8 +65,8 @@ MODE_ORDER = (Mode.COOK, Mode.PICKUP, Mode.DELIVERY)
 
 
 class Meal(StrEnum):
-    """A meal of the day that a catalog item is for (#72). A call's ``Slot`` maps to one, and
-    breakfast is here before it's a slot (#58), so a breakfast call needs no migration."""
+    """A meal of the day that a catalog item is for (#72). A call's ``Slot`` maps to one with
+    the same name (``Slot.meal``)."""
 
     BREAKFAST = "breakfast"
     LUNCH = "lunch"

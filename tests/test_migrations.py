@@ -1066,3 +1066,119 @@ def test_0012_refuses_to_run_with_foreign_keys_on(settings: Settings) -> None:
     finally:
         engine.dispose()
     assert _catalog(settings) == before
+
+
+# 0013: breakfast calls (#58) ---------------------------------------------------------------------
+
+BREAKFAST_CALL = (
+    "INSERT INTO event (household_id, kind, slot, date, state, run, version, opens_at, respond_deadline, "
+    "reminder_minutes, vote_minutes, created_at, updated_at) VALUES (1, 'call', 'breakfast', '2026-10-24', "
+    "'collecting', 1, 1, :t, :t, 10, 15, :t, :t)"
+)
+BREAKFAST_MEAL = (
+    "INSERT INTO meal_log (household_id, date, slot, item_id, cuisine_tags, participants, created_at, updated_at) "
+    "VALUES (1, '2026-10-24', 'breakfast', 1, '[]', '[]', :t, :t)"
+)
+
+
+def _execute(settings: Settings, *statements: str) -> None:
+    engine = create_sync_engine(settings.sync_database_url)
+    try:
+        with engine.begin() as c:
+            for statement in statements:
+                c.execute(text(statement), {"t": STAMP})
+    finally:
+        engine.dispose()
+
+
+def _slot_checks(settings: Settings) -> list[str]:
+    engine = create_engine(settings.sync_database_url)
+    try:
+        with engine.connect() as c:
+            tables = [
+                c.execute(text("SELECT sql FROM sqlite_master WHERE name = :n"), {"n": n}).scalar_one()
+                for n in ("event", "meal_log")
+            ]
+    finally:
+        engine.dispose()
+    return [line.strip().rstrip(",") for sql in tables for line in sql.splitlines() if "ck_" in line and "slot" in line]
+
+
+def _sequences(settings: Settings) -> dict[str, int]:
+    engine = create_engine(settings.sync_database_url)
+    try:
+        with engine.connect() as c:
+            return {str(n): int(s) for n, s in c.execute(text("SELECT name, seq FROM sqlite_sequence")).all()}
+    finally:
+        engine.dispose()
+
+
+def test_0013_lets_calls_and_meals_be_breakfast_and_downgrade_refuses_while_any_are(
+    settings: Settings, migrate_command: None
+) -> None:
+    """``dinnerbell migrate`` on a populated 0012 database rebuilds ``event`` and ``meal_log``
+    without losing a row, an index, a foreign key, or an AUTOINCREMENT high-water mark, and both
+    take breakfast afterward. A downgrade refuses while a breakfast call or meal exists, and
+    changes nothing; without them it goes back to lunch and dinner only, and up again."""
+    from alembic.util.exc import CommandError
+
+    from dinnerbell import main as cli
+
+    _upgrade_to(settings, "0012_catalog_meals")
+    _populate_calls(settings)
+    _delete_newest_call(settings)  # the rebuild must not give its ID back
+    before, fks, sequences = _snapshot(settings), _event_foreign_keys(settings), _sequences(settings)
+    with pytest.raises(IntegrityError, match="CHECK"):
+        _execute(settings, BREAKFAST_CALL)
+    with pytest.raises(IntegrityError, match="CHECK"):
+        _execute(settings, BREAKFAST_MEAL)
+
+    assert cli.main(["migrate"]) == 0
+    after = _snapshot(settings)
+    assert after["rows"] == before["rows"] and after["indexes"] == before["indexes"]
+    assert _event_foreign_keys(settings) == fks and _sequences(settings) == sequences
+    assert "AUTOINCREMENT" in _event_sql(settings)
+    assert _slot_checks(settings) == [
+        "CONSTRAINT ck_event_slot CHECK (slot IN ('breakfast', 'lunch', 'dinner'))",
+        "CONSTRAINT ck_meal_log_slot CHECK (slot IN ('breakfast', 'lunch', 'dinner'))",
+    ]
+    with pytest.raises(IntegrityError, match="CHECK"):
+        _execute(settings, BREAKFAST_CALL.replace("'breakfast'", "'brunch'"))
+    _execute(settings, BREAKFAST_CALL, BREAKFAST_MEAL)
+    assert _next_event_id(settings) == 4  # the breakfast call took 3; 2 never comes back
+    with_breakfast = _snapshot(settings)
+
+    with pytest.raises((RuntimeError, CommandError), match=r"1 breakfast call\(s\) or offer\(s\) and 1 breakfast"):
+        _downgrade_to(settings, "0012_catalog_meals")
+    assert _snapshot(settings) == with_breakfast
+    _execute(
+        settings,
+        "DELETE FROM event WHERE slot = 'breakfast'",
+        "DELETE FROM meal_log WHERE slot = 'breakfast'",
+        "DELETE FROM event WHERE id = 4",
+    )
+    _downgrade_to(settings, "0012_catalog_meals")
+    assert _snapshot(settings)["rows"] == before["rows"] and _event_foreign_keys(settings) == fks
+    assert "slot IN ('lunch', 'dinner')" in _slot_checks(settings)[0]
+    assert cli.main(["migrate"]) == 0
+    assert _snapshot(settings)["rows"] == before["rows"]
+    assert _next_event_id(settings) == 5
+
+
+def test_0013_refuses_to_run_with_foreign_keys_on(settings: Settings) -> None:
+    """Rebuilding ``event`` and ``meal_log`` with foreign keys on would cascade to every call's
+    rows and all feedback."""
+    from alembic import command
+
+    from dinnerbell.db.migrate import _alembic_config
+
+    _upgrade_to(settings, "0012_catalog_meals")
+    _populate_calls(settings)
+    before = _snapshot(settings)
+    engine = create_sync_engine(settings.sync_database_url)
+    try:
+        with pytest.raises(RuntimeError, match="foreign keys on"), engine.begin() as connection:
+            command.upgrade(_alembic_config(connection), "0013_breakfast")
+    finally:
+        engine.dispose()
+    assert _snapshot(settings) == before

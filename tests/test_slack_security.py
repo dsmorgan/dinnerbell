@@ -151,6 +151,7 @@ async def test_a_modal_payload_without_a_view_type_is_dropped(slack: Slack, hous
         ("vote", "7"),
         ("vote", "1:2:3"),
         ("start_call_dinner", "breakfast"),
+        ("start_call_breakfast", "brunch"),
         ("unknown_action", "7"),
         ("details", "7"),
     ],

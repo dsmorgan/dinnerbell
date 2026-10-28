@@ -25,6 +25,14 @@
           {
             "text": {
               "emoji": true,
+              "text": "Breakfast",
+              "type": "plain_text"
+            },
+            "value": "breakfast"
+          },
+          {
+            "text": {
+              "emoji": true,
               "text": "Lunch",
               "type": "plain_text"
             },

@@ -63,7 +63,7 @@ from dinnerbell.domain.events import (
 )
 from dinnerbell.domain.feedback import COOK_NOTE_MAX, FeedbackInput, PlaceIssue, Rating
 from dinnerbell.domain.guests import GuestInput
-from dinnerbell.domain.meals import MealInput, Slot
+from dinnerbell.domain.meals import CALL_ORDER, PICK_SLOT, MealInput, Slot
 from dinnerbell.domain.members import MAX_DISPLAY_NAME_LENGTH, Member
 from dinnerbell.domain.offers import MAX_CAPACITY, replaces_call
 from dinnerbell.services.event_views import EventView, TodayView
@@ -480,7 +480,7 @@ def parse_feedback(values: Any) -> FeedbackInput:
 
 # Offers and logging a meal (FR-4, spec 5.6) ---------------------------------------------------------
 
-SLOT_OPTIONS = {slot: option(slot.value.capitalize(), slot.value) for slot in (Slot.LUNCH, Slot.DINNER)}
+SLOT_OPTIONS = {slot: option(slot.value.capitalize(), slot.value) for slot in Slot}
 MODE_OPTIONS = {mode: option(mode.label, mode.value) for mode in Mode}
 
 
@@ -551,7 +551,7 @@ def _choice_of(values: Any, block_id: str, kinds: Iterable[str], message: str) -
 def parse_offer(values: Any) -> OfferInput:
     """The offer modal's state as ``OfferInput``. Raises FormError or ids.BadValue; the service
     checks the rest."""
-    slot = Slot(_choice_of(values, "slot", (s.value for s in Slot), "Pick lunch or dinner."))
+    slot = Slot(_choice_of(values, "slot", (s.value for s in Slot), PICK_SLOT))
     mode = Mode(_choice_of(values, "mode", (m.value for m in Mode), "Pick how it arrives."))
     at = _time(values, "at")
     if at is None:
@@ -602,7 +602,7 @@ def parse_log(values: Any) -> MealInput:
     item = _picked(values, "item")
     if item is None:
         raise FormError("item", "Pick something from the catalog.")
-    slot = Slot(_choice_of(values, "slot", (s.value for s in Slot), "Pick lunch or dinner."))
+    slot = Slot(_choice_of(values, "slot", (s.value for s in Slot), PICK_SLOT))
     who = _picked_many(values, "who")
     if not who:
         raise FormError("who", "Pick at least one person who ate.")
@@ -881,7 +881,7 @@ def home_view(
     started = {e.slot for e in todays if not e.is_offer or replaces_call(e)}
     called_off = {v.event.slot for v in today.events if v.event.day == today.today and v.can.restart}
     starts: list[Block] = [button("Make an offer", ids.MAKE_OFFER, ids.MAKE_OFFER)]
-    for slot in (Slot.DINNER, Slot.LUNCH):
+    for slot in CALL_ORDER:
         if slot in called_off:  # starting it again takes the start button's path (FR-56)
             starts.append(button(f"Start {slot.value} again", ids.ACTION_FOR_START[slot], slot.value))
         elif slot not in started:

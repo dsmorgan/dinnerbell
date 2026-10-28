@@ -792,7 +792,7 @@ Slots are off after a scrub. To rehearse a scheduled call, turn one on on the **
 
 On production, a call that's decided, done, or past its meal time stays: history matters there, and "There's already a dinner call for that day" stops a second one. On test, you can throw a call away to test the same slot and day again. These controls work only while `DINNERBELL_INSTANCE_LABEL` is set, the same check `scrub-test` uses; on production they don't appear, the pages are a 404, and the command refuses.
 
-- **Discard a call.** As an admin, select **Discard (test)** on the call's card, check what the confirmation page says it deletes, and select **Discard (test)** again. In Slack, run `/dinnerbell-test discard`, which discards today's dinner call; add `lunch`, `tomorrow`, or a date such as `2026-10-24`. From the host, run:
+- **Discard a call.** As an admin, select **Discard (test)** on the call's card, check what the confirmation page says it deletes, and select **Discard (test)** again. In Slack, run `/dinnerbell-test discard`, which discards today's dinner call; add `breakfast` or `lunch`, `tomorrow`, or a date such as `2026-10-24`. From the host, run:
 
   ```sh
   deploy/dinnerbell-test run --rm dinnerbell discard-call 12

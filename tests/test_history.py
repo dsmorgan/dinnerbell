@@ -124,7 +124,7 @@ def test_snapshots_survive_catalog_changes(client: TestClient, household: dict[s
     [
         ({"day": "2026-10-23"}, "not the future"),
         ({"day": "yesterday"}, "Enter the date as YYYY-MM-DD."),
-        ({"slot": "brunch"}, "Pick lunch or dinner."),
+        ({"slot": "brunch"}, "Pick breakfast, lunch, or dinner."),
         ({"item_id": ""}, "Pick something from the catalog."),
         ({"item_id": "999"}, "Pick something from the catalog."),
         ({"participant_ids": []}, "Pick at least one person who ate."),

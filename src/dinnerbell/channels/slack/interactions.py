@@ -28,7 +28,7 @@ import contextlib
 import contextvars
 import logging
 import re
-from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Sequence
 from dataclasses import dataclass, replace
 from datetime import date, timedelta
 from enum import Enum
@@ -681,6 +681,8 @@ class Interactions:
                 return "Marked done. Thanks!"
             if action_id in ids.START_CALL:
                 slot = ids.parse_slot(value)
+                if slot is not ids.START_CALL[action_id]:  # each button starts its own slot
+                    raise ids.BadValue("slot doesn't match the button")
                 day = await slack_members.today(db, member, now=now)
                 await calls.start_call(db, member, slot, day, now=now, instance_label=self.instance_label)
                 return f"Started the {slot.value} call. It's posted in the Dinnerbell channel."
@@ -1367,7 +1369,8 @@ class Interactions:
         await self._run(source, member, work)
 
     async def _cancel_command(self, source: Source, args: list[str]) -> None:
-        """``cancel [lunch|dinner] [day] [reason]``: call off that call, or today's only open one."""
+        """``cancel [breakfast|lunch|dinner] [day] [reason]``: call off that call, or today's only
+        open one."""
         member = await self._member(source)
         if member is None:
             return
@@ -1392,13 +1395,13 @@ class Interactions:
                     raise EventRuleViolation(NO_OPEN_CALL.format(when=when), code="no_call")
                 if len(found) > 1:
                     named = "" if on == today else f" {on.isoformat()}"
-                    return WHICH_CALL.format(when=when, command=self.command, day=named)
+                    return which_call([event.slot for event in found], when=when, command=self.command, day=named)
             return await self._cancel(member, found[0].id, reason, None)
 
         await self._run(source, member, work)
 
     async def _discard_command(self, source: Source, args: list[str]) -> None:
-        """``discard [lunch|dinner] [today|tomorrow|YYYY-MM-DD]``, on a test instance only (#60):
+        """``discard [breakfast|lunch|dinner] [today|tomorrow|YYYY-MM-DD]``, on a test instance only (#60):
         discard that call, dinner today by default. The service checks for an admin."""
         member = await self._member(source)
         if member is None:
@@ -1435,15 +1438,15 @@ class Interactions:
 
 DISCARD_HELP = (
     "• Test instance: `{command} discard` deletes today's dinner call and everything in it, so a fresh "
-    "one can start. Add `lunch` or a day. Admins only."
+    "one can start. Add `breakfast`, `lunch`, or a day. Admins only."
 )
 DISCARD_REFUSED = "Discarding a call works only on a test instance."
 DISCARD_USAGE = "Try `{command} discard`, `{command} discard lunch`, or `{command} discard dinner 2026-10-24`."
 HELP = (
     "*Dinnerbell* helps the household decide what to eat.\n"
-    "• `{command} call` starts a dinner call for today. Add `lunch`, `tomorrow`, or a date "
+    "• `{command} call` starts a dinner call for today. Add `breakfast` or `lunch`, `tomorrow`, or a date "
     "like `2026-10-24`. A later day's call posts at its usual time that day; add `now` to post it now.\n"
-    "• `{command} cancel` calls off today's call. Add `lunch` or `dinner`, a day, and a reason, "
+    "• `{command} cancel` calls off today's call. Add `breakfast`, `lunch`, or `dinner`, a day, and a reason, "
     "like `{command} cancel dinner Pizza at Grandma's`.\n"
     "• `{command} prefs` links to your preferences.\n"
     "• `{command} catalog` and `{command} history` link to the catalog and meal history.\n"
@@ -1455,8 +1458,8 @@ HELP = (
     "Open the Dinnerbell app's Home tab for today's calls, or <{today}|the web app>."
 )
 CALL_USAGE = (
-    "Try `{command} call`, `{command} call lunch tomorrow`, `{command} call lunch tomorrow now`, "
-    "or `{command} call dinner 2026-10-24`."
+    "Try `{command} call`, `{command} call breakfast`, `{command} call lunch tomorrow`, "
+    "`{command} call lunch tomorrow now`, or `{command} call dinner 2026-10-24`."
 )
 POST_WORDS = frozenset({"now", "early"})
 """Words in ``call`` that post a later day's call now instead of at its usual time (#59)."""
@@ -1464,10 +1467,30 @@ CANCEL_USAGE = (
     "Try `{command} cancel`, `{command} cancel lunch`, or `{command} cancel dinner tomorrow Pizza at Grandma's`."
 )
 NO_OPEN_CALL = "There's no open call to call off {when}."
-WHICH_CALL = (
-    "Lunch and dinner are both open {when}. Which one? Try `{command} cancel lunch{day}` or "
-    "`{command} cancel dinner{day}`, and add a reason after it if you like."
-)
+WHICH_CALL = "{open} are {all} open {when}. Which one? Try {tries}, and add a reason after it if you like."
+
+
+def which_call(slots: Sequence[Slot], *, when: str, command: str, day: str) -> str:
+    """``cancel`` without a slot, when more than one call is open on that day: "Lunch and dinner
+    are both open today. Which one? Try `/dinnerbell cancel lunch` or `/dinnerbell cancel
+    dinner`, …". ``slots`` are in the order of the day; ``day`` is " 2026-10-23" for a later day."""
+    names = [slot.value for slot in slots]
+    tries = [f"`{command} cancel {name}{day}`" for name in names]
+    return WHICH_CALL.format(
+        open=_series(names, "and").capitalize(),
+        all="both" if len(names) == 2 else "all",
+        when=when,
+        tries=_series(tries, "or"),
+    )
+
+
+def _series(words: Sequence[str], joiner: str) -> str:
+    """ "a or b", or "a, b, or c"."""
+    if len(words) < 3:
+        return f" {joiner} ".join(words)
+    return f"{', '.join(words[:-1])}, {joiner} {words[-1]}"
+
+
 _ISO_DAY = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}")
 FORMS: dict[str, Callable[[Any], Any]] = {
     "details": parse_details,
@@ -1548,7 +1571,7 @@ def posted_offer_reply(posted: offers.Posted) -> str:
 
 
 def parse_call_args(args: list[str], today: date, *, command: str = DEFAULT_COMMAND) -> tuple[Slot, date, bool]:
-    """``call [lunch|dinner] [today|tomorrow|YYYY-MM-DD] [now|early]``, in any order. Dinner
+    """``call [breakfast|lunch|dinner] [today|tomorrow|YYYY-MM-DD] [now|early]``, in any order. Dinner
     today by default. The flag is whether to post a later day's call now (#59)."""
     slot, day, early = Slot.DINNER, today, False
     for word in args:
@@ -1571,7 +1594,7 @@ def parse_call_args(args: list[str], today: date, *, command: str = DEFAULT_COMM
 def parse_cancel_args(
     args: list[str], today: date, *, command: str = DEFAULT_COMMAND
 ) -> tuple[Slot | None, date | None, str | None]:
-    """``cancel [lunch|dinner] [today|tomorrow|YYYY-MM-DD] [reason]``: the slot and the day, in
+    """``cancel [breakfast|lunch|dinner] [today|tomorrow|YYYY-MM-DD] [reason]``: the slot and the day, in
     either order, then the reason, which keeps its case. Only the first slot and the first day
     count, so after ``dinner`` a reason can start with "lunch". Slack escapes ``&``, ``<``, and ``>`` in a
     command's text; the reason gets them back, and is escaped again wherever it's shown."""

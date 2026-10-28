@@ -75,7 +75,7 @@ class SlotSchedule:
         return timedelta(minutes=self.vote_minutes)
 
 
-DEFAULT_SLOTS: dict[Slot, SlotSchedule] = {
+DEFAULT_SLOTS: dict[Slot, SlotSchedule] = {  # in CALL_ORDER
     Slot.DINNER: SlotSchedule(
         enabled=True,
         call_time=time(15, 0),
@@ -84,6 +84,17 @@ DEFAULT_SLOTS: dict[Slot, SlotSchedule] = {
         reminder_minutes=15,
         modes=frozenset({Mode.PICKUP, Mode.DELIVERY}),
         meal_time=time(18, 30),
+    ),
+    # Breakfast (#58) is coordinated now and then, such as on weekends or with guests, so it has
+    # no daily call until someone turns it on: members start one when they want it.
+    Slot.BREAKFAST: SlotSchedule(
+        enabled=False,
+        call_time=time(7, 0),
+        response_minutes=30,
+        vote_minutes=15,
+        reminder_minutes=10,
+        modes=frozenset({Mode.COOK, Mode.PICKUP}),
+        meal_time=time(8, 0),
     ),
     Slot.LUNCH: SlotSchedule(
         enabled=False,

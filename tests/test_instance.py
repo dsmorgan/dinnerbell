@@ -88,7 +88,7 @@ async def test_call_usage_names_the_configured_command(test_slack: Slack, house:
     house.clock.now = OPENS
     await test_slack.command("Kim", "call dinner soonish", command=TEST_COMMAND)
     (usage,) = test_slack.ephemerals("Kim")
-    assert usage.startswith(f"Try `{TEST_COMMAND} call`, `{TEST_COMMAND} call lunch tomorrow`")
+    assert usage.startswith(f"Try `{TEST_COMMAND} call`, `{TEST_COMMAND} call breakfast`")
     assert "`/dinnerbell " not in usage
 
 
