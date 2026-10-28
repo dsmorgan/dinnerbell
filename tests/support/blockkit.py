@@ -55,6 +55,13 @@ def check_option(option: Any, where: str) -> None:
     assert isinstance(option["value"], str) and 0 < len(option["value"]) <= 150, where
 
 
+def check_image(element: dict[str, Any], where: str) -> None:
+    """An image element: a Slack file by ID, or a URL (not used), and alt text."""
+    assert set(element) == {"type", "slack_file", "alt_text"}, f"{where}: {sorted(element)}"
+    assert set(element["slack_file"]) == {"id"} and element["slack_file"]["id"], f"{where}: slack_file"
+    assert 0 < len(element["alt_text"]) <= 2000, f"{where}: alt_text"
+
+
 def check_element(element: Any, where: str, action_ids: set[str]) -> None:
     kind = element.get("type")
     assert kind in ELEMENTS, f"{where}: unexpected element {kind}"
@@ -140,7 +147,10 @@ def check_blocks(blocks: Any, surface: str = "message") -> None:
                 check_text(field, 2000, f"{where}.field")
             assert len(block.get("fields", [])) <= 10, where
             if "accessory" in block:
-                check_element(block["accessory"], f"{where}.accessory", action_ids)
+                if block["accessory"].get("type") == "image":
+                    check_image(block["accessory"], f"{where}.accessory")
+                else:
+                    check_element(block["accessory"], f"{where}.accessory", action_ids)
         elif kind == "context":
             assert 0 < len(block["elements"]) <= 10, where
             for element in block["elements"]:

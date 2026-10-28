@@ -16,7 +16,7 @@ from datetime import date, time
 from typing import Any
 
 from dinnerbell.channels.slack import ids
-from dinnerbell.channels.slack.badge_text import tag
+from dinnerbell.channels.slack.badge_text import ArtIds, art_element, tag
 from dinnerbell.channels.slack.blocks import (
     FOOTER_BLOCKS,
     MAX_MODAL_TITLE,
@@ -917,15 +917,27 @@ def _guest_home(
     return {"type": "home", "blocks": [*blocks, *tail]}
 
 
-def _badges(stats: MemberStats) -> list[Block]:
-    """The member's own badges and the next one in reach: a heading and a line of text tags, then
-    a context line: always two blocks, which the budget in ``home_view`` counts as part of its tail. Badge art
-    replaces the text tags later. Only their own: it never mentions anyone else's."""
+MAX_HOME_ART = 6
+"""Badges shown as art on Home, each in its own block. The rest of the member's badges are one line of text."""
+
+
+def held_badges(stats: MemberStats) -> dict[BadgeKey, Tier]:
+    """The highest tier the member holds of each badge they have."""
     held: dict[BadgeKey, Tier] = {}
     for award in stats.earned:
         if award.badge not in held or TIERS.index(award.tier) > TIERS.index(held[award.badge]):
             held[award.badge] = award.tier
-    tags = [tag(escape(badge.name), held[badge.key].label) for badge in BADGES if badge.key in held]
+    return held
+
+
+def _badges(stats: MemberStats, art: ArtIds) -> list[Block]:
+    """The member's own badges and the next one in reach: a heading, then each badge with uploaded
+    art (``art``, up to ``MAX_HOME_ART``) as a line with its art beside it, then the rest as a line
+    of text tags, then a context line. With no art it is two blocks, which the budget in
+    ``home_view`` counts as part of its tail. Only their own: it never mentions anyone else's."""
+    held = held_badges(stats)
+    drawn = [b for b in BADGES if b.key in held and (b.key.value, held[b.key].value) in art][:MAX_HOME_ART]
+    tags = [tag(escape(b.name), held[b.key].label) for b in BADGES if b.key in held and b not in drawn]
     line = "   ".join(tags) if tags else "None yet. Pitch in on a meal and your first one is on its way."
     step = next_up(stats.progress)
     if step is None or step.next_tier is None or step.next_at is None:
@@ -933,7 +945,17 @@ def _badges(stats: MemberStats) -> list[Block]:
     else:
         mark = tag(f"*{escape(step.badge.name)}*", step.next_tier.label)
         hint = f"Next: {mark}, {step.remaining} to go ({step.count} of {step.next_at} {step.badge.earned_by})"
-    return [section(f"*Your badges*\n{line}"), context(hint)]
+    if not drawn:
+        return [section(f"*Your badges*\n{line}"), context(hint)]
+    blocks = [section("*Your badges*")]
+    for badge in drawn:
+        tier = held[badge.key]
+        entry = section(f"*{escape(badge.name)}* · {tier.label}")
+        entry["accessory"] = art_element(art[(badge.key.value, tier.value)], f"{badge.name}, {tier.label}")
+        blocks.append(entry)
+    if tags:
+        blocks.append(section(f"Also: {line}"))
+    return [*blocks, context(hint)]
 
 
 def home_view(
@@ -946,11 +968,13 @@ def home_view(
     guest: bool = False,
     member_id: int | None = None,
     badges: MemberStats | None = None,
+    badge_art: ArtIds | None = None,
 ) -> dict[str, Any]:
     """Each member's Home tab. ``label``, the instance label, prefixes the header when set.
     ``member_id`` is whose it is, so a call they coordinate says so.
     ``awaiting`` lists meals the member hasn't given feedback on yet. ``badges``, the member's own
-    stats, adds a compact "Your badges" section of two blocks above the links. A guest's Home (``guest``)
+    stats, adds a "Your badges" section above the links: two blocks, plus one for each badge shown as art
+    (``badge_art``, from ``BadgeFiles``). A guest's Home (``guest``)
     shows only the calls they're invited to, with In, Out, and what they may do, and none of
     the household's buttons or links (#38).
 
@@ -990,7 +1014,7 @@ def home_view(
     web = f"<{links.url('/')}|Today on the web>"
     tail: list[Block] = [
         *_awaiting(awaiting, links),
-        *(_badges(badges) if badges is not None else []),
+        *(_badges(badges, badge_art or {}) if badges is not None else []),
         divider(),
         context(
             f"<{links.url('/preferences')}|Your preferences> · <{links.url('/catalog')}|Catalog> · "

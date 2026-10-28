@@ -5,13 +5,14 @@ The drawing is the approved design (the "Badge component" board): a 120x140 view
 three shapes by tier (a rosette for First, a medal for Bronze, Silver and Gold, a faceted gem for
 Diamond), a 24-px stroke icon scaled into its center, and a sparkle layer on Gold and Diamond.
 
-One definition serves three uses, so the pages, the committed files, and a later PNG render for
-Slack never drift apart:
+One definition serves four uses, so the pages, the committed files, and the PNGs Slack shows never
+drift apart:
 
 - ``badge_svg`` is the inline ``<svg>`` the pages use (the ``badge`` macro in ``_badge.html``).
   Inline, because a page's CSS animates the sparkle, and CSS does not reach into an ``<img>``.
-- ``standalone_svg`` is a complete, still SVG file with the stars drawn in. Slack can render it to
-  a PNG without changing anything here.
+- ``standalone_svg`` is a complete, still SVG file with the stars drawn in.
+- ``png_for`` renders that SVG to a PNG. It is the built-in ``ArtSource``: what
+  ``services.badge_files`` uploads to Slack unless it is given another source.
 - ``icon_file`` and ``frame_file`` produce the files under ``static/badges/``. A test checks that
   the committed files match.
 
@@ -20,10 +21,13 @@ Nothing here takes user input. Every value is a constant from this module.
 
 from __future__ import annotations
 
+import functools
 import itertools
 import math
+from collections.abc import Callable
 from dataclasses import dataclass
 
+import resvg_py
 from markupsafe import Markup, escape
 
 from dinnerbell.domain.badges import BY_KEY, Tier
@@ -259,3 +263,25 @@ def icon_file(key: str) -> str:
         ' stroke-linecap="round" stroke-linejoin="round"/>'
     )
     return _document(path, "0 0 24 24", badge_name(key), 'width="24" height="24"')
+
+
+ArtSource = Callable[[str, Tier], bytes]
+"""Where a badge tier's art comes from: a badge key and a tier to PNG bytes. ``png_for`` is the
+built-in one. ``services.badge_files`` takes any, so art from another source needs no change there:
+a different PNG hashes differently, so it uploads again."""
+PNG_SCALE = 2
+"""Slack shows the art small, but on sharp screens it needs twice the drawing's 120x140 pixels."""
+
+
+@functools.cache
+def png_for(key: str, tier: Tier) -> bytes:
+    """The built-in art, ``standalone_svg`` drawn as a transparent PNG. Cached: it takes a few
+    milliseconds, and there are only sixty."""
+    return bytes(
+        resvg_py.svg_to_bytes(
+            svg_string=standalone_svg(key, tier),
+            width=VIEW_WIDTH * PNG_SCALE,
+            height=VIEW_HEIGHT * PNG_SCALE,
+            skip_system_fonts=True,  # the art has no text; this skips scanning the system's fonts
+        )
+    )

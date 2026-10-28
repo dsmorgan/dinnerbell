@@ -25,7 +25,7 @@ from dinnerbell import __version__
 from dinnerbell import main as cli
 from dinnerbell.config import Settings
 from dinnerbell.db.events import EVENT_ROWS
-from dinnerbell.db.models import Base, InvitationRow, MemberRow, PreferenceRow, SessionRow
+from dinnerbell.db.models import Base, InvitationRow, MemberRow, PreferenceRow, SessionRow, SlackBadgeFileRow
 from dinnerbell.domain.events import EventState, RoleOffer, Status
 from dinnerbell.domain.feedback import FeedbackInput, Rating
 from dinnerbell.domain.meals import Slot
@@ -92,6 +92,16 @@ async def lived_in(house: House) -> int:
                 household_id=household_id, event_id=event_id, guest_id=guest.id, invited_by=kim, created_at=now
             )
         )
+        db.add(
+            SlackBadgeFileRow(
+                household_id=household_id,
+                badge_key="chef",
+                tier="gold",
+                content_hash="0" * 64,
+                file_id="F1",
+                uploaded_at=now,
+            )
+        )
         expires = now + timedelta(days=30)
         db.add(
             SessionRow(
@@ -129,6 +139,7 @@ EXPECTED_KEEP = {
     "catalog_item_tag",
     "catalog_item_cook",
     "preference",
+    "slack_badge_file",
 }
 EXPECTED_CLEAR = {
     "event",

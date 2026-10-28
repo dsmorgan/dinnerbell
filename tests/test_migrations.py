@@ -23,7 +23,7 @@ M0_TABLES = {"household", "member", "session", "audit"}
 M1_TABLES = {"tag", "catalog_item", "catalog_item_tag", "catalog_item_cook", "preference", "meal_log"}
 M2_TABLES = {"event", "response", "suggestion", "proposal", "vote", "assignment", "outbox"}
 M3_TABLES = {"feedback", "invitation"}
-M4_TABLES = {"contribution", "badge_award"}
+M4_TABLES = {"contribution", "badge_award", "slack_badge_file"}
 
 
 def test_migrates_an_empty_database(settings: Settings) -> None:
@@ -457,7 +457,7 @@ def _snapshot(settings: Settings) -> dict[str, object]:
             indexes = c.execute(
                 text(
                     "SELECT name, sql FROM sqlite_master WHERE type = 'index' AND sql IS NOT NULL "
-                    "AND tbl_name NOT IN ('contribution', 'badge_award') ORDER BY name"  # 0016's tables
+                    "AND tbl_name NOT IN ('contribution', 'badge_award', 'slack_badge_file') ORDER BY name"
                 )
             ).all()
             table = c.execute(text("SELECT sql FROM sqlite_master WHERE name = 'event'")).scalar_one()
@@ -1392,7 +1392,7 @@ def _rows_outside_m4(settings: Settings) -> dict[str, list[object]]:
             return {
                 t: list(c.execute(text(f"SELECT * FROM {t} ORDER BY rowid")).all())  # noqa: S608
                 for t in names
-                if t not in {"contribution", "badge_award", "alembic_version"}
+                if t not in {"contribution", "badge_award", "slack_badge_file", "alembic_version"}
             }
     finally:
         engine.dispose()
@@ -1474,3 +1474,35 @@ def test_0016_adds_contributions_and_badges_without_touching_a_row_and_downgrade
     assert {k: v for k, v in _rows_outside_m4(settings).items() if k != "household"} == {
         k: v for k, v in before.items() if k != "household"
     }
+
+
+# 0017: Slack badge art (#105) ------------------------------------------------------------------------
+
+
+def test_0017_adds_the_badge_file_table_and_downgrade_removes_it(settings: Settings) -> None:
+    """Up adds one empty table that refuses a second file for the same household, badge, and tier;
+    down drops it and leaves the 0016 database as it was; up again gives the same."""
+    _upgrade_to(settings, "0016_contributions")
+    _populate_calls(settings)
+    before = _rows_outside_m4(settings)
+    assert "slack_badge_file" not in _tables(settings)
+
+    _upgrade_to(settings, "0017_slack_badge_file")
+    assert _rows_outside_m4(settings) == before
+    row = (
+        "INSERT INTO slack_badge_file (household_id, badge_key, tier, content_hash, file_id, uploaded_at) "
+        "VALUES (1, 'chef', 'gold', 'abc', 'F1', :t)"
+    )
+    _execute(settings, row)
+    engine = create_sync_engine(settings.sync_database_url)
+    try:
+        with pytest.raises(IntegrityError, match="UNIQUE"), engine.begin() as c:
+            c.execute(text(row), {"t": STAMP})
+    finally:
+        engine.dispose()
+
+    _downgrade_to(settings, "0016_contributions")
+    assert "slack_badge_file" not in _tables(settings)
+    assert _rows_outside_m4(settings) == before
+    _upgrade_to(settings, "0017_slack_badge_file")
+    assert "slack_badge_file" in _tables(settings)

@@ -259,6 +259,19 @@ class SlackApi:
     async def publish_home(self, user: str, view: dict[str, Any]) -> None:
         await self._call("views.publish", lambda: self.client.views_publish(user_id=user, view=view))
 
+    async def upload_file(self, filename: str, content: bytes, alt_text: str) -> str:
+        """Upload a file to the workspace without sharing it in a channel (``files.upload``, the
+        v2 flow: three calls), and return its Slack file ID. Needs the ``files:write`` scope."""
+        response = await self._call(
+            "files.upload",
+            lambda: self.client.files_upload_v2(file=content, filename=filename, title=alt_text, alt_txt=alt_text),
+        )
+        file = response.get("file")
+        file_id = file.get("id") if isinstance(file, dict) else None
+        if not isinstance(file_id, str):
+            raise SlackUnavailable("Slack files.upload returned no file ID")
+        return file_id
+
     async def identity(self) -> Identity:
         response = await self._call("auth.test", self.client.auth_test)
         return Identity(team_id=str(response["team_id"]), bot_user_id=str(response["user_id"]))

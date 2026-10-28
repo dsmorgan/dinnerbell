@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import itertools
+import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, ClassVar
@@ -22,6 +23,7 @@ from slack_bolt.async_app import AsyncApp
 from slack_bolt.response import BoltResponse
 from slack_sdk.socket_mode.request import SocketModeRequest
 from slack_sdk.web.async_client import AsyncWebClient
+from slack_sdk.web.file_upload_v2_result import FileUploadV2Result
 from slack_sdk.webhook.async_client import AsyncWebhookClient
 from slack_sdk.webhook.webhook_response import WebhookResponse
 
@@ -66,7 +68,10 @@ class FakeSlack(AsyncWebClient):
         """``conversations.members``' answer, paged by the request's ``limit``."""
         self.gates: dict[str, asyncio.Event] = {}
         """Calls to a method named here wait until its event is set: to hold one call mid-flight."""
+        self.files: dict[str, dict[str, Any]] = {}
+        """Files uploaded with ``files_upload_v2``, by file ID: ``filename``, ``length``, and ``alt_txt``."""
         self._ts = itertools.count(1)
+        self._file_ids = itertools.count(1)
         self._ephemeral_ts = itertools.count(1)
 
     # Setup ---------------------------------------------------------------------------------------
@@ -177,7 +182,27 @@ class FakeSlack(AsyncWebClient):
                 return {"user": self.users_by_email[args["email"]]}
             case "users.info":
                 return {"user": self.users[args["user"]]}
+            case "files.getUploadURLExternal":
+                file_id = f"F0ART{next(self._file_ids):04d}"
+                self.files[file_id] = {
+                    "filename": args["filename"],
+                    "length": args["length"],
+                    "alt_txt": args.get("alt_txt"),
+                }
+                return {"upload_url": f"https://files.slack.invalid/upload/{file_id}", "file_id": file_id}
+            case "files.completeUploadExternal":
+                files = json.loads(args["files"]) if isinstance(args["files"], str) else args["files"]
+                return {"files": [{"id": f["id"]} for f in files]}
         raise AssertionError(f"FakeSlack doesn't know {method}")
+
+    async def _upload_file(self, *, url: str, data: bytes, **_: Any) -> FileUploadV2Result:
+        """Step 2 of ``files_upload_v2``: the bytes go to a separate upload URL, not the Web API."""
+        self.calls.append(Call("upload_url", {"url": url, "bytes": len(data)}))
+        queued = self.failures.get("upload_url")
+        if queued:
+            failure = queued.pop(0)
+            return FileUploadV2Result(status=failure.status, body=failure.error or "")
+        return FileUploadV2Result(status=200, body="OK - 1")
 
     def webhook(self, url: str) -> AsyncWebhookClient:
         """The ``response_url`` client factory ``SlackApi`` takes."""

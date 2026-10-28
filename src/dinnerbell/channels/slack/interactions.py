@@ -75,6 +75,7 @@ from dinnerbell.channels.slack.views import (
     close_modal,
     details_modal,
     feedback_modal,
+    held_badges,
     home_view,
     invite_modal,
     log_modal,
@@ -135,6 +136,7 @@ from dinnerbell.services import (
     stats,
 )
 from dinnerbell.services import schedule as schedule_service
+from dinnerbell.services.badge_files import BadgeFiles
 from dinnerbell.services.clock import Clock
 from dinnerbell.services.errors import Forbidden, NotFound
 from dinnerbell.services.event_views import EventView
@@ -260,8 +262,10 @@ class Interactions:
         version: str = __version__,
         schema_revision: str,
         people: guests.SlackPeople | None = None,
+        badge_files: BadgeFiles | None = None,
     ) -> None:
         self.api = api
+        self.badge_files = badge_files
         self.people = people
         """Who may join from the channel (#38); None leaves joining to the web and the admin."""
         self.join_limiter = guests.JoinLimiter()
@@ -566,8 +570,16 @@ class Interactions:
                 guest=member.is_guest,
                 member_id=member.id,
                 badges=badges,
+                badge_art=await self._badge_art(member, badges),
             )
         await self.api.publish_home(user_id, with_version_footer(view, self.version, self.instance_label))
+
+    async def _badge_art(self, member: Member, badges: MemberStats | None) -> dict[tuple[str, str], str]:
+        """The uploaded art for the badges Home shows, or none. It never raises or waits long."""
+        if self.badge_files is None or badges is None:
+            return {}
+        held = {(key.value, tier.value) for key, tier in held_badges(badges).items()}
+        return await self.badge_files.file_ids(member.household_id, held)
 
     @staticmethod
     async def _badges(db: AsyncSession, member: Member) -> MemberStats | None:

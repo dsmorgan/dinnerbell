@@ -12,7 +12,7 @@
         One `domain.badges.Progress`: picture, name, tier or "Not earned yet", and progress to
         the next tier.
 
-    Slack and App Home reuse the names, not the markup: `web.badge_art.standalone_svg(key,
+    Slack and App Home reuse the names, not the markup: `services.badge_art.standalone_svg(key,
     tier)` returns the same art as a still SVG file to render as a PNG. -#}
 {% macro badge_art(key, tier, locked=False, decorative=False) -%}
 <span class="badge-art">{{ badge_svg(key, tier, locked=locked, decorative=decorative) }}</span>

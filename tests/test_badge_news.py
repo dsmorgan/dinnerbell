@@ -597,9 +597,14 @@ def home_text(view: dict[str, Any]) -> str:
     return json.dumps(view, ensure_ascii=False)
 
 
+def no_art(key: str, tier: Tier) -> bytes:
+    raise RuntimeError("no art in this test")
+
+
 async def test_home_shows_a_members_own_badges_and_the_next_one(house: House) -> None:
+    """The text tags, which show when art can't (tests/test_slack_badge_art.py has the art)."""
     await dinner(house)
-    slack = await wire(house)
+    slack = await wire(house, art_for=no_art)
     await slack.open_home("Alex")
     home = slack.last_home("Alex")
     body = home_text(home)

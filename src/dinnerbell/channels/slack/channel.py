@@ -22,12 +22,15 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from dinnerbell.channels.slack.api import SlackApi
+from dinnerbell.channels.slack.badge_text import ArtIds, wanted
 from dinnerbell.channels.slack.blocks import Directory
 from dinnerbell.channels.slack.messages import RenderContext, render
+from dinnerbell.domain import notifications as note
 from dinnerbell.domain.notifications import (
     DeliveryResult,
     HeldDelivery,
@@ -36,6 +39,7 @@ from dinnerbell.domain.notifications import (
     PermanentDeliveryError,
 )
 from dinnerbell.services import slack_members
+from dinnerbell.services.badge_files import BadgeFiles
 from dinnerbell.services.health import SlackState
 
 log = logging.getLogger(__name__)
@@ -113,8 +117,10 @@ class SlackChannel:
         instance_label: str = "",
         audience: Audience | None = None,
         state: SlackState | None = None,
+        badge_files: BadgeFiles | None = None,
     ) -> None:
         self.api = api
+        self.badge_files = badge_files
         self.hold = hold
         self.audience = audience or Audience()
         self.state = state
@@ -127,8 +133,15 @@ class SlackChannel:
         async with self.sessionmaker() as db:
             return Directory(await slack_members.slack_directory(db, household_id))
 
-    def _context(self, directory: Directory) -> RenderContext:
-        return RenderContext(self.base_url, self.audience.directory(directory), self.instance_label)
+    def _context(self, directory: Directory, art: ArtIds | None = None) -> RenderContext:
+        return RenderContext(self.base_url, self.audience.directory(directory), self.instance_label, art or {})
+
+    async def _art(self, notification: Notification) -> ArtIds:
+        """The uploaded art a badge post shows, or none: art never holds up or fails a delivery."""
+        if self.badge_files is None or not isinstance(notification, note.BadgesEarned):
+            return {}
+        asked = {w for n in notification.news for b in n.badges if (w := wanted(b.name, b.tier))}
+        return await self.badge_files.file_ids(notification.household_id, asked)
 
     async def deliver(self, notification: Notification, *, thread: MessageRef | None = None) -> DeliveryResult:
         self.hold.check(direct=notification.recipient_id is not None)
@@ -148,18 +161,31 @@ class SlackChannel:
                 if self.state is not None and self.state.dms_dropped is not None:
                     self.state.dms_dropped += 1
                 return DeliveryResult(None)
-        message = render(notification, self._context(directory)).payload()
-        if slack_user is not None:
-            ref = await self.api.post(slack_user, message)
-        elif thread is not None:
-            ref = await self.api.post(thread.channel_id, message, thread_ts=thread.message_id)
-        else:
-            ref = await self.api.post(self.channel_id, message)
+        art = await self._art(notification)
+        message = render(notification, self._context(directory, art)).payload()
+        try:
+            ref = await self._send(message, slack_user, thread)
+        except PermanentDeliveryError:
+            if not art or self.badge_files is None:
+                raise
+            # Slack may refuse a file ID, such as one deleted in Slack. Forget the files and send
+            # the text instead, so the post still goes out and the next one uploads again.
+            log.warning("slack refused badge art; posting text badges", extra={"event_id": notification.event_id})
+            await self.badge_files.forget(notification.household_id, art.values())
+            message = render(notification, self._context(directory)).payload()
+            ref = await self._send(message, slack_user, thread)
         log.debug(  # the outbox logs "notification delivered" at info, with the channel and ts
             "slack message posted",
             extra={"kind": notification.kind, "event_id": notification.event_id, "recipient_id": recipient},
         )
         return DeliveryResult(ref)
+
+    async def _send(self, message: dict[str, Any], slack_user: str | None, thread: MessageRef | None) -> MessageRef:
+        if slack_user is not None:
+            return await self.api.post(slack_user, message)
+        if thread is not None:
+            return await self.api.post(thread.channel_id, message, thread_ts=thread.message_id)
+        return await self.api.post(self.channel_id, message)
 
     async def update(self, ref: MessageRef, notification: Notification) -> None:
         self.hold.check(direct=False)
