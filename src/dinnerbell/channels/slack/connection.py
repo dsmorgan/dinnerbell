@@ -332,8 +332,8 @@ class SlackConnection:
                 await asyncio.wait_for(self.socket.close(), left(SOCKET_CLOSE_SECONDS))
             except Exception:
                 log.warning("slack socket did not close cleanly", exc_info=True)
+        await self.interactions.settle(left(SETTLE_SECONDS))  # first: a Home view may start a picture
         await self.badge_files.settle(left(SETTLE_SECONDS))  # a cancelled upload's row still lands
-        await self.interactions.settle(left(SETTLE_SECONDS))
         await self.interactions.cancel_pending()
 
     async def _supervise(self) -> None:

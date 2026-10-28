@@ -44,11 +44,11 @@ The badge announcement and **Your badges** on App Home reference the files in Sl
 
 ### The composite picture on App Home
 
-**Your badges** can show one picture of everything a member holds (#114): each badge at its highest tier, in `BADGES` order, never Food Critic (it stays a text tag), in a grid of 7 to a row (13 badges make two rows) with cells about 64 pixels wide, small gaps, and a transparent background. `badge_art.composite_png(held)` draws it: each badge is the same `standalone_svg` drawing, nested in its cell, rendered by resvg at twice the size for sharp screens. `BadgeFiles` takes it from a `CompositeSource` (the held badges to PNG bytes), the same seam as `ArtSource`; `composite_png` is the only one today.
+**Your badges** can show one picture of everything a member holds (#114): each badge at its highest tier, in `BADGES` order, never Food Critic (it stays a text tag), in a grid of 7 to a row (at most 12 badges, since Food Critic is left out, so two rows of 7 and 5) with cells about 64 pixels wide, small gaps, and a transparent background. `badge_art.composite_png(held)` draws it: each badge is the same `standalone_svg` drawing, nested in its cell, rendered by resvg at twice the size for sharp screens. `BadgeFiles` takes it from a `CompositeSource` (the held badges to PNG bytes), the same seam as `ArtSource`; `composite_png` is the only one today.
 
 The `slack_badge_composite` table keeps one row per member: the Slack file ID, when it was uploaded, and a SHA-256 of the PNG. The hash covers the badges, their tiers, and the art, because the PNG does, so a new tier or a new art source draws a new picture, and the member's one row is replaced. Dinnerbell makes a picture in the background, never in the path of what a member waits for: right after a badge post goes out (for each member it mentions), and when a member opens Home and theirs is missing or out of date. It draws one member at a time, gives up on one after 60 seconds, shares the 15-minute pause after a failure with the art uploads, and never fails or delays a post or a Home view. Old files aren't deleted from Slack.
 
-Home shows the picture as an image block, with alt text that lists the badge names, only when it has been in Slack for at least 30 seconds (`badge_files.COMPOSITE_SETTLE`), so a first view never has an image Slack hasn't processed. Until then it shows the compact rows of small icons, and with no art at all, the text tags. If Slack refuses the view, the same retry and forget rules as for the art apply, and a refused picture is forgotten so the next view makes it again. A guest, or a member who left or was deactivated, gets no new picture; an old row is never shown, because Home reads only the signed-in member's own. `reset-history` clears the table (it is drawn from the badges that reset deletes; a row left behind would describe badges nobody holds), and the next award or Home view draws a picture again.
+Home shows the picture as an image block, with alt text that lists the badge names, only when it has been in Slack for at least 30 seconds (`badge_files.COMPOSITE_SETTLE`), so a first view never has an image Slack hasn't processed. Until then it shows the compact rows of small icons, and with no art at all, the text tags. If Slack refuses the view, the same retry and forget rules as for the art apply, and a refused picture is forgotten so the next view makes it again. A guest, or a member who left or was deactivated, gets no new picture; an old row is never shown, because Home reads only the signed-in member's own. `reset-history` keeps the table: a row left behind is never shown, because Home compares its hash with the badges the member holds now, and a mismatch draws a new picture.
 
 When Home shows the badge's icon in the "Next" line, it leaves the tier emoji off the name; without art it keeps the emoji.
 
@@ -91,7 +91,7 @@ The first start after the upgrade (revision `0016_contributions`) counts the mea
 
 On every later start, Dinnerbell also counts any done call that has no counts. That can only happen if counting failed while the call was being marked done; marking it done is never blocked by that. A call counted late this way earns its badges as `skipped`.
 
-`dinnerbell reset-history` deletes the counts and the badges earned from them, along with the history, and the pictures of those badges on App Home. The badges don't come back.
+`dinnerbell reset-history` deletes the counts and the badges earned from them, along with the history. The badges don't come back.
 
 ## Privacy
 

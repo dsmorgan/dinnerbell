@@ -141,8 +141,11 @@ class BadgeFiles:
         pending: set[asyncio.Future[None]] = {*self._saves, *self._composite_tasks}
         if pending:
             await asyncio.wait(pending, timeout=within)
-        for task in set(self._composite_tasks):
+        left = set(self._composite_tasks)
+        for task in left:
             task.cancel()  # a picture still drawing is made again on the next view
+        if left:
+            await asyncio.wait(left)  # none may run on against a closing database
 
     async def forget(self, household_id: int, file_ids: Iterable[str], *, cool: bool = False) -> None:
         """Drop remembered files Slack refused, so the next use uploads them again. Never raises.
@@ -254,9 +257,14 @@ class BadgeFiles:
                             await self._upload_composite(household_id, member_id, held)
                 except asyncio.CancelledError:
                     raise
-                except Exception as exc:
-                    self._failed(household_id, exc)
+                except (_UploadFailed, TimeoutError) as exc:
+                    self._failed(household_id, exc.__cause__ or exc)
                     return  # the cooldown covers everyone else; the next view or award tries again
+                except Exception:  # not Slack's doing (the database, the drawing): no cooldown for the art
+                    log.exception(
+                        "badge composite could not be made",
+                        extra={"household_id": household_id, "member_id": member_id},
+                    )
                 finally:
                     self._composite_busy.discard((household_id, member_id))
         finally:
@@ -272,7 +280,10 @@ class BadgeFiles:
             if row is not None and row.content_hash == digest:
                 return
             names = ", ".join(f"{BY_KEY[BadgeKey(key)].name} ({Tier(tier).label})" for key, tier in held)
-            file_id = await self.upload(f"badges-{digest[:12]}.png", png, f"Badges: {names}")
+            try:
+                file_id = await self.upload(f"badges-{digest[:12]}.png", png, f"Badges: {names}")
+            except Exception as exc:
+                raise _UploadFailed from exc
             now = self.clock()
             self._uploaded_at = {i: t for i, t in self._uploaded_at.items() if now - t < FRESH_FOR}
             self._uploaded_at[file_id] = now
@@ -354,6 +365,10 @@ class BadgeFiles:
             "(a missing_scope error means the Slack app needs the files:write scope: reinstall it)",
             extra={"household_id": household_id, "error": reason, "retry_minutes": COOLDOWN // timedelta(minutes=1)},
         )
+
+
+class _UploadFailed(Exception):
+    """Slack refused or failed a composite's upload (the cause): the only failure that pauses uploads."""
 
 
 def _held_now(held: Sequence[Held]) -> HeldOf:

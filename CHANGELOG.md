@@ -24,7 +24,7 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ### Upgrade notes
 
-- A migration, `0019_slack_badge_composite`, adds one empty table, `slack_badge_composite`, for the pictures of members' badges on App Home. It moves no row. `reset-history` clears it, because the pictures show badges the reset deletes.
+- A migration, `0019_slack_badge_composite`, adds one empty table, `slack_badge_composite`, for the pictures of members' badges on App Home. It moves no row. `reset-history` keeps it: a leftover row is never shown, because Home compares its hash with the badges a member holds now.
 - **Gambler catches up on its own.** On the first start after the upgrade, Dinnerbell counts Gambler for every call already done, quietly: a badge it reaches is never announced, and no other count changes. Migration `0018_gambler` lets the `contribution` table store the new kind and moves no row.
 
 - **Reinstall the Slack app to grant `files:write`.** Badge art needs a new bot scope. Paste the current `deploy/slack-app-manifest.yaml` (and `deploy/slack-app-manifest.test.yaml` for a test instance) under **App Manifest**, set your hostname again, then select **Install App** > **Reinstall to Workspace**. The bot token doesn't change. Until you reinstall, badges show as text tags, and the log says `badge art not available`.

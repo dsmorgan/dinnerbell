@@ -1337,3 +1337,60 @@ def test_the_home_block_budget_holds_with_the_picture() -> None:
     with_picture = _badges(KIM_BADGES, art, HomeLinks("https://x.example"), "FPIC")
     assert len(with_picture) <= 6 and [b["type"] for b in with_picture][:2] == ["section", "image"]
     assert len(_badges(KIM_BADGES, art, HomeLinks("https://x.example"))) <= 6
+
+
+# Review fixes (#115) -------------------------------------------------------------------------------
+
+
+async def test_a_failure_that_is_not_slacks_logs_its_own_line_and_starts_no_cooldown(
+    house: House, caplog: pytest.LogCaptureFixture
+) -> None:
+    uploads = Uploads()
+    badges = files(house, uploads)
+
+    async def broken() -> None:
+        raise RuntimeError("the database is gone")
+
+    with caplog.at_level(logging.INFO):
+        await badges.composites_soon(house.household.id, [(house["Kim"].id, broken)])
+        await badges.idle()
+    (line,) = [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert line.getMessage() == "badge composite could not be made" and "files:write" not in line.getMessage()
+    assert await badges.file_ids(house.household.id, [CHEF]) == {CHEF: "F1"}  # the art still uploads
+    assert await make_picture(badges, house) is None and (await stored(house)).file_id == "F2"
+
+
+async def test_a_drawing_that_fails_starts_no_cooldown(house: House) -> None:
+    def broken(held: Any) -> bytes:
+        raise ValueError("no drawing")
+
+    uploads = Uploads()
+    badges = files(house, uploads, composite=broken)
+    await make_picture(badges, house)
+    assert await badges.file_ids(house.household.id, [CHEF]) == {CHEF: "F1"}
+
+
+async def test_settling_waits_for_the_cancelled_pictures_to_finish(house: House) -> None:
+    uploads = Uploads()
+    uploads.gate = asyncio.Event()
+    badges = files(house, uploads)
+    await badges.composite(house.household.id, house["Kim"].id, BOTH)
+    await uploads.started.wait()
+    tasks = set(badges._composite_tasks)
+    await badges.settle(0.05)
+    assert all(t.done() for t in tasks)  # none runs on against a closing database
+
+
+async def test_stopping_settles_interactions_before_badge_files(house: House, monkeypatch: pytest.MonkeyPatch) -> None:
+    from tests.support.fake_slack import FakeSlack
+
+    conn = connection(house, FakeSlack())
+    order: list[str] = []
+
+    async def record(name: str, within: float = 0) -> None:
+        order.append(name)
+
+    monkeypatch.setattr(conn.badge_files, "settle", lambda within: record("badge_files", within))
+    monkeypatch.setattr(conn.interactions, "settle", lambda within=0: record("interactions", within))
+    await conn.stop()
+    assert order == ["interactions", "badge_files"]

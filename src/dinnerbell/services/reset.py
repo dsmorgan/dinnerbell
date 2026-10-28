@@ -58,6 +58,7 @@ KEEP: Final = frozenset(
         "catalog_item_cook",
         "preference",  # likes, dislikes, and vetoes
         "slack_badge_file",  # the badge art uploaded to Slack: not history, and reusable (#105)
+        "slack_badge_composite",  # members' badge pictures: a cache Home checks by hash (#114)
     }
 )
 """Tables the reset leaves alone."""
@@ -76,7 +77,6 @@ CLEAR: Final = frozenset(
         "outbox",  # notifications, sent and unsent, and where each Slack message landed
         "contribution",  # what each member did for those meals (M4) ...
         "badge_award",  # ... and the badges it earned
-        "slack_badge_composite",  # the picture of those badges on App Home: drawn from the awards just cleared (#114)
     }
 )
 """Tables the reset empties."""

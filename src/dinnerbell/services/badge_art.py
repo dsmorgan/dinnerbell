@@ -304,7 +304,7 @@ CompositeSource = Callable[[Sequence[Held]], bytes]
 ``composite_png`` is the built-in one. A source that draws from other art changes the PNG, so the
 hash changes and the picture uploads again."""
 COMPOSITE_COLUMNS = 7
-"""Badges to a row: 13 badges make two rows."""
+"""Badges to a row. At most 12 badges are drawn (Food Critic never is), so two rows of 7 and 5."""
 CELL_WIDTH, CELL_HEIGHT = 64, 75
 """One badge's cell, in the composite's own units: the 120x140 drawing at about 64 px wide."""
 CELL_GAP = 6

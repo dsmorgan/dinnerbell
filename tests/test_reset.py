@@ -153,6 +153,7 @@ EXPECTED_KEEP = {
     "catalog_item_cook",
     "preference",
     "slack_badge_file",
+    "slack_badge_composite",
 }
 EXPECTED_CLEAR = {
     "event",
@@ -167,7 +168,6 @@ EXPECTED_CLEAR = {
     "outbox",
     "contribution",
     "badge_award",
-    "slack_badge_composite",
 }
 
 
