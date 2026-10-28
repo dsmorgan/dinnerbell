@@ -46,9 +46,11 @@ def create_app(
     oidc_transport: httpx.AsyncBaseTransport | None = None,
     slack_client: AsyncWebClient | None = None,
     slack_socket: SocketFactory = BoltSocket,
+    prewarm_badge_art: bool = False,
 ) -> FastAPI:
     """Build the app. ``oidc_transport`` lets tests route provider calls to a fake in-process;
-    ``slack_client`` and ``slack_socket`` do the same for Slack."""
+    ``slack_client`` and ``slack_socket`` do the same for Slack. ``prewarm_badge_art`` (the CLI
+    sets it) uploads the badge art to Slack in the background once connected (#112)."""
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -93,7 +95,7 @@ def create_app(
         app.state.jobs = jobs
         app.state.slack = slack
         if slack is not None:
-            await slack.start()
+            await slack.start(prewarm_household=household.id if prewarm_badge_art else None)
         scheduler = build_scheduler(jobs)
         scheduler.start()
         log.info("dinnerbell started")

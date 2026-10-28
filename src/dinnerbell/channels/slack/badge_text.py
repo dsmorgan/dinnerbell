@@ -4,10 +4,17 @@ name with a tier mark, as plain text (``tag``). The text is always the fallback:
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 
+from dinnerbell.channels.slack.blocks import MAX_CONTEXT_ELEMENTS, Block
 from dinnerbell.domain.badges import BADGES, Tier
+
+THUMBNAIL_CUTOFF = 3
+"""A member who earned this many badges or fewer gets a thumbnail row for each in the announcement.
+With more, the post names them in one line and shows one compact row of small icons (#112)."""
+ICONS_PER_BLOCK = MAX_CONTEXT_ELEMENTS
+"""Small icons in one context block: Slack allows 10 elements, so 13 badges take two blocks."""
 
 TIER_MARKS = {
     Tier.FIRST.label: "🎗️",
@@ -41,3 +48,11 @@ def art_element(file_id: str, alt: str) -> dict[str, Any]:
     referenced: a Slack file by ID. If Slack won't show a channel-less upload to every member,
     this is what changes, to an image URL (#105)."""
     return {"type": "image", "slack_file": {"id": file_id}, "alt_text": alt}
+
+
+def icon_rows(icons: Sequence[dict[str, Any]]) -> list[Block]:
+    """Small icons (``art_element`` results) as context blocks, ``ICONS_PER_BLOCK`` to a block."""
+    return [
+        {"type": "context", "elements": list(icons[i : i + ICONS_PER_BLOCK])}
+        for i in range(0, len(icons), ICONS_PER_BLOCK)
+    ]

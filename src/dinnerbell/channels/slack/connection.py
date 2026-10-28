@@ -36,7 +36,7 @@ import contextlib
 import logging
 import re
 import time
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from typing import Any, Protocol
 
 from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
@@ -70,6 +70,10 @@ MIN_CHECK_GAP = 5.0
 """The least time between two supervisor passes, however often it's woken."""
 RECHECK_APP_TOKEN_AFTER = 120.0
 """Seconds the socket may stay down before the app-level token is checked again."""
+PREWARM_DELAY = 30.0
+"""Seconds after Slack connects before the badge art uploads begin, so startup traffic goes first."""
+PREWARM_POLL = 10.0
+"""Seconds between looks at whether Slack has connected, while the badge art waits for it."""
 SOCKET_CLOSE_SECONDS = 4.0
 SETTLE_SECONDS = 3.0
 """Shutdown waits at most this long for each, and never past the deadline ``stop`` is given."""
@@ -265,6 +269,9 @@ class SlackConnection:
         )
         self.interactions.register(self.app)
         self._task: asyncio.Task[None] | None = None
+        self._prewarm_task: asyncio.Task[None] | None = None
+        self.sleep: Callable[[float], Awaitable[None]] = asyncio.sleep
+        """Waits for the badge art prewarm; tests pass one that doesn't."""
         state.configured = True
         state.connected = self.is_connected
 
@@ -273,8 +280,36 @@ class SlackConnection:
 
     # Lifecycle ---------------------------------------------------------------------------------
 
-    async def start(self) -> None:
-        self._task = asyncio.get_running_loop().create_task(self._supervise())
+    async def start(self, *, prewarm_household: int | None = None) -> None:
+        """Begin supervising Slack. With ``prewarm_household``, also upload that household's badge
+        art in the background (#112): it never delays startup or serving."""
+        loop = asyncio.get_running_loop()
+        self._task = loop.create_task(self._supervise())
+        if prewarm_household is not None:
+            self._prewarm_task = loop.create_task(self._prewarm(prewarm_household))
+
+    async def _prewarm(self, household_id: int) -> None:
+        """Wait until Slack is connected and nothing is held back, then let ``BadgeFiles.prewarm``
+        upload the art. With no connection nothing is tried, so nothing is logged or hammered."""
+        try:
+            while not await self._ready_for_art():
+                await self.sleep(PREWARM_POLL)
+            await self.sleep(PREWARM_DELAY)
+            await self.badge_files.prewarm(household_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("badge art prewarm failed")
+
+    async def _ready_for_art(self) -> bool:
+        """Whether Slack is connected and nothing is held back. A failed look counts as not yet."""
+        if self.hold.scope is not HoldScope.NONE:
+            return False
+        try:
+            return await self.is_connected()
+        except Exception:
+            log.debug("badge art prewarm could not check the connection", exc_info=True)
+            return False
 
     async def stop(self, deadline: float | None = None) -> None:
         """Shut down by ``deadline`` (the event loop's clock), or within the default waits."""
@@ -284,7 +319,7 @@ class SlackConnection:
         def left(most: float) -> float:
             return max(0.0, min(most, end - loop.time()))
 
-        for task in (self._task, self._connect_task):
+        for task in (self._task, self._connect_task, self._prewarm_task):
             if task is not None:
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError, Exception):
@@ -294,6 +329,7 @@ class SlackConnection:
                 await asyncio.wait_for(self.socket.close(), left(SOCKET_CLOSE_SECONDS))
             except Exception:
                 log.warning("slack socket did not close cleanly", exc_info=True)
+        await self.badge_files.settle(left(SETTLE_SECONDS))  # a cancelled upload's row still lands
         await self.interactions.settle(left(SETTLE_SECONDS))
         await self.interactions.cancel_pending()
 

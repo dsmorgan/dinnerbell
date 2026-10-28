@@ -18,6 +18,9 @@ Two callers wanting the same new tier at once share one upload. Food Critic is n
 Slack may refuse blocks that use a file it hasn't finished processing (#110), and has no way to ask
 that without an extra scope. So the caller learns which files were new (``fresh``) and, if Slack
 refuses its post, retries up to twice after ``RETRY_PAUSES``. Cached files get no retry.
+
+Better still, nothing is new when it's wanted: ``prewarm`` uploads every tier in the background after
+startup (#112), gently and once, so the first announcement finds files Slack finished processing long ago.
 """
 
 from __future__ import annotations
@@ -31,7 +34,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from dinnerbell.db.badge_files import BadgeFile, BadgeFileRepository
-from dinnerbell.domain.badges import BY_KEY, QUIET_BADGES, TIERS, BadgeKey, Tier
+from dinnerbell.domain.badges import BADGES, BY_KEY, QUIET_BADGES, TIERS, BadgeKey, Tier
 from dinnerbell.services.badge_art import ArtSource
 from dinnerbell.services.clock import Clock
 
@@ -52,6 +55,13 @@ MAX_ERROR = 200
 """Characters of an error that the log line keeps."""
 COOLDOWN = timedelta(minutes=15)
 """How long after a failure before art is tried again."""
+
+PREWARM_SPACING = 2.0
+"""Seconds between the uploads of ``prewarm``, so the 60 files trickle in instead of arriving as a burst."""
+PREWARM_UPLOAD_TIMEOUT = 60.0
+"""The longest ``prewarm`` waits for one upload (three Slack calls) before counting a failure."""
+PREWARM_FAILURES = 3
+"""Failures in a row after which ``prewarm`` gives up. First use uploads what's left, as ever."""
 
 Pause = Callable[[float], Awaitable[None]]
 
@@ -84,6 +94,7 @@ class BadgeFiles:
         self._locks: dict[tuple[int, Wanted], asyncio.Lock] = {}
         self._retry_at = datetime.min.replace(tzinfo=UTC)
         self._uploaded_at: dict[str, datetime] = {}
+        self._saves: set[asyncio.Future[None]] = set()
 
     async def file_ids(
         self, household_id: int, wanted: Iterable[Wanted], fresh: set[str] | None = None
@@ -100,6 +111,12 @@ class BadgeFiles:
         except Exception as exc:
             self._failed(household_id, exc)
         return found
+
+    async def settle(self, within: float) -> None:
+        """Wait up to ``within`` seconds for saves of files already uploaded to Slack, so a shutdown
+        cancelling an upload doesn't lose its row or race the database closing. Never raises."""
+        if self._saves:
+            await asyncio.wait(set(self._saves), timeout=within)
 
     async def forget(self, household_id: int, file_ids: Iterable[str], *, cool: bool = False) -> None:
         """Drop remembered files Slack refused, so the next use uploads them again. Never raises.
@@ -149,9 +166,60 @@ class BadgeFiles:
             self._uploaded_at = {i: t for i, t in self._uploaded_at.items() if now - t < FRESH_FOR}
             self._uploaded_at[file_id] = now
             # Shielded: if the caller gives up now, the file is already in Slack, so the save still lands.
-            await asyncio.shield(self._save(household_id, BadgeFile(key, tier, digest, file_id)))
+            saving = asyncio.ensure_future(self._save(household_id, BadgeFile(key, tier, digest, file_id)))
+            self._saves.add(saving)
+            saving.add_done_callback(self._saves.discard)
+            await asyncio.shield(saving)
             log.info("badge art uploaded", extra={"household_id": household_id, "badge": key, "tier": tier})
             return file_id
+
+    async def prewarm(self, household_id: int, *, spacing: float = PREWARM_SPACING) -> bool:
+        """Upload every badge tier that isn't cached yet (all but Food Critic), one at a time,
+        waiting ``spacing`` seconds after each. Safe to repeat and to stop: it skips what's cached
+        (so a restart resumes where the last run stopped) and each upload is saved as it lands. After a
+        failure it waits out the ``COOLDOWN`` before the next try. It stops for good on a missing
+        ``files:write`` scope (one log line, no retries), and after ``PREWARM_FAILURES`` other failures.
+        Logs one INFO line when every tier is in, and returns whether that happened. Never raises
+        (other than being cancelled)."""
+        failures = 0
+        uploaded = 0
+        try:
+            async with self.sessionmaker() as db:
+                known = await BadgeFileRepository(db).all(household_id)
+            todo = []
+            for want in all_wanted():
+                row = known.get(want)
+                if row is None or row.content_hash != _hash(self.art_for(want[0], Tier(want[1]))):
+                    todo.append(want)
+            total = len(all_wanted())
+            while todo:
+                wait = (self._retry_at - self.clock()).total_seconds()
+                if wait > 0:
+                    await self.pause(wait)
+                want = todo[0]
+                try:
+                    async with asyncio.timeout(PREWARM_UPLOAD_TIMEOUT):
+                        await self._upload(household_id, want, self.art_for(want[0], Tier(want[1])))
+                except Exception as exc:
+                    self._failed(household_id, exc)
+                    failures += 1
+                    if _missing_scope(exc) or failures >= PREWARM_FAILURES:
+                        return False
+                    continue
+                todo.pop(0)
+                uploaded += 1
+                failures = 0  # PREWARM_FAILURES counts failures in a row
+                await self.pause(spacing)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("badge art prewarm failed", extra={"household_id": household_id})
+            return False
+        log.info(
+            "badge art prewarmed",
+            extra={"household_id": household_id, "uploaded": uploaded, "cached": total - uploaded, "total": total},
+        )
+        return True
 
     def _is_recent(self, file_id: str) -> bool:
         uploaded = self._uploaded_at.get(file_id)
@@ -175,3 +243,12 @@ class BadgeFiles:
 def _valid(want: Wanted) -> bool:
     key, tier = want
     return key in BY_KEY and BadgeKey(key) not in QUIET_BADGES and tier in {t.value for t in TIERS}
+
+
+def all_wanted() -> list[Wanted]:
+    """Every badge tier that has art in Slack, in a steady order: all but Food Critic."""
+    return sorted((b.key.value, t.value) for b in BADGES if b.key not in QUIET_BADGES for t in TIERS)
+
+
+def _missing_scope(exc: BaseException) -> bool:
+    return getattr(exc, "code", None) == "missing_scope" or "missing_scope" in str(exc)

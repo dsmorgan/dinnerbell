@@ -14,7 +14,7 @@ from datetime import date, datetime, time
 from typing import Any
 
 from dinnerbell.channels.slack import ids
-from dinnerbell.channels.slack.badge_text import ArtIds, art_element, tag, wanted
+from dinnerbell.channels.slack.badge_text import THUMBNAIL_CUTOFF, ArtIds, art_element, icon_rows, tag, wanted
 from dinnerbell.channels.slack.blocks import (
     MAX_FALLBACK,
     MAX_MESSAGE_BLOCKS,
@@ -1566,7 +1566,8 @@ def badges_earned_message(notification: note.BadgesEarned, ctx: RenderContext) -
     """FR-39: one post for the badges a done call earned. It mentions each member by name order
     (never by what they earned) and only celebrates: no counts against anyone else's. A badge with
     uploaded art (``ctx.art``) gets a line with its art beside it; the rest stay text. With no art,
-    the post is one text block."""
+    the post is one text block. A member with more than ``THUMBNAIL_CUTOFF`` badges gets one line naming
+    them and a compact row of small icons instead of a thumbnail row each (#112)."""
     who = ", ".join(n.person.name for n in notification.news)
     drawn = _drawn(notification.news, ctx.art)
     tail = []
@@ -1578,6 +1579,10 @@ def badges_earned_message(notification: note.BadgesEarned, ctx: RenderContext) -
     else:
         blocks = [section("*New badges!* 🎉")]
         for news, art in zip(notification.news, drawn, strict=True):
+            if _is_many(news):
+                blocks.append(section(_many_line(news, ctx)))
+                blocks += icon_rows([art_element(f, f"{b.name}, {b.tier}") for b, f in art.items()])
+                continue
             text = [tag(f"*{escape(b.name)}*", b.tier) for b in news.badges if b not in art]
             if news.more:
                 text.append(plural(news.more, "more badge"))
@@ -1596,18 +1601,30 @@ def badges_earned_message(notification: note.BadgesEarned, ctx: RenderContext) -
     return _finish(f"New badges for {who}.", blocks)
 
 
+def _is_many(news: note.BadgeNews) -> bool:
+    return len(news.badges) + news.more > THUMBNAIL_CUTOFF
+
+
+def _many_line(news: note.BadgeNews, ctx: RenderContext) -> str:
+    """``@Kim earned 7 badges: 🥇 *Chef* · Gold, ... and 1 more badge.``: the same tags, caps and
+    wording as the text-only post, with the count first. Food Critic never gets here (it isn't announced)."""
+    return f"{ctx.directory.mention(news.person)} earned {len(news.badges) + news.more} badges: {_and(_tags(news))}."
+
+
 def _drawn(news: tuple[note.BadgeNews, ...], art: ArtIds) -> list[dict[note.BadgeTier, str]]:
     """For each member in ``news``, the badges to show as art with their file IDs, in order: those
-    ``art`` has, until ``MAX_ART`` are used up in the post."""
+    ``art`` has, until ``MAX_ART`` are used up in the post. A member shown as a compact row of icons
+    (``_is_many``) uses none of that room: the row is two blocks at most, whatever the size."""
     room = MAX_ART
     drawn: list[dict[note.BadgeTier, str]] = []
     for n in news:
         mine: dict[note.BadgeTier, str] = {}
         for badge in n.badges:
             file_id = art.get(wanted(badge.name, badge.tier) or ("", ""))
-            if file_id and room > 0:
+            many = _is_many(n)
+            if file_id and (many or room > 0):
                 mine[badge] = file_id
-                room -= 1
+                room -= 0 if many else 1
         drawn.append(mine)
     return drawn
 

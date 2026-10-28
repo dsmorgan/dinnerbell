@@ -14,17 +14,20 @@ from typing import Any
 import pytest
 
 from dinnerbell.channels.slack.badge_text import tag
+from dinnerbell.channels.slack.views import HomeLinks, _badges, art_wanted
 from dinnerbell.config import Settings
 from dinnerbell.db.badge_files import BadgeFileRepository
 from dinnerbell.domain import notifications as note
 from dinnerbell.domain.badges import BadgeKey, Tier
+from dinnerbell.domain.notifications import PermanentDeliveryError
 from dinnerbell.services import badge_art
-from dinnerbell.services.badge_files import COOLDOWN, RETRY_PAUSES, BadgeFiles
+from dinnerbell.services.badge_files import COOLDOWN, PREWARM_FAILURES, PREWARM_SPACING, RETRY_PAUSES, BadgeFiles
 from dinnerbell.services.database import Database, open_database
+from dinnerbell.services.stats import my_stats
 from tests.support.calls import House, furnish, make_house
 from tests.support.clock import FakeClock
 from tests.support.fake_slack import Failure
-from tests.support.slack import SLACK_IDS, Slack, wire
+from tests.support.slack import SLACK_IDS, Slack, connection, wire
 from tests.test_badge_news import announce, award
 from tests.test_contributions import dinner
 
@@ -297,13 +300,18 @@ async def test_an_announcement_with_only_quiet_or_unknown_badges_has_no_art(hous
 # App Home -----------------------------------------------------------------------------------------
 
 
+def home_icons(blocks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The small icons of Your badges: the image elements in context blocks."""
+    return [e for row in icons(blocks) for e in row]
+
+
 async def test_home_shows_the_members_own_badges_as_art(house: House) -> None:
     await dinner(house)
     slack = await wire(house)
     await slack.open_home("Alex")
     blocks = slack.last_home("Alex")["blocks"]
-    art = [b for b in blocks if b.get("accessory", {}).get("type") == "image"]
-    assert art and all(b["accessory"]["slack_file"]["id"] in slack.fake.files for b in art)
+    art = home_icons(blocks)
+    assert art and all(e["slack_file"]["id"] in slack.fake.files for e in art)
     text = json.dumps(blocks)
     assert "Your badges" in text and "Next:" in text and "Quarterback" not in text
 
@@ -323,7 +331,7 @@ async def test_home_keeps_a_quiet_badge_as_text(house: House) -> None:
     slack = await wire(house)
     await slack.open_home("Alex")
     blocks = slack.last_home("Alex")["blocks"]
-    assert [b["accessory"]["alt_text"] for b in blocks if "accessory" in b] == ["Chef, Gold"]
+    assert [e["alt_text"] for e in home_icons(blocks)] == ["Chef, Gold"]
     assert tag("Food Critic", "First") in json.dumps(blocks, ensure_ascii=False)
 
 
@@ -545,3 +553,300 @@ async def test_a_file_stays_fresh_for_ten_seconds_then_counts_as_cached(house: H
     house.clock.advance(timedelta(seconds=2))  # 11 s since the upload
     later: set[str] = set()
     assert await badges.file_ids(house.household.id, [CHEF], later) == {CHEF: "F1"} and later == set()
+
+
+# Prewarm (#112) -----------------------------------------------------------------------------------
+
+ALL_BUT_FOOD_CRITIC = 12 * 5
+
+
+async def test_prewarm_uploads_every_tier_but_food_critic_once_with_a_gap_between(
+    house: House, caplog: pytest.LogCaptureFixture
+) -> None:
+    uploads, pauses = Uploads(), Pauses()
+    badges = files(house, uploads, pause=pauses)
+    with caplog.at_level(logging.INFO):
+        assert await badges.prewarm(house.household.id) is True
+    names = [name for name, _, _ in uploads.calls]
+    assert len(names) == len(set(names)) == ALL_BUT_FOOD_CRITIC
+    assert not any(n.startswith("food_critic") for n in names)
+    assert pauses.waits == [PREWARM_SPACING] * ALL_BUT_FOOD_CRITIC
+    done = [r for r in caplog.records if r.getMessage() == "badge art prewarmed"]
+    assert len(done) == 1 and done[0].levelno == logging.INFO
+    assert (done[0].uploaded, done[0].cached) == (ALL_BUT_FOOD_CRITIC, 0)  # type: ignore[attr-defined]
+
+
+async def test_prewarm_skips_what_is_cached_and_a_first_use_afterwards_uploads_nothing(house: House) -> None:
+    uploads = Uploads()
+    await files(house, uploads, pause=Pauses()).prewarm(house.household.id)
+    assert len(uploads.calls) == ALL_BUT_FOOD_CRITIC
+    restarted = files(house, uploads, pause=Pauses())  # a new process, same database
+    assert await restarted.prewarm(house.household.id) is True
+    assert len(uploads.calls) == ALL_BUT_FOOD_CRITIC
+    fresh: set[str] = set()
+    found = await restarted.file_ids(house.household.id, [CHEF], fresh)
+    assert found == {CHEF: f"F{[n for n, _, _ in uploads.calls].index('chef-gold.png') + 1}"}
+    assert fresh == set() and len(uploads.calls) == ALL_BUT_FOOD_CRITIC
+
+
+async def test_prewarm_resumes_where_a_stopped_run_left_off(house: House) -> None:
+    uploads = Uploads()
+    stop, ten = asyncio.Event(), asyncio.Event()
+
+    async def stops_after_ten(seconds: float) -> None:
+        if len(uploads.calls) >= 10:
+            ten.set()
+            await stop.wait()  # the process is going away
+        await asyncio.sleep(0)
+
+    task = asyncio.ensure_future(files(house, uploads, pause=stops_after_ten).prewarm(house.household.id))
+    await asyncio.wait_for(ten.wait(), 5)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert len(uploads.calls) == 10
+    assert await files(house, uploads, pause=Pauses()).prewarm(house.household.id) is True
+    names = [name for name, _, _ in uploads.calls]
+    assert len(names) == len(set(names)) == ALL_BUT_FOOD_CRITIC
+
+
+async def test_prewarm_stops_on_a_missing_scope_with_one_log_line(
+    house: House, caplog: pytest.LogCaptureFixture
+) -> None:
+    uploads = Uploads()
+    uploads.error = PermanentDeliveryError("missing_scope", code="missing_scope")
+    with caplog.at_level(logging.INFO):
+        assert await files(house, uploads, pause=Pauses()).prewarm(house.household.id) is False
+    assert len(uploads.calls) == 1
+    lines = [r for r in caplog.records if r.levelno >= logging.WARNING or "prewarm" in r.getMessage()]
+    assert len(lines) == 1 and "files:write" in lines[0].getMessage()
+
+
+async def test_prewarm_waits_out_the_cooldown_after_a_failure_and_gives_up_after_a_few(house: House) -> None:
+    uploads, pauses = Uploads(), Pauses()
+    uploads.error = RuntimeError("boom")
+    assert await files(house, uploads, pause=pauses).prewarm(house.household.id) is False
+    assert len(uploads.calls) == PREWARM_FAILURES
+    cooling = [w for w in pauses.waits if w > 1]
+    assert len(cooling) == PREWARM_FAILURES - 1 and all(w == COOLDOWN.total_seconds() for w in cooling)
+
+
+async def test_prewarm_does_not_clear_the_failure_cooldown_for_first_use(house: House) -> None:
+    uploads = Uploads()
+    uploads.error = RuntimeError("boom")
+    badges = files(house, uploads, pause=Pauses())
+    await badges.prewarm(house.household.id)
+    uploads.error = None
+    calls = len(uploads.calls)
+    assert await badges.file_ids(house.household.id, [CHEF]) == {}  # still cooling
+    assert len(uploads.calls) == calls
+
+
+async def test_the_connection_prewarms_once_connected_and_not_before(house: House) -> None:
+    from tests.support.fake_slack import FakeSlack
+
+    fake = FakeSlack()
+    conn = connection(house, fake)
+    sleeps: list[float] = []
+
+    async def sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+        if not await conn.is_connected() and len(sleeps) > 3:
+            raise asyncio.CancelledError  # never connected: the test ends the wait
+        await asyncio.sleep(0)
+
+    conn.sleep = sleep
+    with pytest.raises(asyncio.CancelledError):
+        await conn._prewarm(house.household.id)
+    assert fake.files == {}  # no connection, nothing uploaded
+    assert await conn.run_once()
+    await conn._prewarm(house.household.id)
+    assert len(fake.files) == ALL_BUT_FOOD_CRITIC
+
+
+# Compact layouts (#112) ---------------------------------------------------------------------------
+
+FOUR = [
+    (BadgeKey.CHEF, Tier.GOLD),
+    (BadgeKey.SCOUT, Tier.FIRST),
+    (BadgeKey.ROAD_RUNNER, Tier.FIRST),
+    (BadgeKey.QUARTERBACK, Tier.FIRST),
+]
+
+
+async def earn_for_kim(house: House, badges: list[tuple[BadgeKey, Tier]]) -> None:
+    for key, tier in badges:
+        await award(house, "Kim", key, tier)
+    assert await announce(house) == 1
+
+
+def icons(blocks: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
+    return [
+        b["elements"] for b in blocks if b["type"] == "context" and all(e["type"] == "image" for e in b["elements"])
+    ]
+
+
+async def test_three_badges_keep_their_thumbnail_rows(house: House) -> None:
+    slack = await wire(house)
+    await earn_for_kim(house, FOUR[:3])
+    await slack.drain()
+    blocks = announcement(slack)
+    assert len([b for b in blocks if "accessory" in b]) == 3 and icons(blocks) == []
+
+
+async def test_four_badges_become_one_line_and_one_row_of_small_icons(house: House) -> None:
+    slack = await wire(house)
+    await earn_for_kim(house, FOUR)
+    await slack.drain()
+    blocks = announcement(slack)
+    assert not any("accessory" in b for b in blocks)
+    (row,) = icons(blocks)
+    assert [e["alt_text"] for e in row] == ["Chef, Gold", "Road Runner, First", "Quarterback, First", "Scout, First"]
+    line = next(b["text"]["text"] for b in blocks if "earned 4 badges:" in b.get("text", {}).get("text", ""))
+    assert line.startswith(f"<@{SLACK_IDS['Kim']}> earned 4 badges: ")
+    assert tag("*Chef*", "Gold") in line and line.endswith(".")
+
+
+async def test_the_badges_over_the_cap_are_counted_in_the_line_and_all_stay_in_blocks(house: House) -> None:
+    slack = await wire(house)
+    seven = [(k, Tier.FIRST) for k in list(BadgeKey)[:6]] + [(BadgeKey.GAMBLER, Tier.FIRST)]
+    await earn_for_kim(house, seven)
+    await slack.drain()
+    blocks = announcement(slack)
+    text = json.dumps(blocks, ensure_ascii=False)
+    assert "earned 7 badges: " in text and "1 more badge" in text
+    assert len(icons(blocks)) == 1 and len(icons(blocks)[0]) <= 10 and len(blocks) <= 50
+
+
+async def test_four_badges_without_art_post_the_same_text_as_before(house: House) -> None:
+    slack = await wire(house)
+    slack.fake.fail("files.getUploadURLExternal", Failure("missing_scope"))
+    await earn_for_kim(house, FOUR)
+    await slack.drain()
+    (section,) = [b for b in announcement(slack) if "earned" in json.dumps(b)]
+    assert section["text"]["text"].splitlines()[1] == (
+        f"<@{SLACK_IDS['Kim']}> earned {tag('*Chef*', 'Gold')}, {tag('*Road Runner*', 'First')}, "
+        f"{tag('*Quarterback*', 'First')}, and {tag('*Scout*', 'First')}."
+    )
+
+
+async def test_a_member_with_many_badges_and_a_member_with_few_each_get_their_own_layout(house: House) -> None:
+    slack = await wire(house)
+    for key, tier in FOUR:
+        await award(house, "Kim", key, tier)
+    await award(house, "Sam", BadgeKey.EXPLORER, Tier.FIRST)
+    assert await announce(house) == 1
+    await slack.drain()
+    blocks = announcement(slack)
+    assert len(icons(blocks)) == 1 and [b["accessory"]["alt_text"] for b in blocks if "accessory" in b] == [
+        "Explorer, First"
+    ]
+
+
+async def earn_everything(house: House) -> None:
+    for key in BadgeKey:
+        await award(house, "Alex", key, Tier.SILVER if key is BadgeKey.CHEF else Tier.FIRST)
+
+
+async def test_home_fits_thirteen_badges_in_two_icon_blocks_with_a_link_and_the_next_icon(house: House) -> None:
+    await earn_everything(house)
+    slack = await wire(house)
+    await slack.open_home("Alex")
+    blocks = slack.last_home("Alex")["blocks"]
+    rows = icons(blocks)
+    assert [len(r) for r in rows[:2]] == [10, 2]  # 12 have art; Food Critic is text
+    assert len(blocks) <= 100
+    text = json.dumps(blocks, ensure_ascii=False)
+    assert "<https://dinnerbell.test/stats|All badges on the web>" in text
+    assert tag("Food Critic", "First") in text
+    nxt = next(b for b in blocks if b["type"] == "context" and "Next:" in json.dumps(b))
+    assert nxt["elements"][0]["type"] == "image" and nxt["elements"][1]["type"] == "mrkdwn"
+    assert all("accessory" not in b for b in blocks)
+
+
+async def test_home_leaves_out_the_link_without_a_web_address(house: House) -> None:
+    await earn_everything(house)
+    async with house.sessionmaker() as db:
+        mine = await my_stats(db, house["Alex"])
+    art = dict.fromkeys(art_wanted(mine), "F1")
+    assert any("All badges on the web" in json.dumps(b) for b in _badges(mine, art, HomeLinks("https://x.example")))
+    assert not any("All badges on the web" in json.dumps(b) for b in _badges(mine, art, HomeLinks("")))
+
+
+async def test_home_without_art_keeps_the_text_layout_byte_for_byte(house: House) -> None:
+    await earn_everything(house)
+    slack = await wire(house)
+    slack.fake.fail("files.getUploadURLExternal", Failure("missing_scope"))
+    await slack.open_home("Alex")
+    blocks = slack.last_home("Alex")["blocks"]
+    start = next(i for i, b in enumerate(blocks) if "*Your badges*" in json.dumps(b))
+    assert blocks[start]["type"] == "section" and blocks[start]["text"]["text"].startswith("*Your badges*\n")
+    assert blocks[start + 1]["type"] == "context" and len(blocks[start + 1]["elements"]) == 1
+    assert "slack_file" not in json.dumps(blocks) and "All badges on the web" not in json.dumps(blocks)
+
+
+# Shutdown (#112) ----------------------------------------------------------------------------------
+
+
+async def test_a_failed_connection_look_does_not_end_the_prewarm(house: House) -> None:
+    from tests.support.fake_slack import FakeSlack
+
+    conn = connection(house, FakeSlack())
+    looks = 0
+
+    async def flaky() -> bool:
+        nonlocal looks
+        looks += 1
+        if looks == 1:
+            raise RuntimeError("socket gone")
+        return True
+
+    conn.is_connected = flaky  # type: ignore[method-assign]
+    conn.sleep = no_wait
+    await conn._prewarm(house.household.id)
+    assert looks == 2 and len(conn.api.client.files) == ALL_BUT_FOOD_CRITIC  # type: ignore[attr-defined]
+
+
+async def no_wait(seconds: float) -> None:
+    await asyncio.sleep(0)
+
+
+async def test_prewarm_failures_count_in_a_row_not_in_all(house: House) -> None:
+    uploads = Uploads()
+    calls = 0
+    original = uploads.__call__
+
+    async def every_other(filename: str, png: bytes, alt: str) -> str:
+        nonlocal calls
+        calls += 1
+        if calls % 2:
+            raise RuntimeError("blip")
+        return await original(filename, png, alt)
+
+    badges = files(house, uploads, pause=Pauses())
+    badges.upload = every_other
+    assert await badges.prewarm(house.household.id) is True
+
+
+async def test_stopping_during_an_upload_still_saves_its_row(house: House) -> None:
+    uploads = Uploads()
+    badges = files(house, uploads, pause=Pauses())
+    save = badges._save
+    release, saving = asyncio.Event(), asyncio.Event()
+
+    async def slow_save(household_id: int, file: Any) -> None:
+        saving.set()
+        await release.wait()
+        await save(household_id, file)
+
+    badges._save = slow_save  # type: ignore[method-assign]
+    task = asyncio.ensure_future(badges.prewarm(house.household.id))
+    await asyncio.wait_for(saving.wait(), 5)  # the first upload is in flight, its save waiting
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    release.set()
+    await badges.settle(5)
+    async with house.sessionmaker() as db:
+        assert len(await BadgeFileRepository(db).all(house.household.id)) == 1
+    assert not badges._saves

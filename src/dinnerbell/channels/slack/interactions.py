@@ -70,12 +70,12 @@ from dinnerbell.channels.slack.views import (
     FormError,
     HomeLinks,
     InviteInput,
+    art_wanted,
     assign_modal,
     cancel_modal,
     close_modal,
     details_modal,
     feedback_modal,
-    held_badges,
     home_view,
     invite_modal,
     log_modal,
@@ -625,8 +625,7 @@ class Interactions:
         """The uploaded art for the badges Home shows, or none. It never raises or waits long."""
         if self.badge_files is None or badges is None:
             return {}
-        held = {(key.value, tier.value) for key, tier in held_badges(badges).items()}
-        return await self.badge_files.file_ids(member.household_id, held, fresh)
+        return await self.badge_files.file_ids(member.household_id, art_wanted(badges), fresh)
 
     @staticmethod
     async def _badges(db: AsyncSession, member: Member) -> MemberStats | None:

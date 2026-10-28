@@ -430,7 +430,7 @@ def _serve(settings: Settings, host: str, port: int) -> None:
     from dinnerbell.app_factory import create_app
 
     uvicorn.run(
-        create_app(settings),
+        create_app(settings, prewarm_badge_art=True),
         host=host,
         port=port,
         log_config=None,
