@@ -1570,18 +1570,7 @@ def badges_earned_message(notification: note.BadgesEarned, ctx: RenderContext) -
     return _finish(f"New badges for {who}.", blocks)
 
 
-def _did(thanks: note.Thanks) -> str:
-    parts = [
-        f"{verb} {plural(count, noun)}"
-        for verb, noun, count in (
-            ("cooked", "time", thanks.cooked),
-            ("picked up", "time", thanks.picked_up),
-            ("ordered", "time", thanks.ordered),
-            ("coordinated", "call", thanks.coordinated),
-        )
-        if count
-    ]
-    return _and(parts)
+THANKED_AS = {"cooked": "Cooked", "picked_up": "Picked up", "ordered": "Ordered", "coordinated": "Coordinated"}
 
 
 def monthly_recap_message(notification: note.MonthlyRecap) -> Message:
@@ -1600,12 +1589,19 @@ def monthly_recap_message(notification: note.MonthlyRecap) -> Message:
         lines.append(f"*New in the catalog:* {notification.new_items} ({names_})")
     blocks = [section(join_lines(lines))]
     if notification.thanks:
-        thanks = [f"• {escape(t.person.name)} {_did(t)}. Thank you!" for t in notification.thanks]
-        if notification.more_thanks:
-            thanks.append(
-                f"…and {plural(notification.more_thanks, 'more person', 'more people')} pitched in too. Thank you!"
-            )
-        blocks.append(section(join_lines(["*Thank you*", *thanks])))
+        groups = []
+        for group in notification.thanks:
+            who = [escape(p.name) for p in group.people]
+            if group.more:
+                who.append(plural(group.more, "more person", "more people"))
+            groups.append(f"• *{THANKED_AS[group.kind]}:* {_and(who)}")
+        thanks = [
+            "*Thank you*",
+            "Every meal takes a team, and everyone here is part of it.",
+            *groups,
+            "And thank you to everyone who answered a call or pulled up a chair.",
+        ]
+        blocks.append(section(join_lines(thanks)))
     if notification.badges:
         earned = [f"• {escape(n.person.name)}: {', '.join(_tags(n))}" for n in notification.badges]
         if notification.more_badges:

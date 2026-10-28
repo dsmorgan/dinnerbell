@@ -801,22 +801,22 @@ class BadgesEarned:
 
 
 @dataclass(frozen=True, slots=True)
-class Thanks:
-    """What one member did for the month's meals, in whole numbers of times."""
+class ThanksGroup:
+    """Members thanked for one way of pitching in (``kind``: ``cooked``, ``picked_up``,
+    ``ordered``, or ``coordinated``), in name order. No numbers: a list of counts would let
+    anyone rank by eye. ``more`` counts members left off to keep the post short."""
 
-    person: PersonInfo
-    cooked: int = 0
-    picked_up: int = 0
-    ordered: int = 0
-    coordinated: int = 0
+    kind: str
+    people: tuple[PersonInfo, ...]
+    more: int = 0
 
 
 @dataclass(frozen=True, slots=True)
 class MonthlyRecap:
     """The month in review (FR-40), posted once on the first days of the next month: household
-    totals, then a thank-you to each member who pitched in (``thanks``, in name order, never by
-    count), then the badges earned. It names people and counts; it has no ranking, and holds
-    nothing from preferences or feedback. About the household, like ``ScheduleChanged``.
+    totals, then a thank-you to the members who pitched in, grouped by how (``thanks``, each
+    group in name order, with no per-person numbers), then the badges earned. It has no ranking
+    and no one's count, and holds nothing from preferences or feedback. About the household, like ``ScheduleChanged``.
     ``month`` is the first day of the month recapped."""
 
     kind: ClassVar[str] = "monthly_recap"
@@ -831,8 +831,7 @@ class MonthlyRecap:
     """The ones the household had never eaten before the month."""
     new_items: int = 0
     new_item_names: tuple[str, ...] = ()
-    thanks: tuple[Thanks, ...] = ()
-    more_thanks: int = 0
+    thanks: tuple[ThanksGroup, ...] = ()
     badges: tuple[BadgeNews, ...] = ()
     more_badges: int = 0
 

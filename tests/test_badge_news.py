@@ -356,23 +356,36 @@ async def test_the_recap_posts_once_on_the_first_of_the_month(house: House) -> N
     assert channel.kinds.count("monthly_recap") == 1
 
 
-async def test_the_recap_thanks_people_by_name_and_ranks_no_one(house: House) -> None:
+async def test_the_recap_thanks_people_by_group_with_no_counts(house: House) -> None:
     await october(house)  # Kim picked up once, Alex twice, Sam coordinated three times
     house.clock.now = NOV_1_MORNING
     await recapped(house)
     (post,) = await posts(house, "monthly_recap")
     assert isinstance(post, note.MonthlyRecap)
-    assert [t.person.name for t in post.thanks] == ["Alex", "Kim", "Sam"]  # A to Z, not most to least
-    by = {t.person.name: t for t in post.thanks}
-    assert (by["Alex"].picked_up, by["Kim"].picked_up, by["Sam"].coordinated) == (2, 1, 3)
-    assert [n.person.name for n in post.badges] == sorted(n.person.name for n in post.badges)
-    # Lee never pitched in: no line says so.
-    assert "Lee" not in json.dumps(post.thanks, default=str)
+    groups = {g.kind: [p.name for p in g.people] for g in post.thanks}
+    assert groups == {"picked_up": ["Alex", "Kim"], "coordinated": ["Sam"]}  # A to Z, not most to least
+    assert "Lee" not in json.dumps(post.thanks, default=str)  # Lee never pitched in: no line says so
     from dinnerbell.channels.slack.messages import monthly_recap_message
 
     text_ = json.dumps(monthly_recap_message(post).blocks)
-    for word in ("most", "least", "top", "rank", "leaderboard", "#1", "fewest"):
+    assert "Picked up:* Alex and Kim" in text_ and "Coordinated:* Sam" in text_
+    for word in ("most", "least", "top", "rank", "leaderboard", "#1", "fewest", " times"):
         assert word not in text_.lower()
+
+
+async def test_the_recap_names_only_active_members(house: House) -> None:
+    await october(house)
+    async with house.sessionmaker() as db:
+        from dinnerbell.db.repositories import MemberRepository
+
+        await MemberRepository(db).update(house.household.id, house["Kim"].id, house.clock(), active=False)
+        await db.commit()
+    house.clock.now = NOV_1_MORNING
+    await recapped(house)
+    (post,) = await posts(house, "monthly_recap")
+    assert isinstance(post, note.MonthlyRecap)
+    assert "Kim" not in json.dumps(post.thanks, default=str) + json.dumps(post.badges, default=str)
+    assert "Alex" in json.dumps(post.thanks, default=str)
 
 
 async def test_the_recap_shows_no_feedback_and_no_quiet_badges(house: House) -> None:
@@ -533,6 +546,8 @@ def test_months_wrap_the_year_and_leap_february() -> None:
         (datetime(2027, 1, 1, 9, 0, tzinfo=CHICAGO), "2026-11", date(2026, 12, 1)),
         (datetime(2026, 11, 1, 9, 0, tzinfo=CHICAGO), 202610, date(2026, 10, 1)),  # junk reads as none
         (datetime(2026, 11, 1, 9, 0, tzinfo=CHICAGO), "garbage", date(2026, 10, 1)),
+        (datetime(2026, 11, 1, 9, 0, tzinfo=CHICAGO), "2099-01", date(2026, 10, 1)),  # a future marker is a mistake
+        (datetime(2026, 11, 1, 9, 0, tzinfo=CHICAGO), "9999-99", date(2026, 10, 1)),
     ],
 )
 def test_when_a_recap_is_due(local: datetime, posted: object, expected: date | None) -> None:
@@ -666,3 +681,51 @@ def test_next_up_points_at_the_closest_started_badge() -> None:
     assert step is not None and step.badge.key is BadgeKey.CHEF and step.remaining == 7
     fresh = next_up(samples.KIM_NO_BADGES.progress)
     assert fresh is not None and fresh.badge.key is BadgeKey.CHEF and fresh.count == 0
+
+
+def test_the_caps_hold_at_the_boundary() -> None:
+    """One over each cap is counted, not shown: 11 members and 7 badges."""
+    from datetime import datetime as dt
+
+    from dinnerbell.domain.badges import BADGES, Award
+    from dinnerbell.domain.members import Capabilities, Member, Role
+
+    members = {
+        n: Member(n, 1, f"Member {n:02d}", f"m{n}@example.com", Role.MEMBER, Capabilities(), True) for n in range(1, 12)
+    }
+    when = dt(2026, 10, 22, tzinfo=UTC)
+    got = [Award(n, 1, 1, b.key, Tier.FIRST, when, Announcement.PENDING) for n, b in enumerate(BADGES[:7], 100)]
+    got += [Award(200 + n, 1, n, BadgeKey.SCOUT, Tier.FIRST, when, Announcement.PENDING) for n in range(2, 12)]
+    news, more_people = announcements.news_for(got, members)
+    assert len(news) == announcements.MAX_PEOPLE == 10 and more_people == 1
+    first = news[0]
+    assert len(first.badges) == announcements.MAX_BADGES == 6 and first.more == 1
+    exact, none_left = announcements.news_for(got[:6] + got[7:16], {n: members[n] for n in range(1, 11)})
+    assert none_left == 0 and exact[0].more == 0 and len(exact) == 10
+
+
+async def test_a_pending_food_critic_is_not_in_the_newest_badges_before_any_announcer_runs(house: House) -> None:
+    await award(house, "Kim", BadgeKey.FOOD_CRITIC, Tier.FIRST)
+    await award(house, "Alex", BadgeKey.CHEF, Tier.FIRST)
+    async with house.sessionmaker() as db:
+        recent = await BadgeRepository(db).recent(house.household.id, 10)
+    assert [a.badge for a in recent] == [BadgeKey.CHEF]
+
+
+async def test_a_bad_time_zone_logs_one_warning_and_posts_nothing(
+    house: House, caplog: pytest.LogCaptureFixture
+) -> None:
+    from sqlalchemy import update
+
+    from dinnerbell.db.models import HouseholdRow
+
+    async with house.sessionmaker() as db:
+        await db.execute(update(HouseholdRow).values(timezone="Mars/Olympus"))
+        await db.commit()
+    recap._BAD_ZONES.clear()
+    house.clock.now = NOV_1_MORNING
+    with caplog.at_level(logging.WARNING):
+        for _ in range(3):
+            assert await recapped(house) == 0
+    assert [r.levelname for r in caplog.records if "time zone" in r.getMessage()] == ["WARNING"]
+    assert not [r for r in caplog.records if r.exc_info]

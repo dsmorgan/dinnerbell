@@ -9,7 +9,7 @@
     },
     {
       "text": {
-        "text": "*Thank you*\n• Alex cooked 2 times and coordinated 9 calls. Thank you!\n• Kim picked up 1 time. Thank you!\n• Sam cooked 6 times and ordered 1 time. Thank you!",
+        "text": "*Thank you*\nEvery meal takes a team, and everyone here is part of it.\n• *Cooked:* Alex and Sam\n• *Picked up:* Kim\n• *Ordered:* Sam\n• *Coordinated:* Alex\nAnd thank you to everyone who answered a call or pulled up a chair.",
         "type": "mrkdwn"
       },
       "type": "section"

@@ -244,9 +244,10 @@ MANY_BADGES = (
     *(note.BadgeNews(note.PersonInfo(20 + n, f"Member {n}"), (FIRST_SCOUT,)) for n in range(9)),
 )
 THANKS = (
-    note.Thanks(ALEX, cooked=2, coordinated=9),
-    note.Thanks(KIM, picked_up=1),
-    note.Thanks(SAM, cooked=6, ordered=1),
+    note.ThanksGroup("cooked", (ALEX, SAM)),
+    note.ThanksGroup("picked_up", (KIM,)),
+    note.ThanksGroup("ordered", (SAM,)),
+    note.ThanksGroup("coordinated", (ALEX,)),
 )
 RECAP = note.MonthlyRecap(
     household_id=1,
@@ -300,8 +301,10 @@ NOTIFICATIONS: dict[str, Callable[[], note.Notification]] = {
         first_cuisines=("Cuisine 3", "Cuisine 4"),
         new_items=40,
         new_item_names=tuple(f"Dish {n}" for n in range(5)),
-        thanks=tuple(note.Thanks(note.PersonInfo(30 + n, f"Member {n}"), cooked=n + 1) for n in range(15)),
-        more_thanks=4,
+        thanks=(
+            note.ThanksGroup("cooked", tuple(note.PersonInfo(30 + n, f"Member {n}") for n in range(15)), more=4),
+            note.ThanksGroup("picked_up", (KIM,)),
+        ),
         badges=MANY_BADGES[:10],
         more_badges=2,
     ),

@@ -25,7 +25,7 @@ The counts are a household setting. The admin changes them with `badge_threshold
 
 ## Announcements
 
-Every award records when it was earned and whether the channel has been told: `pending`, `announced`, or `skipped`. A badge earned when a meal is done is `pending`. On every scheduler tick (30 seconds), Dinnerbell posts the pending badges and marks them `announced` in one transaction, so a restart, a retry, or two ticks at once never post one twice, and a crash never loses one. A badge earned by catching up (the backfill and a lowered count) is `skipped` and is never announced.
+Every award records when it was earned and whether the channel has been told: `pending`, `announced`, or `skipped`. A badge earned when a meal is done is `pending`. On every scheduler tick (30 seconds), Dinnerbell posts the pending badges and marks them `announced` in one transaction, so a restart, a retry, or two ticks at once never post one twice, and a crash never loses one. A badge earned by catching up (the backfill and a lowered count) is `skipped` and is never announced. The awards are marked `announced` when the post is queued, not when it lands: if Slack then refuses the post for good (the outbox gives up after its retries), the award stays `announced` and that post is lost. Nothing posts it again.
 
 - **One post for each done call.** Everything the call earned goes in one message, with each member mentioned once, in name order. It never compares people. A post names at most 10 members and 6 badges each; the rest are counted ("and 3 more members earned badges too"). A badge earned at several tiers at once shows its highest.
 - **Food Critic is never announced.** Who gave feedback is as private as what they said (FR-49), so this badge is marked `skipped`, left out of the monthly recap and the household's newest badges, and shown only to the member. Every other badge is shown with the member's name.
@@ -34,15 +34,15 @@ Every award records when it was earned and whether the channel has been told: `p
 
 ## The monthly recap
 
-On the first day of each month from 9 a.m., in your household time zone, Dinnerbell posts the month before: how many meals you ate, the cuisines (and any you had never eaten), the new catalog items, a thank-you for each member who cooked, picked up, ordered, or coordinated, and the badges earned. People appear in name order with their own counts for the month, never as a ranking, and nobody is named for doing less. It mentions no one.
+On the first day of each month from 9 a.m., in your household time zone, Dinnerbell posts the month before: how many meals you ate, the cuisines (and any you had never eaten), the new catalog items, a thank-you, and the badges earned. The thank-you lists who cooked, who picked up, who ordered, and who coordinated, each list in name order. It shows no one's count, because a list of numbers lets anyone rank by eye; the numbers it does show are household totals. Being missing from a list says nothing, and the recap thanks everyone who answered a call or pulled up a chair. It mentions no one, and it names only members who are still active.
 
 The household setting `recap_posted` holds the last month recapped, such as `2026-10`, so the recap posts once however often Dinnerbell restarts. If Dinnerbell was down on the first, the recap posts on its next tick up to the seventh; after that it leaves the month out, and only the month just ended is ever recapped. A month with no meals posts nothing: there is nothing to celebrate, and a "0 meals" note isn't news. The marker still moves on.
 
-On the test instance, the recap posts to the test channel like any post. `scrub-test` marks the latest due month as posted, so a restored copy stays quiet until the next month starts.
+On the test instance, the recap posts to the test channel like any post. `scrub-test` marks the latest due month as posted, so a restored copy stays quiet until the next month starts. Then the test instance posts one recap on that month's first, from the production history it was restored with. A marker that is not a `YYYY-MM` month, or is later than the current month, counts as none. If the household time zone is not valid, the recap stays off and Dinnerbell logs one warning.
 
 ## App Home
 
-Each member's App Home has a short "Your badges" section: the badges they hold, each with its highest tier as a text tag, and the badge closest to its next tier ("Next: Chef · Silver, 7 to go (43 of 50 meals cooked)"). It shows only their own. Guests don't see it. If reading it fails, Home still draws without it. The badge art replaces the text tags later.
+Each member's App Home has a short "Your badges" section: the badges they hold, each with its highest tier as a text tag, and the badge closest to its next tier ("Next: Chef · Silver, 7 to go (43 of 50 meals cooked)"). It shows only their own. A guest's App Home has no badge section (a guest's badges are still announced in the channel). If reading it fails, Home still draws without it. The badge art replaces the text tags later.
 
 ## The first start after the upgrade
 

@@ -7,17 +7,17 @@ in the household setting ``recap_posted``. A restart, a second tick, or two tick
 the marker and post nothing, and a crash before the commit posts nothing and tries again.
 
 What it shows is what the household already sees: totals from the meal log, the cuisines and
-catalog items of that month, a thank-you for each member who cooked, picked up, ordered, or
-coordinated (in name order, so never as a ranking), and the badges announced that month. It never
-shows feedback, preferences, or anything about who did less. A month with no meals posts nothing
-(the marker still moves on), because "0 meals" is not news.
+catalog items of that month, a thank-you to the members who cooked, picked up, ordered, or
+coordinated (grouped by how, in name order, with no one's count, so never a ranking), and the
+badges announced that month. It never shows feedback, preferences, or anything about who did
+less. A month with no meals posts nothing (the marker still moves on), because "0 meals" is not news.
 """
 
 from __future__ import annotations
 
 import logging
 from datetime import date, datetime
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -29,7 +29,7 @@ from dinnerbell.db.outbox import OutboxRepository
 from dinnerbell.db.repositories import HouseholdRepository, MemberRepository
 from dinnerbell.domain.contributions import Kind
 from dinnerbell.domain.household import Household
-from dinnerbell.domain.notifications import MonthlyRecap, PersonInfo, Thanks
+from dinnerbell.domain.notifications import MonthlyRecap, PersonInfo, ThanksGroup
 from dinnerbell.domain.recap import (
     MAX_CUISINES,
     MAX_ITEM_NAMES,
@@ -43,6 +43,9 @@ from dinnerbell.domain.recap import (
 from dinnerbell.services.announcements import news_for
 
 log = logging.getLogger(__name__)
+
+_BAD_ZONES: set[int] = set()
+"""Households whose time zone is invalid and have been warned about, so a tick doesn't log it every 30 seconds."""
 
 THANKED = (Kind.COOKED, Kind.PICKED_UP, Kind.ORDERED, Kind.COORDINATED)
 
@@ -64,7 +67,13 @@ async def post_recaps(sessionmaker: async_sessionmaker[AsyncSession], now: datet
 
 async def recap_household(db: AsyncSession, household: Household, *, now: datetime) -> bool:
     """Queue ``household``'s recap if one is due. True when it queued a post."""
-    zone = ZoneInfo(household.timezone)
+    try:
+        zone = ZoneInfo(household.timezone)
+    except (ZoneInfoNotFoundError, ValueError, KeyError):
+        if household.id not in _BAD_ZONES:
+            _BAD_ZONES.add(household.id)
+            log.warning("monthly recap off: the household time zone is not valid", extra={"household_id": household.id})
+        return False
     local = now.astimezone(zone)
     if due_month(local, (await household_settings(db, household.id)).get(SETTINGS_KEY)) is None:
         return False  # the usual tick: no write lock for nothing
@@ -94,16 +103,14 @@ async def build(db: AsyncSession, household_id: int, month: date, zone: ZoneInfo
     ordered = sorted(cuisines.items(), key=lambda kv: (kv[1].casefold(), kv[0]))
     start, end = bounds_utc(month, zone)
     items = await CatalogRepository(db).names_created_between(household_id, start, end)
-    members = {m.id: m for m in await MemberRepository(db).list(household_id)}
+    members = {m.id: m for m in await MemberRepository(db).list(household_id) if m.active}
     counts = await ContributionRepository(db).between(household_id, first, after, THANKED)
-    thanks = [
-        Thanks(
-            PersonInfo(member_id, member.display_name),
-            **{kind.value: counts.get((member_id, kind), 0) for kind in THANKED},
-        )
-        for member_id, member in sorted(members.items(), key=lambda kv: (kv[1].display_name.casefold(), kv[0]))
-        if any(counts.get((member_id, kind)) for kind in THANKED)
-    ]
+    by_name = sorted(members.items(), key=lambda kv: (kv[1].display_name.casefold(), kv[0]))
+    thanks: list[ThanksGroup] = []
+    for kind in THANKED:
+        who = [PersonInfo(m, member.display_name) for m, member in by_name if counts.get((m, kind))]
+        if who:
+            thanks.append(ThanksGroup(kind.value, tuple(who[:MAX_THANKS]), max(len(who) - MAX_THANKS, 0)))
     awards = await BadgeRepository(db).earned_between(household_id, start, end)
     news, more_badges = news_for(awards, members)
     return MonthlyRecap(
@@ -114,8 +121,7 @@ async def build(db: AsyncSession, household_id: int, month: date, zone: ZoneInfo
         first_cuisines=tuple(name for cid, name in ordered[:MAX_CUISINES] if cid not in earlier),
         new_items=len(items),
         new_item_names=tuple(items[:MAX_ITEM_NAMES]),
-        thanks=tuple(thanks[:MAX_THANKS]),
-        more_thanks=max(len(thanks) - MAX_THANKS, 0),
+        thanks=tuple(thanks),
         badges=tuple(news),
         more_badges=more_badges,
     )

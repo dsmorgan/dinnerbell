@@ -43,12 +43,14 @@ def next_month(first: date) -> date:
 def due_month(local_now: datetime, posted: object) -> date | None:
     """The month to recap at ``local_now`` (a time in the household zone), or None when none is
     due: it is too early on the first, past the window, or that month is already recapped.
-    ``posted`` is the stored marker; anything but a ``YYYY-MM`` string counts as none."""
+    ``posted`` is the stored marker; anything but a ``YYYY-MM`` string, or one later than ``local_now``'s
+    month, counts as none."""
     today = local_now.date()
     if today.day > WINDOW_DAYS or (today.day == 1 and local_now.hour < POST_HOUR):
         return None
     month = previous_month(today)
-    if isinstance(posted, str) and MARKER.fullmatch(posted) and posted >= month_key(month):
+    # A marker from the future can only be a mistake, and would silence the recap for good: ignore it.
+    if isinstance(posted, str) and MARKER.fullmatch(posted) and month_key(month) <= posted <= month_key(today):
         return None
     return month
 
