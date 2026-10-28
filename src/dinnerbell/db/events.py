@@ -43,6 +43,7 @@ from dinnerbell.domain.events import (
     RoleOffer,
     Status,
     Suggestion,
+    TieHow,
 )
 from dinnerbell.domain.meals import Slot
 
@@ -102,6 +103,11 @@ def _event(row: EventRow) -> Event:
         ended_by=row.ended_by,
         end_note=row.end_note,
         capacity=row.capacity,
+        shuffles=row.shuffles,
+        shuffle_note=row.shuffle_note,
+        roles_due_at=row.roles_due_at,
+        tie_how=TieHow(row.tie_how) if row.tie_how else None,
+        tie_by=row.tie_by,
     )
 
 
@@ -326,6 +332,11 @@ class EventRepository:
         row.locked_by = event.locked_by
         row.ended_by = event.ended_by
         row.end_note = event.end_note
+        row.shuffles = event.shuffles
+        row.shuffle_note = event.shuffle_note
+        row.roles_due_at = event.roles_due_at
+        row.tie_how = event.tie_how.value if event.tie_how else None
+        row.tie_by = event.tie_by
         row.updated_at = now
         await self._session.flush()
         return _event(row)
@@ -617,6 +628,15 @@ class ProposalRepository:
             update(ProposalRow)
             .where(ProposalRow.household_id == household_id, ProposalRow.id == proposal_id)
             .values(item_id=item_id, free_text=None, free_cuisine_id=None)
+            .execution_options(synchronize_session=False)
+        )
+
+    async def set_mode(self, household_id: int, proposal_id: int, mode: Mode) -> None:
+        """The decided pick's way of getting it, after the coordinator switches it (#87)."""
+        await self._session.execute(
+            update(ProposalRow)
+            .where(ProposalRow.household_id == household_id, ProposalRow.id == proposal_id)
+            .values(mode=mode.value)
             .execution_options(synchronize_session=False)
         )
 

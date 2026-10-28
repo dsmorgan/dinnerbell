@@ -70,6 +70,8 @@ class EventInfo:
     """A call or an offer (FR-4)."""
     plan: PlanInfo | None = None
     """The result, once a call is decided, so the call message can name it."""
+    shuffle_note: str | None = None
+    """The picks message's context line after the coordinator shuffled them (#87), plain words."""
 
     @property
     def key(self) -> str:
@@ -121,6 +123,9 @@ class ProposalInfo:
     them marked, such as "Kim (late)", and leave them out of the count."""
     warnings: tuple[str, ...] = ()
     """Why it may not suit someone who joined late (#76), ready to show. They never say who."""
+    tied: bool = False
+    """It shares the most votes (at least one) with another covered pick, so the coordinator can
+    choose it with **Break the tie** (#87)."""
 
     @property
     def counted(self) -> tuple[PersonInfo, ...]:
@@ -193,6 +198,13 @@ class DecisionInfo:
     participants: tuple[ParticipantInfo, ...]
     assignments: tuple[AssignmentInfo, ...]
     dietary_notes: tuple[str, ...] = ()
+    tie_note: str | None = None
+    """How a tie for the most votes was broken (FR-16), such as "Tied; least recently eaten"."""
+    roles_due_at: datetime | None = None
+    """While set, the coordinator is choosing the role's mode and owner, and the automatic
+    assignment waits until then (#87)."""
+    assign_roles: bool = False
+    """Show **Assign roles**: the role has no clear owner and someone is to choose (#87)."""
 
 
 # Notifications --------------------------------------------------------------------------------
@@ -316,6 +328,8 @@ class ProposalsReady(_Notification):
     participants: tuple[PersonInfo, ...] = ()
     """Everyone who's in, guests who are Slack users and late joiners included. Empty on rows
     queued before it existed."""
+    shuffles_left: int = 0
+    """Shuffles the coordinator may still use, and 0 when none would change anything (#87)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -332,6 +346,8 @@ class ProposalsUpdated(_Notification):
     """Who joined late (#76), for the coordinator's switches."""
     participants: tuple[PersonInfo, ...] = ()
     """As on ``ProposalsReady``: an edit pings nobody, but it keeps the mentions in the text."""
+    shuffles_left: int = 0
+    """As on ``ProposalsReady``."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -376,6 +392,8 @@ class AssignmentMade(_Notification):
     decision: DecisionInfo
     via: PersonInfo | None = None
     """For a guest without Slack (#38), the member who invited them, who gets the message."""
+    assigned_by: PersonInfo | None = None
+    """The coordinator who gave them the role without their offering for it (#87)."""
 
     @property
     def idempotency_key(self) -> str:
@@ -384,6 +402,46 @@ class AssignmentMade(_Notification):
     @property
     def recipient_id(self) -> int | None:
         return self.via.id if self.via is not None else self.member.id
+
+
+@dataclass(frozen=True, slots=True)
+class RolesToChoose(_Notification):
+    """The decision left the role without a clear owner (#87): one direct message to the
+    coordinator, who may switch the pick's mode and assign it until ``due_at``, when the
+    automatic assignment stands."""
+
+    kind: ClassVar[str] = "roles_to_choose"
+    event: EventInfo
+    member: PersonInfo
+    decision: DecisionInfo
+    due_at: datetime
+    via: PersonInfo | None = None
+    """For a guest coordinating without Slack (#38), the member who invited them."""
+
+    @property
+    def idempotency_key(self) -> str:
+        return f"{self.event.key}:{self.kind}:member{self.member.id}"
+
+    @property
+    def recipient_id(self) -> int | None:
+        return self.via.id if self.via is not None else self.member.id
+
+
+@dataclass(frozen=True, slots=True)
+class PicksShuffled(_Notification):
+    """The coordinator shuffled the picks (#87): a short note threaded under the call message,
+    naming them in plain words and mentioning no one. ``count`` keeps each shuffle its own row."""
+
+    kind: ClassVar[str] = "picks_shuffled"
+    thread_suffix: ClassVar[str | None] = "call"
+    event: EventInfo
+    by: PersonInfo
+    replaced: int
+    count: int
+
+    @property
+    def idempotency_key(self) -> str:
+        return f"{self.event.key}:{self.kind}:{self.count}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -776,12 +834,14 @@ Notification = Union[  # noqa: UP007 - a runtime union, used for isinstance chec
     RoleVacated,
     LinkNeeded,
     LateJoinChanged,
+    RolesToChoose,
+    PicksShuffled,
 ]
 NOTIFICATION_TYPES: dict[str, type[Notification]] = {cls.kind: cls for cls in get_args(Notification)}
 UPDATE_KINDS = frozenset(kind for kind, cls in NOTIFICATION_TYPES.items() if cls.is_update)
 
 
-CALL_OFF_SUPERSEDES = frozenset({AssignmentMade.kind, ResponseReminder.kind})
+CALL_OFF_SUPERSEDES = frozenset({AssignmentMade.kind, ResponseReminder.kind, RolesToChoose.kind})
 """Direct messages a call-off makes wrong: "You're cooking" or "Are you in?" must never arrive
 after "It's called off". The call-off closes these unsent, and the drainer checks again just
 before sending one."""

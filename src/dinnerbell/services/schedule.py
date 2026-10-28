@@ -22,13 +22,16 @@ from dinnerbell.db.meals import household_settings
 from dinnerbell.db.outbox import OutboxRepository
 from dinnerbell.db.repositories import HouseholdRepository
 from dinnerbell.domain.catalog import sorted_modes
-from dinnerbell.domain.events import AD_HOC_DAYS_AHEAD
+from dinnerbell.domain.events import AD_HOC_DAYS_AHEAD, DEFAULT_ROLES_CHOICE_MINUTES
 from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.members import Member
 from dinnerbell.domain.notifications import PersonInfo, ScheduleChanged, SlotScheduleInfo
 from dinnerbell.domain.schedule import (
     DEFAULT_TEMPERATURE,
+    MAX_ROLES_CHOICE_MINUTES,
+    MIN_ROLES_CHOICE_MINUTES,
     PROPOSAL_COUNT_KEY,
+    ROLES_CHOICE_KEY,
     SLOTS_KEY,
     TEMPERATURE_KEY,
     WEIGHTS_KEY,
@@ -42,6 +45,7 @@ from dinnerbell.domain.schedule import (
     first_day_using,
     format_hhmm,
     proposal_count,
+    roles_choice_minutes,
     slot_changes,
     slot_fingerprint,
     slot_schedules,
@@ -191,6 +195,7 @@ class RankingSettings:
     proposal_count: int
     variety_window_days: int
     temperature: float = DEFAULT_TEMPERATURE
+    roles_choice_minutes: int = DEFAULT_ROLES_CHOICE_MINUTES
 
 
 async def ranking_settings(db: AsyncSession, actor: Member) -> RankingSettings:
@@ -201,6 +206,7 @@ async def ranking_settings(db: AsyncSession, actor: Member) -> RankingSettings:
         proposal_count=proposal_count(stored),
         variety_window_days=variety_window_days(stored),
         temperature=temperature(stored),
+        roles_choice_minutes=roles_choice_minutes(stored),
     )
 
 
@@ -210,6 +216,7 @@ def _to_json(values: RankingSettings) -> dict[str, Any]:
         PROPOSAL_COUNT_KEY: values.proposal_count,
         SETTINGS_KEY: values.variety_window_days,
         TEMPERATURE_KEY: values.temperature,
+        ROLES_CHOICE_KEY: values.roles_choice_minutes,
     }
 
 
@@ -218,6 +225,10 @@ async def update_ranking(db: AsyncSession, actor: Member, values: RankingSetting
     require_admin(actor, ADMINS_ONLY)
     check_weights(values.weights, values.proposal_count)
     check_temperature(values.temperature)
+    if not MIN_ROLES_CHOICE_MINUTES <= values.roles_choice_minutes <= MAX_ROLES_CHOICE_MINUTES:
+        raise InvalidSchedule(
+            f"The time to choose roles runs {MIN_ROLES_CHOICE_MINUTES} to {MAX_ROLES_CHOICE_MINUTES} minutes."
+        )
     if not MIN_VARIETY_WINDOW_DAYS <= values.variety_window_days <= MAX_VARIETY_WINDOW_DAYS:
         raise InvalidSchedule(f"The variety window runs {MIN_VARIETY_WINDOW_DAYS} to {MAX_VARIETY_WINDOW_DAYS} days.")
     async with write_transaction(db):  # read and write under one lock, so no save is lost

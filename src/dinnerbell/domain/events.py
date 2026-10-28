@@ -235,6 +235,25 @@ class Window(StrEnum):
     VOTE = "vote"
 
 
+class TieHow(StrEnum):
+    """How a tie for the most votes was broken (FR-16), in the order the rules try them."""
+
+    CHOSE = "chose"
+    """The coordinator (or an admin standing in) chose among the tied picks."""
+    COORDINATOR_VOTE = "coordinator_vote"
+    ADMIN_VOTE = "admin_vote"
+    LEAST_RECENT = "least_recent"
+    """The tied pick eaten longest ago, never eaten counting as longest."""
+    RANDOM = "random"
+    """The stored rank, which is the order the draw produced."""
+
+
+MAX_SHUFFLES = 3
+"""Shuffles per call (#87): the button disappears after the third."""
+DEFAULT_ROLES_CHOICE_MINUTES = 15
+"""How long the coordinator has to choose roles before the automatic assignment stands."""
+
+
 @dataclass(frozen=True, slots=True)
 class Event:
     id: int
@@ -269,6 +288,19 @@ class Event:
     for a call. An offer keeps its item, mode, and time in ``decided_item_id``,
     ``decided_mode``, and ``meal_time`` from the start, and closes at ``respond_deadline``,
     its time."""
+    shuffles: int = 0
+    """How many times the coordinator has shuffled this run's picks (#87), at most
+    ``MAX_SHUFFLES``. It goes into the next draw's seed (``ranking_seed``)."""
+    shuffle_note: str | None = None
+    """The picks message's context line after a shuffle, such as "Kim shuffled the picks (2
+    replaced)." Plain words with a name and no mention, so an edit pings nobody (#92)."""
+    roles_due_at: datetime | None = None
+    """While set, the coordinator is choosing the winning pick's mode and roles (#87) and the
+    automatic assignment waits until then (``Step.ASSIGN_ROLES``)."""
+    tie_how: TieHow | None = None
+    """How a tie for the most votes was broken (FR-16), or None when there wasn't one."""
+    tie_by: int | None = None
+    """Who broke it, when a person did (``TieHow.CHOSE``, or a vote that decided it)."""
 
     @property
     def is_offer(self) -> bool:
@@ -374,6 +406,9 @@ class ProposalTally:
     rank: int
     covered: bool
     voters: frozenset[int] = field(default_factory=frozenset)
+    """Voters whose votes count (``counted_votes``)."""
+    days_since_eaten: int | None = None
+    """Whole days since the household last ate it, or None if never: the least recent tie-break."""
 
 
 # Responses -------------------------------------------------------------------------------------
@@ -551,6 +586,71 @@ def coverage(responses: Iterable[Response], members: Mapping[int, Member]) -> Co
 # Decisions (FR-16) -----------------------------------------------------------------------------
 
 
+@dataclass(frozen=True, slots=True)
+class Winner:
+    """The proposal that won, and, when the most votes were tied, how the tie was broken."""
+
+    tally: ProposalTally
+    tie: TieHow | None = None
+    by: int | None = None
+    """The person whose vote broke the tie, when one did."""
+
+
+def tied_leaders(tallies: Iterable[ProposalTally]) -> list[ProposalTally]:
+    """The covered proposals sharing the most votes, when two or more do, in ranking order;
+    otherwise none. These are what the coordinator's **Break the tie** chooses among."""
+    eligible = [t for t in tallies if t.covered]
+    top = max((len(t.voters) for t in eligible), default=0)
+    tied = sorted((t for t in eligible if len(t.voters) == top), key=lambda t: t.rank)
+    return tied if len(tied) > 1 else []
+
+
+def decide_winner(
+    tallies: Iterable[ProposalTally],
+    *,
+    coordinator_id: int | None,
+    admin_ids: frozenset[int],
+    admins_next: bool = False,
+) -> Winner | None:
+    """The proposal that wins at the vote deadline, or None if none is covered (FR-16).
+
+    Most counted votes wins. A tie goes, in this order, to the tied proposal the coordinator
+    voted for; the one more admins voted for (only with no coordinator, or when ``admins_next``);
+    the one eaten longest ago, where never eaten is the longest; then the stored rank. Each rule
+    only narrows the tied proposals, and the one that leaves a single proposal is how the tie was
+    broken. ``admins_next`` lets admins break a tie ``coordinator_id``'s vote didn't: with a guest
+    coordinating, ``coordinator_id`` is whoever invited them, and admins come after them (#38).
+    """
+    eligible = [t for t in tallies if t.covered]
+    if not eligible:
+        return None
+    top = max(len(t.voters) for t in eligible)
+    tied = [t for t in eligible if len(t.voters) == top]
+    if len(tied) == 1:
+        return Winner(tied[0])
+    how: TieHow | None = None
+    by: int | None = None
+    if coordinator_id is not None:
+        voted = [t for t in tied if coordinator_id in t.voters]
+        if voted and len(voted) < len(tied):
+            tied, how, by = voted, TieHow.COORDINATOR_VOTE, coordinator_id
+    if len(tied) > 1 and (coordinator_id is None or admins_next):
+        most = max(len(t.voters & admin_ids) for t in tied)
+        picked = [t for t in tied if len(t.voters & admin_ids) == most]
+        if most and len(picked) < len(tied):
+            tied, how = picked, TieHow.ADMIN_VOTE
+            by = next(iter(sorted(tied[0].voters & admin_ids))) if len(tied[0].voters & admin_ids) == 1 else None
+    if len(tied) > 1:
+        # Never eaten counts as the longest ago.
+        longest = max(math.inf if t.days_since_eaten is None else t.days_since_eaten for t in tied)
+        oldest = [t for t in tied if (math.inf if t.days_since_eaten is None else t.days_since_eaten) == longest]
+        if len(oldest) < len(tied):
+            tied, how, by = oldest, TieHow.LEAST_RECENT, None
+    if len(tied) > 1:
+        tied, how, by = [min(tied, key=lambda t: t.rank)], TieHow.RANDOM, None
+    return Winner(tied[0], how, by)
+
+
 def choose_winner(
     tallies: Iterable[ProposalTally],
     *,
@@ -558,23 +658,27 @@ def choose_winner(
     admin_ids: frozenset[int],
     admins_next: bool = False,
 ) -> ProposalTally | None:
-    """The proposal that wins at the vote deadline, or None if none is covered.
+    """``decide_winner``'s proposal, without how a tie was broken."""
+    winner = decide_winner(tallies, coordinator_id=coordinator_id, admin_ids=admin_ids, admins_next=admins_next)
+    return None if winner is None else winner.tally
 
-    Most votes wins. Ties go to the proposal the coordinator voted for; with no coordinator, to
-    the one more admins voted for; then to ranking order. ``admins_next`` lets admins break a
-    tie ``coordinator_id``'s vote didn't: with a guest coordinating, ``coordinator_id`` is whoever
-    invited them, and admins come after them (#38).
-    """
-    eligible = [t for t in tallies if t.covered]
-    if not eligible:
-        return None
 
-    def key(t: ProposalTally) -> tuple[int, int, int, int]:
-        coordinator_pick = 1 if coordinator_id is not None and coordinator_id in t.voters else 0
-        admin_picks = len(t.voters & admin_ids) if coordinator_id is None or admins_next else 0
-        return (-len(t.voters), -coordinator_pick, -admin_picks, t.rank)
-
-    return min(eligible, key=key)
+def tie_line(how: TieHow, by: str | None, *, coordinator: bool = False) -> str:
+    """The decision message's note on how a tie was broken: "Tied; Kim (coordinator) chose". ``by``
+    is the name of the person who broke it, if one did; ``coordinator`` says they coordinate."""
+    who = None if by is None else f"{by} (coordinator)" if coordinator else by
+    match how:
+        case TieHow.CHOSE:
+            return f"Tied; {who or 'the coordinator'} chose"
+        case TieHow.COORDINATOR_VOTE:
+            return f"Tied; {who or 'the coordinator'} voted for it"
+        case TieHow.ADMIN_VOTE:
+            return f"Tied; {who or 'an admin'} voted for it"
+        case TieHow.LEAST_RECENT:
+            return "Tied; least recently eaten"
+        case TieHow.RANDOM:
+            return "Tied; drawn at random"
+    raise ValueError(how)  # pragma: no cover - the match above is exhaustive
 
 
 def assign_roles(mode: Mode, volunteers: tuple[int, ...], coordinator_id: int | None) -> dict[AssignmentRole, int]:
@@ -778,6 +882,80 @@ def check_can_switch_late(event: Event, actor: Member, coordinator: Member | Non
     if actor.is_admin and (coordinator is None or coordinator.is_guest):
         return ActingAs.ADMIN
     raise EventRuleViolation(LATE_SWITCHERS, code="not_coordinator")
+
+
+SHUFFLERS = "Only the coordinator, or an admin when nobody's coordinating, can shuffle the picks."
+TIE_BREAKERS = "Only the coordinator, or an admin when nobody's coordinating, can break a tie."
+
+
+def _check_picks_power(
+    event: Event, actor: Member, coordinator: Member | None, *, refusal: str, closed: str
+) -> ActingAs:
+    """Who may use a power over the picks while voting (#87): the coordinator, or an admin when
+    nobody coordinates or a guest does, since choosing the plan isn't a guest's (#38). Returns
+    the capacity they act in, for the audit row."""
+    if not actor.active:
+        raise EventRuleViolation("Only active members can do that.", code="inactive")
+    if actor.is_guest:
+        raise EventRuleViolation(GUESTS_DONT, code="guests_dont")
+    if event.is_offer:
+        raise EventRuleViolation(NO_COORDINATOR, code="is_offer")
+    if event.state is not EventState.VOTING:
+        raise EventRuleViolation(closed, code="voting_closed")
+    if is_coordinator(event, actor):
+        return ActingAs.COORDINATOR
+    if actor.is_admin and (coordinator is None or coordinator.is_guest):
+        return ActingAs.ADMIN
+    raise EventRuleViolation(refusal, code="not_coordinator")
+
+
+def check_can_shuffle(event: Event, actor: Member, coordinator: Member | None) -> ActingAs:
+    """Shuffle the picks (FR-61): the coordinator, or an admin with no coordinator, while voting,
+    at most ``MAX_SHUFFLES`` times a call."""
+    capacity = _check_picks_power(
+        event, actor, coordinator, refusal=SHUFFLERS, closed="You can shuffle only while voting is open."
+    )
+    if event.shuffles >= MAX_SHUFFLES:
+        raise EventRuleViolation(f"The picks have been shuffled {MAX_SHUFFLES} times already.", code="shuffle_limit")
+    return capacity
+
+
+def check_can_break_tie(event: Event, actor: Member, coordinator: Member | None) -> ActingAs:
+    """Break a tie (FR-16): the coordinator, or an admin with no coordinator, while voting."""
+    return _check_picks_power(
+        event, actor, coordinator, refusal=TIE_BREAKERS, closed="You can break a tie only while voting is open."
+    )
+
+
+def check_can_choose_roles(event: Event, actor: Member) -> None:
+    """Choose the winning pick's mode and who does its role (FR-61): the coordinator, a guest
+    coordinator too (FR-58), or an admin, while the call is decided. It is
+    ``check_can_manage_decision`` for a call that hasn't been marked done."""
+    check_can_manage_decision(event, actor)
+    if event.state is not EventState.DECIDED:
+        raise EventRuleViolation("There's no decision to change.", code="not_decided")
+
+
+def shuffle_candidates(
+    proposals: Iterable[Proposal], votes: Mapping[int, Iterable[int]], suggested_item_ids: Iterable[int]
+) -> list[Proposal]:
+    """The picks a shuffle may redraw (FR-61): ranked ones only, never one a member added, an
+    offer made, or someone suggested. With nobody having voted, every ranked pick; otherwise
+    only those with no votes at all, counted or not, since a vote is somebody's choice."""
+    suggested = frozenset(suggested_item_ids)
+    ranked = [
+        p
+        for p in proposals
+        if p.source is ProposalSource.SYSTEM and p.proposed_by is None and p.item_id not in suggested
+    ]
+    anyone_voted = any(votes.get(p.id) for p in proposals)
+    return [p for p in ranked if not anyone_voted or not votes.get(p.id)]
+
+
+def roles_unclear(volunteers: tuple[int, ...]) -> bool:
+    """Whether the winning pick's role has no clear owner (FR-61): nobody offered for its mode,
+    or more than one person did."""
+    return len(volunteers) != 1
 
 
 def check_can_offer_role(event: Event, actor: Member, mine: Response | None, *, invited: bool = False) -> None:
@@ -1066,6 +1244,8 @@ class Step(StrEnum):
     REMIND = "remind"
     CLOSE_RESPONSES = "close_responses"
     CLOSE_VOTING = "close_voting"
+    ASSIGN_ROLES = "assign_roles"
+    """The coordinator didn't choose the roles in time: the automatic assignment stands (#87)."""
     MARK_DONE = "mark_done"
 
 
@@ -1166,6 +1346,8 @@ def due_step(
             return Step.REMIND
     if event.state is EventState.VOTING and event.vote_deadline is not None and now >= event.vote_deadline:
         return Step.CLOSE_VOTING
+    if event.state is EventState.DECIDED and event.roles_due_at is not None and now >= event.roles_due_at:
+        return Step.ASSIGN_ROLES
     if event.state is EventState.DECIDED and event.meal_time is not None and now >= event.meal_time + DONE_AFTER_MEAL:
         return Step.MARK_DONE
     return None

@@ -23,6 +23,8 @@
       <label class="field"><span>Proposals per call</span><input type="number" inputmode="numeric" min="1" max="5" name="proposal_count" value="{{ values['proposal_count'] }}" required></label>
       <label class="field"><span>Variety window (days)</span><input type="number" inputmode="numeric" min="1" max="60" name="variety_window_days" value="{{ values['variety_window_days'] }}" required></label>
     </div>
+    <label class="field"><span>Minutes for the coordinator to choose roles</span><input type="number" inputmode="numeric" min="1" max="120" name="roles_choice_minutes" value="{{ values['roles_choice_minutes'] }}" aria-describedby="roles-help" required></label>
+    <p class="small muted" id="roles-help">When nobody has a clear claim on the winning pick's role, because more than one person offered or nobody did, the coordinator can choose the way to get it and who does it. If they don't within this time, the first person who offered does it.</p>
   </fieldset>
   <button type="submit" class="button primary block">Save ranking</button>
 </form>

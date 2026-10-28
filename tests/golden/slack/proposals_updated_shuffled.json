@@ -1,0 +1,257 @@
+{
+  "blocks": [
+    {
+      "text": {
+        "text": "*Dinner picks · Thursday, Oct 22* for 3 people\nVote for any you'd enjoy. Voting closes at *5:15 PM*.",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "elements": [
+        {
+          "text": "Alex shuffled the picks (2 replaced).",
+          "type": "mrkdwn"
+        }
+      ],
+      "type": "context"
+    },
+    {
+      "text": {
+        "text": "*In:* Alex, Sam",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "block_id": "proposal-21",
+      "text": {
+        "text": "*1. Sam's Tacos* · Cook · Mexican\n_Suggested by Sam. New to the household._\n2 votes: <@U01ALEX>, <@U02SAM>",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "block_id": "proposal-actions-21",
+      "elements": [
+        {
+          "action_id": "vote",
+          "style": "primary",
+          "text": {
+            "emoji": true,
+            "text": "Vote",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "7:21"
+        },
+        {
+          "action_id": "lock",
+          "confirm": {
+            "confirm": {
+              "emoji": true,
+              "text": "Lock it in",
+              "type": "plain_text"
+            },
+            "deny": {
+              "emoji": true,
+              "text": "Not yet",
+              "type": "plain_text"
+            },
+            "text": {
+              "emoji": true,
+              "text": "Sam's Tacos becomes the plan right away, and voting closes.",
+              "type": "plain_text"
+            },
+            "title": {
+              "emoji": true,
+              "text": "Lock this in?",
+              "type": "plain_text"
+            }
+          },
+          "text": {
+            "emoji": true,
+            "text": "Lock this",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "7:21"
+        }
+      ],
+      "type": "actions"
+    },
+    {
+      "block_id": "proposal-22",
+      "text": {
+        "text": "*2. <https://siam.example/menu|Siam Garden>* · Pickup · Thai\n_Alex can pick up._\n1 vote: Lee",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "block_id": "proposal-actions-22",
+      "elements": [
+        {
+          "action_id": "vote",
+          "style": "primary",
+          "text": {
+            "emoji": true,
+            "text": "Vote",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "7:22"
+        },
+        {
+          "action_id": "lock",
+          "confirm": {
+            "confirm": {
+              "emoji": true,
+              "text": "Lock it in",
+              "type": "plain_text"
+            },
+            "deny": {
+              "emoji": true,
+              "text": "Not yet",
+              "type": "plain_text"
+            },
+            "text": {
+              "emoji": true,
+              "text": "Siam Garden becomes the plan right away, and voting closes.",
+              "type": "plain_text"
+            },
+            "title": {
+              "emoji": true,
+              "text": "Lock this in?",
+              "type": "plain_text"
+            }
+          },
+          "text": {
+            "emoji": true,
+            "text": "Lock this",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "7:22"
+        }
+      ],
+      "type": "actions"
+    },
+    {
+      "block_id": "proposal-23",
+      "text": {
+        "text": "*3. Taqueria &lt;Lupita&gt; &amp; Co* · Delivery · Mexican\n_Added by Kim._\nNo votes yet",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "block_id": "proposal-actions-23",
+      "elements": [
+        {
+          "action_id": "vote",
+          "style": "primary",
+          "text": {
+            "emoji": true,
+            "text": "Vote",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "7:23"
+        },
+        {
+          "action_id": "lock",
+          "confirm": {
+            "confirm": {
+              "emoji": true,
+              "text": "Lock it in",
+              "type": "plain_text"
+            },
+            "deny": {
+              "emoji": true,
+              "text": "Not yet",
+              "type": "plain_text"
+            },
+            "text": {
+              "emoji": true,
+              "text": "Taqueria <Lupita> & Co becomes the plan right away, and voting closes.",
+              "type": "plain_text"
+            },
+            "title": {
+              "emoji": true,
+              "text": "Lock this in?",
+              "type": "plain_text"
+            }
+          },
+          "text": {
+            "emoji": true,
+            "text": "Lock this",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "7:23"
+        }
+      ],
+      "type": "actions"
+    },
+    {
+      "block_id": "more",
+      "elements": [
+        {
+          "action_id": "add_proposal",
+          "text": {
+            "emoji": true,
+            "text": "Add proposal",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "7"
+        },
+        {
+          "action_id": "shuffle",
+          "confirm": {
+            "confirm": {
+              "emoji": true,
+              "text": "Shuffle",
+              "type": "plain_text"
+            },
+            "deny": {
+              "emoji": true,
+              "text": "Not yet",
+              "type": "plain_text"
+            },
+            "text": {
+              "emoji": true,
+              "text": "Picks nobody has voted for are replaced. Picks with votes, and ones added or suggested, stay.",
+              "type": "plain_text"
+            },
+            "title": {
+              "emoji": true,
+              "text": "Shuffle the picks?",
+              "type": "plain_text"
+            }
+          },
+          "text": {
+            "emoji": true,
+            "text": "Shuffle picks",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "7:1"
+        },
+        {
+          "action_id": "link_event",
+          "text": {
+            "emoji": true,
+            "text": "View on web",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "url": "https://dinnerbell.example.com/events/7"
+        }
+      ],
+      "type": "actions"
+    }
+  ],
+  "text": "Picks for dinner on Thursday, Oct 22: Sam's Tacos, Siam Garden, Taqueria &lt;Lupita&gt; &amp; Co"
+}

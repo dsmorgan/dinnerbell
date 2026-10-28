@@ -128,10 +128,12 @@ class Ranked:
     one included. With 4, it was chosen at random among 4 equally good options."""
 
 
-def ranking_seed(household_id: int, event_id: int, run: int) -> int:
+def ranking_seed(household_id: int, event_id: int, run: int, shuffle: int = 0) -> int:
     """The draw's seed for one run of a call. A digest, not ``hash()``, so it's the same in every
-    process and on every restart of the app."""
-    digest = hashlib.sha256(f"dinnerbell ranking {household_id} {event_id} {run}".encode()).digest()
+    process and on every restart of the app. ``shuffle`` counts the coordinator's shuffles (#87):
+    0, the first draw, keeps the seed it always had, and each shuffle draws with the next."""
+    text = f"dinnerbell ranking {household_id} {event_id} {run}"
+    digest = hashlib.sha256((text if shuffle == 0 else f"{text} shuffle {shuffle}").encode()).digest()
     return int.from_bytes(digest[:8], "big")
 
 

@@ -41,12 +41,14 @@ from dinnerbell.domain import notifications as note
 from dinnerbell.domain.catalog import CatalogItem, ItemKind, Mode, Tag, TagKind
 from dinnerbell.domain.events import (
     DONE_AFTER_MEAL,
+    MAX_SHUFFLES,
     Assignment,
     AssignmentRole,
     Coverage,
     Event,
     EventState,
     Proposal,
+    ProposalTally,
     Response,
     Status,
     Step,
@@ -57,7 +59,11 @@ from dinnerbell.domain.events import (
     head_count,
     late_people,
     posted_before_its_day,
+    roles_unclear,
+    shuffle_candidates,
     stale_after,
+    tie_line,
+    tied_leaders,
     veto_participants,
 )
 from dinnerbell.domain.household import Household
@@ -265,6 +271,7 @@ def event_info(ctx: CallContext) -> note.EventInfo:
         early=posted_before_its_day(event, ctx.zone),
         kind=event.kind,
         plan=plan_info(ctx),
+        shuffle_note=event.shuffle_note if event.state is EventState.VOTING else None,
     )
 
 
@@ -407,13 +414,47 @@ def proposal_info(ctx: CallContext, proposal: Proposal) -> note.ProposalInfo:
         voters=tuple(ctx.person(m) for m in voters),
         uncounted=tuple(m for m in voters if m not in counted),
         warnings=late_warnings(ctx, proposal) if ctx.event.state in WARNING_STATES else (),
+        tied=proposal.id in tied_ids(ctx),
     )
+
+
+def tied_ids(ctx: CallContext) -> frozenset[int]:
+    """The picks sharing the most votes, while voting and at least one vote counts (#87): what
+    **Break the tie** chooses among. Coverage is checked as the decision will; the vetoes and
+    needs the use case checks too were met when each pick was made."""
+    if ctx.event.state is not EventState.VOTING:
+        return frozenset()
+    counted = counted_votes(ctx.votes, ctx.responses)
+
+    def covered(proposal: Proposal) -> bool:
+        item = ctx.items.get(proposal.item_id) if proposal.item_id is not None else None
+        return ctx.coverage.covers(proposal.mode, item.cook_ids if item else frozenset())
+
+    tallies = [ProposalTally(p.id, p.rank, covered(p), counted.get(p.id, frozenset())) for p in ctx.proposals]
+    tied = tied_leaders(tallies)
+    return frozenset(t.id for t in tied) if tied and tied[0].voters else frozenset()
+
+
+def shuffle_picks(ctx: CallContext) -> list[Proposal]:
+    """The picks a shuffle would redraw right now (``shuffle_candidates``): suggestions are the
+    ones members made for this call."""
+    suggested = [s.item_id for s in ctx.suggestions if s.item_id is not None]
+    return shuffle_candidates(ctx.proposals, ctx.votes, suggested)
+
+
+def shuffles_left(ctx: CallContext) -> int:
+    """How many more times the coordinator can shuffle: 0 once they've used all of them, and when
+    there's nothing a shuffle could redraw."""
+    if ctx.event.state is not EventState.VOTING or not shuffle_picks(ctx):
+        return 0
+    return max(MAX_SHUFFLES - ctx.event.shuffles, 0)
 
 
 def decision_info(ctx: CallContext) -> note.DecisionInfo | None:
     winner, meal_time = ctx.winner, ctx.event.meal_time
     if winner is None or meal_time is None:
         return None
+    event = ctx.event
     return note.DecisionInfo(
         proposal=proposal_info(ctx, winner),
         meal_time=meal_time,
@@ -421,7 +462,39 @@ def decision_info(ctx: CallContext) -> note.DecisionInfo | None:
         participants=tuple(note.ParticipantInfo(ctx.person(r.member_id), r.guests, r.late) for r in ctx.participants),
         assignments=tuple(note.AssignmentInfo(a.role, ctx.person(a.member_id)) for a in ctx.assignments),
         dietary_notes=guest_dietary_notes(ctx),
+        tie_note=tie_note(ctx),
+        roles_due_at=event.roles_due_at if event.state is EventState.DECIDED else None,
+        assign_roles=assign_roles_open(ctx),
     )
+
+
+def tie_note(ctx: CallContext) -> str | None:
+    """How a tie for the most votes was broken, in words (FR-16), or None if there wasn't one."""
+    event = ctx.event
+    if event.tie_how is None:
+        return None
+    by = ctx.name(event.tie_by) if event.tie_by is not None else None
+    return tie_line(event.tie_how, by, coordinator=event.tie_by is not None and event.tie_by == event.coordinator_id)
+
+
+def role_volunteers(ctx: CallContext) -> tuple[int, ...]:
+    """Who offered for the decided pick's role, best first (FR-17)."""
+    event = ctx.event
+    if event.decided_mode is None or event.decided_item_id is None:
+        return ()
+    item = ctx.items.get(event.decided_item_id)
+    return ctx.coverage.volunteers(event.decided_mode, item.cook_ids if item else frozenset())
+
+
+def assign_roles_open(ctx: CallContext) -> bool:
+    """Whether the decision message shows **Assign roles** (#87): while the coordinator's choice
+    is pending, and, with nobody coordinating, while the role has no clear owner, for an admin."""
+    event = ctx.event
+    if event.state is not EventState.DECIDED or event.is_offer:
+        return False
+    if event.roles_due_at is not None:
+        return True
+    return event.coordinator_id is None and roles_unclear(role_volunteers(ctx))
 
 
 def guest_dietary_notes(ctx: CallContext) -> tuple[str, ...]:
@@ -492,11 +565,15 @@ def who_is_in(ctx: CallContext) -> tuple[note.PersonInfo, ...]:
 
 
 def proposals_updated(ctx: CallContext) -> note.ProposalsUpdated:
-    return note.ProposalsUpdated(event_info(ctx), proposals(ctx), ctx.head_count, late_joiners(ctx), who_is_in(ctx))
+    return note.ProposalsUpdated(
+        event_info(ctx), proposals(ctx), ctx.head_count, late_joiners(ctx), who_is_in(ctx), shuffles_left(ctx)
+    )
 
 
 def proposals_ready(ctx: CallContext) -> note.ProposalsReady:
-    return note.ProposalsReady(event_info(ctx), proposals(ctx), ctx.head_count, late_joiners(ctx), who_is_in(ctx))
+    return note.ProposalsReady(
+        event_info(ctx), proposals(ctx), ctx.head_count, late_joiners(ctx), who_is_in(ctx), shuffles_left(ctx)
+    )
 
 
 def locked_by(ctx: CallContext) -> note.PersonInfo | None:
@@ -509,13 +586,31 @@ def decision_updated(ctx: CallContext) -> list[note.Notification]:
 
 
 def assignment_made(
-    ctx: CallContext, member_id: int, assignment_id: int, decision: note.DecisionInfo
+    ctx: CallContext,
+    member_id: int,
+    assignment_id: int,
+    decision: note.DecisionInfo,
+    assigned_by: note.PersonInfo | None = None,
 ) -> note.AssignmentMade:
-    """The direct message to ``member_id`` about all their roles, prompted by ``assignment_id``."""
+    """The direct message to ``member_id`` about all their roles, prompted by ``assignment_id``.
+    ``assigned_by`` is the coordinator who gave them a role they hadn't offered for (#87)."""
     order = list(AssignmentRole)
     roles = sorted({a.role for a in ctx.assignments if a.member_id == member_id}, key=order.index)
     via = answering_for(ctx, member_id)
-    return note.AssignmentMade(event_info(ctx), assignment_id, ctx.person(member_id), tuple(roles), decision, via)
+    return note.AssignmentMade(
+        event_info(ctx), assignment_id, ctx.person(member_id), tuple(roles), decision, via, assigned_by
+    )
+
+
+def roles_to_choose(ctx: CallContext, decision: note.DecisionInfo, due_at: datetime) -> note.RolesToChoose | None:
+    """The coordinator's direct message when the decision left the role without a clear owner
+    (#87), or None when nobody coordinates."""
+    coordinator_id = ctx.event.coordinator_id
+    if coordinator_id is None:
+        return None
+    return note.RolesToChoose(
+        event_info(ctx), ctx.person(coordinator_id), decision, due_at, answering_for(ctx, coordinator_id)
+    )
 
 
 def guest_invitations(ctx: CallContext) -> list[note.GuestInvited]:

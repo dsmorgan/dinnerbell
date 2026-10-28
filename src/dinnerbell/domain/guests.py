@@ -55,6 +55,8 @@ class GuestAction(StrEnum):
     INVITE = "invite"
     JOIN_LATE = "join_late"
     LATE_SWITCHES = "late_switches"
+    SHUFFLE = "shuffle"
+    BREAK_TIE = "break_tie"
 
 
 ANSWERING = frozenset({EventState.COLLECTING})
@@ -92,6 +94,8 @@ REFUSED: dict[GuestAction, str] = {
     GuestAction.INVITE: "Only a household member can invite a guest.",
     GuestAction.JOIN_LATE: "Guests come by invitation while answers are open. Ask whoever invited you.",
     GuestAction.LATE_SWITCHES: "Guests don't decide that. Whoever invited you, or an admin, can.",
+    GuestAction.SHUFFLE: "Guests don't pick the plan. Whoever invited you, or an admin, can shuffle the picks.",
+    GuestAction.BREAK_TIE: "Guests don't pick the plan. Whoever invited you, or an admin, can break the tie.",
 }
 NOT_INVITED = GUEST_NOT_INVITED
 NOT_NOW = "That isn't open to guests right now."

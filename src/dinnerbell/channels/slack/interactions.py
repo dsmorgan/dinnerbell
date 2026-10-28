@@ -70,6 +70,7 @@ from dinnerbell.channels.slack.views import (
     FormError,
     HomeLinks,
     InviteInput,
+    assign_modal,
     cancel_modal,
     close_modal,
     details_modal,
@@ -78,6 +79,7 @@ from dinnerbell.channels.slack.views import (
     invite_modal,
     log_modal,
     offer_modal,
+    parse_assign,
     parse_cancel,
     parse_details,
     parse_feedback,
@@ -99,6 +101,7 @@ from dinnerbell.domain.events import (
     RoleOffer,
     Window,
     check_can_cancel,
+    check_can_choose_roles,
     check_can_close_window,
     check_can_respond,
     check_expected_window,
@@ -118,7 +121,18 @@ from dinnerbell.domain.notifications import (
 )
 from dinnerbell.domain.offers import OfferPath
 from dinnerbell.logs import member_id_var, start_unit
-from dinnerbell.services import activity, calls, discard, event_views, feedback, guests, meals, offers, slack_members
+from dinnerbell.services import (
+    activity,
+    calls,
+    coordinator,
+    discard,
+    event_views,
+    feedback,
+    guests,
+    meals,
+    offers,
+    slack_members,
+)
 from dinnerbell.services import schedule as schedule_service
 from dinnerbell.services.clock import Clock
 from dinnerbell.services.errors import Forbidden, NotFound
@@ -159,6 +173,8 @@ WITHDRAWN = {
 CALLED_OFF = "You called off {slot} for {day}."
 CLOSED = {Window.RESPOND: "Responses are closed for {slot}.", Window.VOTE: "Voting is closed for {slot}."}
 VOTED = "Vote counted. Tap Vote again to take it back."
+SHUFFLED = "Shuffled: {replaced} replaced. Everyone sees the new set."
+ASSIGNED = "Assigned. {name} is told."
 JOINED_LATE = "You're in for {slot}, joining late. Your vote shows, but counts only if the coordinator says so."
 ALREADY_IN = "You're in for {slot} already."
 LATE_VOTED = (
@@ -302,6 +318,9 @@ class Interactions:
         async def invite_view(ack: Ack, body: dict[str, Any]) -> None:
             await self._submission(ack, body, "invite")
 
+        async def assign_view(ack: Ack, body: dict[str, Any]) -> None:
+            await self._submission(ack, body, "assign")
+
         async def offer_view(ack: Ack, body: dict[str, Any]) -> None:
             await self._form_submission(ack, body, "offer")
 
@@ -323,6 +342,7 @@ class Interactions:
         app.view(ids.CLOSE_VIEW)(close)
         app.view(ids.FEEDBACK_VIEW)(feedback_view)
         app.view(ids.INVITE_VIEW)(invite_view)
+        app.view(ids.ASSIGN_VIEW)(assign_view)
         app.view(ids.OFFER_VIEW)(offer_view)
         app.view(ids.LOG_VIEW)(log_view)
         app.command(self.command)(command)
@@ -705,6 +725,17 @@ class Interactions:
                 event_id, proposal_id = ids.parse_proposal(value)
                 await calls.lock(db, member, event_id, proposal_id, now=now)
                 return None
+            if action_id == ids.BREAK_TIE:
+                event_id, proposal_id = ids.parse_proposal(value)
+                await coordinator.break_tie(db, member, event_id, proposal_id, now=now)
+                return None
+            if action_id == ids.SHUFFLE:
+                event_id, run = ids.parse_card(value)
+                shuffled = await coordinator.shuffle(db, member, event_id, run=run, now=now)
+                return SHUFFLED.format(replaced=shuffled.replaced)
+            if action_id == ids.ASSIGN_ROLES:
+                event_id, run = ids.parse_card(value)
+                return await self._open_assign(db, member, source, event_id, run, trigger)
             if action_id == ids.MARK_DONE:
                 await calls.mark_done(db, member, ids.parse_event(value), now=now)
                 return "Marked done. Thanks!"
@@ -1022,6 +1053,33 @@ class Interactions:
         event = view.event
         return started_reply(view.info, event.opens_at, today=today, channel_id=self.channel_id, ctx=self._context())
 
+    # Assign roles (FR-61) ----------------------------------------------------------------------
+
+    async def _open_assign(
+        self, db: AsyncSession, member: Member, source: Source, event_id: int, run: int, trigger: object
+    ) -> str | None:
+        """**Assign roles** on the decision message or the coordinator's direct message: open the
+        modal for someone allowed to, on the run the button was drawn for. Anyone else is told why not."""
+        if not isinstance(trigger, str) or not trigger:
+            raise ids.BadValue("no trigger")
+        view = await event_views.event_view(db, member, event_id, now=self.clock())
+        check_run(view.event, run)
+        if not view.can.choose_roles or view.roles is None:
+            check_can_choose_roles(view.event, member)
+            raise EventRuleViolation("Only the coordinator or an admin can assign roles.", code="not_coordinator")
+        origin = ids.ViewOrigin(event_id, source.channel_id, home=source.home, run=run)
+        await self.api.open_view(trigger, assign_modal(view, origin))
+        return None
+
+    async def _assign(self, member: Member, event_id: int, form: Any, run: int | None) -> str:
+        async with self.sessionmaker() as db:
+            await coordinator.choose_roles(
+                db, member, event_id, mode=form.mode, member_id=form.member_id, run=run, now=self.clock()
+            )
+            view = await event_views.event_view(db, member, event_id, now=self.clock())
+        name = next((p.name for p in view.roles.people if p.id == form.member_id), "They") if view.roles else "They"
+        return ASSIGNED.format(name=name)
+
     # Call it off and Close now (FR-56) ---------------------------------------------------------
 
     async def _open_end(
@@ -1260,7 +1318,7 @@ class Interactions:
             origin = ids.ViewOrigin.decode(view.get("private_metadata"))
             if (origin.window is not None) != (kind == "close"):
                 raise ids.BadValue("bad metadata")  # only Close now's confirmation names a window
-            if origin.run is None and kind in {"cancel", "close", "feedback"}:
+            if origin.run is None and kind in {"cancel", "close", "feedback", "assign"}:
                 raise ids.BadValue("bad metadata")  # these name a run; Details and a join-late pick may
             form: Any = origin.window if kind == "close" else FORMS[kind](values)
         except FormError as exc:
@@ -1289,6 +1347,8 @@ class Interactions:
                 return await self._give_feedback(member, event_id, form, origin.run)
             if kind == "invite":
                 return await self._invite(member, event_id, form, origin.run)
+            if kind == "assign":
+                return await self._assign(member, event_id, form, origin.run)
             async with self.sessionmaker() as db:
                 if kind == "details":
                     await calls.save_details(db, member, event_id, form, run=origin.run, now=self.clock())
@@ -1565,6 +1625,7 @@ FORMS: dict[str, Callable[[Any], Any]] = {
     "cancel": parse_cancel,
     "feedback": parse_feedback,
     "invite": parse_invite,
+    "assign": parse_assign,
 }
 """Each modal's form parser, by kind. Close now's confirmation has no fields."""
 
@@ -1583,6 +1644,7 @@ GUEST_TAPS = frozenset(
         ids.MARK_DONE,
         ids.CLOSE_WINDOW,
         ids.CALL_MENU,
+        ids.ASSIGN_ROLES,
     }
 )
 """Buttons a guest may tap (#38): answering, the roles, and coordinating's logistics. Everything

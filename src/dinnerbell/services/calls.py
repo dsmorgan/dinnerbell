@@ -714,6 +714,8 @@ async def change_assignment(
             if response is None or not response.is_in:
                 raise EventRuleViolation("Pick someone who's in.", code="not_in")
             assigned = await repo.assign(actor.household_id, event.id, role, member_id, now)
+        if event.roles_due_at is not None:  # choosing the role ends the coordinator's time to (#87)
+            event = await EventRepository(db).save(replace(event, roles_due_at=None), now)
         ctx = await load(db, event)
         decision = cc.decision_info(ctx)
         await publish(db, ctx, *cc.decision_updated(ctx), now=now)
