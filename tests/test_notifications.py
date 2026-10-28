@@ -142,6 +142,14 @@ EXAMPLES: list[tuple[n.Notification, str, str | None, str | None, int | None]] =
         ALEX.id,
     ),
     (
+        n.BadgesEarned(1, 12, (n.BadgeNews(SAM, (n.BadgeTier("Chef", "First"),)),)),
+        "badges:12",
+        None,
+        None,
+        None,
+    ),
+    (n.MonthlyRecap(1, date(2026, 10, 1), 24), "recap:2026-10", None, None, None),
+    (
         n.RoleVacated(EVENT, ALEX, PAT, (AssignmentRole.PICKUP,)),
         f"event:7:run2:role_vacated:member{ALEX.id}:left{PAT.id}",
         None,

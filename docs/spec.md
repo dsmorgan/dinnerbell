@@ -265,8 +265,8 @@ Requirements use "must" for version 1 and "should" for items that can slip to a 
 | ID | Requirement |
 |---|---|
 | FR-38 | Contributions in section 12 are counted per member when an event is done (feedback, when it is given), exactly once however often the event is finished. The first start after the upgrade counts the meal log already there, in batches, and every start counts a done call that has none. A failure while counting never blocks marking a call done. |
-| FR-39 | Badges in section 12 are awarded when thresholds are met, once per member and tier, announced once in the channel (never for a badge earned while catching up), and shown on the member's Stats page and App Home. |
-| FR-40 | A monthly recap posts on the first day of the month: meals coordinated, cuisines tried, new catalog items, badges earned. It never ranks members from worst to best. |
+| FR-39 | Badges in section 12 are awarded when thresholds are met, once per member and tier, announced once in the channel (never for a badge earned while catching up, and never Food Critic, because who gave feedback is private), and shown on the member's Stats page and App Home. |
+| FR-40 | A monthly recap posts on the first day of the month, from 9 a.m. in the household time zone, for the month before: meals, cuisines tried, new catalog items, badges earned, and a thank-you for each member who cooked, picked up, ordered, or coordinated, in name order. It posts once however often Dinnerbell restarts; if Dinnerbell was down on the first, it posts on the next tick up to the seventh and otherwise leaves that month out. A month with no meals posts nothing. It never ranks members from worst to best. |
 
 ### 6.12 Administration
 
@@ -482,7 +482,7 @@ The five counts are the household's **badge thresholds** (FR-43), 1, 10, 50, 100
 | Food Critic | Star | gave_feedback |
 | On a Roll | Flame | the most calendar weeks (Monday to Sunday, in the household's time zone) in a row with at least one cooked, picked_up, or ordered |
 
-Rules: every slot's events count alike, so a breakfast cooked counts toward Chef as a dinner does. A member earns each badge tier once. A badge earned live starts pending announcement; the channel is told once (FR-39), and an award records when it was earned and whether and when it was announced. A badge earned while catching up, which is the first start after the upgrade that counts the meal log and a lowered threshold, is never announced. The Stats page shows progress toward the next tier; a tier already earned stays reached even if the admin later raises its threshold. Nothing in the app ranks members against each other or names who did the least: a member sees only their own counts, the household sees totals and the newest badges, and no view orders members by a count.
+Rules: every slot's events count alike, so a breakfast cooked counts toward Chef as a dinner does. A member earns each badge tier once. A badge earned live starts pending announcement; the channel is told once (FR-39) in one post for each done call, mentioning each member by name order and never ordered by what they earned, and an award records when it was earned and whether and when it was announced. Food Critic is the one badge the channel never hears about, nor does the recap or the household's newest badges: it would say who gave feedback, which FR-49 keeps private. The member still sees it on their own pages. A badge earned while catching up, which is the first start after the upgrade that counts the meal log and a lowered threshold, is never announced. The Stats page shows progress toward the next tier; a tier already earned stays reached even if the admin later raises its threshold. Nothing in the app ranks members against each other or names who did the least: a member sees only their own counts, the household sees totals and the newest badges, and no view orders members by a count.
 
 ## 13. Architecture
 

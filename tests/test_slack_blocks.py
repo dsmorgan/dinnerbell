@@ -30,6 +30,7 @@ from dinnerbell.domain.events import EventState, ProposalSource, RoleOffer, Stat
 from dinnerbell.domain.meals import Slot
 from dinnerbell.main import main
 from dinnerbell.services.event_views import EventView, TodayView
+from dinnerbell.services.stats import MemberStats
 from tests.support.blockkit import check_message, check_view
 
 GOLDEN = Path(__file__).parent / "golden" / "slack"
@@ -609,17 +610,23 @@ def test_a_call_from_an_earlier_day_that_never_posted_is_left_over_not_coming_up
     _no_orphans(home["blocks"])
 
 
-SWEEP = [(False, notice, awaiting) for notice in (None, "Hi") for awaiting in (0, 1, 6)] + [
-    (True, notice, 0) for notice in (None, "Hi")
-]
+SWEEP = [
+    (False, notice, awaiting, badges)
+    for notice in (None, "Hi")
+    for awaiting in (0, 1, 6)
+    for badges in (None, samples.KIM_NO_BADGES, samples.KIM_BADGES)
+] + [(True, notice, 0, None) for notice in (None, "Hi")]
 
 
-@pytest.mark.parametrize(("guest", "notice", "awaiting"), SWEEP)
-def test_home_keeps_its_footer_links_and_buttons_at_every_size(guest: bool, notice: str | None, awaiting: int) -> None:
+@pytest.mark.parametrize(("guest", "notice", "awaiting", "badges"), SWEEP)
+def test_home_keeps_its_footer_links_and_buttons_at_every_size(
+    guest: bool, notice: str | None, awaiting: int, badges: MemberStats | None
+) -> None:
     """Pins Home's block budget (#51) around the point where cards stop fitting. The notice and
     the awaiting meals change the room's parity (every card is an even number of blocks: two,
     or four for a call taking answers, #84), so a budget off by one block shows up as a view
-    past 100 blocks or one that loses its footer."""
+    past 100 blocks or one that loses its footer. The "Your badges" section (two blocks, #15) is in
+    the sweep with and without badges, so the budget counts it."""
     from dinnerbell.domain.meals import Slot
 
     for todays, coming, left in itertools.product(range(36, 51), (0,) if guest else (0, 1, 2, 3), (0, 1, 4)):
@@ -632,13 +639,16 @@ def test_home_keeps_its_footer_links_and_buttons_at_every_size(guest: bool, noti
             *(_at(samples.SCHEDULED_VIEW, 2000 + n, samples.DAY + timedelta(days=1)) for n in range(coming)),
         ]
         today = TodayView(samples.DAY, events, tuple(Slot))
-        home = home_view(today, HomeLinks(samples.BASE_URL), notice, awaiting=samples.AWAITING[:awaiting], guest=guest)
+        home = home_view(
+            today, HomeLinks(samples.BASE_URL), notice, awaiting=samples.AWAITING[:awaiting], guest=guest, badges=badges
+        )
         blocks = bk.with_version_footer(home, "0.5.0")["blocks"]
         case = f"{todays} today, {coming} coming up, {left} left over: {len(blocks)} blocks"
         assert len(blocks) <= bk.MAX_VIEW_BLOCKS, case
         assert blocks[-1]["elements"][0]["text"].startswith("Dinnerbell 0.5.0"), case
         assert ("Your dietary needs" if guest else "Your preferences") in json.dumps(blocks[-2]), case
         assert guest or "start" in _ids(blocks), case
+        assert (badges is not None) == ("Your badges" in json.dumps(blocks)), case
         _no_orphans(blocks)
 
 

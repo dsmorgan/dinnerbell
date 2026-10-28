@@ -39,6 +39,7 @@ from dinnerbell.channels.slack.views import (
     proposal_modal,
 )
 from dinnerbell.domain import notifications as note
+from dinnerbell.domain.badges import BADGES, DEFAULT_THRESHOLDS, Announcement, Award, BadgeKey, Tier, progress
 from dinnerbell.domain.catalog import CatalogItem, ItemKind, Mode, Tag, TagKind
 from dinnerbell.domain.events import (
     AssignmentRole,
@@ -60,6 +61,7 @@ from dinnerbell.services.event_views import EventView, Permissions, ProposalView
 from dinnerbell.services.feedback import Awaiting, FeedbackForm
 from dinnerbell.services.meals import LogForm
 from dinnerbell.services.offers import OfferForm, SlotDefaults
+from dinnerbell.services.stats import MemberStats
 
 BASE_URL = "https://dinnerbell.example.com"
 ZONE = "America/Chicago"
@@ -231,9 +233,78 @@ DINNER_SCHEDULE = note.SlotScheduleInfo(
     modes=(Mode.PICKUP, Mode.DELIVERY),
 )
 
+CHEF_BRONZE = note.BadgeTier("Chef", "Bronze")
+FIRST_SCOUT = note.BadgeTier("Scout", "First")
+BADGE_NEWS = (
+    note.BadgeNews(ALEX, (note.BadgeTier("Full Table", "First"), note.BadgeTier("Quarterback", "First"))),
+    note.BadgeNews(SAM, (CHEF_BRONZE,)),
+)
+MANY_BADGES = (
+    note.BadgeNews(KIM, tuple(note.BadgeTier(b.name, "Gold") for b in BADGES[:6]), more=6),
+    *(note.BadgeNews(note.PersonInfo(20 + n, f"Member {n}"), (FIRST_SCOUT,)) for n in range(9)),
+)
+THANKS = (
+    note.Thanks(ALEX, cooked=2, coordinated=9),
+    note.Thanks(KIM, picked_up=1),
+    note.Thanks(SAM, cooked=6, ordered=1),
+)
+RECAP = note.MonthlyRecap(
+    household_id=1,
+    month=date(2026, 10, 1),
+    meals=24,
+    cuisines=("Indian", "Mexican", "Thai"),
+    first_cuisines=("Thai",),
+    new_items=3,
+    new_item_names=("Pad Thai", "Pho <Saigon>", "Tikka Masala"),
+    thanks=THANKS,
+    badges=BADGE_NEWS,
+)
+
+
+def _award(n: int, badge: BadgeKey, tier: Tier) -> Award:
+    return Award(n, 1, KIM.id, badge, tier, datetime(2026, 10, 20, tzinfo=UTC), Announcement.ANNOUNCED)
+
+
+def _stats(counts: dict[BadgeKey, int], earned: tuple[Award, ...]) -> MemberStats:
+    steps = tuple(
+        progress(b, counts.get(b.key, 0), DEFAULT_THRESHOLDS, earned=[a.tier for a in earned if a.badge is b.key])
+        for b in BADGES
+    )
+    return MemberStats(KIM.id, {}, steps, earned)
+
+
+KIM_BADGES = _stats(
+    {BadgeKey.CHEF: 43, BadgeKey.SCOUT: 1, BadgeKey.EXPLORER: 12},
+    (
+        _award(1, BadgeKey.CHEF, Tier.FIRST),
+        _award(2, BadgeKey.CHEF, Tier.BRONZE),
+        _award(3, BadgeKey.SCOUT, Tier.FIRST),
+        _award(4, BadgeKey.EXPLORER, Tier.FIRST),
+        _award(5, BadgeKey.EXPLORER, Tier.BRONZE),
+    ),
+)
+KIM_NO_BADGES = _stats({}, ())
+
 NOTIFICATIONS: dict[str, Callable[[], note.Notification]] = {
     "call_opened": lambda: note.CallOpened(event(), (ALEX, KIM, LEE, SAM), waiting_on=(ALEX, KIM, LEE, SAM)),
     "call_opened_early": lambda: note.CallOpened(EARLY, (ALEX, KIM, LEE, SAM), waiting_on=(ALEX, KIM, LEE, SAM)),
+    "badges_earned": lambda: note.BadgesEarned(1, 12, BADGE_NEWS),
+    "badges_earned_one": lambda: note.BadgesEarned(1, 14, BADGE_NEWS[1:]),
+    "badges_earned_many": lambda: note.BadgesEarned(1, 15, MANY_BADGES[:10], more_people=3),
+    "monthly_recap": lambda: RECAP,
+    "monthly_recap_quiet": lambda: note.MonthlyRecap(household_id=1, month=date(2026, 12, 1), meals=2),
+    "monthly_recap_big": lambda: replace(
+        RECAP,
+        month=date(2026, 12, 1),
+        cuisines=tuple(f"Cuisine {n}" for n in range(12)),
+        first_cuisines=("Cuisine 3", "Cuisine 4"),
+        new_items=40,
+        new_item_names=tuple(f"Dish {n}" for n in range(5)),
+        thanks=tuple(note.Thanks(note.PersonInfo(30 + n, f"Member {n}"), cooked=n + 1) for n in range(15)),
+        more_thanks=4,
+        badges=MANY_BADGES[:10],
+        more_badges=2,
+    ),
     "call_updated": lambda: note.CallUpdated(event(), ROSTER, (LEE,), head_count=3),
     "call_updated_voting": lambda: note.CallUpdated(VOTING, ROSTER, (), head_count=3),
     "call_updated_voting_no_coordinator": lambda: note.CallUpdated(event(EventState.VOTING), ROSTER, (), head_count=3),
@@ -597,6 +668,8 @@ VIEWS: dict[str, Callable[[], dict[str, Any]]] = {
     "home_breakfast_called_off": lambda: home_view(
         TodayView(DAY, [BREAKFAST_CALLED_OFF, COLLECTING_VIEW], tuple(Slot)), HomeLinks(BASE_URL)
     ),
+    "home_badges": lambda: home_view(TodayView(DAY, [], tuple(Slot)), HomeLinks(BASE_URL), badges=KIM_BADGES),
+    "home_badges_none": lambda: home_view(TodayView(DAY, [], tuple(Slot)), HomeLinks(BASE_URL), badges=KIM_NO_BADGES),
     "home_empty": lambda: home_view(TodayView(DAY, [], tuple(Slot)), HomeLinks(BASE_URL)),
     "home_upcoming": lambda: home_view(
         TodayView(DAY, [COLLECTING_VIEW, SCHEDULED_VIEW], tuple(Slot)), HomeLinks(BASE_URL)

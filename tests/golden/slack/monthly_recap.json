@@ -1,0 +1,35 @@
+{
+  "blocks": [
+    {
+      "text": {
+        "text": "*October in review* 🍽️\nTogether you put *24 meals* on the table.\n*Cuisines:* Indian, Mexican, Thai (new to you: Thai)\n*New in the catalog:* 3 (Pad Thai, Pho &lt;Saigon&gt;, and Tikka Masala)",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "text": {
+        "text": "*Thank you*\n• Alex cooked 2 times and coordinated 9 calls. Thank you!\n• Kim picked up 1 time. Thank you!\n• Sam cooked 6 times and ordered 1 time. Thank you!",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "text": {
+        "text": "*Badges earned*\n• Alex: 🎗️ *Full Table* · First, 🎗️ *Quarterback* · First\n• Sam: 🥉 *Chef* · Bronze",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "elements": [
+        {
+          "text": "Here's to a tasty November!",
+          "type": "mrkdwn"
+        }
+      ],
+      "type": "context"
+    }
+  ],
+  "text": "October in review: 24 meals together."
+}

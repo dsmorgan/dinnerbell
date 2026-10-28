@@ -9,9 +9,10 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 ### Added
 
 - Contributions and badges, behind the scenes (M4, #15). When a call or offer is done, Dinnerbell now counts what each person did: cooked, picked up, ordered, coordinated, at the table, an answer within 15 minutes, a pick that won, a new place or cuisine that won, a catalog item that was chosen, guests brought, and feedback given. Twelve badges (Chef, Road Runner, Order Up, Quarterback, Full Table, Early Bird, Bright Idea, Scout, Explorer, Good Host, Food Critic, On a Roll) share one ladder of five tiers: First, Bronze, Silver, Gold, and Diamond at 1, 10, 50, 100, and 200. A badge is earned once per person and tier, and records whether the channel has been told. See [docs/contributions.md](docs/contributions.md).
-  - Nothing shows these yet. The Stats page, the channel announcements, App Home, and the monthly recap come in later releases.
+  - The Stats page comes in a later release; the channel announcements, App Home, and the monthly recap are below.
   - Counting is exact: finishing a call twice, or two people tapping **Mark done** at once, counts it once. Guests count for the roles they take; only members count for the rest.
   - The tier counts are a household setting (FR-43), changeable by an admin through the service. The Admin page for it comes later.
+- Badge announcements, the monthly recap, and badges on App Home (M4, #15). When a done call earns badges, the channel gets one warm post for the call that mentions each member once, in name order, and never compares people. A badge is announced exactly once, even across restarts and retries; a big backlog is capped at 10 members and 6 badges each. The first days of each month, Dinnerbell posts a recap of the month before: meals, cuisines, new catalog items, a thank-you for each person who cooked, picked up, ordered, or coordinated, and the badges earned. A month with no meals posts nothing. App Home shows your own badges and the next one in reach. Food Critic is never announced or recapped, because it would say who gave feedback. See [docs/contributions.md](docs/contributions.md).
 
 ### Upgrade notes
 
@@ -19,6 +20,7 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 - On that first start, Dinnerbell counts the meals already in your log. It awards the badges they reach as already announced: nothing posts to the channel for old meals. A second start doesn't count again. It counts in batches, so a large log doesn't hold the database for long, and a start that is stopped halfway finishes next time. **`dinnerbell reset-history` now also deletes every contribution count and every badge earned**, along with the history; they don't come back.
 - To go back, restore your backup. Downgrading the schema instead drops both tables, so every count and badge is lost, and a later upgrade counts the meal log afresh.
 - No settings or Slack changes, and no reinstall.
+- Slice 2 adds no migration. The first scheduler tick after the upgrade announces any badge a done call earned since the previous release that the channel hasn't heard about, one post per call; a household that ran the unreleased M4 slice 1 builds may see a few posts. Catch-up badges are never announced. The recap posts for the month before when you upgrade during the first seven days of a month.
 
 ## [0.7.0] - 2026-10-28
 

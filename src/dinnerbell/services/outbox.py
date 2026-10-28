@@ -30,12 +30,14 @@ from dinnerbell.domain.events import EventState
 from dinnerbell.domain.notifications import (
     CALL_OFF_SUPERSEDES,
     SUPERSEDED_BY_CALL_OFF,
+    BadgesEarned,
     Channel,
     ChannelUnavailable,
     GuestJoined,
     HeldDelivery,
     LinkNeeded,
     MessageRef,
+    MonthlyRecap,
     Notification,
     PayloadError,
     PermanentDeliveryError,
@@ -192,7 +194,7 @@ async def _overtaken(db: AsyncSession, notification: Notification) -> bool:
     """Whether the call ``notification`` is about was called off, or has started a newer run,
     since it was queued."""
     if isinstance(
-        notification, ScheduleChanged | GuestJoined | LinkNeeded
+        notification, ScheduleChanged | GuestJoined | LinkNeeded | BadgesEarned | MonthlyRecap
     ):  # pragma: no cover - not one CALL_OFF_SUPERSEDES names
         return False
     event = await EventRepository(db).get(notification.event.household_id, notification.event.id)

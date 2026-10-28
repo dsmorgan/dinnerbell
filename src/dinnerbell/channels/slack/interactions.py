@@ -132,12 +132,14 @@ from dinnerbell.services import (
     meals,
     offers,
     slack_members,
+    stats,
 )
 from dinnerbell.services import schedule as schedule_service
 from dinnerbell.services.clock import Clock
 from dinnerbell.services.errors import Forbidden, NotFound
 from dinnerbell.services.event_views import EventView
 from dinnerbell.services.lifecycle import CallExists
+from dinnerbell.services.stats import MemberStats
 
 log = logging.getLogger(__name__)
 
@@ -554,6 +556,7 @@ class Interactions:
             async with self.sessionmaker() as db:
                 today = await event_views.today_view(db, member, now=self.clock(), any_time=self.any_time)
                 awaiting = await feedback.awaiting(db, member, now=self.clock())
+                badges = await self._badges(db, member)
             view = home_view(
                 today,
                 self.links,
@@ -562,8 +565,21 @@ class Interactions:
                 awaiting=awaiting,
                 guest=member.is_guest,
                 member_id=member.id,
+                badges=badges,
             )
         await self.api.publish_home(user_id, with_version_footer(view, self.version, self.instance_label))
+
+    @staticmethod
+    async def _badges(db: AsyncSession, member: Member) -> MemberStats | None:
+        """The member's own badges for Home, or None for a guest (no Stats) or if counting them
+        fails: Home never breaks over a badge."""
+        if not member.is_member:
+            return None
+        try:
+            return await stats.my_stats(db, member)
+        except Exception:
+            log.exception("home badges failed", extra={"member_id": member.id})
+            return None
 
     async def _run(self, source: Source, member: Member, work: Callable[[], Awaitable[Done]]) -> None:
         """Run one action and report how it went. ``work`` returns what to reply (``Done``)."""

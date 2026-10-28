@@ -14,6 +14,8 @@ Run it with test stopped, after restoring the backup. In one transaction it:
 - deletes all feedback on meals, which says how each member rated them (FR-49), and the counts and badges
   that show who gave it, so test, where
   testers act as other people, never holds production's answers;
+- marks badges earned but not yet announced as quiet, and the last monthly recap as posted, so a
+  restored copy never tells the test channel what production hadn't yet (M4);
 - strips guests (#38) of what identifies them, as they're people outside the household: each is
   renamed "Guest <ID>" and loses their email, Slack user, sign-in, and dietary needs, as well as
   being deactivated like any member who isn't kept, and the audit rows about guests and joining
@@ -35,6 +37,7 @@ import json
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import TextClause, bindparam, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -52,6 +55,8 @@ from dinnerbell.domain.badges import BADGES
 from dinnerbell.domain.contributions import Kind
 from dinnerbell.domain.events import OPEN_STATES, EndReason, EventState, transition
 from dinnerbell.domain.members import InvalidMemberInput, normalize_email
+from dinnerbell.domain.recap import SETTINGS_KEY as RECAP_KEY
+from dinnerbell.domain.recap import month_key, previous_month
 from dinnerbell.domain.schedule import SLOTS_KEY, slot_schedules, slot_to_json
 from dinnerbell.services.common import audit
 from dinnerbell.services.household import current_household
@@ -167,6 +172,7 @@ class ScrubSummary:
     feedback_deleted: int = 0
     guests_scrubbed: int = 0
     audit_rows_redacted: int = 0
+    badges_quieted: int = 0
 
     def lines(self) -> list[str]:
         return [
@@ -180,6 +186,7 @@ class ScrubSummary:
             f"Feedback rows deleted: {self.feedback_deleted}",
             f"Guests made anonymous: {self.guests_scrubbed}",
             f"Audit rows about guests redacted: {self.audit_rows_redacted}",
+            f"Badges not yet announced, now quiet: {self.badges_quieted}",
         ]
 
 
@@ -288,6 +295,12 @@ async def _scrub(db: AsyncSession, *, instance_label: str, keep: Iterable[str], 
     # Who gave feedback is as private as what they said: the counts, and the badges that show it.
     await ContributionRepository(db).clear_feedback(household.id)
     await BadgeRepository(db).clear(household.id, [b.key for b in BADGES if b.kind is Kind.GAVE_FEEDBACK])
+    # Test never tells its channel what production hadn't yet: badges earned but not announced
+    # stay quiet, and the month's recap (due now, if it is) counts as posted.
+    quieted = await BadgeRepository(db).skip_all_pending(household.id)
+    last_recap = month_key(previous_month(now.astimezone(ZoneInfo(household.timezone)).date()))
+    settings = await household_settings(db, household.id)
+    await HouseholdRepository(db).update_settings(household.id, settings | {RECAP_KEY: last_recap})
 
     summary = ScrubSummary(
         members_kept=len(kept),
@@ -301,6 +314,7 @@ async def _scrub(db: AsyncSession, *, instance_label: str, keep: Iterable[str], 
         feedback_deleted=feedback_deleted,
         guests_scrubbed=guests,
         audit_rows_redacted=redacted,
+        badges_quieted=quieted,
     )
     summary_payload = {"kept_member_ids": sorted(kept_ids), "instance_label": instance_label} | asdict(summary)
     target = f"household:{household.id}"

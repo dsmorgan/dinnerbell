@@ -747,6 +747,117 @@ class GuestJoined:
 
 
 @dataclass(frozen=True, slots=True)
+class BadgeTier:
+    """One badge a member holds at a tier, by name, so a message needs no lookup."""
+
+    name: str
+    tier: str
+
+
+@dataclass(frozen=True, slots=True)
+class BadgeNews:
+    """What one member earned. ``more`` counts badges left off the list to keep the message short."""
+
+    person: PersonInfo
+    badges: tuple[BadgeTier, ...]
+    more: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class BadgesEarned:
+    """Badges earned when one call was marked done (FR-39): one channel post, thanking and
+    mentioning each member (``news``, in name order, never by what they earned). It's about the
+    household, not an event, like ``ScheduleChanged``. ``key`` is the lowest award ID in the post,
+    which names it. ``more_people`` counts members left off to keep the post short; they are
+    thanked without a mention."""
+
+    kind: ClassVar[str] = "badges_earned"
+    is_update: ClassVar[bool] = False
+    needs_thread: ClassVar[bool] = False
+    household_id: int
+    key: int
+    news: tuple[BadgeNews, ...]
+    more_people: int = 0
+
+    @property
+    def idempotency_key(self) -> str:
+        return f"badges:{self.key}"
+
+    @property
+    def message_key(self) -> str | None:
+        return None
+
+    @property
+    def thread_key(self) -> str | None:
+        return None
+
+    @property
+    def recipient_id(self) -> int | None:
+        return None
+
+    @property
+    def event_id(self) -> int | None:
+        return None
+
+
+@dataclass(frozen=True, slots=True)
+class Thanks:
+    """What one member did for the month's meals, in whole numbers of times."""
+
+    person: PersonInfo
+    cooked: int = 0
+    picked_up: int = 0
+    ordered: int = 0
+    coordinated: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class MonthlyRecap:
+    """The month in review (FR-40), posted once on the first days of the next month: household
+    totals, then a thank-you to each member who pitched in (``thanks``, in name order, never by
+    count), then the badges earned. It names people and counts; it has no ranking, and holds
+    nothing from preferences or feedback. About the household, like ``ScheduleChanged``.
+    ``month`` is the first day of the month recapped."""
+
+    kind: ClassVar[str] = "monthly_recap"
+    is_update: ClassVar[bool] = False
+    needs_thread: ClassVar[bool] = False
+    household_id: int
+    month: date
+    meals: int
+    cuisines: tuple[str, ...] = ()
+    """Cuisines eaten that month, by name."""
+    first_cuisines: tuple[str, ...] = ()
+    """The ones the household had never eaten before the month."""
+    new_items: int = 0
+    new_item_names: tuple[str, ...] = ()
+    thanks: tuple[Thanks, ...] = ()
+    more_thanks: int = 0
+    badges: tuple[BadgeNews, ...] = ()
+    more_badges: int = 0
+
+    @property
+    def idempotency_key(self) -> str:
+        return f"recap:{self.month:%Y-%m}"
+
+    @property
+    def message_key(self) -> str | None:
+        return None
+
+    @property
+    def thread_key(self) -> str | None:
+        return None
+
+    @property
+    def recipient_id(self) -> int | None:
+        return None
+
+    @property
+    def event_id(self) -> int | None:
+        return None
+
+
+@dataclass(frozen=True, slots=True)
 class RoleVacated(_Notification):
     """A guest left a decided call (#38: an admin removed them) while assigned to cook, pick up,
     or order: one direct message to ``member``, the coordinator or, with none, each admin, to
@@ -836,6 +947,8 @@ Notification = Union[  # noqa: UP007 - a runtime union, used for isinstance chec
     LateJoinChanged,
     RolesToChoose,
     PicksShuffled,
+    BadgesEarned,
+    MonthlyRecap,
 ]
 NOTIFICATION_TYPES: dict[str, type[Notification]] = {cls.kind: cls for cls in get_args(Notification)}
 UPDATE_KINDS = frozenset(kind for kind, cls in NOTIFICATION_TYPES.items() if cls.is_update)
