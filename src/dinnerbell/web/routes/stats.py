@@ -8,7 +8,6 @@ with no member's count beside another's. A guest sees only their own pitching-in
 
 from __future__ import annotations
 
-import re
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Form, Request
@@ -66,7 +65,7 @@ async def stats_page(request: Request, principal: GuestOrMember, context: Contex
 # Admin > Badges (FR-43) ----------------------------------------------------------------------
 
 FIELDS = [f"threshold_{tier.value}" for tier in TIERS]
-WHOLE = re.compile(r"\s*(\d{1,6})\s*")
+MAX_DIGITS = 6
 NOTICES = {"saved": "Badge counts saved."}
 Field = Annotated[str, Form(max_length=40)]
 
@@ -87,10 +86,10 @@ def _posted(form: FormData) -> dict[str, str]:
 def _parse(posted: dict[str, str]) -> list[int]:
     counts: list[int] = []
     for tier, name in zip(TIERS, FIELDS, strict=True):
-        found = WHOLE.fullmatch(posted[name])
-        if found is None:
+        text = posted[name].strip()  # no regex: a pattern over form input can backtrack
+        if not (text.isascii() and text.isdigit() and len(text) <= MAX_DIGITS):
             raise BadFormValue(f"The {tier.label} count must be a whole number.")
-        counts.append(int(found.group(1)))
+        counts.append(int(text))
     return counts
 
 

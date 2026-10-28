@@ -392,3 +392,14 @@ def test_a_hostile_member_name_is_escaped_on_the_stats_page(house: Settings, adm
     award(house, kim.id, "chef", Tier.FIRST)
     html = admin.get("/stats").text
     assert "<b>x</b>" not in html and "&lt;b&gt;x&lt;/b&gt;" in html
+
+
+@pytest.mark.parametrize("junk", [" " * 40 + "x", "9" * 40, "\uff11\uff12", "²", "1 " * 20])
+def test_adversarial_count_input_is_refused_quickly(admin: TestClient, migrated: Settings, junk: str) -> None:
+    from time import monotonic
+
+    started = monotonic()
+    response = submit(admin, "/admin/badges", form(1, junk, 50, 100, 200))
+    assert response.status_code == 400 and "must be a whole number" in page(response)
+    assert monotonic() - started < 2
+    assert audits(migrated) == []
