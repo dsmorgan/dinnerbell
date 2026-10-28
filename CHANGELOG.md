@@ -13,7 +13,7 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
   - Start one with `/dinnerbell call breakfast` (add `tomorrow` or a date), from **Start a call** on the web's Today page, or with **Start a breakfast call** on App Home. A breakfast called off today shows **Start breakfast again**, on Home and the web.
   - Ranking proposes places whose meals include breakfast, and tops up with others, marked such as "Usually for lunch and dinner.", when too few fit.
   - Everything that names a meal knows breakfast: `/dinnerbell cancel breakfast`, the "which one?" reply when more than one call is open ("Breakfast, lunch, and dinner are all open today."), offers, logging a meal on the web and in Slack, History, **Admin > Ranking**'s Skip a day (once breakfast's schedule is on), `/dinnerbell schedule`, and, on a test instance, `/dinnerbell-test discard breakfast`.
-  - App Home's start buttons read **Make an offer**, then dinner, breakfast, and lunch: dinner, the daily call, first, then the others in the order of the day. The Schedule page and `/dinnerbell schedule` use the same order. History lists a day's meals newest first: dinner, then lunch, then breakfast.
+  - App Home's start buttons keep their places, and **Start a breakfast call** comes last: **Make an offer**, then dinner, lunch, and breakfast. The Schedule page and `/dinnerbell schedule` list breakfast last too. History lists a day's meals newest first: dinner, then lunch, then breakfast.
 
 ### Changed
 

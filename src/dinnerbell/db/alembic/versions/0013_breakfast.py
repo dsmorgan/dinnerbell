@@ -39,7 +39,7 @@ FOREIGN_KEYS_ON = (
 )
 BREAKFAST_LEFT = (
     "This database has {events} breakfast call(s) or offer(s) and {meals} breakfast meal(s), which "
-    "0012_catalog_meals can't store. Restore the backup taken before the upgrade instead."
+    "{revision} can't store. Restore the backup taken before the upgrade instead."
 )
 TABLES = ("event", "meal_log")
 WITH_BREAKFAST = "slot IN ('breakfast', 'lunch', 'dinner')"
@@ -89,5 +89,5 @@ def downgrade() -> None:
     events = bind.exec_driver_sql("SELECT count(*) FROM event WHERE slot = 'breakfast'").scalar()
     meals = bind.exec_driver_sql("SELECT count(*) FROM meal_log WHERE slot = 'breakfast'").scalar()
     if events or meals:
-        raise RuntimeError(BREAKFAST_LEFT.format(events=events, meals=meals))
+        raise RuntimeError(BREAKFAST_LEFT.format(events=events, meals=meals, revision=down_revision))
     _replace_slot_check(WITHOUT_BREAKFAST)

@@ -1070,6 +1070,9 @@ def test_0012_refuses_to_run_with_foreign_keys_on(settings: Settings) -> None:
 
 # 0013: breakfast calls (#58) ---------------------------------------------------------------------
 
+BREAKFAST = "0013_breakfast"
+BEFORE_BREAKFAST = "0012_catalog_meals"
+"""0013's revision and the one before it. Renumbering 0013 changes only these two."""
 BREAKFAST_CALL = (
     "INSERT INTO event (household_id, kind, slot, date, state, run, version, opens_at, respond_deadline, "
     "reminder_minutes, vote_minutes, created_at, updated_at) VALUES (1, 'call', 'breakfast', '2026-10-24', "
@@ -1124,7 +1127,7 @@ def test_0013_lets_calls_and_meals_be_breakfast_and_downgrade_refuses_while_any_
 
     from dinnerbell import main as cli
 
-    _upgrade_to(settings, "0012_catalog_meals")
+    _upgrade_to(settings, BEFORE_BREAKFAST)
     _populate_calls(settings)
     _delete_newest_call(settings)  # the rebuild must not give its ID back
     before, fks, sequences = _snapshot(settings), _event_foreign_keys(settings), _sequences(settings)
@@ -1148,8 +1151,9 @@ def test_0013_lets_calls_and_meals_be_breakfast_and_downgrade_refuses_while_any_
     assert _next_event_id(settings) == 4  # the breakfast call took 3; 2 never comes back
     with_breakfast = _snapshot(settings)
 
-    with pytest.raises((RuntimeError, CommandError), match=r"1 breakfast call\(s\) or offer\(s\) and 1 breakfast"):
-        _downgrade_to(settings, "0012_catalog_meals")
+    refusal = rf"1 breakfast call\(s\) or offer\(s\) and 1 breakfast meal\(s\), which {BEFORE_BREAKFAST} can't"
+    with pytest.raises((RuntimeError, CommandError), match=refusal):
+        _downgrade_to(settings, BEFORE_BREAKFAST)
     assert _snapshot(settings) == with_breakfast
     _execute(
         settings,
@@ -1157,7 +1161,7 @@ def test_0013_lets_calls_and_meals_be_breakfast_and_downgrade_refuses_while_any_
         "DELETE FROM meal_log WHERE slot = 'breakfast'",
         "DELETE FROM event WHERE id = 4",
     )
-    _downgrade_to(settings, "0012_catalog_meals")
+    _downgrade_to(settings, BEFORE_BREAKFAST)
     assert _snapshot(settings)["rows"] == before["rows"] and _event_foreign_keys(settings) == fks
     assert "slot IN ('lunch', 'dinner')" in _slot_checks(settings)[0]
     assert cli.main(["migrate"]) == 0
@@ -1172,13 +1176,13 @@ def test_0013_refuses_to_run_with_foreign_keys_on(settings: Settings) -> None:
 
     from dinnerbell.db.migrate import _alembic_config
 
-    _upgrade_to(settings, "0012_catalog_meals")
+    _upgrade_to(settings, BEFORE_BREAKFAST)
     _populate_calls(settings)
     before = _snapshot(settings)
     engine = create_sync_engine(settings.sync_database_url)
     try:
         with pytest.raises(RuntimeError, match="foreign keys on"), engine.begin() as connection:
-            command.upgrade(_alembic_config(connection), "0013_breakfast")
+            command.upgrade(_alembic_config(connection), BREAKFAST)
     finally:
         engine.dispose()
     assert _snapshot(settings) == before

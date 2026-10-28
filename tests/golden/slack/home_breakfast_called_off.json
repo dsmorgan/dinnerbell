@@ -154,16 +154,6 @@
           "value": "make_offer"
         },
         {
-          "action_id": "start_call_breakfast",
-          "text": {
-            "emoji": true,
-            "text": "Start breakfast again",
-            "type": "plain_text"
-          },
-          "type": "button",
-          "value": "breakfast"
-        },
-        {
           "action_id": "start_call_lunch",
           "text": {
             "emoji": true,
@@ -172,6 +162,16 @@
           },
           "type": "button",
           "value": "lunch"
+        },
+        {
+          "action_id": "start_call_breakfast",
+          "text": {
+            "emoji": true,
+            "text": "Start breakfast again",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "breakfast"
         }
       ],
       "type": "actions"

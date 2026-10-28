@@ -29,9 +29,9 @@ class Slot(StrEnum):
         return Meal(self.value)
 
 
-CALL_ORDER = (Slot.DINNER, Slot.BREAKFAST, Slot.LUNCH)
-"""How the start buttons and the schedule list slots: dinner, the daily call, first, then the
-others in the order of the day."""
+CALL_ORDER = (Slot.DINNER, Slot.LUNCH, Slot.BREAKFAST)
+"""How the start buttons and the schedule list slots: most used first, so dinner and lunch keep
+their places and breakfast, the rarest, comes last."""
 _OF_THE_DAY = {slot: n for n, slot in enumerate(Slot)}
 PICK_SLOT = "Pick breakfast, lunch, or dinner."
 """What a form says when its meal is missing or unknown."""

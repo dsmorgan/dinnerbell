@@ -85,6 +85,15 @@ DEFAULT_SLOTS: dict[Slot, SlotSchedule] = {  # in CALL_ORDER
         modes=frozenset({Mode.PICKUP, Mode.DELIVERY}),
         meal_time=time(18, 30),
     ),
+    Slot.LUNCH: SlotSchedule(
+        enabled=False,
+        call_time=time(10, 30),
+        response_minutes=60,
+        vote_minutes=30,
+        reminder_minutes=15,
+        modes=frozenset({Mode.PICKUP}),
+        meal_time=time(12, 30),
+    ),
     # Breakfast (#58) is coordinated now and then, such as on weekends or with guests, so it has
     # no daily call until someone turns it on: members start one when they want it.
     Slot.BREAKFAST: SlotSchedule(
@@ -95,15 +104,6 @@ DEFAULT_SLOTS: dict[Slot, SlotSchedule] = {  # in CALL_ORDER
         reminder_minutes=10,
         modes=frozenset({Mode.COOK, Mode.PICKUP}),
         meal_time=time(8, 0),
-    ),
-    Slot.LUNCH: SlotSchedule(
-        enabled=False,
-        call_time=time(10, 30),
-        response_minutes=60,
-        vote_minutes=30,
-        reminder_minutes=15,
-        modes=frozenset({Mode.PICKUP}),
-        meal_time=time(12, 30),
     ),
 }
 

@@ -21,7 +21,13 @@ from dinnerbell.db.events import EventRepository
 from dinnerbell.domain.catalog import Meal, Mode
 from dinnerbell.domain.events import Event, EventState, RoleOffer, Status, Step
 from dinnerbell.domain.meals import CALL_ORDER, MealLog, MemberRef, Slot, by_week
-from dinnerbell.domain.schedule import DEFAULT_SLOTS, default_settings, slot_fingerprint, slot_schedules
+from dinnerbell.domain.schedule import (
+    DEFAULT_SLOTS,
+    default_settings,
+    slot_fingerprint,
+    slot_schedules,
+    slot_to_json,
+)
 from dinnerbell.services import calls
 from dinnerbell.services import schedule as schedule_service
 from dinnerbell.services.database import Database, open_database
@@ -87,10 +93,18 @@ def test_breakfast_has_no_daily_call_by_default_and_sensible_times() -> None:
     assert not schedule.enabled
     assert (schedule.call_time.hour, schedule.meal_time.hour) == (7, 8)
     assert schedule.modes == {Mode.COOK, Mode.PICKUP}
-    assert tuple(DEFAULT_SLOTS) == CALL_ORDER == (Slot.DINNER, Slot.BREAKFAST, Slot.LUNCH)
+    assert tuple(DEFAULT_SLOTS) == CALL_ORDER == (Slot.DINNER, Slot.LUNCH, Slot.BREAKFAST)
     assert default_settings()["slots"]["breakfast"]["enabled"] is False
     assert not slot_schedules({})[Slot.BREAKFAST].enabled  # a household saved before #58
     assert Slot.BREAKFAST.meal is Meal.BREAKFAST and list(Slot) == [Slot.BREAKFAST, Slot.LUNCH, Slot.DINNER]
+
+
+@pytest.mark.parametrize("corrupt", ["true", 1, "on", None])
+def test_a_corrupt_enabled_value_reads_as_off(corrupt: object) -> None:
+    """Only a JSON ``true`` turns breakfast on. Anything else, such as a hand edit, falls back to
+    the default, off, so a bad value can't start posting breakfast calls."""
+    stored = {**slot_to_json(DEFAULT_SLOTS[Slot.BREAKFAST]), "enabled": corrupt}
+    assert slot_schedules({"slots": {"breakfast": stored}})[Slot.BREAKFAST].enabled is False
 
 
 async def test_no_breakfast_call_posts_on_its_own_until_someone_turns_it_on(house: House, clock: FakeClock) -> None:
@@ -228,8 +242,8 @@ async def test_home_starts_breakfast_and_starts_it_again(slack: Slack, house: Ho
     assert [e["text"]["text"] for e in starts] == [
         "Make an offer",
         "Start a dinner call",
-        "Start a breakfast call",
         "Start a lunch call",
+        "Start a breakfast call",
     ]
     await slack.click("Lee", ids.ACTION_FOR_START[Slot.BREAKFAST], "breakfast", home=True)
     event = await breakfast(house)
@@ -270,7 +284,7 @@ def test_the_schedule_page_shows_breakfast_off_and_skipping_needs_it_on(
     migrated: Settings,
 ) -> None:
     html = page(admin.get("/schedule"))
-    assert html.index('id="dinner"') < html.index('id="breakfast"') < html.index('id="lunch"')
+    assert html.index('id="dinner"') < html.index('id="lunch"') < html.index('id="breakfast"')
     assert 'name="breakfast_enabled">' in html and 'name="breakfast_call_time" value="07:00"' in html
     assert 'name="breakfast_meal_time" value="08:00"' in html
     assert '<option value="breakfast"' not in page(admin.get("/admin/schedule"))

@@ -39,16 +39,6 @@
           "value": "dinner"
         },
         {
-          "action_id": "start_call_breakfast",
-          "text": {
-            "emoji": true,
-            "text": "Start a breakfast call",
-            "type": "plain_text"
-          },
-          "type": "button",
-          "value": "breakfast"
-        },
-        {
           "action_id": "start_call_lunch",
           "text": {
             "emoji": true,
@@ -57,6 +47,16 @@
           },
           "type": "button",
           "value": "lunch"
+        },
+        {
+          "action_id": "start_call_breakfast",
+          "text": {
+            "emoji": true,
+            "text": "Start a breakfast call",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "breakfast"
         }
       ],
       "type": "actions"

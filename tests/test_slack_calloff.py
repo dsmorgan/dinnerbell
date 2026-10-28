@@ -583,7 +583,7 @@ async def test_home_shows_call_it_off_and_close_now_only_to_who_can(slack: Slack
     # Sam coordinates, so nobody is offered I'll coordinate (#84).
     common = ["card_in", "card_maybe", "card_out", "card_offer_cook", "card_offer_pickup", "card_offer_order"]
     common += ["card_details", "invite_guest"]
-    starts = ["make_offer", "start_call_breakfast", "start_call_lunch"]
+    starts = ["make_offer", "start_call_lunch", "start_call_breakfast"]
     assert home_actions(slack, "Kim") == [*common, "link_event", *starts]
     for who in ("Alex", "Sam"):  # an admin, and the coordinator
         assert home_actions(slack, who) == [
@@ -655,15 +655,15 @@ async def test_home_offers_to_start_a_called_off_slot_again(slack: Slack, house:
             "link_event",
             "make_offer",
             "start_call_dinner",
-            "start_call_breakfast",
             "start_call_lunch",
+            "start_call_breakfast",
         ]
         starts = next(b for b in slack.last_home(who)["blocks"] if b.get("block_id") == "start")["elements"]
         assert [e["text"]["text"] for e in starts] == [
             "Make an offer",
             "Start dinner again",
-            "Start a breakfast call",
             "Start a lunch call",
+            "Start a breakfast call",
         ]
     await slack.click("Lee", ids.ACTION_FOR_START[Slot.DINNER], "dinner", home=True)
     event = await house.event(event_id)
