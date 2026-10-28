@@ -234,8 +234,9 @@ def test_the_catalog_shows_each_items_meals_and_filters_by_meal(client: TestClie
     add_item(client, "Bagel Barn", meals=["breakfast"])
     add_item(client, "Siam Garden")
     listing = page(client.get("/catalog"))
-    assert '<a class="chip meal" href="/catalog?meal=breakfast">Breakfast</a>' in listing
-    assert listing.count('class="chip meal"') == 3  # Breakfast; Lunch and Dinner
+    assert '<a class="chip meal-chip" href="/catalog?meal=breakfast">Breakfast</a>' in listing
+    assert listing.count('class="chip meal-chip"') == 3  # Breakfast; Lunch and Dinner
+    assert 'class="chip meal"' not in listing  # .meal is the meal-log card style; it made every chip tall
     assert '<option value="breakfast">Breakfast</option>' in listing
     breakfast = page(client.get("/catalog?meal=breakfast"))
     assert "Bagel Barn" in breakfast and "Siam Garden" not in breakfast and "1 match" in breakfast

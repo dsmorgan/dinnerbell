@@ -6,6 +6,10 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ## [Unreleased]
 
+### Fixed
+
+- The Catalog page draws tags and meals as small chips again. In 0.6.0 the meal chips picked up the meal-log card's padding, which stretched every chip on the row.
+
 ### Added
 
 - Breakfast calls, started when you want one (#58). Breakfast works like lunch and dinner: in, maybe, or out, roles, offers, proposals, a vote, a decision, and who does what.
