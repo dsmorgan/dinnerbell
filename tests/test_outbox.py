@@ -95,17 +95,37 @@ async def test_pending_updates_coalesce_and_claimed_ones_do_not(database: Databa
 
 async def test_delivery_threads_and_updates_use_the_posts_ref(database: Database, clock: FakeClock) -> None:
     ready = n.ProposalsReady(info(1), ())
-    await enqueue(database, opened(1), updated(1, 2), ready, n.ProposalsUpdated(info(1), ()))
+    called_off = n.EventCancelled(info(1))
+    await enqueue(database, opened(1), updated(1, 2), ready, n.ProposalsUpdated(info(1), ()), called_off)
     channel = RecordingChannel()
-    assert (await outbox.drain(database.sessionmaker, channel, clock)).delivered == 4
+    assert (await outbox.drain(database.sessionmaker, channel, clock)).delivered == 5
     call_ref, ready_ref = channel.sent[0].ref, channel.sent[2].ref
     assert [(s.op, s.ref if s.op == "update" else s.thread) for s in channel.sent] == [
         ("deliver", None),
         ("update", call_ref),
-        ("deliver", call_ref),
+        ("deliver", None),  # the picks post at the top level (#92)
         ("update", ready_ref),
+        ("deliver", call_ref),  # a call-off still replies under the call
     ]
     assert await outbox.drain(database.sessionmaker, channel, clock) == outbox.DrainResult()
+
+
+async def test_a_queued_row_keeps_the_thread_it_was_written_with(database: Database, clock: FakeClock) -> None:
+    """Upgrade (#92): picks queued by the old version carry a ``thread_key``, and the drainer
+    still threads them under the call, whatever the class says now."""
+    await enqueue(database, opened(1))
+    await enqueue(database, n.ProposalsReady(info(1), ()))
+    async with database.sessionmaker() as db:
+        await db.execute(
+            text("UPDATE outbox SET thread_key = 'event:1:run1:call' WHERE kind = 'proposals_ready'"),
+        )
+        await db.commit()
+    channel = RecordingChannel()
+    assert (await outbox.drain(database.sessionmaker, channel, clock)).delivered == 2
+    assert [(s.kind, s.thread) for s in channel.sent] == [
+        ("call_opened", None),
+        ("proposals_ready", channel.sent[0].ref),
+    ]
 
 
 async def test_a_failure_holds_back_its_events_later_rows_only(database: Database, clock: FakeClock) -> None:
@@ -295,6 +315,9 @@ async def test_null_channel_refs_are_not_real_messages(database: Database, clock
     await enqueue(database, opened(1))
     await outbox.drain(database.sessionmaker, NullChannel(), clock)
     await enqueue(database, updated(1, 2), n.ProposalsReady(info(1), ()))
+    async with database.sessionmaker() as db:  # as queued by a version that threaded the picks
+        await db.execute(text("UPDATE outbox SET thread_key = 'event:1:run1:call' WHERE kind = 'proposals_ready'"))
+        await db.commit()
     slack = RecordingChannel()
     assert (await outbox.drain(database.sessionmaker, slack, clock)).delivered == 2
     assert [(s.op, s.kind, s.thread) for s in slack.sent] == [("deliver", "proposals_ready", None)]

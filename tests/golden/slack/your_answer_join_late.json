@@ -2,7 +2,7 @@
   "blocks": [
     {
       "text": {
-        "text": "*Dinner call · Thursday, Oct 22*\n*This call moved on.* Thanks for answering! Vote on the picks in the thread by *5:15 PM*.\nYour answer: *Out*",
+        "text": "*Dinner call · Thursday, Oct 22*\n*This call moved on.* Thanks for answering! Voting is open: the picks are posted in the channel. Vote by *5:15 PM*.\nYour answer: *Out*",
         "type": "mrkdwn"
       },
       "type": "section"

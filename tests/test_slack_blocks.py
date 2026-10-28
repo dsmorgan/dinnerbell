@@ -213,11 +213,14 @@ def test_the_call_menu_offers_what_the_state_allows() -> None:
 
 def test_a_called_off_decision_says_who_and_why_escaped() -> None:
     struck = samples.preview("decision_updated_cancelled")["blocks"][0]["text"]["text"]
-    assert struck == "~Sam's Tacos~ Called off by Alex. “Pizza at Grandma's”"
+    assert struck == "*Dinner decision · Thursday, Oct 22*\n~Sam's Tacos~ Called off by Alex. “Pizza at Grandma's”"
     sneaky = replace(samples.CANCELLED, ended_by=note.PersonInfo(9, "<!here>"), end_note="<@U02SAM> & co")
     message = render(note.DecisionUpdated(sneaky, samples.DECISION), CTX)
     check_message(message.payload())
-    assert message.blocks[0]["text"]["text"] == "~Sam's Tacos~ Called off by &lt;!here&gt;. “&lt;@U02SAM&gt; &amp; co”"
+    assert (
+        message.blocks[0]["text"]["text"]
+        == "*Dinner decision · Thursday, Oct 22*\n~Sam's Tacos~ Called off by &lt;!here&gt;. “&lt;@U02SAM&gt; &amp; co”"
+    )
 
 
 def test_a_reason_cant_break_the_strike_through() -> None:
@@ -225,7 +228,10 @@ def test_a_reason_cant_break_the_strike_through() -> None:
     marked = replace(samples.CANCELLED, end_note="~*Grandma's*~ _pizza_ `now`")
     decision = render(note.DecisionUpdated(marked, samples.DECISION), CTX)
     check_message(decision.payload())
-    assert decision.blocks[0]["text"]["text"] == "~Sam's Tacos~ Called off by Alex. “Grandma's pizza now”"
+    assert (
+        decision.blocks[0]["text"]["text"]
+        == "*Dinner decision · Thursday, Oct 22*\n~Sam's Tacos~ Called off by Alex. “Grandma's pizza now”"
+    )
     call = render(note.CallUpdated(marked), CTX)  # the call message keeps the reason as written
     assert call.blocks[1]["text"]["text"] == "Called off by Alex. “~*Grandma's*~ _pizza_ `now`”"
 
@@ -287,7 +293,7 @@ def test_more_proposals_than_the_cap_are_listed_on_the_web() -> None:
 
 def test_a_cancelled_decision_strikes_the_item() -> None:
     message = render(note.DecisionUpdated(samples.event(EventState.CANCELLED), samples.DECISION), CTX)
-    assert message.blocks[0]["text"]["text"].startswith("~Sam's Tacos~")
+    assert message.blocks[0]["text"]["text"].split("\n")[1].startswith("~Sam's Tacos~")
 
 
 def test_clip_mrkdwn_never_splits_a_link_or_an_escape() -> None:
@@ -634,3 +640,59 @@ def test_home_keeps_its_footer_links_and_buttons_at_every_size(guest: bool, noti
         assert ("Your dietary needs" if guest else "Your preferences") in json.dumps(blocks[-2]), case
         assert guest or "start" in _ids(blocks), case
         _no_orphans(blocks)
+
+
+# The picks and the decision at the top level (#92) --------------------------------------------------
+
+
+def text_blocks(message: Message) -> str:
+    return "\n".join(b["text"]["text"] for b in message.blocks if b["type"] == "section" and "text" in b)
+
+
+def test_the_picks_and_the_decision_open_with_a_title_that_names_the_slot_and_day() -> None:
+    picks = render(samples.NOTIFICATIONS["proposals_ready"](), CTX)
+    assert picks.blocks[0]["text"]["text"].startswith("*Dinner picks · Thursday, Oct 22* for 3 people\n")
+    breakfast = replace(samples.VOTING, slot=Slot.BREAKFAST)
+    early = render(note.ProposalsReady(breakfast, samples.PROPOSALS, 3, participants=(samples.ALEX,)), CTX)
+    assert early.blocks[0]["text"]["text"].startswith("*Breakfast picks · Thursday, Oct 22*")
+    decision = render(samples.NOTIFICATIONS["decision_made"](), CTX)
+    assert decision.blocks[0]["text"]["text"].startswith("*Dinner decision · Thursday, Oct 22*\n")
+    lunch = replace(samples.DECIDED, slot=Slot.LUNCH)
+    assert (
+        render(note.DecisionMade(lunch, samples.DECISION), CTX)
+        .blocks[0]["text"]["text"]
+        .startswith("*Lunch decision · Thursday, Oct 22*")
+    )
+
+
+def test_the_picks_mention_everyone_in_including_guests_and_late_joiners() -> None:
+    people = (samples.ALEX, samples.SAM, samples.KIM, samples.LEE)  # Lee has no Slack user: a plain name
+    picks = render(note.ProposalsReady(samples.VOTING, samples.PROPOSALS, 4, participants=people), CTX)
+    assert "<@U01ALEX>, <@U02SAM>, <@U03KIM>, Lee: vote for any you'd enjoy." in picks.blocks[0]["text"]["text"]
+    edited = render(note.ProposalsUpdated(samples.DECIDED, samples.PROPOSALS, 4, participants=people), CTX)
+    assert "<@U03KIM>, Lee: voting is closed." in edited.blocks[0]["text"]["text"]
+    # Rows queued before the mentions existed render without a mention line.
+    old = render(note.ProposalsReady(samples.VOTING, samples.PROPOSALS, 3), CTX)
+    assert "<@" not in old.blocks[0]["text"]["text"]
+
+
+def test_the_decision_mentions_everyone_in_not_only_those_with_a_role() -> None:
+    decision = replace(
+        samples.DECISION,
+        participants=(note.ParticipantInfo(samples.ALEX), note.ParticipantInfo(samples.KIM, late=True)),
+        assignments=(note.AssignmentInfo(note.AssignmentRole.COOK, samples.SAM),),
+    )
+    message = render(note.DecisionMade(samples.DECIDED, decision), CTX)
+    assert "*In:* <@U01ALEX>, <@U03KIM>\n*Cooking:* <@U02SAM>" in text_blocks(message)
+
+
+def test_the_call_message_points_to_the_picks_and_then_names_the_result() -> None:
+    voting = render(samples.NOTIFICATIONS["call_updated_voting"](), CTX)
+    assert "Voting is open: the picks are posted below. Vote by *5:15 PM*." in text_blocks(voting)
+    assert "in the thread" not in json.dumps(voting.payload())
+    decided = render(samples.NOTIFICATIONS["call_updated_decided"](), CTX)
+    assert "It's decided: Sam's Tacos, cook, at 6:45 PM" in text_blocks(decided)
+    without_plan = render(note.CallUpdated(replace(samples.DECIDED, plan=None)), CTX)
+    assert "It's decided! The plan is posted below." in text_blocks(without_plan)
+    card = json.dumps(samples.preview("your_answer_voting"))  # a card isn't beside the picks
+    assert "the picks are posted in the channel" in card and "below" not in card

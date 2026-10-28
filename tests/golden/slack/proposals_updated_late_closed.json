@@ -2,7 +2,7 @@
   "blocks": [
     {
       "text": {
-        "text": "*The picks for 4 people.* Voting is closed.",
+        "text": "*Dinner picks · Thursday, Oct 22* for 4 people\n<@U01ALEX>, <@U02SAM>, <@U03KIM>: voting is closed.",
         "type": "mrkdwn"
       },
       "type": "section"

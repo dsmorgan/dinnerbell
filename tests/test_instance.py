@@ -115,7 +115,7 @@ async def test_every_message_starts_with_the_label(test_slack: Slack, house: Hou
     await run_a_call(test_slack, house)
     sent = test_slack.fake.of("chat.postMessage", "chat.update")
     assert {c.method for c in sent} == {"chat.postMessage", "chat.update"}
-    assert any(c.args.get("thread_ts") for c in sent)  # replies in the thread too
+    assert not any(c.args.get("thread_ts") for c in sent)  # the picks and decision are top-level (#92)
     for call in sent:
         blocks = call.args["blocks"]
         if isinstance(blocks, str):

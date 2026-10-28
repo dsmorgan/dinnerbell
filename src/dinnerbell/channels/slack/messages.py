@@ -195,6 +195,12 @@ def _title(event: note.EventInfo) -> str:
     return f"{event.slot.value.capitalize()} {kind} · {day_label(event.day)}"
 
 
+def _post_title(event: note.EventInfo, what: str) -> str:
+    """The first line of the picks and decision posts, which stand alone in the channel (#92):
+    the slot and the day tell posts from different calls apart."""
+    return f"{event.slot.value.capitalize()} {what} · {day_label(event.day)}"
+
+
 def _what(event: note.EventInfo) -> str:
     """What was called off: "dinner" for a call, "the dinner offer" for an offer."""
     return f"the {_slot(event)} offer" if event.kind is EventKind.OFFER else _slot(event)
@@ -318,8 +324,9 @@ def _roster(
     return join_lines(lines)
 
 
-def _call_status(event: note.EventInfo) -> str:
-    """Plain words with mrkdwn emphasis: escape before putting it in a block."""
+def _call_status(event: note.EventInfo, *, picks: str = "posted below") -> str:
+    """Plain words with mrkdwn emphasis: escape before putting it in a block. ``picks`` says
+    where the picks are, for a reader who isn't looking at the call message."""
     slot = _slot(event)
     match event.state:
         case EventState.COLLECTING if event.early:  # posted the day before, or earlier (#59)
@@ -328,10 +335,14 @@ def _call_status(event: note.EventInfo) -> str:
         case EventState.COLLECTING:
             return f"Who's in for {slot}? Answer by *{local_clock(event.respond_deadline, event.timezone)}*."
         case EventState.VOTING:
-            closes = f" by *{local_clock(event.vote_deadline, event.timezone)}*" if event.vote_deadline else ""
-            return f"Thanks for answering! Vote on the picks in the thread{closes}."
+            closes = f" Vote by *{local_clock(event.vote_deadline, event.timezone)}*." if event.vote_deadline else ""
+            return f"Thanks for answering! Voting is open: the picks are {picks}.{closes}"
+        case EventState.DECIDED if event.plan is not None:
+            plan = event.plan
+            at = local_clock(plan.meal_time, event.timezone)
+            return f"It's decided: {plan.item}, {plan.mode.label.lower()}, at {at}"
         case EventState.DECIDED:
-            return "It's decided! The plan is in the thread."
+            return f"It's decided! The plan is {picks}."
         case EventState.DONE:
             return f"{slot.capitalize()} is done. Thanks, everyone!"
         case EventState.ABANDONED if event.end_reason is EndReason.MISSED:
@@ -460,14 +471,16 @@ def proposals_message(notification: note.ProposalsReady | note.ProposalsUpdated,
     event = notification.event
     voting = event.state is EventState.VOTING
     people = plural(notification.head_count, "person", "people")
+    # The mentions ping only in the first post; an edit keeps them in the text.
+    who = ctx.directory.mentions(notification.participants)
     if voting:
         closes = (
             f" Voting closes at *{local_clock(event.vote_deadline, event.timezone)}*." if event.vote_deadline else ""
         )
-        intro = f"*Here are the picks for {people}.* Vote for any you'd enjoy.{closes}"
+        intro = f"{who}: vote for any you'd enjoy.{closes}" if who else f"Vote for any you'd enjoy.{closes}"
     else:
-        intro = f"*The picks for {people}.* Voting is closed."
-    blocks: list[Block] = [section(intro)]
+        intro = f"{who}: voting is closed." if who else "Voting is closed."
+    blocks: list[Block] = [section(f"*{_post_title(event, 'picks')}* for {people}\n{intro}")]
     shown = notification.proposals[:MAX_PROPOSALS]
     for number, proposal in enumerate(shown, start=1):
         blocks.append(section(_proposal_text(proposal, number, ctx), block_id=f"proposal-{proposal.id}"))
@@ -536,6 +549,7 @@ def decision_message(
         top = f"~{item}~ {escape(_call_status(replace(event, end_note=reason)))}"
     else:
         top = f"*{_slot(event).capitalize()} is decided: {item}* · {_kind(proposal)}"
+    top = f"*{_post_title(event, 'decision')}*\n{top}"
     if locked_by is not None and event.state is not EventState.CANCELLED:
         top += f"\nLocked in by {ctx.directory.mention(locked_by)}."
     blocks: list[Block] = [
@@ -548,6 +562,8 @@ def decision_message(
         ),
     ]
     lines = _assignments(decision.assignments, ctx) or ["_Nobody is assigned yet._"]
+    if decision.participants:  # everyone in, not only those with a role (#92)
+        lines.insert(0, f"*In:* {ctx.directory.mentions(p.member for p in decision.participants)}")
     late = [p.member for p in decision.participants if p.late]
     if late:
         lines.append(f"*Joined late:* {ctx.directory.mentions(late)}")
@@ -648,7 +664,7 @@ def reminder_message(
     closes = local_clock(event.respond_deadline, event.timezone)
     when = f"{_slot(event)} on {day_label(event.day)}"
     if _moved_on(event, run):
-        why = STARTED_AGAIN if run != event.run else escape(_call_status(event))
+        why = STARTED_AGAIN if run != event.run else escape(_call_status(event, picks="posted in the channel"))
         text = f"*{MOVED_ON}* {why}"
         blocks = [section(text), actions(_web_button(ctx, event), block_id="more")]
         return _finish(f"The {_slot(event)} call for {day_label(event.day)} moved on.", blocks)
@@ -970,7 +986,7 @@ def your_answer(
     moved_on = _moved_on(event, run, mine)
     live = not moved_on and card_live(event, mine)
     if not live:
-        status = escape(_call_status(event))
+        status = escape(_call_status(event, picks="posted in the channel"))
         lines.append(f"*{MOVED_ON}* {status}" if moved_on else status)
     lines += _mine_lines(event, mine, member_id)
     if not_for_you and late_answer(event, mine):

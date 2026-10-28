@@ -27,6 +27,11 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ### Changed
 
+- The picks and the decision post at the top level of the channel, with a mention, instead of in the call's thread (#92). The newest message in the channel is now the thing to act on, and on a phone nothing hides in a thread.
+  - Both start with a title line, such as "Dinner picks · Tuesday, Oct 27" and "Dinner decision · Tuesday, Oct 27", so posts from different calls on one day can't be confused.
+  - The picks post mentions everyone who is in, guests with Slack and late joiners included, so opening the vote pings people. The decision mentions everyone who is in, not only the people with a role. Assignees still get their direct message. On a test instance, the notification guard still limits mentions to the test channel's members.
+  - While voting, the call message says the picks are posted below. Once decided, it names the result: "It's decided: Pho Place, pickup, at 6:30 PM".
+  - A call-off notice still replies under the call message.
 - A call on App Home has the same buttons as your Your answer card, so you can do everything from Home without going back to the channel (#84): **In**, **Maybe**, and **Out**, then **I can cook**, **I can pick up**, **I'll order**, **I'll coordinate** while nobody is, **Details**, and **Invite a guest**, with your choices marked as on the card ("✓ I can cook"). A guest's Home has their **In**, **Out**, the role offers, and **I'll coordinate**. Home and the card draw these buttons from the same code, so they can't drift apart again.
   - A tap on Home works as a tap on the card does, and Home shows your new choice at once, with a line saying what changed.
   - Home's buttons name the call's run, like the card's. A Home left open since the call started again, or since answers closed, changes nothing and says why, as the card does.
@@ -36,6 +41,7 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ### Upgrade notes
 
+- No migration, settings, or Slack changes. Each queued notification keeps the thread it was written with, so a call that is mid-vote when you upgrade can end up split: its picks sit in the call's thread, and its decision posts at the top level. At most one call at upgrade time is affected. Upgrade between calls to avoid it.
 - The database migrates to revision `0013_breakfast` when Dinnerbell starts. It rebuilds the `event` and `meal_log` tables so a call, an offer, or a logged meal can be breakfast. Every row is kept, along with the tables' indexes and foreign keys, and call and meal IDs are still never reused. Like 0012, it must run with foreign keys off, as `dinnerbell serve` and `dinnerbell migrate` do; run any other way, it refuses. To go back, restore your backup. Downgrading the schema instead refuses while any breakfast call, offer, or meal exists, rather than delete them.
 - No settings or Slack changes. Households keep their lunch and dinner schedules; breakfast's starts off, so nothing new posts until someone starts a breakfast call.
 

@@ -2,7 +2,7 @@
   "blocks": [
     {
       "text": {
-        "text": "*Dinner is done: Sam's Tacos.* Thanks to everyone who pitched in!",
+        "text": "*Dinner decision · Thursday, Oct 22*\n*Dinner is done: Sam's Tacos.* Thanks to everyone who pitched in!",
         "type": "mrkdwn"
       },
       "type": "section"
@@ -22,7 +22,7 @@
     },
     {
       "text": {
-        "text": "*Cooking:* <@U02SAM>\n*Coordinating:* <@U01ALEX>\n*Dietary needs:* Vegetarian",
+        "text": "*In:* <@U01ALEX>, <@U02SAM>\n*Cooking:* <@U02SAM>\n*Coordinating:* <@U01ALEX>\n*Dietary needs:* Vegetarian",
         "type": "mrkdwn"
       },
       "type": "section"

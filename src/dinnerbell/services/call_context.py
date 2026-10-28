@@ -264,7 +264,16 @@ def event_info(ctx: CallContext) -> note.EventInfo:
         end_note=event.end_note,
         early=posted_before_its_day(event, ctx.zone),
         kind=event.kind,
+        plan=plan_info(ctx),
     )
+
+
+def plan_info(ctx: CallContext) -> note.PlanInfo | None:
+    """What a decided call is having, how, and when."""
+    winner, meal_time = ctx.winner, ctx.event.meal_time
+    if winner is None or meal_time is None:
+        return None
+    return note.PlanInfo(item_info(ctx, winner).name, winner.mode, meal_time)
 
 
 def _tag_names(ctx: CallContext, tag_ids: Iterable[int]) -> tuple[str, ...]:
@@ -476,12 +485,18 @@ def proposals(ctx: CallContext) -> tuple[note.ProposalInfo, ...]:
     return tuple(proposal_info(ctx, p) for p in ctx.proposals)
 
 
+def who_is_in(ctx: CallContext) -> tuple[note.PersonInfo, ...]:
+    """Everyone who's in, guests and late joiners included, by name."""
+    people = (ctx.person(r.member_id) for r in ctx.participants)
+    return tuple(sorted(people, key=lambda p: p.name.casefold()))
+
+
 def proposals_updated(ctx: CallContext) -> note.ProposalsUpdated:
-    return note.ProposalsUpdated(event_info(ctx), proposals(ctx), ctx.head_count, late_joiners(ctx))
+    return note.ProposalsUpdated(event_info(ctx), proposals(ctx), ctx.head_count, late_joiners(ctx), who_is_in(ctx))
 
 
 def proposals_ready(ctx: CallContext) -> note.ProposalsReady:
-    return note.ProposalsReady(event_info(ctx), proposals(ctx), ctx.head_count, late_joiners(ctx))
+    return note.ProposalsReady(event_info(ctx), proposals(ctx), ctx.head_count, late_joiners(ctx), who_is_in(ctx))
 
 
 def locked_by(ctx: CallContext) -> note.PersonInfo | None:

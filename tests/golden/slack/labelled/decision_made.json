@@ -11,7 +11,7 @@
     },
     {
       "text": {
-        "text": "*Dinner is decided: Sam's Tacos* · Cook · Mexican\nLocked in by <@U01ALEX>.",
+        "text": "*Dinner decision · Thursday, Oct 22*\n*Dinner is decided: Sam's Tacos* · Cook · Mexican\nLocked in by <@U01ALEX>.",
         "type": "mrkdwn"
       },
       "type": "section"
@@ -31,7 +31,7 @@
     },
     {
       "text": {
-        "text": "*Cooking:* <@U02SAM>\n*Coordinating:* <@U01ALEX>\n*Dietary needs:* Vegetarian",
+        "text": "*In:* <@U01ALEX>, <@U02SAM>\n*Cooking:* <@U02SAM>\n*Coordinating:* <@U01ALEX>\n*Dietary needs:* Vegetarian",
         "type": "mrkdwn"
       },
       "type": "section"
