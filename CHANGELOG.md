@@ -6,6 +6,8 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-28
+
 ### Fixed
 
 - The Catalog page draws tags and meals as small chips again. In 0.6.0 the meal chips picked up the meal-log card's padding, which stretched every chip on the row.
@@ -280,7 +282,8 @@ The source-built version, never published as an image. It covers milestones M0 t
 - **M1:** the catalog with file import, preferences and vetoes, meal history, and the members admin page.
 - **M2:** dinner calls in Slack: the scheduled call, reminders, ranked proposals and votes, the decision, assignments, the abandon path, admin overrides, App Home, and `/dinnerbell call`.
 
-[Unreleased]: https://github.com/dsmorgan/dinnerbell/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/dsmorgan/dinnerbell/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/dsmorgan/dinnerbell/releases/tag/v0.7.0
 [0.6.0]: https://github.com/dsmorgan/dinnerbell/releases/tag/v0.6.0
 [0.5.0]: https://github.com/dsmorgan/dinnerbell/releases/tag/v0.5.0
 [0.4.0]: https://github.com/dsmorgan/dinnerbell/releases/tag/v0.4.0
