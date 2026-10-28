@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import sqlite3
+from collections.abc import AsyncIterator
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -66,9 +67,9 @@ def test_last_backup_time(tmp_path: Path) -> None:
 
 
 @pytest.fixture
-def job_context(migrated: Settings, clock: FakeClock) -> runner.JobContext:
+async def job_context(migrated: Settings, clock: FakeClock) -> AsyncIterator[runner.JobContext]:
     engine = create_app_engine(migrated.async_database_url)
-    return runner.JobContext(
+    yield runner.JobContext(
         state=SchedulerState(),
         clock=clock,
         zone=ZoneInfo(migrated.timezone),
@@ -77,6 +78,7 @@ def job_context(migrated: Settings, clock: FakeClock) -> runner.JobContext:
         sessionmaker=create_sessionmaker(engine),
         channel=NullChannel(),
     )
+    await engine.dispose()  # an open connection's thread would outlive the test's loop (#93)
 
 
 @pytest.mark.anyio
@@ -157,34 +159,82 @@ async def test_no_catch_up_when_recent_backup_exists(job_context: runner.JobCont
     assert nightly > datetime.now(UTC)
 
 
-@pytest.mark.anyio
-async def test_stop_waits_for_cancelled_jobs_to_clean_up(job_context: runner.JobContext) -> None:
-    """Regression: shutdown used to dispose the engine while a cancelled job was still unwinding."""
+async def _started_scheduler(job_context: runner.JobContext, job: Any) -> tuple[Any, Any]:
     import asyncio
     from datetime import UTC
 
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
     started = asyncio.Event()
+
+    async def wrapped(ctx: runner.JobContext) -> None:
+        started.set()
+        await job(ctx)
+
+    scheduler = AsyncIOScheduler()
+    scheduler.add_job(runner._tracked(wrapped), args=[job_context], next_run_time=datetime.now(UTC))
+    scheduler.start()
+    await asyncio.wait_for(started.wait(), timeout=5)
+    assert len(job_context.running) == 1
+    return scheduler, started
+
+
+@pytest.mark.anyio
+async def test_stop_cancels_a_job_that_outlasts_the_grace_and_waits_for_it(job_context: runner.JobContext) -> None:
+    """Regression: shutdown used to dispose the engine while a cancelled job was still unwinding."""
+    import asyncio
+
     cleaned_up: list[bool] = []
 
     async def slow_job(_ctx: runner.JobContext) -> None:
-        started.set()
         try:
             await asyncio.sleep(3600)
         finally:
             await asyncio.sleep(0.05)  # async cleanup, like a session rollback
             cleaned_up.append(True)
 
-    scheduler = AsyncIOScheduler()
-    scheduler.add_job(runner._tracked(slow_job), args=[job_context], next_run_time=datetime.now(UTC))
-    scheduler.start()
-    await asyncio.wait_for(started.wait(), timeout=5)
-    assert len(job_context.running) == 1
-
-    await runner.stop_scheduler(scheduler, job_context)
+    scheduler, _ = await _started_scheduler(job_context, slow_job)
+    await runner.stop_scheduler(scheduler, job_context, grace=0.1)
     assert cleaned_up == [True]
     assert job_context.running == set()
+
+
+@pytest.mark.anyio
+async def test_stop_lets_a_running_job_finish(job_context: runner.JobContext) -> None:
+    """Regression (#93): APScheduler's cancel stranded a job's aiosqlite thread mid-query, and the
+    thread died with "Event loop is closed" if the loop closed first. A job within the grace
+    now finishes instead of being cancelled."""
+    import asyncio
+
+    outcome: list[str] = []
+
+    async def job(_ctx: runner.JobContext) -> None:
+        try:
+            await asyncio.sleep(0.2)
+            outcome.append("finished")
+        except asyncio.CancelledError:
+            outcome.append("cancelled")
+            raise
+
+    scheduler, _ = await _started_scheduler(job_context, job)
+    await runner.stop_scheduler(scheduler, job_context, grace=5)
+    assert outcome == ["finished"]
+    assert job_context.running == set()
+
+
+@pytest.mark.anyio
+async def test_a_job_failing_during_shutdown_is_logged(
+    job_context: runner.JobContext, caplog: pytest.LogCaptureFixture
+) -> None:
+    async def job(_ctx: runner.JobContext) -> None:
+        import asyncio
+
+        await asyncio.sleep(0.05)
+        raise ValueError("boom")
+
+    scheduler, _ = await _started_scheduler(job_context, job)
+    await runner.stop_scheduler(scheduler, job_context, grace=5)
+    assert "scheduled job failed during shutdown" in caplog.text
 
 
 def test_stale_partial_backups_are_removed(migrated: Settings) -> None:

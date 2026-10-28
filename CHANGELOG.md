@@ -34,6 +34,10 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
   - The buttons come in short rows, as on the card, so Slack doesn't hide any under **+ N more**.
   - Home says who's coordinating a call, or that you are.
 
+### Fixed
+
+- Shutting down no longer cancels a scheduler job in the middle of a database query (#93). A job that is running when Dinnerbell stops now finishes, up to the shutdown deadline, and only a job that outlasts it is cancelled. Cancelling mid-query could leave a database worker thread to fail with "Event loop is closed" as the process exited.
+
 ### Upgrade notes
 
 - The database migrates to revision `0013_breakfast` when Dinnerbell starts. It rebuilds the `event` and `meal_log` tables so a call, an offer, or a logged meal can be breakfast. Every row is kept, along with the tables' indexes and foreign keys, and call and meal IDs are still never reused. Like 0012, it must run with foreign keys off, as `dinnerbell serve` and `dinnerbell migrate` do; run any other way, it refuses. To go back, restore your backup. Downgrading the schema instead refuses while any breakfast call, offer, or meal exists, rather than delete them.
