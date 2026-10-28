@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Run one shard of the suite, so CI can run the shards in parallel jobs (.github/workflows/ci.yml).
 
-``DINNERBELL_TEST_SHARD=2/4`` keeps every fourth test, starting at the second, in sorted order.
+``DINNERBELL_TEST_SHARD=2/6`` keeps every sixth test, starting at the second, in sorted order.
 Sorted order puts the tests of one module side by side, so a module's slow tests land in
 different shards. Without the variable, every test runs."""
 
@@ -14,10 +14,10 @@ import pytest
 
 
 def parse(spec: str) -> tuple[int, int]:
-    """``"2/4"`` is shard 2 of 4. Raises ``ValueError`` for anything else."""
+    """``"2/6"`` is shard 2 of 4. Raises ``ValueError`` for anything else."""
     index, slash, total = spec.partition("/")
     if not (slash and index.isdecimal() and total.isdecimal()) or not 1 <= int(index) <= int(total):
-        raise ValueError(f"DINNERBELL_TEST_SHARD must look like 2/4 (shard, then total), not {spec!r}")
+        raise ValueError(f"DINNERBELL_TEST_SHARD must look like 2/6 (shard, then total), not {spec!r}")
     return int(index), int(total)
 
 
