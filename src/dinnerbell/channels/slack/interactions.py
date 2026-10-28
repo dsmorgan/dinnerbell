@@ -594,7 +594,7 @@ class Interactions:
                     "; retrying" if fresh else "",
                     extra=extra | refusal(exc),
                 )
-                for pause in RETRY_PAUSES if fresh else ():
+                for attempt, pause in enumerate(RETRY_PAUSES if fresh else (), 1):
                     await self.badge_files.pause(pause)
                     try:
                         await self.api.publish_home(
@@ -604,14 +604,16 @@ class Interactions:
                         if not refused_blocks(again):
                             raise
                         log.warning(
-                            "slack refused badge art again (%s: %s)",
+                            "slack refused badge art again (retry %d of %d: %s: %s)",
+                            attempt,
+                            len(RETRY_PAUSES),
                             again.code,
                             again.detail,
                             extra=extra | refusal(again),
                         )
                     else:
                         return
-                await self.badge_files.forget(member.household_id, art.values())
+                await self.badge_files.forget(member.household_id, art.values(), cool=bool(fresh))
                 view = build({})
             else:
                 return

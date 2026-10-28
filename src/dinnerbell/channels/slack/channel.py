@@ -183,7 +183,7 @@ class SlackChannel:
                 extra=extra | refusal(exc),
             )
             retried: MessageRef | None = None
-            for pause in RETRY_PAUSES if fresh else ():
+            for attempt, pause in enumerate(RETRY_PAUSES if fresh else (), 1):
                 await self.badge_files.pause(pause)
                 try:
                     retried = await self._send(message, slack_user, thread)
@@ -191,7 +191,9 @@ class SlackChannel:
                     if not refused_blocks(again):
                         raise
                     log.warning(
-                        "slack refused badge art again (%s: %s)",
+                        "slack refused badge art again (retry %d of %d: %s: %s)",
+                        attempt,
+                        len(RETRY_PAUSES),
                         again.code,
                         again.detail,
                         extra=extra | refusal(again),
@@ -199,7 +201,7 @@ class SlackChannel:
                 else:
                     break
             if retried is None:
-                await self.badge_files.forget(notification.household_id, art.values())
+                await self.badge_files.forget(notification.household_id, art.values(), cool=bool(fresh))
                 message = render(notification, self._context(directory)).payload()
                 retried = await self._send(message, slack_user, thread)
             ref = retried

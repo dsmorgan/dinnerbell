@@ -45,6 +45,9 @@ the caller shows text. What was uploaded stays cached, so a later ask finishes t
 RETRY_PAUSES = (1.5, 3.0)
 """Seconds to wait before each retry of a post Slack refused over blocks, when a file in it was
 uploaded in the same call (``BadgeFiles.pause`` does the waiting). At most about 4.5 s in all."""
+FRESH_FOR = timedelta(seconds=10)
+"""How long after an upload this process still treats the file as new for retries, whichever caller
+asks (a concurrent caller gets the cached ID but may hit the same not-yet-processed file)."""
 MAX_ERROR = 200
 """Characters of an error that the log line keeps."""
 COOLDOWN = timedelta(minutes=15)
@@ -80,6 +83,7 @@ class BadgeFiles:
         """Waits; tests pass one that doesn't."""
         self._locks: dict[tuple[int, Wanted], asyncio.Lock] = {}
         self._retry_at = datetime.min.replace(tzinfo=UTC)
+        self._uploaded_at: dict[str, datetime] = {}
 
     async def file_ids(
         self, household_id: int, wanted: Iterable[Wanted], fresh: set[str] | None = None
@@ -97,8 +101,12 @@ class BadgeFiles:
             self._failed(household_id, exc)
         return found
 
-    async def forget(self, household_id: int, file_ids: Iterable[str]) -> None:
-        """Drop remembered files Slack refused, so the next use uploads them again. Never raises."""
+    async def forget(self, household_id: int, file_ids: Iterable[str], *, cool: bool = False) -> None:
+        """Drop remembered files Slack refused, so the next use uploads them again. Never raises.
+        ``cool`` also pauses new uploads for ``COOLDOWN``: Slack refused files that just uploaded
+        even after the retries, so uploading again at once would only repeat the wait."""
+        if cool:
+            self._retry_at = self.clock() + COOLDOWN
         ids = set(file_ids)
         if not ids:
             return
@@ -120,9 +128,10 @@ class BadgeFiles:
             row = known.get(want)
             if row is not None and row.content_hash == _hash(png):
                 found[want] = row.file_id
+                if self._is_recent(row.file_id):
+                    fresh.add(row.file_id)
             elif not cooling:
                 uploaded[want] = await self._upload(household_id, want, png)
-        # One wait for all the new files together, so six uploads don't cost six waits.
         found.update(uploaded)
         fresh.update(uploaded.values())
 
@@ -134,12 +143,19 @@ class BadgeFiles:
             async with self.sessionmaker() as db:  # another caller may have uploaded it while this one waited
                 row = (await BadgeFileRepository(db).all(household_id)).get(want)
             if row is not None and row.content_hash == digest:
-                return row.file_id
+                return row.file_id  # a concurrent caller's upload: _is_recent makes it fresh here too
             file_id = await self.upload(f"{key}-{tier}.png", png, f"{BY_KEY[BadgeKey(key)].name}, {Tier(tier).label}")
+            now = self.clock()
+            self._uploaded_at = {i: t for i, t in self._uploaded_at.items() if now - t < FRESH_FOR}
+            self._uploaded_at[file_id] = now
             # Shielded: if the caller gives up now, the file is already in Slack, so the save still lands.
             await asyncio.shield(self._save(household_id, BadgeFile(key, tier, digest, file_id)))
             log.info("badge art uploaded", extra={"household_id": household_id, "badge": key, "tier": tier})
             return file_id
+
+    def _is_recent(self, file_id: str) -> bool:
+        uploaded = self._uploaded_at.get(file_id)
+        return uploaded is not None and self.clock() - uploaded < FRESH_FOR
 
     async def _save(self, household_id: int, file: BadgeFile) -> None:
         async with self.sessionmaker() as db:

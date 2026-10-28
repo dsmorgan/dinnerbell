@@ -338,6 +338,9 @@ async def test_slack_refusing_a_file_on_home_publishes_text_and_forgets_the_file
     assert "slack_file" not in text and tag("Full Table", "First") in text
     async with house.sessionmaker() as db:
         assert await BadgeFileRepository(db).all(house.household.id) == {}
+    await slack.open_home("Alex")  # cooling down: text, no upload
+    assert "slack_file" not in json.dumps(slack.last_home("Alex"))
+    house.clock.advance(COOLDOWN + timedelta(seconds=1))
     await slack.open_home("Alex")  # the next view uploads again
     assert "slack_file" in json.dumps(slack.last_home("Alex"))
 
@@ -455,6 +458,13 @@ async def test_three_refusals_forget_the_files_and_post_text(house: House) -> No
     assert pauses.waits == list(RETRY_PAUSES)
     async with house.sessionmaker() as db:
         assert await BadgeFileRepository(db).all(house.household.id) == {}
+    # The cooldown: the next badge post shows text without uploading or pausing.
+    slack.fake.clear()
+    await award(house, "Alex", BadgeKey.CHEF, Tier.GOLD)
+    await announce(house)
+    await slack.drain()
+    assert slack.fake.of("files.getUploadURLExternal") == [] and len(slack.fake.of("chat.postMessage")) == 1
+    assert pauses.waits == list(RETRY_PAUSES)
 
 
 async def test_a_retry_that_fails_for_another_reason_is_not_hidden(house: House) -> None:
@@ -472,6 +482,7 @@ async def test_a_refusal_with_only_cached_files_is_not_retried_and_forgets_them(
     await earn(house)
     await slack.drain()
     slack.fake.clear()
+    house.clock.advance(timedelta(seconds=11))  # past the time a file counts as new
     pauses = Pauses()
     slack.conn.badge_files.pause = pauses
     slack.fake.fail("chat.postMessage", Failure("invalid_blocks"))
@@ -507,3 +518,30 @@ async def test_a_home_retry_that_fails_for_another_reason_is_not_hidden(house: H
     slack.fake.fail("views.publish", Failure("invalid_blocks"), Failure("user_not_found"))
     await slack.open_home("Alex")
     assert len(slack.fake.of("views.publish")) == 2
+
+
+async def test_a_file_a_concurrent_caller_just_uploaded_is_retried_for_both(house: House) -> None:
+    slack = await wire(house)
+    slack.fake.fail("chat.postMessage", Failure("invalid_blocks"), Failure("invalid_blocks"))
+    kim = note.PersonInfo(house["Kim"].id, "Kim")
+    posts = [
+        note.BadgesEarned(house.household.id, n, (note.BadgeNews(kim, (note.BadgeTier("Chef", "Gold"),)),))
+        for n in (1, 2)
+    ]
+    await asyncio.gather(*(slack.conn.channel.deliver(p) for p in posts))
+    assert len(slack.fake.of("files.getUploadURLExternal")) == 1  # one upload, shared
+    calls = slack.fake.of("chat.postMessage")
+    assert len(calls) == 4 and all(any("accessory" in b for b in c.args["blocks"]) for c in calls)
+    async with house.sessionmaker() as db:
+        assert len(await BadgeFileRepository(db).all(house.household.id)) == 1
+
+
+async def test_a_file_stays_fresh_for_ten_seconds_then_counts_as_cached(house: House) -> None:
+    badges = files(house, Uploads())
+    await badges.file_ids(house.household.id, [CHEF])
+    house.clock.advance(timedelta(seconds=9))
+    again: set[str] = set()
+    assert await badges.file_ids(house.household.id, [CHEF], again) == {CHEF: "F1"} and again == {"F1"}
+    house.clock.advance(timedelta(seconds=2))  # 11 s since the upload
+    later: set[str] = set()
+    assert await badges.file_ids(house.household.id, [CHEF], later) == {CHEF: "F1"} and later == set()
