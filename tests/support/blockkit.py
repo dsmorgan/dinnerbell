@@ -154,7 +154,10 @@ def check_blocks(blocks: Any, surface: str = "message") -> None:
         elif kind == "context":
             assert 0 < len(block["elements"]) <= 10, where
             for element in block["elements"]:
-                check_text(element, 3000, f"{where}.element")
+                if element.get("type") == "image":
+                    check_image(element, f"{where}.element")
+                else:
+                    check_text(element, 3000, f"{where}.element")
         elif kind == "actions":
             assert 0 < len(block["elements"]) <= 25, where
             for element in block["elements"]:
