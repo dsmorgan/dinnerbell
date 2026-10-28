@@ -8,6 +8,8 @@ from zoneinfo import ZoneInfo
 
 from jinja2 import Environment
 
+from dinnerbell.web.badge_art import badge_name, badge_svg
+
 
 def clock(moment: datetime | None, timezone: str) -> str:
     """A UTC moment as a wall-clock time in ``timezone``, such as "4:30 PM"."""
@@ -39,3 +41,4 @@ def day(value: date) -> str:
 
 def register(env: Environment) -> None:
     env.filters.update(clock=clock, wall=wall, hhmm=hhmm, local_hhmm=local_hhmm, day=day)
+    env.globals.update(badge_svg=badge_svg, badge_name=badge_name)

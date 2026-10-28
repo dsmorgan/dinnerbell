@@ -1,0 +1,40 @@
+{#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
+{#- Badge macros (M4, #15). Every page that shows a badge uses these, so the art, the names and
+    the text labels live in one place. Import with `{% from "_badge.html" import ... %}`.
+
+    badge_art(key, tier, locked=False, decorative=False)
+        Just the picture. `key` is a BadgeKey value ("chef"), `tier` a Tier value ("gold").
+        `locked` draws a soft gray placeholder. `decorative` hides it from screen readers; use
+        it where the name and tier are in text beside it.
+    badge_chip(key, tier)
+        A badge as an inline picture and a "Chef · Gold" label: the form for lists of awards.
+    badge_row(p)
+        One `domain.badges.Progress`: picture, name, tier or "Not earned yet", and progress to
+        the next tier.
+
+    Slack and App Home reuse the names, not the markup: `web.badge_art.standalone_svg(key,
+    tier)` returns the same art as a still SVG file to render as a PNG. -#}
+{% macro badge_art(key, tier, locked=False, decorative=False) -%}
+<span class="badge-art">{{ badge_svg(key, tier, locked=locked, decorative=decorative) }}</span>
+{%- endmacro %}
+
+{% macro badge_chip(key, tier) -%}
+<span class="badge-chip">{{ badge_art(key, tier, decorative=True) }}<span class="badge-name">{{ badge_name(key) }} · {{ tier|capitalize }}</span></span>
+{%- endmacro %}
+
+{% macro badge_row(p) -%}
+{% set key = p.badge.key.value %}
+{% set locked = p.tier is none %}
+<li class="badge-row{% if locked %} locked{% endif %}">
+  {{ badge_art(key, (p.tier or p.next_tier).value, locked=locked, decorative=True) }}
+  <div class="badge-info">
+    <h3 class="badge-title">{{ p.badge.name }}<span class="badge-tier"> · {% if locked %}Not earned yet{% else %}{{ p.tier.label }}{% endif %}</span></h3>
+    {% if p.next_tier %}
+    <progress value="{{ [p.count, p.next_at]|min }}" max="{{ p.next_at }}" aria-label="{{ p.badge.name }}: {{ p.count }} of {{ p.next_at }} {{ p.badge.earned_by }} for {{ p.next_tier.label }}">{{ p.count }} of {{ p.next_at }}</progress>
+    <p class="small muted">{{ p.badge.earned_by|capitalize }}: {{ p.count }} of {{ p.next_at }} for {{ p.next_tier.label }}.</p>
+    {% else %}
+    <p class="small muted">Top tier reached. {{ p.badge.earned_by|capitalize }}: {{ p.count }}.</p>
+    {% endif %}
+  </div>
+</li>
+{%- endmacro %}

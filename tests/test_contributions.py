@@ -338,9 +338,18 @@ async def test_a_guest_who_picks_up_earns_it_and_the_member_who_brought_them_hos
         }
     assert (await counts(house, "Sam"))[Kind.HOSTED] == 1
     assert Kind.HOSTED not in await counts(house, "Alex")
-    with pytest.raises(Forbidden):  # a guest has no Stats page
+    with pytest.raises(Forbidden):  # the member view is for members; a guest has guest_stats
         async with house.sessionmaker() as db:
             await stats.my_stats(db, riley[0])
+    async with house.sessionmaker() as db:
+        own = await stats.guest_stats(db, riley[0])
+        assert {p.badge.key for p in own.progress} == {
+            BadgeKey.CHEF, BadgeKey.ROAD_RUNNER, BadgeKey.ORDER_UP, BadgeKey.QUARTERBACK, BadgeKey.ON_A_ROLL,
+        }  # fmt: skip
+        assert own.counts == {Kind.PICKED_UP: 1}
+    with pytest.raises(Forbidden):
+        async with house.sessionmaker() as db:
+            await stats.guest_stats(db, house["Alex"])
 
 
 async def test_a_late_joiner_who_takes_part_is_a_participant_but_not_early(house: House) -> None:
