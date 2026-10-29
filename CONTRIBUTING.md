@@ -90,16 +90,30 @@ Releases follow [Semantic Versioning](https://semver.org/), and [CHANGELOG.md](C
 
    A release's digest never changes. Never re-run a release's workflow or move its tag; `publish` refuses to replace a published release. If the tag's run fails, or something is wrong with the release, cut X.Y.Z+1. The `scan-published` job is an alarm, not a gate: it scans the image after it's pushed, and a finding there also calls for X.Y.Z+1.
 
-5. Create the GitHub release from the changelog section, with the digest appended.
+5. Download the install bundle (`dinnerbell-X.Y.Z.tar.gz` and its `.sha256`, see [docs/install.md](docs/install.md)) that the tag's `release-bundle` job attested, and verify it.
+
+   ```sh
+   bundle=$(mktemp -d)
+   run=$(gh run list --workflow ci.yml --branch vX.Y.Z --limit 1 --json databaseId --jq '.[0].databaseId')
+   gh run download "$run" --repo dsmorgan/dinnerbell --name dinnerbell-X.Y.Z --dir "$bundle"
+   (cd "$bundle" && shasum -a 256 -c dinnerbell-X.Y.Z.tar.gz.sha256)
+   gh attestation verify "$bundle/dinnerbell-X.Y.Z.tar.gz" \
+     --repo dsmorgan/dinnerbell \
+     --signer-workflow dsmorgan/dinnerbell/.github/workflows/ci.yml \
+     --source-ref refs/tags/vX.Y.Z
+   ```
+
+6. Create the GitHub release from the changelog section, with the digest appended and the bundle attached. Releases are immutable, so attach the bundle now: nothing can be added after `gh release create` publishes it. If the bundle is missing or doesn't verify, don't publish the release; cut X.Y.Z+1.
 
    ```sh
    notes="${TMPDIR:-/tmp}/dinnerbell-X.Y.Z.md"
    awk '/^## \[X.Y.Z\]/{f=1; next} /^## /{f=0} f' CHANGELOG.md > "$notes"
    printf '\n### Image\n\n`ghcr.io/dsmorgan/dinnerbell:X.Y.Z@sha256:...`\n' >> "$notes"
-   gh release create vX.Y.Z --title "X.Y.Z" --notes-file "$notes"
+   gh release create vX.Y.Z --title "X.Y.Z" --notes-file "$notes" \
+     "$bundle/dinnerbell-X.Y.Z.tar.gz" "$bundle/dinnerbell-X.Y.Z.tar.gz.sha256"
    ```
 
-6. Promote the release to production with the checklist in [docs/setup.md](docs/setup.md#promote-a-release).
+7. Promote the release to production with the checklist in [docs/setup.md](docs/setup.md#promote-a-release).
 
 ## Update the vendored htmx
 

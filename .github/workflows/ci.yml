@@ -2,6 +2,7 @@
 # One workflow on purpose: `needs:` works only inside a workflow, and a red build must never
 # publish. `check` and `image` run everywhere; `publish` runs only after both pass, on a push to
 # main, a vX.Y.Z tag, or a manual run on main; `scan-published` then scans the pushed digest.
+# On a release tag, `release-bundle` then attests the install bundle and keeps it as an artifact.
 # `check` itself only gathers `lint` and the eight `test` shards, which run in parallel.
 name: CI
 
@@ -507,7 +508,16 @@ jobs:
           sudo apt-get update -q
           sudo apt-get install -y -q podman-compose
       - name: Shellcheck
-        run: shellcheck deploy/dinnerbell-test deploy/check-secrets scripts/check-compose.sh
+        run: shellcheck deploy/dinnerbell-test deploy/check-secrets scripts/check-compose.sh scripts/build-bundle.sh
+      # The install bundle (docs/install.md), built on every run so the script stays exercised. Two
+      # builds of one commit must be byte for byte the same. `release-bundle` builds the release's.
+      - name: Build the install bundle
+        run: |
+          scripts/build-bundle.sh "$RUNNER_TEMP/bundle-1"
+          scripts/build-bundle.sh "$RUNNER_TEMP/bundle-2"
+          cmp "$RUNNER_TEMP"/bundle-1/dinnerbell-*.tar.gz "$RUNNER_TEMP"/bundle-2/dinnerbell-*.tar.gz
+          (cd "$RUNNER_TEMP/bundle-1" && sha256sum --check --strict ./*.sha256)
+          tar --list --verbose --gzip --file "$RUNNER_TEMP"/bundle-1/dinnerbell-*.tar.gz
       # check-compose.sh runs `dinnerbell config check` from this checkout in place of the image.
       - name: Read the uv version from the Containerfile
         id: uv
@@ -529,3 +539,57 @@ jobs:
       # and checks that the test wrapper refuses unsafe setups and runs its configuration check.
       - name: Check compose files
         run: scripts/check-compose.sh
+
+  # The install bundle for a release tag: built from the tagged commit, attested like the image, and
+  # kept as a workflow artifact. Releases are immutable and are created by hand after this run passes,
+  # so the release recipe in CONTRIBUTING.md downloads it, verifies it, and attaches it then. Nothing
+  # here writes to the release. `needs: publish` keeps it to a tag that `publish` accepted.
+  release-bundle:
+    name: release-bundle
+    needs: [publish, compose]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write # Sigstore signing certificate for the attestation
+      attestations: write # store the attestation
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build the install bundle
+        id: bundle
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          scripts/build-bundle.sh dist
+          name="dinnerbell-${TAG#v}"
+          if [[ ! -f "dist/$name.tar.gz" ]]; then
+            echo "::error::The bundle isn't named for $TAG: $(ls dist)"
+            exit 1
+          fi
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+      - name: Attest the bundle
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: dist/${{ steps.bundle.outputs.name }}.tar.gz
+          create-storage-record: false
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ steps.bundle.outputs.name }}
+          path: |
+            dist/${{ steps.bundle.outputs.name }}.tar.gz
+            dist/${{ steps.bundle.outputs.name }}.tar.gz.sha256
+          if-no-files-found: error
+      - name: Record the bundle
+        env:
+          NAME: ${{ steps.bundle.outputs.name }}
+        run: |
+          {
+            echo "### Install bundle"
+            echo
+            echo "Artifact \`${NAME}\`: \`$(cat "dist/${NAME}.tar.gz.sha256")\`"
+            echo
+            echo "Attach it to the release as in the release recipe in CONTRIBUTING.md."
+          } >> "$GITHUB_STEP_SUMMARY"

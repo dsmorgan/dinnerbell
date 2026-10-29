@@ -7,6 +7,7 @@ import ipaddress
 import logging
 import os
 import re
+import secrets
 from collections.abc import Mapping
 from functools import cached_property
 from pathlib import Path
@@ -97,6 +98,27 @@ def is_test_instance(instance_label: str) -> bool:
     return bool(instance_label)
 
 
+def secret_key_problem(key: str) -> str | None:
+    """Why ``key`` can't be DINNERBELL_SECRET_KEY, or None when it can. The message never quotes it."""
+    how = "generate one with: python -c 'import secrets; print(secrets.token_urlsafe(48))'"
+    if len(key) < MIN_SECRET_KEY_LENGTH:
+        return f"must be at least {MIN_SECRET_KEY_LENGTH} characters; {how}"
+    folded = re.sub(r"[-_\s]", "", key.lower())
+    if any(marker in folded for marker in SECRET_KEY_PLACEHOLDER_MARKERS):
+        return f"is still a placeholder from an example file; {how}"
+    if len(set(key)) < MIN_SECRET_KEY_DISTINCT:
+        return f"is too repetitive to be random; {how}"
+    return None
+
+
+def generate_secret_key() -> str:
+    """A new random DINNERBELL_SECRET_KEY, 64 URL-safe characters, that passes every check."""
+    while True:  # a random key fails a check (by spelling a placeholder word) about once in 10**10 tries
+        key = secrets.token_urlsafe(48)
+        if secret_key_problem(key) is None:
+            return key
+
+
 def _is_local_http(url: str) -> bool:
     parts = urlsplit(url)
     return parts.scheme == "http" and parts.hostname in LOCAL_HOSTS
@@ -180,15 +202,8 @@ class Settings(BaseSettings):
     @field_validator("secret_key")
     @classmethod
     def _check_secret_key(cls, value: SecretStr) -> SecretStr:
-        key = value.get_secret_value()
-        how = "generate one with: python -c 'import secrets; print(secrets.token_urlsafe(48))'"
-        if len(key) < MIN_SECRET_KEY_LENGTH:
-            raise ValueError(f"must be at least {MIN_SECRET_KEY_LENGTH} characters; {how}")
-        folded = re.sub(r"[-_\s]", "", key.lower())
-        if any(marker in folded for marker in SECRET_KEY_PLACEHOLDER_MARKERS):
-            raise ValueError(f"is still a placeholder from an example file; {how}")
-        if len(set(key)) < MIN_SECRET_KEY_DISTINCT:
-            raise ValueError(f"is too repetitive to be random; {how}")
+        if problem := secret_key_problem(value.get_secret_value()):
+            raise ValueError(problem)
         return value
 
     @field_validator("admin_email")

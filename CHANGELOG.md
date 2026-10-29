@@ -6,6 +6,11 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ## [Unreleased]
 
+### Added
+
+- **Install without cloning** (#33). Each release attaches `dinnerbell-X.Y.Z.tar.gz` and its SHA-256: `compose.yaml` pinned to the release, `compose.secrets.yaml`, `.env.example`, both Slack manifests, `deploy/dinnerbell-test` with its compose files, and `INSTALL.md`. CI builds it from the tag and attests it, so `gh attestation verify` covers it like the image. [docs/install.md](docs/install.md) installs from it in eight steps.
+- **`dinnerbell init`** writes a new env file. It asks for the hostname, admin email, time zone, household name, and the Slack app's values, with a hint for each; generates `DINNERBELL_SECRET_KEY`; and checks the result as `dinnerbell config check` does. Secrets are read without echo and never printed. It writes to `--output FILE` with mode 600, or to standard output when that isn't a terminal. `init --test` writes a test instance's file and refuses production's secrets, client ID, and hostname from `.env`.
+
 ### Changed
 
 - Documentation only: step 9 of the setup guide again explains that `DINNERBELL_BASE_URL` must match the public URL, what `DINNERBELL_ADMIN_EMAIL` does, that `DINNERBELL_HOUSEHOLD_NAME` and `DINNERBELL_TIMEZONE` apply on first start only, and which secret keys Dinnerbell refuses. 0.9.1's rewrite had dropped these notes.

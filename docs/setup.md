@@ -2,6 +2,8 @@
 
 This guide takes you from nothing to a working Dinnerbell install: a Slack workspace and app, a container on your host, a public HTTPS hostname, and your family signed in. When it works, harden it with [hardening.md](hardening.md).
 
+To install from a release bundle without cloning the repository, follow the shorter [install.md](install.md), and come back here for details.
+
 ## Status
 
 Dinnerbell is under construction. Milestones M0 through M2 ship these parts, and this guide covers them fully:

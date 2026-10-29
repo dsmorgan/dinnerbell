@@ -8,6 +8,8 @@ __pycache__/
 .ruff_cache/
 .coverage
 htmlcov/
+# scripts/build-bundle.sh writes the install bundle here.
+/dist/
 
 # Local config and data. .env and .env.test hold secrets; only the examples are committed.
 .env
