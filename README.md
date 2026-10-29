@@ -50,7 +50,7 @@ You don't need a calendar, an LLM, or an email server. One install serves one ho
 ## How a dinner works
 
 1. At the call time, 3:00 PM by default, Dinnerbell posts a dinner call in your Slack channel and mentions everyone.
-2. Each person taps **Answer**: in, maybe, or out, and whether they can cook, pick up, or order. Anyone who hasn't answered gets one reminder.
+2. Each person taps **Answer**: in, maybe, or out, and whether they can cook, pick up, or order. Anyone who hasn't answered gets a reminder, unless they turned reminders off.
 3. When answers close, Dinnerbell ranks meals from your catalog that fit everyone eating, using vetoes, preferences, variety, and who can do what, and posts the top three for a vote.
 4. The vote picks the meal, and Dinnerbell posts the decision with the meal time and who cooks, picks up, or orders. Each of them gets a direct message.
 5. After the meal, someone taps **Mark done**, or Dinnerbell marks it done two hours after the meal time. It records who did what and announces new badges.
