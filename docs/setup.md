@@ -144,7 +144,7 @@ Avoid `0.0.0.0` unless a firewall limits who can reach the port.
 
    Or use `openssl rand -base64 48`.
 
-   Dinnerbell refuses to start with a key that is shorter than 32 characters, has fewer than 8 distinct characters, or contains a placeholder word (`replace`, `changeme`, `placeholder`, `example`, `yoursecret`, `secretkeyhere`; case, `-`, and `_` ignored), such as the text in `secrets/DINNERBELL_SECRET_KEY.example`. A generated key always passes, and an existing long, random key keeps working.
+   Dinnerbell refuses to start with a key that is shorter than 32 characters, has fewer than 8 distinct characters, or contains placeholder text such as `REPLACE-ME`. A generated key always passes.
 
 4. Edit `.env` and fill in the values you collected. To keep the four secrets out of `.env`, see [Keep secrets in files](#keep-secrets-in-files) (optional).
 
@@ -165,7 +165,7 @@ Avoid `0.0.0.0` unless a firewall limits who can reach the port.
    DINNERBELL_SLACK_CHANNEL=C0123ABCDEF
    ```
 
-   `DINNERBELL_BASE_URL` must match the URL people type: the same host, with `https://` and no path. Dinnerbell derives the sign-in redirect URL from it and checks every form submission against it, so with any other host, such as a LAN IP, every form fails with "Cross-origin request refused".
+   `DINNERBELL_BASE_URL` must match the URL people type: the same host and port, with `https://` and no path. Dinnerbell derives the sign-in redirect URL from it and checks every form submission against it, so with any other host, such as a LAN IP, every form fails with "Cross-origin request refused".
 
    `DINNERBELL_ADMIN_EMAIL` must match the email on your Slack account. If you change it later, Dinnerbell invites the new address as another admin on the next start.
 
