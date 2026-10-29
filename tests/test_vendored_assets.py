@@ -23,3 +23,13 @@ def test_vendored_htmx_matches_the_npm_release() -> None:
         f"{HTMX_FILE} differs from npm htmx.org@{HTMX_VERSION}. Restore it from the npm package, "
         "or follow CONTRIBUTING.md to update htmx on purpose."
     )
+
+
+def test_build_group_matches_build_system_requires() -> None:
+    import tomllib
+    from pathlib import Path
+
+    data = tomllib.loads(Path(__file__).parents[1].joinpath("pyproject.toml").read_text())
+    assert sorted(data["build-system"]["requires"]) == sorted(data["dependency-groups"]["build"]), (
+        "The Containerfile builds with the locked `build` group; keep it equal to [build-system].requires."
+    )

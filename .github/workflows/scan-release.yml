@@ -92,6 +92,7 @@ jobs:
             # run in that gap sees :latest one release ahead of the newest release. Accept that only
             # when the image's tag exists, has no release yet, is newer than the newest release, and
             # the image was built in the last two hours. Anything else is a really wrong :latest.
+            # Not checked: that the tag was pushed by the publisher. Whoever can push tags can publish.
             new_tag="v$version"
             created=$(jq -r '.config.Labels["org.opencontainers.image.created"] // .created // ""' <<<"$config_json")
             created_epoch=$(date -u -d "$created" +%s 2>/dev/null || echo 0)

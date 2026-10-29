@@ -33,10 +33,10 @@ LABEL org.opencontainers.image.title="Dinnerbell" \
       org.opencontainers.image.description="Household meal coordination" \
       org.opencontainers.image.licenses="AGPL-3.0-or-later" \
       org.opencontainers.image.source="https://github.com/dsmorgan/dinnerbell"
-# Remove pip: the app runs from /app/.venv, which has none, and nothing in the image installs
-# packages. This also keeps pip's own advisories out of the image scan.
+# Remove pip and ensurepip's bundled pip wheel: the app runs from /app/.venv, which has none, and
+# nothing in the image installs packages. This keeps pip's advisories out of the image scan.
 RUN python -m pip uninstall --yes pip \
- && rm -rf /usr/local/bin/pip /usr/local/bin/pip3 /usr/local/bin/pip3.12 /usr/local/lib/python3.12/site-packages/pip* \
+ && rm -rf /usr/local/bin/pip /usr/local/bin/pip3 /usr/local/bin/pip3.12 /usr/local/lib/python3.12/site-packages/pip* /usr/local/lib/python3.12/ensurepip \
  && groupadd --system --gid 10001 dinnerbell \
  && useradd --system --uid 10001 --gid dinnerbell --no-create-home --home-dir /nonexistent dinnerbell \
  && mkdir -p /data/backups \

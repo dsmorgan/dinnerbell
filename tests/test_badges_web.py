@@ -396,11 +396,17 @@ def test_a_hostile_member_name_is_escaped_on_the_stats_page(house: Settings, adm
 
 
 @pytest.mark.parametrize("junk", [" " * 40 + "x", "9" * 40, "\uff11\uff12", "²", "1 " * 20])
-def test_adversarial_count_input_is_refused_quickly(admin: TestClient, migrated: Settings, junk: str) -> None:
-    from time import monotonic
+def test_adversarial_count_input_is_refused_before_conversion(
+    admin: TestClient, migrated: Settings, junk: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Work done, not elapsed time: the check must reject junk before int() ever sees it.
+    from dinnerbell.web.routes import stats
 
-    started = monotonic()
+    def guarded(text: str) -> int:
+        assert text != junk.strip(), "int() ran on input the check should have refused"
+        return int(text)
+
+    monkeypatch.setattr(stats, "int", guarded, raising=False)
     response = submit(admin, "/admin/badges", form(1, junk, 50, 100, 200))
     assert response.status_code == 400 and "must be a whole number" in page(response)
-    assert monotonic() - started < 2
     assert audits(migrated) == []
