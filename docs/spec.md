@@ -601,7 +601,7 @@ All configuration comes from environment variables with a `DINNERBELL_` prefix, 
 | `DINNERBELL_ENV_FILE` | Compose only: env file the container reads, default `.env`. Set only by `deploy/dinnerbell-test`, which pairs `.env.test` with the `dinnerbell-test` project and its explicitly named volume |
 | `DINNERBELL_PORT` | Compose only: host port, default `8013`. Set only by `deploy/dinnerbell-test`, to `8014`, never in `.env` |
 | `DINNERBELL_BIND` | Compose only, not read by the app: host address that `compose.yaml` publishes the port on, default `127.0.0.1`. Set it to the interface the reverse proxy reaches |
-| `DINNERBELL_TRUSTED_PROXIES` | Optional comma-separated IPs or CIDRs whose `X-Forwarded-For` is trusted for client IPs, such as the reverse proxy's address |
+| `DINNERBELL_TRUSTED_PROXIES` | Optional comma-separated IPs or CIDRs whose `X-Forwarded-For` is trusted for client IPs. Optional; leave it empty unless you need per-client rate limiting behind a proxy. Set one proxy address, never a range, and never an address that other clients share, such as a container gateway |
 
 Household-level settings that change over time (slot schedule, weights, thresholds) live in the database and are edited in Admin, not in environment variables.
 

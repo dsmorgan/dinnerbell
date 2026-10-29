@@ -185,9 +185,6 @@ Avoid `0.0.0.0` unless a firewall limits who can reach the port.
    DINNERBELL_SLACK_TEAM_ID=T0123ABCDEF
 
    DINNERBELL_SLACK_CHANNEL=C0123ABCDEF
-
-   # Set this in the trusted-proxy step below.
-   # DINNERBELL_TRUSTED_PROXIES=
    ```
 
    `DINNERBELL_ADMIN_EMAIL` must match the email on your Slack account. If you change it later, Dinnerbell invites the new address as another admin on the next start.
@@ -366,45 +363,6 @@ Do this once on an existing install, from the clone's directory, **before** you 
 5. Recreate the service from the new release: `podman-compose down && podman-compose up -d`. The logs show no "is set in the environment" warning, and `/healthz` reports `"slack":"connected"`.
 
 If Dinnerbell stops at start and says it can't read a secret file, see the table in [Keep secrets in files](#keep-secrets-in-files). A test instance has the same four files in `secrets-test/`; do the same there with `.env.test` (`deploy/check-secrets` and `sed` both take the file names).
-
-### Set the trusted proxy
-
-Rate limiting needs the real client IP. Dinnerbell reads `X-Forwarded-For` only from proxies you list in `DINNERBELL_TRUSTED_PROXIES`.
-
-1. Add `DINNERBELL_LOG_LEVEL=DEBUG` to `.env`.
-2. Recreate the service so it reads `.env`. A restart doesn't re-read it.
-
-   ```sh
-   podman-compose down && podman-compose up -d
-   ```
-
-   With Docker: `docker compose down && docker compose up -d`
-
-3. Load your public URL in a browser.
-4. Read the logs. At this level, the app logs the peer IP and the resolved client IP for each request.
-
-   ```sh
-   podman-compose logs dinnerbell
-   ```
-
-   With Docker: `docker compose logs dinnerbell`
-
-5. Find the peer IP. It is the address the proxy connects from. With a Newt site, it is usually the address of the host or container that runs Newt. With a plain WireGuard site, it is the Pangolin server's tunnel address.
-
-   Check the peer IP from a second client too, such as `curl` from another machine on your LAN. Under Docker Desktop, and with rootless podman's port forwarding, every connection to a published port can arrive from the same gateway address, such as `10.0.2.2` or the bridge gateway. If the second client shows the same peer IP as Newt, trusting that address lets any client that can reach the published port forge `X-Forwarded-For`. Trust it only if nothing but Newt can reach the port, for example because `DINNERBELL_BIND` and your firewall restrict it. Otherwise leave `DINNERBELL_TRUSTED_PROXIES` empty: rate limiting then treats all clients as one, which is safe but stricter.
-6. Set the single peer address in `.env`, and remove the `DINNERBELL_LOG_LEVEL` line or set it back to `INFO`.
-
-   ```sh
-   DINNERBELL_TRUSTED_PROXIES=10.0.0.5
-   ```
-
-7. Recreate the service again.
-
-   ```sh
-   podman-compose down && podman-compose up -d
-   ```
-
-Set only the one address the proxy connects from. Never use `0.0.0.0/0`, or a LAN or podman subnet range. Anyone inside a trusted range can forge `X-Forwarded-For` and get around rate limiting.
 
 ### Resource and log limits
 
@@ -793,7 +751,7 @@ Both instances run from your production clone, as the same user. There's no seco
 | Slack app and command | Dinnerbell, `/dinnerbell` | Dinnerbell Test, `/dinnerbell-test` |
 | Pangolin authentication | Off | On |
 
-The instances share the clone and its `compose.yaml`, the host address in `DINNERBELL_BIND`, the Slack workspace (`DINNERBELL_SLACK_TEAM_ID`), and the proxy address in `DINNERBELL_TRUSTED_PROXIES`. Everything else is separate. The secret key, both Slack tokens, and the sign-in client secret must differ: `deploy/dinnerbell-test` refuses to start test when test's secret files (or, until you move them, `.env.test`) share one with production's.
+The instances share the clone and its `compose.yaml`, the host address in `DINNERBELL_BIND`, the Slack workspace (`DINNERBELL_SLACK_TEAM_ID`). Everything else is separate. The secret key, both Slack tokens, and the sign-in client secret must differ: `deploy/dinnerbell-test` refuses to start test when test's secret files (or, until you move them, `.env.test`) share one with production's.
 
 ### Create the test channel and Slack app
 
@@ -864,8 +822,6 @@ Git ignores `.env.test`. Never commit it.
 Unlike production, test runs unreleased code and only you use it, so it stays behind Pangolin's login. Sign in to Pangolin first, then select **Sign in with Slack**. If Slack's redirect lands on a Pangolin login page, sign in to Pangolin and select **Sign in with Slack** again.
 
 Pangolin's login protects only the hostname. Port 8014 is open to anything that can reach `DINNERBELL_BIND`, such as your LAN, where only Dinnerbell's own Slack sign-in stands in the way. Use your host firewall to allow port 8014 only from the address Newt connects from. With rootful Docker, published ports skip `ufw` rules, so add the rule to the `DOCKER-USER` chain instead.
-
-`DINNERBELL_TRUSTED_PROXIES` in `.env.test` takes the same address as in `.env`.
 
 ### Start, stop, and refresh
 
@@ -1105,7 +1061,6 @@ Each member is linked to the account they first signed in with. After you switch
 | Badges show as text tags, and the log says `slack refused badge art` | Slack refused the art in a post or App Home view. The line carries Slack's error code (`slack_error`) and its explanation (`slack_messages`). Dinnerbell retries a post with a new file up to twice; each refused try logs a line. | Send the line to the Dinnerbell issue tracker (#110). Dinnerbell has already posted text badges, so nothing is lost. |
 | Production starts with an empty database after an upgrade | Compose created a new volume, because you ran it from a different directory, with a different project name, or as a different user. | See "Switch a source-built install to the prebuilt image". Your data is still in the old volume. |
 | The test port, 8014, accepts connections but never answers | The test container is in a restart loop: Dinnerbell stops at start, usually on a missing or invalid setting in `.env.test`, and compose restarts it. Port forwarding keeps the port open in between. | Run `podman ps -a --filter name=dinnerbell-test`, and look for `Restarting` or a recent `Exited`. Read why with `deploy/dinnerbell-test logs dinnerbell`. Fix `.env.test`, then run `deploy/dinnerbell-test down` and `deploy/dinnerbell-test up -d`; the configuration check names any setting that's still wrong. |
-| Rate limiting blocks everyone at once | Dinnerbell sees the proxy's address for every request. | Set `DINNERBELL_TRUSTED_PROXIES` to the proxy's single address, then recreate with `podman-compose down && podman-compose up -d`. A restart doesn't re-read `.env`. |
 
 ### Read the logs
 

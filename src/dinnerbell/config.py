@@ -140,6 +140,7 @@ class Settings(BaseSettings):
     seed_file: Path | None = None
     log_level: LogLevel = "INFO"
     build: str = ""
+    # Optional. One proxy address, never a range or an address other clients share (a container gateway).
     trusted_proxies: Annotated[tuple[IPNetwork, ...], NoDecode] = ()
 
     @field_validator("database_url")
