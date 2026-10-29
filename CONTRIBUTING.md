@@ -94,7 +94,8 @@ Releases follow [Semantic Versioning](https://semver.org/), and [CHANGELOG.md](C
 
    ```sh
    bundle=$(mktemp -d)
-   run=$(gh run list --workflow ci.yml --branch vX.Y.Z --limit 1 --json databaseId --jq '.[0].databaseId')
+   run=$(gh run list --repo dsmorgan/dinnerbell --workflow ci.yml --branch vX.Y.Z --event push --limit 1 \
+     --json databaseId --jq '.[0].databaseId')
    gh run download "$run" --repo dsmorgan/dinnerbell --name dinnerbell-X.Y.Z --dir "$bundle"
    (cd "$bundle" && shasum -a 256 -c dinnerbell-X.Y.Z.tar.gz.sha256)
    gh attestation verify "$bundle/dinnerbell-X.Y.Z.tar.gz" \
