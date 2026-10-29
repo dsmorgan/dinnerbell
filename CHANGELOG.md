@@ -17,6 +17,7 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ### Fixed
 
+- A Slack or internet outage no longer drops queued notifications (#14). An unavailable channel used to burn all 8 attempts in about an hour, and every pending row failed for good. Now an outage doesn't count as an attempt: rows retry at least every 5 minutes and are delivered, in order, when Slack returns. A row older than 24 hours is marked failed with a logged reason instead of being sent late. A response reminder queued before the call went to a vote, was decided, or finished is also dropped unsent instead of arriving late. FR-34 and `docs/channels.md` now say what is guaranteed: at least once after a crash, with a duplicate possible after the 5-minute lease.
 - Docs (#99): the ranking page, the spec, and ADR 0007 no longer say a place in the vote is always drawn. The last place is only not reserved for a suggestion, so at temperature 0 it can be one. The 0.7.0 entry below still has the old wording.
 
 ### Upgrade notes

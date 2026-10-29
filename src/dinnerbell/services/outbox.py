@@ -29,7 +29,9 @@ from dinnerbell.db.outbox import OutboxEntry, OutboxRepository
 from dinnerbell.domain.events import EventState
 from dinnerbell.domain.notifications import (
     CALL_OFF_SUPERSEDES,
+    STEP_BOUND,
     SUPERSEDED_BY_CALL_OFF,
+    SUPERSEDED_BY_PROGRESS,
     BadgesEarned,
     Channel,
     ChannelUnavailable,
@@ -52,8 +54,16 @@ BATCH = 100
 LEASE = timedelta(minutes=5)
 """How long a claim lasts. A drainer that dies mid-delivery frees its row after this."""
 MAX_ATTEMPTS = 8
+"""How many times a row may fail for its own reasons. An unavailable channel doesn't count."""
+MAX_AGE = timedelta(hours=24)
+"""How long after it was queued a row may still be sent. An older row is closed as failed, not
+sent late: a day-old reminder or "dinner is ready" does more harm than good."""
+EXPIRED = "expired: queued more than 24 hours ago, not sent late"
 FIRST_RETRY = timedelta(seconds=30)
 LONGEST_RETRY = timedelta(hours=1)
+LONGEST_OUTAGE_RETRY = timedelta(minutes=5)
+"""The longest a row waits between tries while the channel is unavailable, so a recovered
+channel gets its backlog within minutes."""
 NO_MESSAGE = "no message to update"
 NO_THREAD = "no message to thread under"
 MIN_HOLD = timedelta(seconds=5)
@@ -65,6 +75,13 @@ def retry_delay(attempts: int) -> timedelta:
     """30 s, 1 min, 2 min, ... doubling after each failed attempt, at most an hour."""
     delay: timedelta = FIRST_RETRY * 2 ** max(attempts - 1, 0)
     return min(delay, LONGEST_RETRY)
+
+
+def outage_delay(age: timedelta) -> timedelta:
+    """How long a row waits after the channel was unavailable: a quarter of its age, at least
+    30 seconds and at most 5 minutes. It grows with the outage, but doesn't need an attempt
+    count, because an outage doesn't use up attempts."""
+    return min(max(age / 4, FIRST_RETRY), LONGEST_OUTAGE_RETRY)
 
 
 def asked_wait(exc: BaseException) -> timedelta:
@@ -146,13 +163,19 @@ async def _deliver(
         result.superseded += 1
         log.info("notification closed", extra=_about(entry, note=SUPERSEDED))
         return True
-    if notification.kind in CALL_OFF_SUPERSEDES and await _overtaken(db, notification):
+    overtaken = await _overtaken(db, notification)
+    if overtaken is not None:
         # Called off (or started again) since this row was queued, perhaps while a drainer held
         # it and the channel failed or held it: "You're cooking" must not follow "It's off".
-        await repo.delivered(entry.id, token, now=clock(), ref=None, note=SUPERSEDED_BY_CALL_OFF)
+        # Likewise "Are you in?" must not follow the call's move to a vote.
+        await repo.delivered(entry.id, token, now=clock(), ref=None, note=overtaken)
         await db.commit()
         result.superseded += 1
-        log.info("notification closed", extra=_about(entry, note=SUPERSEDED_BY_CALL_OFF))
+        log.info("notification closed", extra=_about(entry, note=overtaken))
+        return True
+    if clock() - entry.created_at > MAX_AGE:
+        log.error("notification expired", extra=_about(entry, attempts=entry.attempts))
+        await _record_failure(db, entry, token, EXPIRED, clock, result, final=True)
         return True
     try:
         ref, skipped = await _send(repo, channel, entry, notification)
@@ -165,8 +188,21 @@ async def _deliver(
         else:
             log.warning("outbox claim expired during delivery", extra=_about(entry))
         return False
+    except ChannelUnavailable as exc:
+        # An outage isn't this row's fault: give the claim back without counting the attempt,
+        # so the row outlasts the outage (until MAX_AGE) instead of using up its attempts.
+        result.stopped = True
+        age = clock() - entry.created_at
+        until = clock() + max(outage_delay(age), asked_wait(exc))
+        released = await repo.release(entry.id, token, until=until, note=f"{type(exc).__name__}: {exc}")
+        await db.commit()
+        if released:
+            result.retrying += 1
+            log.warning("notification delivery failed, channel unavailable", extra=_about(entry))
+        else:
+            log.warning("outbox claim expired during delivery", extra=_about(entry))
+        return False
     except Exception as exc:
-        result.stopped = isinstance(exc, ChannelUnavailable)
         # A permanent error won't get better with retries. Otherwise retry until the last
         # attempt; the claim already counted this one.
         final = isinstance(exc, PermanentDeliveryError) or entry.attempts >= MAX_ATTEMPTS
@@ -190,15 +226,24 @@ def _about(entry: OutboxEntry, **more: object) -> dict[str, object]:
     return {key: value for key, value in fields.items() if value is not None}
 
 
-async def _overtaken(db: AsyncSession, notification: Notification) -> bool:
-    """Whether the call ``notification`` is about was called off, or has started a newer run,
-    since it was queued."""
+async def _overtaken(db: AsyncSession, notification: Notification) -> str | None:
+    """Why ``notification`` is no longer worth sending, or None. A row in ``CALL_OFF_SUPERSEDES``
+    is overtaken when its call was called off or has started a newer run since it was queued; a
+    row in ``STEP_BOUND``, also when the call has left collecting."""
+    if notification.kind not in CALL_OFF_SUPERSEDES | STEP_BOUND:
+        return None
     if isinstance(
         notification, ScheduleChanged | GuestJoined | LinkNeeded | BadgesEarned | MonthlyRecap
-    ):  # pragma: no cover - not one CALL_OFF_SUPERSEDES names
-        return False
+    ):  # pragma: no cover - not one the sets above name
+        return None
     event = await EventRepository(db).get(notification.event.household_id, notification.event.id)
-    return event is None or event.state is EventState.CANCELLED or event.run != notification.event.run
+    if event is None or event.run != notification.event.run:
+        return SUPERSEDED_BY_CALL_OFF
+    if event.state is EventState.CANCELLED and notification.kind in CALL_OFF_SUPERSEDES:
+        return SUPERSEDED_BY_CALL_OFF
+    if notification.kind in STEP_BOUND and event.state is not EventState.COLLECTING:
+        return SUPERSEDED_BY_CALL_OFF if event.state is EventState.CANCELLED else SUPERSEDED_BY_PROGRESS
+    return None
 
 
 async def _send(

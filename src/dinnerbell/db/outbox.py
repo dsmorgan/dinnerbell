@@ -25,6 +25,7 @@ class OutboxEntry:
     idempotency_key: str
     message_key: str | None
     thread_key: str | None
+    created_at: datetime
     available_at: datetime
     claimed_until: datetime | None
     attempts: int
@@ -62,6 +63,7 @@ def _entry(row: OutboxRow) -> OutboxEntry:
         idempotency_key=row.idempotency_key,
         message_key=row.message_key,
         thread_key=row.thread_key,
+        created_at=row.created_at,
         available_at=row.available_at,
         claimed_until=row.claimed_until,
         attempts=row.attempts,
@@ -253,7 +255,8 @@ class OutboxRepository:
         return _rowcount(result) == 1
 
     async def release(self, entry_id: int, token: str, *, until: datetime, note: str) -> bool:
-        """Give back a claim without counting the attempt: the channel held the row."""
+        """Give back a claim without counting the attempt: the channel held the row, or was
+        unavailable."""
         result = await self._session.execute(
             update(OutboxRow)
             .where(OutboxRow.id == entry_id, OutboxRow.claim_token == token)

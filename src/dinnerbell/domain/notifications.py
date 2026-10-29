@@ -962,6 +962,12 @@ after "It's called off". The call-off closes these unsent, and the drainer check
 before sending one."""
 SUPERSEDED_BY_CALL_OFF = "superseded by a call-off"
 
+STEP_BOUND = frozenset({ResponseReminder.kind})
+"""Direct messages that only make sense while the call is collecting responses: "Are you in?"
+after the call went to a vote, was decided, or finished is only confusing. The drainer closes
+them unsent, just before sending one, once the call has left collecting."""
+SUPERSEDED_BY_PROGRESS = "superseded: the call moved on"
+
 
 # Delivery -------------------------------------------------------------------------------------
 
@@ -1014,8 +1020,9 @@ class PermanentDeliveryError(Exception):
 
 class ChannelUnavailable(Exception):
     """The channel can't be reached right now: an outage, a timeout, or a rate limit. The
-    drainer retries the row with backoff, like any failure, and ends its pass at once, so an
-    outage can't tie up a drain for minutes with one timeout per row."""
+    drainer gives the row back without counting the attempt and retries it with a capped
+    backoff, and ends its pass at once, so an outage can't tie up a drain for minutes with one
+    timeout per row. A row gives up only when it is too old (``services.outbox.MAX_AGE``)."""
 
 
 class HeldDelivery(Exception):

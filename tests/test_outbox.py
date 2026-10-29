@@ -16,6 +16,7 @@ from dinnerbell.db.outbox import OutboxEntry, OutboxRepository
 from dinnerbell.domain import notifications as n
 from dinnerbell.domain.events import EndReason, EventState
 from dinnerbell.domain.meals import Slot
+from dinnerbell.domain.notifications import SUPERSEDED_BY_PROGRESS
 from dinnerbell.services import outbox
 from dinnerbell.services.bootstrap import bootstrap
 from dinnerbell.services.database import Database, open_database
@@ -592,3 +593,128 @@ async def test_a_hold_after_the_claim_expired_is_not_counted(
     async with database.sessionmaker() as db:
         token, attempts = (await db.execute(text("SELECT claim_token, attempts FROM outbox"))).one()
     assert (token, attempts) == ("other", 2)  # the other drainer's claim stands
+
+
+async def test_an_outage_never_uses_up_attempts(database: Database, clock: FakeClock) -> None:
+    """A two-hour outage loses nothing: every row survives it and is delivered, in order, once
+    the channel is back."""
+    await enqueue(database, opened(1), updated(1, 2), opened(2))
+    down = HintingChannel(n.ChannelUnavailable("slack is down"))
+    for _ in range(2 * 60 * 2):  # a drain every 30 seconds, for 2 hours
+        await outbox.drain(database.sessionmaker, down, clock)
+        clock.advance(timedelta(seconds=30))
+    async with database.sessionmaker() as db:
+        rows = (await db.execute(text("SELECT attempts, failed_at, last_error FROM outbox ORDER BY id"))).all()
+        assert await OutboxRepository(db).backlog() == (3, 0)
+    assert all(attempts == 0 and failed_at is None for attempts, failed_at, _ in rows)
+    assert rows[0][2] == "ChannelUnavailable: slack is down"  # the update waits behind its post, untried
+    waits = [row.available_at - clock() for row in await entries(database)]
+    assert max(waits) <= outbox.LONGEST_OUTAGE_RETRY  # the backoff stays capped
+
+    up = RecordingChannel()
+    for _ in range(3):
+        clock.advance(outbox.LONGEST_OUTAGE_RETRY)
+        await outbox.drain(database.sessionmaker, up, clock)
+    assert [(s.kind, s.key) for s in up.sent] == [
+        ("call_opened", "event:1:run1:call_opened"),
+        ("call_updated", "event:1:run1:call_updated"),
+        ("call_opened", "event:2:run1:call_opened"),
+    ]
+    async with database.sessionmaker() as db:
+        assert await OutboxRepository(db).backlog() == (0, 0)
+
+
+@pytest.mark.parametrize(
+    ("age", "wait"),
+    [
+        (timedelta(0), timedelta(seconds=30)),
+        (timedelta(minutes=1), timedelta(seconds=30)),
+        (timedelta(minutes=8), timedelta(minutes=2)),
+        (timedelta(hours=3), timedelta(minutes=5)),
+    ],
+)
+def test_the_outage_backoff_grows_to_a_cap(age: timedelta, wait: timedelta) -> None:
+    assert outbox.outage_delay(age) == wait
+
+
+async def test_an_outage_does_not_hide_a_rows_own_failures(database: Database, clock: FakeClock) -> None:
+    """Attempts spent before an outage stay spent, and the row still gives up on its own errors."""
+    await enqueue(database, opened(1))
+    other = HintingChannel(ConnectionError("this row's trouble"))
+    await outbox.drain(database.sessionmaker, other, clock)
+    clock.advance(timedelta(hours=1))
+    await outbox.drain(database.sessionmaker, HintingChannel(n.ChannelUnavailable("down")), clock)
+    assert (await entries(database))[0].attempts == 1  # the outage left it alone
+    for _ in range(outbox.MAX_ATTEMPTS):
+        clock.advance(timedelta(hours=2))
+        await outbox.drain(database.sessionmaker, other, clock)
+    async with database.sessionmaker() as db:
+        assert await OutboxRepository(db).backlog() == (0, 1)
+
+
+async def test_a_row_too_old_is_failed_not_sent_late(
+    database: Database, clock: FakeClock, caplog: pytest.LogCaptureFixture
+) -> None:
+    await enqueue(database, opened(1), updated(1, 2), opened(2))
+    clock.advance(outbox.MAX_AGE - timedelta(minutes=1))
+    channel = RecordingChannel()
+    # An outage that ends just before the limit still delivers everything.
+    assert (await outbox.drain(database.sessionmaker, channel, clock)).delivered == 3
+
+    await enqueue(database, n.ResponseReminder(info(2), n.PersonInfo(7, "Kim")), now=clock())
+    clock.advance(outbox.MAX_AGE + timedelta(seconds=1))
+    sent = len(channel.sent)
+    result = await outbox.drain(database.sessionmaker, channel, clock)
+    assert (result.failed, result.delivered) == (1, 0)
+    assert len(channel.sent) == sent
+    async with database.sessionmaker() as db:
+        error = (await db.execute(text("SELECT last_error FROM outbox WHERE failed_at IS NOT NULL"))).scalar_one()
+        assert await OutboxRepository(db).backlog() == (0, 1)
+    assert error == outbox.EXPIRED
+    assert any(r.message == "notification expired" for r in caplog.records)
+
+
+async def test_an_expired_post_stops_holding_back_its_events_later_rows(database: Database, clock: FakeClock) -> None:
+    await enqueue(database, opened(1))
+    clock.advance(outbox.MAX_AGE + timedelta(minutes=1))
+    await enqueue(database, updated(1, 2), now=clock())
+    channel = HintingChannel(n.ChannelUnavailable("slack is down"))
+    result = await outbox.drain(database.sessionmaker, channel, clock)
+    # The post is too old to send, and the update, with no message to edit, is closed out.
+    assert (channel.calls, result.failed, result.delivered) == (0, 1, 1)
+    async with database.sessionmaker() as db:
+        rows = (await db.execute(text("SELECT failed_at IS NOT NULL, last_error FROM outbox ORDER BY id"))).all()
+    assert rows == [(1, outbox.EXPIRED), (0, outbox.NO_MESSAGE)]
+
+
+async def test_an_outage_ending_late_still_sends_only_the_newest_update(database: Database, clock: FakeClock) -> None:
+    """Status posts need no age rule of their own: updates coalesce into the newest state."""
+    await posted_call(database, clock)
+    for count in range(2, 7):
+        await enqueue(database, updated(1, count))
+        await outbox.drain(database.sessionmaker, HintingChannel(n.ChannelUnavailable("down")), clock)
+        clock.advance(timedelta(hours=1))
+    channel = Edits()
+    await outbox.drain(database.sessionmaker, channel, clock)
+    assert channel.edits == [6]
+
+
+async def test_a_response_reminder_is_dropped_once_the_call_moves_on(database: Database, clock: FakeClock) -> None:
+    """The call left collecting while the reminder waited, such as through an outage."""
+    await enqueue(database, n.ResponseReminder(info(1), n.PersonInfo(7, "Kim")))
+    async with database.sessionmaker() as db:
+        await db.execute(text("UPDATE event SET state='done' WHERE id=1"))
+        await db.commit()
+    channel = RecordingChannel()
+    result = await outbox.drain(database.sessionmaker, channel, clock)
+    assert (channel.sent, result.superseded) == ([], 1)
+    async with database.sessionmaker() as db:
+        note = (await db.execute(text("SELECT last_error FROM outbox"))).scalar_one()
+    assert note == SUPERSEDED_BY_PROGRESS
+
+
+async def test_a_response_reminder_is_still_sent_while_the_call_collects(database: Database, clock: FakeClock) -> None:
+    await enqueue(database, n.ResponseReminder(info(1), n.PersonInfo(7, "Kim")))
+    channel = RecordingChannel()
+    await outbox.drain(database.sessionmaker, channel, clock)
+    assert [s.kind for s in channel.sent] == ["response_reminder"]
