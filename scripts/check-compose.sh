@@ -697,6 +697,8 @@ for ignore in .containerignore .dockerignore; do
 done
 
 echo "== secret files in git"
+is_placeholder() { grep -qi replace "$1"; }
+is_not_placeholder() { ! is_placeholder "$1"; }
 # Only placeholders and the note may be tracked in secrets/ and secrets-test/, and git must ignore
 # the real files. The placeholders hold no value.
 if command -v git >/dev/null 2>&1 && git rev-parse --git-dir >/dev/null 2>&1; then
@@ -705,8 +707,13 @@ if command -v git >/dev/null 2>&1 && git rev-parse --git-dir >/dev/null 2>&1; th
     for name in $SECRET_NAMES; do
         expect "git ignores secrets/$name and secrets-test/$name" \
             test "$(git check-ignore "secrets/$name" "secrets-test/$name" | wc -l)" -eq 2
-        expect "secrets/$name.example is a placeholder, not a value" grep -q 'replace-with\|^xoxb-replace\|^xapp-replace' "secrets/$name.example"
+        expect "secrets/$name.example is a placeholder, not a value" is_placeholder "secrets/$name.example"
     done
+    # The same marker rule as the app's (case-insensitive "replace"); a real-looking value fails it.
+    realistic=$(mktemp)
+    printf '%s' "$test_key" >"$realistic"
+    check "a real-looking value isn't taken for a placeholder" is_not_placeholder "$realistic"
+    rm -f "$realistic"
 fi
 
 [ "$failures" -eq 0 ] || { echo "check-compose: $failures check(s) failed." >&2; exit 1; }
