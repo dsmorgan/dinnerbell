@@ -240,7 +240,7 @@ Requirements use "must" for version 1 and "should" for items that can slip to a 
 | ID | Requirement |
 |---|---|
 | FR-33 | Notifications are produced by the domain layer as typed events and delivered by a channel adapter. Version 1 ships the Slack adapter. |
-| FR-34 | The notification matrix in section 9 defines what is sent, to whom, and where. Every notification is logged with an idempotency key so a restart never sends it twice. |
+| FR-34 | The notification matrix in section 9 defines what is sent, to whom, and where. Every notification is queued in the outbox with an idempotency key, so a transition that is retried queues it once. A clean restart doesn't send it twice. A crash during delivery can: the row is redelivered after its 5-minute lease, so delivery is at least once. A channel outage never uses up a row's attempts: the row keeps retrying for 24 hours after it was queued, then fails with a logged reason instead of being sent late. |
 
 ### 6.9 Web app
 

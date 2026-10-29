@@ -383,6 +383,7 @@ async def test_the_recap_posts_once_on_the_first_of_the_month(house: House) -> N
     assert post.month == date(2026, 10, 1) and post.meals == 3
     assert post.cuisines and post.new_items >= 3  # the furnished catalog was created in the month
     channel = RecordingChannel()
+    house.clock.now = NOV_1_MORNING + timedelta(minutes=1)  # drained soon, not after the outbox's age limit
     await house.drain(channel)
     house.clock.now = NOV_1_MORNING + timedelta(days=1)
     await recapped(house)

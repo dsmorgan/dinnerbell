@@ -956,11 +956,20 @@ NOTIFICATION_TYPES: dict[str, type[Notification]] = {cls.kind: cls for cls in ge
 UPDATE_KINDS = frozenset(kind for kind, cls in NOTIFICATION_TYPES.items() if cls.is_update)
 
 
-CALL_OFF_SUPERSEDES = frozenset({AssignmentMade.kind, ResponseReminder.kind, RolesToChoose.kind})
+CALL_OFF_SUPERSEDES = frozenset({AssignmentMade.kind, ResponseReminder.kind, RolesToChoose.kind, MaybeResolved.kind})
 """Direct messages a call-off makes wrong: "You're cooking" or "Are you in?" must never arrive
 after "It's called off". The call-off closes these unsent, and the drainer checks again just
 before sending one."""
 SUPERSEDED_BY_CALL_OFF = "superseded by a call-off"
+
+STEP_BOUND: dict[str, frozenset[EventState]] = {
+    ResponseReminder.kind: frozenset({EventState.COLLECTING}),
+    RolesToChoose.kind: frozenset({EventState.DECIDED}),
+}
+"""Direct messages that only make sense in one step of the call, and the states that step is:
+"Are you in?" once the call went to a vote, or "Assign roles" once it's done, is only confusing.
+The drainer closes them unsent, just before sending one, once the call has left those states."""
+SUPERSEDED_BY_PROGRESS = "superseded: the call moved on"
 
 
 # Delivery -------------------------------------------------------------------------------------
@@ -1014,8 +1023,9 @@ class PermanentDeliveryError(Exception):
 
 class ChannelUnavailable(Exception):
     """The channel can't be reached right now: an outage, a timeout, or a rate limit. The
-    drainer retries the row with backoff, like any failure, and ends its pass at once, so an
-    outage can't tie up a drain for minutes with one timeout per row."""
+    drainer gives the row back without counting the attempt and retries it with a capped
+    backoff, and ends its pass at once, so an outage can't tie up a drain for minutes with one
+    timeout per row. A row gives up only when it is too old (``services.outbox.MAX_AGE``)."""
 
 
 class HeldDelivery(Exception):

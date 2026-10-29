@@ -90,6 +90,22 @@ async def outbox_backlog(sessionmaker: async_sessionmaker[AsyncSession]) -> tupl
         return None
 
 
+STALE_OUTBOX = timedelta(hours=1)
+"""A notification waiting longer than this makes /healthz report "degraded"."""
+
+
+async def outbox_oldest_age(sessionmaker: async_sessionmaker[AsyncSession], now: datetime) -> timedelta | None:
+    """How long the oldest waiting notification has waited, or None if none waits or the outbox
+    is unreadable."""
+    try:
+        async with sessionmaker() as db:
+            queued = await OutboxRepository(db).oldest_pending()
+    except (SQLAlchemyError, OSError):
+        log.warning("outbox age check failed", exc_info=True)
+        return None
+    return None if queued is None else max(now - queued, timedelta(0))
+
+
 async def database_reachable(sessionmaker: async_sessionmaker[AsyncSession]) -> bool:
     try:
         async with sessionmaker() as db:

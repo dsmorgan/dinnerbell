@@ -32,7 +32,7 @@ def test_healthz_shape(client: TestClient, clock: FakeClock) -> None:
     assert response.headers["content-type"] == "application/json"
     assert set(body) == {"status", "version", "database", "scheduler", "slack", "backup", "outbox"}
     assert body["version"] == __version__
-    assert body["outbox"] == {"backlog": 0, "failed": 0}
+    assert body["outbox"] == {"backlog": 0, "failed": 0, "oldest_pending_age": None}
     assert body["status"] == "ok"
     assert body["database"] == "ok"
     assert body["slack"] == "not_configured"
@@ -122,3 +122,39 @@ def test_unreachable_database_returns_503(client: TestClient, tmp_path: Path) ->
     assert response.status_code == 503
     assert response.json()["status"] == "error"
     assert response.json()["database"] == "unreachable"
+
+
+def queue_row(client: TestClient, queued_at: object) -> None:
+    """Put a row into the outbox that no drain will take, such as one for a later time."""
+    from sqlalchemy import text
+
+    context = client.app.state.dinnerbell  # type: ignore[attr-defined]
+
+    async def insert() -> None:
+        async with context.sessionmaker() as db:
+            await db.execute(
+                text(
+                    "INSERT INTO outbox (household_id, kind, payload, idempotency_key, created_at, updated_at, "
+                    "available_at, attempts) VALUES (1, 'monthly_recap', '{}', 'k', :t, :t, '2099-01-01 00:00:00', 0)"
+                ),
+                {"t": queued_at},
+            )
+            await db.commit()
+
+    client.portal.call(insert)  # type: ignore[union-attr]
+
+
+def test_a_notification_waiting_over_an_hour_is_degraded(client: TestClient, clock: FakeClock) -> None:
+    wait_for_tick(client)
+    state = client.app.state.dinnerbell.scheduler_state  # type: ignore[attr-defined]
+    queue_row(client, clock.now.strftime("%Y-%m-%d %H:%M:%S"))
+    clock.advance(timedelta(minutes=59))
+    state.last_tick = clock.now  # the scheduler is fine; only the notification waits
+    body = client.get("/healthz").json()
+    assert body["outbox"]["oldest_pending_age"] == 59 * 60
+    assert body["outbox"]["backlog"] == 1
+    assert body["status"] == "ok"
+    clock.advance(timedelta(minutes=2))
+    state.last_tick = clock.now
+    body = client.get("/healthz").json()
+    assert (body["status"], body["outbox"]["oldest_pending_age"]) == ("degraded", 61 * 60)

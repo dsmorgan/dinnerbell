@@ -25,6 +25,9 @@ class OutboxEntry:
     idempotency_key: str
     message_key: str | None
     thread_key: str | None
+    created_at: datetime
+    updated_at: datetime
+    """When the row last took on new content: its creation, or the newest update merged into it."""
     available_at: datetime
     claimed_until: datetime | None
     attempts: int
@@ -62,6 +65,8 @@ def _entry(row: OutboxRow) -> OutboxEntry:
         idempotency_key=row.idempotency_key,
         message_key=row.message_key,
         thread_key=row.thread_key,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
         available_at=row.available_at,
         claimed_until=row.claimed_until,
         attempts=row.attempts,
@@ -253,7 +258,8 @@ class OutboxRepository:
         return _rowcount(result) == 1
 
     async def release(self, entry_id: int, token: str, *, until: datetime, note: str) -> bool:
-        """Give back a claim without counting the attempt: the channel held the row."""
+        """Give back a claim without counting the attempt: the channel held the row, or was
+        unavailable."""
         result = await self._session.execute(
             update(OutboxRow)
             .where(OutboxRow.id == entry_id, OutboxRow.claim_token == token)
@@ -347,6 +353,13 @@ class OutboxRepository:
             select(func.count()).select_from(OutboxRow).where(OutboxRow.failed_at.is_not(None))
         )
         return int(waiting or 0), int(failed or 0)
+
+    async def oldest_pending(self) -> datetime | None:
+        """When the oldest row still waiting for delivery was queued, or None if none waits."""
+        found: datetime | None = await self._session.scalar(
+            select(OutboxRow.created_at).where(_pending()).order_by(OutboxRow.created_at).limit(1)
+        )
+        return found
 
     async def clear(self, household_id: int) -> tuple[int, int]:
         """Delete every row of the household's outbox, delivered or not, and with them the
