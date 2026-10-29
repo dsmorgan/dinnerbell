@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from dinnerbell import __version__, catalog_cli
-from dinnerbell.config import ConfigError, Settings, is_test_instance, load_settings
+from dinnerbell.config import LEGACY_WARNINGS, ConfigError, Settings, is_test_instance, load_settings
 from dinnerbell.db.migrate import IntegrityCheckFailed, SchemaTooNewError, UpgradeBlocked, run_migrations
 from dinnerbell.logs import configure_logging, start_unit
 
@@ -478,8 +478,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(NOT_LABELED_FOR_DISCARD, file=sys.stderr)
         return 1  # the same: before anything opens the database
     configure_logging(settings.log_level, settings.instance_label)
-    for warning in warnings:  # secrets still in the environment; no values (see config.py)
-        logging.getLogger("dinnerbell.config").warning(warning)
+    for field in warnings:  # secrets still in the environment: constant messages, never values
+        logging.getLogger("dinnerbell.config").warning(LEGACY_WARNINGS[field])
     if args.command == "serve":  # the server's requests, taps, and jobs each start their own unit
         return _command(args, settings)
     end = start_unit("cli")

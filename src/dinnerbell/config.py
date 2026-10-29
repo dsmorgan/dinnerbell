@@ -30,6 +30,30 @@ SECRETS_DIR = Path("/run/secrets")
 SECRET_FIELDS = ("secret_key", "slack_bot_token", "slack_app_token", "oidc_client_secret")
 FILES_HELP = 'See "Keep secrets in files" in docs/setup.md.'
 log = logging.getLogger(__name__)
+# What to log for a secret that the environment still gives, one constant per setting. Nothing
+# derived from a secret's value is ever passed to the logger: callers look a message up by field.
+LEGACY_WARNINGS = {
+    "secret_key": (
+        "DINNERBELL_SECRET_KEY is set in the environment. Move it to the file "
+        "/run/secrets/DINNERBELL_SECRET_KEY (secrets/ on the host) and remove it from .env: the next "
+        "release ignores it there, and until then it shows on podman's command line. " + FILES_HELP
+    ),
+    "slack_bot_token": (
+        "DINNERBELL_SLACK_BOT_TOKEN is set in the environment. Move it to the file "
+        "/run/secrets/DINNERBELL_SLACK_BOT_TOKEN (secrets/ on the host) and remove it from .env: the next "
+        "release ignores it there, and until then it shows on podman's command line. " + FILES_HELP
+    ),
+    "slack_app_token": (
+        "DINNERBELL_SLACK_APP_TOKEN is set in the environment. Move it to the file "
+        "/run/secrets/DINNERBELL_SLACK_APP_TOKEN (secrets/ on the host) and remove it from .env: the next "
+        "release ignores it there, and until then it shows on podman's command line. " + FILES_HELP
+    ),
+    "oidc_client_secret": (
+        "DINNERBELL_OIDC_CLIENT_SECRET is set in the environment. Move it to the file "
+        "/run/secrets/DINNERBELL_OIDC_CLIENT_SECRET (secrets/ on the host) and remove it from .env: the next "
+        "release ignores it there, and until then it shows on podman's command line. " + FILES_HELP
+    ),
+}
 MIN_SECRET_KEY_LENGTH = 32
 MAX_SECRET_BYTES = 8192
 LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1"})
@@ -320,35 +344,40 @@ def _read_secret_file(path: Path) -> str:
     return text
 
 
+def _set_in_environment(name: str) -> bool:
+    return os.environ.get(name, "") != ""
+
+
+def _environment_differs(name: str, file_text: str) -> bool:
+    """Whether a secret file and the environment both give ``name`` and disagree. Returns only a
+    boolean, so nothing derived from either value reaches a message or a log."""
+    return bool(file_text) and os.environ.get(name, "").strip() != file_text
+
+
 def _read_secret_files(directory: Path, warnings: list[str] | None = None) -> dict[str, str]:
     """Read the four secrets from ``directory``, one file each, named like the variable.
 
     A file that's empty counts as absent. Compose can't skip a secret, so an install without Slack
     keeps an empty file. A secret that is also in the environment is the old layout: the
     environment keeps working for one release, with a warning, and must agree with the file.
-    The warnings go to ``warnings`` when it's given (the CLI logs them once logging is set up),
-    else to the log. The messages never include a value.
+    ``warnings`` collects the setting names (not values) that the environment still gives, for the CLI
+    to log through LEGACY_WARNINGS once logging is set up; without it they go to the log directly.
     """
     values: dict[str, str] = {}
     for field in SECRET_FIELDS:
         name = f"{ENV_PREFIX}{field.upper()}"
         path = directory / name
         text = _read_secret_file(path)
-        in_environment = os.environ.get(name, "") != ""
-        if in_environment:
-            if text and os.environ[name].strip() != text:
+        if _set_in_environment(name):
+            if _environment_differs(name, text):
                 raise ConfigError(
                     f"{name} is set in the environment (probably in .env) and in {path}, with different "
                     f"values. Remove it from .env. {FILES_HELP}"
                 )
-            warning = (
-                f"{name} is set in the environment. Move it to the file {path} and remove it from .env: "
-                f"the next release ignores it there, and until then it shows on podman's command line. {FILES_HELP}"
-            )
             if warnings is None:
-                log.warning("%s", warning)
+                log.warning(LEGACY_WARNINGS[field])
             else:
-                warnings.append(warning)
+                warnings.append(field)
         elif text:
             values[field] = text
     return values
