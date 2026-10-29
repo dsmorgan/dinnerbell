@@ -88,6 +88,10 @@ BADGES = (
     Badge(BadgeKey.GAMBLER, "Gambler", "calls where you left the choice to others", Kind.GAMBLED),
 )
 BY_KEY = {b.key: b for b in BADGES}
+SILENT_BADGES = frozenset({BadgeKey.FOOD_CRITIC})
+"""Earned and shown, but never announced by itself, because a post would interrupt the channel each
+time someone gives feedback. The announcer marks these awards ``announced`` without queuing a post;
+the recap, the household's newest badges, Stats, and the art treat them like any other badge."""
 ROLL_KINDS = frozenset({Kind.COOKED, Kind.PICKED_UP, Kind.ORDERED})
 """Pitching in for On a Roll: a week counts when the member cooked, picked up, or ordered."""
 

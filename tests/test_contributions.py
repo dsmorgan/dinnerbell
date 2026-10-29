@@ -666,6 +666,15 @@ async def test_the_story_of_a_finished_call_names_ids_and_badges_and_no_email(
     assert [r for r in caplog.records if r.getMessage() in {"contributions_recorded", "badge_earned"}] == []
 
 
+async def test_the_feedback_log_line_does_not_name_the_meal(house: House, caplog: pytest.LogCaptureFixture) -> None:
+    await dinner(house)
+    (meal,) = await house.meals()
+    caplog.set_level(logging.INFO)
+    await give(house, "Alex", meal.id)
+    lines = [r for r in caplog.records if r.getMessage() == "contributions_recorded"]
+    assert lines and not any(hasattr(r, "meal_id") for r in lines)
+
+
 # Catching up, and counting that fails -----------------------------------------------------------
 
 

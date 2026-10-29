@@ -248,14 +248,15 @@ async def test_the_announcement_shows_each_badge_as_art(house: House) -> None:
     assert len(art_uploads(slack)) == 2 and all(f["filename"].endswith(".png") for f in slack.fake.files.values())
 
 
-async def test_a_food_critic_announcement_shows_its_art(house: House) -> None:
+async def test_food_critic_is_never_in_an_announcement_even_beside_other_badges(house: House) -> None:
     slack = await wire(house)
+    await award(house, "Kim", BadgeKey.CHEF, Tier.GOLD)
+    await award(house, "Kim", BadgeKey.FOOD_CRITIC, Tier.FIRST)
     await award(house, "Sam", BadgeKey.FOOD_CRITIC, Tier.FIRST)
     assert await announce(house) == 1
     await slack.drain()
-    blocks = announcement(slack)
-    assert [b["accessory"]["alt_text"] for b in blocks if "accessory" in b] == ["Food Critic, First"]
-    assert f"<@{SLACK_IDS['Sam']}> earned *Food Critic* · First" in json.dumps(blocks, ensure_ascii=False)
+    text = json.dumps(announcement(slack), ensure_ascii=False)
+    assert "Food Critic" not in text and f"<@{SLACK_IDS['Sam']}>" not in text
 
 
 async def test_a_second_announcement_reuses_the_uploads(house: House) -> None:

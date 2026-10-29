@@ -286,7 +286,7 @@ PNG_SCALE = 2
 @functools.cache
 def png_for(key: str, tier: Tier) -> bytes:
     """The built-in art, ``standalone_svg`` drawn as a transparent PNG. Cached: it takes a few
-    milliseconds, and there are only sixty."""
+    milliseconds, and there are only 65."""
     return bytes(
         resvg_py.svg_to_bytes(
             svg_string=standalone_svg(key, tier),

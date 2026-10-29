@@ -95,7 +95,7 @@ async def record_feedback(db: AsyncSession, member: Member, meal: MealLog, *, no
     if added or awards:
         log.info(
             "contributions_recorded",
-            extra={"member_id": member.id, "member": member.display_name, "meal_id": meal.id, "credits": len(added)},
+            extra={"member_id": member.id, "member": member.display_name, "credits": len(added)},
         )
     for award in awards:
         log.info(

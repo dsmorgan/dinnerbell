@@ -12,8 +12,8 @@ Run it with test stopped, after restoring the backup. In one transaction it:
 - deletes the outbox, pending rows and the message refs of delivered posts alike, so test never
   sends production's queue or edits production's messages;
 - deletes all feedback on meals, which says how each member rated them (FR-49), and the counts and badges
-  that show who gave it, so test, where
-  testers act as other people, never holds production's answers;
+  that come from it, so test, where testers act as other people, never holds production's feedback or
+  counts;
 - marks badges earned but not yet announced as quiet, and the last monthly recap as posted, so a
   restored copy never tells the test channel what production hadn't yet (M4);
 - strips guests (#38) of what identifies them, as they're people outside the household: each is
@@ -292,7 +292,7 @@ async def _scrub(db: AsyncSession, *, instance_label: str, keep: Iterable[str], 
     redacted += await AuditRepository(db).redact_about(household.id, GUEST_SLACK_AUDIT, about_guests, scrubbed)
     pending, rows = await OutboxRepository(db).clear(household.id)
     feedback_deleted = await FeedbackRepository(db).clear(household.id)
-    # Who gave feedback is as private as what they said: the counts, and the badges that show it.
+    # So test never holds production's feedback or counts: the counts, and the badges that come from them.
     await ContributionRepository(db).clear_feedback(household.id)
     await BadgeRepository(db).clear(household.id, [b.key for b in BADGES if b.kind is Kind.GAVE_FEEDBACK])
     # Test never tells its channel what production hadn't yet: badges earned but not announced
