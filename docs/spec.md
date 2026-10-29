@@ -274,7 +274,7 @@ Requirements use "must" for version 1 and "should" for items that can slip to a 
 |---|---|
 | FR-41 | The admin invites a member by email. The member's first sign-in with that email activates the account and links the identity. Unknown emails are refused with a message to ask the admin. |
 | FR-42 | The admin maps or confirms each member's Slack user ID. Default mapping is by email match. |
-| FR-43 | The admin edits time zone, variety window, ranking weights, ranking randomness (the temperature in section 7), and badge thresholds in the web app. |
+| FR-43 | The admin edits time zone, variety window, ranking weights, ranking randomness (the temperature in section 7), and badge thresholds (three ladders, with **Reset to defaults**) in the web app. |
 | FR-44 | Any active member can edit the standing schedule for a slot, on the web app's Schedule page: call enabled, call time, window lengths, reminder lead time, usual meal time, and default fulfillment modes (everything in FR-1). Times are wall-clock times in the household's time zone. Windows run 5 to 360 minutes, the reminder comes before responses close, the call's windows end by midnight, and, while the slot is on, voting closes before the usual meal time; a slot can always be turned off. Each change is written to the audit log with who changed what, old and new, and announced in the channel with the member's name, what changed, and the first day it applies. A save that changes nothing posts nothing, and a save over someone else's newer change is refused. A change applies from the next call: a call that's open, or already scheduled for a later day, keeps the times it was created with, and so does a day an admin skipped. A call started again, by a re-run or after a call-off, gets fresh windows from the current schedule. When today's call hasn't been created yet, today follows the new schedule if its call can still open today; if it can't, but the old schedule would still have opened one, today's call is scheduled at the old time, and the announcement says so. Turning a slot off applies today. `/dinnerbell schedule` shows each slot's schedule and links to the page; editing stays on the web. Ranking weights and randomness, the proposal count, the variety window, and skipping a day stay admin-only (FR-43, FR-6). |
 
 ### 6.13 Later phases
@@ -456,17 +456,15 @@ A contribution is one thing a member did for a meal. They are counted when a cal
 
 ### Badges
 
-Every badge uses one ladder of five tiers, with a different shape for each so tiers differ without color:
+Every badge has five tiers, with a different shape for each so tiers differ without color: First (ribbon rosette, teal), Bronze (medal), Silver (medal), Gold (medal with a sparkle), and Diamond (faceted gem with a sparkle). Each badge climbs one of three ladders (#130), so badges that happen rarely can still reach Diamond:
 
-| Count | Tier | Shape |
-|---|---|---|
-| 1st | First | Ribbon rosette (teal) |
-| 10th | Bronze | Medal |
-| 50th | Silver | Medal |
-| 100th | Gold | Medal with a sparkle |
-| 200th | Diamond | Faceted gem with a sparkle |
+| Ladder | First | Bronze | Silver | Gold | Diamond | Badges |
+|---|---|---|---|---|---|---|
+| Frequent | 1 | 10 | 50 | 100 | 200 | Full Table, Early Bird, Chef, Food Critic, Quarterback, Gambler, Road Runner, Order Up |
+| Occasional | 1 | 5 | 20 | 50 | 100 | Bright Idea, Good Host |
+| Rare | 1 | 3 | 10 | 25 | 50 | On a Roll, Scout, Explorer |
 
-The five counts are the household's **badge thresholds** (FR-43), 1, 10, 50, 100, and 200 by default. They must be whole numbers from 1 to 10,000, each higher than the one before, and an admin saves all five together. Raising a threshold takes no badge away; lowering one awards the tiers members already have the counts for, quietly (below).
+The counts are the household's **badge thresholds** (FR-43), stored as one list per ladder; the table shows the defaults. In each ladder they must be whole numbers from 1 to 10,000, each higher than the one before. An admin saves all three ladders together, or resets them to the defaults. Raising a threshold takes no badge away; lowering one awards the tiers members already have the counts for, quietly (below). A setting stored as a single list, from before there were three ladders, is read as the Frequent ladder.
 
 | Badge | Icon | Counts |
 |---|---|---|
@@ -481,10 +479,10 @@ The five counts are the household's **badge thresholds** (FR-43), 1, 10, 50, 100
 | Explorer | Compass | explored |
 | Good Host | Extra chair | hosted |
 | Food Critic | Star | gave_feedback |
-| On a Roll | Flame | the most calendar weeks (Monday to Sunday, in the household's time zone) in a row with at least one cooked, picked_up, or ordered |
+| On a Roll | Flame | the most calendar weeks (Monday to Sunday, in the household's time zone) in a run with at least one cooked, picked_up, or ordered. A run survives one missed week between two active weeks, which doesn't count toward it; two missed weeks in a row end it |
 | Gambler | Single die | gambled |
 
-Rules: every slot's events count alike, so a breakfast cooked counts toward Chef as a dinner does. A member earns each badge tier once. A badge earned live starts pending announcement; the channel is told once (FR-39) in one post for each done call, mentioning each member by name order and never ordered by what they earned, and an award records when it was earned and whether and when it was announced. Food Critic is earned and shown like every other badge (Stats, App Home, art, the recap, and the household's newest badges) but never announced by itself: it is earned when a member gives feedback, often days after the call, and a post would interrupt the channel each time. Its awards are marked `announced` without a post, and it is never added to a done call's post. A badge says only that a member gave feedback some number of times, never what the feedback said, so FR-49 (answers are never shown, not even as counts) still holds. A badge earned while catching up, which is the first start after the upgrade that counts the meal log, the one-time Gambler catch-up for a household that had already run it, and a lowered threshold, is never announced. The Stats page (`/stats`) shows each badge with its tier and progress toward the next, the badges earned in the last two weeks (never ones earned while catching up or after a lowered threshold), and, for members, the household's totals and its newest badges by recency, with names; a tier already earned stays reached even if the admin later raises its threshold. Nothing in the app ranks members against each other or names who did the least: a member sees only their own counts, the household sees totals and the newest badges, and no view orders members by a count.
+Rules: every slot's events count alike, so a breakfast cooked counts toward Chef as a dinner does. A member earns each badge tier once. A badge earned live starts pending announcement; the channel is told once (FR-39) in one post for each done call, mentioning each member by name order and never ordered by what they earned, and an award records when it was earned and whether and when it was announced. Food Critic is earned and shown like every other badge (Stats, App Home, art, the recap, and the household's newest badges) but never announced by itself: it is earned when a member gives feedback, often days after the call, and a post would interrupt the channel each time. Its awards are marked `announced` without a post, and it is never added to a done call's post. A badge says only that a member gave feedback some number of times, never what the feedback said, so FR-49 (answers are never shown, not even as counts) still holds. A badge earned while catching up, which is the first start after the upgrade that counts the meal log, the one-time Gambler catch-up for a household that had already run it, the one-time catch-up for the three ladders and the grace week (marked `badge_ladders_awarded`), and a lowered threshold, is never announced. The Stats page (`/stats`) shows each badge with its tier and progress toward the next, the badges earned in the last two weeks (never ones earned while catching up or after a lowered threshold), and, for members, the household's totals and its newest badges by recency, with names; a tier already earned stays reached even if the admin later raises its threshold. Nothing in the app ranks members against each other or names who did the least: a member sees only their own counts, the household sees totals and the newest badges, and no view orders members by a count.
 
 ## 13. Architecture
 

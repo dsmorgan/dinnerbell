@@ -16,7 +16,16 @@ from sqlalchemy.orm import Session
 
 from dinnerbell.config import Settings
 from dinnerbell.db.models import AuditRow, BadgeAwardRow, HouseholdRow
-from dinnerbell.domain.badges import BADGES, DEFAULT_THRESHOLDS, TIERS, Announcement, Tier
+from dinnerbell.domain.badges import (
+    BADGES,
+    DEFAULT_LADDERS,
+    LADDERS,
+    TIERS,
+    Announcement,
+    Ladder,
+    Tier,
+    ladders_setting,
+)
 from dinnerbell.domain.contributions import Kind
 from dinnerbell.services import badge_art
 from tests.conftest import csrf_from, invite, page, sign_in
@@ -257,18 +266,35 @@ def test_the_navigation_links_the_stats_page(house: Settings, client: TestClient
 # Admin > Badges ----------------------------------------------------------------------------------------
 
 
-def form(*counts: int | str) -> dict[str, str]:
-    return {f"threshold_{t.value}": str(n) for t, n in zip(TIERS, counts, strict=True)}
+FREQUENT = DEFAULT_LADDERS[Ladder.FREQUENT]
+
+
+def form(*counts: int | str, ladder: Ladder = Ladder.FREQUENT) -> dict[str, str]:
+    """The whole form: ``counts`` for ``ladder`` and the defaults for the other two."""
+    shown: dict[Ladder, tuple[int | str, ...]] = dict(DEFAULT_LADDERS) | {ladder: counts}
+    return {
+        f"threshold_{lad.value}_{t.value}": str(n) for lad in LADDERS for t, n in zip(TIERS, shown[lad], strict=True)
+    }
+
+
+def reset(client: TestClient) -> Any:
+    return submit(client, "/admin/badges/reset", {})
 
 
 def audits(settings: Settings) -> list[AuditRow]:
     return [a for a in rows(settings, AuditRow) if a.action == "household.badge_thresholds_updated"]
 
 
-def test_the_badges_tab_shows_the_defaults_and_explains_the_rules(admin: TestClient) -> None:
+def test_the_badges_tab_shows_the_three_ladders_and_explains_the_rules(admin: TestClient) -> None:
     html = admin.get("/admin/badges").text
-    for tier, n in zip(TIERS, DEFAULT_THRESHOLDS, strict=True):
-        assert f'name="threshold_{tier.value}" value="{n}"' in html
+    for ladder in LADDERS:
+        for tier, n in zip(TIERS, DEFAULT_LADDERS[ladder], strict=True):
+            assert f'name="threshold_{ladder.value}_{tier.value}" value="{n}"' in html
+        assert f"<h2>{ladder.label}</h2>" in html
+    for badge in BADGES:  # each ladder lists its badges
+        assert badge.name in html
+    assert "Bright Idea, Good Host" in html and "Scout, Explorer, On a Roll" in html
+    assert 'action="/admin/badges/reset"' in html and "Reset to defaults" in html
     assert 'aria-current="page">Badges' in html
     assert "Lowering a count awards the tier to anyone who already has the count, quietly" in html
     assert "Raising a count takes nothing away" in html
@@ -276,17 +302,19 @@ def test_the_badges_tab_shows_the_defaults_and_explains_the_rules(admin: TestCli
 
 
 def test_saving_new_counts_changes_the_ladder_and_audits(admin: TestClient, migrated: Settings) -> None:
-    saved = submit(admin, "/admin/badges", form(1, 5, 25, 60, 150))
+    saved = submit(admin, "/admin/badges", form(1, 2, 4, 8, 16, ladder=Ladder.RARE))
     assert (saved.status_code, saved.headers["location"]) == (303, "/admin/badges?notice=saved")
     assert "Badge counts saved." in admin.get("/admin/badges?notice=saved").text
-    assert rows(migrated, HouseholdRow)[0].settings["badge_thresholds"] == [1, 5, 25, 60, 150]
+    wanted = ladders_setting(DEFAULT_LADDERS) | {"rare": [1, 2, 4, 8, 16]}
+    assert rows(migrated, HouseholdRow)[0].settings["badge_thresholds"] == wanted
     (audit,) = audits(migrated)
-    assert audit.payload["from"] == list(DEFAULT_THRESHOLDS) and audit.payload["to"] == [1, 5, 25, 60, 150]
-    assert 'name="threshold_gold" value="60"' in admin.get("/admin/badges").text
+    assert audit.payload["from"] == ladders_setting(DEFAULT_LADDERS) and audit.payload["to"] == wanted
+    html = admin.get("/admin/badges").text
+    assert 'name="threshold_rare_gold" value="8"' in html and 'name="threshold_frequent_gold" value="100"' in html
 
 
 def test_saving_the_form_untouched_records_nothing(admin: TestClient, migrated: Settings) -> None:
-    assert submit(admin, "/admin/badges", form(*DEFAULT_THRESHOLDS)).status_code == 303
+    assert submit(admin, "/admin/badges", form(*FREQUENT)).status_code == 303
     assert audits(migrated) == [] and "badge_thresholds" not in rows(migrated, HouseholdRow)[0].settings
     submit(admin, "/admin/badges", form(2, 4, 8, 16, 32))
     assert submit(admin, "/admin/badges", form(2, 4, 8, 16, 32)).status_code == 303
@@ -319,16 +347,45 @@ def test_bad_counts_are_refused_and_shown_again(
             assert f'name="{name}" value="{value}"' in response.text
 
 
+def test_a_bad_count_names_its_ladder(admin: TestClient, migrated: Settings) -> None:
+    response = submit(admin, "/admin/badges", form(1, 5, 5, 50, 100, ladder=Ladder.OCCASIONAL))
+    assert response.status_code == 400 and "Occasional ladder: Each tier needs a higher count" in page(response)
+    response = submit(admin, "/admin/badges", form(1, "x", 10, 25, 50, ladder=Ladder.RARE))
+    assert response.status_code == 400 and "Rare ladder: The Bronze count must be a whole number." in page(response)
+    assert audits(migrated) == [] and "badge_thresholds" not in rows(migrated, HouseholdRow)[0].settings
+
+
 def test_a_missing_field_is_refused_not_a_crash(admin: TestClient) -> None:
-    response = submit(admin, "/admin/badges", {"threshold_first": "1"})
+    response = submit(admin, "/admin/badges", {"threshold_frequent_first": "1"})
     assert response.status_code == 400
+
+
+def test_reset_puts_back_the_defaults_and_audits(admin: TestClient, migrated: Settings) -> None:
+    assert reset(admin).status_code == 303
+    assert resets(migrated) == []  # nothing to change, nothing recorded
+    submit(admin, "/admin/badges", form(2, 4, 8, 16, 32))
+    done = reset(admin)
+    assert (done.status_code, done.headers["location"]) == (303, "/admin/badges?notice=reset")
+    assert "Badge counts reset to the defaults." in admin.get("/admin/badges?notice=reset").text
+    assert rows(migrated, HouseholdRow)[0].settings["badge_thresholds"] == ladders_setting(DEFAULT_LADDERS)
+    (audit,) = resets(migrated)
+    assert audit.payload["from"]["frequent"] == [2, 4, 8, 16, 32]
+    assert audit.payload["to"] == ladders_setting(DEFAULT_LADDERS)
+    assert 'name="threshold_frequent_first" value="1"' in admin.get("/admin/badges").text
+
+
+def resets(settings: Settings) -> list[AuditRow]:
+    return [a for a in rows(settings, AuditRow) if a.action == "household.badge_thresholds_reset"]
 
 
 def test_only_admins_reach_the_badges_form(house: Settings, provider: FakeProvider, client: TestClient) -> None:
     sign_in_as(client, provider, "kim@example.com")
     assert client.get("/admin/badges").status_code == 403
     assert submit(client, "/admin/badges", form(1, 2, 3, 4, 5)).status_code == 403
-    assert audits(house) == [] and "badge_thresholds" not in rows(house, HouseholdRow)[0].settings
+    assert reset(client).status_code == 403
+    assert (
+        audits(house) == [] and resets(house) == [] and "badge_thresholds" not in rows(house, HouseholdRow)[0].settings
+    )
 
 
 def test_the_badges_form_checks_csrf_and_origin(admin: TestClient, migrated: Settings) -> None:
@@ -340,6 +397,18 @@ def test_the_badges_form_checks_csrf_and_origin(admin: TestClient, migrated: Set
     )
     assert foreign.status_code == 403
     assert audits(migrated) == []
+
+
+def test_the_reset_checks_csrf_and_origin(admin: TestClient, migrated: Settings) -> None:
+    submit(admin, "/admin/badges", form(2, 4, 8, 16, 32))
+    assert admin.post("/admin/badges/reset").status_code == 403
+    assert admin.post("/admin/badges/reset", data={"csrf_token": "0" * 64}).status_code == 403
+    foreign = admin.post(
+        "/admin/badges/reset", data={"csrf_token": csrf_from(admin)}, headers={"Origin": "https://evil.example"}
+    )
+    assert foreign.status_code == 403
+    assert resets(migrated) == []
+    assert rows(migrated, HouseholdRow)[0].settings["badge_thresholds"]["frequent"] == [2, 4, 8, 16, 32]
 
 
 # Review fixes ------------------------------------------------------------------------------------------

@@ -26,9 +26,9 @@ from dinnerbell.domain.badges import (
     Progress,
     Tier,
     highest_tiers,
+    ladders_from,
     longest_streak,
     progress,
-    thresholds_from,
 )
 from dinnerbell.domain.contributions import PITCHING_IN, Kind
 from dinnerbell.domain.members import Member
@@ -100,7 +100,7 @@ async def guest_stats(db: AsyncSession, actor: Member) -> MemberStats:
 
 async def _standing(db: AsyncSession, actor: Member) -> MemberStats:
     household_id = actor.household_id
-    ladder = thresholds_from(await household_settings(db, household_id))
+    ladders = ladders_from(await household_settings(db, household_id))
     contributions = ContributionRepository(db)
     counts = await contributions.counts(household_id, actor.id)
     weeks = longest_streak(await contributions.days(household_id, actor.id, ROLL_KINDS))
@@ -109,7 +109,7 @@ async def _standing(db: AsyncSession, actor: Member) -> MemberStats:
     for badge in BADGES:
         count = weeks if badge.kind is None else counts.get(badge.kind, 0)
         held: list[Tier] = [a.tier for a in earned if a.badge is badge.key]
-        steps.append(progress(badge, count, ladder, earned=held))
+        steps.append(progress(badge, count, ladders, earned=held))
     return MemberStats(actor.id, counts, tuple(steps), tuple(earned))
 
 

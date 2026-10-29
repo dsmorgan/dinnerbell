@@ -11,16 +11,20 @@ import pytest
 from dinnerbell.domain.badges import (
     BADGES,
     BY_KEY,
-    DEFAULT_THRESHOLDS,
+    DEFAULT_LADDERS,
+    LADDERS,
     SETTINGS_KEY,
     TIERS,
     BadgeKey,
     InvalidThresholds,
+    Ladder,
     Tier,
+    check_ladders,
     check_thresholds,
+    ladders_from,
+    ladders_setting,
     longest_streak,
     progress,
-    thresholds_from,
     tiers_reached,
 )
 from dinnerbell.domain.catalog import Mode
@@ -294,11 +298,32 @@ def test_a_meal_logged_by_hand_makes_an_item_old_but_not_first_used() -> None:
 # Thresholds and tiers --------------------------------------------------------------------------
 
 
-def test_the_ladder_has_five_tiers_and_thirteen_badges() -> None:
+FREQUENT = DEFAULT_LADDERS[Ladder.FREQUENT]
+
+
+def test_three_ladders_of_five_tiers_and_thirteen_badges() -> None:
     assert [t.value for t in TIERS] == ["first", "bronze", "silver", "gold", "diamond"]
-    assert DEFAULT_THRESHOLDS == (1, 10, 50, 100, 200)
+    assert [ladder.value for ladder in LADDERS] == ["frequent", "occasional", "rare"]
+    assert dict(DEFAULT_LADDERS) == {
+        Ladder.FREQUENT: (1, 10, 50, 100, 200),
+        Ladder.OCCASIONAL: (1, 5, 20, 50, 100),
+        Ladder.RARE: (1, 3, 10, 25, 50),
+    }
+    assert {ladder: check_thresholds(counts) for ladder, counts in DEFAULT_LADDERS.items()} == DEFAULT_LADDERS
     assert len(BADGES) == 13 and len(BY_KEY) == 13 and {b.key for b in BADGES} == set(BadgeKey)
     assert [b.kind for b in BADGES if b.kind is None] == [None]  # only On a Roll counts weeks
+
+
+def test_every_badge_is_on_exactly_one_ladder() -> None:
+    on = {ladder: {b.name for b in BADGES if b.ladder is ladder} for ladder in LADDERS}
+    assert on == {
+        Ladder.FREQUENT: {
+            "Full Table", "Early Bird", "Chef", "Food Critic", "Quarterback", "Gambler", "Road Runner", "Order Up",
+        },
+        Ladder.OCCASIONAL: {"Bright Idea", "Good Host"},
+        Ladder.RARE: {"On a Roll", "Scout", "Explorer"},
+    }  # fmt: skip
+    assert sum(len(names) for names in on.values()) == len(BADGES) == 13
 
 
 @pytest.mark.parametrize(
@@ -308,14 +333,44 @@ def test_the_ladder_has_five_tiers_and_thirteen_badges() -> None:
     ],
 )  # fmt: skip
 def test_each_tier_is_reached_exactly_at_its_threshold(count: int, reached: int) -> None:
-    assert tiers_reached(count, DEFAULT_THRESHOLDS) == list(TIERS[:reached])
+    assert tiers_reached(count, FREQUENT) == list(TIERS[:reached])
 
 
-def test_thresholds_come_from_settings_and_fall_back_to_the_default() -> None:
-    assert thresholds_from({}) == DEFAULT_THRESHOLDS
-    assert thresholds_from({SETTINGS_KEY: [2, 4, 6, 8, 10]}) == (2, 4, 6, 8, 10)
-    for broken in ([1, 2, 3], "1,10,50", [5, 5, 6, 7, 8], [0, 1, 2, 3, 4], None, [1, 2, 3, 4, "x"]):
-        assert thresholds_from({SETTINGS_KEY: broken}) == DEFAULT_THRESHOLDS
+def test_ladders_come_from_settings_and_fall_back_to_the_defaults() -> None:
+    assert ladders_from({}) == DEFAULT_LADDERS
+    custom = {"frequent": [2, 4, 6, 8, 10], "occasional": [1, 2, 3, 4, 5], "rare": [3, 4, 5, 6, 7]}
+    assert ladders_setting(ladders_from({SETTINGS_KEY: custom})) == custom
+    # One bad or missing ladder takes its default; the others keep their counts.
+    partial = ladders_from({SETTINGS_KEY: {"rare": [3, 4, 5, 6, 7], "frequent": [5, 5, 6, 7, 8], "extra": [1]}})
+    assert partial == dict(DEFAULT_LADDERS) | {Ladder.RARE: (3, 4, 5, 6, 7)}
+    broken_values = (
+        [1, 2, 3],
+        "1,10,50",
+        [5, 5, 6, 7, 8],
+        [0, 1, 2, 3, 4],
+        None,
+        [1, 2, 3, 4, "x"],
+        7,
+        {},
+        {"rare": "x"},
+    )
+    for broken in broken_values:
+        assert ladders_from({SETTINGS_KEY: broken}) == DEFAULT_LADDERS
+
+
+def test_a_single_stored_list_is_the_frequent_ladder() -> None:
+    """How Dinnerbell stored the setting before there were three ladders (#130)."""
+    old = ladders_from({SETTINGS_KEY: [2, 4, 6, 8, 10]})
+    assert old == dict(DEFAULT_LADDERS) | {Ladder.FREQUENT: (2, 4, 6, 8, 10)}
+
+
+def test_ladders_are_checked_one_by_one_and_the_message_names_the_ladder() -> None:
+    good = {ladder: list(counts) for ladder, counts in DEFAULT_LADDERS.items()}
+    assert check_ladders(good) == DEFAULT_LADDERS
+    with pytest.raises(InvalidThresholds, match=r"^Occasional ladder: Each tier needs a higher count"):
+        check_ladders(good | {Ladder.OCCASIONAL: [1, 5, 5, 50, 100]})
+    with pytest.raises(InvalidThresholds, match=r"^Rare ladder: Give 5 counts"):
+        check_ladders({Ladder.FREQUENT: good[Ladder.FREQUENT], Ladder.OCCASIONAL: good[Ladder.OCCASIONAL]})
 
 
 @pytest.mark.parametrize(
@@ -330,17 +385,28 @@ def test_a_ladder_needs_five_whole_rising_counts(bad: list[object]) -> None:
 
 def test_progress_names_the_next_tier_and_how_far() -> None:
     chef = BY_KEY[BadgeKey.CHEF]
-    none = progress(chef, 0, DEFAULT_THRESHOLDS)
+    none = progress(chef, 0, DEFAULT_LADDERS)
     assert (none.tier, none.next_tier, none.next_at, none.remaining) == (None, Tier.FIRST, 1, 1)
-    some = progress(chef, 12, DEFAULT_THRESHOLDS)
+    some = progress(chef, 12, DEFAULT_LADDERS)
     assert (some.tier, some.next_tier, some.next_at, some.remaining) == (Tier.BRONZE, Tier.SILVER, 50, 38)
-    top = progress(chef, 250, DEFAULT_THRESHOLDS)
+    top = progress(chef, 250, DEFAULT_LADDERS)
     assert (top.tier, top.next_tier, top.remaining) == (Tier.DIAMOND, None, None)
+
+
+def test_progress_uses_the_badge_s_own_ladder() -> None:
+    at_12 = {
+        key: progress(BY_KEY[key], 12, DEFAULT_LADDERS) for key in (BadgeKey.CHEF, BadgeKey.GOOD_HOST, BadgeKey.SCOUT)
+    }
+    assert (at_12[BadgeKey.CHEF].tier, at_12[BadgeKey.CHEF].next_at) == (Tier.BRONZE, 50)
+    assert (at_12[BadgeKey.GOOD_HOST].tier, at_12[BadgeKey.GOOD_HOST].next_at) == (Tier.BRONZE, 20)
+    assert (at_12[BadgeKey.SCOUT].tier, at_12[BadgeKey.SCOUT].next_at) == (Tier.SILVER, 25)
+    roll = progress(BY_KEY[BadgeKey.ON_A_ROLL], 50, DEFAULT_LADDERS)
+    assert (roll.tier, roll.next_tier) == (Tier.DIAMOND, None)  # about a year of weeks
 
 
 def test_a_tier_earned_before_the_admin_raised_a_threshold_still_counts_as_reached() -> None:
     chef = BY_KEY[BadgeKey.CHEF]
-    raised = (5, 20, 60, 120, 240)
+    raised = dict(DEFAULT_LADDERS) | {Ladder.FREQUENT: (5, 20, 60, 120, 240)}
     kept = progress(chef, 3, raised, earned=[Tier.FIRST, Tier.BRONZE])
     assert (kept.tier, kept.next_tier, kept.next_at) == (Tier.BRONZE, Tier.SILVER, 60)
 
@@ -355,6 +421,18 @@ def test_a_streak_is_calendar_weeks_in_a_row() -> None:
     assert longest_streak([mon, mon + timedelta(days=3)]) == 1  # one week
     assert longest_streak([mon, mon + timedelta(days=7), mon + timedelta(days=14)]) == 3
     assert longest_streak([mon, mon + timedelta(days=6), mon + timedelta(days=8)]) == 2  # Mon, Sun | Tue next week
-    gap = [mon, mon + timedelta(days=7), mon + timedelta(days=21), mon + timedelta(days=28), mon + timedelta(days=35)]
-    assert longest_streak(gap) == 3
+    gap = [mon, mon + timedelta(days=7), mon + timedelta(days=28), mon + timedelta(days=35), mon + timedelta(days=42)]
+    assert longest_streak(gap) == 3  # two weeks missed in a row end the run
     assert longest_streak(reversed(gap)) == 3
+
+
+def test_a_streak_survives_one_missed_week_that_does_not_count() -> None:
+    mon = date(2026, 10, 5)
+    weeks = [mon + timedelta(weeks=n) for n in (0, 1, 3, 4)]  # week 2 missed
+    assert longest_streak(weeks) == 4
+    assert longest_streak([mon, mon + timedelta(days=20)]) == 2  # Mon, then Sun two weeks on: one week between
+    assert longest_streak([mon, mon + timedelta(days=21)]) == 1  # Mon, then Mon three weeks on: two between
+    every_other = [mon + timedelta(weeks=n) for n in range(0, 20, 2)]
+    assert longest_streak(every_other) == 10  # each single missed week is forgiven, none counts
+    broken = [mon + timedelta(weeks=n) for n in (0, 2, 4, 7, 8)]  # 5 and 6 missed: a new run starts at 7
+    assert longest_streak(broken) == 3

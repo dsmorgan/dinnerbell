@@ -6,8 +6,9 @@ feedback when a member gives it. Both record rows that ignore a repeat, so a cal
 or by two requests at once, counts once, and then award every badge tier the new counts reach.
 An award is one row per member, badge, and tier, so it happens once too. A live award starts
 ``pending``: the channel is told later, by the Slack slice, which reads ``pending_announcements``
-and calls ``mark_announced``. Awards made while catching up (``ensure_backfilled`` and a lowered
-threshold) are ``skipped`` and never announced.
+and calls ``mark_announced``. Awards made while catching up (``ensure_backfilled``, including the
+one-time catch-up for the three ladders, and a lowered threshold) are ``skipped`` and never
+announced.
 
 Nothing here logs or audits more than IDs, display names, kinds, and counts (SEC-5).
 """
@@ -15,6 +16,7 @@ Nothing here logs or audits more than IDs, display names, kinds, and counts (SEC
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -35,13 +37,16 @@ from dinnerbell.db.meals import MealLogRepository, household_settings
 from dinnerbell.db.repositories import HouseholdRepository, MemberRepository
 from dinnerbell.domain.badges import (
     BADGES,
+    DEFAULT_LADDERS,
     ROLL_KINDS,
     SETTINGS_KEY,
     Announcement,
     Award,
-    check_thresholds,
+    Ladder,
+    check_ladders,
+    ladders_from,
+    ladders_setting,
     longest_streak,
-    thresholds_from,
     tiers_reached,
 )
 from dinnerbell.domain.catalog import CatalogItem
@@ -60,6 +65,9 @@ GAMBLER_KEY = "gambler_backfilled"
 """The household setting that says history has been counted for ``CATCH_UP_KINDS`` (Gambler, #108):
 an ISO timestamp. Households that ran the first backfill before the kind existed get one run."""
 CATCH_UP_KINDS = frozenset({Kind.GAMBLED})
+LADDERS_KEY = "badge_ladders_awarded"
+"""The household setting that says the tiers the three ladders and On a Roll's grace week (#130)
+put in reach have been awarded, quietly: an ISO timestamp."""
 ADMINS_ONLY = "Only an admin changes the badge counts."
 
 
@@ -168,7 +176,7 @@ async def _award(
     event_id: int | None,
 ) -> list[Award]:
     """Award every tier each member's counts reach that they don't hold yet."""
-    thresholds = thresholds_from(await household_settings(db, household_id))
+    ladders = ladders_from(await household_settings(db, household_id))
     contributions, badges = ContributionRepository(db), BadgeRepository(db)
     made: list[Award] = []
     for member_id in sorted(member_ids):
@@ -176,7 +184,7 @@ async def _award(
         weeks = longest_streak(await contributions.days(household_id, member_id, ROLL_KINDS))
         for badge in BADGES:
             count = weeks if badge.kind is None else counts.get(badge.kind, 0)
-            for tier in tiers_reached(count, thresholds):
+            for tier in tiers_reached(count, ladders[badge.ladder]):
                 award = await badges.add(
                     household_id, member_id, badge.key, tier, now=now, announcement=announcement, event_id=event_id
                 )
@@ -199,27 +207,42 @@ async def mark_announced(db: AsyncSession, household_id: int, award_ids: list[in
 # Thresholds ------------------------------------------------------------------------------------
 
 
-async def thresholds(db: AsyncSession, household_id: int) -> tuple[int, ...]:
-    return thresholds_from(await household_settings(db, household_id))
+async def ladders(db: AsyncSession, household_id: int) -> dict[Ladder, tuple[int, ...]]:
+    return ladders_from(await household_settings(db, household_id))
 
 
-async def set_thresholds(db: AsyncSession, actor: Member, values: list[int], *, now: datetime) -> None:
-    """The admin's badge counts (FR-43), one per tier. Raises ``domain.badges.InvalidThresholds``. Audited.
+async def set_thresholds(
+    db: AsyncSession, actor: Member, values: Mapping[Ladder, Sequence[int]], *, now: datetime
+) -> None:
+    """The admin's badge counts (FR-43): five per ladder, one per tier. Raises
+    ``domain.badges.InvalidThresholds``. Audited.
 
     Lowering a count awards the tiers members already have the counts for, quietly: no one is
     announced a badge for a change of rules. Raising one takes nothing away."""
     require_admin(actor, ADMINS_ONLY)
-    ladder = check_thresholds(values)
+    await _save_ladders(db, actor, check_ladders(values), "household.badge_thresholds_updated", now)
+
+
+async def reset_thresholds(db: AsyncSession, actor: Member, *, now: datetime) -> None:
+    """Put every ladder back to its default counts, as ``set_thresholds`` would. Audited."""
+    require_admin(actor, ADMINS_ONLY)
+    await _save_ladders(db, actor, DEFAULT_LADDERS, "household.badge_thresholds_reset", now)
+
+
+async def _save_ladders(
+    db: AsyncSession, actor: Member, ladders: Mapping[Ladder, tuple[int, ...]], action: str, now: datetime
+) -> None:
     async with write_transaction(db):
         stored = await household_settings(db, actor.household_id)
-        before = thresholds_from(stored)
-        if before == ladder:
+        before = ladders_from(stored)
+        if before == ladders:
             return
-        await HouseholdRepository(db).update_settings(actor.household_id, stored | {SETTINGS_KEY: list(ladder)})
+        to = ladders_setting(ladders)
+        await HouseholdRepository(db).update_settings(actor.household_id, stored | {SETTINGS_KEY: to})
         everyone = set(await ContributionRepository(db).members(actor.household_id))
         caught_up = await _award(db, actor.household_id, everyone, now, Announcement.SKIPPED, None)
-        payload = {"from": list(before), "to": list(ladder), "caught_up": len(caught_up)}
-        await audit(db, actor.household_id, actor, "household.badge_thresholds_updated", _target(actor), payload, now)
+        payload = {"from": ladders_setting(before), "to": to, "caught_up": len(caught_up)}
+        await audit(db, actor.household_id, actor, action, _target(actor), payload, now)
         await db.commit()
     log.info("badge thresholds changed", extra={"member_id": actor.id, "caught_up": len(caught_up)})
 
@@ -251,13 +274,18 @@ async def ensure_backfilled(db: AsyncSession, household_id: int, *, now: datetim
     next start counts ``gambled`` for every done call, quietly, and sets it. Other kinds are left
     as they were.
 
+    A household without ``badge_ladders_awarded`` started before the three ladders and On a Roll's
+    grace week (#130), which can put tiers in reach that members don't hold. Its next start awards
+    them, quietly, as a lowered threshold does, and sets it.
+
     It commits every ``BATCH`` calls and sets ``contributions_backfilled`` last, so a start that
     is killed halfway counts the rest next time: every insert ignores a repeat."""
     stored = await household_settings(db, household_id)
     first = BACKFILLED_KEY not in stored
     catching_up = not first and GAMBLER_KEY not in stored
+    regrading = LADDERS_KEY not in stored
     events = await EventRepository(db).done(household_id, uncounted=not first and not catching_up)
-    if not events and not first and not catching_up:
+    if not events and not first and not catching_up and not regrading:
         return False
     # A household that ran the first backfill before a kind existed counts every done call for
     # just that kind. A call with no counts at all still gets all of them.
@@ -286,15 +314,15 @@ async def ensure_backfilled(db: AsyncSession, household_id: int, *, now: datetim
                     counted += len(added)
         everyone = set(await ContributionRepository(db).members(household_id))
         awards = await _award(db, household_id, everyone, now, Announcement.SKIPPED, None)
-        if first or catching_up:
-            marks = {GAMBLER_KEY: now.isoformat()}  # the first run counts every kind, Gambler included
+        if first or catching_up or regrading:
+            # The first run counts every kind, Gambler included, and awards on the current ladders.
+            due = {BACKFILLED_KEY: first, GAMBLER_KEY: first or catching_up, LADDERS_KEY: regrading}
+            marks = {key: now.isoformat() for key, mark in due.items() if mark}
             stored = await household_settings(db, household_id)
-            await HouseholdRepository(db).update_settings(
-                household_id, stored | marks | ({BACKFILLED_KEY: now.isoformat()} if first else {})
-            )
+            await HouseholdRepository(db).update_settings(household_id, stored | marks)
         await db.commit()
     log.info(
         "contributions backfilled",
         extra={"events": len(events), "credits": counted, "badges": len(awards), "first": first},
     )
-    return first or catching_up or counted > 0
+    return first or catching_up or regrading or counted > 0

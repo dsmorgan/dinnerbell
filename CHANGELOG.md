@@ -9,6 +9,14 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 ### Changed
 
 - Documentation only: step 9 of the setup guide again explains that `DINNERBELL_BASE_URL` must match the public URL, what `DINNERBELL_ADMIN_EMAIL` does, that `DINNERBELL_HOUSEHOLD_NAME` and `DINNERBELL_TIMEZONE` apply on first start only, and which secret keys Dinnerbell refuses. 0.9.1's rewrite had dropped these notes.
+- **Badges climb three ladders** (#130). Frequent (1, 10, 50, 100, 200) keeps the meal badges; Occasional (1, 5, 20, 50, 100) is for Bright Idea and Good Host; Rare (1, 3, 10, 25, 50) is for On a Roll, Scout, and Explorer, so every Diamond is within reach. Stats and App Home show each badge's next step on its own ladder.
+- **On a Roll has a grace week.** A run survives one missed week, which doesn't count toward it; two missed weeks in a row still end it.
+- **Admin > Badges edits the three ladders**, five counts each, validated as before, with **Reset to defaults**. Each save and reset is audited. The `badge_thresholds` setting holds one list per ladder; a single list from an earlier version is read as the Frequent ladder.
+- Tiers that the new ladders or the grace week put in reach are awarded quietly, as when an admin lowers a threshold, so the channel gets no burst of posts.
+
+### Upgrade notes
+
+- **Badges:** on the first start, members may receive badge tiers quietly: the new ladders and On a Roll's grace week put them in reach. Nothing is posted to Slack for them, and no earned tier is removed. A custom ladder you saved earlier becomes the Frequent ladder. No database revision ships for this.
 
 ## [0.9.1] - 2026-10-29
 

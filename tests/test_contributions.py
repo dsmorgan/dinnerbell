@@ -31,11 +31,13 @@ from dinnerbell.db.models import (
     ResponseRow,
 )
 from dinnerbell.domain.badges import (
-    DEFAULT_THRESHOLDS,
+    DEFAULT_LADDERS,
     Announcement,
     BadgeKey,
     InvalidThresholds,
+    Ladder,
     Tier,
+    ladders_setting,
 )
 from dinnerbell.domain.catalog import Mode
 from dinnerbell.domain.contributions import Kind
@@ -231,7 +233,7 @@ async def test_the_first_cooked_picked_up_or_coordinated_earns_the_first_tier_pe
 async def test_a_badge_tier_is_awarded_once_each_time_the_count_crosses_it(house: House) -> None:
     """With a ladder of 1, 2, 3, 4, 5, the tiers come one dinner at a time, each exactly once."""
     async with house.sessionmaker() as db:
-        await contributions.set_thresholds(db, house["Alex"], [1, 2, 3, 4, 5], now=house.clock())
+        await contributions.set_thresholds(db, house["Alex"], every(1, 2, 3, 4, 5), now=house.clock())
     seen: list[list[Tier]] = []
     for n in range(5):
         await dinner(house, n=n)
@@ -242,7 +244,7 @@ async def test_a_badge_tier_is_awarded_once_each_time_the_count_crosses_it(house
 
 async def test_a_tier_below_a_threshold_is_not_awarded_one_count_short(house: House) -> None:
     async with house.sessionmaker() as db:
-        await contributions.set_thresholds(db, house["Alex"], [2, 3, 4, 5, 6], now=house.clock())
+        await contributions.set_thresholds(db, house["Alex"], every(2, 3, 4, 5, 6), now=house.clock())
     await dinner(house, n=0)
     assert not [a for a in await awards(house, "Alex") if a[1] is BadgeKey.ROAD_RUNNER]
     await dinner(house, n=1)
@@ -251,16 +253,19 @@ async def test_a_tier_below_a_threshold_is_not_awarded_one_count_short(house: Ho
 
 async def test_on_a_roll_counts_weeks_in_a_row(house: House) -> None:
     async with house.sessionmaker() as db:
-        await contributions.set_thresholds(db, house["Alex"], [1, 2, 3, 4, 5], now=house.clock())
+        await contributions.set_thresholds(db, house["Alex"], every(1, 2, 3, 4, 5), now=house.clock())
     for n in (0, 7, 14):  # Thursday, then each week after
         await dinner(house, n=n)
     rolls = [a[2] for a in await awards(house, "Alex") if a[1] is BadgeKey.ON_A_ROLL]
     assert rolls == [Tier.FIRST, Tier.BRONZE, Tier.SILVER]
-    await dinner(house, n=28)  # a week skipped: the streak starts over, and what was earned stays
+    await dinner(house, n=28)  # one week skipped: a grace week, so the run goes on without it
+    rolls = [a[2] for a in await awards(house, "Alex") if a[1] is BadgeKey.ON_A_ROLL]
+    assert rolls == [Tier.FIRST, Tier.BRONZE, Tier.SILVER, Tier.GOLD]
+    await dinner(house, n=49)  # two weeks skipped: the run starts over, and what was earned stays
     assert [a[2] for a in await awards(house, "Alex") if a[1] is BadgeKey.ON_A_ROLL] == rolls
     mine = await act_stats(house, "Alex")
     roll = next(p for p in mine.progress if p.badge.key is BadgeKey.ON_A_ROLL)
-    assert (roll.count, roll.tier, roll.next_tier) == (3, Tier.SILVER, Tier.GOLD)
+    assert (roll.count, roll.tier, roll.next_tier) == (4, Tier.GOLD, Tier.DIAMOND)
 
 
 async def act_stats(house: House, name: str) -> stats.MemberStats:
@@ -268,51 +273,135 @@ async def act_stats(house: House, name: str) -> stats.MemberStats:
         return await stats.my_stats(db, house[name])
 
 
+def every(*counts: int) -> dict[Ladder, list[int]]:
+    """The same counts for all three ladders."""
+    return {ladder: list(counts) for ladder in Ladder}
+
+
 async def test_the_admin_sets_the_thresholds_and_it_is_audited(house: House) -> None:
-    assert await act_thresholds(house) == DEFAULT_THRESHOLDS
+    assert await act_thresholds(house) == DEFAULT_LADDERS
     async with house.sessionmaker() as db:
-        await contributions.set_thresholds(db, house["Alex"], [3, 6, 9, 12, 15], now=house.clock())
-    assert await act_thresholds(house) == (3, 6, 9, 12, 15)
+        await contributions.set_thresholds(db, house["Alex"], every(3, 6, 9, 12, 15), now=house.clock())
+    assert await act_thresholds(house) == dict.fromkeys(Ladder, (3, 6, 9, 12, 15))
     (row,) = await house.audits("household.badge_thresholds")
     assert row.actor_member_id == house["Alex"].id
-    assert row.payload == {"from": [1, 10, 50, 100, 200], "to": [3, 6, 9, 12, 15], "caught_up": 0}
+    assert row.payload == {
+        "from": {"frequent": [1, 10, 50, 100, 200], "occasional": [1, 5, 20, 50, 100], "rare": [1, 3, 10, 25, 50]},
+        "to": {ladder.value: [3, 6, 9, 12, 15] for ladder in Ladder},
+        "caught_up": 0,
+    }
     async with house.sessionmaker() as db:  # the same values again change nothing and write nothing
-        await contributions.set_thresholds(db, house["Alex"], [3, 6, 9, 12, 15], now=house.clock())
+        await contributions.set_thresholds(db, house["Alex"], every(3, 6, 9, 12, 15), now=house.clock())
     assert len(await house.audits("household.badge_thresholds")) == 1
 
 
-async def act_thresholds(house: House) -> tuple[int, ...]:
+async def act_thresholds(house: House) -> dict[Ladder, tuple[int, ...]]:
     async with house.sessionmaker() as db:
-        return await contributions.thresholds(db, house.household.id)
+        return await contributions.ladders(db, house.household.id)
 
 
 async def test_only_an_admin_sets_thresholds_and_a_bad_ladder_is_refused(house: House) -> None:
     async with house.sessionmaker() as db:
         with pytest.raises(Forbidden):
-            await contributions.set_thresholds(db, house["Sam"], [1, 2, 3, 4, 5], now=house.clock())
+            await contributions.set_thresholds(db, house["Sam"], every(1, 2, 3, 4, 5), now=house.clock())
         with pytest.raises(InvalidThresholds):
-            await contributions.set_thresholds(db, house["Alex"], [5, 4, 3, 2, 1], now=house.clock())
-    assert await act_thresholds(house) == DEFAULT_THRESHOLDS
+            await contributions.set_thresholds(db, house["Alex"], every(5, 4, 3, 2, 1), now=house.clock())
+    assert await act_thresholds(house) == DEFAULT_LADDERS
     assert await house.audits("household.badge_thresholds") == []
 
 
 async def test_lowering_a_threshold_awards_quietly_and_raising_one_takes_nothing_away(house: House) -> None:
     async with house.sessionmaker() as db:
-        await contributions.set_thresholds(db, house["Alex"], [2, 3, 4, 5, 6], now=house.clock())
+        await contributions.set_thresholds(db, house["Alex"], every(2, 3, 4, 5, 6), now=house.clock())
     await dinner(house, n=0)
     assert not [a for a in await awards(house) if a[1] is BadgeKey.ROAD_RUNNER]
     async with house.sessionmaker() as db:  # back to 1 for the first tier: Alex has it already
-        await contributions.set_thresholds(db, house["Alex"], [1, 3, 4, 5, 6], now=house.clock())
+        await contributions.set_thresholds(db, house["Alex"], every(1, 3, 4, 5, 6), now=house.clock())
     found = [a for a in await awards(house) if a[1] is BadgeKey.ROAD_RUNNER]
     assert found == [("Alex", BadgeKey.ROAD_RUNNER, Tier.FIRST, Announcement.SKIPPED)]
     audit = (await house.audits("household.badge"))[-1]
     assert audit.payload["caught_up"] >= 1
     async with house.sessionmaker() as db:  # raising it again leaves the badge earned
-        await contributions.set_thresholds(db, house["Alex"], [5, 6, 7, 8, 9], now=house.clock())
+        await contributions.set_thresholds(db, house["Alex"], every(5, 6, 7, 8, 9), now=house.clock())
     assert [a for a in await awards(house) if a[1] is BadgeKey.ROAD_RUNNER] == found
     mine = await act_stats(house, "Alex")
     runner = next(p for p in mine.progress if p.badge.key is BadgeKey.ROAD_RUNNER)
     assert runner.tier is Tier.FIRST and runner.next_at == 6
+
+
+async def test_each_badge_climbs_its_own_ladder(house: House) -> None:
+    """Three weeks in a row reach Bronze on On a Roll (Rare: 1, 3, ...), while three pickups are
+    still First on Road Runner (Frequent: 1, 10, ...)."""
+    for n in (0, 7, 14):
+        await dinner(house, n=n)
+    mine = await awards(house, "Alex")
+    assert [a[2] for a in mine if a[1] is BadgeKey.ON_A_ROLL] == [Tier.FIRST, Tier.BRONZE]
+    assert [a[2] for a in mine if a[1] is BadgeKey.ROAD_RUNNER] == [Tier.FIRST]
+    steps = {p.badge.key: p for p in (await act_stats(house, "Alex")).progress}
+    assert (steps[BadgeKey.ON_A_ROLL].next_tier, steps[BadgeKey.ON_A_ROLL].next_at) == (Tier.SILVER, 10)
+    assert (steps[BadgeKey.ROAD_RUNNER].next_tier, steps[BadgeKey.ROAD_RUNNER].next_at) == (Tier.BRONZE, 10)
+    assert (steps[BadgeKey.GOOD_HOST].next_tier, steps[BadgeKey.GOOD_HOST].next_at) == (Tier.FIRST, 1)
+
+
+async def test_lowering_one_ladder_awards_only_its_badges_quietly(house: House) -> None:
+    for n in (0, 1):
+        await dinner(house, n=n)
+    before = await awards(house)
+    async with house.sessionmaker() as db:
+        lowered = dict(DEFAULT_LADDERS) | {Ladder.FREQUENT: (1, 2, 3, 4, 5)}
+        await contributions.set_thresholds(db, house["Alex"], lowered, now=house.clock())
+    new = [a for a in await awards(house) if a not in before]
+    assert ("Alex", BadgeKey.ROAD_RUNNER, Tier.BRONZE, Announcement.SKIPPED) in new
+    assert {a[3] for a in new} == {Announcement.SKIPPED}
+    assert not [a for a in new if a[1] is BadgeKey.ON_A_ROLL]  # Rare didn't change
+    (row,) = await house.audits("household.badge_thresholds_updated")
+    assert row.payload["to"] == ladders_setting(lowered) and row.payload["caught_up"] == len(new)
+
+
+async def test_reset_puts_the_defaults_back_and_is_audited(house: House) -> None:
+    async with house.sessionmaker() as db:
+        with pytest.raises(Forbidden):
+            await contributions.reset_thresholds(db, house["Sam"], now=house.clock())
+        await contributions.reset_thresholds(db, house["Alex"], now=house.clock())  # already the defaults
+    assert await house.audits("household.badge_thresholds_reset") == []
+    async with house.sessionmaker() as db:
+        await contributions.set_thresholds(db, house["Alex"], every(2, 4, 8, 16, 32), now=house.clock())
+        await contributions.reset_thresholds(db, house["Alex"], now=house.clock())
+    assert await act_thresholds(house) == DEFAULT_LADDERS
+    (row,) = await house.audits("household.badge_thresholds_reset")
+    assert row.actor_member_id == house["Alex"].id
+    assert row.payload["from"] == ladders_setting(every_tuple(2, 4, 8, 16, 32))
+    assert row.payload["to"] == ladders_setting(DEFAULT_LADDERS)
+
+
+def every_tuple(*counts: int) -> dict[Ladder, tuple[int, ...]]:
+    return dict.fromkeys(Ladder, counts)
+
+
+async def test_the_first_start_on_three_ladders_awards_what_they_reach_quietly(house: House) -> None:
+    """A household from before #130: one ladder stored as a single list, and On a Roll counted
+    with no grace week. Its first start awards what the new ladders and the grace week put in
+    reach as ``skipped``, once."""
+    for n in (0, 14, 28):  # three weeks, each a missed week apart: one run with the grace week
+        await dinner(house, n=n)
+    async with house.sessionmaker() as db:
+        await db.execute(text("DELETE FROM badge_award WHERE badge_key = 'on_a_roll' AND tier != 'first'"))
+        stored = (await db.scalar(select(HouseholdRow.settings))) or {}
+        old = {k: v for k, v in stored.items() if k != contributions.LADDERS_KEY}
+        old |= {contributions.BACKFILLED_KEY: "x", contributions.GAMBLER_KEY: "x", "badge_thresholds": [1, 2, 3, 4, 5]}
+        await db.execute(text("UPDATE household SET settings = :s"), {"s": json.dumps(old)})
+        await db.commit()
+    assert (await act_thresholds(house))[Ladder.FREQUENT] == (1, 2, 3, 4, 5)  # the old list is Frequent
+    assert (await act_thresholds(house))[Ladder.RARE] == DEFAULT_LADDERS[Ladder.RARE]
+    async with house.sessionmaker() as db:
+        assert await contributions.ensure_backfilled(db, house.household.id, now=house.clock()) is True
+    rolls = [a for a in await awards(house, "Alex") if a[1] is BadgeKey.ON_A_ROLL]
+    assert rolls[1:] == [("Alex", BadgeKey.ON_A_ROLL, Tier.BRONZE, Announcement.SKIPPED)]
+    async with house.sessionmaker() as db:
+        stored = await db.scalar(select(HouseholdRow.settings))
+        assert stored is not None and stored[contributions.LADDERS_KEY] == house.clock.now.isoformat()
+        assert stored[contributions.GAMBLER_KEY] == "x"  # the other markers are left alone
+        assert await contributions.ensure_backfilled(db, house.household.id, now=house.clock()) is False  # once
 
 
 # Who counts: guests, late joiners, and offers --------------------------------------------------
@@ -532,7 +621,7 @@ async def test_the_backfill_counts_the_meal_log_without_announcing_anything(hous
 
 async def test_the_backfill_runs_once_and_later_calls_still_count(house: House) -> None:
     async with house.sessionmaker() as db:
-        await contributions.set_thresholds(db, house["Alex"], [1, 2, 3, 4, 5], now=house.clock())
+        await contributions.set_thresholds(db, house["Alex"], every(1, 2, 3, 4, 5), now=house.clock())
     await dinner(house, n=0)
     await forget_everything(house)
     async with house.sessionmaker() as db:

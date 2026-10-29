@@ -20,9 +20,19 @@ Only members earn the "at the table", "answered quickly", idea, hosting, feedbac
 
 ## Badges and tiers
 
-Thirteen badges share one ladder: **First** (1), **Bronze** (10), **Silver** (50), **Gold** (100), **Diamond** (200). A badge tier is earned once per person. **On a Roll** counts weeks in a row, Monday to Sunday in your time zone, with at least one cooked, picked up, or ordered meal.
+Each of the thirteen badges has five tiers, **First**, **Bronze**, **Silver**, **Gold**, and **Diamond**, and climbs one of three ladders:
 
-The counts are a household setting. The admin changes them with `badge_thresholds` in the household settings, five whole numbers that rise from 1 to 10,000. Raising a count takes nothing away. Lowering one awards the tiers people already have the counts for, without an announcement.
+| Ladder | Counts | Badges |
+|---|---|---|
+| Frequent | 1, 10, 50, 100, 200 | Full Table, Early Bird, Chef, Food Critic, Quarterback, Gambler, Road Runner, Order Up |
+| Occasional | 1, 5, 20, 50, 100 | Bright Idea, Good Host |
+| Rare | 1, 3, 10, 25, 50 | On a Roll, Scout, Explorer |
+
+A badge tier is earned once per person. **On a Roll** counts weeks in a run, Monday to Sunday in your time zone, with at least one cooked, picked up, or ordered meal. A run survives one missed week, which doesn't count toward it; two missed weeks in a row end it.
+
+The counts are a household setting. An admin changes them in **Admin > Badges**: five whole numbers per ladder that rise from 1 to 10,000, or **Reset to defaults**. Each change is audited. Raising a count takes nothing away. Lowering one awards the tiers people already have the counts for, without an announcement. The setting, `badge_thresholds`, holds one list per ladder; a single list, from before there were three ladders, is read as the Frequent ladder.
+
+The first start after the three ladders arrived awards the tiers they and the grace week put in reach the same way, without an announcement, and records `badge_ladders_awarded` in the household settings.
 
 Gambler arrived after the first backfill, so a household that already ran it gets one catch-up: on the next start, Dinnerbell counts Gambler for every done call, awards the tiers it reaches as `skipped` (never announced), and records `gambler_backfilled` in the household settings. It changes no other count, and a start that stops halfway runs the rest next time. A new household's first backfill counts Gambler with everything else.
 

@@ -1,21 +1,21 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The Stats page (FR-38, FR-40): a person's own counts and badges, and for members the
 household's totals and newest badges; and Admin > Badges, where an admin sets the five tier
-counts (FR-43).
+counts of each of the three ladders (FR-43, #130).
 
 The page never ranks anyone. A person sees their own numbers; the household list is by recency,
 with no member's count beside another's. A guest sees only their own pitching-in badges."""
 
 from __future__ import annotations
 
-from typing import Annotated, Any
+from typing import Any
 
-from fastapi import APIRouter, Form, Request
+from fastapi import APIRouter, Request
 from fastapi.responses import RedirectResponse
 from starlette.datastructures import FormData
 from starlette.responses import Response
 
-from dinnerbell.domain.badges import TIERS, InvalidThresholds
+from dinnerbell.domain.badges import BADGES, LADDERS, TIERS, InvalidThresholds, Ladder
 from dinnerbell.domain.contributions import PITCHING_IN, Kind
 from dinnerbell.services import contributions, stats
 from dinnerbell.web.auth import AdminCSRFChecked, AdminPrincipal, Context, Database, GuestOrMember
@@ -64,39 +64,50 @@ async def stats_page(request: Request, principal: GuestOrMember, context: Contex
 
 # Admin > Badges (FR-43) ----------------------------------------------------------------------
 
-FIELDS = [f"threshold_{tier.value}" for tier in TIERS]
+FIELDS = {ladder: [f"threshold_{ladder.value}_{tier.value}" for tier in TIERS] for ladder in LADDERS}
+"""Each ladder's five form fields, one per tier."""
 MAX_DIGITS = 6
-NOTICES = {"saved": "Badge counts saved."}
-Field = Annotated[str, Form(max_length=40)]
+NOTICES = {"saved": "Badge counts saved.", "reset": "Badge counts reset to the defaults."}
 
 
 def _page(values: dict[str, str], **extra: Any) -> dict[str, Any]:
-    return {"values": values, "tiers": [(tier, f"threshold_{tier.value}") for tier in TIERS]} | extra
+    rows = [
+        {
+            "ladder": ladder,
+            "badges": ", ".join(b.name for b in BADGES if b.ladder is ladder),
+            "fields": list(zip(TIERS, FIELDS[ladder], strict=True)),
+        }
+        for ladder in LADDERS
+    ]
+    return {"values": values, "ladders": rows} | extra
 
 
-def _shown(ladder: tuple[int, ...]) -> dict[str, str]:
+def _shown(ladders: dict[Ladder, tuple[int, ...]]) -> dict[str, str]:
     """The stored counts as the form shows them, so saving it untouched changes nothing."""
-    return {name: str(n) for name, n in zip(FIELDS, ladder, strict=True)}
+    return {name: str(n) for ladder in LADDERS for name, n in zip(FIELDS[ladder], ladders[ladder], strict=True)}
 
 
 def _posted(form: FormData) -> dict[str, str]:
-    return {name: str(form.get(name) or "")[:40] for name in FIELDS}
+    return {name: str(form.get(name) or "")[:40] for names in FIELDS.values() for name in names}
 
 
-def _parse(posted: dict[str, str]) -> list[int]:
-    counts: list[int] = []
-    for tier, name in zip(TIERS, FIELDS, strict=True):
-        text = posted[name].strip()  # no regex: a pattern over form input can backtrack
-        if not (text.isascii() and text.isdigit() and len(text) <= MAX_DIGITS):
-            raise BadFormValue(f"The {tier.label} count must be a whole number.")
-        counts.append(int(text))
-    return counts
+def _parse(posted: dict[str, str]) -> dict[Ladder, list[int]]:
+    ladders: dict[Ladder, list[int]] = {}
+    for ladder in LADDERS:
+        counts: list[int] = []
+        for tier, name in zip(TIERS, FIELDS[ladder], strict=True):
+            text = posted[name].strip()  # no regex: a pattern over form input can backtrack
+            if not (text.isascii() and text.isdigit() and len(text) <= MAX_DIGITS):
+                raise BadFormValue(f"{ladder.label} ladder: The {tier.label} count must be a whole number.")
+            counts.append(int(text))
+        ladders[ladder] = counts
+    return ladders
 
 
 @router.get("/admin/badges")
 async def admin_badges_page(request: Request, principal: AdminPrincipal, db: Database, notice: str = "") -> Response:
-    ladder = await contributions.thresholds(db, principal.member.household_id)
-    return await render(request, "admin_badges.html", _page(_shown(ladder), notice=NOTICES.get(notice)))
+    ladders = await contributions.ladders(db, principal.member.household_id)
+    return await render(request, "admin_badges.html", _page(_shown(ladders), notice=NOTICES.get(notice)))
 
 
 @router.post("/admin/badges")
@@ -107,3 +118,9 @@ async def save_badges(request: Request, principal: AdminCSRFChecked, context: Co
     except (InvalidThresholds, BadFormValue) as exc:
         return await render(request, "admin_badges.html", _page(posted, error=str(exc)), status_code=400)
     return RedirectResponse("/admin/badges?notice=saved", status_code=303)
+
+
+@router.post("/admin/badges/reset")
+async def reset_badges(principal: AdminCSRFChecked, context: Context, db: Database) -> Response:
+    await contributions.reset_thresholds(db, principal.member, now=context.clock())
+    return RedirectResponse("/admin/badges?notice=reset", status_code=303)

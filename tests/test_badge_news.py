@@ -24,7 +24,7 @@ from dinnerbell.db.meals import household_settings
 from dinnerbell.db.models import BadgeAwardRow, ContributionRow
 from dinnerbell.db.repositories import HouseholdRepository
 from dinnerbell.domain import notifications as note
-from dinnerbell.domain.badges import Announcement, BadgeKey, Tier
+from dinnerbell.domain.badges import Announcement, BadgeKey, Ladder, Tier
 from dinnerbell.domain.recap import bounds_utc, due_month, month_key, next_month, previous_month
 from dinnerbell.scheduler import runner
 from dinnerbell.services import announcements, contributions, recap, scrub, stats
@@ -289,7 +289,9 @@ async def test_a_backfill_and_a_lowered_threshold_announce_nothing(house: House)
     assert await announce(house) == 0
     # A lowered count awards the tiers people already reach, quietly.
     async with house.sessionmaker() as db:
-        await contributions.set_thresholds(db, house["Alex"], [1, 2, 3, 4, 5], now=house.clock())
+        await contributions.set_thresholds(
+            db, house["Alex"], {ladder: [1, 2, 3, 4, 5] for ladder in Ladder}, now=house.clock()
+        )
     assert "pending" not in await states(house)
     assert await announce(house) == 0
     assert len(await posts(house, "badges_earned")) == before
@@ -718,7 +720,7 @@ def test_next_up_points_at_the_closest_started_badge() -> None:
     from dinnerbell.domain.badges import next_up
 
     step = next_up(samples.KIM_BADGES.progress)
-    assert step is not None and step.badge.key is BadgeKey.CHEF and step.remaining == 7
+    assert step is not None and step.badge.key is BadgeKey.SCOUT and step.remaining == 2  # Rare: Bronze at 3
     fresh = next_up(samples.KIM_NO_BADGES.progress)
     assert fresh is not None and fresh.badge.key is BadgeKey.CHEF and fresh.count == 0
 
