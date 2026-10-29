@@ -6,13 +6,27 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-10-29
+
+### Fixed
+
+- **An upgrade to 0.9.0 with the secrets still in `.env` didn't start.** 0.9.0's `compose.yaml` mounted four secret files unconditionally, so podman-compose stopped with `statfs .../secrets/DINNERBELL_SECRET_KEY: no such file or directory` when they didn't exist. Secret files are now optional. `compose.yaml` reads the secrets from `.env` again, as in 0.8.0, and keeps 0.9.0's resource limits, log rotation, and other settings. The new `compose.secrets.yaml` mounts the files when you add it: `podman-compose -f compose.yaml -f compose.secrets.yaml up -d`. `deploy/dinnerbell-test` adds it, pointed at `secrets-test/` (by the new `deploy/compose.test-secrets.yaml`), when any of the four files is there, and then requires all four; otherwise test reads its secrets from `.env.test`. Its shared-secret check compares production and test however each holds them. A secret in an env file stays supported: Dinnerbell logs a warning for each one at start, and the warning no longer says a later release ignores it. `.env.example` and `.env.test.example` list the four secrets again, and "Keep secrets in files" in docs/setup.md is now an optional section. The placeholder-key check from 0.9.0 is unchanged.
+
 ### Changed
 
 - Documentation only: the setup guide no longer has a "Set the trusted proxy" step, its `.env` template line, or the "Rate limiting blocks everyone at once" troubleshooting row. `DINNERBELL_TRUSTED_PROXIES` stays an optional setting, described in the configuration reference and `.env.example`: set one proxy address, never a range, and never an address that other clients share, such as a container gateway. Behavior and defaults are unchanged.
 
 ### Added
 
-- `.github/CODEOWNERS` assigns the owner to CI, the Containerfile, dependency locks, `compose.yaml`, `deploy/`, and `scripts/`.
+- `.github/CODEOWNERS` assigns the owner to CI, the Containerfile, dependency locks, `compose.yaml`, `compose.secrets.yaml`, `deploy/`, and `scripts/`.
+
+### Upgrade notes
+
+- **Back up first.** No database revision ships in this release. The database stays at the revision 0.8.0 left it, so rolling back is a restore of that backup and the 0.8.0 image (or the 0.9.0 image, with secret files).
+- **Secrets in `.env`: no action needed.** Check out `v0.9.1`, pull, and recreate the service as usual (`podman-compose pull && podman-compose down && podman-compose up -d`). Dinnerbell starts and logs one warning per secret in `.env`. To clear the warnings, follow "Keep secrets in files" in [docs/setup.md](docs/setup.md#keep-secrets-in-files); it's optional.
+- **Already created the secret files and removed the four lines from `.env`?** Add the override to every `up`: `podman-compose -f compose.yaml -f compose.secrets.yaml up -d` (Docker: `docker compose -f compose.yaml -f compose.secrets.yaml up -d`). Or put the four lines back in `.env` and run `up` as usual. Without either, Dinnerbell stops at start with `DINNERBELL_SECRET_KEY is required but not set`.
+- **Test instance:** nothing to do. `deploy/dinnerbell-test` uses `secrets-test/` when it holds the files, and `.env.test` otherwise. If `secrets-test/` holds some of the four files but not all, it refuses to start and names the missing one.
+- **Upgrading from 0.8.0 or earlier:** also read the 0.9.0 upgrade notes below, but skip its hard stop: you no longer need secret files before `up`.
 
 ## [0.9.0] - 2026-10-29
 
@@ -385,7 +399,8 @@ The source-built version, never published as an image. It covers milestones M0 t
 - **M1:** the catalog with file import, preferences and vetoes, meal history, and the members admin page.
 - **M2:** dinner calls in Slack: the scheduled call, reminders, ranked proposals and votes, the decision, assignments, the abandon path, admin overrides, App Home, and `/dinnerbell call`.
 
-[Unreleased]: https://github.com/dsmorgan/dinnerbell/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/dsmorgan/dinnerbell/compare/v0.9.1...HEAD
+[0.9.1]: https://github.com/dsmorgan/dinnerbell/releases/tag/v0.9.1
 [0.9.0]: https://github.com/dsmorgan/dinnerbell/releases/tag/v0.9.0
 [0.8.0]: https://github.com/dsmorgan/dinnerbell/releases/tag/v0.8.0
 [0.7.0]: https://github.com/dsmorgan/dinnerbell/releases/tag/v0.7.0

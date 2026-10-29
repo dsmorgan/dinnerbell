@@ -258,7 +258,10 @@ def test_config_check_reads_secret_files_from_a_directory(
     monkeypatch.setattr("sys.stdin", __import__("io").StringIO(env_text))
     assert cli.main(args) == 2
     err = capsys.readouterr().err
-    assert f"DINNERBELL_SECRET_KEY is required but not set. Put it in the file {directory}" in err
+    assert (
+        f"DINNERBELL_SECRET_KEY is required but not set. Set it in the env file, or put it in the file {directory}"
+        in err
+    )
     for name in secrets:
         assert REQUIRED[name] not in err
 

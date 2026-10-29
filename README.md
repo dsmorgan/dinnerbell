@@ -12,7 +12,7 @@ Pre-alpha. Milestones M0 through M2 are in place: the container, configuration, 
 
 ## Run it
 
-Dinnerbell runs as one container behind a reverse proxy such as Pangolin. Each release is a prebuilt, attested image on GitHub Container Registry. Clone the repository for `compose.yaml` and check out the newest release tag, copy `.env.example` to `.env`, fill it in, write the four secrets to files in `secrets/`, then run `podman-compose pull` and `podman-compose up -d` (or the `docker compose` equivalents). The full walkthrough, including the Slack sign-in app, Pangolin, upgrades, and an optional test instance, is in [docs/setup.md](docs/setup.md). Changes are listed in [CHANGELOG.md](CHANGELOG.md).
+Dinnerbell runs as one container behind a reverse proxy such as Pangolin. Each release is a prebuilt, attested image on GitHub Container Registry. Clone the repository for `compose.yaml` and check out the newest release tag, copy `.env.example` to `.env`, fill it in, then run `podman-compose pull` and `podman-compose up -d` (or the `docker compose` equivalents). The full walkthrough, including the Slack sign-in app, Pangolin, upgrades, and an optional test instance, is in [docs/setup.md](docs/setup.md). Changes are listed in [CHANGELOG.md](CHANGELOG.md).
 
 <img src="src/dinnerbell/web/static/logo-test-mark.svg" width="24" height="24" alt="" align="absmiddle"> A test instance shows Dinnerbot, Dinnerbone as a half-built blueprint, so you can tell it from production at a glance.
 

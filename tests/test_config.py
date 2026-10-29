@@ -241,7 +241,10 @@ def test_a_missing_secret_names_its_file(monkeypatch: pytest.MonkeyPatch, tmp_pa
     directory = secrets_from_files(monkeypatch, tmp_path, **(SECRET_FILES | {"DINNERBELL_SECRET_KEY": ""}))
     with pytest.raises(ConfigError) as caught:
         load_settings()
-    assert f"DINNERBELL_SECRET_KEY is required but not set. Put it in the file {directory}" in str(caught.value)
+    assert (
+        f"DINNERBELL_SECRET_KEY is required but not set. Set it in the env file, or put it in the file {directory}"
+        in str(caught.value)
+    )
 
 
 def test_an_unreadable_secret_file_is_a_clear_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -285,8 +288,29 @@ def test_a_secret_in_the_environment_still_works_with_a_warning(
     with caplog.at_level("WARNING", logger="dinnerbell.config"):
         settings = load_settings()
     assert settings.secret_key.get_secret_value() == "env-secret-key-that-is-long-enough-to-pass"
-    assert "DINNERBELL_SECRET_KEY is set in the environment. Move it to the file" in caplog.text
+    assert "DINNERBELL_SECRET_KEY is set in the environment (the env file). That works" in caplog.text
     assert "env-secret-key" not in caplog.text
+
+
+def test_all_four_secrets_from_the_environment_start_without_a_secrets_directory(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The default layout (0.9.1): compose.yaml mounts nothing at /run/secrets, and .env holds the
+    four secrets. Dinnerbell starts and only warns, once per secret, without a value."""
+    from dinnerbell import config
+
+    set_env(monkeypatch, DINNERBELL_SLACK_BOT_TOKEN="xoxb-env-only", DINNERBELL_SLACK_APP_TOKEN="xapp-env-only")
+    monkeypatch.setattr(config, "SECRETS_DIR", tmp_path / "absent")
+    with caplog.at_level("WARNING", logger="dinnerbell.config"):
+        settings = load_settings()
+    assert settings.secret_key.get_secret_value() == REQUIRED["DINNERBELL_SECRET_KEY"]
+    assert settings.slack_bot_token is not None
+    assert settings.slack_bot_token.get_secret_value() == "xoxb-env-only"
+    for field in SECRET_FIELDS:
+        assert config.LEGACY_WARNINGS[field] in caplog.messages
+    for value in (REQUIRED["DINNERBELL_SECRET_KEY"], REQUIRED["DINNERBELL_OIDC_CLIENT_SECRET"], "env-only"):
+        assert value not in caplog.text
+    assert "next release" not in " ".join(config.LEGACY_WARNINGS.values())
 
 
 def test_the_same_secret_in_the_environment_and_a_file_warns(
@@ -345,9 +369,8 @@ def test_env_example_documents_every_setting() -> None:
     for field in Settings.model_fields:
         line = f"\nDINNERBELL_{field.upper()}="
         if field in SECRET_FIELDS:
-            # A secret is a file, not a line: .env.example points to it, and a placeholder shows the name.
-            assert line not in text, field
-            assert f"DINNERBELL_{field.upper()}" in text, field
+            # A secret is a line in .env by default; secrets/ keeps a placeholder for the optional file.
+            assert line in text, field
             assert (root / "secrets" / f"DINNERBELL_{field.upper()}.example").is_file(), field
         elif field in SET_BY_IMAGE:
             assert line not in text, field

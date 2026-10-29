@@ -15,15 +15,18 @@
 # older let .env win over the shell, so this script refuses to run if .env sets any of them.
 # Test publishes on production's DINNERBELL_BIND, read from .env.
 #
-# The four secrets live in files, not in the env file: test's are in secrets-test/ (named in
-# deploy/compose.test.yaml), production's in secrets/. Compose bind-mounts each at /run/secrets, so
-# no secret value reaches a podman command line. See "Keep secrets in files" in docs/setup.md.
+# The four secrets come from the env file by default, as production's come from .env. To keep
+# test's in files instead (see "Keep secrets in files" in docs/setup.md), create all four in
+# secrets-test/: when any of them exists, this script adds compose.secrets.yaml and
+# deploy/compose.test-secrets.yaml, which bind-mount them at /run/secrets, and requires all four.
+# There's no switch to forget: the files themselves opt in, so a secret file is never silently
+# ignored, and an install without them runs on the env file alone.
 #
 # Before any command that may start a container (all but down, stop, logs, and the like), it
-# requires test's secret files, refuses a secret that test shares with production (in files, or
-# in either env file during the migration), and runs `dinnerbell config check` on the env file and
-# the secret files in a one-off container of the same image, with no network, volume, or published
-# port, so a missing setting shows up here instead of as a restart loop.
+# requires all four of test's secret files when any exists, refuses a secret that test shares with
+# production (in files or env files, in any combination), and runs `dinnerbell config check` on the
+# env file and any secret files in a one-off container of the same image, with no network, volume,
+# or published port, so a missing setting shows up here instead of as a restart loop.
 #
 # Overrides: DINNERBELL_TAG (default main), DINNERBELL_ENV_FILE (default .env.test),
 # DINNERBELL_PORT (default 8014), DINNERBELL_COMPOSE (default podman-compose; for Docker use
@@ -36,8 +39,9 @@ PROJECT=dinnerbell-test
 VOLUME=dinnerbell-test_dinnerbell-data
 # The image in compose.yaml, without its tag. scripts/check-compose.sh checks that they match.
 IMAGE=ghcr.io/dsmorgan/dinnerbell
-# Settings that must differ between test and production, each a file of this name. The names and
-# directories match compose.yaml and deploy/compose.test.yaml; scripts/check-compose.sh checks that.
+# Settings that must differ between test and production, each a variable and, optionally, a file of
+# this name. The names and directories match compose.secrets.yaml and
+# deploy/compose.test-secrets.yaml; scripts/check-compose.sh checks that.
 SECRETS="DINNERBELL_SECRET_KEY DINNERBELL_SLACK_BOT_TOKEN DINNERBELL_SLACK_APP_TOKEN DINNERBELL_OIDC_CLIENT_SECRET"
 PRODUCTION_SECRETS=secrets
 TEST_SECRETS=secrets-test
@@ -164,13 +168,16 @@ case "${DINNERBELL_COMPOSE:-podman-compose}" in
     *) engine="${DINNERBELL_ENGINE:-podman}" ;;
 esac
 
-# The configuration check in a one-off container of image $1, with test's secret files mounted.
+# The configuration check in a one-off container of image $1, with test's secret files mounted
+# when test uses them.
 run_check() {
     image=$1
     set --
-    for name in $SECRETS; do
-        set -- "$@" -v "$PWD/$TEST_SECRETS/$name:/run/secrets/$name:ro"
-    done
+    if [ "$secret_files" = yes ]; then
+        for name in $SECRETS; do
+            set -- "$@" -v "$PWD/$TEST_SECRETS/$name:/run/secrets/$name:ro"
+        done
+    fi
     "$engine" run -i --rm --pull=never --log-driver none --network none --read-only \
         --cap-drop ALL --security-opt no-new-privileges "$@" "$image" config check --env-file -
 }
@@ -194,8 +201,8 @@ fingerprint() {
 }
 
 # The fingerprints, one per line, of the values instance dir $1 and env file $2 (either may be
-# absent) give secret $3. Both count, because an instance in the middle of the migration may
-# still have a secret in its env file. Prints nothing and returns 1 when a file can't be read.
+# absent) give secret $3. Both count, because the app reads both (they must agree when both are
+# set). Prints nothing and returns 1 when a file can't be read.
 secret_fingerprints() {
     if [ -e "$1/$3" ]; then
         value=$(read_secret_file "$1/$3") || return 1
@@ -208,9 +215,9 @@ secret_fingerprints() {
 
 [ ! -L "$0" ] || fail "run the script from your clone (deploy/dinnerbell-test), not through a symlink."
 CDPATH='' cd -- "$(dirname -- "$0")/.."
-if [ ! -f compose.yaml ] || [ ! -f deploy/compose.test.yaml ]; then
-    fail "can't find compose.yaml and deploy/compose.test.yaml next to this script."
-fi
+for file in compose.yaml compose.secrets.yaml deploy/compose.test.yaml deploy/compose.test-secrets.yaml; do
+    [ -f "$file" ] || fail "can't find $file in the clone this script is in."
+done
 
 # Global options such as -p or -f would undo the separation this script sets up.
 case "${1:-}" in
@@ -264,11 +271,18 @@ case "${1:-}" in
     *) starts=yes ;;
 esac
 
-if [ "$starts" = yes ]; then
+# Test keeps its secrets in files when any of the four exists in secrets-test/ (or is a dangling
+# link or a directory, both mistakes the checks below name); otherwise only in the env file.
+secret_files=no
+for name in $SECRETS; do
+    if [ -e "$TEST_SECRETS/$name" ] || [ -L "$TEST_SECRETS/$name" ]; then secret_files=yes; fi
+done
+
+if [ "$starts" = yes ] && [ "$secret_files" = yes ]; then
     for name in $SECRETS; do
         [ ! -d "$TEST_SECRETS/$name" ] || fail "$TEST_SECRETS/$name is a directory. Remove it and create the file."
         [ -e "$TEST_SECRETS/$name" ] ||
-            fail "$TEST_SECRETS/$name not found. Create test's secret files: see \"Keep secrets in files\" in docs/setup.md. An empty file is fine for a Slack token you don't use."
+            fail "$TEST_SECRETS/$name not found. $TEST_SECRETS/ holds some of test's secret files, so it needs all four: create it (an empty file is fine for a Slack token you don't use), or remove them all to keep the secrets in $DINNERBELL_ENV_FILE. See \"Keep secrets in files\" in docs/setup.md."
     done
 fi
 
@@ -311,7 +325,8 @@ $print
     done
 fi
 
-echo "dinnerbell-test: project $PROJECT, volume $VOLUME, env file $DINNERBELL_ENV_FILE, secrets $TEST_SECRETS, image tag $DINNERBELL_TAG, port $DINNERBELL_PORT" >&2
+if [ "$secret_files" = yes ]; then secrets_from="files in $TEST_SECRETS/"; else secrets_from="$DINNERBELL_ENV_FILE"; fi
+echo "dinnerbell-test: project $PROJECT, volume $VOLUME, env file $DINNERBELL_ENV_FILE, secrets from $secrets_from, image tag $DINNERBELL_TAG, port $DINNERBELL_PORT" >&2
 
 if [ "$starts" = yes ]; then
     image="$IMAGE:$DINNERBELL_TAG"
@@ -319,8 +334,8 @@ if [ "$starts" = yes ]; then
         echo "dinnerbell-test: pulling $image to check $DINNERBELL_ENV_FILE" >&2
         "$engine" pull "$image" >&2 || fail "can't pull $image. Check DINNERBELL_TAG and the network. Nothing was started."
     fi
-    # The same image, env file, and secret files the service gets, with nothing else it could reach or
-    # change: the files are read-only bind mounts at the paths compose uses (only paths are on the
+    # The same image, env file, and secret files (if any) the service gets, with nothing else it could
+    # reach or change: the files are read-only bind mounts at the paths compose uses (only paths are on the
     # command line). The env file goes in on stdin, and the app parses it with python-dotenv, as podman-compose 1.2.0 and
     # later do (docker compose's parser agrees on quotes, "export ", and comments). podman's own
     # --env-file would keep quotes, and quotes a line it can't parse, value and all. The image
@@ -343,6 +358,11 @@ if [ "$starts" = yes ]; then
     fi
 fi
 
+if [ "$secret_files" = yes ]; then
+    set -- -f compose.yaml -f compose.secrets.yaml -f deploy/compose.test.yaml -f deploy/compose.test-secrets.yaml "$@"
+else
+    set -- -f compose.yaml -f deploy/compose.test.yaml "$@"
+fi
 # DINNERBELL_COMPOSE may hold two words ("docker compose"), so it's split on purpose.
 # shellcheck disable=SC2086
-exec ${DINNERBELL_COMPOSE:-podman-compose} -p "$PROJECT" -f compose.yaml -f deploy/compose.test.yaml "$@"
+exec ${DINNERBELL_COMPOSE:-podman-compose} -p "$PROJECT" "$@"
