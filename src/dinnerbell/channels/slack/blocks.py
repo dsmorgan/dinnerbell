@@ -108,10 +108,12 @@ class Directory:
     """Who is who on Slack: member ID to Slack user ID."""
 
     slack_ids: Mapping[int, str] = field(default_factory=dict)
+    inactive: frozenset[int] = frozenset()
+    """Deactivated members: still in ``slack_ids``, but never mentioned and never sent a message."""
 
     def mention(self, person: PersonInfo) -> str:
-        """``<@U…>`` when the member's Slack user is known, else their escaped name."""
-        slack_id = self.slack_ids.get(person.id)
+        """``<@U…>`` when the member's Slack user is known and they're active, else their escaped name."""
+        slack_id = None if person.id in self.inactive else self.slack_ids.get(person.id)
         return f"<@{slack_id}>" if slack_id else escape(person.name)
 
     def mentions(self, people: Iterable[PersonInfo]) -> str:
