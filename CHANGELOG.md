@@ -6,13 +6,33 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ## [Unreleased]
 
+### Security
+
+- The four secrets (`DINNERBELL_SECRET_KEY`, `DINNERBELL_OIDC_CLIENT_SECRET`, `DINNERBELL_SLACK_BOT_TOKEN`, and `DINNERBELL_SLACK_APP_TOKEN`) are now files in `secrets/` (test: `secrets-test/`) that compose mounts at `/run/secrets`, and no longer lines in `.env`. podman-compose passed every `.env` line to podman as `-e NAME=value`, so while podman created the container, each secret was on its command line, visible to other local users in `ps` and printed by `podman-compose --dry-run` and `--verbose` (#35). Dinnerbell, `deploy/dinnerbell-test`, its shared-secret check, and `dinnerbell config check` (new option `--secrets-dir`) all read the files. A missing, unreadable, or directory secret file stops startup with a message that names the file. `secrets/` and `secrets-test/` are git-ignored, left out of the image build context, and `scripts/check-compose.sh` (run in CI) fails when git tracks anything there except the `*.example` placeholders.
+
 ### Changed
 
 - Food Critic now shows everywhere like every other badge (#117), but never gets a post of its own, because a post would interrupt the channel each time someone gives feedback. Dinnerbell includes it in the monthly recap and the household's newest badges, uploads and prewarms its art (65 files, not 60), and draws it in the announcement, the compact icon rows, and the picture on App Home (up to 13 badges, two rows of 7 and 6). The badge says only how many times you gave feedback, never what you said: answers still aren't shown anywhere, not even as counts. Dinnerbell also no longer logs which meal you gave feedback on.
 
 ### Upgrade notes
 
-- No migration, settings, or Slack scope changes. Food Critic awards made before the upgrade stay out of the recap and the newest badges; ones earned after it appear in both. No Food Critic tier is ever announced.
+- **Move four lines from `.env` into four files before you upgrade.** The new `compose.yaml` mounts the files, so the service doesn't start until they exist. A secret still in `.env` keeps working for this one release, with a warning in the log for each; the next release ignores `.env` for these four. If a value is in both `.env` and its file with different values, Dinnerbell refuses to start. Run this from the clone, with the service still running:
+
+  ```sh
+  umask 077
+  mkdir -p secrets
+  for name in SECRET_KEY OIDC_CLIENT_SECRET SLACK_BOT_TOKEN SLACK_APP_TOKEN; do
+      sed -n "s/^[[:space:]]*\(export[[:space:]]\{1,\}\)\{0,1\}DINNERBELL_$name[[:space:]]*=[[:space:]]*//p" .env | tail -n 1 | tr -d '\r\n"'"'" >"secrets/DINNERBELL_$name"
+      chmod 600 "secrets/DINNERBELL_$name"
+      podman unshare chown 10001:10001 "secrets/DINNERBELL_$name"
+  done
+  ```
+
+  The `sed` reads each value from `.env` without putting it on a command line, and `tr` removes quotes and line endings, so each file holds the bare value with no trailing newline. If a value has a trailing `# comment` or you wrote it in an unusual way, write the file by hand: `printf '%s' 'the value' >secrets/DINNERBELL_SECRET_KEY`, then `chmod 600` and `chown` it. An empty file is fine for a Slack token you don't use, but the file must exist. Then delete the four lines from `.env`, pull the new image, and run `podman-compose down && podman-compose up -d`. Check that the log has no "is set in the environment" warning.
+- With rootful Docker, replace `podman unshare chown 10001:10001` with `sudo chown 10001:10001`. The files must belong to UID 10001, the user inside the container, with mode 600: compose bind-mounts them as they are and ignores `uid`, `gid`, and `mode` for file secrets, so a file owned by your own account is unreadable inside the container. Your own account can no longer read the files afterward; to replace one, delete it, write it again, and `chown` it again.
+- If Dinnerbell stops at start with `Can't read the secret file`, the owner or mode is wrong: run the `chmod` and `chown` again. If it says the path `is a directory`, the file didn't exist when the engine mounted it: remove the directory, create the file, and recreate the service. The table in "Keep secrets in files" in [docs/setup.md](docs/setup.md#keep-secrets-in-files) lists each message.
+- **Test instance:** do the same for `.env.test`, into `secrets-test/` instead of `secrets/` (the `sed` reads `.env.test`). The new `deploy/dinnerbell-test` refuses to start without the four files in `secrets-test/`, and, as before, refuses a secret that test shares with production, now in files as well as in `.env` and `.env.test`. It compares SHA-256 hashes, and reads files owned by UID 10001 through `podman unshare` (with Docker, run it with `sudo`).
+- Food Critic upgrade: no migration, settings, or Slack scope changes. Food Critic awards made before the upgrade stay out of the recap and the newest badges; ones earned after it appear in both. No Food Critic tier is ever announced.
 - The next prewarm uploads 5 more files, one per Food Critic tier, two seconds apart.
 
 ## [0.8.0] - 2026-10-28

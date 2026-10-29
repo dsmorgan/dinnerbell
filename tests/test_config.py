@@ -10,7 +10,7 @@ from typing import Any
 import pytest
 
 from dinnerbell import __version__
-from dinnerbell.config import ConfigError, Settings, load_settings
+from dinnerbell.config import SECRET_FIELDS, ConfigError, Settings, load_settings
 from tests.conftest import make_settings
 
 REQUIRED = {
@@ -190,6 +190,137 @@ def test_secret_files_are_read(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) 
     assert settings.secret_key.get_secret_value() == "from-a-secret-file-and-long-enough-to-pass"
 
 
+SECRET_FILES = {
+    "DINNERBELL_SECRET_KEY": "file-secret-key-that-is-long-enough-to-pass",
+    "DINNERBELL_SLACK_BOT_TOKEN": "xoxb-from-a-file",
+    "DINNERBELL_SLACK_APP_TOKEN": "xapp-from-a-file",
+    "DINNERBELL_OIDC_CLIENT_SECRET": "client-secret-from-a-file",
+}
+
+
+def secrets_from_files(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, **files: str) -> Path:
+    """Point the app at a secrets directory holding ``files`` and no secret in the environment."""
+    from dinnerbell import config
+
+    directory = tmp_path / "secrets"
+    directory.mkdir()
+    for name, text in files.items():
+        (directory / name).write_text(text)
+    set_env(monkeypatch)
+    for name in SECRET_FILES:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(config, "SECRETS_DIR", directory)
+    return directory
+
+
+def test_all_four_secrets_come_from_files(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # printf without a trailing newline and echo with one must both work.
+    files = {name: value + ("\n" if name.endswith("_KEY") else "") for name, value in SECRET_FILES.items()}
+    secrets_from_files(monkeypatch, tmp_path, **files)
+    settings = load_settings()
+    assert settings.secret_key.get_secret_value() == SECRET_FILES["DINNERBELL_SECRET_KEY"]
+    assert settings.slack_bot_token is not None
+    assert settings.slack_bot_token.get_secret_value() == "xoxb-from-a-file"
+    assert settings.slack_app_token is not None
+    assert settings.slack_app_token.get_secret_value() == "xapp-from-a-file"
+    assert settings.oidc_client_secret.get_secret_value() == "client-secret-from-a-file"
+
+
+def test_an_explicit_secrets_directory_is_read(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    directory = secrets_from_files(monkeypatch, tmp_path, **SECRET_FILES)
+    monkeypatch.setattr("dinnerbell.config.SECRETS_DIR", tmp_path / "elsewhere")
+    assert load_settings(directory).slack_bot_token is not None
+
+
+def test_an_empty_secret_file_counts_as_unset(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    secrets_from_files(monkeypatch, tmp_path, **(SECRET_FILES | {"DINNERBELL_SLACK_BOT_TOKEN": "\n"}))
+    assert load_settings().slack_bot_token is None
+
+
+def test_a_missing_secret_names_its_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    directory = secrets_from_files(monkeypatch, tmp_path, **(SECRET_FILES | {"DINNERBELL_SECRET_KEY": ""}))
+    with pytest.raises(ConfigError) as caught:
+        load_settings()
+    assert f"DINNERBELL_SECRET_KEY is required but not set. Put it in the file {directory}" in str(caught.value)
+
+
+def test_an_unreadable_secret_file_is_a_clear_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    import os
+
+    if os.geteuid() == 0:
+        pytest.skip("root reads every file")
+    directory = secrets_from_files(monkeypatch, tmp_path, **SECRET_FILES)
+    (directory / "DINNERBELL_OIDC_CLIENT_SECRET").chmod(0)
+    with pytest.raises(ConfigError) as caught:
+        load_settings()
+    message = str(caught.value)
+    assert "Can't read the secret file" in message
+    assert "DINNERBELL_OIDC_CLIENT_SECRET" in message
+    assert "uid 10001" in message
+    assert SECRET_FILES["DINNERBELL_OIDC_CLIENT_SECRET"] not in message
+
+
+def test_a_secret_file_that_is_a_directory_is_a_clear_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    directory = secrets_from_files(monkeypatch, tmp_path, **SECRET_FILES)
+    (directory / "DINNERBELL_SLACK_APP_TOKEN").unlink()
+    (directory / "DINNERBELL_SLACK_APP_TOKEN").mkdir()
+    with pytest.raises(ConfigError, match="is a directory, not a file"):
+        load_settings()
+
+
+def test_an_undecodable_secret_file_does_not_echo_its_bytes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    directory = secrets_from_files(monkeypatch, tmp_path, **SECRET_FILES)
+    (directory / "DINNERBELL_SECRET_KEY").write_bytes(b"\xff\xfe-hunter2")
+    with pytest.raises(ConfigError) as caught:
+        load_settings()
+    assert "UnicodeDecodeError" in str(caught.value)
+    assert "hunter2" not in str(caught.value)
+
+
+def test_a_secret_in_the_environment_still_works_with_a_warning(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    secrets_from_files(monkeypatch, tmp_path, **{k: v for k, v in SECRET_FILES.items() if not k.endswith("_KEY")})
+    monkeypatch.setenv("DINNERBELL_SECRET_KEY", "env-secret-key-that-is-long-enough-to-pass")
+    with caplog.at_level("WARNING", logger="dinnerbell.config"):
+        settings = load_settings()
+    assert settings.secret_key.get_secret_value() == "env-secret-key-that-is-long-enough-to-pass"
+    assert "DINNERBELL_SECRET_KEY is set in the environment. Move it to the file" in caplog.text
+    assert "env-secret-key" not in caplog.text
+
+
+def test_the_same_secret_in_the_environment_and_a_file_warns(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    secrets_from_files(monkeypatch, tmp_path, **SECRET_FILES)
+    monkeypatch.setenv("DINNERBELL_SECRET_KEY", SECRET_FILES["DINNERBELL_SECRET_KEY"])
+    with caplog.at_level("WARNING", logger="dinnerbell.config"):
+        load_settings()
+    assert "DINNERBELL_SECRET_KEY is set in the environment" in caplog.text
+
+
+def test_different_secrets_in_the_environment_and_a_file_are_refused(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    secrets_from_files(monkeypatch, tmp_path, **SECRET_FILES)
+    monkeypatch.setenv("DINNERBELL_SECRET_KEY", "stale-env-secret-key-that-is-long-enough")
+    with pytest.raises(ConfigError) as caught:
+        load_settings()
+    assert "with different values. Remove it from .env." in str(caught.value)
+    assert "stale-env" not in str(caught.value)
+    assert SECRET_FILES["DINNERBELL_SECRET_KEY"] not in str(caught.value)
+
+
+def test_secrets_in_the_environment_alone_warn_once_each(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    set_env(monkeypatch, DINNERBELL_SLACK_BOT_TOKEN="xoxb-1-2-3")
+    with caplog.at_level("WARNING", logger="dinnerbell.config"):
+        load_settings()
+    names = [r.args[0] for r in caplog.records if r.name == "dinnerbell.config"]  # type: ignore[index]
+    assert names == ["DINNERBELL_SECRET_KEY", "DINNERBELL_SLACK_BOT_TOKEN", "DINNERBELL_OIDC_CLIENT_SECRET"]
+
+
 @pytest.mark.parametrize("build", ["abc1234", "0123456789abcdef0123456789abcdef01234567"])
 def test_build_stamp_follows_the_version(monkeypatch: pytest.MonkeyPatch, build: str) -> None:
     set_env(monkeypatch, DINNERBELL_BUILD=build)
@@ -209,10 +340,16 @@ SET_BY_IMAGE = {"build"}
 
 
 def test_env_example_documents_every_setting() -> None:
-    text = (Path(__file__).resolve().parents[1] / ".env.example").read_text()
+    root = Path(__file__).resolve().parents[1]
+    text = (root / ".env.example").read_text()
     for field in Settings.model_fields:
         line = f"\nDINNERBELL_{field.upper()}="
-        if field in SET_BY_IMAGE:
+        if field in SECRET_FIELDS:
+            # A secret is a file, not a line: .env.example points to it, and a placeholder shows the name.
+            assert line not in text, field
+            assert f"DINNERBELL_{field.upper()}" in text, field
+            assert (root / "secrets" / f"DINNERBELL_{field.upper()}.example").is_file(), field
+        elif field in SET_BY_IMAGE:
             assert line not in text, field
             assert f"\n# DINNERBELL_{field.upper()}=" in text, field
         else:

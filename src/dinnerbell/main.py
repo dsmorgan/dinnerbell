@@ -42,14 +42,19 @@ def _parser() -> argparse.ArgumentParser:
     check = config_commands.add_parser(
         "check",
         help="check the DINNERBELL_* settings and exit",
-        description="Read the settings from the environment, as serve does, and name every one that is "
-        "missing or invalid. Never prints a value. Exits 0 when the configuration is valid, 2 when it isn't. "
+        description="Read the settings from the environment and the secret files, as serve does, and name every one "
+        "that is missing or invalid. Never prints a value. Exits 0 when the configuration is valid, 2 when it isn't. "
         "Touches no database.",
     )
     check.add_argument(
         "--env-file",
         metavar="FILE",
         help="also read settings from FILE, in compose's .env syntax, over the environment; - reads stdin",
+    )
+    check.add_argument(
+        "--secrets-dir",
+        metavar="DIR",
+        help="read the secret files from DIR instead of /run/secrets",
     )
     scrub = commands.add_parser(
         "scrub-test",
@@ -136,7 +141,7 @@ def _environment(values: Mapping[str, str]) -> Iterator[None]:
                 os.environ[name] = previous
 
 
-def _config_check(env_file: str | None) -> int:
+def _config_check(env_file: str | None, secrets_dir: str | None) -> int:
     """Validate the settings ``serve`` would read. The deploy/dinnerbell-test wrapper runs this in a
     one-off container before it starts test, with the env file on stdin, so the file is parsed by
     python-dotenv, as podman-compose 1.2.0 and later parse an ``env_file``."""
@@ -158,7 +163,7 @@ def _config_check(env_file: str | None) -> int:
         values = {name: value for name, value in parsed.items() if value is not None}
     with _environment(values):
         try:
-            load_settings()
+            load_settings(Path(secrets_dir) if secrets_dir else None)
         except ConfigError as exc:
             print(exc, file=sys.stderr)
             return 2
@@ -447,7 +452,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "slack":
         return _slack_preview(args.kind, args.base_url)
     if args.command == "config":
-        return _config_check(args.env_file)
+        return _config_check(args.env_file, args.secrets_dir)
     try:
         settings = load_settings()
     except ConfigError as exc:

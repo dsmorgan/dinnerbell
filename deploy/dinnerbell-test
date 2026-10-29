@@ -15,10 +15,15 @@
 # older let .env win over the shell, so this script refuses to run if .env sets any of them.
 # Test publishes on production's DINNERBELL_BIND, read from .env.
 #
+# The four secrets live in files, not in the env file: test's are in secrets-test/ (named in
+# deploy/compose.test.yaml), production's in secrets/. Compose bind-mounts each at /run/secrets, so
+# no secret value reaches a podman command line. See "Keep secrets in files" in docs/setup.md.
+#
 # Before any command that may start a container (all but down, stop, logs, and the like), it
-# refuses an env file that shares a secret with .env, and runs `dinnerbell config check` on the
-# env file in a one-off container of the same image, with no network, volume, or published port,
-# so a missing setting shows up here instead of as a restart loop.
+# requires test's secret files, refuses a secret that test shares with production (in files, or
+# in either env file during the migration), and runs `dinnerbell config check` on the env file and
+# the secret files in a one-off container of the same image, with no network, volume, or published
+# port, so a missing setting shows up here instead of as a restart loop.
 #
 # Overrides: DINNERBELL_TAG (default main), DINNERBELL_ENV_FILE (default .env.test),
 # DINNERBELL_PORT (default 8014), DINNERBELL_COMPOSE (default podman-compose; for Docker use
@@ -31,8 +36,13 @@ PROJECT=dinnerbell-test
 VOLUME=dinnerbell-test_dinnerbell-data
 # The image in compose.yaml, without its tag. scripts/check-compose.sh checks that they match.
 IMAGE=ghcr.io/dsmorgan/dinnerbell
-# Settings that must differ between test and production.
+# Settings that must differ between test and production, each a file of this name. The names and
+# directories match compose.yaml and deploy/compose.test.yaml; scripts/check-compose.sh checks that.
 SECRETS="DINNERBELL_SECRET_KEY DINNERBELL_SLACK_BOT_TOKEN DINNERBELL_SLACK_APP_TOKEN DINNERBELL_OIDC_CLIENT_SECRET"
+PRODUCTION_SECRETS=secrets
+TEST_SECRETS=secrets-test
+# SHA-256 of nothing: an empty secret file or an unset variable.
+NOTHING=e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
 
 fail() {
     echo "dinnerbell-test: $*" >&2
@@ -147,6 +157,55 @@ normalize() {
     printf '%s' "$1" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9_-'
 }
 
+# The container engine for the check and for reading secret files: docker when DINNERBELL_COMPOSE
+# starts with docker, else podman.
+case "${DINNERBELL_COMPOSE:-podman-compose}" in
+    docker*) engine="${DINNERBELL_ENGINE:-docker}" ;;
+    *) engine="${DINNERBELL_ENGINE:-podman}" ;;
+esac
+
+# The configuration check in a one-off container of image $1, with test's secret files mounted.
+run_check() {
+    image=$1
+    set --
+    for name in $SECRETS; do
+        set -- "$@" -v "$PWD/$TEST_SECRETS/$name:/run/secrets/$name:ro"
+    done
+    "$engine" run -i --rm --pull=never --log-driver none --network none --read-only \
+        --cap-drop ALL --security-opt no-new-privileges "$@" "$image" config check --env-file -
+}
+
+# Prints secret file $1. The files belong to the container's user (uid 10001), which your account
+# can't read; podman unshare enters the user namespace where that user is yours. Docker needs sudo.
+read_secret_file() {
+    if [ -r "$1" ]; then
+        cat -- "$1"
+    elif [ "$(basename -- "$engine")" = podman ]; then
+        "$engine" unshare cat -- "$1"
+    else
+        return 1
+    fi
+}
+
+# Prints the SHA-256 of what stdin holds without whitespace, as the app reads a secret, or
+# $NOTHING when it holds none. A hash is safe in a variable, a comparison, and a message.
+fingerprint() {
+    tr -d ' \t\r\n' | { sha256sum 2>/dev/null || shasum -a 256; } | awk '{ print $1 }'
+}
+
+# The fingerprints, one per line, of the values instance dir $1 and env file $2 (either may be
+# absent) give secret $3. Both count, because an instance in the middle of the migration may
+# still have a secret in its env file. Prints nothing and returns 1 when a file can't be read.
+secret_fingerprints() {
+    if [ -e "$1/$3" ]; then
+        value=$(read_secret_file "$1/$3") || return 1
+        printf '%s' "$value" | fingerprint
+    fi
+    if [ -f "$2" ]; then
+        LC_ALL=C awk -v name="$3" -v mode=print -v anycase=yes "$DOTENV_AWK" "$(operand "$2")" | fingerprint
+    fi
+}
+
 [ ! -L "$0" ] || fail "run the script from your clone (deploy/dinnerbell-test), not through a symlink."
 CDPATH='' cd -- "$(dirname -- "$0")/.."
 if [ ! -f compose.yaml ] || [ ! -f deploy/compose.test.yaml ]; then
@@ -205,6 +264,14 @@ case "${1:-}" in
     *) starts=yes ;;
 esac
 
+if [ "$starts" = yes ]; then
+    for name in $SECRETS; do
+        [ ! -d "$TEST_SECRETS/$name" ] || fail "$TEST_SECRETS/$name is a directory. Remove it and create the file."
+        [ -e "$TEST_SECRETS/$name" ] ||
+            fail "$TEST_SECRETS/$name not found. Create test's secret files: see \"Keep secrets in files\" in docs/setup.md. An empty file is fine for a Slack token you don't use."
+    done
+fi
+
 # Shared tokens split Slack events between the instances; a shared secret key lets one instance's
 # cookies and CSRF tokens work on the other. awk compares the values itself, so they never reach
 # the shell, a command line, or a message. An error counts as shared.
@@ -221,29 +288,47 @@ if [ "$starts" = yes ] && [ -f .env ]; then
     done
 fi
 
-echo "dinnerbell-test: project $PROJECT, volume $VOLUME, env file $DINNERBELL_ENV_FILE, image tag $DINNERBELL_TAG, port $DINNERBELL_PORT" >&2
+# The same, for secret files, and for a secret in one instance's file and the other's env file.
+# Only fingerprints are compared. A file this account can't read counts as shared.
+if [ "$starts" = yes ] && [ -d "$PRODUCTION_SECRETS" ]; then
+    for name in $SECRETS; do
+        production_prints=$(secret_fingerprints "$PRODUCTION_SECRETS" .env "$name") ||
+            fail "can't read $PRODUCTION_SECRETS/$name to compare it with test's. Run this script as the user who owns it (with Docker, through sudo). Nothing was started."
+        # Nothing to share when production holds nothing, and no need to read test's files.
+        printf '%s\n' "$production_prints" | grep -v "^$NOTHING\$" | grep -q . || continue
+        test_prints=$(secret_fingerprints "$TEST_SECRETS" "$DINNERBELL_ENV_FILE" "$name") ||
+            fail "can't read $TEST_SECRETS/$name to compare it with production's. Nothing was started."
+        for print in $test_prints; do
+            [ "$print" != "$NOTHING" ] || continue
+            case "
+$production_prints
+" in
+                *"
+$print
+"*) fail "test and production have the same $name. Give test its own: see \"Keep secrets in files\" in docs/setup.md." ;;
+            esac
+        done
+    done
+fi
+
+echo "dinnerbell-test: project $PROJECT, volume $VOLUME, env file $DINNERBELL_ENV_FILE, secrets $TEST_SECRETS, image tag $DINNERBELL_TAG, port $DINNERBELL_PORT" >&2
 
 if [ "$starts" = yes ]; then
-    case "${DINNERBELL_COMPOSE:-podman-compose}" in
-        docker*) engine="${DINNERBELL_ENGINE:-docker}" ;;
-        *) engine="${DINNERBELL_ENGINE:-podman}" ;;
-    esac
     image="$IMAGE:$DINNERBELL_TAG"
     if ! "$engine" image inspect "$image" >/dev/null 2>&1; then
         echo "dinnerbell-test: pulling $image to check $DINNERBELL_ENV_FILE" >&2
         "$engine" pull "$image" >&2 || fail "can't pull $image. Check DINNERBELL_TAG and the network. Nothing was started."
     fi
-    # The same image and env file the service gets, with nothing it could reach or change. The env
-    # file goes in on stdin, and the app parses it with python-dotenv, as podman-compose 1.2.0 and
+    # The same image, env file, and secret files the service gets, with nothing else it could reach or
+    # change: the files are read-only bind mounts at the paths compose uses (only paths are on the
+    # command line). The env file goes in on stdin, and the app parses it with python-dotenv, as podman-compose 1.2.0 and
     # later do (docker compose's parser agrees on quotes, "export ", and comments). podman's own
     # --env-file would keep quotes, and quotes a line it can't parse, value and all. The image
     # declares /data a volume, so the engine adds an empty anonymous one, and --rm deletes it.
     # The output names settings and line numbers, never values; --log-driver none keeps even that
     # out of the journal.
     status=0
-    problems=$("$engine" run -i --rm --pull=never --log-driver none --network none --read-only \
-        --cap-drop ALL --security-opt no-new-privileges "$image" config check --env-file - \
-        <"$DINNERBELL_ENV_FILE" 2>&1 >/dev/null) || status=$?
+    problems=$(run_check "$image" <"$DINNERBELL_ENV_FILE" 2>&1 >/dev/null) || status=$?
     if [ "$status" -eq 2 ] &&
         printf '%s\n' "$problems" | grep -q "^dinnerbell: error: argument COMMAND: invalid choice: 'config'"; then
         echo "dinnerbell-test: $image predates dinnerbell config check; starting without it." >&2
