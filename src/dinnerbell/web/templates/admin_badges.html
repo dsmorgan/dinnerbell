@@ -6,17 +6,25 @@
 <h1>Badge counts</h1>
 {% if notice %}<p class="alert ok" role="status">{{ notice }}</p>{% endif %}
 {% if error %}<p class="alert error" role="alert">{{ error }}</p>{% endif %}
+<p class="small muted" id="badges-help">Each badge climbs one of three ladders of five counts. In each ladder, every count must be higher than the one before it, and none can be above 10,000. Lowering a count awards the tier to anyone who already has the count, quietly: nobody is announced a badge for a change of rules. Raising a count takes nothing away from anyone who already earned the tier.</p>
 <form method="post" action="/admin/badges" class="stack">
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  {% for row in ladders %}
   <fieldset class="card">
-    <legend><h2>Counts for each tier</h2></legend>
-    <p class="small muted" id="badges-help">Every badge uses the same five counts. Each one needs a higher count than the one before it, and none can be above 10,000. The counts start at 1, 10, 50, 100, and 200. Lowering a count awards the tier to anyone who already has the count, quietly: nobody is announced a badge for a change of rules. Raising a count takes nothing away from anyone who already earned the tier.</p>
+    <legend><h2>{{ row.ladder.label }}</h2></legend>
+    <p class="small muted">{{ row.badges }}</p>
     <div class="weights">
-      {% for tier, name in tiers %}
+      {% for tier, name in row.fields %}
       <label class="field"><span>{{ tier.label }}</span><input type="number" inputmode="numeric" min="1" max="10000" step="1" name="{{ name }}" value="{{ values[name] }}" aria-describedby="badges-help" required></label>
       {% endfor %}
     </div>
   </fieldset>
+  {% endfor %}
   <button type="submit" class="button primary block">Save badge counts</button>
+</form>
+<form method="post" action="/admin/badges/reset" class="stack">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <p class="small muted">The defaults are 1, 10, 50, 100, 200 (Frequent); 1, 5, 20, 50, 100 (Occasional); and 1, 3, 10, 25, 50 (Rare).</p>
+  <button type="submit" class="button block">Reset to defaults</button>
 </form>
 {% endblock %}

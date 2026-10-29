@@ -1,9 +1,11 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Badges (spec 12, FR-39, FR-43): thirteen badges that share one ladder of five tiers.
+"""Badges (spec 12, FR-39, FR-43): thirteen badges, five tiers each, on three ladders (#130).
 
-The ladder is the same for every badge and its counts are the household's setting
-(``badge_thresholds``), 1, 10, 50, 100, and 200 by default. A badge is earned once per member and
-tier, and stays earned if the admin later raises a threshold.
+Each badge climbs one ladder: Frequent (1, 10, 50, 100, 200 by default) for the badges that count
+meals, Occasional (1, 5, 20, 50, 100) for ideas and guests, and Rare (1, 3, 10, 25, 50) for the
+ones capped by novelty or by the calendar. The counts are the household's setting
+(``badge_thresholds``). A badge is earned once per member and tier, and stays earned if the admin
+later raises a threshold.
 """
 
 from __future__ import annotations
@@ -13,6 +15,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from enum import StrEnum
 from itertools import pairwise
+from types import MappingProxyType
 from typing import Any
 
 from dinnerbell.domain.contributions import Kind
@@ -35,7 +38,28 @@ class Tier(StrEnum):
 
 
 TIERS = tuple(Tier)
-DEFAULT_THRESHOLDS = (1, 10, 50, 100, 200)
+
+
+class Ladder(StrEnum):
+    FREQUENT = "frequent"
+    OCCASIONAL = "occasional"
+    RARE = "rare"
+
+    @property
+    def label(self) -> str:
+        return self.value.capitalize()
+
+
+LADDERS = tuple(Ladder)
+Ladders = Mapping[Ladder, tuple[int, ...]]
+"""Each ladder's five counts, one per tier."""
+DEFAULT_LADDERS: Ladders = MappingProxyType(
+    {
+        Ladder.FREQUENT: (1, 10, 50, 100, 200),
+        Ladder.OCCASIONAL: (1, 5, 20, 50, 100),
+        Ladder.RARE: (1, 3, 10, 25, 50),
+    }
+)
 
 
 class Announcement(StrEnum):
@@ -70,22 +94,24 @@ class Badge:
     """What the Stats page says each step counts, such as "meals cooked"."""
     kind: Kind | None
     """The contribution it counts; None for On a Roll, which counts weeks (``longest_streak``)."""
+    ladder: Ladder
+    """The ladder whose counts its tiers need."""
 
 
 BADGES = (
-    Badge(BadgeKey.CHEF, "Chef", "meals cooked", Kind.COOKED),
-    Badge(BadgeKey.ROAD_RUNNER, "Road Runner", "meals picked up", Kind.PICKED_UP),
-    Badge(BadgeKey.ORDER_UP, "Order Up", "meals ordered", Kind.ORDERED),
-    Badge(BadgeKey.QUARTERBACK, "Quarterback", "meals coordinated", Kind.COORDINATED),
-    Badge(BadgeKey.FULL_TABLE, "Full Table", "meals shared", Kind.PARTICIPATED),
-    Badge(BadgeKey.EARLY_BIRD, "Early Bird", "quick answers", Kind.RESPONDED_ON_TIME),
-    Badge(BadgeKey.BRIGHT_IDEA, "Bright Idea", "ideas that won", Kind.SUGGESTED),
-    Badge(BadgeKey.SCOUT, "Scout", "catalog finds that were chosen", Kind.ADDED_ITEM),
-    Badge(BadgeKey.EXPLORER, "Explorer", "new places or cuisines that won", Kind.EXPLORED),
-    Badge(BadgeKey.GOOD_HOST, "Good Host", "meals with guests", Kind.HOSTED),
-    Badge(BadgeKey.FOOD_CRITIC, "Food Critic", "meals you gave feedback on", Kind.GAVE_FEEDBACK),
-    Badge(BadgeKey.ON_A_ROLL, "On a Roll", "weeks in a row of pitching in", None),
-    Badge(BadgeKey.GAMBLER, "Gambler", "calls where you left the choice to others", Kind.GAMBLED),
+    Badge(BadgeKey.CHEF, "Chef", "meals cooked", Kind.COOKED, Ladder.FREQUENT),
+    Badge(BadgeKey.ROAD_RUNNER, "Road Runner", "meals picked up", Kind.PICKED_UP, Ladder.FREQUENT),
+    Badge(BadgeKey.ORDER_UP, "Order Up", "meals ordered", Kind.ORDERED, Ladder.FREQUENT),
+    Badge(BadgeKey.QUARTERBACK, "Quarterback", "meals coordinated", Kind.COORDINATED, Ladder.FREQUENT),
+    Badge(BadgeKey.FULL_TABLE, "Full Table", "meals shared", Kind.PARTICIPATED, Ladder.FREQUENT),
+    Badge(BadgeKey.EARLY_BIRD, "Early Bird", "quick answers", Kind.RESPONDED_ON_TIME, Ladder.FREQUENT),
+    Badge(BadgeKey.BRIGHT_IDEA, "Bright Idea", "ideas that won", Kind.SUGGESTED, Ladder.OCCASIONAL),
+    Badge(BadgeKey.SCOUT, "Scout", "catalog finds that were chosen", Kind.ADDED_ITEM, Ladder.RARE),
+    Badge(BadgeKey.EXPLORER, "Explorer", "new places or cuisines that won", Kind.EXPLORED, Ladder.RARE),
+    Badge(BadgeKey.GOOD_HOST, "Good Host", "meals with guests", Kind.HOSTED, Ladder.OCCASIONAL),
+    Badge(BadgeKey.FOOD_CRITIC, "Food Critic", "meals you gave feedback on", Kind.GAVE_FEEDBACK, Ladder.FREQUENT),
+    Badge(BadgeKey.ON_A_ROLL, "On a Roll", "weeks in a row of pitching in", None, Ladder.RARE),
+    Badge(BadgeKey.GAMBLER, "Gambler", "calls where you left the choice to others", Kind.GAMBLED, Ladder.FREQUENT),
 )
 BY_KEY = {b.key: b for b in BADGES}
 SILENT_BADGES = frozenset({BadgeKey.FOOD_CRITIC})
@@ -100,13 +126,39 @@ class InvalidThresholds(ValueError):
     """Thresholds that can't be saved. The message is safe to show."""
 
 
-def thresholds_from(settings: Mapping[str, Any]) -> tuple[int, ...]:
-    """The ladder from the household's settings JSON, or the defaults when it isn't a valid one."""
+def ladders_from(settings: Mapping[str, Any]) -> dict[Ladder, tuple[int, ...]]:
+    """The ladders from the household's settings JSON. A ladder that is missing or isn't a valid
+    one takes its default. The setting holds one list per ladder; a single list, which is how
+    Dinnerbell stored it before there were three ladders, is the Frequent ladder."""
     value = settings.get(SETTINGS_KEY)
-    try:
-        return check_thresholds(value) if isinstance(value, list | tuple) else DEFAULT_THRESHOLDS
-    except InvalidThresholds:
-        return DEFAULT_THRESHOLDS
+    if isinstance(value, list | tuple):
+        value = {Ladder.FREQUENT.value: value}
+    stored = value if isinstance(value, Mapping) else {}
+    found: dict[Ladder, tuple[int, ...]] = {}
+    for ladder in LADDERS:
+        counts = stored.get(ladder.value)
+        try:
+            found[ladder] = check_thresholds(counts) if isinstance(counts, list | tuple) else DEFAULT_LADDERS[ladder]
+        except InvalidThresholds:
+            found[ladder] = DEFAULT_LADDERS[ladder]
+    return found
+
+
+def ladders_setting(ladders: Ladders) -> dict[str, list[int]]:
+    """``ladders`` as the settings JSON stores them."""
+    return {ladder.value: list(ladders[ladder]) for ladder in LADDERS}
+
+
+def check_ladders(values: Mapping[Ladder, Sequence[object]]) -> dict[Ladder, tuple[int, ...]]:
+    """``values`` as the three ladders, each checked by ``check_thresholds``. The message names the
+    ladder that failed."""
+    found: dict[Ladder, tuple[int, ...]] = {}
+    for ladder in LADDERS:
+        try:
+            found[ladder] = check_thresholds(values.get(ladder, ()))
+        except InvalidThresholds as exc:
+            raise InvalidThresholds(f"{ladder.label} ladder: {exc}") from exc
+    return found
 
 
 def check_thresholds(values: Sequence[object]) -> tuple[int, ...]:
@@ -164,9 +216,10 @@ def highest_tiers(awards: Iterable[Award]) -> dict[BadgeKey, Tier]:
     return held
 
 
-def progress(badge: Badge, count: int, thresholds: Sequence[int], *, earned: Iterable[Tier] = ()) -> Progress:
-    """``badge`` at ``count``. A tier earned earlier counts as reached even if the admin has
-    since raised its threshold, so progress never goes backward."""
+def progress(badge: Badge, count: int, ladders: Ladders, *, earned: Iterable[Tier] = ()) -> Progress:
+    """``badge`` at ``count``, on its own ladder. A tier earned earlier counts as reached even if
+    the admin has since raised its threshold, so progress never goes backward."""
+    thresholds = ladders[badge.ladder]
     reached = set(tiers_reached(count, thresholds)) | set(earned)
     top = max(reached, key=TIERS.index, default=None)
     step = 0 if top is None else TIERS.index(top) + 1
@@ -177,13 +230,21 @@ def progress(badge: Badge, count: int, thresholds: Sequence[int], *, earned: Ite
     return Progress(badge, count, top, ahead, needed, max(needed - count, 0))
 
 
+GRACE = timedelta(weeks=2)
+"""The widest step between two active weeks that keeps a run going: one missed week between them."""
+
+
 def longest_streak(days: Iterable[date]) -> int:
-    """The most calendar weeks (Monday to Sunday) in a row that hold at least one of ``days``."""
+    """The most calendar weeks (Monday to Sunday) in a run that hold at least one of ``days``.
+
+    A run survives one missed week between two active weeks, as often as that happens (a grace
+    week, #130), but the missed week doesn't count toward its length. Two missed weeks in a row end
+    it."""
     weeks = sorted({week_start(d) for d in days})
     best = run = 0
     previous: date | None = None
     for week in weeks:
-        run = run + 1 if previous is not None and week - previous == timedelta(weeks=1) else 1
+        run = run + 1 if previous is not None and week - previous <= GRACE else 1
         best, previous = max(best, run), week
     return best
 

@@ -39,7 +39,7 @@ from dinnerbell.channels.slack.views import (
     proposal_modal,
 )
 from dinnerbell.domain import notifications as note
-from dinnerbell.domain.badges import BADGES, DEFAULT_THRESHOLDS, Announcement, Award, BadgeKey, Tier, progress
+from dinnerbell.domain.badges import BADGES, DEFAULT_LADDERS, Announcement, Award, BadgeKey, Tier, progress
 from dinnerbell.domain.catalog import CatalogItem, ItemKind, Mode, Tag, TagKind
 from dinnerbell.domain.events import (
     AssignmentRole,
@@ -273,14 +273,14 @@ def _award(n: int, badge: BadgeKey, tier: Tier) -> Award:
 
 def _stats(counts: dict[BadgeKey, int], earned: tuple[Award, ...]) -> MemberStats:
     steps = tuple(
-        progress(b, counts.get(b.key, 0), DEFAULT_THRESHOLDS, earned=[a.tier for a in earned if a.badge is b.key])
+        progress(b, counts.get(b.key, 0), DEFAULT_LADDERS, earned=[a.tier for a in earned if a.badge is b.key])
         for b in BADGES
     )
     return MemberStats(KIM.id, {}, steps, earned)
 
 
 KIM_BADGES = _stats(
-    {BadgeKey.CHEF: 43, BadgeKey.SCOUT: 1, BadgeKey.EXPLORER: 12},
+    {BadgeKey.CHEF: 43, BadgeKey.SCOUT: 1, BadgeKey.EXPLORER: 5},
     (
         _award(1, BadgeKey.CHEF, Tier.FIRST),
         _award(2, BadgeKey.CHEF, Tier.BRONZE),
