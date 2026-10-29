@@ -38,7 +38,7 @@ Keep the directory name `dinnerbell`, and run every command in this guide as the
 
 1. Go to [slack.com/get-started](https://slack.com/get-started).
 2. Create a new workspace for your household. The free plan is enough.
-3. Create a channel named `#dinnerbell`. Make it public: a private channel works too, but the Slack app then also needs the `groups:read` and `groups:history` scopes, which Dinnerbell uses to read who's in the channel.
+3. Create a channel named `#dinnerbell`. Make it public: a private channel works too, but the Slack app then also needs the `groups:read` scope, which Dinnerbell uses to read who's in the channel.
 
 The free plan limits history to 90 days and the number of apps to 10. Neither matters: Dinnerbell is the system of record, and it is the only app.
 
@@ -404,6 +404,28 @@ Rate limiting needs the real client IP. Dinnerbell reads `X-Forwarded-For` only 
 
 Set only the one address the proxy connects from. Never use `0.0.0.0/0`, or a LAN or podman subnet range. Anyone inside a trusted range can forge `X-Forwarded-For` and get around rate limiting.
 
+### Resource and log limits
+
+`compose.yaml` and `deploy/compose.test.yaml` (through `compose.yaml`) cap the container, so a runaway process or a noisy log can't take the host:
+
+| Key | Value | Why |
+|---|---|---|
+| `pids_limit` | `256` | Measured on the image: 6 processes and threads at idle, 47 after 300 concurrent requests. The cap is five times that. |
+| `mem_limit` | `512m` | Measured: about 100 MiB at idle and 130 MiB peak after 300 concurrent requests. The cap leaves room for badge rendering and large catalog imports. |
+| `logging` | `json-file`, `max-size: 10m`, `max-file: "3"` | Keeps at most 30 MB of logs per container. |
+
+If you see the container killed for memory (`podman inspect` shows `OOMKilled`), raise `mem_limit` in a `compose.override.yaml`.
+
+What each tool does with the keys:
+
+| Tool | `mem_limit` | `pids_limit` | `logging` |
+|---|---|---|---|
+| Docker Compose | Applied | Applied | Applied |
+| podman-compose 1.6.0 | Applied (`-m`) | Applied (`--pids-limit`) | Applied (`--log-driver`, `--log-opt`) |
+| podman-compose 1.0.6 | Applied (`-m`) | Ignored, with no warning | Applied |
+
+podman-compose 1.0.6 never reads `pids_limit` (confirmed in its source). On that version, the process cap is absent; upgrade podman-compose to get it. podman passes `max-size` to its log driver in every version, but older podman releases ignore `max-file`. `scripts/check-compose.sh` fails if any of these keys is missing from either rendering.
+
 ## 10. Sign in as the admin
 
 1. Open your public URL in a browser.
@@ -606,7 +628,7 @@ If you run a [test instance](#test-instance), follow the [promotion checklist](#
 
 Upgrading from 0.8.0 or earlier to the release that adds secret files? Do [Move the secrets out of .env](#move-the-secrets-out-of-env) between steps 3 and 5: the new `compose.yaml` mounts four files, and the service won't start without them.
 
-If the release's upgrade notes say the Slack app has a new scope, paste the new manifest under **App Manifest** in the app settings (set your hostname in it again), then select **Install App** > **Reinstall to Workspace** and approve the scope. Slack keeps the same bot token, so `.env` doesn't change. Until you reinstall, Dinnerbell keeps working and shows text where a new feature needs the scope: for example, 0.8.0 adds `files:write`, and badges show as text tags until the app has it.
+If the release's upgrade notes say the Slack app has a changed manifest (a new scope, or a scope removed), paste the new manifest under **App Manifest** in the app settings (set your hostname in it again), then select **Install App** > **Reinstall to Workspace** and approve the scopes. A removed scope only takes effect after the reinstall, and nothing breaks before it. Slack keeps the same bot token, so `.env` doesn't change. Until you reinstall, Dinnerbell keeps working and shows text where a new feature needs the scope: for example, 0.8.0 adds `files:write`, and badges show as text tags until the app has it.
 
 Database migrations run on start. They only move forward: after an upgrade, the older version refuses to open the database. To go back, see [Roll back](#roll-back).
 
@@ -664,13 +686,17 @@ gh attestation verify oci://ghcr.io/dsmorgan/dinnerbell:X.Y.Z \
   --source-ref refs/tags/vX.Y.Z
 ```
 
-The release notes on GitHub list each release's digest, which never changes. Compare it with the digest of the image your host pulled:
+The tag can move, so verify the exact image your host pulled, by its digest. Read the digest from the pulled image, then verify that digest:
 
 ```sh
 podman image inspect ghcr.io/dsmorgan/dinnerbell:X.Y.Z --format '{{.RepoDigests}}'
+gh attestation verify oci://ghcr.io/dsmorgan/dinnerbell@sha256:... \
+  --repo dsmorgan/dinnerbell \
+  --signer-workflow dsmorgan/dinnerbell/.github/workflows/ci.yml \
+  --source-ref refs/tags/vX.Y.Z
 ```
 
-With Docker: `docker image inspect` with the same arguments.
+With Docker: `docker image inspect` with the same arguments. The release notes on GitHub list each release's digest, which never changes. Compare it with the digest you read. To make production run exactly what you verified, pin `image:` in a `compose.override.yaml` to `ghcr.io/dsmorgan/dinnerbell@sha256:...`, or keep the version tag: a release tag is never re-pushed.
 
 Don't use `podman auto-update` or a tool such as Watchtower. They follow moving tags, which defeats pinning a release. [hardening.md](hardening.md) lists the other host and GitHub settings that protect your install.
 
@@ -846,7 +872,7 @@ deploy/dinnerbell-test logs dinnerbell
 deploy/dinnerbell-test down
 ```
 
-Each run first prints the project, volume, env file, tag, and port it uses. To pick up a newer `main`, run `pull`, then `down` and `up -d`. To check it, run `curl -s http://<DINNERBELL_BIND>:8014/healthz` and look for `"instance":"TEST"`, or look for the TEST banner in the browser. Test is usually stopped, so don't give it an always-on Uptime Kuma monitor.
+Each run first prints the project, volume, env file, tag, and port it uses. To pick up a newer `main`, run `pull`, then `down` and `up -d`. The `main` tag moves with every merge to `main` and isn't pinned or attested per version, so treat the test instance as running unreleased code: give it no production data except the scrubbed copy, and don't verify it as a release. To check it, run `curl -s http://<DINNERBELL_BIND>:8014/healthz` and look for `"instance":"TEST"`, or look for the TEST banner in the browser. Test is usually stopped, so don't give it an always-on Uptime Kuma monitor.
 
 Before any command that can start a container, such as `up`, `run`, `start`, or `restart`, the script checks the env file and the four secret files. Only commands that stop or inspect test, such as `down`, `stop`, `logs`, `ps`, and `pull`, skip the check. It runs `dinnerbell config check` in a one-off container of the same image, with no network, no published port, no logging, and a read-only file system. It passes the env file on standard input and mounts test's four secret files read-only at `/run/secrets`, as the service gets them; only their paths are on the command line. The image declares `/data` a volume, so the engine gives the container an empty anonymous volume, and removes it with the container. If a setting is missing or invalid, the check prints the setting's name and the reason, never the value, and the script starts nothing. The script pulls the image first if it isn't on the host. An image from before the check, such as 0.2.0, starts with a warning instead.
 
@@ -964,15 +990,18 @@ Use this checklist for every release. It runs the exact release image and compos
    git checkout vX.Y.Z
    ```
 
-3. Pull the release and [verify it](#verify-an-image). Don't go on if verification fails.
+3. Pull the release and [verify it](#verify-an-image) against the digest your host pulled, not just the tag. Don't go on if verification fails.
 
    ```sh
    DINNERBELL_TAG=X.Y.Z deploy/dinnerbell-test pull
-   gh attestation verify oci://ghcr.io/dsmorgan/dinnerbell:X.Y.Z \
+   podman image inspect ghcr.io/dsmorgan/dinnerbell:X.Y.Z --format '{{.RepoDigests}}'
+   gh attestation verify oci://ghcr.io/dsmorgan/dinnerbell@sha256:... \
      --repo dsmorgan/dinnerbell \
      --signer-workflow dsmorgan/dinnerbell/.github/workflows/ci.yml \
      --source-ref refs/tags/vX.Y.Z
    ```
+
+   Production pulls the same tag in step 10. Check that its digest equals the one you verified (or pin the digest in a `compose.override.yaml`).
 
 4. In production, [back up now](#back-up-now). Note the file name, and copy the backup off the host.
 5. Follow steps 1 to 4 of [Copy production data into test](#copy-production-data-into-test) with that backup.

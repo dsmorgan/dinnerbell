@@ -85,10 +85,29 @@ jobs:
             echo "::error::$IMAGE:latest has an unexpected config digest."
             exit 1
           fi
-          version=$(registry "https://ghcr.io/v2/$name/blobs/$config" | jq -r '.config.Labels["org.opencontainers.image.version"] // ""' | tr -cd '0-9A-Za-z.+-')
+          config_json=$(registry "https://ghcr.io/v2/$name/blobs/$config")
+          version=$(jq -r '.config.Labels["org.opencontainers.image.version"] // ""' <<<"$config_json" | tr -cd '0-9A-Za-z.+-')
           if [ "$version" != "${tag#v}" ]; then
-            echo "::error::$IMAGE:latest is version '$version', but the newest release is $tag. Check that the release's publish job pushed :latest."
-            exit 1
+            # The publish job pushes :latest before the release job runs `gh release create`, so a
+            # run in that gap sees :latest one release ahead of the newest release. Accept that only
+            # when the image's tag exists, has no release yet, is newer than the newest release, and
+            # the image was built in the last two hours. Anything else is a really wrong :latest.
+            new_tag="v$version"
+            created=$(jq -r '.config.Labels["org.opencontainers.image.created"] // .created // ""' <<<"$config_json")
+            created_epoch=$(date -u -d "$created" +%s 2>/dev/null || echo 0)
+            newest=$(printf '%s\n%s\n' "${tag#v}" "$version" | sort -V | tail -n 1)
+            if [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+              && [ "$newest" = "$version" ] \
+              && gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$new_tag" --silent 2>/dev/null \
+              && ! gh api "repos/$GITHUB_REPOSITORY/releases/tags/$new_tag" --silent 2>/dev/null \
+              && [ $(( $(date -u +%s) - created_epoch )) -lt 7200 ]; then
+              echo "::notice::$IMAGE:latest is $new_tag, which has a tag but no GitHub release yet (published within two hours). Scanning it."
+              echo "$new_tag has no GitHub release yet; scanning it because it was published within two hours." >> "$GITHUB_STEP_SUMMARY"
+              tag=$new_tag
+            else
+              echo "::error::$IMAGE:latest is version '$version', but the newest release is $tag. Check that the release's publish job pushed :latest."
+              exit 1
+            fi
           fi
 
           echo "ref=$IMAGE@$digest" >> "$GITHUB_OUTPUT"

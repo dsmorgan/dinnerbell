@@ -35,6 +35,17 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
+    # Resource and log caps, so a runaway process can't take the host. Measured on this image: about
+    # 100 MiB idle, 130 MiB after 300 concurrent requests, 6 to 50 processes. The caps are about four
+    # times that. Docker Compose and podman-compose 1.6.0 honor all of them; podman-compose 1.0.6
+    # ignores pids_limit without a warning, and older podman releases ignore max-file.
+    pids_limit: 256
+    mem_limit: 512m
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
     restart: unless-stopped
     # Podman ignores an image HEALTHCHECK when it builds in OCI format, so declare it here too.
     healthcheck:
