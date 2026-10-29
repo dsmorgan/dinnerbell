@@ -138,20 +138,28 @@ Avoid `0.0.0.0` unless a firewall limits who can reach the port.
 
 3. Create the four secret files, one for each secret, in `secrets/`. They stay out of `.env` because podman-compose passes every `.env` line to podman as `-e NAME=value`, where any local user can read it in `ps` and where `--dry-run` and `--verbose` print it. [Keep secrets in files](#keep-secrets-in-files) explains the layout.
 
-   Replace the placeholders with your values. `printf '%s'` writes no trailing newline, and `umask 077` makes each file owner-only from the start. Dinnerbell trims whitespace, so a newline from an editor does no harm.
+   The subshell keeps `umask 077` from changing your shell, and makes each file owner-only from the start. The commands prompt for each value without echoing it, so no secret lands in your shell history, in `ps`, or on a command line, and `printf '%s'` writes no trailing newline (Dinnerbell trims whitespace, so a newline from an editor does no harm). Paste the client secret, the bot token (`xoxb-...`), and the app token (`xapp-...`) when asked. The first command writes a new random secret key.
 
    ```sh
-   umask 077
-   mkdir -p secrets
-   python3 -c "import secrets; print(secrets.token_urlsafe(48), end='')" >secrets/DINNERBELL_SECRET_KEY
-   printf '%s' '<client secret>' >secrets/DINNERBELL_OIDC_CLIENT_SECRET
-   printf '%s' 'xoxb-...' >secrets/DINNERBELL_SLACK_BOT_TOKEN
-   printf '%s' 'xapp-...' >secrets/DINNERBELL_SLACK_APP_TOKEN
+   ( umask 077
+     mkdir -p secrets
+     python3 -c "import secrets; print(secrets.token_urlsafe(48), end='')" >secrets/DINNERBELL_SECRET_KEY
+     for name in OIDC_CLIENT_SECRET SLACK_BOT_TOKEN SLACK_APP_TOKEN; do
+         printf 'Value for DINNERBELL_%s (Enter for none): ' "$name" >&2
+         stty -echo; IFS= read -r value; stty echo; echo >&2
+         printf '%s' "$value" >secrets/DINNERBELL_$name
+     done )
    ```
 
-   The key can also come from `openssl rand -base64 48 | tr -d '\n'`. A shell saves the `printf` lines in its history; for a one-off, put a space before `printf` (bash with `HISTCONTROL=ignorespace`, or zsh with `HIST_IGNORE_SPACE`) or delete those lines from the history afterward.
+   Press Enter for a Slack token you don't use, which creates an empty file; compose can't start a service when a secret's file is missing. If you'd rather write a value with `printf '%s' '<value>' >secrets/<name>`, put a space before the command so your shell leaves it out of the history (bash needs `HISTCONTROL=ignorespace`; zsh needs `setopt HIST_IGNORE_SPACE`).
 
-   Without Slack, or to skip a token for now, create the file empty with `: >secrets/DINNERBELL_SLACK_BOT_TOKEN`. Compose can't start a service when a secret's file is missing.
+   Check the files, without printing a value:
+
+   ```sh
+   deploy/check-secrets
+   ```
+
+   It reports a missing file, a directory, a mode other than 600, or an empty key or client secret.
 
 4. Give the files to the user that runs inside the container, UID 10001, and keep them owner-only. Compose mounts each file as it is, so only that user can read it.
 
@@ -270,7 +278,7 @@ What the compose tools do with `file:` secrets, from their sources and documenta
 
 To change a secret, replace the file rather than editing it, because your account no longer owns it. You own the directory, so you can delete and recreate the file, then run step 4's `chown` again, and recreate the service so it reads the new file (`podman-compose down && podman-compose up -d`).
 
-If a file is missing, compose or the engine refuses to start the service and names the path. If Dinnerbell can't read a file, it stops at start with a message that names it:
+What a missing file source does, and how sure that is: podman-compose 1.0.6 and 1.6.0 put the path in a `--volume` option unchecked (confirmed in their source), and podman refuses a bind mount whose source doesn't exist (podman's documented behavior, not run here). Docker's plain `-v` creates a directory for a missing source; what Docker Compose does for a missing secret file is not verified, so check with `deploy/check-secrets` before `up` instead of relying on either. A directory in place of the file makes Dinnerbell stop at start with the `is a directory` message below. Run `deploy/check-secrets` first: it reports a missing file, a directory, a wrong mode, and an empty file without printing a value. If Dinnerbell can't read a file, it stops at start with a message that names it:
 
 | Message | Cause | Fix |
 |---|---|---|
@@ -290,9 +298,8 @@ Use a throwaway value that you can search for. Do this on a test instance or bef
 1. Write a canary into the test instance's key file. Keep it at least 32 characters.
 
    ```sh
-   umask 077
    rm -f secrets-test/DINNERBELL_SECRET_KEY
-   printf '%s' 'canary-0123456789-abcdefghijklmnopqrstuvwxyz' >secrets-test/DINNERBELL_SECRET_KEY
+   ( umask 077; printf '%s' 'canary-0123456789-abcdefghijklmnopqrstuvwxyz' >secrets-test/DINNERBELL_SECRET_KEY )
    podman unshare chown 10001:10001 secrets-test/DINNERBELL_SECRET_KEY
    ```
 
@@ -312,30 +319,36 @@ Use a throwaway value that you can search for. Do this on a test instance or bef
    The second terminal prints nothing, and the count is `0`. (`grep -c` also exits 1 when the count is `0`.) Press Ctrl+C in the second terminal, then replace the canary with a real key:
 
    ```sh
-   umask 077
    rm -f secrets-test/DINNERBELL_SECRET_KEY
-   python3 -c "import secrets; print(secrets.token_urlsafe(48), end='')" >secrets-test/DINNERBELL_SECRET_KEY
+   ( umask 077; python3 -c "import secrets; print(secrets.token_urlsafe(48), end='')" >secrets-test/DINNERBELL_SECRET_KEY )
    podman unshare chown 10001:10001 secrets-test/DINNERBELL_SECRET_KEY
    ```
 
 ### Move the secrets out of .env
 
-Do this once on an existing install, from the clone's directory, with the service still running on the old release. It copies the four secret lines from `.env` into four files. It reads them with `sed`, so no value reaches a command line.
+Do this once on an existing install, from the clone's directory, **before** you run `up` on the new release: the new `compose.yaml` mounts four files, and the service doesn't start until they exist. The steps copy the four secret lines from `.env` into four files without putting a value on a command line.
 
-1. Write the four files, owner-only and without a trailing newline.
+1. Write the four files. The subshell keeps `umask 077` from changing your shell, so the files are owner-only and each holds the bare value with no trailing newline.
 
    ```sh
-   umask 077
-   mkdir -p secrets
-   for name in SECRET_KEY OIDC_CLIENT_SECRET SLACK_BOT_TOKEN SLACK_APP_TOKEN; do
-       sed -n "s/^[[:space:]]*\(export[[:space:]]\{1,\}\)\{0,1\}DINNERBELL_$name[[:space:]]*=[[:space:]]*//p" .env | tail -n 1 | tr -d '\r\n"'"'" >"secrets/DINNERBELL_$name"
-       [ -s "secrets/DINNERBELL_$name" ] || echo "secrets/DINNERBELL_$name is empty: .env has no DINNERBELL_$name"
-   done
+   ( umask 077
+     mkdir -p secrets
+     for name in SECRET_KEY OIDC_CLIENT_SECRET SLACK_BOT_TOKEN SLACK_APP_TOKEN; do
+         sed -n "s/^[[:space:]]*\(export[[:space:]]\{1,\}\)\{0,1\}DINNERBELL_$name[[:space:]]*=[[:space:]]*//p" .env | tail -n 1 | tr -d '\r' | sed -e 's/[[:space:]]*$//' -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'\$/\1/" | tr -d '\n' >"secrets/DINNERBELL_$name"
+     done )
    ```
 
-   An empty Slack file is fine if you don't use Slack. If a value has a trailing `# comment`, quotes, or spaces inside it, or if you wrote the value in a way this `sed` doesn't handle, write that file by hand with `printf '%s'` instead, as in section 9.
+   The `sed` removes one pair of enclosing quotes and nothing else, so a quote inside a value stays. It doesn't handle a trailing `# comment` or an escape such as `\n` inside double quotes; write that file by hand, as in section 9.
 
-2. Give the files to UID 10001 with mode 600.
+2. Compare each file with its `.env` line before you change anything. The command prints `match` or `differs` for each secret, never a value, and checks the files' modes and that none is missing or empty.
+
+   ```sh
+   deploy/check-secrets --env-file .env
+   ```
+
+   Every line must say `match`. An empty Slack token that `.env` doesn't set also says `match`. Fix a file that `differs` by writing it by hand, and run the command again.
+
+3. Give the files to UID 10001 with mode 600.
 
    ```sh
    for name in SECRET_KEY OIDC_CLIENT_SECRET SLACK_BOT_TOKEN SLACK_APP_TOKEN; do
@@ -344,13 +357,13 @@ Do this once on an existing install, from the clone's directory, with the servic
    done
    ```
 
-   With rootful Docker, use `sudo chown 10001:10001` instead of `podman unshare chown 10001:10001`.
+   With rootful Docker, use `sudo chown 10001:10001` instead of `podman unshare chown 10001:10001`. Your own account can't read the files afterward, which is why step 2 comes first.
 
-3. Delete the four lines from `.env`. Open it in an editor and remove `DINNERBELL_SECRET_KEY`, `DINNERBELL_OIDC_CLIENT_SECRET`, `DINNERBELL_SLACK_BOT_TOKEN`, and `DINNERBELL_SLACK_APP_TOKEN`. While a line stays, Dinnerbell warns at every start, and the value stays on podman's command line.
+4. Delete the four lines from `.env`. Open it in an editor and remove `DINNERBELL_SECRET_KEY`, `DINNERBELL_OIDC_CLIENT_SECRET`, `DINNERBELL_SLACK_BOT_TOKEN`, and `DINNERBELL_SLACK_APP_TOKEN`. While a line stays, Dinnerbell warns at every start, and the value stays on podman's command line.
 
-4. Recreate the service from the new release: `podman-compose down && podman-compose up -d`. The logs show no warning, and `/healthz` reports `"slack":"connected"`.
+5. Recreate the service from the new release: `podman-compose down && podman-compose up -d`. The logs show no "is set in the environment" warning, and `/healthz` reports `"slack":"connected"`.
 
-If Dinnerbell stops at start and says it can't read a secret file, see the table in [Keep secrets in files](#keep-secrets-in-files). A test instance has the same four files in `secrets-test/`; do the same there with `.env.test`.
+If Dinnerbell stops at start and says it can't read a secret file, see the table in [Keep secrets in files](#keep-secrets-in-files). A test instance has the same four files in `secrets-test/`; do the same there with `.env.test` (`deploy/check-secrets` and `sed` both take the file names).
 
 ### Set the trusted proxy
 
@@ -776,12 +789,14 @@ Never reuse production's tokens. Socket Mode delivers each event to only one con
 3. Write test's four secrets to `secrets-test/`, the same way as production's in [section 9](#9-run-dinnerbell), steps 3 and 4, with the test app's values and a new secret key. Never copy production's files.
 
    ```sh
-   umask 077
-   mkdir -p secrets-test
-   python3 -c "import secrets; print(secrets.token_urlsafe(48), end='')" >secrets-test/DINNERBELL_SECRET_KEY
-   printf '%s' '<test client secret>' >secrets-test/DINNERBELL_OIDC_CLIENT_SECRET
-   printf '%s' 'xoxb-...' >secrets-test/DINNERBELL_SLACK_BOT_TOKEN
-   printf '%s' 'xapp-...' >secrets-test/DINNERBELL_SLACK_APP_TOKEN
+   ( umask 077
+     mkdir -p secrets-test
+     python3 -c "import secrets; print(secrets.token_urlsafe(48), end='')" >secrets-test/DINNERBELL_SECRET_KEY
+     for name in OIDC_CLIENT_SECRET SLACK_BOT_TOKEN SLACK_APP_TOKEN; do
+         printf 'Value for DINNERBELL_%s (Enter for none): ' "$name" >&2
+         stty -echo; IFS= read -r value; stty echo; echo >&2
+         printf '%s' "$value" >secrets-test/DINNERBELL_$name
+     done )
    for name in SECRET_KEY OIDC_CLIENT_SECRET SLACK_BOT_TOKEN SLACK_APP_TOKEN; do
        chmod 600 "secrets-test/DINNERBELL_$name"
        podman unshare chown 10001:10001 "secrets-test/DINNERBELL_$name"

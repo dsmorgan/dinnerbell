@@ -13,6 +13,7 @@
 #
 # It writes .env, .env.test, and the secret files in secrets/ and secrets-test/ (made-up values)
 # and deletes them afterward, so it refuses to run when any of them already exists.
+# shellcheck disable=SC2016 # Single quotes hold literal secrets, jq programs, and awk programs here.
 set -eu
 
 CDPATH='' cd -- "$(dirname -- "$0")/.."
@@ -160,7 +161,6 @@ EOF
 # Each secret is a file mounted at /run/secrets/<name>: production's in ./secrets, test's in
 # ./secrets-test, and the service lists all four. None is an environment variable.
 secrets_json='["DINNERBELL_SECRET_KEY","DINNERBELL_SLACK_BOT_TOKEN","DINNERBELL_SLACK_APP_TOKEN","DINNERBELL_OIDC_CLIENT_SECRET"]'
-# shellcheck disable=SC2016 # jq's variables, not the shell's.
 secrets_filter='
     . as $root
     | (.services.dinnerbell.secrets | map(.source) | sort) == ($names | sort)
@@ -598,6 +598,68 @@ if command -v podman-compose >/dev/null 2>&1; then
         pass "test never touches production's volume"
     fi
 fi
+
+echo "== deploy/check-secrets"
+test_secret_files
+expect "check-secrets: four good files in secrets-test/" deploy/check-secrets secrets-test
+chmod 644 secrets-test/DINNERBELL_SECRET_KEY
+check_fails() { ! "$@" >/dev/null 2>&1; }
+check_prints_no_secret() {
+    out=$(deploy/check-secrets secrets-test 2>&1)
+    for secret in $test_secrets; do
+        ! printf '%s' "$out" | grep -qF -- "$secret" || return 1
+    done
+}
+check "check-secrets: mode 644 is a problem" check_fails deploy/check-secrets secrets-test
+chmod 600 secrets-test/DINNERBELL_SECRET_KEY
+rm secrets-test/DINNERBELL_SLACK_APP_TOKEN
+check "check-secrets: a missing file is a problem" check_fails deploy/check-secrets secrets-test
+mkdir secrets-test/DINNERBELL_SLACK_APP_TOKEN
+check "check-secrets: a directory is a problem" check_fails deploy/check-secrets secrets-test
+rmdir secrets-test/DINNERBELL_SLACK_APP_TOKEN
+test_secret_files
+: >secrets-test/DINNERBELL_SECRET_KEY
+check "check-secrets: an empty key is a problem" check_fails deploy/check-secrets secrets-test
+test_secret_files
+write_secrets secrets-test "$test_key" - - "$test_client_secret"
+expect "check-secrets: empty Slack tokens are fine" deploy/check-secrets secrets-test
+check "check-secrets prints no secret value" check_prints_no_secret
+test_secret_files
+
+echo "== migration from .env"
+# Run docs/setup.md's "Move the secrets out of .env" snippet on a .env whose values hold both kinds
+# of quote, then compare with deploy/check-secrets --env-file, in a scratch copy of the layout.
+mig="$stubs/mig"
+mkdir -p "$mig/deploy"
+cp deploy/check-secrets "$mig/deploy/"
+{
+    printf 'DINNERBELL_BASE_URL=https://dinner.example.com\n'
+    printf 'export DINNERBELL_SECRET_KEY = "ab'"'"'c\\"d-0123456789-0123456789-0123456789"\n'
+    printf 'DINNERBELL_OIDC_CLIENT_SECRET='"'"'it"s a $secret'"'"'\r\n'
+    printf 'DINNERBELL_SLACK_BOT_TOKEN=xoxb-"plain"-'"'"'mixed'"'"'\n'
+    printf 'DINNERBELL_SLACK_APP_TOKEN=\n'
+} >"$mig/.env"
+awk '/^### Move the secrets/ { f = 1 } f && /^   ```sh/ { c++; if (c == 1) { g = 1; next } } g && /^   ```$/ { exit } g { sub(/^   /, ""); print }' \
+    docs/setup.md >"$stubs/migrate.sh"
+(cd "$mig" && sh "$stubs/migrate.sh")
+check "migration keeps quotes inside a value, drops one enclosing pair and the line ending" \
+    test "$(cat "$mig/secrets/DINNERBELL_OIDC_CLIENT_SECRET")" = 'it"s a $secret' \
+    -a "$(cat "$mig/secrets/DINNERBELL_SLACK_BOT_TOKEN")" = "xoxb-\"plain\"-'mixed'"
+migration_report=$("$mig/deploy/check-secrets" --env-file "$mig/.env" 2>&1) || true
+check "check-secrets --env-file: four matches, and no value in the output" \
+    test "$(printf '%s\n' "$migration_report" | grep -c ': match$')" -eq 4 -a "$(printf '%s' "$migration_report" | grep -c 'plain\|a \$secret\|ab.c')" -eq 0
+printf 'x' >"$mig/secrets/DINNERBELL_SECRET_KEY"
+migration_report=$("$mig/deploy/check-secrets" --env-file "$mig/.env" 2>&1) || true
+check "check-secrets --env-file: a file that differs says differs" \
+    sh -c 'printf "%s\n" "$1" | grep -q "^DINNERBELL_SECRET_KEY: differs$"' _ "$migration_report"
+
+echo "== build context"
+# The image build must never copy secret files (.dockerignore links to .containerignore).
+for ignore in .containerignore .dockerignore; do
+    for dir in secrets secrets-test; do
+        expect "$ignore excludes $dir/" grep -qx "$dir" "$ignore"
+    done
+done
 
 echo "== secret files in git"
 # Only placeholders and the note may be tracked in secrets/ and secrets-test/, and git must ignore

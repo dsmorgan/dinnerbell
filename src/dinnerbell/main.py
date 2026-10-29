@@ -453,12 +453,15 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _slack_preview(args.kind, args.base_url)
     if args.command == "config":
         return _config_check(args.env_file, args.secrets_dir)
+    warnings: list[str] = []
     try:
-        settings = load_settings()
+        settings = load_settings(warnings=warnings)
     except ConfigError as exc:
         print(exc, file=sys.stderr)
         return 2
     if args.command == "catalog":
+        for warning in warnings:  # stdout carries the export
+            print(warning, file=sys.stderr)
         # Before logging is configured: logs go to stdout, where the export goes. The read-only
         # open may create -wal and -shm files next to the database; SQLite gives them the
         # database file's own mode, whatever the umask, so they're as private as the database,
@@ -476,6 +479,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(NOT_LABELED_FOR_DISCARD, file=sys.stderr)
         return 1  # the same: before anything opens the database
     configure_logging(settings.log_level, settings.instance_label)
+    for warning in warnings:  # secrets still in the environment; no values (see config.py)
+        logging.getLogger("dinnerbell.config").warning(warning)
     if args.command == "serve":  # the server's requests, taps, and jobs each start their own unit
         return _command(args, settings)
     end = start_unit("cli")

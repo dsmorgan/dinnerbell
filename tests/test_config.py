@@ -317,7 +317,7 @@ def test_secrets_in_the_environment_alone_warn_once_each(
     set_env(monkeypatch, DINNERBELL_SLACK_BOT_TOKEN="xoxb-1-2-3")
     with caplog.at_level("WARNING", logger="dinnerbell.config"):
         load_settings()
-    names = [r.args[0] for r in caplog.records if r.name == "dinnerbell.config"]  # type: ignore[index]
+    names = [r.getMessage().split()[0] for r in caplog.records if r.name == "dinnerbell.config"]
     assert names == ["DINNERBELL_SECRET_KEY", "DINNERBELL_SLACK_BOT_TOKEN", "DINNERBELL_OIDC_CLIENT_SECRET"]
 
 
@@ -406,3 +406,66 @@ def test_features_parse_a_comma_separated_list(monkeypatch: pytest.MonkeyPatch, 
     assert "unknown feature flag 'gamma'" in error_for(monkeypatch, DINNERBELL_FEATURES="alpha,gamma")
     with pytest.raises(ValueError, match="unknown feature flag 'gamma'"):
         make_settings(tmp_path, features=frozenset({"gamma"}))
+
+
+def test_a_symlink_to_a_good_file_works(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    directory = secrets_from_files(monkeypatch, tmp_path, **SECRET_FILES)
+    target = tmp_path / "store" / "key"
+    target.parent.mkdir()
+    target.write_text(SECRET_FILES["DINNERBELL_SECRET_KEY"])
+    (directory / "DINNERBELL_SECRET_KEY").unlink()
+    (directory / "DINNERBELL_SECRET_KEY").symlink_to(target)
+    assert load_settings().secret_key.get_secret_value() == SECRET_FILES["DINNERBELL_SECRET_KEY"]
+
+
+def test_a_broken_symlink_is_an_error_not_unset(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    directory = secrets_from_files(monkeypatch, tmp_path, **SECRET_FILES)
+    (directory / "DINNERBELL_SLACK_APP_TOKEN").unlink()
+    (directory / "DINNERBELL_SLACK_APP_TOKEN").symlink_to(tmp_path / "gone")
+    with pytest.raises(ConfigError, match="DINNERBELL_SLACK_APP_TOKEN is a symlink to a file that doesn't exist"):
+        load_settings()
+
+
+def test_a_multi_line_secret_is_refused_but_a_trailing_newline_is_not(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    directory = secrets_from_files(monkeypatch, tmp_path, **SECRET_FILES)
+    (directory / "DINNERBELL_SECRET_KEY").write_text(SECRET_FILES["DINNERBELL_SECRET_KEY"] + "\n\n")
+    assert load_settings().secret_key.get_secret_value() == SECRET_FILES["DINNERBELL_SECRET_KEY"]
+    (directory / "DINNERBELL_SECRET_KEY").write_text("first-line-of-the-key\nsecond-line-hunter2\n")
+    with pytest.raises(ConfigError) as caught:
+        load_settings()
+    assert "has more than one line" in str(caught.value)
+    assert "hunter2" not in str(caught.value)
+
+
+def test_an_oversized_secret_file_is_refused(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    from dinnerbell.config import MAX_SECRET_BYTES
+
+    directory = secrets_from_files(monkeypatch, tmp_path, **SECRET_FILES)
+    (directory / "DINNERBELL_SECRET_KEY").write_text("k" * (MAX_SECRET_BYTES + 1))
+    with pytest.raises(ConfigError, match="is larger than 8192 bytes"):
+        load_settings()
+    (directory / "DINNERBELL_SECRET_KEY").write_text("k" * MAX_SECRET_BYTES)
+    assert len(load_settings().secret_key.get_secret_value()) == MAX_SECRET_BYTES
+
+
+def test_a_directory_the_service_cannot_search_is_a_clear_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import os
+
+    if os.geteuid() == 0:
+        pytest.skip("root searches every directory")
+    directory = secrets_from_files(monkeypatch, tmp_path, **SECRET_FILES)
+    inner = directory / "inner"
+    inner.mkdir()
+    (inner / "DINNERBELL_SECRET_KEY").write_text(SECRET_FILES["DINNERBELL_SECRET_KEY"])
+    inner.chmod(0)
+    try:
+        with pytest.raises(ConfigError) as caught:
+            load_settings(inner)
+    finally:
+        inner.chmod(0o700)
+    assert "Can't read the secret file" in str(caught.value)
+    assert "PermissionError" in str(caught.value)

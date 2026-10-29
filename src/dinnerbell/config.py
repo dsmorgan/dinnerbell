@@ -31,6 +31,7 @@ SECRET_FIELDS = ("secret_key", "slack_bot_token", "slack_app_token", "oidc_clien
 FILES_HELP = 'See "Keep secrets in files" in docs/setup.md.'
 log = logging.getLogger(__name__)
 MIN_SECRET_KEY_LENGTH = 32
+MAX_SECRET_BYTES = 8192
 LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1"})
 BUILD_PATTERN = re.compile(r"[0-9a-f]{7,40}")
 SLACK_ISSUER = "https://slack.com"
@@ -288,32 +289,51 @@ def format_validation_error(error: ValidationError, secrets_dir: Path | None = N
     return "\n".join(lines)
 
 
-def _read_secret_files(directory: Path) -> dict[str, str]:
-    """Read the four secrets from ``directory``, one file each, named like the variable.
-
-    A file that's empty counts as absent. Compose can't skip a secret, so an install without Slack
-    keeps an empty file. A secret that is also in the environment is the old layout: the
-    environment keeps working for one release, with a warning, and must agree with the file.
-    The messages never include a value.
-    """
-    values: dict[str, str] = {}
-    for field in SECRET_FIELDS:
-        name = f"{ENV_PREFIX}{field.upper()}"
-        path = directory / name
-        text = ""
+def _read_secret_file(path: Path) -> str:
+    """The trimmed text of secret file ``path``, or "" when there's no file. Raises ConfigError, naming
+    the path and never a value, for a file that's there but unusable. A symlink to a readable file
+    works, because that's what a secret store may mount."""
+    try:
+        if path.is_symlink() and not path.exists():
+            raise ConfigError(f"{path} is a symlink to a file that doesn't exist. {FILES_HELP}")
         if path.is_dir():
             raise ConfigError(
                 f"{path} is a directory, not a file. Container engines create a directory when the "
                 f"file they mount is missing: remove it and create the file. {FILES_HELP}"
             )
-        if path.exists():
-            try:
-                text = path.read_text(encoding="utf-8").strip()
-            except (OSError, UnicodeDecodeError) as exc:
-                raise ConfigError(
-                    f"Can't read the secret file {path} ({type(exc).__name__}). The user Dinnerbell runs "
-                    f"as (uid 10001 in the image) must own it, with mode 600. {FILES_HELP}"
-                ) from None
+        if not path.exists():
+            return ""
+        with path.open("rb") as stream:
+            raw = stream.read(MAX_SECRET_BYTES + 1)
+        text = raw.decode("utf-8").strip()
+    except (OSError, UnicodeDecodeError) as exc:
+        raise ConfigError(
+            f"Can't read the secret file {path} ({type(exc).__name__}). The user Dinnerbell runs "
+            f"as (uid 10001 in the image) must own it, with mode 600. {FILES_HELP}"
+        ) from None
+    if len(raw) > MAX_SECRET_BYTES:
+        raise ConfigError(f"{path} is larger than {MAX_SECRET_BYTES} bytes, too big for a secret. {FILES_HELP}")
+    if "\n" in text or "\r" in text:
+        raise ConfigError(
+            f"{path} has more than one line. A secret is one line; a trailing newline is fine. {FILES_HELP}"
+        )
+    return text
+
+
+def _read_secret_files(directory: Path, warnings: list[str] | None = None) -> dict[str, str]:
+    """Read the four secrets from ``directory``, one file each, named like the variable.
+
+    A file that's empty counts as absent. Compose can't skip a secret, so an install without Slack
+    keeps an empty file. A secret that is also in the environment is the old layout: the
+    environment keeps working for one release, with a warning, and must agree with the file.
+    The warnings go to ``warnings`` when it's given (the CLI logs them once logging is set up),
+    else to the log. The messages never include a value.
+    """
+    values: dict[str, str] = {}
+    for field in SECRET_FIELDS:
+        name = f"{ENV_PREFIX}{field.upper()}"
+        path = directory / name
+        text = _read_secret_file(path)
         in_environment = os.environ.get(name, "") != ""
         if in_environment:
             if text and os.environ[name].strip() != text:
@@ -321,26 +341,28 @@ def _read_secret_files(directory: Path) -> dict[str, str]:
                     f"{name} is set in the environment (probably in .env) and in {path}, with different "
                     f"values. Remove it from .env. {FILES_HELP}"
                 )
-            log.warning(
-                "%s is set in the environment. Move it to the file %s and remove it from .env: "
-                "the next release ignores it there, and until then it shows on podman's command line. %s",
-                name,
-                path,
-                FILES_HELP,
+            warning = (
+                f"{name} is set in the environment. Move it to the file {path} and remove it from .env: "
+                f"the next release ignores it there, and until then it shows on podman's command line. {FILES_HELP}"
             )
+            if warnings is None:
+                log.warning("%s", warning)
+            else:
+                warnings.append(warning)
         elif text:
             values[field] = text
     return values
 
 
-def load_settings(secrets_dir: Path | None = None) -> Settings:
+def load_settings(secrets_dir: Path | None = None, warnings: list[str] | None = None) -> Settings:
     """Read settings from the environment and the secret files in ``secrets_dir``
-    (default /run/secrets, if there is one)."""
+    (default /run/secrets, if there is one). Warnings about secrets still in the environment go to
+    ``warnings`` if given, else to the log."""
     directory = secrets_dir if secrets_dir is not None else SECRETS_DIR
     try:
         # Init values win over the environment, and _read_secret_files leaves out any secret the
         # environment gives, so each setting has one source.
-        secrets = _read_secret_files(directory)
+        secrets = _read_secret_files(directory, warnings)
         return Settings(**secrets)  # type: ignore[arg-type]
     except ValidationError as exc:
         raise ConfigError(format_validation_error(exc, directory)) from None

@@ -332,3 +332,34 @@ def test_cli_serve_runs_uvicorn(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
 def test_cli_requires_a_command(capsys: pytest.CaptureFixture[str]) -> None:
     with pytest.raises(SystemExit):
         cli.main([])
+
+
+def test_secret_warnings_are_logged_after_logging_is_configured(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A secret still in the environment warns, through the app logger and without its value."""
+    import logging
+
+    for key, value in REQUIRED.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setattr("dinnerbell.config.SECRETS_DIR", tmp_path / "no-secrets")
+    events: list[str] = []
+
+    class Recorder(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            events.append(record.getMessage())
+
+    logger = logging.getLogger("dinnerbell.config")
+    recorder = Recorder()
+    logger.addHandler(recorder)
+    monkeypatch.setattr(cli, "configure_logging", lambda *a, **k: events.append("configure_logging"))
+    monkeypatch.setattr(cli, "_command", lambda args, settings: 0)
+    try:
+        assert cli.main(["migrate"]) == 0
+    finally:
+        logger.removeHandler(recorder)
+    assert events[0] == "configure_logging"
+    named = [e for e in events[1:] if "is set in the environment" in e]
+    assert len(named) == 2  # REQUIRED sets the key and the client secret
+    for value in REQUIRED.values():
+        assert not any(value in e for e in events)
