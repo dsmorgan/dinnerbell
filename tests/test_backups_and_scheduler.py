@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import sqlite3
 from collections.abc import AsyncIterator
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -20,6 +20,8 @@ from dinnerbell.services import backups
 from dinnerbell.services.health import SchedulerState
 from tests.support.clock import FakeClock
 
+NOW = datetime(2026, 10, 22, 12, tzinfo=UTC)
+
 
 def make_backup(directory: Path, day: date) -> Path:
     directory.mkdir(parents=True, exist_ok=True)
@@ -29,7 +31,7 @@ def make_backup(directory: Path, day: date) -> Path:
 
 
 def test_backup_is_a_consistent_copy(migrated: Settings) -> None:
-    result = backups.run_backup(migrated.database_path, migrated.backup_dir, date(2026, 10, 22))
+    result = backups.run_backup(migrated.database_path, migrated.backup_dir, date(2026, 10, 22), now=NOW)
     assert result.created
     assert result.path == migrated.backup_dir / "dinnerbell-2026-10-22.db"
     with sqlite3.connect(result.path) as copy:
@@ -39,9 +41,9 @@ def test_backup_is_a_consistent_copy(migrated: Settings) -> None:
 
 
 def test_backup_is_idempotent_per_day(migrated: Settings) -> None:
-    first = backups.run_backup(migrated.database_path, migrated.backup_dir, date(2026, 10, 22))
+    first = backups.run_backup(migrated.database_path, migrated.backup_dir, date(2026, 10, 22), now=NOW)
     mtime = first.path.stat().st_mtime_ns
-    second = backups.run_backup(migrated.database_path, migrated.backup_dir, date(2026, 10, 22))
+    second = backups.run_backup(migrated.database_path, migrated.backup_dir, date(2026, 10, 22), now=NOW)
     assert not second.created
     assert second.path.stat().st_mtime_ns == mtime
 
@@ -52,7 +54,7 @@ def test_backup_prunes_by_retention(migrated: Settings) -> None:
         make_backup(migrated.backup_dir, today - timedelta(days=i))
     stranger = migrated.backup_dir / "notes.txt"
     stranger.write_text("not ours")
-    result = backups.run_backup(migrated.database_path, migrated.backup_dir, today)
+    result = backups.run_backup(migrated.database_path, migrated.backup_dir, today, now=NOW)
     remaining = backups.existing_backups(migrated.backup_dir)
     assert len(remaining) == 14 + 5  # see test_domain.TestBackupRetention
     assert today in remaining
@@ -241,7 +243,7 @@ def test_stale_partial_backups_are_removed(migrated: Settings) -> None:
     migrated.backup_dir.mkdir(parents=True)
     stale = migrated.backup_dir / "dinnerbell-2026-10-01.partial"
     stale.write_bytes(b"half a database")
-    backups.run_backup(migrated.database_path, migrated.backup_dir, date(2026, 10, 22))
+    backups.run_backup(migrated.database_path, migrated.backup_dir, date(2026, 10, 22), now=NOW)
     assert not stale.exists()
 
 
@@ -254,7 +256,7 @@ def test_backup_opens_the_live_database_read_only(migrated: Settings, monkeypatc
         return real_connect(database, *args, **kwargs)  # type: ignore[call-overload,no-any-return]
 
     monkeypatch.setattr(backups.sqlite3, "connect", recording_connect)
-    backups.run_backup(migrated.database_path, migrated.backup_dir, date(2026, 10, 22))
+    backups.run_backup(migrated.database_path, migrated.backup_dir, date(2026, 10, 22), now=NOW)
     source = opened[0]
     assert source[0].startswith("file:///") and source[0].endswith("dinnerbell.db?mode=ro")
     assert source[1] is True
@@ -271,7 +273,7 @@ def test_a_backup_that_fails_its_check_is_retried_then_deleted(
 
     monkeypatch.setattr(backups, "_check", failing)
     with pytest.raises(backups.BackupCheckFailed):
-        backups.run_backup(migrated.database_path, migrated.backup_dir, date(2026, 10, 22))
+        backups.run_backup(migrated.database_path, migrated.backup_dir, date(2026, 10, 22), now=NOW)
     assert len(calls) == backups.BACKUP_ATTEMPTS
     assert not list(migrated.backup_dir.glob("dinnerbell-*"))
 
@@ -293,15 +295,49 @@ async def test_a_failing_backup_sets_the_health_field(
 
 def test_stale_one_off_partials_are_removed_but_fresh_ones_stay(migrated: Settings) -> None:
     import os
-    import time
 
     migrated.backup_dir.mkdir(parents=True, exist_ok=True)
     stale = migrated.backup_dir / "pre-reset-0.8.0-20260101T000000Z.partial"
     fresh = migrated.backup_dir / "pre-reset-0.8.0-20261022T000000Z.partial"
     stale.write_bytes(b"x")
     fresh.write_bytes(b"x")
-    old = time.time() - 2 * 3600
+    old = NOW.timestamp() - 2 * 3600
     os.utime(stale, (old, old))
-    backups.run_backup(migrated.database_path, migrated.backup_dir, date(2026, 10, 22))
+    os.utime(fresh, (NOW.timestamp() - 60, NOW.timestamp() - 60))
+    backups.run_backup(migrated.database_path, migrated.backup_dir, date(2026, 10, 22), now=NOW)
     assert not stale.exists()
     assert fresh.exists()
+
+
+def test_a_corrupt_copy_is_made_again(migrated: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A real bad copy (garbled bytes), not a mocked check: the first copy fails quick_check, the
+    second is good."""
+    real = backups._copy_online
+    copies: list[int] = []
+
+    def garbling(database_path: Path, target: Path) -> None:
+        real(database_path, target)
+        copies.append(1)
+        if len(copies) == 1:
+            target.write_bytes(b"not a database" * 200)
+
+    monkeypatch.setattr(backups, "_copy_online", garbling)
+    result = backups.run_backup(migrated.database_path, migrated.backup_dir, date(2026, 10, 22), now=NOW)
+    assert result.created
+    assert len(copies) == 2
+    with sqlite3.connect(result.path) as db:
+        assert db.execute("PRAGMA quick_check").fetchall() == [("ok",)]
+
+
+def test_stale_partials_go_even_when_the_backup_then_fails(migrated: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    migrated.backup_dir.mkdir(parents=True, exist_ok=True)
+    stale = migrated.backup_dir / "dinnerbell-2026-10-01.partial"
+    stale.write_bytes(b"x")
+
+    def explode(*_args: object) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(backups, "_copy_online", explode)
+    with pytest.raises(OSError, match="disk full"):
+        backups.run_backup(migrated.database_path, migrated.backup_dir, date(2026, 10, 22), now=NOW)
+    assert not stale.exists()

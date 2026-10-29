@@ -268,6 +268,8 @@ Avoid `0.0.0.0` unless a firewall limits who can reach the port.
 
 Four settings are secrets: `DINNERBELL_SECRET_KEY`, `DINNERBELL_OIDC_CLIENT_SECRET`, `DINNERBELL_SLACK_BOT_TOKEN`, and `DINNERBELL_SLACK_APP_TOKEN`. Each lives in a file of that name in `secrets/` (test: `secrets-test/`), and compose mounts it read-only at `/run/secrets/<name>`. Dinnerbell reads the file when it starts. Everything else stays in `.env`.
 
+Dinnerbell refuses to start with a `DINNERBELL_SECRET_KEY` that is shorter than 32 characters, has fewer than 8 distinct characters, or contains a placeholder word (`example`, `replace`, `changeme`, `placeholder`, `yoursecret`, `secretkeyhere`; case, `-`, and `_` ignored). With `restart: unless-stopped`, that is a crash loop, so run `deploy/check-secrets` before `up`. Keep an existing key that is long and random: those are the only triggers. Replacing a key invalidates only open login pages and import previews, not sessions.
+
 Why: podman-compose reads `env_file` itself and gives podman each line as `-e NAME=value`. While podman creates the container, the values are on its command line, which every local user can read in `ps`, and `podman-compose --dry-run` and `--verbose` print them. A mounted file puts only its path on the command line.
 
 What the compose tools do with `file:` secrets, from their sources and documentation:

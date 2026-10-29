@@ -649,6 +649,13 @@ cp secrets/DINNERBELL_SECRET_KEY.example secrets-test/DINNERBELL_SECRET_KEY
 chmod 600 secrets-test/DINNERBELL_SECRET_KEY
 check "check-secrets: the example placeholder key is a problem" check_fails deploy/check-secrets secrets-test
 test_secret_files
+# Non-ASCII keys count by character, as the app does: 40 characters from 5 distinct ones is
+# repetitive, and 32 distinct accented ones is fine (as many bytes as 64, so a byte count passes both).
+printf '%s' "éééééééééééééééààààààààààààààààèèèèèèèè" >secrets-test/DINNERBELL_SECRET_KEY
+check "check-secrets: a repetitive non-ASCII key is a problem" check_fails deploy/check-secrets secrets-test
+printf '%s' "àáâãäåæçèéêëìíîïðñòóôõöøùúûüýþÿāă" >secrets-test/DINNERBELL_SECRET_KEY
+expect "check-secrets: a long non-ASCII key is fine" deploy/check-secrets secrets-test
+test_secret_files
 write_secrets secrets-test "$test_key" - - "$test_client_secret"
 expect "check-secrets: empty Slack tokens are fine" deploy/check-secrets secrets-test
 check "check-secrets prints no secret value" check_prints_no_secret

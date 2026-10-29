@@ -98,7 +98,7 @@ async def heartbeat(ctx: JobContext) -> None:
 async def nightly_backup(ctx: JobContext) -> None:
     today = ctx.clock().astimezone(ctx.zone).date()
     try:
-        await asyncio.to_thread(backups.run_backup, ctx.database_path, ctx.backup_dir, today)
+        await asyncio.to_thread(backups.run_backup, ctx.database_path, ctx.backup_dir, today, now=ctx.clock())
     except Exception:
         log.exception("database backup failed")
         ctx.state.backup_failing = True

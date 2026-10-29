@@ -457,3 +457,36 @@ async def test_old_refusals_are_pruned_and_other_audit_rows_stay(
         await database.close()
     assert [a.payload["subject"] for a in refusals(migrated)] == ["stranger-2"]
     assert len([a for a in rows(migrated, AuditRow) if a.action != "auth.sign_in_refused"]) == other
+
+
+@pytest.mark.anyio
+async def test_has_recent_filters_in_the_database(migrated: Settings, clock: FakeClock) -> None:
+    from dinnerbell.db.repositories import AuditRepository
+    from dinnerbell.services.bootstrap import bootstrap
+    from dinnerbell.services.database import open_database
+
+    database = open_database(migrated.async_database_url)
+    try:
+        async with database.sessionmaker() as db:
+            await bootstrap(db, household_name="Home", timezone="UTC", admin_email=migrated.admin_email, now=clock())
+            audits = AuditRepository(db)
+            for i in range(50):  # a flood of other people
+                await audits.record(
+                    household_id=1,
+                    actor_member_id=None,
+                    action="auth.sign_in_refused",
+                    target=None,
+                    payload={"subject": f"s{i}", "email": f"{i}@example.org", "reason": "unknown_email"},
+                    now=clock(),
+                )
+            since = clock() - timedelta(hours=1)
+            statements: list[str] = []
+            from sqlalchemy import event
+
+            event.listen(database.engine.sync_engine, "before_cursor_execute", lambda *a: statements.append(a[2]))
+            assert await audits.has_recent(1, "auth.sign_in_refused", since, subject="s7", reason="unknown_email")
+            assert not await audits.has_recent(1, "auth.sign_in_refused", since, subject="s7", reason="wrong_team")
+            assert not await audits.has_recent(1, "auth.sign_in_refused", clock() + timedelta(seconds=1), subject="s7")
+            assert all("LIMIT" in sql and "JSON_EXTRACT" in sql.upper() for sql in statements), statements
+    finally:
+        await database.close()

@@ -38,6 +38,13 @@ class UpgradeBlocked(Exception):
     """A migration found data it can't carry over, and says which row. Nothing was changed."""
 
 
+LOCKED_MESSAGE = (
+    "The database is locked: another Dinnerbell process is probably migrating it right now (a "
+    "second `migrate`, `serve`, or `reset-history`). Wait for it to finish, then run this again. "
+    "Nothing was changed."
+)
+
+
 class MigrationLocked(Exception):
     """Another process held the database's write lock for the whole wait, most likely because it
     is migrating the same database. Nothing was changed."""
@@ -95,7 +102,7 @@ def migrating(engine: Engine) -> Iterator[Connection]:
         check_references(connection)
 
 
-def _is_locked(error: OperationalError) -> bool:
+def is_locked(error: OperationalError) -> bool:
     message = str(error.orig).lower()
     return "locked" in message or "busy" in message
 
@@ -126,14 +133,10 @@ def run_migrations(
                 command.upgrade(config, "head")
             break
         except OperationalError as exc:
-            if not _is_locked(exc):
+            if not is_locked(exc):
                 raise
             if attempt == attempts:
-                raise MigrationLocked(
-                    "The database is locked: another Dinnerbell process is probably migrating it "
-                    "right now (a second `migrate`, `serve`, or `reset-history`). Wait for it to "
-                    "finish, then run this again. Nothing was changed."
-                ) from None
+                raise MigrationLocked(LOCKED_MESSAGE) from None
             log.warning("database is locked by another process; waiting to migrate", extra={"attempt": attempt})
         finally:
             engine.dispose()

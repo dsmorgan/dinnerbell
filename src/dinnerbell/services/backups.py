@@ -55,10 +55,11 @@ def last_backup_time(backup_dir: Path) -> datetime | None:
     return datetime.fromtimestamp(newest.stat().st_mtime, UTC)
 
 
-def run_backup(database_path: Path, backup_dir: Path, today: date) -> BackupResult:
-    """Back up ``database_path`` for ``today`` and prune old copies. Idempotent per day."""
+def run_backup(database_path: Path, backup_dir: Path, today: date, *, now: datetime) -> BackupResult:
+    """Back up ``database_path`` for ``today`` and prune old copies. Idempotent per day. ``now``
+    (the injected clock) dates the leftovers to clean up first, so they go even while backups fail."""
     backup_dir.mkdir(parents=True, exist_ok=True)
-    _remove_partials(backup_dir)
+    _remove_partials(backup_dir, now)
     target = backup_path(backup_dir, today)
     created = False
     if not target.exists():
@@ -74,7 +75,11 @@ def _copy_verified(database_path: Path, target: Path) -> None:
     deleted and made once more; one that fails twice is deleted, logged as an error, and raises
     BackupCheckFailed, so a bad file never counts as the day's backup."""
     for attempt in range(BACKUP_ATTEMPTS):
-        _copy_online(database_path, target)
+        try:
+            _copy_online(database_path, target)
+        except BaseException:
+            target.with_suffix(PARTIAL).unlink(missing_ok=True)
+            raise
         try:
             _check(target, ())
         except (BackupCheckFailed, sqlite3.DatabaseError) as exc:
@@ -160,13 +165,13 @@ def prune(backup_dir: Path) -> tuple[Path, ...]:
     return doomed
 
 
-def _remove_partials(backup_dir: Path) -> None:
+def _remove_partials(backup_dir: Path, now: datetime) -> None:
     """Delete copies left half-written by a crash or restart mid-backup, nightly and one-off."""
     for path in backup_dir.glob(f"{PREFIX}*{PARTIAL}"):
         path.unlink(missing_ok=True)
         log.warning("removed incomplete backup", extra={"backup": path.name})
     # A one-off backup (reset-history) may be writing in another process: leave a fresh one.
-    cutoff = datetime.now(UTC) - STALE_PARTIAL_AFTER
+    cutoff = now - STALE_PARTIAL_AFTER
     for path in backup_dir.glob(f"pre-*{PARTIAL}"):
         try:
             stale = datetime.fromtimestamp(path.stat().st_mtime, UTC) < cutoff
