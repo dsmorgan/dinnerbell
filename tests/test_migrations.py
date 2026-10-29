@@ -152,14 +152,15 @@ def _upgrade_to(settings: Settings, revision: str) -> None:
 
 
 def _downgrade_to(settings: Settings, revision: str) -> None:
-    """Downgrade with foreign keys off, so a batch rebuild can't cascade (#36)."""
+    """Downgrade with foreign keys off, so a batch rebuild can't cascade, and check every
+    reference before committing (#36)."""
     from alembic import command
 
-    from dinnerbell.db.migrate import _alembic_config, migration_engine
+    from dinnerbell.db.migrate import _alembic_config, migrating, migration_engine
 
     engine = migration_engine(settings.sync_database_url)
     try:
-        with engine.begin() as connection:
+        with migrating(engine) as connection:
             command.downgrade(_alembic_config(connection), revision)
     finally:
         engine.dispose()

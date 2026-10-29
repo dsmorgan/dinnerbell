@@ -8,6 +8,7 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ### Changed
 
+- `alembic downgrade` through the command line no longer deletes rows. It now runs with foreign keys off, like `dinnerbell migrate`, and checks every reference before it commits (#36). Production still rolls back by restoring a backup.
 - Food Critic now shows everywhere like every other badge (#117), but never gets a post of its own, because a post would interrupt the channel each time someone gives feedback. Dinnerbell includes it in the monthly recap and the household's newest badges, uploads and prewarms its art (65 files, not 60), and draws it in the announcement, the compact icon rows, and the picture on App Home (up to 13 badges, two rows of 7 and 6). The badge says only how many times you gave feedback, never what you said: answers still aren't shown anywhere, not even as counts. Dinnerbell also no longer logs which meal you gave feedback on.
 
 ### Upgrade notes
@@ -83,7 +84,7 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
   - Answering for a guest without Slack stays on the card (tap **Answer** on the call).
   - The buttons come in short rows, as on the card, so Slack doesn't hide any under **+ N more**.
   - Home says who's coordinating a call, or that you are.
-- Suggestions can no longer fill the whole vote (#85). A place someone suggested is still proposed ahead of the draw, but at most one fewer than the number of proposals are guaranteed that way, so at least one place is always drawn: with the default 3 proposals, one member's three suggestions give 2 guaranteed places and a draw for the third. When more places were suggested, the best-scoring ones go in (equal scores are chosen at random), and the rest stay in the draw, where a suggestion makes them much more likely. With 1 proposal per call, a suggestion no longer skips the draw.
+- Suggestions can no longer fill the whole vote (#85). A place someone suggested is still proposed ahead of the draw, but at most one fewer than the number of proposals are guaranteed that way, so the last place is not reserved for a suggestion: with the default 3 proposals, one member's three suggestions give 2 guaranteed places and a draw for the third. When more places were suggested, the best-scoring ones go in (equal scores are chosen at random), and the rest stay in the draw, where a suggestion makes them much more likely. With 1 proposal per call, a suggestion no longer skips the draw.
 
 ### Fixed
 

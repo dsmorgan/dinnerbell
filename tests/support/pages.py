@@ -1,12 +1,14 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Check a rendered page for code the CSP forbids: inline scripts, ``<style>`` elements, ``style``
-attributes, ``on*`` and ``hx-on`` event handlers, and ``javascript:`` URLs. It parses the HTML as
+attributes, ``on*``, ``hx-on``, and ``data-hx-on`` event handlers, ``javascript:`` URLs, ``srcdoc``
+documents with any script in them, and script sources that climb out of ``/static/``. It parses the HTML as
 a browser would, so ``<SCRIPT>``, ``</script >``, and ``ONCLICK=`` don't slip past, as they can
 past a regular expression."""
 
 from __future__ import annotations
 
 from html.parser import HTMLParser
+from urllib.parse import unquote
 
 
 def _is_javascript_url(value: str | None) -> bool:
@@ -28,8 +30,11 @@ class _Audit(HTMLParser):
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         # The parser lowercases tag and attribute names.
         for name, value in attrs:
-            if name == "style" or name.startswith(("on", "hx-on")):  # HTMX runs hx-on:* as script
+            # HTMX runs hx-on:* and data-hx-on:* as script, but data-onboarding is only data.
+            if name == "style" or name.startswith("on") or name.removeprefix("data-").startswith("hx-on"):
                 self.problems.append(f"<{tag} {name}=...>")
+            elif name == "srcdoc" and value is not None and any(inline_code(value)):
+                self.problems.append(f"<{tag} srcdoc=...> with a script or inline code")
             elif _is_javascript_url(value):
                 self.problems.append(f"<{tag} {name}=javascript:...>")
         if tag == "style":
@@ -37,7 +42,7 @@ class _Audit(HTMLParser):
         if tag == "script":
             src = dict(attrs).get("src") or ""
             self.scripts.append(src)
-            if not src.startswith("/static/"):
+            if not src.startswith("/static/") or ".." in unquote(src):
                 self.problems.append(f"<script> without a /static/ src: {src!r}")
             self._in_script = True
 
