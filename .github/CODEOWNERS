@@ -1,0 +1,8 @@
+/.github/ @dsmorgan
+/.github/CODEOWNERS @dsmorgan
+/Containerfile @dsmorgan
+/uv.lock @dsmorgan
+/pyproject.toml @dsmorgan
+/compose.yaml @dsmorgan
+/deploy/ @dsmorgan
+/scripts/ @dsmorgan

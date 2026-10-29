@@ -6,6 +6,14 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ## [Unreleased]
 
+### Changed
+
+- Documentation only: the setup guide no longer has a "Set the trusted proxy" step, its `.env` template line, or the "Rate limiting blocks everyone at once" troubleshooting row. `DINNERBELL_TRUSTED_PROXIES` stays an optional setting, described in the configuration reference and `.env.example`: set one proxy address, never a range, and never an address that other clients share, such as a container gateway. Behavior and defaults are unchanged.
+
+### Added
+
+- `.github/CODEOWNERS` assigns the owner to CI, the Containerfile, dependency locks, `compose.yaml`, `deploy/`, and `scripts/`.
+
 ## [0.9.0] - 2026-10-29
 
 ### Security
