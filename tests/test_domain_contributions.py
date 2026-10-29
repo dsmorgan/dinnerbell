@@ -237,13 +237,23 @@ def test_only_a_member_who_was_in_and_not_a_late_joiner_gambles() -> None:
     assert gamble(sam, answer(ALEX), event=event(EventKind.OFFER)) == set()
 
 
-def test_voting_for_none_needs_another_members_votes_on_the_call() -> None:
-    assert gamble({}, answer(ALEX), answer(SAM)) == set()  # nobody voted (a lock, an automatic decision)
+def test_voting_for_none_counts_without_any_other_votes() -> None:
+    assert gamble({}, answer(ALEX), answer(SAM)) == {ALEX, SAM}  # nobody voted (a lock, an automatic decision)
+    assert gamble({}, answer(ALEX)) == {ALEX}  # the sole member, no votes at all
     assert gamble({ALEX: {101, 102, 103}}, answer(ALEX)) == {ALEX}  # all needs no one else
     assert gamble({SAM: {101}}, answer(ALEX), answer(SAM)) == {ALEX}  # someone else decided
-    assert gamble({ALEX: {101}}, answer(ALEX)) == set()  # their own vote isn't someone else's
-    assert gamble({GUEST: {101}}, answer(ALEX), guest_ids=frozenset({GUEST})) == set()  # a guest's votes are ignored
-    assert gamble({SAM: {999}}, answer(ALEX)) == set()  # not a vote for any pick
+    assert gamble({ALEX: {101}}, answer(ALEX)) == set()  # their own vote is a choice
+    assert gamble({GUEST: {101}}, answer(ALEX), guest_ids=frozenset({GUEST})) == {ALEX}  # guest votes are ignored
+    assert gamble({SAM: {999}}, answer(ALEX)) == {ALEX}  # not a vote for any pick
+
+
+def test_voting_for_none_still_needs_the_other_conditions() -> None:
+    two = frozenset({101, 102})
+    assert gamble({}, answer(ALEX), picks=two) == set()  # fewer than three picks
+    assert gamble({}, answer(ALEX, late=True)) == set()  # a late joiner
+    assert gamble({}, answer(ALEX, status=Status.OUT), answer(KIM, status=Status.MAYBE)) == set()  # not in
+    assert gamble({}, answer(GUEST), guest_ids=frozenset({GUEST})) == set()  # a guest
+    assert gamble({}, answer(ALEX), event=event(EventKind.OFFER)) == set()  # an offer
 
 
 def test_a_vote_for_a_proposal_that_is_not_a_pick_counts_for_nothing() -> None:
