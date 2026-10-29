@@ -1619,8 +1619,10 @@ class Interactions:
             try:
                 if not isinstance(user, str) or await self._known(user):
                     text = self.command_reply(sub)
-            finally:
-                await ack(response_type="ephemeral", text=text)  # Slack waits 3 seconds, even if the lookup broke
+            except Exception:
+                log.exception("slack command lookup failed")
+                text = BROKEN  # never the join reply: they may well be a member
+            await ack(response_type="ephemeral", text=text)  # Slack waits 3 seconds
             return
         await ack()
         if isinstance(user, str):

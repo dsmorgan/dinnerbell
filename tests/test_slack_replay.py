@@ -23,7 +23,7 @@ from dinnerbell.services import calls
 from dinnerbell.services.database import Database, open_database
 from tests.support.calls import OPENS, REMIND, RESPOND_BY, House, dinner_id, furnish, make_house
 from tests.support.clock import FakeClock
-from tests.support.fake_slack import TEAM, Failure, block_action
+from tests.support.fake_slack import Failure, block_action
 from tests.support.slack import Slack, wire
 
 pytestmark = pytest.mark.anyio
@@ -231,21 +231,15 @@ async def test_a_stranger_past_the_limit_gets_one_try_later_home_view(slack: Sla
     assert TRY_LATER in json.dumps(view.args["view"])
 
 
-async def test_a_broken_member_lookup_still_acknowledges_the_command(
+async def test_a_broken_member_lookup_acknowledges_with_a_try_again_reply(
     slack: Slack, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     async def down(_: str) -> bool:
         raise RuntimeError("database down")
 
     monkeypatch.setattr(slack.conn.interactions, "_known", down)
-    acks: list[dict[str, object]] = []
-
-    async def ack(**kwargs: object) -> None:
-        acks.append(kwargs)
-
-    with pytest.raises(RuntimeError):
-        await slack.conn.interactions._command(ack, {"team_id": TEAM, "text": "help", "user_id": "U01ALEX"})
-    assert len(acks) == 1
+    response = await slack.command("Alex", "help")
+    assert json.loads(response.body)["text"] == BROKEN  # a member is never told to join
 
 
 async def test_a_failed_art_forget_after_the_text_post_does_not_fail_the_delivery(
