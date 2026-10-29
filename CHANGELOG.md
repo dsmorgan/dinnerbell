@@ -6,6 +6,8 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-29
+
 ### Security
 
 - The image build now uses only locked, hashed inputs. The build backend (`hatchling` and its dependencies) used to come from PyPI at build time, unlocked and unhashed. It is now a `build` dependency group in `uv.lock`; the Containerfile installs it with `--require-hashes` into a throwaway venv and builds the wheel with `--no-build-isolation --offline`. The backend never reaches the final image.
@@ -42,6 +44,7 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ### Upgrade notes
 
+- **Back up first.** No new database revision ships in this release, and the database stays at the revision 0.8.0 left it, so rolling back is a restore of that backup and the 0.8.0 image.
 - **Slack manifest change (optional, no urgency).** This release drops the unused `channels:history` scope. Paste the new `deploy/slack-app-manifest.yaml` (or `.test.yaml`) under **App Manifest** in the app settings, set your hostname in it again, then select **Install App** > **Reinstall to Workspace**. The removal takes effect only after the reinstall, and nothing breaks before it.
 - **A `DINNERBELL_SECRET_KEY` with a placeholder marker makes the service refuse to start, and under `restart: unless-stopped` it crash-loops.** Run `deploy/check-secrets` before `up`. The refused keys are the text in `secrets/DINNERBELL_SECRET_KEY.example`, any key containing `example`, `replace`, `changeme`, `placeholder`, `yoursecret`, or `secretkeyhere` (case, `-`, and `_` ignored), and any key with fewer than 8 distinct characters. Keep your old key if it is long and random: marker words and fewer than 8 distinct characters are the only new triggers. If you do rotate the key, that invalidates only open login pages and import previews, not sessions (sessions are random server-side tokens).
 - **Hard stop: create four secret files before you run `up` on this release.** The new `compose.yaml` mounts `secrets/DINNERBELL_SECRET_KEY`, `secrets/DINNERBELL_OIDC_CLIENT_SECRET`, `secrets/DINNERBELL_SLACK_BOT_TOKEN`, and `secrets/DINNERBELL_SLACK_APP_TOKEN`. If you pull and run `up` first, the service won't start. What happens with a missing file depends on the tool: podman-compose 1.0.6 and 1.6.0 pass the path to podman as a `--volume` without checking it (confirmed in their source), and podman refuses a bind mount whose source is missing (documented, not run here). Docker creates a directory for a missing `-v` source; what Docker Compose does for a missing secret file is not verified. A directory in place of a file makes Dinnerbell stop with an "is a directory" message. Run `deploy/check-secrets` (new) first: it reports a missing file, a directory, a mode other than 600, and an empty file, and prints no value. Dinnerbell itself still accepts a secret from `.env` for this one release, with a warning for each; the next release ignores `.env` for these four. If a value is in both `.env` and its file with different values, Dinnerbell refuses to start. Run this from the clone, with the service still running:
@@ -65,6 +68,10 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 - **Test instance:** do the same for `.env.test`, into `secrets-test/` instead of `secrets/` (the `sed` reads `.env.test`). The new `deploy/dinnerbell-test` refuses to start without the four files in `secrets-test/`, and, as before, refuses a secret that test shares with production, now in files as well as in `.env` and `.env.test`. It compares SHA-256 hashes, and reads files owned by UID 10001 through `podman unshare` (with Docker, run it with `sudo`).
 - Food Critic upgrade: no migration, settings, or Slack scope changes. Food Critic awards made before the upgrade stay out of the recap and the newest badges; ones earned after it appear in both. No Food Critic tier is ever announced.
 - The next prewarm uploads 5 more files, one per Food Critic tier, two seconds apart.
+- **Resource and log limits.** `compose.yaml` now sets `pids_limit: 256`, `mem_limit: 512m`, and `json-file` log rotation (10 MB, 3 files). They apply when you recreate the service with `podman-compose down && podman-compose up -d`. If the service is close to 512 MB on your host, check `podman stats` first.
+- **`/healthz` changes.** It gains `backup.failing` and `outbox.oldest_pending_age` (seconds), and reports `degraded` when the newest nightly backup failed or the oldest pending notification is over 1 hour old. A monitor that alerts on anything other than `ok` can fire where it didn't before.
+- **`DINNERBELL_TRUSTED_PROXIES` stays empty** unless the proxy's address is not shared with other clients (see "Rate limiting" in [docs/setup.md](docs/setup.md)). Behind Docker Desktop or rootless podman port forwarding, every client can arrive from one gateway address, and trusting it lets any client forge `X-Forwarded-For`. Nothing changes if you already set it correctly.
+- **Gambler is not backfilled.** Calls already counted keep their counts, so a call that now earns Gambler under the new rule (a vote for none with no other voters) gives nobody the badge retroactively. It applies to calls that finish after the upgrade.
 
 ## [0.8.0] - 2026-10-28
 
@@ -371,7 +378,8 @@ The source-built version, never published as an image. It covers milestones M0 t
 - **M1:** the catalog with file import, preferences and vetoes, meal history, and the members admin page.
 - **M2:** dinner calls in Slack: the scheduled call, reminders, ranked proposals and votes, the decision, assignments, the abandon path, admin overrides, App Home, and `/dinnerbell call`.
 
-[Unreleased]: https://github.com/dsmorgan/dinnerbell/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/dsmorgan/dinnerbell/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/dsmorgan/dinnerbell/releases/tag/v0.9.0
 [0.8.0]: https://github.com/dsmorgan/dinnerbell/releases/tag/v0.8.0
 [0.7.0]: https://github.com/dsmorgan/dinnerbell/releases/tag/v0.7.0
 [0.6.0]: https://github.com/dsmorgan/dinnerbell/releases/tag/v0.6.0
