@@ -144,6 +144,8 @@ Avoid `0.0.0.0` unless a firewall limits who can reach the port.
 
    Or use `openssl rand -base64 48`.
 
+   Dinnerbell refuses to start with a key that is shorter than 32 characters, has fewer than 8 distinct characters, or contains a placeholder word (`replace`, `changeme`, `placeholder`, `example`, `yoursecret`, `secretkeyhere`; case, `-`, and `_` ignored), such as the text in `secrets/DINNERBELL_SECRET_KEY.example`. A generated key always passes, and an existing long, random key keeps working.
+
 4. Edit `.env` and fill in the values you collected. To keep the four secrets out of `.env`, see [Keep secrets in files](#keep-secrets-in-files) (optional).
 
    ```sh
@@ -162,6 +164,12 @@ Avoid `0.0.0.0` unless a firewall limits who can reach the port.
    DINNERBELL_SLACK_APP_TOKEN=xapp-...
    DINNERBELL_SLACK_CHANNEL=C0123ABCDEF
    ```
+
+   `DINNERBELL_BASE_URL` must match the URL people type: the same host, with `https://` and no path. Dinnerbell derives the sign-in redirect URL from it and checks every form submission against it, so with any other host, such as a LAN IP, every form fails with "Cross-origin request refused".
+
+   `DINNERBELL_ADMIN_EMAIL` must match the email on your Slack account. If you change it later, Dinnerbell invites the new address as another admin on the next start.
+
+   `DINNERBELL_HOUSEHOLD_NAME` and `DINNERBELL_TIMEZONE` take effect on first start only. After that, Dinnerbell reads them from its database, so set them before you start it the first time.
 
 5. Optional: load a starter catalog on first start. Copy `seed/example.yaml` to `seed/my-catalog.yaml` and edit it. Git ignores every file in `seed/` except the example and the schema, so your catalog stays out of the repository. The format is in [catalog-format.md](catalog-format.md).
 

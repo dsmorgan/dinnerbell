@@ -6,6 +6,10 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ## [Unreleased]
 
+### Changed
+
+- Documentation only: step 9 of the setup guide again explains that `DINNERBELL_BASE_URL` must match the public URL, what `DINNERBELL_ADMIN_EMAIL` does, that `DINNERBELL_HOUSEHOLD_NAME` and `DINNERBELL_TIMEZONE` apply on first start only, and which secret keys Dinnerbell refuses. 0.9.1's rewrite had dropped these notes.
+
 ## [0.9.1] - 2026-10-29
 
 ### Fixed
