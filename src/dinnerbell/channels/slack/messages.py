@@ -1609,7 +1609,7 @@ def _many_line(news: note.BadgeNews, ctx: RenderContext, art: Mapping[note.Badge
     """``@Kim earned 8 badges: Chef, Scout, ... and 2 more badges.`` With art for some of the badges,
     each of those is named plain, since its icon shows the tier in the row below (#114); the rest keep
     their tag. Every badge is named when the post has them (``news.rest``). Without art for any, it is
-    the text-only post's wording, with the count first. Food Critic never gets here (it isn't announced)."""
+    the text-only post's wording, with the count first."""
     who = f"{ctx.directory.mention(news.person)} earned {len(news.badges) + news.more} badges:"
     if not art:
         return f"{who} {_and(_tags(news))}."
@@ -1629,7 +1629,7 @@ def _drawn(news: tuple[note.BadgeNews, ...], art: ArtIds) -> list[dict[note.Badg
 
     The post stays within Slack's 50 blocks (``MAX_MESSAGE_BLOCKS``). Three are fixed: the heading, the
     line about members left off, and the closing line. At most ``MAX_PEOPLE`` (10) members follow, and
-    each takes at most 3 blocks. A member shown as a row of icons has their line and at most 12 badges
+    each takes at most 3 blocks. A member shown as a row of icons has their line and at most 13 badges
     in two blocks of 10. Any other member has at most three badges (counting those left off): a block
     for each with art, and one line for the rest, 3 together. So 3 + 10 x 3 = 33."""
     room = MAX_ART

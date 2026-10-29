@@ -33,7 +33,7 @@ from dataclasses import dataclass
 import resvg_py
 from markupsafe import Markup, escape
 
-from dinnerbell.domain.badges import BADGES, BY_KEY, QUIET_BADGES, BadgeKey, Tier
+from dinnerbell.domain.badges import BADGES, BY_KEY, BadgeKey, Tier
 
 SVG_NS = "http://www.w3.org/2000/svg"
 VIEW_WIDTH, VIEW_HEIGHT = 120, 140
@@ -286,7 +286,7 @@ PNG_SCALE = 2
 @functools.cache
 def png_for(key: str, tier: Tier) -> bytes:
     """The built-in art, ``standalone_svg`` drawn as a transparent PNG. Cached: it takes a few
-    milliseconds, and there are only sixty."""
+    milliseconds, and there are only 65."""
     return bytes(
         resvg_py.svg_to_bytes(
             svg_string=standalone_svg(key, tier),
@@ -304,16 +304,15 @@ CompositeSource = Callable[[Sequence[Held]], bytes]
 ``composite_png`` is the built-in one. A source that draws from other art changes the PNG, so the
 hash changes and the picture uploads again."""
 COMPOSITE_COLUMNS = 7
-"""Badges to a row. At most 12 badges are drawn (Food Critic never is), so two rows of 7 and 5."""
+"""Badges to a row. There are 13 badges, so at most two rows of 7 and 6."""
 CELL_WIDTH, CELL_HEIGHT = 64, 75
 """One badge's cell, in the composite's own units: the 120x140 drawing at about 64 px wide."""
 CELL_GAP = 6
 
 
 def held_list(held: Mapping[BadgeKey, Tier]) -> tuple[Held, ...]:
-    """The composite's badges for ``held`` (each badge's highest tier): in ``BADGES`` order, and
-    never Food Critic, whose badge is private to its owner and stays text."""
-    return tuple((b.key.value, held[b.key]) for b in BADGES if b.key in held and b.key not in QUIET_BADGES)
+    """The composite's badges for ``held`` (each badge's highest tier): in ``BADGES`` order."""
+    return tuple((b.key.value, held[b.key]) for b in BADGES if b.key in held)
 
 
 def cell_origin(index: int) -> tuple[int, int]:

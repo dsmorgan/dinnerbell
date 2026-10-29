@@ -11,7 +11,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from dinnerbell.domain.badges import BADGES, QUIET_BADGES, Announcement, Award, BadgeKey, Tier, highest_tiers
+from dinnerbell.domain.badges import BADGES, Announcement, Award, BadgeKey, Tier, highest_tiers
 from dinnerbell.services import badge_art
 from dinnerbell.services.badge_art import (
     CELL_GAP,
@@ -27,11 +27,11 @@ from dinnerbell.services.badge_art import (
     held_list,
 )
 
-SHOWN = [b.key.value for b in BADGES if b.key not in QUIET_BADGES]
+SHOWN = [b.key.value for b in BADGES]
 
 
 def some(count: int, tier: Tier = Tier.FIRST) -> list[Held]:
-    """``count`` badges: the twelve that are shown, then repeats (the layout doesn't care)."""
+    """``count`` badges: all thirteen badges, then repeats (the layout doesn't care)."""
     return [(SHOWN[i % len(SHOWN)], tier) for i in range(count)]
 
 
@@ -96,10 +96,10 @@ def test_clip_paths_in_one_picture_never_share_an_id() -> None:
     assert len(ids) == 3 == len(set(ids))
 
 
-def test_food_critic_is_never_in_the_picture_and_the_rest_keep_badges_order() -> None:
+def test_food_critic_is_in_the_picture_in_badges_order_like_the_rest() -> None:
     held = {BadgeKey.FOOD_CRITIC: Tier.DIAMOND, BadgeKey.SCOUT: Tier.FIRST, BadgeKey.CHEF: Tier.GOLD}
-    assert held_list(held) == (("chef", Tier.GOLD), ("scout", Tier.FIRST))
-    assert held_list({BadgeKey.FOOD_CRITIC: Tier.FIRST}) == ()
+    assert held_list(held) == (("chef", Tier.GOLD), ("scout", Tier.FIRST), ("food_critic", Tier.DIAMOND))
+    assert held_list({BadgeKey.FOOD_CRITIC: Tier.FIRST}) == (("food_critic", Tier.FIRST),)
     assert [k for k, _ in held_list(dict.fromkeys(BadgeKey, Tier.FIRST))] == SHOWN
 
 

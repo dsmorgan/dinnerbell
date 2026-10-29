@@ -20,7 +20,6 @@ from dinnerbell.db.meals import MealLogRepository, household_settings
 from dinnerbell.db.repositories import MemberRepository
 from dinnerbell.domain.badges import (
     BADGES,
-    QUIET_BADGES,
     ROLL_KINDS,
     Announcement,
     Award,
@@ -127,15 +126,15 @@ async def household_stats(db: AsyncSession, actor: Member) -> HouseholdStats:
     return HouseholdStats(
         meals=await MealLogRepository(db).count(household_id),
         totals=await ContributionRepository(db).totals(household_id),
-        badges_earned=await badges.count(household_id, without=QUIET_BADGES),
+        badges_earned=await badges.count(household_id),
         recent=recent,
     )
 
 
 async def picture_badges(db: AsyncSession, household_id: int, member_id: int) -> tuple[Held, ...] | None:
     """The badges to draw on a member's Home picture (#114): each they hold at its highest tier, in
-    ``BADGES`` order, without Food Critic. None for someone who gets no picture: a guest, a member
-    who left or was deactivated, or one who isn't there."""
+    ``BADGES`` order. None for someone who gets no picture: a guest, a member who left or was
+    deactivated, or one who isn't there."""
     member = await MemberRepository(db).get(household_id, member_id)
     if member is None or not member.is_member:
         return None

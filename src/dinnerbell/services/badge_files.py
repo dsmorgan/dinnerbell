@@ -12,8 +12,7 @@ Art is a nicety, so nothing here may break what shows it, and it holds it up onl
 returns only the tiers it has: the caller shows text for the rest. After a failure, such as a
 missing ``files:write`` scope, it logs one line and uploads nothing new for ``COOLDOWN``, so a
 broken setup costs one slow call, not one per message; files already uploaded still show.
-Two callers wanting the same new tier at once share one upload. Food Critic is never shown
-(``QUIET_BADGES``).
+Two callers wanting the same new tier at once share one upload.
 
 Slack may refuse blocks that use a file it hasn't finished processing (#110), and has no way to ask
 that without an extra scope. So the caller learns which files were new (``fresh``) and, if Slack
@@ -42,7 +41,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from dinnerbell.db.badge_files import BadgeComposite, BadgeFile, BadgeFileRepository
-from dinnerbell.domain.badges import BADGES, BY_KEY, QUIET_BADGES, TIERS, BadgeKey, Tier
+from dinnerbell.domain.badges import BADGES, BY_KEY, TIERS, BadgeKey, Tier
 from dinnerbell.services.badge_art import ArtSource, CompositeSource, Held
 from dinnerbell.services.clock import Clock
 
@@ -65,7 +64,7 @@ COOLDOWN = timedelta(minutes=15)
 """How long after a failure before art is tried again."""
 
 PREWARM_SPACING = 2.0
-"""Seconds between the uploads of ``prewarm``, so the 60 files trickle in instead of arriving as a burst."""
+"""Seconds between the uploads of ``prewarm``, so the 65 files trickle in instead of arriving as a burst."""
 PREWARM_UPLOAD_TIMEOUT = 60.0
 """The longest ``prewarm`` waits for one upload (three Slack calls) before counting a failure."""
 PREWARM_FAILURES = 3
@@ -301,7 +300,7 @@ class BadgeFiles:
             await db.commit()
 
     async def prewarm(self, household_id: int, *, spacing: float = PREWARM_SPACING) -> bool:
-        """Upload every badge tier that isn't cached yet (all but Food Critic), one at a time,
+        """Upload every badge tier that isn't cached yet (every badge), one at a time,
         waiting ``spacing`` seconds after each. Safe to repeat and to stop: it skips what's cached
         (so a restart resumes where the last run stopped) and each upload is saved as it lands. After a
         failure it waits out the ``COOLDOWN`` before the next try. It stops for good on a missing
@@ -380,12 +379,12 @@ def _held_now(held: Sequence[Held]) -> HeldOf:
 
 def _valid(want: Wanted) -> bool:
     key, tier = want
-    return key in BY_KEY and BadgeKey(key) not in QUIET_BADGES and tier in {t.value for t in TIERS}
+    return key in BY_KEY and tier in {t.value for t in TIERS}
 
 
 def all_wanted() -> list[Wanted]:
-    """Every badge tier that has art in Slack, in a steady order: all but Food Critic."""
-    return sorted((b.key.value, t.value) for b in BADGES if b.key not in QUIET_BADGES for t in TIERS)
+    """Every badge tier that has art in Slack, in a steady order."""
+    return sorted((b.key.value, t.value) for b in BADGES for t in TIERS)
 
 
 def _missing_scope(exc: BaseException) -> bool:

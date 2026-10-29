@@ -52,7 +52,7 @@ from dinnerbell.channels.slack.messages import (
     not_for_you_line,
 )
 from dinnerbell.domain import notifications as note
-from dinnerbell.domain.badges import BADGES, QUIET_BADGES, BadgeKey, Tier, highest_tiers, next_up
+from dinnerbell.domain.badges import BADGES, BadgeKey, Tier, highest_tiers, next_up
 from dinnerbell.domain.catalog import CatalogItem, ItemKind, Mode, Tag
 from dinnerbell.domain.events import (
     CANCEL_NOTE_MAX,
@@ -936,15 +936,15 @@ def _badges(stats: MemberStats, art: ArtIds, links: HomeLinks, composite: str | 
     """The member's own badges and the next one in reach. With no art (``art``, from ``BadgeFiles``)
     it is a heading with the badges as text tags, then the "Next" line: two blocks. With art, the
     heading, the held badges (art, at their highest tier) as compact rows of small icons, ``ICONS_PER_BLOCK``
-    to a block, a line of text tags for held badges without art (Food Critic is always one), a link to the
+    to a block, a line of text tags for held badges without art, a link to the
     Stats page for the names (when there is a web address), and the "Next" line with its badge's icon: at
     most six blocks, which the budget in ``home_view`` counts as part of its tail. With a ``composite``
-    (the file of the one picture of every held badge but Food Critic, once Slack has had it a while), the
+    (the file of the one picture of every held badge, once Slack has had it a while), the
     picture stands in for the icon rows: five blocks at most. The "Next" line leaves the tier emoji off
     when it shows its badge's icon (#114). Only their own: it never mentions anyone else's."""
     held = held_badges(stats)
     if composite:
-        shown = [b for b in BADGES if b.key in held and b.key not in QUIET_BADGES]
+        shown = [b for b in BADGES if b.key in held]
     else:
         shown = [b for b in BADGES if b.key in held and (b.key.value, held[b.key].value) in art]
     tags = [tag(escape(b.name), held[b.key].label) for b in BADGES if b.key in held and b not in shown]

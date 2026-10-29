@@ -6,6 +6,15 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ## [Unreleased]
 
+### Changed
+
+- Food Critic now shows everywhere like every other badge (#117), but never gets a post of its own, because a post would interrupt the channel each time someone gives feedback. Dinnerbell includes it in the monthly recap and the household's newest badges, uploads and prewarms its art (65 files, not 60), and draws it in the announcement, the compact icon rows, and the picture on App Home (up to 13 badges, two rows of 7 and 6). The badge says only how many times you gave feedback, never what you said: answers still aren't shown anywhere, not even as counts. Dinnerbell also no longer logs which meal you gave feedback on.
+
+### Upgrade notes
+
+- No migration, settings, or Slack scope changes. Food Critic awards made before the upgrade stay out of the recap and the newest badges; ones earned after it appear in both. No Food Critic tier is ever announced.
+- The next prewarm uploads 5 more files, one per Food Critic tier, two seconds apart.
+
 ## [0.8.0] - 2026-10-28
 
 ### Added

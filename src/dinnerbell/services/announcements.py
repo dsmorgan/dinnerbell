@@ -11,8 +11,11 @@ first award, so even a repeated write queues nothing new.
 A post covers one done call: every badge it earned, for however many members. It keeps to a size
 a channel reads at a glance: a few members and a few badges each, with the rest counted. It lists
 members by name, never by what they earned, and says nothing about preferences or feedback.
-Awards the household never hears about (``QUIET_BADGES``, and members who are no longer active)
-are marked ``skipped``, not left pending.
+Awards for members who are no longer active are marked ``skipped``, not left pending.
+
+Awards of ``SILENT_BADGES`` (Food Critic, earned when feedback is given, long after the call) queue
+no post and join none: they are marked ``announced`` in the same transaction, so they are not
+pending, and the recap and the newest badges list them like any other.
 """
 
 from __future__ import annotations
@@ -28,7 +31,7 @@ from dinnerbell.db.contributions import BadgeRepository
 from dinnerbell.db.engine import write_transaction
 from dinnerbell.db.outbox import OutboxRepository
 from dinnerbell.db.repositories import HouseholdRepository, MemberRepository
-from dinnerbell.domain.badges import BY_KEY, QUIET_BADGES, TIERS, Award
+from dinnerbell.domain.badges import BY_KEY, SILENT_BADGES, TIERS, Award
 from dinnerbell.domain.members import Member
 from dinnerbell.domain.notifications import BadgeNews, BadgesEarned, BadgeTier, PersonInfo
 
@@ -88,7 +91,8 @@ async def announce_household(db: AsyncSession, household_id: int, *, now: dateti
         if not pending:
             return 0
         members = {m.id: m for m in await MemberRepository(db).list(household_id) if m.active}
-        heard = [a for a in pending if a.badge not in QUIET_BADGES and a.member_id in members]
+        silent = [a for a in pending if a.badge in SILENT_BADGES and a.member_id in members]
+        heard = [a for a in pending if a.badge not in SILENT_BADGES and a.member_id in members]
         by_call: dict[int | None, list[Award]] = defaultdict(list)
         for award in heard:
             by_call[award.event_id].append(award)
@@ -99,9 +103,9 @@ async def announce_household(db: AsyncSession, household_id: int, *, now: dateti
             post = BadgesEarned(household_id, min(a.id for a in group), tuple(news), more)
             await outbox.enqueue(household_id, None, post, now)
             queued += 1
-        await badges.mark_announced(household_id, [a.id for a in heard], now)
-        quiet = [a.id for a in pending if a not in heard]
-        await badges.mark_skipped(household_id, quiet)
+        await badges.mark_announced(household_id, [a.id for a in (*heard, *silent)], now)
+        gone = [a.id for a in pending if a not in heard and a not in silent]
+        await badges.mark_skipped(household_id, gone)
         await db.commit()
     if queued:
         log.info(
