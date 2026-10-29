@@ -70,7 +70,6 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 - The next prewarm uploads 5 more files, one per Food Critic tier, two seconds apart.
 - **Resource and log limits.** `compose.yaml` now sets `pids_limit: 256`, `mem_limit: 512m`, and `json-file` log rotation (10 MB, 3 files). They apply when you recreate the service with `podman-compose down && podman-compose up -d`. If the service is close to 512 MB on your host, check `podman stats` first.
 - **`/healthz` changes.** It gains `backup.failing` and `outbox.oldest_pending_age` (seconds), and reports `degraded` when the newest nightly backup failed or the oldest pending notification is over 1 hour old. A monitor that alerts on anything other than `ok` can fire where it didn't before.
-- **`DINNERBELL_TRUSTED_PROXIES` stays empty** unless the proxy's address is not shared with other clients (see "Rate limiting" in [docs/setup.md](docs/setup.md)). Behind Docker Desktop or rootless podman port forwarding, every client can arrive from one gateway address, and trusting it lets any client forge `X-Forwarded-For`. Nothing changes if you already set it correctly.
 - **Gambler is not backfilled.** Calls already counted keep their counts, so a call that now earns Gambler under the new rule (a vote for none with no other voters) gives nobody the badge retroactively. It applies to calls that finish after the upgrade.
 
 ## [0.8.0] - 2026-10-28
