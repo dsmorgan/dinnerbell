@@ -82,7 +82,7 @@ Socket Mode lets the app connect out to Slack, so Slack never calls your host. T
 
 1. Open **Basic Information** and find **App Credentials**.
 2. Copy **Client ID** into `DINNERBELL_OIDC_CLIENT_ID`.
-3. Reveal and copy **Client Secret** into `DINNERBELL_OIDC_CLIENT_SECRET`.
+3. Reveal and copy **Client Secret**. This is `DINNERBELL_OIDC_CLIENT_SECRET`, one of the four [secret files](#keep-secrets-in-files) you create in section 9.
 4. Set `DINNERBELL_OIDC_ISSUER` to `https://slack.com`. Slack publishes its discovery document at `https://slack.com/.well-known/openid-configuration`.
 
 ## 6. Find the team ID and channel ID
@@ -130,36 +130,60 @@ Avoid `0.0.0.0` unless a firewall limits who can reach the port.
    cp .env.example .env
    ```
 
-2. Restrict access to it, because it holds secrets.
+2. Restrict access to it.
 
    ```sh
    chmod 600 .env
    ```
 
-3. Generate a secret key.
+3. Create the four secret files, one for each secret, in `secrets/`. They stay out of `.env` because podman-compose passes every `.env` line to podman as `-e NAME=value`, where any local user can read it in `ps` and where `--dry-run` and `--verbose` print it. [Keep secrets in files](#keep-secrets-in-files) explains the layout.
+
+   The subshell keeps `umask 077` from changing your shell, and makes each file owner-only from the start. The commands prompt for each value without echoing it, so no secret lands in your shell history, in `ps`, or on a command line, and `printf '%s'` writes no trailing newline (Dinnerbell trims whitespace, so a newline from an editor does no harm). Paste the client secret, the bot token (`xoxb-...`), and the app token (`xapp-...`) when asked. The first command writes a new random secret key.
 
    ```sh
-   python3 -c "import secrets; print(secrets.token_urlsafe(48))"
+   ( umask 077
+     mkdir -p secrets
+     python3 -c "import secrets; print(secrets.token_urlsafe(48), end='')" >secrets/DINNERBELL_SECRET_KEY
+     for name in OIDC_CLIENT_SECRET SLACK_BOT_TOKEN SLACK_APP_TOKEN; do
+         printf 'Value for DINNERBELL_%s (Enter for none): ' "$name" >&2
+         stty -echo; IFS= read -r value; stty echo; echo >&2
+         printf '%s' "$value" >secrets/DINNERBELL_$name
+     done )
    ```
 
-   Or use `openssl rand -base64 48`.
+   Press Enter for a Slack token you don't use, which creates an empty file; compose can't start a service when a secret's file is missing. If you'd rather write a value with `printf '%s' '<value>' >secrets/<name>`, put a space before the command so your shell leaves it out of the history (bash needs `HISTCONTROL=ignorespace`; zsh needs `setopt HIST_IGNORE_SPACE`).
 
-4. Edit `.env` and fill in the values you collected.
+   Check the files, without printing a value:
+
+   ```sh
+   deploy/check-secrets
+   ```
+
+   It reports a missing file, a directory, a mode other than 600, or an empty key or client secret.
+
+4. Give the files to the user that runs inside the container, UID 10001, and keep them owner-only. Compose mounts each file as it is, so only that user can read it.
+
+   ```sh
+   for name in SECRET_KEY OIDC_CLIENT_SECRET SLACK_BOT_TOKEN SLACK_APP_TOKEN; do
+       chmod 600 "secrets/DINNERBELL_$name"
+       podman unshare chown 10001:10001 "secrets/DINNERBELL_$name"
+   done
+   ```
+
+   With rootful Docker, use `sudo chown 10001:10001` in place of `podman unshare chown 10001:10001`. Afterward your own account can no longer read the files, which is the point. To check them, run `podman unshare ls -ln secrets` (rootless podman) or `ls -ln secrets` (Docker). Each of the four shows owner and group `10001` and mode `-rw-------`.
+
+5. Edit `.env` and fill in the values you collected. The secrets aren't here.
 
    ```sh
    DINNERBELL_BASE_URL=https://dinnerbell.example.com
-   DINNERBELL_SECRET_KEY=<generated key>
    DINNERBELL_ADMIN_EMAIL=you@example.com
    DINNERBELL_HOUSEHOLD_NAME=Home
    DINNERBELL_TIMEZONE=America/New_York
 
    DINNERBELL_OIDC_ISSUER=https://slack.com
    DINNERBELL_OIDC_CLIENT_ID=<client ID>
-   DINNERBELL_OIDC_CLIENT_SECRET=<client secret>
    DINNERBELL_SLACK_TEAM_ID=T0123ABCDEF
 
-   DINNERBELL_SLACK_BOT_TOKEN=xoxb-...
-   DINNERBELL_SLACK_APP_TOKEN=xapp-...
    DINNERBELL_SLACK_CHANNEL=C0123ABCDEF
 
    # Set this in the trusted-proxy step below.
@@ -172,13 +196,13 @@ Avoid `0.0.0.0` unless a firewall limits who can reach the port.
 
    `DINNERBELL_HOUSEHOLD_NAME` and `DINNERBELL_TIMEZONE` take effect on first start only. After that, Dinnerbell reads them from its database, so set them correctly before you start it the first time.
 
-5. Optional: load a starter catalog on first start. Copy `seed/example.yaml` to `seed/my-catalog.yaml` and edit it. Git ignores every file in `seed/` except the example and the schema, so your catalog stays out of the repository. The format is in [catalog-format.md](catalog-format.md).
+6. Optional: load a starter catalog on first start. Copy `seed/example.yaml` to `seed/my-catalog.yaml` and edit it. Git ignores every file in `seed/` except the example and the schema, so your catalog stays out of the repository. The format is in [catalog-format.md](catalog-format.md).
 
    ```sh
    cp seed/example.yaml seed/my-catalog.yaml
    ```
 
-6. Optional: mount the catalog file read-only. Create `compose.override.yaml` next to `compose.yaml` with this content. Both compose tools read it automatically, and git ignores it.
+7. Optional: mount the catalog file read-only. Create `compose.override.yaml` next to `compose.yaml` with this content. Both compose tools read it automatically, and git ignores it.
 
    ```yaml
    services:
@@ -187,13 +211,13 @@ Avoid `0.0.0.0` unless a firewall limits who can reach the port.
          - ./seed/my-catalog.yaml:/seed/catalog.yaml:ro
    ```
 
-7. Optional: point Dinnerbell at the mounted file by adding this line to `.env`. Dinnerbell imports the file on first start, while the catalog is still empty. You can also import a file later from the Catalog page.
+8. Optional: point Dinnerbell at the mounted file by adding this line to `.env`. Dinnerbell imports the file on first start, while the catalog is still empty. You can also import a file later from the Catalog page.
 
    ```sh
    DINNERBELL_SEED_FILE=/seed/catalog.yaml
    ```
 
-8. Pull the image.
+9. Pull the image.
 
    ```sh
    podman-compose pull
@@ -203,7 +227,7 @@ Avoid `0.0.0.0` unless a firewall limits who can reach the port.
 
    `compose.yaml` names the release image, such as `ghcr.io/dsmorgan/dinnerbell:0.2.0`. To check that it came from this repository's release workflow, see [Verify an image](#verify-an-image).
 
-9. Start the service.
+10. Start the service.
 
    ```sh
    podman-compose up -d
@@ -211,7 +235,7 @@ Avoid `0.0.0.0` unless a firewall limits who can reach the port.
 
    With Docker: `docker compose up -d`
 
-10. Check that it is healthy.
+11. Check that it is healthy.
 
     ```sh
     curl https://dinnerbell.example.com/healthz
@@ -219,7 +243,7 @@ Avoid `0.0.0.0` unless a firewall limits who can reach the port.
 
     The response reports database reachability, the scheduler's last tick, the Slack state, the outbox (`backlog`: notifications waiting to be sent; `failed`: notifications that gave up), and the last backup time. It returns HTTP 503 when the database is unreachable or the scheduler has not ticked for 5 minutes, so the container health check and Uptime Kuma catch both.
 
-11. Confirm that Slack is connected. Within a few seconds of starting, the response includes `"slack": "connected"` and `"status": "ok"`.
+12. Confirm that Slack is connected. Within a few seconds of starting, the response includes `"slack": "connected"` and `"status": "ok"`.
 
     ```sh
     curl -s https://dinnerbell.example.com/healthz | grep -o '"slack":"[a-z_]*"'
@@ -239,6 +263,107 @@ Avoid `0.0.0.0` unless a firewall limits who can reach the port.
     ```sh
     podman-compose logs dinnerbell | grep -i slack
     ```
+
+### Keep secrets in files
+
+Four settings are secrets: `DINNERBELL_SECRET_KEY`, `DINNERBELL_OIDC_CLIENT_SECRET`, `DINNERBELL_SLACK_BOT_TOKEN`, and `DINNERBELL_SLACK_APP_TOKEN`. Each lives in a file of that name in `secrets/` (test: `secrets-test/`), and compose mounts it read-only at `/run/secrets/<name>`. Dinnerbell reads the file when it starts. Everything else stays in `.env`.
+
+Why: podman-compose reads `env_file` itself and gives podman each line as `-e NAME=value`. While podman creates the container, the values are on its command line, which every local user can read in `ps`, and `podman-compose --dry-run` and `--verbose` print them. A mounted file puts only its path on the command line.
+
+What the compose tools do with `file:` secrets, from their sources and documentation:
+
+- podman-compose 1.0.6 and 1.6.0 turn each file secret into `--volume <absolute path>:/run/secrets/<name>:ro,rprivate,rbind` (1.6.0 also adds `,z` or `,Z` for `x-podman.relabel`). Neither creates a podman secret or reads the file.
+- Docker Compose bind-mounts the file too.
+- None of them applies `uid`, `gid`, or `mode` from the compose file to a file secret. The file keeps the owner and mode it has on the host, so you set those once, as in step 4 of section 9. The container runs as UID 10001. Rootless podman maps that UID to a high UID on the host, and Docker uses 10001 itself. A mode 600 file owned by your own account is unreadable to UID 10001, and a looser mode would let every local user read it. So the files belong to UID 10001, with mode 600, and only that user (and root) can read them.
+
+To change a secret, replace the file rather than editing it, because your account no longer owns it. You own the directory, so you can delete and recreate the file, then run step 4's `chown` again, and recreate the service so it reads the new file (`podman-compose down && podman-compose up -d`).
+
+What a missing file source does, and how sure that is: podman-compose 1.0.6 and 1.6.0 put the path in a `--volume` option unchecked (confirmed in their source), and podman refuses a bind mount whose source doesn't exist (podman's documented behavior, not run here). Docker's plain `-v` creates a directory for a missing source; what Docker Compose does for a missing secret file is not verified, so check with `deploy/check-secrets` before `up` instead of relying on either. A directory in place of the file makes Dinnerbell stop at start with the `is a directory` message below. Run `deploy/check-secrets` first: it reports a missing file, a directory, a wrong mode, and an empty file without printing a value. If Dinnerbell can't read a file, it stops at start with a message that names it:
+
+| Message | Cause | Fix |
+|---|---|---|
+| `Can't read the secret file /run/secrets/NAME (PermissionError)` | The file isn't owned by UID 10001, or its mode isn't 600. | Run step 4's `chmod` and `chown` again. On a host with SELinux enforcing, a correct owner can still be refused: with podman-compose 1.6.0 or later, add `x-podman.relabel: z` to the secret in a `compose.override.yaml` (the label is a podman-compose option; this path is untested here). |
+| `/run/secrets/NAME is a directory, not a file` | The file didn't exist when the engine mounted it, and the engine created a directory in its place. | Remove the directory, create the file, and recreate the service. |
+| `NAME is required but not set. Put it in the file ...` | The file is empty or missing. | Write the secret into it. |
+| `NAME is set in the environment ... with different values` | A line in `.env` and the file disagree. | Delete the line from `.env`. |
+
+A secret still in `.env` keeps working in this release, so an upgrade doesn't break a running install: Dinnerbell logs a warning that names it, and the next release will ignore it there. Even so, the new `compose.yaml` mounts the four files, so the service won't start until they exist. To move an existing install, follow the upgrade notes for this change in the [changelog](../CHANGELOG.md).
+
+To check that no secret reaches a command line, pick a made-up value, then watch the process list while the service starts. The commands are in "Verify that no secret is on a command line" below.
+
+#### Verify that no secret is on a command line
+
+Use a throwaway value that you can search for. Do this on a test instance or before you go live, because it replaces the secret.
+
+1. Write a canary into the test instance's key file. Keep it at least 32 characters.
+
+   ```sh
+   rm -f secrets-test/DINNERBELL_SECRET_KEY
+   ( umask 077; printf '%s' 'canary-0123456789-abcdefghijklmnopqrstuvwxyz' >secrets-test/DINNERBELL_SECRET_KEY )
+   podman unshare chown 10001:10001 secrets-test/DINNERBELL_SECRET_KEY
+   ```
+
+2. In a second terminal, record the process list while the service starts.
+
+   ```sh
+   while :; do ps -eww -o args= | grep -F canary-0123456789 | grep -v grep; sleep 0.05; done
+   ```
+
+3. In the first terminal, start the service, then run the dry run and count the canary in its output. podman-compose 1.0.6 prints the commands with `--dry-run` alone; later versions need `--verbose` too.
+
+   ```sh
+   deploy/dinnerbell-test up -d
+   DINNERBELL_COMPOSE='podman-compose --verbose --dry-run' deploy/dinnerbell-test up -d 2>&1 | grep -c canary-0123456789
+   ```
+
+   The second terminal prints nothing, and the count is `0`. (`grep -c` also exits 1 when the count is `0`.) Press Ctrl+C in the second terminal, then replace the canary with a real key:
+
+   ```sh
+   rm -f secrets-test/DINNERBELL_SECRET_KEY
+   ( umask 077; python3 -c "import secrets; print(secrets.token_urlsafe(48), end='')" >secrets-test/DINNERBELL_SECRET_KEY )
+   podman unshare chown 10001:10001 secrets-test/DINNERBELL_SECRET_KEY
+   ```
+
+### Move the secrets out of .env
+
+Do this once on an existing install, from the clone's directory, **before** you run `up` on the new release: the new `compose.yaml` mounts four files, and the service doesn't start until they exist. The steps copy the four secret lines from `.env` into four files without putting a value on a command line.
+
+1. Write the four files. The subshell keeps `umask 077` from changing your shell, so the files are owner-only and each holds the bare value with no trailing newline.
+
+   ```sh
+   ( umask 077
+     mkdir -p secrets
+     for name in SECRET_KEY OIDC_CLIENT_SECRET SLACK_BOT_TOKEN SLACK_APP_TOKEN; do
+         sed -n "s/^[[:space:]]*\(export[[:space:]]\{1,\}\)\{0,1\}DINNERBELL_$name[[:space:]]*=[[:space:]]*//p" .env | tail -n 1 | tr -d '\r' | sed -e 's/[[:space:]]*$//' -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'\$/\1/" | tr -d '\n' >"secrets/DINNERBELL_$name"
+     done )
+   ```
+
+   The `sed` removes one pair of enclosing quotes and nothing else, so a quote inside a value stays. It doesn't handle a trailing `# comment` or an escape such as `\n` inside double quotes; write that file by hand, as in section 9.
+
+2. Compare each file with its `.env` line before you change anything. The command prints `match` or `differs` for each secret, never a value, and checks the files' modes and that none is missing or empty.
+
+   ```sh
+   deploy/check-secrets --env-file .env
+   ```
+
+   Every line must say `match`. An empty Slack token that `.env` doesn't set also says `match`. Fix a file that `differs` by writing it by hand, and run the command again.
+
+3. Give the files to UID 10001 with mode 600.
+
+   ```sh
+   for name in SECRET_KEY OIDC_CLIENT_SECRET SLACK_BOT_TOKEN SLACK_APP_TOKEN; do
+       chmod 600 "secrets/DINNERBELL_$name"
+       podman unshare chown 10001:10001 "secrets/DINNERBELL_$name"
+   done
+   ```
+
+   With rootful Docker, use `sudo chown 10001:10001` instead of `podman unshare chown 10001:10001`. Your own account can't read the files afterward, which is why step 2 comes first.
+
+4. Delete the four lines from `.env`. Open it in an editor and remove `DINNERBELL_SECRET_KEY`, `DINNERBELL_OIDC_CLIENT_SECRET`, `DINNERBELL_SLACK_BOT_TOKEN`, and `DINNERBELL_SLACK_APP_TOKEN`. While a line stays, Dinnerbell warns at every start, and the value stays on podman's command line.
+
+5. Recreate the service from the new release: `podman-compose down && podman-compose up -d`. The logs show no "is set in the environment" warning, and `/healthz` reports `"slack":"connected"`.
+
+If Dinnerbell stops at start and says it can't read a secret file, see the table in [Keep secrets in files](#keep-secrets-in-files). A test instance has the same four files in `secrets-test/`; do the same there with `.env.test` (`deploy/check-secrets` and `sed` both take the file names).
 
 ### Set the trusted proxy
 
@@ -332,7 +457,7 @@ Joining needs no extra Slack scopes for a public channel: `channels:read` reads 
 
 The catalog is your list of restaurants and home meals. [catalog-format.md](catalog-format.md) describes the file format, and [seed/example.yaml](../seed/example.yaml) is a starter file.
 
-- **On first start:** mount a catalog file and set `DINNERBELL_SEED_FILE`, as described in steps 5 to 7 of section 9.
+- **On first start:** mount a catalog file and set `DINNERBELL_SEED_FILE`, as described in steps 6 to 8 of section 9.
 - **After first start:** paste or upload the file on the Catalog page.
 
 On first start, only the admin is a member yet, so the seed skips every other cook email. After you invite everyone (section 11), import the same file again from the Catalog page to fill in the cooks. Fields in the file replace what's stored, so do this before you edit those items in the app.
@@ -479,6 +604,8 @@ If you run a [test instance](#test-instance), follow the [promotion checklist](#
 
 6. Check that the page footer shows the new version and that `/healthz` returns 200 with `"slack":"connected"`.
 
+Upgrading from 0.8.0 or earlier to the release that adds secret files? Do [Move the secrets out of .env](#move-the-secrets-out-of-env) between steps 3 and 5: the new `compose.yaml` mounts four files, and the service won't start without them.
+
 If the release's upgrade notes say the Slack app has a new scope, paste the new manifest under **App Manifest** in the app settings (set your hostname in it again), then select **Install App** > **Reinstall to Workspace** and approve the scope. Slack keeps the same bot token, so `.env` doesn't change. Until you reinstall, Dinnerbell keeps working and shows text where a new feature needs the scope: for example, 0.8.0 adds `files:write`, and badges show as text tags until the app has it.
 
 Database migrations run on start. They only move forward: after an upgrade, the older version refuses to open the database. To go back, see [Roll back](#roll-back).
@@ -615,6 +742,8 @@ Both instances run from your production clone, as the same user. There's no seco
 ├── compose.yaml              both instances
 ├── .env                      production's settings, and DINNERBELL_BIND for both
 ├── .env.test                 test's settings
+├── secrets/                  production's four secret files
+├── secrets-test/             test's four secret files
 └── deploy/
     ├── compose.test.yaml     test's volume name
     └── dinnerbell-test       runs compose for test
@@ -624,6 +753,7 @@ Both instances run from your production clone, as the same user. There's no seco
 |---|---|---|
 | Command | `podman-compose ...` | `deploy/dinnerbell-test ...` |
 | Env file | `.env` | `.env.test` |
+| Secret files | `secrets/` | `secrets-test/` (named in `deploy/compose.test.yaml`) |
 | Image tag | The release in `compose.yaml` | `main`, or the release you're rehearsing |
 | Data volume | `dinnerbell_dinnerbell-data` (named by compose) | `dinnerbell-test_dinnerbell-data` (named in `deploy/compose.test.yaml`) |
 | Host port | 8013 | 8014 |
@@ -631,7 +761,7 @@ Both instances run from your production clone, as the same user. There's no seco
 | Slack app and command | Dinnerbell, `/dinnerbell` | Dinnerbell Test, `/dinnerbell-test` |
 | Pangolin authentication | Off | On |
 
-The instances share the clone and its `compose.yaml`, the host address in `DINNERBELL_BIND`, the Slack workspace (`DINNERBELL_SLACK_TEAM_ID`), and the proxy address in `DINNERBELL_TRUSTED_PROXIES`. Everything else is separate. The secret key, both Slack tokens, and the sign-in client secret must differ: `deploy/dinnerbell-test` refuses to start test when `.env.test` shares one with `.env`.
+The instances share the clone and its `compose.yaml`, the host address in `DINNERBELL_BIND`, the Slack workspace (`DINNERBELL_SLACK_TEAM_ID`), and the proxy address in `DINNERBELL_TRUSTED_PROXIES`. Everything else is separate. The secret key, both Slack tokens, and the sign-in client secret must differ: `deploy/dinnerbell-test` refuses to start test when test's secret files (or, until you move them, `.env.test`) share one with production's.
 
 ### Create the test channel and Slack app
 
@@ -645,7 +775,7 @@ Use the same workspace as production.
 
 Never reuse production's tokens. Socket Mode delivers each event to only one connection, so two instances on one app would split button taps between them.
 
-### Write .env.test
+### Write .env.test and the secret files
 
 1. Copy the example next to `.env`, and restrict access to it.
 
@@ -654,9 +784,28 @@ Never reuse production's tokens. Socket Mode delivers each event to only one con
    chmod 600 .env.test
    ```
 
-2. Fill it in with the test app's values, a new secret key, the test hostname as `DINNERBELL_BASE_URL`, and the same `DINNERBELL_SLACK_TEAM_ID` as production. Keep `DINNERBELL_INSTANCE_LABEL=TEST` and `DINNERBELL_SLACK_COMMAND=/dinnerbell-test`.
+2. Fill it in with the test app's client ID, the test hostname as `DINNERBELL_BASE_URL`, and the same `DINNERBELL_SLACK_TEAM_ID` as production. Keep `DINNERBELL_INSTANCE_LABEL=TEST` and `DINNERBELL_SLACK_COMMAND=/dinnerbell-test`.
 
-To start from your `.env` instead, for example to keep your time zone and proxy settings, don't copy the whole file: it would hold production's secrets, and any value you forget to replace would stay production's. Copy it without the lines test must set itself, add those lines back empty, and fill in every blank:
+3. Write test's four secrets to `secrets-test/`, the same way as production's in [section 9](#9-run-dinnerbell), steps 3 and 4, with the test app's values and a new secret key. Never copy production's files.
+
+   ```sh
+   ( umask 077
+     mkdir -p secrets-test
+     python3 -c "import secrets; print(secrets.token_urlsafe(48), end='')" >secrets-test/DINNERBELL_SECRET_KEY
+     for name in OIDC_CLIENT_SECRET SLACK_BOT_TOKEN SLACK_APP_TOKEN; do
+         printf 'Value for DINNERBELL_%s (Enter for none): ' "$name" >&2
+         stty -echo; IFS= read -r value; stty echo; echo >&2
+         printf '%s' "$value" >secrets-test/DINNERBELL_$name
+     done )
+   for name in SECRET_KEY OIDC_CLIENT_SECRET SLACK_BOT_TOKEN SLACK_APP_TOKEN; do
+       chmod 600 "secrets-test/DINNERBELL_$name"
+       podman unshare chown 10001:10001 "secrets-test/DINNERBELL_$name"
+   done
+   ```
+
+   With rootful Docker, use `sudo chown 10001:10001`. Git ignores `secrets-test/`. Never commit it.
+
+To start from your `.env` instead, for example to keep your time zone and proxy settings, don't copy the whole file: it would hold any value you forget to replace, and, on an install that hasn't moved its secrets out yet, production's secrets. Copy it without the lines test must set itself, add those lines back empty, and fill in every blank. The secrets are files, so none of them is a line here:
 
 ```sh
 (umask 077 && grep -Ev '^[[:space:]]*(export[[:space:]]+)?DINNERBELL_(SECRET_KEY|OIDC_CLIENT_ID|OIDC_CLIENT_SECRET|SLACK_BOT_TOKEN|SLACK_APP_TOKEN|SLACK_CHANNEL|SLACK_COMMAND|BASE_URL|INSTANCE_LABEL|HOUSEHOLD_NAME)[[:space:]]*=' .env >.env.test)
@@ -665,17 +814,13 @@ DINNERBELL_INSTANCE_LABEL=TEST
 DINNERBELL_SLACK_COMMAND=/dinnerbell-test
 DINNERBELL_HOUSEHOLD_NAME=Test
 DINNERBELL_BASE_URL=
-DINNERBELL_SECRET_KEY=
 DINNERBELL_OIDC_CLIENT_ID=
-DINNERBELL_OIDC_CLIENT_SECRET=
-DINNERBELL_SLACK_BOT_TOKEN=
-DINNERBELL_SLACK_APP_TOKEN=
 DINNERBELL_SLACK_CHANNEL=
 EOF
 chmod 600 .env.test
 ```
 
-Before every start, `deploy/dinnerbell-test` checks `.env.test` and names each setting that's missing or invalid, so a required blank you missed stops it with a message instead of a container that restarts forever.
+Before every start, `deploy/dinnerbell-test` checks `.env.test` and the secret files and names each setting that's missing or invalid, so a required blank you missed stops it with a message instead of a container that restarts forever.
 
 Git ignores `.env.test`. Never commit it.
 
@@ -703,13 +848,14 @@ deploy/dinnerbell-test down
 
 Each run first prints the project, volume, env file, tag, and port it uses. To pick up a newer `main`, run `pull`, then `down` and `up -d`. To check it, run `curl -s http://<DINNERBELL_BIND>:8014/healthz` and look for `"instance":"TEST"`, or look for the TEST banner in the browser. Test is usually stopped, so don't give it an always-on Uptime Kuma monitor.
 
-Before any command that can start a container, such as `up`, `run`, `start`, or `restart`, the script checks the env file. Only commands that stop or inspect test, such as `down`, `stop`, `logs`, `ps`, and `pull`, skip the check. It runs `dinnerbell config check` in a one-off container of the same image, with no network, no published port, no logging, and a read-only file system, and passes the env file on standard input. The image declares `/data` a volume, so the engine gives the container an empty anonymous volume, and removes it with the container. If a setting is missing or invalid, the check prints the setting's name and the reason, never the value, and the script starts nothing. The script pulls the image first if it isn't on the host. An image from before the check, such as 0.2.0, starts with a warning instead.
+Before any command that can start a container, such as `up`, `run`, `start`, or `restart`, the script checks the env file and the four secret files. Only commands that stop or inspect test, such as `down`, `stop`, `logs`, `ps`, and `pull`, skip the check. It runs `dinnerbell config check` in a one-off container of the same image, with no network, no published port, no logging, and a read-only file system. It passes the env file on standard input and mounts test's four secret files read-only at `/run/secrets`, as the service gets them; only their paths are on the command line. The image declares `/data` a volume, so the engine gives the container an empty anonymous volume, and removes it with the container. If a setting is missing or invalid, the check prints the setting's name and the reason, never the value, and the script starts nothing. The script pulls the image first if it isn't on the host. An image from before the check, such as 0.2.0, starts with a warning instead.
 
 Run every test command through `deploy/dinnerbell-test`, never through `podman-compose` directly. The script sets the project, the volume, the env file, the tag, and the port together. Setting only some of them by hand mixes the instances: for example, `.env.test` without `-p dinnerbell-test` runs test's label and Slack app on production's database, where `scrub-test` would then run. The script refuses to run when:
 
 - `.env.test` is missing, sets `DINNERBELL_INSTANCE_LABEL` more than once, or leaves it empty.
+- One of test's four files in `secrets-test/` is missing or is a directory. An empty file is allowed for a Slack token.
 - It can't read `.env.test` or `.env`. Run it as the user who owns them.
-- `.env.test` has the same `DINNERBELL_SECRET_KEY`, `DINNERBELL_SLACK_BOT_TOKEN`, `DINNERBELL_SLACK_APP_TOKEN`, or `DINNERBELL_OIDC_CLIENT_SECRET` as `.env`, or has production's value of one of them anywhere in a line, such as a commented-out copy. Shared tokens split Slack's events between the instances. The script reads both files as compose does, compares the values without printing them, and skips this check for commands that only stop or inspect test.
+- Test has the same `DINNERBELL_SECRET_KEY`, `DINNERBELL_SLACK_BOT_TOKEN`, `DINNERBELL_SLACK_APP_TOKEN`, or `DINNERBELL_OIDC_CLIENT_SECRET` as production, whether each holds it in a file in `secrets/` and `secrets-test/` or on a line in `.env` and `.env.test`, or has production's value of one of them anywhere in a line of `.env.test`, such as a commented-out copy. Shared tokens split Slack's events between the instances. The script reads the env files as compose does and compares SHA-256 hashes of the files' contents, so it never prints a value or puts one on a command line. Your account can't read files owned by UID 10001, so with podman it reads them through `podman unshare`; with Docker, run the script with `sudo`, or it refuses because it can't compare. It skips these checks for commands that only stop or inspect test.
 - The configuration check fails, as described above.
 - The env file is production's `.env`.
 - `.env` sets `DINNERBELL_TAG`, `DINNERBELL_PORT`, or `DINNERBELL_ENV_FILE`. podman-compose 1.1.0 and older let `.env` override the script's values.
@@ -862,12 +1008,11 @@ The web app works with any OpenID Connect provider that publishes a discovery do
 2. Under **Audience**, add your household members as test users, or publish the app.
 3. Create an OAuth client of type **Web application**.
 4. Add `https://dinnerbell.example.com/auth/callback` as an authorized redirect URI.
-5. In `.env`, set the following values and leave `DINNERBELL_SLACK_TEAM_ID` unset.
+5. In `.env`, set the following values and leave `DINNERBELL_SLACK_TEAM_ID` unset. Write the client secret to the file `secrets/DINNERBELL_OIDC_CLIENT_SECRET` as in [Keep secrets in files](#keep-secrets-in-files).
 
    ```sh
    DINNERBELL_OIDC_ISSUER=https://accounts.google.com
    DINNERBELL_OIDC_CLIENT_ID=<Google client ID>
-   DINNERBELL_OIDC_CLIENT_SECRET=<Google client secret>
    ```
 
 Invite members by the email on their Google account. In version 1, Slack is still required for notifications, so you still complete sections 1 through 4, the channel ID in section 6, and section 7.
@@ -902,7 +1047,7 @@ Each member is linked to the account they first signed in with. After you switch
 | Sign-in returns to a Pangolin login page or loops | Pangolin resource authentication is still on. | Turn off **Use Platform SSO**, and leave password, PIN, email OTP, and header auth off. |
 | Sign-in completes but Dinnerbell says you are not invited | The email on the Slack account differs from the invited email, or the email is not verified. | Compare the emails on **Members** and in your Slack profile. Fix the member's email, or use `DINNERBELL_ADMIN_EMAIL` for the admin. |
 | Sign-in refused for a person you invited | They signed in with a different Slack workspace, and `DINNERBELL_SLACK_TEAM_ID` blocks it. | Ask them to sign in to your household workspace. |
-| `/healthz` reports `"slack": "not_configured"` | One of `DINNERBELL_SLACK_BOT_TOKEN`, `DINNERBELL_SLACK_APP_TOKEN`, or `DINNERBELL_SLACK_CHANNEL` is missing. The logs say so at start. | Set all three, then recreate the service with `podman-compose down && podman-compose up -d`. |
+| `/healthz` reports `"slack": "not_configured"` | The file `secrets/DINNERBELL_SLACK_BOT_TOKEN` or `secrets/DINNERBELL_SLACK_APP_TOKEN` is empty, or `DINNERBELL_SLACK_CHANNEL` is missing from `.env`. The logs say so at start. | Set all three, then recreate the service with `podman-compose down && podman-compose up -d`. |
 | `/healthz` reports `"slack": "disconnected"` for more than a minute | The host can't reach Slack. | Check that the host can make outbound HTTPS and WebSocket connections to `slack.com` and `wss-primary.slack.com`. |
 | `/healthz` reports `"slack": "error"`; the log says `Slack refused DINNERBELL_SLACK_BOT_TOKEN` | The bot token is wrong, revoked, or from another app. Dinnerbell notices at start, and as soon as Slack refuses it later, and holds every notification until it's fixed. | Copy the **Bot User OAuth Token** (`xoxb-`) again from **Install App**, then recreate the service. |
 | The log says `Slack refused DINNERBELL_SLACK_APP_TOKEN` | The app-level token is wrong, lacks `connections:write`, or Socket Mode is off. | Create the token again as in step 3, check that **Socket Mode** is on, then recreate the service. |
@@ -915,6 +1060,7 @@ Each member is linked to the account they first signed in with. After you switch
 | Every form fails with "Cross-origin request refused", or sign-in loops back to the start page | `DINNERBELL_BASE_URL` doesn't exactly match the URL in the browser: another host, a LAN IP, an explicit `:443`, or `http://`. | Set `DINNERBELL_BASE_URL` to exactly the URL people type, `https://` and no port, then recreate the service. Open Dinnerbell only at that URL. |
 | Sign-in says "That email is already linked" for everyone | You switched sign-in providers, so members are linked to accounts at the old provider. | Follow "Switch providers on an existing install". |
 | Startup error: `DINNERBELL_SLACK_TEAM_ID is required` | The issuer is Slack and the team ID is empty. | Set `DINNERBELL_SLACK_TEAM_ID` as described in step 6, then recreate the service. |
+| Startup error: `Can't read the secret file`, `is a directory`, or `is required but not set. Put it in the file` | Dinnerbell can't read one of the four secret files: it isn't owned by UID 10001 with mode 600, it didn't exist when the engine mounted it, or it's empty. | See the table in [Keep secrets in files](#keep-secrets-in-files). |
 | Startup error about a token prefix | The tokens are swapped or copied from the wrong page. | `DINNERBELL_SLACK_APP_TOKEN` starts with `xapp-` (Basic Information > App-Level Tokens). `DINNERBELL_SLACK_BOT_TOKEN` starts with `xoxb-` (Install App). |
 | The test instance posts in its channel but sends no direct messages or mentions to someone | While `DINNERBELL_INSTANCE_LABEL` is set, Dinnerbell notifies only members of the test channel, and `/healthz` counts the withheld messages in `slack_dms_dropped`. If the log mentions a missing scope, it can't read the channel's members and notifies no one. | Invite the person to the test channel. For a missing scope, paste `deploy/slack-app-manifest.test.yaml` again under **App Manifest** and reinstall the app. |
 | Badges show as text tags (🥇 Chef · Gold) instead of art, and the log says `badge art not available` with `missing_scope` | The Slack app doesn't have the `files:write` scope, which uploads the badge art. Dinnerbell tries again every 15 minutes. | Paste the current manifest under **App Manifest**, then reinstall the app (see "Upgrade"). Art appears on the next badge post or App Home view after the retry. |

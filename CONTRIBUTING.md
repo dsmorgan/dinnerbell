@@ -43,7 +43,7 @@ uv run pytest -n auto --cov
 docker build -f Containerfile -t dinnerbell .
 ```
 
-If you change `compose.yaml`, `deploy/`, or an env example, also run `scripts/check-compose.sh` (it needs Docker and jq, and checks podman-compose too when it's installed) and `shellcheck deploy/dinnerbell-test scripts/check-compose.sh`.
+If you change `compose.yaml`, `deploy/`, or an env example, also run `scripts/check-compose.sh` (it needs Docker and jq, and checks podman-compose too when it's installed) and `shellcheck deploy/dinnerbell-test deploy/check-secrets scripts/check-compose.sh`.
 
 ## Write tests that stay fast and parallel
 

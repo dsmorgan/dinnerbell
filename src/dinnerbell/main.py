@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from dinnerbell import __version__, catalog_cli
-from dinnerbell.config import ConfigError, Settings, is_test_instance, load_settings
+from dinnerbell.config import LEGACY_WARNINGS, ConfigError, Settings, is_test_instance, load_settings
 from dinnerbell.db.migrate import IntegrityCheckFailed, SchemaTooNewError, UpgradeBlocked, run_migrations
 from dinnerbell.logs import configure_logging, start_unit
 
@@ -42,14 +42,19 @@ def _parser() -> argparse.ArgumentParser:
     check = config_commands.add_parser(
         "check",
         help="check the DINNERBELL_* settings and exit",
-        description="Read the settings from the environment, as serve does, and name every one that is "
-        "missing or invalid. Never prints a value. Exits 0 when the configuration is valid, 2 when it isn't. "
+        description="Read the settings from the environment and the secret files, as serve does, and name every one "
+        "that is missing or invalid. Never prints a value. Exits 0 when the configuration is valid, 2 when it isn't. "
         "Touches no database.",
     )
     check.add_argument(
         "--env-file",
         metavar="FILE",
         help="also read settings from FILE, in compose's .env syntax, over the environment; - reads stdin",
+    )
+    check.add_argument(
+        "--secrets-dir",
+        metavar="DIR",
+        help="read the secret files from DIR instead of /run/secrets",
     )
     scrub = commands.add_parser(
         "scrub-test",
@@ -136,7 +141,7 @@ def _environment(values: Mapping[str, str]) -> Iterator[None]:
                 os.environ[name] = previous
 
 
-def _config_check(env_file: str | None) -> int:
+def _config_check(env_file: str | None, secrets_dir: str | None) -> int:
     """Validate the settings ``serve`` would read. The deploy/dinnerbell-test wrapper runs this in a
     one-off container before it starts test, with the env file on stdin, so the file is parsed by
     python-dotenv, as podman-compose 1.2.0 and later parse an ``env_file``."""
@@ -158,7 +163,7 @@ def _config_check(env_file: str | None) -> int:
         values = {name: value for name, value in parsed.items() if value is not None}
     with _environment(values):
         try:
-            load_settings()
+            load_settings(Path(secrets_dir) if secrets_dir else None)
         except ConfigError as exc:
             print(exc, file=sys.stderr)
             return 2
@@ -447,13 +452,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.command == "slack":
         return _slack_preview(args.kind, args.base_url)
     if args.command == "config":
-        return _config_check(args.env_file)
+        return _config_check(args.env_file, args.secrets_dir)
+    warnings: list[str] = []
     try:
-        settings = load_settings()
+        settings = load_settings(warnings=warnings)
     except ConfigError as exc:
         print(exc, file=sys.stderr)
         return 2
     if args.command == "catalog":
+        # No secret warning here: stdout carries the export, and `serve` warns on every start.
         # Before logging is configured: logs go to stdout, where the export goes. The read-only
         # open may create -wal and -shm files next to the database; SQLite gives them the
         # database file's own mode, whatever the umask, so they're as private as the database,
@@ -471,6 +478,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(NOT_LABELED_FOR_DISCARD, file=sys.stderr)
         return 1  # the same: before anything opens the database
     configure_logging(settings.log_level, settings.instance_label)
+    for field in warnings:  # secrets still in the environment: constant messages, never values
+        logging.getLogger("dinnerbell.config").warning(LEGACY_WARNINGS[field])
     if args.command == "serve":  # the server's requests, taps, and jobs each start their own unit
         return _command(args, settings)
     end = start_unit("cli")

@@ -4,6 +4,8 @@
 .env
 .env.*
 !.env.example
+secrets
+secrets-test
 tests
 docs
 seed

@@ -237,6 +237,32 @@ def test_config_check_reads_the_env_file_from_stdin(
     assert cli.main(["config", "check", "--env-file", "-"]) == 0
 
 
+def test_config_check_reads_secret_files_from_a_directory(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The test wrapper mounts the test instance's files and runs this, as the service would."""
+    secrets = {"DINNERBELL_SECRET_KEY", "DINNERBELL_OIDC_CLIENT_SECRET"}
+    directory = tmp_path / "secrets-test"
+    directory.mkdir()
+    for name in secrets:
+        (directory / name).write_text(REQUIRED[name])
+    env_text = "".join(f"{k}={v}\n" for k, v in REQUIRED.items() if k not in secrets)
+    monkeypatch.setattr("sys.stdin", __import__("io").StringIO(env_text))
+    args = ["config", "check", "--env-file", "-", "--secrets-dir", str(directory)]
+    assert cli.main(args) == 0
+    out, err = capsys.readouterr()
+    assert out == "Configuration is valid.\n"
+    assert err == ""
+
+    (directory / "DINNERBELL_SECRET_KEY").unlink()
+    monkeypatch.setattr("sys.stdin", __import__("io").StringIO(env_text))
+    assert cli.main(args) == 2
+    err = capsys.readouterr().err
+    assert f"DINNERBELL_SECRET_KEY is required but not set. Put it in the file {directory}" in err
+    for name in secrets:
+        assert REQUIRED[name] not in err
+
+
 def test_config_check_reports_an_unreadable_env_file(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     assert cli.main(["config", "check", "--env-file", str(tmp_path / "missing")]) == 2
     assert capsys.readouterr().err == "Can't read the env file (FileNotFoundError).\n"
@@ -306,3 +332,34 @@ def test_cli_serve_runs_uvicorn(monkeypatch: pytest.MonkeyPatch, tmp_path: Path)
 def test_cli_requires_a_command(capsys: pytest.CaptureFixture[str]) -> None:
     with pytest.raises(SystemExit):
         cli.main([])
+
+
+def test_secret_warnings_are_logged_after_logging_is_configured(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A secret still in the environment warns, through the app logger and without its value."""
+    import logging
+
+    for key, value in REQUIRED.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.setattr("dinnerbell.config.SECRETS_DIR", tmp_path / "no-secrets")
+    events: list[str] = []
+
+    class Recorder(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            events.append(record.getMessage())
+
+    logger = logging.getLogger("dinnerbell.config")
+    recorder = Recorder()
+    logger.addHandler(recorder)
+    monkeypatch.setattr(cli, "configure_logging", lambda *a, **k: events.append("configure_logging"))
+    monkeypatch.setattr(cli, "_command", lambda args, settings: 0)
+    try:
+        assert cli.main(["migrate"]) == 0
+    finally:
+        logger.removeHandler(recorder)
+    assert events[0] == "configure_logging"
+    named = [e for e in events[1:] if "is set in the environment" in e]
+    assert len(named) == 2  # REQUIRED sets the key and the client secret
+    for value in REQUIRED.values():
+        assert not any(value in e for e in events)

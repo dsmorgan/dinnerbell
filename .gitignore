@@ -14,6 +14,12 @@ htmlcov/
 .env.*
 !.env.example
 !.env.test.example
+# Secret files: only the placeholders and the note are committed. scripts/check-compose.sh fails
+# when git tracks anything else under secrets/ or secrets-test/.
+/secrets/*
+!/secrets/*.example
+!/secrets/README.md
+/secrets-test/
 migrations-scratch.db
 /data/
 *.db

@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import ipaddress
+import logging
+import os
 import re
 from functools import cached_property
 from pathlib import Path
@@ -22,7 +24,38 @@ from dinnerbell.domain.members import InvalidMemberInput, normalize_email
 
 ENV_PREFIX = "DINNERBELL_"
 SECRETS_DIR = Path("/run/secrets")
+# The settings that live in files under /run/secrets, one file per setting, named like the
+# variable. Keep in step with the secrets in compose.yaml and DINNERBELL_SECRETS in
+# deploy/dinnerbell-test (scripts/check-compose.sh checks both).
+SECRET_FIELDS = ("secret_key", "slack_bot_token", "slack_app_token", "oidc_client_secret")
+FILES_HELP = 'See "Keep secrets in files" in docs/setup.md.'
+log = logging.getLogger(__name__)
+# What to log for a secret that the environment still gives, one constant per setting. Nothing
+# derived from a secret's value is ever passed to the logger: callers look a message up by field.
+LEGACY_WARNINGS = {
+    "secret_key": (
+        "DINNERBELL_SECRET_KEY is set in the environment. Move it to the file "
+        "/run/secrets/DINNERBELL_SECRET_KEY (secrets/ on the host) and remove it from .env: the next "
+        "release ignores it there, and until then it shows on podman's command line. " + FILES_HELP
+    ),
+    "slack_bot_token": (
+        "DINNERBELL_SLACK_BOT_TOKEN is set in the environment. Move it to the file "
+        "/run/secrets/DINNERBELL_SLACK_BOT_TOKEN (secrets/ on the host) and remove it from .env: the next "
+        "release ignores it there, and until then it shows on podman's command line. " + FILES_HELP
+    ),
+    "slack_app_token": (
+        "DINNERBELL_SLACK_APP_TOKEN is set in the environment. Move it to the file "
+        "/run/secrets/DINNERBELL_SLACK_APP_TOKEN (secrets/ on the host) and remove it from .env: the next "
+        "release ignores it there, and until then it shows on podman's command line. " + FILES_HELP
+    ),
+    "oidc_client_secret": (
+        "DINNERBELL_OIDC_CLIENT_SECRET is set in the environment. Move it to the file "
+        "/run/secrets/DINNERBELL_OIDC_CLIENT_SECRET (secrets/ on the host) and remove it from .env: the next "
+        "release ignores it there, and until then it shows on podman's command line. " + FILES_HELP
+    ),
+}
 MIN_SECRET_KEY_LENGTH = 32
+MAX_SECRET_BYTES = 8192
 LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1"})
 BUILD_PATTERN = re.compile(r"[0-9a-f]{7,40}")
 SLACK_ISSUER = "https://slack.com"
@@ -258,7 +291,7 @@ class ConfigError(Exception):
     """Configuration is missing or invalid. The message is safe to print."""
 
 
-def format_validation_error(error: ValidationError) -> str:
+def format_validation_error(error: ValidationError, secrets_dir: Path | None = None) -> str:
     """Render a settings error without echoing any submitted value."""
     lines = ["Dinnerbell cannot start because its configuration is incomplete or invalid:"]
     for item in error.errors(include_input=False, include_url=False):
@@ -268,17 +301,97 @@ def format_validation_error(error: ValidationError) -> str:
             continue
         name = f"{ENV_PREFIX}{str(item['loc'][0]).upper()}"
         if item["type"] == "missing":
-            lines.append(f"  - {name} is required but not set.")
+            hint = (
+                f" Put it in the file {(secrets_dir or SECRETS_DIR) / name}."
+                if name.lower().removeprefix(ENV_PREFIX.lower()) in SECRET_FIELDS
+                else ""
+            )
+            lines.append(f"  - {name} is required but not set.{hint}")
         else:
             lines.append(f"  - {name}: {message}")
     lines.append("See .env.example for every variable and what it does.")
     return "\n".join(lines)
 
 
-def load_settings() -> Settings:
-    """Read settings from the environment and, if present, /run/secrets."""
-    secrets_dir = SECRETS_DIR if SECRETS_DIR.is_dir() else None
+def _read_secret_file(path: Path) -> str:
+    """The trimmed text of secret file ``path``, or "" when there's no file. Raises ConfigError, naming
+    the path and never a value, for a file that's there but unusable. A symlink to a readable file
+    works, because that's what a secret store may mount."""
     try:
-        return Settings(_secrets_dir=secrets_dir)  # type: ignore[call-arg]
+        if path.is_symlink() and not path.exists():
+            raise ConfigError(f"{path} is a symlink to a file that doesn't exist. {FILES_HELP}")
+        if path.is_dir():
+            raise ConfigError(
+                f"{path} is a directory, not a file. Container engines create a directory when the "
+                f"file they mount is missing: remove it and create the file. {FILES_HELP}"
+            )
+        if not path.exists():
+            return ""
+        with path.open("rb") as stream:
+            raw = stream.read(MAX_SECRET_BYTES + 1)
+        text = raw.decode("utf-8").strip()
+    except (OSError, UnicodeDecodeError) as exc:
+        raise ConfigError(
+            f"Can't read the secret file {path} ({type(exc).__name__}). The user Dinnerbell runs "
+            f"as (uid 10001 in the image) must own it, with mode 600. {FILES_HELP}"
+        ) from None
+    if len(raw) > MAX_SECRET_BYTES:
+        raise ConfigError(f"{path} is larger than {MAX_SECRET_BYTES} bytes, too big for a secret. {FILES_HELP}")
+    if "\n" in text or "\r" in text:
+        raise ConfigError(
+            f"{path} has more than one line. A secret is one line; a trailing newline is fine. {FILES_HELP}"
+        )
+    return text
+
+
+def _set_in_environment(name: str) -> bool:
+    return os.environ.get(name, "") != ""
+
+
+def _environment_differs(name: str, file_text: str) -> bool:
+    """Whether a secret file and the environment both give ``name`` and disagree. Returns only a
+    boolean, so nothing derived from either value reaches a message or a log."""
+    return bool(file_text) and os.environ.get(name, "").strip() != file_text
+
+
+def _read_secret_files(directory: Path, warnings: list[str] | None = None) -> dict[str, str]:
+    """Read the four secrets from ``directory``, one file each, named like the variable.
+
+    A file that's empty counts as absent. Compose can't skip a secret, so an install without Slack
+    keeps an empty file. A secret that is also in the environment is the old layout: the
+    environment keeps working for one release, with a warning, and must agree with the file.
+    ``warnings`` collects the setting names (not values) that the environment still gives, for the CLI
+    to log through LEGACY_WARNINGS once logging is set up; without it they go to the log directly.
+    """
+    values: dict[str, str] = {}
+    for field in SECRET_FIELDS:
+        name = f"{ENV_PREFIX}{field.upper()}"
+        path = directory / name
+        text = _read_secret_file(path)
+        if _set_in_environment(name):
+            if _environment_differs(name, text):
+                raise ConfigError(
+                    f"{name} is set in the environment (probably in .env) and in {path}, with different "
+                    f"values. Remove it from .env. {FILES_HELP}"
+                )
+            if warnings is None:
+                log.warning(LEGACY_WARNINGS[field])
+            else:
+                warnings.append(field)
+        elif text:
+            values[field] = text
+    return values
+
+
+def load_settings(secrets_dir: Path | None = None, warnings: list[str] | None = None) -> Settings:
+    """Read settings from the environment and the secret files in ``secrets_dir``
+    (default /run/secrets, if there is one). Warnings about secrets still in the environment go to
+    ``warnings`` if given, else to the log."""
+    directory = secrets_dir if secrets_dir is not None else SECRETS_DIR
+    try:
+        # Init values win over the environment, and _read_secret_files leaves out any secret the
+        # environment gives, so each setting has one source.
+        secrets = _read_secret_files(directory, warnings)
+        return Settings(**secrets)  # type: ignore[arg-type]
     except ValidationError as exc:
-        raise ConfigError(format_validation_error(exc)) from None
+        raise ConfigError(format_validation_error(exc, directory)) from None

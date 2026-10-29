@@ -10,7 +10,7 @@ uv run pytest                    # tests
 uv run pytest -n auto --cov      # tests on every CPU, with coverage (CI fails under 90%)
 uv run ruff check . && uv run ruff format --check .
 uv run mypy                      # strict, whole package
-uv run --env-file .env dinnerbell serve   # run locally (needs a .env; see .env.example)
+uv run --env-file .env dinnerbell serve   # run locally (needs a .env; see .env.example). Secrets in .env work, with a warning; in the container they are files in /run/secrets
 docker build -f Containerfile -t dinnerbell .
 ```
 

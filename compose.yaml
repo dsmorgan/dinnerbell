@@ -11,6 +11,14 @@ services:
     # image X.Y.Z. Production never sets DINNERBELL_TAG; deploy/dinnerbell-test does.
     image: ghcr.io/dsmorgan/dinnerbell:${DINNERBELL_TAG:-0.8.0}
     env_file: ${DINNERBELL_ENV_FILE:-.env}
+    # The four secrets are not in the env file, which podman-compose passes to podman as -e NAME=value
+    # (visible in `ps`, and printed by --dry-run and --verbose). Each is a file the container reads at
+    # /run/secrets/<name>, bind-mounted read-only from the top-level `secrets:` below.
+    secrets:
+      - DINNERBELL_SECRET_KEY
+      - DINNERBELL_SLACK_BOT_TOKEN
+      - DINNERBELL_SLACK_APP_TOKEN
+      - DINNERBELL_OIDC_CLIENT_SECRET
     ports:
       # Publish only on the interface your reverse proxy (Newt) reaches. Set DINNERBELL_BIND in .env.
       - "${DINNERBELL_BIND:-127.0.0.1}:${DINNERBELL_PORT:-8013}:8013"
@@ -44,3 +52,17 @@ volumes:
   # {} rather than an empty value: podman-compose 1.5.0 and older can't merge an empty value with
   # deploy/compose.test.yaml's name.
   dinnerbell-data: {}
+
+# File secrets are bind mounts, so the host file's owner and mode apply inside the container; the
+# compose uid, gid, and mode fields are ignored by Docker Compose and podman-compose. The files
+# belong to the container's user (uid 10001), mode 600. See "Keep secrets in files" in
+# docs/setup.md. deploy/compose.test.yaml points the test instance at ./secrets-test instead.
+secrets:
+  DINNERBELL_SECRET_KEY:
+    file: ./secrets/DINNERBELL_SECRET_KEY
+  DINNERBELL_SLACK_BOT_TOKEN:
+    file: ./secrets/DINNERBELL_SLACK_BOT_TOKEN
+  DINNERBELL_SLACK_APP_TOKEN:
+    file: ./secrets/DINNERBELL_SLACK_APP_TOKEN
+  DINNERBELL_OIDC_CLIENT_SECRET:
+    file: ./secrets/DINNERBELL_OIDC_CLIENT_SECRET
