@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Build the release bundle, dinnerbell-X.Y.Z.tar.gz, and its SHA-256 file in OUTDIR (default dist/):
 # everything an install needs without a clone. X.Y.Z is __version__, and compose.yaml must already
-# default to that image tag, as a release commit does. CI runs this on every build and attests the
+# default to that image tag, as a release commit does. The bundled deploy/dinnerbell-test defaults to
+# X.Y.Z too, where the repository's defaults to main. CI runs this on every build and attests the
 # bundle on a release tag. The archive is reproducible: the same commit gives the same bytes, with
 # sorted entries, one fixed time (the commit's), owner root, fixed modes, and gzip -n.
 #   scripts/build-bundle.sh [OUTDIR]
@@ -51,6 +52,20 @@ printf '%s\n' "$FILES" | while read -r target source; do
     cp "$source" "$root/$target"
     if [ -x "$source" ]; then chmod 755 "$root/$target"; else chmod 644 "$root/$target"; fi
 done
+
+# The bundle's test instance runs the bundle's release, not main as a clone's does.
+test_script="$root/deploy/dinnerbell-test"
+# shellcheck disable=SC2016 # ${DINNERBELL_TAG:-...} is the script's text, not this shell's.
+pinned='DINNERBELL_TAG="${DINNERBELL_TAG:-'"$version"'}"'
+# shellcheck disable=SC2016
+sed -e 's/^DINNERBELL_TAG="${DINNERBELL_TAG:-main}"$/'"$pinned"'/' \
+    -e "s/DINNERBELL_TAG (default main)/DINNERBELL_TAG (default $version, this bundle's release)/" \
+    "$test_script" >"$stage/dinnerbell-test"
+grep -qxF "$pinned" "$stage/dinnerbell-test" || {
+    echo "build-bundle: can't pin deploy/dinnerbell-test's default tag to $version." >&2
+    exit 1
+}
+cat "$stage/dinnerbell-test" >"$test_script" && rm "$stage/dinnerbell-test"
 
 mkdir -p "$outdir"
 name="dinnerbell-$version.tar.gz"

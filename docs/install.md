@@ -37,10 +37,11 @@ You need:
 5. Write `.env`. `dinnerbell init` asks for your hostname, admin email, time zone, household name, and the Slack app's values, with a hint for each. It generates the secret key, writes `.env` with mode 600, and checks it. Secrets don't show as you type or paste them.
 
    ```sh
-   podman run --rm -it --userns keep-id -v "$PWD:/out:z" "ghcr.io/dsmorgan/dinnerbell:$VERSION" init --output /out/.env
+   podman run --rm -it --userns keep-id --user "$(id -u):$(id -g)" -v "$PWD:/out:z" \
+     "ghcr.io/dsmorgan/dinnerbell:$VERSION" init --output /out/.env
    ```
 
-   With Docker: `docker run --rm -it --user "$(id -u):$(id -g)" -v "$PWD:/out" "ghcr.io/dsmorgan/dinnerbell:$VERSION" init --output /out/.env`
+   With Docker: `docker run --rm -it --user "$(id -u):$(id -g)" -v "$PWD:/out:z" "ghcr.io/dsmorgan/dinnerbell:$VERSION" init --output /out/.env`
 
    To skip a Slack value, press Enter, and fill it in `.env` later.
 
@@ -67,7 +68,9 @@ You need:
    cd dinnerbell && podman-compose pull && podman-compose down && podman-compose up -d
    ```
 
+   With Docker: `cd dinnerbell && docker compose pull && docker compose down && docker compose up -d`
+
 ## Options
 
 - **Secrets in files:** to keep the four secrets out of `.env`, use `compose.secrets.yaml`. See [Keep secrets in files](https://github.com/dsmorgan/dinnerbell/blob/main/docs/setup.md#keep-secrets-in-files).
-- **Test instance:** run step 5 with `init --test --output /out/.env.test`. It writes the test settings and refuses production's secrets from `.env`. Start it with `deploy/dinnerbell-test up -d`, on port 8014. See [Test instance](https://github.com/dsmorgan/dinnerbell/blob/main/docs/setup.md#test-instance).
+- **Test instance:** run step 5 with `init --test --output /out/.env.test`. It writes the test settings and refuses production's secrets from `.env`. Start it with `deploy/dinnerbell-test up -d`, on port 8014. The bundle's `deploy/dinnerbell-test` runs the bundle's version. See [Test instance](https://github.com/dsmorgan/dinnerbell/blob/main/docs/setup.md#test-instance).
