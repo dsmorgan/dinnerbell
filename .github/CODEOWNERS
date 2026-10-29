@@ -4,5 +4,6 @@
 /uv.lock @dsmorgan
 /pyproject.toml @dsmorgan
 /compose.yaml @dsmorgan
+/compose.secrets.yaml @dsmorgan
 /deploy/ @dsmorgan
 /scripts/ @dsmorgan

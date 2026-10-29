@@ -1,8 +1,9 @@
 #!/bin/sh
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Check that compose.yaml renders for production and, through deploy/dinnerbell-test, for the
-# test instance, with the volume names, tags, and ports the docs promise, and that the wrapper
-# refuses unsafe setups. CI runs it; run it locally after changing compose files, the wrapper,
+# test instance, with the volume names, tags, and ports the docs promise, with secrets from the env
+# file by default and from files with compose.secrets.yaml (the test wrapper adds it when
+# secrets-test/ holds the files), and that the wrapper refuses unsafe setups. CI runs it; run it locally after changing compose files, the wrapper,
 # or an env example. It needs docker compose, jq, and uv. It also checks podman-compose when that's
 # installed (CI installs Ubuntu 24.04's 1.0.6, the oldest version the docs support; 1.1.0, 1.5.0,
 # and 1.6.0 were checked by hand).
@@ -141,8 +142,10 @@ echo "== docker compose"
 export DINNERBELL_COMPOSE="docker compose"
 expect "production renders" docker compose config --quiet
 expect "build override renders" docker compose -f compose.yaml -f compose.build.yaml config --quiet
+expect "secrets override renders" docker compose -f compose.yaml -f compose.secrets.yaml config --quiet
 # Renaming production's volume would start existing installs on an empty database.
 production=$(docker compose -p dinnerbell config --format json)
+production_files=$(docker compose -p dinnerbell -f compose.yaml -f compose.secrets.yaml config --format json)
 expect "production: volume dinnerbell_dinnerbell-data, a release tag, port 8013" jq -e '
     .volumes["dinnerbell-data"].name == "dinnerbell_dinnerbell-data"
     and (.services.dinnerbell.image | test(":[0-9]+[.][0-9]+[.][0-9]+$"))
@@ -158,22 +161,36 @@ expect "test: project, volume, :main, port 8014, label" jq -e '
     and .services.dinnerbell.environment.DINNERBELL_INSTANCE_LABEL == "TEST"' <<EOF
 $test_instance
 EOF
-# Each secret is a file mounted at /run/secrets/<name>: production's in ./secrets, test's in
-# ./secrets-test, and the service lists all four. None is an environment variable.
+# By default nothing is mounted at /run/secrets, so the env file alone starts the service (0.9.0
+# mounted the files unconditionally, and an upgrade with secrets in .env didn't start).
+no_secrets_filter='.services.dinnerbell.secrets == null and .secrets == null'
+expect "production: no secret files by default, so .env alone starts it" jq -e "$no_secrets_filter" <<EOF
+$production
+EOF
+expect "test without secrets-test/ files: no secret files, so .env.test alone starts it" \
+    jq -e "$no_secrets_filter" <<EOF
+$test_instance
+EOF
+# With compose.secrets.yaml, each secret is a file mounted at /run/secrets/<name>: production's in
+# ./secrets, test's in ./secrets-test, and the service lists all four. No env file gives a value.
 secrets_json='["DINNERBELL_SECRET_KEY","DINNERBELL_SLACK_BOT_TOKEN","DINNERBELL_SLACK_APP_TOKEN","DINNERBELL_OIDC_CLIENT_SECRET"]'
 secrets_filter='
     . as $root
     | (.services.dinnerbell.secrets | map(.source) | sort) == ($names | sort)
     and all(.services.dinnerbell.secrets[]; .target == "/run/secrets/" + .source)
     and all($names[]; . as $n | $root.secrets[$n].file | endswith($dir + $n))
-    and (.services.dinnerbell.environment // {} | keys | map(select(test("SECRET|TOKEN"))) | length) == 0'
-expect "production: the four secrets are files in secrets/, mounted at /run/secrets" \
+    and (.services.dinnerbell.environment // {} | to_entries
+        | map(select((.key | test("SECRET|TOKEN")) and (.value // "") != "")) | length) == 0'
+expect "production with compose.secrets.yaml: the four secrets are files in secrets/, mounted at /run/secrets" \
     jq -e --argjson names "$secrets_json" --arg dir /secrets/ "$secrets_filter" <<EOF
-$production
+$production_files
 EOF
-expect "test: the four secrets are files in secrets-test/, mounted at /run/secrets" \
+for name in $SECRET_NAMES; do : >"secrets-test/$name"; done
+test_instance_files=$(deploy/dinnerbell-test config --format json 2>/dev/null)
+for name in $SECRET_NAMES; do rm -f "secrets-test/$name"; done
+expect "test with secrets-test/ files: the four secrets are files in secrets-test/, mounted at /run/secrets" \
     jq -e --argjson names "$secrets_json" --arg dir /secrets-test/ "$secrets_filter" <<EOF
-$test_instance
+$test_instance_files
 EOF
 
 # Resource and log caps (docs/setup.md, "Resource and log limits"): a process limit, a memory
@@ -190,6 +207,9 @@ $production
 EOF
 expect "test: pids_limit, mem_limit, and json-file log rotation" jq -e "$limits_filter" <<EOF
 $test_instance
+EOF
+expect "production with compose.secrets.yaml: the same limits" jq -e "$limits_filter" <<EOF
+$production_files
 EOF
 
 echo "== wrapper refusals"
@@ -234,10 +254,9 @@ filled_env_test() {
         -e 's|^DINNERBELL_SLACK_CHANNEL=.*|DINNERBELL_SLACK_CHANNEL=C0123ABCD|' \
         .env.test.example
 }
-# .env.test as an install that hasn't moved its secrets has it (the old layout, which still works
-# for one release): the four secrets as lines.
-legacy_env_test() {
-    filled_env_test
+# .env.test with the four secrets as lines, the default layout (without secrets-test/ files).
+env_test_with_secrets() {
+    filled_env_test | grep -Ev '^DINNERBELL_(SECRET_KEY|OIDC_CLIENT_SECRET|SLACK_BOT_TOKEN|SLACK_APP_TOKEN)='
     printf 'DINNERBELL_SECRET_KEY=%s\nDINNERBELL_OIDC_CLIENT_SECRET=%s\n' "$test_key" "$test_client_secret"
     printf 'DINNERBELL_SLACK_BOT_TOKEN=%s\nDINNERBELL_SLACK_APP_TOKEN=%s\n' "$test_bot_token" "$test_app_token"
 }
@@ -256,7 +275,6 @@ write_secrets() {
     done
 }
 test_secret_files() { write_secrets secrets-test "$test_key" "$test_bot_token" "$test_app_token" "$test_client_secret"; }
-empty_test_secret_files() { write_secrets secrets-test - - - -; }
 test_secret_files
 
 # start [VAR=value ...] deploy/dinnerbell-test ARG...: run the wrapper with the stub engine and
@@ -279,6 +297,13 @@ prints_no_secret() {
     done
 }
 started_cleanly() { [ "$status" -eq 0 ] && checked && started && prints_no_secret; }
+started_with_files() {
+    started_cleanly && logged "compose .* -f compose.secrets.yaml .* -f deploy/compose.test-secrets.yaml "
+}
+started_from_env() {
+    started_cleanly && ! logged "compose .*compose.secrets.yaml" && ! logged "compose .*compose.test-secrets.yaml" &&
+        [ "$(engine_options | grep -c -- ' -v ')" -eq 0 ] && said "secrets from .env.test"
+}
 refused() { [ "$status" -ne 0 ] && ! started && said "dinnerbell-test: " && prints_no_secret; }
 refused_naming() { refused && said "$1"; }
 refused_unchecked() { refused && ! checked && said "$1"; }
@@ -306,9 +331,25 @@ check() {
     if "$@"; then pass "$description"; else fail "$description"; fi
 }
 
+# The default: no files in secrets-test/, and the four secrets in .env.test.
+rm -rf secrets-test
+env_test_with_secrets >.env.test
+start deploy/dinnerbell-test up -d
+check "secrets in .env.test and no secrets-test/: starts without compose.secrets.yaml or mounts" started_from_env
+mkdir secrets-test
+start deploy/dinnerbell-test up -d
+check "an empty secrets-test/ counts as no files" started_from_env
+filled_env_test >.env.test
+start deploy/dinnerbell-test up -d
+check "no secrets anywhere: the check names DINNERBELL_SECRET_KEY and starts nothing" \
+    refused_naming "DINNERBELL_SECRET_KEY is required but not set."
+test_secret_files
+
 filled_env_test >.env.test
 start deploy/dinnerbell-test up -d
 check "a valid .env.test starts, and nothing prints a secret" started_cleanly
+check "secret files in secrets-test/: compose gets compose.secrets.yaml and compose.test-secrets.yaml" \
+    started_with_files
 check "the check runs compose's image, $test_image, with the env file on stdin" \
     logged "engine run .* $test_image config check --env-file -\$"
 for option in -i --rm --pull=never "--log-driver none" "--network none" --read-only "--cap-drop ALL" \
@@ -383,7 +424,7 @@ test_secret_files
 write_secrets secrets-test "$test_key" "$test_bot_token" "$test_app_token" -
 start deploy/dinnerbell-test up -d
 check "an empty OIDC client secret file: the check names DINNERBELL_OIDC_CLIENT_SECRET and the file" \
-    refused_naming "DINNERBELL_OIDC_CLIENT_SECRET is required but not set. Put it in the file "
+    refused_naming "DINNERBELL_OIDC_CLIENT_SECRET is required but not set. Set it in the env file, or put it in the file "
 test_secret_files
 write_secrets secrets-test "$test_key" - - "$test_client_secret"
 start deploy/dinnerbell-test up -d
@@ -398,7 +439,8 @@ if [ "$(id -u)" -ne 0 ]; then
 fi
 test_secret_files
 
-# Production's files, kept in secrets/ (never read by test's compose files). A secret that test
+# Production's files, kept in secrets/ (never read by test's compose files, which replace the paths
+# compose.secrets.yaml gives). A secret that test
 # shares with them, however each instance holds it, is refused by name, and no value is printed.
 production_secret_files() {
     write_secrets secrets "$production_key" "$production_bot_token" xapp-production "production-client-secret"
@@ -453,10 +495,9 @@ start deploy/dinnerbell-test up -d
 check "empty production files share nothing with empty Slack files" started_cleanly
 for name in $SECRET_NAMES; do rm -f "secrets/$name"; done
 
-# The old layout: secrets as lines in .env.test and .env, and empty secret files in secrets-test/
-# (an empty file counts as unset), so only the env files carry them.
-empty_test_secret_files
-legacy_env_test >.env.test
+# The default layout: secrets as lines in .env.test and .env, and no files in secrets-test/.
+rm -rf secrets-test
+env_test_with_secrets >.env.test
 for name in DINNERBELL_SECRET_KEY DINNERBELL_SLACK_BOT_TOKEN DINNERBELL_SLACK_APP_TOKEN \
     DINNERBELL_OIDC_CLIENT_SECRET; do
     shared=$(sed -n "s/^$name=//p" .env.test)
@@ -500,7 +541,7 @@ while IFS= read -r case_line; do
     for line in "$test_line" "$production_line"; do
         printf '%s\n' "$line" | sed -e "s/@KEY@/$test_key/g" -e "s/@BOM@/$(printf '\357\273\277')/"
     done >"$stubs/lines"
-    { sed -n 1p "$stubs/lines"; legacy_env_test | grep -v '^DINNERBELL_SECRET_KEY='; } >.env.test
+    { sed -n 1p "$stubs/lines"; env_test_with_secrets | grep -v '^DINNERBELL_SECRET_KEY='; } >.env.test
     { sed -n 2p "$stubs/lines"; grep -v '^DINNERBELL_SECRET_KEY=' .env.example; } >.env
     if dotenv_shares_key; then dotenv=same; else dotenv=different; fi
     start deploy/dinnerbell-test up -d
@@ -526,7 +567,7 @@ CASES
 while IFS= read -r case_line; do
     printf '%s\n' "$case_line" | sed -e "s/@PROD@/$production_key/g" -e "s/@KEY@/$test_key/g" |
         tr '@' '\n' | sed '/^$/d' >"$stubs/lines"
-    { legacy_env_test | grep -v '^DINNERBELL_SECRET_KEY='; cat "$stubs/lines"; } >.env.test
+    { env_test_with_secrets | grep -v '^DINNERBELL_SECRET_KEY='; cat "$stubs/lines"; } >.env.test
     { cat .env.example; printf 'DINNERBELL_SECRET_KEY=%s\n' "$production_key"; } >.env
     start deploy/dinnerbell-test up -d
     check "production's key inside .env.test is refused: $case_line" \
@@ -539,14 +580,14 @@ dinnerbell_secret_key=@PROD@@@DINNERBELL_SECRET_KEY=@KEY@
 # DINNERBELL_SECRET_KEY=@PROD@@@DINNERBELL_SECRET_KEY=@KEY@
 DINNERBELL_SECRET_KEY=@KEY@@@OLD_KEY="@PROD@"  # from production
 CASES
-legacy_env_test >.env.test
+env_test_with_secrets >.env.test
 printf '# old: %s\n' "$production_bot_token" >>.env.test
 { cat .env.example; printf 'DINNERBELL_SLACK_BOT_TOKEN=%s\n' "$production_bot_token"; } >.env
 start deploy/dinnerbell-test up -d
 check "production's bot token in a comment in .env.test is refused by name" \
     refused_unchecked "contains production's DINNERBELL_SLACK_BOT_TOKEN"
 for token in xoxb-15-bytes-a xoxb-16-bytes-ab; do
-    legacy_env_test >.env.test
+    env_test_with_secrets >.env.test
     printf '# old: %s\n' "$token" >>.env.test
     { cat .env.example; printf 'DINNERBELL_SLACK_BOT_TOKEN=%s\n' "$token"; } >.env
     start deploy/dinnerbell-test up -d
@@ -586,6 +627,7 @@ if command -v podman-compose >/dev/null 2>&1; then
     production_secret_files
     test_secret_files
     production=$($pc --dry-run -p dinnerbell up -d 2>&1) || true
+    production_files=$($pc --dry-run -p dinnerbell -f compose.yaml -f compose.secrets.yaml up -d 2>&1) || true
     test_instance=$(DINNERBELL_COMPOSE="$pc --dry-run" DINNERBELL_ENGINE="$stubs/engine" \
         deploy/dinnerbell-test up -d 2>&1) || true
     # podman-compose 1.6.0 and later mount with --mount instead of -v.
@@ -604,16 +646,22 @@ if command -v podman-compose >/dev/null 2>&1; then
         "dinnerbell-test_dinnerbell-data:/data" "source=dinnerbell-test_dinnerbell-data,destination=/data"
     contains "test: port 8014" "$test_instance" "127.0.0.1:8014:8013"
     contains "test: image :main" "$test_instance" "ghcr.io/dsmorgan/dinnerbell:main"
-    # The secret files are mounted by path (podman-compose 1.0.6 and 1.6.0 both bind-mount them).
+    # By default nothing is mounted at /run/secrets. With compose.secrets.yaml, the secret files are
+    # mounted by path (podman-compose 1.0.6 and 1.6.0 both bind-mount them).
+    if printf '%s' "$production" | grep -qF "/run/secrets/"; then
+        fail "production mounts nothing at /run/secrets by default"
+    else
+        pass "production mounts nothing at /run/secrets by default"
+    fi
     for name in $SECRET_NAMES; do
-        contains "production: secrets/$name mounted at /run/secrets/$name" "$production" \
-            "/secrets/$name:/run/secrets/$name:"
+        contains "production with compose.secrets.yaml: secrets/$name mounted at /run/secrets/$name" \
+            "$production_files" "/secrets/$name:/run/secrets/$name:"
         contains "test: secrets-test/$name mounted at /run/secrets/$name" "$test_instance" \
             "/secrets-test/$name:/run/secrets/$name:"
     done
     leaked=no
     for secret in $test_secrets xapp-production production-client-secret; do
-        if printf '%s%s' "$production" "$test_instance" | grep -qF -- "$secret"; then leaked=yes; fi
+        if printf '%s%s' "$production_files" "$test_instance" | grep -qF -- "$secret"; then leaked=yes; fi
     done
     if [ "$leaked" = no ]; then pass "no secret value in podman-compose's commands"; else fail "no secret value in podman-compose's commands"; fi
     if printf '%s' "$test_instance" | grep -qF "dinnerbell_dinnerbell-data"; then
@@ -661,9 +709,9 @@ expect "check-secrets: empty Slack tokens are fine" deploy/check-secrets secrets
 check "check-secrets prints no secret value" check_prints_no_secret
 test_secret_files
 
-echo "== migration from .env"
-# Run docs/setup.md's "Move the secrets out of .env" snippet on a .env whose values hold both kinds
-# of quote, then compare with deploy/check-secrets --env-file, in a scratch copy of the layout.
+echo "== moving secrets from .env to files"
+# Run the first snippet in docs/setup.md's "Keep secrets in files" on a .env whose values hold both
+# kinds of quote, then compare with deploy/check-secrets --env-file, in a scratch copy of the layout.
 mig="$stubs/mig"
 mkdir -p "$mig/deploy"
 cp deploy/check-secrets "$mig/deploy/"
@@ -674,7 +722,7 @@ cp deploy/check-secrets "$mig/deploy/"
     printf 'DINNERBELL_SLACK_BOT_TOKEN=xoxb-"plain"-'"'"'mixed'"'"'\n'
     printf 'DINNERBELL_SLACK_APP_TOKEN=\n'
 } >"$mig/.env"
-awk '/^### Move the secrets/ { f = 1 } f && /^   ```sh/ { c++; if (c == 1) { g = 1; next } } g && /^   ```$/ { exit } g { sub(/^   /, ""); print }' \
+awk '/^### Keep secrets in files/ { f = 1 } f && /^   ```sh/ { c++; if (c == 1) { g = 1; next } } g && /^   ```$/ { exit } g { sub(/^   /, ""); print }' \
     docs/setup.md >"$stubs/migrate.sh"
 (cd "$mig" && sh "$stubs/migrate.sh")
 check "migration keeps quotes inside a value, drops one enclosing pair and the line ending" \

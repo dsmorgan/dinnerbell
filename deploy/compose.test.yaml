@@ -6,16 +6,3 @@
 volumes:
   dinnerbell-data:
     name: dinnerbell-test_dinnerbell-data
-
-# The test instance's own secret files. Compose resolves the paths from the directory of
-# compose.yaml, so ./secrets-test sits next to ./secrets (production's). They are set here, not
-# through a variable, so nothing in .env can point test at production's files.
-secrets:
-  DINNERBELL_SECRET_KEY:
-    file: ./secrets-test/DINNERBELL_SECRET_KEY
-  DINNERBELL_SLACK_BOT_TOKEN:
-    file: ./secrets-test/DINNERBELL_SLACK_BOT_TOKEN
-  DINNERBELL_SLACK_APP_TOKEN:
-    file: ./secrets-test/DINNERBELL_SLACK_APP_TOKEN
-  DINNERBELL_OIDC_CLIENT_SECRET:
-    file: ./secrets-test/DINNERBELL_OIDC_CLIENT_SECRET

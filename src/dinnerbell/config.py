@@ -25,34 +25,40 @@ from dinnerbell.domain.members import InvalidMemberInput, normalize_email
 
 ENV_PREFIX = "DINNERBELL_"
 SECRETS_DIR = Path("/run/secrets")
-# The settings that live in files under /run/secrets, one file per setting, named like the
-# variable. Keep in step with the secrets in compose.yaml and DINNERBELL_SECRETS in
-# deploy/dinnerbell-test (scripts/check-compose.sh checks both).
+# The settings that may live in files under /run/secrets, one file per setting, named like the
+# variable, when compose.secrets.yaml mounts them. Otherwise they come from the environment (.env),
+# with a warning. Keep in step with compose.secrets.yaml and SECRETS in deploy/dinnerbell-test
+# (scripts/check-compose.sh checks both).
 SECRET_FIELDS = ("secret_key", "slack_bot_token", "slack_app_token", "oidc_client_secret")
 FILES_HELP = 'See "Keep secrets in files" in docs/setup.md.'
 log = logging.getLogger(__name__)
-# What to log for a secret that the environment still gives, one constant per setting. Nothing
+
+# What to log for a secret that comes from the environment: a constant string per setting. Nothing
 # derived from a secret's value is ever passed to the logger: callers look a message up by field.
 LEGACY_WARNINGS = {
     "secret_key": (
-        "DINNERBELL_SECRET_KEY is set in the environment. Move it to the file "
-        "/run/secrets/DINNERBELL_SECRET_KEY (secrets/ on the host) and remove it from .env: the next "
-        "release ignores it there, and until then it shows on podman's command line. " + FILES_HELP
+        "DINNERBELL_SECRET_KEY is set in the environment (the env file). That works, but "
+        "podman-compose passes it to podman on the command line, where other local users can see "
+        "it in `ps`. To keep it off, put it in the file secrets/DINNERBELL_SECRET_KEY instead and "
+        "start with compose.secrets.yaml. " + FILES_HELP
     ),
     "slack_bot_token": (
-        "DINNERBELL_SLACK_BOT_TOKEN is set in the environment. Move it to the file "
-        "/run/secrets/DINNERBELL_SLACK_BOT_TOKEN (secrets/ on the host) and remove it from .env: the next "
-        "release ignores it there, and until then it shows on podman's command line. " + FILES_HELP
+        "DINNERBELL_SLACK_BOT_TOKEN is set in the environment (the env file). That works, but "
+        "podman-compose passes it to podman on the command line, where other local users can see "
+        "it in `ps`. To keep it off, put it in the file secrets/DINNERBELL_SLACK_BOT_TOKEN instead and "
+        "start with compose.secrets.yaml. " + FILES_HELP
     ),
     "slack_app_token": (
-        "DINNERBELL_SLACK_APP_TOKEN is set in the environment. Move it to the file "
-        "/run/secrets/DINNERBELL_SLACK_APP_TOKEN (secrets/ on the host) and remove it from .env: the next "
-        "release ignores it there, and until then it shows on podman's command line. " + FILES_HELP
+        "DINNERBELL_SLACK_APP_TOKEN is set in the environment (the env file). That works, but "
+        "podman-compose passes it to podman on the command line, where other local users can see "
+        "it in `ps`. To keep it off, put it in the file secrets/DINNERBELL_SLACK_APP_TOKEN instead and "
+        "start with compose.secrets.yaml. " + FILES_HELP
     ),
     "oidc_client_secret": (
-        "DINNERBELL_OIDC_CLIENT_SECRET is set in the environment. Move it to the file "
-        "/run/secrets/DINNERBELL_OIDC_CLIENT_SECRET (secrets/ on the host) and remove it from .env: the next "
-        "release ignores it there, and until then it shows on podman's command line. " + FILES_HELP
+        "DINNERBELL_OIDC_CLIENT_SECRET is set in the environment (the env file). That works, but "
+        "podman-compose passes it to podman on the command line, where other local users can see "
+        "it in `ps`. To keep it off, put it in the file secrets/DINNERBELL_OIDC_CLIENT_SECRET instead and "
+        "start with compose.secrets.yaml. " + FILES_HELP
     ),
 }
 MIN_SECRET_KEY_LENGTH = 32
@@ -327,7 +333,8 @@ def format_validation_error(error: ValidationError, secrets_dir: Path | None = N
         name = f"{ENV_PREFIX}{str(item['loc'][0]).upper()}"
         if item["type"] == "missing":
             hint = (
-                f" Put it in the file {(secrets_dir or SECRETS_DIR) / name}."
+                f" Set it in the env file, or put it in the file {(secrets_dir or SECRETS_DIR) / name}"
+                " if you keep secrets in files."
                 if name.lower().removeprefix(ENV_PREFIX.lower()) in SECRET_FIELDS
                 else ""
             )
@@ -382,9 +389,10 @@ def _environment_differs(name: str, file_text: str) -> bool:
 def _read_secret_files(directory: Path, warnings: list[str] | None = None) -> dict[str, str]:
     """Read the four secrets from ``directory``, one file each, named like the variable.
 
-    A file that's empty counts as absent. Compose can't skip a secret, so an install without Slack
-    keeps an empty file. A secret that is also in the environment is the old layout: the
-    environment keeps working for one release, with a warning, and must agree with the file.
+    A file that's missing or empty counts as absent, so without /run/secrets every secret comes from
+    the environment. Compose can't skip a secret, so an install that keeps secrets in files but
+    doesn't use Slack keeps an empty file. A secret in the environment works, with a warning
+    (podman-compose puts it on podman's command line); when a file gives it too, they must agree.
     ``warnings`` collects the setting names (not values) that the environment still gives, for the CLI
     to log through LEGACY_WARNINGS once logging is set up; without it they go to the log directly.
     """
@@ -420,7 +428,7 @@ def unknown_setting_names(environ: Mapping[str, str] | None = None) -> list[str]
 
 def load_settings(secrets_dir: Path | None = None, warnings: list[str] | None = None) -> Settings:
     """Read settings from the environment and the secret files in ``secrets_dir``
-    (default /run/secrets, if there is one). Warnings about secrets still in the environment go to
+    (default /run/secrets, if there is one). Warnings about secrets in the environment go to
     ``warnings`` if given, else to the log."""
     directory = secrets_dir if secrets_dir is not None else SECRETS_DIR
     try:

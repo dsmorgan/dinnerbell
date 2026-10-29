@@ -1,8 +1,14 @@
-# Secret files
+# Secret files (optional)
 
-Production reads one file per secret from this directory (the test instance reads `secrets-test/`).
-Compose mounts each at `/run/secrets/<name>` in the container, so no secret appears on a podman or
-docker command line.
+By default the four secrets are lines in `.env`. To keep them off podman's command line, you can
+put each in a file here instead and start with `compose.secrets.yaml`:
+
+```sh
+podman-compose -f compose.yaml -f compose.secrets.yaml up -d
+```
+
+Compose then mounts each file at `/run/secrets/<name>` in the container. The test instance reads
+`secrets-test/`, and `deploy/dinnerbell-test` uses it on its own when the files are there.
 
 | File | What it holds |
 |---|---|
