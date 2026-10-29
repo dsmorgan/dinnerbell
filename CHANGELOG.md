@@ -18,6 +18,7 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 - **On a Roll has a grace week.** A run survives one missed week, which doesn't count toward it; two missed weeks in a row still end it.
 - **Admin > Badges edits the three ladders**, five counts each, validated as before, with **Reset to defaults**. Each save and reset is audited. The `badge_thresholds` setting holds one list per ladder; a single list from an earlier version is read as the Frequent ladder.
 - Tiers that the new ladders or the grace week put in reach are awarded quietly, as when an admin lowers a threshold, so the channel gets no burst of posts.
+- Documentation only: the README opens with what Dinnerbell needs (a container host, a Slack workspace, and an HTTPS hostname), a diagram of how the pieces connect, and how a dinner works in five steps (#34).
 
 ### Upgrade notes
 
