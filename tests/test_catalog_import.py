@@ -341,3 +341,14 @@ async def test_other_integrity_errors_are_not_read_as_a_changed_catalog(
     with pytest.raises(IntegrityError, match="FOREIGN KEY"):
         await catalog_service.apply_import(db, 1, None, SMALL, now=clock())
     assert rows(migrated, CatalogItemRow) == [] and rows(migrated, TagRow) == []
+
+
+@pytest.mark.parametrize("value", ["2001-13-45", "9" * 5000])
+def test_preview_of_an_impossible_date_or_number_is_an_error_page(
+    client: TestClient, provider: FakeProvider, value: str
+) -> None:
+    sign_in(client, provider)
+    response = preview(client, f"version: 1\nrestaurants:\n  - name: {value}\n    cuisine: [Thai]\n")
+    assert response.status_code == 400
+    assert "date or a number" in page(response)
+    assert token_in(response) is None

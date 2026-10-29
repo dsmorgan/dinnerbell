@@ -32,6 +32,9 @@ class SchedulerState:
     started_at: datetime | None = None
     last_tick: datetime | None = None
     last_backup: datetime | None = None
+    backup_failing: bool = False
+    """The newest nightly backup failed, or failed its check and was deleted. /healthz reports
+    "degraded" until one succeeds."""
 
     def tick_is_fresh(self, now: datetime) -> bool:
         return self.last_tick is not None and now - self.last_tick <= STALE_AFTER

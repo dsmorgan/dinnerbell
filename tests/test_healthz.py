@@ -37,7 +37,7 @@ def test_healthz_shape(client: TestClient, clock: FakeClock) -> None:
     assert body["database"] == "ok"
     assert body["slack"] == "not_configured"
     assert body["scheduler"] == {"status": "ok", "last_tick": clock.now.isoformat()}
-    assert set(body["backup"]) == {"last_success"}  # type: ignore[arg-type]
+    assert set(body["backup"]) == {"last_success", "failing"}  # type: ignore[arg-type]
     text = response.text
     assert "@" not in text
     assert "secret" not in text.lower()

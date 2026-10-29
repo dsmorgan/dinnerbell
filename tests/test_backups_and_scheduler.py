@@ -258,3 +258,50 @@ def test_backup_opens_the_live_database_read_only(migrated: Settings, monkeypatc
     source = opened[0]
     assert source[0].startswith("file:///") and source[0].endswith("dinnerbell.db?mode=ro")
     assert source[1] is True
+
+
+def test_a_backup_that_fails_its_check_is_retried_then_deleted(
+    migrated: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls: list[int] = []
+
+    def failing(path: Path, require_tables: object) -> None:
+        calls.append(1)
+        raise backups.BackupCheckFailed("bad")
+
+    monkeypatch.setattr(backups, "_check", failing)
+    with pytest.raises(backups.BackupCheckFailed):
+        backups.run_backup(migrated.database_path, migrated.backup_dir, date(2026, 10, 22))
+    assert len(calls) == backups.BACKUP_ATTEMPTS
+    assert not list(migrated.backup_dir.glob("dinnerbell-*"))
+
+
+@pytest.mark.anyio
+async def test_a_failing_backup_sets_the_health_field(
+    job_context: runner.JobContext, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def explode(*_args: object) -> None:
+        raise backups.BackupCheckFailed("bad")
+
+    monkeypatch.setattr(backups, "run_backup", explode)
+    await runner.nightly_backup(job_context)
+    assert job_context.state.backup_failing is True
+    monkeypatch.undo()
+    await runner.nightly_backup(job_context)
+    assert job_context.state.backup_failing is False
+
+
+def test_stale_one_off_partials_are_removed_but_fresh_ones_stay(migrated: Settings) -> None:
+    import os
+    import time
+
+    migrated.backup_dir.mkdir(parents=True, exist_ok=True)
+    stale = migrated.backup_dir / "pre-reset-0.8.0-20260101T000000Z.partial"
+    fresh = migrated.backup_dir / "pre-reset-0.8.0-20261022T000000Z.partial"
+    stale.write_bytes(b"x")
+    fresh.write_bytes(b"x")
+    old = time.time() - 2 * 3600
+    os.utime(stale, (old, old))
+    backups.run_backup(migrated.database_path, migrated.backup_dir, date(2026, 10, 22))
+    assert not stale.exists()
+    assert fresh.exists()

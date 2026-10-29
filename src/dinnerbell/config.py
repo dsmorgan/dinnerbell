@@ -7,6 +7,7 @@ import ipaddress
 import logging
 import os
 import re
+from collections.abc import Mapping
 from functools import cached_property
 from pathlib import Path
 from typing import Annotated, Literal
@@ -55,6 +56,25 @@ LEGACY_WARNINGS = {
     ),
 }
 MIN_SECRET_KEY_LENGTH = 32
+MIN_SECRET_KEY_DISTINCT = 8
+# Text that only a placeholder or a sample contains. Compared with "-", "_", and spaces removed
+# and the case folded, so "Change-Me" and "REPLACE_WITH_..." both match. Keep in step with the
+# same list in deploy/check-secrets.
+SECRET_KEY_PLACEHOLDER_MARKERS = ("replace", "changeme", "placeholder", "example", "yoursecret", "secretkeyhere")
+# Environment variables that start with ENV_PREFIX and are not settings: the container's launch
+# scripts and compose files read them. A variable in neither list is logged as a likely typo.
+NON_SETTING_VARIABLES = frozenset(
+    {
+        "DINNERBELL_BIND",
+        "DINNERBELL_COMPOSE",
+        "DINNERBELL_ENGINE",
+        "DINNERBELL_ENV_FILE",
+        "DINNERBELL_PORT",
+        "DINNERBELL_SECRETS",
+        "DINNERBELL_TAG",
+        "DINNERBELL_UPDATE_GOLDEN",
+    }
+)
 MAX_SECRET_BYTES = 8192
 LOCAL_HOSTS = frozenset({"localhost", "127.0.0.1"})
 BUILD_PATTERN = re.compile(r"[0-9a-f]{7,40}")
@@ -153,11 +173,15 @@ class Settings(BaseSettings):
     @field_validator("secret_key")
     @classmethod
     def _check_secret_key(cls, value: SecretStr) -> SecretStr:
-        if len(value.get_secret_value()) < MIN_SECRET_KEY_LENGTH:
-            raise ValueError(
-                f"must be at least {MIN_SECRET_KEY_LENGTH} characters; "
-                "generate one with: python -c 'import secrets; print(secrets.token_urlsafe(48))'"
-            )
+        key = value.get_secret_value()
+        how = "generate one with: python -c 'import secrets; print(secrets.token_urlsafe(48))'"
+        if len(key) < MIN_SECRET_KEY_LENGTH:
+            raise ValueError(f"must be at least {MIN_SECRET_KEY_LENGTH} characters; {how}")
+        folded = re.sub(r"[-_\s]", "", key.lower())
+        if any(marker in folded for marker in SECRET_KEY_PLACEHOLDER_MARKERS):
+            raise ValueError(f"is still a placeholder from an example file; {how}")
+        if len(set(key)) < MIN_SECRET_KEY_DISTINCT:
+            raise ValueError(f"is too repetitive to be random; {how}")
         return value
 
     @field_validator("admin_email")
@@ -381,6 +405,16 @@ def _read_secret_files(directory: Path, warnings: list[str] | None = None) -> di
         elif text:
             values[field] = text
     return values
+
+
+def unknown_setting_names(environ: Mapping[str, str] | None = None) -> list[str]:
+    """The ``DINNERBELL_*`` variables in ``environ`` (default: the process environment) that are
+    neither a setting nor a variable the launch scripts use: likely typos, since ``Settings``
+    ignores unknown names. Names only, sorted; never a value."""
+    names = set(Settings.model_fields)
+    known = {f"{ENV_PREFIX}{name.upper()}" for name in names} | NON_SETTING_VARIABLES
+    source = os.environ if environ is None else environ
+    return sorted(name for name in source if name.upper().startswith(ENV_PREFIX) and name.upper() not in known)
 
 
 def load_settings(secrets_dir: Path | None = None, warnings: list[str] | None = None) -> Settings:

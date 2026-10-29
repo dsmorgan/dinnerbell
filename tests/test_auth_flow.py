@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
 from typing import Any
 from urllib.parse import parse_qsl, urlsplit
 
@@ -16,6 +17,7 @@ from dinnerbell.config import Settings
 from dinnerbell.db.models import AuditRow, MemberRow, SessionRow
 from dinnerbell.services.auth import hash_token
 from tests.conftest import csrf_from, invite, page, sign_in, start_login
+from tests.support.clock import FakeClock
 from tests.support.fake_oidc import DROP, REDIRECT_URI, FakeProvider
 
 SESSION_COOKIE = "__Host-dinnerbell_session"
@@ -414,3 +416,44 @@ def test_wrong_client_secret_is_diagnosable(
     assert "couldn't be verified" in page(response)
     reasons = [getattr(r, "reason", "") for r in caplog.records if r.getMessage() == "sign-in verification failed"]
     assert reasons == ["token endpoint refused the request: HTTP 401, error=invalid_client"]
+
+
+def refuse_stranger(client: TestClient, provider: FakeProvider, subject: str, email: str) -> None:
+    client.cookies.clear()
+    params = dict(parse_qsl(urlsplit(client.get("/auth/login").headers["location"]).query))
+    code = provider.authorize(params, claims={"sub": subject, "email": email})
+    assert client.get("/auth/callback", params={"code": code, "state": params["state"]}).status_code == 403
+
+
+def test_repeated_refusals_of_one_person_are_audited_once_an_hour(
+    client: TestClient, provider: FakeProvider, migrated: Settings, clock: FakeClock
+) -> None:
+    for _ in range(5):
+        refuse_stranger(client, provider, "stranger-1", "x1@example.org")
+    refuse_stranger(client, provider, "stranger-2", "x2@example.org")
+    assert len(refusals(migrated)) == 2
+    clock.advance(timedelta(minutes=61))
+    refuse_stranger(client, provider, "stranger-1", "x1@example.org")
+    assert len(refusals(migrated)) == 3
+
+
+@pytest.mark.anyio
+async def test_old_refusals_are_pruned_and_other_audit_rows_stay(
+    client: TestClient, provider: FakeProvider, migrated: Settings, clock: FakeClock
+) -> None:
+    from dinnerbell.services import auth
+    from dinnerbell.services.database import open_database
+
+    refuse_stranger(client, provider, "stranger-1", "x1@example.org")
+    clock.advance(timedelta(days=29))
+    refuse_stranger(client, provider, "stranger-2", "x2@example.org")
+    other = len([a for a in rows(migrated, AuditRow) if a.action != "auth.sign_in_refused"])
+    clock.advance(timedelta(days=2))  # the first is 31 days old, the second 2
+    database = open_database(migrated.async_database_url)
+    try:
+        async with database.sessionmaker() as db:
+            assert await auth.prune_refusals(db, now=clock()) == 1
+    finally:
+        await database.close()
+    assert [a.payload["subject"] for a in refusals(migrated)] == ["stranger-2"]
+    assert len([a for a in rows(migrated, AuditRow) if a.action != "auth.sign_in_refused"]) == other

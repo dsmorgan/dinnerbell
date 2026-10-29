@@ -348,3 +348,15 @@ def test_cooks_must_be_active_but_existing_cooks_stay(
     new = add_item(client, "Cake", kind="home", cuisines="American", cook_ids=[str(sam)])
     assert new.status_code == 400
     assert {c.member_id for c in rows(migrated, CatalogItemCookRow)} == {sam}
+
+
+def test_trailing_slash_is_served_not_redirected(client: TestClient, provider: FakeProvider) -> None:
+    """Starlette's slash redirect built http://<Host>/catalog from the Host header (audit #14)."""
+    sign_in(client, provider)
+    for host in ("testserver", "evil.example"):
+        response = client.get("/catalog/", headers={"Host": host}, follow_redirects=False)
+        assert response.status_code == 200, host
+        assert "location" not in response.headers
+        assert "evil.example" not in response.text
+    assert client.get("/catalog", follow_redirects=False).status_code == 200
+    assert client.get("/static/nope/", follow_redirects=False).status_code == 404

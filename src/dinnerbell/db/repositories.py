@@ -297,6 +297,22 @@ class AuditRepository:
         )
         await self._session.flush()
 
+    async def has_recent(self, household_id: int, action: str, since: datetime, **payload: Any) -> bool:
+        """Whether an audit row with ``action`` since ``since`` has every ``payload`` field equal."""
+        rows = await self._session.scalars(
+            select(AuditRow).where(
+                AuditRow.household_id == household_id, AuditRow.action == action, AuditRow.created_at >= since
+            )
+        )
+        return any(all(row.payload.get(key) == value for key, value in payload.items()) for row in rows)
+
+    async def delete_older(self, action: str, before: datetime) -> int:
+        """Delete the rows with exactly this ``action`` made before ``before``; returns how many."""
+        result = await self._session.execute(
+            delete(AuditRow).where(AuditRow.action == action, AuditRow.created_at < before)
+        )
+        return int(getattr(result, "rowcount", 0) or 0)
+
     async def redact(self, household_id: int, prefixes: tuple[str, ...], payload: dict[str, Any]) -> int:
         """Replace the payload of every audit row whose action starts with one of ``prefixes``,
         and a target naming a Slack user, for ``scrub-test``. Returns how many changed."""

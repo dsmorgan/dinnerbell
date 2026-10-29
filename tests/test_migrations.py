@@ -1588,3 +1588,34 @@ def test_0019_adds_the_composite_table_and_downgrade_removes_it(settings: Settin
     assert "slack_badge_composite" not in _tables(settings)
     _upgrade_to(settings, "0019_slack_badge_composite")
     assert "slack_badge_composite" in _tables(settings)
+
+
+def test_a_second_migrator_waits_then_reports_a_lock(settings: Settings, caplog: pytest.LogCaptureFixture) -> None:
+    """Another process holding the write lock: the loser waits, then raises MigrationLocked
+    instead of a raw "database is locked" (audit #14)."""
+    import sqlite3
+
+    from dinnerbell.db.migrate import MigrationLocked
+
+    run_migrations(settings.sync_database_url, settings.database_path)
+    holder = sqlite3.connect(settings.database_path, isolation_level=None)
+    try:
+        holder.execute("BEGIN IMMEDIATE")
+        with pytest.raises(MigrationLocked) as caught:
+            run_migrations(settings.sync_database_url, settings.database_path, busy_timeout_ms=50, attempts=2)
+        assert "another Dinnerbell process" in str(caught.value)
+        holder.execute("ROLLBACK")
+        run_migrations(settings.sync_database_url, settings.database_path, busy_timeout_ms=50, attempts=2)
+    finally:
+        holder.close()
+
+
+def test_migrate_command_exits_nonzero_when_locked(settings: Settings, monkeypatch: pytest.MonkeyPatch) -> None:
+    from dinnerbell import main as main_module
+    from dinnerbell.db.migrate import MigrationLocked
+
+    def locked(*_args: object, **_kwargs: object) -> None:
+        raise MigrationLocked("The database is locked: another Dinnerbell process")
+
+    monkeypatch.setattr(main_module, "run_migrations", locked)
+    assert main_module._migrate(settings) is False

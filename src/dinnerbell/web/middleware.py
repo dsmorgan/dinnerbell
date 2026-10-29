@@ -387,3 +387,23 @@ def _plain(status: int, text: str) -> PlainTextResponse:
 def too_large(path: str) -> PlainTextResponse:
     hint = " Catalog files can be up to 1 MB." if path.startswith("/catalog/import/") else ""
     return _plain(413, f"That request is too large.{hint}")
+
+
+class TrailingSlashMiddleware:
+    """Serve ``/catalog/`` as ``/catalog`` without a redirect.
+
+    Starlette's own slash redirect builds its ``Location`` from the Host header and the scheme
+    uvicorn sees, which is always ``http`` behind the proxy: it downgraded HTTPS links and echoed
+    any Host. Dropping the slash before routing needs no URL at all. ``/`` and ``/static`` stay as
+    they are."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http":
+            path = scope["path"]
+            if len(path) > 1 and path.endswith("/") and not path.startswith("/static/"):
+                trimmed = path.rstrip("/") or "/"
+                scope = dict(scope, path=trimmed, raw_path=trimmed.encode())
+        await self.app(scope, receive, send)

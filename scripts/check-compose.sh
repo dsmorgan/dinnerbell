@@ -645,6 +645,10 @@ test_secret_files
 : >secrets-test/DINNERBELL_SECRET_KEY
 check "check-secrets: an empty key is a problem" check_fails deploy/check-secrets secrets-test
 test_secret_files
+cp secrets/DINNERBELL_SECRET_KEY.example secrets-test/DINNERBELL_SECRET_KEY
+chmod 600 secrets-test/DINNERBELL_SECRET_KEY
+check "check-secrets: the example placeholder key is a problem" check_fails deploy/check-secrets secrets-test
+test_secret_files
 write_secrets secrets-test "$test_key" - - "$test_client_secret"
 expect "check-secrets: empty Slack tokens are fine" deploy/check-secrets secrets-test
 check "check-secrets prints no secret value" check_prints_no_secret

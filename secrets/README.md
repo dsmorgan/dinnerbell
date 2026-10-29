@@ -6,7 +6,7 @@ docker command line.
 
 | File | What it holds |
 |---|---|
-| `DINNERBELL_SECRET_KEY` | Signing key, at least 32 characters |
+| `DINNERBELL_SECRET_KEY` | Signing key, at least 32 random characters. Dinnerbell refuses the placeholder text and repetitive values |
 | `DINNERBELL_OIDC_CLIENT_SECRET` | Sign-in client secret |
 | `DINNERBELL_SLACK_BOT_TOKEN` | Slack bot token, `xoxb-...` |
 | `DINNERBELL_SLACK_APP_TOKEN` | Slack app-level token, `xapp-...` |

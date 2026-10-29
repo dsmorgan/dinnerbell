@@ -101,7 +101,9 @@ async def nightly_backup(ctx: JobContext) -> None:
         await asyncio.to_thread(backups.run_backup, ctx.database_path, ctx.backup_dir, today)
     except Exception:
         log.exception("database backup failed")
+        ctx.state.backup_failing = True
         return
+    ctx.state.backup_failing = False
     ctx.state.last_backup = backups.last_backup_time(ctx.backup_dir)
 
 
@@ -110,6 +112,10 @@ async def purge_sessions(ctx: JobContext) -> None:
         removed = await auth.purge_expired_sessions(db, now=ctx.clock())
     if removed:
         log.info("expired sessions removed", extra={"count": removed})
+    async with ctx.sessionmaker() as db:
+        refusals = await auth.prune_refusals(db, now=ctx.clock())
+    if refusals:
+        log.info("old sign-in refusals removed", extra={"count": refusals})
 
 
 async def call_tick(ctx: JobContext) -> None:

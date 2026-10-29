@@ -11,7 +11,7 @@ import hashlib
 import logging
 import secrets
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -140,13 +140,43 @@ async def _slack_conflict(db: AsyncSession, member: Member, slack_id: str, holde
         )
 
 
+REFUSAL_ACTION = "auth.sign_in_refused"
+REFUSAL_DEDUPE = timedelta(hours=1)
+"""A refusal of the same person and reason is audited at most once in this time."""
+REFUSAL_RETENTION = timedelta(days=30)
+"""Refusal rows hold a stranger's email, so the hourly job deletes them after this long. Every
+other audit row is kept."""
+
+
+async def prune_refusals(db: AsyncSession, *, now: datetime) -> int:
+    removed = await AuditRepository(db).delete_older(REFUSAL_ACTION, now - REFUSAL_RETENTION)
+    await db.commit()
+    return removed
+
+
 async def _record_refusal(
     db: AsyncSession, household_id: int, claims: IdentityClaims, refusal: Refuse, now: datetime
 ) -> None:
-    await AuditRepository(db).record(
+    log.warning(
+        "sign-in refused",
+        extra={"reason": refusal.reason.value, "member_id": refusal.member_id},
+    )
+    audits = AuditRepository(db)
+    # Anyone with a Slack account can retry a refused sign-in all day: one row per person and
+    # reason per hour keeps the table from growing with every attempt.
+    if await audits.has_recent(
+        household_id,
+        REFUSAL_ACTION,
+        now - REFUSAL_DEDUPE,
+        reason=refusal.reason.value,
+        subject=claims.subject,
+        email=claims.email,
+    ):
+        return
+    await audits.record(
         household_id=household_id,
         actor_member_id=None,
-        action="auth.sign_in_refused",
+        action=REFUSAL_ACTION,
         target=f"member:{refusal.member_id}" if refusal.member_id else None,
         payload={
             "reason": refusal.reason.value,
@@ -158,10 +188,6 @@ async def _record_refusal(
         now=now,
     )
     await db.commit()
-    log.warning(
-        "sign-in refused",
-        extra={"reason": refusal.reason.value, "member_id": refusal.member_id},
-    )
 
 
 async def resolve_session(db: AsyncSession, token: str, *, now: datetime) -> ActiveSession | None:

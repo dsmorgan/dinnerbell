@@ -443,10 +443,10 @@ def test_an_oversized_secret_file_is_refused(monkeypatch: pytest.MonkeyPatch, tm
     from dinnerbell.config import MAX_SECRET_BYTES
 
     directory = secrets_from_files(monkeypatch, tmp_path, **SECRET_FILES)
-    (directory / "DINNERBELL_SECRET_KEY").write_text("k" * (MAX_SECRET_BYTES + 1))
+    (directory / "DINNERBELL_SECRET_KEY").write_text(("k7Qz9xWv" * MAX_SECRET_BYTES)[: MAX_SECRET_BYTES + 1])
     with pytest.raises(ConfigError, match="is larger than 8192 bytes"):
         load_settings()
-    (directory / "DINNERBELL_SECRET_KEY").write_text("k" * MAX_SECRET_BYTES)
+    (directory / "DINNERBELL_SECRET_KEY").write_text(("k7Qz9xWv" * MAX_SECRET_BYTES)[:MAX_SECRET_BYTES])
     assert len(load_settings().secret_key.get_secret_value()) == MAX_SECRET_BYTES
 
 
@@ -469,3 +469,83 @@ def test_a_directory_the_service_cannot_search_is_a_clear_error(
         inner.chmod(0o700)
     assert "Can't read the secret file" in str(caught.value)
     assert "PermissionError" in str(caught.value)
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "replace-with-48-random-characters",
+        "Please_CHANGE-ME_to_something_long_enough_now",
+        "your-secret-key-goes-here-please-xxxx",
+        "a" * 40,
+        "abababababababababababababababab",
+    ],
+)
+def test_placeholder_and_repetitive_secret_keys_are_refused(monkeypatch: pytest.MonkeyPatch, key: str) -> None:
+    message = error_for(monkeypatch, DINNERBELL_SECRET_KEY=key)
+    assert "DINNERBELL_SECRET_KEY" in message
+    assert key not in message
+
+
+def test_the_example_secret_key_file_fails_validation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    example = Path(__file__).resolve().parents[1] / "secrets" / "DINNERBELL_SECRET_KEY.example"
+    (tmp_path / "DINNERBELL_SECRET_KEY").write_text(example.read_text())
+    set_env(monkeypatch)
+    monkeypatch.delenv("DINNERBELL_SECRET_KEY")
+    with pytest.raises(ConfigError) as caught:
+        load_settings(tmp_path)
+    assert "DINNERBELL_SECRET_KEY" in str(caught.value)
+    assert example.read_text().strip() not in str(caught.value)
+
+
+def test_unknown_setting_names_are_found_without_values() -> None:
+    from dinnerbell.config import unknown_setting_names
+
+    environ = {
+        "DINNERBELL_TRUSTED_PROXY": "10.0.0.1",
+        "DINNERBELL_TRUSTED_PROXIES": "10.0.0.0/8",
+        "DINNERBELL_SECRET_KEY": "x",
+        "DINNERBELL_SLACK_APP_TOKEN": "x",
+        "DINNERBELL_TAG": "0.8.0",
+        "DINNERBELL_BUILD": "abc1234",
+        "DINNERBELL_COMPOSE": "podman-compose",
+        "DINNERBELL_ENV_FILE": ".env",
+        "PATH": "/bin",
+    }
+    assert unknown_setting_names(environ) == ["DINNERBELL_TRUSTED_PROXY"]
+
+
+def test_every_dinnerbell_variable_in_the_repo_is_a_setting_or_listed() -> None:
+    import re
+
+    from dinnerbell.config import NON_SETTING_VARIABLES, unknown_setting_names
+
+    root = Path(__file__).resolve().parents[1]
+    found: set[str] = set()
+    for path in [
+        *root.glob("compose*.yaml"),
+        *root.glob(".env*example"),
+        *(root / "deploy").iterdir(),
+        *(root / "scripts").iterdir(),
+    ]:
+        if path.is_file():
+            found |= set(re.findall(r"DINNERBELL_[A-Z_]+", path.read_text(errors="ignore")))
+    found -= {"DINNERBELL_"}
+    assert unknown_setting_names(dict.fromkeys(found, "x")) == []
+    assert "DINNERBELL_TAG" in NON_SETTING_VARIABLES
+
+
+def test_serve_logs_one_warning_for_unknown_names(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    from dinnerbell import main as main_module
+
+    set_env(monkeypatch, DINNERBELL_TRUSTED_PROXY="10.9.8.7")
+    monkeypatch.setattr(main_module, "_command", lambda args, settings: 0)
+    monkeypatch.setattr(main_module, "configure_logging", lambda *args: None)  # keep caplog's handler
+    with caplog.at_level("WARNING", logger="dinnerbell.config"):
+        assert main_module.main(["migrate"]) == 0
+    messages = [r.getMessage() for r in caplog.records if "match no setting" in r.getMessage()]
+    assert len(messages) == 1
+    assert "DINNERBELL_TRUSTED_PROXY" in messages[0]
+    assert "10.9.8.7" not in caplog.text
