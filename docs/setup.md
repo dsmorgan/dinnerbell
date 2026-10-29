@@ -751,7 +751,7 @@ Both instances run from your production clone, as the same user. There's no seco
 | Slack app and command | Dinnerbell, `/dinnerbell` | Dinnerbell Test, `/dinnerbell-test` |
 | Pangolin authentication | Off | On |
 
-The instances share the clone and its `compose.yaml`, the host address in `DINNERBELL_BIND`, the Slack workspace (`DINNERBELL_SLACK_TEAM_ID`). Everything else is separate. The secret key, both Slack tokens, and the sign-in client secret must differ: `deploy/dinnerbell-test` refuses to start test when test's secret files (or, until you move them, `.env.test`) share one with production's.
+The instances share the clone and its `compose.yaml`, the host address in `DINNERBELL_BIND`, and the Slack workspace (`DINNERBELL_SLACK_TEAM_ID`). Everything else is separate. The secret key, both Slack tokens, and the sign-in client secret must differ: `deploy/dinnerbell-test` refuses to start test when test's secret files (or, until you move them, `.env.test`) share one with production's.
 
 ### Create the test channel and Slack app
 
