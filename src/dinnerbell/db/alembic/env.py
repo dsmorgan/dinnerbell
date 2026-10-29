@@ -11,8 +11,9 @@ from __future__ import annotations
 
 from alembic import context
 from sqlalchemy import Connection
+from sqlalchemy.exc import OperationalError
 
-from dinnerbell.db.migrate import migrating, migration_engine
+from dinnerbell.db.migrate import LOCKED_MESSAGE, MigrationLocked, is_locked, migrating, migration_engine
 from dinnerbell.db.models import Base
 
 config = context.config
@@ -42,6 +43,10 @@ def run_migrations_online() -> None:
     try:
         with migrating(engine) as new_connection:
             _run(new_connection)
+    except OperationalError as exc:
+        if is_locked(exc):
+            raise MigrationLocked(LOCKED_MESSAGE) from None
+        raise
     finally:
         engine.dispose()
 

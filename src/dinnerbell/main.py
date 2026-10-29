@@ -16,8 +16,21 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from dinnerbell import __version__, catalog_cli
-from dinnerbell.config import LEGACY_WARNINGS, ConfigError, Settings, is_test_instance, load_settings
-from dinnerbell.db.migrate import IntegrityCheckFailed, SchemaTooNewError, UpgradeBlocked, run_migrations
+from dinnerbell.config import (
+    LEGACY_WARNINGS,
+    ConfigError,
+    Settings,
+    is_test_instance,
+    load_settings,
+    unknown_setting_names,
+)
+from dinnerbell.db.migrate import (
+    IntegrityCheckFailed,
+    MigrationLocked,
+    SchemaTooNewError,
+    UpgradeBlocked,
+    run_migrations,
+)
 from dinnerbell.logs import configure_logging, start_unit
 
 if TYPE_CHECKING:
@@ -187,7 +200,7 @@ def _slack_preview(kind: str | None, base_url: str) -> int:
 def _migrate(settings: Settings) -> bool:
     try:
         run_migrations(settings.sync_database_url, settings.database_path)
-    except (SchemaTooNewError, IntegrityCheckFailed, UpgradeBlocked) as exc:
+    except (SchemaTooNewError, IntegrityCheckFailed, MigrationLocked, UpgradeBlocked) as exc:
         log.critical(str(exc))
         return False
     return True
@@ -480,6 +493,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     configure_logging(settings.log_level, settings.instance_label)
     for field in warnings:  # secrets still in the environment: constant messages, never values
         logging.getLogger("dinnerbell.config").warning(LEGACY_WARNINGS[field])
+    if unknown := unknown_setting_names():  # names only: a typo may sit next to a real value
+        logging.getLogger("dinnerbell.config").warning(
+            "ignoring environment variables that match no setting (a typo?): %s", ", ".join(unknown)
+        )
     if args.command == "serve":  # the server's requests, taps, and jobs each start their own unit
         return _command(args, settings)
     end = start_unit("cli")

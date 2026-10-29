@@ -348,3 +348,43 @@ def test_cooks_must_be_active_but_existing_cooks_stay(
     new = add_item(client, "Cake", kind="home", cuisines="American", cook_ids=[str(sam)])
     assert new.status_code == 400
     assert {c.member_id for c in rows(migrated, CatalogItemCookRow)} == {sam}
+
+
+def test_trailing_slash_is_served_not_redirected(client: TestClient, provider: FakeProvider) -> None:
+    """Starlette's slash redirect built http://<Host>/catalog from the Host header (audit #14)."""
+    sign_in(client, provider)
+    for host in ("testserver", "evil.example"):
+        response = client.get("/catalog/", headers={"Host": host}, follow_redirects=False)
+        assert response.status_code == 200, host
+        assert "location" not in response.headers
+        assert "evil.example" not in response.text
+    assert client.get("/catalog", follow_redirects=False).status_code == 200
+    assert client.get("/static/nope/", follow_redirects=False).status_code == 404
+
+
+def test_a_post_to_a_slash_path_keeps_csrf(client: TestClient, provider: FakeProvider) -> None:
+    sign_in(client, provider)
+    headers = {"Origin": "https://dinnerbell.test"}
+    bare = client.post("/catalog/tags", data={"name": "Noodles"}, headers=headers, follow_redirects=False)
+    slash = client.post("/catalog/tags/", data={"name": "Noodles"}, headers=headers, follow_redirects=False)
+    assert bare.status_code == slash.status_code == 403  # no CSRF token
+    assert "form expired" in slash.text
+    assert "location" not in slash.headers
+    served = submit(client, "/catalog/tags/", {"name": "Noodles", "kind": "other"})
+    assert served.status_code != 404
+    assert submit(client, "/catalog/tags//", {"name": "Soup", "kind": "other"}).status_code == served.status_code
+
+
+def test_repeated_slashes_are_trimmed(client: TestClient, provider: FakeProvider) -> None:
+    assert client.get("//", follow_redirects=False).status_code == 200
+    sign_in(client, provider)
+    for path in ("/catalog//", "/catalog///", "/catalog/"):
+        response = client.get(path, follow_redirects=False)
+        assert response.status_code == 200, path
+        assert "location" not in response.headers
+
+
+def test_a_slash_path_does_not_dodge_the_auth_rate_limit(client: TestClient) -> None:
+    statuses = [client.get("/auth/login/", follow_redirects=False).status_code for _ in range(30)]
+    assert 429 in statuses
+    assert client.get("/auth/login", follow_redirects=False).status_code == 429

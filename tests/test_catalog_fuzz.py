@@ -165,3 +165,10 @@ def test_huge_or_non_ascii_positions_are_unknown_keys(key: str) -> None:
     result = plan_import(parse_catalog(source), CatalogSnapshot.empty())
     assert [e.location for e in result.errors] == ["restaurants[1].modes[0]", key]  # unknown keys sort last
     assert result.errors[-1].message == "unknown field"
+
+
+@pytest.mark.parametrize("value", ["2001-13-45", "2024-02-30", "9" * 5000])
+def test_impossible_dates_and_huge_numbers_are_a_readable_error(value: str) -> None:
+    """PyYAML raises ValueError for these; parse_catalog never raises (audit #14)."""
+    [error] = parse_catalog(f"version: 1\nrestaurants:\n  - name: {value}\n    cuisine: [Thai]\n").errors
+    assert "date or a number" in error.message

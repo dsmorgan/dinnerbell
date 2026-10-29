@@ -645,6 +645,17 @@ test_secret_files
 : >secrets-test/DINNERBELL_SECRET_KEY
 check "check-secrets: an empty key is a problem" check_fails deploy/check-secrets secrets-test
 test_secret_files
+cp secrets/DINNERBELL_SECRET_KEY.example secrets-test/DINNERBELL_SECRET_KEY
+chmod 600 secrets-test/DINNERBELL_SECRET_KEY
+check "check-secrets: the example placeholder key is a problem" check_fails deploy/check-secrets secrets-test
+test_secret_files
+# Non-ASCII keys count by character, as the app does: 40 characters from 5 distinct ones is
+# repetitive, and 32 distinct accented ones is fine (as many bytes as 64, so a byte count passes both).
+printf '%s' "éééééééééééééééààààààààààààààààèèèèèèèè" >secrets-test/DINNERBELL_SECRET_KEY
+check "check-secrets: a repetitive non-ASCII key is a problem" check_fails deploy/check-secrets secrets-test
+printf '%s' "àáâãäåæçèéêëìíîïðñòóôõöøùúûüýþÿāă" >secrets-test/DINNERBELL_SECRET_KEY
+expect "check-secrets: a long non-ASCII key is fine" deploy/check-secrets secrets-test
+test_secret_files
 write_secrets secrets-test "$test_key" - - "$test_client_secret"
 expect "check-secrets: empty Slack tokens are fine" deploy/check-secrets secrets-test
 check "check-secrets prints no secret value" check_prints_no_secret
@@ -686,6 +697,8 @@ for ignore in .containerignore .dockerignore; do
 done
 
 echo "== secret files in git"
+is_placeholder() { grep -qi replace "$1"; }
+is_not_placeholder() { ! is_placeholder "$1"; }
 # Only placeholders and the note may be tracked in secrets/ and secrets-test/, and git must ignore
 # the real files. The placeholders hold no value.
 if command -v git >/dev/null 2>&1 && git rev-parse --git-dir >/dev/null 2>&1; then
@@ -694,8 +707,13 @@ if command -v git >/dev/null 2>&1 && git rev-parse --git-dir >/dev/null 2>&1; th
     for name in $SECRET_NAMES; do
         expect "git ignores secrets/$name and secrets-test/$name" \
             test "$(git check-ignore "secrets/$name" "secrets-test/$name" | wc -l)" -eq 2
-        expect "secrets/$name.example is a placeholder, not a value" grep -q 'replace-with\|^xoxb-replace\|^xapp-replace' "secrets/$name.example"
+        expect "secrets/$name.example is a placeholder, not a value" is_placeholder "secrets/$name.example"
     done
+    # The same marker rule as the app's (case-insensitive "replace"); a real-looking value fails it.
+    realistic=$(mktemp)
+    printf '%s' "$test_key" >"$realistic"
+    check "a real-looking value isn't taken for a placeholder" is_not_placeholder "$realistic"
+    rm -f "$realistic"
 fi
 
 [ "$failures" -eq 0 ] || { echo "check-compose: $failures check(s) failed." >&2; exit 1; }

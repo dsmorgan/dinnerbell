@@ -9,7 +9,7 @@ import re
 import sqlite3
 from collections.abc import Collection
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 from dinnerbell.domain.backups import backups_to_delete
@@ -18,6 +18,10 @@ log = logging.getLogger(__name__)
 PREFIX = "dinnerbell-"
 SUFFIX = ".db"
 PARTIAL = ".partial"
+BACKUP_ATTEMPTS = 2
+# A one-off backup (``pre-*``) that is still being written is younger than this; an older
+# ``pre-*.partial`` was left by a crash.
+STALE_PARTIAL_AFTER = timedelta(hours=1)
 _NAME = re.compile(r"^dinnerbell-(\d{4}-\d{2}-\d{2})\.db$")
 
 
@@ -51,18 +55,40 @@ def last_backup_time(backup_dir: Path) -> datetime | None:
     return datetime.fromtimestamp(newest.stat().st_mtime, UTC)
 
 
-def run_backup(database_path: Path, backup_dir: Path, today: date) -> BackupResult:
-    """Back up ``database_path`` for ``today`` and prune old copies. Idempotent per day."""
+def run_backup(database_path: Path, backup_dir: Path, today: date, *, now: datetime) -> BackupResult:
+    """Back up ``database_path`` for ``today`` and prune old copies. Idempotent per day. ``now``
+    (the injected clock) dates the leftovers to clean up first, so they go even while backups fail."""
     backup_dir.mkdir(parents=True, exist_ok=True)
-    _remove_partials(backup_dir)
+    _remove_partials(backup_dir, now)
     target = backup_path(backup_dir, today)
     created = False
     if not target.exists():
-        _copy_online(database_path, target)
+        _copy_verified(database_path, target)
         created = True
         log.info("database backup written", extra={"backup": target.name})
     deleted = prune(backup_dir)
     return BackupResult(path=target, created=created, deleted=deleted)
+
+
+def _copy_verified(database_path: Path, target: Path) -> None:
+    """Copy the database to ``target`` and run ``quick_check`` on the copy. A copy that fails is
+    deleted and made once more; one that fails twice is deleted, logged as an error, and raises
+    BackupCheckFailed, so a bad file never counts as the day's backup."""
+    for attempt in range(BACKUP_ATTEMPTS):
+        try:
+            _copy_online(database_path, target)
+        except BaseException:
+            target.with_suffix(PARTIAL).unlink(missing_ok=True)
+            raise
+        try:
+            _check(target, ())
+        except (BackupCheckFailed, sqlite3.DatabaseError) as exc:
+            target.unlink(missing_ok=True)
+            log.error("database backup failed its check", extra={"backup": target.name, "attempt": attempt + 1})
+            if attempt == BACKUP_ATTEMPTS - 1:
+                raise BackupCheckFailed("the nightly backup failed SQLite's quick_check twice") from exc
+        else:
+            return
 
 
 def one_off_name(purpose: str, version: str, now: datetime) -> str:
@@ -139,11 +165,21 @@ def prune(backup_dir: Path) -> tuple[Path, ...]:
     return doomed
 
 
-def _remove_partials(backup_dir: Path) -> None:
-    """Delete copies left half-written by a crash or restart mid-backup."""
+def _remove_partials(backup_dir: Path, now: datetime) -> None:
+    """Delete copies left half-written by a crash or restart mid-backup, nightly and one-off."""
     for path in backup_dir.glob(f"{PREFIX}*{PARTIAL}"):
         path.unlink(missing_ok=True)
         log.warning("removed incomplete backup", extra={"backup": path.name})
+    # A one-off backup (reset-history) may be writing in another process: leave a fresh one.
+    cutoff = now - STALE_PARTIAL_AFTER
+    for path in backup_dir.glob(f"pre-*{PARTIAL}"):
+        try:
+            stale = datetime.fromtimestamp(path.stat().st_mtime, UTC) < cutoff
+        except FileNotFoundError:  # finished, or removed, since the glob
+            continue
+        if stale:
+            path.unlink(missing_ok=True)
+            log.warning("removed incomplete backup", extra={"backup": path.name})
 
 
 def _copy_online(database_path: Path, target: Path) -> None:

@@ -195,6 +195,16 @@ def parse_catalog(source: str | bytes) -> ParsedCatalog:
         return _failed(FileError(location, exc.problem or exc.context or "the file isn't valid YAML"))
     except yaml.YAMLError as exc:
         return _failed(FileError("", f"The file isn't valid YAML: {exc}"))
+    except ValueError:
+        # PyYAML's own constructors raise it for a date that can't exist (2001-13-45) and for a
+        # number of more than 4,300 digits; neither carries a position.
+        return _failed(
+            FileError(
+                "",
+                "A value looks like a date or a number but isn't one that exists, such as 2001-13-45 "
+                "or a number of thousands of digits. Put text like that in quotes.",
+            )
+        )
     except RecursionError:  # a backstop; MAX_DEPTH stops nesting long before the stack runs out
         return _failed(FileError("", f"Values are nested more than {MAX_DEPTH} levels deep."))
     if raw is None:

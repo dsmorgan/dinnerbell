@@ -39,7 +39,12 @@ async def healthz(context: Context) -> JSONResponse:
     healthy = database_ok and scheduler != "stopped"
     if not healthy:
         status = "error"
-    elif scheduler == "ok" and slack in {"connected", "not_configured"} and (oldest or timedelta(0)) <= STALE_OUTBOX:
+    elif (
+        scheduler == "ok"
+        and slack in {"connected", "not_configured"}
+        and (oldest or timedelta(0)) <= STALE_OUTBOX
+        and not state.backup_failing
+    ):
         status = "ok"
     else:
         status = "degraded"
@@ -56,7 +61,7 @@ async def healthz(context: Context) -> JSONResponse:
             "failed": backlog[1],
             "oldest_pending_age": None if oldest is None else int(oldest.total_seconds()),
         },
-        "backup": {"last_success": _iso(state.last_backup)},
+        "backup": {"last_success": _iso(state.last_backup), "failing": state.backup_failing},
     }
     if context.settings.instance_label:
         body["instance"] = context.settings.instance_label

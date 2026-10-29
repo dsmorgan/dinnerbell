@@ -28,6 +28,7 @@ from dinnerbell.web.middleware import (
     RequestContextMiddleware,
     SecurityHeadersMiddleware,
     SessionCookieMiddleware,
+    TrailingSlashMiddleware,
 )
 from dinnerbell.web.ratelimit import SlidingWindowLimiter
 from dinnerbell.web.render import error_page, is_htmx
@@ -64,6 +65,9 @@ def build_app(settings: Settings, lifespan: Lifespan) -> FastAPI:
     cookies = CookieNames.for_settings(settings)
     app = FastAPI(
         lifespan=lifespan,
+        # Starlette's slash redirect uses the Host header and uvicorn's scheme (always http behind
+        # the proxy). TrailingSlashMiddleware serves both forms without a redirect instead.
+        redirect_slashes=False,
         docs_url=None,
         redoc_url=None,
         openapi_url=None,
@@ -102,6 +106,7 @@ def build_app(settings: Settings, lifespan: Lifespan) -> FastAPI:
         BodyLimitMiddleware, default_limit=DEFAULT_BODY_LIMIT, path_limits=[(IMPORT_PATH_PREFIX, IMPORT_BODY_LIMIT)]
     )
     app.add_middleware(RequestContextMiddleware, trusted_proxies=settings.trusted_proxies)
+    app.add_middleware(TrailingSlashMiddleware)
     return app
 
 
