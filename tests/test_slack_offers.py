@@ -271,3 +271,27 @@ def test_home_keeps_within_100_blocks_with_the_footer_last() -> None:
     assert "Today on the web" in json.dumps(blocks[-2])
     shown = sum(1 for b in blocks if str(b.get("block_id", "")).startswith("event-actions-"))
     assert f"…and {61 - shown} more" in json.dumps(blocks, ensure_ascii=False)
+
+
+async def test_a_redelivered_offer_submission_posts_one_offer(slack: Slack, house: House) -> None:
+    siam = house.items["Siam Garden"].id
+    payload = view_submission(SLACK_IDS["Alex"], ids.OFFER_VIEW, offer_values(siam), ids.FormOrigin(CHANNEL).encode())
+    for _ in range(2):  # Slack redelivers the same payload, so the same trigger ID
+        await send(slack.conn.app, "interactive", payload)
+        await slack.conn.interactions.settle()
+    assert len([e for e in await house.outbox() if e.kind == "offer_posted"]) == 1
+    assert len([t for t in slack.ephemerals("Alex") if "Posted your lunch offer" in t]) == 1
+
+
+async def test_a_redelivered_log_submission_logs_one_meal(slack: Slack, house: House) -> None:
+    values = state(
+        item={"selected_option": {"value": str(house.items["Taqueria"].id)}},
+        slot={"selected_option": {"value": "dinner"}},
+        day={"selected_date": (DAY - timedelta(days=1)).isoformat()},
+        who={"selected_options": [{"value": str(house["Sam"].id)}]},
+    )
+    payload = view_submission(SLACK_IDS["Sam"], ids.LOG_VIEW, values, ids.FormOrigin(CHANNEL).encode())
+    for _ in range(2):
+        await send(slack.conn.app, "interactive", payload)
+        await slack.conn.interactions.settle()
+    assert len(await house.meals()) == 1

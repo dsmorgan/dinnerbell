@@ -5,20 +5,25 @@ or spend Slack calls."""
 
 from __future__ import annotations
 
+import json
+import logging
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
 from dinnerbell.channels.slack import ids
-from dinnerbell.channels.slack.interactions import SEEN_TRIGGERS, Recent
+from dinnerbell.channels.slack.interactions import BROKEN, DOUBLE_TAP, SEEN_TRIGGERS, TRY_LATER, Recent
 from dinnerbell.config import Settings
 from dinnerbell.db.repositories import MemberRepository
 from dinnerbell.domain import notifications as note
+from dinnerbell.domain.events import AssignmentRole, EventState
+from dinnerbell.domain.meals import Slot
+from dinnerbell.services import calls
 from dinnerbell.services.database import Database, open_database
 from tests.support.calls import OPENS, REMIND, RESPOND_BY, House, dinner_id, furnish, make_house
 from tests.support.clock import FakeClock
-from tests.support.fake_slack import block_action
+from tests.support.fake_slack import TEAM, Failure, block_action
 from tests.support.slack import Slack, wire
 
 pytestmark = pytest.mark.anyio
@@ -163,3 +168,130 @@ async def test_one_strangers_loop_does_not_silence_another(slack: Slack) -> None
         await slack.command("U9STRANGER", "call")
     await slack.command("U8OTHER", "call")
     assert slack.ephemerals("U8OTHER")
+
+
+async def test_a_vote_tapped_again_within_two_seconds_is_ignored_and_says_so(slack: Slack, house: House) -> None:
+    eid, pid = await _voting(slack, house)
+    value = ids.proposal_value(eid, pid)
+    await slack.click("Alex", "vote", value)
+    house.clock.advance(timedelta(seconds=1.5))
+    await slack.click("Alex", "vote", value)
+    assert house["Alex"].id in (await house.context(eid)).votes.get(pid, [])
+    assert slack.ephemerals("Alex")[-1] == DOUBLE_TAP
+    house.clock.advance(timedelta(seconds=1))  # 2.5 s after the first tap: a deliberate undo
+    await slack.click("Alex", "vote", value)
+    assert house["Alex"].id not in (await house.context(eid)).votes.get(pid, [])
+
+
+async def test_votes_for_two_picks_within_two_seconds_both_count(slack: Slack, house: House) -> None:
+    eid, first = await _voting(slack, house)
+    second = (await house.context(eid)).proposals[1].id
+    await slack.click("Alex", "vote", ids.proposal_value(eid, first))
+    await slack.click("Alex", "vote", ids.proposal_value(eid, second))
+    votes = (await house.context(eid)).votes
+    assert house["Alex"].id in votes.get(first, []) and house["Alex"].id in votes.get(second, [])
+
+
+async def test_different_toggles_within_two_seconds_both_count(slack: Slack, house: House) -> None:
+    eid, pid = await _voting(slack, house)
+    await slack.click("Alex", "vote", ids.proposal_value(eid, pid))
+    await slack.click("Alex", "offer_order", str(eid))
+    ctx = await house.context(eid)
+    response = ctx.response_of(house["Alex"].id)
+    assert house["Alex"].id in ctx.votes.get(pid, []) and response is not None and response.offers
+
+
+async def test_a_failed_tap_is_not_taken_for_a_duplicate_when_retried(
+    slack: Slack, house: House, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    eid, pid = await _voting(slack, house)
+    real, failures = calls.toggle_vote, []
+
+    async def flaky(*args: object, **kwargs: object) -> bool:
+        if not failures:
+            failures.append(1)
+            raise RuntimeError("database blip")
+        return await real(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(calls, "toggle_vote", flaky)
+    payload = block_action("U01ALEX", "vote", ids.proposal_value(eid, pid))
+    await slack._send("interactive", payload)
+    assert slack.ephemerals("Alex")[-1] == BROKEN
+    await slack._send("interactive", payload)  # the same payload again, at once: a retry, not a duplicate
+    assert house["Alex"].id in (await house.context(eid)).votes.get(pid, [])
+
+
+async def test_a_stranger_past_the_limit_gets_one_try_later_home_view(slack: Slack) -> None:
+    for _ in range(5):
+        await slack.open_home("U9STRANGER")
+    slack.fake.clear()
+    await slack.open_home("U9STRANGER")
+    await slack.open_home("U9STRANGER")
+    (view,) = slack.fake.of("views.publish")
+    assert TRY_LATER in json.dumps(view.args["view"])
+
+
+async def test_a_broken_member_lookup_still_acknowledges_the_command(
+    slack: Slack, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def down(_: str) -> bool:
+        raise RuntimeError("database down")
+
+    monkeypatch.setattr(slack.conn.interactions, "_known", down)
+    acks: list[dict[str, object]] = []
+
+    async def ack(**kwargs: object) -> None:
+        acks.append(kwargs)
+
+    with pytest.raises(RuntimeError):
+        await slack.conn.interactions._command(ack, {"team_id": TEAM, "text": "help", "user_id": "U01ALEX"})
+    assert len(acks) == 1
+
+
+async def test_a_failed_art_forget_after_the_text_post_does_not_fail_the_delivery(
+    slack: Slack, house: House, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from tests.test_slack_badge_art import earn
+
+    async def broken(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("database blip")
+
+    monkeypatch.setattr(slack.conn.badge_files, "forget", broken)
+    refused = Failure("invalid_blocks")
+    slack.fake.fail("chat.postMessage", refused, refused, refused)
+    await earn(house)
+    result = await slack.drain()
+    assert (result.delivered, result.failed) == (1, 0)
+    assert len(slack.fake.of("chat.postMessage")) == 4  # three tries with art, then one text post: once
+
+
+async def test_dropping_a_deactivated_assignees_dm_is_counted_and_warned(
+    slack: Slack, house: House, caplog: pytest.LogCaptureFixture
+) -> None:
+    house.clock.now = OPENS
+    await house.tick()
+    eid = await dinner_id(house)
+    channel = slack.conn.channel
+    assert channel.state is not None
+    async with house.sessionmaker() as db:
+        await MemberRepository(db).update(house.household.id, house["Kim"].id, house.clock(), active=False)
+        await db.commit()
+    kim = note.PersonInfo(house["Kim"].id, "Kim")
+    event = note.EventInfo(
+        id=eid,
+        household_id=house.household.id,
+        slot=Slot.DINNER,
+        day=date(2026, 10, 22),
+        state=EventState.DECIDED,
+        run=1,
+        path=f"/events/{eid}",
+        timezone="America/Chicago",
+        respond_deadline=house.clock(),
+        vote_deadline=house.clock(),
+        coordinator=None,
+    )
+    vacated = note.RoleVacated(event, kim, kim, (AssignmentRole.PICKUP,))
+    with caplog.at_level(logging.WARNING):
+        result = await channel.deliver(vacated)
+    assert result.ref is None and channel.state.dms_dropped_inactive == 1
+    assert any("role message dropped" in r.getMessage() and r.event_id == eid for r in caplog.records)  # type: ignore[attr-defined]

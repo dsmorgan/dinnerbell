@@ -69,6 +69,9 @@ class SlackState:
     problem: str | None = None
     connected: Callable[[], Awaitable[bool]] | None = None
     dms_dropped: int | None = None
+    dms_dropped_inactive: int = 0
+    """Queued direct messages dropped because the recipient was deactivated. Counted since startup, on
+    every instance; not in /healthz."""
 
     async def status(self) -> str:
         if not self.configured:
