@@ -460,8 +460,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(exc, file=sys.stderr)
         return 2
     if args.command == "catalog":
-        for warning in warnings:  # stdout carries the export
-            print(warning, file=sys.stderr)
+        # No secret warning here: stdout carries the export, and `serve` warns on every start.
         # Before logging is configured: logs go to stdout, where the export goes. The read-only
         # open may create -wal and -shm files next to the database; SQLite gives them the
         # database file's own mode, whatever the umask, so they're as private as the database,
