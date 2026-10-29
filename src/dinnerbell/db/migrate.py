@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -25,7 +27,7 @@ class SchemaTooNewError(Exception):
 
 
 class IntegrityCheckFailed(Exception):
-    """After migrating, some rows refer to rows that don't exist. Nothing was changed."""
+    """After migrating up or down, some rows refer to rows that don't exist. Nothing was changed."""
 
 
 class UpgradeBlocked(Exception):
@@ -59,14 +61,29 @@ def _check_known(connection: Connection, script: ScriptDirectory) -> None:
             )
 
 
-def _check_references(connection: Connection) -> None:
+def check_references(connection: Connection) -> None:
+    """Raise ``IntegrityCheckFailed``, naming the tables, if any row refers to a row that doesn't
+    exist. The log gets the first few (table, rowid, parent table), never a row's contents."""
     broken = connection.exec_driver_sql("PRAGMA foreign_key_check").all()
     if broken:
         tables = ", ".join(sorted({str(row[0]) for row in broken}))
+        for table, rowid, parent, _ in broken[:5]:
+            log.error("dangling reference", extra={"table": table, "rowid": rowid, "parent": parent})
         raise IntegrityCheckFailed(
-            f"The schema upgrade would leave rows in {tables} referring to rows that don't exist, so "
-            "nothing was changed. Restore a backup from /data/backups/ or report this as a bug."
+            f"Rows in {tables} refer to rows that don't exist: this schema change left them that way, "
+            "or they were already broken before it. Nothing was changed. Restore a backup from "
+            "/data/backups/; if the database was fine before, report this as a bug."
         )
+
+
+@contextmanager
+def migrating(engine: Engine) -> Iterator[Connection]:
+    """One transaction for a migration, up or down. ``engine`` is a ``migration_engine`` (foreign
+    keys off). Every reference is checked before the commit, and a broken one rolls everything
+    back. The app, the Alembic CLI (``env.py``), and the tests all migrate through this (#36)."""
+    with engine.begin() as connection:
+        yield connection
+        check_references(connection)
 
 
 def run_migrations(sync_url: str, database_path: Path) -> None:
@@ -75,17 +92,17 @@ def run_migrations(sync_url: str, database_path: Path) -> None:
     Foreign keys are off while migrating: SQLite rebuilds a table to change it (Alembic's batch
     mode), and dropping the old copy with foreign keys on would cascade-delete or null out the
     rows that refer to it. Every reference is checked before committing instead, and any broken
-    one rolls the whole upgrade back, schema changes included (see ``migration_engine``).
+    one rolls the whole upgrade back, schema changes included (see ``migration_engine`` and
+    ``migrating``).
     Connections the app opens keep foreign keys on.
     """
     database_path.parent.mkdir(parents=True, exist_ok=True)
     engine = migration_engine(sync_url)
     try:
-        with engine.begin() as connection:
+        with migrating(engine) as connection:
             config = _alembic_config(connection)
             _check_known(connection, ScriptDirectory.from_config(config))
             command.upgrade(config, "head")
-            _check_references(connection)
     finally:
         engine.dispose()
     log.info("database schema is current", extra={"revision": head_revision()})

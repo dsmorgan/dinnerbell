@@ -2,7 +2,7 @@
 
 When answers close on a call, Dinnerbell proposes a few places to vote on, 3 unless your admin changed it. This page explains how it chooses them, what it never does, and how to tune it. The precise rules are in [spec section 7](spec.md#7-ranking), and the reasoning is in [ADR 0007](adr/0007-seeded-weighted-ranking.md).
 
-In short: Dinnerbell first throws out everything that doesn't work for tonight, scores what's left, includes places someone suggested (leaving at least one place to the draw), then draws the rest at random. A better score makes a place more likely, but it doesn't always win.
+In short: Dinnerbell first throws out everything that doesn't work for tonight, scores what's left, includes places someone suggested (the last place in the vote isn't reserved for a suggestion), then draws the rest at random. A better score makes a place more likely, but it doesn't always win.
 
 ## What can never be picked
 
@@ -30,7 +30,7 @@ Each candidate gets a score, a sum of these parts, each multiplied by its weight
 | Usual way to get it | +0.5 if it's the slot's usual way, such as pickup | 1 |
 | Volunteer knows the dish | +0.5 if the volunteer cook is on its cook list | 1 |
 
-A place that someone suggested for this call is proposed ahead of the draw, if it passes the rules above. A suggestion is a request, not a preference. At least one place in every vote is drawn, though, so at most one fewer than the number of proposals are suggestions that way: with 3 proposals, 2. When more places were suggested than that, the best-scoring suggestions go in (equal scores are chosen at random), and the others stay in the draw, where their suggestion makes them much more likely. The same limit covers a top-up with places for other meals.
+A place that someone suggested for this call is proposed ahead of the draw, if it passes the rules above. A suggestion is a request, not a preference. The last place in every vote isn't reserved for a suggestion, though, so at most one fewer than the number of proposals are suggestions that way: with 3 proposals, 2. When more places were suggested than that, the best-scoring suggestions go in (equal scores are chosen at random), and the others stay in the draw, where their suggestion makes them much more likely. The same limit covers a top-up with places for other meals.
 
 The rest of the proposals are drawn at random, and each point of score makes a place more likely by the same factor. At the default randomness, a place 1 point better is about 2.7 times as likely to be picked, and 2 points better about 7.4 times. Places with the same score have the same chance until a pick shares their cuisine (see below). Names never matter.
 

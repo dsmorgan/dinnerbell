@@ -8,7 +8,12 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ### Changed
 
+- `alembic downgrade` through the command line no longer deletes rows. It now runs with foreign keys off, like `dinnerbell migrate`, and checks every reference before it commits (#36). Production still rolls back by restoring a backup.
 - Food Critic now shows everywhere like every other badge (#117), but never gets a post of its own, because a post would interrupt the channel each time someone gives feedback. Dinnerbell includes it in the monthly recap and the household's newest badges, uploads and prewarms its art (65 files, not 60), and draws it in the announcement, the compact icon rows, and the picture on App Home (up to 13 badges, two rows of 7 and 6). The badge says only how many times you gave feedback, never what you said: answers still aren't shown anywhere, not even as counts. Dinnerbell also no longer logs which meal you gave feedback on.
+
+### Fixed
+
+- Docs (#99): the ranking page, the spec, and ADR 0007 no longer say a place in the vote is always drawn. The last place is only not reserved for a suggestion, so at temperature 0 it can be one. The 0.7.0 entry below still has the old wording.
 
 ### Upgrade notes
 

@@ -273,8 +273,9 @@ def rank(snapshot: RankingSnapshot) -> list[Ranked]:
     """Up to ``snapshot.limit`` proposals, each with its reasons, in the order drawn: items for
     the call's meal, then, only when too few of those fit, a top-up of items for other meals
     (#72). Within each group, places suggested for the call come first, but at most ``limit - 1``
-    of them across both groups, then a weighted draw from the rest, so at least one place in the
-    vote is always drawn. The hard filters apply to both groups, so no pick is ever a veto, an
+    of them across both groups, then a weighted draw from the rest, so the last place in the vote
+    is not reserved for a suggestion (at temperature 0 it is the best-scoring place left, which
+    can be a suggestion). The hard filters apply to both groups, so no pick is ever a veto, an
     unmet guest need, an uncovered mode, or a needless repeat; chance only orders what passed
     them."""
     limit = max(snapshot.limit, 0)
