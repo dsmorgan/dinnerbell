@@ -88,10 +88,6 @@ BADGES = (
     Badge(BadgeKey.GAMBLER, "Gambler", "calls where you left the choice to others", Kind.GAMBLED),
 )
 BY_KEY = {b.key: b for b in BADGES}
-QUIET_BADGES = frozenset({BadgeKey.FOOD_CRITIC})
-"""Badges the household never hears about: Food Critic counts feedback, and who gave feedback is
-as private as what they said (FR-49). They are earned and shown to the member, but never announced
-in the channel, recapped, or listed among the household's newest badges."""
 ROLL_KINDS = frozenset({Kind.COOKED, Kind.PICKED_UP, Kind.ORDERED})
 """Pitching in for On a Roll: a week counts when the member cooked, picked up, or ordered."""
 

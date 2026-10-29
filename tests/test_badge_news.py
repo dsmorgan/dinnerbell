@@ -185,28 +185,41 @@ async def test_a_post_only_names_what_the_household_already_sees(house: House) -
         assert secret not in text_.lower()
 
 
-# Quiet awards -------------------------------------------------------------------------------------
+# Food Critic and quiet awards ---------------------------------------------------------------------
 
 
-async def test_food_critic_is_never_announced_and_is_marked_quiet(house: House) -> None:
-    """Who gave feedback is as private as what they said (FR-49): the badge stays the member's own."""
+async def test_food_critic_is_announced_like_any_other_badge(house: House) -> None:
     await award(house, "Kim", BadgeKey.FOOD_CRITIC, Tier.FIRST)
-    assert await announce(house) == 0
-    assert await posts(house, "badges_earned") == [] and await states(house) == {"skipped"}
-    # Beside a badge that is news, it is left out of the post and the post is unchanged.
-    await award(house, "Kim", BadgeKey.FOOD_CRITIC, Tier.BRONZE)
-    await award(house, "Alex", BadgeKey.CHEF, Tier.FIRST)
     assert await announce(house) == 1
     (post,) = await posts(house, "badges_earned")
     assert isinstance(post, note.BadgesEarned)
-    assert [n.person.name for n in post.news] == ["Alex"] and "Critic" not in json.dumps(post.news, default=str)
-    assert await pending(house) == []
+    (news,) = post.news
+    assert news.person.name == "Kim" and [(b.name, b.tier) for b in news.badges] == [("Food Critic", "First")]
+    assert await pending(house) == [] and await states(house) == {"announced"}
+    # Beside another badge it is part of the same post.
+    await award(house, "Kim", BadgeKey.FOOD_CRITIC, Tier.BRONZE)
+    await award(house, "Alex", BadgeKey.CHEF, Tier.FIRST)
+    assert await announce(house) == 1
+    last = (await posts(house, "badges_earned"))[-1]
+    assert isinstance(last, note.BadgesEarned)
+    assert [n.person.name for n in last.news] == ["Alex", "Kim"]
+
+
+async def test_a_food_critic_award_already_skipped_is_never_announced_later(house: House) -> None:
+    """The 0.8.0 release marked these ``skipped``; the upgrade leaves them that way."""
+    await award(house, "Kim", BadgeKey.FOOD_CRITIC, Tier.FIRST, how=Announcement.SKIPPED)
+    assert await announce(house) == 0 and await announce(house) == 0
+    assert await posts(house, "badges_earned") == [] and await states(house) == {"skipped"}
+    # Another Food Critic tier earned after the upgrade is news, and only that tier.
+    await award(house, "Kim", BadgeKey.FOOD_CRITIC, Tier.BRONZE)
+    assert await announce(house) == 1
+    (post,) = await posts(house, "badges_earned")
+    assert isinstance(post, note.BadgesEarned)
+    assert [(b.name, b.tier) for b in post.news[0].badges] == [("Food Critic", "Bronze")]
+    assert await states(house) == {"skipped", "announced"}
 
 
 async def test_gambler_is_announced_by_name_because_votes_are_visible_on_the_call(house: House) -> None:
-    from dinnerbell.domain.badges import QUIET_BADGES
-
-    assert BadgeKey.GAMBLER not in QUIET_BADGES
     await award(house, "Kim", BadgeKey.GAMBLER, Tier.FIRST)
     assert await announce(house) == 1
     (post,) = await posts(house, "badges_earned")
@@ -216,20 +229,47 @@ async def test_gambler_is_announced_by_name_because_votes_are_visible_on_the_cal
     assert await pending(house) == [] and await states(house) == {"announced"}
 
 
-async def test_a_gave_feedback_badge_from_real_feedback_stays_quiet(house: House) -> None:
+async def give_feedback(house: House, who: str) -> None:
     from dinnerbell.domain.feedback import FeedbackInput, Rating
     from dinnerbell.services import feedback
 
-    await dinner(house)
-    await announce(house)
     async with house.sessionmaker() as db:
         meal = (await house.meals())[0]
-        await feedback.give(
-            db, house["Alex"], meal.id, FeedbackInput(Rating.LOVED, None, frozenset()), now=house.clock()
-        )
-    assert ("Alex", BadgeKey.FOOD_CRITIC, Tier.FIRST) in [(n, b, t) for n, b, t, _ in await _awards(house)]
-    assert await announce(house) == 0
-    assert len(await posts(house, "badges_earned")) == 1  # still only the call's post
+        await feedback.give(db, house[who], meal.id, FeedbackInput(Rating.LOVED, None, frozenset()), now=house.clock())
+
+
+async def test_feedback_given_days_after_the_call_announces_once_in_its_own_post(house: House) -> None:
+    await dinner(house)
+    await announce(house)
+    assert len(await posts(house, "badges_earned")) == 1  # the call's post
+    house.clock.now += timedelta(days=3)
+    await give_feedback(house, "Alex")
+    mine = [a for a in await _awards(house) if a[1] is BadgeKey.FOOD_CRITIC]
+    assert mine == [("Alex", BadgeKey.FOOD_CRITIC, Tier.FIRST, Announcement.PENDING)]
+    async with house.sessionmaker() as db:
+        (row,) = (await db.scalars(select(BadgeAwardRow).where(BadgeAwardRow.badge_key == "food_critic"))).all()
+        assert row.event_id is None  # not tied to the finished call, so it never joins that call's post
+    assert await announce(house) == 1 and await announce(house) == 0
+    posted = await posts(house, "badges_earned")
+    assert len(posted) == 2
+    latest = posted[-1]
+    assert isinstance(latest, note.BadgesEarned)
+    assert [(n.person.name, [b.name for b in n.badges]) for n in latest.news] == [("Alex", ["Food Critic"])]
+    # Changing the feedback earns nothing new and posts nothing.
+    await give_feedback(house, "Alex")
+    assert await announce(house) == 0 and len(await posts(house, "badges_earned")) == 2
+
+
+async def test_feedback_from_several_members_before_a_tick_is_one_post(house: House) -> None:
+    await dinner(house)
+    await announce(house)
+    house.clock.now += timedelta(days=2)
+    await give_feedback(house, "Alex")
+    await give_feedback(house, "Sam")
+    assert await announce(house) == 1
+    latest = (await posts(house, "badges_earned"))[-1]
+    assert isinstance(latest, note.BadgesEarned)
+    assert [n.person.name for n in latest.news] == ["Alex", "Sam"]
 
 
 async def _awards(house: House) -> list[tuple[str, BadgeKey, Tier, Announcement]]:
@@ -294,8 +334,8 @@ async def test_a_big_backlog_is_capped_in_people_and_badges(house: House) -> Non
     assert len(post.news) == announcements.MAX_PEOPLE and post.more_people == 15 - announcements.MAX_PEOPLE
     kim = next(n for n in post.news if n.person.name == "Kim")
     assert (
-        len(kim.badges) == announcements.MAX_BADGES and kim.more == 12 - announcements.MAX_BADGES
-    )  # thirteen badges, less the quiet Food Critic
+        len(kim.badges) == announcements.MAX_BADGES and kim.more == 13 - announcements.MAX_BADGES
+    )  # all thirteen badges, Food Critic included
     assert {b.tier for b in kim.badges} == {"Diamond"}  # five tiers at once show as the highest
     assert await pending(house) == []  # all of it is marked announced, shown or not
 
@@ -401,7 +441,7 @@ async def test_the_recap_names_only_active_members(house: House) -> None:
     assert "Alex" in json.dumps(post.thanks, default=str)
 
 
-async def test_the_recap_shows_no_feedback_and_no_quiet_badges(house: House) -> None:
+async def test_the_recap_lists_food_critic_but_not_quiet_awards(house: House) -> None:
     await october(house)
     await award(house, "Kim", BadgeKey.FOOD_CRITIC, Tier.FIRST, how=Announcement.PENDING)
     await award(house, "Lee", BadgeKey.CHEF, Tier.FIRST, how=Announcement.SKIPPED)
@@ -410,7 +450,7 @@ async def test_the_recap_shows_no_feedback_and_no_quiet_badges(house: House) -> 
     (post,) = await posts(house, "monthly_recap")
     assert isinstance(post, note.MonthlyRecap)
     shown = json.dumps(post.badges, default=str)
-    assert "Critic" not in shown and "Lee" not in shown
+    assert "Food Critic" in shown and "Kim" in shown and "Lee" not in shown
 
 
 async def test_a_missed_first_posts_once_on_the_next_tick_within_the_window(house: House) -> None:
@@ -722,12 +762,12 @@ def test_the_caps_hold_at_the_boundary() -> None:
     assert none_left == 0 and exact[0].more == 0 and len(exact) == 10
 
 
-async def test_a_pending_food_critic_is_not_in_the_newest_badges_before_any_announcer_runs(house: House) -> None:
+async def test_a_pending_food_critic_is_in_the_newest_badges_like_any_other(house: House) -> None:
     await award(house, "Kim", BadgeKey.FOOD_CRITIC, Tier.FIRST)
     await award(house, "Alex", BadgeKey.CHEF, Tier.FIRST)
     async with house.sessionmaker() as db:
         recent = await BadgeRepository(db).recent(house.household.id, 10)
-    assert [a.badge for a in recent] == [BadgeKey.CHEF]
+    assert [a.badge for a in recent] == [BadgeKey.CHEF, BadgeKey.FOOD_CRITIC]
 
 
 async def test_a_bad_time_zone_logs_one_warning_and_posts_nothing(

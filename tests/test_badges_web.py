@@ -353,7 +353,7 @@ def test_household_labels_have_no_you() -> None:
     assert HOUSEHOLD_LABELS[Kind.GAVE_FEEDBACK] == "Feedback given"
 
 
-def test_the_household_view_leaves_out_feedback_badges_but_the_owner_keeps_theirs(
+def test_the_household_view_lists_food_critic_like_any_badge_without_feedback_content(
     house: Settings, provider: FakeProvider, client: TestClient
 ) -> None:
     kim = member(house, "kim@example.com").id
@@ -361,12 +361,13 @@ def test_the_household_view_leaves_out_feedback_badges_but_the_owner_keeps_their
     award(house, kim, "chef", Tier.FIRST, ago=timedelta(hours=2))
     html = page(client.get("/stats"))  # signed in as the admin
     lately = html[html.index("Lately earned") :]
-    assert "Chef · First" in lately and "Food Critic" not in lately
-    assert "1 badge earned together" in html
+    assert "Chef · First" in lately and "Food Critic · First" in lately
+    assert "2 badges earned together" in html
     sign_in_as(client, provider, "kim@example.com")
     mine = page(client.get("/stats"))
     assert "Food Critic<span" in mine[: mine.index("Lately earned")]
-    assert "Food Critic · First" not in mine[mine.index("Lately earned") :]
+    assert "Food Critic · First" in mine[mine.index("Lately earned") :]
+    assert "loved" not in html.lower() and "not again" not in html.lower()  # FR-49: never what anyone said
 
 
 def test_no_page_repeats_an_id(house: Settings, client: TestClient) -> None:

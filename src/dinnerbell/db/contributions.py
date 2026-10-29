@@ -4,7 +4,7 @@ failing, so recording the same call twice, or two at once, is safe and says how 
 
 from __future__ import annotations
 
-from collections.abc import Collection, Iterable
+from collections.abc import Iterable
 from datetime import date, datetime
 
 from sqlalchemy import delete, func, select, update
@@ -12,7 +12,7 @@ from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dinnerbell.db.models import BadgeAwardRow, ContributionRow
-from dinnerbell.domain.badges import QUIET_BADGES, Announcement, Award, BadgeKey, Tier
+from dinnerbell.domain.badges import Announcement, Award, BadgeKey, Tier
 from dinnerbell.domain.contributions import Credit, Kind
 
 
@@ -183,13 +183,12 @@ class BadgeRepository:
 
     async def recent(self, household_id: int, limit: int) -> list[Award]:
         """The newest awards in the household, newest first. Quiet awards (``skipped``: the
-        backfill, a lowered threshold) are not news, so they are left out, and so are ``QUIET_BADGES``."""
+        backfill, a lowered threshold) are not news, so they are left out."""
         rows = await self._session.scalars(
             select(BadgeAwardRow)
             .where(
                 BadgeAwardRow.household_id == household_id,
                 BadgeAwardRow.announcement != Announcement.SKIPPED.value,
-                BadgeAwardRow.badge_key.not_in([b.value for b in QUIET_BADGES]),
             )
             .order_by(BadgeAwardRow.awarded_at.desc(), BadgeAwardRow.id.desc())
             .limit(limit)
@@ -198,7 +197,7 @@ class BadgeRepository:
 
     async def earned_between(self, household_id: int, start: datetime, end: datetime) -> list[Award]:
         """Awards made from ``start`` up to, not including, ``end`` that the household hears about:
-        not the quiet ones (``skipped``) and not ``QUIET_BADGES``. Oldest first."""
+        not the quiet ones (``skipped``). Oldest first."""
         rows = await self._session.scalars(
             select(BadgeAwardRow)
             .where(
@@ -206,20 +205,14 @@ class BadgeRepository:
                 BadgeAwardRow.awarded_at >= start,
                 BadgeAwardRow.awarded_at < end,
                 BadgeAwardRow.announcement != Announcement.SKIPPED.value,
-                BadgeAwardRow.badge_key.not_in([b.value for b in QUIET_BADGES]),
             )
             .order_by(BadgeAwardRow.awarded_at, BadgeAwardRow.id)
         )
         return [_award(r) for r in rows]
 
-    async def count(self, household_id: int, *, without: Collection[BadgeKey] = ()) -> int:
+    async def count(self, household_id: int) -> int:
         n = await self._session.scalar(
-            select(func.count())
-            .select_from(BadgeAwardRow)
-            .where(
-                BadgeAwardRow.household_id == household_id,
-                BadgeAwardRow.badge_key.not_in([k.value for k in without]),
-            )
+            select(func.count()).select_from(BadgeAwardRow).where(BadgeAwardRow.household_id == household_id)
         )
         return int(n or 0)
 

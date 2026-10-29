@@ -23,7 +23,7 @@ from dinnerbell.db.badge_files import BadgeFileRepository
 from dinnerbell.db.models import SlackBadgeCompositeRow
 from dinnerbell.db.repositories import MemberRepository
 from dinnerbell.domain import notifications as note
-from dinnerbell.domain.badges import BADGES, QUIET_BADGES, TIERS, BadgeKey, Tier
+from dinnerbell.domain.badges import BADGES, TIERS, BadgeKey, Tier
 from dinnerbell.domain.notifications import PermanentDeliveryError
 from dinnerbell.services import badge_art, badge_files
 from dinnerbell.services.badge_files import (
@@ -140,11 +140,11 @@ async def test_two_asks_at_once_share_one_upload(house: House) -> None:
     assert len(uploads.calls) == 1
 
 
-async def test_a_quiet_badge_is_never_uploaded(house: House) -> None:
+async def test_food_critic_is_uploaded_like_any_badge_but_unknown_art_is_not(house: House) -> None:
     uploads = Uploads()
     asked = [(BadgeKey.FOOD_CRITIC.value, "gold"), ("nonsense", "gold"), ("chef", "platinum")]
-    assert await files(house, uploads).file_ids(house.household.id, asked) == {}
-    assert uploads.calls == []
+    assert await files(house, uploads).file_ids(house.household.id, asked) == {("food_critic", "gold"): "F1"}
+    assert len(uploads.calls) == 1
 
 
 async def test_forgetting_a_file_uploads_it_again(house: House) -> None:
@@ -220,7 +220,6 @@ async def test_what_was_uploaded_before_a_failure_is_kept(house: House) -> None:
 async def earn(house: House) -> None:
     await award(house, "Kim", BadgeKey.CHEF, Tier.GOLD)
     await award(house, "Kim", BadgeKey.SCOUT, Tier.FIRST)
-    await award(house, "Sam", BadgeKey.FOOD_CRITIC, Tier.FIRST)  # quiet
     assert await announce(house) == 1
 
 
@@ -246,8 +245,17 @@ async def test_the_announcement_shows_each_badge_as_art(house: House) -> None:
     assert {a["slack_file"]["id"] for a in art} <= set(slack.fake.files)
     text = json.dumps(blocks, ensure_ascii=False)
     assert f"<@{SLACK_IDS['Kim']}> earned *Chef* · Gold" in text and "and *Scout* · First." in text
-    assert "Food Critic" not in text
     assert len(art_uploads(slack)) == 2 and all(f["filename"].endswith(".png") for f in slack.fake.files.values())
+
+
+async def test_a_food_critic_announcement_shows_its_art(house: House) -> None:
+    slack = await wire(house)
+    await award(house, "Sam", BadgeKey.FOOD_CRITIC, Tier.FIRST)
+    assert await announce(house) == 1
+    await slack.drain()
+    blocks = announcement(slack)
+    assert [b["accessory"]["alt_text"] for b in blocks if "accessory" in b] == ["Food Critic, First"]
+    assert f"<@{SLACK_IDS['Sam']}> earned *Food Critic* · First" in json.dumps(blocks, ensure_ascii=False)
 
 
 async def test_a_second_announcement_reuses_the_uploads(house: House) -> None:
@@ -301,12 +309,12 @@ async def test_a_refusal_that_is_not_about_blocks_keeps_the_cached_files(house: 
         assert len(await BadgeFileRepository(db).all(house.household.id)) == 2
 
 
-async def test_an_announcement_with_only_quiet_or_unknown_badges_has_no_art(house: House) -> None:
+async def test_an_announcement_with_only_unknown_badges_has_no_art(house: House) -> None:
     slack = await wire(house)
     post = note.BadgesEarned(
         house.household.id,
         1,
-        (note.BadgeNews(note.PersonInfo(house["Kim"].id, "Kim"), (note.BadgeTier("Food Critic", "Gold"),)),),
+        (note.BadgeNews(note.PersonInfo(house["Kim"].id, "Kim"), (note.BadgeTier("Nonsense", "Gold"),)),),
     )
     await slack.conn.channel.deliver(post)
     assert slack.fake.of("files.getUploadURLExternal") == []
@@ -341,14 +349,14 @@ async def test_home_shows_text_tags_when_uploads_fail(house: House) -> None:
     assert "slack_file" not in text and tag("Full Table", "First") in text
 
 
-async def test_home_keeps_a_quiet_badge_as_text(house: House) -> None:
+async def test_home_shows_food_critic_as_art_like_the_rest(house: House) -> None:
     await award(house, "Alex", BadgeKey.CHEF, Tier.GOLD)
     await award(house, "Alex", BadgeKey.FOOD_CRITIC, Tier.FIRST)
     slack = await wire(house)
     await slack.open_home("Alex")
     blocks = slack.last_home("Alex")["blocks"]
-    assert [e["alt_text"] for e in home_icons(blocks)] == ["Chef, Gold"]
-    assert tag("Food Critic", "First") in json.dumps(blocks, ensure_ascii=False)
+    assert [e["alt_text"] for e in home_icons(blocks)] == ["Chef, Gold", "Food Critic, First"]
+    assert "Also:" not in json.dumps(blocks, ensure_ascii=False)
 
 
 async def test_slack_refusing_a_file_on_home_publishes_text_and_forgets_the_file(house: House) -> None:
@@ -573,10 +581,10 @@ async def test_a_file_stays_fresh_for_ten_seconds_then_counts_as_cached(house: H
 
 # Prewarm (#112) -----------------------------------------------------------------------------------
 
-ALL_BUT_FOOD_CRITIC = 12 * 5
+EVERY_TIER = 13 * 5
 
 
-async def test_prewarm_uploads_every_tier_but_food_critic_once_with_a_gap_between(
+async def test_prewarm_uploads_every_tier_once_with_a_gap_between(
     house: House, caplog: pytest.LogCaptureFixture
 ) -> None:
     uploads, pauses = Uploads(), Pauses()
@@ -584,25 +592,25 @@ async def test_prewarm_uploads_every_tier_but_food_critic_once_with_a_gap_betwee
     with caplog.at_level(logging.INFO):
         assert await badges.prewarm(house.household.id) is True
     names = [name for name, _, _ in uploads.calls]
-    assert len(names) == len(set(names)) == ALL_BUT_FOOD_CRITIC
-    assert not any(n.startswith("food_critic") for n in names)
-    assert pauses.waits == [PREWARM_SPACING] * ALL_BUT_FOOD_CRITIC
+    assert len(names) == len(set(names)) == EVERY_TIER
+    assert sum(n.startswith("food_critic") for n in names) == 5
+    assert pauses.waits == [PREWARM_SPACING] * EVERY_TIER
     done = [r for r in caplog.records if r.getMessage() == "badge art prewarmed"]
     assert len(done) == 1 and done[0].levelno == logging.INFO
-    assert (done[0].uploaded, done[0].cached) == (ALL_BUT_FOOD_CRITIC, 0)  # type: ignore[attr-defined]
+    assert (done[0].uploaded, done[0].cached) == (EVERY_TIER, 0)  # type: ignore[attr-defined]
 
 
 async def test_prewarm_skips_what_is_cached_and_a_first_use_afterwards_uploads_nothing(house: House) -> None:
     uploads = Uploads()
     await files(house, uploads, pause=Pauses()).prewarm(house.household.id)
-    assert len(uploads.calls) == ALL_BUT_FOOD_CRITIC
+    assert len(uploads.calls) == EVERY_TIER
     restarted = files(house, uploads, pause=Pauses())  # a new process, same database
     assert await restarted.prewarm(house.household.id) is True
-    assert len(uploads.calls) == ALL_BUT_FOOD_CRITIC
+    assert len(uploads.calls) == EVERY_TIER
     fresh: set[str] = set()
     found = await restarted.file_ids(house.household.id, [CHEF], fresh)
     assert found == {CHEF: f"F{[n for n, _, _ in uploads.calls].index('chef-gold.png') + 1}"}
-    assert fresh == set() and len(uploads.calls) == ALL_BUT_FOOD_CRITIC
+    assert fresh == set() and len(uploads.calls) == EVERY_TIER
 
 
 async def test_prewarm_resumes_where_a_stopped_run_left_off(house: House) -> None:
@@ -623,7 +631,7 @@ async def test_prewarm_resumes_where_a_stopped_run_left_off(house: House) -> Non
     assert len(uploads.calls) == 10
     assert await files(house, uploads, pause=Pauses()).prewarm(house.household.id) is True
     names = [name for name, _, _ in uploads.calls]
-    assert len(names) == len(set(names)) == ALL_BUT_FOOD_CRITIC
+    assert len(names) == len(set(names)) == EVERY_TIER
 
 
 async def test_prewarm_stops_on_a_missing_scope_with_one_log_line(
@@ -677,7 +685,7 @@ async def test_the_connection_prewarms_once_connected_and_not_before(house: Hous
     assert fake.files == {}  # no connection, nothing uploaded
     assert await conn.run_once()
     await conn._prewarm(house.household.id)
-    assert len(fake.files) == ALL_BUT_FOOD_CRITIC
+    assert len(fake.files) == EVERY_TIER
 
 
 # Compact layouts (#112) ---------------------------------------------------------------------------
@@ -771,11 +779,11 @@ async def test_home_fits_thirteen_badges_in_two_icon_blocks_with_a_link_and_the_
     await slack.open_home("Alex")
     blocks = slack.last_home("Alex")["blocks"]
     rows = icons(blocks)
-    assert [len(r) for r in rows[:2]] == [10, 2]  # 12 have art; Food Critic is text
+    assert [len(r) for r in rows[:2]] == [10, 3]  # all 13 have art
     assert len(blocks) <= 100
     text = json.dumps(blocks, ensure_ascii=False)
     assert "<https://dinnerbell.test/stats|All badges on the web>" in text
-    assert tag("Food Critic", "First") in text
+    assert "Also:" not in text
     nxt = next(b for b in blocks if b["type"] == "context" and "Next:" in json.dumps(b))
     assert nxt["elements"][0]["type"] == "image" and nxt["elements"][1]["type"] == "mrkdwn"
     assert all("accessory" not in b for b in blocks)
@@ -821,7 +829,7 @@ async def test_a_failed_connection_look_does_not_end_the_prewarm(house: House) -
     conn.is_connected = flaky  # type: ignore[method-assign]
     conn.sleep = no_wait
     await conn._prewarm(house.household.id)
-    assert looks == 2 and len(conn.api.client.files) == ALL_BUT_FOOD_CRITIC  # type: ignore[attr-defined]
+    assert looks == 2 and len(conn.api.client.files) == EVERY_TIER  # type: ignore[attr-defined]
 
 
 async def no_wait(seconds: float) -> None:
@@ -1061,7 +1069,7 @@ async def test_a_badge_post_makes_each_mentioned_members_picture_for_home(house:
     await slack.drain()
     row = await stored(house, "Kim")
     assert row is not None and row.file_id in slack.fake.files
-    assert await stored(house, "Sam") is None  # Sam earned only the quiet badge: not announced, no picture
+    assert await stored(house, "Sam") is None  # Sam is not in the post, so no picture
     (upload,) = [c for c in slack.fake.of("files.getUploadURLExternal") if c.args["filename"].startswith("badges-")]
     assert upload.args["alt_txt"] == "Badges: Chef (Gold), Scout (First)"
 
@@ -1133,7 +1141,7 @@ async def test_home_never_shows_the_picture_in_the_view_that_uploads_it(house: H
     assert all(picture(call.args["view"]["blocks"]) is None for call in slack.fake.of("views.publish"))
 
 
-async def test_home_keeps_food_critic_out_of_the_picture_and_in_text(house: House) -> None:
+async def test_home_draws_food_critic_in_the_picture_like_the_rest(house: House) -> None:
     await award(house, "Alex", BadgeKey.CHEF, Tier.GOLD)
     await award(house, "Alex", BadgeKey.FOOD_CRITIC, Tier.FIRST)
     slack = await wire(house)
@@ -1142,10 +1150,10 @@ async def test_home_keeps_food_critic_out_of_the_picture_and_in_text(house: Hous
     await slack.open_home("Alex")
     blocks = home_blocks(slack)
     image = picture(blocks)
-    assert image is not None and image["alt_text"] == "Your badges: Chef (Gold)"
-    assert tag("Food Critic", "First") in json.dumps(blocks, ensure_ascii=False)
+    assert image is not None and image["alt_text"] == "Your badges: Chef (Gold), Food Critic (First)"
+    assert "Also:" not in json.dumps(blocks, ensure_ascii=False)
     uploaded = [c for c in slack.fake.of("files.getUploadURLExternal") if c.args["filename"].startswith("badges-")]
-    assert "Food Critic" not in uploaded[0].args["alt_txt"]
+    assert "Food Critic (First)" in uploaded[0].args["alt_txt"]
 
 
 async def test_a_new_tier_goes_back_to_the_icons_until_the_new_picture_settles(house: House) -> None:
@@ -1239,13 +1247,13 @@ async def test_a_member_who_left_gets_no_new_picture_and_the_old_row_is_harmless
 
 # Polish (#114) -------------------------------------------------------------------------------------
 
-NAMES = [b.name for b in BADGES if b.key not in QUIET_BADGES]
+NAMES = [b.name for b in BADGES]
 
 
 def ten_badge_post(first: int = 0, members: int = 1) -> note.BadgesEarned:
-    gold = [note.BadgeTier(name, "Gold") for name in NAMES[:12]]
+    gold = [note.BadgeTier(name, "Gold") for name in NAMES]
     news = tuple(
-        note.BadgeNews(note.PersonInfo(100 + n, f"Member {n}"), tuple(gold[:6]), more=6, rest=tuple(gold[6:]))
+        note.BadgeNews(note.PersonInfo(100 + n, f"Member {n}"), tuple(gold[:6]), more=7, rest=tuple(gold[6:]))
         for n in range(members)
     )
     return note.BadgesEarned(1, first, news)
@@ -1258,34 +1266,34 @@ def every_tier_art() -> dict[tuple[str, str], str]:
 def test_the_icon_row_shows_every_badge_and_the_line_names_them_all_plainly() -> None:
     message = render(ten_badge_post(), RenderContext("https://x.example", Directory(), art=every_tier_art()))
     blocks = message.blocks
-    assert [len(r) for r in icons(blocks)] == [10, 2]  # all 12, not the 6 the text names
-    line = next(b["text"]["text"] for b in blocks if "earned 12 badges:" in b.get("text", {}).get("text", ""))
-    assert line.count("*") == 24 and "more badge" not in line and "🥇" not in line and "·" not in line
+    assert [len(r) for r in icons(blocks)] == [10, 3]  # all 13, not the 6 the text names
+    line = next(b["text"]["text"] for b in blocks if "earned 13 badges:" in b.get("text", {}).get("text", ""))
+    assert line.count("*") == 26 and "more badge" not in line and "🥇" not in line and "·" not in line
     assert all(f"*{name}*" in line for name in NAMES)
 
 
 def test_without_art_the_text_post_is_unchanged_and_still_counts_the_rest() -> None:
     message = render(ten_badge_post(), RenderContext("https://x.example", Directory()))
     (block,) = [b for b in message.blocks if "earned" in json.dumps(b)]
-    assert block["text"]["text"].splitlines()[1].endswith(", and 6 more badges.")
+    assert block["text"]["text"].splitlines()[1].endswith(", and 7 more badges.")
     assert tag("*Chef*", "Gold") in block["text"]["text"] and "🥇" in block["text"]["text"]
 
 
 def test_a_badge_with_no_art_keeps_its_tag_in_the_plain_line() -> None:
     art = {k: v for k, v in every_tier_art().items() if k != ("chef", "gold")}
     message = render(ten_badge_post(), RenderContext("https://x.example", Directory(), art=art))
-    line = next(b["text"]["text"] for b in message.blocks if "earned 12 badges:" in b.get("text", {}).get("text", ""))
+    line = next(b["text"]["text"] for b in message.blocks if "earned 13 badges:" in b.get("text", {}).get("text", ""))
     assert tag("*Chef*", "Gold") in line and "*Scout*" in line and tag("*Scout*", "Gold") not in line
-    assert [len(r) for r in icons(message.blocks)] == [10, 1]
+    assert [len(r) for r in icons(message.blocks)] == [10, 2]
 
 
 def test_a_post_queued_before_the_rest_existed_still_reads_right() -> None:
     old = note.BadgesEarned(1, 1, ten_badge_post().news[:1])
     news = old.news[0]
-    queued = note.BadgesEarned(1, 1, (note.BadgeNews(news.person, news.badges, more=6),))
+    queued = note.BadgesEarned(1, 1, (note.BadgeNews(news.person, news.badges, more=7),))
     message = render(queued, RenderContext("https://x.example", Directory(), art=every_tier_art()))
-    line = next(b["text"]["text"] for b in message.blocks if "earned 12 badges:" in b.get("text", {}).get("text", ""))
-    assert line.endswith("and 6 more badges.") and [len(r) for r in icons(message.blocks)] == [6]
+    line = next(b["text"]["text"] for b in message.blocks if "earned 13 badges:" in b.get("text", {}).get("text", ""))
+    assert line.endswith("and 7 more badges.") and [len(r) for r in icons(message.blocks)] == [6]
 
 
 def test_the_worst_post_stays_within_fifty_blocks() -> None:
@@ -1295,7 +1303,7 @@ def test_the_worst_post_stays_within_fifty_blocks() -> None:
     ctx = RenderContext("https://x.example", Directory(), art=every_tier_art())
     for many in range(11):
         news = tuple(
-            note.BadgeNews(note.PersonInfo(n, f"Member {n}"), tuple(gold[:6]), more=6, rest=tuple(gold[6:]))
+            note.BadgeNews(note.PersonInfo(n, f"Member {n}"), tuple(gold[:6]), more=7, rest=tuple(gold[6:]))
             if n < many
             else note.BadgeNews(note.PersonInfo(n, f"Few {n}"), tuple(gold[:3]))
             for n in range(10)
