@@ -30,7 +30,7 @@ import logging
 import re
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Sequence
 from dataclasses import dataclass, replace
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from enum import Enum
 from typing import Any
 
@@ -155,6 +155,9 @@ UNKNOWN_USER = (
     "or ask the admin to link you on the Members page."
 )
 INACTIVE = "Your Dinnerbell account is turned off. Ask the admin if that's a mistake."
+JOIN_FIRST = "You're not in Dinnerbell yet. Open the Dinnerbell app's Home tab to join, or ask the admin."
+"""What the commands that only link or describe the app (help, prefs, catalog, history, version)
+answer someone Dinnerbell doesn't know. No URL, version, or schema revision."""
 STALE = STALE_CALL
 BROKEN = "That didn't work. Try again in a moment, or use the web."
 OUT_OF_DATE = "That button is out of date. Try the latest message, or use the web."
@@ -198,6 +201,69 @@ FEEDBACK_SAVED = "Thanks for the feedback! Only you see your ratings."
 FEEDBACK_NONE = "Got it: no feedback from you on this meal."
 SETTLE_TIMEOUT_SECONDS = 10.0
 Ack = Callable[..., Awaitable[None]]
+
+
+SEEN_TRIGGERS = 2048
+"""How many trigger IDs ``Recent`` keeps. The oldest go first, so memory stays bounded."""
+SEEN_FOR = timedelta(minutes=10)
+"""How long a trigger ID counts as seen. Slack redelivers within seconds of a reconnect."""
+TOGGLE_PAUSE = timedelta(seconds=2)
+"""A second tap of the same toggle button by the same person within this long is a double tap."""
+DOUBLE_TAP = "Got it, that's already counted. Tap again in a moment to undo."
+TRY_LATER = "Try again in a few minutes."
+STRANGER_TAPS = 5
+STRANGER_WINDOW = timedelta(minutes=5)
+"""How often one Slack user Dinnerbell doesn't know can make the app answer them."""
+
+
+class Recent:
+    """In-memory and per process: the trigger IDs of interactions already taken, and the last time each
+    person tapped each toggle. Slack redelivers an interaction after a reconnect with the same
+    payload, so the same ``trigger_id``, and the shared Vote and offer buttons toggle: handling
+    one twice would undo it. A restart loses all of it, which is fine: it only has to cover the
+    seconds around a redelivery or a double tap. Past ``SEEN_TRIGGERS`` the oldest trigger ID is
+    forgotten, so a redelivery of one that old would be handled again (it takes 2,048 other
+    interactions, far longer than Slack waits to redeliver). An ID is recorded when handling
+    starts, which also covers a concurrent redelivery, and forgotten if the handling fails, so a
+    retry isn't taken for a duplicate."""
+
+    def __init__(self) -> None:
+        self.triggers: dict[str, datetime] = {}
+        self.toggles: dict[tuple[str, str, str], datetime] = {}
+
+    def trigger_seen(self, trigger: object, now: datetime) -> bool:
+        """Whether this trigger ID was handled already. Remembers it if not."""
+        if not isinstance(trigger, str) or not trigger:
+            return False
+        seen = self.triggers.get(trigger)
+        if seen is not None and now - seen < SEEN_FOR:
+            return True
+        self.triggers.pop(trigger, None)
+        self.triggers[trigger] = now
+        while len(self.triggers) > SEEN_TRIGGERS:
+            del self.triggers[next(iter(self.triggers))]  # dicts keep insertion order: the oldest
+        return False
+
+    def double_tap(self, user: str, action_id: str, value: object, now: datetime) -> bool:
+        """Whether this person tapped this toggle a moment ago. Remembers the tap if not."""
+        key = (user, action_id, str(value))
+        last = self.toggles.get(key)
+        if last is not None and now - last < TOGGLE_PAUSE:
+            return True
+        self.toggles = {k: t for k, t in self.toggles.items() if now - t < TOGGLE_PAUSE}
+        self.toggles[key] = now
+        return False
+
+    def forget(self, trigger: object, tap: tuple[str, str, str] | None = None) -> None:
+        """The handling failed: let a retry through."""
+        if isinstance(trigger, str):
+            self.triggers.pop(trigger, None)
+        if tap is not None:
+            self.toggles.pop(tap, None)
+
+
+TOGGLES = frozenset({ids.VOTE, ids.JOIN_OFFER, *ids.OFFER})
+"""The buttons on a shared message that flip: a repeat undoes the first tap."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -271,6 +337,10 @@ class Interactions:
         self.people = people
         """Who may join from the channel (#38); None leaves joining to the web and the admin."""
         self.join_limiter = guests.JoinLimiter()
+        self.stranger_limiter = guests.JoinLimiter(STRANGER_TAPS, STRANGER_WINDOW)
+        """Per Slack user Dinnerbell doesn't know: how often the app answers them, so a loop of
+        commands or Home opens can't spend the household's Slack rate limits."""
+        self.recent = Recent()
         self.sessionmaker = sessionmaker
         self.clock = clock
         self.links = HomeLinks(base_url)
@@ -416,7 +486,18 @@ class Interactions:
 
     async def _unknown(self, source: Source) -> None:
         """Someone Dinnerbell doesn't know tapped, opened Home, or ran the command: offer to join,
-        or say to ask the admin while joining is off."""
+        or say to ask the admin while joining is off. Each Slack user gets a few answers per window;
+        after that they get none, so a loop of commands costs the app no Slack calls."""
+        if not self.stranger_limiter.allow(source.user_id, self.clock()):
+            log.info("slack user Dinnerbell doesn't know is over the limit")
+            if source.home and self.stranger_limiter.first_refusal(source.user_id):
+                # Once per window, so the tab isn't left blank. Further opens cost no Slack call.
+                view = {"type": "home", "blocks": [{"type": "section", "text": {"type": "mrkdwn", "text": TRY_LATER}}]}
+                try:
+                    await self.api.publish_home(source.user_id, view)
+                except SLACK_ERRORS as exc:
+                    log.warning("slack reply failed", extra={"error": str(exc)})
+            return
         if not await self._joinable():
             await self.tell(source, UNKNOWN_USER, member=None)
             return
@@ -590,8 +671,9 @@ class Interactions:
                     raise
                 # Slack may refuse a file ID, such as one deleted in Slack, or one it hasn't
                 # finished processing. A file uploaded just now gets up to two more tries after a pause,
-                # with the cache untouched. Otherwise forget the files and show the text instead,
-                # so Home still draws and the next view uploads again.
+                # with the cache untouched. Otherwise show the text instead, so Home still draws, and
+                # only if that works forget the files, so the next view uploads again. If the text is
+                # refused too, the art wasn't the cause, so the cache stays.
                 extra: dict[str, Any] = {"member_id": member.id}
                 log.warning(
                     "slack refused badge art (%s: %s)%s",
@@ -620,8 +702,11 @@ class Interactions:
                     else:
                         return
                 shown = [*art.values(), *([picture] if picture else [])]
+                await self.api.publish_home(
+                    user_id, with_version_footer(build({}, None), self.version, self.instance_label)
+                )
                 await self.badge_files.forget(member.household_id, shown, cool=bool(fresh))
-                view = build({}, None)
+                return
             else:
                 return
         await self.api.publish_home(user_id, with_version_footer(view, self.version, self.instance_label))
@@ -655,13 +740,16 @@ class Interactions:
             log.exception("home badges failed", extra={"member_id": member.id})
             return None
 
-    async def _run(self, source: Source, member: Member, work: Callable[[], Awaitable[Done]]) -> None:
-        """Run one action and report how it went. ``work`` returns what to reply (``Done``)."""
+    async def _run(self, source: Source, member: Member, work: Callable[[], Awaitable[Done]]) -> bool:
+        """Run one action and report how it went. ``work`` returns what to reply (``Done``).
+        False if it failed unexpectedly (the person is told to try again), True otherwise,
+        including when a rule refused it."""
         notice: str | None = None
+        ok = True
         try:
             done = await work()
             if done is Published.HOME:
-                return
+                return True
             if isinstance(done, Reply):
                 done = done.notice if source.home else done.message
             if isinstance(done, Message):
@@ -681,10 +769,12 @@ class Interactions:
         except Exception:
             log.exception("slack action failed", extra={"member_id": member.id})
             notice = BROKEN
+            ok = False
         if source.home:
             await self._republish_home(source, member, notice)
         elif notice:
             await self.tell(source, notice, member=member)
+        return ok
 
     async def _republish_home(self, source: Source, member: Member, notice: str | None) -> None:
         """Home after a tap there, with ``notice`` at the top. A failure is logged, not raised:
@@ -699,26 +789,44 @@ class Interactions:
     async def _action(self, body: dict[str, Any]) -> None:
         if not self._team_ok(_get(body, "team", "id")):
             return
+        trigger = body.get("trigger_id")
+        if self.recent.trigger_seen(trigger, self.clock()):
+            log.info("slack action redelivered; ignored")
+            return
+        done = False
+        try:
+            done = await self._act(body)
+        finally:
+            if not done:  # it failed, so an immediate retry is not a duplicate
+                self.recent.forget(trigger)
+
+    async def _act(self, body: dict[str, Any]) -> bool:
+        """Handle one button press. False if the handling failed, as opposed to being refused."""
         source = self._message_source(body)
         acts = body.get("actions")
         if source is None or not isinstance(acts, list) or len(acts) != 1 or not isinstance(acts[0], dict):
             log.warning("slack action payload refused")
-            return
+            return True
         in_dm = source.channel_id is not None and source.channel_id != self.channel_id
         if (source.channel_id is None and not source.home) or (in_dm and not await self._is_their_dm(source)):
             log.warning("slack action from an unexpected channel refused")
             await self.tell(Source(source.user_id), WRONG_PLACE, member=None)
-            return
+            return True
         if acts[0].get("action_id") == ids.JOIN_DINNERBELL:  # before _member: they aren't one yet
             if acts[0].get("value") == ids.JOIN_DINNERBELL:
                 await self._join(source)
-            return
+            return True
         member = await self._member(source)
         if member is None:
-            return
+            return True
         action_id, value = acts[0].get("action_id"), acts[0].get("value")
         if action_id in {ids.CALL_MENU, ids.LATE_MENU}:  # an overflow menu sends the option it picked
             value = _get(acts[0], "selected_option", "value")
+        tap_key = (source.user_id, str(action_id), str(value))
+        if action_id in TOGGLES and self.recent.double_tap(source.user_id, str(action_id), value, self.clock()):
+            log.info("slack double tap ignored", extra={"member_id": member.id, "action": str(action_id)[:40]})
+            await self.tell(source, DOUBLE_TAP, member=member)
+            return True
         trigger = body.get("trigger_id")
         container = body.get("container") or {}
         tap = Tap(
@@ -732,7 +840,10 @@ class Interactions:
         async def work() -> Done:
             return await self._dispatch(member, source, str(action_id), value, trigger, tap)
 
-        await self._run(source, member, work)
+        done = await self._run(source, member, work)
+        if not done:
+            self.recent.forget(None, tap_key)
+        return done
 
     async def _dispatch(
         self, member: Member, source: Source, action_id: str, value: object, trigger: object, tap: Tap
@@ -1283,12 +1394,12 @@ class Interactions:
             return
         await ack()
         source = Source(user, channel_id=origin.channel_id, home=origin.home)
-        self._spawn(self._save_form(source, kind, form))
+        self._spawn_once(body, self._save_form(source, kind, form))
 
-    async def _save_form(self, source: Source, kind: str, form: Any) -> None:
+    async def _save_form(self, source: Source, kind: str, form: Any) -> bool:
         member = await self._member(source)
         if member is None:
-            return
+            return True
 
         async def work() -> str:
             async with self.sessionmaker() as db:
@@ -1298,7 +1409,26 @@ class Interactions:
                 meal = await meals.log_meal(db, member, form, today=today, now=self.clock())
             return f"Logged {meal.item_name} for {meal.slot.value} on {day_label(meal.day)}. Thanks!"
 
-        await self._run(source, member, work)
+        return await self._run(source, member, work)
+
+    def _spawn_once(self, body: dict[str, Any], saving: Coroutine[Any, Any, bool]) -> None:
+        """Save a modal's submission unless Slack redelivered it (same ``trigger_id``): a second save
+        would add a second offer or meal. A save that fails is forgotten, so a retry goes through."""
+        trigger = body.get("trigger_id")
+        if self.recent.trigger_seen(trigger, self.clock()):
+            log.info("slack submission redelivered; ignored")
+            saving.close()
+            return
+
+        async def once() -> None:
+            done = False
+            try:
+                done = await saving
+            finally:
+                if not done:
+                    self.recent.forget(trigger)
+
+        self._spawn(once())
 
     # Guests (#38) ------------------------------------------------------------------------------
 
@@ -1420,12 +1550,12 @@ class Interactions:
             return
         await ack()
         source = Source(user, channel_id=origin.channel_id, home=origin.home)
-        self._spawn(self._save(source, origin, kind, form))
+        self._spawn_once(body, self._save(source, origin, kind, form))
 
-    async def _save(self, source: Source, origin: ids.ViewOrigin, kind: str, form: Any) -> None:
+    async def _save(self, source: Source, origin: ids.ViewOrigin, kind: str, form: Any) -> bool:
         member = await self._member(source)
         if member is None:
-            return
+            return True
         event_id = origin.event_id
 
         async def work() -> str | None:
@@ -1457,7 +1587,7 @@ class Interactions:
                 )
                 return None
 
-        await self._run(source, member, work)
+        return await self._run(source, member, work)
 
     # App Home ----------------------------------------------------------------------------------
 
@@ -1483,10 +1613,17 @@ class Interactions:
         words = str(body.get("text") or "").split()
         sub, args = (words[0].lower(), words[1:]) if words else ("help", [])
         discards = sub == "discard" and is_test_instance(self.instance_label)  # #60: test only
-        if sub not in {"call", "cancel", "schedule", "offer", "log"} and not discards:
-            await ack(response_type="ephemeral", text=self.command_reply(sub))
-            return
         user, channel = body.get("user_id"), body.get("channel_id")
+        if sub not in {"call", "cancel", "schedule", "offer", "log"} and not discards:
+            text = JOIN_FIRST  # the app's URL and revision are for the household
+            try:
+                if not isinstance(user, str) or await self._known(user):
+                    text = self.command_reply(sub)
+            except Exception:
+                log.exception("slack command lookup failed")
+                text = BROKEN  # never the join reply: they may well be a member
+            await ack(response_type="ephemeral", text=text)  # Slack waits 3 seconds
+            return
         await ack()
         if isinstance(user, str):
             source = Source(user, channel_id=channel if ids.is_channel_id(channel) else None)
@@ -1500,6 +1637,11 @@ class Interactions:
                 self._spawn(self._discard_command(source, [word.lower() for word in args]))
             else:
                 self._spawn(self._cancel_command(source, args))
+
+    async def _known(self, slack_user: str) -> bool:
+        """Whether Dinnerbell has a member, active or not, for this Slack user."""
+        async with self.sessionmaker() as db:
+            return await slack_members.member_for_slack_user(db, slack_user) is not None
 
     def command_reply(self, sub: str) -> str:
         url = self.links.url
@@ -1523,7 +1665,7 @@ class Interactions:
     def version_reply(self) -> str:
         """Which version, build, instance, and schema revision is answering. None of it is
         secret: /healthz shows the version and label, and the revision follows from the version.
-        So anyone in the workspace may ask, linked or not."""
+        Still only the household gets it: someone Dinnerbell doesn't know gets ``JOIN_FIRST``."""
         line = version_line(self.version, self.instance_label)
         return f"{line} · database {escape(self.schema_revision)} · {version_link(self.version)}"
 

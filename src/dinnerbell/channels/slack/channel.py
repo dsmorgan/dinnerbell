@@ -104,7 +104,7 @@ class Audience:
         plain names instead of mentions."""
         if not self.limited:
             return directory
-        return Directory({m: s for m, s in directory.slack_ids.items() if self.allows(s)})
+        return Directory({m: s for m, s in directory.slack_ids.items() if self.allows(s)}, directory.inactive)
 
 
 def deterministic(exc: SlackAuthError) -> Exception:
@@ -142,7 +142,10 @@ class SlackChannel:
 
     async def _directory(self, household_id: int) -> Directory:
         async with self.sessionmaker() as db:
-            return Directory(await slack_members.slack_directory(db, household_id))
+            return Directory(
+                await slack_members.slack_directory(db, household_id),
+                await slack_members.inactive_members(db, household_id),
+            )
 
     def _context(self, directory: Directory, art: ArtIds | None = None) -> RenderContext:
         return RenderContext(self.base_url, self.audience.directory(directory), self.instance_label, art or {})
@@ -162,6 +165,21 @@ class SlackChannel:
         recipient = notification.recipient_id
         slack_user = None
         if recipient is not None:
+            if recipient in directory.inactive:
+                # Queued before they were deactivated. Done, not failed: the row closes and is never retried.
+                log.info(
+                    "slack direct message dropped: recipient is deactivated",
+                    extra={"kind": notification.kind, "event_id": notification.event_id, "recipient_id": recipient},
+                )
+                if isinstance(notification, note.AssignmentMade | note.RoleVacated):
+                    # A role may have nobody on it now. The members who run the call see it on the event page.
+                    log.warning(
+                        "slack role message dropped: recipient is deactivated",
+                        extra={"kind": notification.kind, "event_id": notification.event_id},
+                    )
+                if self.state is not None:
+                    self.state.dms_dropped_inactive += 1
+                return DeliveryResult(None)
             slack_user = directory.slack_ids.get(recipient)
             if slack_user is None:
                 raise PermanentDeliveryError(f"member {recipient} has no Slack user")
@@ -183,8 +201,10 @@ class SlackChannel:
                 raise  # not about the blocks, so not about the art: the cache stays
             # Slack may refuse a file ID, such as one deleted in Slack, or one it hasn't finished
             # processing. A file uploaded just now gets up to two more tries after a pause, with the
-            # cache untouched. Otherwise forget the files and send the text instead, so the post
-            # still goes out and the next one uploads again.
+            # cache untouched. Otherwise send the text instead, so the post still goes out, and only
+            # if that works forget the files, so the next post uploads again. If the text is refused
+            # too, the art wasn't the cause (``invalid_arguments`` can be about anything), so the
+            # cache stays.
             extra: dict[str, Any] = {"event_id": notification.event_id}
             log.warning(
                 "slack refused badge art (%s: %s)%s",
@@ -212,9 +232,13 @@ class SlackChannel:
                 else:
                     break
             if retried is None:
-                await self.badge_files.forget(notification.household_id, art.values(), cool=bool(fresh))
                 message = render(notification, self._context(directory)).payload()
                 retried = await self._send(message, slack_user, thread)
+                try:
+                    await self.badge_files.forget(notification.household_id, art.values(), cool=bool(fresh))
+                except Exception:
+                    # The post went out. Raising would make the outbox retry and post the badge twice.
+                    log.exception("badge art could not be forgotten", extra={"event_id": notification.event_id})
             ref = retried
         await self._pictures_soon(notification)
         log.debug(  # the outbox logs "notification delivered" at info, with the channel and ts

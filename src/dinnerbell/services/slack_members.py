@@ -46,6 +46,12 @@ async def slack_directory(db: AsyncSession, household_id: int) -> dict[int, str]
     return {m.id: m.slack_user_id for m in members if m.slack_user_id}
 
 
+async def inactive_members(db: AsyncSession, household_id: int) -> frozenset[int]:
+    """The IDs of the household's deactivated members, who get no message and no mention."""
+    members = await MemberRepository(db).list(household_id)
+    return frozenset(m.id for m in members if not m.active)
+
+
 async def today(db: AsyncSession, actor: Member, *, now: datetime) -> date:
     """Today's date in the actor's household time zone."""
     household = await HouseholdRepository(db).get(actor.household_id)

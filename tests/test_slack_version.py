@@ -12,7 +12,7 @@ from sqlalchemy import create_engine, text
 
 from dinnerbell import __version__
 from dinnerbell.channels.slack import blocks as bk
-from dinnerbell.channels.slack.interactions import WRONG_WORKSPACE
+from dinnerbell.channels.slack.interactions import JOIN_FIRST, WRONG_WORKSPACE
 from dinnerbell.config import Settings
 from dinnerbell.db.migrate import head_revision
 from dinnerbell.services.database import Database, open_database
@@ -81,9 +81,11 @@ async def test_version_on_a_labelled_main_build(test_build: Slack) -> None:
     )
 
 
-async def test_version_needs_the_workspace_but_not_a_linked_member(release: Slack) -> None:
-    """Nothing in it is secret, so an unlinked user may ask; another workspace may not."""
-    assert reply(await release.command("U9STRANGER", "version")).startswith(f"Dinnerbell {__version__} · ")
+async def test_version_needs_the_workspace_and_a_known_member(release: Slack) -> None:
+    """Someone Dinnerbell doesn't know gets the short join reply: no version, revision, or URL."""
+    for word in ("version", "help", "prefs", "catalog", "history"):
+        stranger = reply(await release.command("U9STRANGER", word))
+        assert stranger == JOIN_FIRST and "http" not in stranger and head_revision() not in stranger
     assert reply(await release.command("Kim", "version", team=OTHER_TEAM)) == WRONG_WORKSPACE
 
 

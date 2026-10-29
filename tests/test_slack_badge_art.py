@@ -300,6 +300,39 @@ async def test_slack_refusing_a_file_posts_text_and_forgets_the_file(house: Hous
         assert await BadgeFileRepository(db).all(house.household.id) == {}
 
 
+async def test_invalid_arguments_about_a_real_file_posts_text_and_forgets_the_file(house: House) -> None:
+    slack = await wire(house)
+    refused = Failure("invalid_arguments")
+    slack.fake.fail("chat.postMessage", refused, refused, refused)
+    await earn(house)
+    await slack.drain()
+    *tried, text = slack.fake.of("chat.postMessage")
+    assert len(tried) == 3 and not any("accessory" in b for b in text.args["blocks"])
+    async with house.sessionmaker() as db:
+        assert await BadgeFileRepository(db).all(house.household.id) == {}
+
+
+async def test_invalid_arguments_that_text_hits_too_keeps_the_cached_files(house: House) -> None:
+    slack = await wire(house)
+    refused = Failure("invalid_arguments")
+    slack.fake.fail("chat.postMessage", refused, refused, refused, refused)  # art three times, then the text
+    await earn(house)
+    result = await slack.drain()
+    assert result.failed == 1  # the art wasn't the cause, so the post waits like any other
+    async with house.sessionmaker() as db:
+        assert len(await BadgeFileRepository(db).all(house.household.id)) == 2
+
+
+async def test_invalid_arguments_that_home_text_hits_too_keeps_the_cached_files(house: House) -> None:
+    await dinner(house)
+    slack = await wire(house)
+    refused = Failure("invalid_arguments")
+    slack.fake.fail("views.publish", refused, refused, refused, refused)
+    await slack.open_home("Alex")
+    async with house.sessionmaker() as db:
+        assert await BadgeFileRepository(db).all(house.household.id)
+
+
 async def test_a_refusal_that_is_not_about_blocks_keeps_the_cached_files(house: House) -> None:
     slack = await wire(house)
     slack.fake.fail("chat.postMessage", Failure("channel_not_found"))

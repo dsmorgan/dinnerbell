@@ -307,7 +307,7 @@ def block_action(
         "team": {"id": team, "domain": "home"} if team else None,
         "user": {"id": user, "username": "someone", "team_id": team},
         "api_app_id": "A0DINNER",
-        "trigger_id": "1234.5678.trigger",
+        "trigger_id": f"1234.5678.trigger{next(_envelopes)}",  # Slack mints one per tap; a redelivery repeats it
         "actions": [
             {
                 "action_id": action_id,
@@ -352,6 +352,7 @@ def view_submission(
         "team": {"id": team, "domain": "home"} if team else None,
         "user": {"id": user, "username": "someone", "team_id": team},
         "api_app_id": "A0DINNER",
+        "trigger_id": f"1234.5678.trigger{next(_envelopes)}",
         "view": {
             "id": "V0MODAL",
             "type": "modal",

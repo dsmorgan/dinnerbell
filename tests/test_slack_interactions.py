@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import AsyncIterator, Callable
-from datetime import time
+from datetime import time, timedelta
 
 import pytest
 
@@ -121,6 +121,7 @@ async def test_role_buttons_toggle(slack: Slack, house: House) -> None:
     await slack.click("Sam", "offer_cook", str(event_id))
     response = (await house.context(event_id)).response_of(house["Sam"].id)
     assert response is not None and response.offers == {RoleOffer.COOK} and response.status is Status.IN
+    house.clock.advance(timedelta(minutes=1))  # a tap right behind the first is a double tap, which is ignored
     await slack.click("Sam", "offer_cook", str(event_id))
     response = (await house.context(event_id)).response_of(house["Sam"].id)
     assert response is not None and response.offers == frozenset()
@@ -153,7 +154,7 @@ async def test_details_opens_a_prefilled_modal(slack: Slack, house: House) -> No
     await slack.click("Sam", "details", str(event_id))
     (call,) = slack.fake.of("views.open")
     view = call.args["view"]
-    assert call.args["trigger_id"] == "1234.5678.trigger"
+    assert call.args["trigger_id"].startswith("1234.5678.trigger")
     assert view["callback_id"] == ids.DETAILS_VIEW
     assert ids.ViewOrigin.decode(view["private_metadata"]) == ids.ViewOrigin(event_id, "C0DINNER", run=1)
     assert [b.get("block_id") for b in view["blocks"][1:]] == [
@@ -246,6 +247,7 @@ async def test_vote_toggles_and_lock_needs_the_coordinator(slack: Slack, house: 
     value = ids.proposal_value(event_id, first)
     await slack.click("Sam", "vote", value)
     assert (await house.context(event_id)).votes[first] == [house["Sam"].id]
+    house.clock.advance(timedelta(minutes=1))
     await slack.click("Sam", "vote", value)
     assert (await house.context(event_id)).votes.get(first, []) == []
 
