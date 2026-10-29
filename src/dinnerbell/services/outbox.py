@@ -56,8 +56,9 @@ LEASE = timedelta(minutes=5)
 MAX_ATTEMPTS = 8
 """How many times a row may fail for its own reasons. An unavailable channel doesn't count."""
 MAX_AGE = timedelta(hours=24)
-"""How long after it was queued a row may still be sent. An older row is closed as failed, not
-sent late: a day-old reminder or "dinner is ready" does more harm than good."""
+"""How long after its newest content was queued a row may still be sent: its creation, or the
+latest update merged into it (``updated_at``). An older row is closed as failed, not sent late:
+a day-old reminder or "dinner is ready" does more harm than good."""
 EXPIRED = "expired: queued more than 24 hours ago, not sent late"
 FIRST_RETRY = timedelta(seconds=30)
 LONGEST_RETRY = timedelta(hours=1)
@@ -173,7 +174,7 @@ async def _deliver(
         result.superseded += 1
         log.info("notification closed", extra=_about(entry, note=overtaken))
         return True
-    if clock() - entry.created_at > MAX_AGE:
+    if clock() - entry.updated_at > MAX_AGE:
         log.error("notification expired", extra=_about(entry, attempts=entry.attempts))
         await _record_failure(db, entry, token, EXPIRED, clock, result, final=True)
         return True
@@ -192,7 +193,7 @@ async def _deliver(
         # An outage isn't this row's fault: give the claim back without counting the attempt,
         # so the row outlasts the outage (until MAX_AGE) instead of using up its attempts.
         result.stopped = True
-        age = clock() - entry.created_at
+        age = clock() - entry.updated_at
         until = clock() + max(outage_delay(age), asked_wait(exc))
         released = await repo.release(entry.id, token, until=until, note=f"{type(exc).__name__}: {exc}")
         await db.commit()
@@ -229,8 +230,8 @@ def _about(entry: OutboxEntry, **more: object) -> dict[str, object]:
 async def _overtaken(db: AsyncSession, notification: Notification) -> str | None:
     """Why ``notification`` is no longer worth sending, or None. A row in ``CALL_OFF_SUPERSEDES``
     is overtaken when its call was called off or has started a newer run since it was queued; a
-    row in ``STEP_BOUND``, also when the call has left collecting."""
-    if notification.kind not in CALL_OFF_SUPERSEDES | STEP_BOUND:
+    row in ``STEP_BOUND``, also when the call has left the states its step is in."""
+    if notification.kind not in CALL_OFF_SUPERSEDES and notification.kind not in STEP_BOUND:
         return None
     if isinstance(
         notification, ScheduleChanged | GuestJoined | LinkNeeded | BadgesEarned | MonthlyRecap
@@ -241,7 +242,8 @@ async def _overtaken(db: AsyncSession, notification: Notification) -> str | None
         return SUPERSEDED_BY_CALL_OFF
     if event.state is EventState.CANCELLED and notification.kind in CALL_OFF_SUPERSEDES:
         return SUPERSEDED_BY_CALL_OFF
-    if notification.kind in STEP_BOUND and event.state is not EventState.COLLECTING:
+    steps = STEP_BOUND.get(notification.kind)
+    if steps is not None and event.state not in steps:
         return SUPERSEDED_BY_CALL_OFF if event.state is EventState.CANCELLED else SUPERSEDED_BY_PROGRESS
     return None
 

@@ -241,7 +241,7 @@ Avoid `0.0.0.0` unless a firewall limits who can reach the port.
     curl https://dinnerbell.example.com/healthz
     ```
 
-    The response reports database reachability, the scheduler's last tick, the Slack state, the outbox (`backlog`: notifications waiting to be sent; `failed`: notifications that gave up), and the last backup time. It returns HTTP 503 when the database is unreachable or the scheduler has not ticked for 5 minutes, so the container health check and Uptime Kuma catch both.
+    The response reports database reachability, the scheduler's last tick, the Slack state, the outbox (`backlog`: notifications waiting to be sent; `failed`: notifications that gave up; `oldest_pending_age`: seconds the oldest waiting notification has waited, `null` if none waits), and the last backup time. It returns HTTP 503 when the database is unreachable or the scheduler has not ticked for 5 minutes, so the container health check and Uptime Kuma catch both.
 
 12. Confirm that Slack is connected. Within a few seconds of starting, the response includes `"slack": "connected"` and `"status": "ok"`.
 
@@ -256,7 +256,7 @@ Avoid `0.0.0.0` unless a firewall limits who can reach the port.
     | `error` | A startup check failed. The logs say which one and how to fix it; see Troubleshooting. |
     | `not_configured` | One or more of the three Slack variables is missing. The bot posts nothing. |
 
-    A Slack problem alone sets `"status": "degraded"` but keeps HTTP 200, so the container keeps running and you can still sign in to fix it. Notifications wait in the outbox until Slack is back. To have Uptime Kuma alert on Slack too, use an HTTP keyword monitor for `"slack":"connected"`.
+    A notification waiting more than an hour (`oldest_pending_age` above 3600) also sets `"status": "degraded"`: Slack or the network has been down that long, and a notification that waits 24 hours is lost. A Slack problem alone sets `"status": "degraded"` but keeps HTTP 200, so the container keeps running and you can still sign in to fix it. Notifications wait in the outbox until Slack is back. To have Uptime Kuma alert on Slack too, use an HTTP keyword monitor for `"slack":"connected"`.
 
     The logs show what happened:
 

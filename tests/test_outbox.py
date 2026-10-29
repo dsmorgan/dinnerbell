@@ -11,12 +11,14 @@ from datetime import UTC, date, datetime, timedelta
 import pytest
 from sqlalchemy import text
 
+from dinnerbell.channels.slack.api import SlackRateLimited
 from dinnerbell.config import Settings
 from dinnerbell.db.outbox import OutboxEntry, OutboxRepository
 from dinnerbell.domain import notifications as n
-from dinnerbell.domain.events import EndReason, EventState
+from dinnerbell.domain.catalog import ItemKind, Mode
+from dinnerbell.domain.events import AssignmentRole, EndReason, EventState, ProposalSource
 from dinnerbell.domain.meals import Slot
-from dinnerbell.domain.notifications import SUPERSEDED_BY_PROGRESS
+from dinnerbell.domain.notifications import SUPERSEDED_BY_CALL_OFF, SUPERSEDED_BY_PROGRESS
 from dinnerbell.services import outbox
 from dinnerbell.services.bootstrap import bootstrap
 from dinnerbell.services.database import Database, open_database
@@ -718,3 +720,133 @@ async def test_a_response_reminder_is_still_sent_while_the_call_collects(databas
     channel = RecordingChannel()
     await outbox.drain(database.sessionmaker, channel, clock)
     assert [s.kind for s in channel.sent] == ["response_reminder"]
+
+
+@dataclass
+class DownEdits(Edits):
+    """Every edit finds the channel unavailable until ``up``."""
+
+    up: bool = False
+
+    async def update(self, ref: n.MessageRef, notification: n.Notification) -> None:
+        if not self.up:
+            raise n.ChannelUnavailable("slack is down")
+        await super().update(ref, notification)
+
+
+async def test_a_fresh_update_merged_into_an_old_row_is_not_expired(database: Database, clock: FakeClock) -> None:
+    """The age limit is on the newest content: a row that waited out a long outage and then took
+    on a fresh update carries state that is minutes old."""
+    await posted_call(database, clock)
+    channel = DownEdits()
+    await enqueue(database, updated(1, 2), now=clock())
+    for _ in range(24):  # Slack stays down for 24 hours; the row is tried hourly, never claimed
+        clock.advance(timedelta(hours=1))
+        await outbox.drain(database.sessionmaker, channel, clock)
+    await enqueue(database, updated(1, 9), now=clock())  # merges into the same, untried row
+    assert len([e for e in await entries(database) if e.kind == "call_updated"]) == 1
+    clock.advance(timedelta(hours=1))  # the row is now 25 hours old, its content 1 hour
+    channel.up = True
+    result = await outbox.drain(database.sessionmaker, channel, clock)
+    assert (result.delivered, result.failed, channel.edits) == (1, 0, [9])
+
+
+async def test_an_update_nobody_refreshed_does_expire(database: Database, clock: FakeClock) -> None:
+    await posted_call(database, clock)
+    await enqueue(database, updated(1, 2), now=clock())
+    clock.advance(outbox.MAX_AGE + timedelta(minutes=1))
+    channel = DownEdits(up=True)
+    result = await outbox.drain(database.sessionmaker, channel, clock)
+    assert (result.failed, channel.edits) == (1, [])
+
+
+@pytest.mark.parametrize(
+    ("change", "note"),
+    [
+        ("UPDATE event SET state='voting' WHERE id=1", SUPERSEDED_BY_PROGRESS),
+        ("UPDATE event SET state='decided' WHERE id=1", SUPERSEDED_BY_PROGRESS),
+        ("UPDATE event SET state='cancelled' WHERE id=1", SUPERSEDED_BY_CALL_OFF),
+        ("UPDATE event SET run=2 WHERE id=1", SUPERSEDED_BY_CALL_OFF),  # started again
+    ],
+)
+async def test_a_response_reminder_is_closed_when_the_call_moves_on_any_way(
+    database: Database, clock: FakeClock, change: str, note: str
+) -> None:
+    await enqueue(database, n.ResponseReminder(info(1), n.PersonInfo(7, "Kim")))
+    async with database.sessionmaker() as db:
+        await db.execute(text(change))
+        await db.commit()
+    channel = RecordingChannel()
+    result = await outbox.drain(database.sessionmaker, channel, clock)
+    assert (channel.sent, result.superseded) == ([], 1)
+    async with database.sessionmaker() as db:
+        assert (await db.execute(text("SELECT last_error FROM outbox"))).scalar_one() == note
+
+
+def roles_to_choose() -> n.RolesToChoose:
+    kim = n.PersonInfo(7, "Kim")
+    item = n.ItemInfo(3, "Siam Garden", ItemKind.RESTAURANT)
+    proposal = n.ProposalInfo(4, 1, item, Mode.PICKUP, (), ProposalSource.SYSTEM)
+    decision = n.DecisionInfo(
+        proposal, NOW, 2, (n.ParticipantInfo(kim),), (n.AssignmentInfo(AssignmentRole.COORDINATOR, kim),)
+    )
+    return n.RolesToChoose(info(1), kim, decision, NOW + timedelta(hours=1))
+
+
+@pytest.mark.parametrize(
+    ("state", "sent"), [("decided", True), ("done", False), ("cancelled", False), ("voting", False)]
+)
+async def test_roles_to_choose_goes_only_while_the_call_is_decided(
+    database: Database, clock: FakeClock, state: str, sent: bool
+) -> None:
+    await enqueue(database, roles_to_choose())
+    async with database.sessionmaker() as db:
+        await db.execute(text("UPDATE event SET state = :state WHERE id = 1"), {"state": state})
+        await db.commit()
+    channel = RecordingChannel()
+    await outbox.drain(database.sessionmaker, channel, clock)
+    assert [s.kind for s in channel.sent] == (["roles_to_choose"] if sent else [])
+
+
+@pytest.mark.parametrize(("state", "sent"), [("voting", True), ("done", True), ("cancelled", False)])
+async def test_maybe_resolved_is_dropped_only_by_a_call_off(
+    database: Database, clock: FakeClock, state: str, sent: bool
+) -> None:
+    await enqueue(database, n.MaybeResolved(info(1), n.PersonInfo(7, "Kim")))
+    async with database.sessionmaker() as db:
+        await db.execute(text("UPDATE event SET state = :state WHERE id = 1"), {"state": state})
+        await db.commit()
+    channel = RecordingChannel()
+    await outbox.drain(database.sessionmaker, channel, clock)
+    assert [s.kind for s in channel.sent] == (["maybe_resolved"] if sent else [])
+
+
+async def test_assignment_made_still_goes_after_the_call_is_done(database: Database, clock: FakeClock) -> None:
+    kim = n.PersonInfo(7, "Kim")
+    decision = roles_to_choose().decision
+    await enqueue(database, n.AssignmentMade(info(1), 5, kim, (AssignmentRole.PICKUP,), decision))
+    async with database.sessionmaker() as db:
+        await db.execute(text("UPDATE event SET state='done' WHERE id=1"))
+        await db.commit()
+    channel = RecordingChannel()
+    await outbox.drain(database.sessionmaker, channel, clock)
+    assert [s.kind for s in channel.sent] == ["assignment_made"]
+
+
+@pytest.mark.parametrize(
+    ("asked", "wait"),
+    [
+        (120, timedelta(minutes=2)),  # longer than the outage backoff: Slack's ask wins
+        (5, timedelta(seconds=30)),  # shorter: the outage backoff wins
+        (86_400, timedelta(hours=1)),  # beyond the cap: at most an hour
+    ],
+)
+async def test_a_rate_limit_waits_as_asked_without_using_an_attempt(
+    database: Database, clock: FakeClock, asked: int, wait: timedelta
+) -> None:
+    await enqueue(database, opened(1), opened(2))
+    channel = HintingChannel(SlackRateLimited("slow down", retry_after=asked))
+    result = await outbox.drain(database.sessionmaker, channel, clock)
+    assert (result.retrying, result.stopped, result.failed) == (1, True, 0)
+    first = (await entries(database))[0]
+    assert (first.attempts, first.available_at) == (0, clock() + wait)

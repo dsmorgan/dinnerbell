@@ -190,6 +190,30 @@ async def test_the_drainer_retries_rate_limits_and_closes_permanent_failures(hou
     assert error == "PermanentDeliveryError: Slack chat.postMessage failed: not_in_channel"
 
 
+@pytest.mark.parametrize("code", ["missing_scope", "not_allowed_token_type"])
+async def test_a_scope_error_fails_the_row_at_once(house: House, code: str) -> None:
+    """These fail the same way on every retry, so the delivery doesn't retry for a day."""
+    slack = await wire(house)
+    channel = slack.conn.channel
+    event = replace_household(info(), house.household.id)
+    slack.fake.fail("chat.postMessage", Failure(code))
+    with pytest.raises(note.PermanentDeliveryError) as posted:
+        await channel.deliver(note.CallOpened(event, ()))
+    assert posted.value.code == code
+    slack.fake.fail("chat.update", Failure(code))
+    with pytest.raises(note.PermanentDeliveryError) as edited:
+        await channel.update(note.MessageRef(CHANNEL, "1.000100"), note.CallUpdated(event))
+    assert edited.value.code == code
+
+
+async def test_a_refused_token_still_holds_deliveries(house: House) -> None:
+    slack = await wire(house)
+    event = replace_household(info(), house.household.id)
+    slack.fake.fail("chat.postMessage", Failure("invalid_auth"))
+    with pytest.raises(SlackAuthError):
+        await slack.conn.channel.deliver(note.CallOpened(event, ()))
+
+
 # Startup checks ----------------------------------------------------------------------------------
 
 

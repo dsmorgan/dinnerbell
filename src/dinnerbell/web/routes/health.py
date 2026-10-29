@@ -5,12 +5,13 @@ labeled instance adds its label, never a channel ID."""
 
 from __future__ import annotations
 
+from datetime import timedelta
 from typing import Any
 
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
-from dinnerbell.services.health import database_reachable, outbox_backlog
+from dinnerbell.services.health import STALE_OUTBOX, database_reachable, outbox_backlog, outbox_oldest_age
 from dinnerbell.web.auth import Context
 
 router = APIRouter()
@@ -25,18 +26,20 @@ async def healthz(context: Context) -> JSONResponse:
     """503 when the database is unreachable or the scheduler has stopped ticking, so the
     container health check and Uptime Kuma both catch a dead scheduler.
 
+    A notification waiting over an hour also reports "degraded": the outbox is stuck.
     Slack problems alone report "degraded" with a 200. Restarting the container can't invite
     the bot or fix a token, the outbox keeps every notification until Slack is back, and the
     web app must stay up so the admin can sign in and fix things."""
     database_ok = await database_reachable(context.sessionmaker)
     backlog = await outbox_backlog(context.sessionmaker) if database_ok else None
+    oldest = await outbox_oldest_age(context.sessionmaker, context.clock()) if backlog is not None else None
     state = context.scheduler_state
     scheduler = state.scheduler_status(context.clock())
     slack = await context.slack_state.status()
     healthy = database_ok and scheduler != "stopped"
     if not healthy:
         status = "error"
-    elif scheduler == "ok" and slack in {"connected", "not_configured"}:
+    elif scheduler == "ok" and slack in {"connected", "not_configured"} and (oldest or timedelta(0)) <= STALE_OUTBOX:
         status = "ok"
     else:
         status = "degraded"
@@ -46,7 +49,13 @@ async def healthz(context: Context) -> JSONResponse:
         "database": "ok" if database_ok else "unreachable",
         "scheduler": {"status": scheduler, "last_tick": _iso(state.last_tick)},
         "slack": slack,
-        "outbox": None if backlog is None else {"backlog": backlog[0], "failed": backlog[1]},
+        "outbox": None
+        if backlog is None
+        else {
+            "backlog": backlog[0],
+            "failed": backlog[1],
+            "oldest_pending_age": None if oldest is None else int(oldest.total_seconds()),
+        },
         "backup": {"last_success": _iso(state.last_backup)},
     }
     if context.settings.instance_label:

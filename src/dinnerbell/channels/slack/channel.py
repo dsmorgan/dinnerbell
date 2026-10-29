@@ -27,7 +27,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from dinnerbell.channels.slack.api import SlackApi, refusal, refused_blocks
+from dinnerbell.channels.slack.api import TOKEN_REFUSED, SlackApi, SlackAuthError, refusal, refused_blocks
 from dinnerbell.channels.slack.badge_text import ArtIds, wanted
 from dinnerbell.channels.slack.blocks import Directory
 from dinnerbell.channels.slack.composites import held_of_member
@@ -105,6 +105,15 @@ class Audience:
         if not self.limited:
             return directory
         return Directory({m: s for m, s in directory.slack_ids.items() if self.allows(s)})
+
+
+def deterministic(exc: SlackAuthError) -> Exception:
+    """What a delivery raises for a Slack auth error. A refused token stays one, since the
+    adapter holds every delivery until it's fixed. Any other code, such as ``missing_scope``,
+    concerns one method and will fail the same way on every retry, so it fails the row at once."""
+    if exc.code in TOKEN_REFUSED:
+        return exc
+    return PermanentDeliveryError(str(exc), code=exc.code)
 
 
 class SlackChannel:
@@ -231,13 +240,19 @@ class SlackChannel:
             log.exception("badge pictures could not be started", extra={"event_id": notification.event_id})
 
     async def _send(self, message: dict[str, Any], slack_user: str | None, thread: MessageRef | None) -> MessageRef:
-        if slack_user is not None:
-            return await self.api.post(slack_user, message)
-        if thread is not None:
-            return await self.api.post(thread.channel_id, message, thread_ts=thread.message_id)
-        return await self.api.post(self.channel_id, message)
+        try:
+            if slack_user is not None:
+                return await self.api.post(slack_user, message)
+            if thread is not None:
+                return await self.api.post(thread.channel_id, message, thread_ts=thread.message_id)
+            return await self.api.post(self.channel_id, message)
+        except SlackAuthError as exc:
+            raise deterministic(exc) from None
 
     async def update(self, ref: MessageRef, notification: Notification) -> None:
         self.hold.check(direct=False)
         ctx = self._context(await self._directory(notification.household_id))
-        await self.api.update(ref, render(notification, ctx).payload())
+        try:
+            await self.api.update(ref, render(notification, ctx).payload())
+        except SlackAuthError as exc:
+            raise deterministic(exc) from None
