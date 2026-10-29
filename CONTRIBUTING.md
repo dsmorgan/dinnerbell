@@ -101,6 +101,17 @@ Releases follow [Semantic Versioning](https://semver.org/), and [CHANGELOG.md](C
 
 6. Promote the release to production with the checklist in [docs/setup.md](docs/setup.md#promote-a-release).
 
+## Update the vendored htmx
+
+HTMX is vendored at `src/dinnerbell/web/static/htmx-X.Y.Z.min.js`, and `tests/test_vendored_assets.py` checks its SHA-256 against the npm release, so a changed file fails CI. To update it:
+
+```sh
+cd "$(mktemp -d)" && npm pack htmx.org@X.Y.Z && tar xzf htmx.org-X.Y.Z.tgz
+shasum -a 256 package/dist/htmx.min.js
+```
+
+Copy `package/dist/htmx.min.js` to `src/dinnerbell/web/static/htmx-X.Y.Z.min.js` and delete the old file. Then change the version in `HTMX_FILE` (`src/dinnerbell/web/render.py`), the version and hash in `tests/test_vendored_assets.py`, the paths in `tests/test_csrf_and_headers.py`, and the line in CLAUDE.md. Never edit the file by hand.
+
 ## Report a security problem
 
 Don't open a public issue. Follow [SECURITY.md](SECURITY.md).

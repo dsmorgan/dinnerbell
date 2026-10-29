@@ -176,6 +176,22 @@ expect "test: the four secrets are files in secrets-test/, mounted at /run/secre
 $test_instance
 EOF
 
+# Resource and log caps (docs/setup.md, "Resource and log limits"): a process limit, a memory
+# limit, and rotated json-file logs, for production and for the test instance.
+limits_filter='
+    .services.dinnerbell as $s
+    | ($s.pids_limit | tonumber) > 0
+    and ($s.mem_limit | tonumber) > 0
+    and $s.logging.driver == "json-file"
+    and ($s.logging.options["max-size"] | length) > 0
+    and ($s.logging.options["max-file"] | tonumber) > 0'
+expect "production: pids_limit, mem_limit, and json-file log rotation" jq -e "$limits_filter" <<EOF
+$production
+EOF
+expect "test: pids_limit, mem_limit, and json-file log rotation" jq -e "$limits_filter" <<EOF
+$test_instance
+EOF
+
 echo "== wrapper refusals"
 refuses "DINNERBELL_ENV_FILE=.env" DINNERBELL_ENV_FILE=.env deploy/dinnerbell-test
 refuses "DINNERBELL_ENV_FILE=<absolute path to .env>" DINNERBELL_ENV_FILE="$PWD/.env" deploy/dinnerbell-test
@@ -575,6 +591,14 @@ if command -v podman-compose >/dev/null 2>&1; then
     # podman-compose 1.6.0 and later mount with --mount instead of -v.
     contains "production: volume dinnerbell_dinnerbell-data" "$production" \
         "dinnerbell_dinnerbell-data:/data" "source=dinnerbell_dinnerbell-data,destination=/data"
+    # The memory limit and the log driver reach podman in every version. pids_limit reaches it only
+    # in 1.6.0 and later (1.0.6 drops it without a warning, which docs/setup.md says).
+    contains "production: memory limit" "$production" "-m 512m" "--memory 512m" "--memory=512m" "-m=512m"
+    contains "production: log driver json-file" "$production" "--log-driver=json-file"
+    contains "production: log-opt max-size" "$production" "--log-opt=max-size=10m"
+    if podman-compose --help 2>&1 | grep -q -- '--verbose'; then
+        contains "production: pids limit" "$production" "--pids-limit 256" "--pids-limit=256"
+    fi
     contains "production: port 8013" "$production" "127.0.0.1:8013:8013"
     contains "test: volume dinnerbell-test_dinnerbell-data" "$test_instance" \
         "dinnerbell-test_dinnerbell-data:/data" "source=dinnerbell-test_dinnerbell-data,destination=/data"

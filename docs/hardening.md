@@ -25,9 +25,9 @@ GitHub sends a scheduled workflow's failure notice to the person who last change
   ```
 
 - **Keep backups off the container volume.** The nightly backups live next to the database, so losing the volume loses both. Copy `/data/backups/` to another disk or host, as described in [Back up](setup.md#back-up).
-- **Pin a release.** Run a specific `X.Y.Z` image tag, never `latest` or `main`, and don't use `podman auto-update`: it follows moving tags, which defeats the pin. Upgrade on purpose, after you read the release's upgrade notes.
+- **Pin a release.** Run a specific `X.Y.Z` image tag, never `latest` or `main`, and don't use `podman auto-update`: it follows moving tags, which defeats the pin. Upgrade on purpose, after you read the release's upgrade notes. After you pull, run `gh attestation verify oci://ghcr.io/dsmorgan/dinnerbell@sha256:...` against the digest the host holds ([Verify an image](setup.md#verify-an-image)), and consider pinning `image:` to that digest in `compose.override.yaml`. The test instance follows the moving `main` tag, so it is never a verified release.
 - **Bind only to the interface Newt reaches.** Set `DINNERBELL_BIND` in `.env` to that interface's address, never `0.0.0.0`. Your reverse proxy is then the only way in. To confirm, run `ss -ltn | grep 8013` and check the listening address.
-- **Keep the compose hardening flags.** `compose.yaml` runs the container with `read_only`, `cap_drop: ALL`, `no-new-privileges`, and a size-capped `/tmp`. Don't remove them in `compose.override.yaml`.
+- **Keep the compose hardening flags.** `compose.yaml` runs the container with `read_only`, `cap_drop: ALL`, `no-new-privileges`, and a size-capped `/tmp`, a process limit, a memory limit, and rotated logs. Don't remove them in `compose.override.yaml`.
 
 ## Monitor it
 

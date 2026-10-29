@@ -5,7 +5,7 @@
 FROM ghcr.io/astral-sh/uv:0.13.5@sha256:32a7bb39b496babbd997b0a39a4d66c126bdaf5661b302bf6f06abda8deca6ff AS uv
 
 # ---- build: resolve dependencies from uv.lock into /app/.venv -------------------------------
-FROM python:3.12-slim@sha256:cb33f7f771ecec2ef1225cf39b159591a040391bd73e4c01f00fdfc4c47611d2 AS build
+FROM python:3.12-slim@sha256:aa943ce411423c7582288f18707ff66eddcbaeb510502d747a72aeb34f30d159 AS build
 COPY --from=uv /uv /usr/local/bin/uv
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
@@ -14,18 +14,30 @@ ENV UV_COMPILE_BYTECODE=1 \
 WORKDIR /src
 COPY pyproject.toml uv.lock ./
 RUN uv sync --locked --no-dev --no-install-project
+# The build backend comes from uv.lock's `build` group, installed with --require-hashes into a
+# throwaway venv, and the wheel is built with --no-build-isolation and --offline. Nothing is resolved from PyPI
+# outside the lock, and the backend never reaches the runtime stage.
+RUN uv export --locked --only-group build --no-emit-project --no-header --format requirements-txt \
+      --output-file /tmp/build-requirements.txt \
+ && uv venv /tmp/build-venv \
+ && uv pip install --python /tmp/build-venv --require-hashes --no-deps -r /tmp/build-requirements.txt
 COPY README.md LICENSE ./
 COPY src ./src
-RUN uv sync --locked --no-dev --no-editable
+RUN uv --offline build --wheel --no-build-isolation --python /tmp/build-venv/bin/python --out-dir /tmp/dist \
+ && uv --offline pip install --python /app/.venv --no-deps --no-index /tmp/dist/*.whl
 
 # ---- runtime ---------------------------------------------------------------------------------
 # Keep this digest equal to the build stage's so the venv's interpreter matches.
-FROM python:3.12-slim@sha256:cb33f7f771ecec2ef1225cf39b159591a040391bd73e4c01f00fdfc4c47611d2
+FROM python:3.12-slim@sha256:aa943ce411423c7582288f18707ff66eddcbaeb510502d747a72aeb34f30d159
 LABEL org.opencontainers.image.title="Dinnerbell" \
       org.opencontainers.image.description="Household meal coordination" \
       org.opencontainers.image.licenses="AGPL-3.0-or-later" \
       org.opencontainers.image.source="https://github.com/dsmorgan/dinnerbell"
-RUN groupadd --system --gid 10001 dinnerbell \
+# Remove pip and ensurepip's bundled pip wheel: the app runs from /app/.venv, which has none, and
+# nothing in the image installs packages. This keeps pip's advisories out of the image scan.
+RUN python -m pip uninstall --yes pip \
+ && rm -rf /usr/local/bin/pip /usr/local/bin/pip3 /usr/local/bin/pip3.12 /usr/local/lib/python3.12/site-packages/pip* /usr/local/lib/python3.12/ensurepip \
+ && groupadd --system --gid 10001 dinnerbell \
  && useradd --system --uid 10001 --gid dinnerbell --no-create-home --home-dir /nonexistent dinnerbell \
  && mkdir -p /data/backups \
  && chown -R dinnerbell:dinnerbell /data

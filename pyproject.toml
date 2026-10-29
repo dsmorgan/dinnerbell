@@ -41,6 +41,10 @@ packages = ["src/dinnerbell"]
 include = ["src/dinnerbell", "README.md", "LICENSE"]
 
 [dependency-groups]
+# The Containerfile builds the wheel from this group's locked, hashed packages with
+# --no-build-isolation, so no build backend is resolved from PyPI at image build time. Keep
+# the floor equal to [build-system].requires.
+build = ["hatchling>=1.27"]
 dev = [
     "mypy>=2.4.0",
     "pip-audit>=2.10.1",
