@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The ``dinnerbell`` command: ``serve``, ``migrate``, ``config``, ``catalog``, ``slack``,
+"""The ``dinnerbell`` command: ``serve``, ``migrate``, ``init``, ``config``, ``catalog``, ``slack``,
 ``reset-history``, and, on a test instance only, ``scrub-test`` and ``discard-call``."""
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from dinnerbell import __version__, catalog_cli
+from dinnerbell import __version__, catalog_cli, init_cli
 from dinnerbell.config import (
     LEGACY_WARNINGS,
     ConfigError,
@@ -50,6 +50,7 @@ def _parser() -> argparse.ArgumentParser:
     serve.add_argument("--host", default="0.0.0.0", help="address to listen on (default: 0.0.0.0)")  # noqa: S104 container
     serve.add_argument("--port", type=int, default=DEFAULT_PORT, help=f"port (default: {DEFAULT_PORT})")
     commands.add_parser("migrate", help="upgrade the database schema and exit")
+    init_cli.add_parser(commands)
     config = commands.add_parser("config", help="configuration tools")
     config_commands = config.add_subparsers(dest="config_command", required=True, metavar="COMMAND")
     check = config_commands.add_parser(
@@ -466,6 +467,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _slack_preview(args.kind, args.base_url)
     if args.command == "config":
         return _config_check(args.env_file, args.secrets_dir)
+    if args.command == "init":
+        return init_cli.run(args)
     warnings: list[str] = []
     try:
         settings = load_settings(warnings=warnings)
