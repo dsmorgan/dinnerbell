@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from typing import Any
 
 import pytest
@@ -136,7 +137,9 @@ def test_every_migration_goes_down_and_up_without_losing_a_row(migrated: Setting
         command.downgrade(config, older)  # go on from the older revision
 
 
-def test_the_cli_path_refuses_a_downgrade_that_would_leave_a_dangling_reference(migrated: Settings) -> None:
+def test_the_cli_path_refuses_a_downgrade_that_finds_a_dangling_reference(
+    migrated: Settings, caplog: pytest.LogCaptureFixture
+) -> None:
     """The check after a CLI migration names the table and rolls the change back."""
     engine = create_engine(migrated.sync_database_url)
     try:
@@ -157,11 +160,27 @@ def test_the_cli_path_refuses_a_downgrade_that_would_leave_a_dangling_reference(
     finally:
         engine.dispose()
     config = _cli_config(migrated)
-    with pytest.raises(IntegrityCheckFailed, match="tag"):
-        command.downgrade(config, "-1")
+    schema = "SELECT type, name, sql FROM sqlite_master ORDER BY name"
     engine = create_engine(migrated.sync_database_url)
     try:
         with engine.connect() as c:
+            schema_before = c.execute(text(schema)).all()
+    finally:
+        engine.dispose()
+    with (
+        caplog.at_level(logging.ERROR),
+        pytest.raises(IntegrityCheckFailed, match=r"Rows in tag refer to rows that don't exist.*already broken"),
+    ):
+        command.downgrade(config, "-1")
+    assert [(r.table, r.rowid, r.parent) for r in caplog.records if r.message == "dangling reference"] == [
+        ("tag", 1, "household")
+    ]
+    assert "'T'" not in caplog.text
+    engine = create_engine(migrated.sync_database_url)
+    try:
+        with engine.connect() as c:
+            assert c.execute(text(schema)).all() == schema_before  # the rollback undid the DDL
+            assert c.execute(text("SELECT name FROM tag")).all() == [("T",)]
             assert c.execute(text("SELECT version_num FROM alembic_version")).scalar_one().startswith("0019")
     finally:
         engine.dispose()

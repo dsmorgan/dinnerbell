@@ -62,13 +62,17 @@ def _check_known(connection: Connection, script: ScriptDirectory) -> None:
 
 
 def check_references(connection: Connection) -> None:
-    """Raise ``IntegrityCheckFailed``, naming the tables, if any row refers to a row that doesn't exist."""
+    """Raise ``IntegrityCheckFailed``, naming the tables, if any row refers to a row that doesn't
+    exist. The log gets the first few (table, rowid, parent table), never a row's contents."""
     broken = connection.exec_driver_sql("PRAGMA foreign_key_check").all()
     if broken:
         tables = ", ".join(sorted({str(row[0]) for row in broken}))
+        for table, rowid, parent, _ in broken[:5]:
+            log.error("dangling reference", extra={"table": table, "rowid": rowid, "parent": parent})
         raise IntegrityCheckFailed(
-            f"The schema change would leave rows in {tables} referring to rows that don't exist, so "
-            "nothing was changed. Restore a backup from /data/backups/ or report this as a bug."
+            f"Rows in {tables} refer to rows that don't exist: this schema change left them that way, "
+            "or they were already broken before it. Nothing was changed. Restore a backup from "
+            "/data/backups/; if the database was fine before, report this as a bug."
         )
 
 
