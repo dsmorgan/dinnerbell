@@ -10,6 +10,7 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 - CI only: the `image` job tags its local build `ghcr.io/dsmorgan/dinnerbell:ci` instead of `dinnerbell:ci`. Grype's alert fingerprint includes the image name, so a base-image finding had one Code scanning alert from the CI build and another from the published image; now each finding has one alert (#141). The image itself is unchanged, and nothing new is pushed.
 - Documentation only: `SECURITY.md` links straight to the private vulnerability report form and the latest release, and says what to include in a report (#141).
+- Documentation only: the README opens with how a dinner works, with a plain-language diagram of a day: the 3:00 PM call, the vote, the decision, and the 6:30 PM dinner (#136).
 
 ## [0.10.0] - 2026-10-29
 
