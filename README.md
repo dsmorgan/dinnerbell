@@ -1,10 +1,10 @@
 # <img src="src/dinnerbell/web/static/logo-mark.svg" width="48" height="48" alt="" align="absmiddle"> Dinnerbell
 
-Dinnerbell helps a household answer, at a fixed time each day, three questions: who is eating, what are we eating, and who is cooking, picking up, or ordering it.
+Dinnerbell answers three questions for your household at the same time each day: who's eating, what are we eating, and who's cooking, picking up, or ordering it.
 
-It asks in Slack, ranks meals that fit everyone eating, assigns the work, and records who did it so the household can celebrate contributions with badges. It runs as one container on your own hardware, with a mobile-friendly web app for the catalog, preferences, history, and stats.
+It asks in Slack, ranks meals that fit everyone eating, assigns the work, and celebrates who did it with badges. It runs as one container on your own hardware, with a mobile-friendly web app for the catalog, preferences, history, and stats.
 
-You need three things: a host that runs containers, a Slack workspace, and an HTTPS hostname that your phones can reach.
+You need a host that runs containers, a Slack workspace, and an HTTPS hostname your phones can reach.
 
 ## How a dinner works
 
@@ -72,7 +72,7 @@ flowchart LR
     style host fill:#EAF3F3,stroke:#2E6B6F,color:#2A1810
 ```
 
-Dinnerbell opens the connection to Slack, so Slack never needs to reach your host. The only inbound traffic is HTTPS from phones, through your proxy or tunnel. Sign in with Slack returns the browser to `https://<your hostname>/auth/callback`, through the same hostname.
+Dinnerbell opens the connection to Slack, so Slack never needs to reach your host. The only inbound traffic is HTTPS from phones, through your proxy or tunnel, including the return from Sign in with Slack.
 
 ## What you need
 
@@ -82,13 +82,13 @@ Dinnerbell opens the connection to Slack, so Slack never needs to reach your hos
 | A Slack workspace where you can create apps | Calls, buttons, reminders, and sign-in happen in Slack | A new workspace for the household; the free plan is enough |
 | An HTTPS hostname that phones can reach | The web app, and the Sign in with Slack redirect, which must land on HTTPS | Any reverse proxy or tunnel with TLS: Pangolin, Cloudflare Tunnel, Tailscale Funnel, or Caddy or Traefik on a public IP |
 | Household members in Slack | Each adult answers calls in Slack and signs in to the web app with Slack | Another OpenID Connect provider, such as Google, for sign-in; Slack still carries the calls |
-| A test instance | Rehearse releases on a second copy ([ADR 0006](docs/adr/0006-test-instance.md)) | Optional |
+| A test instance | Rehearse releases on a second copy ([test-instance.md](docs/test-instance.md)) | Optional |
 
-You don't need a calendar, an LLM, or an email server. One install serves one household of a handful of adults. Dinnerbell backs up its database every night inside the data volume; copying that volume off the host is up to you.
+You don't need a calendar, an LLM, or an email server. One install serves one household of a handful of adults. Dinnerbell backs up its database every night inside its data volume; you copy the backups off the host.
 
 ## Run it
 
-Each release is a prebuilt, attested image on GitHub Container Registry. Start with the [quick install](docs/install.md). The [setup guide](docs/setup.md) is the full reference: the Slack app, the reverse proxy, secrets, upgrades, backups, and the test instance. Changes are listed in [CHANGELOG.md](CHANGELOG.md).
+Each release is a prebuilt, attested image on GitHub Container Registry. Start with the [quick install](docs/install.md), or follow the [setup guide](docs/setup.md) to install from a git clone, with every step in detail, upgrades, backups, and troubleshooting. Every setting is in the [configuration reference](docs/configuration.md), and changes are in [CHANGELOG.md](CHANGELOG.md).
 
 <img src="src/dinnerbell/web/static/logo-test-mark.svg" width="24" height="24" alt="" align="absmiddle"> A test instance shows Dinnerbot, Dinnerbone as a half-built blueprint, so you can tell it from production at a glance.
 

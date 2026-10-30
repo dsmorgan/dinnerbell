@@ -1,17 +1,20 @@
 # Catalog format
 
-The catalog is the household's list of things to eat: restaurants and home meals, each tagged by cuisine and anything else that matters for choosing. This page defines the file format Dinnerbell imports. The same format is the target for future assistant-drafted entries, so anything that can produce it, whether a person, a script, or a chatbot, can feed the catalog.
+The catalog is the household's list of things to eat: restaurants and home meals, each tagged by cuisine and anything else that matters for choosing. This page defines the catalog file that Dinnerbell imports and exports. Anything that writes this format, whether a person, a script, or a chatbot, can feed the catalog.
 
 ## Ways to add to the catalog
 
-- **In the app.** The Catalog page has an add form for one item at a time. Any member can use it.
-- **Bulk import.** Paste or upload a catalog file on the Catalog page. Dinnerbell validates it, shows a preview of what will be created and changed, and applies it only after you confirm. Any member can import.
-- **First run.** If `DINNERBELL_SEED_FILE` points to a catalog file, Dinnerbell imports it on first start, while the catalog is still empty. At that point only the admin is a member, so other cooks are skipped. After inviting everyone, import the same file again from the Catalog page to fill in the cooks, before editing those items in the app.
-- **With a chatbot, today.** Give any chatbot this page plus your notes ("we get Thai from Siam Garden on Main, pickup or DoorDash") and ask for a catalog file. Import the result; the preview catches mistakes.
+Any member can add to the catalog:
+
+- **In the app.** The **Catalog** page has a form to add one item at a time.
+- **Bulk import.** Paste or upload a catalog file on the **Catalog** page. Dinnerbell validates it, previews what it creates and changes, and applies it only after you confirm.
+- **On first start.** If `DINNERBELL_SEED_FILE` points to a catalog file, Dinnerbell imports it on first start, while the catalog is empty. Only the admin is a member then, so other cooks are skipped. After you invite everyone, import the same file again on the **Catalog** page to fill in the cooks, before you edit those items in the app. See [Load a catalog on first start](configuration.md#load-a-catalog-on-first-start).
+- **With a chatbot.** Give a chatbot this page and your notes, such as "we get Thai from Siam Garden on Main, pickup or DoorDash", and ask for a catalog file. Import the result; the preview catches mistakes.
 - **From another instance.** Export the catalog from one Dinnerbell and import it into another, such as from production into a test instance. See [Export the catalog](#export-the-catalog).
-- **With the built-in assistant, later.** Milestone M6 adds an assistant that drafts entries in this format from a description or a menu link. Its drafts go through the same preview before anything is saved.
 
 ## Example
+
+This file declares tags, three restaurants, and two home meals:
 
 ```yaml
 version: 1
@@ -99,55 +102,61 @@ A complete starter file is in [seed/example.yaml](../seed/example.yaml).
 
 ## Meals
 
-`meals` says which meals an item is for. Ranking proposes items for the call's meal, and fills the vote from items for other meals only when too few fit; those say so, such as "Usually for dinner." **Add a proposal** and **Make an offer** list items for the meal first and mark the rest "(usually dinner)", but you can still pick them.
+`meals` says which meals an item is for. An entry without `meals` is for lunch and dinner, because most places don't serve breakfast. List `breakfast` for a place that serves it, and drop `lunch` or `dinner` for a place that doesn't. A list needs at least one meal, so `meals: []` and `meals: null` are errors.
 
-Most places aren't breakfast places, so an entry without `meals` is for lunch and dinner. List `breakfast` for a place that serves it, and drop `lunch` or `dinner` for a place that doesn't. A list needs at least one meal, so `meals: []` and `meals: null` are errors.
+Ranking proposes items for the call's meal first, and fills the vote from items for other meals only when too few fit; those say so, such as "Usually for dinner." **Add a proposal** and **Make an offer** list items for the meal first and mark the rest, such as "(usually dinner)", but you can still pick them.
 
 ## Rules
 
-- **Tags match by name, ignoring case.** `thai` and `Thai` are the same tag. The first spelling Dinnerbell sees is kept.
+- **Tags match by name, ignoring case.** `thai` and `Thai` are the same tag, and the first spelling Dinnerbell sees is kept.
 - **Tag names are unique across kinds.** You can't have a cuisine and a protein both named `vegetarian`.
-- **Lists hold the right kind of tag.** Every tag in a `cuisine` list must be a cuisine tag, and no tag in a `tags` list may be one. Listing `vegetarian` under `cuisine`, or `Thai` under `tags`, is an error.
-- **Undeclared tags are created.** A tag used in an entry but missing from `tags` is created with kind `cuisine` if it appears in a `cuisine` list, otherwise `other`. The preview lists every tag it will create so you can catch typos.
+- **Lists hold the right kind of tag.** Every tag in a `cuisine` list must be a cuisine, and no tag in a `tags` list may be one. `vegetarian` under `cuisine`, or `Thai` under `tags`, is an error.
+- **Undeclared tags are created.** A tag missing from `tags` is created as a `cuisine` if it appears in a `cuisine` list, and as `other` otherwise. The preview lists every tag it creates, so you can catch typos.
 - **Names are unique within a file.** Two restaurants, or two home meals, whose names match ignoring case are an error.
-- **Unknown fields are errors.** A misspelled field such as `mode:`, or a field that belongs to the other kind, such as `servings` on a restaurant, is reported rather than ignored.
-- **Imports never delete.** An entry whose name matches an existing item of the same kind updates it: fields present in the file replace the stored values, and fields left out stay as they are. A default applies only to a new item: an update without `meals` or `modes` keeps the item's own. Items missing from the file are left alone. To retire an item, set `active: false`.
-- **An explicit empty value clears a field.** On an update, `notes: null`, `url: ""`, or `tags: []` removes the stored value, while leaving the field out keeps it.
-- **Imports are all or nothing.** If any entry fails validation, nothing is saved and the preview lists every error with its location, such as `restaurants[3].modes[0]: "drive-thru" is not one of pickup, delivery`. List positions count from 0, so `restaurants[3]` is the fourth restaurant.
-- **Plain YAML only.** Anchors and aliases (`&name`, `*name`), repeated keys in one mapping, nesting deeper than 20 levels, and more than 50,000 values are refused, as are files over 1 MB.
+- **Unknown fields are errors.** A misspelled field such as `mode:`, or a field of the other kind, such as `servings` on a restaurant, is reported, not ignored.
+- **Imports never delete.** An entry whose name matches an existing item of the same kind updates it: fields in the file replace the stored values, and fields left out stay. Defaults apply only to new items, so an update without `meals` or `modes` keeps the item's own. Items missing from the file stay. To retire an item, set `active: false`.
+- **An explicit empty value clears a field.** On an update, `notes: null`, `url: ""`, or `tags: []` removes the stored value.
+- **Imports are all or nothing.** If any entry fails validation, nothing is saved, and the preview lists every error with its location, such as `restaurants[3].modes[0]: "drive-thru" is not one of pickup, delivery`. Positions count from 0, so `restaurants[3]` is the fourth restaurant.
+- **Plain YAML only.** Dinnerbell refuses anchors and aliases (`&name`, `*name`), repeated keys in one mapping, nesting deeper than 20 levels, more than 50,000 values, and files over 1 MB.
 - **Preferences aren't part of the file.** Each person sets their own vetoes and likes in the app, and other members never see them.
 
 ## Export the catalog
 
-An export is a catalog file of the household's whole catalog: every tag, and every restaurant and home meal, active or not. Use it to copy the catalog to another instance, to keep an editable copy, or to edit many items at once and import the result.
+An export is a catalog file of the whole catalog: every tag, and every restaurant and home meal, active or not. Use it to copy the catalog to another instance, to keep an editable copy, or to edit many items at once and import the result.
 
-- **In the app.** On the Catalog page, select **Download catalog**. Any member can.
-- **From the command line.** `dinnerbell catalog export` writes the file to standard output. Add `--output FILE` to write a file instead; it refuses to replace an existing file unless you add `--force`. `--force` replaces only a regular file or a symlink, and it replaces the symlink itself rather than writing to the file it points to. It writes a new file next to the old one and renames it into place, so the directory must let you create files. The command needs the same configuration as the app to find the database. It opens the database read-only and never migrates it, so it's safe to run while Dinnerbell runs. When Dinnerbell is stopped, SQLite still creates empty `dinnerbell.db-wal` and `dinnerbell.db-shm` files next to the database, readable only by the user who ran the command. So run it inside the container, as the app's user, never as root on the host: Dinnerbell can't open sidecar files that another user owns. [Copy the catalog between production and test](setup.md#copy-the-catalog-between-production-and-test) shows how.
+- **In the app:** on the **Catalog** page, select **Download catalog**. Any member can.
+- **On the command line:** `dinnerbell catalog export` writes the file to standard output. To copy a catalog between instances, see [Copy the catalog between production and test](test-instance.md#copy-the-catalog-between-production-and-test).
 
-An export follows these rules, so it imports cleanly:
+An export imports cleanly:
 
-- **Every field is written.** Empty values are `null` or `[]`, and `active` and `meals` are always there. Because an explicit empty value clears a field, importing an export makes each matching item exactly what the export says.
-- **Everything is sorted.** Tags are sorted by name within each kind, and items by name, so two exports of the same catalog are identical and a diff shows only real changes.
-- **Cooks aren't exported.** They're member emails. An import of an export leaves each item's cooks as they are, so set cooks in the app on each instance.
-- **Nothing personal is exported.** No members, emails, Slack IDs, preferences, vetoes, meal history, or audit records.
-- **Import's limits apply.** Import refuses files over 1 MB or with more than 50,000 values, about 2,000 items. If an export is over either limit, the command warns you; split the file and import each part.
+- **Every field is written.** Empty values are `null` or `[]`, and `active` and `meals` are always present. Because an explicit empty value clears a field, importing an export makes each matching item exactly what the export says.
+- **Everything is sorted.** Tags are sorted by name within each kind, and items by name, so two exports of the same catalog are identical, and a diff shows only real changes.
+- **Cooks aren't exported,** because they're member emails. Importing an export leaves each item's cooks as they are, so set cooks in the app on each instance.
+- **Nothing personal is exported:** no members, emails, Slack IDs, preferences, vetoes, meal history, or audit records.
+- **Import's limits apply.** Import refuses files over 1 MB or with more than 50,000 values, about 2,000 items. If an export passes either limit, the command warns you; split the file and import each part.
 
-An export has `meals`, which Dinnerbell 0.5.0 and earlier refuse as an unknown field, so copy a catalog only to an instance on the same release or later.
+Importing an export into the catalog it came from previews as "The catalog already matches this file." Importing it into another catalog adds missing items and tags, updates items that match by name, and deletes nothing. Dinnerbell 0.5.0 and earlier refuse an export's `meals` field, so copy a catalog only to an instance on the same release or later.
 
-Importing an export into the catalog it came from previews as "The catalog already matches this file." Importing it into another catalog adds the items and tags that are missing, updates the items that match by name, and, like every import, deletes nothing: items that exist only in the target stay.
+### Command-line options
 
-## Validating a file
+- `--output FILE` writes a file instead of standard output. It refuses to replace an existing file unless you add `--force`, which replaces only a regular file or a symlink (the symlink itself, not the file it points to). It writes a new file next to the old one and renames it into place, so the directory must let you create files.
+- The command needs the app's configuration to find the database. It opens the database read-only and never migrates it, so it's safe while Dinnerbell runs.
+- Run it inside the container, as the app's user, never as root on the host. When Dinnerbell is stopped, SQLite still creates empty `dinnerbell.db-wal` and `dinnerbell.db-shm` files next to the database, owned by whoever ran the command, and Dinnerbell can't open sidecar files another user owns.
 
-The JSON Schema for this format is in [seed/catalog.schema.json](../seed/catalog.schema.json). Editors with YAML language support validate against it when the file starts with:
+<a id="validating-a-file"></a>
+
+## Validate a file
+
+The JSON Schema for this format is [seed/catalog.schema.json](../seed/catalog.schema.json). Editors with YAML language support validate against it when the file starts with:
 
 ```yaml
 # yaml-language-server: $schema=./catalog.schema.json
 ```
 
-From a checkout, validate without importing:
+From a checkout, validate a file without importing it:
 
-```
+```sh
 uv run dinnerbell catalog validate path/to/catalog.yaml
 ```
 
-The schema is generated from the format's models. After changing them, regenerate it with `uv run dinnerbell catalog schema > seed/catalog.schema.json`; a test fails while it's stale.
+The schema is generated from the format's models. After you change them, regenerate it with `uv run dinnerbell catalog schema > seed/catalog.schema.json`; a test fails while it's stale.

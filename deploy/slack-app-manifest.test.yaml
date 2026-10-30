@@ -9,7 +9,7 @@
 # dinnerbell-test.example.com in redirect_urls to your test hostname in Slack's
 # manifest editor, before you select Next. The path must stay /auth/callback.
 # To keep a copy with your hostname, write it to a *.local.yaml file, which git
-# ignores. See "Test instance" in docs/setup.md.
+# ignores. See docs/test-instance.md.
 
 display_information:
   name: Dinnerbell Test

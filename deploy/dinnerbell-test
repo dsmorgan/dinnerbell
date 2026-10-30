@@ -294,7 +294,7 @@ if [ "$starts" = yes ] && [ -f .env ]; then
         status=0
         shares .env "$DINNERBELL_ENV_FILE" "$name" || status=$?
         case "$status" in
-            0) fail "$DINNERBELL_ENV_FILE and .env have the same $name. Give test its own: see \"Write .env.test\" in docs/setup.md." ;;
+            0) fail "$DINNERBELL_ENV_FILE and .env have the same $name. Give test its own: see \"Write .env.test\" in docs/test-instance.md." ;;
             1) ;;
             3) fail "$DINNERBELL_ENV_FILE contains production's $name from .env, in a comment or another line. Remove it." ;;
             *) fail "can't compare $name in $DINNERBELL_ENV_FILE and .env (awk exit $status). Nothing was started." ;;

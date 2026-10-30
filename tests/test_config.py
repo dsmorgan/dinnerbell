@@ -379,6 +379,12 @@ def test_env_example_documents_every_setting() -> None:
             assert line in text, field
 
 
+def test_configuration_reference_documents_every_setting() -> None:
+    text = (Path(__file__).resolve().parents[1] / "docs" / "configuration.md").read_text()
+    missing = [field for field in Settings.model_fields if f"`DINNERBELL_{field.upper()}`" not in text]
+    assert missing == [], "add these settings to docs/configuration.md"
+
+
 # Test instance settings (ADR 0006) ----------------------------------------------------------------
 
 
