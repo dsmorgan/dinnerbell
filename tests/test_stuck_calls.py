@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import logging
 import re
-import time
 from collections.abc import AsyncIterator, Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
@@ -30,6 +29,7 @@ from tests.conftest import BASE_URL, page, sign_in
 from tests.support.calls import OPENS, REMIND, RESPOND_BY, House, dinner_id, furnish, make_house
 from tests.support.clock import FakeClock
 from tests.support.fake_oidc import FakeProvider
+from tests.support.scheduler import settle
 from tests.support.web import add_item, submit
 from tests.test_domain_events import event
 from tests.test_events_web import to_voting
@@ -172,15 +172,6 @@ def broken_step(monkeypatch: pytest.MonkeyPatch, step: Step = Step.CLOSE_RESPONS
         raise RuntimeError("a bug in the step")
 
     monkeypatch.setitem(lifecycle.HANDLERS, step, fail)
-
-
-def settle(client: TestClient) -> None:
-    """Wait for the scheduler's startup jobs, so none of them writes ``SchedulerState`` late."""
-    jobs = client.app.state.jobs  # type: ignore[attr-defined]
-    deadline = time.monotonic() + 10
-    while jobs.state.last_tick is None or jobs.running:
-        assert time.monotonic() < deadline, "the startup jobs never finished"
-        time.sleep(0.01)
 
 
 def tick(client: TestClient) -> None:
