@@ -11,7 +11,7 @@ Description=Dinnerbell test instance
 Documentation=https://github.com/dsmorgan/dinnerbell/blob/main/docs/setup.md#start-at-boot
 # See dinnerbell.service for why ExecStartPre waits for the network.
 After=network-online.target
-# With Restart= below, give up after five tries in all.
+# With Restart= below, stop trying after five starts in ten minutes (see dinnerbell.service).
 StartLimitIntervalSec=10min
 StartLimitBurst=5
 
@@ -27,7 +27,8 @@ ExecStart=/usr/bin/env deploy/dinnerbell-test up -d
 ExecStop=/usr/bin/env deploy/dinnerbell-test stop
 # Room to pull the image and run the wrapper's configuration check.
 TimeoutStartSec=10min
-# Try again if up fails, such as on a LAN address in DINNERBELL_BIND that isn't up yet.
+# Try again if up fails, such as on a LAN address in DINNERBELL_BIND that isn't up yet. systemd
+# older than 244 (RHEL 8 has 239) refuses Restart= on a oneshot unit: add Restart=no in a drop-in.
 Restart=on-failure
 RestartSec=30
 
