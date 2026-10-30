@@ -85,7 +85,10 @@ def test_init_writes_a_complete_env_file_with_mode_600(
     assert "Bot User OAuth Token" in err and "App-Level Tokens" in err and "Client Secret" in err
     assert "Configuration is valid." in err
     # The boot unit is optional, and the hint says so.
-    assert err.rstrip().endswith('Optional, with podman: to start it at boot, see "Start at boot" in docs/setup.md.')
+    assert err.rstrip().endswith(
+        "Optional, with podman: to start it at boot, see "
+        "https://github.com/dsmorgan/dinnerbell/blob/main/docs/setup.md#start-at-boot"
+    )
     assert_no_secret(err, BOT, APP, CLIENT_SECRET, key)
     # The file passes the real check, read as compose reads it.
     assert cli.main(["config", "check", "--env-file", str(output)]) == 0
@@ -284,7 +287,7 @@ def test_init_test_refuses_production_values(
         assert f"That's production's {noun}. Test needs its own." in err
     assert_no_secret(err, BOT, APP, CLIENT_SECRET, test_bot, test_app, test_secret)
     assert "port 8014" in err
-    assert "Start at boot" not in err  # test usually runs only while you use it
+    assert "start-at-boot" not in err  # test usually runs only while you use it
     values = dotenv_values(output)
     assert values["DINNERBELL_INSTANCE_LABEL"] == "TEST"
     assert values["DINNERBELL_SLACK_COMMAND"] == "/dinnerbell-test"
