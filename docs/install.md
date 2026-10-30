@@ -74,3 +74,5 @@ You need:
 
 - **Secrets in files:** to keep the four secrets out of `.env`, use `compose.secrets.yaml`. See [Keep secrets in files](https://github.com/dsmorgan/dinnerbell/blob/main/docs/setup.md#keep-secrets-in-files).
 - **Test instance:** run step 5 with `init --test --output /out/.env.test`. It writes the test settings and refuses production's secrets from `.env`. Start it with `deploy/dinnerbell-test up -d`, on port 8014. The bundle's `deploy/dinnerbell-test` runs the bundle's version. See [Test instance](https://github.com/dsmorgan/dinnerbell/blob/main/docs/setup.md#test-instance).
+- **Start at boot:** with podman, Dinnerbell stays down after a reboot until you start it; the bundle's `deploy/dinnerbell.service` starts it at boot. Docker needs nothing. See [Start at boot](https://github.com/dsmorgan/dinnerbell/blob/main/docs/setup.md#start-at-boot).
+- **Switch to a git clone, or from one:** see [Switch between a clone and the bundle](https://github.com/dsmorgan/dinnerbell/blob/main/docs/setup.md#switch-between-a-clone-and-the-bundle).

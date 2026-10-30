@@ -512,4 +512,5 @@ def run(args: argparse.Namespace, terminal: Terminal = TERMINAL) -> int:
         terminal.say("Point the test hostname at port 8014, then start it with: deploy/dinnerbell-test up -d")
     else:
         terminal.say("Point your hostname at port 8013, then start it with: podman-compose up -d")
+        terminal.say('Optional, with podman: to start it at boot, see "Start at boot" in docs/setup.md.')
     return EXIT_OK

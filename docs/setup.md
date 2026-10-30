@@ -351,6 +351,38 @@ What each tool does with the keys:
 
 podman-compose 1.0.6 never reads `pids_limit` (confirmed in its source). On that version, the process cap is absent; upgrade podman-compose to get it. podman passes `max-size` to its log driver in every version, but older podman releases ignore `max-file`. `scripts/check-compose.sh` fails if any of these keys is missing from either rendering.
 
+### Start at boot
+
+This is optional. With Docker, skip it: the Docker daemon starts at boot and restarts Dinnerbell, because `compose.yaml` sets `restart: unless-stopped`. Rootless podman has no daemon, so after a reboot Dinnerbell stays down until you run `podman-compose up -d`. To start it at boot instead, install the systemd user unit `deploy/dinnerbell.service`:
+
+1. Let your user's services run without a login. Check that `loginctl show-user "$USER" -p Linger` then shows `Linger=yes`.
+
+   ```sh
+   loginctl enable-linger "$USER"
+   ```
+
+2. Install and enable the unit. `enable --now` also runs `podman-compose up -d` once; if Dinnerbell already runs, it keeps running.
+
+   ```sh
+   mkdir -p ~/.config/systemd/user && cp deploy/dinnerbell.service ~/.config/systemd/user/
+   systemctl --user daemon-reload && systemctl --user enable --now dinnerbell.service
+   ```
+
+3. Check that `systemctl --user status dinnerbell.service` shows `active (exited)`. If it failed, `journalctl --user -u dinnerbell.service` shows why.
+
+The unit runs `podman-compose up -d` in `~/dinnerbell` at boot, and `podman-compose down` at shutdown. It finds podman-compose in `~/.local/bin`, `/usr/local/bin`, or `/usr/bin`. If your install is in another directory, or you [keep secrets in files](#keep-secrets-in-files), run `systemctl --user edit dinnerbell.service` and add what differs, for example:
+
+```ini
+[Service]
+WorkingDirectory=/srv/dinnerbell
+ExecStart=
+ExecStart=/usr/bin/env podman-compose -f compose.yaml -f compose.secrets.yaml up -d
+```
+
+To start the [test instance](#test-instance) at boot too, do the same with `deploy/dinnerbell-test.service`, which runs `deploy/dinnerbell-test up -d`. Leave it off if you start test only when you need it.
+
+If you switch to the install's user with `sudo -iu`, run `export XDG_RUNTIME_DIR=/run/user/$(id -u)` first, or `systemctl --user` can't reach the user's service manager. To stop starting at boot, run `systemctl --user disable dinnerbell.service`; add `--now` to stop Dinnerbell too.
+
 ## 10. Sign in as the admin
 
 1. Open your public URL in a browser.
@@ -679,6 +711,43 @@ To undo the switch:
 2. Check out the commit you noted in step 1: `git checkout <commit>`.
 3. Restore the backup from step 2 with the command in [Roll back](#roll-back), step 4.
 4. Rebuild and start the old version: `podman-compose up -d --build`.
+
+## Switch between a clone and the bundle
+
+A git clone and the [release bundle](install.md) run the same release the same way, so you can move from either to the other and keep your data. Production's data is in the volume `dinnerbell_dinnerbell-data`, named after the directory, and test's in `dinnerbell-test_dinnerbell-data`. Put the new install in a directory that is also named `dinnerbell`, as the same user, and move your files into it.
+
+1. [Back up now](#back-up-now).
+2. In the old install, stop production and, if it runs, the test instance.
+
+   ```sh
+   podman-compose down
+   deploy/dinnerbell-test down
+   ```
+
+   With Docker: `docker compose down` and `DINNERBELL_COMPOSE="docker compose" deploy/dinnerbell-test down`
+
+3. From the directory that holds `dinnerbell`, move the old install aside.
+
+   ```sh
+   mv dinnerbell dinnerbell-old
+   ```
+
+4. Create the new `dinnerbell` directory at the release you run, which `compose.yaml` names in its `image:` line.
+   - **Clone to bundle:** download, check, and extract the bundle as in steps 1 to 3 of [install.md](install.md#install).
+   - **Bundle to clone:** clone as in [section 0](#0-clone-the-repository), then run `git checkout vX.Y.Z`.
+
+5. From the directory that holds both, move your files into the new one. Moving keeps each file's owner and mode, which secret files need: your account can't read them to copy them. Move anything else your `compose.override.yaml` mounts, such as `seed/my-catalog.yaml`, too.
+
+   ```sh
+   for file in .env .env.test secrets secrets-test compose.override.yaml; do
+       [ ! -e "dinnerbell-old/$file" ] || mv "dinnerbell-old/$file" dinnerbell/
+   done
+   ```
+
+6. Start production as before, from `dinnerbell`, with `-f compose.yaml -f compose.secrets.yaml` if you keep secrets in files, and start test if you run it.
+7. Check that `podman volume ls` (`docker volume ls`) shows no new Dinnerbell volume. Sign in, and check that your members and history are there. Then delete `dinnerbell-old`.
+
+The bundle's `deploy/dinnerbell-test` runs the bundle's release by default, and a clone's runs `main`; set `DINNERBELL_TAG` to run another. From then on, upgrade as the new install's guide says. The [boot units](#start-at-boot) need no change, because the path stays the same.
 
 ## Test instance
 
