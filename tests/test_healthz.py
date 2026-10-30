@@ -12,17 +12,15 @@ from fastapi.testclient import TestClient
 from dinnerbell import __version__
 from dinnerbell.db.engine import create_app_engine, create_sessionmaker
 from tests.support.clock import FakeClock
+from tests.support.scheduler import settle
 
 
 def wait_for_tick(client: TestClient) -> dict[str, object]:
-    import time
-
-    for _ in range(100):
-        body: dict[str, object] = client.get("/healthz").json()
-        if body["scheduler"]["last_tick"] is not None:  # type: ignore[index]
-            return body
-        time.sleep(0.02)
-    raise AssertionError("scheduler never ticked")
+    """/healthz once the scheduler's startup jobs are done (``settle``), so none of them
+    overwrites what the test sets."""
+    settle(client)
+    body: dict[str, object] = client.get("/healthz").json()
+    return body
 
 
 def test_healthz_shape(client: TestClient, clock: FakeClock) -> None:
@@ -156,7 +154,7 @@ def test_a_notification_waiting_over_an_hour_is_degraded(client: TestClient, clo
     body = client.get("/healthz").json()
     assert body["outbox"]["oldest_pending_age"] == 59 * 60
     assert body["outbox"]["backlog"] == 1
-    assert body["status"] == "ok"
+    assert body["status"] == "ok", body
     clock.advance(timedelta(minutes=2))
     state.last_tick = state.stuck_checked_at = clock.now
     body = client.get("/healthz").json()
