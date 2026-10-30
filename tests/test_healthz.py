@@ -152,12 +152,12 @@ def test_a_notification_waiting_over_an_hour_is_degraded(client: TestClient, clo
     state = client.app.state.dinnerbell.scheduler_state  # type: ignore[attr-defined]
     queue_row(client, clock.now.strftime("%Y-%m-%d %H:%M:%S"))
     clock.advance(timedelta(minutes=59))
-    state.last_tick = clock.now  # the scheduler is fine; only the notification waits
+    state.last_tick = state.stuck_checked_at = clock.now  # the scheduler is fine; only the notification waits
     body = client.get("/healthz").json()
     assert body["outbox"]["oldest_pending_age"] == 59 * 60
     assert body["outbox"]["backlog"] == 1
     assert body["status"] == "ok"
     clock.advance(timedelta(minutes=2))
-    state.last_tick = clock.now
+    state.last_tick = state.stuck_checked_at = clock.now
     body = client.get("/healthz").json()
     assert (body["status"], body["outbox"]["oldest_pending_age"]) == ("degraded", 61 * 60)

@@ -20,10 +20,11 @@ from dinnerbell.app_factory import create_app
 from dinnerbell.config import Settings
 from dinnerbell.domain import events as ev
 from dinnerbell.domain.events import Coverage, Event, EventState, Response, Status, Step
-from dinnerbell.scheduler.runner import call_tick
+from dinnerbell.scheduler.runner import CALL_TICK_INTERVAL, call_tick
 from dinnerbell.services import lifecycle, stuck
 from dinnerbell.services.database import Database, open_database
 from dinnerbell.services.errors import Forbidden
+from dinnerbell.services.health import STUCK_CHECK_STALE_AFTER, SchedulerState
 from dinnerbell.web.filters import elapsed
 from tests.conftest import BASE_URL, page, sign_in
 from tests.support.calls import OPENS, REMIND, RESPOND_BY, House, dinner_id, furnish, make_house
@@ -341,12 +342,49 @@ def test_a_failed_check_degrades_but_never_fails_healthz(
             raise ValueError("bad data")
 
     monkeypatch.setattr(stuck, "HouseholdRepository", Broken)
-    tick(admin)
+    for _ in range(3):  # the warning logs once, then waits an hour
+        tick(admin)
+        clock.advance(timedelta(minutes=30))
     response = health(admin, clock)
     assert response.status_code == 200
     assert (response.json()["status"], response.json()["stuck_calls"]) == ("degraded", None)
     assert banner(admin) is None and admin.get("/admin/members").status_code == 200
-    assert "stuck call check failed" in [r.message for r in caplog.records]
+    warnings = [r for r in caplog.records if r.message == stuck.CHECK_FAILED]
+    assert [(r.levelno, r.failures) for r in warnings] == [(logging.WARNING, 1), (logging.WARNING, 2)]  # type: ignore[attr-defined]
+    assert not hasattr(warnings[0], "event_id") and warnings[0].exc_info is not None
+    monkeypatch.undo()
+    tick(admin)
+    assert health(admin, clock).json()["stuck_calls"] == 0
+
+
+def test_a_call_tick_that_stops_checking_degrades_healthz(
+    admin: TestClient, clock: FakeClock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The heartbeat keeps ticking, but the call tick hung: its last result can't be trusted."""
+    assert STUCK_CHECK_STALE_AFTER == 3 * CALL_TICK_INTERVAL
+    start(admin)
+    broken_step(monkeypatch)
+    clock.advance(timedelta(hours=3))  # responses have been due for 90 minutes
+    tick(admin)
+    assert health(admin, clock).json()["stuck_calls"] == 1
+    clock.advance(STUCK_CHECK_STALE_AFTER)
+    body = health(admin, clock).json()
+    assert (body["status"], body["stuck_calls"], body["scheduler"]["status"]) == ("degraded", 1, "ok")
+    assert banner(admin) is not None
+    clock.advance(timedelta(seconds=1))
+    response = health(admin, clock)
+    assert response.status_code == 200
+    assert (response.json()["status"], response.json()["stuck_calls"]) == ("degraded", None)
+    assert banner(admin) is None  # out of date, so not shown
+    tick(admin)
+    assert health(admin, clock).json()["stuck_calls"] == 1
+
+
+def test_a_fresh_start_reports_no_stuck_call_before_its_first_check() -> None:
+    state = SchedulerState(started_at=NOW)
+    assert state.current_stuck(NOW + STUCK_CHECK_STALE_AFTER) == []
+    assert state.current_stuck(NOW + STUCK_CHECK_STALE_AFTER + timedelta(seconds=1)) is None
+    assert SchedulerState().current_stuck(NOW) is None
 
 
 # The service and the log ----------------------------------------------------------------------

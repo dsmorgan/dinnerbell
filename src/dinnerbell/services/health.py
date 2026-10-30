@@ -26,6 +26,10 @@ STALE_AFTER = HEARTBEAT_INTERVAL * 3
 """A tick older than this makes /healthz report "degraded"."""
 STOPPED_AFTER = timedelta(minutes=5)
 """A tick older than this means the scheduler is dead: /healthz returns 503."""
+STUCK_CHECK_STALE_AFTER = timedelta(seconds=90)
+"""Three call ticks (``scheduler.runner.CALL_TICK_INTERVAL``). A stuck call check older than this
+means the call tick has hung or stopped while the heartbeat goes on: /healthz reports
+"degraded" with ``stuck_calls`` null, and Admin shows no banner."""
 
 
 @dataclass
@@ -40,11 +44,22 @@ class SchedulerState:
     """The newest nightly backup failed, or failed its check and was deleted. /healthz reports
     "degraded" until one succeeds."""
     stuck: list[StuckCall] | None = field(default_factory=list)
-    """The stuck calls the latest call tick found (#142), or None if its check failed. /healthz
-    reports "degraded" while any is stuck, and Admin lists them."""
+    """The stuck calls the latest call tick found (#142), or None if its check failed. Read it
+    with ``current_stuck``."""
+    stuck_checked_at: datetime | None = None
+    """When the call tick last finished looking for stuck calls."""
 
     def tick_is_fresh(self, now: datetime) -> bool:
         return self.last_tick is not None and now - self.last_tick <= STALE_AFTER
+
+    def current_stuck(self, now: datetime) -> list[StuckCall] | None:
+        """The latest stuck call check's result, or None if it failed or is older than
+        ``STUCK_CHECK_STALE_AFTER``. Before the first check, the scheduler's start stands in for
+        it, so a fresh start reports none."""
+        checked = self.stuck_checked_at or self.started_at
+        if checked is None or now - checked > STUCK_CHECK_STALE_AFTER:
+            return None
+        return self.stuck
 
     def scheduler_status(self, now: datetime) -> str:
         """ "starting" before the first tick, then "ok", "stale", or "stopped" by tick age.

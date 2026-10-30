@@ -27,9 +27,9 @@ async def healthz(context: Context) -> JSONResponse:
     container health check and Uptime Kuma both catch a dead scheduler.
 
     A notification waiting over an hour also reports "degraded": the outbox is stuck. So does a
-    stuck call (#142), one that has owed the scheduler a step for over an hour, or a failed
-    check for them: restarting can't fix the failing step, and the admin calls it off from its
-    page.
+    stuck call (#142), one that has owed the scheduler a step for over an hour, or a check for
+    them that failed or is out of date (the call tick hung): restarting can't fix a failing
+    step, and the admin calls the call off from its page.
     Slack problems alone report "degraded" with a 200. Restarting the container can't invite
     the bot or fix a token, the outbox keeps every notification until Slack is back, and the
     web app must stay up so the admin can sign in and fix things."""
@@ -38,7 +38,8 @@ async def healthz(context: Context) -> JSONResponse:
     oldest = await outbox_oldest_age(context.sessionmaker, context.clock()) if backlog is not None else None
     state = context.scheduler_state
     scheduler = state.scheduler_status(context.clock())
-    stuck = None if state.stuck is None else len(state.stuck)  # the latest tick's check, never a query here
+    current = state.current_stuck(context.clock())  # the latest tick's check, never a query here
+    stuck = None if current is None else len(current)
     slack = await context.slack_state.status()
     healthy = database_ok and scheduler != "stopped"
     if not healthy:

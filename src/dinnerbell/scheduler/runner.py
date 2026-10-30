@@ -55,9 +55,8 @@ class JobContext:
     """One drain at a time in this process; the outbox's row claims cover other processes."""
     failures: lifecycle.FailureLog = field(default_factory=lifecycle.FailureLog)
     """Throttles the log line for a call whose step keeps failing (#142)."""
-    stuck_check_failures: lifecycle.FailureLog = field(
-        default_factory=lambda: lifecycle.FailureLog("could not check a call for being stuck")
-    )
+    stuck_call_failures: lifecycle.FailureLog = field(default_factory=stuck.call_check_log)
+    stuck_check_failures: lifecycle.FailureLog = field(default_factory=stuck.whole_check_log)
 
 
 Job = Callable[[JobContext], Awaitable[None]]
@@ -134,8 +133,13 @@ async def call_tick(ctx: JobContext) -> None:
     # Look for stuck calls here, once per tick, so /healthz and Admin only read the result.
     now = ctx.clock()
     ctx.state.stuck = await stuck.find_stuck(
-        ctx.sessionmaker, now, running_since=ctx.state.started_at or now, failures=ctx.stuck_check_failures
+        ctx.sessionmaker,
+        now,
+        running_since=ctx.state.started_at or now,
+        failures=ctx.stuck_call_failures,
+        check_failures=ctx.stuck_check_failures,
     )
+    ctx.state.stuck_checked_at = now
     try:
         await announcements.announce_badges(ctx.sessionmaker, ctx.clock())
     except Exception:
