@@ -6,7 +6,35 @@ It asks in Slack, ranks meals that fit everyone eating, assigns the work, and re
 
 You need three things: a host that runs containers, a Slack workspace, and an HTTPS hostname that your phones can reach.
 
-## How it fits together
+## How a dinner works
+
+Dinnerbell asks early, so dinner is settled before anyone is hungry. With the default schedule, it asks at 3:00 PM for a 6:30 PM dinner.
+
+```mermaid
+sequenceDiagram
+    participant D as Dinnerbell
+    participant F as Family, in Slack
+    participant C as Tonight's cook
+    D->>F: 3:00 PM: Who's eating tonight?
+    F->>D: In, out, or maybe, and who can cook, pick up, or order
+    D->>F: 4:30 PM: Here are three meals that fit. Vote.
+    F->>D: Votes
+    D->>F: 5:15 PM: Tonight it's tacos at 6:30
+    D->>C: You're cooking
+    Note over F,C: Dinner at 6:30 PM
+    C->>D: Mark done, or Dinnerbell does it two hours later
+    D->>F: New badges
+```
+
+1. At 3:00 PM, Dinnerbell posts a dinner call in your Slack channel and mentions everyone. Anyone can change the time on the **Schedule** page.
+2. Each person taps **Answer**: in, maybe, or out, and whether they can cook, pick up, or order. Anyone who hasn't answered gets a reminder, unless they turned reminders off.
+3. When answers close, Dinnerbell ranks meals from your catalog that fit everyone eating, using vetoes, preferences, variety, and who can do what, and posts the top three for a vote.
+4. The vote picks the meal, and Dinnerbell posts the decision with the meal time and who cooks, picks up, or orders. Each of them gets a direct message.
+5. After the meal, someone taps **Mark done**, or Dinnerbell marks it done two hours after the meal time. It records who did what and announces new badges.
+
+Lunch and breakfast calls work the same way. Their daily calls are off by default, and anyone can start a call for breakfast, lunch, or dinner when they want one.
+
+## How it runs
 
 ```mermaid
 flowchart LR
@@ -57,16 +85,6 @@ Dinnerbell opens the connection to Slack, so Slack never needs to reach your hos
 | A test instance | Rehearse releases on a second copy ([ADR 0006](docs/adr/0006-test-instance.md)) | Optional |
 
 You don't need a calendar, an LLM, or an email server. One install serves one household of a handful of adults. Dinnerbell backs up its database every night inside the data volume; copying that volume off the host is up to you.
-
-## How a dinner works
-
-1. At the call time, 3:00 PM by default, Dinnerbell posts a dinner call in your Slack channel and mentions everyone.
-2. Each person taps **Answer**: in, maybe, or out, and whether they can cook, pick up, or order. Anyone who hasn't answered gets a reminder, unless they turned reminders off.
-3. When answers close, Dinnerbell ranks meals from your catalog that fit everyone eating, using vetoes, preferences, variety, and who can do what, and posts the top three for a vote.
-4. The vote picks the meal, and Dinnerbell posts the decision with the meal time and who cooks, picks up, or orders. Each of them gets a direct message.
-5. After the meal, someone taps **Mark done**, or Dinnerbell marks it done two hours after the meal time. It records who did what and announces new badges.
-
-Lunch and breakfast calls work the same way. Their daily calls are off by default, and anyone can start a call for breakfast, lunch, or dinner when they want one.
 
 ## Run it
 
