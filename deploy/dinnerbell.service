@@ -22,7 +22,8 @@ Documentation=https://github.com/dsmorgan/dinnerbell/blob/main/docs/setup.md#sta
 # A user manager has no network-online.target of its own, so this line orders nothing there;
 # ExecStartPre waits for the system's instead.
 After=network-online.target
-# With Restart= below, give up after five tries in all.
+# With Restart= below, stop trying after five starts in ten minutes. To start over:
+#   systemctl --user reset-failed dinnerbell.service && systemctl --user start dinnerbell.service
 StartLimitIntervalSec=10min
 StartLimitBurst=5
 
@@ -44,7 +45,8 @@ ExecStart=/usr/bin/env podman-compose up -d
 ExecStop=/usr/bin/env podman-compose stop
 # Room to pull the image when it isn't on the host.
 TimeoutStartSec=10min
-# Try again if up fails, such as on a LAN address in DINNERBELL_BIND that isn't up yet.
+# Try again if up fails, such as on a LAN address in DINNERBELL_BIND that isn't up yet. systemd
+# older than 244 (RHEL 8 has 239) refuses Restart= on a oneshot unit: add Restart=no in a drop-in.
 Restart=on-failure
 RestartSec=30
 

@@ -369,13 +369,17 @@ This is optional. With rootful Docker, skip it: the Docker daemon starts at boot
    systemctl --user daemon-reload
    ```
 
-3. If you [keep secrets in files](#keep-secrets-in-files), or your install isn't in `~/dinnerbell`, run `systemctl --user edit dinnerbell.service` and add the lines that apply. The unit must start Dinnerbell exactly as you do: with other compose files, `up -d` recreates the container without your secret files, and Dinnerbell stops at start.
+3. If any of these cases applies to you, run `systemctl --user edit dinnerbell.service` and add only its lines. The unit must start Dinnerbell exactly as you do: with other compose files, `up -d` recreates the container without your secret files, and Dinnerbell stops at start.
 
    ```ini
    [Service]
+   # Only if your install isn't in ~/dinnerbell:
    WorkingDirectory=/srv/dinnerbell
+   # Only if you keep secrets in files:
    ExecStart=
    ExecStart=/usr/bin/env podman-compose -f compose.yaml -f compose.secrets.yaml up -d
+   # Only if `systemctl --version` is older than 244, such as on RHEL 8, which refuses the unit otherwise:
+   Restart=no
    ```
 
 4. Enable the unit. `--now` also runs it once.
@@ -386,7 +390,7 @@ This is optional. With rootful Docker, skip it: the Docker daemon starts at boot
 
 5. Check that `systemctl --user status dinnerbell.service` shows `active (exited)`, and that `podman-compose ps` shows the container `Up`. If either check fails, `journalctl --user -u dinnerbell.service` and `podman-compose logs dinnerbell` show why.
 
-At boot, the unit runs `podman-compose up -d` in `~/dinnerbell`, and if that fails, tries again every 30 seconds, five tries in all. At shutdown, it runs `podman-compose stop`, which keeps the container and its logs. It finds podman-compose in `~/.local/bin`, `/usr/local/bin`, or `/usr/bin`.
+At boot, the unit runs `podman-compose up -d` in `~/dinnerbell`. If that command exits with an error, the unit tries again 30 seconds later, and stops trying after a few failures; to let it start again, run `systemctl --user reset-failed dinnerbell.service`, then `systemctl --user start dinnerbell.service`. Some podman-compose versions, such as 1.0.6, exit without an error when the container fails to start, so check with step 5 after a reboot too. At shutdown, the unit runs `podman-compose stop`, which keeps the container and its logs. It finds podman-compose in `~/.local/bin`, `/usr/local/bin`, or `/usr/bin`.
 
 To start the [test instance](#test-instance) at boot too, do the same with `deploy/dinnerbell-test.service`, which runs `deploy/dinnerbell-test up -d`. Leave it off if you start test only when you need it. It starts test on the wrapper's default tag, so a reboot ends a [rehearsal](#promote-a-release) on another tag.
 
@@ -765,7 +769,7 @@ Bundles start at 0.10.0. To move a clone to the bundle, first [upgrade](#upgrade
 
 6. Check that production's volume is there under the name the new directory gives it: `podman volume inspect dinnerbell_dinnerbell-data` (with Docker, `docker volume inspect`) must succeed. If `.env` sets `COMPOSE_PROJECT_NAME`, the volume starts with that name instead of `dinnerbell`.
 7. Start production as before, from `dinnerbell`, with `-f compose.yaml -f compose.secrets.yaml` if you keep secrets in files. Sign in, and check that your members and history are there. Then start test if you run it.
-8. Check that `dinnerbell-old` holds nothing of yours. In a clone, `git -C dinnerbell-old status --short --ignored` lists the files git doesn't track. Then delete `dinnerbell-old`.
+8. Check that `dinnerbell-old` holds nothing of yours. In a clone, `git -C dinnerbell-old status --short --ignored` lists the files git doesn't track. In a bundle, `ls -A dinnerbell-old dinnerbell-old/secrets*` lists what's left; anything beyond the bundle's own files is yours. Then delete `dinnerbell-old`.
 
 If Dinnerbell starts empty, compose created a new volume, usually because the directory name or the user differs. Run `podman-compose down`, fix the name or user, and start it again. Your data is still in the old volume.
 
