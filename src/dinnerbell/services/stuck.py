@@ -1,7 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Stuck calls (#142): open calls that have owed the scheduler a step for more than an hour,
-because the step keeps failing. ``/healthz`` counts them, and Admin lists them.
+because the step keeps failing.
 
+The scheduler's call tick looks for them right after it advances the calls and keeps the result
+in ``SchedulerState.stuck``; ``/healthz`` counts it, and every Admin tab lists the household's.
 Nothing is stored: a call's owed step and when it fell due follow from the call itself
 (``domain.events.owed_since``), and the scheduler's start time stands in for the due time of a
 step that fell due while Dinnerbell was down.
@@ -17,10 +19,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from dinnerbell.db.events import EventRepository
 from dinnerbell.db.repositories import HouseholdRepository
-from dinnerbell.domain.events import STUCK_AFTER, Event, stuck_for
+from dinnerbell.domain.events import Event, stuck_for
 from dinnerbell.domain.members import Member
 from dinnerbell.services import call_context as cc
 from dinnerbell.services.common import require_admin
+from dinnerbell.services.lifecycle import FailureLog
 
 log = logging.getLogger(__name__)
 ADMINS_ONLY = "Only an admin can see stuck calls."
@@ -29,44 +32,62 @@ ADMINS_ONLY = "Only an admin can see stuck calls."
 @dataclass(frozen=True)
 class StuckCall:
     event: Event
-    stuck_for: timedelta
+    stuck_for: timedelta | None
+    """How long it has been stuck, as of the check. None when the check failed for this call,
+    which counts as stuck: the tick reads the same things to find the call's step."""
 
 
-async def _stuck(db: AsyncSession, household_id: int, now: datetime, running_since: datetime) -> list[StuckCall]:
-    if now - running_since <= STUCK_AFTER:
-        return []  # nothing can be stuck in the scheduler's first hour, so skip the reads
+async def _household(
+    db: AsyncSession, household_id: int, now: datetime, running_since: datetime, failures: FailureLog
+) -> list[StuckCall]:
     found: list[StuckCall] = []
     events = EventRepository(db)
     for event_id in await events.open_ids(household_id):
         event = await events.get(household_id, event_id)
         if event is None:  # pragma: no cover - discarded since the list was read
             continue
-        waited = stuck_for(await cc.owed(db, event), now, running_since=running_since)
+        try:
+            waited = stuck_for(await cc.owed(db, event), now, running_since=running_since)
+        except Exception:
+            await db.rollback()
+            failures.failed(event_id, now)
+            found.append(StuckCall(event, None))
+            continue
+        failures.recovered(event_id)
         if waited is not None:
             found.append(StuckCall(event, waited))
     return found
 
 
-async def stuck_calls(db: AsyncSession, actor: Member, now: datetime, *, running_since: datetime) -> list[StuckCall]:
-    """The actor's household's stuck calls, oldest call first. ``running_since`` is when the
-    scheduler started (``SchedulerState.started_at``). Admins only."""
-    require_admin(actor, ADMINS_ONLY)
-    return await _stuck(db, actor.household_id, now, running_since)
+async def find_stuck(
+    sessionmaker: async_sessionmaker[AsyncSession],
+    now: datetime,
+    *,
+    running_since: datetime,
+    failures: FailureLog | None = None,
+) -> list[StuckCall] | None:
+    """Every household's stuck calls, oldest call first, or None if the check failed.
 
-
-async def count_stuck(
-    sessionmaker: async_sessionmaker[AsyncSession], now: datetime, *, running_since: datetime
-) -> int | None:
-    """Stuck calls in every household, for ``/healthz``, or None if the check failed.
-
-    Any error counts as a failed check, not only a database error: whatever makes a call's step
-    fail may trip this check too, and ``/healthz`` must answer rather than fail with a 500,
-    which would make the container health check restart Dinnerbell.
+    ``running_since`` is when the scheduler started (``SchedulerState.started_at``). A call
+    whose own check fails counts as stuck, for how long unknown, and the others are still
+    checked; ``failures`` throttles that call's log line as it does the tick's. Any other error
+    fails the whole check, which never raises: whatever makes a step fail may trip this check
+    too.
     """
+    failures = failures if failures is not None else FailureLog("could not check a call for being stuck")
     try:
         async with sessionmaker() as db:
-            households = await HouseholdRepository(db).all()
-            return sum([len(await _stuck(db, h.id, now, running_since)) for h in households])
+            found: list[StuckCall] = []
+            for household in await HouseholdRepository(db).all():
+                found += await _household(db, household.id, now, running_since, failures)
     except Exception:
         log.warning("stuck call check failed", exc_info=True)
         return None
+    failures.keep_only({s.event.id for s in found})
+    return found
+
+
+def for_admin(actor: Member, found: list[StuckCall] | None) -> list[StuckCall]:
+    """The actor's household's calls among the scheduler's latest ``find_stuck``. Admins only."""
+    require_admin(actor, ADMINS_ONLY)
+    return [s for s in found or [] if s.event.household_id == actor.household_id]

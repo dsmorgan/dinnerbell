@@ -12,7 +12,6 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
 from dinnerbell.services.health import STALE_OUTBOX, database_reachable, outbox_backlog, outbox_oldest_age
-from dinnerbell.services.stuck import count_stuck
 from dinnerbell.web.auth import Context
 
 router = APIRouter()
@@ -28,8 +27,9 @@ async def healthz(context: Context) -> JSONResponse:
     container health check and Uptime Kuma both catch a dead scheduler.
 
     A notification waiting over an hour also reports "degraded": the outbox is stuck. So does a
-    stuck call (#142), one that has owed the scheduler a step for over an hour: restarting can't
-    fix the failing step, and the admin re-runs or calls it off from its page.
+    stuck call (#142), one that has owed the scheduler a step for over an hour, or a failed
+    check for them: restarting can't fix the failing step, and the admin calls it off from its
+    page.
     Slack problems alone report "degraded" with a 200. Restarting the container can't invite
     the bot or fix a token, the outbox keeps every notification until Slack is back, and the
     web app must stay up so the admin can sign in and fix things."""
@@ -37,9 +37,8 @@ async def healthz(context: Context) -> JSONResponse:
     backlog = await outbox_backlog(context.sessionmaker) if database_ok else None
     oldest = await outbox_oldest_age(context.sessionmaker, context.clock()) if backlog is not None else None
     state = context.scheduler_state
-    now = context.clock()
-    stuck = await count_stuck(context.sessionmaker, now, running_since=state.started_at or now) if database_ok else None
-    scheduler = state.scheduler_status(now)
+    scheduler = state.scheduler_status(context.clock())
+    stuck = None if state.stuck is None else len(state.stuck)  # the latest tick's check, never a query here
     slack = await context.slack_state.status()
     healthy = database_ok and scheduler != "stopped"
     if not healthy:

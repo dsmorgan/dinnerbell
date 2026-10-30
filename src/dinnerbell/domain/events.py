@@ -1314,6 +1314,48 @@ def early_close_at(
     return last_change + EARLY_CLOSE_QUIET if covered else None
 
 
+def _step_times(
+    event: Event,
+    *,
+    stale_after: datetime,
+    responses: Iterable[Response],
+    active_member_ids: Iterable[int],
+    coverage: Coverage | None,
+    guest_ids: Iterable[int],
+) -> list[tuple[datetime, Step]]:
+    """Every step ``event`` can owe, with the time it falls due, in priority order:
+    ``due_step`` takes the first one due, and ``owed_since`` the earliest time."""
+    if event.is_offer:
+        # An offer has no reminder and no early close: it takes people until its time (FR-4),
+        # then it's on, and done two hours after. Its plan was set when it was posted, so after
+        # downtime it catches up to done instead of expiring like an undecided call.
+        if event.state is EventState.COLLECTING:
+            return [(event.respond_deadline, Step.CLOSE_RESPONSES)]
+        if event.state is EventState.DECIDED and event.meal_time is not None:
+            return [(event.meal_time + DONE_AFTER_MEAL, Step.MARK_DONE)]
+        return []
+    times: list[tuple[datetime, Step]] = []
+    if event.state in UNDECIDED:
+        times.append((stale_after, Step.EXPIRE))
+    if event.state is EventState.SCHEDULED:
+        times += [(event.respond_deadline, Step.EXPIRE), (event.opens_at, Step.OPEN)]
+    if event.state is EventState.COLLECTING:
+        times.append((event.respond_deadline, Step.CLOSE_RESPONSES))
+        early = early_close_at(event, responses, active_member_ids, coverage or Coverage(), guest_ids)
+        if early is not None:
+            times.append((early, Step.CLOSE_RESPONSES))
+        if event.reminder_sent_at is None:
+            times.append((event.remind_at, Step.REMIND))
+    if event.state is EventState.VOTING and event.vote_deadline is not None:
+        times.append((event.vote_deadline, Step.CLOSE_VOTING))
+    if event.state is EventState.DECIDED:
+        if event.roles_due_at is not None:
+            times.append((event.roles_due_at, Step.ASSIGN_ROLES))
+        if event.meal_time is not None:
+            times.append((event.meal_time + DONE_AFTER_MEAL, Step.MARK_DONE))
+    return times
+
+
 def due_step(
     event: Event,
     now: datetime,
@@ -1333,38 +1375,15 @@ def due_step(
     ``closes_early``, given the call's responses, the household's active members, and the
     responses' coverage; with none passed, they close at the deadline.
     """
-    if event.is_offer:
-        # An offer has no reminder and no early close: it takes people until its time (FR-4),
-        # then it's on, and done two hours after. Its plan was set when it was posted, so after
-        # downtime it catches up to done instead of expiring like an undecided call.
-        if event.state is EventState.COLLECTING and now >= event.respond_deadline:
-            return Step.CLOSE_RESPONSES
-        if (
-            event.state is EventState.DECIDED
-            and event.meal_time is not None
-            and now >= event.meal_time + DONE_AFTER_MEAL
-        ):
-            return Step.MARK_DONE
-        return None
-    if event.state in UNDECIDED and now >= stale_after:
-        return Step.EXPIRE
-    if event.state is EventState.SCHEDULED:
-        if now >= event.respond_deadline:
-            return Step.EXPIRE
-        return Step.OPEN if now >= event.opens_at else None
-    if event.state is EventState.COLLECTING:
-        early = closes_early(event, now, responses, active_member_ids, coverage or Coverage(), guest_ids)
-        if now >= event.respond_deadline or early:
-            return Step.CLOSE_RESPONSES
-        if event.reminder_sent_at is None and now >= event.remind_at:
-            return Step.REMIND
-    if event.state is EventState.VOTING and event.vote_deadline is not None and now >= event.vote_deadline:
-        return Step.CLOSE_VOTING
-    if event.state is EventState.DECIDED and event.roles_due_at is not None and now >= event.roles_due_at:
-        return Step.ASSIGN_ROLES
-    if event.state is EventState.DECIDED and event.meal_time is not None and now >= event.meal_time + DONE_AFTER_MEAL:
-        return Step.MARK_DONE
-    return None
+    times = _step_times(
+        event,
+        stale_after=stale_after,
+        responses=responses,
+        active_member_ids=active_member_ids,
+        coverage=coverage,
+        guest_ids=guest_ids,
+    )
+    return next((step for at, step in times if now >= at), None)
 
 
 STUCK_AFTER = timedelta(hours=1)
@@ -1382,33 +1401,16 @@ def owed_since(
 ) -> datetime | None:
     """When ``event``, as stored, started owing the scheduler a step: the earliest moment at
     which ``due_step``, given the same arguments, returns one. None if it never will, such as
-    for a finished call. It mirrors ``due_step`` condition for condition."""
-    due: list[datetime] = []
-    if event.is_offer:
-        if event.state is EventState.COLLECTING:
-            due.append(event.respond_deadline)
-        if event.state is EventState.DECIDED and event.meal_time is not None:
-            due.append(event.meal_time + DONE_AFTER_MEAL)
-        return min(due, default=None)
-    if event.state in UNDECIDED:
-        due.append(stale_after)
-    if event.state is EventState.SCHEDULED:
-        due += [event.respond_deadline, event.opens_at]
-    if event.state is EventState.COLLECTING:
-        due.append(event.respond_deadline)
-        early = early_close_at(event, responses, active_member_ids, coverage or Coverage(), guest_ids)
-        if early is not None:
-            due.append(early)
-        if event.reminder_sent_at is None:
-            due.append(event.remind_at)
-    if event.state is EventState.VOTING and event.vote_deadline is not None:
-        due.append(event.vote_deadline)
-    if event.state is EventState.DECIDED:
-        if event.roles_due_at is not None:
-            due.append(event.roles_due_at)
-        if event.meal_time is not None:
-            due.append(event.meal_time + DONE_AFTER_MEAL)
-    return min(due, default=None)
+    for a finished call."""
+    times = _step_times(
+        event,
+        stale_after=stale_after,
+        responses=responses,
+        active_member_ids=active_member_ids,
+        coverage=coverage,
+        guest_ids=guest_ids,
+    )
+    return min((at for at, _ in times), default=None)
 
 
 def stuck_for(owed: datetime | None, now: datetime, *, running_since: datetime) -> timedelta | None:

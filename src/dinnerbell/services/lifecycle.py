@@ -904,17 +904,27 @@ async def _log_step(db: AsyncSession, step: Step, before: Event) -> None:
     )
 
 
+@dataclass
+class Attempt:
+    """The step ``advance`` is taking, for a failure's log line. None while it works out which
+    step is due, so a failure there never names the step before it."""
+
+    step: Step | None = None
+
+
 async def advance(
-    db: AsyncSession, household_id: int, event_id: int, now: datetime, *, attempted: list[Step] | None = None
+    db: AsyncSession, household_id: int, event_id: int, now: datetime, *, attempt: Attempt | None = None
 ) -> list[Step]:
     """Apply every step ``event_id`` owes at ``now``, each in its own transaction.
 
     The cheap read first means an event with nothing due costs no write. A call that's gone
-    (discarded) owes nothing. ``attempted``, when given, collects each step before it runs, so
-    after a failure its last entry is the step that failed.
+    (discarded) owes nothing. ``attempt``, when given, holds the step being taken, so after a
+    failure it names the step that failed, or None if none was under way.
     """
     applied: list[Step] = []
     for _ in range(MAX_STEPS):
+        if attempt is not None:
+            attempt.step = None
         current = await EventRepository(db).get(household_id, event_id)
         if current is None or await cc.due(db, current, now) is None:
             break
@@ -922,8 +932,8 @@ async def advance(
             async with locked_event(db, household_id, event_id, now) as event:
                 step = await cc.due(db, event, now)
                 if step is not None:
-                    if attempted is not None:
-                        attempted.append(step)
+                    if attempt is not None:
+                        attempt.step = step
                     await HANDLERS[step](db, event, now)
                     await _log_step(db, step, event)
         except NotFound:
@@ -942,32 +952,33 @@ FAILURE_LOG_INTERVAL = timedelta(hours=1)
 
 @dataclass
 class FailureLog:
-    """Throttles ``could not advance call``: a call's first failure logs at once, then at most
-    once per ``FAILURE_LOG_INTERVAL``, each line with its traceback and the number of failures
-    since the last line. The scheduler keeps one for the life of the process; a restart logs
-    the next failure at once again. A call that advances, or is no longer open, is forgotten.
+    """Throttles a per-call error line (#142): a call's first failure logs at once, then at most
+    once per ``FAILURE_LOG_INTERVAL``, each line with its traceback and ``failures``, the
+    number of failures since the last line. Call ``failed`` from inside the ``except`` block.
+    The scheduler keeps one per kind of failure for the life of the process, so a restart logs
+    the next failure at once again. A call that recovers, or is no longer open, is forgotten.
     """
 
+    message: str = "could not advance call"
     logged_at: dict[int, datetime] = field(default_factory=dict)
     unlogged: dict[int, int] = field(default_factory=dict)
 
-    def failed(self, event_id: int, step: Step | None, now: datetime) -> None:
+    def failed(self, event_id: int, now: datetime, **fields: object) -> None:
         last = self.logged_at.get(event_id)
         if last is not None and now - last < FAILURE_LOG_INTERVAL:
             self.unlogged[event_id] = self.unlogged.get(event_id, 0) + 1
             return
         self.logged_at[event_id] = now
         failures = self.unlogged.pop(event_id, 0) + 1
-        step_name = None if step is None else step.value
-        log.exception("could not advance call", extra={"event_id": event_id, "step": step_name, "failures": failures})
+        log.exception(self.message, extra={"event_id": event_id, **fields, "failures": failures})
 
-    def advanced(self, event_id: int) -> None:
+    def recovered(self, event_id: int) -> None:
         self.logged_at.pop(event_id, None)
         self.unlogged.pop(event_id, None)
 
     def keep_only(self, event_ids: set[int]) -> None:
         for event_id in set(self.logged_at) - event_ids:
-            self.advanced(event_id)
+            self.recovered(event_id)
 
 
 async def tick(
@@ -1000,13 +1011,13 @@ async def tick(
                 continue
             for event_id in event_ids:
                 seen.add(event_id)
-                attempted: list[Step] = []
+                attempt = Attempt()
                 try:
-                    applied += await advance(db, household.id, event_id, now, attempted=attempted)
+                    applied += await advance(db, household.id, event_id, now, attempt=attempt)
                 except Exception:
                     await db.rollback()
-                    failures.failed(event_id, attempted[-1] if attempted else None, now)
+                    failures.failed(event_id, now, step=None if attempt.step is None else attempt.step.value)
                 else:
-                    failures.advanced(event_id)
+                    failures.recovered(event_id)
     failures.keep_only(seen)
     return applied
