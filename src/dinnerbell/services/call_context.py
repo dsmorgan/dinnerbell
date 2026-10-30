@@ -58,6 +58,7 @@ from dinnerbell.domain.events import (
     due_step,
     head_count,
     late_people,
+    owed_since,
     posted_before_its_day,
     roles_unclear,
     shuffle_candidates,
@@ -654,24 +655,53 @@ async def stale_cutoff(db: AsyncSession, event: Event) -> datetime:
     return stale_after(event, usual_meal=schedule.meal_time, zone=ZoneInfo(household.timezone))
 
 
-async def due(db: AsyncSession, event: Event, now: datetime) -> Step | None:
-    """``domain.events.due_step`` for ``event``. A call that's collecting also gets its
-    responses, the household's active members, and the coverage, for the early close (FR-56)."""
+@dataclass(frozen=True)
+class StepInputs:
+    """What ``domain.events.due_step`` and ``owed_since`` need besides the event and now."""
+
+    stale_after: datetime
+    responses: list[Response] = field(default_factory=list)
+    active_member_ids: list[int] = field(default_factory=list)
+    coverage: Coverage | None = None
+    guest_ids: list[int] = field(default_factory=list)
+
+
+async def step_inputs(db: AsyncSession, event: Event) -> StepInputs:
+    """A call that's collecting also gets its responses, the household's active members, and
+    the coverage, for the early close (FR-56); any other call needs only its stale time."""
     cutoff = await stale_cutoff(db, event)
     if event.state is not EventState.COLLECTING:
-        return due_step(event, now, stale_after=cutoff)
+        return StepInputs(cutoff)
     responses = await ResponseRepository(db).for_event(event.household_id, event.id)
     members = {m.id: m for m in await MemberRepository(db).list(event.household_id)}
     active = [m.id for m in members.values() if m.is_member]  # nobody waits for a guest (#38)
     invited = await InvitationRepository(db).for_event(event.household_id, event.id)
     guests = [g for g in invited if g in members and members[g].active]
-    covered = coverage(responses, members)
+    return StepInputs(cutoff, responses, active, coverage(responses, members), guests)
+
+
+async def due(db: AsyncSession, event: Event, now: datetime) -> Step | None:
+    """``domain.events.due_step`` for ``event``."""
+    i = await step_inputs(db, event)
     return due_step(
         event,
         now,
-        stale_after=cutoff,
-        responses=responses,
-        active_member_ids=active,
-        coverage=covered,
-        guest_ids=guests,
+        stale_after=i.stale_after,
+        responses=i.responses,
+        active_member_ids=i.active_member_ids,
+        coverage=i.coverage,
+        guest_ids=i.guest_ids,
+    )
+
+
+async def owed(db: AsyncSession, event: Event) -> datetime | None:
+    """``domain.events.owed_since`` for ``event``: when it started owing the scheduler a step."""
+    i = await step_inputs(db, event)
+    return owed_since(
+        event,
+        stale_after=i.stale_after,
+        responses=i.responses,
+        active_member_ids=i.active_member_ids,
+        coverage=i.coverage,
+        guest_ids=i.guest_ids,
     )

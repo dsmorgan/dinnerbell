@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable
-from dataclasses import replace
+from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
@@ -904,11 +904,14 @@ async def _log_step(db: AsyncSession, step: Step, before: Event) -> None:
     )
 
 
-async def advance(db: AsyncSession, household_id: int, event_id: int, now: datetime) -> list[Step]:
+async def advance(
+    db: AsyncSession, household_id: int, event_id: int, now: datetime, *, attempted: list[Step] | None = None
+) -> list[Step]:
     """Apply every step ``event_id`` owes at ``now``, each in its own transaction.
 
     The cheap read first means an event with nothing due costs no write. A call that's gone
-    (discarded) owes nothing.
+    (discarded) owes nothing. ``attempted``, when given, collects each step before it runs, so
+    after a failure its last entry is the step that failed.
     """
     applied: list[Step] = []
     for _ in range(MAX_STEPS):
@@ -919,6 +922,8 @@ async def advance(db: AsyncSession, household_id: int, event_id: int, now: datet
             async with locked_event(db, household_id, event_id, now) as event:
                 step = await cc.due(db, event, now)
                 if step is not None:
+                    if attempted is not None:
+                        attempted.append(step)
                     await HANDLERS[step](db, event, now)
                     await _log_step(db, step, event)
         except NotFound:
@@ -931,15 +936,55 @@ async def advance(db: AsyncSession, household_id: int, event_id: int, now: datet
     return applied
 
 
-async def tick(sessionmaker: async_sessionmaker[AsyncSession], now: datetime) -> list[Step]:
+FAILURE_LOG_INTERVAL = timedelta(hours=1)
+"""How often the tick logs a call whose step keeps failing, after the first failure (#142)."""
+
+
+@dataclass
+class FailureLog:
+    """Throttles ``could not advance call``: a call's first failure logs at once, then at most
+    once per ``FAILURE_LOG_INTERVAL``, each line with its traceback and the number of failures
+    since the last line. The scheduler keeps one for the life of the process; a restart logs
+    the next failure at once again. A call that advances, or is no longer open, is forgotten.
+    """
+
+    logged_at: dict[int, datetime] = field(default_factory=dict)
+    unlogged: dict[int, int] = field(default_factory=dict)
+
+    def failed(self, event_id: int, step: Step | None, now: datetime) -> None:
+        last = self.logged_at.get(event_id)
+        if last is not None and now - last < FAILURE_LOG_INTERVAL:
+            self.unlogged[event_id] = self.unlogged.get(event_id, 0) + 1
+            return
+        self.logged_at[event_id] = now
+        failures = self.unlogged.pop(event_id, 0) + 1
+        step_name = None if step is None else step.value
+        log.exception("could not advance call", extra={"event_id": event_id, "step": step_name, "failures": failures})
+
+    def advanced(self, event_id: int) -> None:
+        self.logged_at.pop(event_id, None)
+        self.unlogged.pop(event_id, None)
+
+    def keep_only(self, event_ids: set[int]) -> None:
+        for event_id in set(self.logged_at) - event_ids:
+            self.advanced(event_id)
+
+
+async def tick(
+    sessionmaker: async_sessionmaker[AsyncSession], now: datetime, *, failures: FailureLog | None = None
+) -> list[Step]:
     """One scheduler tick for every household. Safe to run twice, late, or concurrently.
 
     A failure is logged and rolled back, so the next step's commit can't carry its half-done
-    writes, and one household or call failing never stops the others.
+    writes, and one household or call failing never stops the others. A call that fails on
+    every tick is logged as ``failures`` allows: pass the scheduler's own ``FailureLog`` to
+    throttle it. Without one, every failure is logged.
     """
+    failures = failures if failures is not None else FailureLog()
     async with sessionmaker() as db:
         households = await HouseholdRepository(db).all()
     applied: list[Step] = []
+    seen: set[int] = set()
     for household in households:
         async with sessionmaker() as db:
             try:
@@ -954,9 +999,14 @@ async def tick(sessionmaker: async_sessionmaker[AsyncSession], now: datetime) ->
                 log.exception("could not list calls", extra={"household_id": household.id})
                 continue
             for event_id in event_ids:
+                seen.add(event_id)
+                attempted: list[Step] = []
                 try:
-                    applied += await advance(db, household.id, event_id, now)
+                    applied += await advance(db, household.id, event_id, now, attempted=attempted)
                 except Exception:
                     await db.rollback()
-                    log.exception("could not advance call", extra={"event_id": event_id})
+                    failures.failed(event_id, attempted[-1] if attempted else None, now)
+                else:
+                    failures.advanced(event_id)
+    failures.keep_only(seen)
     return applied

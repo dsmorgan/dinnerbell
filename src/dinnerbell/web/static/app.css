@@ -179,6 +179,9 @@ input:disabled { opacity: 0.7; }
 .alert { padding: 0.7rem 0.9rem; border-radius: 10px; margin-bottom: 1rem; }
 .alert.ok { background: var(--ok-soft); color: var(--ok); }
 .alert.error { background: var(--danger-soft); color: var(--danger); }
+#stuck-calls h2 { font-size: 1rem; }
+#stuck-calls ul { margin: 0.25rem 0 0; padding-left: 1.2rem; }
+#stuck-calls a { color: inherit; font-weight: 600; }
 
 .members { list-style: none; padding: 0; margin: 0 0 1.25rem; }
 

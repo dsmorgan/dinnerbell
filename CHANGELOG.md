@@ -6,11 +6,20 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ## [Unreleased]
 
+### Added
+
+- **Stuck calls show on `/healthz` and Admin** (#142). A call whose next scheduler step has been due for more than an hour, because the step keeps failing, is stuck. `/healthz` reports how many as `stuck_calls` and sets `"status": "degraded"` with HTTP 200, so Uptime Kuma alerts and the container health check doesn't restart Dinnerbell. A banner on every Admin tab lists each stuck call with its meal, day, state, and how long it has been stuck, and links to the call, where you call it off or re-run it. A step that fell due while Dinnerbell was down counts from the start, so a call that catches up after a restart isn't stuck.
+
 ### Changed
 
+- **`could not advance call` logs at most once an hour per call.** The scheduler logs a call's first failure at once, then once an hour while the step keeps failing, instead of every 30 seconds. Each line has the traceback, the event ID, the failing `step`, and `failures`, the number of failures since the previous line.
 - CI only: the `image` job tags its local build `ghcr.io/dsmorgan/dinnerbell:ci` instead of `dinnerbell:ci`. Grype's alert fingerprint includes the image name, so a base-image finding had one Code scanning alert from the CI build and another from the published image; now each finding has one alert (#141). The image itself is unchanged, and nothing new is pushed.
 - Documentation only: `SECURITY.md` links straight to the private vulnerability report form and the latest release, and says what to include in a report (#141).
 - Documentation only: the README opens with how a dinner works, with a plain-language diagram of a day: the 3:00 PM call, the vote, the decision, and the 6:30 PM dinner (#136).
+
+### Upgrade notes
+
+- `/healthz` has a new key, `stuck_calls`: a number, or `null` when the database is unreachable or the check fails. A failed check also reports `degraded`. No database revision ships for this.
 
 ## [0.10.0] - 2026-10-29
 

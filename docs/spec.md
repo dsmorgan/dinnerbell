@@ -629,7 +629,7 @@ Household-level settings that change over time (slot schedule, weights, threshol
 
 ### 13.9 Observability
 
-- `/healthz` returns the version (with the build stamp on `main` builds), database reachability, scheduler last tick, Slack socket connection state, outbox backlog, and last backup time. Uptime Kuma polls it.
+- `/healthz` returns the version (with the build stamp on `main` builds), database reachability, scheduler last tick, Slack socket connection state, outbox backlog, last backup time, and the number of stuck calls: open calls whose next scheduler step has been due for more than an hour (#142). Uptime Kuma polls it.
 - Structured JSON logs to stdout with request ID, member ID, and event ID fields.
 - Optional `/metrics` in Prometheus format behind an admin-only flag.
 
