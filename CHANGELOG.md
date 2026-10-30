@@ -19,7 +19,7 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ### Upgrade notes
 
-- `/healthz` has a new key, `stuck_calls`: a number, or `null` when the check fails, which also reports `degraded`. No database revision ships for this.
+- `/healthz` has a new key, `stuck_calls`: a number, or `null` when the check failed or is more than 90 seconds old (the call tick hung while the heartbeat goes on). Either `null` case also reports `degraded`. No database revision ships for this.
 - **Monitoring:** the documented monitors don't alert on `degraded`, which keeps HTTP 200. To be alerted about stuck calls, and about Slack, the outbox, and backups, replace the `"slack":"connected"` keyword monitor with one for `"status":"ok","version"` (see "Monitor it" in [docs/hardening.md](docs/hardening.md#monitor-it)).
 
 ## [0.10.0] - 2026-10-29

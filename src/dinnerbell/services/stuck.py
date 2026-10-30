@@ -25,6 +25,8 @@ from dinnerbell.services import call_context as cc
 from dinnerbell.services.common import require_admin
 from dinnerbell.services.lifecycle import FailureLog
 
+CHECK_FAILED = "stuck call check failed"
+
 log = logging.getLogger(__name__)
 ADMINS_ONLY = "Only an admin can see stuck calls."
 
@@ -65,6 +67,7 @@ async def find_stuck(
     *,
     running_since: datetime,
     failures: FailureLog | None = None,
+    check_failures: FailureLog | None = None,
 ) -> list[StuckCall] | None:
     """Every household's stuck calls, oldest call first, or None if the check failed.
 
@@ -72,19 +75,31 @@ async def find_stuck(
     whose own check fails counts as stuck, for how long unknown, and the others are still
     checked; ``failures`` throttles that call's log line as it does the tick's. Any other error
     fails the whole check, which never raises: whatever makes a step fail may trip this check
-    too.
+    too. ``check_failures`` throttles that warning (``whole_check_log``).
     """
-    failures = failures if failures is not None else FailureLog("could not check a call for being stuck")
+    failures = failures if failures is not None else call_check_log()
+    check_failures = check_failures if check_failures is not None else whole_check_log()
     try:
         async with sessionmaker() as db:
             found: list[StuckCall] = []
             for household in await HouseholdRepository(db).all():
                 found += await _household(db, household.id, now, running_since, failures)
     except Exception:
-        log.warning("stuck call check failed", exc_info=True)
+        check_failures.failed(0, now)
         return None
+    check_failures.recovered(0)
     failures.keep_only({s.event.id for s in found})
     return found
+
+
+def call_check_log() -> FailureLog:
+    """The throttled log line for a call whose own stuck check fails."""
+    return FailureLog("could not check a call for being stuck")
+
+
+def whole_check_log() -> FailureLog:
+    """The throttled warning for a stuck check that failed as a whole."""
+    return FailureLog(CHECK_FAILED, level=logging.WARNING, key=None)
 
 
 def for_admin(actor: Member, found: list[StuckCall] | None) -> list[StuckCall]:

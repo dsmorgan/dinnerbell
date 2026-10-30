@@ -47,7 +47,8 @@ def _stuck_calls(request: Request) -> list[StuckCall]:
         return []
     if not request.url.path.startswith("/admin") or is_htmx(request):
         return []
-    return for_admin(principal.member, app_context(request).scheduler_state.stuck)
+    context = app_context(request)
+    return for_admin(principal.member, context.scheduler_state.current_stuck(context.clock()))
 
 
 async def render(

@@ -8,7 +8,7 @@
 {% if stuck_calls %}
 <section class="alert error" role="status" aria-labelledby="stuck-heading" id="stuck-calls">
   <h2 id="stuck-heading">{{ "A call is" if stuck_calls|length == 1 else "Calls are" }} stuck</h2>
-  <p class="small">The scheduler keeps failing to move {{ "this call" if stuck_calls|length == 1 else "these calls" }} on. Open {{ "it" if stuck_calls|length == 1 else "each one" }} to call it off; a voting or decided call can also be re-run from its <strong>Admin</strong> menu. The logs say what failed: look for <code>could not advance call</code>.</p>
+  <p class="small">The scheduler keeps failing to move {{ "this call" if stuck_calls|length == 1 else "these calls" }} on. Open {{ "it" if stuck_calls|length == 1 else "each one" }} to call it off; a voting or decided call can also be re-run from its <strong>Admin</strong> menu. The logs say what failed: look for <code>could not advance call</code>. This list updates within a minute.</p>
   <ul>
     {% for s in stuck_calls %}
     <li><a href="{{ s.event.path }}">{{ s.event.slot.value|capitalize }}{{ " offer" if s.event.is_offer }}, {{ s.event.day|day }}</a>: {{ s.event.state.label }}, stuck for {{ s.stuck_for|elapsed if s.stuck_for is not none else "an unknown time" }}</li>

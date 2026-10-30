@@ -952,14 +952,18 @@ FAILURE_LOG_INTERVAL = timedelta(hours=1)
 
 @dataclass
 class FailureLog:
-    """Throttles a per-call error line (#142): a call's first failure logs at once, then at most
-    once per ``FAILURE_LOG_INTERVAL``, each line with its traceback and ``failures``, the
-    number of failures since the last line. Call ``failed`` from inside the ``except`` block.
-    The scheduler keeps one per kind of failure for the life of the process, so a restart logs
-    the next failure at once again. A call that recovers, or is no longer open, is forgotten.
+    """Throttles a repeated failure's log line (#142): each call's first failure logs at once,
+    then at most once per ``FAILURE_LOG_INTERVAL``, each line with its traceback and
+    ``failures``, the number of failures since the last line. Call ``failed`` from inside the
+    ``except`` block. The scheduler keeps one per kind of failure for the life of the process,
+    so a restart logs the next failure at once again. A call that recovers, or is no longer
+    open, is forgotten. With ``key`` None, the line names no call: use one key, such as 0, for
+    a failure that isn't any one call's.
     """
 
     message: str = "could not advance call"
+    level: int = logging.ERROR
+    key: str | None = "event_id"
     logged_at: dict[int, datetime] = field(default_factory=dict)
     unlogged: dict[int, int] = field(default_factory=dict)
 
@@ -970,7 +974,8 @@ class FailureLog:
             return
         self.logged_at[event_id] = now
         failures = self.unlogged.pop(event_id, 0) + 1
-        log.exception(self.message, extra={"event_id": event_id, **fields, "failures": failures})
+        named = {} if self.key is None else {self.key: event_id}
+        log.log(self.level, self.message, exc_info=True, extra={**named, **fields, "failures": failures})
 
     def recovered(self, event_id: int) -> None:
         self.logged_at.pop(event_id, None)
