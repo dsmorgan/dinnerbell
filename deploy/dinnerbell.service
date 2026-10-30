@@ -1,13 +1,17 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-# Optional: start production at boot on a rootless podman host. Docker doesn't need this unit:
-# its daemon restarts the container after a reboot, because compose.yaml sets
-# restart: unless-stopped. Install it as in "Start at boot" in docs/setup.md:
+# Optional: start production at boot on a rootless podman host. Rootful Docker doesn't need this
+# unit: its daemon restarts the container after a reboot, because compose.yaml sets
+# restart: unless-stopped. Install it as "Start at boot" in docs/setup.md says:
 #   loginctl enable-linger "$USER"
 #   mkdir -p ~/.config/systemd/user && cp deploy/dinnerbell.service ~/.config/systemd/user/
-#   systemctl --user daemon-reload && systemctl --user enable --now dinnerbell.service
+#   systemctl --user daemon-reload
+#   systemctl --user edit dinnerbell.service    # only if something below differs for you
+#   systemctl --user enable --now dinnerbell.service
 #
 # Change nothing here; `systemctl --user edit dinnerbell.service` keeps your changes in a drop-in
-# that survives copying a newer version of this file. For example:
+# that survives copying a newer version of this file. The unit must start Dinnerbell exactly as
+# you do, or `up -d` recreates the container differently. For another directory, or for secrets
+# in files:
 #   [Service]
 #   WorkingDirectory=/srv/dinnerbell
 #   ExecStart=
@@ -18,6 +22,9 @@ Documentation=https://github.com/dsmorgan/dinnerbell/blob/main/docs/setup.md#sta
 # A user manager has no network-online.target of its own, so this line orders nothing there;
 # ExecStartPre waits for the system's instead.
 After=network-online.target
+# With Restart= below, give up after five tries in all.
+StartLimitIntervalSec=10min
+StartLimitBurst=5
 
 [Service]
 Type=oneshot
@@ -33,9 +40,13 @@ Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
 # reconnects to Slack on its own; a LAN address in DINNERBELL_BIND needs the network up.
 ExecStartPre=-/usr/bin/timeout 120 /bin/sh -c 'while systemctl list-jobs --no-legend network-online.target | grep -q .; do sleep 1; done'
 ExecStart=/usr/bin/env podman-compose up -d
-ExecStop=/usr/bin/env podman-compose down
+# stop, not down: the container and its logs survive a reboot, and up -d starts it again.
+ExecStop=/usr/bin/env podman-compose stop
 # Room to pull the image when it isn't on the host.
 TimeoutStartSec=10min
+# Try again if up fails, such as on a LAN address in DINNERBELL_BIND that isn't up yet.
+Restart=on-failure
+RestartSec=30
 
 [Install]
 WantedBy=default.target
