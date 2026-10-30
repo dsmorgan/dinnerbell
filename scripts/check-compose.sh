@@ -193,7 +193,7 @@ expect "test with secrets-test/ files: the four secrets are files in secrets-tes
 $test_instance_files
 EOF
 
-# Resource and log caps (docs/setup.md, "Resource and log limits"): a process limit, a memory
+# Resource and log caps (docs/configuration.md, "Resource and log limits"): a process limit, a memory
 # limit, and rotated json-file logs, for production and for the test instance.
 limits_filter='
     .services.dinnerbell as $s
@@ -634,7 +634,7 @@ if command -v podman-compose >/dev/null 2>&1; then
     contains "production: volume dinnerbell_dinnerbell-data" "$production" \
         "dinnerbell_dinnerbell-data:/data" "source=dinnerbell_dinnerbell-data,destination=/data"
     # The memory limit and the log driver reach podman in every version. pids_limit reaches it only
-    # in 1.6.0 and later (1.0.6 drops it without a warning, which docs/setup.md says).
+    # in 1.6.0 and later (1.0.6 drops it without a warning, which docs/configuration.md says).
     contains "production: memory limit" "$production" "-m 512m" "--memory 512m" "--memory=512m" "-m=512m"
     contains "production: log driver json-file" "$production" "--log-driver=json-file"
     contains "production: log-opt max-size" "$production" "--log-opt=max-size=10m"

@@ -1,6 +1,6 @@
 # Install Dinnerbell
 
-This guide installs Dinnerbell from a release bundle, without cloning the repository. The [setup guide](https://github.com/dsmorgan/dinnerbell/blob/main/docs/setup.md) is the full reference: every step in detail, backups, upgrades, troubleshooting, and the optional test instance.
+This guide installs Dinnerbell from a release bundle, without cloning the repository. The [setup guide](https://github.com/dsmorgan/dinnerbell/blob/main/docs/setup.md) explains each step in detail, with backups, upgrades, and troubleshooting.
 
 You need:
 
@@ -10,7 +10,7 @@ You need:
 
 ## Install
 
-1. Download the bundle and its checksum, replacing `X.Y.Z` with the newest version on the [releases page](https://github.com/dsmorgan/dinnerbell/releases), and check it.
+1. Download the bundle and its checksum, and check it. Replace `X.Y.Z` with the newest version on the [releases page](https://github.com/dsmorgan/dinnerbell/releases).
 
    ```sh
    VERSION=X.Y.Z
@@ -26,15 +26,15 @@ You need:
      --signer-workflow dsmorgan/dinnerbell/.github/workflows/ci.yml --source-ref "refs/tags/v$VERSION"
    ```
 
-3. Extract it, and keep the directory name `dinnerbell`: compose names the data volume after it.
+3. Extract it. Keep the directory name `dinnerbell`, because compose names the data volume after it.
 
    ```sh
    tar xzf "dinnerbell-$VERSION.tar.gz" && cd dinnerbell
    ```
 
-4. Create the Slack app. In a Slack workspace for your household, create a channel such as `#dinnerbell`. At [api.slack.com/apps](https://api.slack.com/apps), select **Create New App** > **From a manifest**, paste `deploy/slack-app-manifest.yaml`, and replace `dinnerbell.example.com` with your hostname. Create an app-level token with the `connections:write` scope, install the app, and invite it to the channel with `/invite @Dinnerbell`. Sections 1 to 7 of the [setup guide](https://github.com/dsmorgan/dinnerbell/blob/main/docs/setup.md#1-create-the-slack-workspace-and-channel) show each screen.
+4. Create the Slack app. In your household's Slack workspace, create a channel such as `#dinnerbell`. At [api.slack.com/apps](https://api.slack.com/apps), select **Create New App** > **From a manifest**, paste `deploy/slack-app-manifest.yaml`, and replace `dinnerbell.example.com` with your hostname. Create an app-level token with the `connections:write` scope, install the app, and invite it to the channel with `/invite @Dinnerbell`. [Sections 1 to 7 of the setup guide](https://github.com/dsmorgan/dinnerbell/blob/main/docs/setup.md#1-create-the-slack-workspace-and-channel) show each screen.
 
-5. Write `.env`. `dinnerbell init` asks for your hostname, admin email, time zone, household name, and the Slack app's values, with a hint for each. It generates the secret key, writes `.env` with mode 600, and checks it. Secrets don't show as you type or paste them.
+5. Write `.env` with `dinnerbell init`. It asks for your hostname, admin email, time zone, household name, and the Slack app's values, with a hint for each, and hides secrets as you type or paste them. It generates the secret key, writes `.env` with mode 600, and checks it. To skip a Slack value, press Enter, and fill it in `.env` later.
 
    ```sh
    podman run --rm -it --userns keep-id --user "$(id -u):$(id -g)" -v "$PWD:/out:z" \
@@ -43,9 +43,7 @@ You need:
 
    With Docker: `docker run --rm -it --user "$(id -u):$(id -g)" -v "$PWD:/out:z" "ghcr.io/dsmorgan/dinnerbell:$VERSION" init --output /out/.env`
 
-   To skip a Slack value, press Enter, and fill it in `.env` later.
-
-6. Point your reverse proxy or tunnel at port 8013 on this host, with its own sign-in turned off: Dinnerbell signs people in itself. Compose publishes the port on `127.0.0.1`. If the proxy runs on another host or in a container network, set `DINNERBELL_BIND` in `.env` to this host's LAN address. For Pangolin, see [section 8](https://github.com/dsmorgan/dinnerbell/blob/main/docs/setup.md#8-expose-dinnerbell-through-your-reverse-proxy).
+6. Point your reverse proxy or tunnel at port 8013 on this host, with the proxy's own sign-in turned off: Dinnerbell signs people in itself. Compose publishes the port on `127.0.0.1`. If the proxy runs on another host or in a container network, set `DINNERBELL_BIND` in `.env` to this host's LAN address. For Pangolin, see [section 8](https://github.com/dsmorgan/dinnerbell/blob/main/docs/setup.md#8-expose-dinnerbell-through-your-reverse-proxy).
 
 7. Start Dinnerbell.
 
@@ -55,7 +53,7 @@ You need:
 
    With Docker: `docker compose up -d`
 
-8. Sign in. Open your URL, select **Sign in with Slack**, and add your household on **Members**. `https://<your hostname>/healthz` shows `"slack":"connected"` once the bot is connected. Next, [onboard your family](https://github.com/dsmorgan/dinnerbell/blob/main/docs/setup.md#11-onboard-family-members) and [load the catalog](https://github.com/dsmorgan/dinnerbell/blob/main/docs/setup.md#12-load-the-catalog).
+8. Open your URL, select **Sign in with Slack**, and add your household on **Members**. Once the bot connects, `https://<your hostname>/healthz` shows `"slack":"connected"`. Next, [onboard your family](https://github.com/dsmorgan/dinnerbell/blob/main/docs/setup.md#11-onboard-family-members) and [load the catalog](https://github.com/dsmorgan/dinnerbell/blob/main/docs/setup.md#12-load-the-catalog).
 
 ## Upgrade
 
@@ -72,7 +70,8 @@ You need:
 
 ## Options
 
-- **Secrets in files:** to keep the four secrets out of `.env`, use `compose.secrets.yaml`. See [Keep secrets in files](https://github.com/dsmorgan/dinnerbell/blob/main/docs/setup.md#keep-secrets-in-files).
-- **Test instance:** run step 5 with `init --test --output /out/.env.test`. It writes the test settings and refuses production's secrets from `.env`. Start it with `deploy/dinnerbell-test up -d`, on port 8014. The bundle's `deploy/dinnerbell-test` runs the bundle's version. See [Test instance](https://github.com/dsmorgan/dinnerbell/blob/main/docs/setup.md#test-instance).
-- **Start at boot:** with podman, Dinnerbell stays down after a reboot until you start it; the bundle's `deploy/dinnerbell.service` starts it at boot. Rootful Docker needs nothing. See [Start at boot](https://github.com/dsmorgan/dinnerbell/blob/main/docs/setup.md#start-at-boot).
-- **Switch to a git clone, or from one:** see [Switch between a clone and the bundle](https://github.com/dsmorgan/dinnerbell/blob/main/docs/setup.md#switch-between-a-clone-and-the-bundle).
+- **Other settings:** see the [configuration reference](https://github.com/dsmorgan/dinnerbell/blob/main/docs/configuration.md).
+- **Secrets in files:** to keep the four secrets out of `.env`, see [Keep secrets in files](https://github.com/dsmorgan/dinnerbell/blob/main/docs/setup.md#keep-secrets-in-files).
+- **Start at boot:** with podman, Dinnerbell stays down after a reboot until you start it. The bundle's `deploy/dinnerbell.service` starts it at boot; rootful Docker needs nothing. See [Start at boot](https://github.com/dsmorgan/dinnerbell/blob/main/docs/setup.md#start-at-boot).
+- **Test instance:** run step 5 with `init --test --output /out/.env.test`. It writes the test settings and refuses production's secrets from `.env`. Start test with `deploy/dinnerbell-test up -d`, on port 8014; the bundle's script runs the bundle's version. See [Run a test instance](https://github.com/dsmorgan/dinnerbell/blob/main/docs/test-instance.md).
+- **Switch to a git clone, or from one:** see [Switch between a clone and the bundle](https://github.com/dsmorgan/dinnerbell/blob/main/docs/switch-install.md#switch-between-a-clone-and-the-bundle).

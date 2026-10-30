@@ -1,12 +1,12 @@
 # How Dinnerbell picks proposals
 
-When answers close on a call, Dinnerbell proposes a few places to vote on, 3 unless your admin changed it. This page explains how it chooses them, what it never does, and how to tune it. The precise rules are in [spec section 7](spec.md#7-ranking), and the reasoning is in [ADR 0007](adr/0007-seeded-weighted-ranking.md).
+When answers close on a call, Dinnerbell proposes places to vote on: 3, unless an admin changed it. It rules out everything that doesn't work for tonight, scores what's left, adds places someone suggested, and draws the rest at random. A better score makes a place more likely, but it doesn't always win.
 
-In short: Dinnerbell first throws out everything that doesn't work for tonight, scores what's left, includes places someone suggested (the last place in the vote isn't reserved for a suggestion), then draws the rest at random. A better score makes a place more likely, but it doesn't always win.
+This page explains the rules and how to tune them. The precise rules are in [spec section 7](spec.md#7-ranking), and the reasoning is in [ADR 0007](adr/0007-seeded-weighted-ranking.md).
 
 ## What can never be picked
 
-These rules are absolute. No score, suggestion, or lucky draw gets around them:
+No score, suggestion, or draw gets around these rules:
 
 - **Vetoes.** If anyone who's in or maybe vetoed a place, or one of its tags, it's out.
 - **Guests' needs.** If a guest needs a dietary tag, such as vegan, every proposal has it.
@@ -15,11 +15,11 @@ These rules are absolute. No score, suggestion, or lucky draw gets around them:
 - **Already a pick.** A place that's already on the call, from an offer, isn't proposed again. Each proposal is a different place.
 - **The meal.** Places for tonight's meal come first. Places for other meals, such as a breakfast place on a dinner call, are proposed only when too few dinner places fit, and their first reason says "Usually for breakfast."
 
-Everything that passes all of these is a candidate. Chance only ever chooses among candidates.
+Everything that passes them is a candidate, and chance chooses only among candidates.
 
 ## What makes a place more likely
 
-Each candidate gets a score, a sum of these parts, each multiplied by its weight on Admin:
+Each candidate's score is the sum of these parts, each multiplied by its weight, which an admin can [tune](#tune-the-ranking):
 
 | Part | What earns it | Default weight |
 |---|---|---|
@@ -30,30 +30,28 @@ Each candidate gets a score, a sum of these parts, each multiplied by its weight
 | Usual way to get it | +0.5 if it's the slot's usual way, such as pickup | 1 |
 | Volunteer knows the dish | +0.5 if the volunteer cook is on its cook list | 1 |
 
-A place that someone suggested for this call is proposed ahead of the draw, if it passes the rules above. A suggestion is a request, not a preference. The last place in every vote isn't reserved for a suggestion, though, so at most one fewer than the number of proposals are suggestions that way: with 3 proposals, 2. When more places were suggested than that, the best-scoring suggestions go in (equal scores are chosen at random), and the others stay in the draw, where their suggestion makes them much more likely. The same limit covers a top-up with places for other meals.
+A place someone suggested for this call goes in ahead of the draw, if it passes the rules above: a suggestion is a request, not a preference. The last place in every vote is kept for the draw, so suggestions fill at most one fewer than the number of proposals: with 3 proposals, 2. When more places were suggested than that, the best-scoring suggestions go in, with ties chosen at random, and the others stay in the draw, where their suggestion makes them much more likely. The same limit covers a top-up with places for other meals.
 
-The rest of the proposals are drawn at random, and each point of score makes a place more likely by the same factor. At the default randomness, a place 1 point better is about 2.7 times as likely to be picked, and 2 points better about 7.4 times. Places with the same score have the same chance until a pick shares their cuisine (see below). Names never matter.
+The rest of the proposals are drawn at random, and each point of score makes a place more likely by the same factor. At the default randomness, a place 1 point better is about 2.7 times as likely to be picked, and 2 points better about 7.4 times. Names never matter.
 
-After each pick, places that share its cuisine become less likely: their chances drop to 0.3 of what they were. So a vote rarely has three taco places when other cuisines fit.
+After each pick, places that share its cuisine drop to 0.3 of their chance, so a vote rarely has three taco places when other cuisines fit.
 
 ## Why the picks differ between calls
 
-Each call has its own draw, so two calls with the same people and the same catalog can propose different places. That's on purpose: before, a new household saw the same three places, first in alphabetical order, on every call.
+Each call has its own draw, so two calls with the same people and catalog can propose different places. Dinnerbell seeds the draw from the call itself, so the same call always gets the same picks. If an admin re-runs a call, or someone starts a called-off call again, that's a new run, and it draws again.
 
-The draw isn't redrawn behind your back. Dinnerbell seeds it from the call itself, so the same call always gets the same picks. If an admin re-runs a call, or someone starts a called-off call again, that's a new run, and it draws again.
-
-The order of the proposals is the order they were drawn, suggestions first. It matters once: if a vote ties and nothing else breaks the tie, the one drawn first wins. The tie rules are the coordinator's choice, then their vote, then an admin's vote when nobody coordinates, then the place you ate at longest ago (one you never ate at counts as longest), and only then the draw. The decision says which one decided it.
+Proposals are listed in the order they were drawn, suggestions first. The order matters only when a vote ties. Ties go to the coordinator's choice, then the coordinator's vote, then an admin's vote when nobody coordinates, then the place you ate at longest ago (never counts as longest), and only then to the one drawn first. The decision says which rule decided it.
 
 ## Shuffling the picks
 
-If the picks don't appeal, the coordinator can tap **Shuffle picks** while voting, or an admin can when nobody coordinates (or a guest does). Dinnerbell draws again with the next seed for the call, so a shuffle is as reproducible as the first draw. It can be used 3 times a call.
+If the picks don't appeal, the coordinator can tap **Shuffle picks** while voting, or an admin can when nobody, or a guest, coordinates. A shuffle draws again with the call's next seed, so it's as reproducible as the first draw. Each call allows 3 shuffles.
 
 - **Nobody has voted yet:** every drawn pick is replaced.
 - **Someone has voted:** only picks with no votes are replaced. A vote that doesn't count yet, such as a late joiner's, still keeps its pick, because it is someone's choice.
 - **Never replaced:** picks a member added, picks from an offer, and places someone suggested.
-- **The same rules hold.** The new picks pass everything in "What can never be picked", including a late joiner's guests' needs. A place that was just shuffled out doesn't come back unless nothing else fits. If nothing else fits at all, the shuffle is refused and doesn't count.
+- **The same rules hold.** The new picks pass everything in [What can never be picked](#what-can-never-be-picked), including a late joiner's guests' needs. A place that was just shuffled out comes back only if nothing else fits. If nothing else fits at all, the shuffle is refused and doesn't count.
 
-The picks message says who shuffled and how many were replaced, such as "Kim shuffled the picks (2 replaced).", and the call's thread gets a short note. Nobody is mentioned again.
+The picks message says who shuffled and how many were replaced, such as "Kim shuffled the picks (2 replaced).", and the call's thread gets a short note that mentions nobody.
 
 ## A worked example
 
@@ -82,9 +80,11 @@ The chance of the next pick is the place's weight over the total, 1.87. Once a p
 
 So Siam Garden usually makes the vote, but about one call in six it doesn't, and Taqueria gets a turn about one call in five. If Siam Garden had another Thai place behind it with the same score, that place's weight would drop from 1 to 0.3 once Siam Garden was picked.
 
-## Tune it on Admin
+<a id="tune-it-on-admin"></a>
 
-An admin changes these on **Admin > Ranking**. Changes apply from the next call to close answers.
+## Tune the ranking
+
+An admin changes these on the **Ranking** tab of **Members**. Changes apply from the next call to close answers.
 
 - **Weights** say how much each part of the score counts, from 0 to 10. 0 turns a part off. For example, raise **Cuisine variety** to avoid the same cuisine two days running, or raise **Never had it** to try more new places.
 - **Randomness** says how far the draw strays from the best scores, from 0 to 3:

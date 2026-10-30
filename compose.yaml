@@ -2,7 +2,7 @@
 # Production: podman-compose pull && podman-compose up -d   (or: docker compose ...)
 # Test instance: deploy/dinnerbell-test pull && deploy/dinnerbell-test up -d
 #   (always through that script, never with -p or DINNERBELL_ENV_FILE by hand)
-# Build from source: add -f compose.yaml -f compose.build.yaml. See docs/setup.md.
+# Build from source: add -f compose.yaml -f compose.build.yaml. See docs/switch-install.md.
 # Secrets in files instead of .env (optional): podman-compose -f compose.yaml -f compose.secrets.yaml up -d.
 #   See "Keep secrets in files" in docs/setup.md.
 #
