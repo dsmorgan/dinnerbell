@@ -1,14 +1,14 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 # Optional: start the test instance at boot on a rootless podman host, through deploy/dinnerbell-test
 # and its checks. Enable it only if test should always run. Install it as dinnerbell.service is
-# installed ("Start at boot" in docs/setup.md), with this file's name. Change it with
+# installed ("Start test at boot" in docs/test-instance.md), with this file's name. Change it with
 # `systemctl --user edit dinnerbell-test.service`, never here. It starts test on the wrapper's
 # default tag, so a reboot ends a rehearsal on another one. To keep a bundle's test on main:
 #   [Service]
 #   Environment=DINNERBELL_TAG=main
 [Unit]
 Description=Dinnerbell test instance
-Documentation=https://github.com/dsmorgan/dinnerbell/blob/main/docs/setup.md#start-at-boot
+Documentation=https://github.com/dsmorgan/dinnerbell/blob/main/docs/test-instance.md#start-test-at-boot
 # See dinnerbell.service for why ExecStartPre waits for the network.
 After=network-online.target
 # With Restart= below, stop trying after five starts in ten minutes (see dinnerbell.service).

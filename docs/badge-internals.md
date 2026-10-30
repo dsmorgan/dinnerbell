@@ -1,8 +1,32 @@
-# Badge art internals
+# Badge internals
 
-This page is for maintainers. It explains how Dinnerbell draws badge art and shows it in Slack. [contributions.md](contributions.md) describes the badges themselves.
+This page is for maintainers. It explains how Dinnerbell records and announces badges, how it catches up on old meals, and how it draws badge art and shows it in Slack. [contributions.md](contributions.md) describes the badges for the household.
 
-## On the web
+## Award states
+
+Each award records when it was earned and its announcement state: `pending`, `announced`, or `skipped`. A badge earned when a meal is done is `pending`. On every scheduler tick (30 seconds), Dinnerbell posts the pending badges and marks them `announced` in one transaction, so a restart, a retry, or two ticks at once never post one twice, and a crash never loses one.
+
+- Awards are marked `announced` when the post is queued, not when it lands. If the outbox gives up on the post, or it expires after 24 hours (`notification expired`), nothing posts it again.
+- Food Critic is in `SILENT_BADGES`: the announcer marks its awards `announced` in the same transaction without queuing a post, and never adds it to a done call's post. Food Critic awards made while it was private were marked `skipped`, and stay out of the recap and the household's newest badges.
+- Badges earned by catching up (the backfills, the ladder catch-up, and a lowered count) are `skipped`, and never announced or listed as new.
+- `scrub-test` marks every pending badge `skipped`.
+
+## Tier counts
+
+The admin form saves the household setting `badge_thresholds`, with one list per ladder. A single list, from before there were three ladders, is read as the Frequent ladder.
+
+## The monthly recap marker
+
+The household setting `recap_posted` holds the last month recapped, such as `2026-10`. A value that isn't a `YYYY-MM` month, or is later than the current month, counts as none. The marker moves when the recap is queued, not when it lands, and also moves for a month with no meals. Only the month just ended is ever recapped. `scrub-test` sets it to the latest due month.
+
+## Backfills
+
+- **First count.** The first start after revision `0016_contributions` counts the done calls and feedback already in the log, once, using members' current roles, and awards every badge reached as `skipped`. It works in batches of 200 calls and writes `contributions_backfilled` in the household settings last, so a start that stops halfway finishes the rest next time.
+- **Gambler.** A household that already ran the first count gets one catch-up on the next start: Gambler counts for every done call, with its tiers awarded as `skipped`, recorded as `gambler_backfilled`. It changes no other count, and a start that stops halfway finishes next time. A new household's first count includes Gambler.
+- **Three ladders.** The first start after the ladders arrived awards, as `skipped`, the tiers they and the grace week put in reach, recorded as `badge_ladders_awarded`.
+- **Missed counts.** Every start also counts any done call that has no counts. That happens only if counting failed when the call was marked done, which is never blocked by counting. Those badges are `skipped`.
+
+## Badge art on the web
 
 The art lives in `services/badge_art.py`. Pages draw it with the `badge_art`, `badge_chip`, and `badge_row` macros in `web/templates/_badge.html`. The Gold and Diamond sparkle (twinkling four-point stars and a sheen that sweeps every few seconds) is CSS.
 

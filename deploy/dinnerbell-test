@@ -16,7 +16,7 @@
 # Test publishes on production's DINNERBELL_BIND, read from .env.
 #
 # The four secrets come from the env file by default, as production's come from .env. To keep
-# test's in files instead (see "Keep secrets in files" in docs/setup.md), create all four in
+# test's in files instead (see "Secrets in files for test" in docs/test-instance.md), create all four in
 # secrets-test/: when any of them exists, this script adds compose.secrets.yaml and
 # deploy/compose.test-secrets.yaml, which bind-mount them at /run/secrets, and requires all four.
 # There's no switch to forget: the files themselves opt in, so a secret file is never silently
@@ -213,6 +213,43 @@ secret_fingerprints() {
     fi
 }
 
+case "${1:-}" in
+    -h | --help)
+        cat <<'EOF'
+Usage: deploy/dinnerbell-test COMMAND [ARG ...]
+
+Runs compose for the Dinnerbell test instance (docs/test-instance.md), with test's project,
+volume, env file (.env.test), image tag, and port (8014). Put compose options after the command,
+for example: deploy/dinnerbell-test up -d
+
+Before a command that can start a container (up, run, start, restart, ...), it runs
+`dinnerbell config check` on the env file and any secret files in a one-off container with no
+network, and names each setting that's missing or invalid, never its value.
+
+It refuses to run when:
+  - .env.test is missing, sets DINNERBELL_INSTANCE_LABEL more than once, or leaves it empty.
+  - secrets-test/ holds some of test's four secret files but not all, or one is a directory.
+  - it can't read .env.test or .env (run it as the user who owns them).
+  - test shares DINNERBELL_SECRET_KEY, DINNERBELL_SLACK_BOT_TOKEN, DINNERBELL_SLACK_APP_TOKEN, or
+    DINNERBELL_OIDC_CLIENT_SECRET with production, in env files or secret files, or .env.test
+    holds one of production's values anywhere in a line, such as a comment. With Docker and
+    production's secrets in files, run it through sudo so it can read them to compare.
+  - the env file is production's .env.
+  - .env sets DINNERBELL_TAG, DINNERBELL_PORT, or DINNERBELL_ENV_FILE.
+  - production's compose project is also named dinnerbell-test.
+  - the first argument is a compose option, or it runs through a symlink.
+Commands that only stop or inspect test (down, stop, logs, ps, pull) skip these checks.
+
+Set these per command, never with export:
+  DINNERBELL_TAG       image tag: main in a clone, the bundle's release in a bundle
+  DINNERBELL_ENV_FILE  test's env file: .env.test
+  DINNERBELL_PORT      host port: 8014
+  DINNERBELL_COMPOSE   podman-compose, or "docker compose" for Docker
+  DINNERBELL_ENGINE    engine for the check: docker or podman, from DINNERBELL_COMPOSE
+EOF
+        exit 0
+        ;;
+esac
 [ ! -L "$0" ] || fail "run the script from your clone (deploy/dinnerbell-test), not through a symlink."
 CDPATH='' cd -- "$(dirname -- "$0")/.."
 for file in compose.yaml compose.secrets.yaml deploy/compose.test.yaml deploy/compose.test-secrets.yaml; do
@@ -282,7 +319,7 @@ if [ "$starts" = yes ] && [ "$secret_files" = yes ]; then
     for name in $SECRETS; do
         [ ! -d "$TEST_SECRETS/$name" ] || fail "$TEST_SECRETS/$name is a directory. Remove it and create the file."
         [ -e "$TEST_SECRETS/$name" ] ||
-            fail "$TEST_SECRETS/$name not found. $TEST_SECRETS/ holds some of test's secret files, so it needs all four: create it (an empty file is fine for a Slack token you don't use), or remove them all to keep the secrets in $DINNERBELL_ENV_FILE. See \"Keep secrets in files\" in docs/setup.md."
+            fail "$TEST_SECRETS/$name not found. $TEST_SECRETS/ holds some of test's secret files, so it needs all four: create it (an empty file is fine for a Slack token you don't use), or remove them all to keep the secrets in $DINNERBELL_ENV_FILE. See \"Secrets in files for test\" in docs/test-instance.md."
     done
 fi
 
@@ -319,7 +356,7 @@ $production_prints
 " in
                 *"
 $print
-"*) fail "test and production have the same $name. Give test its own: see \"Keep secrets in files\" in docs/setup.md." ;;
+"*) fail "test and production have the same $name. Give test its own: see \"Secrets in files for test\" in docs/test-instance.md." ;;
             esac
         done
     done

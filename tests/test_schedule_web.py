@@ -75,7 +75,7 @@ def test_a_member_sees_the_schedule_in_the_nav_and_saves_a_change(kim: TestClien
     assert 'href="/schedule"' in today and 'href="/admin/schedule"' not in today
     html = kim.get("/schedule").text
     assert 'action="/schedule/dinner"' in html and 'action="/schedule/lunch"' in html
-    assert 'name="dinner_call_time" value="15:00"' in html and "Admin &gt; Ranking" not in html
+    assert 'name="dinner_call_time" value="15:00"' in html and "Admins: skip one day" not in html
     assert 'name="dinner_response_minutes" min="5" max="360"' in html  # the ranges the server accepts
     assert 'name="dinner_reminder_minutes" min="0" max="180"' in html
     seen = slot_fingerprint(DEFAULT_SLOTS[Slot.DINNER])

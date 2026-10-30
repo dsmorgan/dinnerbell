@@ -8,7 +8,7 @@ Any member can add to the catalog:
 
 - **In the app.** The **Catalog** page has a form to add one item at a time.
 - **Bulk import.** Paste or upload a catalog file on the **Catalog** page. Dinnerbell validates it, previews what it creates and changes, and applies it only after you confirm.
-- **On first start.** If `DINNERBELL_SEED_FILE` points to a catalog file, Dinnerbell imports it on first start, while the catalog is empty. Only the admin is a member then, so other cooks are skipped. After you invite everyone, import the same file again on the **Catalog** page to fill in the cooks, before you edit those items in the app. See [Load a catalog on first start](configuration.md#load-a-catalog-on-first-start).
+- **On first start.** If `DINNERBELL_SEED_FILE` points to a catalog file, Dinnerbell imports it on first start, while the catalog is empty. See [Load a catalog on first start](configuration.md#load-a-catalog-on-first-start).
 - **With a chatbot.** Give a chatbot this page and your notes, such as "we get Thai from Siam Garden on Main, pickup or DoorDash", and ask for a catalog file. Import the result; the preview catches mistakes.
 - **From another instance.** Export the catalog from one Dinnerbell and import it into another, such as from production into a test instance. See [Export the catalog](#export-the-catalog).
 
@@ -125,7 +125,7 @@ Ranking proposes items for the call's meal first, and fills the vote from items 
 An export is a catalog file of the whole catalog: every tag, and every restaurant and home meal, active or not. Use it to copy the catalog to another instance, to keep an editable copy, or to edit many items at once and import the result.
 
 - **In the app:** on the **Catalog** page, select **Download catalog**. Any member can.
-- **On the command line:** `dinnerbell catalog export` writes the file to standard output. To copy a catalog between instances, see [Copy the catalog between production and test](test-instance.md#copy-the-catalog-between-production-and-test).
+- **On the command line:** `dinnerbell catalog export` writes the file to standard output. See [Command-line options](#command-line-options).
 
 An export imports cleanly:
 
@@ -136,6 +136,22 @@ An export imports cleanly:
 - **Import's limits apply.** Import refuses files over 1 MB or with more than 50,000 values, about 2,000 items. If an export passes either limit, the command warns you; split the file and import each part.
 
 Importing an export into the catalog it came from previews as "The catalog already matches this file." Importing it into another catalog adds missing items and tags, updates items that match by name, and deletes nothing. Dinnerbell 0.5.0 and earlier refuse an export's `meals` field, so copy a catalog only to an instance on the same release or later.
+
+### Copy the catalog to another instance
+
+To copy a catalog between production and a [test instance](test-instance.md), export it from one and import it into the other. An export holds no personal data, but keep it out of public repositories: it's still your household's list of places and notes.
+
+1. Export the catalog: on the **Catalog** page, select **Download catalog**. Or, on the host, run the export in a one-off container. Keep `-T`: without it, compose runs the command in a terminal, which changes line endings and mixes messages into the file.
+
+   ```sh
+   podman-compose run --rm -T dinnerbell catalog export > catalog.yaml           # production
+   deploy/dinnerbell-test run --rm -T dinnerbell catalog export > catalog.yaml   # test
+   ```
+
+2. In the other instance, on the **Catalog** page, select **Import a catalog file**, upload `catalog.yaml`, and select **Preview**.
+3. Check what it adds and changes, then select **Apply**.
+
+A tag with a different kind in each instance, such as `vegetarian` as a protein in one and as other in the other, is an error, and nothing is imported until you rename it. To retire an item in both instances, set it inactive in one and copy again.
 
 ### Command-line options
 

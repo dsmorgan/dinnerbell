@@ -108,7 +108,7 @@ DINNERBELL_BIND=192.168.1.20
    chmod 600 .env
    ```
 
-2. Generate a secret key.
+2. Generate a secret key, or use `openssl rand -base64 48`.
 
    ```sh
    python3 -c "import secrets; print(secrets.token_urlsafe(48))"
@@ -149,6 +149,8 @@ DINNERBELL_BIND=192.168.1.20
    ```sh
    podman-compose up -d
    ```
+
+   With rootless podman, Dinnerbell stays down after a reboot until you start it again. To start it at boot, see [Start at boot](#start-at-boot) (optional).
 
 6. Check that Slack is connected. Within a few seconds of the start, the response includes `"status":"ok"` and `"slack":"connected"`.
 
@@ -193,24 +195,13 @@ A link you set or clear by hand stays as you left it. To hand a member back to a
 
 ### Guests and joining from the channel
 
-A guest eats with the household when a member invites them to a call. Guests answer In or Out and can pitch in, but never vote or suggest (spec sections 3 and 5.5).
-
-**Join from the channel** is on by default. Anyone in the channel who isn't in Dinnerbell can join as a guest, from **Join Dinnerbell** in Slack or by signing in on the web. Dinnerbell first checks with Slack that they're a real person in your workspace and in the channel, so bots, deactivated accounts, and people from other organizations can't join. You get a direct message for each join, with **Make member** and **Remove**. Joined guests appear in every member's **Invite a guest** list.
-
-On **Members**, you can do the following:
-
-- To add only the people you choose, turn **Join from the channel** off. Someone who isn't linked then gets a private "I don't know your Slack account yet" message when they tap a button.
-- **Add people from the channel** lists everyone in the channel who isn't in Dinnerbell, to add as a guest or a member.
-- If someone you invited by email joins as a guest because their Slack email differs, select **Link to member** on their guest row to move their Slack account to their membership. Anyone can take any name in Slack, so check the Slack account and email shown on the row. If that email isn't the member's, or they use a Slack guest account, you type the member's name to confirm. Admins aren't offered; an admin sets their own Slack member ID.
-- **Remove** signs a guest out and stops them from joining again until you select **Add back**.
-
-Joining needs no extra scopes for a public channel. A private channel needs `groups:read`.
+**Join from the channel** is on by default: anyone in the channel can join as a guest, and you get a direct message for each join. To add only the people you choose, turn it off on **Members**; on an existing install, do it right after upgrading. [members.md](members.md) explains guests, joining, and linking a guest to a member.
 
 ## 12. Load the catalog
 
 The catalog is your list of restaurants and home meals. Start from [seed/example.yaml](../seed/example.yaml); [catalog-format.md](catalog-format.md) describes the format.
 
-1. Invite everyone first (section 11). An import skips cook emails that don't belong to a member yet.
+1. Invite everyone first (section 11), so the import can match cooks to members.
 2. On the **Catalog** page, paste or upload your file, check the preview, and apply it.
 
 To import a file on first start instead, see [Load a catalog on first start](configuration.md#load-a-catalog-on-first-start).
@@ -237,7 +228,7 @@ The reset deletes every call and everything in it (answers, suggestions, proposa
 
    Then type `reset`. Without a terminal, run the command again with `--yes`. The command first backs up the database to `/data/backups/pre-reset-VERSION-TIME.db`, which nightly pruning never deletes, then deletes the history in one transaction, and writes a `history.reset` audit row.
 
-4. Check that History and Stats are empty, Today and App Home show no old calls, and the catalog, Members, Preferences, and Schedule are unchanged.
+4. Check that History and Stats are empty, Today and App Home show no old calls, and the catalog, Members, Preferences, and Schedule are unchanged. The **Kept** counts the command printed match its preview's **Keeps** counts.
 
 Old messages stay in Slack, and their buttons reply "No such call." Call IDs are never reused. The next scheduled call posts as usual.
 
@@ -496,48 +487,21 @@ If something doesn't work, see [troubleshooting.md](troubleshooting.md). It list
 
 ## Moved sections
 
-These sections have their own pages now.
+These sections moved to their own pages:
 
-### Test instance
-
-See [Run a test instance](test-instance.md):
-
+- <a id="test-instance"></a>[Test instance](test-instance.md)
 - <a id="one-clone-two-instances"></a>[One clone, two instances](test-instance.md#one-clone-two-instances)
 - <a id="create-the-test-channel-and-slack-app"></a>[Create the test channel and Slack app](test-instance.md#create-the-test-channel-and-slack-app)
 - <a id="write-envtest"></a>[Write .env.test](test-instance.md#write-envtest)
 - <a id="add-the-pangolin-resource"></a>[Add the Pangolin resource](test-instance.md#add-the-pangolin-resource)
 - <a id="start-stop-and-refresh"></a>[Start, stop, and refresh](test-instance.md#start-stop-and-refresh)
 - <a id="copy-production-data-into-test"></a>[Copy production data into test](test-instance.md#copy-production-data-into-test)
-- <a id="verify-that-no-secret-is-on-a-command-line"></a>[Verify that no secret is on a command line](test-instance.md#verify-that-no-secret-is-on-a-command-line)
-
-### Promote a release
-
-See [Promote a release](test-instance.md#promote-a-release).
-
-### Copy the catalog between production and test
-
-See [Copy the catalog between production and test](test-instance.md#copy-the-catalog-between-production-and-test).
-
-### Discard a call and start again
-
-See [Discard a call and start again](test-instance.md#discard-a-call-and-start-again).
-
-### Switch between a clone and the bundle
-
-See [Switch between a clone and the bundle](switch-install.md#switch-between-a-clone-and-the-bundle).
-
-### Switch a source-built install to the prebuilt image
-
-See [Switch a source-built install to the prebuilt image](switch-install.md#switch-a-source-built-install-to-the-prebuilt-image).
-
-### Build from source
-
-See [Build from source](switch-install.md#build-from-source).
-
-### Read the logs
-
-See [Read the logs](troubleshooting.md#read-the-logs).
-
-### Resource and log limits
-
-See [Resource and log limits](configuration.md#resource-and-log-limits).
+- <a id="discard-a-call-and-start-again"></a>[Discard a call and start again](test-instance.md#discard-a-call-and-start-again)
+- <a id="promote-a-release"></a>[Promote a release](test-instance.md#promote-a-release)
+- <a id="copy-the-catalog-between-production-and-test"></a>[Copy the catalog between production and test](catalog-format.md#copy-the-catalog-to-another-instance)
+- <a id="verify-that-no-secret-is-on-a-command-line"></a>[Verify that no secret is on a command line](hardening.md#verify-that-no-secret-is-on-a-command-line)
+- <a id="switch-between-a-clone-and-the-bundle"></a>[Switch between a clone and the bundle](switch-install.md#switch-between-a-clone-and-the-bundle)
+- <a id="switch-a-source-built-install-to-the-prebuilt-image"></a>[Switch a source-built install to the prebuilt image](switch-install.md#switch-a-source-built-install-to-the-prebuilt-image)
+- <a id="build-from-source"></a>[Build from source](switch-install.md#build-from-source)
+- <a id="resource-and-log-limits"></a>[Resource and log limits](configuration.md#resource-and-log-limits)
+- <a id="read-the-logs"></a>[Read the logs](troubleshooting.md#read-the-logs)

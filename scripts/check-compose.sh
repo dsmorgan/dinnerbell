@@ -217,6 +217,7 @@ refuses "DINNERBELL_ENV_FILE=.env" DINNERBELL_ENV_FILE=.env deploy/dinnerbell-te
 refuses "DINNERBELL_ENV_FILE=<absolute path to .env>" DINNERBELL_ENV_FILE="$PWD/.env" deploy/dinnerbell-test
 refuses "COMPOSE_PROJECT_NAME=Dinnerbell-Test in the shell" COMPOSE_PROJECT_NAME=Dinnerbell-Test deploy/dinnerbell-test
 refuses "a leading compose option" deploy/dinnerbell-test -p dinnerbell
+expect "--help prints what the wrapper refuses, and exits 0" sh -c 'deploy/dinnerbell-test --help | grep -q "^It refuses to run when:"'
 for line in DINNERBELL_TAG=0.2.0 "export DINNERBELL_PORT=8013" DINNERBELL_ENV_FILE=.env.test \
     COMPOSE_PROJECT_NAME=dinnerbell-test 'COMPOSE_PROJECT_NAME="dinnerbell-test"  # production'; do
     printf '%s\n' "$line" >>.env
