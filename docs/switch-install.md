@@ -2,7 +2,7 @@
 
 You can run Dinnerbell from a git clone or from the release bundle, and you can move between them without losing data. This page also covers building the image yourself. The commands use podman; with Docker, replace `podman-compose` with `docker compose` and `podman` with `docker`.
 
-In every case, run each command as the same user as your install, from a directory named `dinnerbell`. Compose names the data volume after the directory (`dinnerbell_dinnerbell-data`, and `dinnerbell-test_dinnerbell-data` for the test instance), and rootless podman keeps each user's volumes apart. Another directory name or another user, including root, gets a new, empty volume.
+Keep the install in a directory named `dinnerbell`, and run every command as the same user. Compose names the data volume after the directory (`dinnerbell_dinnerbell-data`, and `dinnerbell-test_dinnerbell-data` for the test instance), and rootless podman keeps each user's volumes apart. Another directory name or another user, including root, gets a new, empty volume.
 
 ## Switch between a clone and the bundle
 
@@ -27,18 +27,19 @@ A git clone and the [release bundle](install.md) run the same release the same w
    - **Clone to bundle:** download, check, and extract that release's bundle, as in steps 1 to 3 of [install.md](install.md#install).
    - **Bundle to clone:** clone as in [section 0 of setup.md](setup.md#0-clone-the-repository), then run `git checkout vX.Y.Z`.
 
-5. Move your files into the new directory. Moving keeps each file's owner and mode, which the secret files need: your account can't read them to copy them. A clone already has a `secrets/` directory, so the secret files move one by one.
+5. From the directory that holds both (run `cd ..` if step 4 left you in `dinnerbell`), move your files into the new directory. Moving keeps each file's owner and mode, which the secret files need: your account can't read them to copy them. A clone already has a `secrets/` directory, so the secret files move one by one.
 
    ```sh
-   for file in .env .env.test compose.override.yaml; do
-       [ ! -e "dinnerbell-old/$file" ] || mv "dinnerbell-old/$file" dinnerbell/
-   done
-   for dir in secrets secrets-test; do
-       for name in SECRET_KEY OIDC_CLIENT_SECRET SLACK_BOT_TOKEN SLACK_APP_TOKEN; do
-           file="$dir/DINNERBELL_$name"
-           [ ! -e "dinnerbell-old/$file" ] || { mkdir -p -m 700 "dinnerbell/$dir" && mv "dinnerbell-old/$file" "dinnerbell/$file"; }
-       done
-   done
+   ( [ -d dinnerbell-old ] || { echo "Run this from the directory that holds dinnerbell-old" >&2; exit 1; }
+     for file in .env .env.test compose.override.yaml; do
+         [ ! -e "dinnerbell-old/$file" ] || mv "dinnerbell-old/$file" dinnerbell/
+     done
+     for dir in secrets secrets-test; do
+         for name in SECRET_KEY OIDC_CLIENT_SECRET SLACK_BOT_TOKEN SLACK_APP_TOKEN; do
+             file="$dir/DINNERBELL_$name"
+             [ ! -e "dinnerbell-old/$file" ] || { mkdir -p -m 700 "dinnerbell/$dir" && mv "dinnerbell-old/$file" "dinnerbell/$file"; }
+         done
+     done )
    ```
 
    Also move anything else your `compose.override.yaml` mounts, such as the catalog: `mkdir -p dinnerbell/seed && mv dinnerbell-old/seed/my-catalog.yaml dinnerbell/seed/`.

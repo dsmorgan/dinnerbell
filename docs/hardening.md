@@ -38,6 +38,41 @@ Add two monitors in Uptime Kuma, or any monitor that can match a keyword:
 
 The keyword includes `"version"` because the scheduler's own `"status":"ok"` would otherwise match. In Uptime Kuma, an **HTTP(s) - Json Query** monitor with the query `status` and the expected value `ok` works too. [Check /healthz](troubleshooting.md#check-healthz) explains each key.
 
+## Verify that no secret is on a command line
+
+If you [keep secrets in files](setup.md#keep-secrets-in-files), you can check that no secret reaches a command line. Run the check on a [test instance](test-instance.md) whose secrets are in files, because it replaces test's secret key with a throwaway value that you search for.
+
+1. Write a canary of at least 32 characters into test's key file.
+
+   ```sh
+   rm -f secrets-test/DINNERBELL_SECRET_KEY
+   ( umask 077; printf '%s' 'canary-0123456789-abcdefghijklmnopqrstuvwxyz' >secrets-test/DINNERBELL_SECRET_KEY )
+   podman unshare chown 10001:10001 secrets-test/DINNERBELL_SECRET_KEY
+   ```
+
+2. In a second terminal, watch the process list while the service starts.
+
+   ```sh
+   while :; do ps -eww -o args= | grep -F canary-0123456789 | grep -v grep; sleep 0.05; done
+   ```
+
+3. In the first terminal, start test, then count the canary in a dry run's output. podman-compose 1.0.6 prints the commands with `--dry-run` alone; later versions need `--verbose` too.
+
+   ```sh
+   deploy/dinnerbell-test up -d
+   DINNERBELL_COMPOSE='podman-compose --verbose --dry-run' deploy/dinnerbell-test up -d 2>&1 | grep -c canary-0123456789
+   ```
+
+   The second terminal prints nothing, and the count is `0` (`grep -c` exits 1 then). Press Ctrl+C in the second terminal.
+
+4. Replace the canary with a real key.
+
+   ```sh
+   rm -f secrets-test/DINNERBELL_SECRET_KEY
+   ( umask 077; python3 -c "import secrets; print(secrets.token_urlsafe(48), end='')" >secrets-test/DINNERBELL_SECRET_KEY )
+   podman unshare chown 10001:10001 secrets-test/DINNERBELL_SECRET_KEY
+   ```
+
 ## What CI enforces
 
 The `main` ruleset requires a pull request and these checks before a merge. An admin can bypass them only through a pull request, for emergencies. Agents never pass `--admin`.

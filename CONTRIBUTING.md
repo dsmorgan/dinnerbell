@@ -114,7 +114,7 @@ Releases follow [Semantic Versioning](https://semver.org/), and [CHANGELOG.md](C
      "$bundle/dinnerbell-X.Y.Z.tar.gz" "$bundle/dinnerbell-X.Y.Z.tar.gz.sha256"
    ```
 
-7. Promote the release to production with the checklist in [docs/setup.md](docs/setup.md#promote-a-release).
+7. Promote the release to production with the checklist in [docs/test-instance.md](docs/test-instance.md#promote-a-release).
 
 ## Update the vendored htmx
 
