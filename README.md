@@ -21,7 +21,6 @@ flowchart LR
     subgraph host["Your container host"]
         app["Dinnerbell container<br/>port 8013"]
         db[("SQLite in the<br/>data volume")]
-        test["Test instance, optional<br/>port 8014, own Slack app,<br/>hostname, and volume"]
     end
 
     slackapp <--> slack
@@ -29,8 +28,20 @@ flowchart LR
     browser -->|"HTTPS"| proxy
     browser -.->|"Sign in with Slack"| slack
     proxy --> app
-    proxy -.-> test
     app --> db
+
+    classDef device fill:#FFF3E0,stroke:#C27A34,color:#2A1810
+    classDef slackc fill:#611F69,stroke:#3F0E40,color:#FFFFFF
+    classDef proxyc fill:#E0994C,stroke:#B9712F,color:#2A1810
+    classDef appc fill:#2E6B6F,stroke:#1F4A4D,color:#FFFFFF
+    classDef dbc fill:#FBE8CC,stroke:#2E6B6F,color:#2A1810
+    class slackapp,browser device
+    class slack slackc
+    class proxy proxyc
+    class app appc
+    class db dbc
+    style phones fill:#FDF6EC,stroke:#C27A34,color:#2A1810
+    style host fill:#EAF3F3,stroke:#2E6B6F,color:#2A1810
 ```
 
 Dinnerbell opens the connection to Slack, so Slack never needs to reach your host. The only inbound traffic is HTTPS from phones, through your proxy or tunnel. Sign in with Slack returns the browser to `https://<your hostname>/auth/callback`, through the same hostname.
