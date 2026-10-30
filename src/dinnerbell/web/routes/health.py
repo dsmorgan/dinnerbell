@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """GET /healthz for Uptime Kuma and the container health check. No secrets, emails, or member
-data; the only counts are the outbox's and, on a labeled instance, dropped direct messages. A
-labeled instance adds its label, never a channel ID."""
+data; the only counts are the outbox's, stuck calls (never which ones), and, on a labeled
+instance, dropped direct messages. A labeled instance adds its label, never a channel ID."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
 from dinnerbell.services.health import STALE_OUTBOX, database_reachable, outbox_backlog, outbox_oldest_age
+from dinnerbell.services.stuck import count_stuck
 from dinnerbell.web.auth import Context
 
 router = APIRouter()
@@ -26,7 +27,9 @@ async def healthz(context: Context) -> JSONResponse:
     """503 when the database is unreachable or the scheduler has stopped ticking, so the
     container health check and Uptime Kuma both catch a dead scheduler.
 
-    A notification waiting over an hour also reports "degraded": the outbox is stuck.
+    A notification waiting over an hour also reports "degraded": the outbox is stuck. So does a
+    stuck call (#142), one that has owed the scheduler a step for over an hour: restarting can't
+    fix the failing step, and the admin re-runs or calls it off from its page.
     Slack problems alone report "degraded" with a 200. Restarting the container can't invite
     the bot or fix a token, the outbox keeps every notification until Slack is back, and the
     web app must stay up so the admin can sign in and fix things."""
@@ -34,7 +37,9 @@ async def healthz(context: Context) -> JSONResponse:
     backlog = await outbox_backlog(context.sessionmaker) if database_ok else None
     oldest = await outbox_oldest_age(context.sessionmaker, context.clock()) if backlog is not None else None
     state = context.scheduler_state
-    scheduler = state.scheduler_status(context.clock())
+    now = context.clock()
+    stuck = await count_stuck(context.sessionmaker, now, running_since=state.started_at or now) if database_ok else None
+    scheduler = state.scheduler_status(now)
     slack = await context.slack_state.status()
     healthy = database_ok and scheduler != "stopped"
     if not healthy:
@@ -44,6 +49,7 @@ async def healthz(context: Context) -> JSONResponse:
         and slack in {"connected", "not_configured"}
         and (oldest or timedelta(0)) <= STALE_OUTBOX
         and not state.backup_failing
+        and stuck == 0
     ):
         status = "ok"
     else:
@@ -62,6 +68,7 @@ async def healthz(context: Context) -> JSONResponse:
             "oldest_pending_age": None if oldest is None else int(oldest.total_seconds()),
         },
         "backup": {"last_success": _iso(state.last_backup), "failing": state.backup_failing},
+        "stuck_calls": stuck,
     }
     if context.settings.instance_label:
         body["instance"] = context.settings.instance_label

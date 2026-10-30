@@ -218,7 +218,7 @@ Avoid `0.0.0.0` unless a firewall limits who can reach the port.
     curl https://dinnerbell.example.com/healthz
     ```
 
-    The response reports database reachability, the scheduler's last tick, the Slack state, the outbox (`backlog`: notifications waiting to be sent; `failed`: notifications that gave up; `oldest_pending_age`: seconds the oldest waiting notification has waited, `null` if none waits), and the last backup time. It returns HTTP 503 when the database is unreachable or the scheduler has not ticked for 5 minutes, so the container health check and Uptime Kuma catch both.
+    The response reports database reachability, the scheduler's last tick, the Slack state, the outbox (`backlog`: notifications waiting to be sent; `failed`: notifications that gave up; `oldest_pending_age`: seconds the oldest waiting notification has waited, `null` if none waits), the last backup time, and `stuck_calls`, the number of calls whose next scheduler step has failed for more than an hour. It returns HTTP 503 when the database is unreachable or the scheduler has not ticked for 5 minutes, so the container health check and Uptime Kuma catch both.
 
 11. Confirm that Slack is connected. Within a few seconds of starting, the response includes `"slack": "connected"` and `"status": "ok"`.
 
@@ -998,6 +998,7 @@ Each member is linked to the account they first signed in with. After you switch
 | The log says `The bot isn't a member of the channel` | The bot hasn't been invited. | Run `/invite @Dinnerbell` in the channel. Dinnerbell notices within a minute. |
 | The log says `The channel … is archived` | The channel was archived. | Unarchive it in Slack, or point `DINNERBELL_SLACK_CHANNEL` at another channel. |
 | A member taps a button and Slack says "I don't know your Slack account yet" | Their Slack user isn't linked to a member, often because their emails differ. | Ask them to sign in to the web app with Slack once, or link them on **Members**. |
+| `/healthz` shows `stuck_calls` above 0 and `"status": "degraded"` | A call's next scheduler step, such as closing its responses, has failed on every tick for more than an hour, so the call doesn't move on. Restarting doesn't fix it, so the status stays 200 and the container keeps running. | Open **Members**: a banner lists each stuck call. Open the call to call it off or re-run it. Send the `could not advance call` log line, which names the event and the failing step, to the Dinnerbell issue tracker. |
 | `/healthz` shows `outbox.failed` above 0 | Slack refused some notifications for good, such as a direct message to someone with no Slack link. | Look for `notification delivery gave up` in the logs, then fix the link or the channel. Later notifications still go out. |
 | Every form fails with "Cross-origin request refused", or sign-in loops back to the start page | `DINNERBELL_BASE_URL` doesn't exactly match the URL in the browser: another host, a LAN IP, an explicit `:443`, or `http://`. | Set `DINNERBELL_BASE_URL` to exactly the URL people type, `https://` and no port, then recreate the service. Open Dinnerbell only at that URL. |
 | Sign-in says "That email is already linked" for everyone | You switched sign-in providers, so members are linked to accounts at the old provider. | Follow "Switch providers on an existing install". |

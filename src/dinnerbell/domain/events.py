@@ -1286,6 +1286,19 @@ def closes_early(
     ``guest_ids`` are the guests invited to it (#38). Nobody waits for a guest, but a guest's
     answer counts like anyone's toward who's in, the head count, and the quiet spell.
     """
+    at = early_close_at(event, responses, active_member_ids, coverage, guest_ids)
+    return at is not None and now >= at
+
+
+def early_close_at(
+    event: Event,
+    responses: Iterable[Response],
+    active_member_ids: Iterable[int],
+    coverage: Coverage,
+    guest_ids: Iterable[int] = (),
+) -> datetime | None:
+    """When ``closes_early`` turns true for these responses, or None if it doesn't: at the last
+    change when everyone is out, after ``EARLY_CLOSE_QUIET`` when anyone is in."""
     active = frozenset(active_member_ids)
     counted = active | frozenset(guest_ids)
     this_run = [
@@ -1293,13 +1306,12 @@ def closes_early(
     ]
     answered = {r.member_id for r in this_run} & active
     if not active or answered != active or any(r.status is Status.MAYBE for r in this_run):
-        return False
-    if not any(r.is_in for r in this_run):
-        return True
+        return None
     last_change = max(r.updated_at for r in this_run if r.updated_at is not None)
-    if now - last_change < EARLY_CLOSE_QUIET:
-        return False
-    return head_count(this_run) < MIN_HEAD_COUNT or bool(coverage.cooks or coverage.pickups or coverage.orderers)
+    if not any(r.is_in for r in this_run):
+        return last_change
+    covered = head_count(this_run) < MIN_HEAD_COUNT or bool(coverage.cooks or coverage.pickups or coverage.orderers)
+    return last_change + EARLY_CLOSE_QUIET if covered else None
 
 
 def due_step(
@@ -1353,6 +1365,63 @@ def due_step(
     if event.state is EventState.DECIDED and event.meal_time is not None and now >= event.meal_time + DONE_AFTER_MEAL:
         return Step.MARK_DONE
     return None
+
+
+STUCK_AFTER = timedelta(hours=1)
+"""A call that has owed the scheduler a step for longer than this is stuck (#142)."""
+
+
+def owed_since(
+    event: Event,
+    *,
+    stale_after: datetime,
+    responses: Iterable[Response] = (),
+    active_member_ids: Iterable[int] = (),
+    coverage: Coverage | None = None,
+    guest_ids: Iterable[int] = (),
+) -> datetime | None:
+    """When ``event``, as stored, started owing the scheduler a step: the earliest moment at
+    which ``due_step``, given the same arguments, returns one. None if it never will, such as
+    for a finished call. It mirrors ``due_step`` condition for condition."""
+    due: list[datetime] = []
+    if event.is_offer:
+        if event.state is EventState.COLLECTING:
+            due.append(event.respond_deadline)
+        if event.state is EventState.DECIDED and event.meal_time is not None:
+            due.append(event.meal_time + DONE_AFTER_MEAL)
+        return min(due, default=None)
+    if event.state in UNDECIDED:
+        due.append(stale_after)
+    if event.state is EventState.SCHEDULED:
+        due += [event.respond_deadline, event.opens_at]
+    if event.state is EventState.COLLECTING:
+        due.append(event.respond_deadline)
+        early = early_close_at(event, responses, active_member_ids, coverage or Coverage(), guest_ids)
+        if early is not None:
+            due.append(early)
+        if event.reminder_sent_at is None:
+            due.append(event.remind_at)
+    if event.state is EventState.VOTING and event.vote_deadline is not None:
+        due.append(event.vote_deadline)
+    if event.state is EventState.DECIDED:
+        if event.roles_due_at is not None:
+            due.append(event.roles_due_at)
+        if event.meal_time is not None:
+            due.append(event.meal_time + DONE_AFTER_MEAL)
+    return min(due, default=None)
+
+
+def stuck_for(owed: datetime | None, now: datetime, *, running_since: datetime) -> timedelta | None:
+    """How long a call that has owed a step since ``owed`` has been stuck at ``now``, or None if
+    it isn't stuck: it has waited no longer than ``STUCK_AFTER``.
+
+    The wait counts from ``running_since``, when the scheduler started, at the earliest: a step
+    that fell due while Dinnerbell was down is caught up on the first tick, so it isn't stuck.
+    """
+    if owed is None:
+        return None
+    waited = now - max(owed, running_since)
+    return waited if waited > STUCK_AFTER else None
 
 
 def should_open_today(

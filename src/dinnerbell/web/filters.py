@@ -3,7 +3,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from jinja2 import Environment
@@ -39,6 +39,14 @@ def day(value: date) -> str:
     return f"{value.strftime('%a %b')} {value.day}"
 
 
+def elapsed(value: timedelta) -> str:
+    """A duration in whole minutes, such as "1 hr 5 min" or "45 min"."""
+    hours, minutes = divmod(int(value.total_seconds()) // 60, 60)
+    if not hours:
+        return f"{minutes} min"
+    return f"{hours} hr" if not minutes else f"{hours} hr {minutes} min"
+
+
 def register(env: Environment) -> None:
-    env.filters.update(clock=clock, wall=wall, hhmm=hhmm, local_hhmm=local_hhmm, day=day)
+    env.filters.update(clock=clock, wall=wall, hhmm=hhmm, local_hhmm=local_hhmm, day=day, elapsed=elapsed)
     env.globals.update(badge_svg=badge_svg, badge_name=badge_name)

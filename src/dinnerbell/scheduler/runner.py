@@ -53,6 +53,8 @@ class JobContext:
     running: set[asyncio.Task[object]] = field(default_factory=set)
     drain_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     """One drain at a time in this process; the outbox's row claims cover other processes."""
+    failures: lifecycle.FailureLog = field(default_factory=lifecycle.FailureLog)
+    """Throttles the log line for a call whose step keeps failing (#142)."""
 
 
 Job = Callable[[JobContext], Awaitable[None]]
@@ -123,7 +125,7 @@ async def call_tick(ctx: JobContext) -> None:
     time zone, queue the news (new badges, the monthly recap), then deliver what that produced.
     Replaces one job per deadline (ADR 0004)."""
     try:
-        await lifecycle.tick(ctx.sessionmaker, ctx.clock())
+        await lifecycle.tick(ctx.sessionmaker, ctx.clock(), failures=ctx.failures)
     except Exception:
         log.exception("call tick failed")
     try:
