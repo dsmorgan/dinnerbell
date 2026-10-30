@@ -11,7 +11,7 @@ services:
   dinnerbell:
     # Each release commit sets this default to its own version, so checking out tag vX.Y.Z runs
     # image X.Y.Z. Production never sets DINNERBELL_TAG; deploy/dinnerbell-test does.
-    image: ghcr.io/dsmorgan/dinnerbell:${DINNERBELL_TAG:-0.9.1}
+    image: ghcr.io/dsmorgan/dinnerbell:${DINNERBELL_TAG:-0.10.0}
     env_file: ${DINNERBELL_ENV_FILE:-.env}
     ports:
       # Publish only on the interface your reverse proxy (Newt) reaches. Set DINNERBELL_BIND in .env.
