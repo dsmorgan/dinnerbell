@@ -35,8 +35,8 @@ Add two monitors in Uptime Kuma, or any monitor that can match a keyword:
 
 | Monitor | Target | Alerts when |
 |---|---|---|
-| HTTP | `https://<your hostname>/healthz` | The response isn't 200. Dinnerbell returns 503 when the database is unreachable or the scheduler hasn't ticked for 5 minutes. A tick that's late by less than that, or a stuck call (`stuck_calls` above 0), reports `degraded` with HTTP 200. |
-| HTTP keyword | `https://<your hostname>/healthz`, keyword `"slack":"connected"` | Slack disconnects or a startup check fails. A Slack problem alone keeps HTTP 200, so the first monitor doesn't catch it. |
+| HTTP | `https://<your hostname>/healthz` | The response isn't 200. Dinnerbell returns 503 when the database is unreachable or the scheduler hasn't ticked for 5 minutes. Anything less serious reports `degraded` with HTTP 200, which this monitor doesn't catch. |
+| HTTP keyword | `https://<your hostname>/healthz`, keyword `"status":"ok","version"` | Dinnerbell reports `degraded`: a late scheduler tick, a stuck call (`stuck_calls` above 0), a notification waiting over an hour, a failed backup, or a Slack problem. The keyword includes `"version"` so that the scheduler's own `"status":"ok"` doesn't match. In Uptime Kuma, an **HTTP(s) - Json Query** monitor with the query `status` and the expected value `ok` works too. |
 
 ## What CI enforces
 

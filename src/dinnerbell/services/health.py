@@ -5,8 +5,9 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from typing import TYPE_CHECKING
 
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
@@ -14,6 +15,9 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from dinnerbell.db.migrate import head_revision
 from dinnerbell.db.outbox import OutboxRepository
+
+if TYPE_CHECKING:
+    from dinnerbell.services.stuck import StuckCall
 
 log = logging.getLogger(__name__)
 
@@ -35,6 +39,9 @@ class SchedulerState:
     backup_failing: bool = False
     """The newest nightly backup failed, or failed its check and was deleted. /healthz reports
     "degraded" until one succeeds."""
+    stuck: list[StuckCall] | None = field(default_factory=list)
+    """The stuck calls the latest call tick found (#142), or None if its check failed. /healthz
+    reports "degraded" while any is stuck, and Admin lists them."""
 
     def tick_is_fresh(self, now: datetime) -> bool:
         return self.last_tick is not None and now - self.last_tick <= STALE_AFTER

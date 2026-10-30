@@ -32,6 +32,8 @@ def test_healthz_shape(client: TestClient, clock: FakeClock) -> None:
     assert response.headers["content-type"] == "application/json"
     assert set(body) == {"status", "version", "database", "scheduler", "slack", "backup", "outbox", "stuck_calls"}
     assert body["stuck_calls"] == 0
+    # The documented keyword monitor: the top-level status, which the scheduler's own can't match.
+    assert response.text.startswith('{"status":"ok","version"')
     assert body["version"] == __version__
     assert body["outbox"] == {"backlog": 0, "failed": 0, "oldest_pending_age": None}
     assert body["status"] == "ok"

@@ -22,7 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from dinnerbell.domain.notifications import Channel
 from dinnerbell.logs import start_unit
-from dinnerbell.services import announcements, auth, backups, lifecycle, outbox, recap
+from dinnerbell.services import announcements, auth, backups, lifecycle, outbox, recap, stuck
 from dinnerbell.services.clock import Clock
 from dinnerbell.services.health import HEARTBEAT_INTERVAL, SchedulerState
 
@@ -55,6 +55,9 @@ class JobContext:
     """One drain at a time in this process; the outbox's row claims cover other processes."""
     failures: lifecycle.FailureLog = field(default_factory=lifecycle.FailureLog)
     """Throttles the log line for a call whose step keeps failing (#142)."""
+    stuck_check_failures: lifecycle.FailureLog = field(
+        default_factory=lambda: lifecycle.FailureLog("could not check a call for being stuck")
+    )
 
 
 Job = Callable[[JobContext], Awaitable[None]]
@@ -122,12 +125,17 @@ async def purge_sessions(ctx: JobContext) -> None:
 
 async def call_tick(ctx: JobContext) -> None:
     """Open due calls and walk every open call through the steps it owes, in each household's
-    time zone, queue the news (new badges, the monthly recap), then deliver what that produced.
-    Replaces one job per deadline (ADR 0004)."""
+    time zone, look for stuck calls (#142), queue the news (new badges, the monthly recap),
+    then deliver what that produced. Replaces one job per deadline (ADR 0004)."""
     try:
         await lifecycle.tick(ctx.sessionmaker, ctx.clock(), failures=ctx.failures)
     except Exception:
         log.exception("call tick failed")
+    # Look for stuck calls here, once per tick, so /healthz and Admin only read the result.
+    now = ctx.clock()
+    ctx.state.stuck = await stuck.find_stuck(
+        ctx.sessionmaker, now, running_since=ctx.state.started_at or now, failures=ctx.stuck_check_failures
+    )
     try:
         await announcements.announce_badges(ctx.sessionmaker, ctx.clock())
     except Exception:
