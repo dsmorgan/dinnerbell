@@ -6,6 +6,8 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-10-29
+
 ### Added
 
 - **Install without cloning** (#33). Each release attaches `dinnerbell-X.Y.Z.tar.gz` and its SHA-256: `compose.yaml` pinned to the release, `compose.secrets.yaml`, `.env.example`, both Slack manifests, `deploy/dinnerbell-test` with its compose files, and `INSTALL.md`. CI builds it from the tag and attests it, so `gh attestation verify` covers it like the image. [docs/install.md](docs/install.md) installs from it in eight steps.
@@ -23,6 +25,7 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 ### Upgrade notes
 
 - **Badges:** on the first start, members may receive badge tiers quietly: the new ladders and On a Roll's grace week put them in reach. Nothing is posted to Slack for them, and no earned tier is removed. A custom ladder you saved earlier becomes the Frequent ladder. No database revision ships for this.
+- **Install bundle:** optional. An install from a git clone keeps working, and upgrades the same way. To move to the bundle, see [docs/install.md](docs/install.md); keep the directory name `dinnerbell` so compose finds the same data volume, and copy `.env` (and `.env.test`, `secrets/`, `secrets-test/` if you use them) into it.
 
 ## [0.9.1] - 2026-10-29
 
@@ -417,7 +420,8 @@ The source-built version, never published as an image. It covers milestones M0 t
 - **M1:** the catalog with file import, preferences and vetoes, meal history, and the members admin page.
 - **M2:** dinner calls in Slack: the scheduled call, reminders, ranked proposals and votes, the decision, assignments, the abandon path, admin overrides, App Home, and `/dinnerbell call`.
 
-[Unreleased]: https://github.com/dsmorgan/dinnerbell/compare/v0.9.1...HEAD
+[Unreleased]: https://github.com/dsmorgan/dinnerbell/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/dsmorgan/dinnerbell/releases/tag/v0.10.0
 [0.9.1]: https://github.com/dsmorgan/dinnerbell/releases/tag/v0.9.1
 [0.9.0]: https://github.com/dsmorgan/dinnerbell/releases/tag/v0.9.0
 [0.8.0]: https://github.com/dsmorgan/dinnerbell/releases/tag/v0.8.0
