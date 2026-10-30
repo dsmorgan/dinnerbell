@@ -512,6 +512,19 @@ jobs:
           sudo apt-get install -y -q podman-compose
       - name: Shellcheck
         run: shellcheck deploy/dinnerbell-test deploy/check-secrets scripts/check-compose.sh scripts/build-bundle.sh
+      # The optional boot units ("Start at boot" in docs/setup.md). verify exits 0 on an unknown key,
+      # so any message it prints fails the step too.
+      - name: Check the systemd units
+        run: |
+          export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-$(mktemp -d)}"
+          status=0
+          out=$(systemd-analyze verify --user deploy/dinnerbell.service deploy/dinnerbell-test.service 2>&1) || status=$?
+          out=$(grep -v 'Failed to connect to .*bus' <<<"$out" || true)
+          if [[ $status -ne 0 || -n $out ]]; then
+            echo "$out"
+            echo "::error::systemd-analyze verify flagged deploy/dinnerbell.service or deploy/dinnerbell-test.service."
+            exit 1
+          fi
       # The install bundle (docs/install.md), built on every run so the script stays exercised. Two
       # builds of one commit must be byte for byte the same. `release-bundle` builds the release's.
       - name: Build the install bundle

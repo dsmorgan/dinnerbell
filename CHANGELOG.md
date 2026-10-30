@@ -9,6 +9,8 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 ### Added
 
 - **Stuck calls show on `/healthz` and Admin** (#142). A call whose next scheduler step has been due for more than an hour, because the step keeps failing, is stuck. `/healthz` reports how many as `stuck_calls` and sets `"status": "degraded"` with HTTP 200, so the container health check doesn't restart Dinnerbell, which can't fix the step. The scheduler checks once per tick, so `/healthz` runs no extra queries. A banner on every Admin tab lists each stuck call with its meal, day, state, and how long it has been stuck, and links to the call, where you call it off (or re-run it, for a voting or decided call). A call that can't be checked counts as stuck, for an unknown time. A step that fell due while Dinnerbell was down counts from the start, so a call that catches up after a restart isn't stuck.
+- **Optional: start at boot on podman** (#135). Rootless podman has no daemon, so after a reboot Dinnerbell stayed down until someone ran `podman-compose up -d`. `deploy/dinnerbell.service` and `deploy/dinnerbell-test.service` are systemd user units that run `podman-compose up -d` and `deploy/dinnerbell-test up -d` at boot and stop them at shutdown. They're in the install bundle, and "Start at boot" in docs/setup.md installs them. Docker needs neither: its daemon restarts the container. CI checks both units with `systemd-analyze verify`. `dinnerbell init` mentions them in one optional line at the end.
+- Documentation only: "Switch between a clone and the bundle" in docs/setup.md moves an install from a git clone to the release bundle, or back, keeping both instances' data volumes, `.env`, `.env.test`, `secrets/`, `secrets-test/`, and `compose.override.yaml`.
 
 ### Changed
 
@@ -21,6 +23,7 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 - `/healthz` has a new key, `stuck_calls`: a number, or `null` when the check failed or is more than 90 seconds old (the call tick hung while the heartbeat goes on). Either `null` case also reports `degraded`. No database revision ships for this.
 - **Monitoring:** the documented monitors don't alert on `degraded`, which keeps HTTP 200. To be alerted about stuck calls, and about Slack, the outbox, and backups, replace the `"slack":"connected"` keyword monitor with one for `"status":"ok","version"` (see "Monitor it" in [docs/hardening.md](docs/hardening.md#monitor-it)).
+- **Start at boot:** nothing to do; an install without the unit runs as before.
 
 ## [0.10.0] - 2026-10-29
 

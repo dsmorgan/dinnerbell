@@ -40,6 +40,8 @@ deploy/dinnerbell-test deploy/dinnerbell-test
 deploy/check-secrets deploy/check-secrets
 deploy/compose.test.yaml deploy/compose.test.yaml
 deploy/compose.test-secrets.yaml deploy/compose.test-secrets.yaml
+deploy/dinnerbell.service deploy/dinnerbell.service
+deploy/dinnerbell-test.service deploy/dinnerbell-test.service
 "
 
 stage=$(mktemp -d)

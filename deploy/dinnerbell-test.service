@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# Optional: start the test instance at boot on a rootless podman host, through deploy/dinnerbell-test
+# and its checks. Enable it only if test should always run. Install it as dinnerbell.service is
+# installed ("Start at boot" in docs/setup.md), with this file's name. Change it with
+# `systemctl --user edit dinnerbell-test.service`, never here.
+[Unit]
+Description=Dinnerbell test instance
+Documentation=https://github.com/dsmorgan/dinnerbell/blob/main/docs/setup.md#start-at-boot
+# See dinnerbell.service for why ExecStartPre waits for the network.
+After=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# The directory that holds compose.yaml, .env, and .env.test. The wrapper runs from there.
+WorkingDirectory=%h/dinnerbell
+Environment=PATH=%h/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStartPre=-/usr/bin/timeout 120 /bin/sh -c 'while systemctl list-jobs --no-legend network-online.target | grep -q .; do sleep 1; done'
+# env runs the wrapper by its path relative to WorkingDirectory.
+ExecStart=/usr/bin/env deploy/dinnerbell-test up -d
+ExecStop=/usr/bin/env deploy/dinnerbell-test down
+# Room to pull the image and run the wrapper's configuration check.
+TimeoutStartSec=10min
+
+[Install]
+WantedBy=default.target
