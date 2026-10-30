@@ -224,7 +224,10 @@ jobs:
           file: Containerfile
           platforms: linux/amd64
           build-args: DINNERBELL_BUILD=${{ steps.stamp.outputs.build }}
-          tags: dinnerbell:ci
+          # Local only, never pushed. Named like the published image because Grype's SARIF
+          # fingerprint includes the image name: this scan's findings then share their alerts with
+          # scan-published and the nightly release scan, instead of opening a second alert each.
+          tags: ${{ env.IMAGE }}:ci
           load: true
           push: false
           provenance: false
@@ -242,7 +245,7 @@ jobs:
             --env DINNERBELL_OIDC_ISSUER=https://idp.example.com \
             --env DINNERBELL_OIDC_CLIENT_ID=ci \
             --env DINNERBELL_OIDC_CLIENT_SECRET=ci \
-            dinnerbell:ci
+            "$IMAGE:ci"
           for _ in $(seq 1 30); do
             if curl --silent --fail http://localhost:8013/healthz; then exit 0; fi
             sleep 1
@@ -263,7 +266,7 @@ jobs:
         id: scan
         uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
         with:
-          image: dinnerbell:ci
+          image: ${{ env.IMAGE }}:ci
           only-fixed: true
           severity-cutoff: high
           fail-build: true

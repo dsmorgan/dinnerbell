@@ -6,6 +6,11 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ## [Unreleased]
 
+### Changed
+
+- CI only: the `image` job tags its local build `ghcr.io/dsmorgan/dinnerbell:ci` instead of `dinnerbell:ci`. Grype's alert fingerprint includes the image name, so a base-image finding had one Code scanning alert from the CI build and another from the published image; now each finding has one alert (#141). The image itself is unchanged, and nothing new is pushed.
+- Documentation only: `SECURITY.md` links straight to the private vulnerability report form and the latest release, and says what to include in a report (#141).
+
 ## [0.10.0] - 2026-10-29
 
 ### Added
