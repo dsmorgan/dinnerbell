@@ -60,8 +60,9 @@
     <path d="M40 13.5 Q41 4 50 3 Q50 12 40 13.5Z" fill="#D9772B"/>
     <path d="M40.5 13 L48 5" stroke="#9E4C16" stroke-width=".8"/>
   </symbol>
+  <!-- Worn only late at night, so it's light enough to read against the night sky. -->
   <symbol id="acc-nightcap" viewBox="0 0 64 56">
-    <path d="M32 16.5 Q38 2 56 5 Q48 9 52 17 Q42 13 32 16.5Z" fill="#5B6BB5"/>
+    <path d="M32 16.5 Q38 2 56 5 Q48 9 52 17 Q42 13 32 16.5Z" fill="#9AA8F2" stroke="#F6EFD8" stroke-width=".8"/>
     <circle cx="56" cy="5" r="2.8" fill="#FFFFFF"/>
     <path d="M32 16.5 Q42 12.5 52 17" stroke="#FFFFFF" stroke-width="2.2" fill="none" stroke-linecap="round"/>
   </symbol>

@@ -433,3 +433,13 @@ def test_nothing_moves_unless_motion_is_allowed() -> None:
 def test_the_sprite_carries_the_cache_buster(client: TestClient, provider: FakeProvider) -> None:
     sign_in(client, provider)
     assert f'href="/static/den.svg?v={__version__}%2Babc1234#nook"' in client.get("/").text
+
+
+def test_the_den_stays_under_the_top_bar_and_fits_a_narrow_row() -> None:
+    """The den isolates its layers, or they paint over the sticky top bar when Today scrolls
+    (checked in Chromium, WebKit, and Firefox on #164). It's a container, so a narrow den drops
+    the wheel; and without container units the greeting keeps its usual size."""
+    rule = FUN_CSS.split("\n.den {", 1)[1].split("}", 1)[0]
+    assert "isolation: isolate;" in rule and "container: den / inline-size;" in rule
+    assert "@container den (max-width: 130px)" in FUN_CSS
+    assert "@supports not (width: 1cqi) {\n  .greeting h1 { font-size: 1.6rem; }" in FUN_CSS
