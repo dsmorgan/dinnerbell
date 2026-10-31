@@ -512,7 +512,8 @@ class OutboxRow(Base):
 class FeedbackRow(Base):
     """One member's feedback on one meal (FR-45, FR-46). ``rating`` is the one rating of the
     meal, ``place_issues`` a JSON list of issue chips, and ``issue_note`` what went wrong for the
-    "Other" chip. ``item_id`` through ``participants`` snapshot
+    "Other" chip. ``rating_saved_at`` is when the rating last changed, which a later stance
+    edit overrides (FR-55); saving anything else leaves it. ``item_id`` through ``participants`` snapshot
     the meal when the feedback was saved: the item, its kind and mode, the cook, and who ate.
 
     Deleting the meal deletes its feedback (``meal_id`` cascades), so a discarded call that
@@ -532,6 +533,7 @@ class FeedbackRow(Base):
     meal_id: Mapped[int] = mapped_column(ForeignKey("meal_log.id", ondelete="CASCADE"))
     member_id: Mapped[int] = mapped_column(ForeignKey("member.id", ondelete="CASCADE"), index=True)
     rating: Mapped[str | None] = mapped_column(String(16))
+    rating_saved_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
     place_issues: Mapped[list[str]] = mapped_column(JSON, default=list)
     issue_note: Mapped[str | None] = mapped_column(String(200))
     cook_thanks: Mapped[bool] = mapped_column(Boolean, default=False)

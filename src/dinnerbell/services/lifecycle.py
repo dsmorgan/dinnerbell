@@ -66,6 +66,7 @@ from dinnerbell.domain.members import Member
 from dinnerbell.domain.offers import replaces_call
 from dinnerbell.domain.ranking import GroupPreferences, RankingSnapshot, RankItem, rank, ranking_seed
 from dinnerbell.domain.schedule import (
+    feedback_cap,
     proposal_count,
     roles_choice_minutes,
     slot_schedule,
@@ -412,7 +413,7 @@ async def ranking_snapshot(
             suggesters.setdefault(suggestion.item_id, {})[suggestion.member_id] = ctx.name(suggestion.member_id)
     return RankingSnapshot(
         items=tuple(rank_item(ctx, item) for item in ctx.items.values() if item.active),
-        preferences=await with_ratings(db, household_id, who, group, day=day),
+        preferences=await with_ratings(db, household_id, who, group, day=day, cap=feedback_cap(ctx.settings)),
         coverage=ctx.coverage,
         weights=weights(ctx.settings),
         window_days=window.days,

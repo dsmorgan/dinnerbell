@@ -23,11 +23,11 @@ Real ratings are too few to model, so the design rests on a simulation: Dinnerbe
 
 One rating of a new place gives −1.5, −0.75, 0, +0.5, or +1. Ratings count only while that member is eating (in or maybe). Logged meals count; guests can't rate; ratings never touch a veto.
 
-**Your edit wins.** Setting a stance on an item on Preferences discards your earlier ratings of it. A neutral stance deletes its `preference` row, so a new table, `stance_edit`, keeps each member's last edit time per item.
+**Your edit wins.** Setting a stance on an item on Preferences discards your earlier ratings of it. A neutral stance deletes its `preference` row, so a new table, `stance_edit`, keeps each member's last edit time per item; only ratings changed after it count.
 
-**The Feedback setting.** An admin setting caps the adjustment: 0 (off), 1, or 2. New households start at 2; the migration sets existing ones to 0, and the admin sets it to 2 when ready to let ratings move scores.
+**The Feedback setting.** An admin setting, 0 (off), 1, or 2, limits how far each rating pulls: its score counts as at most that much. New households start at 2; the migration sets existing ones to 0, and the admin sets it to 2 when ready to let ratings move scores.
 
-**The household hint.** Everyone sees a hint for each item, from everyone's ratings and issues, naming nobody. Each rating weighs `0.5^(age in days / 90)`; P, N, and F are the weights of positive, negative, and **It was fine** ratings. A verdict needs ratings from two people and P + N + F of at least 1.5. Then:
+**The household hint.** Everyone sees a hint for each item, from everyone's ratings and issues, naming nobody. Each rating weighs `0.5^(age in days / 90)`; P, N, and F are the weights of positive, negative, and **It was fine** ratings. A verdict needs two people, each with a rating from roughly the last 3 months, and P + N + F of at least 1.5. Then:
 
 - **Mixed reviews** if P ≥ 0.5 and N ≥ 0.5: at least one of each from roughly the last 3 months.
 - **Not well liked**, otherwise, if N is at least a quarter of the total.
@@ -54,4 +54,3 @@ The hint replaces FR-49's loved count on the catalog and is the first reason on 
 - FR-49 changes: the household sees a verdict that can be negative. In a two-person household a hint can reveal the other person's view, and an issue hint says that someone checked it.
 - Item scores needn't be whole. A hint is stored in a pick's reasons when it's drawn, like every reason.
 - Once people stop picking a declining place, nobody rates it; the hint helps there.
-- Re-saving a rating after a stance edit makes it count again: saving it is a new statement.

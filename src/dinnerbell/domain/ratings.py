@@ -6,10 +6,10 @@ hint for each item.
 ratings of it, in the order of the meals' dates: each rating moves it toward the rating's score
 (``Rating.score``, -2 to +2), halfway, or three-quarters of the way for "Hated it" and "Didn't
 like it". It fades by half every 90 days without a new rating, counted from the meal's date. A
-stance the member set on Preferences after a rating wins: only ratings saved after their last
-edit of that item count. Their score for the item is then their stated score plus the
-adjustment, kept within -2 to +2. The household's **Feedback** setting caps the adjustment at
-0 (off), 1, or 2.
+stance the member set on Preferences after a rating wins: only ratings set or changed after
+their last edit of that item count. Their score for the item is then their stated score plus
+the adjustment, kept within -2 to +2. The household's **Feedback** setting, 0 (off), 1, or 2,
+limits how far each rating pulls: its score is held within that many points either way.
 
 **The household hint.** Everyone's ratings of an item, each fading by half every 90 days,
 give a verdict once two people have rated it: "Mixed reviews", "Not well liked", or "Well
@@ -46,6 +46,9 @@ HINT_MIN_WEIGHT = 1.5
 """A rating verdict needs ratings from 2 people, worth 1.5 after fading: two ratings from the
 last 5 weeks, or three from the last 3 months. ADR 0008 explains why not 2, as proposed: two
 ratings would fall below 2 the day after the meal, so the verdict would vanish at once."""
+PERSON_MIN_WEIGHT = 0.5
+"""A person counts toward the two only if their own ratings weigh this much: one from roughly
+the last 3 months, so an old rating can't let one person's recent ones make the verdict."""
 MIXED_MIN = 0.5
 """Mixed reviews: at least this much positive and this much negative, which is one of each from
 roughly the last 3 months."""
@@ -57,8 +60,8 @@ _EPSILON = 1e-9
 @dataclass(frozen=True, slots=True)
 class Opinion:
     """One member's feedback on one meal, as ranking and hints read it: never the "Other" text
-    or a note. ``day`` is the meal's date; ``saved_at`` is when the member last saved it, which
-    a later stance edit overrides."""
+    or a note. ``day`` is the meal's date; ``saved_at`` is when the member last changed the
+    rating, which a later stance edit overrides. Re-saving the same rating doesn't move it."""
 
     member_id: int
     item_id: int
@@ -203,22 +206,24 @@ def verdict(opinions: Iterable[Opinion], *, today: date) -> Verdict | None:
 
     Each rating weighs 1, halving every 90 days since the meal. With P, N, and F the weights of
     positive (Liked it, Loved it), negative (Hated it, Didn't like it), and It was fine ratings,
-    a verdict needs ratings from 2 people and P + N + F of at least 1.5. Then: Mixed reviews when
+    a verdict needs 2 people whose own ratings weigh at least 0.5 each (a rating from roughly the
+    last 3 months), and P + N + F of at least 1.5. Then: Mixed reviews when
     P and N are both at least 0.5; otherwise Not well liked when N is at least a quarter of the
     total; otherwise Well liked when P is at least half of it."""
-    people: set[int] = set()
+    people: dict[int, float] = {}
     positive = negative = total = 0.0
     for opinion in opinions:
         if opinion.rating is None or opinion.day > today:
             continue
         weight = _fade(1.0, (today - opinion.day).days)
-        people.add(opinion.member_id)
+        people[opinion.member_id] = people.get(opinion.member_id, 0.0) + weight
         total += weight
         if opinion.rating.score > 0:
             positive += weight
         elif opinion.rating.score < 0:
             negative += weight
-    if len(people) < HINT_MIN_PEOPLE or total < HINT_MIN_WEIGHT - _EPSILON:
+    counted = sum(1 for weight in people.values() if weight >= PERSON_MIN_WEIGHT - _EPSILON)
+    if counted < HINT_MIN_PEOPLE or total < HINT_MIN_WEIGHT - _EPSILON:
         return None
     if positive >= MIXED_MIN - _EPSILON and negative >= MIXED_MIN - _EPSILON:
         return Verdict.MIXED

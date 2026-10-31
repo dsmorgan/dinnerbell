@@ -62,7 +62,7 @@ Everyone sees a hint for each place, built from everyone's ratings and what went
 - **Not well liked**: otherwise, at least a quarter of the ratings were bad.
 - **Well liked**: otherwise, at least half were good.
 
-A verdict needs ratings from two people, and recent ones count more. What went wrong in the last 3 months adds the most important problem anyone checked: "a recent wrong order", "recently late", "recently cold", or "a recent problem". So a hint reads "Mixed reviews · recently late", or, with no verdict, "Recently cold". The words someone wrote for **Other** are never shown. A hint never changes a score.
+A verdict needs ratings from two people, each from roughly the last 3 months, and recent ones count more. What went wrong in the last 3 months adds the most important problem anyone checked: "a recent wrong order", "recently late", "recently cold", or "a recent problem". So a hint reads "Mixed reviews · recently late", or, with no verdict, "Recently cold". The words someone wrote for **Other** are never shown. A hint never changes a score.
 
 ## Why the picks differ between calls
 
@@ -125,6 +125,6 @@ An admin changes these on the **Ranking** tab of **Members**. Changes apply from
   | 3 | A point better is about 1.4 times as likely | 63% | 38% |
 
   The last two columns are for the worked example. If the same places keep winning, raise it. If the picks feel too random, lower it.
-- **Feedback** says how far ratings move each person's score: 0 (off), 1, or 2. At 2, the default for a new household, ratings can move a score all the way; at 1, by at most a point. A household that existed before the setting did starts at 0; set it to 2 when you're ready to let ratings move scores. Hints show at every setting.
+- **Feedback** limits how far each rating pulls a person's score: 0 (off), 1, or 2. At 2, the default for a new household, **Loved it** pulls toward +2; at 1, toward +1, so ratings move a score by at most a point. A household that existed before the setting did starts at 0; set it to 2 when you're ready to let ratings move scores. Hints show at every setting.
 
 Vetoes, guests' needs, coverage, and the variety window hold at every setting.

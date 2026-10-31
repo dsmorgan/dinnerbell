@@ -30,7 +30,7 @@ PROPOSAL_COUNT_KEY = "proposal_count"
 TEMPERATURE_KEY = "ranking_temperature"
 ROLES_CHOICE_KEY = "roles_choice_minutes"
 FEEDBACK_KEY = "feedback_cap"
-"""The **Feedback** setting (FR-55): how far ratings move a member's score, 0 (off), 1, or 2.
+"""The **Feedback** setting (FR-55): how far each rating pulls a score, 0 (off), 1, or 2.
 Missing means the default, 2; revision 0021 set it to 0 for households from before it."""
 MIN_ROLES_CHOICE_MINUTES = 1
 MAX_ROLES_CHOICE_MINUTES = 120

@@ -1699,6 +1699,9 @@ FEEDBACK_RANKING_ROWS = [
     "INSERT INTO preference (household_id, member_id, tag_id, veto, score, updated_at) VALUES (1, 1, 1, 0, -1, :t)",
     "INSERT INTO household (id, name, timezone, settings, created_at) "
     "VALUES (2, 'Other', 'UTC', '{\"keep\": 1, \"ranking_temperature\": 0.5}', :t)",
+    "INSERT INTO feedback (household_id, meal_id, member_id, rating, place_issues, cook_thanks, item_id, item_name, "
+    "item_kind, participants, created_at, updated_at) "
+    "VALUES (1, 1, 1, 'hated', '[]', 0, 1, 'X', 'restaurant', '[]', :t, '2026-10-23 01:30:00')",
 ]
 
 
@@ -1723,9 +1726,10 @@ def _every_household_settings(settings: Settings) -> list[dict[str, object]]:
 
 def test_0021_records_stance_edits_and_turns_feedback_off_and_downgrade_undoes_both(settings: Settings) -> None:
     """Up adds ``stance_edit``, filled from each item stance with the time it was saved (tag
-    stances have no ratings to override), and sets Feedback to 0 in every household's settings,
-    keeping the rest. Down drops the table and the setting and changes no other row; up again
-    gives the same."""
+    stances have no ratings to override), adds ``feedback.rating_saved_at`` from each row's
+    ``updated_at``, and sets Feedback to 0 in every household's settings, keeping the rest. Down
+    drops the table, the column, and the setting and changes no other row; up again gives the
+    same."""
     _upgrade_to(settings, "0020_one_rating")
     _populate_calls(settings)
     _execute(settings, *FEEDBACK_RANKING_ROWS)
@@ -1740,7 +1744,11 @@ def test_0021_records_stance_edits_and_turns_feedback_off_and_downgrade_undoes_b
         {"keep": 1, "ranking_temperature": 0.5, "feedback_cap": 0},
     ]
     after = _rows_outside_m4(settings)
-    assert {k: v for k, v in after.items() if k != "household"} == {k: v for k, v in before.items() if k != "household"}
+    ours = {"household", "feedback"}
+    assert {k: v for k, v in after.items() if k not in ours} == {k: v for k, v in before.items() if k not in ours}
+    assert _feedback_rows(settings, "rating, updated_at, rating_saved_at") == [
+        ("hated", "2026-10-23 01:30:00", "2026-10-23 01:30:00")
+    ]
     with pytest.raises(IntegrityError, match="UNIQUE"):  # one edit time per member per item
         _execute(settings, "INSERT INTO stance_edit (household_id, member_id, item_id, edited_at) VALUES (1, 1, 1, :t)")
 
@@ -1749,6 +1757,11 @@ def test_0021_records_stance_edits_and_turns_feedback_off_and_downgrade_undoes_b
     assert _every_household_settings(settings) == old_settings  # json_remove rewrites the text, so compare values
     down = _rows_outside_m4(settings)
     assert {k: v for k, v in down.items() if k != "household"} == {k: v for k, v in before.items() if k != "household"}
+    engine = create_engine(settings.sync_database_url)
+    try:
+        assert "rating_saved_at" not in {c["name"] for c in inspect(engine).get_columns("feedback")}
+    finally:
+        engine.dispose()
 
     _upgrade_to(settings, "0021_feedback_ranking")
     assert len(_stance_edits(settings)) == 2

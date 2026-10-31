@@ -44,7 +44,10 @@ def _feedback(row: FeedbackRow) -> Feedback:
 
 
 def _fill(row: FeedbackRow, data: FeedbackInput, facts: MealFacts, now: datetime) -> None:
-    row.rating = data.rating.value if data.rating else None
+    rating = data.rating.value if data.rating else None
+    if row.rating_saved_at is None or row.rating != rating:  # a re-save leaves an overridden rating overridden
+        row.rating_saved_at = now
+    row.rating = rating
     row.place_issues = sorted(i.value for i in data.place_issues)
     row.issue_note = data.issue_note
     row.cook_thanks = data.cook_thanks
@@ -151,7 +154,7 @@ class FeedbackRepository:
     async def opinions(
         self, household_id: int, *, member_ids: Iterable[int] | None = None, item_ids: Iterable[int] | None = None
     ) -> list[Opinion]:
-        """Ratings and issue checkboxes, with the meal's date and when each was saved, for
+        """Ratings and issue checkboxes, with the meal's date and when each rating last changed, for
         ranking and the household hints (FR-55): by these members, or everyone, on these items,
         or every item. Never the "Other" text or a note."""
         query: Any = (
@@ -159,7 +162,7 @@ class FeedbackRepository:
                 FeedbackRow.member_id,
                 FeedbackRow.item_id,
                 MealLogRow.date,
-                FeedbackRow.updated_at,
+                func.coalesce(FeedbackRow.rating_saved_at, FeedbackRow.updated_at),
                 FeedbackRow.rating,
                 FeedbackRow.place_issues,
             )

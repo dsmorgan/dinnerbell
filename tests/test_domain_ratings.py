@@ -203,6 +203,17 @@ def test_a_verdict_needs_two_people() -> None:
     assert verdict([said(LO, member=1), said(LO, member=2)], today=TODAY) is Verdict.WELL_LIKED
 
 
+def test_an_old_rating_doesnt_make_a_second_person() -> None:
+    """Each of the two people needs their own rating from roughly the last 3 months: a
+    two-year-old rating can't let one person's two recent ones make the verdict."""
+    recent = [said(LO, member=1), said(LO, member=1, days_ago=1)]
+    assert verdict([*recent, said(LO, member=2, days_ago=730)], today=TODAY) is None
+    assert verdict([*recent, said(LO, member=2, days_ago=91)], today=TODAY) is None  # weighs just under 0.5
+    assert verdict([*recent, said(LO, member=2, days_ago=90)], today=TODAY) is Verdict.WELL_LIKED
+    two_old = [said(F, member=2, days_ago=200), said(F, member=2, days_ago=200), said(F, member=2, days_ago=200)]
+    assert verdict([*recent, *two_old], today=TODAY) is Verdict.WELL_LIKED  # together they weigh 0.64
+
+
 def test_a_verdict_needs_recent_enough_ratings() -> None:
     """Two ratings weigh 1.5 or more for about 5 weeks; three for 3 months."""
     two = [said(LO, member=1, days_ago=37), said(LO, member=2, days_ago=37)]
@@ -302,6 +313,15 @@ def test_the_hint_is_the_first_reason_and_changes_no_score() -> None:
     plain, with_hint = {r.item_id: r for r in rank(base)}, {r.item_id: r for r in rank(hinted)}
     assert with_hint[1].reasons == ("Mixed reviews · recently late.", *plain[1].reasons)
     assert with_hint[1].score == plain[1].score and with_hint[2].reasons == plain[2].reasons
+
+
+def test_a_hint_alone_is_the_whole_reason() -> None:
+    """Intended: a pick with no standout component says "Works for everyone who's in.", but a
+    hint is a reason, so with one it says only the hint."""
+    eaten = item(1, "Siam")
+    plain = snapshot(eaten, last_eaten_days={1: 30})
+    assert rank(plain)[0].reasons == ("Works for everyone who's in.",)
+    assert rank(replace(plain, hints={1: "Recently cold"}))[0].reasons == ("Recently cold.",)
 
 
 def test_a_top_ups_hint_comes_before_its_meal_note() -> None:
