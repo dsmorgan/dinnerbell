@@ -1,0 +1,101 @@
+<!-- SPDX-License-Identifier: AGPL-3.0-or-later -->
+<!-- Dinnerbone's Den (#153): Dinnerbone, the logo's hamster, full-body and facing right, and his
+     den's furniture. Today draws each part with <use href="den.svg#id">. A page's CSS can't reach
+     inside a <use>, so every part that shows, hides, or moves on its own is a symbol of its own,
+     and the hamster's parts share one 64 by 56 viewBox so they stack into him. Colors are
+     presentation attributes only: this file is served with a CSP that allows no style. -->
+<svg xmlns="http://www.w3.org/2000/svg">
+  <symbol id="ham-body" viewBox="0 0 64 56">
+    <ellipse cx="7.5" cy="37" rx="3.4" ry="2.4" fill="#C27A34"/>
+    <circle cx="36" cy="15" r="6.2" fill="#C27A34"/>
+    <circle cx="36.4" cy="15.6" r="3.5" fill="#F2A3A6"/>
+    <ellipse cx="28" cy="35" rx="22" ry="16.5" fill="#D18A3C"/>
+    <ellipse cx="32" cy="41.5" rx="14" ry="9.5" fill="#FBE8CC"/>
+    <ellipse cx="43" cy="28" rx="15" ry="13.5" fill="#E0994A"/>
+  </symbol>
+  <symbol id="ham-cheek" viewBox="0 0 64 56">
+    <path d="M37 35 Q45 44 56.5 35.5 Q55 30 49 30.5 Q41 31 37 35Z" fill="#FBE8CC"/>
+    <ellipse cx="47" cy="34" rx="4.6" ry="2.8" fill="#F4A0A0" opacity=".7"/>
+  </symbol>
+  <symbol id="ham-eyes-open" viewBox="0 0 64 56">
+    <circle cx="48.5" cy="25" r="2.9" fill="#2A1810"/>
+    <circle cx="47.6" cy="23.9" r="1" fill="#FFFFFF"/>
+  </symbol>
+  <symbol id="ham-eyes-shut" viewBox="0 0 64 56">
+    <path d="M45.8 25.6 Q48.5 27.8 51.2 25.6" stroke="#2A1810" stroke-width="1.6" fill="none" stroke-linecap="round"/>
+  </symbol>
+  <symbol id="ham-nose" viewBox="0 0 64 56">
+    <circle cx="57.4" cy="29.6" r="2" fill="#E97C8A"/>
+    <path d="M55 32 Q60 31 63 32 M55 33.4 Q59.5 34 62.5 35.5" stroke="#7A4A2A" stroke-width=".7" fill="none" opacity=".6"/>
+  </symbol>
+  <symbol id="ham-collar" viewBox="0 0 64 56">
+    <path d="M31.5 29 Q36 39.5 44.5 41.5" stroke="#D2433A" stroke-width="3.2" fill="none" stroke-linecap="round"/>
+    <rect x="40.5" y="41.5" width="7.5" height="3.6" rx="1.4" fill="#F5C64B"/>
+  </symbol>
+  <symbol id="ham-foot-back" viewBox="0 0 64 56">
+    <ellipse cx="20" cy="50.5" rx="4.2" ry="2.6" fill="#E9A0A3"/>
+  </symbol>
+  <symbol id="ham-foot-front" viewBox="0 0 64 56">
+    <ellipse cx="39" cy="50.5" rx="4.2" ry="2.6" fill="#E9A0A3"/>
+  </symbol>
+  <!-- What he wears: one for the season, one for the time of day. -->
+  <symbol id="acc-scarf" viewBox="0 0 64 56">
+    <path d="M30.5 28.5 Q36 40 46 41.5" stroke="#2E6B6F" stroke-width="5" fill="none" stroke-linecap="round"/>
+    <path d="M33 33 L29 45 L33.5 45.5 L36 35" fill="#2E6B6F"/>
+    <path d="M30 41 L34 41.4 M29.5 43.4 L33.6 43.8" stroke="#F5C64B" stroke-width="1"/>
+  </symbol>
+  <symbol id="acc-flower" viewBox="0 0 64 56">
+    <circle cx="31.5" cy="12" r="2.4" fill="#F6A8C0"/>
+    <circle cx="34.5" cy="9.5" r="2.4" fill="#F6A8C0"/>
+    <circle cx="31" cy="7.8" r="2.4" fill="#F6A8C0"/>
+    <circle cx="28.4" cy="10.2" r="2.4" fill="#F6A8C0"/>
+    <circle cx="31.3" cy="9.9" r="1.5" fill="#F5C64B"/>
+  </symbol>
+  <symbol id="acc-sunhat" viewBox="0 0 64 56">
+    <path d="M33 13 Q43 2 53 13 Z" fill="#F5D58B"/>
+    <ellipse cx="43" cy="13.5" rx="15" ry="2.8" fill="#EFC56A"/>
+    <path d="M34.5 11.5 H51.5" stroke="#D2433A" stroke-width="1.6"/>
+  </symbol>
+  <symbol id="acc-leaf" viewBox="0 0 64 56">
+    <path d="M40 13.5 Q41 4 50 3 Q50 12 40 13.5Z" fill="#D9772B"/>
+    <path d="M40.5 13 L48 5" stroke="#9E4C16" stroke-width=".8"/>
+  </symbol>
+  <symbol id="acc-nightcap" viewBox="0 0 64 56">
+    <path d="M32 16.5 Q38 2 56 5 Q48 9 52 17 Q42 13 32 16.5Z" fill="#5B6BB5"/>
+    <circle cx="56" cy="5" r="2.8" fill="#FFFFFF"/>
+    <path d="M32 16.5 Q42 12.5 52 17" stroke="#FFFFFF" stroke-width="2.2" fill="none" stroke-linecap="round"/>
+  </symbol>
+  <symbol id="acc-apron" viewBox="0 0 64 56">
+    <path d="M27 33 H41 L42 47 Q34 50 26 47 Z" fill="#FFFFFF" stroke="#E7DED4" stroke-width=".8"/>
+    <rect x="31" y="40" width="6" height="4" rx="1" fill="none" stroke="#E7DED4" stroke-width=".8"/>
+    <path d="M27 33 L35 26 M41 33 L38 27" stroke="#FFFFFF" stroke-width="1.4"/>
+  </symbol>
+  <symbol id="acc-cereal" viewBox="0 0 64 56">
+    <circle cx="60" cy="38" r="3.6" fill="none" stroke="#E8B04A" stroke-width="2.2"/>
+  </symbol>
+  <!-- The den: a bed of straw with his bowl at its edge, the bell over the bowl, and his wheel. -->
+  <symbol id="nook" viewBox="0 0 46 22">
+    <ellipse cx="15" cy="18" rx="15" ry="4.5" fill="#F1DFB8"/>
+    <path d="M2 17 l5 -4 M7 16 l6 -5 M13 15 l3 -6 M18 15 l5 -5 M23 16 l4 -3" stroke="#D9C08E" stroke-width="1.6" stroke-linecap="round"/>
+    <circle cx="31" cy="11" r="1.6" fill="#C98A3E"/>
+    <circle cx="35" cy="10.4" r="1.8" fill="#E0A94E"/>
+    <circle cx="39" cy="11" r="1.6" fill="#B8742E"/>
+    <circle cx="33" cy="9.6" r="1.4" fill="#E6C27A"/>
+    <path d="M26 12 H45 Q44 21 35.5 21 Q27 21 26 12Z" fill="#2E6B6F"/>
+    <path d="M26 12 H45" stroke="#245558" stroke-width="1.6"/>
+  </symbol>
+  <symbol id="bell" viewBox="0 0 24 30">
+    <path d="M12 0 V7" stroke="#8A7A6A" stroke-width="1.6"/>
+    <path d="M12 7 C7 7 6 12 6 16 L4 21 H20 L18 16 C18 12 17 7 12 7Z" fill="#E0A92E"/>
+    <circle cx="12" cy="23.5" r="2.2" fill="#A8302A"/>
+  </symbol>
+  <symbol id="wheel-frame" viewBox="0 0 54 56">
+    <path d="M27 30 L14 55 M27 30 L40 55" stroke="#8A7A6A" stroke-width="3"/>
+    <circle cx="27" cy="27" r="24" fill="none" stroke="#C9B9A6" stroke-width="3"/>
+  </symbol>
+  <symbol id="wheel-spokes" viewBox="0 0 54 56">
+    <circle cx="27" cy="27" r="24" fill="none" stroke="#A89582" stroke-width="1.4" stroke-dasharray="2 5"/>
+    <path d="M27 3 V51 M3 27 H51 M10 10 L44 44 M44 10 L10 44" stroke="#C9B9A6" stroke-width="1"/>
+    <circle cx="27" cy="27" r="3" fill="#8A7A6A"/>
+  </symbol>
+</svg>

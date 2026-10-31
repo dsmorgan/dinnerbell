@@ -2,7 +2,17 @@
 {% extends "base.html" %}
 {% block title %}Today{% endblock %}
 {% block content %}
+{% if den_pose %}
+{#- Fun mode (#153): the den fills the rest of the greeting row. data-fit is how wide the
+    greeting reads, so fun.css can shrink it to fit before it wraps. -#}
+<div class="greeting" data-fit="{{ greeting_fit }}">
+  <h1>Hi, {{ principal.member.display_name }}</h1>
+  {% include "_den.html" %}
+</div>
+<div class="edge-wx" aria-hidden="true">{% for _ in range(18) %}<i></i>{% endfor %}</div>
+{% else %}
 <h1>Hi, {{ principal.member.display_name }}</h1>
+{% endif %}
 {% if guest %}
 {#- A guest sees only the calls they're invited to (#38). -#}
 <p class="muted">You're a guest. When someone in the household invites you to a meal, it shows here, and you can say whether you're in and how you can help.</p>
