@@ -516,3 +516,5 @@ def test_a_guest_sees_only_their_own_badges(admin: TestClient, provider: FakePro
     for hidden in ("Full Table", "Food Critic", "Meals shared", "The household", "Lately earned", "Stats</a>"):
         assert hidden not in html
     assert "Meals cooked" in html
+    assert 'aria-label="Stats"' not in html and "/stats/household" not in html  # no tabs for a guest (#153)
+    assert admin.get("/stats/household").status_code != 200

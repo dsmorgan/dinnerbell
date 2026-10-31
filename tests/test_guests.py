@@ -327,7 +327,7 @@ async def test_every_influence_and_member_action_is_refused_to_a_guest(house: Ho
     readers: list[tuple[Callable[..., Awaitable[Any]], dict[str, Any]]] = [
         (catalog_service.catalog, {}),
         (guests.saved_guests, {}),
-        (meals.history, {"today": DAY}),
+        (meals.history, {}),
         (offers.offer_form, {"now": house.clock()}),
         (
             meals.log_meal,

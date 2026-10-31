@@ -1,5 +1,6 @@
 {#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
 {% extends "base.html" %}
+{% from "_pager.html" import pager %}
 {% block title %}History{% endblock %}
 {% block content %}
 <h1>History</h1>
@@ -60,10 +61,7 @@
   </ul>
 </section>
 {% else %}
-<p class="muted">No meals logged {% if history.page %}in these weeks{% else %}yet{% endif %}.</p>
+<p class="muted">No meals logged yet.</p>
 {% endfor %}
-<nav class="button-row pager" aria-label="Older and newer meals">
-  {% if history.page > 0 %}<a class="button small" href="/history?page={{ history.page - 1 }}">Newer</a>{% endif %}
-  {% if history.has_older %}<a class="button small" href="/history?page={{ history.page + 1 }}">Older</a>{% endif %}
-</nav>
+{{ pager(history.page, history_url, "Older and newer meals", previous="Newer", next="Older") }}
 {% endblock %}

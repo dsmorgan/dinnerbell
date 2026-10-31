@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from datetime import date
 
+import pytest
 from fastapi.testclient import TestClient
 
 from dinnerbell.config import Settings
@@ -12,6 +13,7 @@ from dinnerbell.db.models import AuditRow, CatalogItemRow, TagRow
 from dinnerbell.web.routes.catalog import last_eaten_label
 from tests.conftest import invite, page, sign_in
 from tests.support.fake_oidc import FakeProvider
+from tests.support.pages import inline_code
 from tests.support.web import add_item, submit
 from tests.test_admin import sign_in_as
 from tests.test_auth_flow import member, rows
@@ -388,3 +390,56 @@ def test_a_slash_path_does_not_dodge_the_auth_rate_limit(client: TestClient) -> 
     statuses = [client.get("/auth/login/", follow_redirects=False).status_code for _ in range(30)]
     assert 429 in statuses
     assert client.get("/auth/login", follow_redirects=False).status_code == 429
+
+
+def test_the_catalog_pages_and_keeps_the_search(
+    client: TestClient, provider: FakeProvider, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dinnerbell.web.routes import catalog
+
+    monkeypatch.setattr(catalog, "ITEMS_PER_PAGE", 2)
+    sign_in(client, provider)
+    for name in ("Anchor", "Bistro", "Cantina", "Diner", "Eatery"):
+        add_item(client, name, cuisines="Thai")
+    add_item(client, "Falafel Hut", kind="home", cuisines="Lebanese")
+    shown = lambda html: [n for n in ("Anchor", "Bistro", "Cantina", "Diner", "Eatery", "Falafel Hut") if n in html]  # noqa: E731
+
+    first = page(client.get("/catalog"))
+    assert shown(first) == ["Anchor", "Bistro"] and "6 active items" in first
+    assert "Page 1 of 3" in first and 'rel="next" href="/catalog?page=2"' in first and 'rel="prev"' not in first
+    last = page(client.get("/catalog?page=3"))
+    assert shown(last) == ["Eatery", "Falafel Hut"] and 'rel="prev" href="/catalog?page=2"' in last
+    assert 'rel="next"' not in last
+
+    # Filters carry over to the page links, normalized; bogus values drop out.
+    filtered = page(client.get("/catalog?q=a&kind=restaurant&mode=bogus&status=all"))
+    assert "5 matches" in filtered and shown(filtered) == ["Anchor", "Bistro"]
+    assert 'href="/catalog?q=a&kind=restaurant&status=all&page=2"' in filtered
+    assert 'href="/catalog?q=a&kind=restaurant&status=all&page=3"' not in filtered
+    second = page(client.get("/catalog?q=a&kind=restaurant&status=all&page=2"))
+    assert shown(second) == ["Cantina", "Diner"]
+    assert 'rel="prev" href="/catalog?q=a&kind=restaurant&status=all"' in second
+
+    # A page past either end shows the nearest page; too few matches for two pages, no pager.
+    assert shown(page(client.get("/catalog?page=99"))) == ["Eatery", "Falafel Hut"]
+    assert shown(page(client.get("/catalog?page=-1"))) == ["Anchor", "Bistro"]
+    single = page(client.get("/catalog?kind=home&page=5"))
+    assert shown(single) == ["Falafel Hut"] and 'class="pager"' not in single and "1 match " in single
+
+
+def test_catalog_page_links_swap_only_the_results(
+    client: TestClient, provider: FakeProvider, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dinnerbell.web.routes import catalog
+
+    monkeypatch.setattr(catalog, "ITEMS_PER_PAGE", 1)
+    sign_in(client, provider)
+    add_item(client, "Anchor")
+    add_item(client, "Bistro")
+    html = client.get("/catalog?q=", headers={"HX-Request": "true"}).text
+    link = html.split('rel="next"', 1)[1].split(">", 1)[0]
+    assert 'href="/catalog?page=2"' in link and 'hx-get="/catalog?page=2"' in link
+    assert 'hx-target="#results"' in link and 'hx-select="#results"' in link and 'hx-push-url="true"' in link
+    assert inline_code(html)[1] == []
+    swapped = client.get("/catalog?page=2", headers={"HX-Request": "true"}).text
+    assert 'id="results"' in swapped and "Bistro" in swapped and "Anchor" not in swapped
