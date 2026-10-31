@@ -26,8 +26,8 @@ features:
     # Socket Mode delivers commands over the WebSocket, so no url field is
     # needed. Slack's manifest reference lists url as optional.
     - command: /dinnerbell
-      description: Start or call off a call, or open your preferences, the catalog, or history
-      usage_hint: "[call | offer | log | cancel | prefs | catalog | history | version | help]"
+      description: Start, offer, log, or call off a meal, see the schedule, or open your preferences
+      usage_hint: "[call | offer | log | cancel | schedule | prefs | catalog | history | version | help]"
       should_escape: false
 
 oauth_config:

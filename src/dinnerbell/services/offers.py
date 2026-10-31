@@ -510,16 +510,30 @@ async def leave(db: AsyncSession, actor: Member, event_id: int, *, run: int | No
         return await _leave_locked(db, actor, await _offer_context(db, event, run, actor), now)
 
 
-async def toggle_join(db: AsyncSession, actor: Member, event_id: int, *, run: int | None = None, now: datetime) -> Seat:
-    """**Count me in** on the shared offer message: join, or drop out if already in, reading
-    the member's answer under the offer's lock, so a double tap ends where it started.
-    Whoever made the offer is always in; their tap changes nothing."""
+async def drop_guest(db: AsyncSession, actor: Member, event_id: int, *, run: int | None = None, now: datetime) -> Seat:
+    """**-1 guest**: one guest fewer, as lowering the number on the web does (#149). Their needs
+    go with the last one. Refused when the member brings none."""
+    async with locked_event(db, actor.household_id, event_id, now) as event:
+        before = await _offer_context(db, event, run, actor)
+        mine = before.response_of(actor.id)
+        if mine is None or not mine.is_in or not mine.guests:
+            raise EventRuleViolation(NO_GUESTS, code="no_guests")
+        guests = mine.guests - 1
+        needs = mine.guest_needs if guests else frozenset()
+        return await _join_locked(db, actor, before, guests=guests, guest_needs=needs, now=now)
+
+
+NO_GUESTS = "You're not bringing any guests to this one."
+
+
+async def count_me_in(db: AsyncSession, actor: Member, event_id: int, *, run: int | None = None, now: datetime) -> Seat:
+    """**Count me in** on the shared offer message: join, or, for someone in already, change
+    nothing (#149). Dropping out is **Can't make it**, so a double tap can't undo a join.
+    Reads the member's answer under the offer's lock."""
     async with locked_event(db, actor.household_id, event_id, now) as event:
         before = await _offer_context(db, event, run, actor)
         mine = before.response_of(actor.id)
         if mine is not None and mine.is_in:
-            if event.created_by == actor.id:
-                check_can_join(event, actor)
-                return await _seat(db, event, actor.id)
-            return await _leave_locked(db, actor, before, now)
+            check_can_join(event, actor)
+            return await _seat(db, event, actor.id)
         return await _join_locked(db, actor, before, guests=0, guest_needs=frozenset(), now=now)

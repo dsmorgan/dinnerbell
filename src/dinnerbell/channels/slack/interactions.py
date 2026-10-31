@@ -273,7 +273,7 @@ class Recent:
             self.toggles.pop(tap, None)
 
 
-TOGGLES = frozenset({ids.VOTE, ids.JOIN_OFFER, *ids.OFFER})
+TOGGLES = frozenset({ids.VOTE, *ids.OFFER})
 """The buttons on a shared message that flip: a repeat undoes the first tap."""
 
 
@@ -1426,7 +1426,8 @@ class Interactions:
         async with self.sessionmaker() as db:
             await calls.cancel_call(db, member, event_id, note=reason, run=run, now=self.clock())
             view = await event_views.event_view(db, member, event_id, now=self.clock())
-        return CALLED_OFF.format(slot=view.event.slot.value, day=day_label(view.event.day))
+        what = f"the {view.event.slot.value} offer" if view.event.is_offer else view.event.slot.value
+        return CALLED_OFF.format(slot=what, day=day_label(view.event.day))
 
     # Feedback (FR-45 to FR-49) -----------------------------------------------------------------
 
@@ -1456,7 +1457,12 @@ class Interactions:
         """**Count me in**, **+1 guest**, or **Can't make it** on an offer, on the shared message or
         Home, for the run it names. The reply says where the member stands now."""
         event_id, run = ids.parse_card(value)
-        use_case = {ids.JOIN_OFFER: offers.toggle_join, ids.ADD_GUEST: offers.add_guest, ids.LEAVE_OFFER: offers.leave}
+        use_case = {
+            ids.JOIN_OFFER: offers.count_me_in,
+            ids.ADD_GUEST: offers.add_guest,
+            ids.DROP_GUEST: offers.drop_guest,
+            ids.LEAVE_OFFER: offers.leave,
+        }
         async with self.sessionmaker() as db:
             seat = await use_case[action_id](db, member, event_id, run=run, now=self.clock())
         return seat_reply(seat)
@@ -1846,7 +1852,8 @@ class Interactions:
 
     async def _cancel_command(self, source: Source, args: list[str]) -> None:
         """``cancel [breakfast|lunch|dinner] [day] [reason]``: call off that call, or today's only
-        open one."""
+        open one. An open offer the member may call off counts too (#149), in a slot with no open
+        call: a call comes first in its slot, as before offers counted."""
         member = await self._member(source)
         if member is None:
             return
@@ -1860,18 +1867,29 @@ class Interactions:
                 slot, day, reason = parse_cancel_args(args, today, command=self.command)
                 on = day or today
                 found = await event_views.calls_on(db, member, on)
+                offered = await event_views.offers_on(db, member, on)
             when = "today" if on == today else f"on {day_label(on)}"
+            open_calls = {event.slot for event in found if event.state.is_open}
+            offered = [event for event in offered if event.slot not in open_calls]  # the call comes first
             if slot is not None:
                 found = [event for event in found if event.slot is slot]
+                theirs = [event for event in offered if event.slot is slot]
+                if slot not in open_calls and theirs:
+                    if len(theirs) > 1:
+                        raise EventRuleViolation(MANY_OFFERS.format(slot=slot.value, when=when), code="many_offers")
+                    found = theirs
                 if not found:
                     raise EventRuleViolation(f"There's no {slot.value} call {when}.", code="no_call")
             else:
-                found = [event for event in found if event.state.is_open]
+                found = [event for event in found if event.state.is_open] + offered
                 if not found:
                     raise EventRuleViolation(NO_OPEN_CALL.format(when=when), code="no_call")
                 if len(found) > 1:
                     named = "" if on == today else f" {on.isoformat()}"
-                    return which_call([event.slot for event in found], when=when, command=self.command, day=named)
+                    slots = [s for s in Slot if any(event.slot is s for event in found)]  # in the order of the day
+                    if len(slots) == 1:  # two offers in one slot
+                        raise EventRuleViolation(MANY_OFFERS.format(slot=slots[0].value, when=when), code="many_offers")
+                    return which_call(slots, when=when, command=self.command, day=named)
             return await self._cancel(member, found[0].id, reason, None)
 
         await self._run(source, member, work)
@@ -1922,8 +1940,8 @@ HELP = (
     "*Dinnerbell* helps the household decide what to eat.\n"
     "• `{command} call` starts a dinner call for today. Add `breakfast` or `lunch`, `tomorrow`, or a date "
     "like `2026-10-24`. A later day's call posts at its usual time that day; add `now` to post it now.\n"
-    "• `{command} cancel` calls off today's call. Add `breakfast`, `lunch`, or `dinner`, a day, and a reason, "
-    "like `{command} cancel dinner Pizza at Grandma's`.\n"
+    "• `{command} cancel` calls off today's call, or your offer. Add `breakfast`, `lunch`, or `dinner`, a day, "
+    "and a reason, like `{command} cancel dinner Pizza at Grandma's`.\n"
     "• `{command} prefs` links to your preferences.\n"
     "• `{command} catalog` and `{command} history` link to the catalog and meal history.\n"
     "• `{command} version` says which version of Dinnerbell is answering.\n"
@@ -1942,7 +1960,11 @@ POST_WORDS = frozenset({"now", "early"})
 CANCEL_USAGE = (
     "Try `{command} cancel`, `{command} cancel lunch`, or `{command} cancel dinner tomorrow Pizza at Grandma's`."
 )
-NO_OPEN_CALL = "There's no open call to call off {when}."
+NO_OPEN_CALL = "There's no open call or offer to call off {when}."
+MANY_OFFERS = (
+    "You can call off more than one {slot} offer {when}. "
+    "Use Call it off on the one you mean, in the channel or on Home."
+)
 WHICH_CALL = "{open} are {all} open {when}. Which one? Try {tries}, and add a reason after it if you like."
 
 
@@ -2055,7 +2077,7 @@ def seat_reply(seat: offers.Seat) -> str:
     if not seat.joined:
         return f"Got it: you're not joining {seat.item_name}. {left}"
     guests = f" with {seat.guests} guest{'' if seat.guests == 1 else 's'}" if seat.guests else ""
-    return f"You're in for {seat.item_name}{guests}. {left} Tap Count me in again to drop out."
+    return f"You're in for {seat.item_name}{guests}. {left} To drop out, tap Can't make it."
 
 
 def posted_offer_reply(posted: offers.Posted) -> str:
