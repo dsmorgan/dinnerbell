@@ -16,7 +16,7 @@
    the greeting reads, in narrow characters, rounded up; the greeting shrinks to fit beside a den
    of about 120 px, down to 1.15rem, then wraps, and the den narrows to 96 px. */
 .greeting {
-  container-type: inline-size;
+  container: greeting / inline-size;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -29,6 +29,9 @@
   margin: 0;
   overflow-wrap: anywhere;
   font-size: clamp(1.15rem, (100cqi - 148px) / (var(--fit, 12) * 0.6), 1.6rem);
+}
+@supports not (width: 1cqi) {
+  .greeting h1 { font-size: 1.6rem; }
 }
 .greeting[data-fit="8"] { --fit: 8; }
 .greeting[data-fit="10"] { --fit: 10; }
@@ -58,9 +61,13 @@ body[data-period="dinner"] { --den-sky1: #6b5a9e; --den-sky2: #f39a6b; }
 body[data-period="late"] { --den-sky1: #121735; --den-sky2: #2f2a5a; }
 
 /* The den: his nook (straw, bowl, and the bell over it) on the left, floor, and his wheel on the
-   right. Decorative, and taps pass through it. */
+   right. Decorative, and taps pass through it. It isolates its layers, so nothing in it paints
+   over the sticky top bar when the page scrolls, and it's a container, so his spots fit a narrow
+   den. */
 .den {
   position: relative;
+  isolation: isolate;
+  container: den / inline-size;
   flex: 1 1 0;
   min-width: 96px;
   max-width: 520px;
@@ -184,24 +191,24 @@ body[data-season="spring"] .edge-wx i { width: 1.4px; height: 13px; background: 
 .den-wx i:nth-child(10) { left: 76%; top: 14%; }
 .den-wx i:nth-child(11) { left: 11%; top: 55%; }
 .den-wx i:nth-child(12) { left: 40%; top: 36%; }
-.edge-wx i:nth-child(1) { left: max(1px, (100% - 40rem) / 2 * 0.05 + 2px); top: 11%; }
-.edge-wx i:nth-child(2) { right: max(1px, (100% - 40rem) / 2 * 0.42 + 7px); top: 48%; }
-.edge-wx i:nth-child(3) { left: max(1px, (100% - 40rem) / 2 * 0.79 + 12px); top: 85%; }
-.edge-wx i:nth-child(4) { right: max(1px, (100% - 40rem) / 2 * 0.31 + 6px); top: 27%; }
-.edge-wx i:nth-child(5) { left: max(1px, (100% - 40rem) / 2 * 0.68 + 11px); top: 64%; }
-.edge-wx i:nth-child(6) { right: max(1px, (100% - 40rem) / 2 * 0.20 + 5px); top: 6%; }
-.edge-wx i:nth-child(7) { left: max(1px, (100% - 40rem) / 2 * 0.57 + 10px); top: 43%; }
-.edge-wx i:nth-child(8) { right: max(1px, (100% - 40rem) / 2 * 0.09 + 4px); top: 80%; }
-.edge-wx i:nth-child(9) { left: max(1px, (100% - 40rem) / 2 * 0.46 + 9px); top: 22%; }
-.edge-wx i:nth-child(10) { right: max(1px, (100% - 40rem) / 2 * 0.83 + 3px); top: 59%; }
-.edge-wx i:nth-child(11) { left: max(1px, (100% - 40rem) / 2 * 0.35 + 8px); top: 1%; }
-.edge-wx i:nth-child(12) { right: max(1px, (100% - 40rem) / 2 * 0.72 + 2px); top: 38%; }
-.edge-wx i:nth-child(13) { left: max(1px, (100% - 40rem) / 2 * 0.24 + 7px); top: 75%; }
-.edge-wx i:nth-child(14) { right: max(1px, (100% - 40rem) / 2 * 0.61 + 12px); top: 17%; }
-.edge-wx i:nth-child(15) { left: max(1px, (100% - 40rem) / 2 * 0.13 + 6px); top: 54%; }
-.edge-wx i:nth-child(16) { right: max(1px, (100% - 40rem) / 2 * 0.50 + 11px); top: 91%; }
-.edge-wx i:nth-child(17) { left: max(1px, (100% - 40rem) / 2 * 0.87 + 5px); top: 33%; }
-.edge-wx i:nth-child(18) { right: max(1px, (100% - 40rem) / 2 * 0.39 + 10px); top: 70%; }
+.edge-wx i:nth-child(1) { left: max(1px, (100% - 40rem) / 2 * 0.05); top: 11%; }
+.edge-wx i:nth-child(2) { right: max(6px, (100% - 40rem) / 2 * 0.42); top: 48%; }
+.edge-wx i:nth-child(3) { left: max(11px, (100% - 40rem) / 2 * 0.79); top: 85%; }
+.edge-wx i:nth-child(4) { right: max(5px, (100% - 40rem) / 2 * 0.31); top: 27%; }
+.edge-wx i:nth-child(5) { left: max(10px, (100% - 40rem) / 2 * 0.68); top: 64%; }
+.edge-wx i:nth-child(6) { right: max(4px, (100% - 40rem) / 2 * 0.20); top: 6%; }
+.edge-wx i:nth-child(7) { left: max(9px, (100% - 40rem) / 2 * 0.57); top: 43%; }
+.edge-wx i:nth-child(8) { right: max(3px, (100% - 40rem) / 2 * 0.09); top: 80%; }
+.edge-wx i:nth-child(9) { left: max(8px, (100% - 40rem) / 2 * 0.46); top: 22%; }
+.edge-wx i:nth-child(10) { right: max(2px, (100% - 40rem) / 2 * 0.83); top: 59%; }
+.edge-wx i:nth-child(11) { left: max(7px, (100% - 40rem) / 2 * 0.35); top: 1%; }
+.edge-wx i:nth-child(12) { right: max(1px, (100% - 40rem) / 2 * 0.72); top: 38%; }
+.edge-wx i:nth-child(13) { left: max(6px, (100% - 40rem) / 2 * 0.24); top: 75%; }
+.edge-wx i:nth-child(14) { right: max(11px, (100% - 40rem) / 2 * 0.61); top: 17%; }
+.edge-wx i:nth-child(15) { left: max(5px, (100% - 40rem) / 2 * 0.13); top: 54%; }
+.edge-wx i:nth-child(16) { right: max(10px, (100% - 40rem) / 2 * 0.50); top: 91%; }
+.edge-wx i:nth-child(17) { left: max(4px, (100% - 40rem) / 2 * 0.87); top: 33%; }
+.edge-wx i:nth-child(18) { right: max(9px, (100% - 40rem) / 2 * 0.39); top: 70%; }
 
 /* Dinnerbone. .den-ham places him and holds the pose; the svg inside faces him. Facing right
    unless a pose turns him toward his bowl. */
@@ -219,6 +226,7 @@ body[data-period="dinner"] .ham .acc-apron,
 body[data-season="winter"] .ham .ham-collar,
 body[data-period="late"] .ham .acc-hat { display: none; }
 .den-zzz { position: absolute; left: 22px; top: -6px; display: none; font: 900 0.6rem/1 system-ui, sans-serif; color: var(--text); opacity: 0.75; }
+body[data-period="late"] .den-zzz { color: #f6efd8; opacity: 0.9; }
 .den-zzz i { display: inline-block; font-style: normal; }
 
 /* The poses. */
@@ -235,6 +243,15 @@ body[data-period="late"] .ham .acc-hat { display: none; }
 .den[data-pose="laps"] .den-ham { left: clamp(52px, 50% - 15px, 100% - 72px); transform: rotate(10deg); }
 .den[data-pose="wheel"] .den-ham { left: calc(100% - 35px); transform: translateY(-7px) scale(0.7); }
 
+/* A narrow den, beside a long name: the wheel goes unless he's in it, so he has floor to stand on
+   that isn't the bowl or the wheel. */
+@container den (max-width: 130px) {
+  .den:not([data-pose="wheel"]) .den-wheel,
+  .den:not([data-pose="wheel"]) .den-spokes,
+  .den:not([data-pose="wheel"]) .den-cap-wheel { display: none; }
+  .den[data-pose="potter"] .den-ham, .den[data-pose="laps"] .den-ham { left: 52px; }
+}
+
 /* Motion, only for people who haven't asked for less. */
 @media (prefers-reduced-motion: no-preference) {
   .den[data-pose="wheel"] .den-spokes { animation: den-spin 0.7s linear infinite; }
@@ -245,7 +262,7 @@ body[data-period="late"] .ham .acc-hat { display: none; }
   .den[data-pose="eat"] .ham-cheek { animation: den-stuff 3.4s ease-in-out infinite; }
   .den[data-pose="wait"] .den-ham { animation: den-look 4s ease-in-out infinite; }
   .den[data-pose="laps"] .den-ham { animation: den-sniff 3s ease-in-out infinite; }
-  .den[data-pose="potter"] .den-ham { animation: den-potter 12s ease-in-out infinite; }
+  .den[data-pose="potter"] .den-ham { left: 52px; animation: den-potter 12s ease-in-out infinite; }
   .den[data-pose="potter"] .ham { animation: den-potter-face 12s step-end infinite; }
   .den-zzz i { animation: den-zzz 3s ease-in-out infinite; }
   .den-zzz i:nth-child(2) { animation-delay: 1.5s; }
@@ -255,7 +272,9 @@ body[data-period="late"] .ham .acc-hat { display: none; }
   .den-wx i { animation: den-fall 6s linear infinite; }
   body[data-season="spring"] .den-wx i { animation: den-rain 0.8s linear infinite; }
   .edge-wx i { animation: den-edge-fall 14s linear infinite; }
+  .edge-wx i:nth-child(even) { animation-name: den-edge-fall-in; }
   body[data-season="spring"] .edge-wx i { animation: den-edge-rain 1.6s linear infinite; }
+  body[data-season="spring"] .edge-wx i:nth-child(even) { animation-name: den-edge-rain-in; }
   .den-wx i:nth-child(1) { top: -10px; animation-delay: -0.0s; animation-duration: 4.0s; }
   body[data-season="spring"] .den-wx i:nth-child(1) { animation-duration: 0.6s; }
   .den-wx i:nth-child(2) { top: -10px; animation-delay: -2.3s; animation-duration: 5.6s; }
@@ -307,12 +326,15 @@ body[data-period="late"] .ham .acc-hat { display: none; }
 @keyframes den-stuff { 0%, 100% { transform: scale(1); } 55%, 80% { transform: scale(1.45); } }
 @keyframes den-look { 0%, 60%, 100% { transform: rotate(7deg); } 70%, 90% { transform: rotate(-4deg); } }
 @keyframes den-sniff { 0%, 70%, 100% { transform: rotate(10deg); } 78%, 92% { transform: rotate(16deg); } 85% { transform: rotate(8deg); } }
-@keyframes den-potter { 0%, 8% { left: 52px; } 42%, 50% { left: calc(100% - 72px); } 92%, 100% { left: 52px; } }
+@keyframes den-potter { 0%, 8% { transform: none; } 42%, 50% { transform: translateX(max(0px, 100cqi - 124px)); } 92%, 100% { transform: none; } }
 @keyframes den-potter-face { 0% { transform: none; } 46% { transform: scaleX(-1); } 96% { transform: none; } }
 @keyframes den-zzz { 0% { transform: translate(0, 0); opacity: 0; } 30% { opacity: 1; } 100% { transform: translate(6px, -10px); opacity: 0; } }
 @keyframes den-twinkle { 50% { filter: brightness(0.8); } }
 @keyframes den-ripple { from { transform: scale(0.2); opacity: 1; } to { transform: scale(1.3); opacity: 0; } }
 @keyframes den-fall { from { transform: translate(0, 0) rotate(0); } to { transform: translate(8px, 64px) rotate(300deg); } }
 @keyframes den-rain { from { transform: translate(0, 0); } to { transform: translate(-6px, 64px); } }
-@keyframes den-edge-fall { from { transform: translate(0, 0) rotate(0); } to { transform: translate(14px, 110vh) rotate(320deg); } }
-@keyframes den-edge-rain { from { transform: translate(0, 0); } to { transform: translate(-30px, 110vh); } }
+/* The left margin's drift right, toward the page; the right margin's (even children) drift left. */
+@keyframes den-edge-fall { from { transform: translate(0, 0) rotate(0); } to { transform: translate(10px, 110vh) rotate(320deg); } }
+@keyframes den-edge-fall-in { from { transform: translate(0, 0) rotate(0); } to { transform: translate(-10px, 110vh) rotate(-320deg); } }
+@keyframes den-edge-rain { from { transform: translate(0, 0); } to { transform: translate(6px, 110vh); } }
+@keyframes den-edge-rain-in { from { transform: translate(0, 0); } to { transform: translate(-6px, 110vh); } }
