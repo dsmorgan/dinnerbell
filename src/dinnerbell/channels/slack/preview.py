@@ -451,6 +451,17 @@ NOTIFICATIONS: dict[str, Callable[[], note.Notification]] = {
     "assignment_made_assigned_handed_off": lambda: note.AssignmentMade(
         replace(DECIDED, coordinator=KIM), 36, SAM, (AssignmentRole.COOK,), DECISION, assigned_by=ALEX
     ),
+    "coordinating_given": lambda: note.CoordinatingGiven(event(coordinator=KIM), KIM, ALEX, ROLES_DUE),
+    "coordinating_given_late": lambda: note.CoordinatingGiven(
+        replace(VOTING, coordinator=KIM), KIM, ALEX, ROLES_DUE, late=True
+    ),
+    "coordinating_given_for_guest": lambda: note.CoordinatingGiven(
+        event(coordinator=PAT), PAT, ALEX, ROLES_DUE, via=KIM
+    ),
+    "assignment_ended": lambda: note.AssignmentEnded(DECIDED, SAM, (AssignmentRole.COOK,), ALEX, ROLES_DUE),
+    "assignment_ended_for_guest": lambda: note.AssignmentEnded(
+        DECIDED, PAT, (AssignmentRole.PICKUP,), ALEX, ROLES_DUE, via=KIM
+    ),
     "roles_to_choose": lambda: note.RolesToChoose(DECIDED, ALEX, PENDING_DECISION, ROLES_DUE),
     "picks_shuffled": lambda: note.PicksShuffled(SHUFFLED_VOTING, ALEX, 2, 1),
     "feedback_reminder": lambda: note.FeedbackReminder(
@@ -535,9 +546,11 @@ ADJUST_VIEW = replace(
 )
 """Alex coordinates the decided dinner, Sam's cooking, and Alex may adjust it (spec 5.7)."""
 NOBODY_IN_VIEW = replace(ADJUST_VIEW, roles=replace(ROLES_CHOICE, due_at=None, people=()))
+"""The same, with nobody left in to give the role to: the modal doesn't ask who."""
 ONE_WAY_VIEW = replace(ADJUST_VIEW, roles=replace(ROLES_CHOICE, due_at=None, modes=(Mode.COOK,)))
 """A place with only one way of getting it: Adjust has no How (#154)."""
-"""The same, with nobody left in to give the role to: the modal doesn't ask who."""
+WAY_GONE_VIEW = replace(ADJUST_VIEW, roles=replace(ROLES_CHOICE, due_at=None, modes=(Mode.PICKUP,)))
+"""The catalog dropped the decided way (cook) since: How offers the way left, with none chosen."""
 CALLED_OFF_VIEW = _event_view(EventState.CANCELLED, SAM_RESPONSE, Permissions(restart=True))
 TOMORROW = date(2026, 10, 23)
 _LUNCH = _event_view(EventState.SCHEDULED, None, Permissions(post_now=True, cancel=True))
@@ -689,6 +702,12 @@ VIEWS: dict[str, Callable[[], dict[str, Any]]] = {
     "adjust_modal": lambda: adjust_modal(ADJUST_VIEW, replace(CALL_OFF_ORIGIN, opened=adjust_opened(ADJUST_VIEW))),
     "adjust_modal_one_way": lambda: adjust_modal(
         ONE_WAY_VIEW, replace(CALL_OFF_ORIGIN, opened=adjust_opened(ONE_WAY_VIEW))
+    ),
+    "adjust_modal_way_gone": lambda: adjust_modal(
+        WAY_GONE_VIEW, replace(CALL_OFF_ORIGIN, opened=adjust_opened(WAY_GONE_VIEW))
+    ),
+    "assign_modal_way_gone": lambda: assign_modal(
+        replace(ROLES_VIEW, roles=replace(ROLES_CHOICE, modes=(Mode.PICKUP,))), CALL_OFF_ORIGIN
     ),
     "adjust_modal_nobody_in": lambda: adjust_modal(
         NOBODY_IN_VIEW, replace(CALL_OFF_ORIGIN, opened=adjust_opened(NOBODY_IN_VIEW))

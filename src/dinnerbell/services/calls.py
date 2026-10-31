@@ -54,6 +54,7 @@ from dinnerbell.domain.events import (
     JoinLateFirst,
     Proposal,
     ProposalSource,
+    Response,
     RoleOffer,
     Status,
     Window,
@@ -373,7 +374,7 @@ async def switch_late_joiner(
             return
         await ResponseRepository(db).save(actor.household_id, event.id, new, now)
         if drops_coordinating(event, new):  # switched off, they're out, so they don't coordinate (#154)
-            event = await cc.release_coordinator(db, event, actor, why="taken_off", now=now)
+            event = await cc.release_coordinator(db, event, actor, why="taken_off", now=now, update=False)
         ctx = await load(db, event)
         sent: list[note.Notification] = [cc.call_updated(ctx), cc.proposals_updated(ctx)]
         person = ctx.members[member_id]
@@ -466,26 +467,35 @@ async def hand_off(
         if expect is not None:
             expect(ctx)
         target = handoff_target(ctx, actor, member_id)
-        await set_coordinator(db, event, member_id, now=now)
+        await set_coordinator(db, event, member_id, by=actor, now=now)
         await audit(
             db, actor.household_id, actor, "event.coordinator_handed_off", _target(event), {"to": member_id}, now
         )
         activity.action(db, "hand_off", event, actor, to_member_id=target.id, to_member=target.display_name)
 
 
-async def set_coordinator(db: AsyncSession, event: Event, member_id: int | None, *, now: datetime) -> None:
+async def set_coordinator(
+    db: AsyncSession, event: Event, member_id: int | None, *, by: Member | None = None, now: datetime
+) -> None:
     """Change the coordinator, and the coordinator assignment once decided. Whoever coordinates
     is in (#154, ``with_coordinating``): someone who wasn't is in now, or joins late while
-    voting; once decided, they must be in already (``check_coordinator_in``). The caller checks
-    who may, and audits. The same coordinator again changes nothing and sends nothing."""
+    voting; once decided, they must be in already (``check_coordinator_in``). When ``by``, who
+    handed it off or assigned it, put someone else in that way, they're told
+    (``CoordinatingGiven``). The caller checks who may, and audits. The same coordinator again
+    changes nothing and sends nothing."""
     if member_id == event.coordinator_id:
         return
+    joined: Response | None = None
     if member_id is not None:
-        current = (await load(db, event)).response_of(member_id)
+        before = await load(db, event)
+        current = before.response_of(member_id)
         check_coordinator_in(event, current)
-        joined = with_coordinating(event, current, member_id, now)
+        person = before.members.get(member_id)
+        joined = with_coordinating(event, current, member_id, now, guest=person is not None and person.is_guest)
         if joined is not None:
             await ResponseRepository(db).save(event.household_id, event.id, joined, now)
+        if current is not None and current.is_in:
+            joined = None  # only a changed vote: they were in already
     event = await EventRepository(db).save(replace(event, coordinator_id=member_id), now)
     assignments = AssignmentRepository(db)
     new_assignment = None
@@ -498,6 +508,16 @@ async def set_coordinator(db: AsyncSession, event: Event, member_id: int | None,
             )
     ctx = await load(db, event)
     await publish(db, ctx, *cc.messages_for_state(ctx), now=now)
+    if joined is not None and member_id is not None and by is not None and by.id != member_id:
+        given = note.CoordinatingGiven(
+            cc.event_info(ctx),
+            ctx.person(member_id),
+            ctx.person(by.id),
+            now,
+            late=joined.late,
+            via=cc.answering_for(ctx, member_id),
+        )
+        await publish(db, ctx, given, now=now)
     decision = cc.decision_info(ctx)
     if new_assignment is not None and decision is not None:
         dm = cc.assignment_made(ctx, new_assignment.member_id, new_assignment.id, decision)
@@ -772,12 +792,17 @@ async def change_assignment(
             if response is None or not response.is_in:
                 raise EventRuleViolation("Pick someone who's in.", code="not_in")
             assigned = await repo.assign(actor.household_id, event.id, role, member_id, now)
-        if event.roles_due_at is not None:  # choosing the role ends the coordinator's time to (#87)
+        was_pending = event.roles_due_at is not None
+        if was_pending:  # choosing the role ends the coordinator's time to (#87)
             event = await EventRepository(db).save(replace(event, roles_due_at=None), now)
         ctx = await load(db, event)
         decision = cc.decision_info(ctx)
         await publish(db, ctx, *cc.decision_updated(ctx), now=now)
-        if assigned is not None and decision is not None and event.state is EventState.DECIDED:
+        # News only while the meal is ahead: afterward it corrects the record (#154).
+        ahead = event.state is EventState.DECIDED and cc.before_the_meal(event, now)
+        if ahead and current is not None and not was_pending:
+            await publish(db, ctx, *cc.assignment_ended(ctx, current, (role,), actor, now), now=now)
+        if assigned is not None and decision is not None and ahead:
             await publish(db, ctx, cc.assignment_made(ctx, assigned.member_id, assigned.id, decision), now=now)
         payload = {"role": role.value, "member_id": member_id}
         await audit(db, actor.household_id, actor, "event.assignment_changed", _target(event), payload, now)

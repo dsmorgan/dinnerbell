@@ -1,0 +1,102 @@
+{
+  "blocks": [
+    {
+      "elements": [
+        {
+          "text": "*Dinner · Thursday, Oct 22*",
+          "type": "mrkdwn"
+        }
+      ],
+      "type": "context"
+    },
+    {
+      "text": {
+        "text": "*Sam's Tacos*: pick how to get it and who does it. Anyone who's in can. Someone who didn't offer is told you assigned them.",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "block_id": "mode",
+      "element": {
+        "action_id": "value",
+        "options": [
+          {
+            "text": {
+              "emoji": true,
+              "text": "Pickup",
+              "type": "plain_text"
+            },
+            "value": "pickup"
+          }
+        ],
+        "type": "static_select"
+      },
+      "label": {
+        "emoji": true,
+        "text": "How",
+        "type": "plain_text"
+      },
+      "optional": false,
+      "type": "input"
+    },
+    {
+      "block_id": "who",
+      "element": {
+        "action_id": "value",
+        "initial_option": {
+          "text": {
+            "emoji": true,
+            "text": "Sam",
+            "type": "plain_text"
+          },
+          "value": "2"
+        },
+        "options": [
+          {
+            "text": {
+              "emoji": true,
+              "text": "Alex",
+              "type": "plain_text"
+            },
+            "value": "1"
+          },
+          {
+            "text": {
+              "emoji": true,
+              "text": "Sam",
+              "type": "plain_text"
+            },
+            "value": "2"
+          }
+        ],
+        "type": "static_select"
+      },
+      "label": {
+        "emoji": true,
+        "text": "Who",
+        "type": "plain_text"
+      },
+      "optional": false,
+      "type": "input"
+    }
+  ],
+  "callback_id": "assign_modal",
+  "close": {
+    "emoji": true,
+    "text": "Cancel",
+    "type": "plain_text"
+  },
+  "private_metadata": "{\"event\":7,\"channel\":\"C0DINNER\",\"home\":false,\"run\":1}",
+  "submit": {
+    "emoji": true,
+    "text": "Assign",
+    "type": "plain_text"
+  },
+  "title": {
+    "emoji": true,
+    "text": "Assign roles",
+    "type": "plain_text"
+  },
+  "type": "modal"
+}

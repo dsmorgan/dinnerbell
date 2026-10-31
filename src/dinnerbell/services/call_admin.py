@@ -72,7 +72,7 @@ async def assign_coordinator(
             target = ctx.members.get(member_id)
             if target is None or not target.active or (target.is_guest and not ctx.invited(target.id)):
                 raise NotFound("No such member.")
-        await set_coordinator(db, event, member_id, now=now)
+        await set_coordinator(db, event, member_id, by=actor, now=now)
         payload = {"from": event.coordinator_id, "to": member_id}
         await audit(db, actor.household_id, actor, "event.coordinator_assigned", _target(event), payload, now)
         activity.action(db, "assign_coordinator", event, actor, to_member_id=member_id)

@@ -743,26 +743,37 @@ def check_claim_coordinator(
 
 
 COORDINATOR_NOT_IN = "It's decided, so only someone who's in can coordinate. Pick someone who's in."
+COORDINATOR_TAKEN_OFF = "They're switched off for this call. Switch them back on first."
 
 
 def check_coordinator_in(event: Event, response: Response | None) -> None:
     """Whoever coordinates is in (#154). Taking it on puts them in while the call is open
     (``with_coordinating``), but nobody joins once it's decided (FR-60), so then only someone
-    who's in already can be handed it, or assigned it."""
+    who's in already can be handed it, or assigned it. A late joiner switched off isn't put
+    back by being handed it, as they can't claim it either (``check_claim_coordinator``)."""
+    if response is not None and response.taken_off:
+        raise EventRuleViolation(COORDINATOR_TAKEN_OFF, code="taken_off")
     if event.state is EventState.DECIDED and (response is None or not response.is_in):
         raise EventRuleViolation(COORDINATOR_NOT_IN, code="not_in")
 
 
-def with_coordinating(event: Event, current: Response | None, member_id: int, now: datetime) -> Response | None:
+def with_coordinating(
+    event: Event, current: Response | None, member_id: int, now: datetime, *, guest: bool = False
+) -> Response | None:
     """The answer of whoever takes on coordinating, by claiming it, a hand-off, or an admin
-    (#154): coordinating puts them in. None when they're in already. While answers are open
-    they're in, as tapping In does. While voting they join late, as **I'm in (late)** does, so
-    their guests and stances don't change the picks (FR-60), but their vote counts, as a
-    coordinator's always has; they can switch it off like anyone's. Once decided nobody joins,
-    so ``check_coordinator_in`` refuses anyone who isn't in."""
+    (#154): coordinating puts them in. None when nothing changes. While answers are open
+    they're in, as tapping In does. While voting a member joins late, as **I'm in (late)**
+    does, so their guests and stances don't change the picks (FR-60), but their vote counts, as
+    a coordinator's always has; a late joiner already in gets a counting vote too. They can
+    switch it off like anyone's. A ``guest`` is in, never late: a guest doesn't vote, and their
+    own dietary needs must always hold (FR-57), which a late joiner's don't. Once decided nobody
+    joins, so ``check_coordinator_in`` refuses anyone who isn't in."""
+    voting = event.state is EventState.VOTING
     if current is not None and current.is_in:
+        if voting and current.late and not current.vote_counts and not guest:
+            return replace(current, vote_counts=True)
         return None
-    if event.state is EventState.VOTING:
+    if voting and not guest:
         return replace(with_late_join(current, member_id, now), vote_counts=True)
     return with_status(current, member_id, Status.IN, now)
 

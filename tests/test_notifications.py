@@ -171,6 +171,20 @@ EXAMPLES: list[tuple[n.Notification, str, str | None, str | None, int | None]] =
         KIM.id,  # each switch is its own message, so off, on, and off again all arrive (#76)
     ),
     (
+        n.CoordinatingGiven(EVENT, KIM, ALEX, WHEN),
+        f"event:7:run2:coordinating_given:member{KIM.id}:{int(WHEN.timestamp() * 1_000_000)}",
+        None,
+        None,
+        KIM.id,  # each hand-off is its own message (#154)
+    ),
+    (
+        n.AssignmentEnded(EVENT, PAT, (AssignmentRole.PICKUP,), ALEX, WHEN, via=SAM),
+        f"event:7:run2:assignment_ended:member{PAT.id}:{int(WHEN.timestamp() * 1_000_000)}",
+        None,
+        None,
+        SAM.id,  # a guest without Slack: the member who invited them gets it
+    ),
+    (
         n.RolesToChoose(EVENT, ALEX, DECISION, WHEN),
         f"event:7:run2:roles_to_choose:member{ALEX.id}",
         None,

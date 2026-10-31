@@ -14,9 +14,9 @@ Tap **I'll coordinate** while answers are open or during the vote, when nobody e
 | The call message | While voting |
 | The call's page on the web | While answers are open, and while voting |
 
-**Coordinating puts you in.** If you said Out or Maybe, or hadn't answered, tapping **I'll coordinate** changes your answer to In. During the vote, you join late (FR-60 in the [spec](spec.md#63-proposals-ranking-and-voting)): you're marked late, any guests or eat window on an earlier answer are cleared, and, unlike other late joiners, your vote counts.
+**Coordinating puts you in.** If you said Out or Maybe, or hadn't answered, tapping **I'll coordinate** changes your answer to In. During the vote, you join late (FR-60 in the [spec](spec.md#63-proposals-ranking-and-voting)): you're marked late, any guests or eat window on an earlier answer are cleared, and, unlike other late joiners, your vote counts. If you joined late already, your vote counts from then on. A guest who coordinates is in, but never marked late, so their dietary needs still count.
 
-The same rule applies when someone hands coordinating to you or an admin assigns it to you: you're in from then on. After the decision, only someone who's already in can take over, because nobody joins a meal once it's decided.
+The same rule applies when someone hands coordinating to you or an admin assigns it to you: you're in from then on, and if that changed your answer, you get a message saying so. After the decision, only someone who's already in can take over, because nobody joins a meal once it's decided. Someone the coordinator switched off during the vote can't take it on.
 
 A guest invited to the call can coordinate too, with fewer powers. See [What a guest coordinator can do](#what-a-guest-coordinator-can-do).
 
@@ -64,7 +64,7 @@ You can change any of these until the meal is marked done.
 
 When you switch how you get it, whoever you pick in **Who does it** does it the new way: for example, switching from pickup to delivery with Kim selected makes Kim the one who orders. When the decision leaves the role without a clear owner, because two people offered or nobody did, you get a message with **Assign roles** and 15 minutes to choose (an admin can change the time); after that, the first person who offered does it.
 
-Whoever you assign is told. If they hadn't offered, the message says you assigned them, and that they can ask you to pick someone else. If you hand off in the same save, it names the new coordinator instead.
+Whoever you assign is told, and so is whoever no longer has the role. If they hadn't offered, the message says you assigned them, and that they can ask you to pick someone else. If you hand off in the same save, it names the new coordinator instead. From the meal time on, a change corrects the record and messages nobody.
 
 Contributions and badges count who did what when the meal is marked done, so a correction you make before then is what counts.
 
@@ -72,11 +72,12 @@ Contributions and badges count who did what when the meal is marked done, so a c
 
 | Action | Where | When |
 |---|---|---|
-| Assign, replace, or clear the coordinator | Web | While the call is open; after the decision, only someone who's in |
+| Assign, replace, or clear the coordinator | Web | Once the call is posted, until it's done; after the decision, only someone who's in |
 | Extend or shorten the open window | Web | While answers are open, or while voting |
 | Re-run a call | Web | Once voting has started, or after the call ended |
 | Skip a day's call | Web | Before it goes out, today or up to 7 days ahead |
-| Close a window early, or call off the call | Slack and web | While the call is open |
+| Close a window early | Slack and web | While answers are open, or while voting |
+| Call off the call | Slack and web | Until it's done, including before it posts |
 | Lock a proposal | Slack and web | While voting |
 | Switch how you get it, and assign who does it | Web; in Slack, **Assign roles** while the role waits for a choice | Once decided |
 | Change the meal time, or who cooks, picks up, or orders | Web | Once decided |
@@ -97,6 +98,7 @@ A guest coordinator handles the logistics, but not the choice of meal. They can 
 | The coordinator says Out | They stop coordinating. The call says nobody coordinates, and anyone can tap **I'll coordinate**, which puts them in. |
 | The coordinator says Maybe | They keep coordinating. If they're still a maybe when answers close, they're out, and they stop coordinating. |
 | The coordinator, as a late joiner, is switched off | They're out, so they stop coordinating. |
+| An admin deactivates the coordinator | Nobody coordinates their open calls. |
 | Nobody coordinates after the decision | Nobody can claim it once it's decided. An admin can assign someone who's in, on the web. |
 | Someone assigned can't do it | They can't refuse in the app. They tell the coordinator, who picks someone else with **Adjust**. |
 | An admin removes a guest who had a role | The role is cleared. The coordinator gets a message with **Adjust** to pick someone who's in; with nobody coordinating, each admin gets a message that links the web. |

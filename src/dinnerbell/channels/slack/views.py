@@ -425,8 +425,10 @@ def assign_modal(v: EventView, origin: ids.ViewOrigin) -> dict[str, Any]:
         ),
     ]
     modes = [option(m.label, m.value) for m in choice.modes]
-    current = next(o for o in modes if o["value"] == choice.mode.value)
-    how: Block = {"type": "static_select", "options": modes, "initial_option": current}
+    how: Block = {"type": "static_select", "options": modes}
+    current = next((o for o in modes if o["value"] == choice.mode.value), None)
+    if current is not None:  # the catalog may have dropped the decided way since
+        how["initial_option"] = current
     blocks.append(_input("mode", "How", how, optional=False))
     people = [option(p.name, str(p.id)) for p in choice.people[:MAX_ASSIGN_PEOPLE]]
     volunteers = choice.volunteers.get(choice.mode, ())
@@ -488,7 +490,8 @@ def adjust_modal(v: EventView, origin: ids.ViewOrigin) -> dict[str, Any]:
         raise ValueError("an Adjust modal needs a decided call, with what it opened with")
     item = decision.proposal.item.name
     people = [option(p.name, str(p.id)) for p in choice.people[:MAX_ASSIGN_PEOPLE]]
-    switchable = len(choice.modes) > 1 and opened.mode is not None and bool(people)
+    other_ways = len(choice.modes) > 1 or (bool(choice.modes) and choice.mode not in choice.modes)
+    switchable = other_ways and opened.mode is not None and bool(people)
     what = "the time, how you get it, who does it" if switchable else "the time, who does it"
     blocks: list[Block] = [
         _intro(v),
@@ -498,7 +501,9 @@ def adjust_modal(v: EventView, origin: ids.ViewOrigin) -> dict[str, Any]:
     if switchable:
         modes = [option(m.label, m.value) for m in choice.modes]
         how: Block = {"type": "static_select", "options": modes}
-        how["initial_option"] = next(o for o in modes if o["value"] == choice.mode.value)
+        way = next((o for o in modes if o["value"] == choice.mode.value), None)
+        if way is not None:  # the catalog may have dropped the decided way since
+            how["initial_option"] = way
         blocks.append(_input("mode", "How", how, optional=False))
     if people:
         who: Block = {"type": "static_select", "options": people, "placeholder": plain("Pick someone who's in")}
