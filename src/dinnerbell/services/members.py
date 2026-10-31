@@ -11,6 +11,7 @@ from datetime import datetime
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from dinnerbell.db.events import EventRepository
 from dinnerbell.db.repositories import MemberRepository, SessionRepository
 from dinnerbell.domain.members import (
     Capabilities,
@@ -24,6 +25,7 @@ from dinnerbell.domain.members import (
     normalize_email,
     normalize_slack_user_id,
 )
+from dinnerbell.services import call_context as cc
 from dinnerbell.services import guests
 from dinnerbell.services.common import audit, require_admin
 from dinnerbell.services.errors import NotFound
@@ -152,10 +154,22 @@ async def set_member_active(db: AsyncSession, actor: Member, member_id: int, act
     await _ensure_an_admin_remains(db, actor.household_id)
     if not active:
         await SessionRepository(db).delete_for_member(target.id)
+        await _stop_coordinating(db, actor, target, now)
     action = "member.reactivated" if active else "member.deactivated"
     await audit(db, actor.household_id, actor, action, f"member:{updated.id}", {}, now)
     await db.commit()
     return updated
+
+
+async def _stop_coordinating(db: AsyncSession, actor: Member, target: Member, now: datetime) -> None:
+    """A deactivated member coordinates nothing (#154): every open call they coordinate has
+    nobody coordinating, so the admin's powers for that case, and **I'll coordinate**, work."""
+    events = EventRepository(db)
+    for event_id in await events.open_ids(actor.household_id):
+        event = await events.get(actor.household_id, event_id)
+        if event is not None and event.coordinator_id == target.id:
+            await events.lock(actor.household_id, event_id, now)
+            await cc.release_coordinator(db, event, actor, why="deactivated", now=now)
 
 
 async def set_slack_user(

@@ -379,7 +379,7 @@ async def test_with_a_hand_off_the_new_assignee_hears_once_and_after_it(house: H
     assert told.event.coordinator is not None and told.event.coordinator.id == house["Alex"].id
     text = json.dumps(render(told, CTX).payload())
     # Alex decides now, so Lee is told to ask Alex, not Sam (#154).
-    assert "Sam assigned you this. If it doesn't work for you, tell Alex, who's coordinating now" in text
+    assert "Sam assigned you this. If it doesn't work for you, tell Alex, who's coordinating and" in text
     assert "can pick someone else with *Adjust*" in text
 
 

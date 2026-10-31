@@ -647,6 +647,24 @@ async def publish(db: AsyncSession, ctx: CallContext, *notifications: note.Notif
         await outbox.enqueue(ctx.event.household_id, ctx.event.id, notification, now)
 
 
+def before_the_meal(event: Event, now: datetime) -> bool:
+    """Whether the meal is still ahead: who does what is news to send. After the meal time, a
+    change corrects the record of who did it, and messages nobody (#154)."""
+    return event.meal_time is None or now < event.meal_time
+
+
+def assignment_ended(
+    ctx: CallContext, member_id: int, roles: tuple[AssignmentRole, ...], by: Member, now: datetime
+) -> list[note.Notification]:
+    """The direct message to ``member_id``, whose ``roles`` went to someone else or whose way of
+    getting it was switched (#154): none for whoever made the change, or someone inactive."""
+    member = ctx.members.get(member_id)
+    if member is None or not member.active or member_id == by.id:
+        return []
+    person, via = ctx.person(member_id), answering_for(ctx, member_id)
+    return [note.AssignmentEnded(event_info(ctx), person, roles, ctx.person(by.id), now, via=via)]
+
+
 def messages_for_state(ctx: CallContext) -> list[note.Notification]:
     """Updates for every message that shows the event: the call (or the offer), and the
     proposals or decision."""
@@ -661,16 +679,17 @@ async def release_coordinator(
     db: AsyncSession, event: Event, actor: Member | None, *, why: str, now: datetime, update: bool = True
 ) -> Event:
     """Nobody coordinates ``event`` any more, because its coordinator is out (#154,
-    ``domain.events.drops_coordinating``): ``why`` is ``out``, ``taken_off``, or ``maybe`` (a
-    maybe when answers closed). The call's messages update, as when an admin sets it to nobody,
-    so anyone who's in can claim it; ``update`` False leaves that to a caller that updates them
-    anyway. Audited as ``event.coordinator_released``, with ``actor`` whoever changed the answer
-    (None for the scheduler). Returns the event as saved."""
+    ``domain.events.drops_coordinating``), or was deactivated: ``why`` is ``out``,
+    ``taken_off``, ``maybe`` (a maybe when answers closed), or ``deactivated``. The call's
+    messages update, as when an admin sets it to nobody, so anyone who's in can claim it;
+    ``update`` False leaves that to a caller that updates them anyway. Audited as
+    ``event.coordinator_released``, with ``actor`` whoever changed the answer or deactivated
+    them (None for the scheduler). Returns the event as saved."""
     member_id = event.coordinator_id
     if member_id is None:  # pragma: no cover - callers check there's a coordinator to release
         return event
     event = await EventRepository(db).save(replace(event, coordinator_id=None), now)
-    if event.state is EventState.DECIDED:  # pragma: no cover - nobody answers once it's decided
+    if event.state is EventState.DECIDED:  # a deactivated coordinator's
         await AssignmentRepository(db).unassign(event.household_id, event.id, AssignmentRole.COORDINATOR)
     if update:
         ctx = await load(db, event)

@@ -686,6 +686,58 @@ class LateJoinChanged(_Notification):
 
 
 @dataclass(frozen=True, slots=True)
+class CoordinatingGiven(_Notification):
+    """Someone (``by``) handed ``member`` coordinating, or an admin assigned it, before the
+    decision, and that put them in (#154): one direct message, so being in isn't a surprise.
+    ``at`` keeps each hand-off its own row."""
+
+    kind: ClassVar[str] = "coordinating_given"
+    event: EventInfo
+    member: PersonInfo
+    by: PersonInfo
+    at: datetime
+    late: bool = False
+    """They joined late, as voting had started."""
+    via: PersonInfo | None = None
+    """For a guest without Slack (#38), the member who invited them, who gets the message."""
+
+    @property
+    def idempotency_key(self) -> str:
+        stamp = int(self.at.timestamp() * 1_000_000)
+        return f"{self.event.key}:{self.kind}:member{self.member.id}:{stamp}"
+
+    @property
+    def recipient_id(self) -> int | None:
+        return self.via.id if self.via is not None else self.member.id
+
+
+@dataclass(frozen=True, slots=True)
+class AssignmentEnded(_Notification):
+    """The coordinator, or an admin (``by``), gave ``member``'s role to someone else, or switched
+    the way of getting the meal, before the meal time (#154): one direct message, so nobody
+    shops or drives for nothing. ``roles`` are the ones they no longer have; ``at`` keeps each
+    change its own row."""
+
+    kind: ClassVar[str] = "assignment_ended"
+    event: EventInfo
+    member: PersonInfo
+    roles: tuple[AssignmentRole, ...]
+    by: PersonInfo
+    at: datetime
+    via: PersonInfo | None = None
+    """For a guest without Slack (#38), the member who invited them, who gets the message."""
+
+    @property
+    def idempotency_key(self) -> str:
+        stamp = int(self.at.timestamp() * 1_000_000)
+        return f"{self.event.key}:{self.kind}:member{self.member.id}:{stamp}"
+
+    @property
+    def recipient_id(self) -> int | None:
+        return self.via.id if self.via is not None else self.member.id
+
+
+@dataclass(frozen=True, slots=True)
 class GuestInvited(_Notification):
     """A member invited a guest with Slack to a call (#38): one direct message to the guest,
     with In and Out buttons that name the run, like the reminder's."""
@@ -947,6 +999,8 @@ Notification = Union[  # noqa: UP007 - a runtime union, used for isinstance chec
     RoleVacated,
     LinkNeeded,
     LateJoinChanged,
+    CoordinatingGiven,
+    AssignmentEnded,
     RolesToChoose,
     PicksShuffled,
     BadgesEarned,
@@ -956,7 +1010,16 @@ NOTIFICATION_TYPES: dict[str, type[Notification]] = {cls.kind: cls for cls in ge
 UPDATE_KINDS = frozenset(kind for kind, cls in NOTIFICATION_TYPES.items() if cls.is_update)
 
 
-CALL_OFF_SUPERSEDES = frozenset({AssignmentMade.kind, ResponseReminder.kind, RolesToChoose.kind, MaybeResolved.kind})
+CALL_OFF_SUPERSEDES = frozenset(
+    {
+        AssignmentMade.kind,
+        ResponseReminder.kind,
+        RolesToChoose.kind,
+        MaybeResolved.kind,
+        CoordinatingGiven.kind,
+        AssignmentEnded.kind,
+    }
+)
 """Direct messages a call-off makes wrong: "You're cooking" or "Are you in?" must never arrive
 after "It's called off". The call-off closes these unsent, and the drainer checks again just
 before sending one."""

@@ -15,10 +15,12 @@ import pytest
 from fastapi.testclient import TestClient
 
 from dinnerbell.channels.slack import ids
+from dinnerbell.channels.slack.messages import render
 from dinnerbell.config import Settings
 from dinnerbell.db.contributions import ContributionRepository
 from dinnerbell.db.models import AssignmentRow, CatalogItemRow, ProposalRow, ResponseRow
-from dinnerbell.domain.catalog import Mode
+from dinnerbell.db.repositories import MemberRepository
+from dinnerbell.domain.catalog import Mode, TagKind
 from dinnerbell.domain.contributions import Kind
 from dinnerbell.domain.events import (
     TAKEN_OFF,
@@ -29,7 +31,8 @@ from dinnerbell.domain.events import (
     Status,
     counted_votes,
 )
-from dinnerbell.services import call_admin, calls, coordinator, event_views, guests
+from dinnerbell.services import call_admin, calls, coordinator, event_views, guests, members
+from dinnerbell.services import call_context as cc
 from dinnerbell.services.coordinator import PLAN_CHANGED, Adjustment, AdjustmentRefused, PartlyAdjusted
 from tests.conftest import invite, page
 from tests.support.calls import RESPOND_BY, VOTE_BY, House
@@ -39,7 +42,7 @@ from tests.support.fake_slack import state
 from tests.support.slack import Slack, wire
 from tests.support.web import add_item, submit
 from tests.test_auth_flow import member, rows
-from tests.test_coordinator import act, add_guest, assigned, open_dinner, pick_ids, sent, to_voting, vote
+from tests.test_coordinator import CTX, act, add_guest, assigned, open_dinner, pick_ids, sent, to_voting, vote
 from tests.test_coordinator import database as database  # the fixtures, re-exported for pytest
 from tests.test_coordinator import house as house
 from tests.test_events_web import admin as admin
@@ -138,6 +141,85 @@ async def test_once_decided_only_someone_in_can_be_given_it(house: House) -> Non
         assert refused.value.code == "not_in"
     assert await answer(house, event_id, "Kim") is None  # nobody joins once it's decided
     assert await coordinator_of(house, event_id) == house["Sam"].id
+
+
+async def test_a_guest_who_coordinates_while_voting_keeps_their_needs(house: House) -> None:
+    """A guest is in, never late, so their own dietary needs still hold (FR-57)."""
+    veg = await house.tag("Vegetarian", TagKind.DIETARY)
+    event_id = await open_dinner(house)
+    async with house.sessionmaker() as db:
+        pat = await MemberRepository(db).add_guest(
+            household_id=house.household.id, display_name="Pat", dietary_needs=frozenset({veg.id}), now=house.clock()
+        )
+        await db.commit()
+    house.people["Pat"] = pat
+    await act(house, guests.invite, house["Sam"], event_id, guest_id=pat.id)
+    await act(house, calls.respond, pat, event_id, Status.OUT)
+    for name in ("Alex", "Sam"):
+        await act(house, calls.respond, house[name], event_id, Status.IN)
+    await act(house, calls.offer_role, house["Alex"], event_id, RoleOffer.PICKUP, True)
+    house.clock.now = RESPOND_BY
+    await house.tick()
+    await act(house, calls.claim_coordinator, pat, event_id)
+    ctx = await house.context(event_id)
+    pats = ctx.response_of(pat.id)
+    assert pats is not None and (pats.status, pats.late) == (Status.IN, False)
+    assert veg.id in ctx.guest_needs
+    assert "Vegetarian" in cc.guest_dietary_notes(ctx)
+
+
+async def test_a_late_joiner_who_takes_it_on_gets_a_counting_vote(house: House) -> None:
+    event_id = await to_voting(house, "Sam", coordinator_name=None)
+    await act(house, calls.join_late, house["Kim"], event_id)
+    assert not (await answer(house, event_id, "Kim")).vote_counts
+    await act(house, calls.claim_coordinator, house["Kim"], event_id)
+    kim = await answer(house, event_id, "Kim")
+    assert (kim.late, kim.vote_counts) == (True, True)
+    assert not await sent(house, "coordinating_given")  # she was in already, and claimed it herself
+
+
+async def test_whoever_is_put_in_by_a_hand_off_is_told(house: House) -> None:
+    event_id = await open_dinner(house)
+    await act(house, calls.respond, house["Kim"], event_id, Status.OUT)
+    await act(house, calls.respond, house["Lee"], event_id, Status.IN)
+    await act(house, calls.claim_coordinator, house["Sam"], event_id)
+    await act(house, calls.hand_off, house["Sam"], event_id, house["Lee"].id)  # in already: nothing new to say
+    assert not await sent(house, "coordinating_given")
+    await act(house, calls.hand_off, house["Lee"], event_id, house["Kim"].id)
+    (told,) = await sent(house, "coordinating_given")
+    assert (told.member.id, told.by.id, told.late) == (house["Kim"].id, house["Lee"].id, False)
+    text = json.dumps(render(told, CTX).payload())
+    assert "Lee gave you coordinating dinner" in text and "so you're in" in text
+
+
+async def test_an_admin_assigning_it_while_voting_says_they_joined_late(house: House) -> None:
+    event_id = await to_voting(house, "Sam", coordinator_name=None)
+    await act(house, call_admin.assign_coordinator, house["Alex"], event_id, house["Kim"].id)
+    (told,) = await sent(house, "coordinating_given")
+    assert (told.member.id, told.late) == (house["Kim"].id, True)
+
+
+async def test_a_late_joiner_switched_off_is_not_handed_it_either(house: House) -> None:
+    event_id = await to_voting(house, "Sam", coordinator_name="Sam")
+    await act(house, calls.join_late, house["Kim"], event_id)
+    await act(house, calls.switch_late_joiner, house["Sam"], event_id, house["Kim"].id, taking_part=False)
+    for use in (
+        lambda: act(house, calls.hand_off, house["Sam"], event_id, house["Kim"].id),
+        lambda: act(house, call_admin.assign_coordinator, house["Alex"], event_id, house["Kim"].id),
+    ):
+        with pytest.raises(EventRuleViolation) as refused:
+            await use()
+        assert refused.value.code == "taken_off"
+    assert (await answer(house, event_id, "Kim")).status is Status.OUT
+
+
+async def test_deactivating_the_coordinator_releases_their_calls(house: House) -> None:
+    event_id = await decided(house)  # Sam coordinates
+    async with house.sessionmaker() as db:
+        await members.set_member_active(db, house["Alex"], house["Sam"].id, False, now=house.clock())
+    assert await coordinator_of(house, event_id) is None
+    assert AssignmentRole.COORDINATOR not in assigned(await house.context(event_id))
+    assert await released(house) == [{"member_id": house["Sam"].id, "why": "deactivated"}]
 
 
 # Out lets it go ---------------------------------------------------------------------------------
@@ -305,6 +387,33 @@ async def test_slack_home_says_coordinating_puts_you_in(slack: Slack, house: Hou
     await slack.click("Kim", "card_coordinate", ids.card_value(event_id, 1), home=True)
     assert "You're in, and coordinating dinner. Thanks for steering!" in json.dumps(slack.last_home("Kim"))
     assert (await answer(house, event_id, "Kim")).status is Status.IN
+
+
+async def test_whoever_loses_a_role_is_told_before_the_meal(house: House) -> None:
+    event_id = await decided(house)  # Alex picks up
+    await adjust(house, replace(opened_as_is(house), assignee_id=house["Lee"].id), event_id)
+    (ended,) = await sent(house, "assignment_ended")
+    assert (ended.member.id, ended.roles, ended.by.id) == (house["Alex"].id, (AssignmentRole.PICKUP,), house["Sam"].id)
+    assert "you're no longer picking up" in json.dumps(render(ended, CTX).payload())
+    # The admin on the web: Lee hears too.
+    await act(house, calls.change_assignment, house["Alex"], event_id, AssignmentRole.PICKUP, house["Sam"].id)
+    assert [n.member.id for n in await sent(house, "assignment_ended")] == [house["Alex"].id, house["Lee"].id]
+
+
+async def test_switching_the_way_for_the_same_person_tells_them_only_the_new_role(house: House) -> None:
+    event_id = await decided(house)
+    await adjust(house, replace(opened_as_is(house), mode=Mode.DELIVERY), event_id)
+    assert not await sent(house, "assignment_ended")
+
+
+async def test_after_the_meal_a_correction_messages_nobody(house: House) -> None:
+    event_id = await decided(house)
+    house.clock.now = AFTER_THE_MEAL
+    made = len(await sent(house, "assignment_made"))
+    await adjust(house, replace(opened_as_is(house), assignee_id=house["Lee"].id), event_id)
+    await act(house, calls.change_assignment, house["Sam"], event_id, AssignmentRole.PICKUP, house["Alex"].id)
+    assert len(await sent(house, "assignment_made")) == made
+    assert not await sent(house, "assignment_ended")
 
 
 # Each step checks its part under the lock ------------------------------------------------------

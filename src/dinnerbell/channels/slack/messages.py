@@ -176,6 +176,10 @@ def _render(notification: note.Notification, ctx: RenderContext) -> Message:
             return link_needed_message(notification, ctx)
         case note.LateJoinChanged():
             return late_join_changed_message(notification, ctx)
+        case note.CoordinatingGiven():
+            return coordinating_given_message(notification, ctx)
+        case note.AssignmentEnded():
+            return assignment_ended_message(notification, ctx)
         case note.RolesToChoose():
             return roles_to_choose_message(notification, ctx)
         case note.PicksShuffled():
@@ -1196,6 +1200,43 @@ def late_join_changed_message(notification: note.LateJoinChanged, ctx: RenderCon
     return _finish(plain, blocks)
 
 
+def coordinating_given_message(notification: note.CoordinatingGiven, ctx: RenderContext) -> Message:
+    """To someone handed coordinating, or assigned it by an admin, who wasn't in (#154):
+    coordinating puts them in, so say so, and whom to tell if it doesn't work."""
+    event, by = notification.event, escape(notification.by.name)
+    slot, day = _slot(event), day_label(event.day)
+    if notification.via is not None:
+        name = escape(notification.member.name)
+        reader = escape(notification.via.name)
+        text = f"Hi {reader}! {by} gave your guest {name} coordinating {slot} on {day}, so they're in."
+        plain = f"{notification.member.name} is coordinating {slot} on {day}."
+    else:
+        late = " The vote has started, so you joined late, and your vote counts." if notification.late else ""
+        text = f"{by} gave you coordinating {slot} on {day}, so you're in.{late}"
+        plain = f"You're coordinating {slot} on {day}."
+    text += f" If it doesn't work for you, tell {by}." + (
+        "" if notification.via is not None else " Thanks for steering!"
+    )
+    blocks = [section(text), actions(_web_button(ctx, event), block_id="more")]
+    return _finish(plain, blocks)
+
+
+def assignment_ended_message(notification: note.AssignmentEnded, ctx: RenderContext) -> Message:
+    """To someone whose role went to someone else, or whose way of getting it was switched (#154)."""
+    event = notification.event
+    role = " and ".join(ROLE_PHRASES[r] for r in notification.roles) or "helping"
+    slot, day, by = _slot(event), day_label(event.day), escape(notification.by.name)
+    who = (
+        f"Hi {escape(notification.via.name)}! {by} changed the plan for {slot} on {day}: your guest "
+        f"{escape(notification.member.name)} is no longer {role}."
+        if notification.via is not None
+        else f"{by} changed the plan for {slot} on {day}: you're no longer {role}."
+    )
+    blocks = [section(who), actions(_web_button(ctx, event), block_id="more")]
+    subject = f"{notification.member.name} is" if notification.via is not None else "You're"
+    return _finish(f"{subject} no longer {role} for {slot} on {day}.", blocks)
+
+
 def assignment_message(notification: note.AssignmentMade, ctx: RenderContext) -> Message:
     event, decision = notification.event, notification.decision
     proposal = decision.proposal
@@ -1218,10 +1259,10 @@ def assignment_message(notification: note.AssignmentMade, ctx: RenderContext) ->
             tell = f"tell {escape(by.name)}"
         elif lead.id == by.id:
             tell = f"tell {escape(by.name)}, who can pick someone else with *{ADJUST}* on the decision"
-        else:  # handed off since: the new coordinator decides now (#154)
+        else:  # an admin assigned them, or the coordinator handed off since: ask the coordinator (#154)
             tell = (
-                f"tell {escape(lead.name)}, who's coordinating now and can pick someone else with "
-                f"*{ADJUST}* on the decision"
+                f"tell {escape(lead.name)}, who's coordinating and can pick someone else with *{ADJUST}* "
+                "on the decision"
             )
         lines.insert(1, f"{escape(by.name)} assigned you this. If it doesn't work for you, {tell}.")
     if decision.dietary_notes:

@@ -278,6 +278,7 @@ async def choose_roles(
             await assignments.unassign(actor.household_id, event.id, MODE_ROLE[current])
         was_pending = event.roles_due_at is not None
         had = next((a for a in ctx.assignments if a.role is role), None)
+        before = next((a for a in ctx.assignments if a.role is MODE_ROLE[current]), None)
         changed = chosen_mode is not current or had is None or had.member_id != who
         event = await EventRepository(db).save(replace(event, decided_mode=chosen_mode, roles_due_at=None), now)
         assigned = await assignments.assign(actor.household_id, event.id, role, who, now) if changed else None
@@ -287,7 +288,10 @@ async def choose_roles(
         decision = cc.decision_info(ctx)
         sent: list[note.Notification] = [*cc.decision_updated(ctx), cc.message_updated(ctx)]
         held: Held | None = None
-        if assigned is not None and decision is not None:
+        ahead = cc.before_the_meal(event, now)  # a correction afterward tells nobody (#154)
+        if ahead and not was_pending and before is not None and before.member_id != who:
+            sent += cc.assignment_ended(ctx, before.member_id, (before.role,), actor, now)
+        if assigned is not None and decision is not None and ahead:
             by = actor.id if who not in volunteers and who != actor.id else None
             if tell:
                 sent.append(
@@ -555,7 +559,7 @@ async def _tell_assigned(db: AsyncSession, actor: Member, event_id: int, held: H
     async with locked_event(db, actor.household_id, event_id, now) as event:
         ctx = await cc.load(db, event)
         decision = cc.decision_info(ctx)
-        if event.state is not EventState.DECIDED or decision is None:
+        if event.state is not EventState.DECIDED or decision is None or not cc.before_the_meal(event, now):
             return
         by = ctx.person(held.by_id) if held.by_id is not None else None
         await publish(db, ctx, cc.assignment_made(ctx, held.member_id, held.assignment_id, decision, by), now=now)
