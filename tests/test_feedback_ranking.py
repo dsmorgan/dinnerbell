@@ -12,17 +12,19 @@ import pytest
 
 from dinnerbell.config import Settings
 from dinnerbell.db.feedback import FeedbackRepository
+from dinnerbell.db.meals import household_settings
 from dinnerbell.db.preferences import PreferenceRepository
 from dinnerbell.domain.feedback import FeedbackInput, PlaceIssue, Rating
 from dinnerbell.domain.meals import MealInput, Slot
 from dinnerbell.domain.preferences import Stance, TargetType
-from dinnerbell.domain.schedule import Weights
+from dinnerbell.domain.schedule import Weights, feedback_cap
 from dinnerbell.services import feedback, meals
 from dinnerbell.services import schedule as schedule_service
 from dinnerbell.services.database import Database, open_database
 from dinnerbell.services.preferences import group_preferences, set_my_preference, with_ratings
 from tests.support.calls import House, furnish, make_house
 from tests.support.clock import FakeClock
+from tests.support.feedback import done_dinner
 from tests.test_calls_services import ranked_with, to_voting
 
 pytestmark = pytest.mark.anyio
@@ -67,7 +69,8 @@ async def scores(house: House, *names: str, day: date = MEAL_DAY) -> dict[int, f
     ids = frozenset(house[n].id for n in names)
     async with house.sessionmaker() as db:
         group = await group_preferences(db, house.household.id, ids)
-        return dict((await with_ratings(db, house.household.id, ids, group, day=day)).item_scores)
+        cap = feedback_cap(await household_settings(db, house.household.id))
+        return dict((await with_ratings(db, house.household.id, ids, group, day=day, cap=cap)).item_scores)
 
 
 async def set_feedback(house: House, level: int) -> None:
@@ -122,6 +125,28 @@ async def test_a_stance_set_on_preferences_wins_over_earlier_ratings(house: Hous
     assert await scores(house, "Kim", day=MEAL_DAY + timedelta(days=1)) == {siam: 1.0}
     await stance(house, "Kim", "Taqueria", Stance(veto=True))  # another item's edit changes nothing here
     assert await scores(house, "Kim", day=MEAL_DAY + timedelta(days=1)) == {siam: 1.0}
+
+
+async def test_re_saving_feedback_doesnt_bring_back_an_overridden_rating(house: House) -> None:
+    """Only a changed rating counts after a stance edit: a thank-you added later, or the same
+    rating submitted again, leaves the stance in charge."""
+    tacos = house.items["Sam's Tacos"].id
+    event_id = await done_dinner(house)  # Sam cooked; Kim ate
+    async with house.sessionmaker() as db:
+        meal = await feedback.meal_for_event(db, house["Kim"], event_id)
+    day = (await house.event(event_id)).day
+    await rate(house, "Kim", meal, Rating.HATED)
+    house.clock.now += timedelta(minutes=5)
+    await stance(house, "Kim", "Sam's Tacos", Stance(score=1))
+    house.clock.now += timedelta(minutes=5)
+    await rate(house, "Kim", meal, Rating.HATED, cook_thanks=True)  # only a thank-you added
+    assert await scores(house, "Kim", day=day) == {tacos: 1.0}
+    house.clock.now += timedelta(minutes=5)
+    await rate(house, "Kim", meal, Rating.HATED, cook_thanks=True)  # the same answers, submitted again
+    assert await scores(house, "Kim", day=day) == {tacos: 1.0}
+    house.clock.now += timedelta(minutes=5)
+    await rate(house, "Kim", meal, Rating.LOVED)  # a new rating counts
+    assert await scores(house, "Kim", day=day) == {tacos: 2.0}
 
 
 async def test_the_hint_is_the_first_reason_on_a_drawn_pick_and_names_nobody(house: House) -> None:

@@ -169,12 +169,12 @@ async def update_my_settings(db: AsyncSession, actor: Member, settings: MySettin
 
 
 async def with_ratings(
-    db: AsyncSession, household_id: int, member_ids: frozenset[int], group: GroupPreferences, *, day: date
+    db: AsyncSession, household_id: int, member_ids: frozenset[int], group: GroupPreferences, *, day: date, cap: int
 ) -> GroupPreferences:
     """``group``, the ``group_preferences`` of ``member_ids``, with each member's item scores
-    moved by their own ratings as of ``day`` (FR-55), as far as the Feedback setting allows.
-    Vetoes and tag scores stay as they are. At Feedback 0 this is ``group`` unchanged."""
-    cap = feedback_cap(await household_settings(db, household_id))
+    moved by their own ratings as of ``day`` (FR-55). ``cap`` is the household's Feedback
+    setting (``domain.schedule.feedback_cap``). Vetoes and tag scores stay as they are. At
+    Feedback 0 this is ``group`` unchanged."""
     if cap == 0 or not member_ids:
         return group
     opinions = await FeedbackRepository(db).opinions(household_id, member_ids=member_ids)
