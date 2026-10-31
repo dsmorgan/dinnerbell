@@ -2,13 +2,13 @@
 """Feedback after meals (spec 5.9, FR-45 to FR-49).
 
 Members who ate a meal give feedback on it, from Slack or the web, and change it for 7 days.
-Each save snapshots the meal: the item, its kind and mode, the cook, and who ate. Feedback has
-no effect on ranking in version 1.
+Each save snapshots the meal: the item, its kind and mode, the cook, and who ate. A rating moves
+the member's own score for the item (FR-55, ``services.preferences.with_ratings``).
 
 What anyone may see (FR-49) is decided here, not in the pages: a member sees their own answers,
-everyone sees only how many loved an item, and only the cook sees who thanked them and their
-notes. Nothing here logs or audits a rating, an issue, or a note, so no log line or audit row
-can say who gave which.
+everyone sees only each item's household hint, such as "Mixed reviews · recently late", and only
+the cook sees who thanked them and their notes. Nothing here logs or audits a rating, an issue,
+or a note, so no log line or audit row can say who gave which.
 """
 
 from __future__ import annotations
@@ -35,17 +35,16 @@ from dinnerbell.domain.feedback import (
     Feedback,
     FeedbackInput,
     InvalidFeedback,
-    ItemCounts,
     MealFacts,
     can_give,
     check_can_give,
     clean,
     closes_on,
-    count,
     thanks_for,
 )
 from dinnerbell.domain.meals import MealLog, MemberRef, Slot, newest_first
 from dinnerbell.domain.members import Member
+from dinnerbell.domain.ratings import hints
 from dinnerbell.services import call_context as cc
 from dinnerbell.services import contributions
 from dinnerbell.services.call_context import NO_SUCH_CALL, CallContext
@@ -281,10 +280,22 @@ async def event_meal(
     return meal, views[meal.id]
 
 
-async def item_counts(db: AsyncSession, actor: Member, item_ids: Iterable[int] | None = None) -> dict[int, ItemCounts]:
-    """How many loved each catalog item (FR-49). Nothing else is counted."""
+async def hints_on(
+    db: AsyncSession, household_id: int, day: date, item_ids: Iterable[int] | None = None
+) -> dict[int, str]:
+    """The household's hint for each item with one, as of ``day`` (FR-55), such as "Well liked"
+    or "Mixed reviews · recently late". It names nobody and never quotes the "Other" text."""
+    opinions = await FeedbackRepository(db).opinions(household_id, item_ids=item_ids)
+    return {item: hint.text for item, hint in hints(opinions, today=day).items()}
+
+
+async def item_hints(
+    db: AsyncSession, actor: Member, item_ids: Iterable[int] | None = None, *, today: date
+) -> dict[int, str]:
+    """The hints the catalog shows (FR-49): one per item, from everyone's ratings and issues,
+    in place of anyone's answers. ``today`` is in the household's time zone."""
     require_member(actor)
-    return count(await FeedbackRepository(db).for_items(actor.household_id, item_ids))
+    return await hints_on(db, actor.household_id, today, item_ids)
 
 
 # The reminder (FR-48) --------------------------------------------------------------------------

@@ -1,9 +1,11 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Preference data access.
 
-Every query that returns stances is scoped to one member. The one cross-member read,
-``group_preferences``, returns only combined values (a union of vetoes and summed scores), so
-no caller can learn one member's stances from it (FR-29).
+Every query that returns stances is scoped to one member, with two cross-member reads for
+ranking. ``group_preferences`` returns only combined values (a union of vetoes and summed
+scores), so no caller can learn one member's stances from it (FR-29). ``item_scores`` and
+``item_edits`` return per-member values, for ``services.preferences`` to add each member's
+ratings to their own score (FR-55) before it sums them; nothing else may call them.
 """
 
 from __future__ import annotations
@@ -15,7 +17,7 @@ from datetime import datetime
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from dinnerbell.db.models import PreferenceRow
+from dinnerbell.db.models import PreferenceRow, StanceEditRow
 from dinnerbell.domain.preferences import Preference, Stance, TargetType
 
 
@@ -65,7 +67,10 @@ class PreferenceRepository:
         stance: Stance,
         now: datetime,
     ) -> None:
-        """Store ``stance``, or delete the row when it's neutral."""
+        """Store ``stance``, or delete the row when it's neutral. For an item, also record the
+        time, neutral or not, so ratings saved before it stop moving the member's score (FR-55)."""
+        if target_type is TargetType.ITEM:
+            await self._edited(household_id, member_id, target_id, now)
         column = getattr(PreferenceRow, _target_column(target_type))
         row = await self._session.scalar(
             select(PreferenceRow).where(
@@ -83,6 +88,41 @@ class PreferenceRepository:
             self._session.add(row)
         row.veto, row.score, row.updated_at = stance.veto, stance.score, now
         await self._session.flush()
+
+    async def _edited(self, household_id: int, member_id: int, item_id: int, now: datetime) -> None:
+        row = await self._session.scalar(
+            select(StanceEditRow).where(
+                StanceEditRow.household_id == household_id,
+                StanceEditRow.member_id == member_id,
+                StanceEditRow.item_id == item_id,
+            )
+        )
+        if row is None:
+            self._session.add(
+                StanceEditRow(household_id=household_id, member_id=member_id, item_id=item_id, edited_at=now)
+            )
+        else:
+            row.edited_at = now
+
+    async def item_edits(self, household_id: int, member_ids: Iterable[int]) -> dict[tuple[int, int], datetime]:
+        """(member, item) to when each member last set a stance on each item."""
+        query = select(StanceEditRow.member_id, StanceEditRow.item_id, StanceEditRow.edited_at).where(
+            StanceEditRow.household_id == household_id, StanceEditRow.member_id.in_(sorted(set(member_ids)))
+        )
+        return {(member, item): at for member, item, at in await self._session.execute(query)}
+
+    async def item_scores(self, household_id: int, member_ids: Iterable[int]) -> dict[tuple[int, int], int]:
+        """(member, item) to each member's stated score, for items they gave a nonzero score."""
+        rows = await self._session.execute(
+            select(PreferenceRow.member_id, PreferenceRow.item_id, PreferenceRow.score).where(
+                PreferenceRow.household_id == household_id,
+                PreferenceRow.member_id.in_(sorted(set(member_ids))),
+                PreferenceRow.item_id.is_not(None),
+                PreferenceRow.veto.is_(False),
+                PreferenceRow.score != 0,
+            )
+        )
+        return {(member, item): score for member, item, score in rows if item is not None}
 
     async def move_tag(
         self,

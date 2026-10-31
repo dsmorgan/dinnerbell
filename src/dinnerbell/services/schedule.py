@@ -26,8 +26,10 @@ from dinnerbell.domain.events import AD_HOC_DAYS_AHEAD, DEFAULT_ROLES_CHOICE_MIN
 from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.members import Member
 from dinnerbell.domain.notifications import PersonInfo, ScheduleChanged, SlotScheduleInfo
+from dinnerbell.domain.ratings import DEFAULT_FEEDBACK
 from dinnerbell.domain.schedule import (
     DEFAULT_TEMPERATURE,
+    FEEDBACK_KEY,
     MAX_ROLES_CHOICE_MINUTES,
     MIN_ROLES_CHOICE_MINUTES,
     PROPOSAL_COUNT_KEY,
@@ -39,9 +41,11 @@ from dinnerbell.domain.schedule import (
     SlotSchedule,
     Weights,
     can_open_today,
+    check_feedback_cap,
     check_schedule,
     check_temperature,
     check_weights,
+    feedback_cap,
     first_day_using,
     format_hhmm,
     proposal_count,
@@ -196,6 +200,8 @@ class RankingSettings:
     variety_window_days: int
     temperature: float = DEFAULT_TEMPERATURE
     roles_choice_minutes: int = DEFAULT_ROLES_CHOICE_MINUTES
+    feedback: int = DEFAULT_FEEDBACK
+    """How far ratings move each member's score (FR-55): 0 (off), 1, or 2."""
 
 
 async def ranking_settings(db: AsyncSession, actor: Member) -> RankingSettings:
@@ -207,6 +213,7 @@ async def ranking_settings(db: AsyncSession, actor: Member) -> RankingSettings:
         variety_window_days=variety_window_days(stored),
         temperature=temperature(stored),
         roles_choice_minutes=roles_choice_minutes(stored),
+        feedback=feedback_cap(stored),
     )
 
 
@@ -217,6 +224,7 @@ def _to_json(values: RankingSettings) -> dict[str, Any]:
         SETTINGS_KEY: values.variety_window_days,
         TEMPERATURE_KEY: values.temperature,
         ROLES_CHOICE_KEY: values.roles_choice_minutes,
+        FEEDBACK_KEY: values.feedback,
     }
 
 
@@ -225,6 +233,7 @@ async def update_ranking(db: AsyncSession, actor: Member, values: RankingSetting
     require_admin(actor, ADMINS_ONLY)
     check_weights(values.weights, values.proposal_count)
     check_temperature(values.temperature)
+    check_feedback_cap(values.feedback)
     if not MIN_ROLES_CHOICE_MINUTES <= values.roles_choice_minutes <= MAX_ROLES_CHOICE_MINUTES:
         raise InvalidSchedule(
             f"The time to choose roles runs {MIN_ROLES_CHOICE_MINUTES} to {MAX_ROLES_CHOICE_MINUTES} minutes."

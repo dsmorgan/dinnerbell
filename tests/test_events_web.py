@@ -256,6 +256,7 @@ def ranking_form(**changes: Any) -> dict[str, Any]:
         "variety_window_days": "7",
         "temperature": "1",
         "roles_choice_minutes": "15",
+        "feedback": "2",
     }
     form |= {f"weight_{n}": v for n, v in (("soft_preference", "1"), ("cuisine_variety", "3"), ("novelty", "1"))}
     form |= {f"weight_{n}": v for n, v in (("suggested", "2"), ("default_mode", "1"), ("volunteer_fit", "1"))}
@@ -281,6 +282,21 @@ def test_ranking_page_saves_and_audits(admin: TestClient, migrated: Settings) ->
     assert set(audit.payload) == {"ranking_weights", "variety_window_days", "ranking_temperature"}
     assert audit.payload["ranking_temperature"] == {"from": 1.0, "to": 0.5}
     assert 'name="temperature" value="0.5"' in admin.get("/admin/schedule").text
+
+
+def test_feedback_is_set_on_the_ranking_page_and_audited(admin: TestClient, migrated: Settings) -> None:
+    """FR-55: Feedback is 0 (off), 1, or 2; a new household starts at 2, the default."""
+    html = admin.get("/admin/schedule").text
+    assert '<option value="2" selected>2</option>' in html and '<option value="0">0 (off)</option>' in html
+    assert submit(admin, "/admin/schedule", ranking_form(feedback="0")).status_code == 303
+    assert rows(migrated, HouseholdRow)[0].settings["feedback_cap"] == 0
+    (audit,) = [a for a in rows(migrated, AuditRow) if a.action == "household.ranking_updated"]
+    assert audit.payload == {"feedback_cap": {"from": 2, "to": 0}}
+    assert '<option value="0" selected>0 (off)</option>' in admin.get("/admin/schedule").text
+    for bad, message in (("3", "Feedback is 0 (off) to 2."), ("-1", "Feedback is 0 (off) to 2."), ("x", "whole")):
+        response = submit(admin, "/admin/schedule", ranking_form(feedback=bad))
+        assert response.status_code == 400 and message in page(response), bad
+    assert rows(migrated, HouseholdRow)[0].settings["feedback_cap"] == 0
 
 
 def test_saving_the_ranking_page_untouched_changes_nothing_even_with_long_values(

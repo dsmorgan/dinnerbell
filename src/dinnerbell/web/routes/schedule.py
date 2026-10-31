@@ -184,6 +184,7 @@ def _stored(values: RankingSettings) -> dict[str, Any]:
         "proposal_count": str(values.proposal_count),
         "variety_window_days": str(values.variety_window_days),
         "roles_choice_minutes": str(values.roles_choice_minutes),
+        "feedback": str(values.feedback),
     }
 
 
@@ -197,6 +198,7 @@ def _posted(form: FormData) -> dict[str, Any]:
             "proposal_count",
             "variety_window_days",
             "roles_choice_minutes",
+            "feedback",
         )
     }
 
@@ -219,6 +221,7 @@ def _parse(posted: dict[str, Any]) -> RankingSettings:
         variety_window_days=_whole(posted["variety_window_days"], "The variety window"),
         temperature=_weight(posted["temperature"], "Randomness"),
         roles_choice_minutes=_whole(posted["roles_choice_minutes"], "The time to choose roles"),
+        feedback=_whole(posted["feedback"], "Feedback"),
     )
 
 

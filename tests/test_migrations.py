@@ -24,6 +24,7 @@ M1_TABLES = {"tag", "catalog_item", "catalog_item_tag", "catalog_item_cook", "pr
 M2_TABLES = {"event", "response", "suggestion", "proposal", "vote", "assignment", "outbox"}
 M3_TABLES = {"feedback", "invitation"}
 M4_TABLES = {"contribution", "badge_award", "slack_badge_file", "slack_badge_composite"}
+M7_TABLES = {"stance_edit"}
 
 
 def test_migrates_an_empty_database(settings: Settings) -> None:
@@ -32,7 +33,7 @@ def test_migrates_an_empty_database(settings: Settings) -> None:
     engine = create_engine(settings.sync_database_url)
     try:
         inspector = inspect(engine)
-        everything = M0_TABLES | M1_TABLES | M2_TABLES | M3_TABLES | M4_TABLES
+        everything = M0_TABLES | M1_TABLES | M2_TABLES | M3_TABLES | M4_TABLES | M7_TABLES
         assert set(inspector.get_table_names()) == everything | {"alembic_version"}
         for table in everything - {"household"}:
             assert "household_id" in {c["name"] for c in inspector.get_columns(table)}, table
@@ -458,7 +459,8 @@ def _snapshot(settings: Settings) -> dict[str, object]:
             indexes = c.execute(
                 text(
                     "SELECT name, sql FROM sqlite_master WHERE type = 'index' AND sql IS NOT NULL "
-                    "AND tbl_name NOT IN ('contribution', 'badge_award', 'slack_badge_file', 'slack_badge_composite') "
+                    "AND tbl_name NOT IN ('contribution', 'badge_award', 'slack_badge_file', 'slack_badge_composite', "
+                    "'stance_edit') "
                     "ORDER BY name"
                 )
             ).all()
@@ -1395,7 +1397,14 @@ def _rows_outside_m4(settings: Settings) -> dict[str, list[object]]:
                 t: list(c.execute(text(f"SELECT * FROM {t} ORDER BY rowid")).all())  # noqa: S608
                 for t in names
                 if t
-                not in {"contribution", "badge_award", "slack_badge_file", "slack_badge_composite", "alembic_version"}
+                not in {
+                    "contribution",
+                    "badge_award",
+                    "slack_badge_file",
+                    "slack_badge_composite",
+                    "stance_edit",
+                    "alembic_version",
+                }
             }
     finally:
         engine.dispose()
@@ -1418,7 +1427,10 @@ def test_0016_adds_contributions_and_badges_without_touching_a_row_and_downgrade
 
     assert cli.main(["migrate"]) == 0
     assert {"contribution", "badge_award"} <= _tables(settings)
-    assert _rows_outside_m4(settings) == before
+    after = _rows_outside_m4(settings)
+    assert {k: v for k, v in after.items() if k != "household"} == {k: v for k, v in before.items() if k != "household"}
+    (household,) = after["household"]
+    assert json.loads(household[3]) == {"contributions_backfilled": "x", "keep": 1, "feedback_cap": 0}  # type: ignore[index]  # 0021
     engine = create_sync_engine(settings.sync_database_url)
     try:
         with engine.connect() as c:
@@ -1674,6 +1686,73 @@ def test_0020_turns_food_and_place_into_one_rating_and_downgrade_turns_it_back(s
     assert [r[0] for r in _feedback_rows(settings, "rating")] == [
         None if want is None else want_again[downgraded[want]] for _, _, want in CONVERSIONS
     ]
+
+
+# 0021: feedback-informed ranking (FR-55) ------------------------------------------------------------
+
+FEEDBACK_RANKING_ROWS = [
+    "INSERT INTO tag (id, household_id, kind, name, name_key, created_at) VALUES (1, 1, 'cuisine', 'Thai', 'thai', :t)",
+    "INSERT INTO catalog_item (id, household_id, kind, name, name_key, modes, active, created_at, updated_at) "
+    "VALUES (2, 1, 'restaurant', 'Y', 'y', '[\"pickup\"]', 1, :t, :t)",
+    "INSERT INTO preference (household_id, member_id, item_id, veto, score, updated_at) "
+    "VALUES (1, 1, 1, 0, 2, '2026-10-20 12:00:00'), (1, 1, 2, 1, 0, '2026-10-21 08:30:00')",
+    "INSERT INTO preference (household_id, member_id, tag_id, veto, score, updated_at) VALUES (1, 1, 1, 0, -1, :t)",
+    "INSERT INTO household (id, name, timezone, settings, created_at) "
+    "VALUES (2, 'Other', 'UTC', '{\"keep\": 1, \"ranking_temperature\": 0.5}', :t)",
+]
+
+
+def _stance_edits(settings: Settings) -> list[tuple[object, ...]]:
+    engine = create_sync_engine(settings.sync_database_url)
+    try:
+        with engine.connect() as c:
+            query = "SELECT household_id, member_id, item_id, edited_at FROM stance_edit ORDER BY item_id"
+            return [tuple(r) for r in c.execute(text(query))]
+    finally:
+        engine.dispose()
+
+
+def _every_household_settings(settings: Settings) -> list[dict[str, object]]:
+    engine = create_sync_engine(settings.sync_database_url)
+    try:
+        with engine.connect() as c:
+            return [json.loads(r[0]) for r in c.execute(text("SELECT settings FROM household ORDER BY id"))]
+    finally:
+        engine.dispose()
+
+
+def test_0021_records_stance_edits_and_turns_feedback_off_and_downgrade_undoes_both(settings: Settings) -> None:
+    """Up adds ``stance_edit``, filled from each item stance with the time it was saved (tag
+    stances have no ratings to override), and sets Feedback to 0 in every household's settings,
+    keeping the rest. Down drops the table and the setting and changes no other row; up again
+    gives the same."""
+    _upgrade_to(settings, "0020_one_rating")
+    _populate_calls(settings)
+    _execute(settings, *FEEDBACK_RANKING_ROWS)
+    before = _rows_outside_m4(settings)
+    old_settings = _every_household_settings(settings)
+
+    _upgrade_to(settings, "0021_feedback_ranking")
+    assert "stance_edit" in _tables(settings)
+    assert _stance_edits(settings) == [(1, 1, 1, "2026-10-20 12:00:00"), (1, 1, 2, "2026-10-21 08:30:00")]
+    assert _every_household_settings(settings) == [
+        {"feedback_cap": 0},
+        {"keep": 1, "ranking_temperature": 0.5, "feedback_cap": 0},
+    ]
+    after = _rows_outside_m4(settings)
+    assert {k: v for k, v in after.items() if k != "household"} == {k: v for k, v in before.items() if k != "household"}
+    with pytest.raises(IntegrityError, match="UNIQUE"):  # one edit time per member per item
+        _execute(settings, "INSERT INTO stance_edit (household_id, member_id, item_id, edited_at) VALUES (1, 1, 1, :t)")
+
+    _downgrade_to(settings, "0020_one_rating")
+    assert "stance_edit" not in _tables(settings)
+    assert _every_household_settings(settings) == old_settings  # json_remove rewrites the text, so compare values
+    down = _rows_outside_m4(settings)
+    assert {k: v for k, v in down.items() if k != "household"} == {k: v for k, v in before.items() if k != "household"}
+
+    _upgrade_to(settings, "0021_feedback_ranking")
+    assert len(_stance_edits(settings)) == 2
+    assert all(s["feedback_cap"] == 0 for s in _every_household_settings(settings))
 
 
 def test_a_second_migrator_waits_then_reports_a_lock(settings: Settings, caplog: pytest.LogCaptureFixture) -> None:

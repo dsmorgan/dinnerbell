@@ -4,13 +4,14 @@
 Each member who ate a meal can say how it was, once, and change it for 7 days. Every part is
 optional: one rating of the meal, from "Hated it" to "Loved it"; for a restaurant, what went
 wrong (issue chips, and a few words for "Other"); and for a home meal with a known cook who
-isn't them, a thank-you with a note. It's stored with a snapshot of the meal as it was, for a
-later milestone to use (#18); in version 1 it doesn't affect ranking.
+isn't them, a thank-you with a note. It's stored with a snapshot of the meal as it was.
+Ratings move the member's own score for the item, and the household sees a hint for each item
+built from everyone's ratings and issues (FR-55, ``domain.ratings``).
 
 Privacy (FR-49): a member's rating, issues, and "Other" note are shown only to them. Everyone
-else sees only how many loved an item: no other rating and no issue is ever shown, not even as
-a count. A cook sees their thank-yous and notes; other members see only how many thank-yous
-there were.
+else sees only the item's hint, such as "Mixed reviews · recently late", which names nobody and
+never includes the "Other" text. A cook sees their thank-yous and notes; other members see only
+how many thank-yous there were.
 """
 
 from __future__ import annotations
@@ -46,7 +47,7 @@ class Rating(StrEnum):
 
     @property
     def score(self) -> int:
-        """-2 for "Hated it" to +2 for "Loved it", for a later milestone's ranking (#18)."""
+        """-2 for "Hated it" to +2 for "Loved it", which ranking moves a member's score toward (FR-55)."""
         return _RATING_SCORES[self]
 
 
@@ -61,8 +62,11 @@ _RATING_SCORES = {Rating.HATED: -2, Rating.DISLIKED: -1, Rating.FINE: 0, Rating.
 
 
 class PlaceIssue(StrEnum):
-    LATE = "late"
+    """What went wrong at a restaurant, most important first: the order forms list them in, and
+    the order the household hint picks one by (FR-55)."""
+
     WRONG_ORDER = "wrong_order"
+    LATE = "late"
     COLD = "cold"
     OTHER = "other"
 
@@ -206,26 +210,6 @@ def clean(data: FeedbackInput, facts: MealFacts, member_id: int) -> FeedbackInpu
 
 
 # What people may see (FR-49) ---------------------------------------------------------------------
-
-
-@dataclass(frozen=True, slots=True)
-class ItemCounts:
-    """Feedback on one catalog item as others may see it: how many loved it, and nothing else.
-    Every other rating and the issues are stored for a later milestone's ranking but never
-    counted for display, because in a small household any count of them could name the one
-    person who gave it."""
-
-    loved: int = 0
-
-
-def count(feedback: Iterable[Feedback]) -> dict[int, ItemCounts]:
-    """How many loved each catalog item, from each feedback's snapshot of the item. Items
-    nobody loved are left out."""
-    loved: dict[int, int] = {}
-    for f in feedback:
-        if f.answers.rating is Rating.LOVED:
-            loved[f.item_id] = loved.get(f.item_id, 0) + 1
-    return {item: ItemCounts(n) for item, n in loved.items()}
 
 
 @dataclass(frozen=True, slots=True)

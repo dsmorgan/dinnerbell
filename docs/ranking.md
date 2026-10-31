@@ -2,7 +2,7 @@
 
 When answers close on a call, Dinnerbell proposes places to vote on: 3, unless an admin changed it. It rules out everything that doesn't work for tonight, scores what's left, adds places someone suggested, and draws the rest at random. A better score makes a place more likely, but it doesn't always win.
 
-This page explains the rules and how to tune them. The precise rules are in [spec section 7](spec.md#7-ranking), and the reasoning is in [ADR 0007](adr/0007-seeded-weighted-ranking.md).
+This page explains the rules and how to tune them. The precise rules are in [spec section 7](spec.md#7-ranking), and the reasoning is in [ADR 0007](adr/0007-seeded-weighted-ranking.md) and, for ratings, [ADR 0008](adr/0008-feedback-informed-ranking.md).
 
 ## What can never be picked
 
@@ -13,7 +13,7 @@ No score, suggestion, or draw gets around these rules:
 - **Someone to do it.** A pickup needs someone who offered to pick up, a home meal needs someone who offered to cook and can cook it, and delivery needs someone who's in and can order.
 - **Recent repeats.** A place you ate within the variety window, 7 days by default, is out, unless nothing else fits at all.
 - **Already a pick.** A place that's already on the call, from an offer, isn't proposed again. Each proposal is a different place.
-- **The meal.** Places for tonight's meal come first. Places for other meals, such as a breakfast place on a dinner call, are proposed only when too few dinner places fit, and their first reason says "Usually for breakfast."
+- **The meal.** Places for tonight's meal come first. Places for other meals, such as a breakfast place on a dinner call, are proposed only when too few dinner places fit, and their reasons say "Usually for breakfast."
 
 Everything that passes them is a candidate, and chance chooses only among candidates.
 
@@ -23,7 +23,7 @@ Each candidate's score is the sum of these parts, each multiplied by its weight,
 
 | Part | What earns it | Default weight |
 |---|---|---|
-| Soft preferences | Each person's +2 to −2 for the place, plus half their scores for its tags | 1 |
+| Soft preferences | Each person's +2 to −2 for the place, moved by their own ratings of it (see [How ratings count](#how-ratings-count)), plus half their scores for its tags | 1 |
 | Cuisine variety | A penalty if you had its cuisine recently, bigger the more recent | 3 |
 | Never had it | +1 if the household has never eaten there | 1 |
 | Suggested today | +1 for each person who suggested it on this call | 2 |
@@ -35,6 +35,34 @@ A place someone suggested for this call goes in ahead of the draw, if it passes 
 The rest of the proposals are drawn at random, and each point of score makes a place more likely by the same factor. At the default randomness, a place 1 point better is about 2.7 times as likely to be picked, and 2 points better about 7.4 times. Names never matter.
 
 After each pick, places that share its cuisine drop to 0.3 of their chance, so a vote rarely has three taco places when other cuisines fit.
+
+## How ratings count
+
+When you rate a meal, your score for that place or recipe moves toward your rating: halfway, or three-quarters of the way for **Hated it** and **Didn't like it**. **Hated it** is −2 and **Loved it** is +2, so one rating of a place you never scored makes your score:
+
+| Your rating | Your score becomes |
+|---|---|
+| Hated it | −1.5 |
+| Didn't like it | −0.75 |
+| It was fine | 0 |
+| Liked it | +0.5 |
+| Loved it | +1 |
+
+The change halves every 3 months, counted from the meal, unless you rate it again. It's added to the score you set on **Preferences**, and the total stays between −2 and +2. Your ratings change only your own score, and only on calls you eat at, as your stated score does. They never veto anything or lift a veto.
+
+- **Your edit wins.** Setting a score for a place on **Preferences**, even back to 0, replaces what your earlier ratings of it said. A rating after that counts again.
+- **See where you stand.** **Preferences** shows you, and only you, what your ratings make your score, such as "From your ratings: about +1".
+- **Off by default after an upgrade.** The admin's **Feedback** setting turns this on (see [Tune the ranking](#tune-the-ranking)).
+
+### The household's hint
+
+Everyone sees a hint for each place, built from everyone's ratings and what went wrong, without names. It's the first reason on a pick, and it shows on the catalog:
+
+- **Mixed reviews**: at least one good rating and one bad one from roughly the last 3 months.
+- **Not well liked**: otherwise, at least a quarter of the ratings were bad.
+- **Well liked**: otherwise, at least half were good.
+
+A verdict needs ratings from two people, and recent ones count more. What went wrong in the last 3 months adds the most important problem anyone checked: "a recent wrong order", "recently late", "recently cold", or "a recent problem". So a hint reads "Mixed reviews · recently late", or, with no verdict, "Recently cold". The words someone wrote for **Other** are never shown. A hint never changes a score.
 
 ## Why the picks differ between calls
 
@@ -97,5 +125,6 @@ An admin changes these on the **Ranking** tab of **Members**. Changes apply from
   | 3 | A point better is about 1.4 times as likely | 63% | 38% |
 
   The last two columns are for the worked example. If the same places keep winning, raise it. If the picks feel too random, lower it.
+- **Feedback** says how far ratings move each person's score: 0 (off), 1, or 2. At 2, the default for a new household, ratings can move a score all the way; at 1, by at most a point. A household that existed before the setting did starts at 0. Hints show at every setting.
 
 Vetoes, guests' needs, coverage, and the variety window hold at every setting.

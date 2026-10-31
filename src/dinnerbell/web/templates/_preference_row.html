@@ -1,5 +1,6 @@
 {#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
-{#- One preference control. Expects: target ("tag:12"), name, stance, levels, and optionally saved or error. -#}
+{#- One preference control. Expects: target ("tag:12"), name, stance, levels, and optionally saved,
+    error, or rating_note (what the member's own ratings make their score, FR-55). -#}
 {% set row_id = "pref-" ~ target|replace(":", "-") %}
 <li class="pref" id="{{ row_id }}">
   <form method="post" action="/preferences/stance" hx-post="/preferences/stance" hx-trigger="change"
@@ -9,6 +10,7 @@
     <fieldset class="levels">
       <legend class="pref-name">{{ name }}{% if saved %} <span class="saved small" role="status">Saved</span>{% endif %}</legend>
       {% if error %}<p class="save-error small" role="alert">{{ error }}</p>{% endif %}
+      {% if rating_note %}<p class="rating-note small muted">{{ rating_note }}</p>{% endif %}
       <div class="segments">
         {% for value, label in levels %}
         <label class="segment level-{{ "veto" if value == "veto" else ("neg" if value.startswith("-") else ("pos" if value != "0" else "zero")) }}">

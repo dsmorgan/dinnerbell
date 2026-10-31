@@ -2,7 +2,7 @@
 {% extends "base.html" %}
 {% block title %}Preferences{% endblock %}
 {% macro row(target_type, target_id, name) -%}
-{% with target=target_type.value ~ ":" ~ target_id, stance=mine.stance(target_type, target_id), saved=false %}{% include "_preference_row.html" %}{% endwith %}
+{% with target=target_type.value ~ ":" ~ target_id, stance=mine.stance(target_type, target_id), saved=false, rating_note=mine.rating_notes.get(target_id) if target_type == TargetType.ITEM else none %}{% include "_preference_row.html" %}{% endwith %}
 {%- endmacro %}
 {% block content %}
 <h1>Preferences</h1>
@@ -54,6 +54,7 @@
 <section class="card">
   <h2>How it works</h2>
   <p class="small"><strong>Veto</strong> means never propose it when you're eating. <strong>−2</strong> to <strong>+2</strong> nudges proposals away from or toward it. <strong>0</strong> is neutral.</p>
+  <p class="small">Your ratings after meals can move your score for a place or recipe too, and the change fades over a few months. Where they have, the item says so, such as "From your ratings: about +1". Setting a score here replaces what your earlier ratings of it said.</p>
 </section>
 
 {% for kind, group in tag_groups.items() if group %}

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Feedback on the web (spec 5.9, 11, FR-45 to FR-49): History and the event page take
-feedback, the catalog shows how many loved an item, the cook sees thank-yous and notes, and
-nobody ever sees who gave which rating or what went wrong."""
+"""Feedback on the web (spec 5.9, 11, FR-45 to FR-49, FR-55): History and the event page take
+feedback, the catalog shows the household's hint for an item, the cook sees thank-yous and
+notes, and nobody ever sees who gave which rating or what went wrong."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ from tests.support.fake_oidc import FakeProvider
 from tests.support.web import add_item, htmx, submit
 from tests.test_auth_flow import member, rows
 from tests.test_catalog_web import item_row
-from tests.test_events_web import sign_in_as, start, tick
+from tests.test_events_web import ranking_form, sign_in_as, start, tick
 from tests.test_history import log
 
 SAM, KIM = "sam@example.com", "kim@example.com"
@@ -145,10 +145,10 @@ def test_the_form_follows_the_meal_and_the_rules(
     assert rows(migrated, FeedbackRow) == []
 
 
-NEGATIVE_COUNT = re.compile(
-    r"\b\d+\s*(hated|didn|disliked|fine|liked|late|cold|wrong order|other)\b|\u00d7", re.IGNORECASE
+COUNT = re.compile(
+    r"\b\d+\s*(hated|didn|disliked|fine|liked|loved|late|cold|wrong order|other)\b|\u00d7", re.IGNORECASE
 )
-"""A count of anything but "Loved it", which could name the one person who gave it (FR-49)."""
+"""A count of a rating or an issue, which could name the one person who gave it (FR-49)."""
 
 
 def item_entry(html: str, item_id: int) -> str:
@@ -157,7 +157,7 @@ def item_entry(html: str, item_id: int) -> str:
     return match.group(1)
 
 
-def test_only_loved_it_is_ever_counted_even_with_one_rater(
+def test_the_catalog_shows_the_hint_and_never_who_or_the_other_text(
     client: TestClient, provider: FakeProvider, household: dict[str, int], migrated: Settings
 ) -> None:
     log(client, household["siam"], [household["admin"], household["kim"]])
@@ -165,9 +165,10 @@ def test_only_loved_it_is_ever_counted_even_with_one_rater(
     sign_in_as(client, provider, KIM)
     issues = ["late", "cold", "wrong_order", "other"]
     give(client, siam, rating="hated", place_issues=issues, issue_note="Soggy Qz8")
-    assert "Your feedback: Hated it. Late, Wrong order, Cold, Other: “Soggy Qz8”" in page(client.get("/history"))
+    assert "Your feedback: Hated it. Wrong order, Late, Cold, Other: “Soggy Qz8”" in page(client.get("/history"))
 
-    # The admin, looking at an item only Kim rated, sees nothing that could be hers.
+    # The admin, looking at an item only Kim rated, sees only the most important issue: one
+    # person's rating gives no verdict, and the Other text is never shown.
     client.cookies.clear()
     sign_in(client, provider)
     pages = {
@@ -175,19 +176,22 @@ def test_only_loved_it_is_ever_counted_even_with_one_rater(
         "item": page(client.get(f"/catalog/items/{household['siam']}")),
         "history": page(client.get("/history")),
     }
+    for name in ("list", "item"):
+        assert '<p class="small item-feedback">A recent wrong order</p>' in pages[name], name
+    assert "item-feedback" not in pages["history"]
     for name, html in pages.items():
-        assert "item-feedback" not in html and "hated" not in html.lower() and "Qz8" not in html, name
-        assert NEGATIVE_COUNT.search(html) is None, name
+        assert "hated" not in html.lower() and "Qz8" not in html, name
+        assert COUNT.search(html) is None, name
 
     sign_in_as(client, provider, KIM)
     give(client, siam, rating="loved", place_issues=["cold"])
     client.cookies.clear()
     sign_in(client, provider)
-    give(client, siam, rating="liked")  # the admin ate it too; "Liked it" isn't counted
+    give(client, siam, rating="liked")  # the admin ate it too: two people, both positive
     entry = item_entry(page(client.get("/catalog")), household["siam"])
-    assert "1 loved it" in entry and NEGATIVE_COUNT.search(entry) is None
+    assert "Well liked · recently cold" in entry and COUNT.search(entry) is None
     item = page(client.get(f"/catalog/items/{household['siam']}"))
-    assert "1 loved it" in item and NEGATIVE_COUNT.search(item) is None
+    assert "Well liked · recently cold" in item and COUNT.search(item) is None
 
 
 def test_feedback_posts_check_csrf_and_origin(
@@ -260,12 +264,55 @@ def test_the_event_page_takes_feedback_and_only_the_cook_sees_notes(
         seen = page(client.get(path))
         assert "1 thank-you for Sam." in seen, path
         assert "Thanks for trying" not in seen and "hated" not in seen.lower(), path
-    # Kim hated it, which is never counted for display; nobody loved it, so no line.
+    # Kim hated it, but one person's rating gives no hint, so no line.
     for path in ("/catalog", f"/catalog/items/{household['tacos']}"):
         assert "item-feedback" not in page(client.get(path)), path
     # The catalog file never carries feedback.
     exported = client.get("/catalog/export.yaml").text
     assert "hated" not in exported and "Thanks for trying" not in exported and "feedback" not in exported
+
+
+def pref_row(html: str, item_id: int) -> str:
+    match = re.search(rf'<li class="pref" id="pref-item-{item_id}">(.*?)</li>', html, re.S)
+    assert match, f"no preference row for item {item_id}"
+    return match.group(1)
+
+
+def test_preferences_show_what_your_own_ratings_make_your_score(
+    client: TestClient, provider: FakeProvider, household: dict[str, int], migrated: Settings, clock: FakeClock
+) -> None:
+    """FR-55: the member sees the score their ratings imply, and only they do. A score they set
+    afterward replaces their earlier ratings; a rating after that counts again."""
+    log(client, household["siam"], [household["admin"], household["kim"]])
+    siam = meal_id(migrated, household["siam"])
+    sign_in_as(client, provider, KIM)
+    give(client, siam, rating="loved")
+    assert "From your ratings: about +1" in pref_row(page(client.get("/preferences")), household["siam"])
+
+    client.cookies.clear()
+    sign_in(client, provider)  # the admin ate it too, but hasn't rated it
+    assert "rating-note" not in page(client.get("/preferences"))
+
+    sign_in_as(client, provider, KIM)
+    clock.advance(timedelta(minutes=1))
+    saved = htmx(client, "/preferences/stance", {"target": f"item:{household['siam']}", "level": "2"})
+    assert saved.status_code == 200 and "rating-note" not in saved.text
+    assert "rating-note" not in pref_row(page(client.get("/preferences")), household["siam"])
+    clock.advance(timedelta(minutes=1))
+    give(client, siam, rating="hated")  # +2, then three-quarters of the way to -2
+    assert "With your ratings: about +0.5" in pref_row(page(client.get("/preferences")), household["siam"])
+
+    clock.advance(timedelta(minutes=1))  # setting it back to 0 deletes the stance, but still wins
+    htmx(client, "/preferences/stance", {"target": f"item:{household['siam']}", "level": "0"})
+    assert "rating-note" not in pref_row(page(client.get("/preferences")), household["siam"])
+
+    client.cookies.clear()
+    sign_in(client, provider)  # Feedback 0: ratings move no score, so the page says nothing
+    submit(client, "/admin/schedule", ranking_form(feedback="0"))
+    sign_in_as(client, provider, KIM)
+    clock.advance(timedelta(minutes=1))
+    give(client, siam, rating="loved")
+    assert "rating-note" not in page(client.get("/preferences"))
 
 
 def test_the_preferences_page_turns_the_reminder_on(

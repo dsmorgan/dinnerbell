@@ -36,7 +36,7 @@ from dinnerbell.services import catalog as catalog_service
 from dinnerbell.services import feedback as feedback_service
 from dinnerbell.services.variety import household_today
 from dinnerbell.web.auth import AdminCSRFChecked, Context, CSRFChecked, Database, Principal, SignedIn
-from dinnerbell.web.context import AppContext
+from dinnerbell.web.context import AppContext, app_context
 from dinnerbell.web.forms import BadFormValue, RowId, choice, optional_int, parse_id, split_names
 from dinnerbell.web.redirects import local_redirect
 from dinnerbell.web.render import render
@@ -118,7 +118,7 @@ async def catalog_page(
             "tags": {t.id: t for t in data.tags},
             "members": {m.id: m for m in data.members},
             "eaten": {i.id: last_eaten_label(data.last_eaten.get(i.id), today) for i in items},
-            "feedback": await feedback_service.item_counts(db, principal.member),
+            "hints": await feedback_service.item_hints(db, principal.member, today=today),
             "sorted_modes": sorted_modes,
             "sorted_meals": sorted_meals,
             "kinds": list(ItemKind),
@@ -239,7 +239,8 @@ async def _item_page(
 ) -> Response:
     data = await catalog_service.catalog(db, principal.member)
     cooks = [m for m in data.members if m.active or m.id in form.cook_ids]
-    counts = await feedback_service.item_counts(db, principal.member, [item.id]) if item else {}
+    today = household_today(principal.household, app_context(request).clock())
+    hints = await feedback_service.item_hints(db, principal.member, [item.id], today=today) if item else {}
     return await render(
         request,
         "catalog_item.html",
@@ -254,7 +255,7 @@ async def _item_page(
             "cooks": cooks,
             "restaurant_modes": [Mode.PICKUP, Mode.DELIVERY],
             "meals": MEAL_ORDER,
-            "counts": counts.get(item.id) if item else None,
+            "hint": hints.get(item.id) if item else None,
         },
         status_code=status_code,
     )

@@ -33,6 +33,7 @@ from dinnerbell.db.models import (
     SessionRow,
     SlackBadgeCompositeRow,
     SlackBadgeFileRow,
+    StanceEditRow,
 )
 from dinnerbell.domain.events import EventState, RoleOffer, Status
 from dinnerbell.domain.feedback import FeedbackInput, Rating
@@ -80,6 +81,8 @@ async def lived_in(house: House) -> int:
         kim, household_id = house["Kim"].id, house.household.id
         thai = house.tags["Thai"].id
         db.add(PreferenceRow(household_id=household_id, member_id=kim, tag_id=thai, veto=True, score=0, updated_at=now))
+        tacos = house.items["Sam's Tacos"].id
+        db.add(StanceEditRow(household_id=household_id, member_id=kim, item_id=tacos, edited_at=now))
         guest = MemberRow(
             household_id=household_id,
             display_name="Pat",
@@ -152,6 +155,7 @@ EXPECTED_KEEP = {
     "catalog_item_tag",
     "catalog_item_cook",
     "preference",
+    "stance_edit",
     "slack_badge_file",
     "slack_badge_composite",
 }

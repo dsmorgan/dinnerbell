@@ -6,7 +6,8 @@ ADR 0007).
 scores decide how likely each place is; the snapshot's seed decides the draw, so the same
 snapshot always gives the same picks. The snapshot carries only combined preferences for the
 people eating, never one member's stances, so nothing ranking produces can say who vetoed or
-disliked what (FR-29).
+disliked what (FR-29). Item scores already include what each member's ratings did to their own
+score (FR-55, ADR 0008), and the household's hint for an item is its first reason.
 """
 
 from __future__ import annotations
@@ -63,12 +64,14 @@ class RankItem:
 
 @dataclass(frozen=True, slots=True)
 class GroupPreferences:
-    """Preferences combined across the people eating. Vetoes are a union; scores are sums."""
+    """Preferences combined across the people eating. Vetoes are a union; scores are sums. An
+    item score is each member's stated score plus what their ratings did to it (FR-55), so it
+    needn't be whole."""
 
     vetoed_tags: frozenset[int] = frozenset()
     vetoed_items: frozenset[int] = frozenset()
     tag_scores: Mapping[int, int] = field(default_factory=dict)
-    item_scores: Mapping[int, int] = field(default_factory=dict)
+    item_scores: Mapping[int, float] = field(default_factory=dict)
 
     def vetoes(self, item: RankItem) -> bool:
         return item.id in self.vetoed_items or bool(item.tag_ids & self.vetoed_tags)
@@ -111,6 +114,9 @@ class RankingSnapshot:
     seed: int = 0
     """Seeds the draw: ``ranking_seed`` of the call and run, so a call always ranks the same and
     a restart draws again (#78)."""
+    hints: Mapping[int, str] = field(default_factory=dict)
+    """The household's hint for each item, such as "Mixed reviews · recently late" (FR-55). It's
+    the first reason on a proposal and never changes a score."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -341,13 +347,16 @@ def _sentence(component: Component, item: RankItem, mode: Mode, value: float, sn
 def explain(
     item: RankItem, mode: Mode, parts: Mapping[Component, float], snapshot: RankingSnapshot, *, for_meal: bool = True
 ) -> tuple[str, ...]:
-    """The top two positive components and every penalty, as sentences, after a top-up's meal
-    note. A pair with no standout component still gets a reason, because it passed every filter."""
+    """The household's hint, a top-up's meal note, then the top two positive components and every
+    penalty, as sentences. A pair with no standout component still gets a reason, because it
+    passed every filter."""
     positive = sorted(
         (c for c in COMPONENT_ORDER if parts[c] > 0), key=lambda c: (-parts[c], COMPONENT_ORDER.index(c))
     )[:REASONS_SHOWN]
     penalties = [c for c in COMPONENT_ORDER if parts[c] < 0]
     sentences = tuple(_sentence(c, item, mode, parts[c], snapshot) for c in [*positive, *penalties])
+    hint = snapshot.hints.get(item.id)
+    first = (f"{hint}.",) if hint else ()
     if not for_meal:
-        return (other_meal(item.meals), *sentences)
-    return sentences or ("Works for everyone who's in.",)
+        return (*first, other_meal(item.meals), *sentences)
+    return (*first, *sentences) or ("Works for everyone who's in.",)

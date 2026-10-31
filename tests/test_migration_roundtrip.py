@@ -18,6 +18,8 @@ in test_migrations.py):
   SQLite's ``json_remove`` rewrites the JSON), so the walk compares the settings without them.
 - 0020 converts ``food`` and ``place`` to ``rating`` and back, so the walk skips those two columns
   across it; test_migrations.py checks the conversion both ways.
+- 0021 sets ``feedback_cap`` to 0 in the household settings and its downgrade removes it, so the
+  walk compares the settings without it; test_migrations.py checks both ways.
 - A downgrade drops the tables and columns its upgrade added, so the walk compares only what the
   older revision has.
 """
@@ -99,6 +101,8 @@ DOWNGRADE_CHANGES: dict[str, Ignored] = {
     "0003_dinner_calls": frozenset({("household", "settings"), ("meal_log", "event_id")}),
     # 0020 turns food and place into one rating, and its downgrade turns the rating back into food.
     "0020_one_rating": frozenset({("feedback", "food"), ("feedback", "place")}),
+    # 0021 turns Feedback off for the households there already, and its downgrade removes the setting.
+    "0021_feedback_ranking": frozenset({("household", "settings")}),
 }
 
 
@@ -185,6 +189,6 @@ def test_the_cli_path_refuses_a_downgrade_that_finds_a_dangling_reference(
         with engine.connect() as c:
             assert c.execute(text(schema)).all() == schema_before  # the rollback undid the DDL
             assert c.execute(text("SELECT name FROM tag")).all() == [("T",)]
-            assert c.execute(text("SELECT version_num FROM alembic_version")).scalar_one().startswith("0020")
+            assert c.execute(text("SELECT version_num FROM alembic_version")).scalar_one().startswith("0021")
     finally:
         engine.dispose()
