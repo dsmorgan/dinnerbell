@@ -43,7 +43,7 @@
       <a href="/stats"{% if path.startswith("/stats") %} aria-current="page"{% endif %}>Stats</a>
       <a href="/schedule"{% if path.startswith("/schedule") %} aria-current="page"{% endif %}>Schedule</a>
       {% if principal.member.is_admin %}
-      <a href="/admin/members"{% if path.startswith("/admin") %} aria-current="page"{% endif %}>Members</a>
+      <a href="/admin/members"{% if path.startswith("/admin") %} aria-current="page"{% endif %}>Admin</a>
       {% endif %}
       {% endif %}
     </nav>

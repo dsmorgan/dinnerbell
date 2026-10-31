@@ -112,7 +112,7 @@ So Siam Garden usually makes the vote, but about one call in six it doesn't, and
 
 ## Tune the ranking
 
-An admin changes these on the **Ranking** tab of **Members**. Changes apply from the next call to close answers.
+An admin changes these on the **Ranking** tab of **Admin**. Changes apply from the next call to close answers.
 
 - **Weights** say how much each part of the score counts, from 0 to 10. 0 turns a part off. For example, raise **Cuisine variety** to avoid the same cuisine two days running, or raise **Never had it** to try more new places.
 - **Randomness** says how far the draw strays from the best scores, from 0 to 3:

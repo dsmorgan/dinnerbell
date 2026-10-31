@@ -460,13 +460,15 @@ def test_a_card_left_open_cannot_act_on_a_newer_run(
 def test_an_admin_skips_a_later_day(
     house: TestClient, provider: FakeProvider, clock: FakeClock, migrated: Settings
 ) -> None:
-    html = house.get("/admin/schedule").text
+    html = house.get("/schedule").text  # Skip a day is on the Schedule page (#149)
     assert 'action="/admin/schedule/skip"' in html and 'min="2026-10-22" max="2026-10-29"' in html
     skipped = submit(
         house, "/admin/schedule/skip", {"slot": "dinner", "day": "2026-10-24", "reason": "<i>AwayZq7x</i>"}
     )
-    assert (skipped.status_code, skipped.headers["location"]) == (303, "/admin/schedule?notice=skipped")
-    assert "Skipped." in house.get("/admin/schedule?notice=skipped").text
+    assert (skipped.status_code, skipped.headers["location"]) == (303, "/schedule?notice=skipped#skip")
+    assert "Skipped." in house.get("/schedule?notice=skipped").text
+    old = house.get("/admin/schedule?notice=skipped", follow_redirects=False)  # a link from before the move
+    assert (old.status_code, old.headers["location"]) == (303, "/schedule?notice=skipped#skip")
     (row,) = rows(migrated, EventRow)
     assert (str(row.date), row.slot, row.state, row.end_note) == (
         "2026-10-24",
@@ -503,25 +505,25 @@ def test_skipping_a_day_explains_refusals(
 
 
 def test_skip_a_day_offers_only_slots_with_a_daily_call(house: TestClient) -> None:
-    html = house.get("/admin/schedule").text
+    html = house.get("/schedule").text
     picker = re.search(r'<select name="slot">(.*?)</select>', html, flags=re.S)
     assert picker is not None and re.findall(r'value="(\w+)"', picker.group(1)) == ["dinner"]  # lunch is off
     off = slot_form(Slot.DINNER)
     off.pop("dinner_enabled")
     assert submit(house, "/schedule/dinner", off).status_code == 303
-    html = house.get("/admin/schedule").text
+    html = house.get("/schedule").text
     assert 'action="/admin/schedule/skip"' not in html and "nothing to skip" in html
     assert submit(house, "/schedule/lunch", slot_form(Slot.LUNCH, lunch_enabled="on")).status_code == 303
     again = slot_form(Slot.DINNER, dinner_seen=seen_on_page(house, Slot.DINNER))
     assert submit(house, "/schedule/dinner", again).status_code == 303
-    picker = re.search(r'<select name="slot">(.*?)</select>', house.get("/admin/schedule").text, flags=re.S)
+    picker = re.search(r'<select name="slot">(.*?)</select>', house.get("/schedule").text, flags=re.S)
     assert picker is not None and re.findall(r'value="(\w+)"', picker.group(1)) == ["dinner", "lunch"]
 
 
 def test_skip_a_day_bounds_follow_the_household_date(house: TestClient, clock: FakeClock, migrated: Settings) -> None:
     """00:30 UTC on the 23rd is still the 22nd in Chicago."""
     clock.now = datetime(2026, 10, 23, 0, 30, tzinfo=UTC)
-    html = house.get("/admin/schedule").text
+    html = house.get("/schedule").text
     assert 'min="2026-10-22" max="2026-10-29"' in html
     late = submit(house, "/admin/schedule/skip", {"slot": "dinner", "day": "2026-10-30"})
     assert late.status_code == 409 and "up to 7 days ahead" in page(late)

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The Schedule page, where any member changes a slot's standing schedule (FR-44), and Admin >
-Ranking: ranking weights, randomness, proposal count, and variety window (FR-43), and skipping a day's call
-before it opens (FR-6)."""
+"""The Schedule page, where any member changes a slot's standing schedule (FR-44) and an admin
+skips a day's call before it opens (FR-6, #149), and Admin > Ranking: ranking weights,
+randomness, proposal count, and variety window (FR-43)."""
 
 from __future__ import annotations
 
@@ -118,23 +118,43 @@ def _parse_slot(posted: dict[str, Any], slot: Slot) -> SlotSchedule:
 
 
 async def _schedule_page(
-    db: Database, principal: Principal, *, typed: dict[str, Any] | None = None, **extra: Any
+    db: Database,
+    principal: Principal,
+    context: AppContext,
+    *,
+    typed: dict[str, Any] | None = None,
+    **extra: Any,
 ) -> dict[str, Any]:
     stored = await schedule_service.slot_schedules_for(db, principal.member)
     values: dict[str, Any] = {}
     for slot in SLOTS:
         values |= _slot_values(slot, stored[slot])
-    return {
+    page: dict[str, Any] = {
         "values": values | (typed or {}),
         "slots": SLOTS,
         "modes": list(MODE_ORDER),
         "minute_fields": MINUTE_FIELDS,
-    } | extra
+    }
+    if principal.member.is_admin:  # Skip a day lives here, beside the schedule it skips (#149)
+        today = await event_views.today_for(db, principal.member, now=context.clock())
+        page |= {
+            "skip_slots": [slot for slot in SLOTS if stored[slot].enabled],
+            "skip": {"slot": "", "day": (today + timedelta(days=1)).isoformat(), "reason": ""},
+            "skip_days": (today, today + timedelta(days=AD_HOC_DAYS_AHEAD)),
+        }
+    return page | extra
+
+
+SKIPPED = "Skipped. That call won't go out. Anyone can still start it from the Today page that day."
 
 
 @router.get("/schedule")
-async def schedule_page(request: Request, principal: SignedIn, db: Database, saved: str = "") -> Response:
-    page = await _schedule_page(db, principal, saved=choice(Slot, saved))
+async def schedule_page(
+    request: Request, principal: SignedIn, context: Context, db: Database, saved: str = "", notice: str = ""
+) -> Response:
+    page = await _schedule_page(
+        db, principal, context, saved=choice(Slot, saved), skipped=SKIPPED if notice == "skipped" else None
+    )
     return await render(request, "schedule.html", page)
 
 
@@ -148,25 +168,25 @@ async def save_slot(request: Request, slot: str, principal: CSRFChecked, context
     posted = _posted_slot(await request.form(), chosen)
     seen = posted[f"{chosen.value}_seen"]
     if not seen:  # every form we draw has one; without it, a save could undo someone else's
-        page = await _schedule_page(db, principal, errors={chosen: OUT_OF_DATE})
+        page = await _schedule_page(db, principal, context, errors={chosen: OUT_OF_DATE})
         return await render(request, "schedule.html", page, status_code=400)
     try:
         changed = await schedule_service.update_slot(
             db, principal.member, chosen, _parse_slot(posted, chosen), seen=seen, now=context.clock()
         )
     except ScheduleMoved as exc:  # show what's there now, not what they typed over
-        page = await _schedule_page(db, principal, errors={chosen: str(exc)})
+        page = await _schedule_page(db, principal, context, errors={chosen: str(exc)})
         return await render(request, "schedule.html", page, status_code=409)
     except (InvalidSchedule, BadFormValue) as exc:
-        page = await _schedule_page(db, principal, typed=posted, errors={chosen: str(exc)})
+        page = await _schedule_page(db, principal, context, typed=posted, errors={chosen: str(exc)})
         return await render(request, "schedule.html", page, status_code=400)
     if not changed:
-        page = await _schedule_page(db, principal, unchanged=chosen)
+        page = await _schedule_page(db, principal, context, unchanged=chosen)
         return await render(request, "schedule.html", page)
     return local_redirect("/schedule?saved={}#{}", chosen, chosen)
 
 
-# Admin > Ranking (FR-43) and Skip a day (FR-6) -------------------------------------------------
+# Admin > Ranking (FR-43), and Skip a day on the Schedule page (FR-6) ---------------------------
 
 
 def _shown(number: float) -> str:
@@ -225,32 +245,21 @@ def _parse(posted: dict[str, Any]) -> RankingSettings:
     )
 
 
-async def _page(
-    db: Database, principal: Principal, context: AppContext, values: dict[str, Any], **extra: Any
-) -> dict[str, Any]:
-    today = await event_views.today_for(db, principal.member, now=context.clock())
-    slots = await schedule_service.slot_schedules_for(db, principal.member)
-    return {
-        "values": values,
-        "weights": [(name, WEIGHT_LABELS[name]) for name in WEIGHT_NAMES],
-        "skip_slots": [slot for slot in SLOTS if slots[slot].enabled],
-        "skip": {"slot": "", "day": (today + timedelta(days=1)).isoformat(), "reason": ""},
-        "skip_days": (today, today + timedelta(days=AD_HOC_DAYS_AHEAD)),
-    } | extra
+def _page(values: dict[str, Any], **extra: Any) -> dict[str, Any]:
+    return {"values": values, "weights": [(name, WEIGHT_LABELS[name]) for name in WEIGHT_NAMES]} | extra
 
 
-NOTICES = {
-    "saved": "Ranking saved. It applies from the next call.",
-    "skipped": "Skipped. That call won't go out. Anyone can still start it from the Today page that day.",
-}
+NOTICES = {"saved": "Ranking saved. It applies from the next call."}
 
 
 @router.get("/admin/schedule")
 async def admin_schedule_page(
     request: Request, principal: AdminPrincipal, context: Context, db: Database, notice: str = ""
 ) -> Response:
+    if notice == "skipped":  # a redirect from before Skip a day moved to the Schedule page (#149)
+        return RedirectResponse("/schedule?notice=skipped#skip", status_code=303)
     stored = await schedule_service.ranking_settings(db, principal.member)
-    page = await _page(db, principal, context, _stored(stored), notice=NOTICES.get(notice))
+    page = _page(_stored(stored), notice=NOTICES.get(notice))
     return await render(request, "admin_schedule.html", page)
 
 
@@ -260,7 +269,7 @@ async def save_ranking(request: Request, principal: AdminCSRFChecked, context: C
     try:
         await schedule_service.update_ranking(db, principal.member, _parse(posted), now=context.clock())
     except (InvalidSchedule, BadFormValue) as exc:
-        page = await _page(db, principal, context, posted, error=str(exc))
+        page = _page(posted, error=str(exc))
         return await render(request, "admin_schedule.html", page, status_code=400)
     return RedirectResponse("/admin/schedule?notice=saved", status_code=303)
 
@@ -280,7 +289,8 @@ async def skip_day(
     day: Field = "",
     reason: Reason = "",
 ) -> Response:
-    """FR-6: skip a day's call, today or up to a week ahead, before it opens."""
+    """FR-6: skip a day's call, today or up to a week ahead, before it opens. The form is on the
+    Schedule page (#149); the route stays under /admin, where every admin action is."""
     try:
         chosen = choice(Slot, slot)
         if chosen is None:
@@ -289,9 +299,8 @@ async def skip_day(
         await calls.skip_day(db, principal.member, chosen, when, note=reason or None, now=context.clock())
     except (EventRuleViolation, BadFormValue) as exc:
         activity.refused(exc, str(exc), principal.member, path=request.url.path)
-        stored = await schedule_service.ranking_settings(db, principal.member)
         typed = {"slot": slot, "day": day, "reason": reason}
-        page = await _page(db, principal, context, _stored(stored), skip_error=str(exc))
+        page = await _schedule_page(db, principal, context, skip_error=str(exc))
         status = 400 if isinstance(exc, BadFormValue) else 409  # a malformed form, or a rule refusal
-        return await render(request, "admin_schedule.html", page | {"skip": typed}, status_code=status)
-    return RedirectResponse("/admin/schedule?notice=skipped", status_code=303)
+        return await render(request, "schedule.html", page | {"skip": typed}, status_code=status)
+    return RedirectResponse("/schedule?notice=skipped#skip", status_code=303)

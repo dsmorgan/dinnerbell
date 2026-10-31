@@ -163,12 +163,12 @@ DINNERBELL_BIND=192.168.1.20
 ## 10. Sign in as the admin
 
 1. Open your URL, select **Sign in with Slack**, and approve the request.
-2. Open **Members**.
+2. Open **Admin**, which opens on its **Members** tab.
 3. Add each household member by the email address you'll invite to Slack. Sign-in is invite-only, and the email must match the one on their Slack account.
 
 ## 11. Onboard family members
 
-Invite each person to the Slack workspace (**Invite people** in Slack) with the email you added on **Members**. Then forward them this message:
+Invite each person to the Slack workspace (**Invite people** in Slack) with the email you added on **Admin** > **Members**. Then forward them this message:
 
 > **Set up Dinnerbell on your phone**
 >
@@ -185,17 +185,17 @@ Invite each person to the Slack workspace (**Invite people** in Slack) with the 
 
 ### Link everyone's Slack account
 
-Dinnerbell needs each member's Slack account to mention them, message them, and accept their button taps. **Members** shows who is linked. Dinnerbell links a member in any of these ways:
+Dinnerbell needs each member's Slack account to mention them, message them, and accept their button taps. **Admin** > **Members** shows who is linked. Dinnerbell links a member in any of these ways:
 
 - When they sign in to the web app with Slack.
 - At start and every hour, by email, for active members whose Dinnerbell email matches their Slack email. This links only full members of your workspace, never guests or people from other organizations.
-- By hand: on **Members**, select **Edit**, and enter their Slack member ID. In Slack, open their profile, select the three dots, then **Copy member ID**.
+- By hand: on **Admin** > **Members**, select **Edit**, and enter their Slack member ID. In Slack, open their profile, select the three dots, then **Copy member ID**.
 
 A link you set or clear by hand stays as you left it. To hand a member back to automatic linking, select **Back to automatic** on their edit page.
 
 ### Guests and joining from the channel
 
-**Join from the channel** is on by default: anyone in the channel can join as a guest, and you get a direct message for each join. To add only the people you choose, turn it off on **Members**; on an existing install, do it right after upgrading. [members.md](members.md) explains guests, joining, and linking a guest to a member.
+**Join from the channel** is on by default: anyone in the channel can join as a guest, and you get a direct message for each join. To add only the people you choose, turn it off on **Admin** > **Members**; on an existing install, do it right after upgrading. [members.md](members.md) explains guests, joining, and linking a guest to a member.
 
 ## 12. Load the catalog
 

@@ -287,7 +287,7 @@ def test_the_schedule_page_shows_breakfast_off_and_skipping_needs_it_on(
     assert html.index('id="dinner"') < html.index('id="lunch"') < html.index('id="breakfast"')
     assert 'name="breakfast_enabled">' in html and 'name="breakfast_call_time" value="07:00"' in html
     assert 'name="breakfast_meal_time" value="08:00"' in html
-    assert '<option value="breakfast"' not in page(admin.get("/admin/schedule"))
+    assert '<option value="breakfast"' not in page(admin.get("/schedule"))
     refused = submit(admin, "/admin/schedule/skip", {"slot": "breakfast", "day": "2026-10-23"})
     assert refused.status_code == 409 and "Breakfast is off in the schedule." in page(refused)
 
@@ -303,7 +303,7 @@ def test_the_schedule_page_shows_breakfast_off_and_skipping_needs_it_on(
     }
     saved = submit(admin, "/schedule/breakfast", form)
     assert saved.headers["location"] == "/schedule?saved=breakfast#breakfast"
-    assert '<option value="breakfast"' in page(admin.get("/admin/schedule"))
+    assert '<option value="breakfast"' in page(admin.get("/schedule"))
     skipped = submit(admin, "/admin/schedule/skip", {"slot": "breakfast", "day": "2026-10-23"})
     assert skipped.status_code == 303
 
