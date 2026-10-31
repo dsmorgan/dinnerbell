@@ -41,9 +41,11 @@ from dinnerbell.channels.slack.blocks import (
     section,
 )
 from dinnerbell.channels.slack.messages import (
+    ADD_GUEST,
     CALL_OFF,
     CANT_MAKE_IT,
     CLOSE_LABELS,
+    DROP_GUEST,
     OFFER_VERBS,
     POST_NOW,
     adjust_button,
@@ -967,9 +969,11 @@ def _offer_card(v: EventView, offer: note.OfferInfo, links: HomeLinks, today: da
     value = ids.card_value(v.id, event.run)
     buttons: list[Block] = []
     if v.can.join:
-        buttons.append(button("Count me in", ids.JOIN_OFFER, value, style="primary"))
+        buttons.append(button(labels.COUNT_ME_IN, ids.JOIN_OFFER, value, style="primary"))
     if v.can.add_guest:
-        buttons.append(button("+1 guest", ids.ADD_GUEST, value))
+        buttons.append(button(ADD_GUEST, ids.ADD_GUEST, value))
+    if v.can.drop_guest:  # the web sets a number; Slack takes one back (#149)
+        buttons.append(button(DROP_GUEST, ids.DROP_GUEST, value))
     if v.can.leave:
         buttons.append(button(CANT_MAKE_IT, ids.LEAVE_OFFER, value))
     if v.can.mark_done:

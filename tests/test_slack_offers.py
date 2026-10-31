@@ -14,6 +14,7 @@ from typing import Any
 import pytest
 
 from dinnerbell.channels.slack import ids
+from dinnerbell.channels.slack.interactions import MANY_OFFERS
 from dinnerbell.config import Settings
 from dinnerbell.domain.catalog import Mode
 from dinnerbell.domain.events import EventState
@@ -295,3 +296,87 @@ async def test_a_redelivered_log_submission_logs_one_meal(slack: Slack, house: H
         await send(slack.conn.app, "interactive", payload)
         await slack.conn.interactions.settle()
     assert len(await house.meals()) == 1
+
+
+# One thing per button (#149) ---------------------------------------------------------------------
+
+
+async def _posted_offer(slack: Slack, house: House, *, capacity: str = "3") -> str:
+    siam = house.items["Siam Garden"].id
+    await submit_form(slack, "Alex", ids.OFFER_VIEW, offer_values(siam, capacity=capacity), ids.FormOrigin(CHANNEL))
+    await slack.drain()
+    return ids.card_value(await offer_id(house), 1)
+
+
+async def test_count_me_in_only_joins_and_cant_make_it_always_shows(slack: Slack, house: House) -> None:
+    value = await _posted_offer(slack, house)
+    (posted,) = [c for c in slack.fake.of("chat.postMessage") if c.args["channel"] == CHANNEL]
+    blocks = blocks_of(posted.args)
+    rows = {b["block_id"]: [e["action_id"] for e in b["elements"]] for b in blocks if b["type"] == "actions"}
+    assert rows["join"] == [ids.JOIN_OFFER, ids.ADD_GUEST, ids.DROP_GUEST, ids.LEAVE_OFFER]
+    assert ids.CANCEL_CALL in rows["more"] and len(rows["more"]) <= 5
+    await slack.click("Sam", ids.JOIN_OFFER, value)
+    await slack.click("Sam", ids.JOIN_OFFER, value)  # a second tap, even a double tap, keeps Sam in
+    async with house.sessionmaker() as db:
+        seat = await offers.count_me_in(db, house["Sam"], await offer_id(house), now=house.clock())
+    assert seat.joined and "Can't make it" in slack.ephemerals("Sam")[0]
+    await slack.click("Sam", ids.LEAVE_OFFER, value)
+    assert "not joining" in slack.ephemerals("Sam")[-1]
+
+
+async def test_minus_one_guest_takes_back_a_plus_one(slack: Slack, house: House) -> None:
+    value = await _posted_offer(slack, house)
+    await slack.click("Kim", ids.ADD_GUEST, value)
+    await slack.click("Kim", ids.ADD_GUEST, value)
+    await slack.click("Kim", ids.DROP_GUEST, value)
+    assert "You're in for Siam Garden with 1 guest" in slack.ephemerals("Kim")[-1]
+    await slack.click("Kim", ids.DROP_GUEST, value)
+    assert slack.ephemerals("Kim")[-1].startswith("You're in for Siam Garden. ")  # still in, no guests
+    await slack.click("Kim", ids.DROP_GUEST, value)
+    assert slack.ephemerals("Kim")[-1] == offers.NO_GUESTS
+    await slack.click("Lee", ids.DROP_GUEST, value)  # not in at all
+    assert slack.ephemerals("Lee")[-1] == offers.NO_GUESTS
+
+
+async def test_a_full_offer_keeps_minus_one_guest_and_cant_make_it(slack: Slack, house: House) -> None:
+    value = await _posted_offer(slack, house, capacity="2")
+    await slack.click("Kim", ids.ADD_GUEST, value)  # Kim and a guest fill both seats
+    slack.fake.clear()
+    await slack.drain()
+    blocks = blocks_of(slack.fake.of("chat.update")[-1].args)
+    assert set(buttons({"blocks": blocks})) >= {ids.DROP_GUEST, ids.LEAVE_OFFER}
+    assert not {ids.JOIN_OFFER, ids.ADD_GUEST} & set(buttons({"blocks": blocks}))
+    await slack.click("Kim", ids.DROP_GUEST, value)  # frees a seat
+    assert "1 spare" in slack.ephemerals("Kim")[-1]
+
+
+async def test_home_offers_minus_one_guest_only_with_a_guest(slack: Slack, house: House) -> None:
+    value = await _posted_offer(slack, house)
+    await slack.click("Kim", ids.JOIN_OFFER, value, home=True)
+    assert ids.DROP_GUEST not in buttons(slack.last_home("Kim"))
+    await slack.click("Kim", ids.ADD_GUEST, value, home=True)
+    assert ids.DROP_GUEST in buttons(slack.last_home("Kim"))
+    await slack.click("Kim", ids.DROP_GUEST, value, home=True)
+    assert ids.DROP_GUEST not in buttons(slack.last_home("Kim"))
+
+
+async def test_cancel_calls_off_your_offer(slack: Slack, house: House) -> None:
+    await _posted_offer(slack, house)
+    await slack.command("Kim", "cancel")  # not Kim's offer
+    assert slack.ephemerals("Kim")[-1] == "There's no open call or offer to call off today."
+    await slack.command("Alex", "cancel lunch Plans changed")
+    assert slack.ephemerals("Alex")[-1] == "You called off the lunch offer for Thursday, Oct 22."
+    event = await house.event(await offer_id(house))
+    assert event.state is EventState.CANCELLED and event.end_note == "Plans changed"
+
+
+async def test_cancel_asks_which_when_you_may_call_off_two_offers(slack: Slack, house: House) -> None:
+    await _posted_offer(slack, house)
+    taqueria = house.items["Taqueria"].id
+    await submit_form(slack, "Sam", ids.OFFER_VIEW, offer_values(taqueria), ids.FormOrigin(CHANNEL))
+    await slack.command("Alex", "cancel lunch")  # an admin may call off both
+    assert slack.ephemerals("Alex")[-1] == MANY_OFFERS.format(slot="lunch", when="today")
+    await slack.command("Alex", "cancel")
+    assert slack.ephemerals("Alex")[-1] == MANY_OFFERS.format(slot="lunch", when="today")
+    await slack.command("Sam", "cancel")  # Sam may call off only his own
+    assert slack.ephemerals("Sam")[-1] == "You called off the lunch offer for Thursday, Oct 22."

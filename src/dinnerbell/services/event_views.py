@@ -58,6 +58,8 @@ class Permissions:
     """Join an open offer that has a seat left (FR-4): ``offers.join``."""
     add_guest: bool = False
     """Bring one more guest to an open offer with a seat left: ``offers.add_guest``."""
+    drop_guest: bool = False
+    """Bring one guest fewer to an open offer (#149): ``offers.drop_guest``."""
     leave: bool = False
     """Drop out of an open offer they're in, unless it's theirs: ``offers.leave``."""
     invite: bool = False
@@ -210,6 +212,7 @@ def _offer_permissions(ctx: CallContext, actor: Member, now: datetime) -> Permis
     return Permissions(
         join=open_to_them and seats and not inside,
         add_guest=open_to_them and seats,
+        drop_guest=open_to_them and inside and mine is not None and mine.guests > 0,
         leave=inside and _allowed(lambda: offers.check_can_leave(event, actor)),
         mark_done=_allowed(lambda: rules.check_can_mark_done(event, actor, mine, now=now)),
         admin=actor.active and actor.is_admin,
@@ -432,6 +435,18 @@ async def calls_on(db: AsyncSession, actor: Member, day: date) -> list[Event]:
     events = EventRepository(db)
     found = [await events.call_for(actor.household_id, slot, day) for slot in Slot]
     return [event for event in found if event is not None]
+
+
+async def offers_on(db: AsyncSession, actor: Member, day: date) -> list[Event]:
+    """The open offers on ``day`` that ``actor`` may call off (#149): their own, or any for an
+    admin, in slot order, so ``/dinnerbell cancel`` finds them as well as calls."""
+    events = EventRepository(db)
+    found: list[Event] = []
+    for slot in Slot:
+        for event in await events.offers_for(actor.household_id, slot, day):
+            if event.state.is_open and _allowed(functools.partial(rules.check_can_cancel, event, actor)):
+                found.append(event)
+    return found
 
 
 async def scheduled_call(db: AsyncSession, actor: Member, slot: Slot, day: date) -> Event | None:

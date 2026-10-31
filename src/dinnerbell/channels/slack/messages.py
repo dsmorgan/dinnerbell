@@ -1477,24 +1477,35 @@ def _offer_roster(roster: tuple[note.RosterEntry, ...], offer: note.OfferInfo, c
     return join_lines(lines)
 
 
+ADD_GUEST = "+1 guest"
+DROP_GUEST = "\u22121 guest"
+"""Read "minus 1 guest": a minus sign, as wide as the plus in **+1 guest**."""
+
+
 def offer_buttons(event: note.EventInfo, offer: note.OfferInfo) -> list[Block]:
     """The offer message's buttons. Everyone sees the same message, so they name no one's own
-    state: **Count me in** joins or drops out, and **+1 guest** adds one, while seats are left;
-    once it's full only **Can't make it** stays, to free a seat (spec section 10)."""
+    state: while seats are left, **Count me in** joins and **+1 guest** adds one; while it's
+    open, **-1 guest** takes one back and **Can't make it** drops out, so each does one thing
+    however often it's tapped (#149, spec section 10). The service refuses what doesn't apply."""
     value = ids.card_value(event.id, event.run)
-    if event.state is EventState.COLLECTING and not offer.full:
-        return [
-            button(
-                "Count me in",
-                ids.JOIN_OFFER,
-                value,
-                style="primary",
-                accessibility_label=f"Join {offer.offerer.name}'s {_slot(event)} offer, or tap again to drop out",
-            ),
-            button("+1 guest", ids.ADD_GUEST, value),
-        ]
     if event.state is EventState.COLLECTING:
-        return [button(CANT_MAKE_IT, ids.LEAVE_OFFER, value)]
+        joining: list[Block] = []
+        if not offer.full:
+            joining = [
+                button(
+                    labels.COUNT_ME_IN,
+                    ids.JOIN_OFFER,
+                    value,
+                    style="primary",
+                    accessibility_label=f"Join {offer.offerer.name}'s {_slot(event)} offer",
+                ),
+                button(ADD_GUEST, ids.ADD_GUEST, value),
+            ]
+        return [
+            *joining,
+            button(DROP_GUEST, ids.DROP_GUEST, value, accessibility_label="Bring one guest fewer"),
+            button(CANT_MAKE_IT, ids.LEAVE_OFFER, value),
+        ]
     if event.state is EventState.DECIDED:
         return [mark_done_button(event)]
     if event.state is EventState.DONE:
@@ -1504,16 +1515,19 @@ def offer_buttons(event: note.EventInfo, offer: note.OfferInfo) -> list[Block]:
 
 def offer_message(notification: note.OfferPosted | note.OfferUpdated, ctx: RenderContext) -> Message:
     """The offer message (spec section 10): offerer, item, mode, time, spare servings, and who's
-    eating, with **Count me in** and **+1 guest** until it's full or its time."""
+    eating, with **Count me in** and **+1 guest** until it's full, and **-1 guest** and **Can't
+    make it** until its time."""
     event, offer = notification.event, notification.offer
     status = _offer_status(event, offer)
     top = _offer_line(event, offer, rich=True) + "\n" + escape(status)
     if event.state is EventState.CANCELLED:
         top = f"~{_offer_line(event, offer, rich=True)}~\n{escape(status)}"
     blocks: list[Block] = [header(_title(event)), section(top), section(_offer_roster(notification.roster, offer, ctx))]
-    buttons = offer_buttons(event, offer)
-    buttons += _item_buttons(offer.item, offer.mode)
-    buttons.append(_web_button(ctx, event))
+    joining = offer_buttons(event, offer)
+    if event.state is EventState.COLLECTING:  # a row of its own, so the next stays within five
+        blocks.append(actions(*joining, block_id="join"))
+        joining = []
+    buttons = [*joining, *_item_buttons(offer.item, offer.mode), _web_button(ctx, event)]
     if event.state in {EventState.COLLECTING, EventState.DECIDED}:
         buttons.append(button(CALL_OFF, ids.CANCEL_CALL, ids.menu_value(ids.MenuChoice.CANCEL, event.id, event.run)))
     blocks.append(actions(*buttons, block_id="more"))

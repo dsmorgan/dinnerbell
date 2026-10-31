@@ -136,17 +136,19 @@ async def test_a_lunch_offer_with_capacity_3_fills_and_closes(house: House) -> N
     assert ctx.response_of(house["Alex"].id) is not None  # the offerer eats, without taking a seat
     assert seats_taken(offer, ctx.responses) == 0
 
-    seat = await act(house, offers.toggle_join, house["Sam"], offer_id)
+    seat = await act(house, offers.count_me_in, house["Sam"], offer_id)
     assert (seat.joined, seat.seats_left) == (True, 2)
     seat = await act(house, offers.add_guest, house["Kim"], offer_id)  # Kim and a guest
     assert (seat.joined, seat.guests, seat.seats_left) == (True, 1, 0)
     with pytest.raises(EventRuleViolation, match=FULL):
-        await act(house, offers.toggle_join, house["Lee"], offer_id)
+        await act(house, offers.count_me_in, house["Lee"], offer_id)
     with pytest.raises(EventRuleViolation, match=FULL):
         await act(house, offers.add_guest, house["Sam"], offer_id)
     assert (await house.kinds()).count("offer_full") == 1  # to Alex, once
 
-    seat = await act(house, offers.toggle_join, house["Sam"], offer_id)  # Sam drops out
+    seat = await act(house, offers.count_me_in, house["Sam"], offer_id)  # a second tap keeps Sam in (#149)
+    assert (seat.joined, seat.seats_left) == (True, 0)
+    seat = await act(house, offers.leave, house["Sam"], offer_id)  # Sam drops out
     assert (seat.joined, seat.seats_left) == (False, 1)
     await act(house, offers.join, house["Lee"], offer_id)
     assert (await house.kinds()).count("offer_full") == 1  # full again, but Alex heard already
@@ -155,7 +157,7 @@ async def test_a_lunch_offer_with_capacity_3_fills_and_closes(house: House) -> N
     await house.tick()
     assert (await house.event(offer_id)).state is EventState.DECIDED
     with pytest.raises(EventRuleViolation, match="isn't taking people"):
-        await act(house, offers.toggle_join, house["Sam"], offer_id)
+        await act(house, offers.count_me_in, house["Sam"], offer_id)
 
     house.clock.now = LUNCH_AT + timedelta(hours=2)
     await house.tick()
@@ -187,11 +189,29 @@ async def test_the_offerer_can_bring_guests_but_not_drop_out(house: House) -> No
     offer_id = (await post(house, "Alex", lunch(house, capacity=2))).event_id
     seat = await act(house, offers.add_guest, house["Alex"], offer_id)
     assert (seat.guests, seat.seats_left) == (1, 1)  # Alex's own seat was never spare; the guest's is
-    seat = await act(house, offers.toggle_join, house["Alex"], offer_id)  # a tap changes nothing
+    seat = await act(house, offers.count_me_in, house["Alex"], offer_id)  # a tap changes nothing
     assert (seat.joined, seat.guests) == (True, 1)
     with pytest.raises(EventRuleViolation, match="your offer"):
         await act(house, offers.leave, house["Alex"], offer_id)
     assert not any(k == "offer_full" for k in await house.kinds())
+
+
+async def test_minus_one_guest_keeps_their_needs_until_the_last_one_goes(house: House) -> None:
+    """#149: Slack's -1 guest, as lowering the number on the web."""
+    veg = await house.tag("Vegetarian", TagKind.DIETARY)
+    offer_id = (await post(house, "Alex", lunch(house))).event_id
+    await act(house, offers.join, house["Sam"], offer_id, guests=2, guest_needs=frozenset({veg.id}))
+    seat = await act(house, offers.drop_guest, house["Sam"], offer_id)
+    assert (seat.joined, seat.guests, seat.seats_left) == (True, 1, 1)
+    mine = (await house.context(offer_id)).response_of(house["Sam"].id)
+    assert mine is not None and mine.guest_needs == {veg.id}
+    seat = await act(house, offers.drop_guest, house["Sam"], offer_id)
+    mine = (await house.context(offer_id)).response_of(house["Sam"].id)
+    assert seat.guests == 0 and mine is not None and mine.is_in and mine.guest_needs == frozenset()
+    with pytest.raises(EventRuleViolation, match="not bringing any guests"):
+        await act(house, offers.drop_guest, house["Sam"], offer_id)
+    with pytest.raises(EventRuleViolation, match="not bringing any guests"):
+        await act(house, offers.drop_guest, house["Kim"], offer_id, run=1)
 
 
 async def test_guests_and_their_needs_fill_seats(house: House) -> None:

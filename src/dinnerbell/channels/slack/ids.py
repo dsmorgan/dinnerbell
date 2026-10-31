@@ -95,13 +95,15 @@ FEEDBACK = "feedback"
 """**How was it?** on a done call's decision message, the feedback reminder, and Home: opens the
 feedback modal. Its value is a ``card_value``, naming the run the meal was decided in."""
 JOIN_OFFER = "join_offer"
-"""**Count me in** on an offer message (FR-4): join, or tap again to drop out. Its value is a
-``card_value``, naming the offer and its run."""
+"""**Count me in** on an offer message (FR-4): join; a tap from someone in already changes
+nothing (#149). Its value is a ``card_value``, naming the offer and its run."""
 ADD_GUEST = "add_guest"
 """**+1 guest** on an offer message: one more guest, counting the tapper in. A ``card_value``."""
+DROP_GUEST = "drop_guest"
+"""**-1 guest** on an offer message and on Home (#149): one guest fewer. A ``card_value``."""
 LEAVE_OFFER = "leave_offer"
-"""**Can't make it** on a full offer message, or on Home: drop out with any guests. A ``card_value``."""
-OFFER_ACTIONS = frozenset({JOIN_OFFER, ADD_GUEST, LEAVE_OFFER})
+"""**Can't make it** on an open offer message, or on Home: drop out with any guests. A ``card_value``."""
+OFFER_ACTIONS = frozenset({JOIN_OFFER, ADD_GUEST, DROP_GUEST, LEAVE_OFFER})
 MAKE_OFFER = "make_offer"
 """**Make an offer** on the Home tab: opens the offer modal. Its value is ``MAKE_OFFER``."""
 INVITE_GUEST = "invite_guest"
