@@ -45,6 +45,7 @@ GUEST_ROUTES = {
     ("GET", "/stats"),  # a guest's own badges (#15)
     ("GET", "/stats/household"),  # sends a guest to /stats: channel posts link it (#153)
     ("POST", "/me"),
+    ("POST", "/me/fun"),  # fun mode on or off for themselves (#153)
     ("GET", "/events/{event_id}"),
     ("GET", "/events/{event_id}/card"),
     ("POST", "/events/{event_id}/respond"),
@@ -211,6 +212,23 @@ def test_a_guest_sets_their_dietary_needs(admin: TestClient, provider: FakeProvi
     assert bad.status_code == 400
     as_admin(guest, provider)
     assert admin.get("/me").headers["location"] == "/preferences"  # members have preferences
+
+
+def test_a_guest_turns_fun_mode_off_on_their_page(
+    admin: TestClient, provider: FakeProvider, migrated: Settings
+) -> None:
+    """A guest's switch for Dinnerbone's Den (#153) is on their dietary-needs page, the one page
+    of their own, and changes only their row."""
+    pat = add_guest(admin, "Pat", slack="U07PAT")
+    guest = as_guest(admin, provider)
+    assert 'data-fun="on"' in guest.get("/").text
+    assert 'name="fun" value="on" checked' in guest.get("/me").text
+    response = submit(guest, "/me/fun", {"fun": "off"})
+    assert (response.status_code, response.headers["location"]) == (303, "/me?saved=1")
+    me = guest.get("/me").text
+    assert 'name="fun" value="off" checked' in me and "data-fun" not in me and "fun.js" not in me
+    assert "data-fun" not in guest.get("/").text
+    assert {m.id: m.fun_mode for m in rows(migrated, MemberRow)} == {1: True, pat: False}
 
 
 # Members inviting and answering for guests -----------------------------------------------------------

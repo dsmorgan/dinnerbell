@@ -251,6 +251,7 @@ Requirements use "must" for version 1 and "should" for items that can slip to a 
 | FR-35 | The web app is mobile-first and works in Safari on iOS with no installation. |
 | FR-36 | Pages: Today, Catalog, Preferences, History, Stats and badges, Admin. See section 11. |
 | FR-37 | Every Slack message about an event links to that event's page. |
+| FR-62 | **Fun mode** (#153). Each member and guest has a fun mode setting, default on, that only they change: members on Preferences, guests on their dietary-needs page. On, the web app shows Dinnerbone's Den (section 11, "Fun mode"). Off, no page carries any of it or loads its files. It never makes a sound. |
 
 ### 6.10 Feedback
 
@@ -425,15 +426,28 @@ Mobile-first server-rendered pages with HTMX for in-place updates. No JavaScript
 
 | Page | Content |
 |---|---|
-| Today | For a guest, only the calls they're invited to, with In, Out, the roles, and coordinating's logistics, and a page for their dietary needs. For members: open events with roster, proposals, votes, and the same actions Slack offers, including **Call it off** and **Close now** for whoever FR-56 allows. A called-off call shows who called it off and why, and **Start {slot} again**. **Coming up** lists calls scheduled for later, when each posts, and **Post it now**. Start a call, now or for a later day, optionally posting it now, or post an offer. |
+| Today | For a guest, only the calls they're invited to, with In, Out, the roles, and coordinating's logistics, and a page for their dietary needs and fun mode. For members: open events with roster, proposals, votes, and the same actions Slack offers, including **Call it off** and **Close now** for whoever FR-56 allows. A called-off call shows who called it off and why, and **Start {slot} again**. **Coming up** lists calls scheduled for later, when each posts, and **Post it now**. Start a call, now or for a later day, optionally posting it now, or post an offer. |
 | Catalog | Search and filter items by tag, kind, mode, 20 matches a page; the page links keep the search. Add and edit items. See last eaten and each item's household hint, such as "Well liked" (FR-55). Tag management: any member adds tags; the admin renames and merges them. Import a catalog file with a preview (FR-26). |
-| Preferences | Tags and items with veto and −2 to +2 controls, and beside an item, what the member's own ratings make their score (FR-55). Capability flags. Mute reminders. Feedback reminder on or off. Calendar URL (later phase). |
+| Preferences | Tags and items with veto and −2 to +2 controls, and beside an item, what the member's own ratings make their score (FR-55). Capability flags. Mute reminders. Feedback reminder on or off. Fun mode on or off (FR-62). Calendar URL (later phase). |
 | History | Meals by week, newest first, 20 meals a page. Cuisines in the current variety window. Give or edit feedback on recent meals. |
 | Stats | Two tabs for members: **Yours**, with contribution counts and badges with progress to the next tier, and **Household**, with household totals and newest badges. Guests see only their own pitching-in badges. |
 | Schedule | Each slot's standing schedule, which any member can change (FR-44). Admins also skip a day's call here (FR-6), with the same audit row. |
 | Admin | Named **Admin** in the navigation, for admins only, with three tabs. **Members**: members and invitations, Slack mapping, guests (add, edit, link Slack, link to a member, promote, remove), **Join from the channel**, and **Add people from the channel**. **Ranking**: ranking weights, randomness, and Feedback (FR-55), proposals per call, the variety window, and minutes to choose roles. **Badges**: badge thresholds. Stuck calls show as a banner on every tab. |
 
 The web app has no page for the household's time zone or backups. The time zone comes from `DINNERBELL_TIMEZONE` on first start ([configuration](configuration.md)); the last backup's time is in `/healthz` (section 13.9).
+
+### Fun mode
+
+Fun mode (FR-62, #153) is **Dinnerbone's Den**: Dinnerbone, the hamster in the logo, lives in a small den beside the greeting on Today and follows the call. It's on by default. Members turn it off on Preferences, and guests on their dietary-needs page.
+
+- **Where.** The den fills the rest of Today's greeting row, to the right of "Hi, Sam". A long name shrinks the greeting to fit, down to 1.15rem, then wraps beside a den at least 96 px wide. The two never overlap.
+- **What he does.** He follows the next open call on Today. While answers are open, he runs laps around that call's card; while it's voting, he runs in his wheel; once it's decided, he eats at his bowl; once it's done, he sleeps in the straw. With no call, he follows the clock: he nibbles at breakfast, potters about at lunch, dozes in the afternoon, and waits at his bowl at dinner. Late at night he sleeps, unless a call that's taking answers or voting wakes him. A call decided after 9 PM gets him up to eat, and he sleeps once it's done.
+- **Time and season.** The server works out the time of day and the season in the household's time zone, with fixed windows: breakfast from 5:00 to 10:30, lunch to 14:00, afternoon to 17:00, dinner to 21:00, and late night from 21:00 to 5:00. Seasons start on fixed dates at the northern hemisphere's equinoxes and solstices: March 20, June 21, September 22, and December 21. How far into its season the day is, in steps from 0 to 10, sets the depth of the snow in winter, the leaf pile in autumn, and the puddle in spring; summer is clear. The piles follow the date, so every visit that day shows the same one. The season's weather also falls down the edges of the page.
+- **Celebrations.** Earning a badge makes him backflip. A decision rings the bell over his bowl and sends him running to eat. Marking a meal done has him pat his belly, waddle to the straw, and fall asleep. Only the person who caused it sees the celebration; everyone else sees a quiet caption, such as "Pad thai it is!", with no animation.
+- **Still and silent.** Fun mode never makes a sound. Under `prefers-reduced-motion`, nothing moves: he holds the pose for the call, and a celebration is a still pose with its caption.
+- **How it reaches the page.** For a viewer with fun mode on, every page drawn from the base layout puts the scene on `<body>`: `data-fun="on"`, `data-period` (`breakfast`, `lunch`, `afternoon`, `dinner`, or `late`), `data-season` (`spring`, `summer`, `autumn`, or `winter`), and `data-season-depth` (`0` to `10`). It also links `/static/fun.css` and `/static/fun.js`, with the version as a cache buster like the other assets. The CSS keys on the attributes, so the CSP needs no inline style, and the browser never reads its own clock to draw the scene. For a viewer with fun mode off, the page has none of this and is exactly the page without fun mode. `domain/fun.py` works out the scene.
+
+The setting and the scene on each page are built; the den, its poses and weather, and the celebrations come next.
 
 ## 12. Metrics and badges
 
@@ -534,7 +548,7 @@ Every table carries `household_id`. Timestamps are UTC; the household time zone 
 | Table | Key fields |
 |---|---|
 | household | name, timezone, settings (JSON: slots, weights, ranking temperature, Feedback (`feedback_cap`), variety window, badge thresholds, slack channel) |
-| member | display name, email (members sign in with it; a guest never has one), slack_email (a joined guest's Slack email, never used to sign in), slack_guest_account, oidc_subject, slack_user_id, slack_link_locked, role (admin, member, guest), can_cook, can_pickup, can_order, mute_dm_reminders, feedback_reminder, dietary_needs (a guest's dietary tags), join_refused (an admin removed this guest), active |
+| member | display name, email (members sign in with it; a guest never has one), slack_email (a joined guest's Slack email, never used to sign in), slack_guest_account, oidc_subject, slack_user_id, slack_link_locked, role (admin, member, guest), can_cook, can_pickup, can_order, mute_dm_reminders, feedback_reminder, fun_mode (FR-62, default on), dietary_needs (a guest's dietary tags), join_refused (an admin removed this guest), active |
 | tag | kind (cuisine, protein, dietary, other), name |
 | catalog_item | kind (home, restaurant), name, notes, url, order_url, modes (cook, pickup, delivery), meals (bits: breakfast 1, lunch 2, dinner 4; 1 to 7, default 6), default_servings, created_by, active |
 | catalog_item_tag | item, tag |

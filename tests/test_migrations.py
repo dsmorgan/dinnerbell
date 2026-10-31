@@ -1428,7 +1428,9 @@ def test_0016_adds_contributions_and_badges_without_touching_a_row_and_downgrade
     assert cli.main(["migrate"]) == 0
     assert {"contribution", "badge_award"} <= _tables(settings)
     after = _rows_outside_m4(settings)
-    assert {k: v for k, v in after.items() if k != "household"} == {k: v for k, v in before.items() if k != "household"}
+    ours = {"household", "member"}
+    assert {k: v for k, v in after.items() if k not in ours} == {k: v for k, v in before.items() if k not in ours}
+    assert [row[:-1] for row in after["member"]] == before["member"]  # 0022 adds fun_mode, last
     (household,) = after["household"]
     assert json.loads(household[3]) == {"contributions_backfilled": "x", "keep": 1, "feedback_cap": 0}  # type: ignore[index]  # 0021
     engine = create_sync_engine(settings.sync_database_url)
@@ -1486,9 +1488,9 @@ def test_0016_adds_contributions_and_badges_without_touching_a_row_and_downgrade
 
     assert cli.main(["migrate"]) == 0
     assert {"contribution", "badge_award"} <= _tables(settings)
-    assert {k: v for k, v in _rows_outside_m4(settings).items() if k != "household"} == {
-        k: v for k, v in before.items() if k != "household"
-    }
+    again = _rows_outside_m4(settings)
+    assert {k: v for k, v in again.items() if k not in ours} == {k: v for k, v in before.items() if k not in ours}
+    assert [row[:-1] for row in again["member"]] == before["member"]
 
 
 # 0017: Slack badge art (#105) ------------------------------------------------------------------------
@@ -1766,6 +1768,51 @@ def test_0021_records_stance_edits_and_turns_feedback_off_and_downgrade_undoes_b
     _upgrade_to(settings, "0021_feedback_ranking")
     assert len(_stance_edits(settings)) == 2
     assert all(s["feedback_cap"] == 0 for s in _every_household_settings(settings))
+
+
+# 0022: fun mode (#153) ------------------------------------------------------------------------------
+
+
+def _fun_modes(settings: Settings) -> list[tuple[object, ...]]:
+    engine = create_sync_engine(settings.sync_database_url)
+    try:
+        with engine.connect() as c:
+            return [tuple(r) for r in c.execute(text("SELECT id, fun_mode FROM member ORDER BY id"))]
+    finally:
+        engine.dispose()
+
+
+def test_0022_turns_fun_mode_on_for_everyone_and_downgrade_drops_it(settings: Settings) -> None:
+    """Up adds ``member.fun_mode``, on for every member and guest already there and for anyone
+    added later. Down drops the column and changes no other row; up again gives the same."""
+    _upgrade_to(settings, "0021_feedback_ranking")
+    _populate_calls(settings)
+    _execute(
+        settings,
+        "INSERT INTO member (id, household_id, display_name, email, role, can_cook, can_pickup, can_order, "
+        "mute_dm_reminders, feedback_reminder, active, slack_link_locked, created_at, updated_at) "
+        "VALUES (2, 1, 'Pat', NULL, 'guest', 0, 0, 0, 0, 0, 1, 0, :t, :t)",
+    )
+    before = _rows_outside_m4(settings)
+
+    _upgrade_to(settings, "0022_fun_mode")
+    assert _fun_modes(settings) == [(1, 1), (2, 1)]
+    after = _rows_outside_m4(settings)
+    assert [row[:-1] for row in after["member"]] == before["member"]  # the new column is last
+    assert {k: v for k, v in after.items() if k != "member"} == {k: v for k, v in before.items() if k != "member"}
+    _execute(
+        settings,
+        "INSERT INTO member (id, household_id, display_name, email, role, can_cook, can_pickup, can_order, "
+        "mute_dm_reminders, feedback_reminder, active, slack_link_locked, created_at, updated_at) "
+        "VALUES (3, 1, 'Lee', 'lee@example.com', 'member', 0, 0, 0, 0, 0, 1, 0, :t, :t)",
+    )
+    assert _fun_modes(settings)[-1] == (3, 1)
+    _execute(settings, "DELETE FROM member WHERE id = 3")
+
+    _downgrade_to(settings, "0021_feedback_ranking")
+    assert _rows_outside_m4(settings) == before
+    _upgrade_to(settings, "0022_fun_mode")
+    assert _fun_modes(settings) == [(1, 1), (2, 1)]
 
 
 def test_a_second_migrator_waits_then_reports_a_lock(settings: Settings, caplog: pytest.LogCaptureFixture) -> None:

@@ -10,6 +10,7 @@ from fastapi import Request
 from starlette.responses import Response
 
 from dinnerbell.config import is_test_instance
+from dinnerbell.domain.fun import Scene, scene
 from dinnerbell.services.household import current_household
 from dinnerbell.services.stuck import StuckCall, for_admin
 from dinnerbell.web import filters
@@ -51,6 +52,15 @@ def _stuck_calls(request: Request) -> list[StuckCall]:
     return for_admin(principal.member, context.scheduler_state.current_stuck(context.clock()))
 
 
+def _fun_scene(request: Request) -> Scene | None:
+    """The time of day and season for Dinnerbone's Den (#153), or None when the viewer has fun
+    mode off or isn't signed in: then the page carries none of it and loads no fun assets."""
+    principal = getattr(request.state, "principal", None)
+    if principal is None or not principal.member.fun_mode:
+        return None
+    return scene(app_context(request).clock(), principal.household.timezone)
+
+
 async def render(
     request: Request, template: str, context: dict[str, Any] | None = None, status_code: int = 200
 ) -> Response:
@@ -66,6 +76,7 @@ async def render(
         "instance_label": settings.instance_label,
         "test_instance": is_test_instance(settings.instance_label),  # what only test may do (#60)
         "stuck_calls": _stuck_calls(request),
+        "fun": _fun_scene(request),
     }
     return TEMPLATES.TemplateResponse(request, template, base | (context or {}), status_code=status_code)
 
