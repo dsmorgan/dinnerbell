@@ -91,8 +91,9 @@ def test_every_link_to_an_event_has_one_name() -> None:
 
 
 def test_badge_posts_and_the_recap_link_stats() -> None:
+    """Posts to the whole channel link the Household tab (#153); Home, one member's, links Yours."""
     for kind in ("badges_earned", "badges_earned_many", "monthly_recap"):
-        assert "/stats|Stats on the web>" in _text(_rendered(kind)["blocks"]), kind
+        assert "/stats/household|Stats on the web>" in _text(_rendered(kind)["blocks"]), kind
 
 
 def test_home_links_stats_and_schedule_without_badge_art() -> None:
@@ -139,7 +140,7 @@ def test_a_recap_links_stats_on_the_instances_own_address() -> None:
     recap = preview.NOTIFICATIONS["monthly_recap"]()
     assert isinstance(recap, note.MonthlyRecap)
     message = render(recap, RenderContext("https://food.example.org", preview.DIRECTORY))
-    assert "<https://food.example.org/stats|Stats on the web>" in str(message.blocks)
+    assert "<https://food.example.org/stats/household|Stats on the web>" in str(message.blocks)
 
 
 # Taps --------------------------------------------------------------------------------------------

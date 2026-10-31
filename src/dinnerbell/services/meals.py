@@ -186,3 +186,9 @@ async def history(db: AsyncSession, actor: Member, *, page: int = 1) -> History:
     shown = page_of(page, await repo.count(actor.household_id), MEALS_PER_PAGE)
     meals = await repo.newest(actor.household_id, offset=shown.offset, limit=shown.size)
     return History(weeks=by_week(meals), page=shown)
+
+
+async def history_page_of(db: AsyncSession, actor: Member, meal: MealLog) -> int:
+    """The History page that lists ``meal``, so a redirect after a change lands on it."""
+    require_member(actor)
+    return await MealLogRepository(db).newer_than(actor.household_id, meal) // MEALS_PER_PAGE + 1

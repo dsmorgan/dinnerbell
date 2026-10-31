@@ -247,33 +247,41 @@ def test_variety_window_uses_the_household_setting(
     assert "Mexican · yesterday" in text and "Thai ·" not in text
 
 
-def fill(settings: Settings, item_id: int, member_id: int, days: int) -> None:
-    """Log a dinner on each of the ``days`` days before TODAY, and a lunch on every third, straight
-    into the database: the form would take two requests a meal."""
+def insert_meals(settings: Settings, item_id: int, member_id: int, meals: list[tuple[date, str]]) -> None:
+    """Log each (day, slot) straight into the database: the form would take two requests a meal."""
     from datetime import UTC, datetime
 
     now = datetime(2026, 10, 22, 18, 0, tzinfo=UTC)
     engine = create_engine(settings.sync_database_url)
     try:
         with Session(engine) as db:
-            for back in range(1, days + 1):
-                for slot in ("dinner", "lunch") if back % 3 == 0 else ("dinner",):
-                    db.add(
-                        MealLogRow(
-                            household_id=1,
-                            date=TODAY - timedelta(days=back),
-                            slot=slot,
-                            item_id=item_id,
-                            cuisine_tags=[],
-                            participants=[{"id": member_id, "name": "admin"}],
-                            logged_by=member_id,
-                            created_at=now,
-                            updated_at=now,
-                        )
+            for day, slot in meals:
+                db.add(
+                    MealLogRow(
+                        household_id=1,
+                        date=day,
+                        slot=slot,
+                        item_id=item_id,
+                        cuisine_tags=[],
+                        participants=[{"id": member_id, "name": "admin"}],
+                        logged_by=member_id,
+                        created_at=now,
+                        updated_at=now,
                     )
+                )
             db.commit()
     finally:
         engine.dispose()
+
+
+def fill(settings: Settings, item_id: int, member_id: int, days: int) -> None:
+    """A dinner on each of the ``days`` days before TODAY, and a lunch on every third."""
+    meals = [
+        (TODAY - timedelta(days=back), slot)
+        for back in range(1, days + 1)
+        for slot in (("dinner", "lunch") if back % 3 == 0 else ("dinner",))
+    ]
+    insert_meals(settings, item_id, member_id, meals)
 
 
 def meal_days(html: str) -> list[str]:
@@ -310,6 +318,39 @@ def test_a_history_page_out_of_range_shows_the_nearest(
     response = client.get(f"/history?page={asked}")
     assert response.status_code == 200
     assert f"Page {shown} of 3" in page(response)
+
+
+def test_changes_return_to_the_meals_page(client: TestClient, household: dict[str, int], migrated: Settings) -> None:
+    """Logging, editing, and deleting a meal, and feedback on it, land on the History page that
+    lists it, not page 1."""
+    fill(migrated, household["tacos"], household["admin"], 33)  # 33 dinners and 11 lunches
+    # 15 dinners and 5 lunches are newer than a dinner 16 days ago: it's the first meal of page 2.
+    logged = log(client, household["siam"], [household["admin"]], day=TODAY - timedelta(days=16))
+    meal = max(r.id for r in rows(migrated, MealLogRow))
+    assert logged.headers["location"] == f"/history?page=2&notice=logged#meal-{meal}"
+    assert f'id="meal-{meal}"' in client.get(logged.headers["location"]).text
+    # Moved to yesterday's lunch, behind only yesterday's dinner, it's on page 1.
+    edit = {"day": (TODAY - timedelta(days=1)).isoformat(), "slot": "lunch", "item_id": str(household["siam"])}
+    edit["participant_ids"] = [str(household["admin"])]
+    moved = submit(client, f"/history/meals/{meal}", edit)
+    assert moved.headers["location"] == f"/history?notice=updated#meal-{meal}"
+    # 31 dinners and 10 lunches are newer than a lunch 31 days ago: page 3.
+    later = submit(client, f"/history/meals/{meal}", edit | {"day": (TODAY - timedelta(days=31)).isoformat()})
+    assert later.headers["location"] == f"/history?page=3&notice=updated#meal-{meal}"
+    gone = submit(client, f"/history/meals/{meal}/delete")
+    assert gone.headers["location"] == "/history?page=3&notice=deleted"
+    first = min(r.id for r in rows(migrated, MealLogRow))  # yesterday's dinner, the newest
+    assert submit(client, f"/history/meals/{first}/delete").headers["location"] == "/history?notice=deleted"
+
+
+def test_feedback_returns_to_the_meals_page(client: TestClient, household: dict[str, int], migrated: Settings) -> None:
+    log(client, household["siam"], [household["admin"]], day=TODAY - timedelta(days=3))
+    meal = max(r.id for r in rows(migrated, MealLogRow))
+    insert_meals(migrated, household["tacos"], household["admin"], [(TODAY, "dinner")] * 20)
+    form = page(client.get(f"/history/meals/{meal}/feedback"))
+    assert f'href="/history?page=2#meal-{meal}"' in form  # the way back
+    saved = submit(client, f"/history/meals/{meal}/feedback", {"rating": "liked"})
+    assert saved.headers["location"] == f"/history?page=2&notice=feedback#meal-{meal}"
 
 
 def test_one_page_of_history_has_no_pager(client: TestClient, household: dict[str, int], migrated: Settings) -> None:

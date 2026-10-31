@@ -427,9 +427,11 @@ def test_the_catalog_pages_and_keeps_the_search(
     assert shown(single) == ["Falafel Hut"] and 'class="pager"' not in single and "1 match " in single
 
 
-def test_catalog_page_links_swap_only_the_results(
+def test_catalog_page_links_load_a_whole_page(
     client: TestClient, provider: FakeProvider, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Plain links, not HTMX swaps: a swap loses keyboard focus when the link pressed isn't on the
+    next page, as Next isn't on the last."""
     from dinnerbell.web.routes import catalog
 
     monkeypatch.setattr(catalog, "ITEMS_PER_PAGE", 1)
@@ -437,9 +439,33 @@ def test_catalog_page_links_swap_only_the_results(
     add_item(client, "Anchor")
     add_item(client, "Bistro")
     html = client.get("/catalog?q=", headers={"HX-Request": "true"}).text
-    link = html.split('rel="next"', 1)[1].split(">", 1)[0]
-    assert 'href="/catalog?page=2"' in link and 'hx-get="/catalog?page=2"' in link
-    assert 'hx-target="#results"' in link and 'hx-select="#results"' in link and 'hx-push-url="true"' in link
+    pager = html[html.index('<nav class="pager"') :].split("</nav>", 1)[0]
+    assert 'href="/catalog?page=2"' in pager and "hx-" not in pager
     assert inline_code(html)[1] == []
-    swapped = client.get("/catalog?page=2", headers={"HX-Request": "true"}).text
-    assert 'id="results"' in swapped and "Bistro" in swapped and "Anchor" not in swapped
+
+
+def test_adding_or_editing_an_item_returns_to_its_page(
+    client: TestClient, provider: FakeProvider, migrated: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dinnerbell.web.routes import catalog
+
+    monkeypatch.setattr(catalog, "ITEMS_PER_PAGE", 2)
+    sign_in(client, provider)
+    first = add_item(client, "Anchor")
+    assert first.headers["location"] == f"/catalog?notice=created#item-{item_row(migrated, 'Anchor').id}"
+    add_item(client, "Bistro")
+    add_item(client, "Cantina")
+    cantina = item_row(migrated, "Cantina").id
+    created = add_item(client, "Diner")
+    diner = item_row(migrated, "Diner").id
+    assert created.headers["location"] == f"/catalog?page=2&notice=created#item-{diner}"
+    edit = {"name": "Cantina", "new_cuisines": "Thai", "modes": ["pickup"], "meals": ["dinner"]}
+    updated = submit(client, f"/catalog/items/{cantina}", edit)
+    assert updated.headers["location"] == f"/catalog?page=2&notice=updated#item-{cantina}"
+    assert f'id="item-{cantina}"' in client.get(updated.headers["location"]).text
+    # Renamed to sort first, it's on page 1; an inactive item isn't listed, so page 1 too.
+    renamed = submit(client, f"/catalog/items/{cantina}", edit | {"name": "Aardvark"})
+    assert renamed.headers["location"] == f"/catalog?notice=updated#item-{cantina}"
+    submit(client, f"/catalog/items/{diner}/deactivate")
+    again = submit(client, f"/catalog/items/{diner}", edit | {"name": "Diner"})
+    assert again.headers["location"] == f"/catalog?notice=updated#item-{diner}"

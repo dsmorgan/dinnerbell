@@ -43,6 +43,7 @@ GUEST_ROUTES = {
     ("HEAD", "/"),
     ("GET", "/me"),
     ("GET", "/stats"),  # a guest's own badges (#15)
+    ("GET", "/stats/household"),  # sends a guest to /stats: channel posts link it (#153)
     ("POST", "/me"),
     ("GET", "/events/{event_id}"),
     ("GET", "/events/{event_id}/card"),
@@ -517,4 +518,5 @@ def test_a_guest_sees_only_their_own_badges(admin: TestClient, provider: FakePro
         assert hidden not in html
     assert "Meals cooked" in html
     assert 'aria-label="Stats"' not in html and "/stats/household" not in html  # no tabs for a guest (#153)
-    assert admin.get("/stats/household").status_code != 200
+    moved = admin.get("/stats/household")
+    assert (moved.status_code, moved.headers["location"]) == (303, "/stats")

@@ -40,7 +40,7 @@ from dinnerbell.services.variety import household_today
 from dinnerbell.web.auth import AdminCSRFChecked, Context, CSRFChecked, Database, Principal, SignedIn
 from dinnerbell.web.context import AppContext, app_context
 from dinnerbell.web.forms import BadFormValue, RowId, choice, optional_int, parse_id, split_names
-from dinnerbell.web.redirects import local_redirect
+from dinnerbell.web.redirects import local_path, local_redirect
 from dinnerbell.web.render import render
 from dinnerbell.web.signing import SignedPayload, derive_key
 
@@ -154,6 +154,17 @@ async def catalog_page(
             "notice": message,
         },
     )
+
+
+async def _listed_path(db: Database, principal: Principal, item_id: int, notice: str) -> str:
+    """The catalog page that lists the item with no search, scrolled to it, with ``notice`` (a
+    ``NOTICES`` key). An inactive item isn't listed there, so that's the first page."""
+    data = await catalog_service.catalog(db, principal.member)
+    names = {t.id: t.name for t in data.tags}
+    listed = [item.id for item in data.items if ItemFilter().matches(item, names)]
+    page = listed.index(item_id) // ITEMS_PER_PAGE + 1 if item_id in listed else 1
+    query = f"page={page}&notice={notice}" if page > 1 else f"notice={notice}"
+    return local_path(f"/catalog?{query}#item-{{}}", item_id)
 
 
 # Add and edit -------------------------------------------------------------------------------------
@@ -307,7 +318,7 @@ async def create_item(
         item = await catalog_service.create_item(db, principal.member, form.to_input(chosen), now=context.clock())
     except (InvalidCatalogInput, CatalogRuleViolation, BadFormValue) as exc:
         return await _item_page(request, principal, db, kind=chosen, form=form, error=str(exc), status_code=400)
-    return local_redirect("/catalog?notice=created#item-{}", item.id)
+    return local_redirect(await _listed_path(db, principal, item.id, "created"))
 
 
 @router.get("/items/{item_id}")
@@ -330,7 +341,7 @@ async def update_item(
         return await _item_page(
             request, principal, db, kind=item.kind, form=form, item=item, error=str(exc), status_code=400
         )
-    return local_redirect("/catalog?notice=updated#item-{}", item_id)
+    return local_redirect(await _listed_path(db, principal, item_id, "updated"))
 
 
 @router.post("/items/{item_id}/deactivate")

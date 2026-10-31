@@ -38,9 +38,9 @@ Each badge is a tier frame with its own icon: Chef (chef hat), Road Runner (car)
 
 ## The Stats page
 
-**Stats** in the navigation shows each badge at your tier, with progress to the next ("Meals cooked: 63 of 100 for Gold"), the badges you earned in the last two weeks, and your counts. Badges you haven't earned yet show softly, with the count that earns the first tier. Members also see household totals, and the newest badges with who earned them. Nobody is ranked, and nobody sees another member's counts.
+**Stats** in the navigation shows each badge at your tier, with progress to the next ("Meals cooked: 63 of 100 for Gold"), the badges you earned in the last two weeks, and your counts. Badges you haven't earned yet show softly, with the count that earns the first tier. Members also have a **Household** tab with household totals, and the newest badges with who earned them; badge posts and the monthly recap in the channel link to it. Nobody is ranked, and nobody sees another member's counts.
 
-A guest sees **Your badges** only: the four pitching-in badges and On a Roll, with no household section.
+A guest sees **Your badges** only: the four pitching-in badges and On a Roll, with no Household tab. A guest who follows a channel post's link to it lands on **Your badges**.
 
 ## App Home
 
