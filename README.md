@@ -11,7 +11,7 @@ You need a host that runs containers, a Slack workspace, and an HTTPS hostname y
 Dinnerbell asks early, so dinner is settled before anyone is hungry. With the default schedule, it asks at 3:00 PM for a 6:30 PM dinner. Here's a takeout night for a family of four.
 
 ```mermaid
-flowchart TD
+flowchart TB
     ask["🔔 3:00 PM<br/>Who's eating tonight?"]
     answer["🙋 Everyone answers<br/>Alex: in, can pick up<br/>Sam and Kim: in<br/>Jo: out"]
     suggest["🍽️ 4:30 PM<br/>Three ideas that suit<br/>the three eating:<br/>tacos, pho, or pizza"]
@@ -20,7 +20,15 @@ flowchart TD
     eat["🌮 6:30 PM<br/>Taco night"]
     after["⭐ Afterward<br/>Rate the tacos<br/>Alex's pickup counts toward a badge"]
 
-    ask --> answer --> suggest --> vote --> decide --> eat --> after
+    subgraph row1[" "]
+        direction LR
+        ask --> answer --> suggest --> vote
+    end
+    subgraph row2[" "]
+        direction LR
+        decide --> eat --> after
+    end
+    row1 --> row2
 
     classDef bell fill:#2E6B6F,stroke:#1F4A4D,color:#FFFFFF
     classDef family fill:#FFF3E0,stroke:#C27A34,color:#2A1810
@@ -28,6 +36,8 @@ flowchart TD
     class ask,suggest,decide bell
     class answer,vote,after family
     class eat meal
+    style row1 fill:none,stroke:none
+    style row2 fill:none,stroke:none
 ```
 
 1. **Dinnerbell asks.** At 3:00 PM, it posts in your family's Slack channel: who's eating tonight?
