@@ -99,7 +99,8 @@ async def test_fewer_than_two_people_abandons(house: House) -> None:
     assert await house.tick() == [Step.CLOSE_RESPONSES]
     event = await house.event(event_id)
     assert (event.state, event.end_reason) == (EventState.ABANDONED, EndReason.TOO_FEW)
-    assert await house.kinds() == ["call_opened", "call_updated", "maybe_resolved", "call_abandoned"]
+    # No "you're counted out" to Sam: it offers I'm in (late), which an ended call can't take (#149).
+    assert await house.kinds() == ["call_opened", "call_updated", "call_abandoned"]
     assert await house.meals() == []
     assert (await house.audits())[-1].payload == {"reason": "too_few"}
 

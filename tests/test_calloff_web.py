@@ -527,6 +527,7 @@ def test_skip_a_day_bounds_follow_the_household_date(house: TestClient, clock: F
     assert 'min="2026-10-22" max="2026-10-29"' in html
     late = submit(house, "/admin/schedule/skip", {"slot": "dinner", "day": "2026-10-30"})
     assert late.status_code == 409 and "up to 7 days ahead" in page(late)
+    assert 'href="/schedule" aria-current="page"' in late.text  # the Schedule page, and the nav says so
     today = submit(house, "/admin/schedule/skip", {"slot": "dinner", "day": "2026-10-22"})
     assert today.status_code == 303
     assert [str(e.date) for e in rows(migrated, EventRow)] == ["2026-10-22"]

@@ -302,5 +302,6 @@ async def skip_day(
         typed = {"slot": slot, "day": day, "reason": reason}
         page = await _schedule_page(db, principal, context, skip_error=str(exc))
         status = 400 if isinstance(exc, BadFormValue) else 409  # a malformed form, or a rule refusal
-        return await render(request, "schedule.html", page | {"skip": typed}, status_code=status)
+        page |= {"skip": typed, "nav_path": "/schedule"}  # the Schedule page, so the nav says so
+        return await render(request, "schedule.html", page, status_code=status)
     return RedirectResponse("/schedule?notice=skipped#skip", status_code=303)

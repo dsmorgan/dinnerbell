@@ -5,6 +5,7 @@ decision, direct messages carry the buttons they mention, and each page is linke
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
+from dataclasses import replace
 from typing import Any
 
 import pytest
@@ -12,11 +13,14 @@ import pytest
 from dinnerbell.channels.slack import ids, preview
 from dinnerbell.channels.slack.interactions import GUEST_TAPS
 from dinnerbell.channels.slack.messages import RenderContext, render
+from dinnerbell.channels.slack.views import HomeLinks, home_view
 from dinnerbell.config import Settings
 from dinnerbell.db.outbox import OutboxRepository
 from dinnerbell.domain import notifications as note
 from dinnerbell.domain.events import EventState
+from dinnerbell.domain.meals import Slot
 from dinnerbell.services.database import Database, open_database
+from dinnerbell.services.event_views import TodayView
 from tests.support.calls import OPENS, RESPOND_BY, House, dinner_id, furnish, make_house
 from tests.support.clock import FakeClock
 from tests.support.fake_slack import CHANNEL
@@ -220,3 +224,11 @@ async def test_the_workspace_address_comes_from_auth_test(slack: Slack) -> None:
 
 def test_the_samples_cover_the_new_home_states() -> None:
     assert {"home_voting", "home_voting_no_coordinator", "home_decided_cook"} <= set(preview.KINDS)
+
+
+def test_a_voted_name_cant_break_out_of_its_bold() -> None:
+    first = preview.VOTED_VIEW.proposals[0]
+    item = replace(first.info.item, name="*Taco* _Bell_ ~x~")
+    view = replace(preview.VOTED_VIEW, proposals=(replace(first, info=replace(first.info, item=item)),))
+    home = home_view(TodayView(preview.DAY, [view], tuple(Slot)), HomeLinks(preview.BASE_URL))
+    assert "You voted for *Taco Bell x*." in _text(home["blocks"])

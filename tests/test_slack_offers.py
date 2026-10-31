@@ -20,7 +20,7 @@ from dinnerbell.domain.catalog import Mode
 from dinnerbell.domain.events import EventState
 from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.offers import FULL
-from dinnerbell.services import offers
+from dinnerbell.services import calls, offers
 from dinnerbell.services.database import Database, open_database
 from tests.support.calls import House, furnish, make_house
 from tests.support.clock import FakeClock
@@ -374,9 +374,51 @@ async def test_cancel_asks_which_when_you_may_call_off_two_offers(slack: Slack, 
     await _posted_offer(slack, house)
     taqueria = house.items["Taqueria"].id
     await submit_form(slack, "Sam", ids.OFFER_VIEW, offer_values(taqueria), ids.FormOrigin(CHANNEL))
-    await slack.command("Alex", "cancel lunch")  # an admin may call off both
+    sams = next(e for e in await _lunch_offers(house) if e.created_by == house["Sam"].id)
+    await slack.command("Alex", "cancel lunch")  # an admin naming the slot may call off either
     assert slack.ephemerals("Alex")[-1] == MANY_OFFERS.format(slot="lunch", when="today")
-    await slack.command("Alex", "cancel")
-    assert slack.ephemerals("Alex")[-1] == MANY_OFFERS.format(slot="lunch", when="today")
-    await slack.command("Sam", "cancel")  # Sam may call off only his own
+    await slack.command("Alex", "cancel")  # without a slot, only Alex's own offer (#149)
+    assert slack.ephemerals("Alex")[-1] == "You called off the lunch offer for Thursday, Oct 22."
+    assert (await house.event(sams.id)).state is EventState.COLLECTING  # Sam's is untouched
+    await slack.command("Alex", "cancel lunch")  # now Sam's is the only one, and the admin may
+    assert (await house.event(sams.id)).state is EventState.CANCELLED
+
+
+async def test_a_bare_cancel_leaves_other_peoples_offers_to_a_named_slot(slack: Slack, house: House) -> None:
+    taqueria = house.items["Taqueria"].id
+    await submit_form(slack, "Sam", ids.OFFER_VIEW, offer_values(taqueria), ids.FormOrigin(CHANNEL))
+    await slack.command("Alex", "cancel")  # an admin, with no offer of his own
+    assert slack.ephemerals("Alex")[-1] == "There's no open call or offer to call off today."
+    await slack.command("Sam", "cancel")
     assert slack.ephemerals("Sam")[-1] == "You called off the lunch offer for Thursday, Oct 22."
+
+
+async def test_cancel_with_a_slot_reaches_your_offer_past_a_call_you_cant_call_off(slack: Slack, house: House) -> None:
+    """Kim can't call off the scheduled dinner call (the scheduler made it), so `cancel dinner`
+    reaches her dinner offer (#149)."""
+    async with house.sessionmaker() as db:
+        call = await calls.start_call(db, house["Alex"], Slot.DINNER, DAY + timedelta(days=1), now=house.clock())
+        await offers.post_offer(
+            db,
+            house["Kim"],
+            offers.OfferInput(
+                slot=Slot.DINNER,
+                day=DAY + timedelta(days=1),
+                mode=Mode.PICKUP,
+                at=time(18, 30),
+                capacity=3,
+                item_id=house.items["Siam Garden"].id,
+            ),
+            now=house.clock(),
+        )
+    assert (await house.event(call.id)).state is EventState.SCHEDULED
+    await slack.command("Kim", "cancel dinner tomorrow")
+    assert slack.ephemerals("Kim")[-1] == "You called off the dinner offer for Friday, Oct 23."
+    assert (await house.event(call.id)).state is EventState.SCHEDULED
+
+
+async def _lunch_offers(house: House) -> list[Any]:
+    from dinnerbell.db.events import EventRepository
+
+    async with house.sessionmaker() as db:
+        return await EventRepository(db).offers_for(house.household.id, Slot.LUNCH, DAY)

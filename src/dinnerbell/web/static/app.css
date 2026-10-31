@@ -423,11 +423,15 @@ ins { color: var(--ok); text-decoration: none; }
 .row-label { margin: 0.5rem 0 0.3rem; }
 .segmented { display: flex; width: 100%; max-width: 26rem; margin: 0 0 0.6rem; }
 .segmented > form { display: flex; flex: 1 1 0; min-width: 0; }
-.segmented .button { flex: 1 1 auto; min-width: 0; min-height: 44px; padding: 0 0.5rem; border-radius: 0; margin-left: -1px; }
-.segmented > form:first-child .button { border-radius: 12px 0 0 12px; margin-left: 0; }
-.segmented > form:last-child .button { border-radius: 0 12px 12px 0; }
-.segmented .button[aria-pressed="true"] { position: relative; z-index: 1; background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
-.segmented .button[aria-pressed="true"]::before { content: "\2713\00a0"; }
+.segmented .answer-option { flex: 1 1 auto; min-width: 0; min-height: 44px; padding: 0 0.5rem; border-radius: 0; margin-left: -1px; }
+.segmented > form:first-child .answer-option { border-radius: 12px 0 0 12px; margin-left: 0; }
+.segmented > form:last-child .answer-option { border-radius: 0 12px 12px 0; }
+.segmented .answer-option[aria-current="true"] { position: relative; z-index: 1; background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+.segmented .answer-option[aria-current="true"]::before { content: "\2713\00a0"; }
+/* Inside the joined control, so a neighbor can't cover the ring; on the filled choice, the ring
+   takes the text color, which contrasts with the accent fill. */
+.segmented .answer-option:focus-visible { position: relative; z-index: 2; outline-offset: -3px; }
+.segmented .answer-option[aria-current="true"]:focus-visible { outline-color: var(--accent-text); }
 .chip.offer { border-style: dashed; }
 .roster, .proposals { list-style: none; padding: 0; margin: 0 0 0.75rem; }
 .roster li { padding: 0.45rem 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }

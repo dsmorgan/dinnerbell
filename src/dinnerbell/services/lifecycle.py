@@ -435,10 +435,11 @@ async def ranking_snapshot(
 
 
 async def _close_responses(db: AsyncSession, event: Event, now: datetime) -> None:
-    """The response deadline: rank with everyone who might eat, turn maybes out and tell them,
-    then abandon (fewer than two, or nothing fits) or open voting. Picks that offers added while
-    responses were open (FR-5) stay if they still fit, after the ranked ones; ranking leaves their
-    places out and still proposes its usual number (#77). Before the deadline,
+    """The response deadline: rank with everyone who might eat, turn maybes out, then abandon
+    (fewer than two, or nothing fits) or open voting and tell the maybes they can still join
+    late. Picks that offers added while responses were open (FR-5) stay if they still fit, after
+    the ranked ones; ranking leaves their places out and still proposes its usual number (#77).
+    Before the deadline,
     because everyone answered (FR-56), the deadline moves to now first, so voting gets its
     usual length from now, as when the coordinator closes the window."""
     if now < event.respond_deadline:
@@ -454,8 +455,6 @@ async def _close_responses(db: AsyncSession, event: Event, now: datetime) -> Non
     resolved = resolve_maybes(ctx.responses)
     for response in resolved:
         await ResponseRepository(db).save(event.household_id, event.id, response, now)
-    info = cc.event_info(ctx)
-    await publish(db, ctx, *(note.MaybeResolved(info, ctx.person(r.member_id)) for r in resolved), now=now)
     if head_count(ctx.responses) < MIN_HEAD_COUNT:  # maybes never count toward the head count
         await abandon(db, event, EndReason.TOO_FEW, now)
         return
@@ -483,6 +482,9 @@ async def _close_responses(db: AsyncSession, event: Event, now: datetime) -> Non
     voting = replace(event, state=transition(event.state, EventState.VOTING), vote_deadline=vote_deadline)
     voting = await EventRepository(db).save(voting, now)
     ctx = await load(db, voting)
+    # Only now: their message offers I'm in (late), which a call that ended can't take (#149).
+    info = cc.event_info(ctx)
+    await publish(db, ctx, *(note.MaybeResolved(info, ctx.person(r.member_id)) for r in resolved), now=now)
     await publish(db, ctx, cc.proposals_ready(ctx), now=now)
     await publish(db, ctx, cc.call_updated(ctx), now=now)
     payload = {"proposals": [{"item_id": r.item_id, "mode": r.mode.value, "score": r.score} for r in ranked]}
