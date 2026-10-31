@@ -14,7 +14,7 @@
           "type": "mrkdwn"
         },
         {
-          "text": "<https://dinnerbell.example.com/schedule|See the schedule>",
+          "text": "<https://dinnerbell.example.com/schedule|Schedule on the web>",
           "type": "mrkdwn"
         }
       ],

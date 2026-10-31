@@ -26,6 +26,10 @@
         {
           "text": "Here's to a tasty January!",
           "type": "mrkdwn"
+        },
+        {
+          "text": "<https://dinnerbell.example.com/stats|Stats on the web>",
+          "type": "mrkdwn"
         }
       ],
       "type": "context"

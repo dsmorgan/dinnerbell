@@ -54,6 +54,52 @@
       "type": "actions"
     },
     {
+      "block_id": "roles",
+      "elements": [
+        {
+          "action_id": "card_offer_cook",
+          "text": {
+            "emoji": true,
+            "text": "I can cook",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "7:1"
+        },
+        {
+          "action_id": "card_offer_pickup",
+          "text": {
+            "emoji": true,
+            "text": "I can pick up",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "7:1"
+        },
+        {
+          "action_id": "card_offer_order",
+          "text": {
+            "emoji": true,
+            "text": "I'll order",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "7:1"
+        },
+        {
+          "action_id": "card_coordinate",
+          "text": {
+            "emoji": true,
+            "text": "I'll coordinate",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "7:1"
+        }
+      ],
+      "type": "actions"
+    },
+    {
       "block_id": "more",
       "elements": [
         {
@@ -68,6 +114,15 @@
         }
       ],
       "type": "actions"
+    },
+    {
+      "elements": [
+        {
+          "text": "Don't want reminders? Turn them off in <https://dinnerbell.example.com/preferences|your preferences>.",
+          "type": "mrkdwn"
+        }
+      ],
+      "type": "context"
     }
   ],
   "text": "Your answer for dinner on Thursday, Oct 22: Maybe."

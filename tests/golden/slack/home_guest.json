@@ -85,7 +85,7 @@
           "action_id": "link_event",
           "text": {
             "emoji": true,
-            "text": "Open",
+            "text": "View on web",
             "type": "plain_text"
           },
           "type": "button",

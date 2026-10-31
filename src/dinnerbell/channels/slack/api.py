@@ -213,6 +213,8 @@ class Identity:
 
     team_id: str
     bot_user_id: str
+    url: str = ""
+    """The workspace's address, such as ``https://example.slack.com/``, for message links."""
 
 
 class SlackApi:
@@ -305,7 +307,12 @@ class SlackApi:
 
     async def identity(self) -> Identity:
         response = await self._call("auth.test", self.client.auth_test)
-        return Identity(team_id=str(response["team_id"]), bot_user_id=str(response["user_id"]))
+        url = response.get("url")
+        return Identity(
+            team_id=str(response["team_id"]),
+            bot_user_id=str(response["user_id"]),
+            url=url if isinstance(url, str) else "",
+        )
 
     async def channel_info(self, channel: str) -> dict[str, Any]:
         response = await self._call("conversations.info", lambda: self.client.conversations_info(channel=channel))

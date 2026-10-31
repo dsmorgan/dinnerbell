@@ -151,7 +151,13 @@ class FakeSlack(AsyncWebClient):
     def _answer(self, method: str, args: dict[str, Any]) -> dict[str, Any]:
         match method:
             case "auth.test":
-                return {"team_id": self.team_id, "user_id": BOT_USER, "bot_id": "B0BOT", "team": "Home"}
+                return {
+                    "team_id": self.team_id,
+                    "user_id": BOT_USER,
+                    "bot_id": "B0BOT",
+                    "team": "Home",
+                    "url": "https://home.slack.com/",
+                }
             case "apps.connections.open":
                 return {"url": "wss://wss.slack.invalid/link"}
             case "conversations.info":

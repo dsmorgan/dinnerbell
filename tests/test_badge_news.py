@@ -402,9 +402,10 @@ async def test_the_recap_thanks_people_by_group_with_no_counts(house: House) -> 
     groups = {g.kind: [p.name for p in g.people] for g in post.thanks}
     assert groups == {"picked_up": ["Alex", "Kim"], "coordinated": ["Sam"]}  # A to Z, not most to least
     assert "Lee" not in json.dumps(post.thanks, default=str)  # Lee never pitched in: no line says so
-    from dinnerbell.channels.slack.messages import monthly_recap_message
+    from dinnerbell.channels.slack.blocks import Directory
+    from dinnerbell.channels.slack.messages import RenderContext, monthly_recap_message
 
-    text_ = json.dumps(monthly_recap_message(post).blocks)
+    text_ = json.dumps(monthly_recap_message(post, RenderContext("https://x.example", Directory())).blocks)
     assert "Picked up:* Alex and Kim" in text_ and "Coordinated:* Sam" in text_
     for word in ("most", "least", "top", "rank", "leaderboard", "#1", "fewest", " times"):
         assert word not in text_.lower()

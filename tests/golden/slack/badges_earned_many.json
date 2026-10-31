@@ -12,6 +12,10 @@
         {
           "text": "Thank you for all you do to get a meal on the table.",
           "type": "mrkdwn"
+        },
+        {
+          "text": "<https://dinnerbell.example.com/stats|Stats on the web>",
+          "type": "mrkdwn"
         }
       ],
       "type": "context"

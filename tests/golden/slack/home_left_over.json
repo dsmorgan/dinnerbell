@@ -107,7 +107,7 @@
           "action_id": "link_event",
           "text": {
             "emoji": true,
-            "text": "Open",
+            "text": "View on web",
             "type": "plain_text"
           },
           "type": "button",
@@ -162,7 +162,7 @@
     {
       "block_id": "event-201",
       "text": {
-        "text": "*Dinner* · Wednesday, Oct 21 · Decided\nYou're in. You're bringing 1 guest. You offered to cook.\n*Coordinator:* Alex\nThe plan: *Sam's Tacos*",
+        "text": "*Dinner* · Wednesday, Oct 21 · Decided\nYou're in. You're bringing 1 guest. You offered to cook.\n*Coordinator:* Alex\nThe plan: *Sam's Tacos* at 6:45 PM",
         "type": "mrkdwn"
       },
       "type": "section"
@@ -207,7 +207,7 @@
           "action_id": "link_event",
           "text": {
             "emoji": true,
-            "text": "Open",
+            "text": "View on web",
             "type": "plain_text"
           },
           "type": "button",
@@ -219,7 +219,7 @@
     {
       "block_id": "event-202",
       "text": {
-        "text": "*Dinner* · Tuesday, Oct 20 · Decided\nYou're in. You're bringing 1 guest. You offered to cook.\n*Coordinator:* Alex\nThe plan: *Sam's Tacos*",
+        "text": "*Dinner* · Tuesday, Oct 20 · Decided\nYou're in. You're bringing 1 guest. You offered to cook.\n*Coordinator:* Alex\nThe plan: *Sam's Tacos* at 6:45 PM",
         "type": "mrkdwn"
       },
       "type": "section"
@@ -264,7 +264,7 @@
           "action_id": "link_event",
           "text": {
             "emoji": true,
-            "text": "Open",
+            "text": "View on web",
             "type": "plain_text"
           },
           "type": "button",
@@ -276,7 +276,7 @@
     {
       "block_id": "event-203",
       "text": {
-        "text": "*Dinner* · Monday, Oct 19 · Decided\nYou're in. You're bringing 1 guest. You offered to cook.\n*Coordinator:* Alex\nThe plan: *Sam's Tacos*",
+        "text": "*Dinner* · Monday, Oct 19 · Decided\nYou're in. You're bringing 1 guest. You offered to cook.\n*Coordinator:* Alex\nThe plan: *Sam's Tacos* at 6:45 PM",
         "type": "mrkdwn"
       },
       "type": "section"
@@ -321,7 +321,7 @@
           "action_id": "link_event",
           "text": {
             "emoji": true,
-            "text": "Open",
+            "text": "View on web",
             "type": "plain_text"
           },
           "type": "button",
@@ -345,7 +345,7 @@
     {
       "elements": [
         {
-          "text": "<https://dinnerbell.example.com/preferences|Your preferences> · <https://dinnerbell.example.com/catalog|Catalog> · <https://dinnerbell.example.com/history|History> · <https://dinnerbell.example.com/|Today on the web>",
+          "text": "<https://dinnerbell.example.com/preferences|Your preferences> · <https://dinnerbell.example.com/catalog|Catalog> · <https://dinnerbell.example.com/history|History> · <https://dinnerbell.example.com/stats|Stats> · <https://dinnerbell.example.com/schedule|Schedule> · <https://dinnerbell.example.com/|Today on the web>",
           "type": "mrkdwn"
         }
       ],

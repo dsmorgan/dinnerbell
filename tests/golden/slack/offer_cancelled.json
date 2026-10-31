@@ -10,7 +10,7 @@
     {
       "elements": [
         {
-          "text": "<https://dinnerbell.example.com/events/9|Open the call on the web>",
+          "text": "<https://dinnerbell.example.com/events/9|View on web>",
           "type": "mrkdwn"
         }
       ],

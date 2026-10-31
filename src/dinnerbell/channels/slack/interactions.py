@@ -140,6 +140,7 @@ from dinnerbell.services import (
     guests,
     meals,
     offers,
+    outbox,
     slack_members,
     stats,
 )
@@ -149,7 +150,7 @@ from dinnerbell.services.badge_files import RETRY_PAUSES, BadgeFiles
 from dinnerbell.services.clock import Clock
 from dinnerbell.services.coordinator import Adjustment
 from dinnerbell.services.errors import Forbidden, NotFound
-from dinnerbell.services.event_views import EventView
+from dinnerbell.services.event_views import EventView, TodayView
 from dinnerbell.services.lifecycle import CallExists
 from dinnerbell.services.stats import MemberStats
 
@@ -364,6 +365,8 @@ class Interactions:
         """The database's schema revision, read once at startup, for ``version``."""
         self.team_id: str | None = None
         """The workspace whose payloads are accepted. Until it's known, nothing is."""
+        self.team_url = ""
+        """The workspace's address, from ``auth.test``, for links to messages; empty until known."""
         self.tasks: set[asyncio.Task[None]] = set()
         self.dm_channels: dict[str, str] = {}
         """Slack user ID to the bot's DM with them, as conversations.open reported it."""
@@ -658,6 +661,7 @@ class Interactions:
                 today = await event_views.today_view(db, member, now=self.clock(), any_time=self.any_time)
                 awaiting = await feedback.awaiting(db, member, now=self.clock())
                 badges = await self._badges(db, member)
+                picks = await self._picks_links(db, member, today)
             fresh: set[str] = set()
             art = await self._badge_art(member, badges, fresh)
             picture = await self._badge_picture(member, badges, fresh)
@@ -674,6 +678,7 @@ class Interactions:
                     badges=badges,
                     badge_art=art,
                     badge_composite=picture,
+                    picks=picks,
                 )
 
             try:
@@ -724,6 +729,17 @@ class Interactions:
             else:
                 return
         await self.api.publish_home(user_id, with_version_footer(view, self.version, self.instance_label))
+
+    async def _picks_links(self, db: AsyncSession, member: Member, today: TodayView) -> dict[int, str]:
+        """Links to the picks post of each call voting on Home (#149), by event ID."""
+        voting = [v.info for v in today.events if v.event.state is EventState.VOTING]
+        if not voting or not self.team_url:
+            return {}
+        posts = await outbox.picks_posts(db, member.household_id, voting)
+        links = {
+            event_id: ids.permalink(self.team_url, ref.channel_id, ref.message_id) for event_id, ref in posts.items()
+        }
+        return {event_id: url for event_id, url in links.items() if url is not None}
 
     async def _badge_art(
         self, member: Member, badges: MemberStats | None, fresh: set[str]
@@ -893,6 +909,9 @@ class Interactions:
         if action_id == ids.POST_NOW:
             event_id, run = ids.parse_card(value)
             return await self._post_now(member, event_id, run)
+        if action_id == ids.RESTART:
+            event_id, run = ids.parse_card(value)
+            return await self._restart(member, event_id, run)
         if action_id == ids.CLOSE_WINDOW:  # Slack asked them to confirm already
             window, event_id, run = ids.parse_window(value)
             return await self._close(member, event_id, window, run)
@@ -1264,6 +1283,17 @@ class Interactions:
         event = view.event
         notice = f"The {event.slot.value} call for {day_label(event.day)} is posted in the Dinnerbell channel."
         return Reply(posted_reply(view.info, channel_id=self.channel_id, ctx=self._context()), notice)
+
+    async def _restart(self, member: Member, event_id: int, run: int) -> Done:
+        """**Start dinner again** where a call-off was told (#149): the same service as the web's
+        and Home's, for the run the button was drawn for."""
+        async with self.sessionmaker() as db:
+            await calls.restart_call(
+                db, member, event_id, run=run, now=self.clock(), instance_label=self.instance_label
+            )
+            today = await slack_members.today(db, member, now=self.clock())
+            view = await event_views.event_view(db, member, event_id, now=self.clock(), any_time=self.any_time)
+        return self._started(view, today)
 
     def _started(self, view: EventView, today: date) -> Message:
         """The reply to starting a call from the slash command: posted, or scheduled with

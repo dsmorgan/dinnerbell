@@ -17,7 +17,7 @@ from sqlalchemy import func, select
 from dinnerbell.channels.slack.badge_text import TIER_MARKS, tag
 from dinnerbell.channels.slack.blocks import MAX_MESSAGE_BLOCKS
 from dinnerbell.channels.slack.messages import Directory, RenderContext, render
-from dinnerbell.channels.slack.views import HomeLinks, _badges, art_wanted
+from dinnerbell.channels.slack.views import _badges, art_wanted
 from dinnerbell.config import Settings
 from dinnerbell.db.badge_files import BadgeFileRepository
 from dinnerbell.db.models import SlackBadgeCompositeRow
@@ -816,20 +816,20 @@ async def test_home_fits_thirteen_badges_in_two_icon_blocks_with_a_link_and_the_
     assert [len(r) for r in rows[:2]] == [10, 3]  # all 13 have art
     assert len(blocks) <= 100
     text = json.dumps(blocks, ensure_ascii=False)
-    assert "<https://dinnerbell.test/stats|All badges on the web>" in text
+    assert "<https://dinnerbell.test/stats|Stats>" in text  # in the link row (#149)
     assert "Also:" not in text
     nxt = next(b for b in blocks if b["type"] == "context" and "Next:" in json.dumps(b))
     assert nxt["elements"][0]["type"] == "image" and nxt["elements"][1]["type"] == "mrkdwn"
     assert all("accessory" not in b for b in blocks)
 
 
-async def test_home_leaves_out_the_link_without_a_web_address(house: House) -> None:
+async def test_the_badges_leave_the_stats_link_to_homes_link_row(house: House) -> None:
+    """Home links Stats in its link row, with or without art (#149), so the badges don't again."""
     await earn_everything(house)
     async with house.sessionmaker() as db:
         mine = await my_stats(db, house["Alex"])
     art = dict.fromkeys(art_wanted(mine), "F1")
-    assert any("All badges on the web" in json.dumps(b) for b in _badges(mine, art, HomeLinks("https://x.example")))
-    assert not any("All badges on the web" in json.dumps(b) for b in _badges(mine, art, HomeLinks("")))
+    assert not any("/stats" in json.dumps(b) for b in _badges(mine, art))
 
 
 async def test_home_without_art_keeps_the_text_layout_byte_for_byte(house: House) -> None:
@@ -1364,11 +1364,11 @@ def test_the_next_line_leaves_the_tier_emoji_off_beside_its_icon_and_keeps_it_wi
     from dinnerbell.channels.slack.preview import KIM_BADGES
 
     art = dict.fromkeys(art_wanted(KIM_BADGES), "F1")
-    with_icon = next(b for b in _badges(KIM_BADGES, art, HomeLinks("https://x.example")) if "Next:" in json.dumps(b))
+    with_icon = next(b for b in _badges(KIM_BADGES, art) if "Next:" in json.dumps(b))
     assert with_icon["elements"][0]["type"] == "image"
     text = with_icon["elements"][1]["text"]
     assert text.startswith("Next: *") and " · " in text and not any(m in text for m in TIER_MARKS.values())
-    plain = next(b for b in _badges(KIM_BADGES, {}, HomeLinks("https://x.example")) if "Next:" in json.dumps(b))
+    plain = next(b for b in _badges(KIM_BADGES, {}) if "Next:" in json.dumps(b))
     assert any(m in plain["elements"][0]["text"] for m in TIER_MARKS.values())
 
 
@@ -1376,9 +1376,9 @@ def test_the_home_block_budget_holds_with_the_picture() -> None:
     from dinnerbell.channels.slack.preview import KIM_BADGES
 
     art = dict.fromkeys(art_wanted(KIM_BADGES), "F1")
-    with_picture = _badges(KIM_BADGES, art, HomeLinks("https://x.example"), "FPIC")
-    assert len(with_picture) <= 6 and [b["type"] for b in with_picture][:2] == ["section", "image"]
-    assert len(_badges(KIM_BADGES, art, HomeLinks("https://x.example"))) <= 6
+    with_picture = _badges(KIM_BADGES, art, "FPIC")
+    assert len(with_picture) <= 4 and [b["type"] for b in with_picture][:2] == ["section", "image"]
+    assert len(_badges(KIM_BADGES, art)) <= 5
 
 
 # Review fixes (#115) -------------------------------------------------------------------------------

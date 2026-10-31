@@ -11,6 +11,16 @@
       "block_id": "more",
       "elements": [
         {
+          "action_id": "join_late",
+          "text": {
+            "emoji": true,
+            "text": "I'm in (late)",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "7:1"
+        },
+        {
           "action_id": "link_event",
           "text": {
             "emoji": true,

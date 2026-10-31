@@ -35,6 +35,7 @@ from dinnerbell.domain.notifications import (
     BadgesEarned,
     Channel,
     ChannelUnavailable,
+    EventInfo,
     GuestJoined,
     HeldDelivery,
     LinkNeeded,
@@ -43,6 +44,7 @@ from dinnerbell.domain.notifications import (
     Notification,
     PayloadError,
     PermanentDeliveryError,
+    ProposalsReady,
     ScheduleChanged,
     from_payload,
 )
@@ -70,6 +72,19 @@ NO_THREAD = "no message to thread under"
 MIN_HOLD = timedelta(seconds=5)
 """The shortest a held row waits, even if the channel asks for less."""
 SUPERSEDED = "superseded by a newer update"
+
+
+async def picks_posts(db: AsyncSession, household_id: int, events: list[EventInfo]) -> dict[int, MessageRef]:
+    """Where each of ``events``' picks post landed in the channel, by event ID, once it's
+    delivered (#149): App Home links it while the call is voting. The key names the run, so a
+    post from before a restart isn't linked."""
+    repo = OutboxRepository(db)
+    found: dict[int, MessageRef] = {}
+    for event in events:
+        ref = await repo.message_ref(household_id, f"{event.key}:{ProposalsReady.message_suffix}")
+        if ref is not None:
+            found[event.id] = ref
+    return found
 
 
 def retry_delay(attempts: int) -> timedelta:
