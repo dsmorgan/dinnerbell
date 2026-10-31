@@ -73,6 +73,8 @@ class Member:
     """A joined guest's Slack email (#38): never used to sign in."""
     slack_guest_account: bool = False
     """The guest joined with a Slack guest account, not as a full member of the workspace."""
+    fun_mode: bool = True
+    """Dinnerbone's Den and its celebrations on the web (#153). Off, the pages load none of it."""
 
     @property
     def is_admin(self) -> bool:

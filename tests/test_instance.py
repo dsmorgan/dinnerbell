@@ -170,7 +170,7 @@ def test_without_a_label_pages_have_no_banner(client: TestClient, provider: Fake
     text = client.get("/").text
     assert "instance" not in text
     # The template's output is unchanged around both insertions.
-    assert '}\'>\n  <header class="topbar">\n    <a class="brand" href="/">' in text
+    assert '>\n  <header class="topbar">\n    <a class="brand" href="/">' in text
     assert "<title>Today · " in text
 
 

@@ -1,0 +1,16 @@
+{#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
+{#- Fun mode on or off (#153), for whoever is signed in. On Preferences for a member, and on a
+    guest's own page. -#}
+<form method="post" action="/me/fun" class="card stack" id="fun-mode">
+  <h2>Fun mode</h2>
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <fieldset class="field compact">
+    <legend>Dinnerbone's Den</legend>
+    <p class="small muted">Dinnerbone, the hamster in the logo, lives beside your greeting on Today and follows the call. Off, your pages load none of it.</p>
+    <div class="segments two">
+      <label class="segment"><input type="radio" name="fun" value="on"{% if principal.member.fun_mode %} checked{% endif %}><span>On</span></label>
+      <label class="segment"><input type="radio" name="fun" value="off"{% if not principal.member.fun_mode %} checked{% endif %}><span>Off</span></label>
+    </div>
+  </fieldset>
+  <button type="submit" class="button">Save</button>
+</form>

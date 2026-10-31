@@ -1,0 +1,12 @@
+/* SPDX-License-Identifier: AGPL-3.0-or-later */
+/* Fun mode (#153): Dinnerbone's Den. Loaded only for a viewer who has fun mode on; with it off,
+   no page links this file.
+
+   The server puts the scene on <body>, in the household's time zone:
+     data-fun="on"
+     data-period="breakfast | lunch | afternoon | dinner | late"
+     data-season="spring | summer | autumn | winter"
+     data-season-depth="0" to "10"   (how far into the season: snow, leaves, or the puddle)
+   so every rule here keys on attribute selectors, such as body[data-season="winter"], and needs
+   no inline style. The base rules draw still poses; motion goes inside
+   @media (prefers-reduced-motion: no-preference). */

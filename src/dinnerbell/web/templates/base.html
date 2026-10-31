@@ -17,8 +17,13 @@
   <link rel="stylesheet" href="/static/app.css?v={{ version|urlencode }}">
   <script src="/static/{{ htmx_file }}" defer></script>
   <script src="/static/app.js?v={{ version|urlencode }}" defer></script>
+  {#- Fun mode (#153): only for a viewer who has it on. Off, the page is exactly as without it. #}
+  {%- if fun %}
+  <link rel="stylesheet" href="/static/fun.css?v={{ version|urlencode }}">
+  <script src="/static/fun.js?v={{ version|urlencode }}" defer></script>
+  {%- endif %}
 </head>
-<body{% if csrf_token %} hx-headers='{{ {"X-CSRF-Token": csrf_token}|tojson }}'{% endif %}>
+<body{% if csrf_token %} hx-headers='{{ {"X-CSRF-Token": csrf_token}|tojson }}'{% endif %}{% if fun %} data-fun="on" data-period="{{ fun.period }}" data-season="{{ fun.season }}" data-season-depth="{{ fun.depth }}"{% endif %}>
   <header class="topbar">{% if instance_label %}
     <div class="instance-banner" role="note">{{ instance_label }} instance</div>{% endif %}
     <a class="brand" href="/">

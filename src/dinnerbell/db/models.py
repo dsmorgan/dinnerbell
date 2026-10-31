@@ -30,6 +30,7 @@ from sqlalchemy import (
     UniqueConstraint,
     false,
     text,
+    true,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -95,6 +96,8 @@ class MemberRow(Base):
     """An admin removed this guest, so joining from the channel is refused (#38)."""
     slack_guest_account: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     """The guest joined with a Slack guest account, not as a full member of the workspace (#38)."""
+    fun_mode: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true())
+    """Dinnerbone's Den on the web (#153), on unless the member or guest turned it off."""
     created_at: Mapped[datetime] = mapped_column(UTCDateTime())
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime())
 

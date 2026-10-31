@@ -1,6 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """A guest's own page (#38 rule 4): their dietary needs, the one thing about themselves a guest
-changes. Members set preferences instead, on the Preferences page."""
+changes that matters to anyone else. Members set preferences instead, on the Preferences page.
+
+``/me/fun`` turns fun mode (#153) on or off for whoever is signed in, member or guest: the
+form is on this page for a guest and on Preferences for a member."""
 
 from __future__ import annotations
 
@@ -13,12 +16,14 @@ from starlette.responses import Response
 from dinnerbell.domain.events import EventRuleViolation
 from dinnerbell.domain.members import InvalidMemberInput
 from dinnerbell.services import activity, guests
+from dinnerbell.services.fun import set_my_fun_mode
 from dinnerbell.web.auth import Context, Database, GuestCSRFChecked, GuestOrMember
 from dinnerbell.web.forms import parse_id
 from dinnerbell.web.render import render
 
 router = APIRouter()
 Needs = Annotated[list[str] | None, Form()]
+FUN_CHOICES = {"on": True, "off": False}
 
 
 @router.get("/me")
@@ -45,3 +50,22 @@ async def save_my_needs(
     if not principal.member.is_guest:  # a member's form is on Preferences
         return RedirectResponse("/preferences?notice=settings", status_code=303)
     return RedirectResponse("/me?saved=1", status_code=303)
+
+
+@router.post("/me/fun")
+async def save_my_fun_mode(
+    request: Request,
+    principal: GuestCSRFChecked,
+    context: Context,
+    db: Database,
+    fun: Annotated[str, Form(max_length=3)] = "",
+) -> Response:
+    """Fun mode on or off for the signed-in person (#153), from Preferences or a guest's page."""
+    on = FUN_CHOICES.get(fun)
+    if on is None:
+        message = "Choose On or Off."
+        return await render(request, "error.html", {"title": "Not saved", "message": message}, status_code=400)
+    await set_my_fun_mode(db, principal.member, on, now=context.clock())
+    if principal.member.is_guest:
+        return RedirectResponse("/me?saved=1", status_code=303)
+    return RedirectResponse("/preferences?notice=settings", status_code=303)
