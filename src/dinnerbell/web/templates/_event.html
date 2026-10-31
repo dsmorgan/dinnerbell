@@ -1,14 +1,14 @@
 {#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
 {#- One event's card. Expects v (an EventView), from_page ("today" or "event"), and optionally
     error. Every action is a small form that HTMX posts, swapping this card in place. -#}
-{% macro act(eid, path, label, cls="button small", fields={}, confirm=None, pressed=None) -%}
+{% macro act(eid, path, label, cls="button small", fields={}, confirm=None, pressed=None, current=False) -%}
 <form method="post" action="{{ path }}" class="inline" hx-post="{{ path }}" hx-target="#event-{{ eid }}" hx-swap="outerHTML"{% if confirm %} hx-confirm="{{ confirm }}"{% endif %}>
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   <input type="hidden" name="from" value="{{ from_page }}">
   {%- for name, value in fields.items() %}
   <input type="hidden" name="{{ name }}" value="{{ value }}">
   {%- endfor %}
-  <button type="submit" class="{{ cls }}"{% if pressed is not none %} aria-pressed="{{ 'true' if pressed else 'false' }}"{% endif %}>{{ label }}</button>
+  <button type="submit" class="{{ cls }}"{% if pressed is not none %} aria-pressed="{{ 'true' if pressed else 'false' }}"{% endif %}{% if current %} aria-current="true"{% endif %}>{{ label }}</button>
 </form>
 {%- endmacro %}
 {% macro hidden() -%}
@@ -86,7 +86,7 @@
   <p class="row-label small muted" id="event-{{ e.id }}-answer">Are you in?</p>
   <div class="segmented answer" role="group" aria-labelledby="event-{{ e.id }}-answer">
     {% for status in (labels.GUEST_ANSWER_ORDER if as_guest else labels.ANSWER_ORDER) %}
-    {{ act(e.id, base ~ "/respond", labels.ANSWER_LABELS[status], "button segment", {"status": status.value}, pressed=(mine is not none and mine.status == status)) }}
+    {{ act(e.id, base ~ "/respond", labels.ANSWER_LABELS[status], "button answer-option", {"status": status.value}, current=(mine is not none and mine.status == status)) }}
     {% endfor %}
   </div>
   <p class="row-label small muted" id="event-{{ e.id }}-roles">Can you help? Tap each one that fits.</p>
@@ -187,7 +187,7 @@
       {% if g.answerable %}
       <div class="segmented answer" role="group" aria-label="Is {{ g.person.name }} in?">
         {% for status in labels.GUEST_ANSWER_ORDER %}
-        {{ act(e.id, base ~ "/guests/" ~ g.person.id ~ "/answer", labels.ANSWER_LABELS[status], "button segment", {"status": status.value, "run": e.run}, pressed=(g.answer is not none and g.answer.status == status)) }}
+        {{ act(e.id, base ~ "/guests/" ~ g.person.id ~ "/answer", labels.ANSWER_LABELS[status], "button answer-option", {"status": status.value, "run": e.run}, current=(g.answer is not none and g.answer.status == status)) }}
         {% endfor %}
       </div>
       <div class="button-row roles" role="group" aria-label="What {{ g.person.name }} can do">

@@ -651,7 +651,7 @@ def assign_roles_button(event: note.EventInfo) -> Block:
     return button("Assign roles", ids.ASSIGN_ROLES, ids.card_value(event.id, event.run))
 
 
-ADJUST = "Adjust"
+ADJUST = labels.ADJUST
 
 
 def adjust_button(event: note.EventInfo) -> Block:

@@ -46,6 +46,7 @@ from dinnerbell.channels.slack.messages import (
     CANT_MAKE_IT,
     CLOSE_LABELS,
     DROP_GUEST,
+    MARKERS,
     OFFER_VERBS,
     POST_NOW,
     adjust_button,
@@ -835,7 +836,7 @@ def _voting_lines(v: EventView, picks_url: str | None) -> list[str]:
     """While voting, Home doesn't vote (#149, Q2): it says how the member voted and links the
     picks post in the channel, where they vote, or says where it is when there's no link yet."""
     lines: list[str] = []
-    voted = [escape(p.info.item.name) for p in v.proposals if p.voted]
+    voted = [escape(p.info.item.name.translate(MARKERS)) for p in v.proposals if p.voted]  # they sit in bold
     if voted:
         lines.append(f"You voted for *{'*, *'.join(voted)}*.")
     elif v.can.vote:
@@ -1138,7 +1139,7 @@ def home_view(
     which its card links (#149). ``label``, the instance label, prefixes the header when set.
     ``member_id`` is whose it is, so a call they coordinate says so.
     ``awaiting`` lists meals the member hasn't given feedback on yet. ``badges``, the member's own
-    stats, adds a "Your badges" section above the links: two blocks, or up to six with art
+    stats, adds a "Your badges" section above the links: two blocks, or up to five with art
     (``badge_art``, from ``BadgeFiles``) or the picture of them all (``badge_composite``); see ``_badges``.
     A guest's Home (``guest``) shows only the calls they're invited to, with In, Out, and what they may do, and none of
     the household's buttons or links (#38).

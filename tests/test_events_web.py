@@ -85,7 +85,7 @@ def test_start_a_call_and_respond(admin: TestClient, migrated: Settings) -> None
     card = htmx(admin, f"/events/{event_id}/respond", {"status": "in", "from": "today"})
     assert card.status_code == 200
     assert f'id="event-{event_id}"' in card.text and "<html" not in card.text
-    assert re.search(r'aria-pressed="true">In<', card.text)
+    assert re.search(r'aria-current="true">In<', card.text)
     plain = submit(admin, f"/events/{event_id}/respond", {"status": "maybe", "from": "today"})
     assert (plain.status_code, plain.headers["location"]) == (303, "/")
     elsewhere = submit(admin, f"/events/{event_id}/respond", {"status": "in", "from": "//evil"})
@@ -102,8 +102,9 @@ def test_the_answers_are_one_toggle_in_slacks_order_apart_from_the_roles(admin: 
     card = htmx(admin, f"/events/{event_id}/respond", {"status": "maybe", "from": "today"}).text
     answers = re.search(r'<div class="segmented answer"[^>]*>(.*?)</div>', card, re.S)
     assert answers is not None
-    labels = re.findall(r'aria-pressed="(true|false)">(\w+)<', answers.group(1))
-    assert labels == [("false", "In"), ("true", "Maybe"), ("false", "Out")]
+    labels = re.findall(r'class="button answer-option"( aria-current="true")?>(\w+)<', answers.group(1))
+    assert labels == [("", "In"), (' aria-current="true"', "Maybe"), ("", "Out")]
+    assert "aria-pressed" not in answers.group(1)  # one choice of three, not three toggles
     roles = re.search(r'<div class="button-row roles"[^>]*>(.*?)</div>', card, re.S)
     assert roles is not None and "I can cook" in roles.group(1) and "Maybe" not in roles.group(1)
     assert card.index("segmented answer") < card.index("button-row roles")

@@ -437,6 +437,11 @@ async def calls_on(db: AsyncSession, actor: Member, day: date) -> list[Event]:
     return [event for event in found if event is not None]
 
 
+def may_cancel(event: Event, actor: Member) -> bool:
+    """Whether ``actor`` may call off ``event`` now (FR-56): ``calls.cancel_call``'s rule."""
+    return _allowed(functools.partial(rules.check_can_cancel, event, actor))
+
+
 async def offers_on(db: AsyncSession, actor: Member, day: date) -> list[Event]:
     """The open offers on ``day`` that ``actor`` may call off (#149): their own, or any for an
     admin, in slot order, so ``/dinnerbell cancel`` finds them as well as calls."""
@@ -444,7 +449,7 @@ async def offers_on(db: AsyncSession, actor: Member, day: date) -> list[Event]:
     found: list[Event] = []
     for slot in Slot:
         for event in await events.offers_for(actor.household_id, slot, day):
-            if event.state.is_open and _allowed(functools.partial(rules.check_can_cancel, event, actor)):
+            if event.state.is_open and may_cancel(event, actor):
                 found.append(event)
     return found
 

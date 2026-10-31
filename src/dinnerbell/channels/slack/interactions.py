@@ -1852,8 +1852,9 @@ class Interactions:
 
     async def _cancel_command(self, source: Source, args: list[str]) -> None:
         """``cancel [breakfast|lunch|dinner] [day] [reason]``: call off that call, or today's only
-        open one. An open offer the member may call off counts too (#149), in a slot with no open
-        call: a call comes first in its slot, as before offers counted."""
+        open one. Offers count too (#149): without a slot, the member's own open offers; with one,
+        any open offer they may call off there, an admin's being anyone's. An open call they may
+        call off comes first in its slot, as before offers counted."""
         member = await self._member(source)
         if member is None:
             return
@@ -1869,8 +1870,10 @@ class Interactions:
                 found = await event_views.calls_on(db, member, on)
                 offered = await event_views.offers_on(db, member, on)
             when = "today" if on == today else f"on {day_label(on)}"
-            open_calls = {event.slot for event in found if event.state.is_open}
-            offered = [event for event in offered if event.slot not in open_calls]  # the call comes first
+            # A call they may call off comes first in its slot; one they may not leaves the slot to
+            # their offer, so `cancel lunch` reaches it (#149).
+            open_calls = {e.slot for e in found if e.state.is_open and event_views.may_cancel(e, member)}
+            offered = [event for event in offered if event.slot not in open_calls]
             if slot is not None:
                 found = [event for event in found if event.slot is slot]
                 theirs = [event for event in offered if event.slot is slot]
@@ -1881,7 +1884,11 @@ class Interactions:
                 if not found:
                     raise EventRuleViolation(f"There's no {slot.value} call {when}.", code="no_call")
             else:
-                found = [event for event in found if event.state.is_open] + offered
+                # Without a slot, only their own offers: an admin names the slot to call off
+                # someone else's (#149).
+                mine = [event for event in offered if event.created_by == member.id]
+                callable_off = [e for e in found if e.state.is_open and e.slot in open_calls]
+                found = (callable_off + mine) or [e for e in found if e.state.is_open]
                 if not found:
                     raise EventRuleViolation(NO_OPEN_CALL.format(when=when), code="no_call")
                 if len(found) > 1:

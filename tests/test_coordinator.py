@@ -19,6 +19,7 @@ from fastapi.testclient import TestClient
 
 from dinnerbell.channels.slack import ids
 from dinnerbell.channels.slack.blocks import Directory
+from dinnerbell.channels.slack.interactions import NOBODY_IN
 from dinnerbell.channels.slack.messages import RenderContext, render
 from dinnerbell.config import Settings
 from dinnerbell.db.events import ResponseRepository
@@ -1485,6 +1486,21 @@ async def test_slack_assign_roles_opens_a_modal_for_the_coordinator_and_saves_th
     await slack.drain()
     told = [c for c in slack.fake.of("chat.postMessage") if c.args["channel"] == "U04LEE"]
     assert told and "Alex assigned you this" in json.dumps(told[-1].args)
+
+
+async def test_slack_assign_roles_with_nobody_in_left_says_so(slack: Slack, house: House) -> None:
+    """Kim coordinates without eating; once everyone who was in is turned off, there's nobody to
+    assign, and Slack would refuse a select with no options, so no modal opens (#157)."""
+    event_id = await to_voting(house, "Sam", pickups=("Alex", "Sam"), coordinator_name="Kim")
+    await vote(house, "Sam", event_id, (await pick_ids(house, event_id))["Siam Garden"])
+    await at_deadline(house, event_id)
+    assert (await house.event(event_id)).state is EventState.DECIDED
+    async with house.sessionmaker() as db:
+        for name in ("Alex", "Sam"):
+            await MemberRepository(db).update(house.household.id, house[name].id, house.clock(), active=False)
+        await db.commit()
+    await slack.click("Kim", ids.ASSIGN_ROLES, ids.card_value(event_id, 1))
+    assert not slack.fake.of("views.open") and slack.ephemerals("Kim")[-1] == NOBODY_IN
 
 
 async def test_slack_assign_roles_modal_checks_its_fields_and_its_run(slack: Slack, house: House) -> None:

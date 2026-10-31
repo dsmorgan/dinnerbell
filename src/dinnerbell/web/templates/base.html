@@ -30,7 +30,8 @@
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <button type="submit" class="link">Sign out</button>
     </form>
-    {% set path = request.url.path %}
+    {#- nav_path: the page a form posted elsewhere shows, such as Skip a day's errors on Schedule. -#}
+    {% set path = nav_path or request.url.path %}
     <nav class="nav" aria-label="Main">
       <a href="/"{% if path == "/" %} aria-current="page"{% endif %}>Today</a>
       {% if principal.member.is_guest %}
