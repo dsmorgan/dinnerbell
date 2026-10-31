@@ -463,7 +463,10 @@ def close_modal(v: EventView, origin: ids.ViewOrigin) -> dict[str, Any]:
 
 # Feedback (FR-45 to FR-49) -------------------------------------------------------------------------
 
-PRIVATE = "Only you see your rating and what went wrong. The catalog shows only how many loved an item, never who."
+PRIVATE = (
+    "Only you see your rating and what went wrong. The household sees a summary of everyone's, such as "
+    '"Well liked" or "Recently late," never who said what. Your rating can also move your own score for it.'
+)
 THANKS = "thanks"
 NO_ANSWER = option("No answer", "none")
 """Slack can't unselect a radio button, so this is how a rating is cleared, as on the web."""

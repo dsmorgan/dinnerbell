@@ -115,18 +115,18 @@
           {
             "text": {
               "emoji": true,
-              "text": "Late",
-              "type": "plain_text"
-            },
-            "value": "late"
-          },
-          {
-            "text": {
-              "emoji": true,
               "text": "Wrong order",
               "type": "plain_text"
             },
             "value": "wrong_order"
+          },
+          {
+            "text": {
+              "emoji": true,
+              "text": "Late",
+              "type": "plain_text"
+            },
+            "value": "late"
           },
           {
             "text": {
@@ -179,7 +179,7 @@
     {
       "elements": [
         {
-          "text": "Only you see your rating and what went wrong. The catalog shows only how many loved an item, never who. You can change it until Thursday, Oct 29.",
+          "text": "Only you see your rating and what went wrong. The household sees a summary of everyone's, such as \"Well liked\" or \"Recently late,\" never who said what. Your rating can also move your own score for it. You can change it until Thursday, Oct 29.",
           "type": "mrkdwn"
         }
       ],

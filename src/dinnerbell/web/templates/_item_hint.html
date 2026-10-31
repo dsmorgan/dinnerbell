@@ -1,0 +1,7 @@
+{#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
+{#- The household's hint for one catalog item, such as "Mixed reviews · recently late" (FR-49,
+    FR-55). It comes from everyone's ratings and issues, names nobody, and never quotes the
+    "Other" text. Expects hint, a string, or None. -#}
+{% if hint %}
+<p class="small item-feedback">{{ hint }}</p>
+{% endif %}

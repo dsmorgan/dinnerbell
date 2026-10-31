@@ -19,6 +19,7 @@ from dinnerbell.domain.preferences import LEVEL_LABELS, LEVELS, NEUTRAL, Invalid
 from dinnerbell.services import guests
 from dinnerbell.services import preferences as preference_service
 from dinnerbell.services.errors import NotFound
+from dinnerbell.services.variety import household_today
 from dinnerbell.web.auth import Context, CSRFChecked, Database, Principal, SignedIn
 from dinnerbell.web.forms import checked, choice, parse_id
 from dinnerbell.web.redirects import local_redirect
@@ -35,8 +36,11 @@ def _levels() -> list[tuple[str, str]]:
 
 
 @router.get("")
-async def preferences_page(request: Request, principal: SignedIn, db: Database, notice: str = "") -> Response:
-    mine = await preference_service.my_preferences(db, principal.member)
+async def preferences_page(
+    request: Request, principal: SignedIn, context: Context, db: Database, notice: str = ""
+) -> Response:
+    today = household_today(principal.household, context.clock())
+    mine = await preference_service.my_preferences(db, principal.member, today=today)
     return await render(
         request,
         "preferences.html",

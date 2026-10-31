@@ -24,7 +24,6 @@ from dinnerbell.domain.feedback import (
     Feedback,
     FeedbackInput,
     InvalidFeedback,
-    ItemCounts,
     MealFacts,
     PlaceIssue,
     Rating,
@@ -233,14 +232,15 @@ async def test_nobody_sees_who_gave_which_rating_or_what_went_wrong(house: House
             name: (await feedback.for_meals(db, house[name], [meal], today=DAY + timedelta(days=1)))[meal_id]
             for name in ("Sam", "Alex", "Lee")
         }
-        counts = await feedback.item_counts(db, house["Lee"])
+        hints = await feedback.item_hints(db, house["Lee"], today=DAY + timedelta(days=1))
     # Sam, the cook, sees the thank-yous with names and notes, but nobody's rating.
     assert seen["Sam"].thanks == CookThanks(2, sam, (("Kim", "Thanks anyway"), ("Alex", None)))
     assert seen["Sam"].mine is None
     assert seen["Alex"].mine == FeedbackInput(rating=Rating.LOVED, cook_thanks=True)  # only their own answers
     assert seen["Alex"].thanks == CookThanks(2, sam) and seen["Alex"].can_give
     assert seen["Lee"].mine is None and seen["Lee"].thanks == CookThanks(2, sam) and not seen["Lee"].can_give
-    assert counts[house.items["Sam's Tacos"].id] == ItemCounts(loved=1)
+    # Everyone sees the household's hint: one Loved it and one Hated it are mixed reviews, by nobody.
+    assert hints == {house.items["Sam's Tacos"].id: "Mixed reviews"}
     for view in seen.values():
         assert "hated" not in repr(view) and "HATED" not in repr(view)
 
@@ -334,4 +334,4 @@ async def test_editing_a_logged_meal_drops_feedback_that_no_longer_fits(house: H
     await edit("Taqueria", "Alex", "Kim")  # a different place: every answer was about Siam Garden
     assert await rows(house) == []
     async with house.sessionmaker() as db:
-        assert await feedback.item_counts(db, house["Alex"]) == {}
+        assert await feedback.item_hints(db, house["Alex"], today=DAY) == {}

@@ -15,6 +15,7 @@ from dinnerbell.db.models import FeedbackRow, MealLogRow
 from dinnerbell.domain.catalog import ItemKind, Mode
 from dinnerbell.domain.feedback import Feedback, FeedbackInput, MealFacts, PlaceIssue, Rating
 from dinnerbell.domain.meals import MemberRef
+from dinnerbell.domain.ratings import Opinion
 
 
 def _feedback(row: FeedbackRow) -> Feedback:
@@ -147,10 +148,36 @@ class FeedbackRepository:
         )
         return set(found)
 
-    async def for_items(self, household_id: int, item_ids: Iterable[int] | None = None) -> list[Feedback]:
-        """Feedback on these catalog items (as each feedback snapshotted the item), or on every
-        item, for counting per item. Services must reduce it to counts."""
-        query: Any = select(FeedbackRow).where(FeedbackRow.household_id == household_id)
+    async def opinions(
+        self, household_id: int, *, member_ids: Iterable[int] | None = None, item_ids: Iterable[int] | None = None
+    ) -> list[Opinion]:
+        """Ratings and issue checkboxes, with the meal's date and when each was saved, for
+        ranking and the household hints (FR-55): by these members, or everyone, on these items,
+        or every item. Never the "Other" text or a note."""
+        query: Any = (
+            select(
+                FeedbackRow.member_id,
+                FeedbackRow.item_id,
+                MealLogRow.date,
+                FeedbackRow.updated_at,
+                FeedbackRow.rating,
+                FeedbackRow.place_issues,
+            )
+            .join(MealLogRow, MealLogRow.id == FeedbackRow.meal_id)
+            .where(FeedbackRow.household_id == household_id)
+        )
+        if member_ids is not None:
+            query = query.where(FeedbackRow.member_id.in_(sorted(set(member_ids))))
         if item_ids is not None:
-            query = query.where(FeedbackRow.item_id.in_(list(set(item_ids))))
-        return [_feedback(row) for row in await self._session.scalars(query.order_by(FeedbackRow.id))]
+            query = query.where(FeedbackRow.item_id.in_(sorted(set(item_ids))))
+        return [
+            Opinion(
+                member_id=member,
+                item_id=item,
+                day=day,
+                saved_at=saved,
+                rating=Rating(rating) if rating else None,
+                issues=frozenset(PlaceIssue(i) for i in issues or []),
+            )
+            for member, item, day, saved, rating, issues in await self._session.execute(query.order_by(FeedbackRow.id))
+        ]

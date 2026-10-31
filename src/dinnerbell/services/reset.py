@@ -57,6 +57,7 @@ KEEP: Final = frozenset(
         "catalog_item_tag",
         "catalog_item_cook",
         "preference",  # likes, dislikes, and vetoes
+        "stance_edit",  # when each stance was set, which wins over earlier ratings (FR-55)
         "slack_badge_file",  # the badge art uploaded to Slack: not history, and reusable (#105)
         "slack_badge_composite",  # members' badge pictures: a cache Home checks by hash (#114)
     }

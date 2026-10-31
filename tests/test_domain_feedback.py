@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Feedback rules (spec 5.9, FR-45, FR-46, FR-49): the 7-day window, the one rating, which
-parts a meal takes, and what counts and thank-yous reveal. Nobody ever sees who gave which."""
+parts a meal takes, and what thank-yous reveal. Nobody ever sees who gave which. The household
+hints that replace the loved counts are in test_domain_ratings.py."""
 
 from __future__ import annotations
 
@@ -16,13 +17,11 @@ from dinnerbell.domain.feedback import (
     Feedback,
     FeedbackInput,
     InvalidFeedback,
-    ItemCounts,
     MealFacts,
     PlaceIssue,
     Rating,
     clean,
     closes_on,
-    count,
     is_open,
     thanks_for,
 )
@@ -93,30 +92,12 @@ def test_what_went_wrong_comes_with_other_and_is_trimmed() -> None:
         clean(FeedbackInput(issue_note="x" * (ISSUE_NOTE_MAX + 1)), PLACE, KIM.id)
     assert not FeedbackInput(issue_note="Cold").is_empty
     every = FeedbackInput(place_issues=frozenset(PlaceIssue))
-    assert every.issues == (PlaceIssue.LATE, PlaceIssue.WRONG_ORDER, PlaceIssue.COLD, PlaceIssue.OTHER)
+    assert every.issues == (PlaceIssue.WRONG_ORDER, PlaceIssue.LATE, PlaceIssue.COLD, PlaceIssue.OTHER)
 
 
 def _saved(member_id: int, item_id: int, answers: FeedbackInput, cook: MemberRef | None = None) -> Feedback:
     kind = ItemKind.HOME if cook else ItemKind.RESTAURANT
     return Feedback(member_id, 1, 1, member_id, answers, item_id, "x", kind, None, cook, (), SAVED_AT, SAVED_AT)
-
-
-def test_counts_name_nobody() -> None:
-    late = frozenset({PlaceIssue.LATE})
-    counts = count(
-        [
-            _saved(1, 12, FeedbackInput(rating=Rating.LOVED, place_issues=late)),
-            _saved(2, 12, FeedbackInput(rating=Rating.HATED)),
-            _saved(3, 12, FeedbackInput(rating=Rating.LOVED)),
-            _saved(4, 12, FeedbackInput(rating=Rating.LIKED)),
-            _saved(5, 11, FeedbackInput(cook_thanks=True), cook=SAM),
-        ]
-    )
-    # Only "Loved it" is counted. Every other rating and the issues are stored but never counted
-    # for display: with one rater, any count of them would name that person.
-    assert counts == {12: ItemCounts(loved=2)}
-    others = [Rating.HATED, Rating.DISLIKED, Rating.FINE, Rating.LIKED]
-    assert count([_saved(6, 13, FeedbackInput(rating=r, place_issues=late)) for r in others]) == {}
 
 
 def test_only_the_cook_sees_who_thanked_them_and_their_notes() -> None:

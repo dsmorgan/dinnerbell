@@ -3,6 +3,7 @@
 M2: dinner calls (event, response, suggestion, proposal, vote, assignment) and the outbox.
 M3: feedback on meals, offers (an event's ``capacity``), guests (a member's ``guest`` role
 and the ``invitation`` table, #38), and the meals each catalog item is for (#72). M4: contributions and badge awards.
+M7: ``stance_edit``, so a stance set on Preferences wins over earlier ratings (FR-55).
 
 Every table carries ``household_id`` (the household table's own key is that ID).
 Changing a model requires a new Alembic revision; see CLAUDE.md.
@@ -212,6 +213,22 @@ class PreferenceRow(Base):
     veto: Mapped[bool] = mapped_column(Boolean, default=False)
     score: Mapped[int] = mapped_column(SmallInteger, default=0)
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime())
+
+
+class StanceEditRow(Base):
+    """When a member last set their stance on an item on Preferences (FR-55, ADR 0008). Ratings
+    they saved before it no longer move their score: the stance they set wins. A row outlives a
+    neutral stance, whose ``preference`` row is deleted, so setting an item back to 0 still
+    discards earlier ratings. One per member per item."""
+
+    __tablename__ = "stance_edit"
+    __table_args__ = (UniqueConstraint("member_id", "item_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    household_id: Mapped[int] = mapped_column(ForeignKey("household.id", ondelete="CASCADE"))
+    member_id: Mapped[int] = mapped_column(ForeignKey("member.id", ondelete="CASCADE"))
+    item_id: Mapped[int] = mapped_column(ForeignKey("catalog_item.id", ondelete="CASCADE"), index=True)
+    edited_at: Mapped[datetime] = mapped_column(UTCDateTime())
 
 
 class MealLogRow(Base):

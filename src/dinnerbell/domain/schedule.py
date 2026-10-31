@@ -22,12 +22,16 @@ from typing import Any
 from dinnerbell.domain.catalog import Mode, sorted_modes
 from dinnerbell.domain.events import DEFAULT_ROLES_CHOICE_MINUTES
 from dinnerbell.domain.meals import Slot
+from dinnerbell.domain.ratings import DEFAULT_FEEDBACK, MAX_FEEDBACK, MIN_FEEDBACK
 
 SLOTS_KEY = "slots"
 WEIGHTS_KEY = "ranking_weights"
 PROPOSAL_COUNT_KEY = "proposal_count"
 TEMPERATURE_KEY = "ranking_temperature"
 ROLES_CHOICE_KEY = "roles_choice_minutes"
+FEEDBACK_KEY = "feedback_cap"
+"""The **Feedback** setting (FR-55): how far ratings move a member's score, 0 (off), 1, or 2.
+Missing means the default, 2; revision 0021 set it to 0 for households from before it."""
 MIN_ROLES_CHOICE_MINUTES = 1
 MAX_ROLES_CHOICE_MINUTES = 120
 
@@ -215,6 +219,17 @@ def temperature(settings: Mapping[str, Any]) -> float:
     if isinstance(value, bool) or not isinstance(value, int | float):
         return DEFAULT_TEMPERATURE
     return float(value) if MIN_TEMPERATURE <= value <= MAX_TEMPERATURE else DEFAULT_TEMPERATURE
+
+
+def feedback_cap(settings: Mapping[str, Any]) -> int:
+    value = _minutes(settings.get(FEEDBACK_KEY), MIN_FEEDBACK, MAX_FEEDBACK)
+    return DEFAULT_FEEDBACK if value is None else value
+
+
+def check_feedback_cap(value: int) -> int:
+    if not MIN_FEEDBACK <= value <= MAX_FEEDBACK:
+        raise InvalidSchedule(f"Feedback is {MIN_FEEDBACK} (off) to {MAX_FEEDBACK}.")
+    return value
 
 
 def check_temperature(value: float) -> float:

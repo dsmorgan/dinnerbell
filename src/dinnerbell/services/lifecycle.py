@@ -78,7 +78,7 @@ from dinnerbell.services import call_context as cc
 from dinnerbell.services.call_context import CallContext, load, locked_event, publish
 from dinnerbell.services.common import audit, is_unique_violation
 from dinnerbell.services.errors import NotFound
-from dinnerbell.services.preferences import group_preferences
+from dinnerbell.services.preferences import group_preferences, with_ratings
 from dinnerbell.services.variety import household_today, last_eaten, variety_window
 
 log = logging.getLogger(__name__)
@@ -399,7 +399,10 @@ async def ranking_snapshot(
     """Spec section 7's inputs for this call, as of the call's date. ``taken`` holds the items
     that are picks already, which ranking leaves out (#77). The seed is this run's, so ranking
     the run again gives the same picks and a restart draws again (#78). ``shuffle`` is the
-    coordinator's shuffle count (#87): each shuffle draws with the next seed."""
+    coordinator's shuffle count (#87): each shuffle draws with the next seed.
+
+    ``group`` is the ``group_preferences`` of ``ctx.veto_people``; ranking scores items with each
+    of them's ratings added to their own scores, and shows the household's hints (FR-55)."""
     household_id, day = ctx.event.household_id, ctx.event.day
     window = await variety_window(db, household_id, day)
     who = ctx.veto_people
@@ -409,7 +412,7 @@ async def ranking_snapshot(
             suggesters.setdefault(suggestion.item_id, {})[suggestion.member_id] = ctx.name(suggestion.member_id)
     return RankingSnapshot(
         items=tuple(rank_item(ctx, item) for item in ctx.items.values() if item.active),
-        preferences=group,
+        preferences=await with_ratings(db, household_id, who, group, day=day),
         coverage=ctx.coverage,
         weights=weights(ctx.settings),
         window_days=window.days,
@@ -426,6 +429,7 @@ async def ranking_snapshot(
         taken=taken,
         temperature=temperature(ctx.settings),
         seed=ranking_seed(household_id, ctx.event.id, ctx.event.run, shuffle),
+        hints=await feedback.hints_on(db, household_id, day),
     )
 
 
