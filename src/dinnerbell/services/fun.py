@@ -117,10 +117,10 @@ async def saw_badges(db: AsyncSession, actor: Member, award_id: int, *, now: dat
     if not actor.active:
         raise Forbidden("Sign in again.")
     mine = {a.id for a in await BadgeRepository(db).for_member(actor.household_id, actor.id)}
-    if award_id not in mine or award_id <= actor.fun_seen_award:
+    if award_id not in mine:
         return
-    await MemberRepository(db).update(actor.household_id, actor.id, now, fun_seen_award=award_id)
-    await db.commit()
+    if await MemberRepository(db).raise_fun_seen_award(actor.household_id, actor.id, award_id, now):
+        await db.commit()
 
 
 async def celebration(db: AsyncSession, actor: Member, event_id: int, kind: Celebrate) -> dict[str, object] | None:
