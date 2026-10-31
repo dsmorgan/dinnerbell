@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from datetime import time
 from enum import StrEnum
 
+from dinnerbell.domain.catalog import Mode
 from dinnerbell.domain.events import RoleOffer, Status, Window
 from dinnerbell.domain.meals import Slot
 
@@ -324,22 +325,27 @@ _HHMM = re.compile(r"([01][0-9]|2[0-3]):[0-5][0-9]")
 @dataclass(frozen=True, slots=True)
 class Opened:
     """What an Adjust modal showed when it opened (spec 5.7): the meal time as ``HH:MM``, who did
-    the role, and who coordinated. Saving changes only the fields that differ from these, and
-    refuses one that changed elsewhere since."""
+    the role, who coordinated, and the way of getting it (``mode``, #154). Saving changes only
+    the fields that differ from these, and refuses one that changed elsewhere since. A modal
+    opened before Adjust showed the way has no ``mode``, and can't change it."""
 
     meal_time: time
     assignee_id: int | None
     coordinator_id: int | None
+    mode: Mode | None = None
 
     def data(self) -> dict[str, object]:
         at = f"{self.meal_time.hour:02d}:{self.meal_time.minute:02d}"
-        return {"at": at, "who": self.assignee_id, "lead": self.coordinator_id}
+        data: dict[str, object] = {"at": at, "who": self.assignee_id, "lead": self.coordinator_id}
+        if self.mode is not None:
+            data["how"] = self.mode.value
+        return data
 
     @classmethod
     def parse(cls, data: object) -> Opened:
-        if not isinstance(data, dict) or set(data) != {"at", "who", "lead"}:
+        if not isinstance(data, dict) or set(data) - {"how"} != {"at", "who", "lead"}:
             raise BadValue("bad metadata")
-        at, who, lead = data["at"], data["who"], data["lead"]
+        at, who, lead, how = data["at"], data["who"], data["lead"], data.get("how")
         if not isinstance(at, str) or not _HHMM.fullmatch(at):
             raise BadValue("bad metadata")
         for value in (who, lead):
@@ -347,7 +353,9 @@ class Opened:
                 isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= MAX_ID
             ):
                 raise BadValue("bad metadata")
-        return cls(time.fromisoformat(at), who, lead)
+        if how is not None and how not in {m.value for m in Mode}:
+            raise BadValue("bad metadata")
+        return cls(time.fromisoformat(at), who, lead, Mode(how) if how is not None else None)
 
 
 @dataclass(frozen=True, slots=True)

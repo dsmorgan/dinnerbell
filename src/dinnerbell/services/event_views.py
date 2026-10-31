@@ -257,7 +257,7 @@ def _member_permissions(
     admin = actor.active and actor.is_admin
     return Permissions(
         respond=_allowed(lambda: rules.check_can_respond(event, actor, invited=ctx.invited(actor.id))),
-        claim=_allowed(lambda: rules.check_claim_coordinator(event, actor, invited=ctx.invited(actor.id))),
+        claim=_allowed(lambda: rules.check_claim_coordinator(event, actor, invited=ctx.invited(actor.id), mine=mine)),
         hand_off=rules.is_coordinator(event, actor) and event.state.is_open and event.state is not EventState.SCHEDULED,
         vote=_allowed(lambda: rules.check_can_vote(event, actor, mine)),
         propose=_allowed(lambda: rules.check_can_propose(event, actor)),

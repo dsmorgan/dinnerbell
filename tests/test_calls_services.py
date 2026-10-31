@@ -17,6 +17,7 @@ from dinnerbell.config import Settings
 from dinnerbell.db.models import CatalogItemRow, ProposalRow, ResponseRow
 from dinnerbell.domain.catalog import Mode, TagKind
 from dinnerbell.domain.events import (
+    COORDINATOR_NOT_IN,
     AssignmentRole,
     Details,
     EndReason,
@@ -523,11 +524,14 @@ async def test_coordinator_changes_after_the_decision_update_the_assignment(hous
     await act(house, calls.claim_coordinator, house["Sam"], event_id)
     house.clock.now = VOTE_BY
     await house.tick()
-    await act(house, calls.hand_off, house["Sam"], event_id, house["Kim"].id)
+    with pytest.raises(EventRuleViolation) as refused:  # Kim isn't in, and nobody joins once it's decided (#154)
+        await act(house, calls.hand_off, house["Sam"], event_id, house["Kim"].id)
+    assert (str(refused.value), refused.value.code) == (COORDINATOR_NOT_IN, "not_in")
+    await act(house, calls.hand_off, house["Sam"], event_id, house["Alex"].id)
     ctx = await house.context(event_id)
-    assert {(a.role, a.member_id) for a in ctx.assignments} >= {(AssignmentRole.COORDINATOR, house["Kim"].id)}
+    assert {(a.role, a.member_id) for a in ctx.assignments} >= {(AssignmentRole.COORDINATOR, house["Alex"].id)}
     dms = [e for e in await house.outbox() if e.kind == "assignment_made"]
-    assert [d.payload["member"]["name"] for d in dms][-1] == "Kim"
+    assert [d.payload["member"]["name"] for d in dms][-1] == "Alex"
     await act(house, call_admin.assign_coordinator, house["Alex"], event_id, None)
     ctx = await house.context(event_id)
     assert AssignmentRole.COORDINATOR not in {a.role for a in ctx.assignments}

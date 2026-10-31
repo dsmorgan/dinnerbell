@@ -720,8 +720,12 @@ def is_coordinator(event: Event, actor: Member) -> bool:
     return event.coordinator_id is not None and event.coordinator_id == actor.id
 
 
-def check_claim_coordinator(event: Event, actor: Member, *, invited: bool = False) -> None:
-    """A guest claims coordinating only on a call they're ``invited`` to (#38)."""
+def check_claim_coordinator(
+    event: Event, actor: Member, *, invited: bool = False, mine: Response | None = None
+) -> None:
+    """A guest claims coordinating only on a call they're ``invited`` to (#38). Claiming puts
+    them in (``with_coordinating``), so a late joiner the coordinator switched off (``mine``)
+    can't claim it, as they can't rejoin on their own (#76)."""
     if not actor.active:
         raise EventRuleViolation("Only active members can coordinate.", code="inactive")
     if actor.is_guest and not invited:
@@ -734,6 +738,40 @@ def check_claim_coordinator(event: Event, actor: Member, *, invited: bool = Fals
         raise EventRuleViolation(
             "Someone is already coordinating. They can hand it off to you.", code="has_coordinator"
         )
+    if mine is not None and mine.taken_off:
+        raise EventRuleViolation(TAKEN_OFF, code="taken_off")
+
+
+COORDINATOR_NOT_IN = "It's decided, so only someone who's in can coordinate. Pick someone who's in."
+
+
+def check_coordinator_in(event: Event, response: Response | None) -> None:
+    """Whoever coordinates is in (#154). Taking it on puts them in while the call is open
+    (``with_coordinating``), but nobody joins once it's decided (FR-60), so then only someone
+    who's in already can be handed it, or assigned it."""
+    if event.state is EventState.DECIDED and (response is None or not response.is_in):
+        raise EventRuleViolation(COORDINATOR_NOT_IN, code="not_in")
+
+
+def with_coordinating(event: Event, current: Response | None, member_id: int, now: datetime) -> Response | None:
+    """The answer of whoever takes on coordinating, by claiming it, a hand-off, or an admin
+    (#154): coordinating puts them in. None when they're in already. While answers are open
+    they're in, as tapping In does. While voting they join late, as **I'm in (late)** does, so
+    their guests and stances don't change the picks (FR-60), but their vote counts, as a
+    coordinator's always has; they can switch it off like anyone's. Once decided nobody joins,
+    so ``check_coordinator_in`` refuses anyone who isn't in."""
+    if current is not None and current.is_in:
+        return None
+    if event.state is EventState.VOTING:
+        return replace(with_late_join(current, member_id, now), vote_counts=True)
+    return with_status(current, member_id, Status.IN, now)
+
+
+def drops_coordinating(event: Event, response: Response) -> bool:
+    """Whether ``response`` ends its member's coordinating (#154): the coordinator said out, was
+    switched off as a late joiner, or was a maybe when answers closed. A maybe doesn't, until
+    then: they may still come."""
+    return event.coordinator_id == response.member_id and response.status is Status.OUT
 
 
 def check_assign_coordinator(event: Event) -> None:

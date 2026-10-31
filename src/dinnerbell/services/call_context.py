@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator, Iterable
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -73,6 +73,7 @@ from dinnerbell.domain.offers import seats_taken
 from dinnerbell.domain.ranking import GroupPreferences
 from dinnerbell.domain.schedule import SlotSchedule, slot_schedule
 from dinnerbell.services import activity
+from dinnerbell.services.common import audit
 from dinnerbell.services.errors import NotFound
 from dinnerbell.services.preferences import group_preferences
 
@@ -644,6 +645,40 @@ async def publish(db: AsyncSession, ctx: CallContext, *notifications: note.Notif
     outbox = OutboxRepository(db)
     for notification in notifications:
         await outbox.enqueue(ctx.event.household_id, ctx.event.id, notification, now)
+
+
+def messages_for_state(ctx: CallContext) -> list[note.Notification]:
+    """Updates for every message that shows the event: the call (or the offer), and the
+    proposals or decision."""
+    messages: list[note.Notification] = [message_updated(ctx)]
+    if ctx.proposals:
+        messages.append(proposals_updated(ctx))
+    messages += decision_updated(ctx)
+    return messages
+
+
+async def release_coordinator(
+    db: AsyncSession, event: Event, actor: Member | None, *, why: str, now: datetime, update: bool = True
+) -> Event:
+    """Nobody coordinates ``event`` any more, because its coordinator is out (#154,
+    ``domain.events.drops_coordinating``): ``why`` is ``out``, ``taken_off``, or ``maybe`` (a
+    maybe when answers closed). The call's messages update, as when an admin sets it to nobody,
+    so anyone who's in can claim it; ``update`` False leaves that to a caller that updates them
+    anyway. Audited as ``event.coordinator_released``, with ``actor`` whoever changed the answer
+    (None for the scheduler). Returns the event as saved."""
+    member_id = event.coordinator_id
+    if member_id is None:  # pragma: no cover - callers check there's a coordinator to release
+        return event
+    event = await EventRepository(db).save(replace(event, coordinator_id=None), now)
+    if event.state is EventState.DECIDED:  # pragma: no cover - nobody answers once it's decided
+        await AssignmentRepository(db).unassign(event.household_id, event.id, AssignmentRole.COORDINATOR)
+    if update:
+        ctx = await load(db, event)
+        await publish(db, ctx, *messages_for_state(ctx), now=now)
+    payload = {"member_id": member_id, "why": why}
+    await audit(db, event.household_id, actor, "event.coordinator_released", f"event:{event.id}", payload, now)
+    activity.action(db, "coordinator_released", event, actor, to_member_id=member_id, why=why)
+    return event
 
 
 async def stale_cutoff(db: AsyncSession, event: Event) -> datetime:

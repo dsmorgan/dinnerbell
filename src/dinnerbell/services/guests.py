@@ -36,6 +36,7 @@ from dinnerbell.domain.events import (
     Status,
     check_can_respond,
     check_run,
+    drops_coordinating,
     with_offer,
     with_status,
 )
@@ -213,8 +214,11 @@ async def answer_for(
                 return
             answer = changed
         await ResponseRepository(db).save(actor.household_id, event.id, answer, now)
-        ctx = await load(db, event)
-        await publish(db, ctx, cc.call_updated(ctx), now=now)
+        if drops_coordinating(event, answer):  # whoever coordinates is in (#154)
+            await cc.release_coordinator(db, event, actor, why="out", now=now)  # updates the messages
+        else:
+            ctx = await load(db, event)
+            await publish(db, ctx, cc.call_updated(ctx), now=now)
         what: dict[str, Any] = {"answer": status.value} if status is not None else {"offered": offered}
         if role is not None:
             what["role"] = role.value

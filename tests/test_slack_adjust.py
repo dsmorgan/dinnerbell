@@ -247,8 +247,10 @@ async def test_slack_adjust_opens_for_the_coordinator_only(slack: Slack, house: 
     assert view["callback_id"] == ids.ADJUST_VIEW and ids.ViewOrigin.decode(view["private_metadata"]).run == 1
     fields = inputs(view)
     assert fields["meal_time"]["element"]["initial_time"] == "18:30"
+    how = fields["mode"]["element"]  # Siam Garden is pickup or delivery (#154)
+    assert [o["value"] for o in how["options"]] == ["pickup", "delivery"] and how["initial_option"]["value"] == "pickup"
     who = fields["who"]["element"]
-    assert fields["who"]["label"]["text"] == "Who picks up"
+    assert fields["who"]["label"]["text"] == "Who does it"  # whichever way How says
     assert {o["text"]["text"] for o in who["options"]} == {"Alex", "Lee", "Sam"}  # whoever is in
     assert who["initial_option"]["text"]["text"] == "Alex"
     lead = fields["coordinator"]["element"]
@@ -376,7 +378,9 @@ async def test_with_a_hand_off_the_new_assignee_hears_once_and_after_it(house: H
     (told,) = [n for n in await sent(house, "assignment_made") if n.member.id == house["Lee"].id]
     assert told.event.coordinator is not None and told.event.coordinator.id == house["Alex"].id
     text = json.dumps(render(told, CTX).payload())
-    assert "Sam assigned you this. If it doesn't work for you, tell Sam." in text and "Adjust" not in text
+    # Alex decides now, so Lee is told to ask Alex, not Sam (#154).
+    assert "Sam assigned you this. If it doesn't work for you, tell Alex, who's coordinating now" in text
+    assert "can pick someone else with *Adjust*" in text
 
 
 async def test_handing_off_to_the_new_assignee_sends_them_one_message(house: House) -> None:

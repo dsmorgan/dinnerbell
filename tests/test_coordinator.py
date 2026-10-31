@@ -1492,15 +1492,19 @@ async def test_slack_assign_roles_opens_a_modal_for_the_coordinator_and_saves_th
 
 
 async def test_slack_assign_roles_with_nobody_in_left_says_so(slack: Slack, house: House) -> None:
-    """Kim coordinates without eating; once everyone who was in is turned off, there's nobody to
-    assign, and Slack would refuse a select with no options, so no modal opens (#157)."""
+    """Kim coordinates without eating, as a coordinator could before coordinating put them in
+    (#154); once everyone who was in is turned off, there's nobody to assign, and Slack would
+    refuse a select with no options, so no modal opens (#157)."""
     event_id = await to_voting(house, "Sam", pickups=("Alex", "Sam"), coordinator_name="Kim")
     await vote(house, "Sam", event_id, (await pick_ids(house, event_id))["Siam Garden"])
     await at_deadline(house, event_id)
     assert (await house.event(event_id)).state is EventState.DECIDED
+    kim = (await house.context(event_id)).response_of(house["Kim"].id)
+    assert kim is not None and kim.is_in  # claiming put her in
     async with house.sessionmaker() as db:
         for name in ("Alex", "Sam"):
             await MemberRepository(db).update(house.household.id, house[name].id, house.clock(), active=False)
+        await ResponseRepository(db).save(house.household.id, event_id, replace(kim, status=Status.OUT), house.clock())
         await db.commit()
     await slack.click("Kim", ids.ASSIGN_ROLES, ids.card_value(event_id, 1))
     assert not slack.fake.of("views.open") and slack.ephemerals("Kim")[-1] == NOBODY_IN

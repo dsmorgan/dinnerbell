@@ -448,6 +448,9 @@ NOTIFICATIONS: dict[str, Callable[[], note.Notification]] = {
     "assignment_made_assigned": lambda: note.AssignmentMade(
         DECIDED, 35, SAM, (AssignmentRole.COOK,), DECISION, assigned_by=ALEX
     ),
+    "assignment_made_assigned_handed_off": lambda: note.AssignmentMade(
+        replace(DECIDED, coordinator=KIM), 36, SAM, (AssignmentRole.COOK,), DECISION, assigned_by=ALEX
+    ),
     "roles_to_choose": lambda: note.RolesToChoose(DECIDED, ALEX, PENDING_DECISION, ROLES_DUE),
     "picks_shuffled": lambda: note.PicksShuffled(SHUFFLED_VOTING, ALEX, 2, 1),
     "feedback_reminder": lambda: note.FeedbackReminder(
@@ -532,6 +535,8 @@ ADJUST_VIEW = replace(
 )
 """Alex coordinates the decided dinner, Sam's cooking, and Alex may adjust it (spec 5.7)."""
 NOBODY_IN_VIEW = replace(ADJUST_VIEW, roles=replace(ROLES_CHOICE, due_at=None, people=()))
+ONE_WAY_VIEW = replace(ADJUST_VIEW, roles=replace(ROLES_CHOICE, due_at=None, modes=(Mode.COOK,)))
+"""A place with only one way of getting it: Adjust has no How (#154)."""
 """The same, with nobody left in to give the role to: the modal doesn't ask who."""
 CALLED_OFF_VIEW = _event_view(EventState.CANCELLED, SAM_RESPONSE, Permissions(restart=True))
 TOMORROW = date(2026, 10, 23)
@@ -682,6 +687,9 @@ VIEWS: dict[str, Callable[[], dict[str, Any]]] = {
     ),
     "assign_modal": lambda: assign_modal(ROLES_VIEW, CALL_OFF_ORIGIN),
     "adjust_modal": lambda: adjust_modal(ADJUST_VIEW, replace(CALL_OFF_ORIGIN, opened=adjust_opened(ADJUST_VIEW))),
+    "adjust_modal_one_way": lambda: adjust_modal(
+        ONE_WAY_VIEW, replace(CALL_OFF_ORIGIN, opened=adjust_opened(ONE_WAY_VIEW))
+    ),
     "adjust_modal_nobody_in": lambda: adjust_modal(
         NOBODY_IN_VIEW, replace(CALL_OFF_ORIGIN, opened=adjust_opened(NOBODY_IN_VIEW))
     ),
