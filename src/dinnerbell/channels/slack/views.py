@@ -53,6 +53,7 @@ from dinnerbell.channels.slack.messages import (
     mark_done_button,
     not_for_you_line,
 )
+from dinnerbell.domain import labels
 from dinnerbell.domain import notifications as note
 from dinnerbell.domain.badges import BADGES, BadgeKey, Tier, highest_tiers, next_up
 from dinnerbell.domain.catalog import CatalogItem, ItemKind, Mode, Tag
@@ -65,9 +66,7 @@ from dinnerbell.domain.events import (
     MODE_ROLE,
     Details,
     EventState,
-    RoleOffer,
     Status,
-    Window,
 )
 from dinnerbell.domain.feedback import COOK_NOTE_MAX, ISSUE_NOTE_MAX, FeedbackInput, PlaceIssue, Rating
 from dinnerbell.domain.guests import GuestInput
@@ -84,7 +83,7 @@ from dinnerbell.services.stats import MemberStats
 VALUE = "value"
 """Every input's action ID; blocks are told apart by block ID."""
 STATUS_WORDS = {Status.IN: "You're in.", Status.MAYBE: "You said maybe.", Status.OUT: "You're out this time."}
-OFFER_WORDS = {RoleOffer.COOK: "cook", RoleOffer.PICKUP: "pick up", RoleOffer.ORDER: "order"}
+OFFER_WORDS = labels.OFFER_WORDS
 MAX_OLDER_CALLS = 3
 """Calls still open from earlier days that Home shows below today's (#51). They're rare, since
 the scheduler closes old calls, so the rest are left to the web."""
@@ -357,14 +356,8 @@ def parse_proposal(values: Any) -> ProposalInput:
 
 # Call it off and Close now (FR-56) ----------------------------------------------------------------
 
-CLOSE_SUBMIT = {Window.RESPOND: "Start the vote", Window.VOTE: "Decide now"}
-CLOSE_EFFECT = {
-    Window.RESPOND: (
-        "Responses close for everyone now, and the vote on the picks starts. "
-        "If fewer than two people are in, everyone's on their own."
-    ),
-    Window.VOTE: "Voting closes for everyone now, and the votes so far decide the plan.",
-}
+CLOSE_SUBMIT = labels.CLOSE_SUBMIT
+CLOSE_EFFECT = labels.CLOSE_EFFECT
 
 
 def cancel_modal(v: EventView, origin: ids.ViewOrigin) -> dict[str, Any]:

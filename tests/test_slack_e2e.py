@@ -95,7 +95,8 @@ async def test_a_dinner_decided_in_slack(slack: Slack) -> None:
     await slack.drain()
     reminder = slack.fake.of("chat.postMessage")[-1]
     reminder_ts = "2.000100"
-    (out,) = [x for x in reminder.args["blocks"][-1]["elements"] if x["action_id"] == "card_out"]
+    (row,) = [b for b in reminder.args["blocks"] if b.get("block_id") == "participation"]
+    (out,) = [x for x in row["elements"] if x["action_id"] == "card_out"]
     await slack.click("Lee", "card_out", out["value"], channel="D04LEE", message_ts=reminder_ts)
     await slack.drain()
 

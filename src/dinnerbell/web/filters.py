@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Jinja filters for showing call times in the household's time zone."""
+"""Jinja filters for showing call times in the household's time zone, and the globals every
+template shares, such as ``labels``: the words Slack uses for the same buttons (#149)."""
 
 from __future__ import annotations
 
@@ -8,6 +9,7 @@ from zoneinfo import ZoneInfo
 
 from jinja2 import Environment
 
+from dinnerbell.domain import labels
 from dinnerbell.services.badge_art import badge_name, badge_svg
 
 
@@ -49,4 +51,4 @@ def elapsed(value: timedelta) -> str:
 
 def register(env: Environment) -> None:
     env.filters.update(clock=clock, wall=wall, hhmm=hhmm, local_hhmm=local_hhmm, day=day, elapsed=elapsed)
-    env.globals.update(badge_svg=badge_svg, badge_name=badge_name)
+    env.globals.update(badge_svg=badge_svg, badge_name=badge_name, labels=labels)

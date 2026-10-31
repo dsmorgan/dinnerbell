@@ -119,7 +119,7 @@ Channel messages are shared, so a button can't show whether the person tapping i
 | Slack action | Service call |
 |---|---|
 | Answer, on the call message while responses are open | No service call: posts the tapper's Your answer card for the run its value names (`ids.card_value`); see below |
-| In, Out, Maybe | `calls.respond(db, actor, event_id, Status.IN / OUT / MAYBE, now=)`; on a card, a reminder, or Home, with `run=` |
+| In, Maybe, Out | `calls.respond(db, actor, event_id, Status.IN / MAYBE / OUT, now=)`; on a card, a reminder, or Home, with `run=` |
 | I can cook, I can pick up, I'll order | `calls.toggle_role(db, actor, event_id, RoleOffer.COOK / PICKUP / ORDER, now=)`, which returns whether the member now offers it; on a card or Home, `calls.offer_role(..., offered, run=, now=)` |
 | I'll coordinate | `calls.claim_coordinator(db, actor, event_id, now=)`; on a card or Home, and on the call message while voting (`ids.CALL_COORDINATE`, value `<id>:<run>`), with `run=` |
 | Details modal (a suggestion needs no cuisine; only proposals do) | `calls.save_details(db, actor, event_id, Details(guests=, guest_needs=, eat_from=, eat_until=, suggestion_item_ids=, suggestion_texts=, note=), now=)` |
