@@ -278,7 +278,8 @@ async def test_an_offer_takes_over_a_pick_for_its_place_and_keeps_its_votes(hous
     pick = next(p for p in (await house.context(event_id)).proposals if p.item_id == siam)
     assert pick.mode is Mode.PICKUP and "Pickup is a usual choice." in pick.reasons
     await act(house, calls.vote, house["Sam"], event_id, pick.id)
-    with pytest.raises(EventRuleViolation, match=r"^Siam Garden is already a pick \(pickup\). Vote for it instead.$"):
+    already = r"^Siam Garden is already a proposal \(pickup\). Vote for it instead.$"
+    with pytest.raises(EventRuleViolation, match=already):
         await act(house, offers.post_offer, house["Sam"], offer(house, Mode.PICKUP, item_id=siam))
 
     posted = await act(house, offers.post_offer, house["Kim"], offer(house, Mode.DELIVERY, item_id=siam))
@@ -325,7 +326,7 @@ async def test_an_offer_doesnt_take_over_another_members_pick(house: House) -> N
     await act(house, offers.post_offer, house["Lee"], offer(house, Mode.DELIVERY, item_id=siam))
     with pytest.raises(EventRuleViolation) as refused:
         await act(house, offers.post_offer, house["Kim"], offer(house, Mode.PICKUP, item_id=siam))
-    assert str(refused.value) == "Siam Garden is already a pick (delivery). Vote for it instead."
+    assert str(refused.value) == "Siam Garden is already a proposal (delivery). Vote for it instead."
     (pick,) = (await house.context(event_id)).proposals
     assert (pick.mode, pick.proposed_by) == (Mode.DELIVERY, house["Lee"].id)
     # Lee's own offer in the other mode takes it over: it's still Lee's.

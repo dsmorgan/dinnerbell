@@ -129,7 +129,7 @@ def _hhmm(at: time | None) -> dict[str, str]:
     return {"initial_time": f"{at.hour:02d}:{at.minute:02d}"} if at else {}
 
 
-PICKED = " (already a pick)"
+PICKED = " (already proposed)"
 
 
 def _no_hint(item: CatalogItem) -> str | None:
@@ -322,11 +322,11 @@ def proposal_modal(v: EventView, origin: ids.ViewOrigin) -> dict[str, Any]:
         cuisines = {"type": "static_select", "options": _tag_options(v.cuisine_tags)}
         hint = "Needed for something new, so variety and vetoes still work."
         blocks.append(_input("cuisine", "Cuisine", cuisines, hint=hint))
-    return _modal("Add a pick", ids.PROPOSAL_VIEW, origin, blocks, "Join late and add" if late else "Add")
+    return _modal("Add a proposal", ids.PROPOSAL_VIEW, origin, blocks, "Join late and add" if late else "Add")
 
 
 JOIN_LATE_TO_ADD = (
-    "Adding a pick joins you late: you're in, and your vote shows, but counts only if the coordinator says so."
+    "Adding a proposal joins you late: you're in, and your vote shows, but counts only if the coordinator says so."
 )
 ADD_PICK_NOTE = (
     "You'll be the one to pick it up, cook it, or order it, whichever way you choose. "
@@ -416,7 +416,7 @@ def assign_modal(v: EventView, origin: ids.ViewOrigin) -> dict[str, Any]:
     choice = v.roles
     if choice is None:
         raise ValueError("an Assign roles modal needs a decided call")
-    item = v.decision.proposal.item.name if v.decision else "the pick"
+    item = v.decision.proposal.item.name if v.decision else "the plan"
     blocks: list[Block] = [
         _intro(v),
         section(
@@ -659,7 +659,9 @@ def offer_modal(form: OfferForm, origin: ids.FormOrigin) -> dict[str, Any]:
     offer starts as pickup at its usual lunch time."""
     defaults = form.defaults[form.slot]
     blocks: list[Block] = [
-        context("Posts in the Dinnerbell channel. If that meal's call is open already, it's added there as a pick."),
+        context(
+            "Posts in the Dinnerbell channel. If that meal's call is open already, it's added there as a proposal."
+        ),
         _input("slot", "Meal", _select(SLOT_OPTIONS.values(), SLOT_OPTIONS[form.slot]), optional=False),
         _input(
             "day",
@@ -842,9 +844,9 @@ def _voting_lines(v: EventView, picks_url: str | None) -> list[str]:
     elif v.can.vote:
         lines.append("You haven't voted yet.")
     if picks_url:
-        lines.append(f"<{picks_url}|See the picks and vote in the channel>")
+        lines.append(f"<{picks_url}|See the proposals and vote in the channel>")
     else:
-        lines.append("The picks are posted in the channel.")
+        lines.append("The proposals are posted in the channel.")
     return lines
 
 

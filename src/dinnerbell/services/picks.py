@@ -53,7 +53,7 @@ def picked(ctx: CallContext, candidate: Proposal) -> Proposal | None:
 def already_a_pick(ctx: CallContext, existing: Proposal) -> DuplicatePick:
     """The refusal for a second pick of ``existing``'s place, naming it and its mode."""
     name = cc.item_info(ctx, existing).name
-    return DuplicatePick(f"{name} is already a pick ({existing.mode.label.lower()}). Vote for it instead.")
+    return DuplicatePick(f"{name} is already a proposal ({existing.mode.label.lower()}). Vote for it instead.")
 
 
 async def announce(db: AsyncSession, event: Event, *, now: datetime) -> CallContext:

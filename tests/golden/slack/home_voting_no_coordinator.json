@@ -11,7 +11,7 @@
     {
       "block_id": "event-7",
       "text": {
-        "text": "*Dinner* · Voting\nYou're in. You're bringing 1 guest. You offered to cook.\nYou haven't voted yet.\nThe picks are posted in the channel.",
+        "text": "*Dinner* · Voting\nYou're in. You're bringing 1 guest. You offered to cook.\nYou haven't voted yet.\nThe proposals are posted in the channel.",
         "type": "mrkdwn"
       },
       "type": "section"

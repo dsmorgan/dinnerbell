@@ -2091,7 +2091,7 @@ def posted_offer_reply(posted: offers.Posted) -> str:
     slot, day = posted.slot.value, day_label(posted.day)
     if posted.path is OfferPath.ATTACH:
         return (
-            f"The {slot} call for {day} is open, so {posted.item_name} is a pick on it now, and you're in to "
+            f"The {slot} call for {day} is open, so {posted.item_name} is a proposal on it now, and you're in to "
             "make it happen. Thanks!"
         )
     if posted.path is OfferPath.REPLACE:

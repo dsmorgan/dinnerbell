@@ -11,7 +11,7 @@
     {
       "block_id": "event-7",
       "text": {
-        "text": "*Dinner* · Voting\n*Coordinator:* Alex\nThe picks are posted in the channel.",
+        "text": "*Dinner* · Voting\n*Coordinator:* Alex\nThe proposals are posted in the channel.",
         "type": "mrkdwn"
       },
       "type": "section"

@@ -9,9 +9,9 @@ A call or offer counts the moment it's done. Each person gets one count per kind
 - **Cooked, picked up, ordered, coordinated:** whoever the meal assigned, guests included.
 - **At the table:** everyone who was in, including a late joiner who is taking part.
 - **Answered quickly:** any answer within 15 minutes of the call opening.
-- **Ideas:** the person whose pick won; the person whose pick was new to the household; and the person who added a catalog item the first time it was chosen.
+- **Ideas:** the person whose proposal won; the person whose proposal was new to the household; and the person who added a catalog item the first time it was chosen.
 - **Hosting:** the member who brought guests.
-- **Leaving the choice to others (Gambler):** on a call with at least three picks, a member who was in, not as a late joiner, and whose votes, when the call was done, were for every pick or for none. Voting for none counts even when nobody voted. Votes you took back don't count, and offers have no picks to vote on.
+- **Leaving the choice to others (Gambler):** on a call with at least three proposals, a member who was in, not as a late joiner, and whose votes, when the call was done, were for every proposal or for none. Voting for none counts even when nobody voted. Votes you took back don't count, and offers have no proposals to vote on.
 - **Feedback:** the first time you give feedback on a meal. Changing it, or taking it back and giving it again, doesn't count again.
 
 Only members earn the at-the-table, answered-quickly, idea, hosting, Gambler, and feedback counts: a guest doesn't choose the meal or give feedback.

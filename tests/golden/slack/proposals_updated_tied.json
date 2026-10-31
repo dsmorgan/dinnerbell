@@ -2,7 +2,7 @@
   "blocks": [
     {
       "text": {
-        "text": "*Dinner picks · Thursday, Oct 22* for 3 people\nVote for any you'd enjoy. Voting closes at *5:15 PM*.",
+        "text": "*Dinner proposals · Thursday, Oct 22* for 3 people\nVote for any you'd enjoy. Voting closes at *5:15 PM*.",
         "type": "mrkdwn"
       },
       "type": "section"
@@ -286,18 +286,18 @@
             },
             "text": {
               "emoji": true,
-              "text": "Picks nobody has voted for are replaced. Picks with votes, and ones added or suggested, stay.",
+              "text": "Proposals nobody has voted for are replaced. Proposals with votes, and ones added or suggested, stay.",
               "type": "plain_text"
             },
             "title": {
               "emoji": true,
-              "text": "Shuffle the picks?",
+              "text": "Shuffle the proposals?",
               "type": "plain_text"
             }
           },
           "text": {
             "emoji": true,
-            "text": "Shuffle picks",
+            "text": "Shuffle proposals",
             "type": "plain_text"
           },
           "type": "button",
@@ -317,5 +317,5 @@
       "type": "actions"
     }
   ],
-  "text": "Picks for dinner on Thursday, Oct 22: Sam's Tacos, Siam Garden, Taqueria &lt;Lupita&gt; &amp; Co"
+  "text": "Proposals for dinner on Thursday, Oct 22: Sam's Tacos, Siam Garden, Taqueria &lt;Lupita&gt; &amp; Co"
 }

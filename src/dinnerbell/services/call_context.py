@@ -331,7 +331,7 @@ def late_joiners(ctx: CallContext) -> tuple[note.LateJoinerInfo, ...]:
 
 
 LATE_GUEST_NEEDS = "⚠ A guest of someone who joined late needs {needs}, and this isn't marked that way."
-NOT_FOR_YOU = "⚠ This pick doesn't fit your preferences."
+NOT_FOR_YOU = "⚠ This proposal doesn't fit your preferences."
 
 
 WARNING_STATES = frozenset({EventState.VOTING, EventState.DECIDED, EventState.DONE})

@@ -286,10 +286,10 @@ async def test_members_add_catalog_and_free_text_proposals(house: House) -> None
     taqueria = house.items["Taqueria"].id
     with pytest.raises(JoinLateFirst, match="you're not in for this call"):
         await act(house, calls.add_proposal, house["Kim"], event_id, Mode.PICKUP, item_id=taqueria)
-    with pytest.raises(EventRuleViolation, match=r"^Taqueria is already a pick \(pickup\). Vote for it instead.$"):
+    with pytest.raises(EventRuleViolation, match=r"^Taqueria is already a proposal \(pickup\). Vote for it instead.$"):
         await act(house, calls.add_proposal, house["Sam"], event_id, Mode.PICKUP, item_id=taqueria)
     # One pick per place, whatever the mode (#77).
-    with pytest.raises(EventRuleViolation, match=r"^Siam Garden is already a pick \(pickup\)"):
+    with pytest.raises(EventRuleViolation, match=r"^Siam Garden is already a proposal \(pickup\)"):
         await act(
             house, calls.add_proposal, house["Sam"], event_id, Mode.DELIVERY, item_id=house.items["Siam Garden"].id
         )
@@ -319,7 +319,7 @@ async def test_members_add_catalog_and_free_text_proposals(house: House) -> None
         house["Sam"].id,
     )
     for mode in (Mode.PICKUP, Mode.DELIVERY):
-        with pytest.raises(EventRuleViolation, match=r"^Pho Place is already a pick \(pickup\)"):
+        with pytest.raises(EventRuleViolation, match=r"^Pho Place is already a proposal \(pickup\)"):
             await act(
                 house,
                 calls.add_proposal,
@@ -330,7 +330,7 @@ async def test_members_add_catalog_and_free_text_proposals(house: House) -> None
                 cuisine_id=vietnamese.id,
             )
     # Free text naming a catalog item proposes that item.
-    with pytest.raises(EventRuleViolation, match="Taqueria is already a pick"):
+    with pytest.raises(EventRuleViolation, match="Taqueria is already a proposal"):
         await act(
             house,
             calls.add_proposal,

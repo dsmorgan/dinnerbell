@@ -458,7 +458,7 @@ async def test_an_offer_for_an_open_call_becomes_a_pick(house: House) -> None:
 
     lee = next(e for e in cc.roster(ctx) if e.member.id == house["Lee"].id)
     assert lee.suggestions == ("Siam Garden",)  # shown on the call while answers are open
-    with pytest.raises(EventRuleViolation, match="already a pick"):
+    with pytest.raises(EventRuleViolation, match="already a proposal"):
         await post(house, "Kim", lunch(house, slot=Slot.DINNER, at=time(18, 30)))
 
     await act(house, calls.respond, house["Sam"], event_id, Status.IN)

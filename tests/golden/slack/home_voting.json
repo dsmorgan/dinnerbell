@@ -11,7 +11,7 @@
     {
       "block_id": "event-7",
       "text": {
-        "text": "*Dinner* · Voting\nYou're in. You're bringing 1 guest. You offered to cook.\n*Coordinator:* Alex\nYou voted for *Sam's Tacos*.\n<https://example.slack.com/archives/C0DINNER/p1729627200000100|See the picks and vote in the channel>",
+        "text": "*Dinner* · Voting\nYou're in. You're bringing 1 guest. You offered to cook.\n*Coordinator:* Alex\nYou voted for *Sam's Tacos*.\n<https://example.slack.com/archives/C0DINNER/p1729627200000100|See the proposals and vote in the channel>",
         "type": "mrkdwn"
       },
       "type": "section"

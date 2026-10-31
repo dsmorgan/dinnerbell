@@ -822,7 +822,7 @@ def test_web_join_late_vote_and_switches(
     assert submit(admin, "/preferences/stance", {"target": f"tag:{thai.id}", "level": "veto"}).status_code < 400
     html = page(admin.get(f"/events/{event_id}"))
     assert "fit your preferences" not in html  # not until she's in (#76)
-    assert "I'm in (late)" in html and "Join late and vote" in html and "Join late and propose" in html
+    assert "I'm in (late)" in html and "Join late and vote" in html and "Join late and add" in html
     assert 'hx-confirm="You missed the answers. Join late?"' in admin.get(f"/events/{event_id}").text
     assert submit(admin, f"/events/{event_id}/join-late", {}).status_code == 400  # it names the run
     response = submit(admin, f"/events/{event_id}/proposals/{first}/vote", {"join_late": "1"})
@@ -832,7 +832,7 @@ def test_web_join_late_vote_and_switches(
     assert (late.status, late.late, late.vote_counts) == ("in", True, False)
     html = page(admin.get(f"/events/{event_id}"))
     assert "Joined late" in html and "Kim (late)" in html and "Taking part" in html
-    assert html.count("⚠ This pick doesn't fit your preferences.") == 1  # Siam Garden, Thai: hers to see
+    assert html.count("⚠ This proposal doesn't fit your preferences.") == 1  # Siam Garden, Thai: hers to see
     assert f"/events/{event_id}/late/" not in html  # her own switches aren't hers to flip
     refused = submit(admin, f"/events/{event_id}/late/{kim.id}", {"switch": "vote", "on": "1", "run": "1"})
     assert refused.status_code == 409 and LATE_SWITCHERS in page(refused)

@@ -10,7 +10,7 @@
     },
     {
       "text": {
-        "text": "Thanks for answering! Voting is open: the picks are posted below. Vote by *5:15 PM*.\nMissed the answers? Tap *I'm in (late)* to join.",
+        "text": "Thanks for answering! Voting is open: the proposals are posted below. Vote by *5:15 PM*.\nMissed the answers? Tap *I'm in (late)* to join.",
         "type": "mrkdwn"
       },
       "type": "section"
@@ -77,5 +77,5 @@
       "type": "actions"
     }
   ],
-  "text": "Dinner call · Thursday, Oct 22: Thanks for answering! Voting is open: the picks are posted below. Vote by 5:15 PM."
+  "text": "Dinner call · Thursday, Oct 22: Thanks for answering! Voting is open: the proposals are posted below. Vote by 5:15 PM."
 }

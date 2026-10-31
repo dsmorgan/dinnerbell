@@ -74,10 +74,10 @@ LATE_MENU = "late_menu"
 """The ⋯ menu beside a late joiner on the proposals message (#76): the coordinator's switches.
 Each option's value is a ``late_value``."""
 SHUFFLE = "shuffle"
-"""**Shuffle picks** in the proposals message footer (#87): the coordinator's. Its value is a
+"""**Shuffle proposals** in the proposals message footer (#87): the coordinator's. Its value is a
 ``card_value``, naming the run the message showed."""
 BREAK_TIE = "break_tie"
-"""**Break the tie** beside a pick tied for the most votes (#87). Its value is a ``proposal_value``."""
+"""**Break the tie** beside a proposal tied for the most votes (#87). Its value is a ``proposal_value``."""
 ASSIGN_ROLES = "assign_roles"
 """**Assign roles** on the decision message and the coordinator's direct message (#87): opens the
 modal. Its value is a ``card_value``."""

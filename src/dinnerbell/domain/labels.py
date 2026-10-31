@@ -42,7 +42,7 @@ ADJUST = "Adjust"
 """The coordinator's way to change the meal time and who does what (5.7, #157)."""
 LOCK = "Lock this"
 BREAK_TIE = "Break the tie"
-SHUFFLE = "Shuffle picks"
+SHUFFLE = "Shuffle proposals"
 VIEW_ON_WEB = "View on web"
 """Every link to an event's page, as a button or a line of text."""
 
@@ -51,7 +51,7 @@ CLOSE_LABELS = {Window.RESPOND: "Start the vote now", Window.VOTE: "Decide now"}
 CLOSE_SUBMIT = {Window.RESPOND: "Start the vote", Window.VOTE: "Decide now"}
 CLOSE_EFFECT = {
     Window.RESPOND: (
-        "Responses close for everyone now, and the vote on the picks starts. "
+        "Responses close for everyone now, and the vote on the proposals starts. "
         "If fewer than two people are in, everyone's on their own."
     ),
     Window.VOTE: "Voting closes for everyone now, and the votes so far decide the plan.",
@@ -59,7 +59,7 @@ CLOSE_EFFECT = {
 
 
 def decides_now(item: str) -> str:
-    """What locking a pick, or choosing it to break a tie, does."""
+    """What locking a proposal, or choosing it to break a tie, does."""
     return f"{item} becomes the plan right away, and voting closes."
 
 
@@ -67,8 +67,8 @@ LOCK_TITLE = "Lock this in?"
 LOCK_SUBMIT = "Lock it in"
 BREAK_TIE_TITLE = "Break the tie?"
 BREAK_TIE_SUBMIT = "Choose it"
-SHUFFLE_TITLE = "Shuffle the picks?"
-SHUFFLE_EFFECT = "Picks nobody has voted for are replaced. Picks with votes, and ones added or suggested, stay."
+SHUFFLE_TITLE = "Shuffle the proposals?"
+SHUFFLE_EFFECT = "Proposals nobody has voted for are replaced. Proposals with votes, and ones added or suggested, stay."
 SHUFFLE_SUBMIT = "Shuffle"
 MARK_DONE_EFFECT = "This ends the meal and adds it to the history."
 

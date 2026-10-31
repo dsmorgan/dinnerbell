@@ -241,7 +241,7 @@
   <h3>Proposals</h3>
   {#- The coordinator's context line after a shuffle (FR-61): plain words, a name and no more. -#}
   {% if v.info.shuffle_note %}<p class="small muted shuffle-note">{{ v.info.shuffle_note }}</p>{% endif %}
-  {% if v.can.break_tie %}<p class="small">Tied for the most votes. As coordinator, you can choose one of the tied picks.</p>{% endif %}
+  {% if v.can.break_tie %}<p class="small">Tied for the most votes. As coordinator, you can choose one of the tied proposals.</p>{% endif %}
   {% if v.can.shuffle %}
   <div class="button-row">{{ act(e.id, base ~ "/shuffle", labels.SHUFFLE, "button small", {"run": e.run}, confirm=labels.web_confirm(labels.SHUFFLE_TITLE, labels.SHUFFLE_EFFECT)) }}
     <span class="small muted">{{ v.shuffles_left }} left</span></div>
@@ -259,7 +259,7 @@
         {%- if p.info.not_counted %} · not counted: {% for n in p.info.not_counted %}{{ n.name }} (late){{ ", " if not loop.last }}{% endfor %}{% endif %}</p>
       {% for w in p.info.warnings %}<p class="small warning">{{ w }}</p>{% endfor %}
       {#- Only the late joiner sees which picks miss their own stances or needs (FR-29). -#}
-      {% if p.not_for_me %}<p class="small warning">⚠ This pick doesn't fit your preferences.</p>{% endif %}
+      {% if p.not_for_me %}<p class="small warning">⚠ This proposal doesn't fit your preferences.</p>{% endif %}
       <div class="button-row">
         {% if v.can.vote %}
         {% if p.voted %}{{ act(e.id, base ~ "/proposals/" ~ p.info.id ~ "/unvote", "Voted", "button small choice", pressed=true) }}
@@ -280,13 +280,13 @@
       {{ hidden() }}
       {% if v.can.join_late %}
       <input type="hidden" name="join_late" value="1">
-      <p class="small">You missed the answers, so adding a pick joins you late. Your vote shows, but counts only if the coordinator says so.</p>
+      <p class="small">You missed the answers, so adding a proposal joins you late. Your vote shows, but counts only if the coordinator says so.</p>
       {% endif %}
       <label class="field"><span>How</span>
         <select name="mode"><option value="pickup">Pickup</option><option value="delivery">Delivery</option><option value="cook">Cook</option></select>
       </label>
       <label class="field"><span>From the catalog</span>
-        <select name="item_id"><option value="">Something new instead</option>{% for item in v.items %}{% set hint = v.meal_hint(item) %}<option value="{{ item.id }}">{{ item.name }}{% if hint %} ({{ hint }}){% endif %}{% if item.id in v.picked_item_ids %} (already a pick){% endif %}</option>{% endfor %}</select>
+        <select name="item_id"><option value="">Something new instead</option>{% for item in v.items %}{% set hint = v.meal_hint(item) %}<option value="{{ item.id }}">{{ item.name }}{% if hint %} ({{ hint }}){% endif %}{% if item.id in v.picked_item_ids %} (already proposed){% endif %}</option>{% endfor %}</select>
       </label>
       <div class="pair">
         <label class="field"><span>New place or dish</span><input type="text" name="free_text" maxlength="100"></label>
@@ -295,7 +295,7 @@
         </label>
       </div>
       <p class="small muted">You'll be the one to pick it up, cook it, or order it, whichever way you choose. A home meal with a cook list you're not on needs one of its cooks to have offered to cook.</p>
-      <button type="submit" class="button primary">{{ "Join late and propose" if v.can.join_late else "Propose" }}</button>
+      <button type="submit" class="button primary">{{ "Join late and add" if v.can.join_late else "Add" }}</button>
     </form>
   </details>
   {% endif %}
@@ -303,7 +303,7 @@
 
   {% if v.late and e.state.value == "voting" %}
   <h3>Joined late</h3>
-  <p class="small muted">Their votes show, but count only if the coordinator says so. Their own needs and stances don't rule out picks.</p>
+  <p class="small muted">Their votes show, but count only if the coordinator says so. Their own needs and stances don't rule out proposals.</p>
   <ul class="roster late">
     {% for l in v.late %}
     <li>
