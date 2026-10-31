@@ -125,6 +125,6 @@ An admin changes these on the **Ranking** tab of **Members**. Changes apply from
   | 3 | A point better is about 1.4 times as likely | 63% | 38% |
 
   The last two columns are for the worked example. If the same places keep winning, raise it. If the picks feel too random, lower it.
-- **Feedback** says how far ratings move each person's score: 0 (off), 1, or 2. At 2, the default for a new household, ratings can move a score all the way; at 1, by at most a point. A household that existed before the setting did starts at 0. Hints show at every setting.
+- **Feedback** says how far ratings move each person's score: 0 (off), 1, or 2. At 2, the default for a new household, ratings can move a score all the way; at 1, by at most a point. A household that existed before the setting did starts at 0; set it to 2 when you're ready to let ratings move scores. Hints show at every setting.
 
 Vetoes, guests' needs, coverage, and the variety window hold at every setting.

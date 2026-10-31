@@ -683,7 +683,7 @@ dinnerbell/
 | M2 Dinner call | Scheduler, Slack adapter, call lifecycle through decision, ranking, assignments, reminders, abandon path, admin overrides | A week of dinners decided through Slack |
 | M3 Offers and guests | Offers with capacity, cooking offers replacing the call, guests with dietary needs, lunch defaults, ad-hoc calls, schedule changes by any member, feedback collection | Lunch offers and guest dinners work without workarounds |
 | M4 Contributions and badges | Contribution counting, badges, channel announcements, Stats page, monthly recap | First badges awarded |
-| M7 Feedback-informed ranking | ADR 0008 and its implementation (FR-55). Ratings start moving scores after the 8-week feedback check, when the admin turns **Feedback** on; existing households start at 0. | Proposals reflect "Hated it" and "Loved it" with reasons that say so |
+| M7 Feedback-informed ranking | ADR 0008 and its implementation (FR-55). Existing households start with **Feedback** at 0, and the admin sets it to 2 when ready to let ratings move scores. | Proposals reflect "Hated it" and "Loved it" with reasons that say so |
 | M6 Assistant | Natural-language proposals and discovery through the domain API; drafting catalog entries from a description or menu link, through the import preview | "Find us something new" produces valid, filtered proposals |
 | M5 Calendar hints | Secret iCal URL polling, busy hints on the roster | Hints show for members who opted in |
 | Backlog | Discord adapter, web push, multi-household, recipes | |
@@ -700,7 +700,7 @@ The table is in build order. M0 through M2 are the minimum for the household to 
 | 4 | ~~Should a "maybe" at the deadline be nudged once more before converting to out?~~ | Resolved: no; one reminder total, and maybes become out at the deadline |
 | 5 | ~~Should the Slack workspace be new or an existing one?~~ | Resolved: one workspace named for the household. The test instance uses the same workspace with its own Slack app and channel (ADR 0006) |
 | 6 | ~~Seed list of cuisines and dietary tags~~ | Resolved: `seed/example.yaml` in the format from catalog-format.md |
-| 7 | ~~Should feedback adjust ranking automatically?~~ | Resolved: yes, each member's ratings move their own score, capped by the admin's Feedback setting, which starts at 0 for existing households until 8 weeks of data are in ([ADR 0008](adr/0008-feedback-informed-ranking.md)) |
+| 7 | ~~Should feedback adjust ranking automatically?~~ | Resolved: yes, each member's ratings move their own score, capped by the admin's Feedback setting, which starts at 0 for existing households until the admin is ready to turn it on ([ADR 0008](adr/0008-feedback-informed-ranking.md)) |
 | 8 | ~~Should cook notes be visible to the whole household or only the cook?~~ | Resolved: only the cook a thank-you names sees who sent it and the note; everyone else sees the thank-you count (FR-49) |
 
 ## 16. Decision records
