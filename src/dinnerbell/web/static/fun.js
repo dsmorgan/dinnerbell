@@ -9,12 +9,12 @@
 // - It walks him from spot to spot when the pose changes. fun.css places every pose, so a walk
 //   animates `left` from where he stands to where the new pose puts him.
 // - While answers are open, he runs laps around the card of the call he follows, on a track
-//   over the page. A lap pauses while the page scrolls and gives up when a card is swapped or
-//   the window resized; the next one measures again.
+//   over the page, sized to it only during a lap. A lap pauses while the page scrolls and gives
+//   up when his state changes or the window is resized; the next one measures again.
 // - Celebrations: the server sends HX-Trigger "dinnerbell:celebrate" only to the member who
 //   locked or marked done the call on Today. Everyone else gets the quiet caption, once per call
-//   and state per browser session. A badge flips once, for the member who earned it: the server
-//   keeps the marker, and this script tells it after the flip.
+//   and state per tab (sessionStorage). A badge flips once, for the member who earned it: the
+//   server keeps the marker, and this script tells it after the flip, once the page is in view.
 // - Tap him: a hop, puffed cheeks, and a heart. Asleep, he opens an eye and rolls over.
 // - Snow never sits on a turning wheel: climbing in, he shakes the wheel's cap off before it
 //   turns, and it builds back up once he's off. Still, a wheel he's in has no cap.
@@ -43,6 +43,8 @@
     event: null,
     track: null,
     runner: null,
+    applied: null, // the last #den-state applied, so the same state arriving again changes nothing
+    pending: null, // a walk waiting on a celebration, such as the waddle after the belly pat
   };
 
   function moving() {
@@ -77,7 +79,7 @@
     }, 4200);
   }
 
-  // True the first time this browser session sees ``key``. Without storage, every time.
+  // True the first time this tab sees ``key`` (sessionStorage). Without storage, every time.
   function firstTime(key) {
     try {
       if (window.sessionStorage.getItem(key)) {
@@ -192,7 +194,16 @@
     if (S.runner) {
       S.runner.classList.remove("den-on");
     }
+    collapseTrack();
     ham.classList.remove("den-away");
+  }
+
+  // The track spans the page only during a lap. Collapsed, it adds nothing to the page's height,
+  // so the page shrinks back when its content does.
+  function collapseTrack() {
+    if (S.track) {
+      S.track.style.setProperty("height", "0px");
+    }
   }
 
   function runnerParts() {
@@ -206,6 +217,7 @@
       S.track.appendChild(S.runner);
       document.body.appendChild(S.track);
     }
+    collapseTrack(); // measure the page without the track itself
     S.track.style.setProperty("height", document.documentElement.scrollHeight + "px");
   }
 
@@ -266,6 +278,7 @@
     S.lap.onfinish = function () {
       S.lap = null;
       S.runner.classList.remove("den-on");
+      collapseTrack();
       ham.classList.remove("den-away");
       scheduleLap(2200 + Math.random() * 2400);
     };
@@ -328,6 +341,20 @@
     }
   }
 
+  // Run ``fn`` now if the page is in view, or once it comes into view.
+  function whenVisible(fn) {
+    if (!document.hidden) {
+      fn();
+      return;
+    }
+    document.addEventListener("visibilitychange", function shown() {
+      if (!document.hidden) {
+        document.removeEventListener("visibilitychange", shown);
+        fn();
+      }
+    });
+  }
+
   function sawBadge(id) {
     var token = csrfToken();
     if (!token || !/^\d+$/.test(id) || !window.fetch) {
@@ -374,6 +401,20 @@
     if (!s) {
       return;
     }
+    var names = ["pose", "period", "season", "season-depth", "event", "run", "state", "caption", "badge"];
+    var signature = names
+      .map(function (name) {
+        return s.getAttribute("data-" + name) || "";
+      })
+      .join("|");
+    if (signature === S.applied) {
+      return; // htmx settles a card and its out-of-band state separately: the same state twice
+    }
+    S.applied = signature;
+    if (S.pending) {
+      window.clearTimeout(S.pending.timer); // a newer state wins over a walk still waiting
+      S.pending = null;
+    }
     ["period", "season", "season-depth"].forEach(function (name) {
       var value = s.getAttribute("data-" + name);
       if (value) {
@@ -390,9 +431,13 @@
     S.gaitUntil = 0;
     var next = s.getAttribute("data-pose");
     if (gait === "waddle") {
-      window.setTimeout(function () {
-        setPose(next, gait);
-      }, 1300); // after the pat
+      S.pending = {
+        pose: next,
+        timer: window.setTimeout(function () {
+          S.pending = null;
+          setPose(next, gait);
+        }, 1300), // after the pat
+      };
     } else {
       setPose(next, gait);
     }
@@ -407,22 +452,23 @@
     }
     var award = s.getAttribute("data-badge");
     if (onLoad && award) {
-      window.setTimeout(
-        function () {
-          say(s.getAttribute("data-badge-caption"));
-          flip();
-          sawBadge(award);
-        },
-        said ? 4500 : 600,
-      );
+      var badgeCaption = s.getAttribute("data-badge-caption");
+      whenVisible(function () {
+        window.setTimeout(
+          function () {
+            say(badgeCaption);
+            flip();
+            sawBadge(award);
+          },
+          said ? 4500 : 600,
+        );
+      });
     }
   }
 
+  // A swap that changes nothing about him leaves a running lap alone; one that does moves him
+  // (setPose stops the lap), and the next lap measures the card again.
   document.addEventListener("htmx:afterSettle", function () {
-    if (S.lap) {
-      stopLaps(); // a swap may have moved the card; the next lap measures again
-      scheduleLap(1500);
-    }
     apply(false);
   });
 

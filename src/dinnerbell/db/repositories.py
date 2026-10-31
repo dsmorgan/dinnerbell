@@ -212,6 +212,21 @@ class MemberRepository:
         await self._session.flush()
         return to_member(row)
 
+    async def raise_fun_seen_award(self, household_id: int, member_id: int, award_id: int, now: datetime) -> bool:
+        """Move the member's den badge marker (#153) up to ``award_id``, never down, in one
+        statement, so two devices racing can't move it back. Whether it moved."""
+        result = await self._session.execute(
+            update(MemberRow)
+            .where(
+                MemberRow.household_id == household_id,
+                MemberRow.id == member_id,
+                MemberRow.fun_seen_award < award_id,
+            )
+            .values(fun_seen_award=award_id, updated_at=now)
+            .execution_options(synchronize_session=False)
+        )
+        return bool(getattr(result, "rowcount", 0))
+
     async def update(self, household_id: int, member_id: int, now: datetime, **values: Any) -> Member:
         row = await self._row(household_id, member_id)
         if row is None:
