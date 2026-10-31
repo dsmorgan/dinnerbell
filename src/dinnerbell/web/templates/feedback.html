@@ -34,6 +34,7 @@
     <label class="field compact issue-note">
       <span class="small muted">What went wrong? (only you see it)</span>
       <input type="text" name="issue_note" maxlength="{{ issue_note_max }}" placeholder="Other: tell us what" value="{{ answers.issue_note or "" }}">
+      <span class="small muted">Clear this box to uncheck Other.</span>
     </label>
   </fieldset>
   {% endif %}

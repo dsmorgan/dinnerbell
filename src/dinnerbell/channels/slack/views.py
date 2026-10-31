@@ -497,7 +497,14 @@ def feedback_modal(form: FeedbackForm, origin: ids.ViewOrigin) -> dict[str, Any]
         other: Block = {"type": "plain_text_input", "max_length": ISSUE_NOTE_MAX}
         if mine.issue_note:
             other["initial_value"] = mine.issue_note
-        blocks.append(_input("issue_note", "What went wrong?", other, hint="For Other. Only you see it."))
+        blocks.append(
+            _input(
+                "issue_note",
+                "What went wrong?",
+                other,
+                hint="For Other. Only you see it. Clear this box to uncheck Other.",
+            )
+        )
     if form.thanks_cook and facts.cook is not None:
         cook = facts.cook.name
         thanks: Block = {"type": "checkboxes", "options": [option(f"Thanks, {cook}!", THANKS)]}
@@ -531,9 +538,16 @@ def _picked_values(values: Any, block_id: str) -> list[str]:
     return [str(o.get("value")) for o in selected]
 
 
+LEGACY_FEEDBACK = "This form changed. Close it and tap How was it? again."
+
+
 def parse_feedback(values: Any) -> FeedbackInput:
     """The feedback modal's state as ``FeedbackInput``. Raises FormError or ids.BadValue.
-    ``feedback.give`` checks the subjects against the meal."""
+    ``feedback.give`` checks each part against the meal."""
+    # A modal opened before 0020 (one rating) asks about the food; saving it would drop the
+    # member's rating. Remove after one release.
+    if isinstance(values, dict) and "food" in values:
+        raise FormError("food", LEGACY_FEEDBACK)
     issues = _picked_values(values, "place_issues")
     if not set(issues) <= {i.value for i in PlaceIssue}:
         raise ids.BadValue("not an issue")

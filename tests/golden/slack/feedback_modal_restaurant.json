@@ -165,7 +165,7 @@
       },
       "hint": {
         "emoji": true,
-        "text": "For Other. Only you see it.",
+        "text": "For Other. Only you see it. Clear this box to uncheck Other.",
         "type": "plain_text"
       },
       "label": {

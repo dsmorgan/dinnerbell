@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Feedback after meals (spec 5.9, FR-45 to FR-49): the rules, the services, the reminder, and
-who may see what. Nobody ever sees who chose "not again"."""
+who may see what. Nobody ever sees who gave which rating."""
 
 from __future__ import annotations
 

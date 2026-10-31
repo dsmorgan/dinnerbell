@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Feedback in Slack (spec 5.9, section 10, FR-47, FR-48): **How was it?** on the done decision,
 on the reminder, and on App Home opens the feedback modal; saving it goes through the same
-checks as the web. Nothing in Slack says who chose "not again"."""
+checks as the web. Nothing in Slack says who gave which rating."""
 
 from __future__ import annotations
 
@@ -197,6 +197,21 @@ async def test_saving_nothing_and_rules_the_modal_cant_check(slack: Slack, house
     )
     assert slack.ephemerals("Kim")[-1] == FEEDBACK_NONE
     assert await rows(house) == []
+
+
+async def test_a_modal_from_before_one_rating_saves_nothing(slack: Slack, house: House) -> None:
+    """A modal opened before the upgrade asks about the food. Saving it would take back the
+    member's rating, so Slack shows an error on it instead (remove after one release)."""
+    event_id = await done_dinner(house)
+    origin = ids.ViewOrigin(event_id, CHANNEL, run=1)
+    await slack.submit("Kim", ids.FEEDBACK_VIEW, state(rating=LOVED), event_id, origin=origin)
+    response = await slack.submit("Kim", ids.FEEDBACK_VIEW, state(food=LOVED), event_id, origin=origin)
+    assert json.loads(response.body) == {
+        "response_action": "errors",
+        "errors": {"food": "This form changed. Close it and tap How was it? again."},
+    }
+    (row,) = await rows(house)
+    assert row.rating == "loved"
 
 
 async def test_tampered_feedback_modals_change_nothing(slack: Slack, house: House) -> None:

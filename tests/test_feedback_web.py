@@ -97,6 +97,23 @@ def test_feedback_from_history_and_an_edit_replaces_it(
     assert rows(migrated, FeedbackRow) == []
 
 
+def test_a_form_from_before_one_rating_saves_nothing_and_shows_the_saved_answers(
+    client: TestClient, household: dict[str, int], migrated: Settings
+) -> None:
+    """A form opened before the upgrade posts "food" and no rating. Saving it would take back the
+    member's rating, so it's refused, and the page shows what they saved (remove after one release)."""
+    log(client, household["siam"], [household["admin"]])
+    siam = meal_id(migrated, household["siam"])
+    give(client, siam, rating="liked", issue_note="No forks")
+    stale = give(client, siam, food="fine", place="", place_issues=["cold"])
+    assert stale.status_code == 409
+    html = page(stale)
+    assert "This form changed since you opened it. Check your answers and save again." in html
+    assert 'value="liked" checked' in html and 'value="No forks"' in html and 'value="cold" checked' not in html
+    (row,) = rows(migrated, FeedbackRow)
+    assert (row.rating, row.place_issues, row.issue_note) == ("liked", ["other"], "No forks")
+
+
 def test_the_form_follows_the_meal_and_the_rules(
     client: TestClient, provider: FakeProvider, household: dict[str, int], migrated: Settings, clock: FakeClock
 ) -> None:

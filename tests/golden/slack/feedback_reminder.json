@@ -11,7 +11,7 @@
       "block_id": "more",
       "elements": [
         {
-          "accessibility_label": "Say how dinner was: the food, the place, or thanks to the cook",
+          "accessibility_label": "Say how dinner was: a rating, what went wrong, or thanks to the cook",
           "action_id": "feedback",
           "style": "primary",
           "text": {
