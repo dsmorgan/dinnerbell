@@ -682,12 +682,12 @@ dinnerbell/
 | M2 Dinner call | Scheduler, Slack adapter, call lifecycle through decision, ranking, assignments, reminders, abandon path, admin overrides | A week of dinners decided through Slack |
 | M3 Offers and guests | Offers with capacity, cooking offers replacing the call, guests with dietary needs, lunch defaults, ad-hoc calls, schedule changes by any member, feedback collection | Lunch offers and guest dinners work without workarounds |
 | M4 Contributions and badges | Contribution counting, badges, channel announcements, Stats page, monthly recap | First badges awarded |
-| M5 Calendar hints | Secret iCal URL polling, busy hints on the roster | Hints show for members who opted in |
+| M7 Feedback-informed ranking | An ADR on how feedback affects ranking, then the implementation. Ratings start moving scores after the 8-week feedback check. | Proposals reflect "Hated it" and "Loved it" with reasons that say so |
 | M6 Assistant | Natural-language proposals and discovery through the domain API; drafting catalog entries from a description or menu link, through the import preview | "Find us something new" produces valid, filtered proposals |
-| M7 Feedback-informed ranking | An ADR on how feedback affects ranking, then the implementation. Starts after 8 weeks of feedback data and can move ahead of M5 or M6. | Proposals reflect "Hated it" and "Loved it" with reasons that say so |
+| M5 Calendar hints | Secret iCal URL polling, busy hints on the roster | Hints show for members who opted in |
 | Backlog | Discord adapter, web push, multi-household, recipes | |
 
-M0 through M2 are the minimum for the household to switch over. M3 and M4 follow within weeks. Each milestone is a set of pull requests with review before merge.
+The table is in build order. M0 through M2 are the minimum for the household to switch over, and M3 and M4 followed within weeks. M7 is the last milestone before 1.0, which ships after the 8-week feedback check. M6 and then M5 come after 1.0. Each milestone is a set of pull requests with review before merge.
 
 ## 15. Open questions
 

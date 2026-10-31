@@ -92,17 +92,13 @@ Each release is a prebuilt, attested image on GitHub Container Registry. Start w
 
 <img src="src/dinnerbell/web/static/logo-test-mark.svg" width="24" height="24" alt="" align="absmiddle"> A test instance shows Dinnerbot, Dinnerbone as a half-built blueprint, so you can tell it from production at a glance.
 
-## Status
-
-Pre-alpha. Milestones M0 through M4 are in place: calls in Slack, offers and guests, the catalog, preferences, meal history, and contributions and badges. Start with the [spec](docs/spec.md) and the [decision records](docs/adr/).
-
 ## Why
 
 Four adults, four schedules, one kitchen. The daily "what are we eating?" lands at the moment of hunger, takes too long, converges on the same cuisines, and lands on the same person. Dinnerbell moves the question earlier, makes the choice fit the people eating, and makes the decision stick.
 
 ## Stack
 
-Python, FastAPI, HTMX, SQLite, Slack Bolt in Socket Mode, one container. See [ADR 0004](docs/adr/0004-stack.md).
+Python, FastAPI, HTMX, SQLite, Slack Bolt in Socket Mode, one container. See [ADR 0004](docs/adr/0004-stack.md). The [spec](docs/spec.md) and the [decision records](docs/adr/) explain the design.
 
 ## Contributing
 
