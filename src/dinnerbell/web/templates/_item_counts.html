@@ -1,11 +1,6 @@
 {#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
-{#- Feedback on one catalog item: only how many loved the food and the place (FR-49). "Fine",
-    "not again", and issue chips are never shown, so no count can name who gave one. Expects c,
-    an ItemCounts, or None. -#}
-{% if c and (c.food_loved or c.place_loved) %}
-<p class="small item-feedback">
-  {%- if c.food_loved %}Food: {{ c.food_loved }} loved it{% endif %}
-  {%- if c.food_loved and c.place_loved %} · {% endif %}
-  {%- if c.place_loved %}Place: {{ c.place_loved }} loved it{% endif %}
-</p>
+{#- Feedback on one catalog item: only how many loved it (FR-49). No other rating and no issue
+    is ever shown, so no count can name who gave one. Expects c, an ItemCounts, or None. -#}
+{% if c and c.loved %}
+<p class="small item-feedback">{{ c.loved }} loved it</p>
 {% endif %}

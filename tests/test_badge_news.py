@@ -181,7 +181,7 @@ async def test_a_post_only_names_what_the_household_already_sees(house: House) -
     await dinner(house)
     await announce(house)
     text_ = json.dumps([e.payload for e in await house.outbox() if e.kind == "badges_earned"])
-    for secret in ("feedback", "veto", "not_again", "preference", "@example.com"):
+    for secret in ("feedback", "veto", "hated", "preference", "@example.com"):
         assert secret not in text_.lower()
 
 
@@ -226,7 +226,7 @@ async def give_feedback(house: House, who: str) -> None:
 
     async with house.sessionmaker() as db:
         meal = (await house.meals())[0]
-        await feedback.give(db, house[who], meal.id, FeedbackInput(Rating.LOVED, None, frozenset()), now=house.clock())
+        await feedback.give(db, house[who], meal.id, FeedbackInput(Rating.LOVED), now=house.clock())
 
 
 async def test_feedback_days_after_the_call_earns_the_badge_without_a_post(house: House) -> None:

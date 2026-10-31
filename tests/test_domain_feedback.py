@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Feedback rules (spec 5.9, FR-45, FR-46, FR-49): the 7-day window, which subjects a meal
-takes, and what counts and thank-yous reveal. Nobody ever sees who chose "not again"."""
+"""Feedback rules (spec 5.9, FR-45, FR-46, FR-49): the 7-day window, the one rating, which
+parts a meal takes, and what counts and thank-yous reveal. Nobody ever sees who gave which."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ import pytest
 from dinnerbell.domain.catalog import ItemKind, Mode
 from dinnerbell.domain.feedback import (
     COOK_NOTE_MAX,
+    ISSUE_NOTE_MAX,
     CookThanks,
     Feedback,
     FeedbackInput,
@@ -44,12 +45,23 @@ def test_feedback_stays_open_for_seven_days() -> None:
     assert not is_open(DAY, date(2026, 10, 21))
 
 
-def test_subjects_follow_the_meal() -> None:
-    assert clean(FeedbackInput(food=Rating.LOVED, place=Rating.FINE), PLACE, KIM.id).place is Rating.FINE
-    with pytest.raises(InvalidFeedback, match="only for restaurants"):
-        clean(FeedbackInput(place=Rating.FINE), HOME, KIM.id)
+def test_ratings_go_from_hated_to_loved_with_scores_for_ranking() -> None:
+    assert [(r.value, r.label, r.score) for r in Rating] == [
+        ("hated", "Hated it", -2),
+        ("disliked", "Didn't like it", -1),
+        ("fine", "It was fine", 0),
+        ("liked", "Liked it", 1),
+        ("loved", "Loved it", 2),
+    ]
+
+
+def test_parts_follow_the_meal() -> None:
+    assert clean(FeedbackInput(rating=Rating.LIKED), HOME, KIM.id).rating is Rating.LIKED  # any meal
+    assert clean(FeedbackInput(rating=Rating.HATED), PLACE, KIM.id).rating is Rating.HATED
     with pytest.raises(InvalidFeedback, match="only for restaurants"):
         clean(FeedbackInput(place_issues=frozenset({PlaceIssue.COLD})), HOME, KIM.id)
+    with pytest.raises(InvalidFeedback, match="only for restaurants"):
+        clean(FeedbackInput(issue_note="Cold"), HOME, KIM.id)
     with pytest.raises(InvalidFeedback, match="no cook"):
         clean(FeedbackInput(cook_thanks=True), PLACE, KIM.id)
     with pytest.raises(InvalidFeedback, match="You cooked"):
@@ -69,6 +81,21 @@ def test_a_note_comes_with_the_thank_you_and_is_trimmed() -> None:
     assert FeedbackInput().is_empty and not FeedbackInput(cook_thanks=True).is_empty
 
 
+def test_what_went_wrong_comes_with_other_and_is_trimmed() -> None:
+    answers = clean(FeedbackInput(issue_note="  No forks\r\nagain  "), PLACE, KIM.id)
+    assert answers == FeedbackInput(place_issues=frozenset({PlaceIssue.OTHER}), issue_note="No forks\nagain")
+    late = frozenset({PlaceIssue.LATE})
+    assert clean(FeedbackInput(place_issues=late, issue_note="   "), PLACE, KIM.id) == FeedbackInput(place_issues=late)
+    other = frozenset({PlaceIssue.OTHER})
+    assert clean(FeedbackInput(place_issues=other), PLACE, KIM.id).issue_note is None  # Other alone is fine
+    assert clean(FeedbackInput(issue_note="x" * ISSUE_NOTE_MAX), PLACE, KIM.id).issue_note == "x" * ISSUE_NOTE_MAX
+    with pytest.raises(InvalidFeedback, match="200 characters"):
+        clean(FeedbackInput(issue_note="x" * (ISSUE_NOTE_MAX + 1)), PLACE, KIM.id)
+    assert not FeedbackInput(issue_note="Cold").is_empty
+    every = FeedbackInput(place_issues=frozenset(PlaceIssue))
+    assert every.issues == (PlaceIssue.LATE, PlaceIssue.WRONG_ORDER, PlaceIssue.COLD, PlaceIssue.OTHER)
+
+
 def _saved(member_id: int, item_id: int, answers: FeedbackInput, cook: MemberRef | None = None) -> Feedback:
     kind = ItemKind.HOME if cook else ItemKind.RESTAURANT
     return Feedback(member_id, 1, 1, member_id, answers, item_id, "x", kind, None, cook, (), SAVED_AT, SAVED_AT)
@@ -78,25 +105,25 @@ def test_counts_name_nobody() -> None:
     late = frozenset({PlaceIssue.LATE})
     counts = count(
         [
-            _saved(1, 12, FeedbackInput(food=Rating.LOVED, place=Rating.NOT_AGAIN, place_issues=late)),
-            _saved(2, 12, FeedbackInput(food=Rating.NOT_AGAIN, place=Rating.NOT_AGAIN)),
-            _saved(3, 12, FeedbackInput(food=Rating.LOVED)),
-            _saved(4, 11, FeedbackInput(cook_thanks=True), cook=SAM),
+            _saved(1, 12, FeedbackInput(rating=Rating.LOVED, place_issues=late)),
+            _saved(2, 12, FeedbackInput(rating=Rating.HATED)),
+            _saved(3, 12, FeedbackInput(rating=Rating.LOVED)),
+            _saved(4, 12, FeedbackInput(rating=Rating.LIKED)),
+            _saved(5, 11, FeedbackInput(cook_thanks=True), cook=SAM),
         ]
     )
-    # Only "loved it" is counted. Fine, not again, and issues are stored but never counted for
-    # display: with one rater, any count of them would name that person.
-    assert counts == {12: ItemCounts(food_loved=2, place_loved=0)}
-    only_negative = count([_saved(5, 13, FeedbackInput(Rating.NOT_AGAIN, Rating.FINE, late))])
-    assert only_negative == {}
-    assert count([_saved(6, 13, FeedbackInput(place=Rating.LOVED))]) == {13: ItemCounts(0, 1)}
+    # Only "Loved it" is counted. Every other rating and the issues are stored but never counted
+    # for display: with one rater, any count of them would name that person.
+    assert counts == {12: ItemCounts(loved=2)}
+    others = [Rating.HATED, Rating.DISLIKED, Rating.FINE, Rating.LIKED]
+    assert count([_saved(6, 13, FeedbackInput(rating=r, place_issues=late)) for r in others]) == {}
 
 
 def test_only_the_cook_sees_who_thanked_them_and_their_notes() -> None:
     given = [
         _saved(3, 11, FeedbackInput(cook_thanks=True, cook_note="Best tacos yet"), cook=SAM),
         _saved(1, 11, FeedbackInput(cook_thanks=True), cook=SAM),
-        _saved(4, 11, FeedbackInput(food=Rating.NOT_AGAIN), cook=SAM),
+        _saved(4, 11, FeedbackInput(rating=Rating.HATED), cook=SAM),
     ]
     names = {1: "Alex", 3: "Kim"}
     assert thanks_for(given, SAM.id, names, SAM) == CookThanks(2, SAM, (("Alex", None), ("Kim", "Best tacos yet")))

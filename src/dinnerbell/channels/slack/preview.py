@@ -560,7 +560,9 @@ EATERS = (MemberRef(1, "Alex"), MemberRef(2, "Sam"), MemberRef(3, "Kim"))
 CLOSES = date(2026, 10, 29)
 HOME_MEAL = MealFacts(51, DAY, Slot.DINNER, 11, "Sam's Tacos", ItemKind.HOME, Mode.COOK, MemberRef(2, "Sam"), EATERS, 7)
 TAKEOUT = MealFacts(52, DAY, Slot.DINNER, 13, TAQUERIA.name, ItemKind.RESTAURANT, Mode.DELIVERY, None, EATERS, 7)
-KIM_SAID = FeedbackInput(Rating.LOVED, Rating.NOT_AGAIN, frozenset({PlaceIssue.COLD, PlaceIssue.LATE}))
+KIM_SAID = FeedbackInput(
+    Rating.DISLIKED, frozenset({PlaceIssue.COLD, PlaceIssue.LATE, PlaceIssue.OTHER}), "No napkins, no forks"
+)
 AWAITING = tuple(
     Awaiting(60 + n, 7 + n, 1, DAY - timedelta(days=n), Slot.DINNER, name, CLOSES - timedelta(days=n))
     for n, name in enumerate(("Sam's Tacos", "Siam Garden", "Pho <Saigon>", "Taqueria", "Curry Night", "Pizza"))
@@ -692,7 +694,7 @@ VIEWS: dict[str, Callable[[], dict[str, Any]]] = {
         FeedbackForm(TAKEOUT, KIM.id, KIM_SAID, CLOSES), replace(FEEDBACK_ORIGIN, home=True)
     ),
     "feedback_modal_thanked": lambda: feedback_modal(
-        FeedbackForm(HOME_MEAL, KIM.id, FeedbackInput(Rating.FINE, cook_thanks=True, cook_note="Best yet!"), CLOSES),
+        FeedbackForm(HOME_MEAL, KIM.id, FeedbackInput(Rating.LIKED, cook_thanks=True, cook_note="Best yet!"), CLOSES),
         FEEDBACK_ORIGIN,
     ),
     "home_offer": lambda: home_view(TodayView(DAY, [OFFER_VIEW, COLLECTING_VIEW], tuple(Slot)), HomeLinks(BASE_URL)),

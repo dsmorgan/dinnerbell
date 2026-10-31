@@ -195,7 +195,7 @@ async def test_discarding_a_done_call_deletes_its_feedback(house: House) -> None
     the audit row count it, as a number only."""
     event_id = await done_dinner(house, RecordingChannel())
     (meal,) = await house.meals()
-    for name, answers in (("Alex", FeedbackInput(food=Rating.NOT_AGAIN)), ("Sam", FeedbackInput(food=Rating.LOVED))):
+    for name, answers in (("Alex", FeedbackInput(rating=Rating.HATED)), ("Sam", FeedbackInput(rating=Rating.LOVED))):
         await act(house, feedback.give, house[name], meal.id, answers)
     preview = await act_no_clock(house, discard.preview, house.household.id, event_id)
     assert preview.rows["feedback"] == 2 and "feedback 2" in preview.lines()[2]
@@ -207,7 +207,7 @@ async def test_discarding_a_done_call_deletes_its_feedback(house: House) -> None
         assert await db.scalar(select(func.count()).select_from(FeedbackRow)) == 0
     audit = next(a for a in await house.audits() if a.action == "event.discarded")
     assert audit.payload["rows"]["feedback"] == 2
-    assert "not_again" not in str(audit.payload) and "loved" not in str(audit.payload)
+    assert "hated" not in str(audit.payload) and "loved" not in str(audit.payload)
     # What the call and the feedback counted goes with them; the badges they earned stay, forgetting the call.
     assert summary.rows["contribution"] >= 4
     async with house.sessionmaker() as db:

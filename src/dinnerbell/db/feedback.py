@@ -25,9 +25,9 @@ def _feedback(row: FeedbackRow) -> Feedback:
         meal_id=row.meal_id,
         member_id=row.member_id,
         answers=FeedbackInput(
-            food=Rating(row.food) if row.food else None,
-            place=Rating(row.place) if row.place else None,
+            rating=Rating(row.rating) if row.rating else None,
             place_issues=frozenset(PlaceIssue(i) for i in row.place_issues),
+            issue_note=row.issue_note,
             cook_thanks=row.cook_thanks,
             cook_note=row.cook_note,
         ),
@@ -43,9 +43,9 @@ def _feedback(row: FeedbackRow) -> Feedback:
 
 
 def _fill(row: FeedbackRow, data: FeedbackInput, facts: MealFacts, now: datetime) -> None:
-    row.food = data.food.value if data.food else None
-    row.place = data.place.value if data.place else None
+    row.rating = data.rating.value if data.rating else None
     row.place_issues = sorted(i.value for i in data.place_issues)
+    row.issue_note = data.issue_note
     row.cook_thanks = data.cook_thanks
     row.cook_note = data.cook_note
     row.item_id, row.item_name, row.item_kind = facts.item_id, facts.item_name, facts.item_kind.value

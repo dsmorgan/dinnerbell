@@ -454,7 +454,7 @@ async def test_guests_give_no_feedback(house: House) -> None:
     pat = house["Pat"]
     assert await act(house, feedback.awaiting, pat) == []
     with pytest.raises(Forbidden):
-        await act(house, feedback.give, pat, 1, FeedbackInput(food=Rating.LOVED))
+        await act(house, feedback.give, pat, 1, FeedbackInput(rating=Rating.LOVED))
 
 
 # Guest records -----------------------------------------------------------------------------------

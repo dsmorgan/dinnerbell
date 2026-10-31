@@ -531,8 +531,8 @@ async def test_an_offer_counts_the_offerer_for_the_mode_and_those_who_joined(hou
 # Feedback --------------------------------------------------------------------------------------
 
 
-async def give(house: House, name: str, meal_id: int, food: Rating | None = Rating.LOVED) -> None:
-    await act(house, feedback.give, house[name], meal_id, FeedbackInput(food=food))
+async def give(house: House, name: str, meal_id: int, rating: Rating | None = Rating.LOVED) -> None:
+    await act(house, feedback.give, house[name], meal_id, FeedbackInput(rating=rating))
 
 
 async def test_feedback_counts_once_per_meal_however_often_it_changes(house: House) -> None:
@@ -542,7 +542,7 @@ async def test_feedback_counts_once_per_meal_however_often_it_changes(house: Hou
     assert (await counts(house, "Alex"))[Kind.GAVE_FEEDBACK] == 1
     await give(house, "Alex", meal.id, Rating.FINE)  # changing it
     await give(house, "Alex", meal.id, None)  # taking it back
-    await give(house, "Alex", meal.id, Rating.NOT_AGAIN)  # and giving it again
+    await give(house, "Alex", meal.id, Rating.HATED)  # and giving it again
     assert (await counts(house, "Alex"))[Kind.GAVE_FEEDBACK] == 1
     assert ("Alex", BadgeKey.FOOD_CRITIC, Tier.FIRST, Announcement.PENDING) in await awards(house)
     assert Kind.GAVE_FEEDBACK not in await counts(house, "Sam")
@@ -679,12 +679,12 @@ async def test_nothing_in_the_stats_carries_anyone_elses_stances_or_feedback(hou
     """Sam rates the meal "not again" and Alex looks at everything the stats give him."""
     await dinner(house)
     (meal,) = await house.meals()
-    await give(house, "Sam", meal.id, Rating.NOT_AGAIN)
+    await give(house, "Sam", meal.id, Rating.HATED)
     async with house.sessionmaker() as db:
         mine = await stats.my_stats(db, house["Alex"])
         household = await stats.household_stats(db, house["Alex"])
     seen = repr(mine) + repr(household)
-    for secret in ("not_again", "NOT_AGAIN", "loved", "veto", "score", "stance", "preference"):
+    for secret in ("hated", "HATED", "loved", "veto", "score", "stance", "preference"):
         assert secret not in seen
     assert {f.name for f in fields(mine)} == {"member_id", "counts", "progress", "earned"}
     assert {c.name for c in ContributionRow.__table__.columns} == {

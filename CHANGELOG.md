@@ -14,6 +14,7 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ### Changed
 
+- **Feedback is one rating per meal** (#18). Instead of rating the food and, for a restaurant, the place, each member gives the meal one rating: **Hated it**, **Didn't like it**, **It was fine**, **Liked it**, or **Loved it**. Every meal takes a rating, home or restaurant, and it stays optional (**No answer**). The issue chips (**Late**, **Wrong order**, **Cold**, **Other**) stay for restaurants, and **Other** gets a box to say what went wrong, up to 200 characters; typing in it checks **Other**. Only the member who wrote the text sees it, as with their rating and chips. The catalog shows one count, how many loved an item, in place of separate food and place counts. Feedback still doesn't affect ranking.
 - **`could not advance call` logs at most once an hour per call.** The scheduler logs a call's first failure at once, then once an hour while the step keeps failing, instead of every 30 seconds. Each line has the traceback, the event ID, the failing `step`, and `failures`, the number of failures since the previous line.
 - CI only: the `image` job tags its local build `ghcr.io/dsmorgan/dinnerbell:ci` instead of `dinnerbell:ci`. Grype's alert fingerprint includes the image name, so a base-image finding had one Code scanning alert from the CI build and another from the published image; now each finding has one alert (#141). The image itself is unchanged, and nothing new is pushed.
 - Documentation only: `SECURITY.md` links straight to the private vulnerability report form and the latest release, and says what to include in a report (#141).
@@ -22,6 +23,7 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ### Upgrade notes
 
+- **Feedback:** revision `0020_one_rating` converts the feedback members already gave, on the first start. It scores each old answer (loved it +2, fine 0, not again −2) and gives the meal a rating from that score; when someone rated both the food and the place, it uses the average. So food loved it becomes **Loved it**, food loved it with place fine becomes **Liked it**, and food fine with place not again becomes **Didn't like it**. Issue chips, thank-yous, and notes to the cook stay as they were. The catalog's counts change to match: each item shows how many loved it, counted once per member per meal. To go back to 0.10.0, restore the backup you took before the upgrade.
 - `/healthz` has a new key, `stuck_calls`: a number, or `null` when the check failed or is more than 90 seconds old (the call tick hung while the heartbeat goes on). Either `null` case also reports `degraded`. No database revision ships for this.
 - **Monitoring:** the documented monitors don't alert on `degraded`, which keeps HTTP 200. To be alerted about stuck calls, and about Slack, the outbox, and backups, replace the `"slack":"connected"` keyword monitor with one for `"status":"ok","version"` (see "Monitor it" in [docs/hardening.md](docs/hardening.md#monitor-it)).
 - **Start at boot:** nothing to do; an install without the unit runs as before.

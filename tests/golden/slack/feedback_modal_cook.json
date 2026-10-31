@@ -10,7 +10,7 @@
       "type": "context"
     },
     {
-      "block_id": "food",
+      "block_id": "rating",
       "element": {
         "action_id": "value",
         "initial_option": {
@@ -25,15 +25,23 @@
           {
             "text": {
               "emoji": true,
-              "text": "Loved it",
+              "text": "Hated it",
               "type": "plain_text"
             },
-            "value": "loved"
+            "value": "hated"
           },
           {
             "text": {
               "emoji": true,
-              "text": "Fine",
+              "text": "Didn't like it",
+              "type": "plain_text"
+            },
+            "value": "disliked"
+          },
+          {
+            "text": {
+              "emoji": true,
+              "text": "It was fine",
               "type": "plain_text"
             },
             "value": "fine"
@@ -41,10 +49,18 @@
           {
             "text": {
               "emoji": true,
-              "text": "Not again",
+              "text": "Liked it",
               "type": "plain_text"
             },
-            "value": "not_again"
+            "value": "liked"
+          },
+          {
+            "text": {
+              "emoji": true,
+              "text": "Loved it",
+              "type": "plain_text"
+            },
+            "value": "loved"
           },
           {
             "text": {
@@ -59,7 +75,7 @@
       },
       "label": {
         "emoji": true,
-        "text": "The food",
+        "text": "Your rating",
         "type": "plain_text"
       },
       "optional": true,
@@ -68,7 +84,7 @@
     {
       "elements": [
         {
-          "text": "Only you see your ratings. The catalog shows only how many loved an item, never who. You can change it until Thursday, Oct 29.",
+          "text": "Only you see your rating and what went wrong. The catalog shows only how many loved an item, never who. You can change it until Thursday, Oct 29.",
           "type": "mrkdwn"
         }
       ],

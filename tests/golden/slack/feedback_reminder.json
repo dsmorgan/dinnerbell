@@ -2,7 +2,7 @@
   "blocks": [
     {
       "text": {
-        "text": "Hi Kim! How was dinner on Thursday, Oct 22: *Sam's Tacos*? Only you see your ratings, and you can change them until *Thursday, Oct 29*.",
+        "text": "Hi Kim! How was dinner on Thursday, Oct 22: *Sam's Tacos*? Only you see your feedback, and you can change it until *Thursday, Oct 29*.",
         "type": "mrkdwn"
       },
       "type": "section"

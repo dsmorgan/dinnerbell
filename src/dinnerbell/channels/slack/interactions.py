@@ -197,7 +197,7 @@ LATE_SWITCHED = {
     (ids.LateSwitch.VOTE_COUNTS, False): "{name}'s vote doesn't count now.",
 }
 UNVOTED = "Vote taken back."
-FEEDBACK_SAVED = "Thanks for the feedback! Only you see your ratings."
+FEEDBACK_SAVED = "Thanks for the feedback! Only you see it."
 FEEDBACK_NONE = "Got it: no feedback from you on this meal."
 SETTLE_TIMEOUT_SECONDS = 10.0
 Ack = Callable[..., Awaitable[None]]

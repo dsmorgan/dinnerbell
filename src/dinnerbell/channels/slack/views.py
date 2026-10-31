@@ -66,7 +66,7 @@ from dinnerbell.domain.events import (
     Status,
     Window,
 )
-from dinnerbell.domain.feedback import COOK_NOTE_MAX, FeedbackInput, PlaceIssue, Rating
+from dinnerbell.domain.feedback import COOK_NOTE_MAX, ISSUE_NOTE_MAX, FeedbackInput, PlaceIssue, Rating
 from dinnerbell.domain.guests import GuestInput
 from dinnerbell.domain.meals import CALL_ORDER, PICK_SLOT, MealInput, Slot
 from dinnerbell.domain.members import MAX_DISPLAY_NAME_LENGTH, Member
@@ -463,7 +463,7 @@ def close_modal(v: EventView, origin: ids.ViewOrigin) -> dict[str, Any]:
 
 # Feedback (FR-45 to FR-49) -------------------------------------------------------------------------
 
-PRIVATE = "Only you see your ratings. The catalog shows only how many loved an item, never who."
+PRIVATE = "Only you see your rating and what went wrong. The catalog shows only how many loved an item, never who."
 THANKS = "thanks"
 NO_ANSWER = option("No answer", "none")
 """Slack can't unselect a radio button, so this is how a rating is cleared, as on the web."""
@@ -479,19 +479,25 @@ def _radio(answer: Rating | None) -> Block:
 
 
 def feedback_modal(form: FeedbackForm, origin: ids.ViewOrigin) -> dict[str, Any]:
-    """How was it? The food, the place for a restaurant, and the cook for a home meal someone
-    else cooked, each optional and prefilled with the member's answers (FR-46). ``origin.run``
-    is the run of the call, which saving checks again."""
+    """How was it? One rating, what went wrong for a restaurant, and the cook for a home meal
+    someone else cooked, each optional and prefilled with the member's answers (FR-46).
+    ``origin.run`` is the run of the call, which saving checks again.
+
+    A modal can't show a field only once "Other" is checked, so a restaurant's "What went
+    wrong?" box is always there, and text in it counts as "Other", as on the web."""
     facts, mine = form.facts, form.mine or FeedbackInput()
     intro = f"*{facts.slot.value.capitalize()} · {day_label(facts.day)}* · {escape(facts.item_name)}"
-    blocks: list[Block] = [context(intro), _input("food", "The food", _radio(mine.food))]
+    blocks: list[Block] = [context(intro), _input("rating", "Your rating", _radio(mine.rating))]
     if facts.has_place:
-        blocks.append(_input("place", "The place", _radio(mine.place)))
         chips: Block = {"type": "checkboxes", "options": [option(i.label, i.value) for i in PlaceIssue]}
-        chosen = [option(i.label, i.value) for i in PlaceIssue if i in mine.place_issues]
+        chosen = [option(i.label, i.value) for i in mine.issues]
         if chosen:
             chips["initial_options"] = chosen
         blocks.append(_input("place_issues", "Anything go wrong?", chips))
+        other: Block = {"type": "plain_text_input", "max_length": ISSUE_NOTE_MAX}
+        if mine.issue_note:
+            other["initial_value"] = mine.issue_note
+        blocks.append(_input("issue_note", "What went wrong?", other, hint="For Other. Only you see it."))
     if form.thanks_cook and facts.cook is not None:
         cook = facts.cook.name
         thanks: Block = {"type": "checkboxes", "options": [option(f"Thanks, {cook}!", THANKS)]}
@@ -537,10 +543,13 @@ def parse_feedback(values: Any) -> FeedbackInput:
     note = _text(values, "cook_note")
     if len(note) > COOK_NOTE_MAX:  # Slack enforces max_length; this is a tampered payload
         raise FormError("cook_note", f"Keep the note to {COOK_NOTE_MAX} characters.")
+    issue_note = _text(values, "issue_note")
+    if len(issue_note) > ISSUE_NOTE_MAX:  # likewise
+        raise FormError("issue_note", f"Keep what went wrong to {ISSUE_NOTE_MAX} characters.")
     return FeedbackInput(
-        food=_picked_rating(values, "food"),
-        place=_picked_rating(values, "place"),
+        rating=_picked_rating(values, "rating"),
         place_issues=frozenset(PlaceIssue(i) for i in issues),
+        issue_note=issue_note or None,
         cook_thanks=bool(thanks),
         cook_note=note or None,
     )
@@ -862,7 +871,7 @@ def _awaiting(awaiting: Sequence[Awaiting], links: HomeLinks) -> list[Block]:
     ``MAX_AWAITING``, one block each, so Home stays far under Slack's 100 blocks."""
     if not awaiting:
         return []
-    blocks: list[Block] = [section("*How was it?* Meals you ate in the last week. Only you see your ratings.")]
+    blocks: list[Block] = [section("*How was it?* Meals you ate in the last week. Only you see your feedback.")]
     for meal in awaiting[:MAX_AWAITING]:
         what = f"*{meal.slot.value.capitalize()} · {day_label(meal.day)}*: {escape(meal.item_name)}"
         row = section(f"{what}\nOpen until {day_label(meal.closes_on)}", block_id=f"feedback-{meal.meal_id}")

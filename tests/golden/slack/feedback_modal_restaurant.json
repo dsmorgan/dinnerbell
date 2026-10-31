@@ -10,30 +10,38 @@
       "type": "context"
     },
     {
-      "block_id": "food",
+      "block_id": "rating",
       "element": {
         "action_id": "value",
         "initial_option": {
           "text": {
             "emoji": true,
-            "text": "Loved it",
+            "text": "Didn't like it",
             "type": "plain_text"
           },
-          "value": "loved"
+          "value": "disliked"
         },
         "options": [
           {
             "text": {
               "emoji": true,
-              "text": "Loved it",
+              "text": "Hated it",
               "type": "plain_text"
             },
-            "value": "loved"
+            "value": "hated"
           },
           {
             "text": {
               "emoji": true,
-              "text": "Fine",
+              "text": "Didn't like it",
+              "type": "plain_text"
+            },
+            "value": "disliked"
+          },
+          {
+            "text": {
+              "emoji": true,
+              "text": "It was fine",
               "type": "plain_text"
             },
             "value": "fine"
@@ -41,10 +49,18 @@
           {
             "text": {
               "emoji": true,
-              "text": "Not again",
+              "text": "Liked it",
               "type": "plain_text"
             },
-            "value": "not_again"
+            "value": "liked"
+          },
+          {
+            "text": {
+              "emoji": true,
+              "text": "Loved it",
+              "type": "plain_text"
+            },
+            "value": "loved"
           },
           {
             "text": {
@@ -59,63 +75,7 @@
       },
       "label": {
         "emoji": true,
-        "text": "The food",
-        "type": "plain_text"
-      },
-      "optional": true,
-      "type": "input"
-    },
-    {
-      "block_id": "place",
-      "element": {
-        "action_id": "value",
-        "initial_option": {
-          "text": {
-            "emoji": true,
-            "text": "Not again",
-            "type": "plain_text"
-          },
-          "value": "not_again"
-        },
-        "options": [
-          {
-            "text": {
-              "emoji": true,
-              "text": "Loved it",
-              "type": "plain_text"
-            },
-            "value": "loved"
-          },
-          {
-            "text": {
-              "emoji": true,
-              "text": "Fine",
-              "type": "plain_text"
-            },
-            "value": "fine"
-          },
-          {
-            "text": {
-              "emoji": true,
-              "text": "Not again",
-              "type": "plain_text"
-            },
-            "value": "not_again"
-          },
-          {
-            "text": {
-              "emoji": true,
-              "text": "No answer",
-              "type": "plain_text"
-            },
-            "value": "none"
-          }
-        ],
-        "type": "radio_buttons"
-      },
-      "label": {
-        "emoji": true,
-        "text": "The place",
+        "text": "Your rating",
         "type": "plain_text"
       },
       "optional": true,
@@ -141,6 +101,14 @@
               "type": "plain_text"
             },
             "value": "cold"
+          },
+          {
+            "text": {
+              "emoji": true,
+              "text": "Other",
+              "type": "plain_text"
+            },
+            "value": "other"
           }
         ],
         "options": [
@@ -188,9 +156,30 @@
       "type": "input"
     },
     {
+      "block_id": "issue_note",
+      "element": {
+        "action_id": "value",
+        "initial_value": "No napkins, no forks",
+        "max_length": 200,
+        "type": "plain_text_input"
+      },
+      "hint": {
+        "emoji": true,
+        "text": "For Other. Only you see it.",
+        "type": "plain_text"
+      },
+      "label": {
+        "emoji": true,
+        "text": "What went wrong?",
+        "type": "plain_text"
+      },
+      "optional": true,
+      "type": "input"
+    },
+    {
       "elements": [
         {
-          "text": "Only you see your ratings. The catalog shows only how many loved an item, never who. You can change it until Thursday, Oct 29.",
+          "text": "Only you see your rating and what went wrong. The catalog shows only how many loved an item, never who. You can change it until Thursday, Oct 29.",
           "type": "mrkdwn"
         }
       ],
