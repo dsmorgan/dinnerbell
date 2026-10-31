@@ -17,6 +17,7 @@ import pytest
 from dinnerbell.channels.slack import ids
 from dinnerbell.channels.slack.interactions import GUEST_TAPS
 from dinnerbell.channels.slack.messages import render
+from dinnerbell.channels.slack.views import adjust_opened
 from dinnerbell.domain.events import (
     ADJUST_IS_THE_COORDINATORS,
     STALE_CALL,
@@ -68,8 +69,12 @@ def as_is(house: House, coordinator_name: str = "Sam", assignee: str = "Alex") -
     return Adjustment(time(18, 30), house[assignee].id, house[coordinator_name].id)
 
 
-async def adjust(house: House, who: str, event_id: int, wanted: Adjustment, *, run: int = 1) -> Adjustment:
-    return await act(house, coordinator.adjust, house[who], event_id, wanted, run=run)  # type: ignore[no-any-return]
+async def adjust(
+    house: House, who: str, event_id: int, wanted: Adjustment, *, opened: Adjustment | None = None, run: int = 1
+) -> Adjustment:
+    """``opened`` is what the modal showed: the plan as decided, by default."""
+    shown = opened or as_is(house)
+    return await act(house, coordinator.adjust, house[who], event_id, wanted, opened=shown, run=run)  # type: ignore[no-any-return]
 
 
 # The use case ------------------------------------------------------------------------------------
@@ -192,7 +197,8 @@ async def test_a_guest_coordinator_adjusts_the_plan(house: House) -> None:
     await act(house, calls.lock, house["Alex"], event_id, (await pick_ids(house, event_id))["Siam Garden"])
     assert (await act(house, event_views.event_view, pat, event_id)).can.adjust
     wanted = Adjustment(time(19, 0), house["Lee"].id, house["Sam"].id)
-    assert await act(house, coordinator.adjust, pat, event_id, wanted, run=1) == wanted
+    opened = Adjustment(time(18, 30), house["Alex"].id, pat.id)
+    assert await act(house, coordinator.adjust, pat, event_id, wanted, opened=opened, run=1) == wanted
     event, ctx = await house.event(event_id), await house.context(event_id)
     assert (event.coordinator_id, assigned(ctx)[AssignmentRole.PICKUP]) == (house["Sam"].id, house["Lee"].id)
 
@@ -209,6 +215,12 @@ async def slack(house: House) -> AsyncIterator[Slack]:
 
 def inputs(view: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return {b["block_id"]: b for b in view["blocks"] if b["type"] == "input"}
+
+
+async def opened_now(house: House, event_id: int) -> ids.ViewOrigin:
+    """The metadata of an Adjust modal opened now, by Sam, in the channel."""
+    view = await act(house, event_views.event_view, house["Sam"], event_id)
+    return ids.ViewOrigin(event_id, CHANNEL, run=1, opened=adjust_opened(view))
 
 
 def form(house: House, *, at: str = "18:30", who: str = "Alex", lead: str = "Sam") -> dict[str, Any]:
@@ -246,7 +258,7 @@ async def test_slack_adjust_opens_for_the_coordinator_only(slack: Slack, house: 
 
 async def test_slack_adjust_saves_what_changed_and_says_so(slack: Slack, house: House) -> None:
     event_id = await decided(house)
-    origin = ids.ViewOrigin(event_id, CHANNEL, run=1)
+    origin = await opened_now(house, event_id)
     response = await slack.submit("Sam", ids.ADJUST_VIEW, form(house, at="19:00", who="Lee"), event_id, origin=origin)
     assert not response.body  # the modal closes
     assert slack.ephemerals("Sam")[-1] == "Saved. The meal time is 7:00 PM. Lee is picking up, and is told."
@@ -258,6 +270,7 @@ async def test_slack_adjust_saves_what_changed_and_says_so(slack: Slack, house: 
     updated = json.dumps([c.args for c in slack.fake.of("chat.update")])
     assert "7:00 PM" in updated  # the decision shows the new time
 
+    origin = await opened_now(house, event_id)  # Adjust opened again, on the plan as it is now
     await slack.submit("Sam", ids.ADJUST_VIEW, form(house, at="19:00", who="Lee", lead="Lee"), event_id, origin=origin)
     assert slack.ephemerals("Sam")[-1] == "Saved. Lee is coordinating now, and is told."
     assert (await house.event(event_id)).coordinator_id == house["Lee"].id
@@ -266,7 +279,7 @@ async def test_slack_adjust_saves_what_changed_and_says_so(slack: Slack, house: 
 async def test_slack_adjust_with_nothing_changed_saves_nothing(slack: Slack, house: House) -> None:
     event_id = await decided(house)
     audits, outbox = len(await house.audits()), len(await house.outbox())
-    origin = ids.ViewOrigin(event_id, CHANNEL, run=1)
+    origin = await opened_now(house, event_id)
     response = await slack.submit("Sam", ids.ADJUST_VIEW, form(house), event_id, origin=origin)
     assert not response.body
     assert slack.ephemerals("Sam")[-1] == "Nothing changed."
@@ -275,7 +288,7 @@ async def test_slack_adjust_with_nothing_changed_saves_nothing(slack: Slack, hou
 
 async def test_slack_adjust_shows_a_refusal_next_to_its_field_and_keeps_the_modal(slack: Slack, house: House) -> None:
     event_id = await decided(house)
-    origin = ids.ViewOrigin(event_id, CHANNEL, run=1)
+    origin = await opened_now(house, event_id)
     early = await slack.submit("Sam", ids.ADJUST_VIEW, form(house, at="16:00", who="Lee"), event_id, origin=origin)
     body = json.loads(early.body)
     assert body["response_action"] == "errors" and "after the decision" in body["errors"]["meal_time"]
@@ -292,7 +305,7 @@ async def test_slack_adjust_shows_a_refusal_next_to_its_field_and_keeps_the_moda
 
 async def test_slack_adjust_refuses_everyone_else_and_old_modals_after_closing(slack: Slack, house: House) -> None:
     event_id = await decided(house)
-    origin = ids.ViewOrigin(event_id, CHANNEL, run=1)
+    origin = await opened_now(house, event_id)
     response = await slack.submit("Lee", ids.ADJUST_VIEW, form(house, at="19:00"), event_id, origin=origin)
     assert not response.body and slack.ephemerals("Lee")[-1] == ADJUST_IS_THE_COORDINATORS
     await slack.submit("Sam", ids.ADJUST_VIEW, form(house, at="19:00"), event_id, origin=replace(origin, run=2))
@@ -312,3 +325,78 @@ async def test_slack_home_shows_adjust_to_the_coordinator_only(slack: Slack, hou
     for who in ("Lee", "Alex"):
         await slack.open_home(who)
         assert ids.ADJUST not in action_ids(slack.last_home(who))
+
+
+# Review follow-ups: stale modals, partial saves, and who's told -----------------------------------
+
+
+async def test_a_change_made_elsewhere_after_opening_is_not_written_back(slack: Slack, house: House) -> None:
+    event_id = await decided(house)
+    origin = await opened_now(house, event_id)  # Alex picks up, as the modal shows
+    await act(house, coordinator.choose_roles, house["Sam"], event_id, member_id=house["Lee"].id, run=1)
+    await slack.submit("Sam", ids.ADJUST_VIEW, form(house, at="19:00", who="Alex"), event_id, origin=origin)
+    assert slack.ephemerals("Sam")[-1] == "Saved. The meal time is 7:00 PM."
+    assert assigned(await house.context(event_id))[AssignmentRole.PICKUP] == house["Lee"].id  # Lee keeps it
+
+
+async def test_a_part_changed_both_here_and_elsewhere_is_refused_by_its_field(slack: Slack, house: House) -> None:
+    event_id = await decided(house)
+    origin = await opened_now(house, event_id)
+    await act(house, calls.set_meal_time, house["Sam"], event_id, time(19, 0))  # on the web, say
+    response = await slack.submit("Sam", ids.ADJUST_VIEW, form(house, at="19:30", who="Lee"), event_id, origin=origin)
+    assert json.loads(response.body)["errors"] == {"meal_time": coordinator.PLAN_CHANGED}
+    assert await meal(house, event_id) == time(19, 0)
+    assert assigned(await house.context(event_id))[AssignmentRole.PICKUP] == house["Alex"].id  # nothing saved
+
+
+async def test_a_later_part_refused_after_an_earlier_one_saved_says_both(
+    slack: Slack, house: House, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    event_id = await decided(house)
+
+    async def left(*args: Any, **kwargs: Any) -> None:  # Lee left between the check and the save
+        raise EventRuleViolation("Pick someone who's in.", code="not_in")
+
+    monkeypatch.setattr(coordinator, "choose_roles", left)
+    with pytest.raises(coordinator.PartlyAdjusted) as partly:
+        await adjust(house, "Sam", event_id, Adjustment(time(19, 0), house["Lee"].id, house["Sam"].id))
+    assert partly.value.saved == Adjustment(meal_time=time(19, 0)) and str(partly.value) == "Pick someone who's in."
+
+    origin = await opened_now(house, event_id)
+    await slack.submit("Sam", ids.ADJUST_VIEW, form(house, at="19:30", who="Lee"), event_id, origin=origin)
+    assert slack.ephemerals("Sam")[-1] == (
+        "Saved. The meal time is 7:30 PM. The rest didn't change: Pick someone who's in."
+    )
+    assert await meal(house, event_id) == time(19, 30)
+
+
+async def test_with_a_hand_off_the_new_assignee_hears_once_and_after_it(house: House) -> None:
+    event_id = await decided(house)
+    await adjust(house, "Sam", event_id, Adjustment(time(18, 30), house["Lee"].id, house["Alex"].id))
+    (told,) = [n for n in await sent(house, "assignment_made") if n.member.id == house["Lee"].id]
+    assert told.event.coordinator is not None and told.event.coordinator.id == house["Alex"].id
+    text = json.dumps(render(told, CTX).payload())
+    assert "Sam assigned you this. If it doesn't work for you, tell Sam." in text and "Adjust" not in text
+
+
+async def test_handing_off_to_the_new_assignee_sends_them_one_message(house: House) -> None:
+    event_id = await decided(house)
+    await adjust(house, "Sam", event_id, Adjustment(time(18, 30), house["Lee"].id, house["Lee"].id))
+    (told,) = [n for n in await sent(house, "assignment_made") if n.member.id == house["Lee"].id]
+    assert set(told.roles) == {AssignmentRole.PICKUP, AssignmentRole.COORDINATOR}
+
+
+async def test_each_step_checks_the_coordinator_again_under_the_lock(house: House) -> None:
+    event_id = await decided(house)
+    assert house["Alex"].is_admin  # the web lets an admin change these; Adjust's steps don't
+    for use in (
+        lambda: calls.set_meal_time(db, house["Alex"], event_id, time(19, 0), as_coordinator=True, now=house.clock()),
+        lambda: coordinator.choose_roles(
+            db, house["Alex"], event_id, member_id=house["Lee"].id, as_coordinator=True, now=house.clock()
+        ),
+    ):
+        async with house.sessionmaker() as db:
+            with pytest.raises(EventRuleViolation) as refused:
+                await use()
+        assert refused.value.code == "not_coordinator"
+    assert await meal(house, event_id) == time(18, 30)

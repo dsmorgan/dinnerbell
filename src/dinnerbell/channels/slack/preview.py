@@ -28,6 +28,7 @@ from dinnerbell.channels.slack.messages import (
 from dinnerbell.channels.slack.views import (
     HomeLinks,
     adjust_modal,
+    adjust_opened,
     assign_modal,
     cancel_modal,
     close_modal,
@@ -530,6 +531,8 @@ ADJUST_VIEW = replace(
     DECIDED_VIEW, can=Permissions(adjust=True), roles=replace(ROLES_CHOICE, due_at=None), decision=DECISION
 )
 """Alex coordinates the decided dinner, Sam's cooking, and Alex may adjust it (spec 5.7)."""
+NOBODY_IN_VIEW = replace(ADJUST_VIEW, roles=replace(ROLES_CHOICE, due_at=None, people=()))
+"""The same, with nobody left in to give the role to: the modal doesn't ask who."""
 CALLED_OFF_VIEW = _event_view(EventState.CANCELLED, SAM_RESPONSE, Permissions(restart=True))
 TOMORROW = date(2026, 10, 23)
 _LUNCH = _event_view(EventState.SCHEDULED, None, Permissions(post_now=True, cancel=True))
@@ -664,7 +667,10 @@ VIEWS: dict[str, Callable[[], dict[str, Any]]] = {
         HomeLinks(BASE_URL),
     ),
     "assign_modal": lambda: assign_modal(ROLES_VIEW, CALL_OFF_ORIGIN),
-    "adjust_modal": lambda: adjust_modal(ADJUST_VIEW, CALL_OFF_ORIGIN),
+    "adjust_modal": lambda: adjust_modal(ADJUST_VIEW, replace(CALL_OFF_ORIGIN, opened=adjust_opened(ADJUST_VIEW))),
+    "adjust_modal_nobody_in": lambda: adjust_modal(
+        NOBODY_IN_VIEW, replace(CALL_OFF_ORIGIN, opened=adjust_opened(NOBODY_IN_VIEW))
+    ),
     "cancel_modal": lambda: cancel_modal(COLLECTING_VIEW, CALL_OFF_ORIGIN),
     "cancel_modal_decided": lambda: cancel_modal(DECIDED_VIEW, replace(CALL_OFF_ORIGIN, home=True)),
     "close_modal": lambda: close_modal(COLLECTING_VIEW, replace(CALL_OFF_ORIGIN, window=Window.RESPOND)),

@@ -58,6 +58,7 @@ from dinnerbell.domain.events import (
     Window,
     can_do,
     check_ad_hoc_day,
+    check_can_adjust,
     check_can_cancel,
     check_can_close_window,
     check_can_join_late,
@@ -675,13 +676,23 @@ def meal_at(ctx: CallContext, at: time) -> datetime:
 
 
 async def set_meal_time(
-    db: AsyncSession, actor: Member, event_id: int, at: time, *, run: int | None = None, now: datetime
+    db: AsyncSession,
+    actor: Member,
+    event_id: int,
+    at: time,
+    *,
+    run: int | None = None,
+    as_coordinator: bool = False,
+    now: datetime,
 ) -> None:
-    """FR-19: the coordinator (or an admin) changes the meal time, on the call's date."""
+    """FR-19: the coordinator (or an admin) changes the meal time, on the call's date.
+    ``as_coordinator``, from Slack's Adjust, allows only the coordinator (spec 5.7)."""
     async with locked_event(db, actor.household_id, event_id, now) as event:
         await guest_rules.gate(db, event, actor, GuestAction.MANAGE_DECISION)
         check_run(event, run)
         check_can_manage_decision(event, actor)
+        if as_coordinator:
+            check_can_adjust(event, actor)
         if event.state is not EventState.DECIDED:
             raise EventRuleViolation("This meal is already done.", code="not_decided")
         ctx = await load(db, event)

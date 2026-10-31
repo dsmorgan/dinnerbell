@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
+from datetime import time
 from enum import StrEnum
 
 from dinnerbell.domain.events import RoleOffer, Status, Window
@@ -299,6 +300,38 @@ def is_channel_id(value: object) -> bool:
     return isinstance(value, str) and bool(_CHANNEL.fullmatch(value))
 
 
+_HHMM = re.compile(r"([01][0-9]|2[0-3]):[0-5][0-9]")
+
+
+@dataclass(frozen=True, slots=True)
+class Opened:
+    """What an Adjust modal showed when it opened (spec 5.7): the meal time as ``HH:MM``, who did
+    the role, and who coordinated. Saving changes only the fields that differ from these, and
+    refuses one that changed elsewhere since."""
+
+    meal_time: time
+    assignee_id: int | None
+    coordinator_id: int | None
+
+    def data(self) -> dict[str, object]:
+        at = f"{self.meal_time.hour:02d}:{self.meal_time.minute:02d}"
+        return {"at": at, "who": self.assignee_id, "lead": self.coordinator_id}
+
+    @classmethod
+    def parse(cls, data: object) -> Opened:
+        if not isinstance(data, dict) or set(data) != {"at", "who", "lead"}:
+            raise BadValue("bad metadata")
+        at, who, lead = data["at"], data["who"], data["lead"]
+        if not isinstance(at, str) or not _HHMM.fullmatch(at):
+            raise BadValue("bad metadata")
+        for value in (who, lead):
+            if value is not None and not (
+                isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= MAX_ID
+            ):
+                raise BadValue("bad metadata")
+        return cls(time.fromisoformat(at), who, lead)
+
+
 @dataclass(frozen=True, slots=True)
 class ViewOrigin:
     """What a modal is about and where it was opened: the event, and the channel (or DM) to
@@ -314,6 +347,8 @@ class ViewOrigin:
     """The run of the call the modal was opened for. Call it off, Close now, and feedback set it,
     and so does Details opened from a card, so a modal left open across a re-run or a restart
     can't act on the newer run."""
+    opened: Opened | None = None
+    """What an Adjust modal showed when it opened. Only that modal sets it."""
 
     def encode(self) -> str:
         data: dict[str, object] = {"event": self.event_id, "channel": self.channel_id, "home": self.home}
@@ -321,6 +356,8 @@ class ViewOrigin:
             data["window"] = self.window.value
         if self.run is not None:
             data["run"] = self.run
+        if self.opened is not None:
+            data["opened"] = self.opened.data()
         return json.dumps(data, separators=(",", ":"))
 
     @classmethod
@@ -331,7 +368,7 @@ class ViewOrigin:
             data = json.loads(text)
         except ValueError:
             raise BadValue("bad metadata") from None
-        if not isinstance(data, dict) or set(data) - {"window", "run"} != {"event", "channel", "home"}:
+        if not isinstance(data, dict) or set(data) - {"window", "run", "opened"} != {"event", "channel", "home"}:
             raise BadValue("bad metadata")
         event, channel, home = data["event"], data["channel"], data["home"]
         window, run = data.get("window"), data.get("run")
@@ -345,7 +382,8 @@ class ViewOrigin:
             raise BadValue("bad metadata")
         if channel is not None and not is_channel_id(channel):
             raise BadValue("bad metadata")
-        return cls(event, channel, home, Window(window) if window is not None else None, run)
+        opened = Opened.parse(data["opened"]) if "opened" in data else None
+        return cls(event, channel, home, Window(window) if window is not None else None, run, opened)
 
 
 @dataclass(frozen=True, slots=True)
