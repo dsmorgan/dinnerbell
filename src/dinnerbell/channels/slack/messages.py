@@ -721,7 +721,7 @@ def feedback_button(event: note.EventInfo) -> Block:
         ids.FEEDBACK,
         ids.card_value(event.id, event.run),
         style="primary",
-        accessibility_label=f"Say how {_slot(event)} was: the food, the place, or thanks to the cook",
+        accessibility_label=f"Say how {_slot(event)} was: a rating, what went wrong, or thanks to the cook",
     )
 
 

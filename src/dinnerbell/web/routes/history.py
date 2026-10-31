@@ -299,6 +299,9 @@ async def feedback_page(
     return await _feedback_page(request, principal, context, db, meal_id, came_from=came_from)
 
 
+LEGACY_FORM = "This form changed since you opened it. Check your answers and save again."
+
+
 @router.post("/meals/{meal_id}/feedback")
 async def give_feedback(
     request: Request,
@@ -308,7 +311,14 @@ async def give_feedback(
     meal_id: RowId,
     answers: PostedFeedback,
     came_from: Annotated[str, Form(alias="from", max_length=10)] = "",
+    legacy: Annotated[str | None, Form(alias="food", max_length=40)] = None,
 ) -> Response:
+    if legacy is not None:
+        # A form opened before 0020 (one rating) posts "food" and no rating; saving it would drop
+        # the member's rating. Show their saved answers instead. Remove after one release.
+        return await _feedback_page(
+            request, principal, context, db, meal_id, came_from=came_from, error=LEGACY_FORM, status_code=409
+        )
     try:
         saved = await feedback_service.give(db, principal.member, meal_id, answers, now=context.clock())
     except InvalidFeedback as exc:

@@ -676,7 +676,7 @@ async def test_the_household_view_has_totals_and_recent_badges_and_no_member_cou
 
 
 async def test_nothing_in_the_stats_carries_anyone_elses_stances_or_feedback(house: House) -> None:
-    """Sam rates the meal "not again" and Alex looks at everything the stats give him."""
+    """Sam hated the meal, and Alex looks at everything the stats give him."""
     await dinner(house)
     (meal,) = await house.meals()
     await give(house, "Sam", meal.id, Rating.HATED)
