@@ -8,17 +8,17 @@ You need a host that runs containers, a Slack workspace, and an HTTPS hostname y
 
 ## How a dinner works
 
-Dinnerbell asks early, so dinner is settled before anyone is hungry. With the default schedule, it asks at 3:00 PM for a 6:30 PM dinner.
+Dinnerbell asks early, so dinner is settled before anyone is hungry. With the default schedule, it asks at 3:00 PM for a 6:30 PM dinner. Here's a takeout night for a family of four.
 
 ```mermaid
 flowchart TD
     ask["🔔 3:00 PM<br/>Who's eating tonight?"]
-    answer["🙋 Everyone answers<br/>In, maybe, or out"]
-    suggest["🍽️ 4:30 PM<br/>Three meal ideas<br/>that suit everyone"]
-    vote["🗳️ Everyone votes"]
-    decide["✅ 5:15 PM<br/>Dinner is set"]
-    eat["😋 6:30 PM<br/>Dinner"]
-    after["⭐ Afterward<br/>Rate it, earn badges"]
+    answer["🙋 Everyone answers<br/>Alex: in, can pick up<br/>Sam and Kim: in<br/>Jo: out"]
+    suggest["🍽️ 4:30 PM<br/>Three ideas that suit<br/>the three eating:<br/>tacos, pho, or pizza"]
+    vote["🗳️ Everyone votes<br/>Tacos win"]
+    decide["✅ 5:15 PM<br/>Tacos at 6:30<br/>Alex picks them up"]
+    eat["🌮 6:30 PM<br/>Taco night"]
+    after["⭐ Afterward<br/>Rate the tacos<br/>Alex's pickup counts toward a badge"]
 
     ask --> answer --> suggest --> vote --> decide --> eat --> after
 
