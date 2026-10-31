@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """What the coordinator can do that others can't (FR-16, FR-61, #87): break a tie, shuffle the
-picks, and choose the winning pick's mode and who does its role.
+picks, and choose the winning pick's mode and who does its role; and, in Slack, adjust the plan
+once it's decided (spec 5.7).
 
 Each is the coordinator's, or an admin's when nobody coordinates, or a guest does (a guest
 coordinator chooses roles, which is logistics, but not the plan, FR-58). Each takes the event's
@@ -10,21 +11,23 @@ actor's household.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, replace
-from datetime import datetime
+from datetime import datetime, time
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dinnerbell.db.events import AssignmentRepository, EventRepository, ProposalRepository
 from dinnerbell.domain import notifications as note
-from dinnerbell.domain.catalog import Mode
+from dinnerbell.domain.catalog import CatalogItem, Mode
 from dinnerbell.domain.events import (
     MODE_ROLE,
     EventRuleViolation,
     EventState,
     ProposalSource,
     can_do,
+    check_can_adjust,
     check_can_break_tie,
     check_can_choose_roles,
     check_can_shuffle,
@@ -37,6 +40,7 @@ from dinnerbell.services import activity, lifecycle
 from dinnerbell.services import call_context as cc
 from dinnerbell.services import guests as guest_rules
 from dinnerbell.services.call_context import CallContext, locked_event, publish
+from dinnerbell.services.calls import hand_off, handoff_target, meal_at, set_meal_time
 from dinnerbell.services.common import audit
 from dinnerbell.services.errors import NotFound
 from dinnerbell.services.preferences import group_preferences
@@ -178,6 +182,22 @@ async def shuffle(db: AsyncSession, actor: Member, event_id: int, *, run: int | 
 NO_ONE_CHOSEN = "Pick who will {verb} it."
 
 
+def check_assignee(ctx: CallContext, item: CatalogItem, mode: Mode, who: int) -> Member:
+    """Who may do the decided pick's role: an active member or guest who's in, and on the cook
+    list of a home meal that has one."""
+    target = ctx.members.get(who)
+    if target is None or not target.active:
+        raise NotFound("No such member.")
+    response = ctx.response_of(who)
+    if response is None or not response.is_in:
+        raise EventRuleViolation("Pick someone who's in.", code="not_in")
+    if not can_do(item, mode, who):
+        raise EventRuleViolation(
+            f"{item.name} has a cook list, and {target.display_name} isn't on it.", code="cook_list"
+        )
+    return target
+
+
 async def choose_roles(
     db: AsyncSession,
     actor: Member,
@@ -213,16 +233,7 @@ async def choose_roles(
         who = member_id if member_id is not None else (volunteers[0] if volunteers else None)
         if who is None:
             raise EventRuleViolation(NO_ONE_CHOSEN.format(verb=chosen_mode.verb), code="no_one_chosen")
-        target = ctx.members.get(who)
-        if target is None or not target.active:
-            raise NotFound("No such member.")
-        response = ctx.response_of(who)
-        if response is None or not response.is_in:
-            raise EventRuleViolation("Pick someone who's in.", code="not_in")
-        if not can_do(item, chosen_mode, who):
-            raise EventRuleViolation(
-                f"{item.name} has a cook list, and {target.display_name} isn't on it.", code="cook_list"
-            )
+        target = check_assignee(ctx, item, chosen_mode, who)
         role = MODE_ROLE[chosen_mode]
         assignments = AssignmentRepository(db)
         if chosen_mode is not current:
@@ -265,3 +276,99 @@ async def choose_roles(
             item_id=item.id,
             mode=chosen_mode,
         )
+
+
+# Adjust the plan in Slack (spec 5.7) ------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class Adjustment:
+    """What the coordinator's **Adjust** modal asks for: the meal time (a wall time on the call's
+    date), who does the decided pick's role, and who coordinates. None leaves that part alone."""
+
+    meal_time: time | None = None
+    assignee_id: int | None = None
+    coordinator_id: int | None = None
+
+    @property
+    def empty(self) -> bool:
+        return self.meal_time is None and self.assignee_id is None and self.coordinator_id is None
+
+
+class AdjustmentRefused(EventRuleViolation):
+    """One part of an **Adjust** the rules refuse, so the modal can show why next to it. ``part``
+    is ``meal_time``, ``assignee``, or ``coordinator``."""
+
+    def __init__(self, part: str, refusal: EventRuleViolation | NotFound) -> None:
+        super().__init__(str(refusal), code=getattr(refusal, "code", "not_found"))
+        self.part = part
+
+
+def _part(part: str, check: Callable[[], object]) -> None:
+    try:
+        check()
+    except (EventRuleViolation, NotFound) as exc:
+        raise AdjustmentRefused(part, exc) from exc
+
+
+def _wall(ctx: CallContext, at: datetime) -> time:
+    local = at.astimezone(ctx.zone)
+    return time(local.hour, local.minute)
+
+
+async def plan_adjustment(
+    db: AsyncSession, actor: Member, event_id: int, wanted: Adjustment, *, run: int
+) -> Adjustment:
+    """What ``adjust`` would change: each part of ``wanted`` that differs from the call as it is,
+    checked with the rules the use cases apply. It only reads, so the Slack modal can ask before
+    it closes and show a refusal next to its field (``AdjustmentRefused``). A refusal of the
+    whole thing, such as from someone who isn't the coordinator, is an ``EventRuleViolation``."""
+    event = await EventRepository(db).get(actor.household_id, event_id)
+    if event is None:
+        raise NotFound(cc.NO_SUCH_CALL)
+    activity.about(event)  # for the refusal's log line, as under the event's lock
+    return await _plan(db, await cc.load(db, event), actor, wanted, run)
+
+
+async def _plan(db: AsyncSession, ctx: CallContext, actor: Member, wanted: Adjustment, run: int) -> Adjustment:
+    event = ctx.event
+    await guest_rules.gate(db, event, actor, GuestAction.MANAGE_DECISION)
+    check_run(event, run)
+    check_can_adjust(event, actor)
+    item = ctx.items.get(event.decided_item_id) if event.decided_item_id is not None else None
+    mode = event.decided_mode
+    if item is None or mode is None or event.meal_time is None:  # pragma: no cover - a decided call has all three
+        raise EventRuleViolation("There's no decision to change.", code="not_decided")
+    meal = wanted.meal_time
+    if meal is not None and meal == _wall(ctx, event.meal_time):
+        meal = None
+    if meal is not None:
+        _part("meal_time", lambda: meal_at(ctx, meal))
+    current = next((a.member_id for a in ctx.assignments if a.role is MODE_ROLE[mode]), None)
+    assignee = wanted.assignee_id if wanted.assignee_id != current else None
+    if assignee is not None:
+        _part("assignee", lambda: check_assignee(ctx, item, mode, assignee))
+    coordinator = wanted.coordinator_id if wanted.coordinator_id != event.coordinator_id else None
+    if coordinator is not None:
+        await guest_rules.gate(db, event, actor, GuestAction.HAND_OFF)
+        _part("coordinator", lambda: handoff_target(ctx, actor, coordinator))
+    return Adjustment(meal, assignee, coordinator)
+
+
+async def adjust(
+    db: AsyncSession, actor: Member, event_id: int, wanted: Adjustment, *, run: int, now: datetime
+) -> Adjustment:
+    """**Adjust** in Slack (spec 5.7): the coordinator changes the meal time, who does the role,
+    and who coordinates, in one modal. Only the parts that differ from the call as it is change,
+    each through the use case the web uses for it, which checks its rules again under the event's
+    lock and is audited: ``calls.set_meal_time``, ``choose_roles``, then ``calls.hand_off``,
+    last, since handing off ends the actor's say over the rest. Returns what changed; an empty
+    ``Adjustment`` changed nothing and sent nothing."""
+    changes = await plan_adjustment(db, actor, event_id, wanted, run=run)
+    if changes.meal_time is not None:
+        await set_meal_time(db, actor, event_id, changes.meal_time, run=run, now=now)
+    if changes.assignee_id is not None:
+        await choose_roles(db, actor, event_id, member_id=changes.assignee_id, run=run, now=now)
+    if changes.coordinator_id is not None:
+        await hand_off(db, actor, event_id, changes.coordinator_id, run=run, now=now)
+    return changes

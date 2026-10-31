@@ -2,7 +2,7 @@
   "blocks": [
     {
       "text": {
-        "text": "Heads up, Alex: Pat isn't coming to dinner on Thursday, Oct 22 any more, so nobody is *picking up*. Pick someone who's in on the web.",
+        "text": "Heads up, Alex: Pat isn't coming to dinner on Thursday, Oct 22 any more, so nobody is *picking up*. Tap *Adjust* to pick someone who's in.",
         "type": "mrkdwn"
       },
       "type": "section"
@@ -11,10 +11,20 @@
       "block_id": "more",
       "elements": [
         {
+          "action_id": "adjust",
+          "text": {
+            "emoji": true,
+            "text": "Adjust",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "7:1"
+        },
+        {
           "action_id": "link_event",
           "text": {
             "emoji": true,
-            "text": "Pick someone",
+            "text": "View on web",
             "type": "plain_text"
           },
           "type": "button",

@@ -27,6 +27,7 @@ from dinnerbell.channels.slack.messages import (
 )
 from dinnerbell.channels.slack.views import (
     HomeLinks,
+    adjust_modal,
     assign_modal,
     cancel_modal,
     close_modal,
@@ -408,6 +409,9 @@ NOTIFICATIONS: dict[str, Callable[[], note.Notification]] = {
     ),
     "response_reminder_guest": lambda: note.ResponseReminder(event(), PAT, guest=True),
     "role_vacated": lambda: note.RoleVacated(DECIDED, ALEX, PAT, (AssignmentRole.PICKUP,)),
+    "role_vacated_admin": lambda: note.RoleVacated(
+        replace(DECIDED, coordinator=None), ALEX, PAT, (AssignmentRole.PICKUP,)
+    ),
     "link_needed": lambda: note.LinkNeeded(
         1, ALEX, KIM, "U09KIM", "Kim <K> & *Co*", "join", slack_email="kim@example.com"
     ),
@@ -522,6 +526,10 @@ ROLES_CHOICE = RolesChoice(
 ROLES_VIEW = replace(
     DECIDED_VIEW, can=Permissions(mark_done=True, choose_roles=True), roles=ROLES_CHOICE, decision=PENDING_DECISION
 )
+ADJUST_VIEW = replace(
+    DECIDED_VIEW, can=Permissions(adjust=True), roles=replace(ROLES_CHOICE, due_at=None), decision=DECISION
+)
+"""Alex coordinates the decided dinner, Sam's cooking, and Alex may adjust it (spec 5.7)."""
 CALLED_OFF_VIEW = _event_view(EventState.CANCELLED, SAM_RESPONSE, Permissions(restart=True))
 TOMORROW = date(2026, 10, 23)
 _LUNCH = _event_view(EventState.SCHEDULED, None, Permissions(post_now=True, cancel=True))
@@ -656,6 +664,7 @@ VIEWS: dict[str, Callable[[], dict[str, Any]]] = {
         HomeLinks(BASE_URL),
     ),
     "assign_modal": lambda: assign_modal(ROLES_VIEW, CALL_OFF_ORIGIN),
+    "adjust_modal": lambda: adjust_modal(ADJUST_VIEW, CALL_OFF_ORIGIN),
     "cancel_modal": lambda: cancel_modal(COLLECTING_VIEW, CALL_OFF_ORIGIN),
     "cancel_modal_decided": lambda: cancel_modal(DECIDED_VIEW, replace(CALL_OFF_ORIGIN, home=True)),
     "close_modal": lambda: close_modal(COLLECTING_VIEW, replace(CALL_OFF_ORIGIN, window=Window.RESPOND)),
@@ -663,6 +672,10 @@ VIEWS: dict[str, Callable[[], dict[str, Any]]] = {
     "home": lambda: home_view(TodayView(DAY, [COLLECTING_VIEW], tuple(Slot)), HomeLinks(BASE_URL)),
     "home_decided": lambda: home_view(
         TodayView(DAY, [DECIDED_VIEW], tuple(Slot)), HomeLinks(BASE_URL), notice="Marked done. Thanks!"
+    ),
+    "home_decided_coordinator": lambda: home_view(
+        TodayView(DAY, [replace(ADJUST_VIEW, can=Permissions(adjust=True, cancel=True))], tuple(Slot)),
+        HomeLinks(BASE_URL),
     ),
     "home_coordinator": lambda: home_view(
         TodayView(

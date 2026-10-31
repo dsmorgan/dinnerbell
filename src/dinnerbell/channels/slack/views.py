@@ -14,6 +14,7 @@ from collections.abc import Callable, Collection, Iterable, Sequence
 from dataclasses import dataclass
 from datetime import date, time
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from dinnerbell.channels.slack import ids
 from dinnerbell.channels.slack.badge_text import ArtIds, art_element, icon_rows, image_block, tag
@@ -45,6 +46,7 @@ from dinnerbell.channels.slack.messages import (
     CLOSE_LABELS,
     OFFER_VERBS,
     POST_NOW,
+    adjust_button,
     answer_actions,
     coordinator_line,
     join_late_button,
@@ -60,6 +62,7 @@ from dinnerbell.domain.events import (
     MAX_GUESTS,
     MAX_NOTE_LENGTH,
     MAX_SUGGESTION_LENGTH,
+    MODE_ROLE,
     Details,
     EventState,
     RoleOffer,
@@ -71,6 +74,7 @@ from dinnerbell.domain.guests import GuestInput
 from dinnerbell.domain.meals import CALL_ORDER, PICK_SLOT, MealInput, Slot
 from dinnerbell.domain.members import MAX_DISPLAY_NAME_LENGTH, Member
 from dinnerbell.domain.offers import MAX_CAPACITY, replaces_call
+from dinnerbell.services.coordinator import Adjustment
 from dinnerbell.services.event_views import EventView, TodayView
 from dinnerbell.services.feedback import MAX_AWAITING, Awaiting, FeedbackForm
 from dinnerbell.services.meals import LogForm
@@ -451,6 +455,58 @@ def parse_assign(values: Any) -> AssignInput:
     return AssignInput(mode, member)
 
 
+# Adjust (spec 5.7) ----------------------------------------------------------------------------------
+
+ROLE_WHO = {Mode.COOK: "Who cooks", Mode.PICKUP: "Who picks up", Mode.DELIVERY: "Who orders"}
+ADJUST_BLOCKS = {"meal_time": "meal_time", "assignee": "who", "coordinator": "coordinator"}
+"""The input block for each part of an ``Adjustment``, where its refusal shows."""
+
+
+def adjust_modal(v: EventView, origin: ids.ViewOrigin) -> dict[str, Any]:
+    """**Adjust** (spec 5.7): the coordinator's meal time, who does the decided pick's role, from
+    the people who are in, and whom to hand coordinating to, each set to what it is now. Saving
+    changes only what they changed. The modal names the run (``origin.run``), which saving checks."""
+    choice, decision, coordinator = v.roles, v.decision, v.event.coordinator_id
+    if choice is None or decision is None or coordinator is None:
+        raise ValueError("an Adjust modal needs a decided call")
+    item = decision.proposal.item.name
+    blocks: list[Block] = [
+        _intro(v),
+        section(f"*{escape(item)}*: change the time, who does it, or who coordinates. Only what you change is saved."),
+    ]
+    at = decision.meal_time.astimezone(ZoneInfo(v.info.timezone)).time()
+    blocks.append(_input("meal_time", "Meal time", {"type": "timepicker", **_hhmm(at)}, optional=False))
+    people = [option(p.name, str(p.id)) for p in choice.people[:MAX_ASSIGN_PEOPLE]]
+    role = MODE_ROLE[choice.mode]
+    doing = next((a.member.id for a in decision.assignments if a.role is role), None)
+    who: Block = {"type": "static_select", "options": people, "placeholder": plain("Pick someone who's in")}
+    current = next((o for o in people if o["value"] == str(doing)), None)
+    if current is not None:
+        who["initial_option"] = current
+    blocks.append(_input("who", ROLE_WHO[choice.mode], who, optional=current is None))
+    them = next((p for p in v.members if p.id == coordinator), None)
+    leads = [option(them.name, str(them.id))] if them is not None else []
+    leads += [o for o in people if o["value"] != str(coordinator)]
+    lead: Block = {"type": "static_select", "options": leads[:MAX_ASSIGN_PEOPLE]}
+    if leads and leads[0]["value"] == str(coordinator):
+        lead["initial_option"] = leads[0]
+    hint = "Hand it off to someone who's in. They're told, and the plan is theirs to change after."
+    blocks.append(_input("coordinator", "Coordinator", lead, optional=False, hint=hint))
+    return _modal("Adjust the plan", ids.ADJUST_VIEW, origin, blocks, "Save")
+
+
+def parse_adjust(values: Any) -> Adjustment:
+    """The Adjust modal's state, as everything it shows; ``coordinator.adjust`` keeps only what
+    changed, and checks it against the call."""
+    meal = _time(values, "meal_time")
+    if meal is None:
+        raise FormError("meal_time", "Pick a meal time.")
+    lead = _picked(values, "coordinator")
+    if lead is None:
+        raise FormError("coordinator", "Pick who coordinates.")
+    return Adjustment(meal_time=meal, assignee_id=_picked(values, "who"), coordinator_id=lead)
+
+
 def close_modal(v: EventView, origin: ids.ViewOrigin) -> dict[str, Any]:
     """Close now's confirmation from the ⋯ menu, which can't confirm one option and not the
     other. ``origin.window`` is the window it closes; the submission checks it's still open."""
@@ -814,6 +870,8 @@ def _event_card(
         buttons.append(join_late_button(v.info))
     if v.can.mark_done:
         buttons.append(mark_done_button(v.info))
+    if v.can.adjust:
+        buttons.append(adjust_button(v.info))
     # Home is per member, so these show only to people allowed to use them (FR-56).
     window = v.can.close_window
     if window is not None:

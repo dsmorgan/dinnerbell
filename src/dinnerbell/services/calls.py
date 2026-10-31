@@ -422,14 +422,23 @@ async def claim_coordinator(
         activity.action(db, "coordinate", event, actor)
 
 
-async def hand_off(db: AsyncSession, actor: Member, event_id: int, member_id: int, *, now: datetime) -> None:
+def handoff_target(ctx: CallContext, actor: Member, member_id: int) -> Member:
+    """Whom ``actor`` may hand coordinating to: a member, or a guest invited to the call."""
+    target = ctx.members.get(member_id)
+    if target is None or (target.is_guest and not ctx.invited(target.id)):
+        raise NotFound(NO_SUCH_MEMBER)
+    check_handoff(ctx.event, actor, target)
+    return target
+
+
+async def hand_off(
+    db: AsyncSession, actor: Member, event_id: int, member_id: int, *, run: int | None = None, now: datetime
+) -> None:
     async with locked_event(db, actor.household_id, event_id, now) as event:
         await guest_rules.gate(db, event, actor, GuestAction.HAND_OFF)
+        check_run(event, run)
         ctx = await load(db, event)
-        target = ctx.members.get(member_id)
-        if target is None or (target.is_guest and not ctx.invited(target.id)):
-            raise NotFound(NO_SUCH_MEMBER)
-        check_handoff(event, actor, target)
+        target = handoff_target(ctx, actor, member_id)
         await set_coordinator(db, event, member_id, now=now)
         await audit(
             db, actor.household_id, actor, "event.coordinator_handed_off", _target(event), {"to": member_id}, now
@@ -656,17 +665,27 @@ async def lock(db: AsyncSession, actor: Member, event_id: int, proposal_id: int,
 # After the decision (FR-19 to FR-21) ----------------------------------------------------------
 
 
-async def set_meal_time(db: AsyncSession, actor: Member, event_id: int, at: time, *, now: datetime) -> None:
+def meal_at(ctx: CallContext, at: time) -> datetime:
+    """``at``, a wall time on the call's date, as the meal time: never before the decision (FR-19)."""
+    event = ctx.event
+    meal = datetime.combine(event.day, at, tzinfo=ctx.zone).astimezone(UTC)
+    if event.decided_at is not None and meal < event.decided_at:
+        raise EventRuleViolation("Pick a meal time after the decision. Check AM and PM.", code="bad_time")
+    return meal
+
+
+async def set_meal_time(
+    db: AsyncSession, actor: Member, event_id: int, at: time, *, run: int | None = None, now: datetime
+) -> None:
     """FR-19: the coordinator (or an admin) changes the meal time, on the call's date."""
     async with locked_event(db, actor.household_id, event_id, now) as event:
         await guest_rules.gate(db, event, actor, GuestAction.MANAGE_DECISION)
+        check_run(event, run)
         check_can_manage_decision(event, actor)
         if event.state is not EventState.DECIDED:
             raise EventRuleViolation("This meal is already done.", code="not_decided")
         ctx = await load(db, event)
-        meal = datetime.combine(event.day, at, tzinfo=ctx.zone).astimezone(UTC)
-        if event.decided_at is not None and meal < event.decided_at:
-            raise EventRuleViolation("Pick a meal time after the decision. Check AM and PM.", code="bad_time")
+        meal = meal_at(ctx, at)
         event = await EventRepository(db).save(replace(event, meal_time=meal), now)
         ctx = await load(db, event)
         # The call message names the result, time included.
