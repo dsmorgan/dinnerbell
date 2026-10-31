@@ -168,8 +168,8 @@ def pose(scene: Scene, call: EventState | None) -> Pose:
     return CLOCK_POSES[scene.period]
 
 
-def followed_state(events: Iterable[Event], now: datetime, timezone: str) -> EventState | None:
-    """The state of the call he follows among ``events``, the calls on Today in their order.
+def followed_call(events: Iterable[Event], now: datetime, timezone: str) -> Event | None:
+    """The call he follows among ``events``, the calls on Today in their order, or None.
 
     It's the first call that's taking answers, voting, or decided. With none, a call marked done
     today keeps him asleep for the rest of the time of day it was done in, so a dinner done at
@@ -178,15 +178,34 @@ def followed_state(events: Iterable[Event], now: datetime, timezone: str) -> Eve
     calls = [e for e in events if e.kind is EventKind.CALL]
     for event in calls:
         if event.state in FOLLOWED_STATES:
-            return event.state
+            return event
     zone = ZoneInfo(timezone)
     local = now.astimezone(zone)
     for event in calls:
         if event.state is EventState.DONE and event.done_at is not None:
             done = event.done_at.astimezone(zone)
             if done.date() == local.date() and period_at(done.time()) is period_at(local.time()) and done <= local:
-                return EventState.DONE
+                return event
     return None
+
+
+def followed_state(events: Iterable[Event], now: datetime, timezone: str) -> EventState | None:
+    """The state of ``followed_call``, or None."""
+    event = followed_call(events, now, timezone)
+    return None if event is None else event.state
+
+
+DONE_CAPTION = "All done. So full."
+
+
+def decided_caption(item_name: str | None, slot: str) -> str:
+    """What the den says when a call is decided, such as "Pad thai it is!"."""
+    return f"{item_name} it is!" if item_name else f"{slot.capitalize()} is decided!"
+
+
+def badge_caption(badge_name: str, tier_label: str) -> str:
+    """What the den says for a badge, such as "Road Runner · Silver"."""
+    return f"{badge_name} \u00b7 {tier_label}"
 
 
 FIT_STEPS = (8, 10, 12, 14, 16, 18, 20, 24, 28, 32, 40)

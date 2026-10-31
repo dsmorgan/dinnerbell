@@ -23,7 +23,10 @@ from dinnerbell.domain.fun import (
     Pose,
     Scene,
     Season,
+    badge_caption,
+    decided_caption,
     fit_step,
+    followed_call,
     followed_state,
     period_at,
     pose,
@@ -206,6 +209,18 @@ def test_he_follows_the_first_open_call() -> None:
     assert followed_state([lunch_done, dinner, tomorrow], NOW, CHICAGO) is EventState.VOTING
     assert followed_state([lunch_done, tomorrow], NOW, CHICAGO) is EventState.COLLECTING
     assert followed_state([event(4, EventState.DECIDED), dinner], NOW, CHICAGO) is EventState.DECIDED
+
+
+def test_followed_call_is_the_event_itself() -> None:
+    dinner = event(2, EventState.DECIDED)
+    assert followed_call([event(1, EventState.SCHEDULED), dinner], NOW, CHICAGO) is dinner
+    assert followed_call([], NOW, CHICAGO) is None
+
+
+def test_captions() -> None:
+    assert decided_caption("Pad thai", "dinner") == "Pad thai it is!"
+    assert decided_caption(None, "lunch") == "Lunch is decided!"
+    assert badge_caption("Road Runner", "Silver") == "Road Runner \u00b7 Silver"
 
 
 def test_offers_and_calls_not_posted_or_ended_dont_count() -> None:
@@ -443,3 +458,12 @@ def test_the_den_stays_under_the_top_bar_and_fits_a_narrow_row() -> None:
     assert "isolation: isolate;" in rule and "container: den / inline-size;" in rule
     assert "@container den (max-width: 130px)" in FUN_CSS
     assert "@supports not (width: 1cqi) {\n  .greeting h1 { font-size: 1.6rem; }" in FUN_CSS
+
+
+def test_no_snow_on_a_turning_wheel() -> None:
+    """A wheel he's in has no snow cap, still or moving; climbing in, fun.js shakes it off
+    (.den-shake) before the wheel turns, and it builds back up once he's off (.den-rebuild)."""
+    assert '.den[data-pose="wheel"] .den-cap-wheel { display: none; }' in FUN_CSS
+    assert ".den[data-walking] .den-spokes, .den.den-shake .den-spokes { animation: none; }" in FUN_CSS
+    script = (STATIC / "fun.js").read_text()
+    assert '"den-shake"' in script and '"den-rebuild"' in script

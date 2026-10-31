@@ -242,6 +242,8 @@ body[data-period="late"] .den-zzz { color: #f6efd8; opacity: 0.9; }
 .den[data-pose="potter"] .den-ham { left: clamp(52px, 40%, 100% - 72px); }
 .den[data-pose="laps"] .den-ham { left: clamp(52px, 50% - 15px, 100% - 72px); transform: rotate(10deg); }
 .den[data-pose="wheel"] .den-ham { left: calc(100% - 35px); transform: translateY(-7px) scale(0.7); }
+/* No snow on a turning wheel. */
+.den[data-pose="wheel"] .den-cap-wheel { display: none; }
 
 /* A narrow den, beside a long name: the wheel goes unless he's in it, so he has floor to stand on
    that isn't the bowl or the wheel. */
@@ -250,6 +252,37 @@ body[data-period="late"] .den-zzz { color: #f6efd8; opacity: 0.9; }
   .den:not([data-pose="wheel"]) .den-spokes,
   .den:not([data-pose="wheel"]) .den-cap-wheel { display: none; }
   .den[data-pose="potter"] .den-ham, .den[data-pose="laps"] .den-ham { left: 52px; }
+}
+
+/* fun.js (#153): he can be tapped; he walks between spots (data-walking, data-gait); he leaves
+   the den for laps (.den-away) as a runner on a track over the page; and the captions. These
+   come after the poses, so walking wins over a pose's tilt and eyes. Still, nothing here moves. */
+.den.den-live .den-ham { pointer-events: auto; cursor: pointer; }
+.den-ham.den-away { visibility: hidden; }
+.den[data-walking] .den-ham, .den[data-walking] .ham, .den[data-walking] .ham-cheek { transform: none; }
+.den[data-walking="left"] .ham { transform: scaleX(-1); }
+.den[data-walking] .ham-eyes-open, .den.den-stir .ham-eyes-open { display: inline; }
+.den[data-walking] .ham-eyes-shut, .den[data-walking] .den-zzz, .den.den-stir .ham-eyes-shut { display: none; }
+.den.den-stir .ham { transform: scaleX(-1); }
+/* On his way to the wheel, it's still: its snow stays until he shakes it off (.den-shake). */
+body[data-season="winter"] .den[data-walking] .den-cap-wheel,
+body[data-season="winter"] .den.den-shake .den-cap-wheel { display: block; }
+.den-heart { position: absolute; left: 9px; top: -9px; font: 700 11px/1 system-ui, sans-serif; color: #e5577a; opacity: 0; }
+.den-heart.den-pop { opacity: 1; }
+.den-track { position: absolute; left: 0; top: 0; width: 100%; overflow: hidden; pointer-events: none; z-index: 0; }
+.den-runner { position: absolute; left: 0; top: 0; display: none; width: 24px; height: 21px; transform-origin: 50% 50%; }
+.den-runner.den-on { display: block; }
+.den-runner .ham { display: block; width: 100%; height: 100%; overflow: visible; }
+.greeting { position: relative; }
+.den-caption {
+  position: absolute; right: 0; top: calc(100% + 2px); z-index: 0; max-width: 100%; margin: 0;
+  padding: 2px 10px; border-radius: 999px; background: var(--text); color: var(--bg);
+  font-size: 0.85rem; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  pointer-events: none;
+}
+.den-caption.den-float {
+  position: fixed; left: 50%; right: auto; top: auto; bottom: calc(16px + env(safe-area-inset-bottom));
+  z-index: 2; max-width: calc(100% - 32px); translate: -50% 0;
 }
 
 /* Motion, only for people who haven't asked for less. */
@@ -275,6 +308,21 @@ body[data-period="late"] .den-zzz { color: #f6efd8; opacity: 0.9; }
   .edge-wx i:nth-child(even) { animation-name: den-edge-fall-in; }
   body[data-season="spring"] .edge-wx i { animation: den-edge-rain 1.6s linear infinite; }
   body[data-season="spring"] .edge-wx i:nth-child(even) { animation-name: den-edge-rain-in; }
+
+  /* fun.js: walking, celebrations, and taps. Walking stops the pose's own motion. */
+  .den[data-walking] .den-ham, .den[data-walking] .ham, .den[data-walking] .ham-cheek { animation: none; }
+  .den[data-walking] .ham-foot-back, .den-runner .ham-foot-back { animation: den-step 0.22s linear infinite; }
+  .den[data-walking] .ham-foot-front, .den-runner .ham-foot-front { animation: den-step 0.22s linear infinite reverse; }
+  .den[data-walking][data-gait="waddle"] .den-ham { animation: den-waddle 0.45s ease-in-out infinite; }
+  .den[data-walking] .den-spokes, .den.den-shake .den-spokes { animation: none; }
+  .den.den-shake .den-cap-wheel { animation: den-cap-drop 0.7s ease-in forwards; }
+  .den.den-rebuild .den-cap-wheel { animation: den-cap-build 8s ease-in both; }
+  .den.den-coast .den-spokes { animation: den-spin 2.6s cubic-bezier(0.1, 0.6, 0.3, 1) 1; }
+  .den.den-ring .den-bell { animation: den-ring 0.3s ease-in-out 8 alternate; }
+  .den.den-pat .den-ham { animation: den-pat 0.3s ease-in-out 4; }
+  .den.den-puff .ham-cheek { animation: den-puff 0.5s ease-in-out 3; }
+  .den-heart.den-pop { animation: den-heart 1.3s ease-out both; }
+  .den-caption:not([hidden]) { animation: den-say 0.25s ease-out; }
   .den-wx i:nth-child(1) { top: -10px; animation-delay: -0.0s; animation-duration: 4.0s; }
   body[data-season="spring"] .den-wx i:nth-child(1) { animation-duration: 0.6s; }
   .den-wx i:nth-child(2) { top: -10px; animation-delay: -2.3s; animation-duration: 5.6s; }
@@ -320,6 +368,14 @@ body[data-period="late"] .den-zzz { color: #f6efd8; opacity: 0.9; }
 }
 
 @keyframes den-spin { to { transform: rotate(360deg); } }
+@keyframes den-cap-drop { 0%, 40% { transform: translateX(0); } 15% { transform: translateX(-2px); } 30% { transform: translateX(2px); } 100% { transform: translateY(34px); opacity: 0; } }
+@keyframes den-cap-build { from { opacity: 0; } }
+@keyframes den-waddle { 25% { transform: rotate(-7deg); } 75% { transform: rotate(7deg); } }
+@keyframes den-ring { from { transform: rotate(-18deg); } to { transform: rotate(18deg); } }
+@keyframes den-pat { 50% { transform: translateY(-3px) scale(1.05, 0.95); } }
+@keyframes den-puff { 50% { transform: scale(1.5); } }
+@keyframes den-heart { 0% { opacity: 0; transform: translateY(4px) scale(0.6); } 25% { opacity: 1; transform: none; } 100% { opacity: 0; transform: translateY(-12px); } }
+@keyframes den-say { from { opacity: 0; transform: translateY(-4px); } }
 @keyframes den-step { 0%, 100% { transform: translateX(-3px); } 50% { transform: translateX(3px); } }
 @keyframes den-breathe { 0%, 100% { transform: scale(1, 1); } 50% { transform: scale(1.03, 0.95); } }
 @keyframes den-nibble { 0%, 100% { transform: scaleX(-1) rotate(0); } 50% { transform: scaleX(-1) rotate(-6deg); } }

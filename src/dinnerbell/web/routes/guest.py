@@ -3,7 +3,8 @@
 changes that matters to anyone else. Members set preferences instead, on the Preferences page.
 
 ``/me/fun`` turns fun mode (#153) on or off for whoever is signed in, member or guest: the
-form is on this page for a guest and on Preferences for a member."""
+form is on this page for a guest and on Preferences for a member. ``/me/fun/seen`` is fun.js
+saying the den has flipped for their badges, so it won't again on any device."""
 
 from __future__ import annotations
 
@@ -16,7 +17,7 @@ from starlette.responses import Response
 from dinnerbell.domain.events import EventRuleViolation
 from dinnerbell.domain.members import InvalidMemberInput
 from dinnerbell.services import activity, guests
-from dinnerbell.services.fun import set_my_fun_mode
+from dinnerbell.services.fun import saw_badges, set_my_fun_mode
 from dinnerbell.web.auth import Context, Database, GuestCSRFChecked, GuestOrMember
 from dinnerbell.web.forms import parse_id
 from dinnerbell.web.render import render
@@ -70,3 +71,15 @@ async def save_my_fun_mode(
     if principal.member.is_guest:
         return RedirectResponse("/me?saved=fun#fun-mode", status_code=303)
     return RedirectResponse("/preferences?notice=fun#fun-mode", status_code=303)
+
+
+@router.post("/me/fun/seen")
+async def saw_my_badges(
+    principal: GuestCSRFChecked, context: Context, db: Database, award: Annotated[str, Form(max_length=20)] = ""
+) -> Response:
+    """The den flipped for the signed-in person's badges up to ``award``, one of their own (#153).
+    fun.js posts it, with the CSRF header; anything else changes nothing."""
+    award_id = parse_id(award)
+    if award_id is not None:
+        await saw_badges(db, principal.member, award_id, now=context.clock())
+    return Response(status_code=204)

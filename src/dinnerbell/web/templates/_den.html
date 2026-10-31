@@ -1,11 +1,11 @@
 {#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
 {#- Dinnerbone's Den (#153), beside the greeting on Today, for a viewer with fun mode on.
-    Expects den_pose (domain.fun.Pose). The light, weather, and piles key on <body>'s
+    Expects den (services.fun.Den). The light, weather, and piles key on <body>'s
     data-period, data-season, and data-season-depth; what he's doing keys on data-pose. Every
     part is drawn from den.svg, and fun.css places, shows, and hides them: no inline style.
     Decorative, so hidden from assistive technology. -#}
 {%- set sprite = "/static/den.svg?v=" ~ (version|urlencode) %}
-<div class="den" data-pose="{{ den_pose }}" aria-hidden="true">
+<div class="den" data-pose="{{ den.pose }}" aria-hidden="true">
   <div class="den-sky"></div>
   <div class="den-floor"></div>
   <svg class="den-nook" viewBox="0 0 46 22" focusable="false"><use href="{{ sprite }}#nook"/></svg>
@@ -36,6 +36,7 @@
       <use class="ham-foot-front" href="{{ sprite }}#ham-foot-front"/>
     </svg>
     <span class="den-zzz"><i>z</i><i>z</i></span>
+    <span class="den-heart">&#9829;</span>
   </div>
   <div class="den-wx">{% for _ in range(12) %}<i></i>{% endfor %}</div>
 </div>
