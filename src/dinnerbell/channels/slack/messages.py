@@ -42,6 +42,7 @@ from dinnerbell.channels.slack.blocks import (
     safe_url,
     section,
 )
+from dinnerbell.domain import labels
 from dinnerbell.domain import notifications as note
 from dinnerbell.domain.catalog import Mode
 from dinnerbell.domain.events import (
@@ -55,6 +56,7 @@ from dinnerbell.domain.events import (
     Status,
     Window,
 )
+from dinnerbell.domain.labels import OFFER_LABELS, OFFER_WORDS, OFFERED_LABELS, ROLE_TITLES
 from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.members import SLACK_USER_ID_PATTERN
 from dinnerbell.domain.schedule import SlotSchedule
@@ -63,13 +65,6 @@ MAX_PROPOSALS = 10
 """Services allow 10 proposals per call. Each takes two blocks, well under the 50 a message
 may have; any beyond 10 are listed on the web."""
 
-OFFER_WORDS = {RoleOffer.COOK: "cook", RoleOffer.PICKUP: "pick up", RoleOffer.ORDER: "order"}
-ROLE_TITLES = {
-    AssignmentRole.COOK: "Cooking",
-    AssignmentRole.PICKUP: "Picking up",
-    AssignmentRole.ORDER: "Ordering",
-    AssignmentRole.COORDINATOR: "Coordinating",
-}
 ROLE_PHRASES = {
     AssignmentRole.COOK: "cooking",
     AssignmentRole.PICKUP: "picking up",
@@ -77,10 +72,9 @@ ROLE_PHRASES = {
     AssignmentRole.COORDINATOR: "coordinating",
 }
 
-ANSWERS = (Status.IN, Status.MAYBE, Status.OUT)
-"""The participation buttons, in the order they're shown."""
-ANSWER_WORDS = {Status.IN: "In", Status.MAYBE: "Maybe", Status.OUT: "Out"}
-OFFER_LABELS = {RoleOffer.COOK: "I can cook", RoleOffer.PICKUP: "I can pick up", RoleOffer.ORDER: "I'll order"}
+ANSWERS = labels.ANSWER_ORDER
+"""The participation buttons, in the order they're shown: In, Maybe, Out, as on the web."""
+ANSWER_WORDS = labels.ANSWER_LABELS
 SELECTED = "✓ "
 """Marks a selected button's text as well as its color, for color-blind people and for Slack
 themes where primary isn't green."""
@@ -88,10 +82,9 @@ MOVED_ON = "This call moved on."
 STARTED_AGAIN = "It started again, so answer on the newest call message."
 """Why a card or reminder for an earlier run can't act: answers belong to the new one."""
 
-CLOSE_LABELS = {Window.RESPOND: "Start the vote now", Window.VOTE: "Decide now"}
-"""Close now, named for what it does to the open window (FR-56)."""
+CLOSE_LABELS = labels.CLOSE_LABELS
 MENU_WINDOWS = {EventState.COLLECTING: Window.RESPOND, EventState.VOTING: Window.VOTE}
-CALL_OFF = "Call it off"
+CALL_OFF = labels.CALL_OFF
 MARKERS = str.maketrans("", "", "~*_`")
 """mrkdwn's emphasis and code markers, dropped from text that sits inside other formatting."""
 
@@ -219,7 +212,7 @@ def _what(event: note.EventInfo) -> str:
     return f"the {_slot(event)} offer" if event.kind is EventKind.OFFER else _slot(event)
 
 
-def _web_button(ctx: RenderContext, event: note.EventInfo, text: str = "View on web") -> Block:
+def _web_button(ctx: RenderContext, event: note.EventInfo, text: str = labels.VIEW_ON_WEB) -> Block:
     return button(text, f"{ids.LINK_PREFIX}event", url=ctx.url(event.path))
 
 
@@ -271,7 +264,7 @@ def _window(entry: note.RosterEntry) -> str | None:
     return f"eats by {clock(end)}" if end else None
 
 
-LATE_IN = "I'm in (late)"
+LATE_IN = labels.JOIN_LATE
 LATE = "joined late"
 
 
@@ -395,7 +388,7 @@ def call_message(
         # can't act on the newer one (#54).
         late = [join_late_button(event)]
         if event.coordinator is None:
-            late.append(button("I'll coordinate", ids.CALL_COORDINATE, ids.card_value(event.id, event.run)))
+            late.append(button(labels.COORDINATE, ids.CALL_COORDINATE, ids.card_value(event.id, event.run)))
         blocks.append(actions(*late, block_id="roles"))
     more: list[Block] = []
     if event.state is EventState.COLLECTING:
@@ -534,17 +527,11 @@ def proposals_message(notification: note.ProposalsReady | note.ProposalsUpdated,
         if voting:
             value = ids.proposal_value(event.id, proposal.id)
             name = clip(proposal.item.name, 60)
-            lock = confirm(
-                "Lock this in?",
-                f"{name} becomes the plan right away, and voting closes.",
-                "Lock it in",
-            )
-            row = [button("Vote", ids.VOTE, value, style="primary"), button("Lock this", ids.LOCK, value, confirm=lock)]
+            lock = confirm(labels.LOCK_TITLE, labels.decides_now(name), labels.LOCK_SUBMIT)
+            row = [button("Vote", ids.VOTE, value, style="primary"), button(labels.LOCK, ids.LOCK, value, confirm=lock)]
             if proposal.tied:
-                choose = confirm(
-                    "Break the tie?", f"{name} becomes the plan right away, and voting closes.", "Choose it"
-                )
-                row.append(button("Break the tie", ids.BREAK_TIE, value, confirm=choose))
+                choose = confirm(labels.BREAK_TIE_TITLE, labels.decides_now(name), labels.BREAK_TIE_SUBMIT)
+                row.append(button(labels.BREAK_TIE, ids.BREAK_TIE, value, confirm=choose))
             blocks.append(actions(*row, block_id=f"proposal-actions-{proposal.id}"))
     hidden = len(notification.proposals) - len(shown)
     if hidden:
@@ -554,12 +541,8 @@ def proposals_message(notification: note.ProposalsReady | note.ProposalsUpdated,
     if voting:
         footer.append(button("Add proposal", ids.ADD_PROPOSAL, ids.event_value(event.id)))
         if notification.shuffles_left:
-            shuffle = confirm(
-                "Shuffle the picks?",
-                "Picks nobody has voted for are replaced. Picks with votes, and ones added or suggested, stay.",
-                "Shuffle",
-            )
-            footer.append(button("Shuffle picks", ids.SHUFFLE, ids.card_value(event.id, event.run), confirm=shuffle))
+            shuffle = confirm(labels.SHUFFLE_TITLE, labels.SHUFFLE_EFFECT, labels.SHUFFLE_SUBMIT)
+            footer.append(button(labels.SHUFFLE, ids.SHUFFLE, ids.card_value(event.id, event.run), confirm=shuffle))
     footer.append(_web_button(ctx, event))
     blocks.append(actions(*footer, block_id="more"))
     text = f"Picks for {_slot(event)} on {day_label(event.day)}: " + ", ".join(
@@ -678,8 +661,8 @@ def _roles_pending(event: note.EventInfo, decision: note.DecisionInfo) -> str:
 
 def mark_done_button(event: note.EventInfo) -> Block:
     """Mark done ends the meal and logs it, so it asks first (docs/channels.md)."""
-    sure = confirm(f"Mark {_slot(event)} done?", "This ends the meal and adds it to the history.", "Mark done")
-    return button("Mark done", ids.MARK_DONE, ids.event_value(event.id), style="primary", confirm=sure)
+    sure = confirm(labels.mark_done_title(_slot(event)), labels.MARK_DONE_EFFECT, labels.MARK_DONE)
+    return button(labels.MARK_DONE, ids.MARK_DONE, ids.event_value(event.id), style="primary", confirm=sure)
 
 
 # Starting and posting a call from Slack (issue #59) ---------------------------------------------
@@ -780,11 +763,9 @@ def reminder_message(
     value = ids.card_value(event.id, event.run)
     blocks = [
         section(text),
-        actions(
-            *_answer_buttons(value, mine, guest=guest),
-            _web_button(ctx, event),
-            block_id="participation",
-        ),
+        # In, Maybe, Out on a row of their own: one choice, apart from the other buttons.
+        actions(*_answer_buttons(value, mine, guest=guest), block_id="participation"),
+        actions(_web_button(ctx, event), block_id="more"),
     ]
     return _finish(fallback, blocks)
 
@@ -930,8 +911,7 @@ def can_join_late(event: note.EventInfo, mine: Response | None, *, guest: bool =
     return event.state is EventState.VOTING and not guest and (mine is None or (not mine.is_in and not mine.late))
 
 
-GUEST_ANSWERS = (Status.IN, Status.OUT)
-"""A guest is in or out (#38)."""
+GUEST_ANSWERS = labels.GUEST_ANSWER_ORDER
 
 
 def _answer_buttons(value: str, mine: Response | None, *, guest: bool = False) -> list[Block]:
@@ -1044,7 +1024,7 @@ def _guest_rows(event: note.EventInfo, guests: tuple[CardGuest, ...]) -> list[Bl
         for role in RoleOffer:
             offered = mine is not None and role in mine.offers
             action = (ids.GUEST_ACTION_FOR_WITHDRAW if offered else ids.GUEST_ACTION_FOR_OFFER)[role]
-            buttons.append(choice_button(OFFER_LABELS[role], action, value, selected=offered))
+            buttons.append(choice_button(OFFERED_LABELS[role], action, value, selected=offered))
         blocks += [section(line, block_id=f"guest-{guest.id}"), actions(*buttons, block_id=f"guest-actions-{guest.id}")]
     if len(guests) > MAX_CARD_GUESTS:
         blocks.append(context("Answer for your other guests on the web."))
@@ -1147,10 +1127,10 @@ def answer_actions(
         action = (ids.CARD_ACTION_FOR_WITHDRAW if offered else ids.CARD_ACTION_FOR_OFFER)[role]
         roles.append(choice_button(OFFER_LABELS[role], action, value, selected=offered))
     if event.coordinator is None:
-        roles.append(button("I'll coordinate", ids.CARD_COORDINATE, value))
+        roles.append(button(labels.COORDINATE, ids.CARD_COORDINATE, value))
     more: list[Block] = []
     if not guest:  # a guest has only In, Out, and the roles (#38)
-        more.append(button("Details", ids.CARD_DETAILS, value))
+        more.append(button(labels.DETAILS, ids.CARD_DETAILS, value))
     if can_invite:
         more.append(button("Invite a guest", ids.INVITE_GUEST, value))
     return AnswerActions(_answer_buttons(value, mine, guest=guest), roles, more)
@@ -1427,7 +1407,7 @@ def _add(at: time, minutes: int) -> time:
 # Offers (FR-4) -----------------------------------------------------------------------------------
 
 OFFER_VERBS = {Mode.COOK: "is making", Mode.PICKUP: "is picking up", Mode.DELIVERY: "is ordering"}
-CANT_MAKE_IT = "Can't make it"
+CANT_MAKE_IT = labels.CANT_MAKE_IT
 
 
 def _offer_line(event: note.EventInfo, offer: note.OfferInfo, *, rich: bool) -> str:

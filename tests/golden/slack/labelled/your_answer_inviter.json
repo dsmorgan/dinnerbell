@@ -144,7 +144,7 @@
           "action_id": "guest_offer_cook",
           "text": {
             "emoji": true,
-            "text": "I can cook",
+            "text": "Can cook",
             "type": "plain_text"
           },
           "type": "button",
@@ -155,7 +155,7 @@
           "style": "primary",
           "text": {
             "emoji": true,
-            "text": "✓ I can pick up",
+            "text": "✓ Can pick up",
             "type": "plain_text"
           },
           "type": "button",
@@ -165,7 +165,7 @@
           "action_id": "guest_offer_order",
           "text": {
             "emoji": true,
-            "text": "I'll order",
+            "text": "Can order",
             "type": "plain_text"
           },
           "type": "button",
@@ -209,7 +209,7 @@
           "action_id": "guest_offer_cook",
           "text": {
             "emoji": true,
-            "text": "I can cook",
+            "text": "Can cook",
             "type": "plain_text"
           },
           "type": "button",
@@ -219,7 +219,7 @@
           "action_id": "guest_offer_pickup",
           "text": {
             "emoji": true,
-            "text": "I can pick up",
+            "text": "Can pick up",
             "type": "plain_text"
           },
           "type": "button",
@@ -229,7 +229,7 @@
           "action_id": "guest_offer_order",
           "text": {
             "emoji": true,
-            "text": "I'll order",
+            "text": "Can order",
             "type": "plain_text"
           },
           "type": "button",

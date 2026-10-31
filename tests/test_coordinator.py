@@ -1357,7 +1357,7 @@ def test_web_break_the_tie(admin: TestClient, provider: FakeProvider, clock: Fak
 
     sign_in(admin, provider)  # an admin, with nobody coordinating
     html = page(admin.get(f"/events/{event_id}"))
-    assert html.count("Break the tie: this one") == 2 and "Tied for the most votes" in html
+    assert html.count(">Break the tie</button>") == 2 and "Tied for the most votes" in html
     third = proposal_ids(migrated)[2]
     assert submit(admin, f"/events/{event_id}/proposals/{third}/break-tie", {"run": "1"}).status_code == 409  # not tied
     assert submit(admin, f"/events/{event_id}/proposals/{second}/break-tie", {}).status_code == 400

@@ -95,6 +95,20 @@ def test_start_a_call_and_respond(admin: TestClient, migrated: Settings) -> None
     assert f"/events/{event_id}" in admin.get("/").text
 
 
+def test_the_answers_are_one_toggle_in_slacks_order_apart_from_the_roles(admin: TestClient) -> None:
+    """#149: In, Maybe, Out, in that order as in Slack, joined in a row of their own with the
+    choice pressed, and the role offers in a separate row."""
+    event_id = start(admin)
+    card = htmx(admin, f"/events/{event_id}/respond", {"status": "maybe", "from": "today"}).text
+    answers = re.search(r'<div class="segmented answer"[^>]*>(.*?)</div>', card, re.S)
+    assert answers is not None
+    labels = re.findall(r'aria-pressed="(true|false)">(\w+)<', answers.group(1))
+    assert labels == [("false", "In"), ("true", "Maybe"), ("false", "Out")]
+    roles = re.search(r'<div class="button-row roles"[^>]*>(.*?)</div>', card, re.S)
+    assert roles is not None and "I can cook" in roles.group(1) and "Maybe" not in roles.group(1)
+    assert card.index("segmented answer") < card.index("button-row roles")
+
+
 def test_details_roles_and_coordinating(admin: TestClient, migrated: Settings) -> None:
     event_id = start(admin)
     for path, data in [
@@ -116,7 +130,7 @@ def test_details_roles_and_coordinating(admin: TestClient, migrated: Settings) -
         assert submit(admin, f"/events/{event_id}/{path}", data).status_code == 303, path
     html = admin.get(f"/events/{event_id}").text
     assert "&lt;script&gt;x&lt;/script&gt;" in html and "<script>x" not in html
-    assert "Orders" in html and "+2 guests" in html and "Suggests Pho" in html and "Coordinator: admin" in html
+    assert "Can order" in html and "+2 guests" in html and "Suggests Pho" in html and "Coordinator: admin" in html
     (response,) = rows(migrated, ResponseRow)
     assert (response.offers_cook, response.offers_order, response.guests) == (False, True, 2)
     bad = htmx(admin, f"/events/{event_id}/details", {"guests": "lots"})
@@ -161,7 +175,7 @@ def test_vote_lock_and_mark_done(admin: TestClient, clock: FakeClock, migrated: 
     assert malformed.status_code == 409 and "Pick a member" in malformed.text  # not a silent unassign
     assert "Picking up: admin" in page(malformed)
     assert htmx(admin, f"/events/{event_id}/assignments", {"role": "pickup", "member_id": ""}).status_code == 200
-    assert 'hx-confirm="Mark this meal done?' in admin.get(f"/events/{event_id}").text
+    assert "done? This ends the meal and adds it to the history." in admin.get(f"/events/{event_id}").text
     done = htmx(admin, f"/events/{event_id}/done", {})
     assert done.status_code == 200 and "Done" in done.text
     assert htmx(admin, f"/events/{event_id}/done", {}).status_code == 409  # already done: shown, not a 500

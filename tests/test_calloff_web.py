@@ -268,7 +268,7 @@ def test_close_now_starts_the_vote_then_decides(
 ) -> None:
     event_id = call_in(house, provider, clock, migrated, "collecting")
     html = house.get(f"/events/{event_id}").text
-    assert 'hx-confirm="Close responses and start the vote now?"' in html
+    assert 'hx-confirm="Start the vote now? Responses close for everyone now' in html  # Slack's words (#149)
     voting = htmx(house, f"/events/{event_id}/close", {"run": "1", "window": "respond"})
     assert voting.status_code == 200 and state_of(migrated, event_id) == "voting"
     assert close_label(voting.text, event_id) == "Decide now" and "Proposals" in voting.text

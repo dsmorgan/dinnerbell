@@ -58,12 +58,12 @@
       </div>
     </fieldset>
     {% endif %}
-    <button type="submit" class="button primary">{{ "Save guests" if mine_in else "Count me in" }}</button>
+    <button type="submit" class="button primary">{{ "Save guests" if mine_in else labels.COUNT_ME_IN }}</button>
   </form>
   {% endif %}
-  {% if v.can.leave %}<div class="button-row">{{ act(e.id, base ~ "/leave", "Can't make it", "button small", {"run": e.run}) }}</div>{% endif %}
+  {% if v.can.leave %}<div class="button-row">{{ act(e.id, base ~ "/leave", labels.CANT_MAKE_IT, "button small", {"run": e.run}) }}</div>{% endif %}
   {% if o.dietary_notes %}<p class="small">Dietary needs: {{ o.dietary_notes|join(", ") }}.</p>{% endif %}
-  {% if v.can.mark_done %}<div class="button-row">{{ act(e.id, base ~ "/done", "Mark done", "button small", confirm="Mark this meal done? It goes into the history.") }}</div>{% endif %}
+  {% if v.can.mark_done %}<div class="button-row">{{ act(e.id, base ~ "/done", labels.MARK_DONE, "button small", confirm=labels.web_confirm(labels.mark_done_title(e.slot.value), labels.MARK_DONE_EFFECT)) }}</div>{% endif %}
   {% else %}
   <p class="event-when small">
     {%- if e.state.value == "scheduled" %}Posts {{ e.day|day }} at <strong>{{ e.opens_at|clock(tz) }}</strong>.
@@ -81,23 +81,28 @@
 
   {% if v.can.respond %}
   {% set mine = v.mine %}
-  <div class="button-row respond" role="group" aria-label="Are you in?">
-    {% for status, label in ((("in", "In"), ("out", "Out")) if as_guest else (("in", "In"), ("out", "Out"), ("maybe", "Maybe"))) %}
-    {{ act(e.id, base ~ "/respond", label, "button small choice", {"status": status}, pressed=(mine is not none and mine.status.value == status)) }}
+  {#- In, Maybe, Out is one choice: a joined control on a row of its own, apart from the role
+      offers, which each turn on and off by themselves (#149). -#}
+  <p class="row-label small muted" id="event-{{ e.id }}-answer">Are you in?</p>
+  <div class="segmented answer" role="group" aria-labelledby="event-{{ e.id }}-answer">
+    {% for status in (labels.GUEST_ANSWER_ORDER if as_guest else labels.ANSWER_ORDER) %}
+    {{ act(e.id, base ~ "/respond", labels.ANSWER_LABELS[status], "button segment", {"status": status.value}, pressed=(mine is not none and mine.status == status)) }}
     {% endfor %}
   </div>
-  <div class="button-row roles" role="group" aria-label="What can you do?">
-    {% for role, label in (("cook", "I can cook"), ("pickup", "I can pick up"), ("order", "I'll order")) %}
-    {% set offered = mine is not none and role in mine.offers|map(attribute="value")|list %}
-    {{ act(e.id, base ~ "/offer", label, "button small choice", {"role": role, "offered": "0" if offered else "1"}, pressed=offered) }}
+  <p class="row-label small muted" id="event-{{ e.id }}-roles">Can you help? Tap each one that fits.</p>
+  <div class="button-row roles" role="group" aria-labelledby="event-{{ e.id }}-roles">
+    {% for role, label in labels.OFFER_LABELS.items() %}
+    {% set offered = mine is not none and role in mine.offers %}
+    {{ act(e.id, base ~ "/offer", label, "button small choice", {"role": role.value, "offered": "0" if offered else "1"}, pressed=offered) }}
     {% endfor %}
-    {% if v.can.claim %}{{ act(e.id, base ~ "/coordinate", "I'll coordinate", "button small choice") }}{% endif %}
+    {% if v.can.claim %}{{ act(e.id, base ~ "/coordinate", labels.COORDINATE, "button small choice") }}{% endif %}
   </div>
   {% if not as_guest %}
   <details class="details-form">
-    <summary class="small">Guests, times, a suggestion, or a note</summary>
+    <summary class="small">{{ labels.DETAILS }}</summary>
     <form method="post" action="{{ base }}/details" hx-post="{{ base }}/details" {{ swap|safe }} class="stack">
       {{ hidden() }}
+      <p class="small muted">{{ labels.DETAILS_HINT }}</p>
       <label class="field"><span>Guests</span><input type="number" name="guests" min="0" max="20" inputmode="numeric" value="{{ mine.guests if mine else 0 }}"></label>
       {% if v.dietary_tags %}
       <fieldset class="field"><legend>Guests' dietary needs</legend>
@@ -131,16 +136,16 @@
   {% if v.can.join_late %}
   <div class="join-late">
     <p class="small">You missed the answers, but you can still join. You'll be in, and your vote shows, but it counts only if the coordinator says so.</p>
-    <div class="button-row">{{ act(e.id, base ~ "/join-late", "I'm in (late)", "button small primary", {"run": e.run}) }}</div>
+    <div class="button-row">{{ act(e.id, base ~ "/join-late", labels.JOIN_LATE, "button small primary", {"run": e.run}) }}</div>
   </div>
   {% endif %}
   {% if v.can.late_roles %}
   {% set mine = v.mine %}
   <p class="small">You joined late{% if mine.vote_counts %}, and your vote counts{% else %}. Your vote shows, but counts only if the coordinator says so{% endif %}.</p>
-  <div class="button-row roles" role="group" aria-label="What can you do?">
-    {% for role, label in (("cook", "I can cook"), ("pickup", "I can pick up"), ("order", "I'll order")) %}
-    {% set offered = role in mine.offers|map(attribute="value")|list %}
-    {{ act(e.id, base ~ "/offer", label, "button small choice", {"role": role, "offered": "0" if offered else "1"}, pressed=offered) }}
+  <div class="button-row roles" role="group" aria-label="Can you help?">
+    {% for role, label in labels.OFFER_LABELS.items() %}
+    {% set offered = role in mine.offers %}
+    {{ act(e.id, base ~ "/offer", label, "button small choice", {"role": role.value, "offered": "0" if offered else "1"}, pressed=offered) }}
     {% endfor %}
   </div>
   {% endif %}
@@ -154,7 +159,7 @@
       <span class="chip status">{{ r.status.value|capitalize }}</span>
       {% if r.late %}<span class="chip late">Joined late{% if r.status.value == "out" %}, not taking part{% elif r.vote_counts %}, vote counts{% endif %}</span>{% endif %}
       {% if r.guests %}<span class="chip">+{{ r.guests }} guest{{ "" if r.guests == 1 else "s" }}{% if r.guest_needs %}: {{ r.guest_needs|join(", ") }}{% endif %}</span>{% endif %}
-      {% for o in r.offers %}<span class="chip role">{{ {"cook": "Cooks", "pickup": "Picks up", "order": "Orders"}[o.value] }}</span>{% endfor %}
+      {% for o in r.offers %}<span class="chip offer">{{ labels.OFFERED_LABELS[o] }}</span>{% endfor %}
       {% if r.eat_from or r.eat_until %}<span class="small muted time">{{ r.eat_from|wall }}{% if r.eat_until %}–{{ r.eat_until|wall }}{% endif %}</span>{% endif %}
       {% if r.suggestions %}<div class="small">Suggests {{ r.suggestions|join(", ") }}</div>{% endif %}
       {% if r.note %}<div class="small muted note">{{ r.note }}</div>{% endif %}
@@ -171,17 +176,19 @@
     <li>
       <strong>{{ g.person.name }}</strong>
       <span class="chip status">{{ g.answer.status.value|capitalize if g.answer else "No answer yet" }}</span>
-      {% if g.answer %}{% for o in g.answer.offers %}<span class="chip role">{{ {"cook": "Cooks", "pickup": "Picks up", "order": "Orders"}[o.value] }}</span>{% endfor %}{% endif %}
+      {% if g.answer %}{% for o in g.answer.offers %}<span class="chip offer">{{ labels.OFFERED_LABELS[o] }}</span>{% endfor %}{% endif %}
       {% if g.needs %}<span class="chip">Needs {{ g.needs|join(", ") }}</span>{% endif %}
       {% if g.invited_by %}<span class="small muted">invited by {{ g.invited_by.name }}</span>{% endif %}
       {% if g.answerable %}
-      <div class="button-row" role="group" aria-label="Answer for {{ g.person.name }}">
-        {% for status, label in (("in", "In"), ("out", "Out")) %}
-        {{ act(e.id, base ~ "/guests/" ~ g.person.id ~ "/answer", label, "button small choice", {"status": status, "run": e.run}, pressed=(g.answer is not none and g.answer.status.value == status)) }}
+      <div class="segmented answer" role="group" aria-label="Is {{ g.person.name }} in?">
+        {% for status in labels.GUEST_ANSWER_ORDER %}
+        {{ act(e.id, base ~ "/guests/" ~ g.person.id ~ "/answer", labels.ANSWER_LABELS[status], "button segment", {"status": status.value, "run": e.run}, pressed=(g.answer is not none and g.answer.status == status)) }}
         {% endfor %}
-        {% for role, label in (("cook", "Can cook"), ("pickup", "Can pick up"), ("order", "Will order")) %}
-        {% set offered = g.answer is not none and role in g.answer.offers|map(attribute="value")|list %}
-        {{ act(e.id, base ~ "/guests/" ~ g.person.id ~ "/answer", label, "button small choice", {"role": role, "offered": "0" if offered else "1", "run": e.run}, pressed=offered) }}
+      </div>
+      <div class="button-row roles" role="group" aria-label="What {{ g.person.name }} can do">
+        {% for role, label in labels.OFFERED_LABELS.items() %}
+        {% set offered = g.answer is not none and role in g.answer.offers %}
+        {{ act(e.id, base ~ "/guests/" ~ g.person.id ~ "/answer", label, "button small choice", {"role": role.value, "offered": "0" if offered else "1", "run": e.run}, pressed=offered) }}
         {% endfor %}
       </div>
       {% endif %}
@@ -231,7 +238,7 @@
   {% if v.info.shuffle_note %}<p class="small muted shuffle-note">{{ v.info.shuffle_note }}</p>{% endif %}
   {% if v.can.break_tie %}<p class="small">Tied for the most votes. As coordinator, you can choose one of the tied picks.</p>{% endif %}
   {% if v.can.shuffle %}
-  <div class="button-row">{{ act(e.id, base ~ "/shuffle", "Shuffle picks", "button small", {"run": e.run}, confirm="Replace picks nobody has voted for, and keep the rest?") }}
+  <div class="button-row">{{ act(e.id, base ~ "/shuffle", labels.SHUFFLE, "button small", {"run": e.run}, confirm=labels.web_confirm(labels.SHUFFLE_TITLE, labels.SHUFFLE_EFFECT)) }}
     <span class="small muted">{{ v.shuffles_left }} left</span></div>
   {% endif %}
   <ol class="proposals">
@@ -255,8 +262,8 @@
         {% elif v.can.join_late %}
         {{ act(e.id, base ~ "/proposals/" ~ p.info.id ~ "/vote", "Join late and vote", "button small", {"join_late": "1"}, confirm=late_prompt) }}
         {% endif %}
-        {% if v.can.break_tie and p.info.tied %}{{ act(e.id, base ~ "/proposals/" ~ p.info.id ~ "/break-tie", "Break the tie: this one", "button small primary", {"run": e.run}, confirm="Choose " ~ p.info.item.name ~ " and decide now?") }}{% endif %}
-        {% if v.can.lock %}{{ act(e.id, base ~ "/proposals/" ~ p.info.id ~ "/lock", "Lock this", "button small primary", confirm="Decide on " ~ p.info.item.name ~ " now?") }}{% endif %}
+        {% if v.can.break_tie and p.info.tied %}{{ act(e.id, base ~ "/proposals/" ~ p.info.id ~ "/break-tie", labels.BREAK_TIE, "button small primary", {"run": e.run}, confirm=labels.web_confirm(labels.BREAK_TIE_TITLE, labels.decides_now(p.info.item.name))) }}{% endif %}
+        {% if v.can.lock %}{{ act(e.id, base ~ "/proposals/" ~ p.info.id ~ "/lock", labels.LOCK, "button small primary", confirm=labels.web_confirm(labels.LOCK_TITLE, labels.decides_now(p.info.item.name))) }}{% endif %}
       </div>
     </li>
     {% endfor %}
@@ -317,10 +324,10 @@
     {% for w in d.proposal.warnings %}<p class="small warning">{{ w }}</p>{% endfor %}
     {% if d.tie_note %}<p class="small tie-note">{{ d.tie_note }}.</p>{% endif %}
     <ul class="chips assignments">
-      {% for a in d.assignments %}<li class="chip role">{{ {"cook": "Cooking", "pickup": "Picking up", "order": "Ordering", "coordinator": "Coordinating"}[a.role.value] }}: {{ a.member.name }}</li>{% endfor %}
+      {% for a in d.assignments %}<li class="chip role">{{ labels.ROLE_TITLES[a.role] }}: {{ a.member.name }}</li>{% endfor %}
     </ul>
     {% if d.roles_due_at %}<p class="small">{% if v.info.coordinator %}{{ v.info.coordinator.name }} is choosing who {{ {"cook": "cooks", "pickup": "picks up", "delivery": "orders"}[d.proposal.mode.value] }} until {{ d.roles_due_at|clock(tz) }}. If they don't, the first person who offered does.{% endif %}</p>{% endif %}
-    {% if v.can.mark_done %}<div class="button-row">{{ act(e.id, base ~ "/done", "Mark done", "button small", confirm="Mark this meal done? It goes into the history.") }}</div>{% endif %}
+    {% if v.can.mark_done %}<div class="button-row">{{ act(e.id, base ~ "/done", labels.MARK_DONE, "button small", confirm=labels.web_confirm(labels.mark_done_title(e.slot.value), labels.MARK_DONE_EFFECT)) }}</div>{% endif %}
     {% if v.can.choose_roles and v.roles %}
     {% set r = v.roles %}
     <details class="details-form"{% if d.assign_roles %} open{% endif %}>
@@ -372,21 +379,18 @@
   {% if v.can.close_window or v.can.cancel %}
   <div class="end-controls">
     {% if v.can.close_window %}
-    {% if v.can.close_window.value == "respond" %}
-    {{ act(e.id, base ~ "/close", "Start the vote now", "button small", {"run": e.run, "window": "respond"}, confirm="Close responses and start the vote now?") }}
-    {% else %}
-    {{ act(e.id, base ~ "/close", "Decide now", "button small", {"run": e.run, "window": "vote"}, confirm="Close the vote and decide now?") }}
-    {% endif %}
+    {% set w = v.can.close_window %}
+    {{ act(e.id, base ~ "/close", labels.CLOSE_LABELS[w], "button small", {"run": e.run, "window": w.value}, confirm=labels.web_confirm(labels.CLOSE_LABELS[w] ~ "?", labels.CLOSE_EFFECT[w])) }}
     {% endif %}
     {% if v.can.cancel %}
     <details class="details-form calloff">
-      <summary class="small">Call it off</summary>
+      <summary class="small">{{ labels.CALL_OFF }}</summary>
       <form method="post" action="{{ base }}/cancel" hx-post="{{ base }}/cancel" {{ swap|safe }} hx-confirm="Call off {{ e.slot.value }} for everyone?" class="stack">
         {{ hidden() }}
         <input type="hidden" name="run" value="{{ e.run }}">
         <p class="small muted">Nobody eats together this time{% if e.state.value != "scheduled" %}, and everyone who's in hears about it{% endif %}.</p>
         <label class="field"><span>Reason (optional)</span><input type="text" name="reason" maxlength="140" autocomplete="off"></label>
-        <button type="submit" class="button small danger">Call it off</button>
+        <button type="submit" class="button small danger">{{ labels.CALL_OFF }}</button>
       </form>
     </details>
     {% endif %}
