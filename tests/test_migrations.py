@@ -1430,7 +1430,7 @@ def test_0016_adds_contributions_and_badges_without_touching_a_row_and_downgrade
     after = _rows_outside_m4(settings)
     ours = {"household", "member"}
     assert {k: v for k, v in after.items() if k not in ours} == {k: v for k, v in before.items() if k not in ours}
-    assert [row[:-1] for row in after["member"]] == before["member"]  # 0022 adds fun_mode, last
+    assert [row[:-2] for row in after["member"]] == before["member"]  # 0022 and 0023 add two, last
     (household,) = after["household"]
     assert json.loads(household[3]) == {"contributions_backfilled": "x", "keep": 1, "feedback_cap": 0}  # type: ignore[index]  # 0021
     engine = create_sync_engine(settings.sync_database_url)
@@ -1490,7 +1490,7 @@ def test_0016_adds_contributions_and_badges_without_touching_a_row_and_downgrade
     assert {"contribution", "badge_award"} <= _tables(settings)
     again = _rows_outside_m4(settings)
     assert {k: v for k, v in again.items() if k not in ours} == {k: v for k, v in before.items() if k not in ours}
-    assert [row[:-1] for row in again["member"]] == before["member"]
+    assert [row[:-2] for row in again["member"]] == before["member"]
 
 
 # 0017: Slack badge art (#105) ------------------------------------------------------------------------
@@ -1813,6 +1813,37 @@ def test_0022_turns_fun_mode_on_for_everyone_and_downgrade_drops_it(settings: Se
     assert _rows_outside_m4(settings) == before
     _upgrade_to(settings, "0022_fun_mode")
     assert _fun_modes(settings) == [(1, 1), (2, 1)]
+
+
+# 0023: the den's badge marker (#153) ----------------------------------------------------------------
+
+
+def test_0023_marks_every_badge_so_far_seen_and_downgrade_drops_it(settings: Settings) -> None:
+    """Up adds ``member.fun_seen_award`` at each member's newest award, or 0 without one, so no
+    badge earned before it flips. Down drops the column and changes no other row."""
+    _upgrade_to(settings, "0022_fun_mode")
+    _populate_calls(settings)
+    _execute(
+        settings,
+        "INSERT INTO member (id, household_id, display_name, email, role, can_cook, can_pickup, can_order, "
+        "mute_dm_reminders, feedback_reminder, active, slack_link_locked, created_at, updated_at) "
+        "VALUES (2, 1, 'Pat', NULL, 'guest', 0, 0, 0, 0, 0, 1, 0, :t, :t)",
+        "INSERT INTO badge_award (id, household_id, member_id, badge_key, tier, awarded_at, announcement) "
+        "VALUES (4, 1, 1, 'chef', 'first', :t, 'announced'), (9, 1, 1, 'chef', 'bronze', :t, 'pending')",
+    )
+    before = _rows_outside_m4(settings)
+    _upgrade_to(settings, "0023_fun_seen_award")
+    engine = create_sync_engine(settings.sync_database_url)
+    try:
+        with engine.connect() as c:
+            assert c.execute(text("SELECT id, fun_seen_award FROM member ORDER BY id")).all() == [(1, 9), (2, 0)]
+    finally:
+        engine.dispose()
+    after = _rows_outside_m4(settings)
+    assert [row[:-1] for row in after["member"]] == before["member"]
+    assert {k: v for k, v in after.items() if k != "member"} == {k: v for k, v in before.items() if k != "member"}
+    _downgrade_to(settings, "0022_fun_mode")
+    assert _rows_outside_m4(settings) == before
 
 
 def test_a_second_migrator_waits_then_reports_a_lock(settings: Settings, caplog: pytest.LogCaptureFixture) -> None:

@@ -2,13 +2,16 @@
 {% extends "base.html" %}
 {% block title %}Today{% endblock %}
 {% block content %}
-{% if den_pose %}
+{% if den %}
 {#- Fun mode (#153): the den fills the rest of the greeting row. data-fit is how wide the
-    greeting reads, so fun.css can shrink it to fit before it wraps. -#}
+    greeting reads, so fun.css can shrink it to fit before it wraps. The caption under it is
+    where fun.js says "Pad thai it is!". -#}
 <div class="greeting" data-fit="{{ greeting_fit }}">
   <h1>Hi, {{ principal.member.display_name }}</h1>
   {% include "_den.html" %}
+  <p class="den-caption" role="status" aria-live="polite" hidden></p>
 </div>
+{% include "_den_state.html" %}
 <div class="edge-wx" aria-hidden="true">{% for _ in range(18) %}<i></i>{% endfor %}</div>
 {% else %}
 <h1>Hi, {{ principal.member.display_name }}</h1>

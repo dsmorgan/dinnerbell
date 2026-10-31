@@ -50,6 +50,7 @@ def to_member(row: MemberRow) -> Member:
         slack_email=row.slack_email,
         slack_guest_account=row.slack_guest_account,
         fun_mode=row.fun_mode,
+        fun_seen_award=row.fun_seen_award,
     )
 
 
@@ -167,6 +168,7 @@ class MemberRepository:
             mute_dm_reminders=False,
             feedback_reminder=False,
             fun_mode=True,
+            fun_seen_award=0,
             active=True,
             created_at=now,
             updated_at=now,
@@ -198,6 +200,7 @@ class MemberRepository:
             mute_dm_reminders=False,
             feedback_reminder=False,
             fun_mode=True,
+            fun_seen_award=0,
             active=True,
             dietary_needs=sorted(dietary_needs),
             join_refused=False,

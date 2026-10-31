@@ -1,0 +1,9 @@
+{#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
+{#- What Dinnerbone's Den shows now (#153), for fun.js: the scene, his pose, the call he follows,
+    its quiet caption, and on Today's own load a badge to flip for. Expects den (services.fun.Den)
+    and, in a card swapped into Today, oob, which swaps it in place of Today's. -#}
+<div id="den-state" hidden data-pose="{{ den.pose }}" data-period="{{ den.scene.period }}" data-season="{{ den.scene.season }}" data-season-depth="{{ den.scene.depth }}"
+  {%- if den.call %} data-event="{{ den.call.id }}" data-run="{{ den.call.run }}" data-state="{{ den.call.state.value }}"{% endif %}
+  {%- if den.caption %} data-caption="{{ den.caption }}"{% endif %}
+  {%- if den.badge %} data-badge="{{ den.badge.award_id }}" data-badge-caption="{{ den.badge.caption }}"{% endif %}
+  {%- if oob %} hx-swap-oob="true"{% endif %}></div>

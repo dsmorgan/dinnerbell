@@ -75,6 +75,8 @@ class Member:
     """The guest joined with a Slack guest account, not as a full member of the workspace."""
     fun_mode: bool = True
     """Dinnerbone's Den and its celebrations on the web (#153). Off, the pages load none of it."""
+    fun_seen_award: int = 0
+    """The newest badge award whose backflip the den has shown them (#153): later ones flip once."""
 
     @property
     def is_admin(self) -> bool:

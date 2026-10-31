@@ -46,6 +46,7 @@ GUEST_ROUTES = {
     ("GET", "/stats/household"),  # sends a guest to /stats: channel posts link it (#153)
     ("POST", "/me"),
     ("POST", "/me/fun"),  # fun mode on or off for themselves (#153)
+    ("POST", "/me/fun/seen"),  # the den flipped for their own badges (#153)
     ("GET", "/events/{event_id}"),
     ("GET", "/events/{event_id}/card"),
     ("POST", "/events/{event_id}/respond"),

@@ -13,6 +13,7 @@ don't exist (404).
 
 from __future__ import annotations
 
+import json
 from collections.abc import Awaitable, Callable
 from datetime import time
 from typing import Annotated
@@ -42,7 +43,18 @@ from dinnerbell.domain.guests import GuestInput
 from dinnerbell.domain.meals import PICK_SLOT, Slot
 from dinnerbell.domain.members import InvalidMemberInput
 from dinnerbell.domain.offers import MAX_CAPACITY
-from dinnerbell.services import activity, call_admin, calls, coordinator, discard, event_views, feedback, guests, offers
+from dinnerbell.services import (
+    activity,
+    call_admin,
+    calls,
+    coordinator,
+    discard,
+    event_views,
+    feedback,
+    fun,
+    guests,
+    offers,
+)
 from dinnerbell.services.errors import Forbidden, NotFound
 from dinnerbell.services.lifecycle import CallExists
 from dinnerbell.web.auth import (
@@ -101,8 +113,41 @@ async def _card(
     status = status_code or (409 if error else 200)
     page = {"v": view, "from_page": came_from, "error": error}
     if is_htmx(request):
+        page |= await _den_update(request, principal, context, db, came_from)
         return await render(request, "_event.html", page, status_code=status)
     return await render(request, "event.html", page | {"from_page": "event"}, status_code=status)
+
+
+async def _den_update(
+    request: Request, principal: Principal, context: AppContext, db: Database, came_from: str
+) -> dict[str, object]:
+    """A card swapped into Today brings the den's state along (#153), out of band, so the den
+    follows the call as cards change: ``den_oob`` for ``_event.html``. Nothing for the event
+    page, which has no den, or with fun mode off."""
+    if came_from != "today" or not principal.member.fun_mode or not is_htmx(request):
+        return {}
+    return {"den_oob": await fun.den(db, principal.member, principal.household, now=context.clock())}
+
+
+async def _celebrating(
+    request: Request,
+    principal: Principal,
+    db: Database,
+    event_id: int,
+    came_from: str,
+    kind: fun.Celebrate,
+    response: Response,
+) -> Response:
+    """Celebrate on Today for the member who just decided or finished the call (#153): an
+    ``HX-Trigger`` that ``fun.js`` plays. Only on a card swapped in after success (never a 409,
+    a stale run, or a redirect), and only with their fun mode on. Everyone else sees the quiet
+    caption the den's state carries."""
+    if response.status_code != 200 or came_from != "today" or not is_htmx(request):
+        return response
+    payload = await fun.celebration(db, principal.member, event_id, kind)
+    if payload is not None:
+        response.headers["HX-Trigger"] = json.dumps({"dinnerbell:celebrate": payload}, ensure_ascii=True)
+    return response
 
 
 Action = Callable[[], Awaitable[object]]
@@ -166,7 +211,8 @@ async def event_card(
     view = await event_views.event_view(
         db, principal.member, event_id, now=context.clock(), any_time=_any_time(context)
     )
-    page = {"v": view, "from_page": "today" if came_from == "today" else "event"}
+    page: dict[str, object] = {"v": view, "from_page": "today" if came_from == "today" else "event"}
+    page |= await _den_update(request, principal, context, db, came_from)
     return await render(request, "_event.html", page)
 
 
@@ -217,7 +263,7 @@ async def _today_error(
     now = context.clock()
     view = await event_views.today_view(db, principal.member, now=now, any_time=_any_time(context))
     form = await offers.offer_form(db, principal.member, now=now)
-    page = today_page(principal, view, now) | {"offer_form": form} | errors
+    page = await today_page(db, principal, view, now) | {"offer_form": form} | errors
     return await render(request, "today.html", page, status_code=409)
 
 
@@ -455,7 +501,8 @@ async def lock(
     came_from: Annotated[str, Form(alias="from", max_length=10)] = "",
 ) -> Response:
     """FR-15: the coordinator or an admin; the service checks which."""
-    return await _on_proposal(request, principal, context, db, event_id, proposal_id, came_from, calls.lock)
+    response = await _on_proposal(request, principal, context, db, event_id, proposal_id, came_from, calls.lock)
+    return await _celebrating(request, principal, db, event_id, came_from, "decided", response)
 
 
 # The coordinator's powers (FR-16, FR-61) -------------------------------------------------------
@@ -657,7 +704,8 @@ async def done(
     async def action() -> None:
         await calls.mark_done(db, principal.member, event_id, now=context.clock())
 
-    return await _run(request, principal, context, db, event_id, came_from, action)
+    response = await _run(request, principal, context, db, event_id, came_from, action)
+    return await _celebrating(request, principal, db, event_id, came_from, "done", response)
 
 
 # Calling it off and closing early (FR-56) -------------------------------------------------------

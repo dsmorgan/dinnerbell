@@ -98,6 +98,9 @@ class MemberRow(Base):
     """The guest joined with a Slack guest account, not as a full member of the workspace (#38)."""
     fun_mode: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true())
     """Dinnerbone's Den on the web (#153), on unless the member or guest turned it off."""
+    fun_seen_award: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    """The newest ``badge_award.id`` the den has flipped for (#153); 0 for none. Not a foreign key:
+    deleting an award must not touch the member."""
     created_at: Mapped[datetime] = mapped_column(UTCDateTime())
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime())
 
