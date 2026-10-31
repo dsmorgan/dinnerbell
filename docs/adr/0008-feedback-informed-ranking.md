@@ -25,7 +25,7 @@ One rating of a new place gives −1.5, −0.75, 0, +0.5, or +1. Ratings count o
 
 **Your edit wins.** Setting a stance on an item on Preferences discards your earlier ratings of it. A neutral stance deletes its `preference` row, so a new table, `stance_edit`, keeps each member's last edit time per item.
 
-**The Feedback setting.** An admin setting caps the adjustment: 0 (off), 1, or 2. New households start at 2; the migration sets existing ones to 0, until the admin turns it on after 8 weeks of real ratings, about 2026-12-20.
+**The Feedback setting.** An admin setting caps the adjustment: 0 (off), 1, or 2. New households start at 2; the migration sets existing ones to 0, and the admin sets it to 2 when ready to let ratings move scores.
 
 **The household hint.** Everyone sees a hint for each item, from everyone's ratings and issues, naming nobody. Each rating weighs `0.5^(age in days / 90)`; P, N, and F are the weights of positive, negative, and **It was fine** ratings. A verdict needs ratings from two people and P + N + F of at least 1.5. Then:
 
@@ -46,7 +46,7 @@ The hint replaces FR-49's loved count on the catalog and is the first reason on 
 - **It fades.** Places and people change; an old verdict gives way without anyone editing anything.
 - **What else held up.** A great new place got 29% more dinners in its first four months; variety held at 14.0 different meals every four weeks (15.3 today); with one heavy rater, everyone else still gained. Feedback 1 gives about two-thirds of the gain.
 - **The edit wins** because a stance someone sets is deliberate, and answers the ratings before it.
-- **Off at first.** FR-55 asks for 8 weeks of real data. Feedback at 0 ships the hints now, and turning it on is one setting.
+- **Off at first.** An existing household gets the hints now and lets ratings move scores when it's ready, with one setting.
 - **A verdict, not counts.** A count can name the one person who gave it; a verdict needs two raters. The owner chose one of each for **Mixed reviews** (not a quarter of each) and issues from one person. The weight minimum is 1.5, not the proposed 2: two fresh ratings fall below 2 the next day, so a verdict would vanish at once. At 1.5, two ratings keep one for about five weeks.
 
 ## Consequences
