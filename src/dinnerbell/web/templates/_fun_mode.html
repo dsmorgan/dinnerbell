@@ -1,8 +1,9 @@
 {#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
 {#- Fun mode on or off (#153), for whoever is signed in. On Preferences for a member, and on a
-    guest's own page. -#}
+    guest's own page. fun_saved says it just saved; the route sends people back to #fun-mode. -#}
 <form method="post" action="/me/fun" class="card stack" id="fun-mode">
   <h2>Fun mode</h2>
+  {% if fun_saved %}<p class="alert ok" role="status">Saved.</p>{% endif %}
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   <fieldset class="field compact">
     <legend>Dinnerbone's Den</legend>

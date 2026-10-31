@@ -29,6 +29,8 @@ SVG = "{http://www.w3.org/2000/svg}"
 # Exactly what the logos use. Anything new, such as the M4 badge art's `class` attributes and
 # CSS-driven animation (#15), must be added here deliberately, with a look at what it can load.
 ELEMENTS = {"svg", "title", "defs", "clipPath", "radialGradient", "stop", "g", "circle", "ellipse", "rect", "path"}
+# The den's sprite (#153): a <symbol> only groups shapes for <use> on the page, and loads nothing.
+ELEMENTS |= {"symbol"}
 ATTRIBUTES = {
     "viewBox", "role", "aria-labelledby", "id", "cx", "cy", "r", "rx", "ry", "x", "y", "width", "height", "d",
     "fill", "stroke", "stroke-width", "stroke-linecap", "stroke-linejoin", "opacity", "offset", "stop-color",

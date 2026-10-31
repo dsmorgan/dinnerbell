@@ -31,7 +31,7 @@ async def my_needs(request: Request, principal: GuestOrMember, db: Database, sav
     if not principal.member.is_guest:
         return RedirectResponse("/preferences", status_code=303)
     tags = await guests.dietary_tags(db, principal.member)
-    page = {"tags": tags, "mine": principal.member.dietary_needs, "saved": saved == "1"}
+    page = {"tags": tags, "mine": principal.member.dietary_needs, "saved": saved == "1", "fun_saved": saved == "fun"}
     return await render(request, "me.html", page)
 
 
@@ -66,6 +66,7 @@ async def save_my_fun_mode(
         message = "Choose On or Off."
         return await render(request, "error.html", {"title": "Not saved", "message": message}, status_code=400)
     await set_my_fun_mode(db, principal.member, on, now=context.clock())
+    # Back to the card, which says it saved.
     if principal.member.is_guest:
-        return RedirectResponse("/me?saved=1", status_code=303)
-    return RedirectResponse("/preferences?notice=settings", status_code=303)
+        return RedirectResponse("/me?saved=fun#fun-mode", status_code=303)
+    return RedirectResponse("/preferences?notice=fun#fun-mode", status_code=303)

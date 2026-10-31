@@ -59,6 +59,7 @@ from dinnerbell.web.context import AppContext
 from dinnerbell.web.forms import BadFormValue, RowId, choice, iso_date, optional_int, parse_id
 from dinnerbell.web.redirects import local_redirect
 from dinnerbell.web.render import is_htmx, render
+from dinnerbell.web.routes.pages import today_page
 
 router = APIRouter()
 
@@ -213,9 +214,10 @@ async def _today_error(
     request: Request, principal: Principal, context: AppContext, db: Database, **errors: str
 ) -> Response:
     """Today again, with a form's error (``start_error`` or ``offer_error``), as a 409."""
-    view = await event_views.today_view(db, principal.member, now=context.clock(), any_time=_any_time(context))
-    form = await offers.offer_form(db, principal.member, now=context.clock())
-    page = {"today": view, "from_page": "today", "offer_form": form} | errors
+    now = context.clock()
+    view = await event_views.today_view(db, principal.member, now=now, any_time=_any_time(context))
+    form = await offers.offer_form(db, principal.member, now=now)
+    page = today_page(principal, view, now) | {"offer_form": form} | errors
     return await render(request, "today.html", page, status_code=409)
 
 

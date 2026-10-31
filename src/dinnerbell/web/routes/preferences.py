@@ -53,6 +53,7 @@ async def preferences_page(
             "TargetType": TargetType,
             "me": principal.member,
             "notice": NOTICES.get(notice),
+            "fun_saved": notice == "fun",
             "dietary_tags": await guests.dietary_tags(db, principal.member),
         },
     )

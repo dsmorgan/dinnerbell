@@ -1,0 +1,41 @@
+{#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
+{#- Dinnerbone's Den (#153), beside the greeting on Today, for a viewer with fun mode on.
+    Expects den_pose (domain.fun.Pose). The light, weather, and piles key on <body>'s
+    data-period, data-season, and data-season-depth; what he's doing keys on data-pose. Every
+    part is drawn from den.svg, and fun.css places, shows, and hides them: no inline style.
+    Decorative, so hidden from assistive technology. -#}
+{%- set sprite = "/static/den.svg?v=" ~ (version|urlencode) %}
+<div class="den" data-pose="{{ den_pose }}" aria-hidden="true">
+  <div class="den-sky"></div>
+  <div class="den-floor"></div>
+  <svg class="den-nook" viewBox="0 0 46 22" focusable="false"><use href="{{ sprite }}#nook"/></svg>
+  <svg class="den-bell" viewBox="0 0 24 30" focusable="false"><use href="{{ sprite }}#bell"/></svg>
+  <svg class="den-wheel" viewBox="0 0 54 56" focusable="false"><use href="{{ sprite }}#wheel-frame"/></svg>
+  <svg class="den-spokes" viewBox="0 0 54 56" focusable="false"><use href="{{ sprite }}#wheel-spokes"/></svg>
+  <div class="den-snow"></div>
+  <div class="den-cap den-cap-straw"></div>
+  <div class="den-cap den-cap-wheel"></div>
+  <div class="den-leaves">{% for _ in range(14) %}<i></i>{% endfor %}</div>
+  <div class="den-puddle"></div>
+  <div class="den-ham">
+    <svg class="ham" viewBox="0 0 64 56" focusable="false">
+      <use class="ham-foot-back" href="{{ sprite }}#ham-foot-back"/>
+      <use href="{{ sprite }}#ham-body"/>
+      <use class="ham-cheek" href="{{ sprite }}#ham-cheek"/>
+      <use class="ham-eyes-open" href="{{ sprite }}#ham-eyes-open"/>
+      <use class="ham-eyes-shut" href="{{ sprite }}#ham-eyes-shut"/>
+      <use href="{{ sprite }}#ham-nose"/>
+      <use class="ham-collar" href="{{ sprite }}#ham-collar"/>
+      <use class="acc acc-apron" href="{{ sprite }}#acc-apron"/>
+      <use class="acc acc-scarf" href="{{ sprite }}#acc-scarf"/>
+      <use class="acc acc-hat acc-flower" href="{{ sprite }}#acc-flower"/>
+      <use class="acc acc-hat acc-sunhat" href="{{ sprite }}#acc-sunhat"/>
+      <use class="acc acc-hat acc-leaf" href="{{ sprite }}#acc-leaf"/>
+      <use class="acc acc-nightcap" href="{{ sprite }}#acc-nightcap"/>
+      <use class="acc acc-cereal" href="{{ sprite }}#acc-cereal"/>
+      <use class="ham-foot-front" href="{{ sprite }}#ham-foot-front"/>
+    </svg>
+    <span class="den-zzz"><i>z</i><i>z</i></span>
+  </div>
+  <div class="den-wx">{% for _ in range(12) %}<i></i>{% endfor %}</div>
+</div>

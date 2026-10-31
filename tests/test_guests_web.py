@@ -221,13 +221,15 @@ def test_a_guest_turns_fun_mode_off_on_their_page(
     of their own, and changes only their row."""
     pat = add_guest(admin, "Pat", slack="U07PAT")
     guest = as_guest(admin, provider)
-    assert 'data-fun="on"' in guest.get("/").text
+    today = guest.get("/").text
+    assert 'data-fun="on"' in today and '<div class="den" data-pose="potter"' in today  # no invitations: the clock
     assert 'name="fun" value="on" checked' in guest.get("/me").text
     response = submit(guest, "/me/fun", {"fun": "off"})
-    assert (response.status_code, response.headers["location"]) == (303, "/me?saved=1")
+    assert (response.status_code, response.headers["location"]) == (303, "/me?saved=fun#fun-mode")
     me = guest.get("/me").text
     assert 'name="fun" value="off" checked' in me and "data-fun" not in me and "fun.js" not in me
-    assert "data-fun" not in guest.get("/").text
+    today = guest.get("/").text
+    assert "data-fun" not in today and 'class="den' not in today
     assert {m.id: m.fun_mode for m in rows(migrated, MemberRow)} == {1: True, pat: False}
 
 
