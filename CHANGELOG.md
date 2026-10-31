@@ -6,6 +6,8 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-10-31
+
 ### Added
 
 - **Ratings move your own score** (#18, FR-55, [ADR 0008](docs/adr/0008-feedback-informed-ranking.md)). When you rate a meal, your score for that place or recipe moves toward your rating, from −2 for **Hated it** to +2 for **Loved it**: halfway, or three-quarters of the way for **Hated it** and **Didn't like it**. The change halves every 3 months, counts only on calls you eat at, and never vetoes anything. Logged meals count. Setting a score on **Preferences**, even back to 0, replaces your earlier ratings of it. **Preferences** shows you, and only you, what your ratings make your score, such as "From your ratings: about +1".
@@ -477,7 +479,8 @@ The source-built version, never published as an image. It covers milestones M0 t
 - **M1:** the catalog with file import, preferences and vetoes, meal history, and the members admin page.
 - **M2:** dinner calls in Slack: the scheduled call, reminders, ranked proposals and votes, the decision, assignments, the abandon path, admin overrides, App Home, and `/dinnerbell call`.
 
-[Unreleased]: https://github.com/dsmorgan/dinnerbell/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/dsmorgan/dinnerbell/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/dsmorgan/dinnerbell/releases/tag/v0.11.0
 [0.10.0]: https://github.com/dsmorgan/dinnerbell/releases/tag/v0.10.0
 [0.9.1]: https://github.com/dsmorgan/dinnerbell/releases/tag/v0.9.1
 [0.9.0]: https://github.com/dsmorgan/dinnerbell/releases/tag/v0.9.0
