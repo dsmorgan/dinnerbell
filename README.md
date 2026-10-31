@@ -11,26 +11,32 @@ You need a host that runs containers, a Slack workspace, and an HTTPS hostname y
 Dinnerbell asks early, so dinner is settled before anyone is hungry. With the default schedule, it asks at 3:00 PM for a 6:30 PM dinner.
 
 ```mermaid
-sequenceDiagram
-    participant D as Dinnerbell
-    participant F as Family, in Slack
-    participant C as Tonight's cook
-    D->>F: 3:00 PM: Who's eating tonight?
-    F->>D: In, out, or maybe, and who can cook, pick up, or order
-    D->>F: 4:30 PM: Here are three meals that fit. Vote.
-    F->>D: Votes
-    D->>F: 5:15 PM: Tonight it's tacos at 6:30
-    D->>C: You're cooking
-    Note over F,C: Dinner at 6:30 PM
-    C->>D: Mark done, or Dinnerbell does it two hours later
-    D->>F: New badges
+flowchart TD
+    ask["🔔 3:00 PM<br/>Who's eating tonight?"]
+    answer["🙋 Everyone answers<br/>In, maybe, or out"]
+    suggest["🍽️ 4:30 PM<br/>Three meal ideas<br/>that suit everyone"]
+    vote["🗳️ Everyone votes"]
+    decide["✅ 5:15 PM<br/>Dinner is set"]
+    eat["😋 6:30 PM<br/>Dinner"]
+    after["⭐ Afterward<br/>Rate it, earn badges"]
+
+    ask --> answer --> suggest --> vote --> decide --> eat --> after
+
+    classDef bell fill:#2E6B6F,stroke:#1F4A4D,color:#FFFFFF
+    classDef family fill:#FFF3E0,stroke:#C27A34,color:#2A1810
+    classDef meal fill:#E0994C,stroke:#B9712F,color:#2A1810
+    class ask,suggest,decide bell
+    class answer,vote,after family
+    class eat meal
 ```
 
-1. At 3:00 PM, Dinnerbell posts a dinner call in your Slack channel and mentions everyone. Anyone can change the time on the **Schedule** page.
-2. Each person taps **Answer**: in, maybe, or out, and whether they can cook, pick up, or order. Anyone who hasn't answered gets a reminder, unless they turned reminders off.
-3. When answers close, Dinnerbell ranks meals from your catalog that fit everyone eating, using vetoes, preferences, variety, and who can do what, and posts the top three for a vote.
-4. The vote picks the meal, and Dinnerbell posts the decision with the meal time and who cooks, picks up, or orders. Each of them gets a direct message.
-5. After the meal, someone taps **Mark done**, or Dinnerbell marks it done two hours after the meal time. It records who did what and announces new badges.
+1. **Dinnerbell asks.** At 3:00 PM, it posts in your family's Slack channel: who's eating tonight?
+2. **Everyone answers.** Tap **In**, **Maybe**, or **Out**, and say whether you can cook, pick up, or order. Dinnerbell reminds anyone who forgets.
+3. **Dinnerbell suggests three meals** from your family's list. It skips anything someone eating can't or won't eat, favors what people like, and mixes things up from day to day.
+4. **Everyone votes, and dinner is set.** Dinnerbell posts the plan and messages whoever is cooking, picking up, or ordering.
+5. **After dinner,** someone taps **Mark done**, or Dinnerbell does it two hours later. Rate the meal if you like, and new badges are announced.
+
+In the diagram, teal steps are Dinnerbell and cream steps are you. The times are the defaults; anyone can change them on the **Schedule** page.
 
 Lunch and breakfast calls work the same way. Their daily calls are off by default, and anyone can start a call for breakfast, lunch, or dinner when they want one.
 
