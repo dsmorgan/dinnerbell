@@ -493,8 +493,9 @@ class OutboxRow(Base):
 
 
 class FeedbackRow(Base):
-    """One member's feedback on one meal (FR-45, FR-46). ``food`` and ``place`` are ratings,
-    ``place_issues`` a JSON list of issue chips. ``item_id`` through ``participants`` snapshot
+    """One member's feedback on one meal (FR-45, FR-46). ``rating`` is the one rating of the
+    meal, ``place_issues`` a JSON list of issue chips, and ``issue_note`` what went wrong for the
+    "Other" chip. ``item_id`` through ``participants`` snapshot
     the meal when the feedback was saved: the item, its kind and mode, the cook, and who ate.
 
     Deleting the meal deletes its feedback (``meal_id`` cascades), so a discarded call that
@@ -504,8 +505,7 @@ class FeedbackRow(Base):
     __tablename__ = "feedback"
     __table_args__ = (
         UniqueConstraint("meal_id", "member_id"),
-        CheckConstraint("food IS NULL OR food IN ('loved', 'fine', 'not_again')", name="food"),
-        CheckConstraint("place IS NULL OR place IN ('loved', 'fine', 'not_again')", name="place"),
+        CheckConstraint("rating IS NULL OR rating IN ('hated', 'disliked', 'fine', 'liked', 'loved')", name="rating"),
         CheckConstraint("item_kind IN ('home', 'restaurant')", name="item_kind"),
         CheckConstraint("mode IS NULL OR mode IN ('cook', 'pickup', 'delivery')", name="mode"),
     )
@@ -514,9 +514,9 @@ class FeedbackRow(Base):
     household_id: Mapped[int] = mapped_column(ForeignKey("household.id", ondelete="CASCADE"))
     meal_id: Mapped[int] = mapped_column(ForeignKey("meal_log.id", ondelete="CASCADE"))
     member_id: Mapped[int] = mapped_column(ForeignKey("member.id", ondelete="CASCADE"), index=True)
-    food: Mapped[str | None] = mapped_column(String(16))
-    place: Mapped[str | None] = mapped_column(String(16))
+    rating: Mapped[str | None] = mapped_column(String(16))
     place_issues: Mapped[list[str]] = mapped_column(JSON, default=list)
+    issue_note: Mapped[str | None] = mapped_column(String(200))
     cook_thanks: Mapped[bool] = mapped_column(Boolean, default=False)
     cook_note: Mapped[str | None] = mapped_column(String(200))
     item_id: Mapped[int] = mapped_column(ForeignKey("catalog_item.id", ondelete="RESTRICT"), index=True)

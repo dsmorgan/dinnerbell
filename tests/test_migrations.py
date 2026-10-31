@@ -570,7 +570,7 @@ def test_0008_adds_feedback_that_goes_with_its_meal_and_downgrade_removes_it(set
                 ),
                 {"t": STAMP},
             )
-        run_migrations(settings.sync_database_url, settings.database_path)
+        _upgrade_to(settings, "0008_meal_feedback")  # 0020 replaces food and place with rating
         engine.dispose()  # a connection from before the table existed reads stale foreign key lists
         fks = {
             (fk["constrained_columns"][0], fk["referred_table"], fk["options"].get("ondelete"))
@@ -1588,6 +1588,92 @@ def test_0019_adds_the_composite_table_and_downgrade_removes_it(settings: Settin
     assert "slack_badge_composite" not in _tables(settings)
     _upgrade_to(settings, "0019_slack_badge_composite")
     assert "slack_badge_composite" in _tables(settings)
+
+
+# 0020: one rating per meal -----------------------------------------------------------------------
+
+OLD_FEEDBACK = (
+    "INSERT INTO feedback (household_id, meal_id, member_id, food, place, place_issues, cook_thanks, cook_note, "
+    "item_id, item_name, item_kind, participants, created_at, updated_at) "
+    "VALUES (1, :meal, :member, {food}, {place}, '[\"other\"]', 0, 'Yum', 1, 'X', 'restaurant', '[]', :t, :t)"
+)
+# (food, place) before 0020, and the rating it becomes: scores loved +2, fine 0, not_again -2,
+# averaged when both are set.
+CONVERSIONS = [
+    ("loved", None, "loved"),
+    ("fine", None, "fine"),
+    ("not_again", None, "hated"),
+    (None, "loved", "loved"),
+    (None, "not_again", "hated"),
+    ("loved", "loved", "loved"),
+    ("loved", "fine", "liked"),
+    ("fine", "loved", "liked"),
+    ("fine", "not_again", "disliked"),
+    ("not_again", "fine", "disliked"),
+    ("loved", "not_again", "fine"),
+    ("not_again", "not_again", "hated"),
+    ("fine", "fine", "fine"),
+    (None, None, None),
+]
+
+
+def _literal(value: str | None) -> str:
+    return "NULL" if value is None else f"'{value}'"
+
+
+def _feedback_rows(settings: Settings, columns: str) -> list[tuple[object, ...]]:
+    engine = create_sync_engine(settings.sync_database_url)
+    try:
+        with engine.connect() as c:
+            return [tuple(r) for r in c.execute(text(f"SELECT {columns} FROM feedback ORDER BY id"))]  # noqa: S608
+    finally:
+        engine.dispose()
+
+
+def test_0020_turns_food_and_place_into_one_rating_and_downgrade_turns_it_back(settings: Settings) -> None:
+    """Up converts every row's food and place into one rating and keeps everything else; down
+    turns the rating back into food, with place empty and the note gone; up again gives the
+    same."""
+    _upgrade_to(settings, "0019_slack_badge_composite")
+    _populate_calls(settings)  # a household, members, and a restaurant
+    meals = [MEAL_ROW.replace(":day", f"'2026-10-{n + 1:02d}'") for n in range(len(CONVERSIONS))]
+    _execute(settings, *meals)
+    engine = create_sync_engine(settings.sync_database_url)
+    try:
+        with engine.begin() as c:
+            meal_ids = list(c.execute(text("SELECT id FROM meal_log ORDER BY id DESC")).scalars())[: len(CONVERSIONS)]
+            for meal, (food, place, _) in zip(sorted(meal_ids), CONVERSIONS, strict=True):
+                insert = OLD_FEEDBACK.format(food=_literal(food), place=_literal(place))
+                c.execute(text(insert), {"meal": meal, "member": 1, "t": STAMP})
+    finally:
+        engine.dispose()
+    kept = "id, meal_id, member_id, place_issues, cook_thanks, cook_note, item_id, created_at"
+    before = _feedback_rows(settings, kept)
+
+    _upgrade_to(settings, "0020_one_rating")
+    assert [r[0] for r in _feedback_rows(settings, "rating")] == [want for _, _, want in CONVERSIONS]
+    assert _feedback_rows(settings, kept) == before
+    assert {r[0] for r in _feedback_rows(settings, "issue_note")} == {None}
+    with pytest.raises(IntegrityError, match="ck_feedback_rating"):
+        _execute(settings, "UPDATE feedback SET rating = 'not_again'")
+    _execute(settings, "UPDATE feedback SET issue_note = 'No forks' WHERE rating = 'liked'")
+
+    _downgrade_to(settings, "0019_slack_badge_composite")
+    downgraded = {"hated": "not_again", "disliked": "not_again", "fine": "fine", "liked": "loved", "loved": "loved"}
+    assert _feedback_rows(settings, "food, place") == [
+        (None if want is None else downgraded[want], None) for _, _, want in CONVERSIONS
+    ]
+    assert _feedback_rows(settings, kept) == before
+    with pytest.raises(IntegrityError, match="ck_feedback_food"):
+        _execute(settings, "UPDATE feedback SET food = 'liked'")
+    with pytest.raises(IntegrityError, match="ck_feedback_place"):
+        _execute(settings, "UPDATE feedback SET place = 'liked'")
+
+    _upgrade_to(settings, "0020_one_rating")
+    want_again = {"not_again": "hated", "fine": "fine", "loved": "loved"}
+    assert [r[0] for r in _feedback_rows(settings, "rating")] == [
+        None if want is None else want_again[downgraded[want]] for _, _, want in CONVERSIONS
+    ]
 
 
 def test_a_second_migrator_waits_then_reports_a_lock(settings: Settings, caplog: pytest.LogCaptureFixture) -> None:

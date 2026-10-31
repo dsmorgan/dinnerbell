@@ -1,15 +1,15 @@
 {#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
 {#- Feedback on one meal as the viewer may see it (FR-49). Expects meal, fb (a MealFeedback or
-    None), and optionally from_page ("event"). Shows the viewer's own answers, the thank-you
-    count, and, only to the cook they were written to, who thanked them and their notes. -#}
+    None), and optionally from_page ("event"). Shows the viewer's own answers (their rating,
+    issues, and what went wrong), the thank-you count, and, only to the cook they were written
+    to, who thanked them and their notes. -#}
 {% if fb %}
 <div class="meal-feedback small">
   {% set mine = fb.mine %}
   {% if mine %}
   <p>Your feedback:
-    {%- if mine.food %} food {{ mine.food.label|lower }}.{% endif %}
-    {%- if mine.place %} Place {{ mine.place.label|lower }}.{% endif %}
-    {%- if mine.place_issues %} {% for i in mine.place_issues|sort %}{{ i.label }}{{ ", " if not loop.last }}{% endfor %}.{% endif %}
+    {%- if mine.rating %} {{ mine.rating.label }}.{% endif %}
+    {%- if mine.place_issues %} {% for i in mine.issues %}{{ i.label }}{{ ", " if not loop.last }}{% endfor %}{% if mine.issue_note %}: “{{ mine.issue_note }}”{% else %}.{% endif %}{% endif %}
     {%- if mine.cook_thanks %} You said thanks{% if mine.cook_note %}: “{{ mine.cook_note }}”{% else %}.{% endif %}{% endif %}
   </p>
   {% endif %}

@@ -90,20 +90,20 @@ async def test_feedback_on_a_home_meal_snapshots_it_and_an_edit_replaces_it(hous
     assert form.facts.item_kind is ItemKind.HOME and form.facts.cook == MemberRef(house["Sam"].id, "Sam")
     assert form.thanks_cook and form.mine is None and form.closes_on == date(2026, 10, 29)
 
-    saved = await give(house, "Kim", meal_id, FeedbackInput(food=Rating.LOVED, cook_note="Best tacos Zq7x"))
+    saved = await give(house, "Kim", meal_id, FeedbackInput(rating=Rating.LOVED, cook_note="Best tacos Zq7x"))
     assert saved is not None and saved.answers.cook_thanks
     assert (saved.item_id, saved.item_kind, saved.mode) == (house.items["Sam's Tacos"].id, ItemKind.HOME, Mode.COOK)
     assert saved.cook == MemberRef(house["Sam"].id, "Sam")
     assert {p.name for p in saved.participants} == {"Alex", "Kim", "Sam"}
 
     house.clock.now = DONE_AT + timedelta(days=6)
-    answers = FeedbackInput(food=Rating.FINE)
+    answers = FeedbackInput(rating=Rating.FINE)
     async with house.sessionmaker() as db:
         await feedback.give_for_event(db, house["Kim"], event_id, answers, run=1, now=house.clock())
         form = await feedback.form(db, house["Kim"], meal_id, now=house.clock())
     assert form.mine == answers
     (row,) = await rows(house)
-    assert (row.food, row.cook_thanks, row.cook_note, row.created_at) == ("fine", False, None, saved.created_at)
+    assert (row.rating, row.cook_thanks, row.cook_note, row.created_at) == ("fine", False, None, saved.created_at)
     assert row.updated_at == house.clock()
 
 
@@ -111,11 +111,11 @@ async def test_who_can_give_feedback_and_until_when(house: House) -> None:
     event_id = await done_dinner(house)
     meal_id = await meal_of(house, event_id)
     with pytest.raises(InvalidFeedback, match="Only people who ate"):
-        await give(house, "Lee", meal_id, FeedbackInput(food=Rating.LOVED))
+        await give(house, "Lee", meal_id, FeedbackInput(rating=Rating.LOVED))
     with pytest.raises(InvalidFeedback, match="You cooked"):
         await give(house, "Sam", meal_id, FeedbackInput(cook_thanks=True))
     with pytest.raises(InvalidFeedback, match="only for restaurants"):
-        await give(house, "Kim", meal_id, FeedbackInput(place=Rating.LOVED))
+        await give(house, "Kim", meal_id, FeedbackInput(issue_note="Cold"))
     async with house.sessionmaker() as db:
         with pytest.raises(StaleRun):
             await feedback.form_for_event(db, house["Kim"], event_id, run=2, now=house.clock())
@@ -123,7 +123,7 @@ async def test_who_can_give_feedback_and_until_when(house: House) -> None:
             await feedback.form(db, house["Kim"], 999, now=house.clock())
     house.clock.now = DONE_AT + timedelta(days=8)  # Oct 30 in Chicago: the window closed on the 29th
     with pytest.raises(InvalidFeedback, match="has closed"):
-        await give(house, "Kim", meal_id, FeedbackInput(food=Rating.LOVED))
+        await give(house, "Kim", meal_id, FeedbackInput(rating=Rating.LOVED))
     assert await rows(house) == []
 
 
@@ -140,20 +140,31 @@ async def test_a_call_not_done_yet_takes_no_feedback(house: House) -> None:
 
 async def test_empty_feedback_takes_it_back(house: House) -> None:
     meal_id = await meal_of(house, await done_dinner(house))
-    await give(house, "Kim", meal_id, FeedbackInput(food=Rating.NOT_AGAIN))
+    await give(house, "Kim", meal_id, FeedbackInput(rating=Rating.HATED))
     assert len(await rows(house)) == 1
     assert await give(house, "Kim", meal_id, FeedbackInput()) is None
     assert await rows(house) == []
     assert await give(house, "Kim", meal_id, FeedbackInput()) is None  # nothing to take back
 
 
-async def test_a_restaurant_meal_takes_place_feedback_and_no_thanks(house: House) -> None:
+async def test_a_restaurant_meal_takes_issues_and_what_went_wrong_and_no_thanks(
+    house: House, caplog: pytest.LogCaptureFixture
+) -> None:
     meal_id = await meal_of(house, await done_dinner(house, "Siam Garden", Mode.PICKUP))
     issues = frozenset({PlaceIssue.COLD, PlaceIssue.LATE})
-    saved = await give(house, "Kim", meal_id, FeedbackInput(place=Rating.NOT_AGAIN, place_issues=issues))
+    answers = FeedbackInput(rating=Rating.HATED, place_issues=issues, issue_note=" No forks Qz8 ")
+    caplog.set_level("DEBUG", logger="dinnerbell")
+    saved = await give(house, "Kim", meal_id, answers)
     assert saved is not None and saved.cook is None and saved.mode is Mode.PICKUP
     (row,) = await rows(house)
-    assert row.place_issues == ["cold", "late"]
+    assert (row.rating, row.place_issues, row.issue_note) == ("hated", ["cold", "late", "other"], "No forks Qz8")
+    assert "Qz8" not in " ".join(f"{r.getMessage()} {r.__dict__}" for r in caplog.records)
+    async with house.sessionmaker() as db:  # what went wrong is Kim's alone, like her rating
+        meal = await meals.get_meal(db, house["Alex"], meal_id)
+        alex = (await feedback.for_meals(db, house["Alex"], [meal], today=DAY))[meal_id]
+        kim = (await feedback.for_meals(db, house["Kim"], [meal], today=DAY))[meal_id]
+    assert alex.mine is None and "Qz8" not in repr(alex)
+    assert kim.mine is not None and kim.mine.issue_note == "No forks Qz8"
     with pytest.raises(InvalidFeedback, match="no cook"):
         await give(house, "Kim", meal_id, FeedbackInput(cook_thanks=True))
 
@@ -161,12 +172,12 @@ async def test_a_restaurant_meal_takes_place_feedback_and_no_thanks(house: House
 async def test_a_logged_meal_takes_feedback_from_the_people_named_on_it(house: House) -> None:
     house.clock.now = DONE_AT
     meal_id = await log(house, "Sam's Tacos", "Alex", "Lee")
-    saved = await give(house, "Lee", meal_id, FeedbackInput(food=Rating.LOVED))
+    saved = await give(house, "Lee", meal_id, FeedbackInput(rating=Rating.LOVED))
     assert saved is not None and saved.mode is None and saved.cook is None
     with pytest.raises(InvalidFeedback, match="no cook"):
         await give(house, "Lee", meal_id, FeedbackInput(cook_thanks=True))
     with pytest.raises(InvalidFeedback, match="Only people who ate"):
-        await give(house, "Kim", meal_id, FeedbackInput(food=Rating.LOVED))
+        await give(house, "Kim", meal_id, FeedbackInput(rating=Rating.LOVED))
     async with house.sessionmaker() as db:
         assert await feedback.awaiting(db, house["Alex"], now=house.clock()) == []  # Home lists calls only
 
@@ -174,7 +185,7 @@ async def test_a_logged_meal_takes_feedback_from_the_people_named_on_it(house: H
 async def test_deleting_a_meal_deletes_its_feedback(house: House) -> None:
     house.clock.now = DONE_AT
     meal_id = await log(house, "Taqueria", "Alex")
-    await give(house, "Alex", meal_id, FeedbackInput(food=Rating.FINE))
+    await give(house, "Alex", meal_id, FeedbackInput(rating=Rating.FINE))
     async with house.sessionmaker() as db:
         await meals.delete_meal(db, house["Alex"], meal_id, now=house.clock())
     assert await rows(house) == []
@@ -187,7 +198,7 @@ async def test_meals_await_feedback_until_given_or_closed(house: House) -> None:
         assert await feedback.awaiting(db, house["Lee"], now=house.clock()) == []  # didn't eat
     assert (waiting.event_id, waiting.run, waiting.item_name) == (event_id, 1, "Sam's Tacos")
     assert waiting.closes_on == date(2026, 10, 29)
-    await give(house, "Kim", waiting.meal_id, FeedbackInput(food=Rating.LOVED))
+    await give(house, "Kim", waiting.meal_id, FeedbackInput(rating=Rating.LOVED))
     async with house.sessionmaker() as db:
         assert await feedback.awaiting(db, house["Kim"], now=house.clock()) == []
         assert len(await feedback.awaiting(db, house["Alex"], now=house.clock())) == 1
@@ -211,10 +222,10 @@ async def test_the_reminder_goes_once_to_those_who_turned_it_on(house: House) ->
 # Who sees what (FR-49) -------------------------------------------------------------------------
 
 
-async def test_nobody_sees_who_chose_not_again(house: House) -> None:
+async def test_nobody_sees_who_gave_which_rating_or_what_went_wrong(house: House) -> None:
     meal_id = await meal_of(house, await done_dinner(house))
-    await give(house, "Kim", meal_id, FeedbackInput(food=Rating.NOT_AGAIN, cook_note="Thanks anyway"))
-    await give(house, "Alex", meal_id, FeedbackInput(food=Rating.LOVED, cook_thanks=True))
+    await give(house, "Kim", meal_id, FeedbackInput(rating=Rating.HATED, cook_note="Thanks anyway"))
+    await give(house, "Alex", meal_id, FeedbackInput(rating=Rating.LOVED, cook_thanks=True))
     sam = MemberRef(house["Sam"].id, "Sam")
     async with house.sessionmaker() as db:
         meal = await meals.get_meal(db, house["Alex"], meal_id)
@@ -226,22 +237,22 @@ async def test_nobody_sees_who_chose_not_again(house: House) -> None:
     # Sam, the cook, sees the thank-yous with names and notes, but nobody's rating.
     assert seen["Sam"].thanks == CookThanks(2, sam, (("Kim", "Thanks anyway"), ("Alex", None)))
     assert seen["Sam"].mine is None
-    assert seen["Alex"].mine == FeedbackInput(food=Rating.LOVED, cook_thanks=True)  # only their own answers
+    assert seen["Alex"].mine == FeedbackInput(rating=Rating.LOVED, cook_thanks=True)  # only their own answers
     assert seen["Alex"].thanks == CookThanks(2, sam) and seen["Alex"].can_give
     assert seen["Lee"].mine is None and seen["Lee"].thanks == CookThanks(2, sam) and not seen["Lee"].can_give
-    assert counts[house.items["Sam's Tacos"].id] == ItemCounts(food_loved=1)
+    assert counts[house.items["Sam's Tacos"].id] == ItemCounts(loved=1)
     for view in seen.values():
-        assert "not_again" not in repr(view) and "NOT_AGAIN" not in repr(view)
+        assert "hated" not in repr(view) and "HATED" not in repr(view)
 
 
 async def test_saving_feedback_logs_and_audits_no_rating(house: House, caplog: pytest.LogCaptureFixture) -> None:
     meal_id = await meal_of(house, await done_dinner(house))
     caplog.set_level("DEBUG", logger="dinnerbell")
-    await give(house, "Kim", meal_id, FeedbackInput(food=Rating.NOT_AGAIN, cook_note="Too salty"))
+    await give(house, "Kim", meal_id, FeedbackInput(rating=Rating.HATED, cook_note="Too salty"))
     await give(house, "Kim", meal_id, FeedbackInput())
     logged = " ".join(f"{r.getMessage()} {r.__dict__}" for r in caplog.records)
     assert "feedback saved" in logged and "feedback removed" in logged
-    assert "not_again" not in logged and "Not again" not in logged and "Too salty" not in logged
+    assert "hated" not in logged and "Hated it" not in logged and "Too salty" not in logged
     assert await house.audits("feedback") == []
 
 
@@ -273,12 +284,12 @@ async def test_the_window_closes_at_midnight_in_the_households_time_zone(house: 
     meal_id = await meal_of(house, await done_dinner(house))
     chicago = ZoneInfo("America/Chicago")
     house.clock.now = datetime(2026, 10, 29, 23, 30, tzinfo=chicago).astimezone(UTC)  # Oct 30 04:30 UTC
-    assert await give(house, "Kim", meal_id, FeedbackInput(food=Rating.LOVED)) is not None
+    assert await give(house, "Kim", meal_id, FeedbackInput(rating=Rating.LOVED)) is not None
     house.clock.now += timedelta(hours=1)  # 00:30 on Oct 30 in Chicago
     with pytest.raises(InvalidFeedback, match="has closed"):
-        await give(house, "Kim", meal_id, FeedbackInput(food=Rating.FINE))
+        await give(house, "Kim", meal_id, FeedbackInput(rating=Rating.FINE))
     (row,) = await rows(house)
-    assert row.food == "loved"
+    assert row.rating == "loved"
 
 
 async def test_a_double_submit_that_loses_the_insert_race_replaces_the_winner(
@@ -287,7 +298,7 @@ async def test_a_double_submit_that_loses_the_insert_race_replaces_the_winner(
     """Two first saves at once: the second finds no row, its insert hits the unique
     constraint, and it saves again as an edit, so there's still one row, with its answer."""
     meal_id = await meal_of(house, await done_dinner(house))
-    await give(house, "Kim", meal_id, FeedbackInput(food=Rating.FINE))
+    await give(house, "Kim", meal_id, FeedbackInput(rating=Rating.FINE))
     real = FeedbackRepository._row
     missed: list[bool] = []
 
@@ -298,17 +309,17 @@ async def test_a_double_submit_that_loses_the_insert_race_replaces_the_winner(
         return await real(self, *args)
 
     monkeypatch.setattr(FeedbackRepository, "_row", miss_once)
-    saved = await give(house, "Kim", meal_id, FeedbackInput(food=Rating.LOVED))
-    assert missed and saved is not None and saved.answers.food is Rating.LOVED
+    saved = await give(house, "Kim", meal_id, FeedbackInput(rating=Rating.LOVED))
+    assert missed and saved is not None and saved.answers.rating is Rating.LOVED
     (row,) = await rows(house)
-    assert row.food == "loved"
+    assert row.rating == "loved"
 
 
 async def test_editing_a_logged_meal_drops_feedback_that_no_longer_fits(house: House) -> None:
     house.clock.now = DONE_AT
     meal_id = await log(house, "Siam Garden", "Alex", "Kim", "Lee")
     for name in ("Alex", "Kim", "Lee"):
-        await give(house, name, meal_id, FeedbackInput(food=Rating.LOVED, place=Rating.LOVED))
+        await give(house, name, meal_id, FeedbackInput(rating=Rating.LOVED, issue_note="Late"))
 
     async def edit(item: str, *people: str) -> None:
         data = MealInput(DAY, Slot.LUNCH, house.items[item].id, frozenset(house[p].id for p in people))

@@ -206,7 +206,7 @@ async def test_scrub_deletes_all_feedback_and_counts_it(house: House) -> None:
     facts = MealFacts(meal.id, meal.date, Slot.DINNER, item.id, item.name, item.kind, None, None, eaters)
     async with house.sessionmaker() as db:
         await FeedbackRepository(db).save(
-            house.household.id, house["Kim"].id, FeedbackInput(Rating.NOT_AGAIN), facts, house.clock()
+            house.household.id, house["Kim"].id, FeedbackInput(Rating.HATED), facts, house.clock()
         )
         await ContributionRepository(db).add(  # what giving it counted
             house.household.id,
@@ -234,7 +234,7 @@ async def test_scrub_deletes_all_feedback_and_counts_it(house: House) -> None:
         assert "food_critic" not in left and "chef" in left  # other badges stay
     assert [m.id for m in await house.meals()] == [meal.id]
     (row,) = await house.audits("instance.")
-    assert row.payload["feedback_deleted"] == 1 and "not_again" not in str(row.payload)
+    assert row.payload["feedback_deleted"] == 1 and "hated" not in str(row.payload)
 
 
 async def test_a_second_run_changes_nothing(house: House) -> None:

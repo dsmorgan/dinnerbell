@@ -1,15 +1,16 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Feedback after meals (spec 5.9, FR-45 to FR-49).
 
-Each member who ate a meal can say how it was, once, and change it for 7 days. Feedback has up
-to three subjects, each optional: the food, the place (restaurants only), and the cook (home
-meals with a known cook only). It's stored with a snapshot of the meal as it was, for a later
-milestone to use; in version 1 it doesn't affect ranking.
+Each member who ate a meal can say how it was, once, and change it for 7 days. Every part is
+optional: one rating of the meal, from "Hated it" to "Loved it"; for a restaurant, what went
+wrong (issue chips, and a few words for "Other"); and for a home meal with a known cook who
+isn't them, a thank-you with a note. It's stored with a snapshot of the meal as it was, for a
+later milestone to use (#18); in version 1 it doesn't affect ranking.
 
-Privacy (FR-49): nobody ever sees who chose "not again". Food and place ratings are shown only
-to the member who gave them. Everyone else sees only how many loved an item's food or place:
-"fine", "not again", and issue chips are never shown, not even as counts. A cook sees their
-thank-yous and notes; other members see only how many thank-yous there were.
+Privacy (FR-49): a member's rating, issues, and "Other" note are shown only to them. Everyone
+else sees only how many loved an item: no other rating and no issue is ever shown, not even as
+a count. A cook sees their thank-yous and notes; other members see only how many thank-yous
+there were.
 """
 
 from __future__ import annotations
@@ -26,16 +27,37 @@ from dinnerbell.domain.members import Member
 FEEDBACK_DAYS = 7
 """Feedback stays open through this many days after the meal's date (FR-45)."""
 COOK_NOTE_MAX = 200
+ISSUE_NOTE_MAX = 200
+"""The most characters in what went wrong, for the "Other" issue."""
 
 
 class Rating(StrEnum):
-    LOVED = "loved"
+    """How a member found a meal, lowest first, which is the order forms show."""
+
+    HATED = "hated"
+    DISLIKED = "disliked"
     FINE = "fine"
-    NOT_AGAIN = "not_again"
+    LIKED = "liked"
+    LOVED = "loved"
 
     @property
     def label(self) -> str:
-        return {"loved": "Loved it", "fine": "Fine", "not_again": "Not again"}[self.value]
+        return _RATING_LABELS[self]
+
+    @property
+    def score(self) -> int:
+        """-2 for "Hated it" to +2 for "Loved it", for a later milestone's ranking (#18)."""
+        return _RATING_SCORES[self]
+
+
+_RATING_LABELS = {
+    Rating.HATED: "Hated it",
+    Rating.DISLIKED: "Didn't like it",
+    Rating.FINE: "It was fine",
+    Rating.LIKED: "Liked it",
+    Rating.LOVED: "Loved it",
+}
+_RATING_SCORES = {Rating.HATED: -2, Rating.DISLIKED: -1, Rating.FINE: 0, Rating.LIKED: 1, Rating.LOVED: 2}
 
 
 class PlaceIssue(StrEnum):
@@ -55,31 +77,38 @@ class InvalidFeedback(ValueError):
 
 NOT_A_PARTICIPANT = "Only people who ate this meal can give feedback on it."
 CLOSED = f"Feedback is open for {FEEDBACK_DAYS} days after a meal, and this one has closed."
-NO_PLACE = "Place feedback is only for restaurants."
+NO_PLACE = "What went wrong is only for restaurants."
 NO_COOK = "There's no cook to thank for this meal."
 OWN_COOKING = "You cooked this one, so there's nobody to thank. Thanks for cooking!"
 NOTE_TOO_LONG = f"Keep the note to {COOK_NOTE_MAX} characters."
+ISSUE_NOTE_TOO_LONG = f"Keep what went wrong to {ISSUE_NOTE_MAX} characters."
 
 
 @dataclass(frozen=True, slots=True)
 class FeedbackInput:
-    """A member's answers. Every subject is optional; a note comes with the thank-you."""
+    """A member's answers. Every part is optional. ``issue_note`` says what went wrong, and
+    comes with the "Other" issue; ``cook_note`` comes with the thank-you."""
 
-    food: Rating | None = None
-    place: Rating | None = None
+    rating: Rating | None = None
     place_issues: frozenset[PlaceIssue] = frozenset()
+    issue_note: str | None = None
     cook_thanks: bool = False
     cook_note: str | None = None
 
     @property
     def is_empty(self) -> bool:
         return (
-            self.food is None
-            and self.place is None
+            self.rating is None
             and not self.place_issues
+            and not self.issue_note
             and not self.cook_thanks
             and not self.cook_note
         )
+
+    @property
+    def issues(self) -> tuple[PlaceIssue, ...]:
+        """``place_issues`` in the order forms show them, so "Other" comes last."""
+        return tuple(i for i in PlaceIssue if i in self.place_issues)
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,19 +180,29 @@ def check_can_give(member: Member, facts: MealFacts, today: date) -> None:
         raise InvalidFeedback(CLOSED)
 
 
+def _trimmed(text: str | None, most: int, too_long: str) -> str | None:
+    found = (text or "").replace("\r\n", "\n").strip() or None
+    if found is not None and len(found) > most:
+        raise InvalidFeedback(too_long)
+    return found
+
+
 def clean(data: FeedbackInput, facts: MealFacts, member_id: int) -> FeedbackInput:
-    """``data`` checked against the meal, with the note trimmed. A note implies the thank-you it
-    comes with. Raises InvalidFeedback."""
-    note = (data.cook_note or "").replace("\r\n", "\n").strip() or None
-    if note is not None and len(note) > COOK_NOTE_MAX:
-        raise InvalidFeedback(NOTE_TOO_LONG)
-    if (data.place is not None or data.place_issues) and not facts.has_place:
+    """``data`` checked against the meal, with the notes trimmed. Each note implies what it comes
+    with: what went wrong implies "Other", and a note to the cook the thank-you. Raises
+    InvalidFeedback."""
+    note = _trimmed(data.cook_note, COOK_NOTE_MAX, NOTE_TOO_LONG)
+    issue_note = _trimmed(data.issue_note, ISSUE_NOTE_MAX, ISSUE_NOTE_TOO_LONG)
+    issues = frozenset(data.place_issues) | ({PlaceIssue.OTHER} if issue_note is not None else set())
+    if issues and not facts.has_place:
         raise InvalidFeedback(NO_PLACE)
     thanks = data.cook_thanks or note is not None
     if thanks and not facts.thanks_cook(member_id):
         own = facts.cook is not None and facts.cook.id == member_id
         raise InvalidFeedback(OWN_COOKING if own else NO_COOK)
-    return FeedbackInput(data.food, data.place, frozenset(data.place_issues), thanks, note)
+    return FeedbackInput(
+        rating=data.rating, place_issues=issues, issue_note=issue_note, cook_thanks=thanks, cook_note=note
+    )
 
 
 # What people may see (FR-49) ---------------------------------------------------------------------
@@ -171,26 +210,22 @@ def clean(data: FeedbackInput, facts: MealFacts, member_id: int) -> FeedbackInpu
 
 @dataclass(frozen=True, slots=True)
 class ItemCounts:
-    """Feedback on one catalog item as others may see it: how many loved the food and how many
-    loved the place, and nothing else. "Fine", "not again", and the issue chips are stored for a
-    later milestone's ranking but never counted for display, because in a small household any
-    count of them could name the one person who gave it."""
+    """Feedback on one catalog item as others may see it: how many loved it, and nothing else.
+    Every other rating and the issues are stored for a later milestone's ranking but never
+    counted for display, because in a small household any count of them could name the one
+    person who gave it."""
 
-    food_loved: int = 0
-    place_loved: int = 0
+    loved: int = 0
 
 
 def count(feedback: Iterable[Feedback]) -> dict[int, ItemCounts]:
-    """Positive counts per catalog item, from each feedback's snapshot of the item. Items with
-    no "loved it" are left out."""
-    food: dict[int, int] = {}
-    place: dict[int, int] = {}
+    """How many loved each catalog item, from each feedback's snapshot of the item. Items
+    nobody loved are left out."""
+    loved: dict[int, int] = {}
     for f in feedback:
-        if f.answers.food is Rating.LOVED:
-            food[f.item_id] = food.get(f.item_id, 0) + 1
-        if f.answers.place is Rating.LOVED:
-            place[f.item_id] = place.get(f.item_id, 0) + 1
-    return {i: ItemCounts(food.get(i, 0), place.get(i, 0)) for i in food.keys() | place.keys()}
+        if f.answers.rating is Rating.LOVED:
+            loved[f.item_id] = loved.get(f.item_id, 0) + 1
+    return {item: ItemCounts(n) for item, n in loved.items()}
 
 
 @dataclass(frozen=True, slots=True)

@@ -465,7 +465,8 @@ async def test_an_export_holds_no_personal_data(migrated: Settings, clock: FakeC
                 None,
                 (MemberRef(zeb.id, "Z"),),
             )
-            answers = FeedbackInput(Rating.NOT_AGAIN, Rating.NOT_AGAIN, frozenset({PlaceIssue.WRONG_ORDER}))
+            issues = frozenset({PlaceIssue.WRONG_ORDER, PlaceIssue.OTHER})
+            answers = FeedbackInput(Rating.HATED, issues, "ISSUE-NOTE-MARKER")
             await FeedbackRepository(db).save(1, zeb.id, answers, facts, clock())
             await audit(db, 1, zeb, "test.marker", "member:zeb", {"note": "AUDIT-PAYLOAD-MARKER"}, clock())
             await SessionRepository(db).add(
@@ -487,8 +488,9 @@ async def test_an_export_holds_no_personal_data(migrated: Settings, clock: FakeC
         *SLACK_IDS.values(),
         "U0ZEBULON9",
         "veto",
-        "not_again",
-        "Not again",
+        "hated",
+        "Hated it",
+        "ISSUE-NOTE-MARKER",
         "wrong_order",
         "feedback",
         "AUDIT-PAYLOAD-MARKER",

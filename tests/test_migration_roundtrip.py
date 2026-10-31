@@ -16,6 +16,8 @@ in test_migrations.py):
   seed's guest has only an invitation, so the walk expects that one member row to go and nothing else.
 - 0016 and 0018 downgrades clear their ``*_backfilled`` markers from the household settings (and
   SQLite's ``json_remove`` rewrites the JSON), so the walk compares the settings without them.
+- 0020 converts ``food`` and ``place`` to ``rating`` and back, so the walk skips those two columns
+  across it; test_migrations.py checks the conversion both ways.
 - A downgrade drops the tables and columns its upgrade added, so the walk compares only what the
   older revision has.
 """
@@ -95,6 +97,8 @@ DOWNGRADE_CHANGES: dict[str, Ignored] = {
     "0002_catalog": frozenset({("household", "settings")}),
     # Before 0003 no household had the schedule and ranking keys, and no meal had a call.
     "0003_dinner_calls": frozenset({("household", "settings"), ("meal_log", "event_id")}),
+    # 0020 turns food and place into one rating, and its downgrade turns the rating back into food.
+    "0020_one_rating": frozenset({("feedback", "food"), ("feedback", "place")}),
 }
 
 
@@ -181,6 +185,6 @@ def test_the_cli_path_refuses_a_downgrade_that_finds_a_dangling_reference(
         with engine.connect() as c:
             assert c.execute(text(schema)).all() == schema_before  # the rollback undid the DDL
             assert c.execute(text("SELECT name FROM tag")).all() == [("T",)]
-            assert c.execute(text("SELECT version_num FROM alembic_version")).scalar_one().startswith("0019")
+            assert c.execute(text("SELECT version_num FROM alembic_version")).scalar_one().startswith("0020")
     finally:
         engine.dispose()

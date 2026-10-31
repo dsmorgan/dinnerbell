@@ -103,7 +103,7 @@
     },
     {
       "text": {
-        "text": "*How was it?* Meals you ate in the last week. Only you see your ratings.",
+        "text": "*How was it?* Meals you ate in the last week. Only you see your feedback.",
         "type": "mrkdwn"
       },
       "type": "section"

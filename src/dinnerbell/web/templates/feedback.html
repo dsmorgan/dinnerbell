@@ -1,20 +1,11 @@
 {#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
 {#- How was it? Expects form (a FeedbackForm), answers (FeedbackInput), came_from, back, ratings,
-    issues, note_max, and optionally error. Every subject is optional (FR-46). -#}
+    issues, note_max, issue_note_max, and optionally error. Every part is optional (FR-46). The
+    "What went wrong?" box shows once "Other" is checked or it holds text (CSS :has(); without
+    :has() it always shows), and text in it counts as "Other". -#}
 {% extends "base.html" %}
 {% set facts = form.facts %}
 {% block title %}How was it?{% endblock %}
-{% macro rating(name, legend, answer) -%}
-<fieldset class="field">
-  <legend>{{ legend }}</legend>
-  <div class="chip-picker">
-    {% for r in ratings %}
-    <label class="chip-toggle"><input type="radio" name="{{ name }}" value="{{ r.value }}"{% if answer == r %} checked{% endif %}><span>{{ r.label }}</span></label>
-    {% endfor %}
-    <label class="chip-toggle"><input type="radio" name="{{ name }}" value=""{% if answer is none %} checked{% endif %}><span>No answer</span></label>
-  </div>
-</fieldset>
-{%- endmacro %}
 {% block content %}
 <p><a href="{{ back }}">← {{ "The call" if came_from == "event" else "History" }}</a></p>
 <h1>How was it?</h1>
@@ -23,16 +14,27 @@
 <form method="post" action="/history/meals/{{ facts.meal_id }}/feedback" class="card stack">
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   <input type="hidden" name="from" value="{{ came_from }}">
-  {{ rating("food", "The food", answers.food) }}
-  {% if facts.has_place %}
-  {{ rating("place", "The place", answers.place) }}
   <fieldset class="field">
+    <legend>Your rating</legend>
+    <div class="chip-picker">
+      {% for r in ratings %}
+      <label class="chip-toggle"><input type="radio" name="rating" value="{{ r.value }}"{% if answers.rating == r %} checked{% endif %}><span>{{ r.label }}</span></label>
+      {% endfor %}
+      <label class="chip-toggle"><input type="radio" name="rating" value=""{% if answers.rating is none %} checked{% endif %}><span>No answer</span></label>
+    </div>
+  </fieldset>
+  {% if facts.has_place %}
+  <fieldset class="field issues">
     <legend>Anything go wrong?</legend>
     <div class="chip-picker">
       {% for i in issues %}
       <label class="chip-toggle"><input type="checkbox" name="place_issues" value="{{ i.value }}"{% if i in answers.place_issues %} checked{% endif %}><span>{{ i.label }}</span></label>
       {% endfor %}
     </div>
+    <label class="field compact issue-note">
+      <span class="small muted">What went wrong? (only you see it)</span>
+      <input type="text" name="issue_note" maxlength="{{ issue_note_max }}" placeholder="Other: tell us what" value="{{ answers.issue_note or "" }}">
+    </label>
   </fieldset>
   {% endif %}
   {% if form.thanks_cook %}
@@ -45,7 +47,7 @@
     </label>
   </fieldset>
   {% endif %}
-  <p class="small muted">Only you see your ratings. The catalog shows only how many loved an item, never who. You can change this until {{ form.closes_on|day }}.</p>
+  <p class="small muted">Only you see your rating and what went wrong. The catalog shows only how many loved an item, never who. You can change this until {{ form.closes_on|day }}.</p>
   <button type="submit" class="button primary block">Save</button>
 </form>
 {% endblock %}

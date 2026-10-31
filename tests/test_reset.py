@@ -74,7 +74,7 @@ async def lived_in(house: House) -> int:
     preferences, and a signed-in member. Returns the dinner's ID."""
     event_id = await done_dinner(house, RecordingChannel())
     (meal,) = await house.meals()
-    await act(house, feedback.give, house["Sam"], meal.id, FeedbackInput(food=Rating.LOVED))
+    await act(house, feedback.give, house["Sam"], meal.id, FeedbackInput(rating=Rating.LOVED))
     async with house.sessionmaker() as db:
         now = house.clock()
         kim, household_id = house["Kim"].id, house.household.id

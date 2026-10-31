@@ -13,7 +13,14 @@ from fastapi.responses import RedirectResponse
 from starlette.responses import Response
 
 from dinnerbell.domain.catalog import ItemKind
-from dinnerbell.domain.feedback import COOK_NOTE_MAX, FeedbackInput, InvalidFeedback, PlaceIssue, Rating
+from dinnerbell.domain.feedback import (
+    COOK_NOTE_MAX,
+    ISSUE_NOTE_MAX,
+    FeedbackInput,
+    InvalidFeedback,
+    PlaceIssue,
+    Rating,
+)
 from dinnerbell.domain.meals import PICK_SLOT, InvalidMeal, MealInput, MealLog, Slot, can_change
 from dinnerbell.services import catalog as catalog_service
 from dinnerbell.services import feedback as feedback_service
@@ -33,7 +40,7 @@ NOTICES = {
     "logged": "Meal logged.",
     "updated": "Meal updated.",
     "deleted": "Meal deleted.",
-    "feedback": "Thanks for the feedback! Only you see your ratings.",
+    "feedback": "Thanks for the feedback! Only you see it.",
     "no_feedback": "Got it: no feedback from you on that meal.",
 }
 FormText = Annotated[str, Form(max_length=40)]
@@ -214,22 +221,24 @@ async def delete_meal(principal: CSRFChecked, context: Context, db: Database, me
 FROM_PAGES = {"history", "event"}
 
 
-def _rating(value: str) -> Rating | None:
-    """A posted rating; anything else, including the "no answer" choice, is no answer."""
-    return choice(Rating, value)
-
-
 def posted_feedback(
-    food: FormText = "",
-    place: FormText = "",
+    rating: FormText = "",
     place_issues: Annotated[list[str] | None, Form()] = None,
+    issue_note: Annotated[str, Form(max_length=ISSUE_NOTE_MAX * 2)] = "",
     cook_thanks: FormText = "",
     cook_note: Annotated[str, Form(max_length=COOK_NOTE_MAX * 2)] = "",
 ) -> FeedbackInput:
-    """The feedback form as posted. ``feedback.give`` checks it against the meal, including the
-    note's length after trimming."""
+    """The feedback form as posted. Any rating but the five, including "No answer", is no answer.
+    ``feedback.give`` checks the rest against the meal, including each note's length after
+    trimming."""
     issues = frozenset(i for v in place_issues or [] if (i := choice(PlaceIssue, v)) is not None)
-    return FeedbackInput(_rating(food), _rating(place), issues, cook_thanks == "1", cook_note or None)
+    return FeedbackInput(
+        rating=choice(Rating, rating),
+        place_issues=issues,
+        issue_note=issue_note or None,
+        cook_thanks=cook_thanks == "1",
+        cook_note=cook_note or None,
+    )
 
 
 PostedFeedback = Annotated[FeedbackInput, Depends(posted_feedback)]
@@ -271,6 +280,7 @@ async def _feedback_page(
             "ratings": list(Rating),
             "issues": list(PlaceIssue),
             "note_max": COOK_NOTE_MAX,
+            "issue_note_max": ISSUE_NOTE_MAX,
             "error": error,
         },
         status_code=status_code,

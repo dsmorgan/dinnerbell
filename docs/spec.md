@@ -86,7 +86,7 @@ Each member declares capability flags: can cook, can pick up, can order. The fla
 | Meal log | The record of what the household ate, whether or not Dinnerbell coordinated it. Feeds variety and history. |
 | Contribution | A counted act: cooked, picked up, ordered, coordinated, added a catalog item, responded on time, hosted guests, participated. |
 | Badge | A named award earned by reaching a contribution milestone. Every slot counts the same: a breakfast cooked is a meal cooked. |
-| Feedback | A member's reaction to a meal they ate, on up to three subjects: the food, the place (restaurants), and the cook (home meals). |
+| Feedback | A member's reaction to a meal they ate: one rating of the meal, what went wrong (restaurants), and a thank-you to the cook (home meals). |
 
 ## 5. How it works
 
@@ -144,13 +144,13 @@ Calls run at the same times every day by default. Any member can change a slot's
 
 ### 5.9 Feedback after meals
 
-When an event is done, the decision message gains a **How was it?** button, and the meal shows on the member's App Home and History page as awaiting feedback. Feedback is three quick taps, each optional:
+When an event is done, the decision message gains a **How was it?** button, and the meal shows on the member's App Home and History page as awaiting feedback. Feedback is a few quick taps, each optional:
 
-- **Food**: loved it, fine, or not again.
-- **Place** (restaurants only): loved it, fine, or not again, with optional chips such as "late," "wrong order," or "cold."
+- **Rating**, for every meal: hated it, didn't like it, it was fine, liked it, or loved it.
+- **What went wrong** (restaurants only): chips for "late," "wrong order," "cold," and "other," with a few words to say what "other" was.
 - **Cook** (home meals only): a thank-you, with an optional short note.
 
-There's no nudge by default. A member who wants one turns on a feedback reminder in Preferences and gets one direct message per meal, unless they muted direct-message reminders, which stops every reminder. Feedback stays open for 7 days after the meal: through the seventh day after its date, in the household's time zone. A cook doesn't thank themselves, and a logged meal has no cook on record, so it takes food feedback (and place feedback for a restaurant) but no thank-you. App Home lists meals from calls; logged meals take feedback on History. Changing a meal's item deletes its feedback, and taking someone off a meal deletes theirs.
+There's no nudge by default. A member who wants one turns on a feedback reminder in Preferences and gets one direct message per meal, unless they muted direct-message reminders, which stops every reminder. Feedback stays open for 7 days after the meal: through the seventh day after its date, in the household's time zone. A cook doesn't thank themselves, and a logged meal has no cook on record, so it takes a rating (and what went wrong, for a restaurant) but no thank-you. App Home lists meals from calls; logged meals take feedback on History. Changing a meal's item deletes its feedback, and taking someone off a meal deletes theirs.
 
 In version 1, feedback is collected and displayed but doesn't affect ranking. After at least 8 weeks of data, a later milestone decides how feedback should influence proposals.
 
@@ -255,10 +255,10 @@ Requirements use "must" for version 1 and "should" for items that can slip to a 
 | ID | Requirement |
 |---|---|
 | FR-45 | Any participant in a done event, or a member named on a logged meal, can give feedback for up to 7 days after the meal. Each member gives at most one feedback per meal and can edit it within the window. Feedback does not affect ranking in version 1. All feedback is stored with the item, mode, cook, and participants at the time, so a later milestone can use it. |
-| FR-46 | Feedback has up to three subjects, each optional. Food: loved it, fine, or not again. Place, restaurants only: loved it, fine, or not again, plus optional issue chips (late, wrong order, cold, other). Cook, home meals only: a thank-you plus an optional note up to 200 characters. |
+| FR-46 | Every part of feedback is optional. Rating, for every meal: one of "Hated it," "Didn't like it," "It was fine," "Liked it," or "Loved it" (scores −2 to +2 for a later milestone), or no answer. What went wrong, restaurants only: issue chips (late, wrong order, cold, other), plus a note up to 200 characters that says what "other" was; writing the note checks "other." Cook, home meals only: a thank-you plus an optional note up to 200 characters; writing the note checks the thank-you. |
 | FR-47 | Feedback is available from a button on the decision or offer message, from App Home, and from the History page. Feedback is never required. |
 | FR-48 | Each member has a feedback reminder setting, default off. When on, the member gets one direct message per done meal they participated in. |
-| FR-49 | The catalog item shows how many loved the food and how many loved the place. "Fine," "not again," and place issues are stored for a later milestone but never shown, not even as counts, because in a small household a count can name the one person who gave it. Cook thank-yous and notes are shown to the cook. Other members see only the thank-you count. No one sees who chose "not again." Each member sees only their own food and place answers; no page, message, export, log, or audit row says who gave which. A thank-you belongs to the cook it named when it was given, so if the cook changes later, the new cook never sees notes written to the old one, and the count is about the meal's cook now. |
+| FR-49 | The catalog item shows how many loved it. Every other rating, the issues, and the "other" note are stored for a later milestone but never shown to anyone else, not even as counts, because in a small household a count can name the one person who gave it. Cook thank-yous and notes are shown to the cook. Other members see only the thank-you count. Each member sees only their own rating, issues, and "other" note; no page, message, export, log, or audit row says who gave which. A thank-you belongs to the cook it named when it was given, so if the cook changes later, the new cook never sees notes written to the old one, and the count is about the meal's cook now. |
 
 ### 6.11 Metrics and badges
 
@@ -286,7 +286,7 @@ Requirements use "must" for version 1 and "should" for items that can slip to a 
 | FR-52 | A Discord adapter implements the channel interface. | Channels |
 | FR-53 | Web push for Home Screen web apps as an optional additional channel. | Channels |
 | FR-54 | Multiple households per deployment. | Multi-tenant |
-| FR-55 | Feedback influences ranking, for example a "not again" from a participant acting as a soft penalty for that item. The design is decided from at least 8 weeks of collected data and recorded in an ADR. | Feedback-informed ranking |
+| FR-55 | Feedback influences ranking, for example a "Hated it" from a participant acting as a soft penalty for that item. The design is decided from at least 8 weeks of collected data and recorded in an ADR. | Feedback-informed ranking |
 
 ## 7. Ranking
 
@@ -403,7 +403,7 @@ The adapter lives in `src/dinnerbell/channels/slack/`. `dinnerbell slack preview
 
 **Proposals message.** A top-level post that opens with the title line and mentions everyone who is in, guests with Slack and late joiners included after the instructions and deadline. Only this first post mentions anyone: an edit shows the same people as plain names, because Slack may notify a mention an edit adds. A very large household is split across a few sections and cut off with a pointer to the web. One section per proposal, at most 10: name (linked when it has a URL), mode, cuisine, reason, vote count, and voters. Each has **Vote** (tap again to take the vote back; a private message confirms which) and **Lock this** with a confirmation. Slack shows everyone the same message, so everyone sees **Lock**; the service refuses anyone but the coordinator and the admin. An **Add proposal** button opens a modal: how (cook, pickup, delivery), a catalog item or something new, and a cuisine for something new.
 
-**Decision message.** The same title line ("Dinner decision · Tuesday, Oct 27"), then item, mode, meal time, head count with guests, assignments with mentions, guests' dietary needs, a closing "In:" list that mentions everyone who is in (not only people with a role; plain names on an edit, split and capped for a large household), guests' dietary needs, item and order links, event link. **Mark done** button, which asks to confirm; members can mark it done once it's meal time, the admin any time. A **Call it off** button stays until the meal is done. A called-off decision is struck through, with who called it off and why. After the event is done, a **How was it?** button opens the feedback modal: the food, the place for a restaurant, and a thank-you with an optional note for the cook of a home meal, prefilled with the member's answers. It names the call's run, like a card button. Feedback never changes the shared message.
+**Decision message.** The same title line ("Dinner decision · Tuesday, Oct 27"), then item, mode, meal time, head count with guests, assignments with mentions, guests' dietary needs, a closing "In:" list that mentions everyone who is in (not only people with a role; plain names on an edit, split and capped for a large household), guests' dietary needs, item and order links, event link. **Mark done** button, which asks to confirm; members can mark it done once it's meal time, the admin any time. A **Call it off** button stays until the meal is done. A called-off decision is struck through, with who called it off and why. After the event is done, a **How was it?** button opens the feedback modal: a rating, what went wrong for a restaurant, and a thank-you with an optional note for the cook of a home meal, prefilled with the member's answers. It names the call's run, like a card button. Feedback never changes the shared message.
 
 **Direct messages.** The reminder has **In**, **Maybe**, and **Out** buttons, unselected until the member answers. They're card buttons, naming the run, and a tap edits the reminder itself with `chat.update` to show the answer selected, as on the card; a reminder for a call that has moved on says so instead. If Slack won't edit it, a private line says what was saved. A maybe turned out at the deadline is told so, kindly. Each assignee gets one message listing all their roles, the item, the meal time, the head count, guests' dietary needs, and links.
 
@@ -424,7 +424,7 @@ Mobile-first server-rendered pages with HTMX for in-place updates. No JavaScript
 | Page | Content |
 |---|---|
 | Today | For a guest, only the calls they're invited to, with In, Out, the roles, and coordinating's logistics, and a page for their dietary needs. For members: open events with roster, proposals, votes, and the same actions Slack offers, including **Call it off** and **Close now** for whoever FR-56 allows. A called-off call shows who called it off and why, and **Start {slot} again**. **Coming up** lists calls scheduled for later, when each posts, and **Post it now**. Start a call, now or for a later day, optionally posting it now, or post an offer. |
-| Catalog | Search and filter items by tag, kind, mode. Add and edit items. See last eaten and feedback counts. Tag management: any member adds tags; the admin renames and merges them. Import a catalog file with a preview (FR-26). |
+| Catalog | Search and filter items by tag, kind, mode. Add and edit items. See last eaten and how many loved each item. Tag management: any member adds tags; the admin renames and merges them. Import a catalog file with a preview (FR-26). |
 | Preferences | Tags and items with veto and −2 to +2 controls. Capability flags. Mute reminders. Feedback reminder on or off. Calendar URL (later phase). |
 | History | Meals by week. Cuisines in the current variety window. Give or edit feedback on recent meals. |
 | Stats | Contribution counts, badges with progress to the next tier, household totals and newest badges. Guests see only their own pitching-in badges. |
@@ -544,7 +544,7 @@ Every table carries `household_id`. Timestamps are UTC; the household time zone 
 | vote | proposal, member |
 | assignment | event, member, role (cook, pickup, order, coordinator) |
 | meal_log | date, slot, item, cuisine_tags snapshot, participants snapshot, event (nullable, unique), logged_by |
-| feedback | meal_log (deleting the meal deletes its feedback), member, food (loved, fine, not_again, null), place (same, null), place_issues (JSON), cook_thanks (bool), cook_note, and a snapshot of the meal when saved: item, item name, item kind, mode (null for a logged meal), cook_member and cook name (nullable), participants (JSON); created_at, updated_at. One per member per meal |
+| feedback | meal_log (deleting the meal deletes its feedback), member, rating (hated, disliked, fine, liked, loved, null), place_issues (JSON), issue_note (what "other" was, nullable), cook_thanks (bool), cook_note, and a snapshot of the meal when saved: item, item name, item kind, mode (null for a logged meal), cook_member and cook name (nullable), participants (JSON); created_at, updated_at. One per member per meal |
 | contribution | member, kind, day, event or meal (exactly one: a call for most kinds, a meal for feedback), item (added_item only), created_at. Unique per member, kind, and source, and per kind and item, so counting twice counts once. Deleted with its call or meal |
 | badge_award | member, badge_key, tier, event (cleared if the call is deleted), awarded_at, announcement (pending, announced, or skipped), announced_at. Unique per member, badge, and tier |
 | outbox | event, notification type, payload (JSON), idempotency_key, message_key, thread_key, available_at, claim_token, claimed_until, attempts, last_error, delivered_at, failed_at, and the delivered message's reference |
@@ -684,7 +684,7 @@ dinnerbell/
 | M4 Contributions and badges | Contribution counting, badges, channel announcements, Stats page, monthly recap | First badges awarded |
 | M5 Calendar hints | Secret iCal URL polling, busy hints on the roster | Hints show for members who opted in |
 | M6 Assistant | Natural-language proposals and discovery through the domain API; drafting catalog entries from a description or menu link, through the import preview | "Find us something new" produces valid, filtered proposals |
-| M7 Feedback-informed ranking | An ADR on how feedback affects ranking, then the implementation. Starts after 8 weeks of feedback data and can move ahead of M5 or M6. | Proposals reflect "not again" and "loved it" with reasons that say so |
+| M7 Feedback-informed ranking | An ADR on how feedback affects ranking, then the implementation. Starts after 8 weeks of feedback data and can move ahead of M5 or M6. | Proposals reflect "Hated it" and "Loved it" with reasons that say so |
 | Backlog | Discord adapter, web push, multi-household, recipes | |
 
 M0 through M2 are the minimum for the household to switch over. M3 and M4 follow within weeks. Each milestone is a set of pull requests with review before merge.

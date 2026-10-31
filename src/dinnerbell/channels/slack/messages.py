@@ -880,7 +880,7 @@ def feedback_reminder_message(notification: note.FeedbackReminder, ctx: RenderCo
     closes = day_label(notification.closes)
     text = (
         f"Hi {escape(notification.member.name)}! How was {when}: *{escape(notification.item)}*? "
-        f"Only you see your ratings, and you can change them until *{closes}*."
+        f"Only you see your feedback, and you can change it until *{closes}*."
     )
     blocks = [section(text), actions(feedback_button(event), _web_button(ctx, event), block_id="more")]
     return _finish(f"How was {when}? Tell us by {closes}.", blocks)
