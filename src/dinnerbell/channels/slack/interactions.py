@@ -74,6 +74,7 @@ from dinnerbell.channels.slack.views import (
     HomeLinks,
     InviteInput,
     adjust_modal,
+    adjust_opened,
     art_wanted,
     assign_modal,
     cancel_modal,
@@ -192,6 +193,7 @@ VOTED = "Vote counted. Tap Vote again to take it back."
 SHUFFLED = "Shuffled: {replaced} replaced. Everyone sees the new set."
 ASSIGNED = "Assigned. {name} is told."
 ADJUSTED_NOTHING = "Nothing changed."
+NOBODY_IN = "Nobody's in, so there's nobody to assign."
 JOINED_LATE = "You're in for {slot}, joining late. Your vote shows, but counts only if the coordinator says so."
 ALREADY_IN = "You're in for {slot} already."
 LATE_VOTED = (
@@ -1283,6 +1285,8 @@ class Interactions:
         if not view.can.choose_roles or view.roles is None:
             check_can_choose_roles(view.event, member)
             raise EventRuleViolation("Only the coordinator or an admin can assign roles.", code="not_coordinator")
+        if not view.roles.people:  # Slack refuses a select with no options
+            raise EventRuleViolation(NOBODY_IN, code="nobody_in")
         origin = ids.ViewOrigin(event_id, source.channel_id, home=source.home, run=run)
         await self.api.open_view(trigger, assign_modal(view, origin))
         return None
@@ -1307,11 +1311,12 @@ class Interactions:
         if not isinstance(trigger, str) or not trigger:
             raise ids.BadValue("no trigger")
         # The rules Adjust saves with, with nothing to change: anyone who may not is told why.
-        await coordinator.plan_adjustment(db, member, event_id, Adjustment(), run=run)
+        await coordinator.plan_adjustment(db, member, event_id, Adjustment(), opened=Adjustment(), run=run)
         view = await event_views.event_view(db, member, event_id, now=self.clock())
         if view.roles is None:  # pragma: no cover - a decided call has its pick and mode
             raise EventRuleViolation("There's no decision to change.", code="not_decided")
-        origin = ids.ViewOrigin(event_id, source.channel_id, home=source.home, run=run)
+        opened = adjust_opened(view)
+        origin = ids.ViewOrigin(event_id, source.channel_id, home=source.home, run=run, opened=opened)
         await self.api.open_view(trigger, adjust_modal(view, origin))
         return None
 
@@ -1319,14 +1324,16 @@ class Interactions:
         """Before the modal closes: a part of the Adjust the rules refuse, by the input block it
         shows under. It only reads. A refusal of the whole thing, or a call that changed since,
         is left to the save, which says why in a message, as other modals' saves do."""
-        if origin.run is None:  # pragma: no cover - _submission refuses an Adjust modal without a run
+        if origin.run is None or origin.opened is None:  # pragma: no cover - _submission refuses those
             return {}
         async with self.sessionmaker() as db:
             member = await slack_members.member_for_slack_user(db, user)
             if member is None or not member.active:
                 return {}  # the save tells them
             try:
-                await coordinator.plan_adjustment(db, member, origin.event_id, form, run=origin.run)
+                await coordinator.plan_adjustment(
+                    db, member, origin.event_id, form, opened=_opened(origin.opened), run=origin.run
+                )
             except coordinator.AdjustmentRefused as exc:
                 activity.refused(exc, str(exc), member, event_id=origin.event_id, action=ids.ADJUST_VIEW)
                 return {ADJUST_BLOCKS[exc.part]: str(exc)}
@@ -1334,11 +1341,19 @@ class Interactions:
                 return {}
         return {}
 
-    async def _adjust(self, member: Member, event_id: int, form: Adjustment, run: int | None) -> str:
-        if run is None:  # pragma: no cover - _submission refuses an Adjust modal without a run
+    async def _adjust(self, member: Member, origin: ids.ViewOrigin, form: Adjustment) -> str:
+        event_id, run = origin.event_id, origin.run
+        if run is None or origin.opened is None:  # pragma: no cover - _submission refuses those
             raise ids.BadValue("no run")
+        opened = _opened(origin.opened)
         async with self.sessionmaker() as db:
-            changed = await coordinator.adjust(db, member, event_id, form, run=run, now=self.clock())
+            try:
+                changed = await coordinator.adjust(db, member, event_id, form, opened=opened, run=run, now=self.clock())
+            except coordinator.PartlyAdjusted as exc:  # saved some, then the rest was refused
+                view = await event_views.event_view(db, member, event_id, now=self.clock())
+                shown = f"{adjusted(exc.saved, view)} The rest didn't change: {exc}"
+                activity.refused(exc, shown, member, event_id=event_id, action=ids.ADJUST_VIEW)
+                return shown
             view = await event_views.event_view(db, member, event_id, now=self.clock())
         return adjusted(changed, view)
 
@@ -1603,6 +1618,8 @@ class Interactions:
                 raise ids.BadValue("bad metadata")  # only Close now's confirmation names a window
             if origin.run is None and kind in {"cancel", "close", "feedback", "assign", "adjust"}:
                 raise ids.BadValue("bad metadata")  # these name a run; Details and a join-late pick may
+            if (origin.opened is not None) != (kind == "adjust"):
+                raise ids.BadValue("bad metadata")  # only Adjust says what it opened with
             form: Any = origin.window if kind == "close" else FORMS[kind](values)
         except FormError as exc:
             await ack(response_action="errors", errors={exc.block_id: str(exc)})
@@ -1638,7 +1655,7 @@ class Interactions:
             if kind == "assign":
                 return await self._assign(member, event_id, form, origin.run)
             if kind == "adjust":
-                return await self._adjust(member, event_id, form, origin.run)
+                return await self._adjust(member, origin, form)
             async with self.sessionmaker() as db:
                 if kind == "details":
                     await calls.save_details(db, member, event_id, form, run=origin.run, now=self.clock())
@@ -1971,6 +1988,10 @@ JOIN_OFFER = (
     "You're not in Dinnerbell yet. Join as a guest: household members can then invite you to meals, "
     "and the admin can make you a member."
 )
+
+
+def _opened(opened: ids.Opened) -> Adjustment:
+    return Adjustment(opened.meal_time, opened.assignee_id, opened.coordinator_id)
 
 
 def adjusted(changed: Adjustment, view: EventView) -> str:

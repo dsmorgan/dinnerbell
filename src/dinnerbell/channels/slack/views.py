@@ -462,42 +462,57 @@ ADJUST_BLOCKS = {"meal_time": "meal_time", "assignee": "who", "coordinator": "co
 """The input block for each part of an ``Adjustment``, where its refusal shows."""
 
 
+def adjust_opened(v: EventView) -> ids.Opened:
+    """What an Adjust modal for ``v`` shows: the meal time, who does the role, and who
+    coordinates, as they are now. It goes in the modal's metadata, so saving can tell what the
+    person changed from what changed elsewhere since."""
+    choice, decision = v.roles, v.decision
+    if choice is None or decision is None:
+        raise ValueError("an Adjust modal needs a decided call")
+    at = decision.meal_time.astimezone(ZoneInfo(v.info.timezone))
+    role = MODE_ROLE[choice.mode]
+    doing = next((a.member.id for a in decision.assignments if a.role is role), None)
+    return ids.Opened(time(at.hour, at.minute), doing, v.event.coordinator_id)
+
+
 def adjust_modal(v: EventView, origin: ids.ViewOrigin) -> dict[str, Any]:
     """**Adjust** (spec 5.7): the coordinator's meal time, who does the decided pick's role, from
-    the people who are in, and whom to hand coordinating to, each set to what it is now. Saving
-    changes only what they changed. The modal names the run (``origin.run``), which saving checks."""
-    choice, decision, coordinator = v.roles, v.decision, v.event.coordinator_id
-    if choice is None or decision is None or coordinator is None:
-        raise ValueError("an Adjust modal needs a decided call")
+    the people who are in, and whom to hand coordinating to, each set to what ``origin.opened``
+    says they were. Saving changes only what the person changed. The modal names the run
+    (``origin.run``), which saving checks. With nobody in to pick, the role isn't asked: Slack
+    refuses a select with no options."""
+    choice, decision, opened = v.roles, v.decision, origin.opened
+    if choice is None or decision is None or opened is None or opened.coordinator_id is None:
+        raise ValueError("an Adjust modal needs a decided call, with what it opened with")
     item = decision.proposal.item.name
     blocks: list[Block] = [
         _intro(v),
         section(f"*{escape(item)}*: change the time, who does it, or who coordinates. Only what you change is saved."),
+        _input("meal_time", "Meal time", {"type": "timepicker", **_hhmm(opened.meal_time)}, optional=False),
     ]
-    at = decision.meal_time.astimezone(ZoneInfo(v.info.timezone)).time()
-    blocks.append(_input("meal_time", "Meal time", {"type": "timepicker", **_hhmm(at)}, optional=False))
     people = [option(p.name, str(p.id)) for p in choice.people[:MAX_ASSIGN_PEOPLE]]
-    role = MODE_ROLE[choice.mode]
-    doing = next((a.member.id for a in decision.assignments if a.role is role), None)
-    who: Block = {"type": "static_select", "options": people, "placeholder": plain("Pick someone who's in")}
-    current = next((o for o in people if o["value"] == str(doing)), None)
-    if current is not None:
-        who["initial_option"] = current
-    blocks.append(_input("who", ROLE_WHO[choice.mode], who, optional=current is None))
+    if people:
+        who: Block = {"type": "static_select", "options": people, "placeholder": plain("Pick someone who's in")}
+        current = next((o for o in people if o["value"] == str(opened.assignee_id)), None)
+        if current is not None:
+            who["initial_option"] = current
+        blocks.append(_input("who", ROLE_WHO[choice.mode], who, optional=current is None))
+    coordinator = opened.coordinator_id
     them = next((p for p in v.members if p.id == coordinator), None)
     leads = [option(them.name, str(them.id))] if them is not None else []
     leads += [o for o in people if o["value"] != str(coordinator)]
-    lead: Block = {"type": "static_select", "options": leads[:MAX_ASSIGN_PEOPLE]}
-    if leads and leads[0]["value"] == str(coordinator):
-        lead["initial_option"] = leads[0]
-    hint = "Hand it off to someone who's in. They're told, and the plan is theirs to change after."
-    blocks.append(_input("coordinator", "Coordinator", lead, optional=False, hint=hint))
+    if leads:
+        lead: Block = {"type": "static_select", "options": leads[:MAX_ASSIGN_PEOPLE]}
+        if leads[0]["value"] == str(coordinator):
+            lead["initial_option"] = leads[0]
+        hint = "Hand it off to someone who's in. They're told, and the plan is theirs to change after."
+        blocks.append(_input("coordinator", "Coordinator", lead, optional=False, hint=hint))
     return _modal("Adjust the plan", ids.ADJUST_VIEW, origin, blocks, "Save")
 
 
 def parse_adjust(values: Any) -> Adjustment:
     """The Adjust modal's state, as everything it shows; ``coordinator.adjust`` keeps only what
-    changed, and checks it against the call."""
+    differs from what it opened with, and checks that against the call."""
     meal = _time(values, "meal_time")
     if meal is None:
         raise FormError("meal_time", "Pick a meal time.")
