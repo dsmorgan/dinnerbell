@@ -210,6 +210,22 @@ def check_assignee(ctx: CallContext, item: CatalogItem, mode: Mode, who: int) ->
     return target
 
 
+def check_mode(item: CatalogItem, mode: Mode) -> None:
+    """The decided place can be had ``mode``'s way (FR-61): the catalog says it supports it."""
+    if mode not in item.modes:
+        raise EventRuleViolation(f"{item.name} isn't available by {mode.label.lower()}.", code="unavailable")
+
+
+def _who(ctx: CallContext, item: CatalogItem, mode: Mode, member_id: int | None) -> int:
+    """Who does ``mode``'s role: ``member_id``, or the first volunteer for it (FR-17)."""
+    if member_id is not None:
+        return member_id
+    volunteers = ctx.coverage.volunteers(mode, item.cook_ids)
+    if not volunteers:
+        raise EventRuleViolation(NO_ONE_CHOSEN.format(verb=mode.verb), code="no_one_chosen")
+    return volunteers[0]
+
+
 async def choose_roles(
     db: AsyncSession,
     actor: Member,
@@ -220,6 +236,7 @@ async def choose_roles(
     run: int | None = None,
     as_coordinator: bool = False,
     tell: bool = True,
+    expect: Callable[[CallContext], object] | None = None,
     now: datetime,
 ) -> Held | None:
     """**Assign roles**: switch the winning pick to another way of getting it (``mode``, for a
@@ -232,9 +249,10 @@ async def choose_roles(
     coordinator assigned it; they can't refuse in the app, but they can tell the coordinator.
     Audited as ``event.roles_assigned``; logged as ``assign_roles``.
 
-    From Slack's Adjust, ``as_coordinator`` allows only the coordinator (spec 5.7), and with
-    ``tell`` False the message to whoever is assigned is held and returned, for ``adjust`` to
-    send once a hand-off in the same save is done."""
+    From Slack's Adjust, ``as_coordinator`` allows only the coordinator (spec 5.7), ``expect``
+    checks under the lock that the call is still as the modal showed it, and with ``tell`` False
+    the message to whoever is assigned is held and returned, for ``adjust`` to send once a
+    hand-off in the same save is done."""
     async with locked_event(db, actor.household_id, event_id, now) as event:
         await guest_rules.gate(db, event, actor, GuestAction.MANAGE_DECISION)
         check_run(event, run)
@@ -242,17 +260,16 @@ async def choose_roles(
         if as_coordinator:
             check_can_adjust(event, actor)
         ctx = await cc.load(db, event)
+        if expect is not None:
+            expect(ctx)
         item = ctx.items.get(event.decided_item_id) if event.decided_item_id is not None else None
         winner, current = ctx.winner, event.decided_mode
         if item is None or winner is None or current is None:  # pragma: no cover - a decided call has all three
             raise EventRuleViolation("There's no decision to change.", code="not_decided")
         chosen_mode = mode or current
-        if chosen_mode not in item.modes:
-            raise EventRuleViolation(f"{item.name} isn't available by {chosen_mode.label.lower()}.", code="unavailable")
+        check_mode(item, chosen_mode)
         volunteers = ctx.coverage.volunteers(chosen_mode, item.cook_ids)
-        who = member_id if member_id is not None else (volunteers[0] if volunteers else None)
-        if who is None:
-            raise EventRuleViolation(NO_ONE_CHOSEN.format(verb=chosen_mode.verb), code="no_one_chosen")
+        who = _who(ctx, item, chosen_mode, member_id)
         target = check_assignee(ctx, item, chosen_mode, who)
         role = MODE_ROLE[chosen_mode]
         assignments = AssignmentRepository(db)
@@ -312,21 +329,23 @@ PLAN_CHANGED = "The plan changed since you opened this. Open Adjust again."
 @dataclass(frozen=True, slots=True)
 class Adjustment:
     """The coordinator's **Adjust** modal: the meal time (a wall time on the call's date), who
-    does the decided pick's role, and who coordinates. As asked for, None leaves that part alone;
-    as opened, it's what the modal showed."""
+    does the decided pick's role, who coordinates, and the way of getting it (``mode``: cook,
+    pickup, or delivery). As asked for, None leaves that part alone; as opened, it's what the
+    modal showed, with ``mode`` None for a modal opened before Adjust could switch it."""
 
     meal_time: time | None = None
     assignee_id: int | None = None
     coordinator_id: int | None = None
+    mode: Mode | None = None
 
     @property
     def empty(self) -> bool:
-        return self.meal_time is None and self.assignee_id is None and self.coordinator_id is None
+        return self.meal_time is None and self.assignee_id is None and self.coordinator_id is None and self.mode is None
 
 
 class AdjustmentRefused(EventRuleViolation):
     """One part of an **Adjust** the rules refuse, so the modal can show why next to it. ``part``
-    is ``meal_time``, ``assignee``, or ``coordinator``."""
+    is ``meal_time``, ``mode``, ``assignee``, or ``coordinator``."""
 
     def __init__(self, part: str, refusal: EventRuleViolation | NotFound) -> None:
         super().__init__(str(refusal), code=getattr(refusal, "code", "not_found"))
@@ -355,14 +374,50 @@ def _wall(ctx: CallContext, at: datetime) -> time:
     return time(local.hour, local.minute)
 
 
+def _changed_since(part: str) -> AdjustmentRefused:
+    return AdjustmentRefused(part, EventRuleViolation(PLAN_CHANGED, code="plan_changed"))
+
+
 def _asked(part: str, wanted: object, opened: object, current: object) -> bool:
     """Whether the person changed ``part`` in the modal: it differs from what the modal opened
     with. A part changed elsewhere since is refused, so the modal never writes back over it."""
     if wanted is None or wanted == opened:
         return False
     if current != opened:
-        raise AdjustmentRefused(part, EventRuleViolation(PLAN_CHANGED, code="plan_changed"))
+        raise _changed_since(part)
     return True
+
+
+def _meal_now(ctx: CallContext) -> time | None:
+    return _wall(ctx, ctx.event.meal_time) if ctx.event.meal_time is not None else None
+
+
+def _role_now(ctx: CallContext) -> tuple[Mode | None, int | None]:
+    """The decided pick's way of getting it, and who does its role."""
+    mode = ctx.event.decided_mode
+    who = next((a.member_id for a in ctx.assignments if mode is not None and a.role is MODE_ROLE[mode]), None)
+    return mode, who
+
+
+def _role_as_opened(ctx: CallContext, opened: Adjustment) -> bool:
+    mode, who = _role_now(ctx)
+    return (opened.mode is None or mode == opened.mode) and who == opened.assignee_id
+
+
+def _still(opened: Adjustment, part: str) -> Callable[[CallContext], None]:
+    """For each locked step of ``adjust``: the part it saves is still as the modal opened with,
+    so a change committed since ``plan_adjustment`` read the call is refused, not overwritten."""
+
+    def check(ctx: CallContext) -> None:
+        same = {
+            "meal_time": lambda: _meal_now(ctx) == opened.meal_time,
+            "role": lambda: _role_as_opened(ctx, opened),
+            "coordinator": lambda: ctx.event.coordinator_id == opened.coordinator_id,
+        }[part]()
+        if not same:
+            raise _changed_since("assignee" if part == "role" else part)
+
+    return check
 
 
 async def plan_adjustment(
@@ -372,7 +427,12 @@ async def plan_adjustment(
     opened with (``opened``), checked with the rules the use cases apply. It only reads, so the
     Slack modal can ask before it closes and show a refusal next to its field
     (``AdjustmentRefused``). A refusal of the whole thing, such as from someone who isn't the
-    coordinator, is an ``EventRuleViolation``."""
+    coordinator, is an ``EventRuleViolation``.
+
+    The way of getting it and who does it are one part, the role: changing either saves both,
+    as **Assign roles** does, and the person must be able to do the role that way (FR-17, as
+    ``choose_roles`` checks). With the way changed and nobody picked, the first volunteer for
+    it does it."""
     event = await EventRepository(db).get(actor.household_id, event_id)
     if event is None:
         raise NotFound(cc.NO_SUCH_CALL)
@@ -388,22 +448,29 @@ async def _plan(
     check_run(event, run)
     check_can_adjust(event, actor)
     item = ctx.items.get(event.decided_item_id) if event.decided_item_id is not None else None
-    mode = event.decided_mode
-    if item is None or mode is None or event.meal_time is None:  # pragma: no cover - a decided call has all three
+    current = event.decided_mode
+    if item is None or current is None or event.meal_time is None:  # pragma: no cover - a decided call has all three
         raise EventRuleViolation("There's no decision to change.", code="not_decided")
     meal = wanted.meal_time
-    if _asked("meal_time", meal, opened.meal_time, _wall(ctx, event.meal_time)) and meal is not None:
+    if _asked("meal_time", meal, opened.meal_time, _meal_now(ctx)) and meal is not None:
         at: time = meal
         _part("meal_time", lambda: meal_at(ctx, at))
     else:
         meal = None
-    current = next((a.member_id for a in ctx.assignments if a.role is MODE_ROLE[mode]), None)
-    assignee = wanted.assignee_id
-    if _asked("assignee", assignee, opened.assignee_id, current) and assignee is not None:
-        who: int = assignee
-        _part("assignee", lambda: check_assignee(ctx, item, mode, who))
-    else:
-        assignee = None
+    mode_asked = wanted.mode is not None and opened.mode is not None and wanted.mode != opened.mode
+    who_asked = wanted.assignee_id is not None and wanted.assignee_id != opened.assignee_id
+    mode: Mode | None = None
+    assignee: int | None = None
+    if mode_asked or who_asked:
+        if not _role_as_opened(ctx, opened):
+            raise _changed_since("mode" if mode_asked else "assignee")
+        chosen: Mode = wanted.mode if mode_asked and wanted.mode is not None else current
+        _part("mode", lambda: check_mode(item, chosen))
+        try:
+            assignee = check_assignee(ctx, item, chosen, _who(ctx, item, chosen, wanted.assignee_id)).id
+        except (EventRuleViolation, NotFound) as exc:
+            raise AdjustmentRefused("assignee", exc) from exc
+        mode = chosen if mode_asked else None
     lead = wanted.coordinator_id
     if _asked("coordinator", lead, opened.coordinator_id, event.coordinator_id) and lead is not None:
         await guest_rules.gate(db, event, actor, GuestAction.HAND_OFF)
@@ -411,7 +478,7 @@ async def _plan(
         _part("coordinator", lambda: handoff_target(ctx, actor, to))
     else:
         lead = None
-    return Adjustment(meal, assignee, lead)
+    return Adjustment(meal, assignee, lead, mode)
 
 
 async def adjust(
@@ -424,14 +491,16 @@ async def adjust(
     run: int,
     now: datetime,
 ) -> Adjustment:
-    """**Adjust** in Slack (spec 5.7): the coordinator changes the meal time, who does the role,
-    and who coordinates, in one modal. Only the parts they changed from what the modal opened
-    with change, each through the use case the web uses for it, which checks its rules again
-    under the event's lock, the coordinator's say included, and is audited:
-    ``calls.set_meal_time``, ``choose_roles``, then ``calls.hand_off``, last, since handing off
-    ends the actor's say over the rest. Returns what changed; an empty ``Adjustment`` changed
-    nothing and sent nothing. A part refused after an earlier one was saved raises
-    ``PartlyAdjusted``.
+    """**Adjust** in Slack (spec 5.7): the coordinator changes the meal time, the way of getting
+    it and who does its role, and who coordinates, in one modal. Only the parts they changed
+    from what the modal opened with change, each through the use case the web uses for it,
+    which checks its rules again under the event's lock, the coordinator's say included, and
+    is audited: ``calls.set_meal_time``, ``choose_roles``, then ``calls.hand_off``, last, since
+    handing off ends the actor's say over the rest. Each step also checks, under its lock, that
+    its part is still as the modal opened with (``_still``), so a change saved elsewhere since
+    ``plan_adjustment`` read the call is refused rather than written over. Returns what changed;
+    an empty ``Adjustment`` changed nothing and sent nothing. A part refused after an earlier
+    one was saved raises ``PartlyAdjusted``.
 
     With a hand-off in the same save, the message to whoever gets the role waits until after it,
     so it names the new coordinator; when that's the same person, the hand-off's own message
@@ -441,22 +510,35 @@ async def adjust(
     held: Held | None = None
     try:
         if changes.meal_time is not None:
-            await set_meal_time(db, actor, event_id, changes.meal_time, run=run, as_coordinator=True, now=now)
+            await set_meal_time(
+                db,
+                actor,
+                event_id,
+                changes.meal_time,
+                run=run,
+                as_coordinator=True,
+                expect=_still(opened, "meal_time"),
+                now=now,
+            )
             saved = replace(saved, meal_time=changes.meal_time)
         if changes.assignee_id is not None:
             held = await choose_roles(
                 db,
                 actor,
                 event_id,
+                mode=changes.mode,
                 member_id=changes.assignee_id,
                 run=run,
                 as_coordinator=True,
                 tell=changes.coordinator_id is None,
+                expect=_still(opened, "role"),
                 now=now,
             )
-            saved = replace(saved, assignee_id=changes.assignee_id)
+            saved = replace(saved, assignee_id=changes.assignee_id, mode=changes.mode)
         if changes.coordinator_id is not None:
-            await hand_off(db, actor, event_id, changes.coordinator_id, run=run, now=now)
+            await hand_off(
+                db, actor, event_id, changes.coordinator_id, run=run, expect=_still(opened, "coordinator"), now=now
+            )
             saved = replace(saved, coordinator_id=changes.coordinator_id)
     except (EventRuleViolation, NotFound, IllegalTransition) as exc:
         if saved.empty:

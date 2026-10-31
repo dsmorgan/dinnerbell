@@ -9,6 +9,7 @@ response; no function takes another member's response.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, date, datetime, time
 from zoneinfo import ZoneInfo
@@ -72,6 +73,7 @@ from dinnerbell.domain.events import (
     check_can_switch_late,
     check_can_vote,
     check_claim_coordinator,
+    check_coordinator_in,
     check_details,
     check_expected_window,
     check_handoff,
@@ -80,10 +82,12 @@ from dinnerbell.domain.events import (
     check_run,
     check_skip_day,
     clean_cancel_note,
+    drops_coordinating,
     friendly,
     is_coordinator,
     not_on_cook_list,
     transition,
+    with_coordinating,
     with_details,
     with_late_join,
     with_late_switches,
@@ -216,7 +220,10 @@ async def respond(
         ctx = await load(db, event)
         new = with_status(ctx.response_of(actor.id), actor.id, status, now)
         await ResponseRepository(db).save(actor.household_id, event.id, new, now)
-        await _roster_changed(db, event, now)
+        if drops_coordinating(event, new):  # whoever coordinates is in (#154)
+            await cc.release_coordinator(db, event, actor, why="out", now=now)  # updates the messages
+        else:
+            await _roster_changed(db, event, now)
         activity.action(db, "answer", event, actor, answer=status.value)
 
 
@@ -365,6 +372,8 @@ async def switch_late_joiner(
         if new == target:
             return
         await ResponseRepository(db).save(actor.household_id, event.id, new, now)
+        if drops_coordinating(event, new):  # switched off, they're out, so they don't coordinate (#154)
+            event = await cc.release_coordinator(db, event, actor, why="taken_off", now=now)
         ctx = await load(db, event)
         sent: list[note.Notification] = [cc.call_updated(ctx), cc.proposals_updated(ctx)]
         person = ctx.members[member_id]
@@ -410,35 +419,52 @@ async def _roster_changed(db: AsyncSession, event: Event, now: datetime) -> None
 async def claim_coordinator(
     db: AsyncSession, actor: Member, event_id: int, *, run: int | None = None, now: datetime
 ) -> None:
-    """The first member to claim coordinating gets it. Claiming it again, as from a double tap
-    or a retried Slack delivery, changes nothing and isn't an error."""
+    """The first member to claim coordinating gets it, and is in (#154): someone who was out,
+    a maybe, or hadn't answered is in now, or joins late while voting (``set_coordinator``).
+    Claiming it again, as from a double tap or a retried Slack delivery, changes nothing and
+    isn't an error."""
     async with locked_event(db, actor.household_id, event_id, now) as event:
         await guest_rules.gate(db, event, actor, GuestAction.COORDINATE)
         check_run(event, run)
         if actor.active and is_coordinator(event, actor):
             return
-        check_claim_coordinator(event, actor, invited=await _invited(db, event, actor))
+        mine = (await load(db, event)).response_of(actor.id)
+        check_claim_coordinator(event, actor, invited=await _invited(db, event, actor), mine=mine)
         await set_coordinator(db, event, actor.id, now=now)
         await audit(db, actor.household_id, actor, "event.coordinator_claimed", _target(event), {}, now)
         activity.action(db, "coordinate", event, actor)
 
 
 def handoff_target(ctx: CallContext, actor: Member, member_id: int) -> Member:
-    """Whom ``actor`` may hand coordinating to: a member, or a guest invited to the call."""
+    """Whom ``actor`` may hand coordinating to: a member, or a guest invited to the call. Once
+    it's decided, only someone who's in (``check_coordinator_in``)."""
     target = ctx.members.get(member_id)
     if target is None or (target.is_guest and not ctx.invited(target.id)):
         raise NotFound(NO_SUCH_MEMBER)
     check_handoff(ctx.event, actor, target)
+    check_coordinator_in(ctx.event, ctx.response_of(target.id))
     return target
 
 
 async def hand_off(
-    db: AsyncSession, actor: Member, event_id: int, member_id: int, *, run: int | None = None, now: datetime
+    db: AsyncSession,
+    actor: Member,
+    event_id: int,
+    member_id: int,
+    *,
+    run: int | None = None,
+    expect: Callable[[CallContext], object] | None = None,
+    now: datetime,
 ) -> None:
+    """Hand coordinating to someone else, who is in from now on (``set_coordinator``).
+    ``expect``, from Slack's Adjust, checks under the lock that the call is still as the modal
+    showed it, and raises if not."""
     async with locked_event(db, actor.household_id, event_id, now) as event:
         await guest_rules.gate(db, event, actor, GuestAction.HAND_OFF)
         check_run(event, run)
         ctx = await load(db, event)
+        if expect is not None:
+            expect(ctx)
         target = handoff_target(ctx, actor, member_id)
         await set_coordinator(db, event, member_id, now=now)
         await audit(
@@ -448,10 +474,18 @@ async def hand_off(
 
 
 async def set_coordinator(db: AsyncSession, event: Event, member_id: int | None, *, now: datetime) -> None:
-    """Change the coordinator, and the coordinator assignment once decided. The caller checks
+    """Change the coordinator, and the coordinator assignment once decided. Whoever coordinates
+    is in (#154, ``with_coordinating``): someone who wasn't is in now, or joins late while
+    voting; once decided, they must be in already (``check_coordinator_in``). The caller checks
     who may, and audits. The same coordinator again changes nothing and sends nothing."""
     if member_id == event.coordinator_id:
         return
+    if member_id is not None:
+        current = (await load(db, event)).response_of(member_id)
+        check_coordinator_in(event, current)
+        joined = with_coordinating(event, current, member_id, now)
+        if joined is not None:
+            await ResponseRepository(db).save(event.household_id, event.id, joined, now)
     event = await EventRepository(db).save(replace(event, coordinator_id=member_id), now)
     assignments = AssignmentRepository(db)
     new_assignment = None
@@ -463,21 +497,11 @@ async def set_coordinator(db: AsyncSession, event: Event, member_id: int | None,
                 event.household_id, event.id, AssignmentRole.COORDINATOR, member_id, now
             )
     ctx = await load(db, event)
-    await publish(db, ctx, *_messages_for_state(ctx), now=now)
+    await publish(db, ctx, *cc.messages_for_state(ctx), now=now)
     decision = cc.decision_info(ctx)
     if new_assignment is not None and decision is not None:
         dm = cc.assignment_made(ctx, new_assignment.member_id, new_assignment.id, decision)
         await publish(db, ctx, dm, now=now)
-
-
-def _messages_for_state(ctx: CallContext) -> list[note.Notification]:
-    """Updates for every message that shows the event: the call (or the offer), and the
-    proposals or decision."""
-    messages: list[note.Notification] = [cc.message_updated(ctx)]
-    if ctx.proposals:
-        messages.append(cc.proposals_updated(ctx))
-    messages += cc.decision_updated(ctx)
-    return messages
 
 
 # Proposals and votes (FR-13 to FR-15) ---------------------------------------------------------
@@ -683,10 +707,12 @@ async def set_meal_time(
     *,
     run: int | None = None,
     as_coordinator: bool = False,
+    expect: Callable[[CallContext], object] | None = None,
     now: datetime,
 ) -> None:
     """FR-19: the coordinator (or an admin) changes the meal time, on the call's date.
-    ``as_coordinator``, from Slack's Adjust, allows only the coordinator (spec 5.7)."""
+    ``as_coordinator``, from Slack's Adjust, allows only the coordinator (spec 5.7), and
+    ``expect`` checks under the lock that the call is still as the modal showed it."""
     async with locked_event(db, actor.household_id, event_id, now) as event:
         await guest_rules.gate(db, event, actor, GuestAction.MANAGE_DECISION)
         check_run(event, run)
@@ -696,6 +722,8 @@ async def set_meal_time(
         if event.state is not EventState.DECIDED:
             raise EventRuleViolation("This meal is already done.", code="not_decided")
         ctx = await load(db, event)
+        if expect is not None:
+            expect(ctx)
         meal = meal_at(ctx, at)
         event = await EventRepository(db).save(replace(event, meal_time=meal), now)
         ctx = await load(db, event)

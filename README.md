@@ -50,6 +50,8 @@ In the diagram, teal steps are Dinnerbell and cream steps are you. The times are
 
 Lunch and breakfast calls work the same way. Their daily calls are off by default, and anyone can start a call for breakfast, lunch, or dinner when they want one.
 
+For the household, these guides explain the rest: [coordinating a meal](docs/coordinating.md), [how Dinnerbell picks meals](docs/ranking.md), [contributions and badges](docs/contributions.md), and [members and guests](docs/members.md).
+
 ## How it runs
 
 ```mermaid

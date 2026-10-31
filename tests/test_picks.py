@@ -129,10 +129,11 @@ async def test_a_pickup_picks_winner_is_picked_up_by_whoever_added_it(house: Hou
     assert {(a.role.value, a.member_id) for a in ctx.assignments} == {("pickup", house["Kim"].id)}
 
 
-@pytest.mark.parametrize("answer", ["never", Status.OUT, Status.MAYBE, "coordinating"])
+@pytest.mark.parametrize("answer", ["never", Status.OUT, Status.MAYBE])
 async def test_someone_not_in_adds_a_pick_only_by_joining_late(house: House, answer: object) -> None:
     """Someone who isn't in is told to join late first (#76), whatever they'd add, unless they
-    said yes to joining late; a coordinator who isn't in too."""
+    said yes to joining late. A coordinator is always in (#154): claiming it while voting joins
+    them late (``test_claiming_while_voting_joins_late_with_the_vote_counting``)."""
     event_id = await open_dinner(house)
     for name in ("Alex", "Lee"):
         await act(house, calls.respond, house[name], event_id, Status.IN)
@@ -140,8 +141,6 @@ async def test_someone_not_in_adds_a_pick_only_by_joining_late(house: House, ans
         await act(house, calls.respond, house["Kim"], event_id, answer)  # a maybe is out at the deadline
     house.clock.now = RESPOND_BY
     await house.tick()
-    if answer == "coordinating":
-        await act(house, calls.claim_coordinator, house["Kim"], event_id)
     for mode, target in [
         (Mode.PICKUP, {"item_id": house.items["Taqueria"].id}),
         (Mode.DELIVERY, {"free_text": "Thai Express", "cuisine_id": house.tags["Thai"].id}),

@@ -98,6 +98,7 @@ from dinnerbell.channels.slack.views import (
     proposal_modal,
 )
 from dinnerbell.config import is_test_instance
+from dinnerbell.domain.catalog import Mode
 from dinnerbell.domain.events import (
     GUESTS_DONT,
     MODE_ROLE,
@@ -176,7 +177,7 @@ CONFIRM = {
     "respond_in": "You're in for {slot}. Thanks!",
     "respond_maybe": "Got it: you're a maybe for {slot}.",
     "respond_out": "Got it: you're out for {slot} this time.",
-    ids.COORDINATE: "You're coordinating {slot}. Thanks for steering!",
+    ids.COORDINATE: "You're in, and coordinating {slot}. Thanks for steering!",
 }
 OFFERED = {
     RoleOffer.COOK: "Thanks! You're offering to cook. Tap again to take it back.",
@@ -2050,7 +2051,11 @@ JOIN_OFFER = (
 
 
 def _opened(opened: ids.Opened) -> Adjustment:
-    return Adjustment(opened.meal_time, opened.assignee_id, opened.coordinator_id)
+    return Adjustment(opened.meal_time, opened.assignee_id, opened.coordinator_id, opened.mode)
+
+
+SWITCHED = {Mode.COOK: "It's home-cooked now.", Mode.PICKUP: "It's pickup now.", Mode.DELIVERY: "It's delivery now."}
+"""Adjust's reply when it switched the way of getting the meal (#154)."""
 
 
 def adjusted(changed: Adjustment, view: EventView) -> str:
@@ -2061,6 +2066,8 @@ def adjusted(changed: Adjustment, view: EventView) -> str:
     said: list[str] = []
     if changed.meal_time is not None and view.decision is not None:
         said.append(f"The meal time is {local_clock(view.decision.meal_time, view.info.timezone)}.")
+    if changed.mode is not None:
+        said.append(SWITCHED[changed.mode])
     if changed.assignee_id is not None and view.roles is not None:
         doing = ROLE_PHRASES[MODE_ROLE[view.roles.mode]]
         said.append(f"{names.get(changed.assignee_id, 'They')} is {doing}, and is told.")

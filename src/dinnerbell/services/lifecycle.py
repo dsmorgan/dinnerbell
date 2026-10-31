@@ -49,6 +49,7 @@ from dinnerbell.domain.events import (
     clean_cancel_note,
     counted_votes,
     decide_winner,
+    drops_coordinating,
     head_count,
     meal_time,
     needs_reminder,
@@ -441,7 +442,8 @@ async def _close_responses(db: AsyncSession, event: Event, now: datetime) -> Non
     the ranked ones; ranking leaves their places out and still proposes its usual number (#77).
     Before the deadline,
     because everyone answered (FR-56), the deadline moves to now first, so voting gets its
-    usual length from now, as when the coordinator closes the window."""
+    usual length from now, as when the coordinator closes the window. A coordinator who was
+    still a maybe is out now, so nobody coordinates (#154)."""
     if now < event.respond_deadline:
         early = {"window": Window.RESPOND.value, "from": event.respond_deadline.isoformat(), "to": now.isoformat()}
         event = await EventRepository(db).save(replace(event, respond_deadline=now), now)
@@ -455,6 +457,8 @@ async def _close_responses(db: AsyncSession, event: Event, now: datetime) -> Non
     resolved = resolve_maybes(ctx.responses)
     for response in resolved:
         await ResponseRepository(db).save(event.household_id, event.id, response, now)
+        if drops_coordinating(event, response):  # a maybe coordinator is out now, so isn't one (#154)
+            event = await cc.release_coordinator(db, event, None, why="maybe", now=now, update=False)
     if head_count(ctx.responses) < MIN_HEAD_COUNT:  # maybes never count toward the head count
         await abandon(db, event, EndReason.TOO_FEW, now)
         return

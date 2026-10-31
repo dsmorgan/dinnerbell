@@ -11,7 +11,7 @@
     },
     {
       "text": {
-        "text": "*Sam's Tacos*: change the time, who does it, or who coordinates. Only what you change is saved.",
+        "text": "*Sam's Tacos*: change the time, how you get it, who does it, or who coordinates. Only what you change is saved.",
         "type": "mrkdwn"
       },
       "type": "section"
@@ -26,6 +26,46 @@
       "label": {
         "emoji": true,
         "text": "Meal time",
+        "type": "plain_text"
+      },
+      "optional": false,
+      "type": "input"
+    },
+    {
+      "block_id": "mode",
+      "element": {
+        "action_id": "value",
+        "initial_option": {
+          "text": {
+            "emoji": true,
+            "text": "Cook",
+            "type": "plain_text"
+          },
+          "value": "cook"
+        },
+        "options": [
+          {
+            "text": {
+              "emoji": true,
+              "text": "Cook",
+              "type": "plain_text"
+            },
+            "value": "cook"
+          },
+          {
+            "text": {
+              "emoji": true,
+              "text": "Pickup",
+              "type": "plain_text"
+            },
+            "value": "pickup"
+          }
+        ],
+        "type": "static_select"
+      },
+      "label": {
+        "emoji": true,
+        "text": "How",
         "type": "plain_text"
       },
       "optional": false,
@@ -68,9 +108,14 @@
         },
         "type": "static_select"
       },
+      "hint": {
+        "emoji": true,
+        "text": "They cook, pick up, or order, whichever How says.",
+        "type": "plain_text"
+      },
       "label": {
         "emoji": true,
-        "text": "Who cooks",
+        "text": "Who does it",
         "type": "plain_text"
       },
       "optional": false,
@@ -128,7 +173,7 @@
     "text": "Cancel",
     "type": "plain_text"
   },
-  "private_metadata": "{\"event\":7,\"channel\":\"C0DINNER\",\"home\":false,\"run\":1,\"opened\":{\"at\":\"18:45\",\"who\":2,\"lead\":1}}",
+  "private_metadata": "{\"event\":7,\"channel\":\"C0DINNER\",\"home\":false,\"run\":1,\"opened\":{\"at\":\"18:45\",\"who\":2,\"lead\":1,\"how\":\"cook\"}}",
   "submit": {
     "emoji": true,
     "text": "Save",

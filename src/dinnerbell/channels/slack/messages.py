@@ -1213,9 +1213,16 @@ def assignment_message(notification: note.AssignmentMade, ctx: RenderContext) ->
     ]
     by = notification.assigned_by
     if by is not None:  # they hadn't offered: say who asked, and whom to tell
-        tell = f"tell {escape(by.name)}"
-        if event.coordinator is not None and event.coordinator.id == by.id:
-            tell += f", who can pick someone else with *{ADJUST}* on the decision"
+        lead = event.coordinator
+        if lead is None:
+            tell = f"tell {escape(by.name)}"
+        elif lead.id == by.id:
+            tell = f"tell {escape(by.name)}, who can pick someone else with *{ADJUST}* on the decision"
+        else:  # handed off since: the new coordinator decides now (#154)
+            tell = (
+                f"tell {escape(lead.name)}, who's coordinating now and can pick someone else with "
+                f"*{ADJUST}* on the decision"
+            )
         lines.insert(1, f"{escape(by.name)} assigned you this. If it doesn't work for you, {tell}.")
     if decision.dietary_notes:
         lines.append(f"*Dietary needs:* {escape(', '.join(decision.dietary_notes))}")
