@@ -6,11 +6,11 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dinnerbell.db.models import CatalogItemRow, HouseholdRow, MealLogRow
-from dinnerbell.domain.meals import MealLog, MemberRef, Slot, TagRef
+from dinnerbell.domain.meals import OF_THE_DAY, MealLog, MemberRef, Slot, TagRef
 
 
 def _refs(values: list[dict[str, Any]]) -> list[tuple[int, str]]:
@@ -73,18 +73,20 @@ class MealLogRepository:
         rows = await self._session.execute(query.order_by(MealLogRow.date.desc(), MealLogRow.id.desc()))
         return [_meal(row, name) for row, name in rows]
 
+    async def newest(self, household_id: int, *, offset: int, limit: int) -> list[MealLog]:
+        """A page of the household's meals, newest first, in ``newest_first``'s order: later days,
+        then later meals of the day, then the one logged last."""
+        of_the_day = case({slot.value: n for slot, n in OF_THE_DAY.items()}, value=MealLogRow.slot, else_=-1)
+        query = self._select(household_id).order_by(MealLogRow.date.desc(), of_the_day.desc(), MealLogRow.id.desc())
+        rows = await self._session.execute(query.offset(offset).limit(limit))
+        return [_meal(row, name) for row, name in rows]
+
     async def for_event(self, household_id: int, event_id: int) -> int | None:
         """The ID of the meal a call logged, if it has logged one."""
         meal_id: int | None = await self._session.scalar(
             select(MealLogRow.id).where(MealLogRow.household_id == household_id, MealLogRow.event_id == event_id)
         )
         return meal_id
-
-    async def earliest(self, household_id: int) -> date | None:
-        value: date | None = await self._session.scalar(
-            select(func.min(MealLogRow.date)).where(MealLogRow.household_id == household_id)
-        )
-        return value
 
     async def last_eaten(self, household_id: int) -> dict[int, date]:
         rows = await self._session.execute(

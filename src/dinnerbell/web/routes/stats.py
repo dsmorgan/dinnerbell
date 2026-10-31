@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The Stats page (FR-38, FR-40): a person's own counts and badges, and for members the
-household's totals and newest badges; and Admin > Badges, where an admin sets the five tier
-counts of each of the three ladders (FR-43, #130).
+"""The Stats page (FR-38, FR-40), in two tabs (#153): Yours, a person's own counts and badges, and
+for members Household, the household's totals and newest badges. Also Admin > Badges, where an
+admin sets the five tier counts of each of the three ladders (FR-43, #130).
 
 The page never ranks anyone. A person sees their own numbers; the household list is by recency,
 with no member's count beside another's. A guest sees only their own pitching-in badges."""
@@ -18,7 +18,7 @@ from starlette.responses import Response
 from dinnerbell.domain.badges import BADGES, LADDERS, TIERS, InvalidThresholds, Ladder
 from dinnerbell.domain.contributions import PITCHING_IN, Kind
 from dinnerbell.services import contributions, stats
-from dinnerbell.web.auth import AdminCSRFChecked, AdminPrincipal, Context, Database, GuestOrMember
+from dinnerbell.web.auth import AdminCSRFChecked, AdminPrincipal, Context, Database, GuestOrMember, SignedIn
 from dinnerbell.web.forms import BadFormValue
 from dinnerbell.web.render import render
 
@@ -46,17 +46,29 @@ HOUSEHOLD_LABELS = KIND_LABELS | {
 
 @router.get("/stats")
 async def stats_page(request: Request, principal: GuestOrMember, context: Context, db: Database) -> Response:
+    """The Yours tab: the person's own badges and counts. A guest sees only this."""
     member = principal.member
     guest = member.is_guest
     mine = await (stats.guest_stats(db, member) if guest else stats.my_stats(db, member))
     page: dict[str, Any] = {
         "guest": guest,
+        "tab": "mine",
         "mine": mine,
         "fresh": stats.newly_earned(mine, context.clock()),
         "kinds": [
             (label, mine.counts.get(kind, 0)) for kind, label in KIND_LABELS.items() if not guest or kind in PITCHING_IN
         ],
-        "household": None if guest else await stats.household_stats(db, member),
+    }
+    return await render(request, "stats.html", page)
+
+
+@router.get("/stats/household")
+async def household_stats_page(request: Request, principal: SignedIn, db: Database) -> Response:
+    """The Household tab, for members: the household's totals and its newest badges."""
+    page: dict[str, Any] = {
+        "guest": False,
+        "tab": "household",
+        "household": await stats.household_stats(db, principal.member),
         "kind_labels": HOUSEHOLD_LABELS,
     }
     return await render(request, "stats.html", page)

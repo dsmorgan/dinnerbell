@@ -96,9 +96,8 @@ def test_form_ids_are_ignored_or_refused(lenient: TestClient, migrated: Settings
     assert rows(migrated, PreferenceRow) == [] and rows(migrated, MealLogRow) == []
 
 
-@pytest.mark.parametrize(("page", "shown"), [("300000", "520"), ("99999999999999999999", "520"), ("-4", "0")])
-def test_history_page_is_clamped(lenient: TestClient, page: str, shown: str) -> None:
-    response = lenient.get(f"/history?page={page}")
+@pytest.mark.parametrize("page", ["300000", "99999999999999999999", "-4", "0"])
+@pytest.mark.parametrize("path", ["/history", "/catalog"])
+def test_a_page_number_out_of_range_is_clamped(lenient: TestClient, path: str, page: str) -> None:
+    response = lenient.get(f"{path}?page={page}")
     assert response.status_code == 200
-    if shown != "0":
-        assert f'href="/history?page={int(shown) - 1}">Newer' in response.text

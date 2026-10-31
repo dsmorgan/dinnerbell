@@ -32,7 +32,9 @@ class Slot(StrEnum):
 CALL_ORDER = (Slot.DINNER, Slot.LUNCH, Slot.BREAKFAST)
 """How the start buttons and the schedule list slots: most used first, so dinner and lunch keep
 their places and breakfast, the rarest, comes last."""
-_OF_THE_DAY = {slot: n for n, slot in enumerate(Slot)}
+OF_THE_DAY = {slot: n for n, slot in enumerate(Slot)}
+"""Each slot's place in the day, breakfast first: the order ``newest_first`` and History's pages
+sort meals of the same day by."""
 PICK_SLOT = "Pick breakfast, lunch, or dinner."
 """What a form says when its meal is missing or unknown."""
 
@@ -112,7 +114,7 @@ def can_change(actor: Member, meal: MealLog) -> bool:
 def newest_first(meal: MealLog) -> tuple[date, int, int]:
     """A sort key that, reversed, puts the newest meal first: later days, then later meals of
     the day, then the one logged last."""
-    return meal.day, _OF_THE_DAY[meal.slot], meal.id
+    return meal.day, OF_THE_DAY[meal.slot], meal.id
 
 
 def week_start(day: date) -> date:

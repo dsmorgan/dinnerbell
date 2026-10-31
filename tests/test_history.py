@@ -14,6 +14,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
 
 from dinnerbell.config import Settings
 from dinnerbell.db.models import AuditRow, MealLogRow, TagRow
@@ -246,15 +247,84 @@ def test_variety_window_uses_the_household_setting(
     assert "Mexican · yesterday" in text and "Thai ·" not in text
 
 
-def test_history_pages_by_eight_weeks(client: TestClient, household: dict[str, int]) -> None:
-    log(client, household["tacos"], [household["admin"]], day=date(2026, 8, 10))  # 10 weeks back
+def fill(settings: Settings, item_id: int, member_id: int, days: int) -> None:
+    """Log a dinner on each of the ``days`` days before TODAY, and a lunch on every third, straight
+    into the database: the form would take two requests a meal."""
+    from datetime import UTC, datetime
+
+    now = datetime(2026, 10, 22, 18, 0, tzinfo=UTC)
+    engine = create_engine(settings.sync_database_url)
+    try:
+        with Session(engine) as db:
+            for back in range(1, days + 1):
+                for slot in ("dinner", "lunch") if back % 3 == 0 else ("dinner",):
+                    db.add(
+                        MealLogRow(
+                            household_id=1,
+                            date=TODAY - timedelta(days=back),
+                            slot=slot,
+                            item_id=item_id,
+                            cuisine_tags=[],
+                            participants=[{"id": member_id, "name": "admin"}],
+                            logged_by=member_id,
+                            created_at=now,
+                            updated_at=now,
+                        )
+                    )
+            db.commit()
+    finally:
+        engine.dispose()
+
+
+def meal_days(html: str) -> list[str]:
+    return re.findall(r'class="meal-when small muted">([^<]+)<', html)
+
+
+def test_history_pages_by_twenty_meals(client: TestClient, household: dict[str, int], migrated: Settings) -> None:
+    from dinnerbell.services.meals import MEALS_PER_PAGE
+
+    assert MEALS_PER_PAGE == 20
+    fill(migrated, household["tacos"], household["admin"], 33)  # 33 dinners and 11 lunches: 44 meals
     first = page(client.get("/history"))
-    assert "No meals logged in these weeks." not in first and "Week of Aug" not in first
-    assert 'href="/history?page=1">Older' in first
-    older = page(client.get("/history?page=1"))
-    assert "Week of Aug 10" in older and 'href="/history?page=0">Newer' in older
-    assert ">Older</a>" not in older
-    assert "No meals logged in these weeks." in page(client.get("/history?page=5"))
+    assert len(meal_days(first)) == 20
+    assert meal_days(first)[:3] == ["Wed Oct 21 · Dinner", "Tue Oct 20 · Dinner", "Mon Oct 19 · Dinner"]
+    # Dinner before lunch on the same day, as by_week orders them.
+    assert meal_days(first)[2:5] == ["Mon Oct 19 · Dinner", "Mon Oct 19 · Lunch", "Sun Oct 18 · Dinner"]
+    assert "Page 1 of 3" in first and ": 1 to 20 of 44" in first
+    assert 'rel="next" href="/history?page=2"' in first and 'rel="prev"' not in first
+    second = page(client.get("/history?page=2"))
+    assert len(meal_days(second)) == 20 and not set(meal_days(second)) & set(meal_days(first))
+    assert 'rel="prev" href="/history"' in second and 'rel="next" href="/history?page=3"' in second
+    assert 'aria-label="Newer: page 1"' in second and 'aria-label="Older: page 3"' in second
+    last = page(client.get("/history?page=3"))
+    assert len(meal_days(last)) == 4 and "Page 3 of 3" in last and ": 41 to 44 of 44" in last
+    assert 'rel="next"' not in last
+    assert meal_days(last)[-2:] == ["Sat Sep 19 · Dinner", "Sat Sep 19 · Lunch"]  # the oldest
+
+
+@pytest.mark.parametrize(("asked", "shown"), [("4", 3), ("99999999999999999999", 3), ("0", 1), ("-4", 1)])
+def test_a_history_page_out_of_range_shows_the_nearest(
+    client: TestClient, household: dict[str, int], migrated: Settings, asked: str, shown: int
+) -> None:
+    fill(migrated, household["tacos"], household["admin"], 33)
+    response = client.get(f"/history?page={asked}")
+    assert response.status_code == 200
+    assert f"Page {shown} of 3" in page(response)
+
+
+def test_one_page_of_history_has_no_pager(client: TestClient, household: dict[str, int], migrated: Settings) -> None:
+    fill(migrated, household["tacos"], household["admin"], 20)  # 20 dinners and 6 lunches: two pages
+    assert "Page 1 of 2" in page(client.get("/history"))
+    log(client, household["siam"], [household["admin"]])
+    assert 'class="pager"' in client.get("/history").text
+    engine = create_engine(migrated.sync_database_url)
+    try:
+        with engine.begin() as connection:
+            connection.execute(text("DELETE FROM meal_log WHERE date < '2026-10-10'"))
+    finally:
+        engine.dispose()
+    html = client.get("/history").text
+    assert 'class="pager"' not in html and "Page 1 of" not in html
 
 
 @pytest.fixture

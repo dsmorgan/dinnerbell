@@ -1,9 +1,17 @@
 {#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
 {% extends "base.html" %}
 {% from "_badge.html" import badge_chip, badge_row %}
-{% block title %}{% if guest %}Your badges{% else %}Stats{% endif %}{% endblock %}
+{% block title %}{% if guest %}Your badges{% elif tab == "household" %}Household stats{% else %}Stats{% endif %}{% endblock %}
 {% block content %}
+{% if not guest %}
+{#- Two tabs, like Admin's (#153): your own standing, and the household's news. -#}
+<nav class="tabs" aria-label="Stats">
+  <a href="/stats"{% if tab == "mine" %} aria-current="page"{% endif %}>Yours</a>
+  <a href="/stats/household"{% if tab == "household" %} aria-current="page"{% endif %}>Household</a>
+</nav>
+{% endif %}
 <h1>{% if guest %}Your badges{% else %}Stats{% endif %}</h1>
+{% if tab == "mine" %}
 {% if fresh %}
 <section class="card" aria-labelledby="new-title">
   <h2 id="new-title">Newly earned</h2>
@@ -25,14 +33,17 @@
     {% for label, n in kinds %}<div><dt>{{ label }}</dt><dd>{{ n }}</dd></div>{% endfor %}
   </dl>
 </section>
-{% if household %}
+{% if not guest %}<p class="small muted">The household's totals and everyone's newest badges are on the <a href="/stats/household">Household</a> tab.</p>{% endif %}
+{% else %}
 <section class="card" aria-labelledby="house-title">
   <h2 id="house-title">The household</h2>
   <p>{{ household.meals }} {{ "meal" if household.meals == 1 else "meals" }} on record, and {{ household.badges_earned }} {{ "badge" if household.badges_earned == 1 else "badges" }} earned together.</p>
   <dl class="counts">
     {% for kind, label in kind_labels.items() %}{% if household.totals.get(kind) %}<div><dt>{{ label }}</dt><dd>{{ household.totals[kind] }}</dd></div>{% endif %}{% endfor %}
   </dl>
-  <h3>Lately earned</h3>
+</section>
+<section class="card" aria-labelledby="lately-title">
+  <h2 id="lately-title">Lately earned</h2>
   {% if household.recent %}
   <ul class="badge-list">
     {% for r in household.recent %}<li><strong>{{ r.member_name }}</strong> {{ badge_chip(r.award.badge.value, r.award.tier.value) }}</li>{% endfor %}

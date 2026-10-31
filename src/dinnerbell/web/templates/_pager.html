@@ -1,0 +1,14 @@
+{#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
+{#- Previous and next page links around "Page 2 of 5", for a list split by domain.pages.page_of.
+    url(n) is page n's address. With target, a link swaps only that element, as the page's search
+    form does; without JavaScript it's a plain link. -#}
+{% macro _swap(target, href) %}{% if target %} hx-get="{{ href }}" hx-target="{{ target }}" hx-select="{{ target }}" hx-swap="outerHTML show:{{ target }}:top" hx-push-url="true"{% endif %}{% endmacro %}
+{% macro pager(p, url, label, previous="Previous", next="Next", target=none) %}
+{% if p.count > 1 %}
+<nav class="pager" aria-label="{{ label }}">
+  {% if p.has_previous %}{% set href = url(p.number - 1) %}<a class="button small pager-previous" rel="prev" href="{{ href }}"{{ _swap(target, href) }} aria-label="{{ previous }}: page {{ p.number - 1 }}">&larr; {{ previous }}</a>{% else %}<span class="pager-previous"></span>{% endif %}
+  <span class="pager-status small">Page {{ p.number }} of {{ p.count }}<span class="visually-hidden">: {{ p.first }} to {{ p.last }} of {{ p.total }}</span></span>
+  {% if p.has_next %}{% set href = url(p.number + 1) %}<a class="button small pager-next" rel="next" href="{{ href }}"{{ _swap(target, href) }} aria-label="{{ next }}: page {{ p.number + 1 }}">{{ next }} &rarr;</a>{% else %}<span class="pager-next"></span>{% endif %}
+</nav>
+{% endif %}
+{% endmacro %}

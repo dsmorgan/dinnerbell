@@ -34,8 +34,6 @@ from dinnerbell.web.render import render
 
 router = APIRouter(prefix="/history")
 
-MAX_PAGE = 520
-"""Ten years of eight-week pages."""
 NOTICES = {
     "logged": "Meal logged.",
     "updated": "Meal updated.",
@@ -115,14 +113,14 @@ async def _history_page(
     context: AppContext,
     db: Database,
     *,
-    page: int = 0,
+    page: int = 1,
     form: MealForm | None = None,
     error: str | None = None,
     notice: str | None = None,
     status_code: int = 200,
 ) -> Response:
     today = _today(context, principal)
-    history = await meal_service.history(db, principal.member, today=today, page=page)
+    history = await meal_service.history(db, principal.member, page=page)
     window = await variety_window(db, principal.household.id, today)
     shown = [meal for _, meals in history.weeks for meal in meals]
     feedback = await feedback_service.for_meals(db, principal.member, shown, today=today)
@@ -132,6 +130,7 @@ async def _history_page(
         "history.html",
         {
             "history": history,
+            "history_url": lambda number: f"/history?page={number}" if number > 1 else "/history",
             "window": window,
             "today": today,
             "form": form or blank,
@@ -147,9 +146,9 @@ async def _history_page(
 
 @router.get("")
 async def history_page(
-    request: Request, principal: SignedIn, context: Context, db: Database, page: int = 0, notice: str = ""
+    request: Request, principal: SignedIn, context: Context, db: Database, page: int = 1, notice: str = ""
 ) -> Response:
-    page = min(max(page, 0), MAX_PAGE)
+    """History, ``MEALS_PER_PAGE`` meals at a time. A page past either end shows the nearest one."""
     return await _history_page(request, principal, context, db, page=page, notice=NOTICES.get(notice))
 
 

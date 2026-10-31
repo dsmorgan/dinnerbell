@@ -1,5 +1,6 @@
 {#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
 {% extends "base.html" %}
+{% from "_pager.html" import pager %}
 {% block title %}Catalog{% endblock %}
 {% block content %}
 <h1>Catalog</h1>
@@ -55,7 +56,7 @@
 </form>
 <div id="results">
   <p class="muted small">
-    {% if search.is_default %}{{ total }} active item{{ "" if total == 1 else "s" }}{% else %}{{ items|length }} match{{ "" if items|length == 1 else "es" }} · <a href="/catalog">Clear filters</a>{% endif %}
+    {% if search.is_default %}{{ total }} active item{{ "" if total == 1 else "s" }}{% else %}{{ matches }} match{{ "" if matches == 1 else "es" }} · <a href="/catalog">Clear filters</a>{% endif %}
   </p>
   {% if not items %}
   <section class="card">
@@ -90,6 +91,7 @@
     </li>
     {% endfor %}
   </ul>
+  {{ pager(page, page_url, "Catalog pages", target="#results") }}
 </div>
 <p class="footer-links small"><a href="/catalog/tags">Manage tags</a> · <a href="/catalog/import">Import a catalog file</a></p>
 {% endblock %}

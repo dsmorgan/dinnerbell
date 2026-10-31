@@ -7,6 +7,7 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Annotated, Any
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, Form, Request
 from fastapi.responses import RedirectResponse
@@ -32,6 +33,7 @@ from dinnerbell.domain.catalog import (
 )
 from dinnerbell.domain.catalog_file import MAX_FILE_BYTES
 from dinnerbell.domain.catalog_import import ImportPlan
+from dinnerbell.domain.pages import page_of
 from dinnerbell.services import catalog as catalog_service
 from dinnerbell.services import feedback as feedback_service
 from dinnerbell.services.variety import household_today
@@ -54,6 +56,8 @@ NOTICES = {
     "tag_renamed": "Tag renamed.",
     "tags_merged": "Tags merged.",
 }
+ITEMS_PER_PAGE = 20
+"""The Catalog page's page size: enough to scan, short enough to scroll on a phone."""
 FormText = Annotated[str, Form(max_length=4000)]
 FormList = Annotated[list[str] | None, Form()]
 
@@ -90,7 +94,10 @@ async def catalog_page(
     created: int = 0,
     updated: int = 0,
     tags_created: int = 0,
+    page: int = 1,
 ) -> Response:
+    """The catalog, ``ITEMS_PER_PAGE`` matches at a time. The page links keep the search, and a page
+    past either end shows the nearest one."""
     data = await catalog_service.catalog(db, principal.member)
     tag_id = parse_id(tag)
     search = ItemFilter(
@@ -102,7 +109,23 @@ async def catalog_page(
         status=choice(Status, status) or Status.ACTIVE,
     )
     names = {t.id: t.name for t in data.tags}
-    items = [item for item in data.items if search.matches(item, names)]
+    matches = [item for item in data.items if search.matches(item, names)]
+    shown = page_of(page, len(matches), ITEMS_PER_PAGE)
+    items = matches[shown.offset : shown.offset + shown.size]
+    kept = {
+        "q": search.query,
+        "kind": search.kind.value if search.kind else "",
+        "mode": search.mode.value if search.mode else "",
+        "meal": search.meal.value if search.meal else "",
+        "tag": str(search.tag_id or ""),
+        "status": "" if search.status is Status.ACTIVE else search.status.value,
+    }
+    kept = {name: value for name, value in kept.items() if value}  # the search as understood, for page links
+
+    def page_url(number: int) -> str:
+        query = urlencode(kept | ({"page": number} if number > 1 else {}))
+        return f"/catalog?{query}" if query else "/catalog"
+
     today = household_today(principal.household, context.clock())
     message = NOTICES.get(notice)
     if notice == "imported":
@@ -112,6 +135,9 @@ async def catalog_page(
         "catalog.html",
         {
             "items": items,
+            "matches": len(matches),
+            "page": shown,
+            "page_url": page_url,
             "total": len([i for i in data.items if i.active]),
             "search": search,
             "tag_groups": tags_by_kind(data.tags),

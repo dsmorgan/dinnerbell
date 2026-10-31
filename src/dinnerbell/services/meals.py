@@ -10,7 +10,7 @@ off a meal drops theirs, since it was about a meal they no longer ate.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -19,19 +19,22 @@ from dinnerbell.db.feedback import FeedbackRepository
 from dinnerbell.db.meals import MealLogRepository
 from dinnerbell.db.repositories import MemberRepository
 from dinnerbell.domain.catalog import CatalogItem, TagKind
-from dinnerbell.domain.meals import MealInput, MealLog, MemberRef, TagRef, by_week, can_change, check_meal, week_start
+from dinnerbell.domain.meals import MealInput, MealLog, MemberRef, TagRef, by_week, can_change, check_meal
 from dinnerbell.domain.members import Member
+from dinnerbell.domain.pages import Page, page_of
 from dinnerbell.services.common import audit, require_member
 from dinnerbell.services.errors import Forbidden, NotFound
 
-WEEKS_PER_PAGE = 8
+MEALS_PER_PAGE = 20
+"""History's page size: a few weeks of dinners, short enough to scroll on a phone."""
 
 
 @dataclass(frozen=True, slots=True)
 class History:
+    """One page of the meal log, grouped by week. A week can run on to the next page."""
+
     weeks: list[tuple[date, list[MealLog]]]
-    page: int
-    has_older: bool
+    page: Page
 
 
 @dataclass(frozen=True, slots=True)
@@ -175,13 +178,11 @@ async def delete_meal(db: AsyncSession, actor: Member, meal_id: int, *, now: dat
     await db.commit()
 
 
-async def history(db: AsyncSession, actor: Member, *, today: date, page: int = 0) -> History:
-    """Meals by week, ``WEEKS_PER_PAGE`` weeks per page, newest first."""
+async def history(db: AsyncSession, actor: Member, *, page: int = 1) -> History:
+    """Meals by week, newest first, ``MEALS_PER_PAGE`` meals per page. Page numbers count from 1;
+    one past either end shows the nearest page that exists."""
     require_member(actor)
-    page = max(page, 0)
-    end = week_start(today) + timedelta(days=6) - timedelta(weeks=WEEKS_PER_PAGE * page)
-    start = end - timedelta(weeks=WEEKS_PER_PAGE) + timedelta(days=1)
     repo = MealLogRepository(db)
-    meals = await repo.between(actor.household_id, start, end)
-    earliest = await repo.earliest(actor.household_id)
-    return History(weeks=by_week(meals), page=page, has_older=earliest is not None and earliest < start)
+    shown = page_of(page, await repo.count(actor.household_id), MEALS_PER_PAGE)
+    meals = await repo.newest(actor.household_id, offset=shown.offset, limit=shown.size)
+    return History(weeks=by_week(meals), page=shown)
