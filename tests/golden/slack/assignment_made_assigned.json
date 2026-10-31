@@ -2,7 +2,7 @@
   "blocks": [
     {
       "text": {
-        "text": "Thanks for pitching in, Sam! You're *cooking* for dinner on Thursday, Oct 22: *Sam's Tacos* · Cook · Mexican.\nAlex assigned you this. If it doesn't work for you, tell Alex.\n*When:* 6:45 PM · *Eating:* 3 people (1 guest)\n*Dietary needs:* Vegetarian\n*Also helping:* Alex (coordinating)",
+        "text": "Thanks for pitching in, Sam! You're *cooking* for dinner on Thursday, Oct 22: *Sam's Tacos* · Cook · Mexican.\nAlex assigned you this. If it doesn't work for you, tell Alex, who can pick someone else with *Adjust* on the decision.\n*When:* 6:45 PM · *Eating:* 3 people (1 guest)\n*Dietary needs:* Vegetarian\n*Also helping:* Alex (coordinating)",
         "type": "mrkdwn"
       },
       "type": "section"

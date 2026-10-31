@@ -170,8 +170,22 @@ def test_buttons_follow_the_state() -> None:
     assert action_ids("home_voting_join_late")[:2] == ["join_late", "link_event"]  # then Home's start buttons
     assert action_ids("proposals_updated") == ["vote", "lock"] * 3 + ["add_proposal", "link_event"]
     assert action_ids("proposals_updated_closed") == ["link_event"]
-    assert action_ids("decision_made") == ["mark_done", "link_event", "cancel_call"]
-    assert action_ids("decision_made_by_vote") == ["mark_done", "link_item", "link_order", "link_event", "cancel_call"]
+    assert action_ids("decision_made") == ["mark_done", "adjust", "link_event", "cancel_call"]
+    assert action_ids("decision_made_by_vote") == [
+        "mark_done",
+        "adjust",
+        "link_item",
+        "link_order",
+        "link_event",
+        "cancel_call",
+    ]
+    # Adjust is the coordinator's (spec 5.7): on Home only for them, on the vacated role's message
+    # only when it's to them, and never on a done meal.
+    assert "adjust" not in action_ids("home_decided")
+    assert action_ids("home_decided_coordinator")[:3] == ["adjust", "cancel_call", "link_event"]
+    assert action_ids("role_vacated") == ["adjust", "link_event"]
+    assert action_ids("role_vacated_admin") == ["link_event"]
+    assert "adjust" not in action_ids("decision_updated_assign_roles")  # nobody coordinates, so nobody may
     assert action_ids("decision_updated_done") == ["feedback", "link_event"]  # How was it? (FR-47)
     assert action_ids("feedback_reminder") == ["feedback", "link_event"]
     assert action_ids("decision_updated_cancelled") == ["link_event"]

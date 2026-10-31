@@ -71,6 +71,16 @@
           "value": "7"
         },
         {
+          "action_id": "adjust",
+          "text": {
+            "emoji": true,
+            "text": "Adjust",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "7:1"
+        },
+        {
           "action_id": "link_item",
           "text": {
             "emoji": true,

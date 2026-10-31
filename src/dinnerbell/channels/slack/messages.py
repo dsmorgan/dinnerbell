@@ -639,6 +639,8 @@ def decision_message(
         buttons.append(mark_done_button(event))
         if decision.assign_roles:
             buttons.append(assign_roles_button(event))
+        if event.kind is EventKind.CALL and event.coordinator is not None:  # nobody else may
+            buttons.append(adjust_button(event))
     elif event.state is EventState.DONE:
         buttons.append(feedback_button(event))
     buttons += _item_buttons(proposal.item, proposal.mode)
@@ -655,6 +657,15 @@ def assign_roles_button(event: note.EventInfo) -> Block:
     """**Assign roles** (#87): opens the modal for the coordinator, or an admin standing in. Everyone
     sees the button; the service checks who tapped it."""
     return button("Assign roles", ids.ASSIGN_ROLES, ids.card_value(event.id, event.run))
+
+
+ADJUST = "Adjust"
+
+
+def adjust_button(event: note.EventInfo) -> Block:
+    """**Adjust** (spec 5.7): the coordinator's modal for the meal time, who does the role, and
+    handing off. Everyone sees the button on the decision; the service checks who tapped it."""
+    return button(ADJUST, ids.ADJUST, ids.card_value(event.id, event.run))
 
 
 def _roles_pending(event: note.EventInfo, decision: note.DecisionInfo) -> str:
@@ -828,9 +839,16 @@ def role_vacated_message(notification: note.RoleVacated, ctx: RenderContext) -> 
     who = escape(notification.left.name)
     text = (
         f"Heads up, {escape(notification.member.name)}: {who} isn't coming to {_slot(event)} on "
-        f"{day_label(event.day)} any more, so nobody is *{role}*. Pick someone who's in on the web."
+        f"{day_label(event.day)} any more, so nobody is *{role}*. "
     )
-    blocks = [section(text), actions(_web_button(ctx, event, "Pick someone"), block_id="more")]
+    coordinating = event.coordinator is not None and event.coordinator.id == notification.member.id
+    if coordinating:  # the coordinator picks in Slack; an admin with nobody coordinating, on the web
+        text += f"Tap *{ADJUST}* to pick someone who's in."
+        buttons = [adjust_button(event), _web_button(ctx, event)]
+    else:
+        text += "Pick someone who's in on the web."
+        buttons = [_web_button(ctx, event, "Pick someone")]
+    blocks = [section(text), actions(*buttons, block_id="more")]
     return _finish(f"{notification.left.name} isn't coming, so nobody is {role} for {_slot(event)}.", blocks)
 
 
@@ -1191,12 +1209,12 @@ def assignment_message(notification: note.AssignmentMade, ctx: RenderContext) ->
         f"{_kind(proposal)}.",
         f"*When:* {when} · *Eating:* {_head_count(decision)}",
     ]
-    if notification.assigned_by is not None:  # they hadn't offered: say who asked, and whom to tell
-        lines.insert(
-            1,
-            f"{escape(notification.assigned_by.name)} assigned you this. If it doesn't work for you, "
-            f"tell {escape(notification.assigned_by.name)}.",
-        )
+    by = notification.assigned_by
+    if by is not None:  # they hadn't offered: say who asked, and whom to tell
+        tell = f"tell {escape(by.name)}"
+        if event.coordinator is not None and event.coordinator.id == by.id:
+            tell += f", who can pick someone else with *{ADJUST}* on the decision"
+        lines.insert(1, f"{escape(by.name)} assigned you this. If it doesn't work for you, {tell}.")
     if decision.dietary_notes:
         lines.append(f"*Dietary needs:* {escape(', '.join(decision.dietary_notes))}")
     others = [a for a in decision.assignments if a.member.id != notification.member.id]

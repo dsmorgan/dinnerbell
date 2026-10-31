@@ -76,6 +76,9 @@ class Permissions:
     """Choose among picks tied for the most votes (FR-16): ``coordinator.break_tie``."""
     choose_roles: bool = False
     """Switch the decided pick's mode and assign its role (FR-61): ``coordinator.choose_roles``."""
+    adjust: bool = False
+    """**Adjust** in Slack (spec 5.7): the meal time, who does the role, and handing off, for the
+    coordinator only: ``coordinator.adjust``."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -229,6 +232,7 @@ def _guest_permissions(base: Permissions, ctx: CallContext, actor: Member) -> Pe
         mark_done=base.mark_done and may(GuestAction.MARK_DONE),
         close_window=base.close_window if may(GuestAction.CLOSE_WINDOW) else None,
         choose_roles=base.choose_roles and may(GuestAction.MANAGE_DECISION),
+        adjust=base.adjust and may(GuestAction.MANAGE_DECISION),
     )
 
 
@@ -278,6 +282,7 @@ def _member_permissions(
         break_tie=bool(cc.tied_ids(ctx))
         and _allowed(lambda: rules.check_can_break_tie(event, actor, _coordinator(ctx))),
         choose_roles=event.state is EventState.DECIDED and _allowed(lambda: rules.check_can_choose_roles(event, actor)),
+        adjust=_allowed(lambda: rules.check_can_adjust(event, actor)),
     )
 
 

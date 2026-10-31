@@ -938,6 +938,18 @@ def check_can_choose_roles(event: Event, actor: Member) -> None:
         raise EventRuleViolation("There's no decision to change.", code="not_decided")
 
 
+ADJUST_IS_THE_COORDINATORS = "Only the coordinator can adjust the plan here. An admin can change it on the web."
+
+
+def check_can_adjust(event: Event, actor: Member) -> None:
+    """**Adjust** in Slack (spec 5.7): the meal time, who does the role, and handing off, in one
+    modal. Only the coordinator, a guest coordinator too (FR-58), while the call is decided; an
+    admin's overrides stay on the web."""
+    if not event.is_offer and not is_coordinator(event, actor):
+        raise EventRuleViolation(ADJUST_IS_THE_COORDINATORS, code="not_coordinator")
+    check_can_choose_roles(event, actor)
+
+
 def shuffle_candidates(
     proposals: Iterable[Proposal], votes: Mapping[int, Iterable[int]], suggested_item_ids: Iterable[int]
 ) -> list[Proposal]:

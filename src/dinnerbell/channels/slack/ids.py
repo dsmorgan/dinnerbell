@@ -80,6 +80,10 @@ BREAK_TIE = "break_tie"
 ASSIGN_ROLES = "assign_roles"
 """**Assign roles** on the decision message and the coordinator's direct message (#87): opens the
 modal. Its value is a ``card_value``."""
+ADJUST = "adjust"
+"""**Adjust** on the decision message, the coordinator's Home card, and the role-vacated direct
+message (spec 5.7): opens the modal for the meal time, who does the role, and handing off. Its
+value is a ``card_value``."""
 POST_NOW = "post_now"
 """**Post it now** on a scheduled call (issue #59): on the reply to starting a later day's call,
 and on the Home tab. Its value is a ``card_value``."""
@@ -135,6 +139,7 @@ OFFER_VIEW = "offer_modal"
 INVITE_VIEW = "invite_modal"
 LOG_VIEW = "log_modal"
 ASSIGN_VIEW = "assign_modal"
+ADJUST_VIEW = "adjust_modal"
 
 MAX_ID = 2**63 - 1
 _DIGITS = re.compile(r"^[0-9]{1,19}$")
