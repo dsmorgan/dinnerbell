@@ -14,7 +14,7 @@
           "action_id": "link_schedule",
           "text": {
             "emoji": true,
-            "text": "Change the schedule",
+            "text": "Schedule on the web",
             "type": "plain_text"
           },
           "type": "button",

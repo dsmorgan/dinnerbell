@@ -11,6 +11,17 @@
       "block_id": "more",
       "elements": [
         {
+          "action_id": "restart_call",
+          "style": "primary",
+          "text": {
+            "emoji": true,
+            "text": "Start dinner again",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "7:1"
+        },
+        {
           "action_id": "link_event",
           "text": {
             "emoji": true,

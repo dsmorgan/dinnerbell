@@ -1,0 +1,118 @@
+{
+  "blocks": [
+    {
+      "text": {
+        "emoji": true,
+        "text": "Today · Thursday, Oct 22",
+        "type": "plain_text"
+      },
+      "type": "header"
+    },
+    {
+      "block_id": "event-7",
+      "text": {
+        "text": "*Dinner* · Decided\nYou're in. You're bringing 1 guest. You offered to cook.\n*Coordinator:* Alex\nThe plan: *Sam's Tacos* at 6:45 PM\nYou're cooking.",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "block_id": "event-actions-7",
+      "elements": [
+        {
+          "action_id": "mark_done",
+          "confirm": {
+            "confirm": {
+              "emoji": true,
+              "text": "Mark done",
+              "type": "plain_text"
+            },
+            "deny": {
+              "emoji": true,
+              "text": "Not yet",
+              "type": "plain_text"
+            },
+            "text": {
+              "emoji": true,
+              "text": "This ends the meal and adds it to the history.",
+              "type": "plain_text"
+            },
+            "title": {
+              "emoji": true,
+              "text": "Mark dinner done?",
+              "type": "plain_text"
+            }
+          },
+          "style": "primary",
+          "text": {
+            "emoji": true,
+            "text": "Mark done",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "7"
+        },
+        {
+          "action_id": "link_event",
+          "text": {
+            "emoji": true,
+            "text": "View on web",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "url": "https://dinnerbell.example.com/events/7"
+        }
+      ],
+      "type": "actions"
+    },
+    {
+      "block_id": "start",
+      "elements": [
+        {
+          "action_id": "make_offer",
+          "text": {
+            "emoji": true,
+            "text": "Make an offer",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "make_offer"
+        },
+        {
+          "action_id": "start_call_lunch",
+          "text": {
+            "emoji": true,
+            "text": "Start a lunch call",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "lunch"
+        },
+        {
+          "action_id": "start_call_breakfast",
+          "text": {
+            "emoji": true,
+            "text": "Start a breakfast call",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "breakfast"
+        }
+      ],
+      "type": "actions"
+    },
+    {
+      "type": "divider"
+    },
+    {
+      "elements": [
+        {
+          "text": "<https://dinnerbell.example.com/preferences|Your preferences> · <https://dinnerbell.example.com/catalog|Catalog> · <https://dinnerbell.example.com/history|History> · <https://dinnerbell.example.com/stats|Stats> · <https://dinnerbell.example.com/schedule|Schedule> · <https://dinnerbell.example.com/|Today on the web>",
+          "type": "mrkdwn"
+        }
+      ],
+      "type": "context"
+    }
+  ],
+  "type": "home"
+}

@@ -11,7 +11,7 @@
     {
       "block_id": "event-7",
       "text": {
-        "text": "*Dinner* · Voting\nYou joined late. You offered to pick up.\n⚠ Not a fit for your preferences: Siam Garden\n*Coordinator:* Alex\nThe picks are posted in the channel.",
+        "text": "*Dinner* · Voting\nYou joined late. You offered to pick up.\n⚠ Not a fit for your preferences: Siam Garden\n*Coordinator:* Alex\nYou haven't voted yet.\nThe picks are posted in the channel.",
         "type": "mrkdwn"
       },
       "type": "section"
@@ -60,7 +60,7 @@
           "action_id": "link_event",
           "text": {
             "emoji": true,
-            "text": "Open",
+            "text": "View on web",
             "type": "plain_text"
           },
           "type": "button",
@@ -111,7 +111,7 @@
     {
       "elements": [
         {
-          "text": "<https://dinnerbell.example.com/preferences|Your preferences> · <https://dinnerbell.example.com/catalog|Catalog> · <https://dinnerbell.example.com/history|History> · <https://dinnerbell.example.com/|Today on the web>",
+          "text": "<https://dinnerbell.example.com/preferences|Your preferences> · <https://dinnerbell.example.com/catalog|Catalog> · <https://dinnerbell.example.com/history|History> · <https://dinnerbell.example.com/stats|Stats> · <https://dinnerbell.example.com/schedule|Schedule> · <https://dinnerbell.example.com/|Today on the web>",
           "type": "mrkdwn"
         }
       ],

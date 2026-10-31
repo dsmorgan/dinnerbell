@@ -198,6 +198,8 @@ async def test_a_guest_sees_only_their_invitations_and_answers_in_or_out(slack: 
     assert set(buttons(invitation)) == {
         ids.CARD_ACTION_FOR_STATUS[Status.IN],
         ids.CARD_ACTION_FOR_STATUS[Status.OUT],
+        *ids.CARD_OFFER,  # the role offers, as on their card and Home (#149)
+        ids.CARD_COORDINATE,
         "link_event",
     }
     await slack.open_home(PAT)

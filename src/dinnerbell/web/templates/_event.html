@@ -150,6 +150,11 @@
   </div>
   {% endif %}
 
+  {#- While voting with nobody coordinating, anyone may still take the vote in hand (#149). -#}
+  {% if v.can.claim and e.state.value == "voting" %}
+  <div class="button-row">{{ act(e.id, base ~ "/coordinate", labels.COORDINATE, "button small") }}</div>
+  {% endif %}
+
   {% if v.roster or v.waiting_on %}
   <h3>Who's in <span class="muted small">· {{ v.head_count }} eating</span></h3>
   <ul class="roster">

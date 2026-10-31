@@ -636,6 +636,20 @@ def left_over(days_ago: int) -> EventView:
     )
 
 
+VOTED_VIEW = replace(
+    VOTING_VIEW,
+    proposals=(ProposalView(PROPOSALS[0], voted=True), *(ProposalView(p, voted=False) for p in PROPOSALS[1:])),
+)
+"""Sam voted for the first pick; Home says so and links the picks post (#149)."""
+PICKS_LINK = "https://example.slack.com/archives/C0DINNER/p1729627200000100"
+NO_COORDINATOR_VOTING = replace(
+    VOTING_VIEW,
+    event=replace(VOTING_VIEW.event, coordinator_id=None),
+    info=replace(VOTING_VIEW.info, coordinator=None),
+    can=Permissions(vote=True, claim=True, close_window=None),
+)
+"""Voting with nobody coordinating: Home offers **I'll coordinate** (#149)."""
+
 LOG_FORM = LogForm(DAY, SAM.id, ITEMS, (MemberRef(1, "Alex"), MemberRef(3, "Kim"), MemberRef(2, "Sam")))
 
 VIEWS: dict[str, Callable[[], dict[str, Any]]] = {
@@ -682,6 +696,15 @@ VIEWS: dict[str, Callable[[], dict[str, Any]]] = {
     "home_decided_coordinator": lambda: home_view(
         TodayView(DAY, [replace(ADJUST_VIEW, can=Permissions(adjust=True, cancel=True))], tuple(Slot)),
         HomeLinks(BASE_URL),
+    ),
+    "home_decided_cook": lambda: home_view(
+        TodayView(DAY, [DECIDED_VIEW], tuple(Slot)), HomeLinks(BASE_URL), member_id=SAM.id
+    ),
+    "home_voting": lambda: home_view(
+        TodayView(DAY, [VOTED_VIEW], tuple(Slot)), HomeLinks(BASE_URL), member_id=SAM.id, picks={7: PICKS_LINK}
+    ),
+    "home_voting_no_coordinator": lambda: home_view(
+        TodayView(DAY, [NO_COORDINATOR_VOTING], tuple(Slot)), HomeLinks(BASE_URL), member_id=SAM.id
     ),
     "home_coordinator": lambda: home_view(
         TodayView(

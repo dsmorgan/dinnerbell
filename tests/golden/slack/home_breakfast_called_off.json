@@ -23,7 +23,7 @@
           "action_id": "link_event",
           "text": {
             "emoji": true,
-            "text": "Open",
+            "text": "View on web",
             "type": "plain_text"
           },
           "type": "button",
@@ -131,7 +131,7 @@
           "action_id": "link_event",
           "text": {
             "emoji": true,
-            "text": "Open",
+            "text": "View on web",
             "type": "plain_text"
           },
           "type": "button",
@@ -182,7 +182,7 @@
     {
       "elements": [
         {
-          "text": "<https://dinnerbell.example.com/preferences|Your preferences> · <https://dinnerbell.example.com/catalog|Catalog> · <https://dinnerbell.example.com/history|History> · <https://dinnerbell.example.com/|Today on the web>",
+          "text": "<https://dinnerbell.example.com/preferences|Your preferences> · <https://dinnerbell.example.com/catalog|Catalog> · <https://dinnerbell.example.com/history|History> · <https://dinnerbell.example.com/stats|Stats> · <https://dinnerbell.example.com/schedule|Schedule> · <https://dinnerbell.example.com/|Today on the web>",
           "type": "mrkdwn"
         }
       ],

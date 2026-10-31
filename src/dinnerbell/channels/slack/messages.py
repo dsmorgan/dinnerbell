@@ -183,7 +183,7 @@ def _render(notification: note.Notification, ctx: RenderContext) -> Message:
         case note.BadgesEarned():
             return badges_earned_message(notification, ctx)
         case note.MonthlyRecap():
-            return monthly_recap_message(notification)
+            return monthly_recap_message(notification, ctx)
     raise TypeError(f"no Slack rendering for {type(notification).__name__}")  # pragma: no cover
 
 
@@ -272,6 +272,13 @@ def join_late_button(event: note.EventInfo) -> Block:
     """**I'm in (late)** (#76), for the run ``event`` shows: everyone who missed the answers can
     still join while the call is voting. The service says why not to anyone who can't."""
     return button(LATE_IN, ids.JOIN_LATE, ids.card_value(event.id, event.run))
+
+
+def restart_button(event: note.EventInfo) -> Block:
+    """**Start dinner again** where a call-off is told (#149): on the called-off call message and
+    on the starter's message about an unposted one. It names the run it was drawn for. Any member
+    may, until the usual meal time plus two hours (FR-56); the service says why not after that."""
+    return button(f"Start {_slot(event)} again", ids.RESTART, ids.card_value(event.id, event.run), style="primary")
 
 
 def _entry_line(entry: note.RosterEntry, ctx: RenderContext) -> str:
@@ -395,6 +402,8 @@ def call_message(
         # Everyone sees this message, so it offers no choices, only the way to your own card,
         # where In, Maybe, Out, the offers, I'll coordinate, and Details are (issue #52).
         more.append(answer_button(event))
+    if event.state is EventState.CANCELLED:
+        more.append(restart_button(event))
     more.append(_web_button(ctx, event))
     more += call_menu(event)
     blocks.append(actions(*more, block_id="more"))
@@ -760,19 +769,28 @@ def reminder_message(
             f"*{ANSWER_WORDS[mine.status]}*. You can change it here until *{closes}*."
         )
         fallback = f"Your answer for {when}: {ANSWER_WORDS[mine.status]}."
-    value = ids.card_value(event.id, event.run)
+    answer = answer_actions(event, mine, guest=guest)
     blocks = [
         section(text),
-        # In, Maybe, Out on a row of their own: one choice, apart from the other buttons.
-        actions(*_answer_buttons(value, mine, guest=guest), block_id="participation"),
+        # In, Maybe, Out on a row of their own: one choice, apart from the role offers, which are
+        # the card's (#149, Q6). A tap on either edits this message, as on the card.
+        actions(*answer.participation, block_id="participation"),
+        actions(*answer.roles, block_id="roles"),
         actions(_web_button(ctx, event), block_id="more"),
     ]
+    if not guest:
+        blocks.append(mute_hint(ctx))
     return _finish(fallback, blocks)
 
 
+def mute_hint(ctx: RenderContext) -> Block:
+    """How to stop reminders, on each one (#149): both are set in Preferences."""
+    return context(f"Don't want reminders? Turn them off in {link(ctx.url('/preferences'), 'your preferences')}.")
+
+
 def guest_invited_message(notification: note.GuestInvited, ctx: RenderContext) -> Message:
-    """A registered guest's invitation (#38): In and Out, as card buttons that name the run.
-    A tap edits it in place, as on the reminder."""
+    """A registered guest's invitation (#38): In and Out, and the role offers, as on their card,
+    as card buttons that name the run. A tap edits it in place, as on the reminder."""
     return reminder_message(notification, ctx)
 
 
@@ -828,7 +846,7 @@ def role_vacated_message(notification: note.RoleVacated, ctx: RenderContext) -> 
         buttons = [adjust_button(event), _web_button(ctx, event)]
     else:
         text += "Pick someone who's in on the web."
-        buttons = [_web_button(ctx, event, "Pick someone")]
+        buttons = [_web_button(ctx, event)]
     blocks = [section(text), actions(*buttons, block_id="more")]
     return _finish(f"{notification.left.name} isn't coming, so nobody is {role} for {_slot(event)}.", blocks)
 
@@ -881,7 +899,11 @@ def feedback_reminder_message(notification: note.FeedbackReminder, ctx: RenderCo
         f"Hi {escape(notification.member.name)}! How was {when}: *{escape(notification.item)}*? "
         f"Only you see your feedback, and you can change it until *{closes}*."
     )
-    blocks = [section(text), actions(feedback_button(event), _web_button(ctx, event), block_id="more")]
+    blocks = [
+        section(text),
+        actions(feedback_button(event), _web_button(ctx, event), block_id="more"),
+        mute_hint(ctx),
+    ]
     return _finish(f"How was {when}? Tell us by {closes}.", blocks)
 
 
@@ -1142,7 +1164,7 @@ def maybe_resolved_message(notification: note.MaybeResolved, ctx: RenderContext)
         f"The {_slot(event)} call for {day_label(event.day)} closed while you were a maybe, so you're "
         f"counted out this time. If your plans change, tap *{LATE_IN}* on the call while the vote is open."
     )
-    blocks = [section(text), actions(_web_button(ctx, event), block_id="more")]
+    blocks = [section(text), actions(join_late_button(event), _web_button(ctx, event), block_id="more")]
     return _finish(f"You're counted out for {_slot(event)} on {day_label(event.day)}.", blocks)
 
 
@@ -1258,7 +1280,7 @@ def abandoned_message(notification: note.CallAbandoned, ctx: RenderContext) -> M
     text = template.format(slot=_slot(event), day=day_label(event.day))
     blocks = [
         section(text + " Thanks for answering, and see you at the next one!"),
-        context(link(ctx.url(event.path), "Open the call on the web")),
+        context(link(ctx.url(event.path), labels.VIEW_ON_WEB)),
     ]
     return _finish(text, blocks)
 
@@ -1295,7 +1317,7 @@ def cancelled_message(notification: note.EventCancelled, ctx: RenderContext) -> 
     people = notification.participants if notification.audience is None else notification.audience
     if people:
         lines.append(f"Heads up {ctx.directory.mentions(people)}.")
-    blocks = [section(join_lines(lines)), context(link(ctx.url(event.path), "Open the call on the web"))]
+    blocks = [section(join_lines(lines)), context(link(ctx.url(event.path), labels.VIEW_ON_WEB))]
     return _finish(_called_off(event, notification.cancelled_by, notification.note), blocks)
 
 
@@ -1321,13 +1343,16 @@ def started_call_cancelled_message(notification: note.StartedCallCancelled, ctx:
         _reason(event, notification.cancelled_by, notification.note),
         f"That's the {_slot(event)} call you started. It hadn't been posted yet, so nobody else was told.",
     ]
-    blocks = [section(join_lines(lines)), actions(_web_button(ctx, event), block_id="more")]
+    blocks = [section(join_lines(lines)), actions(restart_button(event), _web_button(ctx, event), block_id="more")]
     return _finish(_called_off(event, notification.cancelled_by, notification.note), blocks)
 
 
 # The schedule (FR-44) ----------------------------------------------------------------------------
 
 MODE_WORDS = {Mode.COOK: "cook", Mode.PICKUP: "pickup", Mode.DELIVERY: "delivery"}
+SCHEDULE_LINK = "Schedule on the web"
+STATS_LINK = "Stats on the web"
+"""One name per page a message links to (#149), as every event link is **View on web**."""
 
 
 def _minutes(count: int) -> str:
@@ -1366,7 +1391,7 @@ def schedule_changed_message(notification: note.ScheduleChanged, ctx: RenderCont
         section(join_lines(lines)),
         context(
             "Calls already out or scheduled keep their times; a call started again uses the new ones.",
-            link(ctx.url(notification.path), "See the schedule"),
+            link(ctx.url(notification.path), SCHEDULE_LINK),
         ),
     ]
     summary = "; ".join(f"{label.lower()} {old} → {new}" for label, old, new in changes)
@@ -1391,7 +1416,7 @@ def schedule_reply(schedules: dict[Slot, SlotSchedule], ctx: RenderContext) -> M
         )
     blocks = [
         section(join_lines(lines)),
-        actions(button("Change the schedule", f"{ids.LINK_PREFIX}schedule", url=ctx.url("/schedule")), block_id="more"),
+        actions(button(SCHEDULE_LINK, f"{ids.LINK_PREFIX}schedule", url=ctx.url("/schedule")), block_id="more"),
         context("Anyone in the household can change it. Each change is posted in the Dinnerbell channel."),
     ]
     text = "When calls go out: " + " ".join(lines).replace("*", "")
@@ -1595,7 +1620,7 @@ def badges_earned_message(notification: note.BadgesEarned, ctx: RenderContext) -
             if text:
                 blocks.append(section(f"{'Also earned' if art else lead} {_and(text)}."))
         blocks += [section(t) for t in tail]
-    blocks.append(context("Thank you for all you do to get a meal on the table."))
+    blocks.append(context("Thank you for all you do to get a meal on the table.", link(ctx.url("/stats"), STATS_LINK)))
     return _finish(f"New badges for {who}.", blocks)
 
 
@@ -1647,7 +1672,7 @@ def _drawn(news: tuple[note.BadgeNews, ...], art: ArtIds) -> list[dict[note.Badg
 THANKED_AS = {"cooked": "Cooked", "picked_up": "Picked up", "ordered": "Ordered", "coordinated": "Coordinated"}
 
 
-def monthly_recap_message(notification: note.MonthlyRecap) -> Message:
+def monthly_recap_message(notification: note.MonthlyRecap, ctx: RenderContext) -> Message:
     """FR-40: the month in review. Household totals first, then a thank-you for each member who
     pitched in, in name order, then badges. It names no one for doing less and ranks no one."""
     month = MONTHS[notification.month.month - 1]
@@ -1682,5 +1707,5 @@ def monthly_recap_message(notification: note.MonthlyRecap) -> Message:
             earned.append(f"…and {plural(notification.more_badges, 'more member')} earned badges too.")
         blocks.append(section(join_lines(["*Badges earned*", *earned])))
     following = MONTHS[notification.month.month % 12]
-    blocks.append(context(f"Here's to a tasty {following}!"))
+    blocks.append(context(f"Here's to a tasty {following}!", link(ctx.url("/stats"), STATS_LINK)))
     return _finish(f"{month} in review: {plural(notification.meals, 'meal')} together.", blocks)

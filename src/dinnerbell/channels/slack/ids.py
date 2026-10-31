@@ -88,6 +88,9 @@ value is a ``card_value``."""
 POST_NOW = "post_now"
 """**Post it now** on a scheduled call (issue #59): on the reply to starting a later day's call,
 and on the Home tab. Its value is a ``card_value``."""
+RESTART = "restart_call"
+"""**Start dinner again** on a called-off call message and on the starter's message about an
+unposted call called off (#149): starts that call again. Its value is a ``card_value``."""
 FEEDBACK = "feedback"
 """**How was it?** on a done call's decision message, the feedback reminder, and Home: opens the
 feedback modal. Its value is a ``card_value``, naming the run the meal was decided in."""
@@ -283,6 +286,19 @@ def response_url(value: object) -> str | None:
     if not isinstance(value, str) or len(value) > MAX_RESPONSE_URL:
         return None
     return value if _RESPONSE_URL.fullmatch(value) else None
+
+
+_WORKSPACE_URL = re.compile(r"https://[a-z0-9-]{1,63}(\.[a-z0-9-]{1,63}){0,2}\.slack(-gov)?\.com/")
+
+
+def permalink(workspace_url: str, channel_id: str, message_ts_: str) -> str | None:
+    """A link to a message, in the form ``chat.getPermalink`` gives, built from the workspace's
+    address (``auth.test``'s ``url``) without a call: ``<workspace>archives/<channel>/p<ts>``,
+    the timestamp without its dot. None unless each part is the shape Slack sends."""
+    if not _WORKSPACE_URL.fullmatch(workspace_url) or not is_channel_id(channel_id):
+        return None
+    ts = message_ts(message_ts_)
+    return None if ts is None else f"{workspace_url}archives/{channel_id}/p{ts.replace('.', '')}"
 
 
 def parse_slot(value: object) -> Slot:

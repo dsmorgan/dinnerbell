@@ -10,7 +10,7 @@ back as untrusted input.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Collection, Iterable, Sequence
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, time
 from typing import Any
@@ -64,6 +64,7 @@ from dinnerbell.domain.events import (
     MAX_NOTE_LENGTH,
     MAX_SUGGESTION_LENGTH,
     MODE_ROLE,
+    AssignmentRole,
     Details,
     EventState,
     Status,
@@ -819,15 +820,60 @@ class HomeLinks:
         return f"{self.base_url}{path}"
 
 
+def _web(links: HomeLinks, v: EventView) -> Block:
+    """The event's page, named as on every message (#149)."""
+    return button(labels.VIEW_ON_WEB, f"{ids.LINK_PREFIX}event", url=links.url(v.event.path))
+
+
 OPEN_STATES = frozenset({EventState.COLLECTING, EventState.VOTING, EventState.DECIDED})
 """States in which Home says who's coordinating (#84)."""
 
 
+def _voting_lines(v: EventView, picks_url: str | None) -> list[str]:
+    """While voting, Home doesn't vote (#149, Q2): it says how the member voted and links the
+    picks post in the channel, where they vote, or says where it is when there's no link yet."""
+    lines: list[str] = []
+    voted = [escape(p.info.item.name) for p in v.proposals if p.voted]
+    if voted:
+        lines.append(f"You voted for *{'*, *'.join(voted)}*.")
+    elif v.can.vote:
+        lines.append("You haven't voted yet.")
+    if picks_url:
+        lines.append(f"<{picks_url}|See the picks and vote in the channel>")
+    else:
+        lines.append("The picks are posted in the channel.")
+    return lines
+
+
+def _plan_lines(v: EventView, member_id: int | None) -> list[str]:
+    """What was decided, when, and, while it's still ahead, the member's own role (#149)."""
+    decision = v.decision
+    if decision is None:
+        return []
+    at = local_clock(decision.meal_time, v.info.timezone)
+    lines = [f"The plan: *{escape(decision.proposal.item.name)}* at {at}"]
+    roles = [a.role for a in decision.assignments if a.member.id == member_id and a.role in DOING]
+    if roles and v.event.state is EventState.DECIDED:
+        lines.append(f"You're {' and '.join(DOING[r] for r in roles)}.")
+    return lines
+
+
+DOING = {AssignmentRole.COOK: "cooking", AssignmentRole.PICKUP: "picking up", AssignmentRole.ORDER: "ordering"}
+"""Roles the decided card names; coordinating has its own line."""
+
+
 def _event_card(
-    v: EventView, links: HomeLinks, today: date, *, guest: bool = False, member_id: int | None = None
+    v: EventView,
+    links: HomeLinks,
+    today: date,
+    *,
+    guest: bool = False,
+    member_id: int | None = None,
+    picks_url: str | None = None,
 ) -> list[Block]:
     """A call on Home: two blocks, or four while answers are open, when the member's Your answer
-    card buttons take two rows of their own above the call's other buttons (#84)."""
+    card buttons take two rows of their own above the call's other buttons (#84). While voting,
+    ``picks_url`` links the picks post in the channel, when Home has its link."""
     state = v.event.state
     day = "" if v.event.day == today else f" · {day_label(v.event.day)}"  # posted early (#59)
     lines = [f"*{v.event.slot.value.capitalize()}*{day} · {state.label}"]
@@ -851,9 +897,9 @@ def _event_card(
     if coordinating is not None:
         lines.append(coordinating)
     if v.decision is not None:
-        lines.append(f"The plan: *{escape(v.decision.proposal.item.name)}*")
+        lines += _plan_lines(v, member_id)
     elif state is EventState.VOTING:
-        lines.append("The picks are posted in the channel.")
+        lines += _voting_lines(v, picks_url)
     if state is EventState.CANCELLED and v.info.ended_by is not None:
         reason = f" “{escape(v.info.end_note)}”" if v.info.end_note else ""
         lines.append(f"Called off by {escape(v.info.ended_by.name)}.{reason}")
@@ -871,9 +917,11 @@ def _event_card(
             actions(*answer.roles, block_id=f"roles-{v.id}"),
         ]
         buttons += answer.more
-    elif v.can.late_roles:  # a late joiner pitches in while voting (#76)
+    elif v.can.late_roles:  # a late joiner pitches in while voting (#76), and can coordinate
         roles = answer_actions(v.info, v.mine, guest=guest).roles
         rows = [actions(*roles, block_id=f"roles-{v.id}")]
+    elif v.can.claim:  # someone can still take the vote in hand (#149)
+        buttons.append(button(labels.COORDINATE, ids.CARD_COORDINATE, ids.card_value(v.id, v.event.run)))
     if v.can.join_late:
         buttons.append(join_late_button(v.info))
     if v.can.mark_done:
@@ -890,7 +938,7 @@ def _event_card(
     if v.can.cancel:
         cancel = ids.menu_value(ids.MenuChoice.CANCEL, v.id, v.event.run)
         buttons.append(button(CALL_OFF, ids.CANCEL_CALL, cancel, style="danger"))
-    buttons.append(button("Open", f"{ids.LINK_PREFIX}event", url=links.url(v.event.path)))
+    buttons.append(_web(links, v))
     return [
         section("\n".join(lines), block_id=f"event-{v.id}"),
         *rows,
@@ -929,7 +977,7 @@ def _offer_card(v: EventView, offer: note.OfferInfo, links: HomeLinks, today: da
     if v.can.cancel:
         cancel = ids.menu_value(ids.MenuChoice.CANCEL, v.id, event.run)
         buttons.append(button(CALL_OFF, ids.CANCEL_CALL, cancel, style="danger"))
-    buttons.append(button("Open", f"{ids.LINK_PREFIX}event", url=links.url(event.path)))
+    buttons.append(_web(links, v))
     return [section("\n".join(lines), block_id=f"event-{v.id}"), actions(*buttons, block_id=f"event-actions-{v.id}")]
 
 
@@ -945,7 +993,7 @@ def _upcoming_card(v: EventView, links: HomeLinks) -> list[Block]:
     if v.can.cancel:
         cancel = ids.menu_value(ids.MenuChoice.CANCEL, v.id, event.run)
         buttons.append(button(CALL_OFF, ids.CANCEL_CALL, cancel, style="danger"))
-    buttons.append(button("Open", f"{ids.LINK_PREFIX}event", url=links.url(event.path)))
+    buttons.append(_web(links, v))
     return [section(line, block_id=f"event-{v.id}"), actions(*buttons, block_id=f"event-actions-{v.id}")]
 
 
@@ -1024,15 +1072,15 @@ def art_wanted(stats: MemberStats) -> set[tuple[str, str]]:
     return wanted
 
 
-def _badges(stats: MemberStats, art: ArtIds, links: HomeLinks, composite: str | None = None) -> list[Block]:
+def _badges(stats: MemberStats, art: ArtIds, composite: str | None = None) -> list[Block]:
     """The member's own badges and the next one in reach. With no art (``art``, from ``BadgeFiles``)
     it is a heading with the badges as text tags, then the "Next" line: two blocks. With art, the
     heading, the held badges (art, at their highest tier) as compact rows of small icons, ``ICONS_PER_BLOCK``
-    to a block, a line of text tags for held badges without art, a link to the
-    Stats page for the names (when there is a web address), and the "Next" line with its badge's icon: at
-    most six blocks, which the budget in ``home_view`` counts as part of its tail. With a ``composite``
-    (the file of the one picture of every held badge, once Slack has had it a while), the
-    picture stands in for the icon rows: five blocks at most. The "Next" line leaves the tier emoji off
+    to a block, a line of text tags for held badges without art, and the "Next" line with its badge's
+    icon: at most five blocks, which the budget in ``home_view`` counts as part of its tail. With a
+    ``composite`` (the file of the one picture of every held badge, once Slack has had it a while), the
+    picture stands in for the icon rows: four blocks at most. Home's link row links the Stats page,
+    with every badge's name (#149). The "Next" line leaves the tier emoji off
     when it shows its badge's icon (#114). Only their own: it never mentions anyone else's."""
     held = held_badges(stats)
     if composite:
@@ -1065,8 +1113,6 @@ def _badges(stats: MemberStats, art: ArtIds, links: HomeLinks, composite: str | 
         blocks += icon_rows(icons)
     if tags:
         blocks.append(context(f"Also: {line}"))
-    if links.base_url:
-        blocks.append(context(f"<{links.url('/stats')}|All badges on the web>"))
     return [*blocks, next_line]
 
 
@@ -1082,8 +1128,10 @@ def home_view(
     badges: MemberStats | None = None,
     badge_art: ArtIds | None = None,
     badge_composite: str | None = None,
+    picks: Mapping[int, str] | None = None,
 ) -> dict[str, Any]:
-    """Each member's Home tab. ``label``, the instance label, prefixes the header when set.
+    """Each member's Home tab. ``picks`` maps a voting call's ID to its picks post in the channel,
+    which its card links (#149). ``label``, the instance label, prefixes the header when set.
     ``member_id`` is whose it is, so a call they coordinate says so.
     ``awaiting`` lists meals the member hasn't given feedback on yet. ``badges``, the member's own
     stats, adds a "Your badges" section above the links: two blocks, or up to six with art
@@ -1096,6 +1144,7 @@ def home_view(
     room for the version footer (``blocks.with_version_footer``) within Slack's 100 blocks, and
     keeps the start buttons and the links: when cards don't all fit, the least important ones
     are left to the web, whole, and a line says how many."""
+    picks = picks or {}
     title = f"Today · {day_label(today.today)}"
     head: list[Block] = [header(f"{label} · {title}" if label else title)]
     if notice:
@@ -1104,7 +1153,7 @@ def home_view(
     def card(v: EventView) -> list[Block]:
         if v.offer is not None:
             return _offer_card(v, v.offer, links, today.today)
-        return _event_card(v, links, today.today, guest=guest, member_id=member_id)
+        return _event_card(v, links, today.today, guest=guest, member_id=member_id, picks_url=picks.get(v.id))
 
     # Today's, and any posted early for a later day (#59), in the order they came. Anything
     # open from an earlier day, even a call that never posted, is left over.
@@ -1127,11 +1176,12 @@ def home_view(
     web = f"<{links.url('/')}|Today on the web>"
     tail: list[Block] = [
         *_awaiting(awaiting, links),
-        *(_badges(badges, badge_art or {}, links, badge_composite) if badges is not None else []),
+        *(_badges(badges, badge_art or {}, badge_composite) if badges is not None else []),
         divider(),
         context(
             f"<{links.url('/preferences')}|Your preferences> · <{links.url('/catalog')}|Catalog> · "
-            f"<{links.url('/history')}|History> · {web}"
+            f"<{links.url('/history')}|History> · <{links.url('/stats')}|Stats> · "
+            f"<{links.url('/schedule')}|Schedule> · {web}"
         ),
     ]
     # Room for the version footer, the start buttons, "No calls today yet.", and a line for

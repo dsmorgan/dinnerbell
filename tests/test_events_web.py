@@ -151,6 +151,18 @@ def test_hand_off_from_the_page(admin: TestClient, provider: FakeProvider, migra
     assert rows(migrated, EventRow)[0].coordinator_id == sam
 
 
+def test_anyone_can_take_the_vote_in_hand_on_the_web(admin: TestClient, clock: FakeClock) -> None:
+    """#149: while voting with nobody coordinating, the web offers I'll coordinate, as the call
+    message and Home do."""
+    event_id = start(admin)
+    to_voting(admin, clock, event_id)
+    html = admin.get(f"/events/{event_id}").text
+    assert "No coordinator yet." in html and ">I&#39;ll coordinate</button>" in html
+    claimed = htmx(admin, f"/events/{event_id}/coordinate", {})
+    assert claimed.status_code == 200 and "Coordinator: admin." in claimed.text
+    assert "coordinate</button>" not in claimed.text
+
+
 def test_vote_lock_and_mark_done(admin: TestClient, clock: FakeClock, migrated: Settings) -> None:
     event_id = start(admin)
     to_voting(admin, clock, event_id)

@@ -421,6 +421,7 @@ class SlackConnection:
             )
         self.team_id = identity.team_id
         self.interactions.team_id = identity.team_id
+        self.interactions.team_url = identity.url
         if self.socket is None:
             try:
                 await self._check_app_token()
