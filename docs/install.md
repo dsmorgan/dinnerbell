@@ -53,7 +53,7 @@ You need:
 
    With Docker: `docker compose up -d`
 
-8. Open your URL, select **Sign in with Slack**, and add your household on **Members**. Once the bot connects, `https://<your hostname>/healthz` shows `"slack":"connected"`. Next, [onboard your family](https://github.com/dsmorgan/dinnerbell/blob/main/docs/setup.md#11-onboard-family-members) and [load the catalog](https://github.com/dsmorgan/dinnerbell/blob/main/docs/setup.md#12-load-the-catalog).
+8. Open your URL, select **Sign in with Slack**, and add your household on **Admin** > **Members**. Once the bot connects, `https://<your hostname>/healthz` shows `"slack":"connected"`. Next, [onboard your family](https://github.com/dsmorgan/dinnerbell/blob/main/docs/setup.md#11-onboard-family-members) and [load the catalog](https://github.com/dsmorgan/dinnerbell/blob/main/docs/setup.md#12-load-the-catalog).
 
 ## Upgrade
 

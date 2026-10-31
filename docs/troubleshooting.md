@@ -11,9 +11,9 @@ After you fix a setting, recreate the service: `podman-compose down && podman-co
 | Slack says "redirect_uri did not match" after **Sign in** | The app's redirect URL isn't exactly `https://<host>/auth/callback`. | Fix it under **OAuth & Permissions** > **Redirect URLs**, and check `DINNERBELL_BASE_URL`. |
 | Sign-in returns to a Pangolin login page or loops | Pangolin authentication is on. | Turn off **Use Platform SSO**, and leave password, PIN, email OTP, and header auth off. |
 | Every form fails with "Cross-origin request refused", or sign-in loops to the start page | `DINNERBELL_BASE_URL` differs from the URL in the browser: another host, a LAN IP, an explicit `:443`, or `http://`. | Set it to exactly the URL people type. Open Dinnerbell only at that URL. |
-| Sign-in works, but Dinnerbell says you aren't invited | The Slack email differs from the invited one, or isn't verified. | Compare the emails on **Members** and in Slack, and fix the member's email or `DINNERBELL_ADMIN_EMAIL`. |
+| Sign-in works, but Dinnerbell says you aren't invited | The Slack email differs from the invited one, or isn't verified. | Compare the emails on **Admin** > **Members** and in Slack, and fix the member's email or `DINNERBELL_ADMIN_EMAIL`. |
 | Sign-in refused for someone you invited | They signed in to another Slack workspace. | Ask them to sign in to your household workspace. |
-| A member taps a button and Slack says "I don't know your Slack account yet" | Their Slack account isn't linked, often because the emails differ. | Ask them to sign in to the web app once, or link them on **Members**. |
+| A member taps a button and Slack says "I don't know your Slack account yet" | Their Slack account isn't linked, often because the emails differ. | Ask them to sign in to the web app once, or link them on **Admin** > **Members**. |
 | Startup error about a token prefix | The tokens are swapped. | The app token starts with `xapp-`, and the bot token with `xoxb-`. |
 | The log warns `ignoring environment variables that match no setting` | A `DINNERBELL_` name in `.env` is misspelled, so that setting keeps its default. | Fix the name (see [configuration.md](configuration.md)). |
 | `migrate` or `serve` says `The database is locked` | Another process, such as `reset-history`, held the write lock. Nothing changed. | Wait for it to finish, and try again. |
@@ -27,7 +27,7 @@ After you fix a setting, recreate the service: `podman-compose down && podman-co
 | The log says `The bot isn't a member of the channel` | The bot isn't invited. | Send `/invite @Dinnerbell` in the channel. Dinnerbell notices within a minute. |
 | The log says `The channel … is archived` | The channel is archived. | Unarchive it, or set `DINNERBELL_SLACK_CHANNEL` to another channel. |
 | `/healthz` shows `outbox.failed` above 0 | Slack refused some notifications for good, such as a direct message to someone with no Slack link. | Find `notification delivery gave up` in the log, and fix the link or the channel. |
-| `/healthz` shows `stuck_calls` above 0 | A call's next step, such as closing its answers, has failed for more than an hour. A restart doesn't help. | On **Members**, a banner lists each stuck call. Call it off, or re-run a voting or decided call from its **Admin** menu. Report the `could not advance call` log line on the issue tracker. |
+| `/healthz` shows `stuck_calls` above 0 | A call's next step, such as closing its answers, has failed for more than an hour. A restart doesn't help. | On **Admin**, a banner lists each stuck call. Call it off, or re-run a voting or decided call from its **Admin** menu. Report the `could not advance call` log line on the issue tracker. |
 | Badges show as text, and the log says `badge art not available` with `missing_scope` | The Slack app lacks `files:write`. | Paste the current manifest and reinstall the app (see [Upgrade](setup.md#upgrade)). |
 | Badges show as text, and the log says `slack refused badge art` | Slack refused the art. | Report the line, with its `slack_error`, on the issue tracker (#110). |
 

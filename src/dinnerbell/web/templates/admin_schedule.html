@@ -3,10 +3,10 @@
 {% block title %}Ranking{% endblock %}
 {% block content %}
 {% include "_admin_tabs.html" %}
-<h1>Ranking and skipped days</h1>
+<h1>Ranking</h1>
 {% if notice %}<p class="alert ok" role="status">{{ notice }}</p>{% endif %}
 {% if error %}<p class="alert error" role="alert">{{ error }}</p>{% endif %}
-<p class="small muted">Call times and windows are on the <a href="/schedule">Schedule</a> page, where anyone in the household can change them.</p>
+<p class="small muted">Call times and windows are on the <a href="/schedule">Schedule</a> page, where anyone in the household can change them. Skip a day's call there too, under <a href="/schedule#skip">Skip a day</a>.</p>
 <form method="post" action="/admin/schedule" class="stack">
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   <fieldset class="card">
@@ -32,24 +32,4 @@
   </fieldset>
   <button type="submit" class="button primary block">Save ranking</button>
 </form>
-<section class="card" id="skip" aria-labelledby="skip-title">
-  <h2 id="skip-title">Skip a day</h2>
-  <p class="small muted">Skip one day's call, today or up to a week ahead, before it goes out. Nothing is posted, and anyone can still start that call from the Today page. To end a call that's already out, use <strong>Call it off</strong> on the call.</p>
-  {% if skip_error %}<p class="alert error" role="alert">{{ skip_error }}</p>{% endif %}
-  {% if skip_slots %}
-  <form method="post" action="/admin/schedule/skip" class="stack">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <div class="pair">
-      <label class="field"><span>Meal</span>
-        <select name="slot">{% for slot in skip_slots %}<option value="{{ slot.value }}"{% if slot.value == skip.slot %} selected{% endif %}>{{ slot.value|capitalize }}</option>{% endfor %}</select>
-      </label>
-      <label class="field"><span>Day</span><input type="date" name="day" value="{{ skip.day }}" min="{{ skip_days[0].isoformat() }}" max="{{ skip_days[1].isoformat() }}" required></label>
-    </div>
-    <label class="field"><span>Reason (optional)</span><input type="text" name="reason" maxlength="140" autocomplete="off" value="{{ skip.reason }}"></label>
-    <button type="submit" class="button block">Skip this call</button>
-  </form>
-  {% else %}
-  <p class="small">No meal has a daily call right now, so there's nothing to skip.</p>
-  {% endif %}
-</section>
 {% endblock %}

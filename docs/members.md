@@ -1,6 +1,6 @@
 # Members and guests
 
-Admins manage the household on **Members**. This page explains guests, joining from the channel, and the related controls. To link members' Slack accounts, see [Link everyone's Slack account](setup.md#link-everyones-slack-account).
+Admins manage the household on **Admin** > **Members**. This page explains guests, joining from the channel, and the related controls. To link members' Slack accounts, see [Link everyone's Slack account](setup.md#link-everyones-slack-account).
 
 ## Guests
 
@@ -12,7 +12,7 @@ A guest eats with the household when a member invites them to a call. Guests ans
 
 ## Controls on Members
 
-These controls are on **Members**:
+These controls are on **Admin** > **Members**:
 
 - To add only the people you choose, turn **Join from the channel** off. Someone who isn't linked then gets a private "I don't know your Slack account yet" message when they tap a button.
 - **Add people from the channel** lists everyone in the channel who isn't in Dinnerbell, to add as a guest or a member.

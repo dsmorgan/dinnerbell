@@ -48,7 +48,7 @@ Each member's App Home has a short **Your badges** section with their own badges
 
 ## Changing the counts
 
-An admin changes the tier counts on the **Badges** tab of **Members**: five whole numbers per ladder, from 1 to 10,000, each higher than the one before. **Reset to defaults** restores the table above. Each change writes an audit row. Raising a count takes nothing away, and lowering one quietly awards the tier to anyone who already has that count.
+An admin changes the tier counts on the **Badges** tab of **Admin**: five whole numbers per ladder, from 1 to 10,000, each higher than the one before. **Reset to defaults** restores the table above. Each change writes an audit row. Raising a count takes nothing away, and lowering one quietly awards the tier to anyone who already has that count.
 
 ## Announcements
 

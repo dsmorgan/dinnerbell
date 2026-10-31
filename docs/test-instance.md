@@ -70,7 +70,7 @@ deploy/dinnerbell-test down
 
 - To pick up a newer `main`, run `pull`, then `down` and `up -d`. The `main` tag moves with every merge and isn't attested, so give test no production data except a scrubbed copy.
 - To check test, look for the TEST banner in the browser, or `"instance":"TEST"` from `curl -s http://<DINNERBELL_BIND>:8014/healthz`. Test is usually stopped, so don't give it an always-on monitor.
-- A new test instance starts with an empty database and invites `DINNERBELL_ADMIN_EMAIL`. Add test members on **Members**, or [copy production's data](#copy-production-data-into-test).
+- A new test instance starts with an empty database and invites `DINNERBELL_ADMIN_EMAIL`. Add test members on **Admin** > **Members**, or [copy production's data](#copy-production-data-into-test).
 
 Always run test through `deploy/dinnerbell-test`, never through `podman-compose` directly. The script sets the project, volume, env file, tag, and port together; setting only some of them by hand mixes the instances, such as test's label and Slack app on production's database. Before any command that can start test, the script checks `.env.test` and test's secret files with `dinnerbell config check`, and refuses anything that would mix test and production, naming the reason. `deploy/dinnerbell-test --help` lists every check and variable.
 
