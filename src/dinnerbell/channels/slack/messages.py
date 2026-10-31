@@ -1635,7 +1635,9 @@ def badges_earned_message(notification: note.BadgesEarned, ctx: RenderContext) -
             if text:
                 blocks.append(section(f"{'Also earned' if art else lead} {_and(text)}."))
         blocks += [section(t) for t in tail]
-    blocks.append(context("Thank you for all you do to get a meal on the table.", link(ctx.url("/stats"), STATS_LINK)))
+    blocks.append(
+        context("Thank you for all you do to get a meal on the table.", link(ctx.url("/stats/household"), STATS_LINK))
+    )
     return _finish(f"New badges for {who}.", blocks)
 
 
@@ -1722,5 +1724,5 @@ def monthly_recap_message(notification: note.MonthlyRecap, ctx: RenderContext) -
             earned.append(f"…and {plural(notification.more_badges, 'more member')} earned badges too.")
         blocks.append(section(join_lines(["*Badges earned*", *earned])))
     following = MONTHS[notification.month.month % 12]
-    blocks.append(context(f"Here's to a tasty {following}!", link(ctx.url("/stats"), STATS_LINK)))
+    blocks.append(context(f"Here's to a tasty {following}!", link(ctx.url("/stats/household"), STATS_LINK)))
     return _finish(f"{month} in review: {plural(notification.meals, 'meal')} together.", blocks)

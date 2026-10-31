@@ -18,7 +18,7 @@ from starlette.responses import Response
 from dinnerbell.domain.badges import BADGES, LADDERS, TIERS, InvalidThresholds, Ladder
 from dinnerbell.domain.contributions import PITCHING_IN, Kind
 from dinnerbell.services import contributions, stats
-from dinnerbell.web.auth import AdminCSRFChecked, AdminPrincipal, Context, Database, GuestOrMember, SignedIn
+from dinnerbell.web.auth import AdminCSRFChecked, AdminPrincipal, Context, Database, GuestOrMember
 from dinnerbell.web.forms import BadFormValue
 from dinnerbell.web.render import render
 
@@ -63,8 +63,11 @@ async def stats_page(request: Request, principal: GuestOrMember, context: Contex
 
 
 @router.get("/stats/household")
-async def household_stats_page(request: Request, principal: SignedIn, db: Database) -> Response:
-    """The Household tab, for members: the household's totals and its newest badges."""
+async def household_stats_page(request: Request, principal: GuestOrMember, db: Database) -> Response:
+    """The Household tab, for members: the household's totals and its newest badges. A guest who
+    follows a channel post's Stats link gets their own badges instead (#153)."""
+    if principal.member.is_guest:
+        return RedirectResponse("/stats", status_code=303)
     page: dict[str, Any] = {
         "guest": False,
         "tab": "household",

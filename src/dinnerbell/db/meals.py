@@ -42,6 +42,10 @@ async def household_settings(session: AsyncSession, household_id: int) -> dict[s
     return dict(settings or {})
 
 
+_day_rank = case({slot.value: n for slot, n in OF_THE_DAY.items()}, value=MealLogRow.slot, else_=-1)
+"""A meal's place in its day, as SQL, in ``OF_THE_DAY``'s order."""
+
+
 class MealLogRepository:
     def __init__(self, session: AsyncSession) -> None:
         self._session = session
@@ -76,10 +80,23 @@ class MealLogRepository:
     async def newest(self, household_id: int, *, offset: int, limit: int) -> list[MealLog]:
         """A page of the household's meals, newest first, in ``newest_first``'s order: later days,
         then later meals of the day, then the one logged last."""
-        of_the_day = case({slot.value: n for slot, n in OF_THE_DAY.items()}, value=MealLogRow.slot, else_=-1)
-        query = self._select(household_id).order_by(MealLogRow.date.desc(), of_the_day.desc(), MealLogRow.id.desc())
+        query = self._select(household_id).order_by(MealLogRow.date.desc(), _day_rank.desc(), MealLogRow.id.desc())
         rows = await self._session.execute(query.offset(offset).limit(limit))
         return [_meal(row, name) for row, name in rows]
+
+    async def newer_than(self, household_id: int, meal: MealLog) -> int:
+        """How many of the household's meals ``newest`` lists before ``meal``."""
+        rank = OF_THE_DAY[meal.slot]
+        later_today = (_day_rank > rank) | ((_day_rank == rank) & (MealLogRow.id > meal.id))
+        n = await self._session.scalar(
+            select(func.count())
+            .select_from(MealLogRow)
+            .where(
+                MealLogRow.household_id == household_id,
+                (MealLogRow.date > meal.day) | ((MealLogRow.date == meal.day) & later_today),
+            )
+        )
+        return int(n or 0)
 
     async def for_event(self, household_id: int, event_id: int) -> int | None:
         """The ID of the meal a call logged, if it has logged one."""

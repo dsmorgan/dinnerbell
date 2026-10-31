@@ -223,7 +223,7 @@ input:disabled { opacity: 0.7; }
 
 details > summary { list-style: none; cursor: pointer; display: flex; align-items: center; min-height: 44px; }
 details > summary::-webkit-details-marker { display: none; }
-details > summary h2 { display: inline; }
+details > summary h2 { display: inline; margin: 0; }
 details > summary h2::after { content: " +"; color: var(--muted); }
 details[open] > summary h2::after { content: " −"; }
 details[open] > summary { margin-bottom: 0.5rem; }
@@ -327,7 +327,7 @@ h3 { font-size: 1rem; margin: 1rem 0 0.4rem; }
    enough apart that the hit areas never overlap. */
 a.chip { position: relative; display: inline-flex; align-items: center; min-height: 32px; padding: 0 0.65rem; text-decoration: none; }
 a.chip::after { content: ""; position: absolute; inset: -6px 0; }
-.chips:has(> a.chip) { gap: 0.75rem 0.4rem; align-items: center; }
+.chips:has(> a.chip), ul.chips:has(a.chip) { gap: 0.75rem 0.4rem; align-items: center; }
 .chips:has(> a.chip) > .chip { display: inline-flex; align-items: center; min-height: 32px; padding: 0 0.65rem; }
 .chip.mode, .chip.meal-chip { background: var(--bg); }
 .chip.meal-chip { font-style: italic; }  /* not .meal: that is the meal-log card */
@@ -475,7 +475,7 @@ ins { color: var(--ok); text-decoration: none; }
 .proposal .warning { color: var(--danger); margin: 0.2rem 0; }
 .join-late { margin: 0.5rem 0; }
 .details-form { margin: 0.4rem 0 0.6rem; }
-.details-form > summary { color: var(--muted); min-height: 40px; display: flex; align-items: center; }
+.details-form > summary { color: var(--muted); min-height: 44px; display: flex; align-items: center; }
 .details-form form { margin-top: 0.5rem; }
 .pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.5rem; }
 .pair .field { margin-top: 0; }

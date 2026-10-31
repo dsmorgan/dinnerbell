@@ -9,7 +9,6 @@ from datetime import date
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Form, Query, Request
-from fastapi.responses import RedirectResponse
 from starlette.responses import Response
 
 from dinnerbell.domain.catalog import ItemKind
@@ -30,6 +29,7 @@ from dinnerbell.services.variety import household_today, variety_window
 from dinnerbell.web.auth import Context, CSRFChecked, Database, Principal, SignedIn
 from dinnerbell.web.context import AppContext
 from dinnerbell.web.forms import BadFormValue, RowId, choice, iso_date, parse_id
+from dinnerbell.web.redirects import local_path, local_redirect
 from dinnerbell.web.render import render
 
 router = APIRouter(prefix="/history")
@@ -92,6 +92,13 @@ PostedMeal = Annotated[MealForm, Depends(posted_meal)]
 
 def _today(context: AppContext, principal: Principal) -> date:
     return household_today(principal.household, context.clock())
+
+
+async def _history_path(db: Database, principal: Principal, meal: MealLog, notice: str = "") -> str:
+    """The History page that lists ``meal``, scrolled to it, with ``notice`` (a ``NOTICES`` key)."""
+    page = await meal_service.history_page_of(db, principal.member, meal)
+    query = "&".join(([f"page={page}"] if page > 1 else []) + ([f"notice={notice}"] if notice else []))
+    return local_path(f"/history{'?' if query else ''}{query}#meal-{{}}", meal.id)
 
 
 async def _choices(db: Database, principal: Principal, editing: MealLog | None = None) -> dict[str, Any]:
@@ -157,12 +164,12 @@ async def log_meal(
     request: Request, principal: CSRFChecked, context: Context, db: Database, form: PostedMeal
 ) -> Response:
     try:
-        await meal_service.log_meal(
+        meal = await meal_service.log_meal(
             db, principal.member, form.to_input(), today=_today(context, principal), now=context.clock()
         )
     except (InvalidMeal, BadFormValue) as exc:
         return await _history_page(request, principal, context, db, form=form, error=str(exc), status_code=400)
-    return RedirectResponse("/history?notice=logged", status_code=303)
+    return local_redirect(await _history_path(db, principal, meal, "logged"))
 
 
 async def _edit_page(
@@ -200,19 +207,23 @@ async def update_meal(
     request: Request, principal: CSRFChecked, context: Context, db: Database, meal_id: RowId, form: PostedMeal
 ) -> Response:
     try:
-        await meal_service.update_meal(
+        meal = await meal_service.update_meal(
             db, principal.member, meal_id, form.to_input(), today=_today(context, principal), now=context.clock()
         )
     except (InvalidMeal, BadFormValue) as exc:
         meal = await meal_service.get_meal(db, principal.member, meal_id)
         return await _edit_page(request, principal, context, db, meal, form, error=str(exc), status_code=400)
-    return RedirectResponse("/history?notice=updated", status_code=303)
+    return local_redirect(await _history_path(db, principal, meal, "updated"))
 
 
 @router.post("/meals/{meal_id}/delete")
 async def delete_meal(principal: CSRFChecked, context: Context, db: Database, meal_id: RowId) -> Response:
+    meal = await meal_service.get_meal(db, principal.member, meal_id)
+    page = await meal_service.history_page_of(db, principal.member, meal)  # where it was: its neighbors stay there
     await meal_service.delete_meal(db, principal.member, meal_id, now=context.clock())
-    return RedirectResponse("/history?notice=deleted", status_code=303)
+    if page == 1:
+        return local_redirect("/history?notice=deleted")
+    return local_redirect("/history?page={}&notice=deleted", page)
 
 
 # Feedback (FR-45 to FR-49) -------------------------------------------------------------------------
@@ -243,11 +254,12 @@ def posted_feedback(
 PostedFeedback = Annotated[FeedbackInput, Depends(posted_feedback)]
 
 
-def _back(meal: MealLog, came_from: str) -> str:
-    """Where the form returns: the meal's event page when it came from there, else History."""
+async def _back(db: Database, principal: Principal, meal: MealLog, came_from: str, notice: str = "") -> str:
+    """Where the form returns: the meal's event page when it came from there, else the History
+    page that lists the meal."""
     if came_from == "event" and meal.event_id is not None:
-        return f"/events/{meal.event_id}#feedback"
-    return f"/history#meal-{meal.id}"
+        return local_path("/events/{}#feedback", meal.event_id)
+    return await _history_path(db, principal, meal, notice)
 
 
 async def _feedback_page(
@@ -275,7 +287,7 @@ async def _feedback_page(
             "form": form,
             "answers": answers or form.mine or FeedbackInput(),
             "came_from": came_from if came_from in FROM_PAGES else "history",
-            "back": _back(meal, came_from),
+            "back": await _back(db, principal, meal, came_from),
             "ratings": list(Rating),
             "issues": list(PlaceIssue),
             "note_max": COOK_NOTE_MAX,
@@ -326,8 +338,5 @@ async def give_feedback(
             request, principal, context, db, meal_id, came_from=came_from, answers=answers, error=error, status_code=400
         )
     meal = await meal_service.get_meal(db, principal.member, meal_id)
-    back = _back(meal, came_from)
-    if back.startswith("/history"):
-        notice = "feedback" if saved is not None else "no_feedback"
-        back = f"/history?notice={notice}#meal-{meal.id}"
-    return RedirectResponse(back, status_code=303)
+    notice = "feedback" if saved is not None else "no_feedback"
+    return local_redirect(await _back(db, principal, meal, came_from, notice))

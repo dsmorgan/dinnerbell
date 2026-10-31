@@ -28,7 +28,7 @@
           "type": "mrkdwn"
         },
         {
-          "text": "<https://dinnerbell.example.com/stats|Stats on the web>",
+          "text": "<https://dinnerbell.example.com/stats/household|Stats on the web>",
           "type": "mrkdwn"
         }
       ],
