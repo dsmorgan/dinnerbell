@@ -103,9 +103,9 @@ def test_home_links_stats_and_schedule_without_badge_art() -> None:
 def test_homes_voting_card_says_how_you_voted_and_links_the_picks() -> None:
     text = _text(_rendered("home_voting")["blocks"])
     assert "You voted for *Sam's Tacos*." in text
-    assert f"<{preview.PICKS_LINK}|See the picks and vote in the channel>" in text
+    assert f"<{preview.PICKS_LINK}|See the proposals and vote in the channel>" in text
     unlinked = _text(_rendered("home_voting_no_coordinator")["blocks"])
-    assert "You haven't voted yet." in unlinked and "The picks are posted in the channel." in unlinked
+    assert "You haven't voted yet." in unlinked and "The proposals are posted in the channel." in unlinked
 
 
 def test_home_offers_to_coordinate_while_voting_with_nobody_coordinating() -> None:
@@ -214,7 +214,7 @@ async def test_home_links_the_picks_post_while_voting(slack: Slack, house: House
     slack.conn.interactions.team_url = "https://home.slack.com/"
     await slack.open_home("Sam")
     text = _text(slack.last_home("Sam")["blocks"])
-    assert f"<https://home.slack.com/archives/{CHANNEL}/p{ts.replace('.', '')}|See the picks" in text
+    assert f"<https://home.slack.com/archives/{CHANNEL}/p{ts.replace('.', '')}|See the proposals" in text
     assert "You haven't voted yet." in text
 
 

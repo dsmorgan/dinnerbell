@@ -214,7 +214,7 @@ TIED_PROPOSALS = (
     replace(PROPOSALS[1], voters=(SAM,), tied=True),
     replace(PROPOSALS[2], voters=()),
 )
-SHUFFLED_VOTING = replace(VOTING, shuffle_note="Alex shuffled the picks (2 replaced).")
+SHUFFLED_VOTING = replace(VOTING, shuffle_note="Alex shuffled the proposals (2 replaced).")
 TIE_DECISION = replace(DELIVERY, tie_note="Tied; Alex (coordinator) chose")
 ROLES_DUE = datetime(2026, 10, 22, 23, 0, tzinfo=UTC)
 PENDING_DECISION = replace(

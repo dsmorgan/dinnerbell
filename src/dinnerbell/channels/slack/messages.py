@@ -349,7 +349,7 @@ def _call_status(event: note.EventInfo, *, picks: str = "posted below") -> str:
             return f"Who's in for {slot}? Answer by *{local_clock(event.respond_deadline, event.timezone)}*."
         case EventState.VOTING:
             closes = f" Vote by *{local_clock(event.vote_deadline, event.timezone)}*." if event.vote_deadline else ""
-            return f"Thanks for answering! Voting is open: the picks are {picks}.{closes}"
+            return f"Thanks for answering! Voting is open: the proposals are {picks}.{closes}"
         case EventState.DECIDED if event.plan is not None:
             plan = event.plan
             at = local_clock(plan.meal_time, event.timezone)
@@ -522,7 +522,7 @@ def proposals_message(notification: note.ProposalsReady | note.ProposalsUpdated,
         intro = f"Vote for any you'd enjoy.{closes}"
     else:
         intro = "Voting is closed."
-    blocks: list[Block] = [section(f"*{_post_title(event, 'picks')}* for {people}\n{intro}")]
+    blocks: list[Block] = [section(f"*{_post_title(event, 'proposals')}* for {people}\n{intro}")]
     if voting and event.shuffle_note:  # plain words: an edit pings nobody (#92)
         blocks.append(context(escape(event.shuffle_note)))
     if voting and any(p.tied for p in notification.proposals):
@@ -544,7 +544,7 @@ def proposals_message(notification: note.ProposalsReady | note.ProposalsUpdated,
             blocks.append(actions(*row, block_id=f"proposal-actions-{proposal.id}"))
     hidden = len(notification.proposals) - len(shown)
     if hidden:
-        blocks.append(context(f"…and {plural(hidden, 'more pick')} on the web."))
+        blocks.append(context(f"…and {plural(hidden, 'more proposal')} on the web."))
     blocks += _late_blocks(notification, ctx)
     footer: list[Block] = []
     if voting:
@@ -554,7 +554,7 @@ def proposals_message(notification: note.ProposalsReady | note.ProposalsUpdated,
             footer.append(button(labels.SHUFFLE, ids.SHUFFLE, ids.card_value(event.id, event.run), confirm=shuffle))
     footer.append(_web_button(ctx, event))
     blocks.append(actions(*footer, block_id="more"))
-    text = f"Picks for {_slot(event)} on {day_label(event.day)}: " + ", ".join(
+    text = f"Proposals for {_slot(event)} on {day_label(event.day)}: " + ", ".join(
         p.item.name for p in notification.proposals[:5]
     )
     return _finish(text, blocks)
@@ -1252,8 +1252,8 @@ def picks_shuffled_message(notification: note.PicksShuffled) -> Message:
     """The note in the call's thread after a shuffle (#87): plain words, and no mention."""
     event = notification.event
     text = (
-        f"{notification.by.name} shuffled the picks for {_slot(event)} ({notification.replaced} replaced). "
-        "See the new set in the picks message."
+        f"{notification.by.name} shuffled the proposals for {_slot(event)} ({notification.replaced} replaced). "
+        "See the new set in the proposals message."
     )
     return _finish(text, [section(escape(text))])
 
@@ -1264,7 +1264,8 @@ def picks_shuffled_message(notification: note.PicksShuffled) -> Message:
 ABANDONED = {
     EndReason.TOO_FEW: "Not enough people for a group {slot} on {day}, so everyone's on their own this time.",
     EndReason.NO_COVERAGE: (
-        "Nobody was free to cook or fetch any of the picks for {slot} on {day}, so everyone's on their own this time."
+        "Nobody was free to cook or fetch any of the proposals for {slot} on {day}, "
+        "so everyone's on their own this time."
     ),
 }
 NEEDS_UNMET = (

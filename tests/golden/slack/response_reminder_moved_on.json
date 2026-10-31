@@ -2,7 +2,7 @@
   "blocks": [
     {
       "text": {
-        "text": "*This call moved on.* Thanks for answering! Voting is open: the picks are posted in the channel. Vote by *5:15 PM*.",
+        "text": "*This call moved on.* Thanks for answering! Voting is open: the proposals are posted in the channel. Vote by *5:15 PM*.",
         "type": "mrkdwn"
       },
       "type": "section"

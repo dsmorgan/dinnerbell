@@ -435,7 +435,7 @@ async def test_a_card_after_responses_close_says_the_call_moved_on(
     await slack.tap_card("Kim", "card_out", card)
     assert await response(house, event_id, "Kim") == (Status.IN, frozenset())
     (replaced,) = slack.fake.of("response_url")
-    assert f"*{MOVED_ON}* Thanks for answering! Voting is open: the picks are posted in the channel" in text_of(
+    assert f"*{MOVED_ON}* Thanks for answering! Voting is open: the proposals are posted in the channel" in text_of(
         replaced.args
     )
     assert "Your answer: *In*" in text_of(replaced.args)

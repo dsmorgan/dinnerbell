@@ -329,7 +329,7 @@ async def set_my_needs(db: AsyncSession, actor: Member, needs: frozenset[int], *
             if answer is None or answer.status is Status.OUT:
                 continue
             raise EventRuleViolation(
-                "A call you're in is voting now, and its picks already fit your needs as they were. "
+                "A call you're in is voting now, and its proposals already fit your needs as they were. "
                 "Change them once it's decided.",
                 code="voting_needs",
             )

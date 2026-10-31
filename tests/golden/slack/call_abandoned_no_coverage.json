@@ -2,7 +2,7 @@
   "blocks": [
     {
       "text": {
-        "text": "Nobody was free to cook or fetch any of the picks for dinner on Thursday, Oct 22, so everyone's on their own this time. Thanks for answering, and see you at the next one!",
+        "text": "Nobody was free to cook or fetch any of the proposals for dinner on Thursday, Oct 22, so everyone's on their own this time. Thanks for answering, and see you at the next one!",
         "type": "mrkdwn"
       },
       "type": "section"
@@ -17,5 +17,5 @@
       "type": "context"
     }
   ],
-  "text": "Nobody was free to cook or fetch any of the picks for dinner on Thursday, Oct 22, so everyone's on their own this time."
+  "text": "Nobody was free to cook or fetch any of the proposals for dinner on Thursday, Oct 22, so everyone's on their own this time."
 }

@@ -11,7 +11,7 @@
     },
     {
       "text": {
-        "text": "*Dinner picks · Thursday, Oct 22* for 3 people\nVote for any you'd enjoy. Voting closes at *5:15 PM*.",
+        "text": "*Dinner proposals · Thursday, Oct 22* for 3 people\nVote for any you'd enjoy. Voting closes at *5:15 PM*.",
         "type": "mrkdwn"
       },
       "type": "section"
@@ -221,5 +221,5 @@
       "type": "actions"
     }
   ],
-  "text": "Picks for dinner on Thursday, Oct 22: Sam's Tacos, Siam Garden, Taqueria &lt;Lupita&gt; &amp; Co"
+  "text": "Proposals for dinner on Thursday, Oct 22: Sam's Tacos, Siam Garden, Taqueria &lt;Lupita&gt; &amp; Co"
 }

@@ -12,7 +12,7 @@ No score, suggestion, or draw gets around these rules:
 - **Guests' needs.** If a guest needs a dietary tag, such as vegan, every proposal has it.
 - **Someone to do it.** A pickup needs someone who offered to pick up, a home meal needs someone who offered to cook and can cook it, and delivery needs someone who's in and can order.
 - **Recent repeats.** A place you ate within the variety window, 7 days by default, is out, unless nothing else fits at all.
-- **Already a pick.** A place that's already on the call, from an offer, isn't proposed again. Each proposal is a different place.
+- **Already a proposal.** A place that's already on the call, from an offer, isn't proposed again. Each proposal is a different place.
 - **The meal.** Places for tonight's meal come first. Places for other meals, such as a breakfast place on a dinner call, are proposed only when too few dinner places fit, and their reasons say "Usually for breakfast."
 
 Everything that passes them is a candidate, and chance chooses only among candidates.
@@ -56,7 +56,7 @@ The change halves every 3 months, counted from the meal, unless you rate it agai
 
 ### The household's hint
 
-Everyone sees a hint for each place, built from everyone's ratings and what went wrong, without names. It's the first reason on a pick, and it shows on the catalog:
+Everyone sees a hint for each place, built from everyone's ratings and what went wrong, without names. It's the first reason on a proposal, and it shows on the catalog:
 
 - **Mixed reviews**: at least one good rating and one bad one from roughly the last 3 months.
 - **Not well liked**: otherwise, at least a quarter of the ratings were bad.
@@ -64,22 +64,22 @@ Everyone sees a hint for each place, built from everyone's ratings and what went
 
 A verdict needs ratings from two people, each from roughly the last 3 months, and recent ones count more. What went wrong in the last 3 months adds the most important problem anyone checked: "a recent wrong order", "recently late", "recently cold", or "a recent problem". So a hint reads "Mixed reviews · recently late", or, with no verdict, "Recently cold". The words someone wrote for **Other** are never shown. A hint never changes a score.
 
-## Why the picks differ between calls
+## Why the proposals differ between calls
 
-Each call has its own draw, so two calls with the same people and catalog can propose different places. Dinnerbell seeds the draw from the call itself, so the same call always gets the same picks. If an admin re-runs a call, or someone starts a called-off call again, that's a new run, and it draws again.
+Each call has its own draw, so two calls with the same people and catalog can propose different places. Dinnerbell seeds the draw from the call itself, so the same call always gets the same proposals. If an admin re-runs a call, or someone starts a called-off call again, that's a new run, and it draws again.
 
 Proposals are listed in the order they were drawn, suggestions first. The order matters only when a vote ties. Ties go to the coordinator's choice, then the coordinator's vote, then an admin's vote when nobody coordinates, then the place you ate at longest ago (never counts as longest), and only then to the one drawn first. The decision says which rule decided it.
 
-## Shuffling the picks
+## Shuffling the proposals
 
-If the picks don't appeal, the coordinator can tap **Shuffle picks** while voting, or an admin can when nobody, or a guest, coordinates. A shuffle draws again with the call's next seed, so it's as reproducible as the first draw. Each call allows 3 shuffles.
+If the proposals don't appeal, the coordinator can tap **Shuffle proposals** while voting, or an admin can when nobody, or a guest, coordinates. A shuffle draws again with the call's next seed, so it's as reproducible as the first draw. Each call allows 3 shuffles.
 
-- **Nobody has voted yet:** every drawn pick is replaced.
-- **Someone has voted:** only picks with no votes are replaced. A vote that doesn't count yet, such as a late joiner's, still keeps its pick, because it is someone's choice.
-- **Never replaced:** picks a member added, picks from an offer, and places someone suggested.
-- **The same rules hold.** The new picks pass everything in [What can never be picked](#what-can-never-be-picked), including a late joiner's guests' needs. A place that was just shuffled out comes back only if nothing else fits. If nothing else fits at all, the shuffle is refused and doesn't count.
+- **Nobody has voted yet:** every drawn proposal is replaced.
+- **Someone has voted:** only proposals with no votes are replaced. A vote that doesn't count yet, such as a late joiner's, still keeps its proposal, because it is someone's choice.
+- **Never replaced:** proposals a member added, proposals from an offer, and places someone suggested.
+- **The same rules hold.** The new proposals pass everything in [What can never be picked](#what-can-never-be-picked), including a late joiner's guests' needs. A place that was just shuffled out comes back only if nothing else fits. If nothing else fits at all, the shuffle is refused and doesn't count.
 
-The picks message says who shuffled and how many were replaced, such as "Kim shuffled the picks (2 replaced).", and the call's thread gets a short note that mentions nobody.
+The proposals message says who shuffled and how many were replaced, such as "Kim shuffled the proposals (2 replaced).", and the call's thread gets a short note that mentions nobody.
 
 ## A worked example
 
@@ -124,7 +124,7 @@ An admin changes these on the **Ranking** tab of **Admin**. Changes apply from t
   | 2 | A point better is about 1.6 times as likely | 69% | 32% |
   | 3 | A point better is about 1.4 times as likely | 63% | 38% |
 
-  The last two columns are for the worked example. If the same places keep winning, raise it. If the picks feel too random, lower it.
+  The last two columns are for the worked example. If the same places keep winning, raise it. If the proposals feel too random, lower it.
 - **Feedback** limits how far each rating pulls a person's score: 0 (off), 1, or 2. At 2, the default for a new household, **Loved it** pulls toward +2; at 1, toward +1, so ratings move a score by at most a point. A household that existed before the setting did starts at 0; set it to 2 when you're ready to let ratings move scores. Hints show at every setting.
 
 Vetoes, guests' needs, coverage, and the variety window hold at every setting.

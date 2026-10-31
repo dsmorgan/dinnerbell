@@ -73,7 +73,7 @@
               {
                 "text": {
                   "emoji": true,
-                  "text": "Sam's Tacos (already a pick)",
+                  "text": "Sam's Tacos (already proposed)",
                   "type": "plain_text"
                 },
                 "value": "11"
@@ -90,7 +90,7 @@
               {
                 "text": {
                   "emoji": true,
-                  "text": "Siam Garden (already a pick)",
+                  "text": "Siam Garden (already proposed)",
                   "type": "plain_text"
                 },
                 "value": "12"
@@ -175,7 +175,7 @@
   },
   "title": {
     "emoji": true,
-    "text": "Add a pick",
+    "text": "Add a proposal",
     "type": "plain_text"
   },
   "type": "modal"

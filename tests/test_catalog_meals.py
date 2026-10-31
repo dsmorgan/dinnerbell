@@ -281,9 +281,9 @@ def test_add_a_proposal_lists_the_calls_meal_first_and_marks_the_rest(
     marked = {name: f"{name} (usually {meal})" for name, meal in usually.items()}
     assert select_options(html, "item_id") == [
         "Something new instead",
-        "Siam Garden (already a pick)",
-        "Taqueria (already a pick)",
-        *(f"{marked[name]} (already a pick)" if name == topped else marked[name] for name in usually),
+        "Siam Garden (already proposed)",
+        "Taqueria (already proposed)",
+        *(f"{marked[name]} (already proposed)" if name == topped else marked[name] for name in usually),
     ]
     other = next(i for i, name in by_id.items() if name in usually and name != topped)
     added = submit(client, f"/events/{event_id}/proposals", {"mode": "pickup", "item_id": str(other)})
@@ -326,7 +326,7 @@ def test_slack_lists_mark_items_for_other_meals() -> None:
     modal = proposal_modal(replace(samples.VOTING_VIEW, items=items), samples.ORIGIN)  # a dinner call; 12 is a pick
     check_view(modal)
     labels = _labels(modal)
-    assert labels[:2] == ["Siam Garden", "Bagel Barn (usually breakfast) (already a pick)"]
+    assert labels[:2] == ["Siam Garden", "Bagel Barn (usually breakfast) (already proposed)"]
     assert labels[2].endswith("\N{HORIZONTAL ELLIPSIS} (usually lunch)") and len(labels[2]) == 75
 
     offer = offer_modal(replace(samples.OFFER_FORM, items=items), ids.FormOrigin("C0DINNER"))  # starts on lunch

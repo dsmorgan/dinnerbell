@@ -132,7 +132,7 @@ NOT_IN_JOIN_LATE = "You missed the answers, so you're not in for this call. Tap 
 """Why a vote or a pick from someone who isn't in did nothing, when nobody asked them to join late."""
 TAKEN_OFF = "The coordinator has you out for this one. Ask them if you can take part after all."
 LATE_TOO_LATE = "It's decided already, so it's too late to join. Ask the coordinator, or make an offer."
-ALREADY_A_PICK = "That's already a pick on the call. Vote for it instead."
+ALREADY_A_PICK = "That's already a proposal on the call. Vote for it instead."
 
 
 class JoinLateFirst(EventRuleViolation):
@@ -886,7 +886,7 @@ def check_can_switch_late(event: Event, actor: Member, coordinator: Member | Non
     raise EventRuleViolation(LATE_SWITCHERS, code="not_coordinator")
 
 
-SHUFFLERS = "Only the coordinator, or an admin when nobody's coordinating, can shuffle the picks."
+SHUFFLERS = "Only the coordinator, or an admin when nobody's coordinating, can shuffle the proposals."
 TIE_BREAKERS = "Only the coordinator, or an admin when nobody's coordinating, can break a tie."
 
 
@@ -918,7 +918,9 @@ def check_can_shuffle(event: Event, actor: Member, coordinator: Member | None) -
         event, actor, coordinator, refusal=SHUFFLERS, closed="You can shuffle only while voting is open."
     )
     if event.shuffles >= MAX_SHUFFLES:
-        raise EventRuleViolation(f"The picks have been shuffled {MAX_SHUFFLES} times already.", code="shuffle_limit")
+        raise EventRuleViolation(
+            f"The proposals have been shuffled {MAX_SHUFFLES} times already.", code="shuffle_limit"
+        )
     return capacity
 
 

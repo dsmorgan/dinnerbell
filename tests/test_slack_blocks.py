@@ -299,7 +299,7 @@ def test_more_proposals_than_the_cap_are_listed_on_the_web() -> None:
     check_message(message.payload())
     sections = [b for b in message.blocks if b.get("block_id", "").startswith("proposal-") and b["type"] == "section"]
     assert len(sections) == MAX_PROPOSALS
-    assert any("4 more picks" in json.dumps(b) for b in message.blocks)
+    assert any("4 more proposals" in json.dumps(b) for b in message.blocks)
     # The label's block fits too: the biggest message leaves room for it, so the footer stays.
     assert len(message.blocks) < bk.MAX_MESSAGE_BLOCKS
     labelled = render(note.ProposalsUpdated(samples.VOTING, proposals, 3), replace(CTX, label="TEST"))
@@ -416,7 +416,7 @@ def test_views_for_an_empty_catalog_and_a_busy_day() -> None:
     home = home_view(TodayView(samples.DAY, [voting, lunch], tuple(Slot)), HomeLinks(samples.BASE_URL))
     check_view(home)
     text = json.dumps(home)
-    assert "The picks are posted in the channel." in text and "Are you in? Tap below." in text
+    assert "The proposals are posted in the channel." in text and "Are you in? Tap below." in text
     assert "start_call_lunch" not in text and "start_call_dinner" not in text  # both calls exist already
     assert "start_call_breakfast" in text
 
@@ -675,10 +675,10 @@ def text_blocks(message: Message) -> str:
 
 def test_the_picks_and_the_decision_open_with_a_title_that_names_the_slot_and_day() -> None:
     picks = render(samples.NOTIFICATIONS["proposals_ready"](), CTX)
-    assert picks.blocks[0]["text"]["text"].startswith("*Dinner picks · Thursday, Oct 22* for 3 people\n")
+    assert picks.blocks[0]["text"]["text"].startswith("*Dinner proposals · Thursday, Oct 22* for 3 people\n")
     breakfast = replace(samples.VOTING, slot=Slot.BREAKFAST)
     early = render(note.ProposalsReady(breakfast, samples.PROPOSALS, 3, participants=(samples.ALEX,)), CTX)
-    assert early.blocks[0]["text"]["text"].startswith("*Breakfast picks · Thursday, Oct 22*")
+    assert early.blocks[0]["text"]["text"].startswith("*Breakfast proposals · Thursday, Oct 22*")
     decision = render(samples.NOTIFICATIONS["decision_made"](), CTX)
     assert decision.blocks[0]["text"]["text"].startswith("*Dinner decision · Thursday, Oct 22*\n")
     lunch = replace(samples.DECIDED, slot=Slot.LUNCH)
@@ -748,11 +748,11 @@ def test_a_big_household_cant_push_out_the_instructions_assignments_or_notes() -
 
 def test_the_call_message_points_to_the_picks_and_then_names_the_result() -> None:
     voting = render(samples.NOTIFICATIONS["call_updated_voting"](), CTX)
-    assert "Voting is open: the picks are posted below. Vote by *5:15 PM*." in text_blocks(voting)
+    assert "Voting is open: the proposals are posted below. Vote by *5:15 PM*." in text_blocks(voting)
     assert "in the thread" not in json.dumps(voting.payload())
     decided = render(samples.NOTIFICATIONS["call_updated_decided"](), CTX)
     assert "It's decided: Sam's Tacos, cook, at 6:45 PM" in text_blocks(decided)
     without_plan = render(note.CallUpdated(replace(samples.DECIDED, plan=None)), CTX)
     assert "It's decided! The plan is posted below." in text_blocks(without_plan)
     card = json.dumps(samples.preview("your_answer_voting"))  # a card isn't beside the picks
-    assert "the picks are posted in the channel" in card and "below" not in card
+    assert "the proposals are posted in the channel" in card and "below" not in card

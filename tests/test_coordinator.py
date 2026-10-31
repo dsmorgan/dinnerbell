@@ -923,7 +923,7 @@ async def test_a_shuffle_with_no_votes_redraws_every_ranked_pick(house: House) -
     assert (result.replaced, result.kept, result.shuffles_left) == (3, 0, 2)
     assert len(names(after)) == 3 and set(names(after)).isdisjoint(before)  # never one just shuffled out
     assert len({p.item_id for p in after.proposals}) == 3  # a place is one pick (#77)
-    assert (after.event.shuffles, after.event.shuffle_note) == (1, "Alex shuffled the picks (3 replaced).")
+    assert (after.event.shuffles, after.event.shuffle_note) == (1, "Alex shuffled the proposals (3 replaced).")
     assert all(p.source is ProposalSource.SYSTEM for p in after.proposals)
 
 
@@ -1103,7 +1103,7 @@ async def test_at_most_three_shuffles_a_call(house: House) -> None:
     assert refused.value.code == "shuffle_limit" and (await house.event(event_id)).shuffles == 3
     updated = cc.proposals_updated(ctx)
     assert updated.shuffles_left == 0
-    assert "Shuffle picks" not in json.dumps(render(updated, CTX).payload())  # the button is gone
+    assert "Shuffle proposals" not in json.dumps(render(updated, CTX).payload())  # the button is gone
     view = await act(house, event_views.event_view, house["Alex"], event_id)
     assert not view.can.shuffle
 
@@ -1111,14 +1111,15 @@ async def test_at_most_three_shuffles_a_call(house: House) -> None:
 async def test_the_button_counts_down_and_everyone_sees_the_note_but_nobody_is_mentioned(house: House) -> None:
     event_id = await with_many_places(house, "Sam")
     ctx = await house.context(event_id)
-    assert json.dumps(render(cc.proposals_updated(ctx), CTX).payload()).count("Shuffle picks") == 1
+    assert json.dumps(render(cc.proposals_updated(ctx), CTX).payload()).count("Shuffle proposals") == 1
     await shuffle(house, "Alex", event_id)
     updates = await sent(house, "proposals_updated")
-    assert updates[-1].event.shuffle_note == "Alex shuffled the picks (3 replaced)." and updates[-1].shuffles_left == 2
+    assert updates[-1].event.shuffle_note == "Alex shuffled the proposals (3 replaced)."
+    assert updates[-1].shuffles_left == 2
     rendered = render(
         updates[-1], RenderContext("https://dinnerbell.example.com", Directory({"Alex": "U01ALEX"}))
     ).payload()
-    note_block = next(b for b in rendered["blocks"] if "Alex shuffled the picks" in json.dumps(b))
+    note_block = next(b for b in rendered["blocks"] if "Alex shuffled the proposals" in json.dumps(b))
     assert "<@" not in json.dumps(note_block)  # plain names: an edit adds no mention (#92)
     (said,) = await sent(house, "picks_shuffled")  # and a short note in the call's thread
     assert (said.by.name, said.replaced, said.count) == ("Alex", 3, 1)
@@ -1129,7 +1130,7 @@ async def test_the_button_counts_down_and_everyone_sees_the_note_but_nobody_is_m
     # Anyone with the proposals open on the web sees the new set on refresh.
     view = await act(house, event_views.event_view, house["Sam"], event_id)
     assert [p.info.item.name for p in view.proposals] == names(await house.context(event_id))
-    assert view.info.shuffle_note == "Alex shuffled the picks (3 replaced)."
+    assert view.info.shuffle_note == "Alex shuffled the proposals (3 replaced)."
 
 
 async def test_the_note_stays_on_later_edits_and_goes_when_voting_closes(house: House) -> None:
@@ -1137,9 +1138,10 @@ async def test_the_note_stays_on_later_edits_and_goes_when_voting_closes(house: 
     await shuffle(house, "Alex", event_id)
     first = (await house.context(event_id)).proposals[0]
     await vote(house, "Sam", event_id, first.id)  # a vote edits the picks message again
-    assert "shuffled the picks" in json.dumps(render((await sent(house, "proposals_updated"))[-1], CTX).payload())
+    assert "shuffled the proposals" in json.dumps(render((await sent(house, "proposals_updated"))[-1], CTX).payload())
     await at_deadline(house, event_id)
-    assert "shuffled the picks" not in json.dumps(render((await sent(house, "proposals_updated"))[-1], CTX).payload())
+    closed = render((await sent(house, "proposals_updated"))[-1], CTX).payload()
+    assert "shuffled the proposals" not in json.dumps(closed)
 
 
 async def test_a_shuffle_that_would_change_nothing_is_refused_and_not_counted(house: House) -> None:
@@ -1283,7 +1285,7 @@ async def test_a_shuffle_with_a_veto_in_play_sends_nothing_that_names_it(house: 
     text = json.dumps(note_payload(said)).lower()
     assert "veto" not in text and "kim" not in text and "thai" not in text
     (update,) = [u for u in await sent(house, "proposals_updated") if u.event.shuffle_note]
-    assert update.event.shuffle_note == "Alex shuffled the picks (3 replaced)."
+    assert update.event.shuffle_note == "Alex shuffled the proposals (3 replaced)."
     assert all(not p.warnings and p.voters == () for p in update.proposals)  # nothing about anyone's stance
 
 
@@ -1319,7 +1321,7 @@ def test_web_shuffle(admin: TestClient, provider: FakeProvider, clock: FakeClock
     event_id = web_voting(admin, provider, clock, migrated)
     before = proposal_ids(migrated)
     html = page(admin.get(f"/events/{event_id}"))
-    assert f'action="/events/{event_id}/shuffle"' in html and "Shuffle picks" in html and "3 left" in html
+    assert f'action="/events/{event_id}/shuffle"' in html and "Shuffle proposals" in html and "3 left" in html
 
     assert submit(admin, f"/events/{event_id}/shuffle", {}).status_code == 400  # it names the run
     stale = submit(admin, f"/events/{event_id}/shuffle", {"run": "9"})
@@ -1328,14 +1330,14 @@ def test_web_shuffle(admin: TestClient, provider: FakeProvider, clock: FakeClock
     done = submit(admin, f"/events/{event_id}/shuffle", {"run": "1"})
     assert done.status_code == 303
     html = page(admin.get(f"/events/{event_id}"))
-    assert "shuffled the picks (3 replaced)." in html and "2 left" in html
+    assert "shuffled the proposals (3 replaced)." in html and "2 left" in html
     (row,) = list(rows(migrated, EventRow))
     assert row.shuffles == 1
     assert [a.action for a in rows(migrated, AuditRow) if a.action == "event.shuffled"] == ["event.shuffled"]
 
     sign_in_as(admin, provider, "kim@example.com")  # not the coordinator, and not an admin
     html = page(admin.get(f"/events/{event_id}"))
-    assert "Shuffle picks" not in html and "shuffled the picks (3 replaced)." in html  # everyone sees the note
+    assert "Shuffle proposals" not in html and "shuffled the proposals (3 replaced)." in html  # everyone sees the note
     refused = submit(admin, f"/events/{event_id}/shuffle", {"run": "1"})
     assert refused.status_code == 409 and "Only the coordinator" in page(refused)
     assert rows(migrated, EventRow)[0].shuffles == 1
@@ -1430,13 +1432,14 @@ async def test_slack_shuffle_is_the_coordinators_and_says_what_it_did(slack: Sla
     await slack.click("Sam", ids.SHUFFLE, value)
     assert slack.ephemerals("Sam")[-1] == "Shuffled: 3 replaced. Everyone sees the new set."
     after = await house.context(event_id)
-    assert set(names(after)).isdisjoint(before) and after.event.shuffle_note == "Sam shuffled the picks (3 replaced)."
+    assert set(names(after)).isdisjoint(before)
+    assert after.event.shuffle_note == "Sam shuffled the proposals (3 replaced)."
     await slack.click("Sam", ids.SHUFFLE, "not-a-value")
     assert "out of date" in slack.ephemerals("Sam")[-1]
     await slack.drain()
     posted = [c for c in slack.fake.calls if c.method in {"chat.postMessage", "chat.update"}]
     texts = json.dumps([c.args.get("blocks") for c in posted])
-    assert "Sam shuffled the picks (3 replaced)." in texts and "Shuffle picks" in texts
+    assert "Sam shuffled the proposals (3 replaced)." in texts and "Shuffle proposals" in texts
 
 
 async def test_slack_break_the_tie_is_the_coordinators(slack: Slack, house: House) -> None:

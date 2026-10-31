@@ -2,7 +2,7 @@
   "blocks": [
     {
       "text": {
-        "text": "*Dinner picks · Thursday, Oct 22* for 4 people\nVoting is closed.",
+        "text": "*Dinner proposals · Thursday, Oct 22* for 4 people\nVoting is closed.",
         "type": "mrkdwn"
       },
       "type": "section"
@@ -64,5 +64,5 @@
       "type": "actions"
     }
   ],
-  "text": "Picks for dinner on Thursday, Oct 22: Sam's Tacos, Siam Garden, Taqueria &lt;Lupita&gt; &amp; Co"
+  "text": "Proposals for dinner on Thursday, Oct 22: Sam's Tacos, Siam Garden, Taqueria &lt;Lupita&gt; &amp; Co"
 }

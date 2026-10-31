@@ -11,7 +11,7 @@
     },
     {
       "text": {
-        "text": "*You missed the answers. Join late?* Adding a pick joins you late: you're in, and your vote shows, but counts only if the coordinator says so.",
+        "text": "*You missed the answers. Join late?* Adding a proposal joins you late: you're in, and your vote shows, but counts only if the coordinator says so.",
         "type": "mrkdwn"
       },
       "type": "section"
@@ -80,7 +80,7 @@
               {
                 "text": {
                   "emoji": true,
-                  "text": "Sam's Tacos (already a pick)",
+                  "text": "Sam's Tacos (already proposed)",
                   "type": "plain_text"
                 },
                 "value": "11"
@@ -97,7 +97,7 @@
               {
                 "text": {
                   "emoji": true,
-                  "text": "Siam Garden (already a pick)",
+                  "text": "Siam Garden (already proposed)",
                   "type": "plain_text"
                 },
                 "value": "12"
@@ -182,7 +182,7 @@
   },
   "title": {
     "emoji": true,
-    "text": "Add a pick",
+    "text": "Add a proposal",
     "type": "plain_text"
   },
   "type": "modal"

@@ -82,7 +82,7 @@ REFUSED: dict[GuestAction, str] = {
     GuestAction.MAYBE: "As a guest, you're in or out.",
     GuestAction.DETAILS: "As a guest, ask whoever invited you to add details.",
     GuestAction.VOTE: "Guests don't vote, but thanks for joining!",
-    GuestAction.PROPOSE: "Guests don't add picks. Ask whoever invited you.",
+    GuestAction.PROPOSE: "Guests don't add proposals. Ask whoever invited you.",
     GuestAction.LOCK: "Guests don't pick the plan. Whoever invited you, or an admin, can lock it.",
     GuestAction.CALL_OFF: "Only a household member can call it off.",
     GuestAction.START: "Only a household member can start a call.",
@@ -94,7 +94,7 @@ REFUSED: dict[GuestAction, str] = {
     GuestAction.INVITE: "Only a household member can invite a guest.",
     GuestAction.JOIN_LATE: "Guests come by invitation while answers are open. Ask whoever invited you.",
     GuestAction.LATE_SWITCHES: "Guests don't decide that. Whoever invited you, or an admin, can.",
-    GuestAction.SHUFFLE: "Guests don't pick the plan. Whoever invited you, or an admin, can shuffle the picks.",
+    GuestAction.SHUFFLE: "Guests don't pick the plan. Whoever invited you, or an admin, can shuffle the proposals.",
     GuestAction.BREAK_TIE: "Guests don't pick the plan. Whoever invited you, or an admin, can break the tie.",
 }
 NOT_INVITED = GUEST_NOT_INVITED

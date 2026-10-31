@@ -3,7 +3,7 @@
     {
       "elements": [
         {
-          "text": "Posts in the Dinnerbell channel. If that meal's call is open already, it's added there as a pick.",
+          "text": "Posts in the Dinnerbell channel. If that meal's call is open already, it's added there as a proposal.",
           "type": "mrkdwn"
         }
       ],

@@ -47,9 +47,9 @@ from dinnerbell.services.common import audit
 from dinnerbell.services.errors import NotFound
 from dinnerbell.services.preferences import group_preferences
 
-NOT_TIED = "That pick isn't tied for the most votes."
-NOTHING_TO_SHUFFLE = "Nothing can be shuffled: every pick was added, offered, suggested, or has votes."
-NOTHING_ELSE_FITS = "No other place fits for everyone who's in, so the picks stay as they are."
+NOT_TIED = "That proposal isn't tied for the most votes."
+NOTHING_TO_SHUFFLE = "Nothing can be shuffled: every proposal was added, offered, suggested, or has votes."
+NOTHING_ELSE_FITS = "No other place fits for everyone who's in, so the proposals stay as they are."
 
 
 def _target(event_id: int) -> str:
@@ -158,7 +158,7 @@ async def shuffle(db: AsyncSession, actor: Member, event_id: int, *, run: int | 
                 now=now,
             )
         replaced = len(fresh)
-        line = f"{actor.display_name} shuffled the picks ({replaced} replaced)."
+        line = f"{actor.display_name} shuffled the proposals ({replaced} replaced)."
         event = await EventRepository(db).save(replace(event, shuffles=number, shuffle_note=line), now)
         ctx = await cc.load(db, event)
         by = ctx.person(actor.id)
