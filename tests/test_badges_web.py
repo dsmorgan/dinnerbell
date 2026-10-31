@@ -436,7 +436,8 @@ def test_the_household_view_lists_food_critic_like_any_badge_without_feedback_co
     mine = page(client.get("/stats"))
     assert "Food Critic<span" in mine[: mine.index("Lately earned")]
     assert "Food Critic · First" in mine[mine.index("Lately earned") :]
-    assert "loved" not in html.lower() and "not again" not in html.lower()  # FR-49: never what anyone said
+    # FR-49: never what anyone said
+    assert not any(word in html.lower() for word in ("loved", "liked", "hated", "didn&#39;t like"))
 
 
 def test_no_page_repeats_an_id(house: Settings, client: TestClient) -> None:
