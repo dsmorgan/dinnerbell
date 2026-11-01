@@ -14,6 +14,7 @@
   --ok-soft: #dcf3e3;
   --danger: #b91c1c;
   --danger-soft: #fde4e4;
+  --press-filled: rgb(0 0 0 / 0.14);
   --radius: 14px;
   --shadow: 0 1px 2px rgb(0 0 0 / 0.05), 0 4px 16px rgb(0 0 0 / 0.04);
   --gutter: max(16px, env(safe-area-inset-left));
@@ -34,6 +35,7 @@
     --ok-soft: #173322;
     --danger: #fca5a5;
     --danger-soft: #3f1d1d;
+    --press-filled: rgb(255 255 255 / 0.18);
     --shadow: none;
   }
 }
@@ -228,8 +230,45 @@ details > summary h2::after { content: " +"; color: var(--muted); }
 details[open] > summary h2::after { content: " −"; }
 details[open] > summary { margin-bottom: 0.5rem; }
 
-/* The form whose request is in flight, not a whole card being refreshed. */
-form.htmx-request button { opacity: 0.6; }
+/* Tap feedback (#153). A pressed button, level, or toggle chip tints at once: 10% of its own text
+   color over a light fill, or darker (lighter in dark mode) on a filled choice, so its text keeps
+   at least 4.5:1 in both themes. A link chip's border takes its text color instead, since its
+   tinted fill would fall short. With motion allowed, colors ease over 120 ms, including a choice
+   that turns on or off after a save, and a pressed control shrinks slightly. The press shows
+   instantly; only the release eases. */
+:is(.button, button):not(:disabled):active,
+.segment:active span,
+.chip-toggle:active span {
+  box-shadow: inset 0 0 0 100vmax color-mix(in srgb, currentColor 10%, transparent);
+}
+:is(.button.primary, .button.choice[aria-pressed="true"], .answer-option[aria-current="true"]):not(:disabled):active,
+.segment:not(.level-zero, .level-neg, .level-pos):active input:checked + span,
+.chip-toggle:active input:checked + span {
+  box-shadow: inset 0 0 0 100vmax var(--press-filled);
+}
+a.chip:active { border-color: currentColor; }
+@media (prefers-reduced-motion: no-preference) {
+  .button, button, a.chip, .segment span, .chip-toggle span {
+    transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease, box-shadow 120ms ease, transform 120ms ease;
+  }
+  :is(.button, button, a.chip):not(:disabled):active,
+  .segment:active span,
+  .chip-toggle:active span {
+    transform: scale(0.97);
+    transition-duration: 0s;
+  }
+}
+
+/* Pending (#153): the form whose save is in flight, never a whole card being refreshed. After
+   150 ms, so a fast save doesn't flicker, its buttons, or a preference row's levels, dim and show a
+   progress cursor. form.submitting is a full-page form on its way (app.js). */
+form.htmx-request button, form.submitting button, form.htmx-request .segments { animation: pending 0s 150ms forwards; }
+form.htmx-request .segment span { animation: pending-cursor 0s 150ms forwards; }
+@media (prefers-reduced-motion: no-preference) {
+  form.htmx-request button, form.submitting button, form.htmx-request .segments { animation-duration: 120ms; }
+}
+@keyframes pending { to { opacity: 0.6; cursor: progress; } }
+@keyframes pending-cursor { to { cursor: progress; } }
 
 /* ---- M1: navigation, catalog, preferences, history ---------------------------------------- */
 
@@ -393,6 +432,14 @@ ins { color: var(--ok); text-decoration: none; }
 .levels { border: 0; margin: 0; padding: 0; min-width: 0; }
 .pref-name { padding: 0; margin-bottom: 0.35rem; font-weight: 600; overflow-wrap: anywhere; }
 .saved { color: var(--ok); font-weight: 400; margin-left: 0.4rem; }
+/* "Saved" fades after about 2 seconds (#153); with reduced motion, it hides then without fading.
+   Hidden, it keeps its space, so the row doesn't shift. */
+.saved { animation: saved-fade 2.4s ease-in forwards; }
+@keyframes saved-fade { 0%, 75% { opacity: 1; } 100% { opacity: 0; visibility: hidden; } }
+@media (prefers-reduced-motion: reduce) {
+  .saved { animation: saved-hide 0s 2s forwards; }
+}
+@keyframes saved-hide { to { visibility: hidden; } }
 .segments { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 0; }
 .segments.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .segments.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }

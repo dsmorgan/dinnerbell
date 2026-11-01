@@ -85,7 +85,31 @@
     if (elt instanceof Element) {
       elt.classList.remove("htmx-request");
     }
+    var target = event.detail && event.detail.target;
+    if (target instanceof Element) {
+      target.removeAttribute("aria-busy");
+    }
   });
+
+  // While a save is on its way, the card or row it will replace is busy, so a screen reader waits
+  // for the new one. app.css dims the control after 150 ms. A card's refresh doesn't count.
+  // HTMX ends every request it sends with htmx:afterRequest: a response, an error, a timeout, or
+  // an abort when a second tap replaces it.
+  document.addEventListener("htmx:beforeSend", function (event) {
+    var target = event.detail && event.detail.target;
+    if (isSave(event) && target instanceof Element) {
+      target.setAttribute("aria-busy", "true");
+    }
+  });
+  document.addEventListener("htmx:afterRequest", function (event) {
+    var target = event.detail && event.detail.target;
+    if (target instanceof Element) {
+      target.removeAttribute("aria-busy");
+    }
+  });
+
+  // iOS Safari shows :active, the pressed style in app.css, only on a page that listens for touches.
+  document.addEventListener("touchstart", function () {}, { passive: true });
 
   // A double tap on one of a card's controls would send the same thing twice: the card's
   // hx-sync aborts the first in the browser, but the server has usually received it already.
@@ -139,12 +163,48 @@
     }
   });
 
+  // A full-page form, such as feedback or a setting, posts and loads a new page. Until it does,
+  // mark the form as submitting (app.css dims its buttons after 150 ms) and ignore a second
+  // submit, so a double tap posts once. Forms HTMX sends, forms the browser's validation stops
+  // (they never fire submit), and forms the size check above stops are left alone. A GET, such as
+  // the Catalog search, is safe to repeat.
+  var SUBMITTING = "submitting";
+
+  function isFullPagePost(form, submitter) {
+    var method = (submitter && submitter.getAttribute("formmethod")) || form.getAttribute("method") || "get";
+    var target = (submitter && submitter.getAttribute("formtarget")) || form.getAttribute("target") || "_self";
+    return method.toLowerCase() === "post" && target === "_self";
+  }
+
   document.addEventListener("submit", function (event) {
-    var inputs = event.target.querySelectorAll("input[type=file][data-max-bytes]");
+    var form = event.target;
+    if (!(form instanceof HTMLFormElement)) {
+      return;
+    }
+    var inputs = form.querySelectorAll("input[type=file][data-max-bytes]");
     for (var i = 0; i < inputs.length; i += 1) {
       if (!fileFits(inputs[i])) {
         event.preventDefault();
       }
+    }
+    if (event.defaultPrevented || !isFullPagePost(form, event.submitter)) {
+      return; // HTMX cancels the submit of each form it sends.
+    }
+    if (form.classList.contains(SUBMITTING)) {
+      event.preventDefault();
+      return;
+    }
+    form.classList.add(SUBMITTING);
+    form.setAttribute("aria-busy", "true");
+  });
+
+  // Back and Forward can show this page again from the browser's cache, as it was when the form
+  // left: clear the mark, so the form works again.
+  window.addEventListener("pageshow", function () {
+    var forms = document.querySelectorAll("form." + SUBMITTING);
+    for (var i = 0; i < forms.length; i += 1) {
+      forms[i].classList.remove(SUBMITTING);
+      forms[i].removeAttribute("aria-busy");
     }
   });
 
