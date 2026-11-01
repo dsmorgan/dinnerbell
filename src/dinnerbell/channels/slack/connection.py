@@ -290,6 +290,14 @@ class SlackConnection:
         self._task = loop.create_task(self._supervise())
         if prewarm_household is not None:
             self._prewarm_task = loop.create_task(self._prewarm(prewarm_household))
+            self.badge_files.forgotten = self._prewarm_again
+
+    def _prewarm_again(self, household_id: int) -> None:
+        """After Slack refused files and ``BadgeFiles.forget`` dropped them, upload them again in the
+        background, so the next post finds them settled. One prewarm runs at a time: while one still
+        runs, this does nothing, and the next post uploads what that run had already passed."""
+        if self._prewarm_task is None or self._prewarm_task.done():
+            self._prewarm_task = asyncio.get_running_loop().create_task(self._prewarm(household_id))
 
     async def _prewarm(self, household_id: int) -> None:
         """Wait until Slack is connected and nothing is held back, then let ``BadgeFiles.prewarm``

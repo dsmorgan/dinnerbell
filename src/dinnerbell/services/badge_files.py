@@ -116,6 +116,9 @@ class BadgeFiles:
         self._composite_locks: dict[tuple[int, int], asyncio.Lock] = {}
         self._composite_busy: set[tuple[int, int]] = set()
         self._composite_tasks: set[asyncio.Task[None]] = set()
+        self.forgotten: Callable[[int], None] | None = None
+        """Told the household after ``forget`` drops files, so the connection can upload them again in
+        the background (``SlackConnection`` sets it only when it prewarms)."""
 
     async def file_ids(
         self, household_id: int, wanted: Iterable[Wanted], fresh: set[str] | None = None
@@ -159,14 +162,18 @@ class BadgeFiles:
             async with self.sessionmaker() as db:
                 await BadgeFileRepository(db).forget(household_id, ids)
                 await db.commit()
+            if self.forgotten is not None:
+                self.forgotten(household_id)
         except Exception:
             log.exception("badge art could not be forgotten", extra={"household_id": household_id})
 
     async def _resolve(self, household_id: int, asked: set[Wanted], found: dict[Wanted, str], fresh: set[str]) -> None:
+        """Every cached file goes in ``found`` first, then the missing ones upload, each added as it
+        lands. So an upload that fails or runs out of time ends only the uploads after it: the cached
+        files and the uploads before it still show."""
         async with self.sessionmaker() as db:
             known = await BadgeFileRepository(db).all(household_id)
-        cooling = self.clock() < self._retry_at  # a failure pauses new uploads, never files already uploaded
-        uploaded: dict[Wanted, str] = {}
+        missing: list[tuple[Wanted, bytes]] = []
         for want in sorted(asked):
             key, tier = want
             png = self.art_for(key, Tier(tier))
@@ -175,10 +182,14 @@ class BadgeFiles:
                 found[want] = row.file_id
                 if self._is_recent(row.file_id):
                     fresh.add(row.file_id)
-            elif not cooling:
-                uploaded[want] = await self._upload(household_id, want, png)
-        found.update(uploaded)
-        fresh.update(uploaded.values())
+            else:
+                missing.append((want, png))
+        if self.clock() < self._retry_at:
+            return  # a failure pauses new uploads, never files already uploaded
+        for want, png in missing:
+            file_id = await self._upload(household_id, want, png)
+            found[want] = file_id
+            fresh.add(file_id)
 
     async def _upload(self, household_id: int, want: Wanted, png: bytes) -> str:
         key, tier = want

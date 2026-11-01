@@ -44,9 +44,11 @@ Slack shows the art as PNGs. `badge_art.png_for(key, tier)` draws `standalone_sv
 
 30 to 40 seconds after Slack connects, Dinnerbell uploads the art for every tier in the background (#112): all 65 files, one at a time, 2 seconds apart, so the first announcement doesn't wait for Slack to process a file. It skips cached files, so a restart picks up where the last run stopped, and logs `badge art prewarmed` once every tier is in. A missing `files:write` scope logs one `badge art not available` line and ends the run. Any other failure waits out the 15-minute pause and tries again, up to three failures in a row. The prewarm never delays startup or serving, and a first use still uploads anything missing. A development run (`create_app` without `prewarm_badge_art`) never prewarms.
 
+When Dinnerbell forgets files that Slack refused (see [Failures](#failures)), a prewarming run starts the prewarm again in the background, so the next post finds the files uploaded and processed. Only one prewarm runs at a time: if one is still running, nothing new starts, and the next post uploads anything that run had already passed. The 15-minute pause after a refused fresh file still applies, because the prewarm waits it out first.
+
 ## In announcements, the recap, and App Home
 
-The badge announcement, the monthly recap, and **Your badges** on App Home reference the files in Slack image elements. `announcements.news_for` sorts each member's badges with `badges.news_order` (highest tier, then `RARITY`: Rare, Occasional, Frequent, then `BADGES` order) before `MAX_BADGES` cuts them, so every layout below names and draws them in that order.
+The badge announcement, the monthly recap, and **Your badges** on App Home reference the files in Slack image elements. `announcements.news_for` sorts each member's badges with `badges.news_order` (highest tier, then `RARITY`: Rare, Occasional, Frequent, then `BADGES` order) before `MAX_BADGES` cuts them, so the announcement and the recap name and draw them in that order. App Home doesn't use `news_for`: it shows a member's badges in `BADGES` order.
 
 - A member with more than three badges (`badge_text.THUMBNAIL_CUTOFF`) in one announcement gets one line naming them, with plain names and no tier emoji ("<@member> earned 8 badges: *Chef*, *Scout*, ..."), and a compact row of small icons, in context blocks of up to 10 images (#114). A badge without art keeps its tag.
 - A member with three or fewer gets a thumbnail row for each badge.
@@ -62,7 +64,7 @@ The badge announcement, the monthly recap, and **Your badges** on App Home refer
 
 Art never fails or blocks a post or a Home view:
 
-- A post or Home view waits at most 3 seconds for a new upload, then shows text.
+- A post or Home view waits at most 3 seconds for a new upload, then shows text. Cached files are looked up first, so an upload that fails or runs out of time never hides them, and uploads that finished before it still show.
 - If an upload fails or the app lacks `files:write`, Dinnerbell logs one `badge art not available` line, shows text tags, and uploads nothing new for 15 minutes. Files already uploaded still show.
 - If Slack refuses blocks and a file was uploaded in the same call, Slack may not have processed it yet, so Dinnerbell waits 1.5 seconds and tries again, then 3 seconds and tries once more, keeping the cache. Only a first post with new art that Slack refuses takes up to about 4.5 seconds longer. If the last try is refused too, Dinnerbell forgets the files, shows text, and uploads nothing new for 15 minutes.
 - If no file was new, such as when one was deleted in Slack, Dinnerbell forgets the cached files and shows text at once. Other refusals keep the cache.
