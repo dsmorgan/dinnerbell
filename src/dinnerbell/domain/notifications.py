@@ -808,7 +808,8 @@ class BadgeTier:
 
 @dataclass(frozen=True, slots=True)
 class BadgeNews:
-    """What one member earned. ``more`` counts badges left off the list to keep the message short.
+    """What one member earned, in ``badges.news_order`` (highest tier, then rarest ladder). ``more``
+    counts badges left off the list to keep the message short.
     ``rest`` are those badges, which a message that shows art for every badge may draw (#114); a
     post queued before it existed has none."""
 

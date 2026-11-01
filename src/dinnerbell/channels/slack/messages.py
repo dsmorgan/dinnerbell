@@ -14,7 +14,15 @@ from datetime import date, datetime, time
 from typing import Any
 
 from dinnerbell.channels.slack import ids
-from dinnerbell.channels.slack.badge_text import THUMBNAIL_CUTOFF, ArtIds, art_element, icon_rows, tag, wanted
+from dinnerbell.channels.slack.badge_text import (
+    ICONS_PER_BLOCK,
+    THUMBNAIL_CUTOFF,
+    ArtIds,
+    art_element,
+    icon_rows,
+    tag,
+    wanted,
+)
 from dinnerbell.channels.slack.blocks import (
     MAX_FALLBACK,
     MAX_MESSAGE_BLOCKS,
@@ -1734,12 +1742,70 @@ def _drawn(news: tuple[note.BadgeNews, ...], art: ArtIds) -> list[dict[note.Badg
     return drawn
 
 
+RECAP_ICONS = ICONS_PER_BLOCK
+"""Badges the recap shows for one member when it has art: one row of small icons, which Slack caps at
+10 elements, with the same badges named in the line above. The rest are counted ("and 2 more
+badges"). Without art, the recap names ``MAX_BADGES`` (6) with their tier marks, as before."""
+
+
+def _recap_shown(news: note.BadgeNews) -> tuple[note.BadgeTier, ...]:
+    """The badges the recap names for one member when it shows art: the first ``RECAP_ICONS``, in
+    the order ``news_for`` gives them (highest tier, then rarest ladder)."""
+    return (*news.badges, *news.rest)[:RECAP_ICONS]
+
+
+def art_wanted(notification: note.Notification) -> set[tuple[str, str]]:
+    """The badge art a post could show, as ``ArtIds`` keys: every badge of a badge post (a member
+    with many shows them all as icons), and the badges the recap names. Empty for anything else."""
+    if isinstance(notification, note.BadgesEarned):
+        shown = [b for n in notification.news for b in (*n.badges, *n.rest)]
+    elif isinstance(notification, note.MonthlyRecap):
+        shown = [b for n in notification.badges for b in _recap_shown(n)]
+    else:
+        return set()
+    return {w for b in shown if (w := wanted(b.name, b.tier))}
+
+
+def _recap_badges(notification: note.MonthlyRecap, art: ArtIds) -> list[Block]:
+    """The recap's badges. With art for any of them: a heading, then for each member a line naming
+    their badges and a row of the icons, which show each tier, so a badge with art is named plain and
+    one without keeps its tag. Without art for any: one text block, as before art (#105).
+
+    The recap stays within Slack's 50 blocks (``MAX_MESSAGE_BLOCKS``). Four are fixed: the totals, the
+    thank-you, the badge heading, and the closing line; a fifth says how many members were left off.
+    ``MAX_PEOPLE`` (10) members follow, each with a line and at most one row of ``RECAP_ICONS`` (10)
+    icons: 2 blocks. So 5 + 10 x 2 = 25, and 26 with the instance label."""
+    more = (
+        [f"…and {plural(notification.more_badges, 'more member')} earned badges too."]
+        if notification.more_badges
+        else []
+    )
+    drawn = [
+        {b: f for b in _recap_shown(n) if (f := art.get(wanted(b.name, b.tier) or ("", "")))}
+        for n in notification.badges
+    ]
+    if not any(drawn):
+        earned = [f"• {escape(n.person.name)}: {', '.join(_tags(n))}" for n in notification.badges]
+        return [section(join_lines(["*Badges earned*", *earned, *more]))]
+    blocks = [section("*Badges earned*")]
+    for news, mine in zip(notification.badges, drawn, strict=True):
+        shown = _recap_shown(news)
+        names = [f"*{escape(b.name)}*" if b in mine else tag(f"*{escape(b.name)}*", b.tier) for b in shown]
+        if left := len(news.badges) + news.more - len(shown):
+            names.append(plural(left, "more badge"))
+        blocks.append(section(f"{escape(news.person.name)}: {_and(names)}"))
+        blocks += icon_rows([art_element(f, f"{b.name}, {b.tier}") for b, f in mine.items()])
+    blocks += [section(t) for t in more]
+    return blocks
+
+
 THANKED_AS = {"cooked": "Cooked", "picked_up": "Picked up", "ordered": "Ordered", "coordinated": "Coordinated"}
 
 
 def monthly_recap_message(notification: note.MonthlyRecap, ctx: RenderContext) -> Message:
     """FR-40: the month in review. Household totals first, then a thank-you for each member who
-    pitched in, in name order, then badges. It names no one for doing less and ranks no one."""
+    pitched in, in name order, then badges, with their art when it is uploaded (``_recap_badges``).
+    It names no one for doing less and ranks no one."""
     month = MONTHS[notification.month.month - 1]
     lines = [f"*{month} in review* 🍽️", f"Together you put *{plural(notification.meals, 'meal')}* on the table."]
     if notification.cuisines:
@@ -1767,10 +1833,7 @@ def monthly_recap_message(notification: note.MonthlyRecap, ctx: RenderContext) -
         ]
         blocks.append(section(join_lines(thanks)))
     if notification.badges:
-        earned = [f"• {escape(n.person.name)}: {', '.join(_tags(n))}" for n in notification.badges]
-        if notification.more_badges:
-            earned.append(f"…and {plural(notification.more_badges, 'more member')} earned badges too.")
-        blocks.append(section(join_lines(["*Badges earned*", *earned])))
+        blocks += _recap_badges(notification, ctx.art)
     following = MONTHS[notification.month.month % 12]
     blocks.append(context(f"Here's to a tasty {following}!", link(ctx.url("/stats/household"), STATS_LINK)))
     return _finish(f"{month} in review: {plural(notification.meals, 'meal')} together.", blocks)

@@ -1,0 +1,299 @@
+{
+  "blocks": [
+    {
+      "text": {
+        "text": "*October in review* 🍽️\nTogether you put *24 meals* on the table.\n*Cuisines:* Indian, Mexican, Thai (new to you: Thai)\n*New in the catalog:* 3 (Pad Thai, Pho &lt;Saigon&gt;, and Tikka Masala)",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "text": {
+        "text": "*Thank you*\nEvery meal takes a team, and everyone here is part of it.\n• *Cooked:* Alex and Sam\n• *Picked up:* Kim\n• *Ordered:* Sam\n• *Coordinated:* Alex\nAnd thank you to everyone who answered a call or pulled up a chair.",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "text": {
+        "text": "*Badges earned*",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "text": {
+        "text": "Kim: *Chef*, *Explorer*, *Bright Idea*, *Road Runner*, *Quarterback*, *Scout*, *On a Roll*, *Full Table*, *Early Bird*, *Good Host*, and 2 more badges",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "elements": [
+        {
+          "alt_text": "Chef, Diamond",
+          "slack_file": {
+            "id": "F-chef-diamond"
+          },
+          "type": "image"
+        },
+        {
+          "alt_text": "Explorer, Gold",
+          "slack_file": {
+            "id": "F-explorer-gold"
+          },
+          "type": "image"
+        },
+        {
+          "alt_text": "Bright Idea, Gold",
+          "slack_file": {
+            "id": "F-bright_idea-gold"
+          },
+          "type": "image"
+        },
+        {
+          "alt_text": "Road Runner, Gold",
+          "slack_file": {
+            "id": "F-road_runner-gold"
+          },
+          "type": "image"
+        },
+        {
+          "alt_text": "Quarterback, Gold",
+          "slack_file": {
+            "id": "F-quarterback-gold"
+          },
+          "type": "image"
+        },
+        {
+          "alt_text": "Scout, Silver",
+          "slack_file": {
+            "id": "F-scout-silver"
+          },
+          "type": "image"
+        },
+        {
+          "alt_text": "On a Roll, Silver",
+          "slack_file": {
+            "id": "F-on_a_roll-silver"
+          },
+          "type": "image"
+        },
+        {
+          "alt_text": "Full Table, Silver",
+          "slack_file": {
+            "id": "F-full_table-silver"
+          },
+          "type": "image"
+        },
+        {
+          "alt_text": "Early Bird, Bronze",
+          "slack_file": {
+            "id": "F-early_bird-bronze"
+          },
+          "type": "image"
+        },
+        {
+          "alt_text": "Good Host, First",
+          "slack_file": {
+            "id": "F-good_host-first"
+          },
+          "type": "image"
+        }
+      ],
+      "type": "context"
+    },
+    {
+      "text": {
+        "text": "Member 0: *Scout*",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "elements": [
+        {
+          "alt_text": "Scout, First",
+          "slack_file": {
+            "id": "F-scout-first"
+          },
+          "type": "image"
+        }
+      ],
+      "type": "context"
+    },
+    {
+      "text": {
+        "text": "Member 1: *Scout*",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "elements": [
+        {
+          "alt_text": "Scout, First",
+          "slack_file": {
+            "id": "F-scout-first"
+          },
+          "type": "image"
+        }
+      ],
+      "type": "context"
+    },
+    {
+      "text": {
+        "text": "Member 2: *Scout*",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "elements": [
+        {
+          "alt_text": "Scout, First",
+          "slack_file": {
+            "id": "F-scout-first"
+          },
+          "type": "image"
+        }
+      ],
+      "type": "context"
+    },
+    {
+      "text": {
+        "text": "Member 3: *Scout*",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "elements": [
+        {
+          "alt_text": "Scout, First",
+          "slack_file": {
+            "id": "F-scout-first"
+          },
+          "type": "image"
+        }
+      ],
+      "type": "context"
+    },
+    {
+      "text": {
+        "text": "Member 4: *Scout*",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "elements": [
+        {
+          "alt_text": "Scout, First",
+          "slack_file": {
+            "id": "F-scout-first"
+          },
+          "type": "image"
+        }
+      ],
+      "type": "context"
+    },
+    {
+      "text": {
+        "text": "Member 5: *Scout*",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "elements": [
+        {
+          "alt_text": "Scout, First",
+          "slack_file": {
+            "id": "F-scout-first"
+          },
+          "type": "image"
+        }
+      ],
+      "type": "context"
+    },
+    {
+      "text": {
+        "text": "Member 6: *Scout*",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "elements": [
+        {
+          "alt_text": "Scout, First",
+          "slack_file": {
+            "id": "F-scout-first"
+          },
+          "type": "image"
+        }
+      ],
+      "type": "context"
+    },
+    {
+      "text": {
+        "text": "Member 7: *Scout*",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "elements": [
+        {
+          "alt_text": "Scout, First",
+          "slack_file": {
+            "id": "F-scout-first"
+          },
+          "type": "image"
+        }
+      ],
+      "type": "context"
+    },
+    {
+      "text": {
+        "text": "Member 8: *Scout*",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "elements": [
+        {
+          "alt_text": "Scout, First",
+          "slack_file": {
+            "id": "F-scout-first"
+          },
+          "type": "image"
+        }
+      ],
+      "type": "context"
+    },
+    {
+      "text": {
+        "text": "…and 2 more members earned badges too.",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "elements": [
+        {
+          "text": "Here's to a tasty November!",
+          "type": "mrkdwn"
+        },
+        {
+          "text": "<https://dinnerbell.example.com/stats/household|Stats on the web>",
+          "type": "mrkdwn"
+        }
+      ],
+      "type": "context"
+    }
+  ],
+  "text": "October in review: 24 meals together."
+}

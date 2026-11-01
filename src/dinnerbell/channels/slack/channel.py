@@ -28,10 +28,10 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from dinnerbell.channels.slack.api import TOKEN_REFUSED, SlackApi, SlackAuthError, refusal, refused_blocks
-from dinnerbell.channels.slack.badge_text import ArtIds, wanted
+from dinnerbell.channels.slack.badge_text import ArtIds
 from dinnerbell.channels.slack.blocks import Directory
 from dinnerbell.channels.slack.composites import held_of_member
-from dinnerbell.channels.slack.messages import RenderContext, render
+from dinnerbell.channels.slack.messages import RenderContext, art_wanted, render
 from dinnerbell.domain import notifications as note
 from dinnerbell.domain.notifications import (
     DeliveryResult,
@@ -151,12 +151,12 @@ class SlackChannel:
         return RenderContext(self.base_url, self.audience.directory(directory), self.instance_label, art or {})
 
     async def _art(self, notification: Notification) -> tuple[ArtIds, set[str]]:
-        """The uploaded art a badge post shows, and which of its files were uploaded just now, or
-        none: art never holds up or fails a delivery."""
+        """The uploaded art a badge post or the monthly recap shows (``art_wanted``), and which of its
+        files were uploaded just now, or none: art never holds up or fails a delivery."""
         fresh: set[str] = set()
-        if self.badge_files is None or not isinstance(notification, note.BadgesEarned):
+        asked = art_wanted(notification)
+        if self.badge_files is None or not asked:
             return {}, fresh
-        asked = {w for n in notification.news for b in (*n.badges, *n.rest) if (w := wanted(b.name, b.tier))}
         return await self.badge_files.file_ids(notification.household_id, asked, fresh), fresh
 
     async def deliver(self, notification: Notification, *, thread: MessageRef | None = None) -> DeliveryResult:

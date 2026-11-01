@@ -118,6 +118,19 @@ SILENT_BADGES = frozenset({BadgeKey.FOOD_CRITIC})
 """Earned and shown, but never announced by itself, because a post would interrupt the channel each
 time someone gives feedback. The announcer marks these awards ``announced`` without queuing a post;
 the recap, the household's newest badges, Stats, and the art treat them like any other badge."""
+RARITY = (Ladder.RARE, Ladder.OCCASIONAL, Ladder.FREQUENT)
+"""The ladders from hardest to climb to easiest: a list of news names a Rare badge before a Frequent one."""
+_CATALOG = {b.key: n for n, b in enumerate(BADGES)}
+
+
+def news_order(badge: BadgeKey, tier: Tier) -> tuple[int, int, int]:
+    """The sort key for one member's badges in a badge post or the recap (FR-39, FR-40): the
+    highest tier first (Diamond to First), then the rarest ladder (``RARITY``), then ``BADGES``
+    order. Any list that is cut short ("and 2 more badges") is sorted first, so what's left off
+    is the most common."""
+    return (-TIERS.index(tier), RARITY.index(BY_KEY[badge].ladder), _CATALOG[badge])
+
+
 ROLL_KINDS = frozenset({Kind.COOKED, Kind.PICKED_UP, Kind.ORDERED})
 """Pitching in for On a Roll: a week counts when the member cooked, picked up, or ordered."""
 

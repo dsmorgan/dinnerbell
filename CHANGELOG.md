@@ -6,6 +6,11 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ## [Unreleased]
 
+### Changed
+
+- **The monthly recap shows your badge art.** Each member's badges in the recap now get a line naming them and a row of the same art the badge posts use, beneath it. The line names up to 10 badges, one row's worth, and counts the rest ("and 2 more badges"). A badge whose art isn't in Slack keeps its text tag, and when there's no art at all, such as when the Slack app lacks the `files:write` scope, the recap is the text it was, with 6 badges a member. The recap waits for, retries, and falls back from the art the same way badge posts do.
+- **Badges are listed rarest first.** Badge posts and the recap list each member's badges by tier, highest first (Diamond, Gold, Silver, Bronze, First), then by ladder (Rare, then Occasional, then Frequent), then in the order of the badge table. Before, they followed the badge table alone, so a Diamond could be cut off ("and 6 more badges") while a First tier was named. A list cut short now leaves off the most common badges.
+
 ### Removed
 
 - **The upgrade guard for old feedback forms** (#148). 0.11.0 refused a **How was it?** form or modal opened before the upgrade, which still asked about the food and the place, so that saving it couldn't take back your rating. Both instances now run 0.11.0, so the guard is gone. A rating is now simply required: the web form and the Slack modal always send one, because a rating, **No answer** at first, is always selected. A web post without one gets the **Request refused** page, a Slack modal without the rating closes, and one with no rating picked says "Pick a rating, or No answer." None of them saves anything.

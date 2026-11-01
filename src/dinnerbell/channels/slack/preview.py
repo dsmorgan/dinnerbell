@@ -41,7 +41,18 @@ from dinnerbell.channels.slack.views import (
     proposal_modal,
 )
 from dinnerbell.domain import notifications as note
-from dinnerbell.domain.badges import BADGES, DEFAULT_LADDERS, Announcement, Award, BadgeKey, Tier, progress
+from dinnerbell.domain.badges import (
+    BADGES,
+    BY_KEY,
+    DEFAULT_LADDERS,
+    TIERS,
+    Announcement,
+    Award,
+    BadgeKey,
+    Tier,
+    news_order,
+    progress,
+)
 from dinnerbell.domain.catalog import CatalogItem, ItemKind, Mode, Tag, TagKind
 from dinnerbell.domain.events import (
     AssignmentRole,
@@ -59,6 +70,7 @@ from dinnerbell.domain.feedback import FeedbackInput, MealFacts, PlaceIssue, Rat
 from dinnerbell.domain.meals import MemberRef, Slot
 from dinnerbell.domain.members import Capabilities, Member, Role
 from dinnerbell.domain.schedule import DEFAULT_SLOTS
+from dinnerbell.services.announcements import MAX_BADGES
 from dinnerbell.services.event_views import EventView, Permissions, ProposalView, RolesChoice, TodayView
 from dinnerbell.services.feedback import Awaiting, FeedbackForm
 from dinnerbell.services.meals import LogForm
@@ -241,13 +253,28 @@ BADGE_NEWS = (
     note.BadgeNews(ALEX, (note.BadgeTier("Full Table", "First"), note.BadgeTier("Quarterback", "First"))),
     note.BadgeNews(SAM, (CHEF_BRONZE,)),
 )
+KIM_MONTH = {
+    BadgeKey.CHEF: Tier.DIAMOND,
+    BadgeKey.ROAD_RUNNER: Tier.GOLD,
+    BadgeKey.ORDER_UP: Tier.FIRST,
+    BadgeKey.QUARTERBACK: Tier.GOLD,
+    BadgeKey.FULL_TABLE: Tier.SILVER,
+    BadgeKey.EARLY_BIRD: Tier.BRONZE,
+    BadgeKey.BRIGHT_IDEA: Tier.GOLD,
+    BadgeKey.SCOUT: Tier.SILVER,
+    BadgeKey.EXPLORER: Tier.GOLD,
+    BadgeKey.GOOD_HOST: Tier.FIRST,
+    BadgeKey.ON_A_ROLL: Tier.SILVER,
+    BadgeKey.GAMBLER: Tier.FIRST,
+}
+"""Kim's badges in a busy month: every badge but Food Critic, which is never in a badge post, at
+mixed tiers, so the samples show the order of ``news_order``."""
+KIM_EARNED = tuple(
+    note.BadgeTier(BY_KEY[key].name, tier.label)
+    for key, tier in sorted(KIM_MONTH.items(), key=lambda kt: news_order(*kt))
+)
 MANY_BADGES = (
-    note.BadgeNews(
-        KIM,
-        tuple(note.BadgeTier(b.name, "Gold") for b in BADGES[:6]),
-        more=6,
-        rest=tuple(note.BadgeTier(b.name, "Gold") for b in BADGES[6:12]),
-    ),
+    note.BadgeNews(KIM, KIM_EARNED[:MAX_BADGES], more=len(KIM_EARNED) - MAX_BADGES, rest=KIM_EARNED[MAX_BADGES:]),
     *(note.BadgeNews(note.PersonInfo(20 + n, f"Member {n}"), (FIRST_SCOUT,)) for n in range(9)),
 )
 THANKS = (
@@ -315,6 +342,7 @@ NOTIFICATIONS: dict[str, Callable[[], note.Notification]] = {
         badges=MANY_BADGES[:10],
         more_badges=2,
     ),
+    "monthly_recap_art": lambda: replace(RECAP, badges=MANY_BADGES[:10], more_badges=2),
     "call_updated": lambda: note.CallUpdated(event(), ROSTER, (LEE,), head_count=3),
     "call_updated_voting": lambda: note.CallUpdated(VOTING, ROSTER, (), head_count=3),
     "call_updated_voting_no_coordinator": lambda: note.CallUpdated(event(EventState.VOTING), ROSTER, (), head_count=3),
@@ -866,12 +894,19 @@ CARDS: dict[str, CardSample] = {
 KINDS = (*NOTIFICATIONS, *VIEWS, *CARDS)
 
 
+SAMPLE_ART = {(b.key.value, t.value): f"F-{b.key.value}-{t.value}" for b in BADGES for t in TIERS}
+"""Made-up Slack file IDs for every badge tier, as if all were uploaded. Real IDs exist only in a
+workspace, so Block Kit Builder shows these as broken images, but the layout and block count are real."""
+WITH_ART = frozenset({"monthly_recap_art"})
+"""Samples rendered with ``SAMPLE_ART``. Every other sample shows badges as text, as with no art."""
+
+
 def preview(kind: str, base_url: str = BASE_URL) -> dict[str, Any]:
     """The Block Kit JSON for sample ``kind``: a message payload for notifications and cards, or
     the view for a modal or the Home tab. Raises KeyError for an unknown kind."""
     if kind in VIEWS:
         return VIEWS[kind]()
-    ctx = RenderContext(base_url, DIRECTORY)
+    ctx = RenderContext(base_url, DIRECTORY, art=SAMPLE_ART if kind in WITH_ART else {})
     if kind in CARDS:
         return CARDS[kind](ctx)
     return render(NOTIFICATIONS[kind](), ctx).payload()

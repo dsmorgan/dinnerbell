@@ -44,14 +44,16 @@ Slack shows the art as PNGs. `badge_art.png_for(key, tier)` draws `standalone_sv
 
 30 to 40 seconds after Slack connects, Dinnerbell uploads the art for every tier in the background (#112): all 65 files, one at a time, 2 seconds apart, so the first announcement doesn't wait for Slack to process a file. It skips cached files, so a restart picks up where the last run stopped, and logs `badge art prewarmed` once every tier is in. A missing `files:write` scope logs one `badge art not available` line and ends the run. Any other failure waits out the 15-minute pause and tries again, up to three failures in a row. The prewarm never delays startup or serving, and a first use still uploads anything missing. A development run (`create_app` without `prewarm_badge_art`) never prewarms.
 
-## In announcements and App Home
+## In announcements, the recap, and App Home
 
-The badge announcement and **Your badges** on App Home reference the files in Slack image elements:
+The badge announcement, the monthly recap, and **Your badges** on App Home reference the files in Slack image elements. `announcements.news_for` sorts each member's badges with `badges.news_order` (highest tier, then `RARITY`: Rare, Occasional, Frequent, then `BADGES` order) before `MAX_BADGES` cuts them, so every layout below names and draws them in that order.
 
 - A member with more than three badges (`badge_text.THUMBNAIL_CUTOFF`) in one announcement gets one line naming them, with plain names and no tier emoji ("<@member> earned 8 badges: *Chef*, *Scout*, ..."), and a compact row of small icons, in context blocks of up to 10 images (#114). A badge without art keeps its tag.
 - A member with three or fewer gets a thumbnail row for each badge.
 - Each member is laid out on their own, so one post can mix the two. The text-only post names 6 badges and counts the rest ("and 2 more badges").
 - A post stays within Slack's 50 blocks: 3 are fixed, and each of at most 10 members takes at most 3, so it never passes 33.
+- The monthly recap gives every member the compact layout, whatever their count: a line naming up to `messages.RECAP_ICONS` (10) badges, plain beside their icon or tagged without one, then one context block of their icons. More than 10 are counted ("and 2 more badges"), so each member takes 2 blocks and the recap never passes 26 blocks with the instance label. With no art for any badge, it is the text it was before art: one block, 6 badges a member with tier marks.
+- `messages.art_wanted` lists the art a post asks `BadgeFiles` for: every badge of a badge post, and the badges the recap names. The recap uses the same upload, timeout, cooldown, retry, and forget rules as a badge post, below.
 - When Home shows a badge's icon in the "Next" line, it leaves the tier emoji off the name.
 
 `badge_text.art_element` is the one place that decides how art is referenced. If Slack won't show a file that no channel shares (#110, hypothesis 2), change it to an `image_url` for a public PNG route. #110 has the design: `GET /badge-art/{key}/{tier}.png`, no sign-in, immutable caching, only valid keys and tiers, and a Pangolin bypass for that path.
