@@ -18,7 +18,7 @@ Only members earn the at-the-table, answered-quickly, idea, hosting, Gambler, an
 
 A call counts once, even if two people tap **Mark done** together. Called-off and discarded calls, and meals logged by hand, count for nothing.
 
-When an admin corrects who cooked, picked up, or ordered after the meal is done, the count moves to the person who has the role now. They earn the badges it reaches, announced as usual, and the person who lost it loses any tier their counts no longer reach. A pending badge taken back is never announced, and the den never celebrates it; one already announced disappears from Stats, App Home, and the recap. A tier kept through a raised count stays. See [Coordinating](coordinating.md#what-an-admin-can-do-beyond-that).
+When an admin corrects who cooked, picked up, or ordered after the meal is done, the count moves to the person who has the role now. They earn the badges it reaches, announced as usual, and the person who lost it loses each tier their counts no longer reach on the current counts, even a tier they first earned at a lower count before an admin raised it. A tier their counts never reached on the raised count stays, as it does when an admin raises one. A pending badge taken back is never announced, and the den never celebrates it. One already announced leaves Stats, App Home, the household's newest badges, and future recaps, but a post already sent or queued in Slack stays. See [Coordinating](coordinating.md#what-an-admin-can-do-beyond-that).
 
 ## Badges and tiers
 

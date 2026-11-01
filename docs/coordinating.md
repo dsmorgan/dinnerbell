@@ -86,7 +86,7 @@ Contributions and badges count who did what when the meal is marked done, so a c
 
 **Adjust** in Slack is the coordinator's alone. An admin who taps it is told to use the web.
 
-When you correct who cooked, picked up, or ordered after the meal is done, Dinnerbell moves that meal's count from the old person to the new one. The new person earns any badge the count reaches, which is announced like any other. The old person loses any badge tier their counts no longer reach, even one already announced; a tier they kept when an admin raised its count stays. Correcting it back restores both. Each correction that moves a count writes an audit row, `event.contributions_recounted`, with who lost and gained the count and the badges taken back and awarded.
+When you correct who cooked, picked up, or ordered after the meal is done, Dinnerbell moves that meal's count from the old person to the new one. The new person earns any badge the count reaches, which is announced like any other. The old person loses each badge tier their counts no longer reach on the current counts, even one already announced, and even one first earned at a lower count before an admin raised it. A post about it that Slack already has stays. Correcting it back restores both. Each correction that moves a count writes an audit row, `event.contributions_recounted`, with who lost and gained the count and the badges taken back and awarded.
 
 ## What a guest coordinator can do
 
