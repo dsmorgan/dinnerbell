@@ -18,6 +18,8 @@ Only members earn the at-the-table, answered-quickly, idea, hosting, Gambler, an
 
 A call counts once, even if two people tap **Mark done** together. Called-off and discarded calls, and meals logged by hand, count for nothing.
 
+When an admin corrects who cooked, picked up, or ordered after the meal is done, the count moves to the person who has the role now. They earn the badges it reaches, announced as usual, and the person who lost it loses any tier their counts no longer reach. A pending badge taken back is never announced, and the den never celebrates it; one already announced disappears from Stats, App Home, and the recap. A tier kept through a raised count stays. See [Coordinating](coordinating.md#what-an-admin-can-do-beyond-that).
+
 ## Badges and tiers
 
 Each of the 13 badges has five tiers, **First**, **Bronze**, **Silver**, **Gold**, and **Diamond**, and climbs one of three ladders:
@@ -28,7 +30,7 @@ Each of the 13 badges has five tiers, **First**, **Bronze**, **Silver**, **Gold*
 | Occasional | 1, 5, 20, 50, 100 | Bright Idea, Good Host |
 | Rare | 1, 3, 10, 25, 50 | On a Roll, Scout, Explorer |
 
-Each person earns a badge tier once. **On a Roll** counts weeks in a run, Monday to Sunday in your time zone, with at least one meal cooked, picked up, or ordered. A run survives one missed week, which doesn't count toward it; two missed weeks in a row end it.
+Each person earns a badge tier once, unless an admin's correction takes it back (see [What counts](#what-counts)). **On a Roll** counts weeks in a run, Monday to Sunday in your time zone, with at least one meal cooked, picked up, or ordered. A run survives one missed week, which doesn't count toward it; two missed weeks in a row end it.
 
 ## The badge art
 
@@ -82,4 +84,4 @@ A member sees their own counts and progress. The household sees totals and the n
 
 ## Logs
 
-Counting writes `contributions_recorded` and `badge_earned` lines with the member ID and display name, the badge and tier, and the call. They never carry emails or anything a member wrote.
+Counting writes `contributions_recorded` and `badge_earned` lines with the member ID and display name, the badge and tier, and the call. A correction after the meal writes `contributions_recounted`, and `badge_revoked` for each tier it takes back. They never carry emails or anything a member wrote.

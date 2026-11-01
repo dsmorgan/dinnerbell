@@ -189,6 +189,6 @@ def test_the_cli_path_refuses_a_downgrade_that_finds_a_dangling_reference(
         with engine.connect() as c:
             assert c.execute(text(schema)).all() == schema_before  # the rollback undid the DDL
             assert c.execute(text("SELECT name FROM tag")).all() == [("T",)]
-            assert c.execute(text("SELECT version_num FROM alembic_version")).scalar_one().startswith("0023")
+            assert c.execute(text("SELECT version_num FROM alembic_version")).scalar_one().startswith("0024")
     finally:
         engine.dispose()
