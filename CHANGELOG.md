@@ -13,6 +13,11 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 ### Fixed
 
 - **A History or Catalog page that isn't a number shows the first page.** An address such as `/history?page=abc` or `/catalog?q=thai&page=2.5` showed **Request refused**. It now shows the first page, and the Catalog keeps your search. A page number past either end still shows the nearest page.
+- **A correction after the meal moves the count and the badges** (#162). When an admin corrects who cooked, picked up, or ordered after a meal is done, the meal's count for that role now moves to the person who has it. They earn any badge the count reaches, announced like any other and celebrated by the den. The person who lost the role loses each badge tier their counts no longer reach: a pending one is never announced or celebrated, and one already announced leaves Stats, App Home, and the recap. A tier kept through a raised count stays. Correcting it back restores both. Each correction that moves a count is audited as `event.contributions_recounted`, with the badges taken back and awarded. Before, a correction after done changed the record but not the counts.
+
+### Upgrade notes
+
+- **Badges:** revision `0024_badge_award_autoincrement` rebuilds the badge award table on the first start, keeping every award, so the ID of a badge taken back is never given to another. To go back to 0.11.0, restore the backup you took before the upgrade.
 
 ## [0.11.0] - 2026-10-31
 

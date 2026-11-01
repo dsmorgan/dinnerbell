@@ -41,12 +41,12 @@ from dinnerbell.domain.badges import (
 )
 from dinnerbell.domain.catalog import Mode
 from dinnerbell.domain.contributions import Kind
-from dinnerbell.domain.events import EventState, RoleOffer, Status, with_status
+from dinnerbell.domain.events import AssignmentRole, EventState, RoleOffer, Status, with_status
 from dinnerbell.domain.feedback import FeedbackInput, Rating
 from dinnerbell.domain.guests import GuestInput
 from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.members import Member, Role
-from dinnerbell.services import calls, contributions, feedback, guests, offers, stats
+from dinnerbell.services import calls, contributions, feedback, fun, guests, offers, stats
 from dinnerbell.services.database import Database, open_database
 from dinnerbell.services.errors import Forbidden
 from dinnerbell.services.offers import OfferInput
@@ -1159,3 +1159,141 @@ async def test_gambler_reads_every_calls_votes_in_one_query_not_one_per_member(h
     finally:
         sa_event.remove(engine, "before_cursor_execute", record)
     assert len([s for s in statements if "FROM vote" in s]) == 1
+
+
+# Correcting a done call (#162) -----------------------------------------------------------------
+
+
+async def correct(house: House, event_id: int, role: AssignmentRole, name: str | None) -> None:
+    """The admin (Alex) corrects who did ``role``."""
+    who = house[name].id if name is not None else None
+    await act(house, calls.change_assignment, house["Alex"], event_id, role, who)
+
+
+def held(found: list[tuple[str, BadgeKey, Tier, Announcement]]) -> set[tuple[str, BadgeKey, Tier]]:
+    return {(who, badge, tier) for who, badge, tier, _ in found}
+
+
+async def test_a_correction_after_done_moves_the_count_and_the_badges_and_is_audited(house: House) -> None:
+    event_id = await dinner(house)  # Alex picked up
+    before = await awards(house)
+    assert ("Alex", BadgeKey.ROAD_RUNNER, Tier.FIRST) in held(before)
+    await correct(house, event_id, AssignmentRole.PICKUP, "Sam")
+
+    alex, sam = await counts(house, "Alex"), await counts(house, "Sam")
+    assert Kind.PICKED_UP not in alex and sam[Kind.PICKED_UP] == 1
+    assert alex[Kind.PARTICIPATED] == 1 and sam[Kind.COORDINATED] == 1  # the other counts stay
+    after = await awards(house)
+    lost = {("Alex", BadgeKey.ROAD_RUNNER, Tier.FIRST), ("Alex", BadgeKey.ON_A_ROLL, Tier.FIRST)}
+    earned = {("Sam", BadgeKey.ROAD_RUNNER, Tier.FIRST), ("Sam", BadgeKey.ON_A_ROLL, Tier.FIRST)}
+    assert held(after) == (held(before) - lost) | earned
+    # Earned by the correction, like any award: pending, for this call.
+    async with house.sessionmaker() as db:
+        new = await db.scalars(select(BadgeAwardRow).where(BadgeAwardRow.member_id == house["Sam"].id))
+        road = next(r for r in new if r.badge_key == BadgeKey.ROAD_RUNNER.value)
+    assert (road.announcement, road.event_id, road.awarded_at) == ("pending", event_id, house.clock.now)
+
+    changed, recounted = (await house.audits("event."))[-2:]
+    assert changed.action == "event.assignment_changed"
+    assert recounted.action == "event.contributions_recounted"
+    assert recounted.actor_member_id == house["Alex"].id and recounted.target == f"event:{event_id}"
+    payload = recounted.payload
+    assert (payload["role"], payload["kind"]) == ("pickup", "picked_up")
+    assert (payload["removed"], payload["added"]) == ([house["Alex"].id], [house["Sam"].id])
+    assert {(b["member_id"], b["badge"], b["tier"]) for b in payload["badges_revoked"]} == {
+        (house["Alex"].id, "road_runner", "first"),
+        (house["Alex"].id, "on_a_roll", "first"),
+    }
+    assert {(b["member_id"], b["badge"], b["tier"]) for b in payload["badges_awarded"]} == {
+        (house["Sam"].id, "road_runner", "first"),
+        (house["Sam"].id, "on_a_roll", "first"),
+    }
+
+
+async def test_a_badge_taken_back_before_its_post_is_never_announced_or_celebrated(house: House) -> None:
+    event_id = await dinner(house)
+    await correct(house, event_id, AssignmentRole.PICKUP, "Sam")
+    async with house.sessionmaker() as db:
+        pending = await contributions.pending_announcements(db, house.household.id)
+        alex = await fun.den(db, house["Alex"], house.household, now=house.clock(), with_badge=True)
+    announced = {(a.member_id, a.badge) for a in pending}
+    assert (house["Alex"].id, BadgeKey.ROAD_RUNNER) not in announced
+    assert (house["Alex"].id, BadgeKey.ON_A_ROLL) not in announced
+    assert (house["Sam"].id, BadgeKey.ROAD_RUNNER) in announced
+    assert alex.badge is not None
+    assert "Road Runner" not in alex.badge.caption and "On a Roll" not in alex.badge.caption
+
+
+async def test_a_correction_takes_back_only_the_tiers_the_count_no_longer_reaches(house: House) -> None:
+    async with house.sessionmaker() as db:
+        await contributions.set_thresholds(db, house["Alex"], every(1, 2, 3, 4, 5), now=house.clock())
+    first = await dinner(house, n=0)
+    await dinner(house, n=1)
+    road = [t for who, badge, t, _ in await awards(house, "Alex") if badge is BadgeKey.ROAD_RUNNER]
+    assert road == [Tier.FIRST, Tier.BRONZE]
+    await correct(house, first, AssignmentRole.PICKUP, "Sam")
+    assert (await counts(house, "Alex"))[Kind.PICKED_UP] == 1
+    road = [t for who, badge, t, _ in await awards(house, "Alex") if badge is BadgeKey.ROAD_RUNNER]
+    assert road == [Tier.FIRST]
+
+
+async def test_a_tier_kept_through_a_raised_threshold_stays_after_a_correction(house: House) -> None:
+    async with house.sessionmaker() as db:
+        await contributions.set_thresholds(db, house["Alex"], every(1, 2, 3, 4, 5), now=house.clock())
+    first = await dinner(house, n=0)
+    await dinner(house, n=1)
+    async with house.sessionmaker() as db:  # Bronze now takes 3, but Alex keeps the one earned at 2
+        await contributions.set_thresholds(db, house["Alex"], every(1, 3, 4, 5, 6), now=house.clock())
+    await correct(house, first, AssignmentRole.PICKUP, "Sam")
+    road = [t for who, badge, t, _ in await awards(house, "Alex") if badge is BadgeKey.ROAD_RUNNER]
+    assert road == [Tier.FIRST, Tier.BRONZE]
+
+
+async def test_correcting_back_restores_the_counts_and_the_badges_with_new_ids(house: House) -> None:
+    event_id = await dinner(house)
+    original_rows, original = await snapshot(house), held(await awards(house))
+    await correct(house, event_id, AssignmentRole.PICKUP, "Sam")
+    async with house.sessionmaker() as db:
+        sams = [a.id for a in await BadgeRepository(db).for_member(house.household.id, house["Sam"].id)]
+    await correct(house, event_id, AssignmentRole.PICKUP, "Alex")
+    assert await snapshot(house) == original_rows
+    assert held(await awards(house)) == original
+    async with house.sessionmaker() as db:
+        alexes = [a.id for a in await BadgeRepository(db).for_member(house.household.id, house["Alex"].id)]
+    assert max(alexes) > max(sams)  # Sam's awards were the newest; their IDs aren't given out again
+    assert len(await house.audits("event.contributions_recounted")) == 2
+
+
+async def test_clearing_a_role_after_done_takes_its_count_back(house: House) -> None:
+    event_id = await dinner(house)
+    await correct(house, event_id, AssignmentRole.PICKUP, None)
+    assert Kind.PICKED_UP not in await counts(house, "Alex")
+    assert not [a for a in await awards(house, "Alex") if a[1] is BadgeKey.ROAD_RUNNER]
+    (row,) = await house.audits("event.contributions_recounted")
+    assert (row.payload["removed"], row.payload["added"]) == ([house["Alex"].id], [])
+
+
+async def test_a_correction_before_done_is_what_done_counts_and_recounts_nothing(house: House) -> None:
+    event_id = await dinner(house, done=False)
+    await act(house, calls.change_assignment, house["Sam"], event_id, AssignmentRole.PICKUP, house["Sam"].id)
+    assert await rows(house) == 0 and await house.audits("event.contributions_recounted") == []
+    house.clock.now = DONE_AT
+    await house.tick()
+    assert Kind.PICKED_UP not in await counts(house, "Alex")
+    assert (await counts(house, "Sam"))[Kind.PICKED_UP] == 1
+    assert ("Sam", BadgeKey.ROAD_RUNNER, Tier.FIRST) in held(await awards(house))
+    assert await house.audits("event.contributions_recounted") == []
+
+
+async def test_a_correction_to_a_call_never_counted_is_left_to_the_next_start(house: House) -> None:
+    """Only a failure at Mark done leaves a done call uncounted; the next start counts it as corrected."""
+    event_id = await dinner(house)
+    async with house.sessionmaker() as db:
+        await db.execute(text("DELETE FROM contribution"))
+        await db.commit()
+    await correct(house, event_id, AssignmentRole.PICKUP, "Sam")
+    assert await rows(house) == 0 and await house.audits("event.contributions_recounted") == []
+    async with house.sessionmaker() as db:
+        await contributions.ensure_backfilled(db, house.household.id, now=house.clock())
+    assert (await counts(house, "Sam"))[Kind.PICKED_UP] == 1
+    assert Kind.PICKED_UP not in await counts(house, "Alex")

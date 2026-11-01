@@ -100,7 +100,7 @@ from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.members import Member
 from dinnerbell.domain.notifications import CALL_OFF_SUPERSEDES, SUPERSEDED_BY_CALL_OFF
 from dinnerbell.domain.schedule import slot_schedule
-from dinnerbell.services import activity, lifecycle, picks
+from dinnerbell.services import activity, contributions, lifecycle, picks
 from dinnerbell.services import call_context as cc
 from dinnerbell.services import guests as guest_rules
 from dinnerbell.services.call_context import CallContext, load, locked_event, publish
@@ -763,7 +763,10 @@ async def change_assignment(
     """Who cooks, picks up, or orders: the coordinator picks while decided (two volunteer cooks,
     for example); the admin can also correct it after the meal (spec 5.7). Only the decided
     mode's role, and only someone who's in. Giving a role to whoever has it already changes
-    nothing and sends nothing. Audited."""
+    nothing and sends nothing. Audited.
+
+    A correction after the call is done moves the role's count and the badges it reaches
+    (``contributions.recount_role``, #162), in the same transaction."""
     if role not in ROLE_CHANGES:
         raise EventRuleViolation("Change the coordinator with hand off instead.", code="wrong_role")
     async with locked_event(db, actor.household_id, event_id, now) as event:
@@ -816,6 +819,8 @@ async def change_assignment(
             to_member_id=member_id,
             to_member=to.display_name if to else None,
         )
+        if event.state is EventState.DONE:
+            await contributions.recount_role(db, actor, event, role, now=now)
 
 
 async def mark_done(db: AsyncSession, actor: Member, event_id: int, *, now: datetime) -> None:

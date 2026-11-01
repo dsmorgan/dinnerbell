@@ -51,6 +51,40 @@ class ContributionRepository:
                 added.append(credit)
         return added
 
+    async def counted(self, household_id: int, event_id: int) -> bool:
+        """Whether the call has any counts: false for one that hasn't been counted, which
+        ``ensure_backfilled`` counts on the next start."""
+        found = await self._session.scalar(
+            select(ContributionRow.id)
+            .where(ContributionRow.household_id == household_id, ContributionRow.event_id == event_id)
+            .limit(1)
+        )
+        return found is not None
+
+    async def credited(self, household_id: int, event_id: int, kind: Kind) -> set[int]:
+        """Who has ``kind`` counted for the call."""
+        rows = await self._session.scalars(
+            select(ContributionRow.member_id).where(
+                ContributionRow.household_id == household_id,
+                ContributionRow.event_id == event_id,
+                ContributionRow.kind == kind.value,
+            )
+        )
+        return set(rows)
+
+    async def remove(self, household_id: int, event_id: int, kind: Kind, member_ids: Iterable[int]) -> int:
+        """Delete the call's ``kind`` counts for ``member_ids``, for a correction after the meal
+        (#162). Returns how many rows."""
+        result = await self._session.execute(
+            delete(ContributionRow).where(
+                ContributionRow.household_id == household_id,
+                ContributionRow.event_id == event_id,
+                ContributionRow.kind == kind.value,
+                ContributionRow.member_id.in_(list(member_ids)),
+            )
+        )
+        return int(result.rowcount)  # type: ignore[attr-defined]
+
     async def counts(self, household_id: int, member_id: int) -> dict[Kind, int]:
         rows = await self._session.execute(
             select(ContributionRow.kind, func.count())
@@ -163,6 +197,23 @@ class BadgeRepository:
         if award_id is None:
             return None
         return Award(award_id, household_id, member_id, badge, tier, now, announcement, None, event_id)
+
+    async def revoke(self, household_id: int, member_id: int, badge: BadgeKey, tier: Tier) -> Award | None:
+        """Delete the member's award of ``badge`` at ``tier``, and return it; None when they don't
+        hold it. A pending award goes before it's announced, so its post is never sent."""
+        row = await self._session.scalar(
+            select(BadgeAwardRow).where(
+                BadgeAwardRow.household_id == household_id,
+                BadgeAwardRow.member_id == member_id,
+                BadgeAwardRow.badge_key == badge.value,
+                BadgeAwardRow.tier == tier.value,
+            )
+        )
+        if row is None:
+            return None
+        award = _award(row)
+        await self._session.execute(delete(BadgeAwardRow).where(BadgeAwardRow.id == row.id))
+        return award
 
     async def clear(self, household_id: int, badges: Iterable[BadgeKey]) -> int:
         """Delete the household's awards of ``badges``, for ``scrub-test``. Returns how many rows."""

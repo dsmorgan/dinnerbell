@@ -599,7 +599,11 @@ class BadgeAwardRow(Base):
     """A badge tier a member earned, once (``member_id``, ``badge_key``, ``tier`` are unique).
     ``announcement`` says whether the channel has been told: ``pending`` until a post goes out
     (``announced_at``), or ``skipped`` for an award made quietly, such as the backfill. The call
-    that earned it is ``event_id``, cleared if the call is deleted; the award stays."""
+    that earned it is ``event_id``, cleared if the call is deleted; the award stays.
+
+    AUTOINCREMENT, because an admin's correction after the meal can take an award back (#162),
+    and SQLite would otherwise give its ID to the next award. A badge post's outbox key and
+    ``member.fun_seen_award`` name awards by ID."""
 
     __tablename__ = "badge_award"
     __table_args__ = (
@@ -607,6 +611,7 @@ class BadgeAwardRow(Base):
         CheckConstraint("tier IN ('first', 'bronze', 'silver', 'gold', 'diamond')", name="tier"),
         CheckConstraint("announcement IN ('pending', 'announced', 'skipped')", name="announcement"),
         Index("ix_badge_award_household_announcement", "household_id", "announcement"),
+        {"sqlite_autoincrement": True},
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

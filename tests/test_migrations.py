@@ -1188,7 +1188,8 @@ def test_0013_lets_calls_and_meals_be_breakfast_and_downgrade_refuses_while_any_
     assert cli.main(["migrate"]) == 0
     after = _snapshot(settings)
     assert _calls_before_late_join(settings) == before["rows"] and after["indexes"] == before["indexes"]
-    assert _event_foreign_keys(settings) == fks and _sequences(settings) == sequences
+    # 0024 rebuilds badge_award with AUTOINCREMENT, which adds its own (empty) high-water mark.
+    assert _event_foreign_keys(settings) == fks and _sequences(settings) == sequences | {"badge_award": 0}
     assert "AUTOINCREMENT" in _event_sql(settings)
     assert _slot_checks(settings) == [
         "CONSTRAINT ck_event_slot CHECK (slot IN ('breakfast', 'lunch', 'dinner'))",
@@ -1844,6 +1845,51 @@ def test_0023_marks_every_badge_so_far_seen_and_downgrade_drops_it(settings: Set
     assert {k: v for k, v in after.items() if k != "member"} == {k: v for k, v in before.items() if k != "member"}
     _downgrade_to(settings, "0022_fun_mode")
     assert _rows_outside_m4(settings) == before
+
+
+# 0024: badge award IDs are never reused (#162) ------------------------------------------------------
+
+
+def _badge_awards(settings: Settings) -> tuple[str, list[object]]:
+    engine = create_engine(settings.sync_database_url)
+    try:
+        with engine.connect() as c:
+            sql: str = c.execute(text("SELECT sql FROM sqlite_master WHERE name = 'badge_award'")).scalar_one()
+            return sql, list(c.execute(text("SELECT * FROM badge_award ORDER BY id")).all())
+    finally:
+        engine.dispose()
+
+
+def test_0024_rebuilds_badge_award_without_losing_a_row_and_never_reuses_an_id(settings: Settings) -> None:
+    """Up rebuilds ``badge_award`` with AUTOINCREMENT, keeping every award; then taking back the
+    newest award doesn't free its ID. Down rebuilds it without, and changes no other row."""
+    _upgrade_to(settings, "0023_fun_seen_award")
+    _populate_calls(settings)
+    _execute(
+        settings,
+        "INSERT INTO badge_award (id, household_id, member_id, badge_key, tier, awarded_at, announcement) "
+        "VALUES (4, 1, 1, 'chef', 'first', :t, 'announced'), (9, 1, 1, 'chef', 'bronze', :t, 'pending')",
+    )
+    sql, awards = _badge_awards(settings)
+    others = _rows_outside_m4(settings)
+    assert "AUTOINCREMENT" not in sql and len(awards) == 2
+
+    _upgrade_to(settings, "0024_badge_award_autoincrement")
+    sql, after = _badge_awards(settings)
+    assert "AUTOINCREMENT" in sql and after == awards
+    assert _rows_outside_m4(settings) == others
+    _execute(
+        settings,
+        "DELETE FROM badge_award WHERE id = 9",
+        "INSERT INTO badge_award (household_id, member_id, badge_key, tier, awarded_at, announcement) "
+        "VALUES (1, 1, 'chef', 'bronze', :t, 'pending')",
+    )
+    assert [row[0] for row in _badge_awards(settings)[1]] == [4, 10]
+
+    _downgrade_to(settings, "0023_fun_seen_award")
+    sql, down = _badge_awards(settings)
+    assert "AUTOINCREMENT" not in sql and [row[0] for row in down] == [4, 10]
+    assert _rows_outside_m4(settings) == others
 
 
 def test_a_second_migrator_waits_then_reports_a_lock(settings: Settings, caplog: pytest.LogCaptureFixture) -> None:

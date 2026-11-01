@@ -4,7 +4,9 @@
 ``record_done`` counts a call's contributions when it reaches done, and ``record_feedback`` counts
 feedback when a member gives it. Both record rows that ignore a repeat, so a call finished twice,
 or by two requests at once, counts once, and then award every badge tier the new counts reach.
-An award is one row per member, badge, and tier, so it happens once too. A live award starts
+An award is one row per member, badge, and tier, so it happens once too. ``recount_role`` moves
+a role's count when an admin corrects who did it after the meal is done (#162), and takes back the
+badges the old assignee no longer reaches. A live award starts
 ``pending``: the channel is told later, by the Slack slice, which reads ``pending_announcements``
 and calls ``mark_announced``. Awards made while catching up (``ensure_backfilled``, including the
 one-time catch-up for the three ladders, and a lowered threshold) are ``skipped`` and never
@@ -42,7 +44,10 @@ from dinnerbell.domain.badges import (
     SETTINGS_KEY,
     Announcement,
     Award,
+    BadgeKey,
     Ladder,
+    Ladders,
+    Tier,
     check_ladders,
     ladders_from,
     ladders_setting,
@@ -50,8 +55,8 @@ from dinnerbell.domain.badges import (
     tiers_reached,
 )
 from dinnerbell.domain.catalog import CatalogItem
-from dinnerbell.domain.contributions import Credit, DoneFacts, Kind, credits_for_done, newness_by_meal
-from dinnerbell.domain.events import Event
+from dinnerbell.domain.contributions import ROLE_KIND, Credit, DoneFacts, Kind, credits_for_done, newness_by_meal
+from dinnerbell.domain.events import AssignmentRole, Event
 from dinnerbell.domain.meals import MealLog
 from dinnerbell.domain.members import Member
 from dinnerbell.services import activity
@@ -164,7 +169,85 @@ async def _count_event(
     return await ContributionRepository(db).add(household_id, credits, day=event.day, now=now, event_id=event.id)
 
 
+# Correcting a done call (#162) -----------------------------------------------------------------
+
+
+async def recount_role(db: AsyncSession, actor: Member, event: Event, role: AssignmentRole, *, now: datetime) -> None:
+    """Make the done call's count for ``role`` match who has it now, after an admin's correction,
+    in the caller's transaction. Whoever lost the role loses the call's count for it, and every
+    badge tier their counts reached before and don't now, on the household's current ladders: a
+    tier they kept through a raised threshold stays. Taking an award back deletes it, so a pending
+    one is never announced, and the den never flips for it. Whoever has the role now gets the
+    count and every tier it reaches, pending, like any badge earned when a call is done; one taken
+    back and earned again is a new award. Running it again changes nothing, so correcting back
+    restores the counts and the badges.
+
+    A call that was never counted, which only a failure at Mark done leaves, is left to
+    ``ensure_backfilled``, which counts it from the roles as corrected. Audited as
+    ``event.contributions_recounted`` when anything changed."""
+    household_id, kind = event.household_id, ROLE_KIND[role]
+    counts = ContributionRepository(db)
+    if not await counts.counted(household_id, event.id):
+        return
+    members = {m.id: m for m in await MemberRepository(db).list(household_id)}
+    assigned = await AssignmentRepository(db).for_event(household_id, event.id)
+    wanted = {a.member_id for a in assigned if a.role is role and a.member_id in members}
+    had = await counts.credited(household_id, event.id, kind)
+    losing, gaining = sorted(had - wanted), sorted(wanted - had)
+    if not losing and not gaining:
+        return
+    ladders = ladders_from(await household_settings(db, household_id))
+    before = {m: await _reached(counts, household_id, m, ladders) for m in losing}
+    await counts.remove(household_id, event.id, kind, losing)
+    await counts.add(household_id, [Credit(m, kind) for m in gaining], day=event.day, now=now, event_id=event.id)
+    revoked: list[Award] = []
+    for member_id in losing:
+        after = set(await _reached(counts, household_id, member_id, ladders))
+        for badge, tier in [t for t in before[member_id] if t not in after]:
+            award = await BadgeRepository(db).revoke(household_id, member_id, badge, tier)
+            if award is not None:
+                revoked.append(award)
+    awarded = await _award(db, household_id, set(gaining), now, Announcement.PENDING, event.id)
+    payload = {
+        "role": role.value,
+        "kind": kind.value,
+        "removed": losing,
+        "added": gaining,
+        "badges_revoked": [_award_payload(a) for a in revoked],
+        "badges_awarded": [_award_payload(a) for a in awarded],
+    }
+    await audit(db, household_id, actor, "event.contributions_recounted", f"event:{event.id}", payload, now)
+    activity.action(
+        db, "contributions_recounted", event, actor, kind=kind.value, removed=len(losing), added=len(gaining)
+    )
+    for award in revoked:
+        activity.action(
+            db, "badge_revoked", event, members.get(award.member_id), badge=award.badge.value, tier=award.tier.value
+        )
+    for award in awarded:
+        activity.action(
+            db, "badge_earned", event, members.get(award.member_id), badge=award.badge.value, tier=award.tier.value
+        )
+
+
+def _award_payload(award: Award) -> dict[str, object]:
+    return {"member_id": award.member_id, "badge": award.badge.value, "tier": award.tier.value}
+
+
 # Awarding --------------------------------------------------------------------------------------
+
+
+async def _reached(
+    contributions: ContributionRepository, household_id: int, member_id: int, ladders: Ladders
+) -> list[tuple[BadgeKey, Tier]]:
+    """Every badge tier the member's counts reach on ``ladders``, in ``BADGES`` order, lowest tier first."""
+    counts = await contributions.counts(household_id, member_id)
+    weeks = longest_streak(await contributions.days(household_id, member_id, ROLL_KINDS))
+    return [
+        (badge.key, tier)
+        for badge in BADGES
+        for tier in tiers_reached(weeks if badge.kind is None else counts.get(badge.kind, 0), ladders[badge.ladder])
+    ]
 
 
 async def _award(
@@ -180,16 +263,12 @@ async def _award(
     contributions, badges = ContributionRepository(db), BadgeRepository(db)
     made: list[Award] = []
     for member_id in sorted(member_ids):
-        counts = await contributions.counts(household_id, member_id)
-        weeks = longest_streak(await contributions.days(household_id, member_id, ROLL_KINDS))
-        for badge in BADGES:
-            count = weeks if badge.kind is None else counts.get(badge.kind, 0)
-            for tier in tiers_reached(count, ladders[badge.ladder]):
-                award = await badges.add(
-                    household_id, member_id, badge.key, tier, now=now, announcement=announcement, event_id=event_id
-                )
-                if award is not None:
-                    made.append(award)
+        for badge, tier in await _reached(contributions, household_id, member_id, ladders):
+            award = await badges.add(
+                household_id, member_id, badge, tier, now=now, announcement=announcement, event_id=event_id
+            )
+            if award is not None:
+                made.append(award)
     return made
 
 
