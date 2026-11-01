@@ -1,26 +1,71 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Dinnerbell's only script besides HTMX. Loaded from /static, so the CSP needs no inline code.
 //
-// HTMX swaps in successful responses only. When a request fails outright (an expired session,
-// a server error, or no network), show a banner so a tap that didn't save never looks like it did.
+// HTMX swaps in successful responses only. When a request fails outright (no network, a server
+// error, an expired session, or no answer in time), show a banner so a tap that didn't save never
+// looks like it did. The next save that works clears it. A tap replaced by a second tap (hx-sync)
+// is aborted, which HTMX reports as htmx:sendAbort, not a failure, so it raises nothing.
 (function () {
   "use strict";
 
-  function showSaveError(event) {
+  var OFFLINE = "Not saved. Check your connection and try again.";
+  var SERVER = "Not saved. Something went wrong. Try again.";
+  var RELOAD = "Not saved. Reload the page.";
+  var SLOW = "This might not have saved: the server took too long. Reload the page to check.";
+
+  function isSave(event) {
     var config = event && event.detail && event.detail.requestConfig;
-    if (config && config.verb === "get") {
-      return; // a background refresh failed; nothing the person did went unsaved
-    }
+    // A failed GET is a background refresh or a search; nothing the person did went unsaved.
+    return !(config && config.verb === "get");
+  }
+
+  function setBanner(text) {
     var banner = document.getElementById("save-error");
     if (!banner) {
       return;
     }
-    banner.textContent = "Not saved. Reload the page.";
-    banner.hidden = false;
+    banner.textContent = text;
+    banner.hidden = !text;
   }
 
-  document.addEventListener("htmx:responseError", showSaveError);
-  document.addEventListener("htmx:sendError", showSaveError);
+  function failed(text) {
+    return function (event) {
+      if (isSave(event)) {
+        setBanner(text);
+      }
+    };
+  }
+
+  document.addEventListener("htmx:sendError", failed(OFFLINE));
+  document.addEventListener("htmx:timeout", failed(SLOW));
+  document.addEventListener("htmx:responseError", function (event) {
+    var status = event.detail && event.detail.xhr ? event.detail.xhr.status : 0;
+    // 401 and 403 mean an expired session or a stale CSRF token, and other 4xx a page that's out
+    // of date, so reloading is the fix. A 5xx might work the second time.
+    failed(status >= 500 ? SERVER : RELOAD)(event);
+  });
+  document.addEventListener("htmx:afterRequest", function (event) {
+    var xhr = event.detail && event.detail.xhr;
+    if (isSave(event) && xhr && xhr.status >= 200 && xhr.status < 300) {
+      setBanner("");
+    }
+  });
+
+  // An action that a card refuses (a 409) shows its error at the top of the card, which can be
+  // above the screen on a tall card. Bring it into view once the new card settles.
+  document.addEventListener("htmx:afterSettle", function (event) {
+    var swapped = event.target;
+    if (!isSave(event) || !(swapped instanceof Element)) {
+      return;
+    }
+    var shown = "[role=alert]:not([hidden])";
+    var alert = swapped.matches(shown) ? swapped : swapped.querySelector(shown);
+    if (!alert) {
+      return;
+    }
+    var still = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    alert.scrollIntoView({ block: "nearest", behavior: still ? "instant" : "smooth" });
+  });
 
   // A file over the server's limit usually ends in a reset connection rather than a readable
   // 413, so check the size before sending. Inputs opt in with data-max-bytes and name the
