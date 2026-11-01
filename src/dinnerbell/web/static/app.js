@@ -3,8 +3,10 @@
 //
 // HTMX swaps in successful responses only. When a request fails outright (no network, a server
 // error, an expired session, or no answer in time), show a banner so a tap that didn't save never
-// looks like it did. The next save that works clears it. A tap replaced by a second tap (hx-sync)
-// is aborted, which HTMX reports as htmx:sendAbort, not a failure, so it raises nothing.
+// looks like it did. A preference row that failed goes back to the level it last saved. The
+// banner stays until each card or row that failed saves. A tap replaced by a second tap on
+// another control (hx-sync) is aborted, which HTMX reports as htmx:sendAbort, not a failure, so
+// it raises nothing.
 (function () {
   "use strict";
 
@@ -13,10 +15,18 @@
   var RELOAD = "Not saved. Reload the page.";
   var SLOW = "This might not have saved: the server took too long. Reload the page to check.";
 
+  // The ids of the cards and rows whose last save failed.
+  var unsaved = {};
+
   function isSave(event) {
     var config = event && event.detail && event.detail.requestConfig;
     // A failed GET is a background refresh or a search; nothing the person did went unsaved.
     return !(config && config.verb === "get");
+  }
+
+  function targetOf(event) {
+    var target = event.detail && event.detail.target;
+    return (target && target.id) || "page";
   }
 
   function setBanner(text) {
@@ -30,9 +40,17 @@
 
   function failed(text) {
     return function (event) {
-      if (isSave(event)) {
-        setBanner(text);
+      if (!isSave(event)) {
+        return;
       }
+      unsaved[targetOf(event)] = true;
+      var elt = event.detail && event.detail.elt;
+      // A preference row shows the level tapped as soon as it's tapped. Put back the one it
+      // last saved, which the page rendered as checked.
+      if (elt instanceof HTMLFormElement && elt.matches("form[hx-post='/preferences/stance']")) {
+        elt.reset();
+      }
+      setBanner(text);
     };
   }
 
@@ -46,8 +64,23 @@
   });
   document.addEventListener("htmx:afterRequest", function (event) {
     var xhr = event.detail && event.detail.xhr;
-    if (isSave(event) && xhr && xhr.status >= 200 && xhr.status < 300) {
+    if (!isSave(event) || !xhr || xhr.status < 200 || xhr.status >= 300) {
+      return;
+    }
+    delete unsaved[targetOf(event)];
+    if (Object.keys(unsaved).length === 0) {
       setBanner("");
+    }
+  });
+
+  // A double tap on one of a card's controls would send the same thing twice: the card's
+  // hx-sync aborts the first in the browser, but the server has usually received it already.
+  // So while a control's request is in flight (HTMX marks its form with htmx-request), drop a
+  // repeat. A tap on a different control still replaces it.
+  document.addEventListener("htmx:confirm", function (event) {
+    var elt = event.detail && event.detail.elt;
+    if (elt instanceof Element && elt.closest(".event") && elt.classList.contains("htmx-request")) {
+      event.preventDefault();
     }
   });
 
@@ -104,9 +137,15 @@
   // Calls still in progress (scheduled, collecting, voting, or decided) carry data-poll, the URL
   // of their card. Refresh them now and then, so a page left open shows the call opening,
   // voting, the decision, and Mark done at meal time. Skip a card while someone is using it: an
-  // open form, focus inside, or a request in flight (Safari doesn't focus a tapped button).
-  // Skip hidden tabs.
+  // open form, typing in a field, or a request in flight (Safari doesn't focus a tapped button).
+  // A focused button doesn't count: Chrome focuses a tapped one, and HTMX keeps that focus
+  // across the swap. Skip hidden tabs.
+  //
+  // The card is the poll's source, so it shares the card's hx-sync: a tap replaces a poll in
+  // flight, and its answer can't overwrite the tap's. A poll never starts while a save is in
+  // flight, since that would abort the save.
   var POLL_MS = 45000;
+  var TYPING = "textarea, select, input:not([type=hidden]):not([type=radio]):not([type=checkbox])";
   window.setInterval(function () {
     if (document.hidden || !window.htmx) {
       return;
@@ -115,10 +154,11 @@
     for (var i = 0; i < cards.length; i += 1) {
       var card = cards[i];
       var busy = card.classList.contains("htmx-request") || card.querySelector(".htmx-request");
-      if (busy || card.querySelector("details[open]") || card.contains(document.activeElement)) {
+      var typing = card.contains(document.activeElement) && document.activeElement.matches(TYPING);
+      if (busy || typing || card.querySelector("details[open]")) {
         continue;
       }
-      window.htmx.ajax("GET", card.getAttribute("data-poll"), { target: card, swap: "outerHTML" });
+      window.htmx.ajax("GET", card.getAttribute("data-poll"), { source: card, target: card, swap: "outerHTML" });
     }
   }, POLL_MS);
 })();
