@@ -95,9 +95,12 @@ async def catalog_page(
     updated: int = 0,
     tags_created: int = 0,
     page: str = "1",
+    item: str = "",
 ) -> Response:
     """The catalog, ``ITEMS_PER_PAGE`` matches at a time. The page links keep the search, a page
-    past either end shows the nearest one, and a page that isn't a number shows the first."""
+    past either end shows the nearest one, and a page that isn't a number shows the first.
+    ``item`` is the item the notice is about; the notice shows in its entry when this page lists
+    it, else at the top."""
     data = await catalog_service.catalog(db, principal.member)
     tag_id = parse_id(tag)
     search = ItemFilter(
@@ -130,6 +133,8 @@ async def catalog_page(
     message = NOTICES.get(notice)
     if notice == "imported":
         message = f"Imported: {created} added, {updated} updated, {tags_created} new tags."
+    about = parse_id(item) if len(item) <= 20 else None  # 20 digits is past any row ID; skip int() on more
+    notice_item = about if message is not None and about in {i.id for i in items} else None
     return await render(
         request,
         "catalog.html",
@@ -152,19 +157,21 @@ async def catalog_page(
             "meals": MEAL_ORDER,
             "statuses": list(Status),
             "notice": message,
+            "notice_item": notice_item,
         },
     )
 
 
 async def _listed_path(db: Database, principal: Principal, item_id: int, notice: str) -> str:
     """The catalog page that lists the item with no search, scrolled to it, with ``notice`` (a
-    ``NOTICES`` key). An inactive item isn't listed there, so that's the first page."""
+    ``NOTICES`` key) in the item's entry (#153). An inactive item isn't listed there, so that's the
+    first page, with the notice at the top."""
     data = await catalog_service.catalog(db, principal.member)
     names = {t.id: t.name for t in data.tags}
     listed = [item.id for item in data.items if ItemFilter().matches(item, names)]
     page = listed.index(item_id) // ITEMS_PER_PAGE + 1 if item_id in listed else 1
     query = f"page={page}&notice={notice}" if page > 1 else f"notice={notice}"
-    return local_path(f"/catalog?{query}#item-{{}}", item_id)
+    return local_path(f"/catalog?{query}&item={{}}#item-{{}}", item_id, item_id)
 
 
 # Add and edit -------------------------------------------------------------------------------------

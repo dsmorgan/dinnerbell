@@ -4,7 +4,7 @@
 {% block title %}Catalog{% endblock %}
 {% block content %}
 <h1>Catalog</h1>
-{% if notice %}<p class="alert ok" role="status">{{ notice }}</p>{% endif %}
+{% if notice and not notice_item %}<p class="alert ok" role="status">{{ notice }}</p>{% endif %}
 <div class="button-row">
   <a class="button primary" href="/catalog/new?kind=restaurant">Add restaurant</a>
   <a class="button" href="/catalog/new?kind=home">Add home meal</a>
@@ -70,6 +70,8 @@
   <ul class="items">
     {% for item in items %}
     <li class="item{% if not item.active %} inactive{% endif %}" id="item-{{ item.id }}">
+      {#- The redirect scrolls here, so a notice about this item shows here, not off screen at the top. -#}
+      {% if notice and item.id == notice_item %}<p class="alert ok landed-notice" role="status">{{ notice }}</p>{% endif %}
       <div class="item-head">
         <strong class="item-name">{{ item.name }}</strong>
         <span class="badge">{{ item.kind.label }}</span>
