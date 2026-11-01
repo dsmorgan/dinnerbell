@@ -175,8 +175,10 @@ async def _count_event(
 async def recount_role(db: AsyncSession, actor: Member, event: Event, role: AssignmentRole, *, now: datetime) -> None:
     """Make the done call's count for ``role`` match who has it now, after an admin's correction,
     in the caller's transaction. Whoever lost the role loses the call's count for it, and every
-    badge tier their counts reached before and don't now, on the household's current ladders: a
-    tier they kept through a raised threshold stays. Taking an award back deletes it, so a pending
+    badge tier their counts reached before and don't now, on the household's current ladders. A
+    tier first earned at a lower count before the admin raised it goes too, once the counts reached
+    the raised count and then drop below it; one the counts never reached on the raised count
+    stays, as a raised threshold takes nothing away. Taking an award back deletes it, so a pending
     one is never announced, and the den never flips for it. Whoever has the role now gets the
     count and every tier it reaches, pending, like any badge earned when a call is done; one taken
     back and earned again is a new award. Running it again changes nothing, so correcting back

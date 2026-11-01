@@ -10,6 +10,9 @@ flipped for, so a member's next badge could go uncelebrated.
 
 Nothing refers to ``badge_award`` by foreign key, so rebuilding it is safe with foreign keys on
 or off. Copying the rows sets ``sqlite_sequence`` to the largest ID, so no existing ID is reused.
+The upgrade then raises it to the largest ``member.fun_seen_award``, if that is higher: before
+this revision, a deleted award's ID could already be in a den marker, such as one ``scrub-test``
+cleared, and the next award must start above it to flip.
 
 A downgrade drops that record, and upgrading again reseeds it from the largest ID left, so an
 ID deleted in between could be given out again. Production never downgrades: it rolls back by
@@ -32,9 +35,22 @@ branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 
+ABOVE_DEN_MARKERS = (
+    "UPDATE sqlite_sequence SET seq = max(seq, (SELECT coalesce(max(fun_seen_award), 0) FROM member)) "
+    "WHERE name = 'badge_award'"
+)
+SEED_SEQUENCE = (
+    "INSERT INTO sqlite_sequence (name, seq) "
+    "SELECT 'badge_award', 0 WHERE NOT EXISTS (SELECT 1 FROM sqlite_sequence WHERE name = 'badge_award')"
+)
+
+
 def upgrade() -> None:
     with op.batch_alter_table("badge_award", recreate="always", table_kwargs={"sqlite_autoincrement": True}):
         pass
+    # An empty table has no sqlite_sequence row until its first insert; add one so the marker counts.
+    op.execute(SEED_SEQUENCE)
+    op.execute(ABOVE_DEN_MARKERS)
 
 
 def downgrade() -> None:

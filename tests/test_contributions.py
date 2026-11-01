@@ -1237,7 +1237,7 @@ async def test_a_correction_takes_back_only_the_tiers_the_count_no_longer_reache
     assert road == [Tier.FIRST]
 
 
-async def test_a_tier_kept_through_a_raised_threshold_stays_after_a_correction(house: House) -> None:
+async def test_a_tier_the_counts_never_reached_on_a_raised_threshold_stays_after_a_correction(house: House) -> None:
     async with house.sessionmaker() as db:
         await contributions.set_thresholds(db, house["Alex"], every(1, 2, 3, 4, 5), now=house.clock())
     first = await dinner(house, n=0)
@@ -1247,6 +1247,26 @@ async def test_a_tier_kept_through_a_raised_threshold_stays_after_a_correction(h
     await correct(house, first, AssignmentRole.PICKUP, "Sam")
     road = [t for who, badge, t, _ in await awards(house, "Alex") if badge is BadgeKey.ROAD_RUNNER]
     assert road == [Tier.FIRST, Tier.BRONZE]
+
+
+async def test_a_tier_earned_before_a_raised_threshold_goes_once_the_counts_reached_it_and_drop_below(
+    house: House,
+) -> None:
+    """Bronze earned at 2, raised to 3, reached again at 3: a correction to 2 takes it back, since
+    the counts reached it before and don't on the current ladders."""
+    async with house.sessionmaker() as db:
+        await contributions.set_thresholds(db, house["Alex"], every(1, 2, 3, 4, 5), now=house.clock())
+    first = await dinner(house, n=0)
+    await dinner(house, n=1)
+    async with house.sessionmaker() as db:
+        await contributions.set_thresholds(db, house["Alex"], every(1, 3, 4, 5, 6), now=house.clock())
+    await dinner(house, n=2)
+    road = [t for who, badge, t, _ in await awards(house, "Alex") if badge is BadgeKey.ROAD_RUNNER]
+    assert road == [Tier.FIRST, Tier.BRONZE]
+    await correct(house, first, AssignmentRole.PICKUP, "Sam")
+    assert (await counts(house, "Alex"))[Kind.PICKED_UP] == 2
+    road = [t for who, badge, t, _ in await awards(house, "Alex") if badge is BadgeKey.ROAD_RUNNER]
+    assert road == [Tier.FIRST]
 
 
 async def test_correcting_back_restores_the_counts_and_the_badges_with_new_ids(house: House) -> None:

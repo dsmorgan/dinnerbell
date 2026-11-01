@@ -1892,6 +1892,36 @@ def test_0024_rebuilds_badge_award_without_losing_a_row_and_never_reuses_an_id(s
     assert _rows_outside_m4(settings) == others
 
 
+@pytest.mark.parametrize(("awards", "marker", "next_id"), [((4, 9), 15, 16), ((), 12, 13), ((4, 9), 7, 10)])
+def test_0024_starts_new_award_ids_above_every_den_marker(
+    settings: Settings, awards: tuple[int, ...], marker: int, next_id: int
+) -> None:
+    """A den marker can name an award already deleted (``scrub-test``), even with none left. After
+    the upgrade, the next award's ID is above both the largest award and the largest marker, so it
+    flips the den."""
+    _upgrade_to(settings, "0023_fun_seen_award")
+    _populate_calls(settings)
+    insert = (
+        "INSERT INTO badge_award (id, household_id, member_id, badge_key, tier, awarded_at, announcement) "
+        "VALUES (:id, 1, 1, 'chef', :tier, :t, 'announced')"
+    )
+    engine = create_sync_engine(settings.sync_database_url)
+    try:
+        with engine.begin() as c:
+            for award_id, tier in zip(awards, ("first", "bronze"), strict=False):
+                c.execute(text(insert), {"id": award_id, "tier": tier, "t": STAMP})
+            c.execute(text("UPDATE member SET fun_seen_award = :m WHERE id = 1"), {"m": marker})
+    finally:
+        engine.dispose()
+    _upgrade_to(settings, "0024_badge_award_autoincrement")
+    _execute(
+        settings,
+        "INSERT INTO badge_award (household_id, member_id, badge_key, tier, awarded_at, announcement) "
+        "VALUES (1, 1, 'chef', 'silver', :t, 'pending')",
+    )
+    assert _badge_awards(settings)[1][-1][0] == next_id
+
+
 def test_a_second_migrator_waits_then_reports_a_lock(settings: Settings, caplog: pytest.LogCaptureFixture) -> None:
     """Another process holding the write lock: the loser waits, then raises MigrationLocked
     instead of a raw "database is locked" (audit #14)."""
