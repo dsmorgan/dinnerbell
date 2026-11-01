@@ -418,6 +418,21 @@ ins { color: var(--ok); text-decoration: none; }
 .meal p { margin: 0.35rem 0 0; }
 .meal-feedback > .button { margin-top: 0.6rem; }
 
+/* The meal a save lands on (#153): clear of the sticky top bar, its notice inside, and a highlight
+   that fades so you can spot it. Without motion, the highlight stays and nothing moves. */
+.meal { scroll-margin-top: calc(env(safe-area-inset-top) + 11rem); }  /* the top bar's three rows */
+@media (min-width: 36rem) { .meal { scroll-margin-top: calc(env(safe-area-inset-top) + 8rem); } }  /* two */
+@media (min-width: 54rem) { .meal { scroll-margin-top: calc(env(safe-area-inset-top) + 5rem); } }  /* one */
+.meal-notice { margin: 0 0 0.6rem; }
+.meal:target { animation: meal-landed 3s ease-in both; }
+@keyframes meal-landed {
+  0%, 40% { background: var(--accent-soft); border-color: var(--accent); }
+  100% { background: var(--surface); border-color: var(--line); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .meal:target { animation: none; background: var(--accent-soft); border-color: var(--accent); }
+}
+
 /* Pages of a long list (#153): previous, "Page 2 of 5", next, the status centered whichever links
    show. */
 .pager { display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 0.5rem; margin-top: 1rem; }

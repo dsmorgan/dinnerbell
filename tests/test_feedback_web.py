@@ -72,7 +72,7 @@ def test_feedback_from_history_and_an_edit_replaces_it(
     assert values == ["hated", "disliked", "fine", "liked", "loved", ""]
     assert 'name="rating" value="" checked' in form
     saved = give(client, siam, rating="liked", place_issues=["cold", "late", "bogus"], issue_note=" No forks ")
-    assert saved.status_code == 303 and saved.headers["location"] == f"/history?notice=feedback#meal-{siam}"
+    assert saved.status_code == 303 and saved.headers["location"] == f"/history?notice=feedback&meal={siam}#meal-{siam}"
     (row,) = rows(migrated, FeedbackRow)
     # Text in "What went wrong?" checks Other, as a note to the cook checks the thank-you.
     assert (row.rating, row.place_issues, row.issue_note, row.mode) == (
@@ -94,7 +94,7 @@ def test_feedback_from_history_and_an_edit_replaces_it(
     assert (row.rating, row.place_issues, row.issue_note) == ("fine", ["other"], None)
     assert "Your feedback: It was fine. Other." in page(client.get("/history"))
     taken_back = give(client, siam, rating="")
-    assert taken_back.headers["location"] == f"/history?notice=no_feedback#meal-{siam}"
+    assert taken_back.headers["location"] == f"/history?notice=no_feedback&meal={siam}#meal-{siam}"
     assert rows(migrated, FeedbackRow) == []
 
 
