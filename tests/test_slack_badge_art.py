@@ -215,6 +215,37 @@ async def test_what_was_uploaded_before_a_failure_is_kept(house: House) -> None:
     assert await badges.file_ids(house.household.id, [CHEF, SCOUT]) == {CHEF: "F1"}
 
 
+async def test_a_cached_file_still_shows_when_an_upload_before_it_fails(house: House) -> None:
+    uploads = Uploads()
+    badges = files(house, uploads)
+    await badges.file_ids(house.household.id, [SCOUT])
+    uploads.error = RuntimeError("boom")
+    assert CHEF < SCOUT  # Chef is asked for first
+    assert await badges.file_ids(house.household.id, [CHEF, SCOUT]) == {SCOUT: "F1"}
+
+
+async def test_a_cached_file_still_shows_when_an_upload_before_it_runs_out_of_time(house: House) -> None:
+    uploads = Uploads()
+    badges = files(house, uploads, timeout=0.05)
+    await badges.file_ids(house.household.id, [SCOUT])
+    uploads.gate = asyncio.Event()  # never set: Chef's upload hangs
+    assert await badges.file_ids(house.household.id, [CHEF, SCOUT]) == {SCOUT: "F1"}
+
+
+async def test_an_upload_that_landed_before_a_failed_one_is_kept_and_fresh(house: House) -> None:
+    class SecondFails(Uploads):
+        async def __call__(self, filename: str, png: bytes, alt: str) -> str:
+            if self.calls:
+                self.calls.append((filename, png, alt))
+                raise RuntimeError("boom")
+            return await super().__call__(filename, png, alt)
+
+    uploads = SecondFails()
+    fresh: set[str] = set()
+    found = await files(house, uploads).file_ids(house.household.id, [CHEF, SCOUT], fresh)
+    assert found == {CHEF: "F1"} and fresh == {"F1"} and len(uploads.calls) == 2
+
+
 # The announcement ---------------------------------------------------------------------------------
 
 
@@ -721,6 +752,61 @@ async def test_the_connection_prewarms_once_connected_and_not_before(house: Hous
     assert await conn.run_once()
     await conn._prewarm(house.household.id)
     assert len(fake.files) == EVERY_TIER
+
+
+async def started_with_prewarm(house: House, fake: Any, monkeypatch: pytest.MonkeyPatch) -> Any:
+    conn = connection(house, fake)
+
+    async def no_supervisor() -> None:
+        return None
+
+    monkeypatch.setattr(conn, "_supervise", no_supervisor)
+    conn.sleep = no_wait
+    assert await conn.run_once()
+    await conn.start(prewarm_household=house.household.id)
+    assert conn._prewarm_task is not None
+    await conn._prewarm_task
+    return conn
+
+
+async def test_forgotten_files_upload_again_in_the_background(house: House, monkeypatch: pytest.MonkeyPatch) -> None:
+    from tests.support.fake_slack import FakeSlack
+
+    fake = FakeSlack()
+    conn = await started_with_prewarm(house, fake, monkeypatch)
+    first = conn._prewarm_task
+    async with house.sessionmaker() as db:
+        cached = await BadgeFileRepository(db).all(house.household.id)
+    assert len(cached) == EVERY_TIER
+    await conn.badge_files.forget(house.household.id, [cached[CHEF].file_id, cached[SCOUT].file_id])
+    assert conn._prewarm_task is not first
+    await conn._prewarm_task
+    async with house.sessionmaker() as db:
+        again = await BadgeFileRepository(db).all(house.household.id)
+    assert len(again) == EVERY_TIER and again[CHEF].file_id != cached[CHEF].file_id
+    assert len(fake.files) == EVERY_TIER + 2  # only the two forgotten tiers uploaded again
+    await conn.stop()
+
+
+async def test_a_forget_during_a_prewarm_starts_no_second_one(house: House, monkeypatch: pytest.MonkeyPatch) -> None:
+    from tests.support.fake_slack import FakeSlack
+
+    conn = await started_with_prewarm(house, FakeSlack(), monkeypatch)
+    running = asyncio.get_running_loop().create_future()
+    conn._prewarm_task = running  # type: ignore[assignment]
+    await conn.badge_files.forget(house.household.id, ["F-anything"])
+    assert conn._prewarm_task is running
+    running.cancel()
+    await conn.stop()
+
+
+async def test_a_connection_that_never_prewarms_does_not_prewarm_after_a_forget(house: House) -> None:
+    from tests.support.fake_slack import FakeSlack
+
+    conn = connection(house, FakeSlack())
+    assert conn.badge_files.forgotten is None
+    await conn.badge_files.forget(house.household.id, ["F-anything"])
+    assert conn._prewarm_task is None
 
 
 # Compact layouts (#112) ---------------------------------------------------------------------------
@@ -1545,6 +1631,23 @@ async def test_slack_refusing_the_recaps_art_posts_its_text_and_forgets_the_file
     assert icons(tried.args["blocks"]) and not icons(sent.args["blocks"])
     async with house.sessionmaker() as db:
         assert await BadgeFileRepository(db).all(house.household.id) == {}
+
+
+async def test_a_failed_upload_in_the_recap_keeps_the_icons_already_in_slack(house: House) -> None:
+    from tests.test_badge_news import october
+
+    slack = await wire(house)
+    await october(house)
+    await slack.drain()  # Kim's October badges (Early Bird, Full Table, ...) are uploaded
+    await award(house, "Kim", BadgeKey.CHEF, Tier.GOLD)  # new, and asked for before them: "chef" sorts first
+    slack.fake.fail("files.getUploadURLExternal", Failure("missing_scope"))
+    slack.fake.clear()
+    await recap_october(house, slack)
+    assert len(art_uploads(slack)) == 1  # Chef's, which failed
+    blocks = recap_post(slack)
+    assert recap_line(blocks, "Kim").startswith(f"Kim: {tag('*Chef*', 'Gold')}, *")
+    kim = next(r for r in icons(blocks) if r[0]["alt_text"] != "Chef, Gold")
+    assert kim and all(e["alt_text"] != "Chef, Gold" for r in icons(blocks) for e in r)
 
 
 def kim_month() -> note.BadgeNews:
