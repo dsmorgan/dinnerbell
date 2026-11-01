@@ -62,13 +62,21 @@ def parse_id(value: str | None) -> int | None:
     return number if 1 <= number <= MAX_ID else None
 
 
+PAST_THE_END = 10**30
+"""The page a ``?page=`` number longer than 30 digits reads as: past the end of any list."""
+
+
 def page_number(value: str) -> int:
     """A ``?page=`` number as typed, or 1 when it isn't a whole number, such as "abc" or "2.5".
     ``page_of`` moves a number past either end onto the nearest page, so any value lands on a
-    page instead of an error."""
+    page instead of an error. A number too long to bother converting is past the end: the
+    first page when it's negative, else the last."""
+    negative = value.startswith("-")
     digits = value.removeprefix("-")
-    if not (digits.isascii() and digits.isdigit()) or len(digits) > 30:
+    if not (digits.isascii() and digits.isdigit()):
         return 1
+    if len(digits) > 30:
+        return 1 if negative else PAST_THE_END
     return int(value)
 
 

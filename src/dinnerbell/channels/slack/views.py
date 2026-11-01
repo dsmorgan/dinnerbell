@@ -634,15 +634,21 @@ def _picked_values(values: Any, block_id: str) -> list[str]:
     return [str(o.get("value")) for o in selected]
 
 
+PICK_A_RATING = "Pick a rating, or No answer."
+
+
 def parse_feedback(values: Any) -> FeedbackInput:
     """The feedback modal's state as ``FeedbackInput``. Raises FormError or ids.BadValue.
     ``feedback.give`` checks each part against the meal.
 
     The rating's radio buttons always start on an answer, so a real modal always posts a rating.
-    Without one, the modal isn't one this app drew, and saving it would take back the member's
-    rating."""
-    if not _state(values, "rating").get("selected_option"):
+    A modal without the rating block isn't one this app drew, such as one from before one rating
+    that asked about the food, so it closes without saving rather than take back the member's
+    rating. A rating block with nothing selected asks for an answer next to it."""
+    if not isinstance(values, dict) or not isinstance(values.get("rating"), dict):
         raise ids.BadValue("no rating")
+    if not _state(values, "rating").get("selected_option"):
+        raise FormError("rating", PICK_A_RATING)
     issues = _picked_values(values, "place_issues")
     if not set(issues) <= {i.value for i in PlaceIssue}:
         raise ids.BadValue("not an issue")
