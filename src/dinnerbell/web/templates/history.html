@@ -4,7 +4,7 @@
 {% block title %}History{% endblock %}
 {% block content %}
 <h1>History</h1>
-{% if notice %}<p class="alert ok" role="status">{{ notice }}</p>{% endif %}
+{% if notice and not notice_meal %}<p class="alert ok" role="status">{{ notice }}</p>{% endif %}
 {% if error %}<p class="alert error" role="alert">{{ error }}</p>{% endif %}
 
 <section class="card" aria-labelledby="variety-heading">
@@ -41,6 +41,8 @@
   <ul class="meals">
     {% for meal in meals %}
     <li class="meal" id="meal-{{ meal.id }}">
+      {#- The redirect scrolls here, so a notice about this meal shows here, not off screen at the top. -#}
+      {% if notice and meal.id == notice_meal %}<p class="alert ok meal-notice" role="status">{{ notice }}</p>{% endif %}
       <div class="meal-when small muted">{{ meal.day.strftime("%a %b") }} {{ meal.day.day }} · {{ meal.slot.value|capitalize }}</div>
       <strong>{{ meal.item_name }}</strong>
       {% if meal.cuisines %}<div class="chips">{% for c in meal.cuisines %}<span class="chip tag-cuisine">{{ c.name }}</span>{% endfor %}</div>{% endif %}

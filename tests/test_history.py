@@ -339,16 +339,16 @@ def test_changes_return_to_the_meals_page(client: TestClient, household: dict[st
     # 15 dinners and 5 lunches are newer than a dinner 16 days ago: it's the first meal of page 2.
     logged = log(client, household["siam"], [household["admin"]], day=TODAY - timedelta(days=16))
     meal = max(r.id for r in rows(migrated, MealLogRow))
-    assert logged.headers["location"] == f"/history?page=2&notice=logged#meal-{meal}"
+    assert logged.headers["location"] == f"/history?page=2&notice=logged&meal={meal}#meal-{meal}"
     assert f'id="meal-{meal}"' in client.get(logged.headers["location"]).text
     # Moved to yesterday's lunch, behind only yesterday's dinner, it's on page 1.
     edit = {"day": (TODAY - timedelta(days=1)).isoformat(), "slot": "lunch", "item_id": str(household["siam"])}
     edit["participant_ids"] = [str(household["admin"])]
     moved = submit(client, f"/history/meals/{meal}", edit)
-    assert moved.headers["location"] == f"/history?notice=updated#meal-{meal}"
+    assert moved.headers["location"] == f"/history?notice=updated&meal={meal}#meal-{meal}"
     # 31 dinners and 10 lunches are newer than a lunch 31 days ago: page 3.
     later = submit(client, f"/history/meals/{meal}", edit | {"day": (TODAY - timedelta(days=31)).isoformat()})
-    assert later.headers["location"] == f"/history?page=3&notice=updated#meal-{meal}"
+    assert later.headers["location"] == f"/history?page=3&notice=updated&meal={meal}#meal-{meal}"
     # History's Delete button is boosted: HTMX follows the same redirect to the same page.
     boosted = {"HX-Request": "true", "HX-Boosted": "true", "HX-Current-URL": f"{BASE_URL}/history?page=3"}
     gone = submit(client, f"/history/meals/{meal}/delete", **boosted)
@@ -368,8 +368,78 @@ def test_feedback_returns_to_the_meals_page(client: TestClient, household: dict[
     refused = submit(client, f"/history/meals/{meal}/feedback", {"rating": "liked", "issue_note": "x" * 201})
     assert refused.status_code == 400 and f'href="/history?page=2#meal-{meal}"' in page(refused)
     saved = submit(client, f"/history/meals/{meal}/feedback", {"rating": "liked"})
-    assert saved.headers["location"] == f"/history?page=2&notice=feedback#meal-{meal}"
+    assert saved.headers["location"] == f"/history?page=2&notice=feedback&meal={meal}#meal-{meal}"
     assert f'id="meal-{meal}"' in client.get(saved.headers["location"]).text
+
+
+def notices(html: str) -> tuple[list[str], dict[int, list[str]]]:
+    """The thank-you and other ok notices on a History page: those above the first meal, and
+    those inside each meal's entry, by meal ID."""
+    top, _, rest = html.partition('<li class="meal"')
+    found = r'<p class="alert ok[^"]*" role="status">([^<]+)</p>'
+    inside: dict[int, list[str]] = {}
+    for entry in rest.split('<li class="meal"'):
+        if texts := re.findall(found, entry):
+            inside[int(entry.split('id="meal-', 1)[1].split('"', 1)[0])] = texts
+    return re.findall(found, top), inside
+
+
+@pytest.mark.parametrize("page_number", [1, 2])
+def test_the_feedback_notice_shows_in_the_meal_you_land_on(
+    client: TestClient, household: dict[str, int], migrated: Settings, page_number: int
+) -> None:
+    """The redirect scrolls to the meal, so its notice shows there, not off screen at the top
+    (#153)."""
+    log(client, household["siam"], [household["admin"]], day=TODAY - timedelta(days=3))
+    meal = max(r.id for r in rows(migrated, MealLogRow))
+    if page_number == 2:
+        insert_meals(migrated, household["tacos"], household["admin"], [(TODAY, "dinner")] * 20)
+    saved = submit(client, f"/history/meals/{meal}/feedback", {"rating": "liked"})
+    query = "page=2&" if page_number == 2 else ""
+    assert saved.headers["location"] == f"/history?{query}notice=feedback&meal={meal}#meal-{meal}"
+    landed = page(client.get(saved.headers["location"]))
+    assert ("Page 2 of 2" in landed) == (page_number == 2)
+    assert notices(landed) == ([], {meal: ["Thanks for the feedback! Only you see it."]})
+    # Taking the feedback back lands the same way.
+    taken_back = submit(client, f"/history/meals/{meal}/feedback", {"rating": ""})
+    assert notices(page(client.get(taken_back.headers["location"]))) == (
+        [],
+        {meal: ["Got it: no feedback from you on that meal."]},
+    )
+
+
+def test_logged_and_updated_notices_show_in_the_meal(
+    client: TestClient, household: dict[str, int], migrated: Settings
+) -> None:
+    """Logging and editing a meal scroll to it as feedback does, so their notices move too."""
+    fill(migrated, household["tacos"], household["admin"], 33)
+    logged = log(client, household["siam"], [household["admin"]], day=TODAY - timedelta(days=16))
+    meal = max(r.id for r in rows(migrated, MealLogRow))
+    assert notices(page(client.get(logged.headers["location"]))) == ([], {meal: ["Meal logged."]})
+    edit = {"day": (TODAY - timedelta(days=1)).isoformat(), "slot": "lunch", "item_id": str(household["siam"])}
+    edit["participant_ids"] = [str(household["admin"])]
+    updated = submit(client, f"/history/meals/{meal}", edit)
+    assert notices(page(client.get(updated.headers["location"]))) == ([], {meal: ["Meal updated."]})
+
+
+def test_a_notice_without_its_meal_on_the_page_shows_at_the_top(
+    client: TestClient, household: dict[str, int], migrated: Settings
+) -> None:
+    """Delete has no meal to land on, so its notice stays at the top. So does a notice whose meal
+    isn't on the page, such as a link saved before the meal moved, or one that names no meal."""
+    fill(migrated, household["tacos"], household["admin"], 33)
+    on_page_2 = sorted(r.id for r in rows(migrated, MealLogRow))[25]
+    assert notices(page(client.get("/history?notice=deleted"))) == (["Meal deleted."], {})
+    for meal in (str(on_page_2), "999999", "abc", "", "-1", "9" * 20):
+        landed = page(client.get(f"/history?notice=feedback&meal={meal}"))
+        assert notices(landed) == (["Thanks for the feedback! Only you see it."], {}), meal
+    assert notices(page(client.get(f"/history?page=2&notice=feedback&meal={on_page_2}")))[1] == {
+        on_page_2: ["Thanks for the feedback! Only you see it."]
+    }
+    # A meal with no notice, or an unknown notice, shows nothing.
+    assert notices(page(client.get(f"/history?page=2&meal={on_page_2}"))) == ([], {})
+    assert notices(page(client.get(f"/history?page=2&notice=bogus&meal={on_page_2}"))) == ([], {})
+    assert notices(page(client.get("/history?notice=updated&meal=" + "9" * 5000))) == (["Meal updated."], {})
 
 
 def test_one_page_of_history_has_no_pager(client: TestClient, household: dict[str, int], migrated: Settings) -> None:

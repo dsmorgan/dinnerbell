@@ -96,10 +96,13 @@ def _today(context: AppContext, principal: Principal) -> date:
 
 
 async def _history_path(db: Database, principal: Principal, meal: MealLog, notice: str = "") -> str:
-    """The History page that lists ``meal``, scrolled to it, with ``notice`` (a ``NOTICES`` key)."""
+    """The History page that lists ``meal``, scrolled to it, with ``notice`` (a ``NOTICES`` key).
+    The notice names the meal too, so the page shows it in the meal's entry, where you land,
+    instead of at the top, off screen (#153). The server never sees the ``#meal-`` part."""
     page = await meal_service.history_page_of(db, principal.member, meal)
-    query = "&".join(([f"page={page}"] if page > 1 else []) + ([f"notice={notice}"] if notice else []))
-    return local_path(f"/history{'?' if query else ''}{query}#meal-{{}}", meal.id)
+    query = "&".join(([f"page={page}"] if page > 1 else []) + ([f"notice={notice}&meal={{}}"] if notice else []))
+    values = (meal.id, meal.id) if notice else (meal.id,)
+    return local_path(f"/history{'?' if query else ''}{query}#meal-{{}}", *values)
 
 
 async def _choices(db: Database, principal: Principal, editing: MealLog | None = None) -> dict[str, Any]:
@@ -125,12 +128,17 @@ async def _history_page(
     form: MealForm | None = None,
     error: str | None = None,
     notice: str | None = None,
+    notice_meal: int | None = None,
     status_code: int = 200,
 ) -> Response:
+    """``notice_meal`` is the meal a notice is about. When this page lists it, the notice shows
+    in that meal's entry instead of at the top."""
     today = _today(context, principal)
     history = await meal_service.history(db, principal.member, page=page)
     window = await variety_window(db, principal.household.id, today)
     shown = [meal for _, meals in history.weeks for meal in meals]
+    if notice is None or notice_meal not in {meal.id for meal in shown}:
+        notice_meal = None
     feedback = await feedback_service.for_meals(db, principal.member, shown, today=today)
     blank = MealForm(day=today.isoformat(), participant_ids={principal.member.id})
     return await render(
@@ -144,6 +152,7 @@ async def _history_page(
             "form": form or blank,
             "error": error,
             "notice": notice,
+            "notice_meal": notice_meal,
             "can_change": lambda meal: can_change(principal.member, meal),
             "feedback": feedback,
         }
@@ -154,12 +163,22 @@ async def _history_page(
 
 @router.get("")
 async def history_page(
-    request: Request, principal: SignedIn, context: Context, db: Database, page: str = "1", notice: str = ""
+    request: Request,
+    principal: SignedIn,
+    context: Context,
+    db: Database,
+    page: str = "1",
+    notice: str = "",
+    meal: str = "",
 ) -> Response:
     """History, ``MEALS_PER_PAGE`` meals at a time. A page past either end shows the nearest one,
-    and a page that isn't a number shows the first."""
+    and a page that isn't a number shows the first. ``meal`` is the meal the notice is about;
+    the notice shows at the top when it's missing, not a row ID, or not on this page."""
     shown = page_number(page)
-    return await _history_page(request, principal, context, db, page=shown, notice=NOTICES.get(notice))
+    about = parse_id(meal) if len(meal) <= 20 else None  # a row ID has at most 19 digits
+    return await _history_page(
+        request, principal, context, db, page=shown, notice=NOTICES.get(notice), notice_meal=about
+    )
 
 
 @router.post("/meals")
