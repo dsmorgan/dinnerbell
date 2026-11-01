@@ -174,7 +174,7 @@ def test_preference_rows_let_the_last_tap_win_and_keep_focus(admin: TestClient) 
     assert 'hx-sync="this:replace"' in saved
 
 
-def test_a_failed_save_says_why_and_clears_after_the_next(client: TestClient) -> None:
+def test_a_failed_save_says_why_until_it_saves(client: TestClient) -> None:
     script = client.get("/static/app.js").text
     assert "Not saved. Check your connection and try again." in script  # no network
     assert "Not saved. Something went wrong. Try again." in script  # a 5xx
@@ -183,3 +183,21 @@ def test_a_failed_save_says_why_and_clears_after_the_next(client: TestClient) ->
     for event in ("htmx:sendError", "htmx:responseError", "htmx:timeout", "htmx:afterRequest", "htmx:afterSettle"):
         assert event in script, event
     assert 'block: "nearest"' in script and "prefers-reduced-motion: reduce" in script
+    # A failed preference row goes back to its saved level, and the banner stays until each card
+    # or row that failed saves.
+    assert "elt.reset()" in script and "form[hx-post='/preferences/stance']" in script
+    assert "unsaved[targetOf(event)] = true" in script and "delete unsaved[targetOf(event)]" in script
+
+
+def test_a_repeat_tap_is_dropped_and_polls_share_the_cards_sync(client: TestClient) -> None:
+    """The card's hx-sync aborts a request only in the browser, so a double tap on one control
+    would reach the server twice. A poll shares that sync, so a tap replaces it, and it never
+    starts during a save or skips a card just because a tapped button kept focus."""
+    script = client.get("/static/app.js").text
+    assert '"htmx:confirm"' in script and 'elt.classList.contains("htmx-request")' in script
+    assert "source: card, target: card" in script
+    assert "input:not([type=hidden]):not([type=radio]):not([type=checkbox])" in script
+    assert "card.contains(document.activeElement) && document.activeElement.matches(TYPING)" in script
+    css = client.get("/static/app.css").text
+    assert "form.htmx-request button { opacity: 0.6; }" in css
+    assert "\n.htmx-request button" not in css  # a poll in flight doesn't dim the whole card

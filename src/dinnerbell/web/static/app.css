@@ -228,7 +228,8 @@ details > summary h2::after { content: " +"; color: var(--muted); }
 details[open] > summary h2::after { content: " −"; }
 details[open] > summary { margin-bottom: 0.5rem; }
 
-.htmx-request button { opacity: 0.6; }
+/* The form whose request is in flight, not a whole card being refreshed. */
+form.htmx-request button { opacity: 0.6; }
 
 /* ---- M1: navigation, catalog, preferences, history ---------------------------------------- */
 
