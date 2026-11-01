@@ -310,7 +310,9 @@ def test_history_pages_by_twenty_meals(client: TestClient, household: dict[str, 
     assert meal_days(last)[-2:] == ["Sat Sep 19 · Dinner", "Sat Sep 19 · Lunch"]  # the oldest
 
 
-@pytest.mark.parametrize(("asked", "shown"), [("4", 3), ("99999999999999999999", 3), ("0", 1), ("-4", 1)])
+@pytest.mark.parametrize(
+    ("asked", "shown"), [("4", 3), ("99999999999999999999", 3), ("1" * 40, 3), ("0", 1), ("-4", 1), ("-" + "1" * 40, 1)]
+)
 def test_a_history_page_out_of_range_shows_the_nearest(
     client: TestClient, household: dict[str, int], migrated: Settings, asked: str, shown: int
 ) -> None:
@@ -320,7 +322,7 @@ def test_a_history_page_out_of_range_shows_the_nearest(
     assert f"Page {shown} of 3" in page(response)
 
 
-@pytest.mark.parametrize("asked", ["abc", "2.5", "1e3", "%C2%B2", "", "+2", "1" * 40])
+@pytest.mark.parametrize("asked", ["abc", "2.5", "1e3", "%C2%B2", "", "+2", "-"])
 def test_a_history_page_that_isnt_a_number_shows_the_first(
     client: TestClient, household: dict[str, int], migrated: Settings, asked: str
 ) -> None:

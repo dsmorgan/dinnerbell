@@ -8,7 +8,7 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ### Removed
 
-- **The upgrade guard for old feedback forms** (#148). 0.11.0 refused a **How was it?** form or modal opened before the upgrade, which still asked about the food and the place, so that saving it couldn't take back your rating. Both instances now run 0.11.0, so the guard is gone. A rating is now simply required: the web form and the Slack modal always send one, because a rating, **No answer** at first, is always selected. A web post without one gets the **Request refused** page, and a Slack modal without one closes. Neither saves anything.
+- **The upgrade guard for old feedback forms** (#148). 0.11.0 refused a **How was it?** form or modal opened before the upgrade, which still asked about the food and the place, so that saving it couldn't take back your rating. Both instances now run 0.11.0, so the guard is gone. A rating is now simply required: the web form and the Slack modal always send one, because a rating, **No answer** at first, is always selected. A web post without one gets the **Request refused** page, a Slack modal without the rating closes, and one with no rating picked says "Pick a rating, or No answer." None of them saves anything.
 
 ### Fixed
 

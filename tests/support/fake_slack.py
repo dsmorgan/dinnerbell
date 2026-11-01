@@ -405,3 +405,25 @@ def home_opened(user: str, *, team: str = TEAM, tab: str = "home") -> dict[str, 
 def state(**fields: dict[str, Any]) -> dict[str, Any]:
     """view.state.values with each block's single input under action ID "value"."""
     return {block_id: {"value": entry} for block_id, entry in fields.items()}
+
+
+def untouched(view: dict[str, Any]) -> dict[str, Any]:
+    """view.state.values as Slack posts a modal saved without changing anything: each input
+    block, under its action ID, with the element's initial option, options, date, or value, and
+    an empty one where the element has none."""
+    values: dict[str, Any] = {}
+    for block in view["blocks"]:
+        if block["type"] != "input":
+            continue
+        element = block["element"]
+        entry: dict[str, Any] = {"type": element["type"]}
+        if element["type"] in {"radio_buttons", "static_select"}:
+            entry["selected_option"] = element.get("initial_option")
+        elif element["type"] == "checkboxes":
+            entry["selected_options"] = element.get("initial_options", [])
+        elif element["type"] == "datepicker":
+            entry["selected_date"] = element.get("initial_date")
+        else:
+            entry["value"] = element.get("initial_value")
+        values[block["block_id"]] = {element["action_id"]: entry}
+    return values

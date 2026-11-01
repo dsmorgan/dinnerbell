@@ -21,7 +21,7 @@ from dinnerbell.domain.feedback import NO_PLACE, NOT_A_PARTICIPANT
 from dinnerbell.services.database import Database, open_database
 from tests.support.calls import House, furnish, make_house
 from tests.support.clock import FakeClock
-from tests.support.fake_slack import CHANNEL, state
+from tests.support.fake_slack import CHANNEL, state, untouched
 from tests.support.feedback import done_dinner, remind
 from tests.support.slack import Slack, wire
 
@@ -203,18 +203,53 @@ async def test_saving_nothing_and_rules_the_modal_cant_check(slack: Slack, house
     assert await rows(house) == []
 
 
-async def test_a_modal_without_a_rating_saves_nothing(slack: Slack, house: House) -> None:
-    """Every modal this app draws posts a rating, since its radio buttons start on an answer. One
-    without, such as a modal from before one rating that asked about the food, closes and saves
-    nothing, so it can't take back the member's rating."""
+async def test_a_modal_without_a_rating_block_closes_and_saves_nothing(slack: Slack, house: House) -> None:
+    """Every modal this app draws has a rating block. One without, such as a modal from before
+    one rating that asked about the food, closes and saves nothing, so it can't take back the
+    member's rating."""
     event_id = await done_dinner(house)
     origin = ids.ViewOrigin(event_id, CHANNEL, run=1)
     await slack.submit("Kim", ids.FEEDBACK_VIEW, state(rating=LOVED), event_id, origin=origin)
-    for values in (state(food=LOVED), state(), state(rating={"selected_option": None})):
+    for values in (state(food=LOVED), state()):
         response = await slack.submit("Kim", ids.FEEDBACK_VIEW, values, event_id, origin=origin)
         assert response.body == ""
     (row,) = await rows(house)
     assert row.rating == "loved"
+
+
+async def test_a_rating_with_nothing_picked_asks_for_one(slack: Slack, house: House) -> None:
+    event_id = await done_dinner(house)
+    origin = ids.ViewOrigin(event_id, CHANNEL, run=1)
+    await slack.submit("Kim", ids.FEEDBACK_VIEW, state(rating=LOVED), event_id, origin=origin)
+    response = await slack.submit(
+        "Kim", ids.FEEDBACK_VIEW, state(rating={"selected_option": None}), event_id, origin=origin
+    )
+    assert json.loads(response.body) == {
+        "response_action": "errors",
+        "errors": {"rating": "Pick a rating, or No answer."},
+    }
+    (row,) = await rows(house)
+    assert row.rating == "loved"
+
+
+async def test_saving_an_untouched_modal_keeps_its_answers(slack: Slack, house: House) -> None:
+    """Slack posts each field's starting value when nobody changes it: a new modal saves No
+    answer, and a prefilled one saves what it showed."""
+    event_id = await done_dinner(house, "Siam Garden", Mode.PICKUP)
+    origin = ids.ViewOrigin(event_id, CHANNEL, run=1)
+    await slack.click("Kim", ids.FEEDBACK, ids.card_value(event_id, 1))
+    await slack.submit("Kim", ids.FEEDBACK_VIEW, untouched(modal(slack)), event_id, origin=origin)
+    assert slack.ephemerals("Kim")[-1] == FEEDBACK_NONE
+    assert await rows(house) == []
+
+    answers = state(rating=LOVED, place_issues={"selected_options": [{"value": "cold"}]}, issue_note={"value": "Soggy"})
+    await slack.submit("Kim", ids.FEEDBACK_VIEW, answers, event_id, origin=origin)
+    slack.fake.clear()
+    await slack.click("Kim", ids.FEEDBACK, ids.card_value(event_id, 1))
+    await slack.submit("Kim", ids.FEEDBACK_VIEW, untouched(modal(slack)), event_id, origin=origin)
+    assert slack.ephemerals("Kim")[-1] == FEEDBACK_SAVED
+    (row,) = await rows(house)
+    assert (row.rating, row.place_issues, row.issue_note) == ("loved", ["cold", "other"], "Soggy")
 
 
 async def test_tampered_feedback_modals_change_nothing(slack: Slack, house: House) -> None:
