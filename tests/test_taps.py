@@ -199,5 +199,101 @@ def test_a_repeat_tap_is_dropped_and_polls_share_the_cards_sync(client: TestClie
     assert "input:not([type=hidden]):not([type=radio]):not([type=checkbox])" in script
     assert "card.contains(document.activeElement) && document.activeElement.matches(TYPING)" in script
     css = client.get("/static/app.css").text
-    assert "form.htmx-request button { opacity: 0.6; }" in css
+    assert "form.htmx-request button, form.submitting button, form.htmx-request .segments {" in css
     assert "\n.htmx-request button" not in css  # a poll in flight doesn't dim the whole card
+    assert ".event.htmx-request" not in css and "[data-poll]" not in css
+
+
+# Tap and pending feedback (#153) ------------------------------------------------------------------
+
+
+def motion_blocks(css: str, query: str) -> list[str]:
+    """Every @media block for one prefers-reduced-motion value."""
+    start = f"@media (prefers-reduced-motion: {query})"
+    blocks = []
+    at = css.find(start)
+    while at != -1:
+        depth, end = 0, at
+        for end in range(at, len(css)):
+            depth += {"{": 1, "}": -1}.get(css[end], 0)
+            if css[end] == "}" and depth == 0:
+                break
+        blocks.append(css[at : end + 1])
+        at = css.find(start, end)
+    return blocks
+
+
+def test_a_tap_shows_at_once_and_moves_only_with_motion_allowed(client: TestClient) -> None:
+    """Buttons, levels, and chips show a press the moment they're tapped, with a tint that keeps
+    their text's contrast in both themes. Only with motion allowed do colors ease and a pressed
+    control shrink."""
+    css = client.get("/static/app.css").text
+    tint = "box-shadow: inset 0 0 0 100vmax "
+    assert (
+        ":is(.button, button):not(:disabled):active,\n.segment:active span,\n.chip-toggle:active span {\n  " + tint
+        in css
+    )
+    assert tint + "color-mix(in srgb, currentColor 10%, transparent);" in css  # toward the text on a light fill
+    assert tint + "var(--press-filled);" in css  # away from the text on a filled choice
+    assert "--press-filled: rgb(0 0 0 / 0.14);" in css and "--press-filled: rgb(255 255 255 / 0.18);" in css
+    assert "a.chip:active { border-color: currentColor; }" in css
+    moving = motion_blocks(css, "no-preference")
+    assert any("scale(0.97)" in b and "transition: background-color 120ms ease" in b for b in moving)
+    assert css.count("scale(0.97)") == 1
+    still = css
+    for block in moving:
+        still = still.replace(block, "")
+    assert "transition:" not in still  # no transition at all with reduced motion
+    script = client.get("/static/app.js").text
+    assert 'addEventListener("touchstart", function () {}, { passive: true })' in script  # :active on iOS
+
+
+def test_a_pending_save_shows_after_150_ms(client: TestClient) -> None:
+    """The form whose save is in flight dims after 150 ms, so a fast save doesn't flicker, and the
+    card or row it replaces is aria-busy until the request ends. A refresh does neither."""
+    css = client.get("/static/app.css").text
+    pending = "form.htmx-request button, form.submitting button, form.htmx-request .segments"
+    assert pending + " { animation: pending 0s 150ms forwards; }" in css
+    assert "form.htmx-request .segment span { animation: pending-cursor 0s 150ms forwards; }" in css
+    assert "@keyframes pending { to { opacity: 0.6; cursor: progress; } }" in css
+    script = client.get("/static/app.js").text
+    assert '"htmx:beforeSend"' in script and 'target.setAttribute("aria-busy", "true")' in script
+    assert "if (isSave(event) && target instanceof Element)" in script  # not for a refresh
+    assert 'target.removeAttribute("aria-busy")' in script
+
+
+def test_a_full_page_form_posts_once(client: TestClient) -> None:
+    """A full-page form (feedback, settings) is marked while it posts, a second submit is ignored,
+    and Back clears the mark. One that HTMX sends or the size check stops is left alone."""
+    script = client.get("/static/app.js").text
+    assert "if (event.defaultPrevented || !isFullPagePost(form, event.submitter))" in script
+    assert "form.classList.contains(SUBMITTING)" in script and "event.preventDefault();\n      return;" in script
+    assert 'window.addEventListener("pageshow"' in script
+    assert 'method.toLowerCase() === "post"' in script  # a GET search is safe to repeat
+    # The size check runs first, in the same listener, so a file it stops never marks the form.
+    assert script.index("fileFits(inputs[i])") < script.index("form.classList.add(SUBMITTING)")
+
+
+def test_a_changed_choice_settles_and_saved_fades(admin: TestClient) -> None:  # noqa: F811
+    """A swapped button starts from its old aria-current and aria-pressed, so a choice that changed
+    eases into place and one that didn't stays still. "Saved" on a row fades after about 2 s, and
+    with reduced motion hides without fading."""
+    html = admin.get("/").text
+    config = re.search(r"<meta name=\"htmx-config\" content='([^']*)'>", html)
+    assert config is not None
+    assert json.loads(config.group(1))["attributesToSettle"] == [
+        "class",
+        "style",
+        "width",
+        "height",
+        "aria-current",
+        "aria-pressed",
+    ]
+    row = re.search(r'<li class="pref" id="pref-(tag-\d+)">', admin.get("/preferences").text)
+    assert row is not None
+    saved = htmx(admin, "/preferences/stance", {"target": row.group(1).replace("-", ":"), "level": "1"}).text
+    assert '<span class="saved small" role="status">Saved</span>' in saved
+    css = admin.get("/static/app.css").text
+    assert ".saved { animation: saved-fade 2.4s ease-in forwards; }" in css
+    assert "@keyframes saved-fade { 0%, 75% { opacity: 1; } 100% { opacity: 0; visibility: hidden; } }" in css
+    assert ".saved { animation: saved-hide 0s 2s forwards; }" in "".join(motion_blocks(css, "reduce"))
