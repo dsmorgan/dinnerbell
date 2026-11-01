@@ -432,14 +432,14 @@ ins { color: var(--ok); text-decoration: none; }
 .levels { border: 0; margin: 0; padding: 0; min-width: 0; }
 .pref-name { padding: 0; margin-bottom: 0.35rem; font-weight: 600; overflow-wrap: anywhere; }
 .saved { color: var(--ok); font-weight: 400; margin-left: 0.4rem; }
-/* "Saved" fades after about 2 seconds (#153); with reduced motion, it hides then without fading.
-   Hidden, it keeps its space, so the row doesn't shift. */
+/* "Saved" fades after about 2 seconds (#153); with reduced motion, it goes then without fading.
+   Faded, it keeps its space, so the row doesn't shift, and a screen reader can still read it. */
 .saved { animation: saved-fade 2.4s ease-in forwards; }
-@keyframes saved-fade { 0%, 75% { opacity: 1; } 100% { opacity: 0; visibility: hidden; } }
+@keyframes saved-fade { 0%, 75% { opacity: 1; } 100% { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) {
   .saved { animation: saved-hide 0s 2s forwards; }
 }
-@keyframes saved-hide { to { visibility: hidden; } }
+@keyframes saved-hide { to { opacity: 0; } }
 .segments { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 0; }
 .segments.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .segments.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }

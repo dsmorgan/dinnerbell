@@ -259,12 +259,14 @@ def test_a_pending_save_shows_after_150_ms(client: TestClient) -> None:
     script = client.get("/static/app.js").text
     assert '"htmx:beforeSend"' in script and 'target.setAttribute("aria-busy", "true")' in script
     assert "if (isSave(event) && target instanceof Element)" in script  # not for a refresh
-    assert 'target.removeAttribute("aria-busy")' in script
+    after = script[script.index('document.addEventListener("htmx:afterRequest", function (event) {\n    var target') :]
+    assert after.index('target.removeAttribute("aria-busy")') < after.index("});")  # in that listener
 
 
 def test_a_full_page_form_posts_once(client: TestClient) -> None:
     """A full-page form (feedback, settings) is marked while it posts, a second submit is ignored,
-    and Back clears the mark. One that HTMX sends or the size check stops is left alone."""
+    and Back or 10 seconds clears the mark. One that HTMX sends, the size check stops, or a
+    modifier key may open elsewhere is left alone."""
     script = client.get("/static/app.js").text
     assert "if (event.defaultPrevented || !isFullPagePost(form, event.submitter))" in script
     assert "form.classList.contains(SUBMITTING)" in script and "event.preventDefault();\n      return;" in script
@@ -272,12 +274,18 @@ def test_a_full_page_form_posts_once(client: TestClient) -> None:
     assert 'method.toLowerCase() === "post"' in script  # a GET search is safe to repeat
     # The size check runs first, in the same listener, so a file it stops never marks the form.
     assert script.index("fileFits(inputs[i])") < script.index("form.classList.add(SUBMITTING)")
+    # A stopped load never leaves the page: the mark lifts after 10 s, so the form works again.
+    assert "var RELEASE_MS = 10000;" in script and "unmark(form);\n      }, RELEASE_MS)" in script
+    # A Ctrl-, Cmd-, or Shift-click, or Enter, may open the result elsewhere: no mark.
+    assert "elsewhere = event.ctrlKey || event.metaKey || event.shiftKey;" in script
+    assert '"click",' in script and 'event.target.closest("button, input[type=submit], input[type=image]")' in script
+    assert 'if (event.key === "Enter")' in script and "if (elsewhere) {\n      return;" in script
 
 
 def test_a_changed_choice_settles_and_saved_fades(admin: TestClient) -> None:  # noqa: F811
     """A swapped button starts from its old aria-current and aria-pressed, so a choice that changed
     eases into place and one that didn't stays still. "Saved" on a row fades after about 2 s, and
-    with reduced motion hides without fading."""
+    with reduced motion goes without fading. Either way it stays readable to a screen reader."""
     html = admin.get("/").text
     config = re.search(r"<meta name=\"htmx-config\" content='([^']*)'>", html)
     assert config is not None
@@ -295,5 +303,8 @@ def test_a_changed_choice_settles_and_saved_fades(admin: TestClient) -> None:  #
     assert '<span class="saved small" role="status">Saved</span>' in saved
     css = admin.get("/static/app.css").text
     assert ".saved { animation: saved-fade 2.4s ease-in forwards; }" in css
-    assert "@keyframes saved-fade { 0%, 75% { opacity: 1; } 100% { opacity: 0; visibility: hidden; } }" in css
+    assert "@keyframes saved-fade { 0%, 75% { opacity: 1; } 100% { opacity: 0; } }" in css
+    assert "@keyframes saved-hide { to { opacity: 0; } }" in css
+    rules = css[css.index(".saved { animation") : css.index("@keyframes saved-hide")]
+    assert "visibility" not in rules  # faded, a screen reader still reads it
     assert ".saved { animation: saved-hide 0s 2s forwards; }" in "".join(motion_blocks(css, "reduce"))
