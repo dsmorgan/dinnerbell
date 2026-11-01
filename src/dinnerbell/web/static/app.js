@@ -167,14 +167,52 @@
   // mark the form as submitting (app.css dims its buttons after 150 ms) and ignore a second
   // submit, so a double tap posts once. Forms HTMX sends, forms the browser's validation stops
   // (they never fire submit), and forms the size check above stops are left alone. A GET, such as
-  // the Catalog search, is safe to repeat.
+  // the Catalog search, is safe to repeat. The page may never leave: the load can be stopped, so
+  // the mark lifts after 10 seconds. A click or Enter with Ctrl, Cmd, or Shift held can open the
+  // result in another tab or window while this page stays, so it isn't marked at all.
   var SUBMITTING = "submitting";
+  var RELEASE_MS = 10000;
+  var releases = new WeakMap();
+  var elsewhere = false;
 
   function isFullPagePost(form, submitter) {
     var method = (submitter && submitter.getAttribute("formmethod")) || form.getAttribute("method") || "get";
     var target = (submitter && submitter.getAttribute("formtarget")) || form.getAttribute("target") || "_self";
     return method.toLowerCase() === "post" && target === "_self";
   }
+
+  function unmark(form) {
+    window.clearTimeout(releases.get(form));
+    releases.delete(form);
+    form.classList.remove(SUBMITTING);
+    form.removeAttribute("aria-busy");
+  }
+
+  // A click or Enter submits in the same task, so note its modifier keys until that task ends.
+  function noteModifiers(event) {
+    elsewhere = event.ctrlKey || event.metaKey || event.shiftKey;
+    window.setTimeout(function () {
+      elsewhere = false;
+    }, 0);
+  }
+  document.addEventListener(
+    "click",
+    function (event) {
+      if (event.target instanceof Element && event.target.closest("button, input[type=submit], input[type=image]")) {
+        noteModifiers(event);
+      }
+    },
+    true
+  );
+  document.addEventListener(
+    "keydown",
+    function (event) {
+      if (event.key === "Enter") {
+        noteModifiers(event);
+      }
+    },
+    true
+  );
 
   document.addEventListener("submit", function (event) {
     var form = event.target;
@@ -194,8 +232,17 @@
       event.preventDefault();
       return;
     }
+    if (elsewhere) {
+      return;
+    }
     form.classList.add(SUBMITTING);
     form.setAttribute("aria-busy", "true");
+    releases.set(
+      form,
+      window.setTimeout(function () {
+        unmark(form);
+      }, RELEASE_MS)
+    );
   });
 
   // Back and Forward can show this page again from the browser's cache, as it was when the form
@@ -203,8 +250,7 @@
   window.addEventListener("pageshow", function () {
     var forms = document.querySelectorAll("form." + SUBMITTING);
     for (var i = 0; i < forms.length; i += 1) {
-      forms[i].classList.remove(SUBMITTING);
-      forms[i].removeAttribute("aria-busy");
+      unmark(forms[i]);
     }
   });
 
