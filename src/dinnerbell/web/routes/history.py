@@ -9,6 +9,7 @@ from datetime import date
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, Form, Query, Request
+from fastapi.exceptions import RequestValidationError
 from starlette.responses import Response
 
 from dinnerbell.domain.catalog import ItemKind
@@ -28,7 +29,7 @@ from dinnerbell.services.errors import Forbidden
 from dinnerbell.services.variety import household_today, variety_window
 from dinnerbell.web.auth import Context, CSRFChecked, Database, Principal, SignedIn
 from dinnerbell.web.context import AppContext
-from dinnerbell.web.forms import BadFormValue, RowId, choice, iso_date, parse_id
+from dinnerbell.web.forms import BadFormValue, RowId, choice, iso_date, page_number, parse_id
 from dinnerbell.web.redirects import local_path, local_redirect
 from dinnerbell.web.render import render
 
@@ -153,10 +154,12 @@ async def _history_page(
 
 @router.get("")
 async def history_page(
-    request: Request, principal: SignedIn, context: Context, db: Database, page: int = 1, notice: str = ""
+    request: Request, principal: SignedIn, context: Context, db: Database, page: str = "1", notice: str = ""
 ) -> Response:
-    """History, ``MEALS_PER_PAGE`` meals at a time. A page past either end shows the nearest one."""
-    return await _history_page(request, principal, context, db, page=page, notice=NOTICES.get(notice))
+    """History, ``MEALS_PER_PAGE`` meals at a time. A page past either end shows the nearest one,
+    and a page that isn't a number shows the first."""
+    shown = page_number(page)
+    return await _history_page(request, principal, context, db, page=shown, notice=NOTICES.get(notice))
 
 
 @router.post("/meals")
@@ -231,7 +234,8 @@ async def delete_meal(principal: CSRFChecked, context: Context, db: Database, me
 FROM_PAGES = {"history", "event"}
 
 
-def posted_feedback(
+async def posted_feedback(
+    request: Request,
     rating: FormText = "",
     place_issues: Annotated[list[str] | None, Form()] = None,
     issue_note: Annotated[str, Form(max_length=ISSUE_NOTE_MAX * 2)] = "",
@@ -240,7 +244,15 @@ def posted_feedback(
 ) -> FeedbackInput:
     """The feedback form as posted. Any rating but the five, including "No answer", is no answer.
     ``feedback.give`` checks the rest against the meal, including each note's length after
-    trimming."""
+    trimming.
+
+    The form always posts a rating, because one radio button is always checked. A post without
+    one, such as from a form opened before one rating, is an invalid request, so it can't take
+    back the member's rating. FastAPI reads an empty field as a missing one, so this checks the
+    form itself."""
+    if "rating" not in await request.form():
+        missing = {"type": "missing", "loc": ("body", "rating"), "msg": "Field required", "input": None}
+        raise RequestValidationError([missing])
     issues = frozenset(i for v in place_issues or [] if (i := choice(PlaceIssue, v)) is not None)
     return FeedbackInput(
         rating=choice(Rating, rating),
@@ -310,9 +322,6 @@ async def feedback_page(
     return await _feedback_page(request, principal, context, db, meal_id, came_from=came_from)
 
 
-LEGACY_FORM = "This form changed since you opened it. Check your answers and save again."
-
-
 @router.post("/meals/{meal_id}/feedback")
 async def give_feedback(
     request: Request,
@@ -322,14 +331,7 @@ async def give_feedback(
     meal_id: RowId,
     answers: PostedFeedback,
     came_from: Annotated[str, Form(alias="from", max_length=10)] = "",
-    legacy: Annotated[str | None, Form(alias="food", max_length=40)] = None,
 ) -> Response:
-    if legacy is not None:
-        # A form opened before 0020 (one rating) posts "food" and no rating; saving it would drop
-        # the member's rating. Show their saved answers instead. Remove after one release.
-        return await _feedback_page(
-            request, principal, context, db, meal_id, came_from=came_from, error=LEGACY_FORM, status_code=409
-        )
     try:
         saved = await feedback_service.give(db, principal.member, meal_id, answers, now=context.clock())
     except InvalidFeedback as exc:

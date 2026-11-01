@@ -75,6 +75,8 @@ def fields(view: dict[str, Any]) -> dict[str, dict[str, Any]]:
 
 LOVED = {"selected_option": {"value": "loved"}}
 HATED = {"selected_option": {"value": "hated"}}
+NO_ANSWER = {"selected_option": {"value": "none"}}
+"""The rating as an untouched modal posts it: its radio buttons start on No answer."""
 
 
 async def test_how_was_it_from_the_reminder_and_the_decision(slack: Slack, house: House) -> None:
@@ -137,7 +139,9 @@ async def test_a_restaurant_meal_asks_what_went_wrong(slack: Slack, house: House
     assert fields(view)["issue_note"] == {"type": "plain_text_input", "max_length": 200, "action_id": "value"}
     # Text in "What went wrong?" counts as Other, as on the web.
     values = state(
-        place_issues={"selected_options": [{"value": "cold"}, {"value": "late"}]}, issue_note={"value": " No forks "}
+        rating=NO_ANSWER,
+        place_issues={"selected_options": [{"value": "cold"}, {"value": "late"}]},
+        issue_note={"value": " No forks "},
     )
     origin = ids.ViewOrigin(event_id, CHANNEL, run=1)
     await slack.submit("Kim", ids.FEEDBACK_VIEW, values, event_id, origin=origin)
@@ -172,9 +176,11 @@ async def test_meals_awaiting_feedback_on_home(slack: Slack, house: House) -> No
 async def test_saving_nothing_and_rules_the_modal_cant_check(slack: Slack, house: House) -> None:
     event_id = await done_dinner(house)
     origin = ids.ViewOrigin(event_id, CHANNEL, run=1)
-    await slack.submit("Kim", ids.FEEDBACK_VIEW, state(), event_id, origin=origin)
+    await slack.submit("Kim", ids.FEEDBACK_VIEW, state(rating=NO_ANSWER), event_id, origin=origin)
     assert slack.ephemerals("Kim")[-1] == FEEDBACK_NONE
-    await slack.submit("Kim", ids.FEEDBACK_VIEW, state(issue_note={"value": "Cold"}), event_id, origin=origin)
+    await slack.submit(
+        "Kim", ids.FEEDBACK_VIEW, state(rating=NO_ANSWER, issue_note={"value": "Cold"}), event_id, origin=origin
+    )
     assert slack.ephemerals("Kim")[-1] == NO_PLACE
     assert await rows(house) == []
 
@@ -192,24 +198,21 @@ async def test_saving_nothing_and_rules_the_modal_cant_check(slack: Slack, house
         "Loved it",
     ]
     assert rating["initial_option"]["value"] == "loved"
-    await slack.submit(
-        "Kim", ids.FEEDBACK_VIEW, state(rating={"selected_option": {"value": "none"}}), event_id, origin=origin
-    )
+    await slack.submit("Kim", ids.FEEDBACK_VIEW, state(rating=NO_ANSWER), event_id, origin=origin)
     assert slack.ephemerals("Kim")[-1] == FEEDBACK_NONE
     assert await rows(house) == []
 
 
-async def test_a_modal_from_before_one_rating_saves_nothing(slack: Slack, house: House) -> None:
-    """A modal opened before the upgrade asks about the food. Saving it would take back the
-    member's rating, so Slack shows an error on it instead (remove after one release)."""
+async def test_a_modal_without_a_rating_saves_nothing(slack: Slack, house: House) -> None:
+    """Every modal this app draws posts a rating, since its radio buttons start on an answer. One
+    without, such as a modal from before one rating that asked about the food, closes and saves
+    nothing, so it can't take back the member's rating."""
     event_id = await done_dinner(house)
     origin = ids.ViewOrigin(event_id, CHANNEL, run=1)
     await slack.submit("Kim", ids.FEEDBACK_VIEW, state(rating=LOVED), event_id, origin=origin)
-    response = await slack.submit("Kim", ids.FEEDBACK_VIEW, state(food=LOVED), event_id, origin=origin)
-    assert json.loads(response.body) == {
-        "response_action": "errors",
-        "errors": {"food": "This form changed. Close it and tap How was it? again."},
-    }
+    for values in (state(food=LOVED), state(), state(rating={"selected_option": None})):
+        response = await slack.submit("Kim", ids.FEEDBACK_VIEW, values, event_id, origin=origin)
+        assert response.body == ""
     (row,) = await rows(house)
     assert row.rating == "loved"
 
@@ -219,9 +222,9 @@ async def test_tampered_feedback_modals_change_nothing(slack: Slack, house: Hous
     origin = ids.ViewOrigin(event_id, CHANNEL, run=1)
     for values in (
         state(rating={"selected_option": {"value": "not_again"}}),
-        state(place_issues={"selected_options": [{"value": "rude"}]}),
-        state(cook_thanks={"selected_options": [{"value": "yes"}]}),
-        state(place_issues={"selected_options": "cold"}),
+        state(rating=NO_ANSWER, place_issues={"selected_options": [{"value": "rude"}]}),
+        state(rating=NO_ANSWER, cook_thanks={"selected_options": [{"value": "yes"}]}),
+        state(rating=NO_ANSWER, place_issues={"selected_options": "cold"}),
     ):
         response = await slack.submit("Kim", ids.FEEDBACK_VIEW, values, event_id, origin=origin)
         assert response.body == ""
@@ -231,13 +234,13 @@ async def test_tampered_feedback_modals_change_nothing(slack: Slack, house: Hous
     )
     assert await rows(house) == []
     assert slack.ephemerals("Kim") == []
-    too_long = state(cook_note={"value": "x" * 201})
+    too_long = state(rating=NO_ANSWER, cook_note={"value": "x" * 201})
     response = await slack.submit("Kim", ids.FEEDBACK_VIEW, too_long, event_id, origin=origin)
     assert json.loads(response.body) == {
         "response_action": "errors",
         "errors": {"cook_note": "Keep the note to 200 characters."},
     }
-    too_long = state(issue_note={"value": "x" * 201})
+    too_long = state(rating=NO_ANSWER, issue_note={"value": "x" * 201})
     response = await slack.submit("Kim", ids.FEEDBACK_VIEW, too_long, event_id, origin=origin)
     assert json.loads(response.body) == {
         "response_action": "errors",

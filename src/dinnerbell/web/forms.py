@@ -62,5 +62,15 @@ def parse_id(value: str | None) -> int | None:
     return number if 1 <= number <= MAX_ID else None
 
 
+def page_number(value: str) -> int:
+    """A ``?page=`` number as typed, or 1 when it isn't a whole number, such as "abc" or "2.5".
+    ``page_of`` moves a number past either end onto the nearest page, so any value lands on a
+    page instead of an error."""
+    digits = value.removeprefix("-")
+    if not (digits.isascii() and digits.isdigit()) or len(digits) > 30:
+        return 1
+    return int(value)
+
+
 RowId = Annotated[int, Path(ge=1, le=MAX_ID)]
 """A row ID in a URL path. Anything else, such as 0 or a 25-digit number, is a 404."""

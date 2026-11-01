@@ -49,7 +49,8 @@ def meal_id(settings: Settings, item_id: int) -> int:
 
 
 def give(client: TestClient, meal: int, **answers: object) -> httpx.Response:
-    return submit(client, f"/history/meals/{meal}/feedback", dict(answers))
+    """Post the form as a browser does: one rating is always checked, "No answer" at first."""
+    return submit(client, f"/history/meals/{meal}/feedback", {"rating": ""} | answers)
 
 
 def test_feedback_from_history_and_an_edit_replaces_it(
@@ -97,19 +98,17 @@ def test_feedback_from_history_and_an_edit_replaces_it(
     assert rows(migrated, FeedbackRow) == []
 
 
-def test_a_form_from_before_one_rating_saves_nothing_and_shows_the_saved_answers(
+def test_a_post_without_a_rating_is_refused_and_saves_nothing(
     client: TestClient, household: dict[str, int], migrated: Settings
 ) -> None:
-    """A form opened before the upgrade posts "food" and no rating. Saving it would take back the
-    member's rating, so it's refused, and the page shows what they saved (remove after one release)."""
+    """The form always posts a rating. A post without one, such as from a form opened before one
+    rating that posts "food", is refused, so it can't take back the member's rating."""
     log(client, household["siam"], [household["admin"]])
     siam = meal_id(migrated, household["siam"])
     give(client, siam, rating="liked", issue_note="No forks")
-    stale = give(client, siam, food="fine", place="", place_issues=["cold"])
-    assert stale.status_code == 409
-    html = page(stale)
-    assert "This form changed since you opened it. Check your answers and save again." in html
-    assert 'value="liked" checked' in html and 'value="No forks"' in html and 'value="cold" checked' not in html
+    for stale in ({"food": "fine", "place": "", "place_issues": ["cold"]}, {}):
+        refused = submit(client, f"/history/meals/{siam}/feedback", stale)
+        assert refused.status_code == 400 and "Request refused" in page(refused)
     (row,) = rows(migrated, FeedbackRow)
     assert (row.rating, row.place_issues, row.issue_note) == ("liked", ["other"], "No forks")
 
