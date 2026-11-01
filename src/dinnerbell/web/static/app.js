@@ -4,9 +4,9 @@
 // HTMX swaps in successful responses only. When a request fails outright (no network, a server
 // error, an expired session, or no answer in time), show a banner so a tap that didn't save never
 // looks like it did. A preference row that failed goes back to the level it last saved. The
-// banner stays until each card or row that failed saves. A tap replaced by a second tap on
-// another control (hx-sync) is aborted, which HTMX reports as htmx:sendAbort, not a failure, so
-// it raises nothing.
+// banner stays until each card or row that failed saves, or that card refreshes. A tap replaced
+// by a second tap on another control (hx-sync) is aborted, which HTMX reports as
+// htmx:sendAbort, not a failure, so it raises nothing.
 (function () {
   "use strict";
 
@@ -64,12 +64,26 @@
   });
   document.addEventListener("htmx:afterRequest", function (event) {
     var xhr = event.detail && event.detail.xhr;
-    if (!isSave(event) || !xhr || xhr.status < 200 || xhr.status >= 300) {
+    if (!xhr || xhr.status < 200 || xhr.status >= 300) {
+      return;
+    }
+    var target = event.detail.target;
+    // A card's refresh shows it as the server has it, so a failed tap on it no longer misleads.
+    if (!isSave(event) && !(target instanceof Element && target.hasAttribute("data-poll"))) {
       return;
     }
     delete unsaved[targetOf(event)];
     if (Object.keys(unsaved).length === 0) {
       setBanner("");
+    }
+  });
+
+  // If HTMX's own swap fails, it never clears htmx-request, and the repeat guard below and the
+  // refresh would skip that form or card until a reload.
+  document.addEventListener("htmx:onLoadError", function (event) {
+    var elt = event.detail && event.detail.elt;
+    if (elt instanceof Element) {
+      elt.classList.remove("htmx-request");
     }
   });
 
