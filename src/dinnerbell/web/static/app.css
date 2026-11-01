@@ -275,6 +275,14 @@ details[open] > summary { margin-bottom: 0.5rem; }
   .topbar .nav { order: 1; flex: 0 1 auto; justify-content: flex-end; margin-left: auto; }
   .topbar .signout { order: 2; margin-left: 0; }
 }
+/* A page that scrolls to an anchor, such as #meal-12 after a save, stops below the sticky top bar
+   (#153): its three rows on phones, two from 36rem, one from 54rem, plus the test instance's
+   banner. */
+:root { --topbar-height: calc(env(safe-area-inset-top) + 11rem); }
+@media (min-width: 36rem) { :root { --topbar-height: calc(env(safe-area-inset-top) + 8rem); } }
+@media (min-width: 54rem) { :root { --topbar-height: calc(env(safe-area-inset-top) + 5rem); } }
+:root:has(.instance-banner) { --banner-height: 1.75rem; }
+html { scroll-padding-top: calc(var(--topbar-height) + var(--banner-height, 0px)); }
 
 textarea {
   width: 100%;
@@ -418,19 +426,17 @@ ins { color: var(--ok); text-decoration: none; }
 .meal p { margin: 0.35rem 0 0; }
 .meal-feedback > .button { margin-top: 0.6rem; }
 
-/* The meal a save lands on (#153): clear of the sticky top bar, its notice inside, and a highlight
-   that fades so you can spot it. Without motion, the highlight stays and nothing moves. */
-.meal { scroll-margin-top: calc(env(safe-area-inset-top) + 11rem); }  /* the top bar's three rows */
-@media (min-width: 36rem) { .meal { scroll-margin-top: calc(env(safe-area-inset-top) + 8rem); } }  /* two */
-@media (min-width: 54rem) { .meal { scroll-margin-top: calc(env(safe-area-inset-top) + 5rem); } }  /* one */
-.meal-notice { margin: 0 0 0.6rem; }
-.meal:target { animation: meal-landed 3s ease-in both; }
-@keyframes meal-landed {
+/* The meal or catalog item a save lands on (#153): its notice inside, and a highlight that holds
+   for 1.2 s, then fades over 1.8 s so you can spot it. Without motion, the highlight stays and
+   nothing moves. */
+.meal > .landed-notice, .item > .landed-notice { margin: 0 0 0.6rem; }
+.meal:target, .item:target { animation: landed 3s ease-in both; }
+@keyframes landed {
   0%, 40% { background: var(--accent-soft); border-color: var(--accent); }
   100% { background: var(--surface); border-color: var(--line); }
 }
 @media (prefers-reduced-motion: reduce) {
-  .meal:target { animation: none; background: var(--accent-soft); border-color: var(--accent); }
+  .meal:target, .item:target { animation: none; background: var(--accent-soft); border-color: var(--accent); }
 }
 
 /* Pages of a long list (#153): previous, "Page 2 of 5", next, the status centered whichever links

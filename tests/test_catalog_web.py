@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import date
 
 import pytest
@@ -459,20 +460,85 @@ def test_adding_or_editing_an_item_returns_to_its_page(
     monkeypatch.setattr(catalog, "ITEMS_PER_PAGE", 2)
     sign_in(client, provider)
     first = add_item(client, "Anchor")
-    assert first.headers["location"] == f"/catalog?notice=created#item-{item_row(migrated, 'Anchor').id}"
+    anchor = item_row(migrated, "Anchor").id
+    assert first.headers["location"] == f"/catalog?notice=created&item={anchor}#item-{anchor}"
     add_item(client, "Bistro")
     add_item(client, "Cantina")
     cantina = item_row(migrated, "Cantina").id
     created = add_item(client, "Diner")
     diner = item_row(migrated, "Diner").id
-    assert created.headers["location"] == f"/catalog?page=2&notice=created#item-{diner}"
+    assert created.headers["location"] == f"/catalog?page=2&notice=created&item={diner}#item-{diner}"
     edit = {"name": "Cantina", "new_cuisines": "Thai", "modes": ["pickup"], "meals": ["dinner"]}
     updated = submit(client, f"/catalog/items/{cantina}", edit)
-    assert updated.headers["location"] == f"/catalog?page=2&notice=updated#item-{cantina}"
+    assert updated.headers["location"] == f"/catalog?page=2&notice=updated&item={cantina}#item-{cantina}"
     assert f'id="item-{cantina}"' in client.get(updated.headers["location"]).text
     # Renamed to sort first, it's on page 1; an inactive item isn't listed, so page 1 too.
     renamed = submit(client, f"/catalog/items/{cantina}", edit | {"name": "Aardvark"})
-    assert renamed.headers["location"] == f"/catalog?notice=updated#item-{cantina}"
+    assert renamed.headers["location"] == f"/catalog?notice=updated&item={cantina}#item-{cantina}"
     submit(client, f"/catalog/items/{diner}/deactivate")
     again = submit(client, f"/catalog/items/{diner}", edit | {"name": "Diner"})
-    assert again.headers["location"] == f"/catalog?notice=updated#item-{diner}"
+    assert again.headers["location"] == f"/catalog?notice=updated&item={diner}#item-{diner}"
+    # Diner is inactive, so the first page doesn't list it and the notice shows at the top.
+    assert item_notices(page(client.get(again.headers["location"]))) == (["Changes saved."], {})
+
+
+def item_notices(html: str) -> tuple[list[str], dict[int, list[str]]]:
+    """The ok notices on a Catalog page: those above the first item, and those inside each item's
+    entry, by item ID."""
+    top, _, rest = html.partition('<li class="item')
+    found = r'<p class="alert ok[^"]*" role="status">([^<]+)</p>'
+    inside: dict[int, list[str]] = {}
+    for entry in rest.split('<li class="item'):
+        if texts := re.findall(found, entry):
+            inside[int(entry.split('id="item-', 1)[1].split('"', 1)[0])] = texts
+    return re.findall(found, top), inside
+
+
+@pytest.mark.parametrize("page_number", [1, 2])
+def test_the_saved_notice_shows_in_the_item_you_land_on(
+    client: TestClient, provider: FakeProvider, migrated: Settings, monkeypatch: pytest.MonkeyPatch, page_number: int
+) -> None:
+    """The redirect scrolls to the item, so its notice shows there, not off screen at the top
+    (#153)."""
+    from dinnerbell.web.routes import catalog
+
+    monkeypatch.setattr(catalog, "ITEMS_PER_PAGE", 2)
+    sign_in(client, provider)
+    for name in ("Anchor", "Bistro"):
+        add_item(client, name)
+    name = "Cantina" if page_number == 2 else "Aardvark"
+    created = add_item(client, name)
+    item = item_row(migrated, name).id
+    landed = page(client.get(created.headers["location"]))
+    assert ("Page 2 of 2" in landed) == (page_number == 2)
+    assert item_notices(landed) == ([], {item: ["Saved to the catalog."]})
+    updated = submit(
+        client,
+        f"/catalog/items/{item}",
+        {"name": name, "new_cuisines": "Thai", "modes": ["pickup"], "meals": ["dinner"]},
+    )
+    assert item_notices(page(client.get(updated.headers["location"]))) == ([], {item: ["Changes saved."]})
+
+
+def test_a_catalog_notice_without_its_item_on_the_page_shows_at_the_top(
+    client: TestClient, provider: FakeProvider, migrated: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dinnerbell.web.routes import catalog
+
+    monkeypatch.setattr(catalog, "ITEMS_PER_PAGE", 2)
+    sign_in(client, provider)
+    for name in ("Anchor", "Bistro", "Cantina"):
+        add_item(client, name)
+    cantina = item_row(migrated, "Cantina").id  # on page 2
+    for item in (str(cantina), "999999", "abc", "", "-1", "9" * 5000):
+        landed = page(client.get(f"/catalog?notice=created&item={item}"))
+        assert item_notices(landed) == (["Saved to the catalog."], {}), item[:20]
+    # A search that hides the item, an unknown notice, or no notice.
+    assert item_notices(page(client.get(f"/catalog?q=anchor&notice=created&item={cantina}"))) == (
+        ["Saved to the catalog."],
+        {},
+    )
+    assert item_notices(page(client.get(f"/catalog?page=2&notice=bogus&item={cantina}"))) == ([], {})
+    assert item_notices(page(client.get(f"/catalog?page=2&item={cantina}"))) == ([], {})
+    imported = page(client.get(f"/catalog?notice=imported&created=1&updated=0&tags_created=0&item={cantina}"))
+    assert item_notices(imported)[0] == ["Imported: 1 added, 0 updated, 0 new tags."]

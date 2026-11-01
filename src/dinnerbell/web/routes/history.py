@@ -175,7 +175,7 @@ async def history_page(
     and a page that isn't a number shows the first. ``meal`` is the meal the notice is about;
     the notice shows at the top when it's missing, not a row ID, or not on this page."""
     shown = page_number(page)
-    about = parse_id(meal) if len(meal) <= 20 else None  # a row ID has at most 19 digits
+    about = parse_id(meal) if len(meal) <= 20 else None  # 20 digits is past any row ID; skip int() on more
     return await _history_page(
         request, principal, context, db, page=shown, notice=NOTICES.get(notice), notice_meal=about
     )
