@@ -21,7 +21,7 @@ from dinnerbell.db.models import AuditRow, MealLogRow, TagRow
 from dinnerbell.services import variety
 from dinnerbell.services.bootstrap import bootstrap
 from dinnerbell.services.database import open_database
-from tests.conftest import invite, page, sign_in
+from tests.conftest import BASE_URL, invite, page, sign_in
 from tests.support.clock import FakeClock
 from tests.support.fake_oidc import FakeProvider
 from tests.support.web import add_item, submit
@@ -320,6 +320,16 @@ def test_a_history_page_out_of_range_shows_the_nearest(
     assert f"Page {shown} of 3" in page(response)
 
 
+@pytest.mark.parametrize("asked", ["abc", "2.5", "1e3", "%C2%B2", "", "+2", "1" * 40])
+def test_a_history_page_that_isnt_a_number_shows_the_first(
+    client: TestClient, household: dict[str, int], migrated: Settings, asked: str
+) -> None:
+    fill(migrated, household["tacos"], household["admin"], 33)
+    response = client.get(f"/history?page={asked}")
+    assert response.status_code == 200
+    assert "Page 1 of 3" in page(response)
+
+
 def test_changes_return_to_the_meals_page(client: TestClient, household: dict[str, int], migrated: Settings) -> None:
     """Logging, editing, and deleting a meal, and feedback on it, land on the History page that
     lists it, not page 1."""
@@ -337,8 +347,11 @@ def test_changes_return_to_the_meals_page(client: TestClient, household: dict[st
     # 31 dinners and 10 lunches are newer than a lunch 31 days ago: page 3.
     later = submit(client, f"/history/meals/{meal}", edit | {"day": (TODAY - timedelta(days=31)).isoformat()})
     assert later.headers["location"] == f"/history?page=3&notice=updated#meal-{meal}"
-    gone = submit(client, f"/history/meals/{meal}/delete")
-    assert gone.headers["location"] == "/history?page=3&notice=deleted"
+    # History's Delete button is boosted: HTMX follows the same redirect to the same page.
+    boosted = {"HX-Request": "true", "HX-Boosted": "true", "HX-Current-URL": f"{BASE_URL}/history?page=3"}
+    gone = submit(client, f"/history/meals/{meal}/delete", **boosted)
+    assert gone.status_code == 303 and gone.headers["location"] == "/history?page=3&notice=deleted"
+    assert "Page 3 of 3" in page(client.get(gone.headers["location"]))
     first = min(r.id for r in rows(migrated, MealLogRow))  # yesterday's dinner, the newest
     assert submit(client, f"/history/meals/{first}/delete").headers["location"] == "/history?notice=deleted"
 
@@ -349,8 +362,12 @@ def test_feedback_returns_to_the_meals_page(client: TestClient, household: dict[
     insert_meals(migrated, household["tacos"], household["admin"], [(TODAY, "dinner")] * 20)
     form = page(client.get(f"/history/meals/{meal}/feedback"))
     assert f'href="/history?page=2#meal-{meal}"' in form  # the way back
+    # A refused save shows the form again, and its way back still goes to page 2.
+    refused = submit(client, f"/history/meals/{meal}/feedback", {"rating": "liked", "issue_note": "x" * 201})
+    assert refused.status_code == 400 and f'href="/history?page=2#meal-{meal}"' in page(refused)
     saved = submit(client, f"/history/meals/{meal}/feedback", {"rating": "liked"})
     assert saved.headers["location"] == f"/history?page=2&notice=feedback#meal-{meal}"
+    assert f'id="meal-{meal}"' in client.get(saved.headers["location"]).text
 
 
 def test_one_page_of_history_has_no_pager(client: TestClient, household: dict[str, int], migrated: Settings) -> None:

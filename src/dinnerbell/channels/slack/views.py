@@ -634,16 +634,15 @@ def _picked_values(values: Any, block_id: str) -> list[str]:
     return [str(o.get("value")) for o in selected]
 
 
-LEGACY_FEEDBACK = "This form changed. Close it and tap How was it? again."
-
-
 def parse_feedback(values: Any) -> FeedbackInput:
     """The feedback modal's state as ``FeedbackInput``. Raises FormError or ids.BadValue.
-    ``feedback.give`` checks each part against the meal."""
-    # A modal opened before 0020 (one rating) asks about the food; saving it would drop the
-    # member's rating. Remove after one release.
-    if isinstance(values, dict) and "food" in values:
-        raise FormError("food", LEGACY_FEEDBACK)
+    ``feedback.give`` checks each part against the meal.
+
+    The rating's radio buttons always start on an answer, so a real modal always posts a rating.
+    Without one, the modal isn't one this app drew, and saving it would take back the member's
+    rating."""
+    if not _state(values, "rating").get("selected_option"):
+        raise ids.BadValue("no rating")
     issues = _picked_values(values, "place_issues")
     if not set(issues) <= {i.value for i in PlaceIssue}:
         raise ids.BadValue("not an issue")

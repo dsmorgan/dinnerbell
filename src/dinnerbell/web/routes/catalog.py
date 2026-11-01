@@ -39,7 +39,7 @@ from dinnerbell.services import feedback as feedback_service
 from dinnerbell.services.variety import household_today
 from dinnerbell.web.auth import AdminCSRFChecked, Context, CSRFChecked, Database, Principal, SignedIn
 from dinnerbell.web.context import AppContext, app_context
-from dinnerbell.web.forms import BadFormValue, RowId, choice, optional_int, parse_id, split_names
+from dinnerbell.web.forms import BadFormValue, RowId, choice, optional_int, page_number, parse_id, split_names
 from dinnerbell.web.redirects import local_path, local_redirect
 from dinnerbell.web.render import render
 from dinnerbell.web.signing import SignedPayload, derive_key
@@ -94,10 +94,10 @@ async def catalog_page(
     created: int = 0,
     updated: int = 0,
     tags_created: int = 0,
-    page: int = 1,
+    page: str = "1",
 ) -> Response:
-    """The catalog, ``ITEMS_PER_PAGE`` matches at a time. The page links keep the search, and a page
-    past either end shows the nearest one."""
+    """The catalog, ``ITEMS_PER_PAGE`` matches at a time. The page links keep the search, a page
+    past either end shows the nearest one, and a page that isn't a number shows the first."""
     data = await catalog_service.catalog(db, principal.member)
     tag_id = parse_id(tag)
     search = ItemFilter(
@@ -110,7 +110,7 @@ async def catalog_page(
     )
     names = {t.id: t.name for t in data.tags}
     matches = [item for item in data.items if search.matches(item, names)]
-    shown = page_of(page, len(matches), ITEMS_PER_PAGE)
+    shown = page_of(page_number(page), len(matches), ITEMS_PER_PAGE)
     items = matches[shown.offset : shown.offset + shown.size]
     kept = {
         "q": search.query,

@@ -6,6 +6,14 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ## [Unreleased]
 
+### Removed
+
+- **The upgrade guard for old feedback forms** (#148). 0.11.0 refused a **How was it?** form or modal opened before the upgrade, which still asked about the food and the place, so that saving it couldn't take back your rating. Both instances now run 0.11.0, so the guard is gone. A rating is now simply required: the web form and the Slack modal always send one, because a rating, **No answer** at first, is always selected. A web post without one gets the **Request refused** page, and a Slack modal without one closes. Neither saves anything.
+
+### Fixed
+
+- **A History or Catalog page that isn't a number shows the first page.** An address such as `/history?page=abc` or `/catalog?q=thai&page=2.5` showed **Request refused**. It now shows the first page, and the Catalog keeps your search. A page number past either end still shows the nearest page.
+
 ## [0.11.0] - 2026-10-31
 
 ### Added

@@ -423,6 +423,12 @@ def test_the_catalog_pages_and_keeps_the_search(
     # A page past either end shows the nearest page; too few matches for two pages, no pager.
     assert shown(page(client.get("/catalog?page=99"))) == ["Eatery", "Falafel Hut"]
     assert shown(page(client.get("/catalog?page=-1"))) == ["Anchor", "Bistro"]
+    # A page that isn't a whole number shows the first page, keeping the search.
+    for bad in ("abc", "2.5", "%C2%B2", "", "1" * 40):
+        response = client.get(f"/catalog?page={bad}")
+        assert response.status_code == 200 and shown(page(response)) == ["Anchor", "Bistro"]
+    filtered = page(client.get("/catalog?q=a&kind=restaurant&status=all&page=x"))
+    assert "Page 1 of" in filtered and 'href="/catalog?q=a&kind=restaurant&status=all&page=2"' in filtered
     single = page(client.get("/catalog?kind=home&page=5"))
     assert shown(single) == ["Falafel Hut"] and 'class="pager"' not in single and "1 match " in single
 
