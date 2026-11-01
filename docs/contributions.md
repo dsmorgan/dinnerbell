@@ -57,6 +57,7 @@ An admin changes the tier counts on the **Badges** tab of **Admin**: five whole 
 When a meal is done, Dinnerbell announces the badges it earned in the channel, within about 30 seconds. A restart or a retry never posts a badge twice.
 
 - **One post for each done call.** Everything the call earned goes in one message, with each member mentioned once, in name order. It never compares people. A post names at most 10 members and 6 badges each, and counts the rest ("and 3 more members earned badges too"). A badge earned at several tiers at once shows its highest.
+- **The rarest badges come first.** Each member's badges are listed highest tier first (Diamond, Gold, Silver, Bronze, First), then by ladder (Rare, then Occasional, then Frequent), then in the order of the badge table. When a list is cut short, the badges left off are the most common ones.
 - **Food Critic gets no post.** It's earned when a member gives feedback, often days after the call, so a post would interrupt the channel each time. It shows everywhere else. A badge says how many times someone gave feedback, never what they said.
 - **Some badges are never announced:** badges earned by catching up, such as after an upgrade or a lowered count, and badges of a member who left.
 - **A lost post stays lost.** If Slack refuses a post for good, or it waits more than 24 hours, such as during a long Slack outage or with a bad token, it's never sent. The log shows `notification delivery gave up`, and `/healthz` counts it in `outbox.failed`.
@@ -65,6 +66,8 @@ When a meal is done, Dinnerbell announces the badges it earned in the channel, w
 ## The monthly recap
 
 On the first day of each month, from 9 a.m. household time, Dinnerbell posts the month before: how many meals you ate, the cuisines (and any new ones), new catalog items, a thank-you, and the badges earned. The thank-you lists who cooked, picked up, ordered, and coordinated, in name order and without counts, so nobody can rank by eye, and thanks everyone who answered a call or pulled up a chair. It mentions no one, and names only active members.
+
+The badges are in the same order as in badge posts. When Slack has the badge art, each member gets a line naming up to 10 badges and a row of their icons beneath it, and any more are counted ("and 2 more badges"). Without the art, such as when the Slack app lacks the `files:write` scope, the recap names up to 6 badges per member as text, with tier marks.
 
 - The recap posts once a month, however often Dinnerbell restarts. If Dinnerbell was down on the first, it posts on the next start, up to the seventh; after that, the month is skipped.
 - A month with no meals posts nothing.

@@ -31,7 +31,7 @@ from dinnerbell.db.contributions import BadgeRepository
 from dinnerbell.db.engine import write_transaction
 from dinnerbell.db.outbox import OutboxRepository
 from dinnerbell.db.repositories import HouseholdRepository, MemberRepository
-from dinnerbell.domain.badges import BY_KEY, SILENT_BADGES, TIERS, Award
+from dinnerbell.domain.badges import BY_KEY, SILENT_BADGES, TIERS, Award, news_order
 from dinnerbell.domain.members import Member
 from dinnerbell.domain.notifications import BadgeNews, BadgesEarned, BadgeTier, PersonInfo
 
@@ -45,8 +45,10 @@ MAX_BADGES = 6
 
 def news_for(awards: Iterable[Award], members: dict[int, Member]) -> tuple[list[BadgeNews], int]:
     """``awards`` as one entry per member in name order, and how many members were left off
-    (``MAX_PEOPLE``). A badge earned at several tiers at once shows its highest. Members not in
-    ``members`` are left out without being counted."""
+    (``MAX_PEOPLE``). A badge earned at several tiers at once shows its highest. Each member's
+    badges are in ``news_order`` (highest tier, then rarest ladder, then catalog order) before
+    ``MAX_BADGES`` cuts them, so ``badges`` holds the most notable and ``rest`` the most common.
+    Members not in ``members`` are left out without being counted."""
     best: dict[int, dict[str, Award]] = defaultdict(dict)
     for award in awards:
         if award.member_id not in members:
@@ -54,10 +56,9 @@ def news_for(awards: Iterable[Award], members: dict[int, Member]) -> tuple[list[
         held = best[award.member_id].get(award.badge.value)
         if held is None or TIERS.index(award.tier) > TIERS.index(held.tier):
             best[award.member_id][award.badge.value] = award
-    order = {key: n for n, key in enumerate(BY_KEY)}
     people: list[BadgeNews] = []
     for member_id in sorted(best, key=lambda m: (members[m].display_name.casefold(), m)):
-        earned = sorted(best[member_id].values(), key=lambda a: order[a.badge])
+        earned = sorted(best[member_id].values(), key=lambda a: news_order(a.badge, a.tier))
         shown = tuple(BadgeTier(BY_KEY[a.badge].name, a.tier.label) for a in earned[:MAX_BADGES])
         person = PersonInfo(member_id, members[member_id].display_name)
         rest = tuple(BadgeTier(BY_KEY[a.badge].name, a.tier.label) for a in earned[MAX_BADGES:])

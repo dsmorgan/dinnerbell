@@ -747,6 +747,42 @@ def test_the_caps_hold_at_the_boundary() -> None:
     assert none_left == 0 and exact[0].more == 0 and len(exact) == 10
 
 
+def test_each_members_badges_go_highest_tier_then_rarest_ladder_then_catalog_order() -> None:
+    """The order is set before the cap cuts the list (FR-39, FR-40), so what's left off is the most common."""
+    from datetime import datetime as dt
+
+    from dinnerbell.domain.badges import BY_KEY, LADDERS, RARITY, Award, news_order
+    from dinnerbell.domain.members import Capabilities, Member, Role
+
+    members = {1: Member(1, 1, "Kim", "kim@example.com", Role.MEMBER, Capabilities(), True)}
+    when = dt(2026, 10, 22, tzinfo=UTC)
+    earned = [
+        (BadgeKey.GAMBLER, Tier.FIRST),  # Frequent, last in the catalog
+        (BadgeKey.CHEF, Tier.FIRST),  # Frequent, first in the catalog
+        (BadgeKey.GOOD_HOST, Tier.FIRST),  # Occasional
+        (BadgeKey.SCOUT, Tier.FIRST),  # Rare
+        (BadgeKey.EXPLORER, Tier.BRONZE),  # a higher tier beats any ladder
+        (BadgeKey.FULL_TABLE, Tier.SILVER),  # and the highest tier beats a rarer ladder
+        (BadgeKey.ON_A_ROLL, Tier.FIRST),  # Rare, after Scout in the catalog
+    ]
+    got = [Award(n, 1, 1, k, t, when, Announcement.PENDING) for n, (k, t) in enumerate(earned)]
+    (kim,), _ = announcements.news_for(got, members)
+    assert [(b.name, b.tier) for b in (*kim.badges, *kim.rest)] == [
+        ("Full Table", "Silver"),
+        ("Explorer", "Bronze"),
+        ("Scout", "First"),
+        ("On a Roll", "First"),
+        ("Good Host", "First"),
+        ("Chef", "First"),
+        ("Gambler", "First"),
+    ]
+    assert [b.name for b in kim.badges] == ["Full Table", "Explorer", "Scout", "On a Roll", "Good Host", "Chef"]
+    assert [b.name for b in kim.rest] == ["Gambler"] and kim.more == 1  # trimmed after sorting
+    assert set(RARITY) == set(LADDERS) and len(RARITY) == len(LADDERS)
+    assert news_order(BadgeKey.CHEF, Tier.DIAMOND) < news_order(BadgeKey.SCOUT, Tier.GOLD)
+    assert BY_KEY[BadgeKey.GAMBLER].ladder is Ladder.FREQUENT  # the case above relies on it
+
+
 async def test_a_pending_food_critic_is_in_the_newest_badges_like_any_other(house: House) -> None:
     await award(house, "Kim", BadgeKey.FOOD_CRITIC, Tier.FIRST)
     await award(house, "Alex", BadgeKey.CHEF, Tier.FIRST)

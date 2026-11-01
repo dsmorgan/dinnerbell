@@ -8,7 +8,8 @@ import asyncio
 import json
 import logging
 from collections.abc import AsyncIterator
-from datetime import timedelta
+from dataclasses import replace
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -759,10 +760,11 @@ async def test_four_badges_become_one_line_and_one_row_of_small_icons(house: Hou
     blocks = announcement(slack)
     assert not any("accessory" in b for b in blocks)
     (row,) = icons(blocks)
-    assert [e["alt_text"] for e in row] == ["Chef, Gold", "Road Runner, First", "Quarterback, First", "Scout, First"]
+    # Gold first, then the First tiers: Scout's Rare ladder before the Frequent ones, in catalog order
+    assert [e["alt_text"] for e in row] == ["Chef, Gold", "Scout, First", "Road Runner, First", "Quarterback, First"]
     line = next(b["text"]["text"] for b in blocks if "earned 4 badges:" in b.get("text", {}).get("text", ""))
     assert line.startswith(f"<@{SLACK_IDS['Kim']}> earned 4 badges: ")
-    assert line.endswith("earned 4 badges: *Chef*, *Road Runner*, *Quarterback*, and *Scout*.")
+    assert line.endswith("earned 4 badges: *Chef*, *Scout*, *Road Runner*, and *Quarterback*.")
     assert "🥇" not in line and "·" not in line  # the icons below show the tiers
 
 
@@ -784,8 +786,8 @@ async def test_four_badges_without_art_post_the_same_text_as_before(house: House
     await slack.drain()
     (section,) = [b for b in announcement(slack) if "earned" in json.dumps(b)]
     assert section["text"]["text"].splitlines()[1] == (
-        f"<@{SLACK_IDS['Kim']}> earned {tag('*Chef*', 'Gold')}, {tag('*Road Runner*', 'First')}, "
-        f"{tag('*Quarterback*', 'First')}, and {tag('*Scout*', 'First')}."
+        f"<@{SLACK_IDS['Kim']}> earned {tag('*Chef*', 'Gold')}, {tag('*Scout*', 'First')}, "
+        f"{tag('*Road Runner*', 'First')}, and {tag('*Quarterback*', 'First')}."
     )
 
 
@@ -1436,3 +1438,213 @@ async def test_stopping_settles_interactions_before_badge_files(house: House, mo
     monkeypatch.setattr(conn.interactions, "settle", lambda within=0: record("interactions", within))
     await conn.stop()
     assert order == ["interactions", "badge_files"]
+
+
+# The monthly recap's art -----------------------------------------------------------------------------
+
+
+def recap_post(slack: Slack) -> list[dict[str, Any]]:
+    (call,) = [c for c in slack.fake.of("chat.postMessage") if c.args["text"].startswith("October in review")]
+    blocks: list[dict[str, Any]] = call.args["blocks"]
+    return blocks
+
+
+def recap_line(blocks: list[dict[str, Any]], who: str) -> str:
+    """The line naming ``who``'s badges in the recap: its own block with art, or a bullet in the text."""
+    text = "\n".join(b["text"]["text"] for b in blocks if b["type"] == "section")
+    return next(line for line in text.splitlines() if line.startswith((f"{who}: ", f"• {who}: ")))
+
+
+async def recap_october(house: House, slack: Slack) -> None:
+    """Post October's recap at 9 a.m. on November 1, and deliver everything queued."""
+    from tests.test_badge_news import NOV_1_MORNING, recapped
+
+    house.clock.now = NOV_1_MORNING
+    assert await recapped(house) == 1
+    await slack.drain()
+
+
+async def test_the_recap_shows_each_members_badges_as_a_line_and_a_row_of_icons(house: House) -> None:
+    from tests.test_badge_news import october
+
+    slack = await wire(house)
+    await october(house)
+    await award(house, "Kim", BadgeKey.CHEF, Tier.GOLD)
+    await award(house, "Kim", BadgeKey.SCOUT, Tier.FIRST)
+    await slack.drain()  # the badge posts upload their art first
+    slack.fake.clear()
+    await recap_october(house, slack)
+    blocks = recap_post(slack)
+    line = recap_line(blocks, "Kim")
+    assert line.startswith("Kim: *Chef*, *Scout*") and "🥇" not in line and "·" not in line
+    kim = next(r for r in icons(blocks) if r[0]["alt_text"] == "Chef, Gold")
+    assert kim[1]["alt_text"] == "Scout, First"
+    assert {e["slack_file"]["id"] for r in icons(blocks) for e in r} <= set(slack.fake.files)
+    assert blocks.index(next(b for b in blocks if b.get("text", {}).get("text") == "*Badges earned*")) == 2
+    assert "<@" not in json.dumps(blocks)  # the recap still mentions nobody
+
+
+async def test_the_recap_uploads_art_no_badge_post_used(house: House) -> None:
+    from tests.test_badge_news import october
+
+    slack = await wire(house)
+    await october(house)
+    await slack.drain()
+    await award(house, "Kim", BadgeKey.EXPLORER, Tier.SILVER)  # never announced, so never uploaded
+    slack.fake.clear()
+    await recap_october(house, slack)
+    assert [c.args["filename"] for c in art_uploads(slack)] == ["explorer-silver.png"]
+    assert any(e["alt_text"] == "Explorer, Silver" for r in icons(recap_post(slack)) for e in r)
+
+
+async def test_without_art_the_recap_is_the_text_it_was(house: House) -> None:
+    from dinnerbell.channels.slack.messages import monthly_recap_message
+    from tests.test_badge_news import october, posts
+
+    slack = await wire(house)
+    slack.fake.fail("files.getUploadURLExternal", Failure("missing_scope"))
+    await october(house)
+    await award(house, "Kim", BadgeKey.CHEF, Tier.GOLD)
+    await recap_october(house, slack)  # the first upload fails, and nothing uploads for 15 minutes
+    blocks = recap_post(slack)
+    assert icons(blocks) == []
+    assert recap_line(blocks, "Kim").startswith(f"• Kim: {tag('*Chef*', 'Gold')}, ")
+    (post,) = await posts(house, "monthly_recap")
+    assert isinstance(post, note.MonthlyRecap)
+    text_only = monthly_recap_message(post, RenderContext("https://x.example", Directory()))
+    assert [b["type"] for b in blocks] == [b["type"] for b in text_only.blocks] == ["section"] * 3 + ["context"]
+
+
+async def test_a_recap_with_some_art_keeps_the_tag_of_each_badge_without(house: House) -> None:
+    from tests.test_badge_news import NOV_1_MORNING, october
+
+    slack = await wire(house)
+    await october(house)
+    await slack.drain()  # the art for October's badge posts is uploaded
+    await award(house, "Kim", BadgeKey.CHEF, Tier.GOLD)  # a new tier, not uploaded yet
+    house.clock.now = NOV_1_MORNING
+    slack.fake.fail("files.getUploadURLExternal", Failure("missing_scope"))
+    assert await slack.conn.badge_files.file_ids(house.household.id, [("gambler", "diamond")]) == {}
+    await recap_october(house, slack)  # in the 15-minute pause: cached files show, Chef's doesn't upload
+    blocks = recap_post(slack)
+    line = recap_line(blocks, "Kim")
+    assert line.startswith(f"Kim: {tag('*Chef*', 'Gold')}, *")  # the rest are plain, beside their icons
+    alts = [e["alt_text"] for r in icons(blocks) for e in r]
+    assert "Chef, Gold" not in alts and alts
+
+
+async def test_slack_refusing_the_recaps_art_posts_its_text_and_forgets_the_files(house: House) -> None:
+    from tests.test_badge_news import october
+
+    slack = await wire(house)
+    await october(house)
+    await slack.drain()
+    slack.fake.fail("chat.postMessage", Failure("invalid_blocks"))
+    await recap_october(house, slack)  # cached files: no retry, the text at once
+    tried, sent = [c for c in slack.fake.of("chat.postMessage") if c.args["text"].startswith("October in review")]
+    assert icons(tried.args["blocks"]) and not icons(sent.args["blocks"])
+    async with house.sessionmaker() as db:
+        assert await BadgeFileRepository(db).all(house.household.id) == {}
+
+
+def kim_month() -> note.BadgeNews:
+    """Kim's 12 badges from one month, through ``news_for``: every badge but Food Critic at mixed tiers,
+    with Chef earned at three tiers at once."""
+    from dinnerbell.channels.slack.preview import KIM_MONTH
+    from dinnerbell.domain.badges import Announcement, Award
+    from dinnerbell.domain.members import Capabilities, Member, Role
+    from dinnerbell.services.announcements import news_for
+
+    kim = Member(3, 1, "Kim", "kim@example.com", Role.MEMBER, Capabilities(), True)
+    when = datetime(2026, 10, 22, tzinfo=UTC)
+    awards = [Award(n, 1, 3, k, t, when, Announcement.ANNOUNCED) for n, (k, t) in enumerate(KIM_MONTH.items())]
+    awards += [Award(90 + n, 1, 3, BadgeKey.CHEF, t, when, Announcement.ANNOUNCED) for n, t in enumerate(TIERS[:3])]
+    (news,), more_people = news_for(reversed(awards), {3: kim})
+    assert more_people == 0
+    return news
+
+
+KIM_ORDER = [
+    ("Chef", "Diamond"),
+    ("Explorer", "Gold"),  # Rare
+    ("Bright Idea", "Gold"),  # Occasional
+    ("Road Runner", "Gold"),  # Frequent, in catalog order
+    ("Quarterback", "Gold"),
+    ("Scout", "Silver"),
+    ("On a Roll", "Silver"),
+    ("Full Table", "Silver"),
+    ("Early Bird", "Bronze"),
+    ("Good Host", "First"),
+    ("Order Up", "First"),
+    ("Gambler", "First"),
+]
+"""Kim's 12 badges in order: highest tier first, then Rare, Occasional, and Frequent, then the catalog."""
+
+
+def recap_of(news: tuple[note.BadgeNews, ...], more: int = 0) -> note.MonthlyRecap:
+    from dinnerbell.channels.slack.preview import RECAP
+
+    return note.MonthlyRecap(1, date(2026, 10, 1), 3, thanks=RECAP.thanks, badges=news, more_badges=more)
+
+
+def test_a_member_with_twelve_badges_is_sorted_then_trimmed() -> None:
+    news = kim_month()
+    assert [(b.name, b.tier) for b in (*news.badges, *news.rest)] == KIM_ORDER
+    assert news.more == 6 and len(news.badges) == 6
+    with_art = render(recap_of((news,)), RenderContext("https://x.example", Directory(), art=every_tier_art())).blocks
+    names = ", ".join(f"*{n}*" for n, _ in KIM_ORDER[:10])
+    assert recap_line(with_art, "Kim") == f"Kim: {names}, and 2 more badges"  # the two most common left off
+    assert [[e["alt_text"] for e in r] for r in icons(with_art)] == [[f"{n}, {t}" for n, t in KIM_ORDER[:10]]]
+    text = render(recap_of((news,)), RenderContext("https://x.example", Directory())).blocks
+    tags = ", ".join(tag(f"*{n}*", t) for n, t in KIM_ORDER[:6])
+    assert recap_line(text, "Kim") == f"• Kim: {tags}, 6 more badges"
+
+
+def test_a_recap_queued_before_the_rest_existed_counts_what_it_cannot_name() -> None:
+    news = kim_month()
+    old = note.BadgeNews(news.person, news.badges, more=news.more)
+    blocks = render(recap_of((old,)), RenderContext("https://x.example", Directory(), art=every_tier_art())).blocks
+    assert recap_line(blocks, "Kim").endswith(", and 6 more badges") and [len(r) for r in icons(blocks)] == [6]
+
+
+def test_a_member_with_no_art_in_a_recap_with_art_keeps_their_tags_and_gets_no_row() -> None:
+    kim = kim_month()
+    sam = note.BadgeNews(note.PersonInfo(2, "Sam"), (note.BadgeTier("Chef", "Bronze"),))
+    art = {k: v for k, v in every_tier_art().items() if k != ("chef", "bronze")}
+    blocks = render(recap_of((sam, kim)), RenderContext("https://x.example", Directory(), art=art)).blocks
+    assert recap_line(blocks, "Sam") == f"Sam: {tag('*Chef*', 'Bronze')}"
+    assert [len(r) for r in icons(blocks)] == [10]  # Kim's row only
+
+
+def test_the_biggest_recap_stays_within_fifty_blocks() -> None:
+    """Five fixed blocks and, for each of 10 members, a line and one row of at most 10 icons: 25,
+    and 26 with the instance label. Every member holds all 13 badges, Food Critic included."""
+    from dinnerbell.channels.slack.preview import RECAP
+    from dinnerbell.services import announcements
+    from tests.support.blockkit import check_message
+
+    every = [note.BadgeTier(name, "Diamond") for name in NAMES]
+    news = tuple(
+        note.BadgeNews(note.PersonInfo(n, f"Member {n} " + "x" * 60), tuple(every[:6]), more=7, rest=tuple(every[6:]))
+        for n in range(announcements.MAX_PEOPLE)
+    )
+    big = replace(recap_of(news, more=40), cuisines=RECAP.cuisines, new_items=40, new_item_names=RECAP.new_item_names)
+    ctx = RenderContext("https://x.example", Directory(), label="TEST", art=every_tier_art())
+    message = render(big, ctx)
+    check_message(message.payload())
+    assert len(message.blocks) == 26 < MAX_MESSAGE_BLOCKS
+    assert [len(r) for r in icons(message.blocks)] == [10] * announcements.MAX_PEOPLE
+    assert json.dumps(message.blocks).count("and 3 more badges") == announcements.MAX_PEOPLE
+
+
+def test_the_recap_asks_only_for_the_art_it_shows() -> None:
+    from dinnerbell.channels.slack.messages import art_wanted as post_art
+
+    news = kim_month()
+    assert post_art(recap_of((news,))) == {
+        (b.key.value, t.lower()) for b in BADGES for n, t in KIM_ORDER[:10] if b.name == n
+    }
+    assert post_art(note.BadgesEarned(1, 1, (news,))) == {
+        (b.key.value, t.lower()) for b in BADGES for n, t in KIM_ORDER if b.name == n
+    }
+    assert post_art(recap_of(())) == set()
