@@ -1,10 +1,12 @@
 {#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
 {#- One preference control. Expects: target ("tag:12"), name, stance, levels, and optionally saved,
-    error, or rating_note (what the member's own ratings make their score, FR-55). -#}
+    error, or rating_note (what the member's own ratings make their score, FR-55). A second change
+    while the first is saving replaces it (hx-sync), so the last level tapped is saved. Each radio
+    has a stable id, so HTMX puts focus back after the swap and the arrow keys keep working. -#}
 {% set row_id = "pref-" ~ target|replace(":", "-") %}
 <li class="pref" id="{{ row_id }}">
   <form method="post" action="/preferences/stance" hx-post="/preferences/stance" hx-trigger="change"
-        hx-target="#{{ row_id }}" hx-swap="outerHTML">
+        hx-target="#{{ row_id }}" hx-swap="outerHTML" hx-sync="this:replace">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <input type="hidden" name="target" value="{{ target }}">
     <fieldset class="levels">
@@ -14,7 +16,7 @@
       <div class="segments">
         {% for value, label in levels %}
         <label class="segment level-{{ "veto" if value == "veto" else ("neg" if value.startswith("-") else ("pos" if value != "0" else "zero")) }}">
-          <input type="radio" name="level" value="{{ value }}"{% if stance.level == value %} checked{% endif %}>
+          <input type="radio" id="{{ row_id }}-{{ value|replace("-", "minus") }}" name="level" value="{{ value }}"{% if stance.level == value %} checked{% endif %}>
           <span>{{ label }}</span>
         </label>
         {% endfor %}

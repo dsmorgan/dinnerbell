@@ -1,14 +1,20 @@
 {#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
 {#- One event's card. Expects v (an EventView), from_page ("today" or "event"), and optionally
-    error. Every action is a small form that HTMX posts, swapping this card in place. -#}
+    error. Every action is a small form that HTMX posts, swapping this card in place. The card's
+    hx-sync lets a second tap replace one still in flight, so the last tap is the one shown and
+    saved. -#}
+{#- Each button's id is stable across swaps, so HTMX puts focus back on it: the path after the
+    event, plus the field that tells its siblings apart. Vote and Voted share one. -#}
 {% macro act(eid, path, label, cls="button small", fields={}, confirm=None, pressed=None, current=False) -%}
+{%- set key = [path.split("/")[3:]|join("-")|replace("unvote", "vote")] -%}
+{%- set key = key + [fields.get("status"), fields.get("role"), fields.get("switch"), fields.get("window"), fields.get("shift")] -%}
 <form method="post" action="{{ path }}" class="inline" hx-post="{{ path }}" hx-target="#event-{{ eid }}" hx-swap="outerHTML"{% if confirm %} hx-confirm="{{ confirm }}"{% endif %}>
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   <input type="hidden" name="from" value="{{ from_page }}">
   {%- for name, value in fields.items() %}
   <input type="hidden" name="{{ name }}" value="{{ value }}">
   {%- endfor %}
-  <button type="submit" class="{{ cls }}"{% if pressed is not none %} aria-pressed="{{ 'true' if pressed else 'false' }}"{% endif %}{% if current %} aria-current="true"{% endif %}>{{ label }}</button>
+  <button type="submit" id="event-{{ eid }}-{{ key|select|join("-") }}" class="{{ cls }}"{% if pressed is not none %} aria-pressed="{{ 'true' if pressed else 'false' }}"{% endif %}{% if current %} aria-current="true"{% endif %}>{{ label }}</button>
 </form>
 {%- endmacro %}
 {% macro hidden() -%}
@@ -21,7 +27,7 @@
 {% set swap = 'hx-target="#event-' ~ e.id ~ '" hx-swap="outerHTML"' %}
 {#- A member starts a called-off call again with Start {slot} again, so admins don't also get Re-run for it. -#}
 {% set rerun = v.can.rerun and not v.can.restart %}
-<section class="card event state-{{ e.state.value }}" id="event-{{ e.id }}" aria-labelledby="event-{{ e.id }}-title"
+<section class="card event state-{{ e.state.value }}" id="event-{{ e.id }}" aria-labelledby="event-{{ e.id }}-title" hx-sync="closest .event:replace"
   {%- if e.state.is_open %} data-poll="{{ base }}/card?from={{ from_page }}"{% endif %}>
   <div class="event-head">
     <h2 id="event-{{ e.id }}-title"><a href="{{ base }}">{{ e.slot.value|capitalize }}{% if v.offer %} offer{% endif %}</a> <span class="muted small">{{ e.day|day }}</span></h2>
