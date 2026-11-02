@@ -6,6 +6,8 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-11-01
+
 ### Changed
 
 - **The monthly recap shows your badge art.** Each member's badges in the recap now get a line naming them and a row of the same art the badge posts use, beneath it. The line names up to 10 badges, one row's worth, and counts the rest ("and 2 more badges"). A badge whose art isn't in Slack keeps its text tag, and when there's no art at all, such as when the Slack app lacks the `files:write` scope, the recap is the text it was, with 6 badges a member. The recap waits for, retries, and falls back from the art the same way badge posts do.
@@ -509,7 +511,8 @@ The source-built version, never published as an image. It covers milestones M0 t
 - **M1:** the catalog with file import, preferences and vetoes, meal history, and the members admin page.
 - **M2:** dinner calls in Slack: the scheduled call, reminders, ranked proposals and votes, the decision, assignments, the abandon path, admin overrides, App Home, and `/dinnerbell call`.
 
-[Unreleased]: https://github.com/dsmorgan/dinnerbell/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/dsmorgan/dinnerbell/compare/v0.12.0...HEAD
+[0.12.0]: https://github.com/dsmorgan/dinnerbell/releases/tag/v0.12.0
 [0.11.0]: https://github.com/dsmorgan/dinnerbell/releases/tag/v0.11.0
 [0.10.0]: https://github.com/dsmorgan/dinnerbell/releases/tag/v0.10.0
 [0.9.1]: https://github.com/dsmorgan/dinnerbell/releases/tag/v0.9.1
