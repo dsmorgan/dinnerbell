@@ -47,12 +47,14 @@ from dinnerbell.domain.events import (
     check_run,
     check_window_change,
     clean_cancel_note,
+    coordinator_candidates,
     counted_votes,
     decide_winner,
     drops_coordinating,
     head_count,
     meal_time,
     needs_reminder,
+    pick_coordinator,
     posted_before_its_day,
     resolve_maybes,
     roles_unclear,
@@ -443,7 +445,8 @@ async def _close_responses(db: AsyncSession, event: Event, now: datetime) -> Non
     Before the deadline,
     because everyone answered (FR-56), the deadline moves to now first, so voting gets its
     usual length from now, as when the coordinator closes the window. A coordinator who was
-    still a maybe is out now, so nobody coordinates (#154)."""
+    still a maybe is out now (#154). Voting picks a member who's in to coordinate when nobody
+    does by then (#179, ``pick_coordinator``)."""
     if now < event.respond_deadline:
         early = {"window": Window.RESPOND.value, "from": event.respond_deadline.isoformat(), "to": now.isoformat()}
         event = await EventRepository(db).save(replace(event, respond_deadline=now), now)
@@ -483,7 +486,13 @@ async def _close_responses(db: AsyncSession, event: Event, now: datetime) -> Non
             now=now,
         )
     vote_deadline = event.respond_deadline + timedelta(minutes=event.vote_minutes)
-    voting = replace(event, state=transition(event.state, EventState.VOTING), vote_deadline=vote_deadline)
+    picked = pick_coordinator(event, ctx.responses, ctx.members)  # after the maybes are out (#179)
+    voting = replace(
+        event,
+        state=transition(event.state, EventState.VOTING),
+        vote_deadline=vote_deadline,
+        coordinator_id=event.coordinator_id if picked is None else picked,
+    )
     voting = await EventRepository(db).save(voting, now)
     ctx = await load(db, voting)
     # Only now: their message offers I'm in (late), which a call that ended can't take (#149).
@@ -493,6 +502,21 @@ async def _close_responses(db: AsyncSession, event: Event, now: datetime) -> Non
     await publish(db, ctx, cc.call_updated(ctx), now=now)
     payload = {"proposals": [{"item_id": r.item_id, "mode": r.mode.value, "score": r.score} for r in ranked]}
     await audit(db, event.household_id, None, "event.voting", _target(event), payload, now)
+    if picked is not None:
+        await _coordinator_picked(db, ctx, picked, now)
+
+
+async def _coordinator_picked(db: AsyncSession, ctx: CallContext, member_id: int, now: datetime) -> None:
+    """Tell the member voting picked to coordinate (#179), audit it as
+    ``event.coordinator_picked`` with whom it picked among, and log it. They were in already, so
+    picking them changes no answer (``with_coordinating``). The pick commits with the move to
+    voting, under the call's lock, so it happens once a run, and never over a claim."""
+    event = ctx.event
+    among = coordinator_candidates(ctx.responses, ctx.members)
+    await publish(db, ctx, note.CoordinatorPicked(cc.event_info(ctx), ctx.person(member_id)), now=now)
+    payload = {"member_id": member_id, "among": among, "run": event.run}
+    await audit(db, event.household_id, None, "event.coordinator_picked", _target(event), payload, now)
+    activity.action(db, "coordinator_picked", event, None, to_member_id=member_id, among=len(among))
 
 
 async def _keep_attached(db: AsyncSession, ctx: CallContext, group: GroupPreferences, now: datetime) -> list[Proposal]:

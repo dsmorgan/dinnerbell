@@ -844,7 +844,8 @@ async def test_done_when_end_to_end(house: House) -> None:
     from dinnerbell.domain.notifications import from_payload
 
     dms = [from_payload(e.kind, e.payload) for e in await house.outbox() if e.kind == "assignment_made"]
-    assert {(d.member.id, d.recipient_id) for d in dms} == {(rae.id, rae.id)}  # type: ignore[union-attr]
+    kim = house["Kim"].id  # the only member in, so voting picked her to coordinate (#179)
+    assert {(d.member.id, d.recipient_id) for d in dms} == {(rae.id, rae.id), (kim, kim)}  # type: ignore[union-attr]
 
 
 async def test_a_vote_decided_assignment_for_a_guest_without_slack_reaches_the_inviter(house: House) -> None:
@@ -861,7 +862,9 @@ async def test_a_vote_decided_assignment_for_a_guest_without_slack_reaches_the_i
     house.clock.now = VOTE_BY
     await house.tick()
     dms = [from_payload(e.kind, e.payload) for e in await house.outbox() if e.kind == "assignment_made"]
-    assert {(d.member.id, d.recipient_id) for d in dms} == {(house["Jo"].id, house["Kim"].id)}  # type: ignore[union-attr]
+    sam = house["Sam"].id  # the only member in, so voting picked him to coordinate (#179)
+    jo, kim = house["Jo"].id, house["Kim"].id
+    assert {(d.member.id, d.recipient_id) for d in dms} == {(jo, kim), (sam, sam)}  # type: ignore[union-attr]
 
 
 async def test_everyone_out_closes_early_with_saved_guests_in_the_household(house: House) -> None:
@@ -1163,7 +1166,8 @@ async def test_removing_a_guest_from_a_decided_call_clears_their_role(house: Hou
     ctx = await house.context(event_id)
     assert all(a.member_id != pat.id for a in ctx.assignments)
     (vacated,) = [e for e in await house.outbox() if e.kind == "role_vacated"]
-    assert vacated.payload["member"]["id"] == house["Alex"].id and vacated.payload["roles"] == ["pickup"]
+    # Sam, the only member in, coordinates (#179), so he's the one asked to pick someone
+    assert vacated.payload["member"]["id"] == house["Sam"].id and vacated.payload["roles"] == ["pickup"]
 
 
 @pytest.mark.parametrize("use", ["offer_role", "toggle_role", "claim_coordinator", "post_offer", "join_offer"])

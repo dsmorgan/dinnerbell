@@ -26,7 +26,7 @@ from dinnerbell.domain.events import EventRuleViolation, EventState, IllegalTran
 from dinnerbell.domain.meals import Slot
 from dinnerbell.services import calls
 from dinnerbell.services.database import Database, open_database
-from tests.support.calls import OPENS, RESPOND_BY, House, dinner_id, furnish, make_house
+from tests.support.calls import OPENS, RESPOND_BY, House, dinner_id, furnish, make_house, nobody_coordinates
 from tests.support.clock import FakeClock
 from tests.support.fake_slack import Failure, block_action, send, state
 from tests.support.slack import Slack, wire
@@ -252,6 +252,7 @@ async def test_details_closed_window_is_explained_instead_of_a_modal(slack: Slac
 
 async def test_vote_toggles_and_lock_needs_the_coordinator(slack: Slack, house: House) -> None:
     event_id = await to_voting(slack)
+    await nobody_coordinates(house, event_id)  # voting picked someone (#179)
     ctx = await house.context(event_id)
     first = ctx.proposals[0].id
     value = ids.proposal_value(event_id, first)

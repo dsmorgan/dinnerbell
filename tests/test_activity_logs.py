@@ -112,6 +112,7 @@ async def test_a_call_tells_its_story_one_line_per_action(
         "answer",
         "offer_role",
         "answer",
+        "coordinator_picked",  # nobody claimed it (#179)
         "voting",
         "propose",
         "refused",
@@ -127,13 +128,15 @@ async def test_a_call_tells_its_story_one_line_per_action(
         made = name == "opened"  # the scheduler made the call, so it had no state before
         assert all(line.get(key) is not None for key in CALL_FIELDS if not (made and key == "state_before")), line
         assert (line["event_id"], line["run"], line["slot"], line["day"]) == (event_id, 1, "dinner", "2026-10-22")
-        if name not in {"opened", "voting"}:  # the scheduler's
+        if name not in {"opened", "voting", "coordinator_picked"}:  # the scheduler's
             assert all(line.get(key) is not None for key in WHO), line
         if name in {"propose", "vote", "lock"}:
             assert (line["item"], line["mode"]) == ("Burrito Barn", "pickup"), line
     assert by_name["answer"]["answer"] == "in"
     assert (by_name["offer_role"]["role"], by_name["offer_role"]["offered"]) == ("pickup", True)
     assert (by_name["voting"]["state_before"], by_name["voting"]["state_after"]) == ("collecting", "voting")
+    picked = by_name["coordinator_picked"]
+    assert picked["to_member_id"] in {house["Alex"].id, house["Sam"].id} and picked["among"] == 2
     assert (by_name["lock"]["state_before"], by_name["lock"]["state_after"]) == ("voting", "decided")
     assert (by_name["assign"]["role"], by_name["assign"]["to_member"]) == ("pickup", "Sam")
     call_off = by_name["call_off"]

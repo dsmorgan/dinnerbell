@@ -111,7 +111,12 @@ async def test_a_full_call_from_open_to_done(house: House, clock: FakeClock) -> 
     assert (ctx.event.decided_item_id, ctx.event.decided_mode) == (house.items["Sam's Tacos"].id, Mode.COOK)
     # FR-19: Sam's earliest time, 18:40, rounded up to 18:45 in Chicago.
     assert ctx.event.meal_time == MEAL + timedelta(minutes=15)
-    assert [(a.role, a.member_id) for a in ctx.assignments] == [(AssignmentRole.COOK, house["Sam"].id)]
+    # Nobody claimed coordinating, so voting picked Sam, one of the two in (#179).
+    assert ctx.event.coordinator_id == house["Sam"].id
+    assert {(a.role, a.member_id) for a in ctx.assignments} == {
+        (AssignmentRole.COOK, house["Sam"].id),
+        (AssignmentRole.COORDINATOR, house["Sam"].id),
+    }
     await house.drain(channel)
 
     clock.now = MEAL + timedelta(minutes=15) + timedelta(hours=2) - timedelta(seconds=1)
@@ -141,6 +146,7 @@ async def test_a_full_call_from_open_to_done(house: House, clock: FakeClock) -> 
         ("maybe_resolved", f"{key}:maybe_resolved:member{house['Kim'].id}"),
         ("proposals_ready", f"{key}:proposals_ready"),
         ("call_updated", f"{key}:call_updated:2"),
+        ("coordinator_picked", f"{key}:coordinator_picked:member{house['Sam'].id}"),
         ("proposals_updated", f"{key}:proposals_updated:1"),  # two votes, coalesced
         ("decision_made", f"{key}:decision_made"),
         ("assignment_made", f"{key}:assignment_made:member{house['Sam'].id}:{ctx.assignments[0].id}"),
@@ -160,6 +166,7 @@ async def test_a_full_call_from_open_to_done(house: House, clock: FakeClock) -> 
         ("deliver", "maybe_resolved"),
         ("deliver", "proposals_ready"),
         ("update", "call_updated"),
+        ("deliver", "coordinator_picked"),
         ("update", "proposals_updated"),
         ("deliver", "decision_made"),
         ("deliver", "assignment_made"),
@@ -179,7 +186,7 @@ async def test_a_full_call_from_open_to_done(house: House, clock: FakeClock) -> 
     assert {s.ref for s in channel.sent if s.kind == "decision_updated"} == {by_kind["decision_made"].ref}
 
     actions = [a.action for a in await house.audits()]
-    assert actions == ["event.opened", "event.voting", "event.decided", "event.done"]
+    assert actions == ["event.opened", "event.voting", "event.coordinator_picked", "event.decided", "event.done"]
 
 
 async def test_restart_mid_call_and_downtime_past_every_deadline(
@@ -209,6 +216,7 @@ async def test_restart_mid_call_and_downtime_past_every_deadline(
             "call_updated",
             "maybe_resolved",
             "proposals_ready",
+            "coordinator_picked",
             "decision_made",
             "assignment_made",
             "proposals_updated",

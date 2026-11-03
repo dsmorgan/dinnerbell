@@ -6,6 +6,7 @@ order, are the contract with Slack: posts, threads, in-place updates, and direct
 
 from __future__ import annotations
 
+import json
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -109,10 +110,8 @@ async def test_a_dinner_decided_in_slack(slack: Slack) -> None:
     first = ids.proposal_value(event_id, ctx.proposals[0].id)
     await slack.click("Alex", "vote", first)
     await slack.click("Sam", "vote", first)
-    await slack.click("Sam", "lock", first)  # not Sam's call to make
-    await slack.click("Sam", "coordinate", e)
-    await slack.drain()
-    await slack.click("Sam", "lock", first)  # now Sam coordinates
+    await slack.click("Lee", "lock", first)  # not Lee's call to make
+    await slack.click("Sam", "lock", first)  # nobody claimed it, so voting picked Sam to coordinate (#179)
     await slack.drain()
     assert (await house.event(event_id)).state is EventState.DECIDED
 
@@ -122,7 +121,7 @@ async def test_a_dinner_decided_in_slack(slack: Slack) -> None:
     assert (await house.event(event_id)).state is EventState.DONE
 
     call = (CHANNEL, "1.000100")
-    picks_ts, decision_ts = "4.000100", "5.000100"
+    picks_ts, decision_ts = "4.000100", "6.000100"
     assert [summary(c) for c in slack.fake.calls] == [
         ("post", CHANNEL, None, "Dinner call · Thursday, Oct 22: Who's in"),
         ("ephemeral", CHANNEL, "U01ALEX", "Dinner call · Thursday, Oct 22: you haven't answered yet"),
@@ -141,15 +140,13 @@ async def test_a_dinner_decided_in_slack(slack: Slack) -> None:
         ("post", "U03KIM", None, "You're counted out for dinner on Thursda"),
         ("post", CHANNEL, None, "Proposals for dinner on Thursday, Oct 22"),
         ("update", *call, "Dinner call · Thursday, Oct 22: Thanks f"),
+        ("post", "U02SAM", None, "You're coordinating dinner on Thursday, "),
         ("ephemeral", CHANNEL, "U01ALEX", "Vote counted. Tap Vote again to take it back."),
         ("ephemeral", CHANNEL, "U02SAM", "Vote counted. Tap Vote again to take it back."),
-        ("ephemeral", CHANNEL, "U02SAM", "Only the coordinator or an admin can lock a proposal."),
-        ("ephemeral", CHANNEL, "U02SAM", "Dinner call · Thursday, Oct 22: your answer is In with 1 guest, can cook"),
+        ("ephemeral", CHANNEL, "U04LEE", "Only the coordinator or an admin can lock a proposal."),
         ("update", CHANNEL, picks_ts, "Proposals for dinner on Thursday, Oct 22"),
-        ("update", *call, "Dinner call · Thursday, Oct 22: Thanks f"),
         ("post", CHANNEL, None, "Dinner on Thursday, Oct 22: Sam's Tacos "),
         ("post", "U02SAM", None, "You're cooking and coordinating for dinn"),  # one DM, both roles
-        ("update", CHANNEL, picks_ts, "Proposals for dinner on Thursday, Oct 22"),
         ("update", *call, "Dinner call · Thursday, Oct 22: It's dec"),
         ("ephemeral", CHANNEL, "U01ALEX", "Marked done. Thanks!"),
         ("update", CHANNEL, decision_ts, "Dinner on Thursday, Oct 22: Sam's Tacos "),
@@ -166,9 +163,11 @@ async def test_a_dinner_decided_in_slack(slack: Slack) -> None:
     assert "*In* · 3 people eating" in roster and "<@U02SAM> · +1 guest · can cook" in roster
     assert "*Maybe:* <@U03KIM>" in roster and "Still to answer: Lee" in roster
     assert "*Out:* <@U03KIM>, <@U04LEE>" in block_text(updates[2], 2)
+    assert "*Coordinator:* <@U02SAM>" in json.dumps(updates[2].args["blocks"])  # names who voting picked
     assert "2 votes: <@U01ALEX>, <@U02SAM>" in block_text(updates[3], 2)
     assert "*Coordinator:* <@U02SAM>" in block_text(updates[4], 2)
-    decision = posts[4]
+    assert "picked you at random" in block_text(posts[4], 0)  # Sam's direct message (#179)
+    decision = posts[5]
     assert "Locked in by <@U02SAM>." in block_text(decision, 0)
     assert "*Cooking:* <@U02SAM>" in block_text(decision, 2)
     assert decision.args["blocks"][1]["fields"][0]["text"] == "*When*\n6:45 PM"

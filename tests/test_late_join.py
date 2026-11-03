@@ -65,7 +65,17 @@ from dinnerbell.services.event_views import TodayView
 from dinnerbell.services.lifecycle import DOESNT_FIT
 from dinnerbell.services.preferences import group_preferences, set_my_preference
 from tests.conftest import invite, page, sign_in
-from tests.support.calls import OPENS, RESPOND_BY, VOTE_BY, House, RecordingChannel, dinner_id, furnish, make_house
+from tests.support.calls import (
+    OPENS,
+    RESPOND_BY,
+    VOTE_BY,
+    House,
+    RecordingChannel,
+    dinner_id,
+    furnish,
+    make_house,
+    nobody_coordinates,
+)
 from tests.support.clock import FakeClock
 from tests.support.fake_oidc import FakeProvider
 from tests.support.fake_slack import state
@@ -105,7 +115,7 @@ async def open_dinner(house: House) -> int:
 
 async def to_voting(house: House, *eaters: str, maybes: tuple[str, ...] = ()) -> int:
     """``eaters`` are in and Alex offers to pick up, so Siam Garden and Taqueria are the picks.
-    Kim never answers unless she's named."""
+    Kim never answers unless she's named. Nobody coordinates."""
     event_id = await open_dinner(house)
     for name in eaters:
         await act(house, calls.respond, house[name], event_id, Status.IN)
@@ -115,6 +125,7 @@ async def to_voting(house: House, *eaters: str, maybes: tuple[str, ...] = ()) ->
     house.clock.now = RESPOND_BY
     await house.tick()
     assert (await house.event(event_id)).state is EventState.VOTING
+    await nobody_coordinates(house, event_id)  # voting picked someone (#179); Alex acts as the admin
     return event_id
 
 
@@ -566,11 +577,11 @@ async def test_a_late_joiners_own_needs_stay_off_the_decision_for_everyone_else(
     await act(house, calls.respond, house["Sam"], event_id, Status.IN)
     await act(house, calls.save_details, house["Sam"], event_id, Details(guests=1, guest_needs=frozenset({gf.id})))
     await act(house, calls.offer_role, house["Alex"], event_id, RoleOffer.PICKUP, True)
+    await act(house, calls.claim_coordinator, house["Alex"], event_id)
     house.clock.now = RESPOND_BY
     await house.tick()
     found = await picks(house, event_id)
     await act(house, calls.join_late, house["Kim"], event_id)
-    await act(house, calls.claim_coordinator, house["Alex"], event_id)
     await act(house, calls.lock, house["Alex"], event_id, next(iter(found.values())))
     ctx = await house.context(event_id)
     decision = cc.decision_info(ctx)

@@ -712,6 +712,25 @@ class CoordinatingGiven(_Notification):
 
 
 @dataclass(frozen=True, slots=True)
+class CoordinatorPicked(_Notification):
+    """Voting started with nobody coordinating, so Dinnerbell picked ``member``, who was in, at
+    random (#179): one direct message a run, saying what a coordinator can do and how to hand
+    it off. Never sent to a guest."""
+
+    kind: ClassVar[str] = "coordinator_picked"
+    event: EventInfo
+    member: PersonInfo
+
+    @property
+    def idempotency_key(self) -> str:
+        return f"{self.event.key}:{self.kind}:member{self.member.id}"
+
+    @property
+    def recipient_id(self) -> int | None:
+        return self.member.id
+
+
+@dataclass(frozen=True, slots=True)
 class AssignmentEnded(_Notification):
     """The coordinator, or an admin (``by``), gave ``member``'s role to someone else, or switched
     the way of getting the meal, before the meal time (#154): one direct message, so nobody
@@ -1001,6 +1020,7 @@ Notification = Union[  # noqa: UP007 - a runtime union, used for isinstance chec
     LinkNeeded,
     LateJoinChanged,
     CoordinatingGiven,
+    CoordinatorPicked,
     AssignmentEnded,
     RolesToChoose,
     PicksShuffled,
@@ -1018,6 +1038,7 @@ CALL_OFF_SUPERSEDES = frozenset(
         RolesToChoose.kind,
         MaybeResolved.kind,
         CoordinatingGiven.kind,
+        CoordinatorPicked.kind,
         AssignmentEnded.kind,
     }
 )
@@ -1029,6 +1050,7 @@ SUPERSEDED_BY_CALL_OFF = "superseded by a call-off"
 STEP_BOUND: dict[str, frozenset[EventState]] = {
     ResponseReminder.kind: frozenset({EventState.COLLECTING}),
     RolesToChoose.kind: frozenset({EventState.DECIDED}),
+    CoordinatorPicked.kind: frozenset({EventState.VOTING, EventState.DECIDED}),
 }
 """Direct messages that only make sense in one step of the call, and the states that step is:
 "Are you in?" once the call went to a vote, or "Assign roles" once it's done, is only confusing.

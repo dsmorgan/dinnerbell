@@ -186,6 +186,8 @@ def _render(notification: note.Notification, ctx: RenderContext) -> Message:
             return late_join_changed_message(notification, ctx)
         case note.CoordinatingGiven():
             return coordinating_given_message(notification, ctx)
+        case note.CoordinatorPicked():
+            return coordinator_picked_message(notification, ctx)
         case note.AssignmentEnded():
             return assignment_ended_message(notification, ctx)
         case note.RolesToChoose():
@@ -1227,6 +1229,21 @@ def coordinating_given_message(notification: note.CoordinatingGiven, ctx: Render
     )
     blocks = [section(text), actions(_web_button(ctx, event), block_id="more")]
     return _finish(plain, blocks)
+
+
+def coordinator_picked_message(notification: note.CoordinatorPicked, ctx: RenderContext) -> Message:
+    """To the member voting picked to coordinate because nobody had (#179): why them, what a
+    coordinator can do, and that they can hand it off."""
+    event = notification.event
+    slot, day = _slot(event), day_label(event.day)
+    text = (
+        f"Nobody had claimed coordinating {slot} on {day}, so Dinnerbell picked you at random from everyone "
+        "who's in. While the vote is open, you can break a tie and shuffle the picks. Once it's decided, you "
+        "choose how you get it, such as pickup or delivery, and who does it. If it doesn't suit you, hand it "
+        "off to someone who's in on the call's page. Thanks for steering!"
+    )
+    blocks = [section(text), actions(_web_button(ctx, event), block_id="more")]
+    return _finish(f"You're coordinating {slot} on {day}.", blocks)
 
 
 def assignment_ended_message(notification: note.AssignmentEnded, ctx: RenderContext) -> Message:

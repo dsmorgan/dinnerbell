@@ -1,0 +1,28 @@
+{
+  "blocks": [
+    {
+      "text": {
+        "text": "Nobody had claimed coordinating dinner on Thursday, Oct 22, so Dinnerbell picked you at random from everyone who's in. While the vote is open, you can break a tie and shuffle the picks. Once it's decided, you choose how you get it, such as pickup or delivery, and who does it. If it doesn't suit you, hand it off to someone who's in on the call's page. Thanks for steering!",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "block_id": "more",
+      "elements": [
+        {
+          "action_id": "link_event",
+          "text": {
+            "emoji": true,
+            "text": "View on web",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "url": "https://dinnerbell.example.com/events/7"
+        }
+      ],
+      "type": "actions"
+    }
+  ],
+  "text": "You're coordinating dinner on Thursday, Oct 22."
+}

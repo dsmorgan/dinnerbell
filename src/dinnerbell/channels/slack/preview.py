@@ -486,6 +486,7 @@ NOTIFICATIONS: dict[str, Callable[[], note.Notification]] = {
     "coordinating_given_for_guest": lambda: note.CoordinatingGiven(
         event(coordinator=PAT), PAT, ALEX, ROLES_DUE, via=KIM
     ),
+    "coordinator_picked": lambda: note.CoordinatorPicked(replace(VOTING, coordinator=KIM), KIM),
     "assignment_ended": lambda: note.AssignmentEnded(DECIDED, SAM, (AssignmentRole.COOK,), ALEX, ROLES_DUE),
     "assignment_ended_for_guest": lambda: note.AssignmentEnded(
         DECIDED, PAT, (AssignmentRole.PICKUP,), ALEX, ROLES_DUE, via=KIM

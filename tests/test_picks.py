@@ -126,7 +126,8 @@ async def test_a_pickup_picks_winner_is_picked_up_by_whoever_added_it(house: Hou
     )
     await act(house, calls.lock, house["Alex"], event_id, pho.id)
     ctx = await house.context(event_id)
-    assert {(a.role.value, a.member_id) for a in ctx.assignments} == {("pickup", house["Kim"].id)}
+    roles = {(a.role.value, a.member_id) for a in ctx.assignments if a.role.value != "coordinator"}  # #179
+    assert roles == {("pickup", house["Kim"].id)}
 
 
 @pytest.mark.parametrize("answer", ["never", Status.OUT, Status.MAYBE])
@@ -182,7 +183,8 @@ async def test_someone_off_a_cook_list_adds_a_pick_a_cook_on_it_covers(house: Ho
     assert await offers_of(house, event_id, "Kim") == frozenset()  # Kim can't cook it, so takes no role
     await act(house, calls.lock, house["Alex"], event_id, added.id)
     ctx = await house.context(event_id)
-    assert {(a.role.value, a.member_id) for a in ctx.assignments} == {("cook", house["Sam"].id)}
+    roles = {(a.role.value, a.member_id) for a in ctx.assignments if a.role.value != "coordinator"}  # #179
+    assert roles == {("cook", house["Sam"].id)}
 
 
 async def test_a_delivery_pick_makes_its_adder_the_orderer(house: House) -> None:

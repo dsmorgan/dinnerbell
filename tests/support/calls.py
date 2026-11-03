@@ -24,7 +24,7 @@ from dinnerbell.domain.household import Household
 from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.members import Capabilities, Member, Role
 from dinnerbell.domain.notifications import DeliveryResult, MessageRef, Notification
-from dinnerbell.services import lifecycle, outbox
+from dinnerbell.services import call_admin, lifecycle, outbox
 from dinnerbell.services.bootstrap import bootstrap
 from dinnerbell.services.call_context import CallContext, load
 from tests.support.clock import FakeClock
@@ -218,3 +218,10 @@ async def dinner_id(house: House, day: date = date(2026, 10, 22)) -> int:
         event = await EventRepository(db).call_for(house.household.id, Slot.DINNER, day)
     assert event is not None
     return event.id
+
+
+async def nobody_coordinates(house: House, event_id: int) -> None:
+    """Clear the coordinator that voting picked at random (#179), as an admin can, for a test of
+    a vote with nobody coordinating, which is what a call with no member in gets."""
+    async with house.sessionmaker() as db:
+        await call_admin.assign_coordinator(db, house["Alex"], event_id, None, now=house.clock())

@@ -178,6 +178,13 @@ EXAMPLES: list[tuple[n.Notification, str, str | None, str | None, int | None]] =
         KIM.id,  # each hand-off is its own message (#154)
     ),
     (
+        n.CoordinatorPicked(EVENT, KIM),
+        "event:7:run2:coordinator_picked:member3",
+        None,
+        None,
+        KIM.id,  # once a run (#179)
+    ),
+    (
         n.AssignmentEnded(EVENT, PAT, (AssignmentRole.PICKUP,), ALEX, WHEN, via=SAM),
         f"event:7:run2:assignment_ended:member{PAT.id}:{int(WHEN.timestamp() * 1_000_000)}",
         None,
