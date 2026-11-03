@@ -77,8 +77,10 @@ async def set_my_fun_mode(db: AsyncSession, actor: Member, on: bool, *, now: dat
 
 async def set_member_fun_mode(db: AsyncSession, actor: Member, member_id: int, on: bool, *, now: datetime) -> Member:
     """An admin turns another member's fun mode on or off (#181). Audited as
-    ``member.fun_mode_set``."""
+    ``member.fun_mode_set``, unless it was already that way."""
     member = await member_for_admin(db, actor, member_id)
+    if member.fun_mode == on:
+        return member
     updated = await MemberRepository(db).update(actor.household_id, member.id, now, fun_mode=on)
     payload = {"from": member.fun_mode, "to": on}
     await audit(db, actor.household_id, actor, "member.fun_mode_set", f"member:{member.id}", payload, now)

@@ -3,12 +3,15 @@
 
 The ``my_`` functions act on ``actor`` and take no other member's ID: no other member can read
 or write someone's preferences. A member's own changes aren't audited, because the audit log is
-visible to the admin.
+visible to the admin. Dietary needs are the exception: ``guests.set_my_needs`` audits them as
+``guest.needs_updated``, for members and guests alike.
 
 The ``member_`` functions are the one exception (#181): an admin reads and changes another
 member's preferences from Admin > Members. They take the member's ID, look it up in the admin's
 own household, and write an audit row naming the admin as the actor and the member as the target
-for every change. The member isn't messaged.
+for every change. A save of settings, dietary needs, or fun mode that changes nothing writes no
+row; a stance is always audited, because saving one, even the same level, resets what the
+member's earlier ratings say (FR-55). The member isn't messaged.
 
 The other exceptions, ``group_preferences`` and ``with_ratings``, are for ranking. They return the
 combined vetoes and summed scores of a group, never a breakdown by member, so their result
@@ -74,8 +77,11 @@ class MySettings:
 async def member_for_admin(db: AsyncSession, actor: Member, member_id: int) -> Member:
     """The member whose preferences an admin opens on Admin > Members (#181): any member or admin
     of the actor's household, active or not, but never a guest. A guest has no Preferences page;
-    an admin changes a guest's dietary needs on their row in the Guests section."""
+    an admin changes a guest's dietary needs on their row in the Guests section. Never the admin
+    themselves either: their own are on Preferences, unaudited like anyone's."""
     require_admin(actor, EDIT_OTHERS)
+    if member_id == actor.id:
+        raise NotFound("That's you. Change your own on Preferences.")
     member = await MemberRepository(db).get(actor.household_id, member_id)
     if member is None or member.is_guest:
         raise NotFound("No such member.")
@@ -243,12 +249,14 @@ async def update_member_settings(
     db: AsyncSession, actor: Member, member_id: int, settings: MySettings, *, now: datetime
 ) -> Member:
     """An admin changes another member's **I can usually** and reminders (#181). Audited as
-    ``member.settings_updated``, with the settings that changed and their new values."""
+    ``member.settings_updated``, with the settings that changed and their new values. A save
+    that changes nothing writes no row."""
     member = await member_for_admin(db, actor, member_id)
     updated = await _update_settings(db, member, settings, now=now)
     before = _describe_settings(member)
     changes = {key: value for key, value in _describe_settings(updated).items() if before[key] != value}
-    await audit(db, actor.household_id, actor, "member.settings_updated", f"member:{member.id}", changes, now)
+    if changes:
+        await audit(db, actor.household_id, actor, "member.settings_updated", f"member:{member.id}", changes, now)
     await db.commit()
     return updated
 

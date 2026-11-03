@@ -262,12 +262,52 @@ def test_guests_and_missing_members_have_no_preferences_page(
         assert client.get(f"/admin/members/{bad}/preferences").status_code == 404, bad
 
 
-def test_the_admins_own_id_goes_to_their_own_page(client: TestClient, house: dict[str, Any]) -> None:
-    response = client.get(base(house, "admin"))
+def test_the_admins_own_id_goes_to_their_own_page(
+    client: TestClient, migrated: Settings, house: dict[str, Any]
+) -> None:
+    """The page redirects to /preferences, and every write refuses: an admin's own preferences
+    are changed on Preferences, unaudited like anyone's."""
+    path = base(house, "admin")
+    response = client.get(path)
     assert (response.status_code, response.headers["location"]) == (303, "/preferences")
+    assert htmx(client, f"{path}/stance", {"target": f"tag:{house['thai']}", "level": "veto"}).status_code == 404
+    for suffix, data in (
+        ("/stance", {"target": f"tag:{house['thai']}", "level": "veto"}),
+        ("/settings", {"can_cook": "on"}),
+        ("/needs", {"needs": [str(house["veg"])]}),
+        ("/fun", {"fun": "off"}),
+    ):
+        assert submit(client, f"{path}{suffix}", data).status_code == 404, suffix
+    admin = member(migrated, "admin@example.com")
+    assert stances(migrated, "admin@example.com") == {}
+    assert (admin.can_cook, admin.dietary_needs, admin.fun_mode) == (False, [], True)
+    assert not any_admin_audit(migrated)
 
 
-def test_a_members_own_changes_stay_unaudited(
+def test_a_save_that_changes_nothing_writes_no_audit_row(
+    client: TestClient, migrated: Settings, house: dict[str, Any]
+) -> None:
+    """Settings, dietary needs, and fun mode saved as they are write nothing to the audit log. A
+    stance is always audited: saving one resets what the member's ratings say (FR-55)."""
+    assert submit(client, f"{base(house)}/settings", {"can_cook": "on"}).status_code == 303  # Sam's as they are
+    assert submit(client, f"{base(house)}/needs", {}).status_code == 303
+    assert submit(client, f"{base(house)}/fun", {"fun": "on"}).status_code == 303
+    assert not any_admin_audit(migrated)
+    htmx(client, f"{base(house)}/stance", {"target": f"tag:{house['thai']}", "level": "veto"})
+    assert [a.action for a in any_admin_audit(migrated)] == ["member.preference_set"]
+
+
+def test_needs_that_cant_be_saved_show_why(client: TestClient, migrated: Settings, house: dict[str, Any]) -> None:
+    response = submit(client, f"{base(house)}/needs", {"needs": [str(house["thai"])]})  # not a dietary tag
+    assert response.status_code == 400
+    text = page(response)
+    assert 'role="alert"' in response.text and "You're editing Sam's preferences." in text
+    assert f'action="{base(house)}/needs"' in response.text
+    assert member(migrated, "sam@example.com").dietary_needs == []
+    assert not any_admin_audit(migrated)
+
+
+def test_a_members_own_changes_stay_unaudited_except_dietary_needs(
     client: TestClient, provider: FakeProvider, migrated: Settings, house: dict[str, Any]
 ) -> None:
     sign_in_as(client, provider, "subject-sam", "sam@example.com")
@@ -275,3 +315,8 @@ def test_a_members_own_changes_stay_unaudited(
     submit(client, "/preferences/settings", {"can_order": "on"})
     submit(client, "/me/fun", {"fun": "off"})
     assert not any_admin_audit(migrated)
+    # Except dietary needs, audited for members and guests alike, as before #181.
+    submit(client, "/me", {"needs": [str(house["veg"])]})
+    assert not any_admin_audit(migrated)
+    (needs,) = [a for a in rows(migrated, AuditRow) if a.action == "guest.needs_updated"]
+    assert (needs.actor_member_id, needs.target) == (house["sam"], f"member:{house['sam']}")

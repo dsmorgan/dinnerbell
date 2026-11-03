@@ -26,7 +26,7 @@ from dinnerbell.domain.catalog import ItemKind, tags_by_kind
 from dinnerbell.domain.events import EventRuleViolation
 from dinnerbell.domain.members import Capabilities, InvalidMemberInput, Member
 from dinnerbell.domain.preferences import LEVEL_LABELS, LEVELS, NEUTRAL, InvalidPreference, Stance, TargetType
-from dinnerbell.services import guests
+from dinnerbell.services import activity, guests
 from dinnerbell.services import preferences as preference_service
 from dinnerbell.services.errors import NotFound
 from dinnerbell.services.fun import set_member_fun_mode
@@ -313,6 +313,7 @@ async def save_member_needs(
     try:
         await guests.set_member_needs(db, principal.member, whose.member.id, chosen, now=context.clock())
     except (InvalidMemberInput, EventRuleViolation) as exc:
+        activity.refused(exc, str(exc), principal.member, path=request.url.path)
         return await _page(request, whose, context, db, error=str(exc), status_code=400)
     return local_redirect("/admin/members/{}/preferences?notice=settings", whose.member.id)
 
