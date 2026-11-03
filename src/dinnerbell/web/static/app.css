@@ -235,6 +235,11 @@ details > summary h2::after { content: " +"; color: var(--muted); }
 details[open] > summary h2::after { content: " −"; }
 details[open] > summary { margin-bottom: 0.5rem; }
 
+/* Start a call and Make an offer on Today (#177): the line under each heading says what it does,
+   and shows while the card is folded. */
+.today-action > summary { flex-wrap: wrap; row-gap: 0.15rem; }
+.today-action > summary > span { flex-basis: 100%; }
+
 /* Tap feedback (#153). A pressed button, level, or toggle chip tints at once: 10% of its own text
    color over a light fill, or darker (lighter in dark mode) on a filled choice, so its text keeps
    at least 4.5:1 in both themes. A link chip's border takes its text color instead, since its

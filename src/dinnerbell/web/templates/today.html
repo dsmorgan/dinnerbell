@@ -39,8 +39,10 @@
 {% include "_event.html" %}
 {% endfor %}
 {% endif %}
-<details class="card"{% if start_error %} open{% endif %}>
-  <summary><h2>Start a call</h2></summary>
+{#- Start a call and Make an offer stay folded, each with a line saying what it does (#177). A
+    form whose post failed comes back open on its error. -#}
+<details class="card today-action"{% if start_error %} open{% endif %}>
+  <summary><h2>Start a call</h2><span class="small muted">Ask the household who's in and what to eat, then vote on it.</span></summary>
   {% if start_error %}<p class="alert error" role="alert">{{ start_error }}</p>{% endif %}
   <form method="post" action="/events" class="stack">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -57,10 +59,10 @@
 </details>
 {% if offer_form %}
 {% set f = offer_form %}
-<details class="card"{% if offer_error %} open{% endif %}>
-  <summary><h2>Make an offer</h2></summary>
+<details class="card today-action"{% if offer_error %} open{% endif %}>
+  <summary><h2>Make an offer</h2><span class="small muted">Say what you're already making or getting, so others can join.</span></summary>
   {% if offer_error %}<p class="alert error" role="alert">{{ offer_error }}</p>{% endif %}
-  <p class="small muted">Making or getting a meal with servings to spare? Others join until it's full. If that meal's call is open already, your offer becomes a proposal on it. A cooking offer stands in for that day's call.</p>
+  <p class="small muted">Others join until your spare servings are taken. If that meal's call is open already, your offer becomes a proposal on it. A cooking offer stands in for that day's call.</p>
   <form method="post" action="/offers" class="stack">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <div class="pair">
@@ -89,16 +91,6 @@
     <button type="submit" class="button primary block">Post the offer</button>
   </form>
 </details>
-{% endif %}
-{% if principal.member.is_admin %}
-<section class="card">
-  <h2>Set up the household</h2>
-  <p>Invite everyone who eats here, and set when calls go out.</p>
-  <div class="button-row">
-    <a class="button" href="/admin/members">Manage members</a>
-    <a class="button" href="/schedule">Schedule</a>
-  </div>
-</section>
 {% endif %}
 {% endif %}
 {% endblock %}
