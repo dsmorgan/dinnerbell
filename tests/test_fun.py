@@ -316,7 +316,7 @@ def test_turning_it_off_leaves_the_page_as_it_was(
     assert 'name="fun" value="on" checked' in client.get("/preferences").text
     assert 'class="den"' in today_on and 'class="greeting"' in today_on and 'class="edge-wx"' in today_on
 
-    response = submit(client, "/me/fun", {"fun": "off"})
+    response = submit(client, "/me/fun")  # the box unchecked: the browser sends no "fun"
     assert response.status_code == 303
     assert response.headers["location"] == "/preferences?notice=fun#fun-mode"
     card = page(client.get(response.headers["location"])).split('id="fun-mode"', 1)[1].split("</form>", 1)[0]
@@ -329,7 +329,7 @@ def test_turning_it_off_leaves_the_page_as_it_was(
         assert "data-fun" not in html and "fun.css" not in html and "fun.js" not in html
         assert 'class="den' not in html and "den.svg" not in html and "edge-wx" not in html
     assert f"<h1>Hi, {member(migrated, ADMIN_EMAIL).display_name}</h1>\n" in today_off
-    assert 'name="fun" value="off" checked' in client.get("/preferences").text
+    assert 'name="fun" value="on">' in client.get("/preferences").text
     assert len(rows(migrated, AuditRow)) == audits  # a personal setting, not audited
 
     assert submit(client, "/me/fun", {"fun": "on"}).status_code == 303
@@ -349,7 +349,7 @@ def test_the_switch_needs_csrf_and_a_choice(client: TestClient, provider: FakePr
     sign_in(client, provider)
     assert client.post("/me/fun", data={"fun": "off"}).status_code == 403
     assert member(migrated, ADMIN_EMAIL).fun_mode
-    for value in ("", "yes", "OFF"):
+    for value in ("yes", "OFF"):
         response = submit(client, "/me/fun", {"fun": value})
         assert response.status_code == 400, value
         assert "Choose On or Off." in page(response)

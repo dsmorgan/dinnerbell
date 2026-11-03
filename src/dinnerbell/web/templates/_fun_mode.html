@@ -1,17 +1,16 @@
 {#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
 {#- Fun mode on or off (#153), for whoever is signed in. On Preferences for a member, and on a
-    guest's own page. fun_saved says it just saved; the route sends people back to #fun-mode. -#}
+    guest's own page. A checkbox like the page's other on/off settings: unchecked sends nothing,
+    which the route reads as off. fun_saved says it just saved; the route sends people back to
+    #fun-mode. -#}
 <form method="post" action="/me/fun" class="card stack" id="fun-mode">
   <h2>Fun mode</h2>
   {% if fun_saved %}<p class="alert ok" role="status">Saved.</p>{% endif %}
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   <fieldset class="field compact">
     <legend>Dinnerbone's Den</legend>
-    <p class="small muted">Dinnerbone, the hamster in the logo, lives beside your greeting on Today and follows the call. Off, your pages load none of it.</p>
-    <div class="segments two">
-      <label class="segment"><input type="radio" name="fun" value="on"{% if principal.member.fun_mode %} checked{% endif %}><span>On</span></label>
-      <label class="segment"><input type="radio" name="fun" value="off"{% if not principal.member.fun_mode %} checked{% endif %}><span>Off</span></label>
-    </div>
+    <p class="small muted" id="fun-mode-about">Dinnerbone, the hamster in the logo, lives beside your greeting on Today and follows the call. Off, your pages load none of it.</p>
+    <label class="check"><input type="checkbox" aria-describedby="fun-mode-about" name="fun" value="on"{% if principal.member.fun_mode %} checked{% endif %}> Show Dinnerbone's Den</label>
   </fieldset>
   <button type="submit" class="button">Save</button>
 </form>

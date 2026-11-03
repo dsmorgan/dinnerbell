@@ -6,6 +6,10 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ## [Unreleased]
 
+### Changed
+
+- **Checkboxes on Preferences are all the same size** (#177). Under **I can usually** and **Reminders**, a long label no longer shrinks its checkbox, and each box lines up with the first line of its label. The hint under **Pick up** now sits on its own line beneath the label, so **Pick up** stays on one line. **Fun mode** is now a **Show Dinnerbone's Den** checkbox, like the page's other on and off settings, instead of **On** and **Off** buttons. The same checkbox fix applies wherever the app has a checkbox row, such as **Schedule** and the **Catalog**.
+
 ## [0.12.0] - 2026-11-01
 
 ### Changed
