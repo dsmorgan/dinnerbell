@@ -518,7 +518,7 @@ async def shuffle_picks(
     run: Run = "",
     came_from: Annotated[str, Form(alias="from", max_length=10)] = "",
 ) -> Response:
-    """**Shuffle picks**: the coordinator, or an admin with no coordinator, on the run the page showed."""
+    """**Shuffle picks**: the coordinator or an admin, on the run the page showed."""
     seen = parse_id(run)
     if seen is None:
         return await _malformed(request, principal, context, db, event_id, came_from)

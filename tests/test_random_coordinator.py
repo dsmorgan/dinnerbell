@@ -5,12 +5,18 @@ guest, a maybe, or someone deactivated; never over a claim; nobody when no membe
 
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
+from dinnerbell.channels.slack.blocks import Directory
+from dinnerbell.channels.slack.messages import RenderContext, render
+from dinnerbell.db.meals import household_settings
+from dinnerbell.db.repositories import HouseholdRepository
 from dinnerbell.domain.events import (
+    COORDINATORS_OWN,
     AssignmentRole,
     Event,
     EventKind,
@@ -325,3 +331,35 @@ async def test_whoever_was_picked_breaks_a_tie(house: House) -> None:
     assert (event.state, event.tie_how, event.tie_by) == (EventState.DECIDED, TieHow.CHOSE, picked)
     (made,) = await sent(house, "decision_made")
     assert made.decision.tie_note == f"Tied; {coordinator.display_name} (coordinator) chose"
+
+
+@pytest.mark.parametrize(("minutes", "words"), [(1, "within 1 minute,"), (40, "within 40 minutes,")])
+async def test_the_message_names_the_households_time_to_choose(house: House, minutes: int, words: str) -> None:
+    async with house.sessionmaker() as db:
+        stored = await household_settings(db, house.household.id)
+        await HouseholdRepository(db).update_settings(house.household.id, stored | {"roles_choice_minutes": minutes})
+        await db.commit()
+    await to_voting(house, "Sam")
+    (told,) = await sent(house, "coordinator_picked")
+    assert told.choose_minutes == minutes
+    text = json.dumps(render(told, RenderContext("https://dinnerbell.example.com", Directory())).blocks)
+    assert words in text and "or by the meal time if that's sooner" in text and "if anyone did" in text
+
+
+async def test_an_admin_cannot_switch_the_coordinators_own_late_row(house: House) -> None:
+    """A coordinator's vote always counts, and taking part off would release them (FR-10), so an
+    admin reassigns coordinating instead. The coordinator still switches themselves, and the admin
+    anyone else."""
+    event_id = await to_voting(house, "Sam")
+    await act(house, call_admin.assign_coordinator, house["Alex"], event_id, None)
+    await act(house, calls.claim_coordinator, house["Kim"], event_id)  # joins late, her vote counting
+    await act(house, calls.join_late, house["Lee"], event_id)
+    for switch in ({"vote_counts": False}, {"taking_part": False}):
+        with pytest.raises(EventRuleViolation) as refused:
+            await act(house, calls.switch_late_joiner, house["Alex"], event_id, house["Kim"].id, **switch)
+        assert (refused.value.code, str(refused.value)) == ("coordinators_own", COORDINATORS_OWN)
+    kim = (await house.context(event_id)).response_of(house["Kim"].id)
+    assert kim is not None and (kim.status, kim.late, kim.vote_counts) == (Status.IN, True, True)
+    assert (await house.event(event_id)).coordinator_id == house["Kim"].id
+    await act(house, calls.switch_late_joiner, house["Alex"], event_id, house["Lee"].id, vote_counts=True)
+    await act(house, calls.switch_late_joiner, house["Kim"], event_id, house["Kim"].id, vote_counts=True)

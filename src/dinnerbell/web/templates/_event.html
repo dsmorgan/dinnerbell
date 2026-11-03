@@ -247,7 +247,7 @@
   <h3>Proposals</h3>
   {#- The coordinator's context line after a shuffle (FR-61): plain words, a name and no more. -#}
   {% if v.info.shuffle_note %}<p class="small muted shuffle-note">{{ v.info.shuffle_note }}</p>{% endif %}
-  {% if v.can.break_tie %}<p class="small">Tied for the most votes. As coordinator, you can choose one of the tied proposals.</p>{% endif %}
+  {% if v.can.break_tie %}<p class="small">Tied for the most votes. As {{ "coordinator" if principal.member.id == e.coordinator_id else "an admin" }}, you can choose one of the tied proposals.</p>{% endif %}
   {% if v.can.shuffle %}
   <div class="button-row">{{ act(e.id, base ~ "/shuffle", labels.SHUFFLE, "button small", {"run": e.run}, confirm=labels.web_confirm(labels.SHUFFLE_TITLE, labels.SHUFFLE_EFFECT)) }}
     <span class="small muted">{{ v.shuffles_left }} left</span></div>
@@ -316,7 +316,8 @@
       <strong>{{ l.member.name }}</strong>
       <span class="chip">{{ "Taking part" if l.taking_part else "Not taking part" }}</span>
       <span class="chip">{{ "Vote counts" if l.vote_counts else "Vote doesn't count" }}</span>
-      {% if v.can.switch_late %}
+      {#- An admin can't flip the coordinator's own switches; they reassign coordinating instead. -#}
+      {% if v.can.switch_late and (l.member.id != e.coordinator_id or principal.member.id == e.coordinator_id) %}
       <div class="button-row" role="group" aria-label="Switches for {{ l.member.name }}">
         {{ act(e.id, base ~ "/late/" ~ l.member.id, "Taking part", "button small choice", {"switch": "part", "on": "0" if l.taking_part else "1", "run": e.run}, pressed=l.taking_part) }}
         {{ act(e.id, base ~ "/late/" ~ l.member.id, "Vote counts", "button small choice", {"switch": "vote", "on": "0" if l.vote_counts else "1", "run": e.run}, pressed=l.vote_counts) }}
