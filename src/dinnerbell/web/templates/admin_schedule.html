@@ -32,4 +32,12 @@
   </fieldset>
   <button type="submit" class="button primary block">Save ranking</button>
 </form>
+<details class="details-form">
+  <summary class="small">Reset to defaults</summary>
+  <form method="post" action="/admin/schedule/reset" class="stack">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <p class="small muted">Every setting on this page goes back to what a new household starts with. That includes Feedback, so if it's off, ratings start moving scores. Call times, skipped days, and badge counts stay as they are.</p>
+    <button type="submit" class="button small danger">Reset ranking</button>
+  </form>
+</details>
 {% endblock %}

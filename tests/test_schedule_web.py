@@ -18,7 +18,7 @@ from tests.conftest import csrf_from, invite, page, sign_in
 from tests.support.fake_oidc import FakeProvider
 from tests.support.web import submit
 from tests.test_auth_flow import member, rows
-from tests.test_events_web import sign_in_as
+from tests.test_events_web import ranking_form, sign_in_as
 
 DEFAULTS = {
     Slot.DINNER: {
@@ -193,3 +193,54 @@ def test_admins_reach_the_schedule_and_their_own_settings(client: TestClient, pr
     tabs = client.get("/admin/schedule").text
     assert ">Ranking</a>" in tabs and 'action="/admin/schedule/skip"' not in tabs and 'href="/schedule#skip"' in tabs
     assert re.search(r'<a href="/admin/members" aria-current="page">Admin</a>', tabs)  # the nav says Admin
+
+
+# Admin > Ranking: reset to the defaults (#177) --------------------------------------------------
+
+RANKING_KEYS = (
+    "ranking_weights",
+    "proposal_count",
+    "variety_window_days",
+    "ranking_temperature",
+    "roles_choice_minutes",
+    "feedback_cap",
+)
+
+
+def test_reset_puts_every_ranking_setting_back_and_nothing_else(
+    client: TestClient, provider: FakeProvider, migrated: Settings
+) -> None:
+    sign_in(client, provider)
+    fresh = client.get("/admin/schedule").text
+    assert 'action="/admin/schedule/reset"' in fresh and "Reset to defaults</summary>" in fresh
+    every = {name: "4" for name in ranking_form() if name.startswith("weight_")}
+    every |= {"proposal_count": "4", "variety_window_days": "20", "temperature": "2"}
+    every |= {"roles_choice_minutes": "40", "feedback": "1"}
+    assert submit(client, "/admin/schedule", ranking_form(**every)).status_code == 303
+    assert submit(client, "/schedule/dinner", slot_form(Slot.DINNER, dinner_call_time="14:00")).status_code == 303
+    before = rows(migrated, HouseholdRow)[0].settings
+
+    reset = submit(client, "/admin/schedule/reset", {})
+    assert (reset.status_code, reset.headers["location"]) == (303, "/admin/schedule?notice=reset")
+    assert "Ranking reset to the defaults" in client.get("/admin/schedule?notice=reset").text
+    after = rows(migrated, HouseholdRow)[0].settings
+    others = {k: v for k, v in after.items() if k not in RANKING_KEYS}
+    assert others == {k: v for k, v in before.items() if k not in RANKING_KEYS}
+    assert after["slots"]["dinner"]["call_time"] == "14:00"  # the call times stay
+    assert client.get("/admin/schedule").text == fresh  # every field shows a new household's value
+    (audit,) = [a for a in rows(migrated, AuditRow) if a.action == "household.ranking_reset"]
+    assert set(audit.payload) == set(RANKING_KEYS)
+    assert audit.payload["feedback_cap"] == {"from": 1, "to": 2}
+    assert submit(client, "/admin/schedule/reset", {}).status_code == 303  # already the defaults: no row
+    assert len([a for a in rows(migrated, AuditRow) if a.action == "household.ranking_reset"]) == 1
+
+
+def test_members_cannot_reset_the_ranking(client: TestClient, provider: FakeProvider, migrated: Settings) -> None:
+    sign_in(client, provider)
+    assert submit(client, "/admin/schedule", ranking_form(temperature="2")).status_code == 303
+    assert invite(client, "kim@example.com", "Kim").status_code == 303
+    sign_in_as(client, provider, "kim@example.com")
+    before = len(rows(migrated, AuditRow))
+    assert submit(client, "/admin/schedule/reset", {}).status_code == 403
+    assert rows(migrated, HouseholdRow)[0].settings["ranking_temperature"] == 2
+    assert len(rows(migrated, AuditRow)) == before

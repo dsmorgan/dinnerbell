@@ -249,7 +249,10 @@ def _page(values: dict[str, Any], **extra: Any) -> dict[str, Any]:
     return {"values": values, "weights": [(name, WEIGHT_LABELS[name]) for name in WEIGHT_NAMES]} | extra
 
 
-NOTICES = {"saved": "Ranking saved. It applies from the next call."}
+NOTICES = {
+    "saved": "Ranking saved. It applies from the next call.",
+    "reset": "Ranking reset to the defaults. It applies from the next call.",
+}
 
 
 @router.get("/admin/schedule")
@@ -272,6 +275,13 @@ async def save_ranking(request: Request, principal: AdminCSRFChecked, context: C
         page = _page(posted, error=str(exc))
         return await render(request, "admin_schedule.html", page, status_code=400)
     return RedirectResponse("/admin/schedule?notice=saved", status_code=303)
+
+
+@router.post("/admin/schedule/reset")
+async def reset_ranking(principal: AdminCSRFChecked, context: Context, db: Database) -> Response:
+    """Put every setting on Admin > Ranking back to a new household's defaults (#177)."""
+    await schedule_service.reset_ranking(db, principal.member, now=context.clock())
+    return RedirectResponse("/admin/schedule?notice=reset", status_code=303)
 
 
 Field = Annotated[str, Form(max_length=40)]
