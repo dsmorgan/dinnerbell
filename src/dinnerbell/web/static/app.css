@@ -572,6 +572,10 @@ fieldset.card > legend h2 { margin: 0; }
 fieldset.card > * + :not(legend) { margin-top: 0.9rem; }
 fieldset.card > .field + .small, fieldset.card > .alert + * { margin-top: 0.35rem; }
 fieldset.card > .button.block { margin-bottom: 0; }
+/* The Schedule's three minute fields share a row where each column still fits its label, and stack
+   on phones (#177). Inputs line up along the bottom when the labels wrap to different lengths. */
+.trio { display: grid; gap: 0.9rem 0.5rem; align-items: end; }
+@media (min-width: 36rem) { .trio { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 .tabs { display: flex; gap: 0.25rem; margin: 0.25rem 0 0.5rem; }
 .tabs a { display: inline-flex; align-items: center; min-height: 44px; padding: 0 0.8rem; border-radius: 10px; color: var(--muted); text-decoration: none; }
 .tabs a[aria-current="page"] { color: var(--text); background: var(--accent-soft); }
