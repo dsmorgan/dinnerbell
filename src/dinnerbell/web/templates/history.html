@@ -1,6 +1,7 @@
 {#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
 {% extends "base.html" %}
 {% from "_pager.html" import pager %}
+{% from "_meal_feedback.html" import feedback_button %}
 {% block title %}History{% endblock %}
 {% block content %}
 <h1>History</h1>
@@ -43,19 +44,27 @@
     <li class="meal" id="meal-{{ meal.id }}">
       {#- The redirect scrolls here, so a notice about this meal shows here, not off screen at the top. -#}
       {% if notice and meal.id == notice_meal %}<p class="alert ok landed-notice" role="status">{{ notice }}</p>{% endif %}
-      <div class="meal-when small muted">{{ meal.day.strftime("%a %b") }} {{ meal.day.day }} · {{ meal.slot.value|capitalize }}</div>
-      <strong>{{ meal.item_name }}</strong>
-      {% if meal.cuisines %}<div class="chips">{% for c in meal.cuisines %}<span class="chip tag-cuisine">{{ c.name }}</span>{% endfor %}</div>{% endif %}
-      <p class="small muted">{% for p in meal.participants %}{{ p.name }}{{ ", " if not loop.last }}{% endfor %}{% if meal.logged_by %} · logged by {{ member_names.get(meal.logged_by, "a former member") }}{% endif %}</p>
-      {% with fb=feedback.get(meal.id), from_page="history" %}{% include "_meal_feedback.html" %}{% endwith %}
-      {% if can_change(meal) %}
-      <div class="item-actions">
-        <a class="button small" href="/history/meals/{{ meal.id }}">Edit</a>
-        <form method="post" action="/history/meals/{{ meal.id }}/delete" class="inline" hx-boost="true"
-              hx-confirm="Delete this meal from history? This can't be undone.">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-          <button type="submit" class="button small danger">Delete</button>
-        </form>
+      {% set fb = feedback.get(meal.id) %}
+      <div class="meal-details">
+        <div class="meal-when small muted">{{ meal.day.strftime("%a %b") }} {{ meal.day.day }} · {{ meal.slot.value|capitalize }}</div>
+        <div class="meal-name"><strong>{{ meal.item_name }}</strong>
+          {%- if meal.cuisines %}<div class="chips">{% for c in meal.cuisines %}<span class="chip tag-cuisine">{{ c.name }}</span>{% endfor %}</div>{% endif %}</div>
+        <p class="small muted">{% for p in meal.participants %}{{ p.name }}{{ ", " if not loop.last }}{% endfor %}{% if meal.logged_by %} · logged by {{ member_names.get(meal.logged_by, "a former member") }}{% endif %}</p>
+        {% with button_apart=True %}{% include "_meal_feedback.html" %}{% endwith %}
+      </div>
+      {% if (fb and fb.can_give) or can_change(meal) %}
+      <div class="meal-actions">
+        {{ feedback_button(meal, fb) }}
+        {% if can_change(meal) %}
+        <div class="meal-changes">
+          <a class="button small" href="/history/meals/{{ meal.id }}">Edit</a>
+          <form method="post" action="/history/meals/{{ meal.id }}/delete" class="inline" hx-boost="true"
+                hx-confirm="Delete this meal from history? This can't be undone.">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button type="submit" class="button small danger">Delete</button>
+          </form>
+        </div>
+        {% endif %}
       </div>
       {% endif %}
     </li>
