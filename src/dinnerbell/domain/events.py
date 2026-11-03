@@ -339,6 +339,9 @@ class Response:
     whether they're taking part: in, or out because the coordinator switched them off."""
     vote_counts: bool = False
     """The coordinator counts a late joiner's votes like anyone's (``counts_vote``)."""
+    usual_offers_done: bool = False
+    """Their usual offers have had their one turn on this call (``with_usual_offers``): turned
+    on when they answered in, or skipped because they turned an offer off first (#180)."""
 
     @property
     def is_in(self) -> bool:
@@ -482,12 +485,35 @@ def with_offer(
     current: Response | None, member_id: int, role: RoleOffer, offered: bool, now: datetime
 ) -> Response | None:
     """Offer or withdraw a role; None when there's nothing to change. Offering to cook, pick
-    up, or order counts you in unless you said maybe: the person doing the work is at the meal."""
+    up, or order counts you in unless you said maybe: the person doing the work is at the meal.
+    Withdrawing one ends the turn of their usual offers (``with_usual_offers``), so answering in
+    later never turns it back on."""
     if not offered:
-        return None if current is None else replace(current, offers=current.offers - {role})
+        if current is None:
+            return None
+        return replace(current, offers=current.offers - {role}, usual_offers_done=True)
     status = Status.MAYBE if current is not None and current.status is Status.MAYBE else Status.IN
     base = with_status(current, member_id, status, now)
     return replace(base, offers=base.offers | {role})
+
+
+def usual_offers(member: Member) -> frozenset[RoleOffer]:
+    """The offers ``member``'s usual settings on Preferences stand for (#180)."""
+    caps = member.capabilities
+    usual = ((RoleOffer.COOK, caps.can_cook), (RoleOffer.PICKUP, caps.can_pickup), (RoleOffer.ORDER, caps.can_order))
+    return frozenset(role for role, on in usual if on)
+
+
+def with_usual_offers(response: Response, member: Member) -> Response:
+    """#180: answering in turns on the offers ``member``'s usual settings stand for, once per
+    call. The first answer that finds them in, by tapping In, claiming coordinating, or joining
+    late, turns them on, and they're the member's from then on: turning one off, saying out,
+    or answering in again never brings one back. Someone who turned an offer off before they
+    were first in, while a maybe, chose for this call already, so nothing turns on. A maybe or
+    an out turns nothing on. An item's cook list still decides who can cook it (``coverage``)."""
+    if not response.is_in or response.usual_offers_done:
+        return response
+    return replace(response, offers=response.offers | usual_offers(member), usual_offers_done=True)
 
 
 def with_details(current: Response | None, member_id: int, details: Details, now: datetime) -> Response:

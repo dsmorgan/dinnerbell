@@ -14,6 +14,7 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 - **Checkboxes on Preferences are all the same size** (#177). Under **I can usually** and **Reminders**, a long label no longer shrinks its checkbox, and each box lines up with the first line of its label. The hint under **Pick up** now sits on its own line beneath the label, so **Pick up** stays on one line. **Fun mode** is now a **Show Dinnerbone's Den** checkbox, like the page's other on and off settings, instead of **On** and **Off** buttons. The same checkbox fix applies wherever the app has a checkbox row, such as **Schedule** and the **Catalog**.
 - **Schedule sections are shorter** (#177). On a screen 576 pixels wide or wider, such as a tablet or a computer, each meal's **Time to answer**, **Time to vote**, and **Reminder before answers close** now share one row, so a meal's section is about a quarter shorter. On a phone, they stay stacked one above the other.
+- **Your usual settings start your offers on** (#180). The first time you answer **In** on a call, whether you tap **In**, claim coordinating, or join late, **I can cook**, **I can pick up**, and **I'll order** turn on to match **Cook**, **Pick up**, and **Order** on **Preferences**. Turn any off for that call, and it stays off: answering **In** again, coming back **In** after **Out**, and a refreshed card don't turn it back on. **Maybe** and **Out** turn nothing on, and an item's cook list still decides who can cook it. **Preferences** says so in place of "this doesn't volunteer you", and **Order delivery** is now **Order**, on **Preferences** and on **Admin** > **Members**.
 - **Today says what Start a call and Make an offer do** (#177). Both stay folded, and each now has a line under its name: a call asks the household who's in and what to eat, then everyone votes on it; an offer says what you're already making or getting, so others can join. A form whose post fails opens on its error, as before. The **Set up the household** card at the bottom of **Today** is gone, because **Admin** and **Schedule** are in the menu.
 
 ### Added
@@ -26,6 +27,10 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 ### Removed
 
 - **The Set up the household card on Today** (#177). Its **Manage members** and **Schedule** buttons repeated the menu's **Admin** and **Schedule** links, which show at every screen width.
+
+### Upgrade notes
+
+- **Offers:** revision `0025_usual_offers_done` adds a column to call answers on the first start, and marks every answer already saved as having had its usual offers, so no saved answer changes and none gains an offer later. Members who haven't answered an open call yet get their usual offers when they answer **In**. To go back to 0.12.0, restore the backup you made before upgrading.
 
 ## [0.12.0] - 2026-11-01
 

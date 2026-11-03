@@ -401,6 +401,7 @@ def _response(row: ResponseRow) -> Response:
         updated_at=row.updated_at,
         late=row.late,
         vote_counts=row.vote_counts,
+        usual_offers_done=row.usual_offers_done,
     )
 
 
@@ -447,6 +448,7 @@ class ResponseRepository:
         row.responded_at = response.responded_at or row.responded_at
         row.late = response.late
         row.vote_counts = response.vote_counts
+        row.usual_offers_done = response.usual_offers_done
         row.updated_at = now
         await self._session.flush()
 
