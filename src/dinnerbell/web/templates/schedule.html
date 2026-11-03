@@ -18,9 +18,11 @@
       <label class="field"><span>Call time</span><input type="time" name="{{ p }}_call_time" value="{{ values[p ~ '_call_time'] }}" required></label>
       <label class="field"><span>Usual meal time</span><input type="time" name="{{ p }}_meal_time" value="{{ values[p ~ '_meal_time'] }}" required></label>
     </div>
-    {% for name, label, low, high in minute_fields %}
-    <label class="field"><span>{{ label }}</span><input type="number" inputmode="numeric" name="{{ p }}_{{ name }}" min="{{ low }}" max="{{ high }}" value="{{ values[p ~ '_' ~ name] }}" required></label>
-    {% endfor %}
+    <div class="trio">
+      {% for name, label, low, high in minute_fields %}
+      <label class="field"><span>{{ label }}</span><input type="number" inputmode="numeric" name="{{ p }}_{{ name }}" min="{{ low }}" max="{{ high }}" value="{{ values[p ~ '_' ~ name] }}" required></label>
+      {% endfor %}
+    </div>
     <fieldset class="field"><legend>Usual ways to get it</legend>
       <div class="chip-picker">
         {% for mode in modes %}

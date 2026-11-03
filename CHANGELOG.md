@@ -9,6 +9,7 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 ### Changed
 
 - **Checkboxes on Preferences are all the same size** (#177). Under **I can usually** and **Reminders**, a long label no longer shrinks its checkbox, and each box lines up with the first line of its label. The hint under **Pick up** now sits on its own line beneath the label, so **Pick up** stays on one line. **Fun mode** is now a **Show Dinnerbone's Den** checkbox, like the page's other on and off settings, instead of **On** and **Off** buttons. The same checkbox fix applies wherever the app has a checkbox row, such as **Schedule** and the **Catalog**.
+- **Schedule sections are shorter** (#177). On a screen 576 pixels wide or wider, such as a tablet or a computer, each meal's **Time to answer**, **Time to vote**, and **Reminder before answers close** now share one row, so a meal's section is about a fifth shorter. On a phone, they stay stacked one above the other.
 
 ## [0.12.0] - 2026-11-01
 
