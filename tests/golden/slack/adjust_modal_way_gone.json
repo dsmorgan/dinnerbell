@@ -94,7 +94,7 @@
       },
       "label": {
         "emoji": true,
-        "text": "Who cooks",
+        "text": "Who cooks or orders",
         "type": "plain_text"
       },
       "optional": false,
@@ -128,11 +128,6 @@
           "type": "plain_text"
         },
         "type": "static_select"
-      },
-      "hint": {
-        "emoji": true,
-        "text": "Only for pickup. Nobody picks up a delivery.",
-        "type": "plain_text"
       },
       "label": {
         "emoji": true,

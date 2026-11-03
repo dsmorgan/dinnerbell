@@ -363,12 +363,12 @@
         <input type="hidden" name="mode" value="{{ r.mode.value }}">
         {% endif %}
         {% set chosen = r.preselected(r.lead) %}
-        <label class="field"><span>{{ labels.ROLE_WHO[r.lead] }}</span>
+        <label class="field"><span>{{ r.lead_label }}</span>
           <select name="member_id">{% for m in r.people %}<option value="{{ m.id }}"{% if m.id == chosen %} selected{% endif %}>{{ m.name }}{% if m.id in r.offered[r.lead] %} (offered){% endif %}</option>{% endfor %}</select>
         </label>
         {% if r.has_pickup %}
         {% set picker = r.preselected(labels.PICKUP_ROLE, labels.PICKUP_MODE) %}
-        <label class="field"><span>{{ labels.ROLE_WHO[labels.PICKUP_ROLE] }}{% if r.modes|length > 1 %} (pickup only){% endif %}</span>
+        <label class="field"><span>{{ labels.ROLE_WHO[labels.PICKUP_ROLE] }}{% if r.pickup_hint %} (pickup only){% endif %}</span>
           <select name="pickup_id">{% for m in r.people %}<option value="{{ m.id }}"{% if m.id == picker %} selected{% endif %}>{{ m.name }}{% if m.id in r.offered[labels.PICKUP_ROLE] %} (offered){% endif %}</option>{% endfor %}</select>
         </label>
         {% endif %}

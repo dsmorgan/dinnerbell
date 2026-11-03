@@ -88,7 +88,7 @@ The decision asks you right away, with a message that has **Assign roles**, when
 - A role has no clear owner, because two people offered or nobody did. For pickup, ordering has no clear owner when more than one person besides the one picking up has **I'll order** on.
 - The winning proposal is takeout at a place that allows pickup and delivery, and nobody chose its way: Dinnerbell drew it, and nobody set it during the vote. A proposal someone added, or an offer, has the way they chose.
 
-In **Assign roles**, you choose how to get it, who cooks or orders, and who picks it up. You have 15 minutes to choose (an admin can change the time). After that, it stays the way it is, and the first people who offered do the roles.
+In **Assign roles**, you choose how to get it, who cooks or orders, and who picks it up. If you change only one role, with **Change the time or who does what**, the other roles go to the first people who offered. You have 15 minutes to choose (an admin can change the time). After that, it stays the way it is, and the first people who offered do the roles.
 
 ## What an admin can do beyond that
 

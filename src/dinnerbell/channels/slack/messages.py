@@ -575,7 +575,8 @@ def proposals_message(notification: note.ProposalsReady | note.ProposalsUpdated,
         blocks.append(context(f"…and {plural(hidden, 'more proposal')} on the web."))
     blocks += _late_blocks(notification, ctx)
     if voting and any(p.ways and not p.mode_chosen for p in shown):  # #178
-        blocks.append(context("The coordinator can make a proposal pickup or delivery with ⋯ beside it."))
+        who = "The coordinator or an admin" if event.coordinator is not None else "An admin"
+        blocks.append(context(f"{who} can make a proposal pickup or delivery with ⋯ beside it."))
     footer: list[Block] = []
     if voting:
         footer.append(button("Add proposal", ids.ADD_PROPOSAL, ids.event_value(event.id)))
@@ -1258,9 +1259,10 @@ def coordinator_picked_message(notification: note.CoordinatorPicked, ctx: Render
     minutes = notification.choose_minutes
     text = (
         f"Nobody had claimed coordinating {slot} on {day}, so Dinnerbell picked you at random from everyone "
-        f"who's in. While the vote is open, you can tap *{labels.LOCK}* on a pick to decide it, break a tie, or "
-        "shuffle the picks. Once it's decided, you can change how you get it, such as pickup or delivery, "
-        "and who does it. If it isn't clear who does it, you'll be asked to choose. If you don't within "
+        f"who's in. While the vote is open, you can tap *{labels.LOCK}* on a pick to decide it, break a tie, "
+        "shuffle the picks, or make a takeout pick pickup or delivery with ⋯ beside it. Once it's decided, you "
+        "can change how you get it and who does it. If that isn't clear, you'll be asked to choose. If you "
+        "don't within "
         f"{minutes} minute{'' if minutes == 1 else 's'}, or by the meal time if that's sooner, the first person "
         "who offered does it, if anyone did. If it doesn't suit you, hand it off to someone who's in on the "
         "call's page. Thanks for steering!"

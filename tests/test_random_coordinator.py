@@ -313,7 +313,8 @@ async def test_whoever_was_picked_chooses_an_unclear_role_until_the_time_runs_ou
     ctx = await house.context(event_id)
     assert ctx.event.roles_due_at is None
     roles = {(a.role, a.member_id) for a in ctx.assignments}
-    assert roles == {(AssignmentRole.COORDINATOR, picked), (AssignmentRole.PICKUP, house["Alex"].id)}  # first to offer
+    alex = house["Alex"].id  # the first to offer picks up, and orders too, as nobody has I'll order on (#178)
+    assert roles == {(AssignmentRole.COORDINATOR, picked), (AssignmentRole.PICKUP, alex), (AssignmentRole.ORDER, alex)}
 
 
 async def test_whoever_was_picked_breaks_a_tie(house: House) -> None:

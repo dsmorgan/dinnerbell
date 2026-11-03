@@ -451,10 +451,10 @@ def assign_modal(v: EventView, origin: ids.ViewOrigin) -> dict[str, Any]:
         how["initial_option"] = current
     blocks.append(_input("mode", "How", how, optional=False))
     lead = _people_select(choice, choice.preselected(choice.lead))
-    blocks.append(_input("who", ROLE_WHO[choice.lead], lead, optional=False))
+    blocks.append(_input("who", choice.lead_label, lead, optional=False))
     if choice.has_pickup:
         pickup = _people_select(choice, choice.preselected(AssignmentRole.PICKUP, Mode.PICKUP))
-        hint = PICKUP_HINT if len(choice.modes) > 1 else None
+        hint = PICKUP_HINT if choice.pickup_hint else None
         blocks.append(_input("pickup", ROLE_WHO[AssignmentRole.PICKUP], pickup, optional=True, hint=hint))
     return _modal("Assign roles", ids.ASSIGN_VIEW, origin, blocks, "Assign")
 
@@ -530,10 +530,10 @@ def adjust_modal(v: EventView, origin: ids.ViewOrigin) -> dict[str, Any]:
         blocks.append(_input("mode", "How", how, optional=False))
     if people:
         who = _people_select(choice, opened.assignee_id, "Pick someone who's in")
-        blocks.append(_input("who", ROLE_WHO[choice.lead], who, optional="initial_option" not in who))
+        blocks.append(_input("who", choice.lead_label, who, optional="initial_option" not in who))
         if choice.has_pickup and (switchable or choice.mode is Mode.PICKUP):
             pickup = _people_select(choice, opened.pickup_id, "Pick someone who's in")
-            hint = PICKUP_HINT if switchable else None
+            hint = PICKUP_HINT if switchable and choice.pickup_hint else None
             optional = "initial_option" not in pickup
             blocks.append(_input("pickup", ROLE_WHO[AssignmentRole.PICKUP], pickup, optional=optional, hint=hint))
     coordinator = opened.coordinator_id

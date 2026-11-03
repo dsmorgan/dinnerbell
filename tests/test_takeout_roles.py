@@ -16,6 +16,7 @@ from datetime import date, time, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import text
 
 from dinnerbell.channels.slack import ids
 from dinnerbell.channels.slack.messages import render
@@ -55,7 +56,7 @@ from dinnerbell.services.coordinator import Adjustment
 from dinnerbell.services.database import Database, open_database
 from dinnerbell.services.errors import NotFound
 from tests.conftest import invite, page
-from tests.support.calls import OPENS, RESPOND_BY, House, furnish, make_house
+from tests.support.calls import OPENS, RESPOND_BY, House, furnish, make_house, nobody_coordinates
 from tests.support.clock import FakeClock
 from tests.support.fake_oidc import FakeProvider
 from tests.support.slack import Slack, wire
@@ -75,6 +76,8 @@ from tests.test_coordinator import (
 from tests.test_events_web import admin as admin  # the fixture, re-exported for pytest
 from tests.test_events_web import sign_in_as, start
 from tests.test_events_web import tick as web_tick
+from tests.test_picks import offer as picks_offer
+from tests.test_picks import to_voting as picks_voting
 
 pytestmark = pytest.mark.anyio
 
@@ -226,6 +229,8 @@ async def to_voting(
     house.clock.now = RESPOND_BY
     await house.tick()
     assert (await house.event(event_id)).state is EventState.VOTING
+    if coordinator_name is None:
+        await nobody_coordinates(house, event_id)  # voting picked someone (#179)
     return event_id
 
 
@@ -734,3 +739,61 @@ async def test_someone_who_turned_ill_order_off_orders_a_delivery_but_not_a_pick
     assert default_roles(Mode.DELIVERY, ctx.coverage) == {ORDER: house["Lee"].id}  # #190's fallback
     assert default_roles(Mode.PICKUP, ctx.coverage) == {ORDER: house["Alex"].id, PICKUP: house["Alex"].id}
     assert not roles_unclear(Mode.PICKUP, ctx.coverage)
+
+
+# Review follow-ups --------------------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("chosen", ["order", "pickup"])
+async def test_setting_one_role_while_the_coordinator_chooses_fills_the_others(house: House, chosen: str) -> None:
+    """On the web, the coordinator sets only one of a pickup's roles while choosing: the other goes
+    to its first volunteer at once, and each person is told once, as when the time runs out."""
+    event_id = await to_voting(house, "Lee", "Kim")
+    await decide_on(house, event_id, "Siam Garden")  # the way is open, so the coordinator is choosing
+    due = (await house.event(event_id)).roles_due_at
+    assert due is not None
+    role = AssignmentRole(chosen)
+    await act(house, calls.change_assignment, house["Alex"], event_id, role, house["Kim"].id)
+    expected = {ORDER: house["Lee"].id, PICKUP: house["Alex"].id, LEAD: house["Alex"].id} | {role: house["Kim"].id}
+    assert assigned(await house.context(event_id)) == expected
+    assert (await house.event(event_id)).roles_due_at is None
+    told = sorted(n.member.id for n in await sent(house, "assignment_made"))
+    assert told == sorted({house["Kim"].id, *(who for r, who in expected.items() if r is not LEAD)})
+    house.clock.now = due
+    assert Step.ASSIGN_ROLES not in await house.tick()
+    await act(house, calls.mark_done, house["Alex"], event_id)
+    assert assigned(await house.context(event_id)) == expected  # nothing left empty
+
+
+async def test_an_offer_taking_over_a_set_pick_keeps_the_offers_way(house: House) -> None:
+    event_id = await picks_voting(house, "Alex", "Kim", "Lee", offers_pickup=("Alex",))
+    await nobody_coordinates(house, event_id)
+    siam = house.items["Siam Garden"].id
+    pick = next(p for p in (await house.context(event_id)).proposals if p.item_id == siam)
+    await act(house, coordinator.set_way, house["Alex"], event_id, pick.id, Mode.PICKUP, run=1)
+    await act(house, offers.post_offer, house["Kim"], picks_offer(house, Mode.DELIVERY, item_id=siam))
+    taken = (await house.context(event_id)).proposal(pick.id)
+    assert taken is not None and (taken.mode, taken.mode_chosen) == (Mode.DELIVERY, True)  # Kim's way now
+
+
+async def test_a_cook_who_now_orders_hears_only_the_new_role(house: House) -> None:
+    """The catalog gave a home meal a takeout way after it was decided. Switching keeps the cook as
+    the one who orders: one message with the new role, not also "no longer cooking"."""
+    event_id = await to_voting(house, "Sam", "Lee", pickups=(), coordinator_name="Alex")
+    tacos = await act(
+        house, calls.add_proposal, house["Sam"], event_id, Mode.COOK, item_id=house.items["Sam's Tacos"].id
+    )
+    await act(house, calls.lock, house["Alex"], event_id, tacos.id)
+    assert assigned(await house.context(event_id))[COOK] == house["Sam"].id
+    async with house.sessionmaker() as db:
+        await db.execute(
+            text("UPDATE catalog_item SET modes = :m WHERE id = :id"),
+            {"m": '["cook", "delivery"]', "id": house.items["Sam's Tacos"].id},
+        )
+        await db.commit()
+    before = len(await sent(house, "assignment_made"))
+    await act(house, coordinator.choose_roles, house["Alex"], event_id, mode=Mode.DELIVERY, member_id=house["Sam"].id)
+    assert assigned(await house.context(event_id)) == {ORDER: house["Sam"].id, LEAD: house["Alex"].id}
+    assert await sent(house, "assignment_ended") == []
+    (told,) = (await sent(house, "assignment_made"))[before:]
+    assert (told.member.id, told.roles) == (house["Sam"].id, (ORDER,))

@@ -42,6 +42,7 @@ from dinnerbell.domain.catalog import (
     normalize_item_name,
 )
 from dinnerbell.domain.events import (
+    LEAD_ROLE,
     MODE_ROLES,
     NOT_IN_JOIN_LATE,
     ActingAs,
@@ -83,6 +84,7 @@ from dinnerbell.domain.events import (
     check_run,
     check_skip_day,
     clean_cancel_note,
+    default_roles,
     drops_coordinating,
     friendly,
     is_coordinator,
@@ -803,9 +805,20 @@ async def change_assignment(
             if response is None or not response.is_in:
                 raise EventRuleViolation("Pick someone who's in.", code="not_in")
             assigned = await repo.assign(actor.household_id, event.id, role, member_id, now)
+        made: dict[int, int] = {} if assigned is None else {assigned.member_id: assigned.id}
         was_pending = event.roles_due_at is not None
-        if was_pending:  # choosing the role ends the coordinator's time to (#87)
+        if was_pending:  # choosing a role ends the coordinator's time to (#87)
             event = await EventRepository(db).save(replace(event, roles_due_at=None), now)
+            # The way's other roles go to their first volunteers now, as when the time runs out:
+            # nothing would fill them later (#178).
+            ctx = await load(db, event)
+            item = ctx.items.get(event.decided_item_id) if event.decided_item_id is not None else None
+            holders = {a.role: a.member_id for a in ctx.assignments}
+            lead, pickup = holders.get(LEAD_ROLE[mode]), holders.get(AssignmentRole.PICKUP)
+            fill = default_roles(mode, ctx.coverage, item.cook_ids if item else frozenset(), lead=lead, pickup=pickup)
+            for other, who in fill.items():
+                if other not in holders and other is not role:
+                    made.setdefault(who, (await repo.assign(actor.household_id, event.id, other, who, now)).id)
         ctx = await load(db, event)
         decision = cc.decision_info(ctx)
         await publish(db, ctx, *cc.decision_updated(ctx), now=now)
@@ -813,8 +826,8 @@ async def change_assignment(
         ahead = event.state is EventState.DECIDED and cc.before_the_meal(event, now)
         if ahead and current is not None and not was_pending:
             await publish(db, ctx, *cc.assignment_ended(ctx, current, (role,), actor, now), now=now)
-        if assigned is not None and decision is not None and ahead:
-            await publish(db, ctx, cc.assignment_made(ctx, assigned.member_id, assigned.id, decision), now=now)
+        if decision is not None and ahead:  # one message each, naming all their roles
+            await publish(db, ctx, *(cc.assignment_made(ctx, who, aid, decision) for who, aid in made.items()), now=now)
         payload = {"role": role.value, "member_id": member_id}
         await audit(db, actor.household_id, actor, "event.assignment_changed", _target(event), payload, now)
         to = ctx.members.get(member_id) if member_id is not None else None
