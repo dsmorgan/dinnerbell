@@ -486,15 +486,17 @@ def with_offer(
 ) -> Response | None:
     """Offer or withdraw a role; None when there's nothing to change. Offering to cook, pick
     up, or order counts you in unless you said maybe: the person doing the work is at the meal.
-    Withdrawing one ends the turn of their usual offers (``with_usual_offers``), so answering in
-    later never turns it back on."""
+    Withdrawing one, or being counted in by offering one, ends the turn of their usual offers
+    (``with_usual_offers``): they chose this call's offers themselves, so answering in later
+    turns on nothing more."""
     if not offered:
         if current is None:
             return None
         return replace(current, offers=current.offers - {role}, usual_offers_done=True)
     status = Status.MAYBE if current is not None and current.status is Status.MAYBE else Status.IN
     base = with_status(current, member_id, status, now)
-    return replace(base, offers=base.offers | {role})
+    done = base.usual_offers_done or status is Status.IN
+    return replace(base, offers=base.offers | {role}, usual_offers_done=done)
 
 
 def usual_offers(member: Member) -> frozenset[RoleOffer]:
@@ -505,12 +507,14 @@ def usual_offers(member: Member) -> frozenset[RoleOffer]:
 
 
 def with_usual_offers(response: Response, member: Member) -> Response:
-    """#180: answering in turns on the offers ``member``'s usual settings stand for, once per
-    call. The first answer that finds them in, by tapping In, claiming coordinating, or joining
-    late, turns them on, and they're the member's from then on: turning one off, saying out,
-    or answering in again never brings one back. Someone who turned an offer off before they
-    were first in, while a maybe, chose for this call already, so nothing turns on. A maybe or
-    an out turns nothing on. An item's cook list still decides who can cook it (``coverage``)."""
+    """#180: the offers ``member``'s usual settings stand for turn on once per call, the first
+    time they count as in, however that happens: tapping In, saving Details first, claiming
+    coordinating or being given it, or joining late. After that the call's offers are theirs:
+    turning one off, saying out, or answering in again never brings one back. Being counted in
+    by offering a role or adding a pick is their own choice of offers, so it ends the turn with
+    only that role (``with_offer``, ``with_pick_role``), and so does turning an offer off while
+    a maybe. A maybe or an out turns nothing on. An item's cook list still decides who can cook
+    it (``coverage``)."""
     if not response.is_in or response.usual_offers_done:
         return response
     return replace(response, offers=response.offers | usual_offers(member), usual_offers_done=True)
@@ -872,12 +876,13 @@ def with_pick_role(current: Response | None, member_id: int, mode: Mode, now: da
     """The answer of whoever adds a pick in ``mode``, offering the role it needs: whoever adds a
     pick does it (#74), so it's covered (FR-17). The caller checks they can (``can_do``). It
     skips ``check_can_respond``, because a pick can be added after responses close. While
-    responses are open (``join``), adding one counts you in, as offering a role does; after
-    that, only someone already in can (``check_in_to_add``)."""
+    responses are open (``join``), adding one counts you in, as offering a role does, and ends
+    the turn of your usual offers (``with_usual_offers``); after that, only someone already in
+    can (``check_in_to_add``)."""
     if not join:
         check_in_to_add(current)
     base = with_status(current, member_id, Status.IN, now)
-    return replace(base, offers=base.offers | {MODE_OFFER[mode]})
+    return replace(base, offers=base.offers | {MODE_OFFER[mode]}, usual_offers_done=True)
 
 
 # Joining late (#76) -------------------------------------------------------------------------------

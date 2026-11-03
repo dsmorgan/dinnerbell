@@ -284,7 +284,10 @@ async def save_details(
             dietary_tag_ids=[t.id for t in ctx.tags.values() if t.kind is TagKind.DIETARY],
             active_item_ids=[i.id for i in ctx.items.values() if i.active],
         )
-        new = with_details(ctx.response_of(actor.id), actor.id, clean, now)
+        current = ctx.response_of(actor.id)
+        new = with_details(current, actor.id, clean, now)
+        if current is None:  # Details counted them in (#180)
+            new = with_usual_offers(new, actor)
         await ResponseRepository(db).save(actor.household_id, event.id, new, now)
         await SuggestionRepository(db).replace(
             actor.household_id, event.id, actor.id, clean.suggestion_item_ids, clean.suggestion_texts, now

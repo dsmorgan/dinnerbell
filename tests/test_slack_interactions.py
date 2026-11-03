@@ -201,6 +201,16 @@ async def test_saving_details_calls_the_service(slack: Slack, house: House) -> N
     assert blocks["note"]["element"]["initial_value"] == "Back at 6"
 
 
+async def test_details_before_answering_turn_on_the_usual_offers(slack: Slack, house: House) -> None:
+    """#180: saving Details first counts Lee in, so Lee's usual **I'll order** turns on too."""
+    event_id = await open_call(house)
+    values = state(guests={"type": "number_input", "value": "1"})
+    response = await slack.submit("Lee", ids.DETAILS_VIEW, values, event_id)
+    assert response.status == 200
+    mine = (await house.context(event_id)).response_of(house["Lee"].id)
+    assert mine is not None and (mine.status, mine.offers) == (Status.IN, frozenset({RoleOffer.ORDER}))
+
+
 @pytest.mark.parametrize(
     ("values", "errors"),
     [

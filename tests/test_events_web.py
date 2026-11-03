@@ -117,6 +117,16 @@ def test_in_turns_on_your_usual_offers_once(admin: TestClient, migrated: Setting
     assert pressed(page(admin.get(f"/events/{event_id}"))) == ["I'll order"]
 
 
+def test_details_before_answering_turn_on_your_usual_offers(admin: TestClient, migrated: Settings) -> None:
+    """#180: saving Details first counts you in, as In does, so your usual offers turn on."""
+    submit(admin, "/preferences/settings", {"can_pickup": "on"})
+    event_id = start(admin)
+    submit(admin, f"/events/{event_id}/details", {"guests": "1"})
+    (response,) = rows(migrated, ResponseRow)
+    assert response.status == "in"
+    assert (response.offers_cook, response.offers_pickup, response.offers_order) == (False, True, False)
+
+
 def test_the_answers_are_one_toggle_in_slacks_order_apart_from_the_roles(admin: TestClient) -> None:
     """#149: In, Maybe, Out, in that order as in Slack, joined in a row of their own with the
     choice pressed, and the role offers in a separate row."""
