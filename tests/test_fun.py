@@ -352,8 +352,10 @@ def test_the_switch_needs_csrf_and_a_choice(client: TestClient, provider: FakePr
     for value in ("yes", "OFF"):
         response = submit(client, "/me/fun", {"fun": value})
         assert response.status_code == 400, value
-        assert "Choose On or Off." in page(response)
+        assert "Not a fun mode setting." in page(response)
     assert member(migrated, ADMIN_EMAIL).fun_mode
+    assert submit(client, "/me/fun", {"fun": ""}).status_code == 303  # empty, like no box: off
+    assert not member(migrated, ADMIN_EMAIL).fun_mode
 
 
 def test_signed_out_the_switch_sends_you_to_sign_in(client: TestClient) -> None:
