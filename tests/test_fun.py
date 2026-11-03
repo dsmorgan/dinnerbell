@@ -462,6 +462,19 @@ def test_the_den_stays_under_the_top_bar_and_fits_a_narrow_row() -> None:
     assert "@supports not (width: 1cqi) {\n  .greeting h1 { font-size: 1.6rem; }" in FUN_CSS
 
 
+def test_the_bowl_stands_clear_of_the_bed() -> None:
+    """The bowl is its own part, out on the floor (#177): the bell and his spots at the bowl
+    follow --den-bowl, so they stay together wherever it is."""
+    assert "--den-bowl: max(38px, 35cqi - 10px);" in FUN_CSS
+    for rule in (
+        ".den-bowl { position: absolute; left: var(--den-bowl);",
+        ".den-bell { position: absolute; left: calc(var(--den-bowl) + 2px);",
+        '.den[data-pose="eat"] .den-ham, .den[data-pose="nibble"] .den-ham { left: calc(var(--den-bowl) + 17px); }',
+        '.den[data-pose="wait"] .den-ham { left: calc(var(--den-bowl) + 21px);',
+    ):
+        assert rule in FUN_CSS, rule
+
+
 def test_no_snow_on_a_turning_wheel() -> None:
     """A wheel he's in has no snow cap, still or moving; climbing in, fun.js shakes it off
     (.den-shake) before the wheel turns, and it builds back up once he's off (.den-rebuild)."""
