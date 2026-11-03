@@ -188,7 +188,7 @@ def test_admins_reach_the_schedule_and_their_own_settings(client: TestClient, pr
     sign_in(client, provider)
     html = client.get("/schedule").text
     assert 'action="/schedule/dinner"' in html and 'href="/admin/schedule"' in html
-    assert re.search(r'<a class="button" href="/schedule">Schedule</a>', client.get("/").text)
+    assert '<a href="/schedule">Schedule</a>' in client.get("/").text  # the menu's link
     assert 'action="/admin/schedule/skip"' in html  # Skip a day, beside the schedule (#149)
     tabs = client.get("/admin/schedule").text
     assert ">Ranking</a>" in tabs and 'action="/admin/schedule/skip"' not in tabs and 'href="/schedule#skip"' in tabs
