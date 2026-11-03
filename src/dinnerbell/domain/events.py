@@ -974,14 +974,14 @@ def with_late_switches(
     return changed
 
 
-LATE_SWITCHERS = "Only the coordinator, or an admin when nobody's coordinating, can change that."
+LATE_SWITCHERS = "Only the coordinator or an admin can change that."
 
 
-def check_can_switch_late(event: Event, actor: Member, coordinator: Member | None) -> ActingAs:
+def check_can_switch_late(event: Event, actor: Member) -> ActingAs:
     """Who flips a late joiner's switches, taking part and vote counts (#76): the coordinator,
-    or an admin when nobody is, or when a guest is, since choosing whose vote counts is picking
-    the plan, not logistics (#38). Only while voting, the only time anyone joins late. Returns
-    the capacity they act in, for the audit row."""
+    or any admin, alongside them (#179). Never a guest, even one coordinating, since choosing
+    whose vote counts is picking the plan, not logistics (#38). Only while voting, the only time
+    anyone joins late. Returns the capacity they act in, for the audit row."""
     if not actor.active:
         raise EventRuleViolation("Only active members can change that.", code="inactive")
     if actor.is_guest:
@@ -990,21 +990,19 @@ def check_can_switch_late(event: Event, actor: Member, coordinator: Member | Non
         raise EventRuleViolation("You can change that only while voting is open.", code="voting_closed")
     if is_coordinator(event, actor):
         return ActingAs.COORDINATOR
-    if actor.is_admin and (coordinator is None or coordinator.is_guest):
+    if actor.is_admin:
         return ActingAs.ADMIN
     raise EventRuleViolation(LATE_SWITCHERS, code="not_coordinator")
 
 
-SHUFFLERS = "Only the coordinator, or an admin when nobody's coordinating, can shuffle the proposals."
-TIE_BREAKERS = "Only the coordinator, or an admin when nobody's coordinating, can break a tie."
+SHUFFLERS = "Only the coordinator or an admin can shuffle the proposals."
+TIE_BREAKERS = "Only the coordinator or an admin can break a tie."
 
 
-def _check_picks_power(
-    event: Event, actor: Member, coordinator: Member | None, *, refusal: str, closed: str
-) -> ActingAs:
-    """Who may use a power over the picks while voting (#87): the coordinator, or an admin when
-    nobody coordinates or a guest does, since choosing the plan isn't a guest's (#38). Returns
-    the capacity they act in, for the audit row."""
+def _check_picks_power(event: Event, actor: Member, *, refusal: str, closed: str) -> ActingAs:
+    """Who may use a power over the picks while voting (#87): the coordinator, or any admin,
+    alongside them (#179). Never a guest, even one coordinating, since choosing the plan isn't
+    a guest's (#38). Returns the capacity they act in, for the audit row."""
     if not actor.active:
         raise EventRuleViolation("Only active members can do that.", code="inactive")
     if actor.is_guest:
@@ -1015,17 +1013,15 @@ def _check_picks_power(
         raise EventRuleViolation(closed, code="voting_closed")
     if is_coordinator(event, actor):
         return ActingAs.COORDINATOR
-    if actor.is_admin and (coordinator is None or coordinator.is_guest):
+    if actor.is_admin:
         return ActingAs.ADMIN
     raise EventRuleViolation(refusal, code="not_coordinator")
 
 
-def check_can_shuffle(event: Event, actor: Member, coordinator: Member | None) -> ActingAs:
-    """Shuffle the picks (FR-61): the coordinator, or an admin with no coordinator, while voting,
-    at most ``MAX_SHUFFLES`` times a call."""
-    capacity = _check_picks_power(
-        event, actor, coordinator, refusal=SHUFFLERS, closed="You can shuffle only while voting is open."
-    )
+def check_can_shuffle(event: Event, actor: Member) -> ActingAs:
+    """Shuffle the picks (FR-61): the coordinator or an admin, while voting, at most
+    ``MAX_SHUFFLES`` times a call."""
+    capacity = _check_picks_power(event, actor, refusal=SHUFFLERS, closed="You can shuffle only while voting is open.")
     if event.shuffles >= MAX_SHUFFLES:
         raise EventRuleViolation(
             f"The proposals have been shuffled {MAX_SHUFFLES} times already.", code="shuffle_limit"
@@ -1033,10 +1029,10 @@ def check_can_shuffle(event: Event, actor: Member, coordinator: Member | None) -
     return capacity
 
 
-def check_can_break_tie(event: Event, actor: Member, coordinator: Member | None) -> ActingAs:
-    """Break a tie (FR-16): the coordinator, or an admin with no coordinator, while voting."""
+def check_can_break_tie(event: Event, actor: Member) -> ActingAs:
+    """Break a tie (FR-16): the coordinator or an admin, while voting."""
     return _check_picks_power(
-        event, actor, coordinator, refusal=TIE_BREAKERS, closed="You can break a tie only while voting is open."
+        event, actor, refusal=TIE_BREAKERS, closed="You can break a tie only while voting is open."
     )
 
 

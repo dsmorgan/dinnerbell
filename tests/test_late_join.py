@@ -200,17 +200,18 @@ def test_who_may_join_late(event: Event, actor: Member, answer: Response | None,
 def test_who_flips_the_switches() -> None:
     voting = _event(EventState.VOTING, coordinator_id=2)
     admin, guest = _person(1, Role.ADMIN), _person(9, Role.GUEST)
-    assert check_can_switch_late(voting, _person(2), _person(2)) is ActingAs.COORDINATOR
-    assert check_can_switch_late(_event(EventState.VOTING), admin, None) is ActingAs.ADMIN
-    assert check_can_switch_late(replace(voting, coordinator_id=9), admin, guest) is ActingAs.ADMIN  # #38
-    for event, actor, coordinator, code in [
-        (voting, admin, _person(2), "not_coordinator"),
-        (voting, _person(2, active=False), _person(2), "inactive"),
-        (replace(voting, coordinator_id=9), guest, guest, "guests_dont"),
-        (replace(voting, state=EventState.DECIDED), _person(2), _person(2), "voting_closed"),
+    assert check_can_switch_late(voting, _person(2)) is ActingAs.COORDINATOR
+    assert check_can_switch_late(_event(EventState.VOTING), admin) is ActingAs.ADMIN
+    assert check_can_switch_late(voting, admin) is ActingAs.ADMIN  # alongside a member coordinating (#179)
+    assert check_can_switch_late(replace(voting, coordinator_id=9), admin) is ActingAs.ADMIN  # #38
+    for event, actor, code in [
+        (voting, _person(3), "not_coordinator"),
+        (voting, _person(2, active=False), "inactive"),
+        (replace(voting, coordinator_id=9), guest, "guests_dont"),
+        (replace(voting, state=EventState.DECIDED), _person(2), "voting_closed"),
     ]:
         with pytest.raises(EventRuleViolation) as refused:
-            check_can_switch_late(event, actor, coordinator)
+            check_can_switch_late(event, actor)
         assert refused.value.code == code
 
 
@@ -399,8 +400,6 @@ async def test_taking_part_off_drops_them_from_the_head_count_and_the_roles(hous
     await act(house, calls.claim_coordinator, house["Sam"], event_id)
     with pytest.raises(EventRuleViolation, match=LATE_SWITCHERS):
         await act(house, calls.switch_late_joiner, house["Lee"], event_id, house["Kim"].id, taking_part=False)
-    with pytest.raises(EventRuleViolation, match=LATE_SWITCHERS):  # an admin, while someone coordinates
-        await act(house, calls.switch_late_joiner, house["Alex"], event_id, house["Kim"].id, taking_part=False)
     with pytest.raises(EventRuleViolation, match="on time") as on_time:
         await act(house, calls.switch_late_joiner, house["Sam"], event_id, house["Lee"].id, taking_part=False)
     assert on_time.value.code == "not_late"

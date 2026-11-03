@@ -294,33 +294,34 @@ def _person(member_id: int, role: Role = Role.MEMBER, *, active: bool = True) ->
 
 
 @pytest.mark.parametrize("check", [check_can_shuffle, check_can_break_tie])
-def test_who_may_use_the_coordinators_picks_powers(check: Callable[[Event, Member, Member | None], ActingAs]) -> None:
+def test_who_may_use_the_coordinators_picks_powers(check: Callable[[Event, Member], ActingAs]) -> None:
     voting = _event(EventState.VOTING, coordinator_id=2)
     admin, guest = _person(1, Role.ADMIN), _person(9, Role.GUEST)
-    assert check(voting, _person(2), _person(2)) is ActingAs.COORDINATOR
-    assert check(_event(EventState.VOTING), admin, None) is ActingAs.ADMIN
-    assert check(replace(voting, coordinator_id=9), admin, guest) is ActingAs.ADMIN  # choosing isn't a guest's (#38)
-    for event, actor, coordinating, code in [
-        (voting, admin, _person(2), "not_coordinator"),  # an admin doesn't override a coordinator
-        (voting, _person(3), _person(2), "not_coordinator"),
-        (_event(EventState.VOTING), _person(3), None, "not_coordinator"),
-        (voting, _person(2, active=False), _person(2), "inactive"),
-        (replace(voting, coordinator_id=9), guest, guest, "guests_dont"),
-        (replace(voting, state=EventState.DECIDED), _person(2), _person(2), "voting_closed"),
-        (replace(voting, state=EventState.COLLECTING), _person(2), _person(2), "voting_closed"),
-        (_event(EventState.COLLECTING, kind=EventKind.OFFER), _person(2), None, "is_offer"),
+    assert check(voting, _person(2)) is ActingAs.COORDINATOR
+    assert check(_event(EventState.VOTING), admin) is ActingAs.ADMIN
+    assert check(voting, admin) is ActingAs.ADMIN  # alongside a member coordinating (#179)
+    assert check(replace(voting, coordinator_id=9), admin) is ActingAs.ADMIN  # choosing isn't a guest's (#38)
+    assert check(replace(voting, coordinator_id=1), admin) is ActingAs.COORDINATOR  # an admin who coordinates
+    for event, actor, code in [
+        (voting, _person(3), "not_coordinator"),
+        (_event(EventState.VOTING), _person(3), "not_coordinator"),
+        (voting, _person(2, active=False), "inactive"),
+        (replace(voting, coordinator_id=9), guest, "guests_dont"),
+        (replace(voting, state=EventState.DECIDED), _person(2), "voting_closed"),
+        (replace(voting, state=EventState.COLLECTING), _person(2), "voting_closed"),
+        (_event(EventState.COLLECTING, kind=EventKind.OFFER), _person(2), "is_offer"),
     ]:
         with pytest.raises(EventRuleViolation) as refused:
-            check(event, actor, coordinating)
+            check(event, actor)
         assert refused.value.code == code, (event.state, actor.id)
 
 
 def test_the_shuffle_limit_is_three() -> None:
     voting = _event(EventState.VOTING, coordinator_id=2)
     for used in range(MAX_SHUFFLES):
-        check_can_shuffle(replace(voting, shuffles=used), _person(2), _person(2))
+        check_can_shuffle(replace(voting, shuffles=used), _person(2))
     with pytest.raises(EventRuleViolation) as refused:
-        check_can_shuffle(replace(voting, shuffles=MAX_SHUFFLES), _person(2), _person(2))
+        check_can_shuffle(replace(voting, shuffles=MAX_SHUFFLES), _person(2))
     assert refused.value.code == "shuffle_limit" and MAX_SHUFFLES == 3
 
 
@@ -457,7 +458,7 @@ async def test_break_the_tie_is_refused_to_everyone_else(house: House) -> None:
     picks = await pick_ids(house, event_id)
     await vote(house, "Alex", event_id, picks["Siam Garden"])
     await vote(house, "Lee", event_id, picks["Taqueria"])
-    for who in ("Alex", "Lee", "Kim"):  # an admin doesn't override a coordinator
+    for who in ("Lee", "Kim"):  # neither coordinates nor is an admin
         with pytest.raises(EventRuleViolation) as refused:
             await act(house, coordinator.break_tie, house[who], event_id, picks["Siam Garden"])
         assert refused.value.code == "not_coordinator", who
@@ -1197,12 +1198,13 @@ async def test_the_places_just_drawn_away_come_back_only_when_nothing_else_fits(
 
 async def test_who_may_shuffle(house: House) -> None:
     event_id = await with_many_places(house, "Sam", "Lee", coordinator_name="Sam")
-    for who in ("Lee", "Alex", "Kim"):  # an admin doesn't override a coordinator
+    for who in ("Lee", "Kim"):  # neither coordinates nor is an admin
         with pytest.raises(EventRuleViolation) as refused:
             await shuffle(house, who, event_id)
         assert refused.value.code == "not_coordinator", who
         view = await act(house, event_views.event_view, house[who], event_id)
         assert not view.can.shuffle and not view.can.break_tie
+    assert (await act(house, event_views.event_view, house["Alex"], event_id)).can.shuffle  # an admin (#179)
     with pytest.raises(StaleRun):
         await shuffle(house, "Sam", event_id, run=3)
     view = await act(house, event_views.event_view, house["Sam"], event_id)
@@ -1267,7 +1269,7 @@ async def test_a_shuffle_is_audited_and_logged_with_its_counts(house: House, cap
 async def test_refusals_say_why_with_reason_codes_in_the_log(house: House, caplog: pytest.LogCaptureFixture) -> None:
     event_id = await with_many_places(house, "Sam", coordinator_name="Sam")
     caplog.set_level(logging.INFO)
-    for who in ("Lee", "Alex"):
+    for who in ("Lee", "Kim"):
         try:
             await shuffle(house, who, event_id)
         except EventRuleViolation as exc:
@@ -1432,15 +1434,13 @@ async def slack(house: House) -> AsyncIterator[Slack]:
     await wired.conn.stop()
 
 
-async def test_slack_shuffle_is_the_coordinators_and_says_what_it_did(slack: Slack, house: House) -> None:
+async def test_slack_shuffle_is_the_coordinators_and_admins_and_says_what_it_did(slack: Slack, house: House) -> None:
     await stock(house, 9)
     event_id = await to_voting(house, "Sam", "Lee", coordinator_name="Sam")
     before = names(await house.context(event_id))
     value = ids.card_value(event_id, 1)
     await slack.click("Lee", ids.SHUFFLE, value)
     assert slack.ephemerals("Lee")[-1] == SHUFFLERS
-    await slack.click("Alex", ids.SHUFFLE, value)  # an admin doesn't override a coordinator
-    assert slack.ephemerals("Alex")[-1] == SHUFFLERS
     await slack.click("Sam", ids.SHUFFLE, ids.card_value(event_id, 2))  # a message from an earlier run
     assert slack.ephemerals("Sam")[-1] == STALE
     assert names(await house.context(event_id)) == before
@@ -1456,6 +1456,9 @@ async def test_slack_shuffle_is_the_coordinators_and_says_what_it_did(slack: Sla
     posted = [c for c in slack.fake.calls if c.method in {"chat.postMessage", "chat.update"}]
     texts = json.dumps([c.args.get("blocks") for c in posted])
     assert "Sam shuffled the proposals (3 replaced)." in texts and "Shuffle proposals" in texts
+    await slack.click("Alex", ids.SHUFFLE, value)  # an admin, alongside the coordinator (#179)
+    assert slack.ephemerals("Alex")[-1].startswith("Shuffled: ")
+    assert (await house.event(event_id)).shuffle_note.startswith("Alex shuffled the proposals")  # type: ignore[union-attr]
 
 
 async def test_slack_break_the_tie_is_the_coordinators(slack: Slack, house: House) -> None:
@@ -1589,23 +1592,31 @@ async def test_nobody_voting_leaves_no_tie_note(house: House) -> None:
     assert made.decision.tie_note is None
 
 
-async def test_an_admin_is_refused_the_picks_powers_while_a_member_coordinates(house: House) -> None:
+async def test_an_admin_uses_the_picks_powers_while_a_member_coordinates(house: House) -> None:
+    """#179: an admin can switch a late joiner, shuffle, and break a tie alongside the coordinator,
+    each audited as an admin's, and the web offers them too."""
     event_id = await with_many_places(house, "Sam", "Lee", coordinator_name="Sam")
     picks = await pick_ids(house, event_id)
-    first = next(iter(picks.values()))
+    first, second = list(picks.values())[:2]
     await vote(house, "Sam", event_id, first)
-    await vote(house, "Lee", event_id, list(picks.values())[1])
-    assert house["Alex"].is_admin
-    for use in (
-        lambda: coordinator.shuffle(db, house["Alex"], event_id, now=house.clock()),
-        lambda: coordinator.break_tie(db, house["Alex"], event_id, first, now=house.clock()),
-    ):
-        async with house.sessionmaker() as db:
-            with pytest.raises(EventRuleViolation) as refused:
-                await use()
-        assert refused.value.code == "not_coordinator"
+    await vote(house, "Lee", event_id, second)
+    assert house["Alex"].is_admin and not house["Lee"].is_admin
+    can = (await act(house, event_views.event_view, house["Alex"], event_id)).can
+    assert can.shuffle and can.break_tie
+    await act(house, calls.join_late, house["Kim"], event_id)
+    await act(house, calls.switch_late_joiner, house["Alex"], event_id, house["Kim"].id, vote_counts=True)
+    await shuffle(house, "Alex", event_id)
+    await act(house, coordinator.break_tie, house["Alex"], event_id, first)
     event = await house.event(event_id)
-    assert (event.state, event.shuffles) == (EventState.VOTING, 0)
+    assert (event.state, event.shuffles, event.coordinator_id) == (EventState.DECIDED, 1, house["Sam"].id)
+    assert (event.tie_how, event.tie_by) == (TieHow.CHOSE, house["Alex"].id)
+    (made,) = await sent(house, "decision_made")
+    assert made.decision.tie_note == "Tied; Alex chose"
+    audits = await house.audits()
+    capacities = [a.payload["as"] for a in audits if a.action in {"event.late_joiner_changed", "event.shuffled"}]
+    assert capacities == ["admin", "admin"]
+    (decided,) = [a for a in audits if a.action == "event.decided"]
+    assert (decided.actor_member_id, decided.payload["how"]) == (house["Alex"].id, "tie_break")
 
 
 async def test_another_households_call_is_not_found(house: House, migrated: Settings) -> None:

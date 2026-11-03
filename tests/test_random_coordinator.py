@@ -6,11 +6,12 @@ guest, a maybe, or someone deactivated; never over a claim; nobody when no membe
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
 from dinnerbell.domain.events import (
+    AssignmentRole,
     Event,
     EventKind,
     EventRuleViolation,
@@ -18,6 +19,8 @@ from dinnerbell.domain.events import (
     Response,
     RoleOffer,
     Status,
+    Step,
+    TieHow,
     Window,
     coordinator_candidates,
     coordinator_seed,
@@ -26,7 +29,8 @@ from dinnerbell.domain.events import (
 from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.members import Capabilities, Member, Role
 from dinnerbell.services import call_admin, calls, guests, lifecycle, members
-from tests.support.calls import RESPOND_BY, House, RecordingChannel
+from dinnerbell.services import coordinator as coordinator_service
+from tests.support.calls import RESPOND_BY, VOTE_BY, House, RecordingChannel
 from tests.test_coordinator import act, add_guest, open_dinner, sent
 from tests.test_coordinator import database as database  # the fixtures, re-exported for pytest
 from tests.test_coordinator import house as house
@@ -274,3 +278,50 @@ async def test_a_failure_mid_step_picks_nothing_and_the_next_tick_picks_once(
     assert event.state is EventState.VOTING and event.coordinator_id is not None
     assert len(await house.audits("event.coordinator_picked")) == 1
     assert len(await sent(house, "coordinator_picked")) == 1
+
+
+async def test_whoever_was_picked_chooses_an_unclear_role_until_the_time_runs_out(house: House) -> None:
+    """A picked coordinator gets the usual wait to choose who does it (FR-61), and when they
+    don't choose, the first volunteer does it."""
+    event_id = await open_dinner(house)
+    for name in ("Alex", "Sam"):
+        await act(house, calls.respond, house[name], event_id, Status.IN)
+        await act(house, calls.offer_role, house[name], event_id, RoleOffer.PICKUP, True)  # two volunteers
+    house.clock.now = RESPOND_BY
+    await house.tick()
+    picked = (await house.event(event_id)).coordinator_id
+    assert picked in {house["Alex"].id, house["Sam"].id}
+    (told,) = await sent(house, "coordinator_picked")
+    assert told.choose_minutes == 15
+    house.clock.now = VOTE_BY
+    await house.tick()
+    event = await house.event(event_id)
+    assert event.state is EventState.DECIDED and event.roles_due_at == VOTE_BY + timedelta(minutes=15)
+    (asked,) = await sent(house, "roles_to_choose")
+    assert asked.recipient_id == picked
+    ctx = await house.context(event_id)
+    assert {(a.role, a.member_id) for a in ctx.assignments} == {(AssignmentRole.COORDINATOR, picked)}
+
+    house.clock.now = VOTE_BY + timedelta(minutes=15)
+    assert await house.tick() == [Step.ASSIGN_ROLES]
+    ctx = await house.context(event_id)
+    assert ctx.event.roles_due_at is None
+    roles = {(a.role, a.member_id) for a in ctx.assignments}
+    assert roles == {(AssignmentRole.COORDINATOR, picked), (AssignmentRole.PICKUP, house["Alex"].id)}  # first to offer
+
+
+async def test_whoever_was_picked_breaks_a_tie(house: House) -> None:
+    event_id = await to_voting(house, "Sam", "Kim")
+    picked = (await house.event(event_id)).coordinator_id
+    assert picked is not None
+    coordinator = next(m for m in house.people.values() if m.id == picked)
+    others = [n for n in ("Alex", "Sam", "Kim") if house[n].id != picked]
+    ctx = await house.context(event_id)
+    first, second = (p.id for p in sorted(ctx.proposals, key=lambda p: p.rank)[:2])
+    await act(house, calls.vote, house[others[0]], event_id, first)
+    await act(house, calls.vote, house[others[1]], event_id, second)
+    await act(house, coordinator_service.break_tie, coordinator, event_id, second)
+    event = await house.event(event_id)
+    assert (event.state, event.tie_how, event.tie_by) == (EventState.DECIDED, TieHow.CHOSE, picked)
+    (made,) = await sent(house, "decision_made")
+    assert made.decision.tie_note == f"Tied; {coordinator.display_name} (coordinator) chose"

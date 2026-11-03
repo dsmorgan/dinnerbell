@@ -2,7 +2,7 @@
   "blocks": [
     {
       "text": {
-        "text": "Nobody had claimed coordinating dinner on Thursday, Oct 22, so Dinnerbell picked you at random from everyone who's in. While the vote is open, you can break a tie and shuffle the picks. Once it's decided, you choose how you get it, such as pickup or delivery, and who does it. If it doesn't suit you, hand it off to someone who's in on the call's page. Thanks for steering!",
+        "text": "Nobody had claimed coordinating dinner on Thursday, Oct 22, so Dinnerbell picked you at random from everyone who's in. While the vote is open, you can tap *Lock this* on a pick to decide it, break a tie, or shuffle the picks. Once it's decided, you can change how you get it, such as pickup or delivery, and who does it. If it isn't clear who does it, you'll be asked to choose, and if you don't within 15 minutes, the first volunteer does it. If it doesn't suit you, hand it off to someone who's in on the call's page. Thanks for steering!",
         "type": "mrkdwn"
       },
       "type": "section"

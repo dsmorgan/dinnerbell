@@ -20,9 +20,9 @@ The same rule applies when someone hands coordinating to you or an admin assigns
 
 ### If nobody claims it
 
-When answers close and voting starts with nobody coordinating, Dinnerbell picks a coordinator at random from the members who said In. It never picks a guest or someone who was still a maybe. The call message names you, and you get a direct message saying you were picked and what you can do: break a tie and shuffle the picks while voting, and once it's decided, choose how you get it and who does it. If it doesn't suit you, hand it off on the call's page. Nobody gets picked when no member is in.
+When answers close and voting starts with nobody coordinating, Dinnerbell picks a coordinator at random from the members who said In. It never picks a guest or someone who was still a maybe. The call message names you, and you get a direct message saying you were picked and what you can do. You're a coordinator like any other: you can tap **Lock this**, break a tie, and shuffle the picks while voting, and once it's decided, change how you get it and who does it. When the decision leaves it unclear who does the role, you're asked to choose, and if you don't within 15 minutes (an admin can change the time), the first person who offered does it. You get credit for coordinating when the meal is done, as if you'd claimed it. If it doesn't suit you, hand it off on the call's page. Nobody gets picked when no member is in.
 
-The pick is random, but reproducible: the same call, with the same people in, always picks the same person. A re-run, or starting a called-off call again, picks again only if nobody coordinates by then.
+The pick is random, but reproducible: the same run of a call, with the same people in, always picks the same person. A re-run, or starting a called-off call again, picks again only if nobody coordinates by then.
 
 A guest invited to the call can coordinate too, with fewer powers. See [What a guest coordinator can do](#what-a-guest-coordinator-can-do).
 
@@ -88,7 +88,7 @@ Contributions and badges count who did what when the meal is marked done, so a c
 | Switch how you get it, and assign who does it | Web; in Slack, **Assign roles** while the role waits for a choice | Once decided |
 | Change the meal time, or who cooks, picks up, or orders | Web | Once decided |
 | Correct who did what after the meal is done | Web | Any time after |
-| Break a tie, shuffle, switch late joiners | Slack and web | While voting, only when nobody coordinates or a guest does |
+| Break a tie, shuffle, switch late joiners | Slack and web | While voting, alongside the coordinator |
 
 **Adjust** in Slack is the coordinator's alone. An admin who taps it is told to use the web.
 

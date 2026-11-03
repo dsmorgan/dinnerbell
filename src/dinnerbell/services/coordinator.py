@@ -3,8 +3,8 @@
 picks, and choose the winning pick's mode and who does its role; and, in Slack, adjust the plan
 once it's decided (spec 5.7).
 
-Each is the coordinator's, or an admin's when nobody coordinates, or a guest does (a guest
-coordinator chooses roles, which is logistics, but not the plan, FR-58). Each takes the event's
+Each is the coordinator's and every admin's alike (#179). A guest coordinator chooses roles,
+which is logistics, but not the plan (FR-58). Each takes the event's
 lock, checks the run the person saw, and is audited and logged (#75). Everything is scoped to the
 actor's household.
 """
@@ -56,11 +56,6 @@ def _target(event_id: int) -> str:
     return f"event:{event_id}"
 
 
-def _coordinator(ctx: CallContext) -> Member | None:
-    coordinator_id = ctx.event.coordinator_id
-    return ctx.members.get(coordinator_id) if coordinator_id is not None else None
-
-
 # Break the tie (FR-16) --------------------------------------------------------------------------
 
 
@@ -75,7 +70,7 @@ async def break_tie(
         await guest_rules.gate(db, event, actor, GuestAction.BREAK_TIE)
         check_run(event, run)
         ctx = await cc.load(db, event)
-        capacity = check_can_break_tie(event, actor, _coordinator(ctx))
+        capacity = check_can_break_tie(event, actor)
         proposal = ctx.proposal(proposal_id)
         if proposal is None:
             raise NotFound("No such proposal.")
@@ -119,7 +114,7 @@ async def shuffle(db: AsyncSession, actor: Member, event_id: int, *, run: int | 
         await guest_rules.gate(db, event, actor, GuestAction.SHUFFLE)
         check_run(event, run)
         ctx = await cc.load(db, event)
-        capacity = check_can_shuffle(event, actor, _coordinator(ctx))
+        capacity = check_can_shuffle(event, actor)
         out = cc.shuffle_picks(ctx)
         if not out:
             raise EventRuleViolation(NOTHING_TO_SHUFFLE, code="nothing_to_shuffle")

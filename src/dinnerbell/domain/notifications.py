@@ -715,11 +715,14 @@ class CoordinatingGiven(_Notification):
 class CoordinatorPicked(_Notification):
     """Voting started with nobody coordinating, so Dinnerbell picked ``member``, who was in, at
     random (#179): one direct message a run, saying what a coordinator can do and how to hand
-    it off. Never sent to a guest."""
+    it off. It reads right before or after the decision. Never sent to a guest."""
 
     kind: ClassVar[str] = "coordinator_picked"
     event: EventInfo
     member: PersonInfo
+    choose_minutes: int = 15
+    """How long they have to choose who does the role when the decision leaves it unclear
+    (FR-61), the household's setting."""
 
     @property
     def idempotency_key(self) -> str:
