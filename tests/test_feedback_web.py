@@ -59,7 +59,8 @@ def test_feedback_from_history_and_an_edit_replaces_it(
     log(client, household["siam"], [household["admin"], household["kim"]])
     siam = meal_id(migrated, household["siam"])
     history = page(client.get("/history"))
-    assert f'href="/history/meals/{siam}/feedback"' in history and "How was it?" in history
+    # One button, beside Edit and Delete, not also in the feedback (#177).
+    assert history.count(f'href="/history/meals/{siam}/feedback"') == 1 and "How was it?" in history
 
     form = page(client.get(f"/history/meals/{siam}/feedback"))
     assert 'name="rating"' in form and 'name="place_issues"' in form and 'name="issue_note"' in form
@@ -84,7 +85,7 @@ def test_feedback_from_history_and_an_edit_replaces_it(
     history = page(client.get("/history?notice=feedback"))
     assert "Thanks for the feedback!" in history
     assert "Your feedback: Liked it. Late, Cold, Other: “No forks”" in history
-    assert "Change your feedback" in history
+    assert "Change your feedback" in history and history.count(f'href="/history/meals/{siam}/feedback"') == 1
     form = page(client.get(f"/history/meals/{siam}/feedback"))
     assert 'value="liked" checked' in form and 'value="cold" checked' in form and 'value="other" checked' in form
     assert 'value="No forks"' in form
