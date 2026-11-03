@@ -466,6 +466,7 @@ def test_the_bowl_stands_clear_of_the_bed() -> None:
     """The bowl is its own part, out on the floor (#177): the bell and his spots at the bowl
     follow --den-bowl, so they stay together wherever it is."""
     assert "--den-bowl: max(38px, 35cqi - 10px);" in FUN_CSS
+    assert "@supports not (width: 1cqi) {\n  .den { --den-bowl: max(38px, 35% - 10px); }" in FUN_CSS
     for rule in (
         ".den-bowl { position: absolute; left: var(--den-bowl);",
         ".den-bell { position: absolute; left: calc(var(--den-bowl) + 2px);",
