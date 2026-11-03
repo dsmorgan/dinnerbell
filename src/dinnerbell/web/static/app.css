@@ -616,6 +616,9 @@ fieldset.card > .button.block { margin-bottom: 0; }
 .badge-svg { width: 56px; height: 65px; }
 .badge-svg-locked { filter: grayscale(1); opacity: 0.35; }
 .badge-list { list-style: none; margin: 0 0 0.75rem; padding: 0; display: grid; gap: 0.5rem; }
+/* Household > Newly earned: who, the badge, and the date wrap as whole pieces on a phone (#177). */
+.recent-badges li { display: flex; flex-wrap: wrap; align-items: center; gap: 0.25rem 0.5rem; }
+.recent-badges time { white-space: nowrap; }
 .badge-chip { display: inline-flex; align-items: center; gap: 0.5rem; vertical-align: middle; }
 .badge-chip .badge-svg { width: 36px; height: 42px; }
 .badge-name { font-weight: 600; }

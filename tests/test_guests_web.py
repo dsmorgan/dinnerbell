@@ -535,7 +535,7 @@ def test_a_guest_sees_only_their_own_badges(admin: TestClient, provider: FakePro
     html = page(admin.get("/stats"))
     assert "<h1>Your badges</h1>" in html and 'aria-current="page">Your badges' in html
     assert html.count("badge-row") == 5 and "Road Runner<span" in html and "Newly earned" in html
-    for hidden in ("Full Table", "Food Critic", "Meals shared", "The household", "Lately earned", "Stats</a>"):
+    for hidden in ("Full Table", "Food Critic", "Meals shared", "The household", 'id="lately-title"', "Stats</a>"):
         assert hidden not in html
     assert "Meals cooked" in html
     assert 'aria-label="Stats"' not in html and "/stats/household" not in html  # no tabs for a guest (#153)

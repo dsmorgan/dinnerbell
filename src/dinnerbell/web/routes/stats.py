@@ -73,6 +73,7 @@ async def household_stats_page(request: Request, principal: GuestOrMember, db: D
         "tab": "household",
         "household": await stats.household_stats(db, principal.member),
         "kind_labels": HOUSEHOLD_LABELS,
+        "tz": principal.household.timezone,
     }
     return await render(request, "stats.html", page)
 
