@@ -218,6 +218,21 @@ def test_starting_a_call_reports_problems(admin: TestClient) -> None:
     assert submit(admin, "/events", {"slot": "lunch", "day": "soon"}).status_code == 409
 
 
+def test_today_folds_start_a_call_and_make_an_offer_until_one_fails(admin: TestClient) -> None:
+    """#177: each form is folded under a line that says what it does, and opens on its own error.
+    The menu has Admin and Schedule, so Today doesn't repeat them."""
+    html = page(admin.get("/"))
+    folds = re.findall(r'<details class="card today-action"( open)?>\s*<summary><h2>([^<]+)</h2><span', html)
+    assert folds == [("", "Start a call"), ("", "Make an offer")]
+    assert "vote on it" in html and "so others can join" in html
+    assert html.count('href="/admin/members"') == 1 and html.count('href="/schedule"') == 1  # the menu's
+    start(admin)
+    again = page(submit(admin, "/events", {"slot": "dinner", "day": "2026-10-22"}))
+    folds = re.findall(r'<details class="card today-action"( open)?>\s*<summary><h2>([^<]+)</h2>', again)
+    assert folds == [(" open", "Start a call"), ("", "Make an offer")]
+    assert re.search(r"Start a call</h2>.*?</summary>\s*<p [^>]*role=\"alert\">[^<]*already a dinner call", again, re.S)
+
+
 def test_rule_errors_show_on_the_page_without_htmx(admin: TestClient, clock: FakeClock) -> None:
     event_id = start(admin)
     to_voting(admin, clock, event_id)

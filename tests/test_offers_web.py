@@ -106,6 +106,7 @@ def test_a_bad_offer_shows_on_today(admin: TestClient, migrated: Settings) -> No
     ]:
         response = submit(admin, "/offers", offer_form(**changes))
         assert response.status_code == 409 and message in page(response), changes
+        assert '<details class="card today-action" open>\n  <summary><h2>Make an offer' in response.text  # #177
     assert rows(migrated, EventRow) == []
 
 
