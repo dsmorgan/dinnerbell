@@ -59,9 +59,10 @@ async def save_my_fun_mode(
     principal: GuestCSRFChecked,
     context: Context,
     db: Database,
-    fun: Annotated[str, Form(max_length=3)] = "",
+    fun: Annotated[str, Form(max_length=3)] = "off",
 ) -> Response:
-    """Fun mode on or off for the signed-in person (#153), from Preferences or a guest's page."""
+    """Fun mode on or off for the signed-in person (#153), from Preferences or a guest's page.
+    The form's checkbox sends ``on`` when checked and nothing when not, which means off."""
     on = FUN_CHOICES.get(fun)
     if on is None:
         message = "Choose On or Off."

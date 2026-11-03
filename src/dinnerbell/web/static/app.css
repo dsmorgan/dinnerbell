@@ -176,8 +176,13 @@ input:not([type="checkbox"]), select {
 
 input:disabled { opacity: 0.7; }
 
-.check { display: flex; align-items: center; gap: 0.6rem; min-height: 44px; }
-.check input { width: 22px; height: 22px; accent-color: var(--accent); }
+/* A checkbox row, at least 44px tall. The box never shrinks, and it lines up with the label's
+   first line, so a label that wraps keeps its box the same size and at the top. A hint goes in
+   .check-hint, on its own line under the label text. The box takes the label's font, so 1lh is
+   the label's line height. */
+.check { display: flex; align-items: flex-start; gap: 0.6rem; min-height: 44px; padding: calc((44px - 1lh) / 2) 0; }
+.check input { flex: none; width: 22px; height: 22px; margin: calc((1lh - 22px) / 2) 0 0; font: inherit; accent-color: var(--accent); }
+.check-hint { display: block; }
 
 .alert { padding: 0.7rem 0.9rem; border-radius: 10px; margin-bottom: 1rem; }
 .alert.ok { background: var(--ok-soft); color: var(--ok); }

@@ -228,7 +228,7 @@ def test_a_guest_turns_fun_mode_off_on_their_page(
     response = submit(guest, "/me/fun", {"fun": "off"})
     assert (response.status_code, response.headers["location"]) == (303, "/me?saved=fun#fun-mode")
     me = guest.get("/me").text
-    assert 'name="fun" value="off" checked' in me and "data-fun" not in me and "fun.js" not in me
+    assert 'name="fun" value="on">' in me and "data-fun" not in me and "fun.js" not in me
     today = guest.get("/").text
     assert "data-fun" not in today and 'class="den' not in today
     assert {m.id: m.fun_mode for m in rows(migrated, MemberRow)} == {1: True, pat: False}
