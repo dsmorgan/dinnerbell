@@ -354,7 +354,8 @@ class ResponseRow(Base):
     """A member's answer to a call (FR-7 to FR-9). ``guest_needs`` is a JSON list of dietary
     tag IDs; ``maybe_at_deadline`` marks a maybe the deadline turned into out. ``late`` marks
     someone who joined while voting (#76), and ``vote_counts`` whether the coordinator counts
-    their votes."""
+    their votes. ``usual_offers_done`` marks that the member's usual offers had their one turn
+    on this call (#180)."""
 
     __tablename__ = "response"
     __table_args__ = (
@@ -381,6 +382,7 @@ class ResponseRow(Base):
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime())
     late: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     vote_counts: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    usual_offers_done: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
 
 
 class SuggestionRow(Base):

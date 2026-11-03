@@ -201,8 +201,10 @@ async def make_house(sessionmaker: async_sessionmaker[AsyncSession], clock: Fake
 
 
 async def furnish(house: House) -> House:
-    """Sam cooks and is on the tacos' cook list; Lee can order; Kim has no flags."""
-    await house.add_member("Sam", can_cook=True)
+    """Sam is on the tacos' cook list; Lee can order; Kim has no flags. Sam's usual settings
+    leave Cook off, so answering In offers nothing and a test offers to cook when it means to
+    (#180); Lee's answer In offers to order."""
+    await house.add_member("Sam")
     await house.add_member("Kim")
     await house.add_member("Lee", can_order=True)
     await house.add_item("Siam Garden", Mode.PICKUP, Mode.DELIVERY, cuisine="Thai", url="https://siam.example")

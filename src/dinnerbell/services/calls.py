@@ -94,6 +94,7 @@ from dinnerbell.domain.events import (
     with_late_switches,
     with_offer,
     with_status,
+    with_usual_offers,
 )
 from dinnerbell.domain.guests import GuestAction, answer_action
 from dinnerbell.domain.meals import Slot
@@ -213,13 +214,14 @@ async def post_now(db: AsyncSession, actor: Member, event_id: int, *, run: int |
 async def respond(
     db: AsyncSession, actor: Member, event_id: int, status: Status, *, run: int | None = None, now: datetime
 ) -> None:
-    """``run``, when given, is the run the actor saw (``check_run``), as on a Slack card."""
+    """``run``, when given, is the run the actor saw (``check_run``), as on a Slack card. In turns
+    on the actor's usual offers, once per call (#180, ``with_usual_offers``)."""
     async with locked_event(db, actor.household_id, event_id, now) as event:
         await guest_rules.gate(db, event, actor, answer_action(status))
         check_run(event, run)
         check_can_respond(event, actor, invited=await _invited(db, event, actor))
         ctx = await load(db, event)
-        new = with_status(ctx.response_of(actor.id), actor.id, status, now)
+        new = with_usual_offers(with_status(ctx.response_of(actor.id), actor.id, status, now), actor)
         await ResponseRepository(db).save(actor.household_id, event.id, new, now)
         if drops_coordinating(event, new):  # whoever coordinates is in (#154)
             await cc.release_coordinator(db, event, actor, why="out", now=now)  # updates the messages
@@ -316,7 +318,8 @@ async def _joined_late(db: AsyncSession, ctx: CallContext, actor: Member, *, now
     mine = ctx.response_of(actor.id)
     if not check_can_join_late(ctx.event, actor, mine):
         return ctx
-    await ResponseRepository(db).save(actor.household_id, ctx.event.id, with_late_join(mine, actor.id, now), now)
+    joined_answer = with_usual_offers(with_late_join(mine, actor.id, now), actor)  # #180
+    await ResponseRepository(db).save(actor.household_id, ctx.event.id, joined_answer, now)
     joined = await load(db, ctx.event)
     await publish(db, joined, cc.call_updated(joined), cc.proposals_updated(joined), now=now)
     before = "never" if mine is None else ("maybe" if mine.maybe_at_deadline else mine.status.value)
@@ -492,6 +495,8 @@ async def set_coordinator(
         check_coordinator_in(event, current)
         person = before.members.get(member_id)
         joined = with_coordinating(event, current, member_id, now, guest=person is not None and person.is_guest)
+        if joined is not None and person is not None:
+            joined = with_usual_offers(joined, person)  # #180: as answering In does
         if joined is not None:
             await ResponseRepository(db).save(event.household_id, event.id, joined, now)
         if current is not None and current.is_in:

@@ -259,6 +259,25 @@ async def test_a_role_tap_on_the_card_toggles_its_check(slack: Slack, house: Hou
     assert await response(house, event_id, "Kim") == (Status.IN, frozenset())
 
 
+async def test_in_on_the_card_turns_on_the_usual_offers_once(slack: Slack, house: House) -> None:
+    """#180: Lee usually orders, so In on the card turns **I'll order** on. Turned off, it stays
+    off when Lee taps In again or the card is drawn again; Maybe and Out turn nothing on."""
+    event_id = await open_call(house)
+    await slack.click("Lee", "respond_maybe", str(event_id))
+    assert selected(slack.cards("Lee")[-1]) == ["✓ Maybe"]
+    await slack.tap_card("Lee", "card_in", slack.cards("Lee")[-1])
+    card = slack.cards("Lee")[-1]
+    assert selected(card) == ["✓ In", "✓ I'll order"] and "card_withdraw_order" in action_ids(card)
+    assert await response(house, event_id, "Lee") == (Status.IN, frozenset({RoleOffer.ORDER}))
+
+    await slack.tap_card("Lee", "card_withdraw_order", card)
+    await slack.tap_card("Lee", "card_in", slack.cards("Lee")[-1])
+    assert selected(slack.cards("Lee")[-1]) == ["✓ In"]
+    await slack.click("Lee", "answer", ids.card_value(event_id, 1))  # a fresh card
+    assert selected(slack.cards("Lee")[-1]) == ["✓ In"]
+    assert await response(house, event_id, "Lee") == (Status.IN, frozenset())
+
+
 async def test_a_double_tap_on_the_card_offers_once(slack: Slack, house: House) -> None:
     """The card's buttons say which way they go, so the second tap of a double tap, on the
     card as it was, can't take the offer back as a toggle would."""
@@ -576,8 +595,8 @@ async def test_a_reminder_slack_wont_edit_still_answers(slack: Slack, house: Hou
     slack.fake.clear()
     slack.fake.fail("chat.update", Failure("message_not_found"))
     await slack.tap_card("Lee", "card_in", reminder, channel="D04LEE", ephemeral=False, message_ts=ts)
-    assert await response(house, event_id, "Lee") == (Status.IN, frozenset())
-    assert slack.ephemerals("Lee") == ["Dinner call · Thursday, Oct 22: your answer is In"]
+    assert await response(house, event_id, "Lee") == (Status.IN, frozenset({RoleOffer.ORDER}))  # usually (#180)
+    assert slack.ephemerals("Lee") == ["Dinner call · Thursday, Oct 22: your answer is In, can order"]
 
 
 async def test_a_reminder_tap_without_a_message_ts_answers_in_text(slack: Slack, house: House) -> None:

@@ -1048,12 +1048,13 @@ def _catalog_columns(settings: Settings) -> list[str]:
 
 
 def _calls_before_late_join(settings: Settings) -> object:
-    """The call rows, without the columns 0014 adds to ``response`` at the end (#76) and 0015
-    adds to ``event`` (#87), for comparing with rows read before ``dinnerbell migrate`` took the
-    database to the head."""
+    """The call rows, without the columns 0014 and 0025 add to ``response`` at the end (#76,
+    #180) and 0015 adds to ``event`` (#87), for comparing with rows read before ``dinnerbell
+    migrate`` took the database to the head."""
     rows: dict[str, list[tuple[object, ...]]] = _snapshot(settings)["rows"]  # type: ignore[assignment]
+    added = len(LATE_COLUMNS) + len(USUAL_OFFERS_COLUMNS)
     return rows | {
-        "response": [tuple(r)[: -len(LATE_COLUMNS)] for r in rows["response"]],
+        "response": [tuple(r)[:-added] for r in rows["response"]],
         "event": [tuple(r)[: -len(COORDINATOR_COLUMNS)] for r in rows["event"]],
     }
 
@@ -1241,6 +1242,8 @@ def test_0013_refuses_to_run_with_foreign_keys_on(settings: Settings) -> None:
 # 0014: joining a call late (#76) -----------------------------------------------------------------
 
 LATE_COLUMNS = ("late", "vote_counts")
+USUAL_OFFERS_COLUMNS = ("usual_offers_done",)
+"""What 0025 adds to ``response``, after ``LATE_COLUMNS`` (#180)."""
 
 
 def _response_table(settings: Settings) -> tuple[list[str], str]:
@@ -1271,7 +1274,7 @@ def test_0014_marks_every_answer_on_time_and_downgrade_drops_the_columns(
 
     assert cli.main(["migrate"]) == 0
     after, _ = _response_table(settings)
-    assert after == [*columns, *LATE_COLUMNS]
+    assert after == [*columns, *LATE_COLUMNS, *USUAL_OFFERS_COLUMNS]
     assert _calls_before_late_join(settings) == before["rows"] and _catalog(settings) == catalog
     engine = create_sync_engine(settings.sync_database_url)
     try:
@@ -1288,7 +1291,7 @@ def test_0014_marks_every_answer_on_time_and_downgrade_drops_the_columns(
     assert _snapshot(settings) == before and _catalog(settings) == catalog
 
     assert cli.main(["migrate"]) == 0
-    assert _response_table(settings)[0] == [*columns, *LATE_COLUMNS]
+    assert _response_table(settings)[0] == [*columns, *LATE_COLUMNS, *USUAL_OFFERS_COLUMNS]
     assert _calls_before_late_join(settings) == before["rows"]
     engine = create_sync_engine(settings.sync_database_url)
     try:
@@ -1429,9 +1432,10 @@ def test_0016_adds_contributions_and_badges_without_touching_a_row_and_downgrade
     assert cli.main(["migrate"]) == 0
     assert {"contribution", "badge_award"} <= _tables(settings)
     after = _rows_outside_m4(settings)
-    ours = {"household", "member"}
+    ours = {"household", "member", "response"}
     assert {k: v for k, v in after.items() if k not in ours} == {k: v for k, v in before.items() if k not in ours}
     assert [row[:-2] for row in after["member"]] == before["member"]  # 0022 and 0023 add two, last
+    assert [row[:-1] for row in after["response"]] == before["response"]  # 0025 adds one, last
     (household,) = after["household"]
     assert json.loads(household[3]) == {"contributions_backfilled": "x", "keep": 1, "feedback_cap": 0}  # type: ignore[index]  # 0021
     engine = create_sync_engine(settings.sync_database_url)
@@ -1920,6 +1924,46 @@ def test_0024_starts_new_award_ids_above_every_den_marker(
         "VALUES (1, 1, 'chef', 'silver', :t, 'pending')",
     )
     assert _badge_awards(settings)[1][-1][0] == next_id
+
+
+# 0025: usual offers start on (#180) ---------------------------------------------------------------
+
+
+def _usual_offers_done(settings: Settings) -> list[object]:
+    engine = create_engine(settings.sync_database_url)
+    try:
+        with engine.connect() as c:
+            return list(c.execute(text("SELECT event_id, usual_offers_done FROM response ORDER BY rowid")).all())
+    finally:
+        engine.dispose()
+
+
+def test_0025_marks_every_saved_answer_done_and_downgrade_drops_it(settings: Settings) -> None:
+    """Up adds ``response.usual_offers_done``, on for every answer saved before it, so no saved
+    answer gains an offer; a new answer starts with it off. Down drops the column and changes
+    no other row."""
+    _upgrade_to(settings, "0024_badge_award_autoincrement")
+    _populate_calls(settings)
+    before = _rows_outside_m4(settings)
+    _upgrade_to(settings, "0025_usual_offers_done")
+    assert _usual_offers_done(settings) == [(2, 1), (1, 1)]
+    after = _rows_outside_m4(settings)
+    assert [row[:-1] for row in after["response"]] == before["response"]  # the new column is last
+    assert {k: v for k, v in after.items() if k != "response"} == {k: v for k, v in before.items() if k != "response"}
+    _execute(
+        settings,
+        "INSERT INTO event (id, household_id, kind, slot, date, state, run, version, opens_at, respond_deadline, "
+        "reminder_minutes, vote_minutes, created_at, updated_at) "
+        "VALUES (3, 1, 'call', 'dinner', '2026-10-23', 'collecting', 1, 1, :t, :t, 15, 45, :t, :t)",
+        "INSERT INTO response (household_id, event_id, member_id, status, guests, guest_needs, offers_cook, "
+        "offers_pickup, offers_order, maybe_at_deadline, responded_at, updated_at) "
+        "VALUES (1, 3, 1, 'maybe', 0, '[]', 0, 0, 0, 0, :t, :t)",
+    )
+    assert _usual_offers_done(settings)[-1] == (3, 0)
+    _execute(settings, "DELETE FROM response WHERE event_id = 3", "DELETE FROM event WHERE id = 3")
+
+    _downgrade_to(settings, "0024_badge_award_autoincrement")
+    assert _rows_outside_m4(settings) == before
 
 
 def test_a_second_migrator_waits_then_reports_a_lock(settings: Settings, caplog: pytest.LogCaptureFixture) -> None:

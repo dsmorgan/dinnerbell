@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import re
 from datetime import timedelta
+from html import unescape
 from typing import Any
 
 import httpx
@@ -93,6 +94,27 @@ def test_start_a_call_and_respond(admin: TestClient, migrated: Settings) -> None
     (response,) = rows(migrated, ResponseRow)
     assert response.status == "in"
     assert f"/events/{event_id}" in admin.get("/").text
+
+
+def test_in_turns_on_your_usual_offers_once(admin: TestClient, migrated: Settings) -> None:
+    """#180: with Cook and Order on Preferences, In turns on I can cook and I'll order. One
+    turned off stays off when you answer In again; Maybe turns nothing on."""
+    submit(admin, "/preferences/settings", {"can_cook": "on", "can_order": "on"})
+    event_id = start(admin)
+
+    def pressed(card: str) -> list[str]:
+        return [unescape(label) for label in re.findall(r'aria-pressed="true">([^<]+)<', card)]
+
+    assert pressed(htmx(admin, f"/events/{event_id}/respond", {"status": "maybe", "from": "today"}).text) == []
+    card = htmx(admin, f"/events/{event_id}/respond", {"status": "in", "from": "today"}).text
+    assert pressed(card) == ["I can cook", "I'll order"]
+    (response,) = rows(migrated, ResponseRow)
+    assert (response.offers_cook, response.offers_pickup, response.offers_order) == (True, False, True)
+
+    submit(admin, f"/events/{event_id}/offer", {"role": "cook", "offered": "0"})
+    card = htmx(admin, f"/events/{event_id}/respond", {"status": "in", "from": "today"}).text
+    assert pressed(card) == ["I'll order"]
+    assert pressed(page(admin.get(f"/events/{event_id}"))) == ["I'll order"]
 
 
 def test_the_answers_are_one_toggle_in_slacks_order_apart_from_the_roles(admin: TestClient) -> None:
