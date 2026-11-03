@@ -578,9 +578,11 @@ class ProposalRepository:
         free_cuisine_id: int | None = None,
         score: float | None = None,
         proposed_by: int | None = None,
+        mode_chosen: bool = False,
     ) -> Proposal:
         """Add a pick. Raises ``DuplicatePick`` when the call has one for the same place already,
-        in any mode (#77): the use cases refuse that first, with the pick's name."""
+        in any mode (#77): the use cases refuse that first, with the pick's name. ``mode_chosen``
+        says someone chose its way, as whoever adds a pick does (#178)."""
         await self._check_new_place(household_id, event_id, mode, item_id, free_text)
         row = ProposalRow(
             household_id=household_id,
@@ -595,6 +597,7 @@ class ProposalRepository:
             source=source.value,
             proposed_by=proposed_by,
             created_at=now,
+            mode_chosen=mode_chosen,
         )
         self._session.add(row)
         await self._session.flush()
@@ -641,7 +644,7 @@ class ProposalRepository:
     ) -> None:
         """An offer for a place that's a pick in another mode takes the pick over (#77): its mode,
         reasons, and proposer change, and free text becomes the offer's catalog item. Its votes
-        and place in the order stay."""
+        and place in the order stay. The offer chose its way (#178)."""
         await self._session.execute(
             update(ProposalRow)
             .where(ProposalRow.household_id == household_id, ProposalRow.id == proposal_id)
@@ -652,6 +655,7 @@ class ProposalRepository:
                 free_cuisine_id=None,
                 reasons=list(reasons),
                 proposed_by=proposed_by,
+                mode_chosen=True,
             )
             .execution_options(synchronize_session=False)
         )

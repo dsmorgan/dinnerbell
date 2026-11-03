@@ -401,7 +401,7 @@ def _roles_choice(ctx: CallContext) -> RolesChoice | None:
         mode=event.decided_mode,
         modes=modes,
         people=tuple(ctx.person(m.id) for m in sorted(people, key=lambda m: m.display_name.casefold()) if m.active),
-        offered={role: ctx.coverage.for_role(role, item.cook_ids) for role in WORK_ROLES},
+        offered={role: ctx.coverage.volunteers(event.decided_mode, role, item.cook_ids) for role in WORK_ROLES},
         chosen=chosen,
         due_at=event.roles_due_at,
     )

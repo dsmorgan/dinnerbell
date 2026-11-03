@@ -567,7 +567,7 @@ Every table carries `household_id`. Timestamps are UTC; the household time zone 
 | invitation | event, guest, invited_by. One per guest per call (#38) |
 | response | event, member, status (in, out, maybe), guests, guest_needs (tags), eat_from, eat_until, offers_cook, offers_pickup, offers_order, usual_offers_done (the member's usual offers had their one turn on this call, FR-8), note, maybe_at_deadline, late (joined while voting, FR-60; while late, status out means the coordinator switched them off), vote_counts (the coordinator counts a late joiner's votes). Coordinating is event.coordinator, not a response field |
 | suggestion | event, member, item (nullable), free_text |
-| proposal | event, item (nullable), free_text and its cuisine (until it wins), mode, mode_chosen (the coordinator or an admin set its way during the vote, #178), rank, score, reasons (JSON), source (system, coordinator, member), proposed_by |
+| proposal | event, item (nullable), free_text and its cuisine (until it wins), mode, mode_chosen (someone chose its way: whoever added it, its offer, or the coordinator or an admin during the vote, #178), rank, score, reasons (JSON), source (system, coordinator, member), proposed_by |
 | vote | proposal, member |
 | assignment | event, member, role (cook, pickup, order, coordinator) |
 | meal_log | date, slot, item, cuisine_tags snapshot, participants snapshot, event (nullable, unique), logged_by |

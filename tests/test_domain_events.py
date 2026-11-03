@@ -217,7 +217,8 @@ def test_coverage_counts_active_members_who_are_in_in_answer_order() -> None:
         Response(9, Status.IN, offers=frozenset({RoleOffer.COOK})),  # not a member any more
     ]
     covered = ev.coverage(responses, members)
-    assert covered == Coverage(cooks=(1, 2), pickups=(1,), orderers=(2, 7))
+    # 7 usually orders but has I'll order off: a delivery's orderer, never a pickup's by default (#178).
+    assert covered == Coverage(cooks=(1, 2), pickups=(1,), orderers=(2, 7), order_offers=(2,))
 
 
 def test_cooking_needs_a_volunteer_on_the_cook_list_when_there_is_one() -> None:
@@ -271,7 +272,7 @@ def test_assign_roles() -> None:
     }
     assert ev.assign_roles(Mode.DELIVERY, Coverage(orderers=(4,)), none, None) == {AssignmentRole.ORDER: 4}
     assert ev.assign_roles(Mode.PICKUP, Coverage(), none, None) == {}
-    assert ev.assign_roles(Mode.PICKUP, Coverage(pickups=(4,), orderers=(5,)), none, None) == {
+    assert ev.assign_roles(Mode.PICKUP, Coverage(pickups=(4,), orderers=(5,), order_offers=(5,)), none, None) == {
         AssignmentRole.ORDER: 5,
         AssignmentRole.PICKUP: 4,
     }

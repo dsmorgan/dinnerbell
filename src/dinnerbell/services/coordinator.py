@@ -330,7 +330,7 @@ async def choose_roles(
         check_mode(item, chosen_mode)
         roles = _roles(ctx, item, chosen_mode, member_id, pickup_id)
         targets = {role: check_assignee(ctx, item, chosen_mode, who) for role, who in roles.items()}
-        offered = {role: ctx.coverage.for_role(role, item.cook_ids) for role in roles}
+        offered = {role: ctx.coverage.volunteers(chosen_mode, role, item.cook_ids) for role in roles}
         before = {a.role: a for a in ctx.assignments if a.role in WORK_ROLES}
         assignments = AssignmentRepository(db)
         if chosen_mode is not current:
