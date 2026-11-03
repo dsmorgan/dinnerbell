@@ -81,6 +81,10 @@ body[data-period="late"] { --den-sky1: #121735; --den-sky2: #2f2a5a; }
   background: var(--surface);
   --den-bowl: max(38px, 35cqi - 10px);
 }
+/* Without container units, the same spot in %, which `left` measures against the den. */
+@supports not (width: 1cqi) {
+  .den { --den-bowl: max(38px, 35% - 10px); }
+}
 .den svg { display: block; overflow: visible; }
 .den-sky {
   position: absolute;
@@ -162,6 +166,10 @@ body[data-season-depth="10"] .den-snow { height: 9.0px; } body[data-season-depth
 .den-leaves i:nth-child(12) { left: 45%; bottom: 5px; transform: rotate(193deg); }
 .den-leaves i:nth-child(13) { left: 78%; bottom: 2px; transform: rotate(276deg); }
 .den-leaves i:nth-child(14) { left: 41%; bottom: 3px; transform: rotate(359deg); }
+/* In a narrow den the bowl reaches the pile, so the pile settles just past it. */
+@container den (max-width: 160px) {
+  .den-leaves i:nth-child(even) { margin-left: 20px; }
+}
 
 /* Weather that falls, in the den and down the page's edges, behind the cards. Still, it hangs
    where it is; with motion allowed, it falls (at the end). Summer is clear. */
