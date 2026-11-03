@@ -513,7 +513,8 @@ async def _coordinator_picked(db: AsyncSession, ctx: CallContext, member_id: int
     voting, under the call's lock, so it happens once a run, and never over a claim."""
     event = ctx.event
     among = coordinator_candidates(ctx.responses, ctx.members)
-    await publish(db, ctx, note.CoordinatorPicked(cc.event_info(ctx), ctx.person(member_id)), now=now)
+    told = note.CoordinatorPicked(cc.event_info(ctx), ctx.person(member_id), roles_choice_minutes(ctx.settings))
+    await publish(db, ctx, told, now=now)
     payload = {"member_id": member_id, "among": among, "run": event.run}
     await audit(db, event.household_id, None, "event.coordinator_picked", _target(event), payload, now)
     activity.action(db, "coordinator_picked", event, None, to_member_id=member_id, among=len(among))

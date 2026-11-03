@@ -1236,11 +1236,14 @@ def coordinator_picked_message(notification: note.CoordinatorPicked, ctx: Render
     coordinator can do, and that they can hand it off."""
     event = notification.event
     slot, day = _slot(event), day_label(event.day)
+    minutes = notification.choose_minutes
     text = (
         f"Nobody had claimed coordinating {slot} on {day}, so Dinnerbell picked you at random from everyone "
-        "who's in. While the vote is open, you can break a tie and shuffle the picks. Once it's decided, you "
-        "choose how you get it, such as pickup or delivery, and who does it. If it doesn't suit you, hand it "
-        "off to someone who's in on the call's page. Thanks for steering!"
+        f"who's in. While the vote is open, you can tap *{labels.LOCK}* on a pick to decide it, break a tie, or "
+        "shuffle the picks. Once it's decided, you can change how you get it, such as pickup or delivery, "
+        "and who does it. If it isn't clear who does it, you'll be asked to choose, and if you don't within "
+        f"{minutes} minute{'' if minutes == 1 else 's'}, the first volunteer does it. If it doesn't suit you, "
+        "hand it off to someone who's in on the call's page. Thanks for steering!"
     )
     blocks = [section(text), actions(_web_button(ctx, event), block_id="more")]
     return _finish(f"You're coordinating {slot} on {day}.", blocks)

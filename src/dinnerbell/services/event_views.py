@@ -279,11 +279,9 @@ def _member_permissions(
         and mine.late
         and _allowed(lambda: rules.check_can_offer_role(event, actor, mine))
         and event.state is EventState.VOTING,
-        switch_late=_allowed(lambda: rules.check_can_switch_late(event, actor, _coordinator(ctx))),
-        shuffle=bool(cc.shuffles_left(ctx))
-        and _allowed(lambda: rules.check_can_shuffle(event, actor, _coordinator(ctx))),
-        break_tie=bool(cc.tied_ids(ctx))
-        and _allowed(lambda: rules.check_can_break_tie(event, actor, _coordinator(ctx))),
+        switch_late=_allowed(lambda: rules.check_can_switch_late(event, actor)),
+        shuffle=bool(cc.shuffles_left(ctx)) and _allowed(lambda: rules.check_can_shuffle(event, actor)),
+        break_tie=bool(cc.tied_ids(ctx)) and _allowed(lambda: rules.check_can_break_tie(event, actor)),
         choose_roles=event.state is EventState.DECIDED and _allowed(lambda: rules.check_can_choose_roles(event, actor)),
         adjust=_allowed(lambda: rules.check_can_adjust(event, actor)),
     )
@@ -294,11 +292,6 @@ def _joins_late(event: Event, actor: Member, mine: Response | None) -> bool:
         return rules.check_can_join_late(event, actor, mine)
     except EventRuleViolation:
         return False
-
-
-def _coordinator(ctx: CallContext) -> Member | None:
-    coordinator_id = ctx.event.coordinator_id
-    return ctx.members.get(coordinator_id) if coordinator_id is not None else None
 
 
 def _closable(event: Event, actor: Member, now: datetime) -> Window | None:
