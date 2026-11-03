@@ -65,7 +65,7 @@ async def save_my_fun_mode(
     The form's checkbox sends ``on`` when checked and nothing when not, which means off."""
     on = FUN_CHOICES.get(fun)
     if on is None:
-        message = "Choose On or Off."
+        message = "Not a fun mode setting."
         return await render(request, "error.html", {"title": "Not saved", "message": message}, status_code=400)
     await set_my_fun_mode(db, principal.member, on, now=context.clock())
     # Back to the card, which says it saved.

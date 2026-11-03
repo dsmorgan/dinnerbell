@@ -446,7 +446,6 @@ ins { color: var(--ok); text-decoration: none; }
 }
 @keyframes saved-hide { to { opacity: 0; } }
 .segments { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 0; }
-.segments.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .segments.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .segment { position: relative; }
 .segment input { position: absolute; opacity: 0; width: 1px; height: 1px; }
