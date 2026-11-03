@@ -5,14 +5,16 @@ settings stand for, once per call, and an offer they turn off stays off."""
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Awaitable, Callable
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
 
 from dinnerbell.config import Settings
 from dinnerbell.domain.catalog import Mode
-from dinnerbell.domain.events import RoleOffer, Status
-from dinnerbell.services import calls
+from dinnerbell.domain.events import Details, RoleOffer, Status, with_pick_role, with_usual_offers
+from dinnerbell.domain.members import Capabilities, Member, Role
+from dinnerbell.services import call_admin, calls
 from dinnerbell.services.database import Database, open_database
 from tests.support.calls import OPENS, RESPOND_BY, House, dinner_id, furnish, make_house
 from tests.support.clock import FakeClock
@@ -20,6 +22,7 @@ from tests.support.clock import FakeClock
 pytestmark = pytest.mark.anyio
 
 COOK, PICKUP, ORDER = RoleOffer.COOK, RoleOffer.PICKUP, RoleOffer.ORDER
+STAMP = datetime(2026, 10, 22, 18, tzinfo=UTC)
 
 
 @pytest.fixture
@@ -95,9 +98,35 @@ async def test_an_offer_turned_off_while_a_maybe_keeps_them_all_off(house: House
 
 
 async def test_offering_a_role_first_counts_you_in_with_only_that_role(house: House) -> None:
+    """Being counted in by an offer is your own choice of offers, so tapping In later turns on
+    nothing more."""
     event_id = await open_dinner(house)
     await act(house, calls.offer_role, house["Pat"], event_id, PICKUP, True)
     assert await answer(house, event_id, "Pat") == (Status.IN, frozenset({PICKUP}))
+    await act(house, calls.respond, house["Pat"], event_id, Status.IN)
+    assert await answer(house, event_id, "Pat") == (Status.IN, frozenset({PICKUP}))
+
+
+async def test_adding_a_pick_while_answers_are_open_counts_you_in_with_only_its_role() -> None:
+    """An offer that joins an open call as a pick (FR-5) counts its maker in with the pick's
+    role, which ends the turn of their usual offers."""
+    pat = Member(7, 1, "Pat", "pat@example.com", Role.MEMBER, Capabilities(can_cook=True, can_pickup=True), True)
+    picked = with_pick_role(None, pat.id, Mode.PICKUP, STAMP, join=True)
+    assert (picked.status, picked.offers, picked.usual_offers_done) == (Status.IN, frozenset({PICKUP}), True)
+    assert with_usual_offers(picked, pat) == picked
+
+
+async def test_details_before_answering_turn_them_on(house: House) -> None:
+    event_id = await open_dinner(house)
+    await act(house, calls.save_details, house["Pat"], event_id, Details(guests=1))
+    assert await answer(house, event_id, "Pat") == (Status.IN, frozenset({COOK, PICKUP}))
+
+
+async def test_details_after_maybe_turn_none_on(house: House) -> None:
+    event_id = await open_dinner(house)
+    await act(house, calls.respond, house["Pat"], event_id, Status.MAYBE)
+    await act(house, calls.save_details, house["Pat"], event_id, Details(guests=1))
+    assert await answer(house, event_id, "Pat") == (Status.MAYBE, frozenset())
 
 
 async def test_claiming_coordinating_turns_them_on(house: House) -> None:
@@ -111,6 +140,16 @@ async def test_a_hand_off_turns_them_on(house: House) -> None:
     await act(house, calls.claim_coordinator, house["Kim"], event_id)
     await act(house, calls.hand_off, house["Kim"], event_id, house["Pat"].id)
     assert await answer(house, event_id, "Pat") == (Status.IN, frozenset({COOK, PICKUP}))
+
+
+async def test_an_admin_assigning_coordinating_turns_them_on_once(house: House) -> None:
+    event_id = await open_dinner(house)
+    await act(house, call_admin.assign_coordinator, house["Alex"], event_id, house["Pat"].id)
+    assert await answer(house, event_id, "Pat") == (Status.IN, frozenset({COOK, PICKUP}))
+    await act(house, calls.offer_role, house["Pat"], event_id, COOK, False)
+    await act(house, call_admin.assign_coordinator, house["Alex"], event_id, house["Kim"].id)
+    await act(house, call_admin.assign_coordinator, house["Alex"], event_id, house["Pat"].id)
+    assert await answer(house, event_id, "Pat") == (Status.IN, frozenset({PICKUP}))
 
 
 async def test_joining_late_turns_them_on(house: House) -> None:
