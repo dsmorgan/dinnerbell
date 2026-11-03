@@ -19,6 +19,10 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 - **Dinnerbone's bowl and bell sit out on the floor** (#177). In fun mode, the food bowl and the dinner bell over it now stand about a third of the way across the den, away from his bed of straw, instead of at the bed's edge. He still eats, nibbles, and waits at the bowl, the bell still rings over it, and he potters, and rests between laps, on the floor between the bowl and his wheel.
 - **Stats shows what's new, with dates** (#177). On the **Yours** tab, **Newly earned** now lists the badges you earned in the last three days instead of the last two weeks. On the **Household** tab, **Lately earned** is now **Newly earned**, like the Yours tab, and each badge in it shows the day it was earned, in the household's time zone, beside who earned it.
 
+### Removed
+
+- **The Set up the household card on Today** (#177). Its **Manage members** and **Schedule** buttons repeated the menu's **Admin** and **Schedule** links, which show at every screen width.
+
 ## [0.12.0] - 2026-11-01
 
 ### Changed
