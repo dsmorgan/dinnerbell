@@ -757,6 +757,9 @@ async def test_setting_one_role_while_the_coordinator_chooses_fills_the_others(h
     expected = {ORDER: house["Lee"].id, PICKUP: house["Alex"].id, LEAD: house["Alex"].id} | {role: house["Kim"].id}
     assert assigned(await house.context(event_id)) == expected
     assert (await house.event(event_id)).roles_due_at is None
+    (audit,) = [a for a in await house.audits() if a.action == "event.assignment_changed"]
+    other = PICKUP if role is ORDER else ORDER
+    assert audit.payload["filled"] == {other.value: expected[other]}  # what was given out automatically
     told = sorted(n.member.id for n in await sent(house, "assignment_made"))
     assert told == sorted({house["Kim"].id, *(who for r, who in expected.items() if r is not LEAD)})
     house.clock.now = due

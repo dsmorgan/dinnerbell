@@ -38,7 +38,7 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 ### Upgrade notes
 
 - **Offers:** revision `0025_usual_offers_done` adds a column to call answers on the first start, and marks every answer already saved as having had its usual offers, so no saved answer changes and none gains an offer later. Members who haven't answered an open call yet get their usual offers when they answer **In**. To go back to 0.12.0, restore the backup you made before upgrading.
-- **Proposals:** revision `0026_proposal_mode_chosen` adds `proposal.mode_chosen` on the first start, off for every proposal, even one a member added. A call that's voting during the upgrade and decides on a takeout place that allows pickup and delivery asks its coordinator to choose the way.
+- **Proposals:** revision `0026_proposal_mode_chosen` adds `proposal.mode_chosen` on the first start: on for every proposal a member added or an offer made, off for every drawn one. A call that's voting during the upgrade and decides on a takeout place that allows pickup and delivery asks its coordinator to choose the way.
 - **Calls decided before the upgrade:** a pickup decided before the upgrade has a pickup person and no orderer. The coordinator can add one with **Adjust** or on the web, and the meal counts as it is when it's done. A pickup whose roles were waiting for the coordinator gets both roles when the time runs out.
 - **Adjust modals open during the upgrade:** saving one changes the meal time and the coordinator as before. Changing who does the role on a pickup asks you to open **Adjust** again.
 
