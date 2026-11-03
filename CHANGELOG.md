@@ -10,6 +10,9 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 - **Checkboxes on Preferences are all the same size** (#177). Under **I can usually** and **Reminders**, a long label no longer shrinks its checkbox, and each box lines up with the first line of its label. The hint under **Pick up** now sits on its own line beneath the label, so **Pick up** stays on one line. **Fun mode** is now a **Show Dinnerbone's Den** checkbox, like the page's other on and off settings, instead of **On** and **Off** buttons. The same checkbox fix applies wherever the app has a checkbox row, such as **Schedule** and the **Catalog**.
 - **Schedule sections are shorter** (#177). On a screen 576 pixels wide or wider, such as a tablet or a computer, each meal's **Time to answer**, **Time to vote**, and **Reminder before answers close** now share one row, so a meal's section is about a quarter shorter. On a phone, they stay stacked one above the other.
+### Added
+
+- **Reset the ranking to its defaults** (#177). **Admin > Ranking** now has **Reset to defaults** below the form. Open it and select **Reset ranking** to put every setting on the page back to what a new household starts with: the weights, Randomness, Feedback, the number of proposals, the variety window, and the time to choose roles. Call times, skipped days, and badge counts stay as they are. A reset is audited as `household.ranking_reset`. A household that upgraded to 0.11.0 has Feedback at 0 unless an admin changed it, so a reset turns ratings on.
 
 ## [0.12.0] - 2026-11-01
 

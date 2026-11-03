@@ -45,6 +45,7 @@ from dinnerbell.domain.schedule import (
     check_schedule,
     check_temperature,
     check_weights,
+    default_settings,
     feedback_cap,
     first_day_using,
     format_hhmm,
@@ -206,7 +207,10 @@ class RankingSettings:
 
 async def ranking_settings(db: AsyncSession, actor: Member) -> RankingSettings:
     require_admin(actor, ADMINS_ONLY)
-    stored = await household_settings(db, actor.household_id)
+    return _ranking(await household_settings(db, actor.household_id))
+
+
+def _ranking(stored: dict[str, Any]) -> RankingSettings:
     return RankingSettings(
         weights=weights(stored),
         proposal_count=proposal_count(stored),
@@ -228,7 +232,20 @@ def _to_json(values: RankingSettings) -> dict[str, Any]:
     }
 
 
-async def update_ranking(db: AsyncSession, actor: Member, values: RankingSettings, *, now: datetime) -> None:
+async def reset_ranking(db: AsyncSession, actor: Member, *, now: datetime) -> None:
+    """Put every ranking setting back to what a new household starts with, as ``update_ranking``
+    would, keeping the household's other settings (#177). Audited."""
+    await update_ranking(db, actor, _ranking(default_settings()), now=now, action="household.ranking_reset")
+
+
+async def update_ranking(
+    db: AsyncSession,
+    actor: Member,
+    values: RankingSettings,
+    *,
+    now: datetime,
+    action: str = "household.ranking_updated",
+) -> None:
     """Validate and store the ranking settings, keeping the household's other settings."""
     require_admin(actor, ADMINS_ONLY)
     check_weights(values.weights, values.proposal_count)
@@ -249,5 +266,5 @@ async def update_ranking(db: AsyncSession, actor: Member, values: RankingSetting
             return
         await HouseholdRepository(db).update_settings(actor.household_id, stored | after)
         target = f"household:{actor.household_id}"
-        await audit(db, actor.household_id, actor, "household.ranking_updated", target, changed, now)
+        await audit(db, actor.household_id, actor, action, target, changed, now)
         await db.commit()
