@@ -98,18 +98,22 @@ ORDER, PICKUP, COOK, LEAD = AssignmentRole.ORDER, AssignmentRole.PICKUP, Assignm
 
 
 def test_pickup_goes_to_different_people_by_default() -> None:
-    covered = Coverage(pickups=(1, 2), orderers=(1, 3, 4))
-    assert default_roles(Mode.PICKUP, covered) == {ORDER: 3, PICKUP: 1}  # the first orderer who isn't them
+    covered = Coverage(pickups=(1, 2), orderers=(1, 3, 4), order_offers=(1, 3))
+    assert default_roles(Mode.PICKUP, covered) == {ORDER: 3, PICKUP: 1}  # the first other with I'll order on
     assert default_roles(Mode.DELIVERY, covered) == {ORDER: 1}
-    assert default_roles(Mode.PICKUP, Coverage(pickups=(1,), orderers=(1,))) == {ORDER: 1, PICKUP: 1}
+    assert default_roles(Mode.PICKUP, Coverage(pickups=(1,), orderers=(1,), order_offers=(1,))) == {ORDER: 1, PICKUP: 1}
+    # 4 usually orders but turned I'll order off: a delivery's orderer, not a pickup's.
+    usual = Coverage(pickups=(1,), orderers=(4,))
+    assert default_roles(Mode.PICKUP, usual) == {ORDER: 1, PICKUP: 1}
+    assert default_roles(Mode.DELIVERY, usual) == {ORDER: 4}
     assert default_roles(Mode.PICKUP, Coverage(pickups=(1,))) == {ORDER: 1, PICKUP: 1}  # nobody else: they order too
-    assert default_roles(Mode.PICKUP, Coverage(orderers=(3,))) == {ORDER: 3}  # nobody to pick up
+    assert default_roles(Mode.PICKUP, Coverage(order_offers=(3,))) == {ORDER: 3}  # nobody to pick up
     assert default_roles(Mode.COOK, Coverage(cooks=(5, 6)), frozenset({6})) == {COOK: 6}
     assert default_roles(Mode.DELIVERY, Coverage()) == {}
 
 
 def test_choices_win_over_the_defaults_and_one_person_can_do_both() -> None:
-    covered = Coverage(pickups=(1, 2), orderers=(1, 3))
+    covered = Coverage(pickups=(1, 2), orderers=(1, 3), order_offers=(1, 3))
     assert default_roles(Mode.PICKUP, covered, pickup=2) == {ORDER: 1, PICKUP: 2}
     assert default_roles(Mode.PICKUP, covered, lead=2) == {ORDER: 2, PICKUP: 1}
     assert default_roles(Mode.PICKUP, covered, lead=9, pickup=9) == {ORDER: 9, PICKUP: 9}
@@ -125,10 +129,11 @@ def test_a_pickup_volunteer_is_still_all_a_pickup_needs() -> None:
 
 
 def test_when_the_takeout_roles_have_no_clear_owner() -> None:
-    assert not roles_unclear(Mode.PICKUP, Coverage(pickups=(1,), orderers=(1,)))  # they do both
-    assert not roles_unclear(Mode.PICKUP, Coverage(pickups=(1,), orderers=(1, 2)))  # one other orderer
-    assert roles_unclear(Mode.PICKUP, Coverage(pickups=(1,), orderers=(1, 2, 3)))  # two others could order
-    assert roles_unclear(Mode.PICKUP, Coverage(pickups=(1, 2), orderers=(3,)))  # two could pick up
+    assert not roles_unclear(Mode.PICKUP, Coverage(pickups=(1,), order_offers=(1,)))  # they do both
+    assert not roles_unclear(Mode.PICKUP, Coverage(pickups=(1,), order_offers=(1, 2)))  # one other orderer
+    assert roles_unclear(Mode.PICKUP, Coverage(pickups=(1,), order_offers=(1, 2, 3)))  # two others offered
+    assert not roles_unclear(Mode.PICKUP, Coverage(pickups=(1,), orderers=(2, 3)))  # usually ordering doesn't count
+    assert roles_unclear(Mode.PICKUP, Coverage(pickups=(1, 2), order_offers=(3,)))  # two could pick up
     assert roles_unclear(Mode.PICKUP, Coverage(orderers=(3,)))
     assert not roles_unclear(Mode.DELIVERY, Coverage(orderers=(3,)))
     assert roles_unclear(Mode.DELIVERY, Coverage(orderers=(3, 4)))
@@ -701,3 +706,31 @@ async def test_a_pickup_with_nobody_to_pick_it_up_asks_who_will(house: House) ->
         PICKUP: house["Lee"].id,
         LEAD: house["Alex"].id,
     }
+
+
+async def test_a_pick_someone_added_keeps_the_way_they_chose(house: House) -> None:
+    event_id = await to_voting(house, "Lee")
+    pho = await house.add_item("Pho Place", Mode.PICKUP, Mode.DELIVERY, cuisine="Vietnamese")  # not drawn
+    added = await act(house, calls.add_proposal, house["Alex"], event_id, Mode.PICKUP, item_id=pho.id)
+    assert added.mode_chosen
+    siam = (await house.context(event_id)).proposal((await pick_ids(house, event_id))["Siam Garden"])
+    assert siam is not None and not siam.mode_chosen  # drawn: nobody chose its way
+    await act(house, calls.lock, house["Alex"], event_id, added.id)
+    assert (await house.event(event_id)).roles_due_at is None  # nothing to ask
+    assert assigned(await house.context(event_id)) == {
+        ORDER: house["Lee"].id,
+        PICKUP: house["Alex"].id,
+        LEAD: house["Alex"].id,
+    }
+
+
+async def test_someone_who_turned_ill_order_off_orders_a_delivery_but_not_a_pickup(house: House) -> None:
+    event_id = await open_dinner(house)
+    for name in ("Alex", "Lee"):
+        await act(house, calls.respond, house[name], event_id, Status.IN)
+    await act(house, calls.offer_role, house["Alex"], event_id, RoleOffer.PICKUP, True)
+    await act(house, calls.offer_role, house["Lee"], event_id, RoleOffer.ORDER, False)  # Lee usually orders
+    ctx = await house.context(event_id)
+    assert default_roles(Mode.DELIVERY, ctx.coverage) == {ORDER: house["Lee"].id}  # #190's fallback
+    assert default_roles(Mode.PICKUP, ctx.coverage) == {ORDER: house["Alex"].id, PICKUP: house["Alex"].id}
+    assert not roles_unclear(Mode.PICKUP, ctx.coverage)

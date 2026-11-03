@@ -373,6 +373,7 @@ async def _attach(db: AsyncSession, actor: Member, call: Event, item: CatalogIte
             source=source,
             reasons=reasons,
             proposed_by=actor.id,
+            mode_chosen=True,  # the offer says how it arrives (#178)
             now=now,
         )
     else:

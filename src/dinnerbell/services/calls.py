@@ -594,6 +594,7 @@ async def add_proposal(
             source=candidate.source,
             reasons=candidate.reasons,
             proposed_by=actor.id,
+            mode_chosen=True,  # whoever adds a pick chooses its way, and does it (#74, #178)
             now=now,
         )
         await picks.announce(db, event, now=now)

@@ -75,7 +75,7 @@ Contributions and badges count who did what when the meal is marked done, so a c
 
 ### Takeout: who orders and who picks up
 
-A home meal has a cook, and delivery has someone who orders. Pickup has two roles: someone orders it, and someone picks it up. By default they're different people: the first person who offered to pick up picks it up, and the first person who can order who isn't them orders. If nobody else can order, the person picking up orders too, so someone who offered to pick up is all a pickup needs. You can give one person every role, coordinating included.
+A home meal has a cook, and delivery has someone who orders. Pickup has two roles: someone orders it, and someone picks it up. By default they're different people: the first person who offered to pick up picks it up, and the first other person with **I'll order** on for the call orders. Someone who usually orders but turned **I'll order** off isn't picked, though they would be for delivery. If nobody else has it on, the person picking up orders too, so someone who offered to pick up is all a pickup needs. You can give one person every role, coordinating included.
 
 While voting, you can make a takeout proposal pickup or delivery when its place allows both: ⋯ beside it on the proposals message, or the **Pickup** and **Delivery** buttons on the call page. Choosing the way it already has settles it too, and the proposal then says "(chosen)". An admin can do this as well.
 
@@ -85,8 +85,8 @@ When you switch how you get it, the person ordering keeps ordering. Switching fr
 
 The decision asks you right away, with a message that has **Assign roles**, when either of these is true:
 
-- A role has no clear owner, because two people offered or nobody did. For pickup, ordering has no clear owner when more than one person besides the one picking up can order.
-- The winning proposal is takeout at a place that allows pickup and delivery, and nobody chose its way during the vote.
+- A role has no clear owner, because two people offered or nobody did. For pickup, ordering has no clear owner when more than one person besides the one picking up has **I'll order** on.
+- The winning proposal is takeout at a place that allows pickup and delivery, and nobody chose its way: Dinnerbell drew it, and nobody set it during the vote. A proposal someone added, or an offer, has the way they chose.
 
 In **Assign roles**, you choose how to get it, who cooks or orders, and who picks it up. You have 15 minutes to choose (an admin can change the time). After that, it stays the way it is, and the first people who offered do the roles.
 

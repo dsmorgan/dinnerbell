@@ -393,8 +393,9 @@ class Proposal:
     reasons: tuple[str, ...] = ()
     proposed_by: int | None = None
     mode_chosen: bool = False
-    """The coordinator, or an admin, set its way during the vote (#178), so a decision on it
-    doesn't ask again (``way_unsettled``)."""
+    """Someone chose its way (#178): the member who added it, the offer it came from, or the
+    coordinator or an admin during the vote. A decision on it doesn't ask again
+    (``way_unsettled``). Only a drawn pick starts without."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -600,12 +601,22 @@ class Coverage:
     cooks: tuple[int, ...] = ()
     pickups: tuple[int, ...] = ()
     orderers: tuple[int, ...] = ()
+    """Who could order a delivery: those who offered to, then those who usually order (#190)."""
+    order_offers: tuple[int, ...] = ()
+    """Who has **I'll order** on for this call. Only they order a pickup by default (#178)."""
 
     def covers(self, mode: Mode, cook_list: frozenset[int]) -> bool:
         """Someone can take ``mode``'s lead role (FR-17): someone who can cook it, or order a
         delivery. A pickup needs someone to pick it up, who orders it too when nobody else who's
         in can (#178)."""
         return bool(self.for_role(AssignmentRole.PICKUP if mode is Mode.PICKUP else LEAD_ROLE[mode], cook_list))
+
+    def volunteers(self, mode: Mode, role: AssignmentRole, cook_list: frozenset[int] = frozenset()) -> tuple[int, ...]:
+        """Who offered for ``role`` when the meal is had ``mode``'s way, best first: ``for_role``,
+        except that ordering a pickup goes only to those with **I'll order** on (#178)."""
+        if mode is Mode.PICKUP and role is AssignmentRole.ORDER:
+            return self.order_offers
+        return self.for_role(role, cook_list)
 
     def for_role(self, role: AssignmentRole, cook_list: frozenset[int] = frozenset()) -> tuple[int, ...]:
         """Members who could take ``role``, best first. A cook must be on the item's cook list
@@ -629,7 +640,7 @@ def coverage(responses: Iterable[Response], members: Mapping[int, Member]) -> Co
     offered_order = [r.member_id for r in ordered if RoleOffer.ORDER in r.offers]
     can_order = [r.member_id for r in ordered if members[r.member_id].capabilities.can_order]
     orderers = tuple(dict.fromkeys(offered_order + can_order))
-    return Coverage(cooks=cooks, pickups=pickups, orderers=orderers)
+    return Coverage(cooks=cooks, pickups=pickups, orderers=orderers, order_offers=tuple(offered_order))
 
 
 # Decisions (FR-16) -----------------------------------------------------------------------------
@@ -743,15 +754,16 @@ def default_roles(
     """Who does each role ``mode`` needs (FR-17, #178), with ``lead`` (who cooks or orders) and
     ``pickup`` (who picks up) as chosen, and the first volunteer for whatever isn't. For pickup
     the roles go to different people by default: the first pickup volunteer picks up, and the
-    first orderer who isn't them orders; with nobody else to order, the pickup person orders too.
-    A role nobody can take is left out."""
+    first other person with **I'll order** on for the call orders; with nobody else, the pickup
+    person orders too. Someone who usually orders but turned it off isn't asked, as they are for
+    a delivery. A role nobody can take is left out."""
     if mode is not Mode.PICKUP:
         role = LEAD_ROLE[mode]
         who = lead if lead is not None else next(iter(coverage.for_role(role, cook_list)), None)
         return {role: who} if who is not None else {}
     picker = pickup if pickup is not None else next(iter(coverage.pickups), None)
     if lead is None:
-        others = [m for m in coverage.orderers if m != picker]
+        others = [m for m in coverage.order_offers if m != picker]
         lead = others[0] if others else picker
     roles: dict[AssignmentRole, int] = {}
     if lead is not None:
@@ -764,9 +776,9 @@ def default_roles(
 def roles_unclear(mode: Mode, coverage: Coverage, cook_list: frozenset[int] = frozenset()) -> bool:
     """Whether the winning pick's roles have no clear owner (FR-61): nobody offered for the role,
     or more than one person did. For pickup, the pickup role is unclear the same way, and the
-    order role when more than one person besides the pickup person can order (#178); with
-    nobody else, the pickup person orders, which is clear."""
-    lead = coverage.for_role(LEAD_ROLE[mode], cook_list)
+    order role when more than one person besides the pickup person has **I'll order** on (#178);
+    with nobody else, the pickup person orders, which is clear."""
+    lead = coverage.volunteers(mode, LEAD_ROLE[mode], cook_list)
     if mode is not Mode.PICKUP:
         return len(lead) != 1
     if len(coverage.pickups) != 1:
@@ -783,7 +795,8 @@ def takeout_ways(modes: Iterable[Mode]) -> tuple[Mode, ...]:
 
 def way_unsettled(proposal: Proposal, item_modes: Iterable[Mode]) -> bool:
     """Whether the winning pick's way is still the coordinator's to choose at the decision (#178):
-    its place allows pickup and delivery, and nobody set it during the vote."""
+    its place allows pickup and delivery, and nobody chose it, as for a drawn pick nobody set
+    during the vote."""
     return bool(takeout_ways(item_modes)) and not proposal.mode_chosen
 
 
