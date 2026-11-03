@@ -51,7 +51,7 @@ When you rate a meal, your score for that place or recipe moves toward your rati
 The change halves every 3 months, counted from the meal, unless you rate it again. It's added to the score you set on **Preferences**, and the total stays between −2 and +2. Your ratings change only your own score, and only on calls you eat at, as your stated score does. They never veto anything or lift a veto.
 
 - **Your edit wins.** Setting a score for a place on **Preferences**, even back to 0, replaces what your earlier ratings of it said. A rating after that counts again.
-- **See where you stand.** **Preferences** shows you, and only you, what your ratings make your score, such as "From your ratings: about +1".
+- **See where you stand.** **Preferences** shows you, and an admin who opens your preferences, what your ratings make your score, such as "From your ratings: about +1".
 - **Off by default after an upgrade.** The admin's **Feedback** setting turns this on (see [Tune the ranking](#tune-the-ranking)).
 
 ### The household's hint

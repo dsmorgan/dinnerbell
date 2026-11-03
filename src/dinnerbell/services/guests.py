@@ -327,8 +327,12 @@ async def set_member_needs(
     db: AsyncSession, actor: Member, member_id: int, needs: frozenset[int], *, now: datetime
 ) -> Member:
     """An admin sets another member's dietary needs on their Preferences (#181). Audited as
-    ``member.needs_updated``. A guest's are on their row instead (``update_guest``)."""
+    ``member.needs_updated``, unless they were already those. A guest's are on their row instead
+    (``update_guest``)."""
     member = await member_for_admin(db, actor, member_id)
+    if needs == member.dietary_needs:
+        check_dietary_needs(needs, dietary_tag_ids=await _dietary_tag_ids(db, member.household_id))
+        return member
     return await _set_needs(db, actor, member, needs, "member.needs_updated", now=now)
 
 
