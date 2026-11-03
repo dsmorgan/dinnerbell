@@ -472,16 +472,28 @@ ins { color: var(--ok); text-decoration: none; }
 .level-neg input:checked + span { background: var(--danger-soft); border-color: var(--danger); color: var(--danger); }
 .level-pos input:checked + span { background: var(--ok-soft); border-color: var(--ok); color: var(--ok); }
 
-/* History */
+/* History (#177): a meal's buttons sit in a column beside its details, and wrap below them where
+   the details would get less than about half the width, as on a phone. Edit and Delete wrap as a
+   pair. A meal's name and cuisines share a line. */
 .week h2 { margin-top: 1.25rem; }
+.meal { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 0.6rem 1rem; }
+.meal > .landed-notice { flex-basis: 100%; }
+.meal-details { flex: 999 1 0; min-width: 55%; }
 .meal-when { margin-bottom: 0.15rem; }
+.meal-name { display: flex; flex-wrap: wrap; align-items: center; gap: 0.3rem 0.5rem; overflow-wrap: anywhere; }
+.meal-name > .chips { margin-top: 0; }
 .meal p { margin: 0.35rem 0 0; }
+.meal-actions { flex: 1 1 12rem; }
+.meal-actions, .meal-changes { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.meal-actions .button { min-height: 44px; }
+@media (min-width: 36rem) { .meal-actions, .meal-changes { justify-content: flex-end; } }
 .meal-feedback > .button { margin-top: 0.6rem; }
 
 /* The meal or catalog item a save lands on (#153): its notice inside, and a highlight that holds
    for 1.2 s, then fades over 1.8 s so you can spot it. Without motion, the highlight stays and
    nothing moves. */
-.meal > .landed-notice, .item > .landed-notice { margin: 0 0 0.6rem; }
+.item > .landed-notice { margin: 0 0 0.6rem; }
+.meal > .landed-notice { margin: 0; }  /* the meal's gap spaces it */
 .meal:target, .item:target { animation: landed 3s ease-in both; }
 @keyframes landed {
   0%, 40% { background: var(--accent-soft); border-color: var(--accent); }

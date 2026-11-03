@@ -13,6 +13,7 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 ### Added
 
 - **Reset the ranking to its defaults** (#177). **Admin > Ranking** now has **Reset to defaults** below the form. Open it and select **Reset ranking** to put every setting on the page back to what a new household starts with: the weights, Randomness, Feedback, the number of proposals, the variety window, and the time to choose roles. Call times, skipped days, and badge counts stay as they are. A reset is audited as `household.ranking_reset`. A household that upgraded to 0.11.0 has Feedback at 0 unless an admin changed it, so a reset turns ratings on.
+- **History is more compact** (#177). On a wide screen, each meal's buttons now sit in a column beside its details instead of below them. On a phone, they stay below the details but share a row where they fit, with **Edit** and **Delete** always side by side. A meal's cuisines share a line with its name, and History's buttons are now 44 pixels tall, so they're easier to tap.
 
 ## [0.12.0] - 2026-11-01
 

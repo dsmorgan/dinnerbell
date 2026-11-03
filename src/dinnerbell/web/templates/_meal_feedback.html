@@ -2,7 +2,13 @@
 {#- Feedback on one meal as the viewer may see it (FR-49). Expects meal, fb (a MealFeedback or
     None), and optionally from_page ("event"). Shows the viewer's own answers (their rating,
     issues, and what went wrong), the thank-you count, and, only to the cook they were written
-    to, who thanked them and their notes. -#}
+    to, who thanked them and their notes. History shows the feedback button beside the meal's
+    other buttons instead: it imports feedback_button and sets button_apart. -#}
+{% macro feedback_button(meal, fb, from_page="history") %}
+{% if fb and fb.can_give %}
+<a class="button small{% if not fb.mine %} primary{% endif %}" href="/history/meals/{{ meal.id }}/feedback{% if from_page == 'event' %}?from=event{% endif %}">{{ "Change your feedback" if fb.mine else "How was it?" }}</a>
+{% endif %}
+{% endmacro %}
 {% if fb %}
 <div class="meal-feedback small">
   {% set mine = fb.mine %}
@@ -20,8 +26,6 @@
   {% elif fb.thanks.count and fb.thanks.cook %}
   <p>{{ fb.thanks.count }} thank-you{{ "" if fb.thanks.count == 1 else "s" }} for {{ fb.thanks.cook.name }}.</p>
   {% endif %}
-  {% if fb.can_give %}
-  <a class="button small{% if not mine %} primary{% endif %}" href="/history/meals/{{ meal.id }}/feedback{% if from_page == 'event' %}?from=event{% endif %}">{{ "Change your feedback" if mine else "How was it?" }}</a>
-  {% endif %}
+  {% if not button_apart %}{{ feedback_button(meal, fb, from_page) }}{% endif %}
 </div>
 {% endif %}
