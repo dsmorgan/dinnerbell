@@ -239,8 +239,9 @@ ROLE_VERB = {AssignmentRole.COOK: "cook it", AssignmentRole.ORDER: "order it", A
 
 @dataclass(frozen=True, slots=True)
 class Held:
-    """The message to someone just assigned, held back by ``choose_roles(tell=False)``: who, the
-    assignment, and the coordinator who assigned them, if they hadn't offered."""
+    """The message to someone ``choose_roles`` just assigned: who, the assignment, and the
+    coordinator who assigned them, if they hadn't offered. ``choose_roles`` returns one for each
+    person it told, or, with ``tell=False``, held back for ``adjust`` to send."""
 
     member_id: int
     assignment_id: int

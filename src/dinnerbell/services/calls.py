@@ -806,6 +806,7 @@ async def change_assignment(
                 raise EventRuleViolation("Pick someone who's in.", code="not_in")
             assigned = await repo.assign(actor.household_id, event.id, role, member_id, now)
         made: dict[int, int] = {} if assigned is None else {assigned.member_id: assigned.id}
+        filled: dict[str, int] = {}  # the way's other roles, given out automatically
         was_pending = event.roles_due_at is not None
         if was_pending:  # choosing a role ends the coordinator's time to (#87)
             event = await EventRepository(db).save(replace(event, roles_due_at=None), now)
@@ -819,6 +820,7 @@ async def change_assignment(
             for other, who in fill.items():
                 if other not in holders and other is not role:
                     made.setdefault(who, (await repo.assign(actor.household_id, event.id, other, who, now)).id)
+                    filled[other.value] = who
         ctx = await load(db, event)
         decision = cc.decision_info(ctx)
         await publish(db, ctx, *cc.decision_updated(ctx), now=now)
@@ -828,7 +830,9 @@ async def change_assignment(
             await publish(db, ctx, *cc.assignment_ended(ctx, current, (role,), actor, now), now=now)
         if decision is not None and ahead:  # one message each, naming all their roles
             await publish(db, ctx, *(cc.assignment_made(ctx, who, aid, decision) for who, aid in made.items()), now=now)
-        payload = {"role": role.value, "member_id": member_id}
+        payload: dict[str, object] = {"role": role.value, "member_id": member_id}
+        if filled:
+            payload["filled"] = filled
         await audit(db, actor.household_id, actor, "event.assignment_changed", _target(event), payload, now)
         to = ctx.members.get(member_id) if member_id is not None else None
         activity.action(
@@ -839,6 +843,7 @@ async def change_assignment(
             role=role.value,
             to_member_id=member_id,
             to_member=to.display_name if to else None,
+            filled=filled or None,
         )
         if event.state is EventState.DONE:
             await contributions.recount_role(db, actor, event, role, now=now)

@@ -2027,17 +2027,24 @@ def test_the_alembic_cli_path_reports_a_lock_readably(settings: Settings, monkey
 # 0026: a takeout pick's way is chosen (#178) ---------------------------------------------------------
 
 
-def test_0026_leaves_every_pick_unchosen_and_downgrade_drops_it(settings: Settings) -> None:
-    """Up adds ``proposal.mode_chosen``, off for every pick already there, and keeps every proposal
-    and the rows that refer to them. Down drops the column and changes no other row."""
+def test_0026_marks_picks_someone_added_as_chosen_and_downgrade_drops_it(settings: Settings) -> None:
+    """Up adds ``proposal.mode_chosen``: on for a pick someone added (a member's or an offer's,
+    ``proposed_by`` set), so a call voting during the upgrade doesn't ask about it again, and off
+    for a drawn pick. It keeps every proposal and the rows that refer to them. Down drops the
+    column and changes no other row."""
     _upgrade_to(settings, "0025_usual_offers_done")
     _populate_calls(settings)
+    _execute(
+        settings,
+        "INSERT INTO proposal (id, household_id, event_id, free_text, mode, rank, reasons, source, proposed_by, "
+        "created_at) VALUES (2, 1, 2, 'Pho', 'delivery', 2, '[]', 'member', 1, :t)",
+    )
     before = _rows_outside_m4(settings)
-    assert before["proposal"]
+    assert len(before["proposal"]) == 2
 
     _upgrade_to(settings, "0026_proposal_mode_chosen")
     after = _rows_outside_m4(settings)
-    assert [row[-1] for row in after["proposal"]] == [0] * len(before["proposal"])
+    assert [(row[0], row[-1]) for row in after["proposal"]] == [(1, 0), (2, 1)]  # drawn, then added
     assert [row[:-1] for row in after["proposal"]] == before["proposal"]  # the new column is last
     assert {k: v for k, v in after.items() if k != "proposal"} == {k: v for k, v in before.items() if k != "proposal"}
     _downgrade_to(settings, "0025_usual_offers_done")
