@@ -43,7 +43,7 @@ from dinnerbell.services.call_context import CallContext
 from dinnerbell.services.database import Database, open_database
 from dinnerbell.services.errors import Forbidden, NotFound
 from dinnerbell.services.preferences import group_preferences, set_my_preference
-from tests.support.calls import OPENS, RESPOND_BY, VOTE_BY, House, dinner_id, furnish, make_house
+from tests.support.calls import OPENS, RESPOND_BY, VOTE_BY, House, dinner_id, furnish, make_house, nobody_coordinates
 from tests.support.clock import FakeClock
 
 pytestmark = pytest.mark.anyio
@@ -80,6 +80,7 @@ async def to_voting(house: House, *, pickup: str = "Alex", eaters: tuple[str, ..
     house.clock.now = RESPOND_BY
     await house.tick()
     assert (await house.event(event_id)).state is EventState.VOTING
+    await nobody_coordinates(house, event_id)  # voting picked someone (#179)
     return event_id
 
 

@@ -173,7 +173,8 @@ async def test_a_breakfast_call_runs_end_to_end_like_lunch(house: House, clock: 
     assert ctx.event.state is EventState.DECIDED
     assert (ctx.event.decided_item_id, ctx.event.decided_mode) == (house.items["Pancakes"].id, Mode.COOK)
     assert ctx.event.meal_time == at(8)  # nobody gave a time: breakfast's usual meal time
-    assert [(a.role.value, a.member_id) for a in ctx.assignments] == [("cook", house["Sam"].id)]
+    roles = [(a.role.value, a.member_id) for a in ctx.assignments if a.role.value != "coordinator"]  # #179
+    assert roles == [("cook", house["Sam"].id)]
 
     clock.now = at(10)
     assert await house.tick() == [Step.MARK_DONE]
@@ -185,7 +186,8 @@ async def test_a_breakfast_call_runs_end_to_end_like_lunch(house: House, clock: 
     kinds = [s.kind for s in channel.sent if s.op == "deliver"]
     assert kinds[0] == "call_opened"
     assert {"proposals_ready", "decision_made", "assignment_made"} <= set(kinds)
-    assert [a.action for a in await house.audits()] == ["event.opened", "event.voting", "event.decided", "event.done"]
+    actions = [a.action for a in await house.audits()]
+    assert actions == ["event.opened", "event.voting", "event.coordinator_picked", "event.decided", "event.done"]
 
 
 # Slack -------------------------------------------------------------------------------------------

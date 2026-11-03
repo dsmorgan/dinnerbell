@@ -189,6 +189,8 @@ def test_anyone_can_take_the_vote_in_hand_on_the_web(admin: TestClient, clock: F
     message and Home do."""
     event_id = start(admin)
     to_voting(admin, clock, event_id)
+    assert "Coordinator: admin." in admin.get(f"/events/{event_id}").text  # voting picked the one member in (#179)
+    submit(admin, f"/events/{event_id}/admin/coordinator", {"member_id": ""})  # an admin clears it
     html = admin.get(f"/events/{event_id}").text
     assert "No coordinator yet." in html and ">I&#39;ll coordinate</button>" in html
     claimed = htmx(admin, f"/events/{event_id}/coordinate", {})

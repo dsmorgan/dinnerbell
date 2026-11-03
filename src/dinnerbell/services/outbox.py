@@ -35,6 +35,7 @@ from dinnerbell.domain.notifications import (
     BadgesEarned,
     Channel,
     ChannelUnavailable,
+    CoordinatorPicked,
     EventInfo,
     GuestJoined,
     HeldDelivery,
@@ -245,7 +246,8 @@ def _about(entry: OutboxEntry, **more: object) -> dict[str, object]:
 async def _overtaken(db: AsyncSession, notification: Notification) -> str | None:
     """Why ``notification`` is no longer worth sending, or None. A row in ``CALL_OFF_SUPERSEDES``
     is overtaken when its call was called off or has started a newer run since it was queued; a
-    row in ``STEP_BOUND``, also when the call has left the states its step is in."""
+    row in ``STEP_BOUND``, also when the call has left the states its step is in. A
+    ``CoordinatorPicked`` row, also when its member no longer coordinates."""
     if notification.kind not in CALL_OFF_SUPERSEDES and notification.kind not in STEP_BOUND:
         return None
     if isinstance(
@@ -260,6 +262,8 @@ async def _overtaken(db: AsyncSession, notification: Notification) -> str | None
     steps = STEP_BOUND.get(notification.kind)
     if steps is not None and event.state not in steps:
         return SUPERSEDED_BY_CALL_OFF if event.state is EventState.CANCELLED else SUPERSEDED_BY_PROGRESS
+    if isinstance(notification, CoordinatorPicked) and event.coordinator_id != notification.member.id:
+        return SUPERSEDED_BY_PROGRESS  # they handed it off, said out, or were deactivated since (#179)
     return None
 
 

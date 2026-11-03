@@ -7,6 +7,7 @@ reading and the household time zone in.
 
 from __future__ import annotations
 
+import hashlib
 import math
 import unicodedata
 from collections.abc import Iterable, Mapping
@@ -813,6 +814,34 @@ def drops_coordinating(event: Event, response: Response) -> bool:
     switched off as a late joiner, or was a maybe when answers closed. A maybe doesn't, until
     then: they may still come."""
     return event.coordinator_id == response.member_id and response.status is Status.OUT
+
+
+def coordinator_seed(household_id: int, event_id: int, run: int) -> int:
+    """The seed for picking a coordinator when voting starts (#179). A digest of the household,
+    the call, and the run, as ``ranking.ranking_seed`` is, so the pick is the same in every
+    process and on every restart, and a new run picks again."""
+    digest = hashlib.sha256(f"dinnerbell coordinator {household_id} {event_id} {run}".encode()).digest()
+    return int.from_bytes(digest[:8], "big")
+
+
+def coordinator_candidates(responses: Iterable[Response], members: Mapping[int, Member]) -> list[int]:
+    """Whom voting can pick to coordinate (#179), by ID: active members who are in. Not guests,
+    and not maybes, who are out by then (FR-9)."""
+    return sorted(
+        r.member_id for r in responses if r.is_in and (m := members.get(r.member_id)) is not None and m.is_member
+    )
+
+
+def pick_coordinator(event: Event, responses: Iterable[Response], members: Mapping[int, Member]) -> int | None:
+    """Who coordinates when voting starts and nobody does (#179): one of
+    ``coordinator_candidates``, chosen by ``coordinator_seed``, so the same call and run always
+    pick the same member. None when someone coordinates already, or no member is in."""
+    if event.coordinator_id is not None or event.is_offer:
+        return None
+    candidates = coordinator_candidates(responses, members)
+    if not candidates:
+        return None
+    return candidates[coordinator_seed(event.household_id, event.id, event.run) % len(candidates)]
 
 
 def check_assign_coordinator(event: Event) -> None:

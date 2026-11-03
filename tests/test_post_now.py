@@ -24,7 +24,7 @@ from dinnerbell.domain.meals import Slot
 from dinnerbell.services import call_admin, call_context, calls, event_views, lifecycle
 from dinnerbell.services.database import Database, open_database
 from dinnerbell.services.errors import NotFound
-from tests.support.calls import OPENS, RESPOND_BY, House, dinner_id, furnish, make_house
+from tests.support.calls import OPENS, RESPOND_BY, House, dinner_id, furnish, make_house, nobody_coordinates
 from tests.support.clock import FakeClock
 from tests.support.fake_slack import Failure
 from tests.support.slack import Slack, wire
@@ -320,6 +320,7 @@ async def to_voting(slack: Slack, house: House) -> int:
     house.clock.now = RESPOND_BY
     await house.tick()
     assert (await house.event(event_id)).state is EventState.VOTING
+    await nobody_coordinates(house, event_id)  # voting picked someone (#179)
     return event_id
 
 

@@ -72,7 +72,17 @@ from dinnerbell.services.database import Database, open_database
 from dinnerbell.services.errors import NotFound
 from dinnerbell.services.preferences import group_preferences, set_my_preference
 from tests.conftest import invite, page
-from tests.support.calls import OPENS, RESPOND_BY, VOTE_BY, House, RecordingChannel, dinner_id, furnish, make_house
+from tests.support.calls import (
+    OPENS,
+    RESPOND_BY,
+    VOTE_BY,
+    House,
+    RecordingChannel,
+    dinner_id,
+    furnish,
+    make_house,
+    nobody_coordinates,
+)
 from tests.support.clock import FakeClock
 from tests.support.fake_oidc import FakeProvider
 from tests.support.fake_slack import CHANNEL, state
@@ -117,7 +127,8 @@ async def to_voting(
     cooks: tuple[str, ...] = (),
     coordinator_name: str | None = "Alex",
 ) -> int:
-    """``eaters`` are in; ``pickups`` offer to pick up; ``coordinator_name`` coordinates (or nobody).
+    """``eaters`` are in; ``pickups`` offer to pick up; ``coordinator_name`` coordinates (or nobody,
+    clearing the one voting picks).
     With the furnished catalog, Siam Garden and Taqueria are the picks."""
     event_id = await open_dinner(house)
     for name in dict.fromkeys(("Alex", *eaters)):
@@ -131,6 +142,8 @@ async def to_voting(
     house.clock.now = RESPOND_BY
     await house.tick()
     assert (await house.event(event_id)).state is EventState.VOTING
+    if coordinator_name is None:
+        await nobody_coordinates(house, event_id)  # voting picked someone (#179)
     return event_id
 
 
@@ -1315,6 +1328,8 @@ def web_voting(admin: TestClient, provider: FakeProvider, clock: FakeClock, migr
     sign_in(admin, provider)
     clock.advance(timedelta(minutes=90))
     web_tick(admin, clock)
+    nobody = submit(admin, f"/events/{event_id}/admin/coordinator", {"member_id": ""})  # voting picked one (#179)
+    assert nobody.status_code == 303
     return event_id
 
 

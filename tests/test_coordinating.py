@@ -35,7 +35,7 @@ from dinnerbell.services import call_admin, calls, coordinator, event_views, gue
 from dinnerbell.services import call_context as cc
 from dinnerbell.services.coordinator import PLAN_CHANGED, Adjustment, AdjustmentRefused, PartlyAdjusted
 from tests.conftest import invite, page
-from tests.support.calls import RESPOND_BY, VOTE_BY, House
+from tests.support.calls import RESPOND_BY, VOTE_BY, House, nobody_coordinates
 from tests.support.clock import FakeClock
 from tests.support.fake_oidc import FakeProvider
 from tests.support.fake_slack import state
@@ -160,6 +160,7 @@ async def test_a_guest_who_coordinates_while_voting_keeps_their_needs(house: Hou
     await act(house, calls.offer_role, house["Alex"], event_id, RoleOffer.PICKUP, True)
     house.clock.now = RESPOND_BY
     await house.tick()
+    await nobody_coordinates(house, event_id)  # voting picked a member (#179)
     await act(house, calls.claim_coordinator, pat, event_id)
     ctx = await house.context(event_id)
     pats = ctx.response_of(pat.id)
@@ -251,10 +252,11 @@ async def test_a_maybe_keeps_coordinating_until_answers_close(house: House) -> N
     house.clock.now = RESPOND_BY
     await house.tick()
     event = await house.event(event_id)
-    assert (event.state, event.coordinator_id) == (EventState.VOTING, None)  # the maybe is out now
+    assert event.state is EventState.VOTING
+    assert event.coordinator_id in {house["Alex"].id, house["Sam"].id}  # the maybe is out now: voting picked (#179)
     assert await released(house) == [{"member_id": house["Kim"].id, "why": "maybe"}]
     assert [n.member.id for n in await sent(house, "maybe_resolved")] == [house["Kim"].id]
-    assert (await sent(house, "call_updated"))[-1].event.coordinator is None
+    assert (await sent(house, "call_updated"))[-1].event.coordinator.id == event.coordinator_id
 
 
 async def test_a_coordinator_switched_off_as_a_late_joiner_lets_it_go(house: House) -> None:

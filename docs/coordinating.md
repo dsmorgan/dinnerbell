@@ -1,6 +1,6 @@
 # Coordinating a meal
 
-A coordinator steers one call: they keep the vote moving, and once the meal is decided they set the time, how the food arrives, and who cooks, picks up, or orders it. Coordinating is optional. Without a coordinator, the vote and the first person who offered decide everything. The precise rules are in [spec](spec.md) sections 5.7, 6.2, and 6.3 (FR-10, FR-58, FR-61).
+A coordinator steers one call: they keep the vote moving, and once the meal is decided they set the time, how the food arrives, and who cooks, picks up, or orders it. If nobody has claimed coordinating by the time voting starts, Dinnerbell picks someone who's in at random. Without a coordinator, the vote and the first person who offered decide everything. The precise rules are in [spec](spec.md) sections 5.7, 6.2, and 6.3 (FR-10, FR-58, FR-61).
 
 ## Become the coordinator
 
@@ -17,6 +17,12 @@ Tap **I'll coordinate** while answers are open or during the vote, when nobody e
 **Coordinating puts you in.** If you said Out or Maybe, or hadn't answered, tapping **I'll coordinate** changes your answer to In. During the vote, you join late (FR-60 in the [spec](spec.md#63-proposals-ranking-and-voting)): you're marked late, any guests or eat window on an earlier answer are cleared, and, unlike other late joiners, your vote counts. If you joined late already, your vote counts from then on. A guest who coordinates is in, but never marked late, so their dietary needs still count.
 
 The same rule applies when someone hands coordinating to you or an admin assigns it to you: you're in from then on, and if that changed your answer, you get a message saying so. After the decision, only someone who's already in can take over, because nobody joins a meal once it's decided. Someone the coordinator switched off during the vote can't take it on.
+
+### If nobody claims it
+
+When answers close and voting starts with nobody coordinating, Dinnerbell picks a coordinator at random from the members who said In. It never picks a guest or someone who was still a maybe. The call message names you, and you get a direct message saying you were picked and what you can do: break a tie and shuffle the picks while voting, and once it's decided, choose how you get it and who does it. If it doesn't suit you, hand it off on the call's page. Nobody gets picked when no member is in.
+
+The pick is random, but reproducible: the same call, with the same people in, always picks the same person. A re-run, or starting a called-off call again, picks again only if nobody coordinates by then.
 
 A guest invited to the call can coordinate too, with fewer powers. See [What a guest coordinator can do](#what-a-guest-coordinator-can-do).
 
@@ -96,7 +102,7 @@ A guest coordinator handles the logistics, but not the choice of meal. They can 
 
 | Situation | What happens |
 |---|---|
-| Nobody claims coordinating | The vote decides. A tie goes to the proposal more admins voted for, then the place eaten longest ago, then the order the proposals were drawn in. The first person who offered does the role, and an admin can change it. |
+| Nobody claims coordinating | When voting starts, Dinnerbell picks a member who's in at random, and tells them. If no member is in, nobody coordinates: the vote decides, a tie goes to the proposal more admins voted for, then the place eaten longest ago, then the order the proposals were drawn in, and the first person who offered does the role, which an admin can change. |
 | The coordinator says Out | They stop coordinating. The call says nobody coordinates, and anyone can tap **I'll coordinate**, which puts them in. |
 | The coordinator says Maybe | They keep coordinating. If they're still a maybe when answers close, they're out, and they stop coordinating. |
 | The coordinator, as a late joiner, is switched off | They're out, so they stop coordinating. |

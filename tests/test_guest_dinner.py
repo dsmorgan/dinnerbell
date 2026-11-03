@@ -86,6 +86,7 @@ async def test_a_dinner_with_two_guests_one_vegetarian(house: House) -> None:
     assert [(p.member.name, p.guests) for p in made.decision.participants if p.guests] == [("Sam", 2)]
     # Everyone who's in is mentioned at the top level, not only those with a role (#92).
     assert [p.name for p in made_picks(entries)] == ["Alex", "Kim", "Sam"]
-    dm = from_payload("assignment_made", entries["assignment_made"].payload)
-    assert isinstance(dm, AssignmentMade) and dm.member.id == house["Alex"].id
+    dms = [from_payload(e.kind, e.payload) for e in await house.outbox() if e.kind == "assignment_made"]
+    dm = next(d for d in dms if d.member.id == house["Alex"].id)  # the other is whoever voting picked (#179)
+    assert isinstance(dm, AssignmentMade)
     assert (dm.decision.head_count, dm.decision.dietary_notes) == (5, ("Vegetarian",))
