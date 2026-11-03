@@ -11,7 +11,7 @@
     },
     {
       "text": {
-        "text": "*Sam's Tacos*: change the time, who does it, or who coordinates. Only what you change is saved.",
+        "text": "*Sam's Tacos*: change the time, who does what, or who coordinates. Only what you change is saved.",
         "type": "mrkdwn"
       },
       "type": "section"

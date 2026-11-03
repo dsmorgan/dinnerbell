@@ -10,12 +10,12 @@ from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from dinnerbell.db.catalog import CatalogRepository, ItemValues
 from dinnerbell.db.events import EventRepository
-from dinnerbell.db.models import AuditRow, MealLogRow, MemberRow
+from dinnerbell.db.models import AuditRow, MealLogRow, MemberRow, ProposalRow
 from dinnerbell.db.outbox import OutboxEntry, OutboxRepository
 from dinnerbell.db.repositories import MemberRepository, to_member
 from dinnerbell.domain.catalog import DEFAULT_MEALS, CatalogItem, ItemKind, Meal, Mode, Tag, TagKind
@@ -177,6 +177,18 @@ class House:
     async def context(self, event_id: int) -> CallContext:
         async with self.sessionmaker() as db:
             return await load(db, await self.event(event_id))
+
+    async def settle_ways(self, event_id: int) -> None:
+        """Settle the way of every takeout pick on the call as it is, as the coordinator would
+        while voting (#178), without a message or an audit row, so a decision on one asks
+        nothing about pickup or delivery."""
+        async with self.sessionmaker() as db:
+            await db.execute(
+                update(ProposalRow)
+                .where(ProposalRow.household_id == self.household.id, ProposalRow.event_id == event_id)
+                .values(mode_chosen=True)
+            )
+            await db.commit()
 
     async def audits(self, prefix: str = "event.") -> list[AuditRow]:
         async with self.sessionmaker() as db:

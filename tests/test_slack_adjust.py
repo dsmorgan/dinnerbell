@@ -18,6 +18,7 @@ from dinnerbell.channels.slack import ids
 from dinnerbell.channels.slack.interactions import GUEST_TAPS
 from dinnerbell.channels.slack.messages import render
 from dinnerbell.channels.slack.views import adjust_opened
+from dinnerbell.domain.catalog import Mode
 from dinnerbell.domain.events import (
     ADJUST_IS_THE_COORDINATORS,
     STALE_CALL,
@@ -52,9 +53,11 @@ pytestmark = pytest.mark.anyio
 
 
 async def decided(house: House) -> int:
-    """Sam coordinates; Alex (the admin) picks up Siam Garden; Lee is in and has no role; Kim never
-    answered. Decided at 5:15 PM, for 6:30 PM."""
+    """Sam coordinates; Alex (the admin) picks up Siam Garden, which Sam kept pickup while voting;
+    Lee is in and can order, so Lee orders (#178); Kim never answered. Decided at 5:15 PM, for
+    6:30 PM."""
     event_id = await to_voting(house, "Sam", "Lee", pickups=("Alex",), coordinator_name="Sam")
+    await house.settle_ways(event_id)
     await vote(house, "Alex", event_id, (await pick_ids(house, event_id))["Siam Garden"])
     await at_deadline(house, event_id)
     return event_id
@@ -65,8 +68,14 @@ async def meal(house: House, event_id: int) -> time:
     return view.decision.meal_time.astimezone(ZoneInfo(view.info.timezone)).time()
 
 
-def as_is(house: House, coordinator_name: str = "Sam", assignee: str = "Alex") -> Adjustment:
-    return Adjustment(time(18, 30), house[assignee].id, house[coordinator_name].id)
+def as_is(house: House, coordinator_name: str = "Sam", pickup: str = "Alex") -> Adjustment:
+    """The plan as decided: Lee orders, ``pickup`` picks up (#178)."""
+    return Adjustment(time(18, 30), house["Lee"].id, house[coordinator_name].id, pickup_id=house[pickup].id)
+
+
+def picks_up(house: House, who: str, at: time = time(18, 30), lead: str = "Sam") -> Adjustment:
+    """An Adjust that gives pickup to ``who``, Lee still ordering."""
+    return Adjustment(at, house["Lee"].id, house[lead].id, pickup_id=house[who].id)
 
 
 async def adjust(
@@ -102,10 +111,10 @@ async def test_only_the_meal_time_changes_when_only_it_is_changed(house: House) 
 
 async def test_the_role_goes_to_someone_who_is_in_and_they_are_told_who_to_ask(house: House) -> None:
     event_id = await decided(house)
-    changed = await adjust(house, "Sam", event_id, replace(as_is(house), assignee_id=house["Lee"].id))
-    assert changed == Adjustment(assignee_id=house["Lee"].id)
+    changed = await adjust(house, "Sam", event_id, replace(as_is(house), pickup_id=house["Lee"].id))
+    assert changed == Adjustment(assignee_id=house["Lee"].id, pickup_id=house["Lee"].id)
     assert assigned(await house.context(event_id))[AssignmentRole.PICKUP] == house["Lee"].id
-    (told,) = [n for n in await sent(house, "assignment_made") if n.member.id == house["Lee"].id]
+    told = [n for n in await sent(house, "assignment_made") if n.member.id == house["Lee"].id][-1]  # after ordering
     text = json.dumps(render(told, CTX).payload())
     assert "Sam assigned you this" in text and "tell Sam, who can pick someone else with *Adjust*" in text
     assert [a.action for a in await house.audits() if a.action == "event.roles_assigned"]
@@ -113,7 +122,7 @@ async def test_the_role_goes_to_someone_who_is_in_and_they_are_told_who_to_ask(h
 
 async def test_handing_off_comes_last_so_the_rest_still_counts_as_the_coordinators(house: House) -> None:
     event_id = await decided(house)
-    wanted = Adjustment(time(19, 0), house["Lee"].id, house["Lee"].id)
+    wanted = picks_up(house, "Lee", time(19, 0), lead="Lee")
     changed = await adjust(house, "Sam", event_id, wanted)
     assert changed == wanted
     event, ctx = await house.event(event_id), await house.context(event_id)
@@ -148,6 +157,7 @@ async def test_each_refused_part_names_itself_and_nothing_changes(house: House) 
     for wanted, part, says in (
         (replace(as_is(house), meal_time=time(16, 0)), "meal_time", "after the decision"),
         (replace(as_is(house), assignee_id=house["Kim"].id), "assignee", "Pick someone who's in."),
+        (replace(as_is(house), pickup_id=house["Kim"].id), "pickup", "Pick someone who's in."),
         (replace(as_is(house), coordinator_id=pat.id), "coordinator", "No such member."),
     ):
         with pytest.raises(AdjustmentRefused) as refused:
@@ -196,8 +206,9 @@ async def test_a_guest_coordinator_adjusts_the_plan(house: House) -> None:
     await house.tick()
     await act(house, calls.lock, house["Alex"], event_id, (await pick_ids(house, event_id))["Siam Garden"])
     assert (await act(house, event_views.event_view, pat, event_id)).can.adjust
-    wanted = Adjustment(time(19, 0), house["Lee"].id, house["Sam"].id)
-    opened = Adjustment(time(18, 30), house["Alex"].id, pat.id)
+    await act(house, coordinator.choose_roles, pat, event_id, mode=Mode.PICKUP)  # Pat keeps it pickup (#178)
+    wanted = Adjustment(time(19, 0), house["Lee"].id, house["Sam"].id, pickup_id=house["Lee"].id)
+    opened = Adjustment(time(18, 30), house["Lee"].id, pat.id, pickup_id=house["Alex"].id)
     assert await act(house, coordinator.adjust, pat, event_id, wanted, opened=opened, run=1) == wanted
     event, ctx = await house.event(event_id), await house.context(event_id)
     assert (event.coordinator_id, assigned(ctx)[AssignmentRole.PICKUP]) == (house["Sam"].id, house["Lee"].id)
@@ -224,9 +235,11 @@ async def opened_now(house: House, event_id: int) -> ids.ViewOrigin:
 
 
 def form(house: House, *, at: str = "18:30", who: str = "Alex", lead: str = "Sam") -> dict[str, Any]:
+    """The Adjust modal, with ``who`` picking up and Lee still ordering (#178)."""
     return state(
         meal_time={"selected_time": at},
-        who={"selected_option": {"value": str(house[who].id)}},
+        who={"selected_option": {"value": str(house["Lee"].id)}},
+        pickup={"selected_option": {"value": str(house[who].id)}},
         coordinator={"selected_option": {"value": str(house[lead].id)}},
     )
 
@@ -249,10 +262,11 @@ async def test_slack_adjust_opens_for_the_coordinator_only(slack: Slack, house: 
     assert fields["meal_time"]["element"]["initial_time"] == "18:30"
     how = fields["mode"]["element"]  # Siam Garden is pickup or delivery (#154)
     assert [o["value"] for o in how["options"]] == ["pickup", "delivery"] and how["initial_option"]["value"] == "pickup"
-    who = fields["who"]["element"]
-    assert fields["who"]["label"]["text"] == "Who does it"  # whichever way How says
+    who, pickup = fields["who"]["element"], fields["pickup"]["element"]
+    assert fields["who"]["label"]["text"] == "Who orders"  # pickup or delivery alike (#178)
+    assert fields["pickup"]["label"]["text"] == "Who picks up"
     assert {o["text"]["text"] for o in who["options"]} == {"Alex", "Lee", "Sam"}  # whoever is in
-    assert who["initial_option"]["text"]["text"] == "Alex"
+    assert who["initial_option"]["text"]["text"] == "Lee" and pickup["initial_option"]["text"]["text"] == "Alex"
     lead = fields["coordinator"]["element"]
     assert lead["initial_option"]["text"]["text"] == "Sam"
     assert [o["text"]["text"] for o in lead["options"]] == ["Sam", "Alex", "Lee"]  # Sam first, then who's in
@@ -295,7 +309,7 @@ async def test_slack_adjust_shows_a_refusal_next_to_its_field_and_keeps_the_moda
     body = json.loads(early.body)
     assert body["response_action"] == "errors" and "after the decision" in body["errors"]["meal_time"]
     out = await slack.submit("Sam", ids.ADJUST_VIEW, form(house, who="Kim"), event_id, origin=origin)
-    assert json.loads(out.body)["errors"] == {"who": "Pick someone who's in."}
+    assert json.loads(out.body)["errors"] == {"pickup": "Pick someone who's in."}
     missing = state(meal_time={"selected_time": "18:30"})
     nobody = await slack.submit("Sam", ids.ADJUST_VIEW, missing, event_id, origin=origin)
     assert json.loads(nobody.body)["errors"] == {"coordinator": "Pick who coordinates."}
@@ -335,7 +349,7 @@ async def test_slack_home_shows_adjust_to_the_coordinator_only(slack: Slack, hou
 async def test_a_change_made_elsewhere_after_opening_is_not_written_back(slack: Slack, house: House) -> None:
     event_id = await decided(house)
     origin = await opened_now(house, event_id)  # Alex picks up, as the modal shows
-    await act(house, coordinator.choose_roles, house["Sam"], event_id, member_id=house["Lee"].id, run=1)
+    await act(house, coordinator.choose_roles, house["Sam"], event_id, pickup_id=house["Lee"].id, run=1)
     await slack.submit("Sam", ids.ADJUST_VIEW, form(house, at="19:00", who="Alex"), event_id, origin=origin)
     assert slack.ephemerals("Sam")[-1] == "Saved. The meal time is 7:00 PM."
     assert assigned(await house.context(event_id))[AssignmentRole.PICKUP] == house["Lee"].id  # Lee keeps it
@@ -361,7 +375,7 @@ async def test_a_later_part_refused_after_an_earlier_one_saved_says_both(
 
     monkeypatch.setattr(coordinator, "choose_roles", left)
     with pytest.raises(coordinator.PartlyAdjusted) as partly:
-        await adjust(house, "Sam", event_id, Adjustment(time(19, 0), house["Lee"].id, house["Sam"].id))
+        await adjust(house, "Sam", event_id, picks_up(house, "Lee", time(19, 0)))
     assert partly.value.saved == Adjustment(meal_time=time(19, 0)) and str(partly.value) == "Pick someone who's in."
 
     origin = await opened_now(house, event_id)
@@ -374,8 +388,8 @@ async def test_a_later_part_refused_after_an_earlier_one_saved_says_both(
 
 async def test_with_a_hand_off_the_new_assignee_hears_once_and_after_it(house: House) -> None:
     event_id = await decided(house)
-    await adjust(house, "Sam", event_id, Adjustment(time(18, 30), house["Lee"].id, house["Alex"].id))
-    (told,) = [n for n in await sent(house, "assignment_made") if n.member.id == house["Lee"].id]
+    await adjust(house, "Sam", event_id, picks_up(house, "Lee", lead="Alex"))
+    told = [n for n in await sent(house, "assignment_made") if n.member.id == house["Lee"].id][-1]  # after ordering
     assert told.event.coordinator is not None and told.event.coordinator.id == house["Alex"].id
     text = json.dumps(render(told, CTX).payload())
     # Alex decides now, so Lee is told to ask Alex, not Sam (#154).
@@ -385,9 +399,9 @@ async def test_with_a_hand_off_the_new_assignee_hears_once_and_after_it(house: H
 
 async def test_handing_off_to_the_new_assignee_sends_them_one_message(house: House) -> None:
     event_id = await decided(house)
-    await adjust(house, "Sam", event_id, Adjustment(time(18, 30), house["Lee"].id, house["Lee"].id))
-    (told,) = [n for n in await sent(house, "assignment_made") if n.member.id == house["Lee"].id]
-    assert set(told.roles) == {AssignmentRole.PICKUP, AssignmentRole.COORDINATOR}
+    await adjust(house, "Sam", event_id, picks_up(house, "Lee", lead="Lee"))
+    told = [n for n in await sent(house, "assignment_made") if n.member.id == house["Lee"].id][-1]  # after ordering
+    assert set(told.roles) == {AssignmentRole.ORDER, AssignmentRole.PICKUP, AssignmentRole.COORDINATOR}
 
 
 async def test_each_step_checks_the_coordinator_again_under_the_lock(house: House) -> None:

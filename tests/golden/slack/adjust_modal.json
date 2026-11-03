@@ -11,7 +11,7 @@
     },
     {
       "text": {
-        "text": "*Sam's Tacos*: change the time, how you get it, who does it, or who coordinates. Only what you change is saved.",
+        "text": "*Sam's Tacos*: change the time, how you get it, who does what, or who coordinates. Only what you change is saved.",
         "type": "mrkdwn"
       },
       "type": "section"
@@ -108,17 +108,54 @@
         },
         "type": "static_select"
       },
+      "label": {
+        "emoji": true,
+        "text": "Who cooks",
+        "type": "plain_text"
+      },
+      "optional": false,
+      "type": "input"
+    },
+    {
+      "block_id": "pickup",
+      "element": {
+        "action_id": "value",
+        "options": [
+          {
+            "text": {
+              "emoji": true,
+              "text": "Alex",
+              "type": "plain_text"
+            },
+            "value": "1"
+          },
+          {
+            "text": {
+              "emoji": true,
+              "text": "Sam",
+              "type": "plain_text"
+            },
+            "value": "2"
+          }
+        ],
+        "placeholder": {
+          "emoji": true,
+          "text": "Pick someone who's in",
+          "type": "plain_text"
+        },
+        "type": "static_select"
+      },
       "hint": {
         "emoji": true,
-        "text": "They cook, pick up, or order, whichever How says.",
+        "text": "Only for pickup. Nobody picks up a delivery.",
         "type": "plain_text"
       },
       "label": {
         "emoji": true,
-        "text": "Who does it",
+        "text": "Who picks up",
         "type": "plain_text"
       },
-      "optional": false,
+      "optional": true,
       "type": "input"
     },
     {

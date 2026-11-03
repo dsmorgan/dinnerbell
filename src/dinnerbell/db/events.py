@@ -546,6 +546,7 @@ def _proposal(row: ProposalRow) -> Proposal:
         score=row.score,
         reasons=tuple(str(r) for r in row.reasons or []),
         proposed_by=row.proposed_by,
+        mode_chosen=row.mode_chosen,
     )
 
 
@@ -673,11 +674,12 @@ class ProposalRepository:
         )
 
     async def set_mode(self, household_id: int, proposal_id: int, mode: Mode) -> None:
-        """The decided pick's way of getting it, after the coordinator switches it (#87)."""
+        """A pick's way of getting it, set by the coordinator or an admin: during the vote (#178),
+        or after the decision (#87). Either way, it's chosen."""
         await self._session.execute(
             update(ProposalRow)
             .where(ProposalRow.household_id == household_id, ProposalRow.id == proposal_id)
-            .values(mode=mode.value)
+            .values(mode=mode.value, mode_chosen=True)
             .execution_options(synchronize_session=False)
         )
 

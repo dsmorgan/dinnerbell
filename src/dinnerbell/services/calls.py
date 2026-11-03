@@ -42,7 +42,7 @@ from dinnerbell.domain.catalog import (
     normalize_item_name,
 )
 from dinnerbell.domain.events import (
-    MODE_ROLE,
+    MODE_ROLES,
     NOT_IN_JOIN_LATE,
     ActingAs,
     AssignmentRole,
@@ -762,15 +762,16 @@ async def set_meal_time(
 
 
 ROLE_CHANGES = (AssignmentRole.COOK, AssignmentRole.PICKUP, AssignmentRole.ORDER)
+ROLE_VERBS = {AssignmentRole.COOK: "cooks", AssignmentRole.PICKUP: "picks up", AssignmentRole.ORDER: "orders"}
 
 
 async def change_assignment(
     db: AsyncSession, actor: Member, event_id: int, role: AssignmentRole, member_id: int | None, *, now: datetime
 ) -> None:
     """Who cooks, picks up, or orders: the coordinator picks while decided (two volunteer cooks,
-    for example); the admin can also correct it after the meal (spec 5.7). Only the decided
-    mode's role, and only someone who's in. Giving a role to whoever has it already changes
-    nothing and sends nothing. Audited.
+    for example); the admin can also correct it after the meal (spec 5.7). Only a role the
+    decided mode has (a pickup has an orderer and a pickup person, #178), and only someone who's
+    in. Giving a role to whoever has it already changes nothing and sends nothing. Audited.
 
     A correction after the call is done moves the role's count and the badges it reaches
     (``contributions.recount_role``, #162), in the same transaction."""
@@ -783,10 +784,9 @@ async def change_assignment(
         mode = event.decided_mode
         if mode is None:  # pragma: no cover - a decided or done call always has a mode
             raise EventRuleViolation("There's no decision to change.", code="not_decided")
-        if role is not MODE_ROLE[mode]:
-            raise EventRuleViolation(
-                f"This meal is {mode.label.lower()}, so only {MODE_ROLE[mode].value} is assigned.", code="wrong_role"
-            )
+        if role not in MODE_ROLES[mode]:
+            wrong = f"Nobody {ROLE_VERBS[role]} for a {mode.label.lower()} meal."
+            raise EventRuleViolation(wrong, code="wrong_role")
         current = next((a.member_id for a in ctx.assignments if a.role is role), None)
         if member_id == current:
             return

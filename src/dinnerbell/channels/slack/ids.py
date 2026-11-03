@@ -78,6 +78,9 @@ SHUFFLE = "shuffle"
 """**Shuffle proposals** in the proposals message footer (#87): the coordinator's. Its value is a
 ``card_value``, naming the run the message showed."""
 BREAK_TIE = "break_tie"
+SET_WAY = "set_way"
+"""The ⋯ menu beside a takeout pick whose place allows pickup and delivery, on the proposals
+message while voting (#178): the coordinator sets its way. Each option's value is a ``way_value``."""
 """**Break the tie** beside a proposal tied for the most votes (#87). Its value is a ``proposal_value``."""
 ASSIGN_ROLES = "assign_roles"
 """**Assign roles** on the decision message and the coordinator's direct message (#87): opens the
@@ -155,6 +158,7 @@ _MENU = re.compile(r"(cancel|close):([1-9][0-9]{0,18}):([1-9][0-9]{0,18})")
 _WINDOW = re.compile(r"(respond|vote):([1-9][0-9]{0,18}):([1-9][0-9]{0,18})")
 _CARD = re.compile(r"([1-9][0-9]{0,18}):([1-9][0-9]{0,18})")
 _GUEST = re.compile(r"([1-9][0-9]{0,18}):([1-9][0-9]{0,18}):([1-9][0-9]{0,18})")
+_WAY = re.compile(r"(pickup|delivery):([1-9][0-9]{0,18}):([1-9][0-9]{0,18}):([1-9][0-9]{0,18})")
 _LATE = re.compile(r"(part|vote):(on|off):([1-9][0-9]{0,18}):([1-9][0-9]{0,18}):([1-9][0-9]{0,18})")
 _CHANNEL = re.compile(r"^[CDG][A-Z0-9]{2,31}$")
 _MESSAGE_TS = re.compile(r"[0-9]{1,12}\.[0-9]{1,8}")
@@ -262,6 +266,20 @@ def parse_late(value: object) -> tuple[LateSwitch, bool, int, int, int]:
     return switch, on, _row_id(match.group(3)), _row_id(match.group(4)), _row_id(match.group(5))
 
 
+def way_value(mode: Mode, event_id: int, run: int, proposal_id: int) -> str:
+    """``<pickup|delivery>:<id>:<run>:<proposal>``: set a takeout pick's way, on the run the
+    proposals message showed (#178)."""
+    return f"{mode.value}:{event_id}:{run}:{proposal_id}"
+
+
+def parse_way(value: object) -> tuple[Mode, int, int, int]:
+    """``<pickup|delivery>:<id>:<run>:<proposal>``, exactly as ``way_value`` writes it."""
+    match = _WAY.fullmatch(value) if isinstance(value, str) else None
+    if match is None:
+        raise BadValue("not a way value")
+    return Mode(match.group(1)), _row_id(match.group(2)), _row_id(match.group(3)), _row_id(match.group(4))
+
+
 def guest_value(event_id: int, run: int, guest_id: int) -> str:
     """``<id>:<run>:<guest>``: a guest button on a member's card, for that call's run."""
     return f"{event_id}:{run}:{guest_id}"
@@ -324,38 +342,43 @@ _HHMM = re.compile(r"([01][0-9]|2[0-3]):[0-5][0-9]")
 
 @dataclass(frozen=True, slots=True)
 class Opened:
-    """What an Adjust modal showed when it opened (spec 5.7): the meal time as ``HH:MM``, who did
-    the role, who coordinated, and the way of getting it (``mode``, #154). Saving changes only
-    the fields that differ from these, and refuses one that changed elsewhere since. A modal
-    opened before Adjust showed the way has no ``mode``, and can't change it."""
+    """What an Adjust modal showed when it opened (spec 5.7): the meal time as ``HH:MM``, who
+    cooked or ordered, who coordinated, the way of getting it (``mode``, #154), and who picked
+    it up (``pickup_id``, #178). Saving changes only the fields that differ from these, and
+    refuses one that changed elsewhere since. A modal opened before Adjust showed the way has no
+    ``mode``, and can't change it; one opened before it showed the pickup person has no
+    ``pick``, and reads as having shown nobody."""
 
     meal_time: time
     assignee_id: int | None
     coordinator_id: int | None
     mode: Mode | None = None
+    pickup_id: int | None = None
 
     def data(self) -> dict[str, object]:
         at = f"{self.meal_time.hour:02d}:{self.meal_time.minute:02d}"
         data: dict[str, object] = {"at": at, "who": self.assignee_id, "lead": self.coordinator_id}
         if self.mode is not None:
             data["how"] = self.mode.value
+        if self.pickup_id is not None:
+            data["pick"] = self.pickup_id
         return data
 
     @classmethod
     def parse(cls, data: object) -> Opened:
-        if not isinstance(data, dict) or set(data) - {"how"} != {"at", "who", "lead"}:
+        if not isinstance(data, dict) or set(data) - {"how", "pick"} != {"at", "who", "lead"}:
             raise BadValue("bad metadata")
-        at, who, lead, how = data["at"], data["who"], data["lead"], data.get("how")
+        at, who, lead, how, pick = data["at"], data["who"], data["lead"], data.get("how"), data.get("pick")
         if not isinstance(at, str) or not _HHMM.fullmatch(at):
             raise BadValue("bad metadata")
-        for value in (who, lead):
+        for value in (who, lead, pick):
             if value is not None and not (
                 isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= MAX_ID
             ):
                 raise BadValue("bad metadata")
         if how is not None and how not in {m.value for m in Mode}:
             raise BadValue("bad metadata")
-        return cls(time.fromisoformat(at), who, lead, Mode(how) if how is not None else None)
+        return cls(time.fromisoformat(at), who, lead, Mode(how) if how is not None else None, pick)
 
 
 @dataclass(frozen=True, slots=True)

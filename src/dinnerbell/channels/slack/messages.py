@@ -55,6 +55,7 @@ from dinnerbell.domain import notifications as note
 from dinnerbell.domain.catalog import Mode
 from dinnerbell.domain.events import (
     JOIN_LATE_PROMPT,
+    TAKEOUT_WAYS,
     AssignmentRole,
     EndReason,
     EventKind,
@@ -467,7 +468,8 @@ def _kind(proposal: note.ProposalInfo) -> str:
 
 
 def _proposal_text(proposal: note.ProposalInfo, number: int, ctx: RenderContext) -> str:
-    lines = [f"*{number}. {_item_name(proposal.item)}* · {_kind(proposal)}"]
+    chosen = " (chosen)" if proposal.ways and proposal.mode_chosen else ""  # the coordinator set its way (#178)
+    lines = [f"*{number}. {_item_name(proposal.item)}* · {_kind(proposal)}{chosen}"]
     if proposal.reasons:
         lines.append("_" + escape(" ".join(proposal.reasons)) + "_")
     votes = plural(proposal.votes, "vote")
@@ -503,6 +505,16 @@ def late_menu(event: note.EventInfo, late: note.LateJoinerInfo) -> Block:
             option(f"Take {who} off this call" if late.taking_part else f"Put {who} back on", part),
             option(f"Don't count {who}'s vote" if late.vote_counts else f"Count {who}'s vote", vote),
         ],
+    )
+
+
+def way_menu(event: note.EventInfo, proposal: note.ProposalInfo) -> Block:
+    """The ⋯ beside a takeout pick whose place allows pickup and delivery, while voting (#178):
+    the coordinator sets its way. Everyone sees it, so the server checks who picked it; each
+    option names the run. Picking the way it has settles it, so the decision doesn't ask."""
+    return overflow(
+        ids.SET_WAY,
+        [option(labels.WAY_LABELS[way], ids.way_value(way, event.id, event.run, proposal.id)) for way in proposal.ways],
     )
 
 
@@ -555,11 +567,15 @@ def proposals_message(notification: note.ProposalsReady | note.ProposalsUpdated,
             if proposal.tied:
                 choose = confirm(labels.BREAK_TIE_TITLE, labels.decides_now(name), labels.BREAK_TIE_SUBMIT)
                 row.append(button(labels.BREAK_TIE, ids.BREAK_TIE, value, confirm=choose))
+            if proposal.ways:
+                row.append(way_menu(event, proposal))
             blocks.append(actions(*row, block_id=f"proposal-actions-{proposal.id}"))
     hidden = len(notification.proposals) - len(shown)
     if hidden:
         blocks.append(context(f"…and {plural(hidden, 'more proposal')} on the web."))
     blocks += _late_blocks(notification, ctx)
+    if voting and any(p.ways and not p.mode_chosen for p in shown):  # #178
+        blocks.append(context("The coordinator can make a proposal pickup or delivery with ⋯ beside it."))
     footer: list[Block] = []
     if voting:
         footer.append(button("Add proposal", ids.ADD_PROPOSAL, ids.event_value(event.id)))
@@ -591,7 +607,7 @@ def _item_buttons(item: note.ItemInfo, mode: Mode) -> list[Block]:
     out: list[Block] = []
     if safe_url(item.url):
         out.append(button("Website", f"{ids.LINK_PREFIX}item", url=safe_url(item.url)))
-    if mode is Mode.DELIVERY and safe_url(item.order_url):
+    if mode in TAKEOUT_WAYS and safe_url(item.order_url):  # someone orders a pickup too (#178)
         out.append(button("Order online", f"{ids.LINK_PREFIX}order", url=safe_url(item.order_url)))
     return out
 
@@ -675,11 +691,14 @@ def adjust_button(event: note.EventInfo) -> Block:
 
 
 def _roles_pending(event: note.EventInfo, decision: note.DecisionInfo) -> str:
-    """While the coordinator chooses: who does the role is theirs to say until the time shown."""
-    verb = {Mode.COOK: "cooks", Mode.PICKUP: "picks up", Mode.DELIVERY: "orders"}[decision.proposal.mode]
+    """While the coordinator chooses: the way and who does the roles are theirs to say until the
+    time shown (#178)."""
+    proposal = decision.proposal
+    what = labels.roles_to_choose(proposal.mode, way_open=proposal.way_open)
     until = local_clock(decision.roles_due_at, event.timezone) if decision.roles_due_at else ""
     who = escape(event.coordinator.name) if event.coordinator else "The coordinator"  # plain: an edit pings nobody
-    return f"_{who} is choosing who {verb}, until {until}. If they don't, the first person who offered does._"
+    fallback = labels.roles_fallback(proposal.mode, way_open=proposal.way_open)
+    return f"_{who} is choosing {what}, until {until}. If they don't, {fallback}._"
 
 
 def mark_done_button(event: note.EventInfo) -> Block:
@@ -1308,21 +1327,26 @@ def assignment_message(notification: note.AssignmentMade, ctx: RenderContext) ->
 
 
 def roles_to_choose_message(notification: note.RolesToChoose, ctx: RenderContext) -> Message:
-    """To the coordinator (#87): the decision left the role without a clear owner, so they pick
-    the mode and who does it, until ``due_at``; after that the first volunteer does."""
+    """To the coordinator (#87): the decision left the roles without a clear owner, or the way
+    to choose (#178), so they pick the way and who does each role, until ``due_at``; after that
+    the first volunteers do."""
     event, decision = notification.event, notification.decision
     proposal = decision.proposal
     until = local_clock(notification.due_at, event.timezone)
     name = _item_name(proposal.item)
+    what = labels.roles_to_choose(proposal.mode, way_open=proposal.way_open)
+    fallback = labels.roles_fallback(proposal.mode, way_open=proposal.way_open)
+    stays = f"it stays {proposal.mode.label.lower()}, and " if proposal.way_open else ""
+    after = f"After that, {stays}{fallback}."
     reader = notification.via.name if notification.via else notification.member.name
     who = f"Your guest {escape(notification.member.name)} is" if notification.via else "You're"
     text = (
         f"Hi {escape(reader)}! {who} coordinating {_slot(event)} on {day_label(event.day)}: *{name}* · "
-        f"{_kind(proposal)}. Nobody has a clear claim on the {proposal.mode.verb}, so it's yours to choose. "
-        f"Tap *Assign roles* by *{until}*. After that, the first person who offered does it."
+        f"{_kind(proposal)}. It's yours to choose {what}. "
+        f"Tap *Assign roles* by *{until}*. {after}"
     )
     blocks = [section(text), actions(assign_roles_button(event), _web_button(ctx, event), block_id="more")]
-    return _finish(f"Choose who will {proposal.mode.verb} {proposal.item.name} by {until}.", blocks)
+    return _finish(f"Choose {what} for {proposal.item.name} by {until}.", blocks)
 
 
 def picks_shuffled_message(notification: note.PicksShuffled) -> Message:

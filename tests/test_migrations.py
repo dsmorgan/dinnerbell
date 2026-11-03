@@ -1049,13 +1049,14 @@ def _catalog_columns(settings: Settings) -> list[str]:
 
 def _calls_before_late_join(settings: Settings) -> object:
     """The call rows, without the columns 0014 and 0025 add to ``response`` at the end (#76,
-    #180) and 0015 adds to ``event`` (#87), for comparing with rows read before ``dinnerbell
-    migrate`` took the database to the head."""
+    #180), 0015 adds to ``event`` (#87), and 0026 adds to ``proposal`` (#178), for comparing with
+    rows read before ``dinnerbell migrate`` took the database to the head."""
     rows: dict[str, list[tuple[object, ...]]] = _snapshot(settings)["rows"]  # type: ignore[assignment]
     added = len(LATE_COLUMNS) + len(USUAL_OFFERS_COLUMNS)
     return rows | {
         "response": [tuple(r)[:-added] for r in rows["response"]],
         "event": [tuple(r)[: -len(COORDINATOR_COLUMNS)] for r in rows["event"]],
+        "proposal": [tuple(r)[:-1] for r in rows["proposal"]],
     }
 
 
@@ -1432,10 +1433,11 @@ def test_0016_adds_contributions_and_badges_without_touching_a_row_and_downgrade
     assert cli.main(["migrate"]) == 0
     assert {"contribution", "badge_award"} <= _tables(settings)
     after = _rows_outside_m4(settings)
-    ours = {"household", "member", "response"}
+    ours = {"household", "member", "response", "proposal"}
     assert {k: v for k, v in after.items() if k not in ours} == {k: v for k, v in before.items() if k not in ours}
     assert [row[:-2] for row in after["member"]] == before["member"]  # 0022 and 0023 add two, last
     assert [row[:-1] for row in after["response"]] == before["response"]  # 0025 adds one, last
+    assert [row[:-1] for row in after["proposal"]] == before["proposal"]  # 0026 adds one, last
     (household,) = after["household"]
     assert json.loads(household[3]) == {"contributions_backfilled": "x", "keep": 1, "feedback_cap": 0}  # type: ignore[index]  # 0021
     engine = create_sync_engine(settings.sync_database_url)
@@ -2020,3 +2022,23 @@ def test_the_alembic_cli_path_reports_a_lock_readably(settings: Settings, monkey
             command.downgrade(config, "-1")
     finally:
         holder.close()
+
+
+# 0026: a takeout pick's way is chosen (#178) ---------------------------------------------------------
+
+
+def test_0026_leaves_every_pick_unchosen_and_downgrade_drops_it(settings: Settings) -> None:
+    """Up adds ``proposal.mode_chosen``, off for every pick already there, and keeps every proposal
+    and the rows that refer to them. Down drops the column and changes no other row."""
+    _upgrade_to(settings, "0025_usual_offers_done")
+    _populate_calls(settings)
+    before = _rows_outside_m4(settings)
+    assert before["proposal"]
+
+    _upgrade_to(settings, "0026_proposal_mode_chosen")
+    after = _rows_outside_m4(settings)
+    assert [row[-1] for row in after["proposal"]] == [0] * len(before["proposal"])
+    assert [row[:-1] for row in after["proposal"]] == before["proposal"]  # the new column is last
+    assert {k: v for k, v in after.items() if k != "proposal"} == {k: v for k, v in before.items() if k != "proposal"}
+    _downgrade_to(settings, "0025_usual_offers_done")
+    assert _rows_outside_m4(settings) == before

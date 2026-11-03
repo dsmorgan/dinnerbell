@@ -56,6 +56,7 @@ GUEST_ROUTES = {
     ("POST", "/events/{event_id}/meal-time"),
     ("POST", "/events/{event_id}/assignments"),
     ("POST", "/events/{event_id}/roles"),  # a guest coordinating assigns roles (FR-58, #87)
+    ("POST", "/events/{event_id}/proposals/{proposal_id}/way"),  # a guest coordinating sets the way (#178)
     ("POST", "/events/{event_id}/done"),
     ("POST", "/events/{event_id}/close"),
 }

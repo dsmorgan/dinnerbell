@@ -39,7 +39,7 @@ from dinnerbell.domain.catalog import (
     sorted_modes,
 )
 from dinnerbell.domain.events import (
-    MODE_ROLE,
+    MODE_ROLES,
     Event,
     EventRuleViolation,
     EventState,
@@ -268,7 +268,8 @@ async def _post(
         capacity=capacity,
         now=now,
     )
-    await AssignmentRepository(db).assign(actor.household_id, offer.id, MODE_ROLE[data.mode], actor.id, now)
+    for role in MODE_ROLES[data.mode]:  # whoever offers a pickup orders it and picks it up (#178)
+        await AssignmentRepository(db).assign(actor.household_id, offer.id, role, actor.id, now)
     offerer = with_status(None, actor.id, Status.IN, now)
     await ResponseRepository(db).save(actor.household_id, offer.id, offerer, now)
     if replacing is not None:

@@ -169,7 +169,11 @@ async def test_no_coordinator_and_no_votes_decides_the_top_ranked(house: House) 
     ctx = await house.context(event_id)
     assert ctx.event.coordinator_id is None
     assert ctx.items[ctx.event.decided_item_id or 0].name == "Siam Garden"  # rank 1: alphabetical tie
-    assert [(a.role, a.member_id) for a in ctx.assignments] == [(AssignmentRole.PICKUP, house["Alex"].id)]
+    # Alex picks it up, and orders it too, as nobody else can (#178).
+    assert [(a.role, a.member_id) for a in ctx.assignments] == [
+        (AssignmentRole.ORDER, house["Alex"].id),
+        (AssignmentRole.PICKUP, house["Alex"].id),
+    ]
     decided = (await house.audits())[-1]
     assert (decided.action, decided.actor_member_id, decided.payload["how"]) == ("event.decided", None, "vote")
 
@@ -185,6 +189,7 @@ async def test_a_tie_goes_to_the_coordinators_pick(house: House) -> None:
     ctx = await house.context(event_id)
     assert ctx.items[ctx.event.decided_item_id or 0].name == "Taqueria"
     assert {(a.role, a.member_id) for a in ctx.assignments} == {
+        (AssignmentRole.ORDER, house["Alex"].id),
         (AssignmentRole.PICKUP, house["Alex"].id),
         (AssignmentRole.COORDINATOR, house["Sam"].id),
     }
@@ -544,6 +549,7 @@ async def test_coordinator_changes_after_the_decision_update_the_assignment(hous
 async def decided(house: House) -> int:
     event_id = await to_voting(house)
     await act(house, calls.claim_coordinator, house["Sam"], event_id)
+    await house.settle_ways(event_id)  # Sam keeps each pick's way (#178)
     house.clock.now = VOTE_BY
     await house.tick()
     return event_id
@@ -1196,7 +1202,7 @@ async def test_assignments_fit_the_decision_and_repeat_quietly(house: House) -> 
     """Regression: any role could be given to anyone, and reassigning the same person sent
     them a second assignment message."""
     event_id = await decided(house)  # Siam Garden by pickup, picked up by Alex
-    with pytest.raises(EventRuleViolation, match="This meal is pickup"):
+    with pytest.raises(EventRuleViolation, match="Nobody cooks for a pickup meal"):
         await act(house, calls.change_assignment, house["Sam"], event_id, AssignmentRole.COOK, house["Sam"].id)
     with pytest.raises(EventRuleViolation, match="someone who's in"):
         await act(house, calls.change_assignment, house["Sam"], event_id, AssignmentRole.PICKUP, house["Kim"].id)
@@ -1252,18 +1258,20 @@ async def test_rerun_a_later_days_call_from_any_rerunnable_state(house: House, s
 async def test_one_direct_message_per_assignee_lists_all_their_roles(house: House) -> None:
     event_id = await to_voting(house)  # Alex is in and picks up
     await act(house, calls.claim_coordinator, house["Alex"], event_id)
+    await house.settle_ways(event_id)
     siam = (await proposal_ids(house, event_id))["Siam Garden"]
     await act(house, calls.lock, house["Alex"], event_id, siam)
     ctx = await house.context(event_id)
     alex = house["Alex"].id
     assert {(a.role, a.member_id) for a in ctx.assignments} == {
+        (AssignmentRole.ORDER, alex),
         (AssignmentRole.PICKUP, alex),
         (AssignmentRole.COORDINATOR, alex),
     }
     (dm,) = [e for e in await house.outbox() if e.kind == "assignment_made"]
     first = min(a.id for a in ctx.assignments)
     assert dm.idempotency_key == f"event:{event_id}:run1:assignment_made:member{alex}:{first}"
-    assert dm.payload["roles"] == ["pickup", "coordinator"]
+    assert dm.payload["roles"] == ["pickup", "order", "coordinator"]
     assert dm.payload["assignment_id"] == first
 
 

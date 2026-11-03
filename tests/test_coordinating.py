@@ -290,18 +290,19 @@ async def adjust(house: House, wanted: Adjustment, event_id: int, *, opened: Adj
     return await act(house, coordinator.adjust, house["Sam"], event_id, wanted, opened=shown, run=1)  # type: ignore[no-any-return]
 
 
-async def test_adjust_switches_the_way_and_whoever_did_it_does_it_that_way(house: House) -> None:
-    event_id = await decided(house)  # Alex picks up Siam Garden
+async def test_adjust_switches_the_way_and_whoever_orders_keeps_ordering(house: House) -> None:
+    event_id = await decided(house)  # Alex picks up Siam Garden, and Lee orders it
     changed = await adjust(house, replace(opened_as_is(house), mode=Mode.DELIVERY), event_id)
-    assert changed == Adjustment(assignee_id=house["Alex"].id, mode=Mode.DELIVERY)
+    assert changed == Adjustment(assignee_id=house["Lee"].id, mode=Mode.DELIVERY)
     event, ctx = await house.event(event_id), await house.context(event_id)
     assert event.decided_mode is Mode.DELIVERY
     roles = assigned(ctx)
-    assert roles[AssignmentRole.ORDER] == house["Alex"].id and AssignmentRole.PICKUP not in roles
+    assert roles[AssignmentRole.ORDER] == house["Lee"].id and AssignmentRole.PICKUP not in roles  # #178
     (audit,) = await house.audits("event.roles_assigned")
     assert (audit.payload["mode"], audit.payload["switched_from"]) == ("delivery", "pickup")
-    told = [n for n in await sent(house, "assignment_made") if n.member.id == house["Alex"].id]
-    assert AssignmentRole.ORDER in told[-1].roles
+    assert audit.payload["dropped"] == ["pickup"]
+    (ended,) = await sent(house, "assignment_ended")
+    assert (ended.member.id, ended.roles) == (house["Alex"].id, (AssignmentRole.PICKUP,))
 
 
 async def test_adjust_switches_the_way_and_who_together(house: House) -> None:
@@ -325,8 +326,9 @@ async def test_a_way_changed_elsewhere_since_opening_is_refused(house: House) ->
         house, coordinator.choose_roles, house["Sam"], event_id, mode=Mode.DELIVERY, member_id=house["Alex"].id, run=1
     )  # on the web, say
     for wanted, part in (
-        (replace(opened_as_is(house), assignee_id=house["Lee"].id), "assignee"),
-        (replace(opened_as_is(house), mode=Mode.DELIVERY, assignee_id=house["Lee"].id), "mode"),
+        (replace(opened_as_is(house), pickup_id=house["Lee"].id), "pickup"),
+        (replace(opened_as_is(house), assignee_id=house["Alex"].id), "assignee"),
+        (replace(opened_as_is(house), mode=Mode.DELIVERY, assignee_id=house["Alex"].id), "mode"),
     ):
         with pytest.raises(AdjustmentRefused) as refused:
             await adjust(house, wanted, event_id)
@@ -393,7 +395,7 @@ async def test_slack_home_says_coordinating_puts_you_in(slack: Slack, house: Hou
 
 async def test_whoever_loses_a_role_is_told_before_the_meal(house: House) -> None:
     event_id = await decided(house)  # Alex picks up
-    await adjust(house, replace(opened_as_is(house), assignee_id=house["Lee"].id), event_id)
+    await adjust(house, replace(opened_as_is(house), pickup_id=house["Lee"].id), event_id)
     (ended,) = await sent(house, "assignment_ended")
     assert (ended.member.id, ended.roles, ended.by.id) == (house["Alex"].id, (AssignmentRole.PICKUP,), house["Sam"].id)
     assert "you're no longer picking up" in json.dumps(render(ended, CTX).payload())
@@ -402,17 +404,17 @@ async def test_whoever_loses_a_role_is_told_before_the_meal(house: House) -> Non
     assert [n.member.id for n in await sent(house, "assignment_ended")] == [house["Alex"].id, house["Lee"].id]
 
 
-async def test_switching_the_way_for_the_same_person_tells_them_only_the_new_role(house: House) -> None:
+async def test_switching_the_way_tells_only_whoever_lost_a_role(house: House) -> None:
     event_id = await decided(house)
     await adjust(house, replace(opened_as_is(house), mode=Mode.DELIVERY), event_id)
-    assert not await sent(house, "assignment_ended")
+    assert [n.member.id for n in await sent(house, "assignment_ended")] == [house["Alex"].id]  # not Lee, who orders
 
 
 async def test_after_the_meal_a_correction_messages_nobody(house: House) -> None:
     event_id = await decided(house)
     house.clock.now = AFTER_THE_MEAL
     made = len(await sent(house, "assignment_made"))
-    await adjust(house, replace(opened_as_is(house), assignee_id=house["Lee"].id), event_id)
+    await adjust(house, replace(opened_as_is(house), pickup_id=house["Lee"].id), event_id)
     await act(house, calls.change_assignment, house["Sam"], event_id, AssignmentRole.PICKUP, house["Alex"].id)
     assert len(await sent(house, "assignment_made")) == made
     assert not await sent(house, "assignment_ended")
@@ -444,8 +446,8 @@ async def test_a_role_changed_after_the_check_is_refused_not_written_over(house:
         lambda: act(house, calls.change_assignment, house["Alex"], event_id, AssignmentRole.PICKUP, house["Sam"].id)
     )
     with pytest.raises(AdjustmentRefused) as refused:
-        await adjust(house, replace(opened_as_is(house), assignee_id=house["Lee"].id), event_id)
-    assert (refused.value.part, str(refused.value)) == ("assignee", PLAN_CHANGED)
+        await adjust(house, replace(opened_as_is(house), pickup_id=house["Lee"].id), event_id)
+    assert (refused.value.part, str(refused.value)) == ("pickup", PLAN_CHANGED)
     assert assigned(await house.context(event_id))[AssignmentRole.PICKUP] == house["Sam"].id  # the admin's stands
 
 
@@ -454,7 +456,7 @@ async def test_a_later_part_changed_after_the_check_says_what_was_saved(house: H
     meanwhile.append(
         lambda: act(house, calls.change_assignment, house["Alex"], event_id, AssignmentRole.PICKUP, house["Sam"].id)
     )
-    wanted = replace(opened_as_is(house), meal_time=time(19, 0), assignee_id=house["Lee"].id)
+    wanted = replace(opened_as_is(house), meal_time=time(19, 0), pickup_id=house["Lee"].id)
     with pytest.raises(PartlyAdjusted) as partly:
         await adjust(house, wanted, event_id)
     assert partly.value.saved == Adjustment(meal_time=time(19, 0)) and str(partly.value) == PLAN_CHANGED
@@ -503,7 +505,7 @@ async def test_the_coordinator_corrects_who_did_what_until_it_is_done(house: Hou
 async def test_adjust_works_after_the_meal_time_too(house: House) -> None:
     event_id = await decided(house)
     house.clock.now = AFTER_THE_MEAL
-    await adjust(house, replace(opened_as_is(house), assignee_id=house["Lee"].id), event_id)
+    await adjust(house, replace(opened_as_is(house), pickup_id=house["Lee"].id), event_id)
     assert assigned(await house.context(event_id))[AssignmentRole.PICKUP] == house["Lee"].id
 
 

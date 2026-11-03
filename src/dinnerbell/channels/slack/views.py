@@ -66,7 +66,6 @@ from dinnerbell.domain.events import (
     MAX_GUESTS,
     MAX_NOTE_LENGTH,
     MAX_SUGGESTION_LENGTH,
-    MODE_ROLE,
     AssignmentRole,
     Details,
     EventState,
@@ -74,11 +73,12 @@ from dinnerbell.domain.events import (
 )
 from dinnerbell.domain.feedback import COOK_NOTE_MAX, ISSUE_NOTE_MAX, FeedbackInput, PlaceIssue, Rating
 from dinnerbell.domain.guests import GuestInput
+from dinnerbell.domain.labels import ROLE_WHO
 from dinnerbell.domain.meals import CALL_ORDER, PICK_SLOT, MealInput, Slot
 from dinnerbell.domain.members import MAX_DISPLAY_NAME_LENGTH, Member
 from dinnerbell.domain.offers import MAX_CAPACITY, replaces_call
 from dinnerbell.services.coordinator import Adjustment
-from dinnerbell.services.event_views import EventView, TodayView
+from dinnerbell.services.event_views import EventView, RolesChoice, TodayView
 from dinnerbell.services.feedback import MAX_AWAITING, Awaiting, FeedbackForm
 from dinnerbell.services.meals import LogForm
 from dinnerbell.services.offers import OfferForm, OfferInput
@@ -407,12 +407,32 @@ MAX_ASSIGN_PEOPLE = 100
 class AssignInput:
     mode: Mode
     member_id: int
+    pickup_id: int | None = None
+    """Who picks up, for a pickup (#178); None for the first who offered."""
+
+
+def _people_select(choice: RolesChoice, preselect: int | None, placeholder: str | None = None) -> Block:
+    """A select of the people who are in, with ``preselect`` chosen."""
+    people = [option(p.name, str(p.id)) for p in choice.people[:MAX_ASSIGN_PEOPLE]]
+    element: Block = {"type": "static_select", "options": people}
+    if placeholder is not None:
+        element["placeholder"] = plain(placeholder)
+    current = next((o for o in people if preselect is not None and o["value"] == str(preselect)), None)
+    if current is not None:
+        element["initial_option"] = current
+    return element
+
+
+PICKUP_HINT = "Only for pickup. Nobody picks up a delivery."
 
 
 def assign_modal(v: EventView, origin: ids.ViewOrigin) -> dict[str, Any]:
     """**Assign roles** (#87): how to get the winning pick, for a place that allows more than one
-    way, and who does it, from the people who are in. A volunteer is preselected. The modal names
-    the run (``origin.run``), which submitting checks."""
+    way, who cooks or orders it, and, at a place that allows pickup, who picks it up (#178), from
+    the people who are in. Whoever has a role, or else its first volunteer, is preselected. Slack
+    can't redraw a field when another changes, so "Who picks up" shows whenever the place allows
+    pickup, and counts only for a pickup. The modal names the run (``origin.run``), which
+    submitting checks."""
     choice = v.roles
     if choice is None:
         raise ValueError("an Assign roles modal needs a decided call")
@@ -420,8 +440,8 @@ def assign_modal(v: EventView, origin: ids.ViewOrigin) -> dict[str, Any]:
     blocks: list[Block] = [
         _intro(v),
         section(
-            f"*{escape(item)}*: pick how to get it and who does it. Anyone who's in can. "
-            "Someone who didn't offer is told you assigned them."
+            f"*{escape(item)}*: pick how to get it and who does it. Anyone who's in can, and one "
+            "person can do it all. Someone who didn't offer is told you assigned them."
         ),
     ]
     modes = [option(m.label, m.value) for m in choice.modes]
@@ -430,13 +450,12 @@ def assign_modal(v: EventView, origin: ids.ViewOrigin) -> dict[str, Any]:
     if current is not None:  # the catalog may have dropped the decided way since
         how["initial_option"] = current
     blocks.append(_input("mode", "How", how, optional=False))
-    people = [option(p.name, str(p.id)) for p in choice.people[:MAX_ASSIGN_PEOPLE]]
-    volunteers = choice.volunteers.get(choice.mode, ())
-    preselected = next((o for o in people if volunteers and o["value"] == str(volunteers[0])), None)
-    element: Block = {"type": "static_select", "options": people}
-    if preselected is not None:
-        element["initial_option"] = preselected
-    blocks.append(_input("who", "Who", element, optional=False))
+    lead = _people_select(choice, choice.preselected(choice.lead))
+    blocks.append(_input("who", ROLE_WHO[choice.lead], lead, optional=False))
+    if choice.has_pickup:
+        pickup = _people_select(choice, choice.preselected(AssignmentRole.PICKUP, Mode.PICKUP))
+        hint = PICKUP_HINT if len(choice.modes) > 1 else None
+        blocks.append(_input("pickup", ROLE_WHO[AssignmentRole.PICKUP], pickup, optional=True, hint=hint))
     return _modal("Assign roles", ids.ASSIGN_VIEW, origin, blocks, "Assign")
 
 
@@ -451,40 +470,44 @@ def parse_assign(values: Any) -> AssignInput:
     member = _picked(values, "who")
     if member is None:
         raise FormError("who", "Pick who does it.")
-    return AssignInput(mode, member)
+    return AssignInput(mode, member, _picked(values, "pickup"))
 
 
 # Adjust (spec 5.7) ----------------------------------------------------------------------------------
 
-ROLE_WHO = {Mode.COOK: "Who cooks", Mode.PICKUP: "Who picks up", Mode.DELIVERY: "Who orders"}
-ADJUST_BLOCKS = {"meal_time": "meal_time", "mode": "mode", "assignee": "who", "coordinator": "coordinator"}
+ADJUST_BLOCKS = {
+    "meal_time": "meal_time",
+    "mode": "mode",
+    "assignee": "who",
+    "pickup": "pickup",
+    "coordinator": "coordinator",
+}
 """The input block for each part of an ``Adjustment``, where its refusal shows."""
 
 
-WHO_HINT = "They cook, pick up, or order, whichever How says."
-
-
 def adjust_opened(v: EventView) -> ids.Opened:
-    """What an Adjust modal for ``v`` shows: the meal time, who does the role, who
-    coordinates, and the way of getting it, as they are now. It goes in the modal's metadata,
-    so saving can tell what the person changed from what changed elsewhere since."""
+    """What an Adjust modal for ``v`` shows: the meal time, who cooks or orders, who
+    coordinates, the way of getting it, and who picks it up (#178), as they are now. It goes in
+    the modal's metadata, so saving can tell what the person changed from what changed elsewhere
+    since."""
     choice, decision = v.roles, v.decision
     if choice is None or decision is None:
         raise ValueError("an Adjust modal needs a decided call")
     at = decision.meal_time.astimezone(ZoneInfo(v.info.timezone))
-    role = MODE_ROLE[choice.mode]
-    doing = next((a.member.id for a in decision.assignments if a.role is role), None)
-    return ids.Opened(time(at.hour, at.minute), doing, v.event.coordinator_id, choice.mode)
+    holders = {a.role: a.member.id for a in decision.assignments}
+    pickup = holders.get(AssignmentRole.PICKUP) if choice.mode is Mode.PICKUP else None
+    return ids.Opened(time(at.hour, at.minute), holders.get(choice.lead), v.event.coordinator_id, choice.mode, pickup)
 
 
 def adjust_modal(v: EventView, origin: ids.ViewOrigin) -> dict[str, Any]:
     """**Adjust** (spec 5.7): the coordinator's meal time, the way of getting the decided pick
-    (when the place allows more than one, #154), who does its role, from the people who are
-    in, and whom to hand coordinating to, each set to what ``origin.opened`` says they were.
-    Saving changes only what the person changed. The modal names the run (``origin.run``),
-    which saving checks. With nobody in to pick, the role isn't asked: Slack refuses a select
-    with no options. Slack can't redraw a field when another changes, so with a choice of ways
-    "Who" names no role: whoever it says does it the way "How" says."""
+    (when the place allows more than one, #154), who cooks or orders it and, at a place that
+    allows pickup, who picks it up (#178), from the people who are in, and whom to hand
+    coordinating to, each set to what ``origin.opened`` says they were. Saving changes only what
+    the person changed. The modal names the run (``origin.run``), which saving checks. With
+    nobody in to pick, the roles aren't asked: Slack refuses a select with no options. Slack
+    can't redraw a field when another changes, so "Who picks up" shows whenever the place allows
+    pickup, and counts only for a pickup."""
     choice, decision, opened = v.roles, v.decision, origin.opened
     if choice is None or decision is None or opened is None or opened.coordinator_id is None:
         raise ValueError("an Adjust modal needs a decided call, with what it opened with")
@@ -492,7 +515,7 @@ def adjust_modal(v: EventView, origin: ids.ViewOrigin) -> dict[str, Any]:
     people = [option(p.name, str(p.id)) for p in choice.people[:MAX_ASSIGN_PEOPLE]]
     other_ways = len(choice.modes) > 1 or (bool(choice.modes) and choice.mode not in choice.modes)
     switchable = other_ways and opened.mode is not None and bool(people)
-    what = "the time, how you get it, who does it" if switchable else "the time, who does it"
+    what = "the time, how you get it, who does what" if switchable else "the time, who does what"
     blocks: list[Block] = [
         _intro(v),
         section(f"*{escape(item)}*: change {what}, or who coordinates. Only what you change is saved."),
@@ -506,13 +529,13 @@ def adjust_modal(v: EventView, origin: ids.ViewOrigin) -> dict[str, Any]:
             how["initial_option"] = way
         blocks.append(_input("mode", "How", how, optional=False))
     if people:
-        who: Block = {"type": "static_select", "options": people, "placeholder": plain("Pick someone who's in")}
-        current = next((o for o in people if o["value"] == str(opened.assignee_id)), None)
-        if current is not None:
-            who["initial_option"] = current
-        label = "Who does it" if switchable else ROLE_WHO[choice.mode]
-        hint = WHO_HINT if switchable else None
-        blocks.append(_input("who", label, who, optional=current is None, hint=hint))
+        who = _people_select(choice, opened.assignee_id, "Pick someone who's in")
+        blocks.append(_input("who", ROLE_WHO[choice.lead], who, optional="initial_option" not in who))
+        if choice.has_pickup and (switchable or choice.mode is Mode.PICKUP):
+            pickup = _people_select(choice, opened.pickup_id, "Pick someone who's in")
+            hint = PICKUP_HINT if switchable else None
+            optional = "initial_option" not in pickup
+            blocks.append(_input("pickup", ROLE_WHO[AssignmentRole.PICKUP], pickup, optional=optional, hint=hint))
     coordinator = opened.coordinator_id
     them = next((p for p in v.members if p.id == coordinator), None)
     leads = [option(them.name, str(them.id))] if them is not None else []
@@ -541,7 +564,13 @@ def parse_adjust(values: Any) -> Adjustment:
     if raw is not None and raw not in {m.value for m in Mode}:
         raise FormError("mode", "Pick how to get it.")
     mode = Mode(str(raw)) if raw is not None else None
-    return Adjustment(meal_time=meal, assignee_id=_picked(values, "who"), coordinator_id=lead, mode=mode)
+    return Adjustment(
+        meal_time=meal,
+        assignee_id=_picked(values, "who"),
+        coordinator_id=lead,
+        mode=mode,
+        pickup_id=_picked(values, "pickup"),
+    )
 
 
 def close_modal(v: EventView, origin: ids.ViewOrigin) -> dict[str, Any]:

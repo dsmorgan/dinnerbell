@@ -22,7 +22,7 @@
     },
     {
       "text": {
-        "text": "*Coordinating:* <@U01ALEX>\n_Alex is choosing who cooks, until 6:00 PM. If they don't, the first person who offered does._\n*Dietary needs:* Vegetarian",
+        "text": "*Coordinating:* <@U01ALEX>\n_Alex is choosing who cooks, until 6:00 PM. If they don't, the first person who offered does it._\n*Dietary needs:* Vegetarian",
         "type": "mrkdwn"
       },
       "type": "section"

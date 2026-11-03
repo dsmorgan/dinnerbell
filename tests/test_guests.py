@@ -1166,8 +1166,9 @@ async def test_removing_a_guest_from_a_decided_call_clears_their_role(house: Hou
     ctx = await house.context(event_id)
     assert all(a.member_id != pat.id for a in ctx.assignments)
     (vacated,) = [e for e in await house.outbox() if e.kind == "role_vacated"]
-    # Sam, the only member in, coordinates (#179), so he's the one asked to pick someone
-    assert vacated.payload["member"]["id"] == house["Sam"].id and vacated.payload["roles"] == ["pickup"]
+    # Sam, the only member in, coordinates (#179), so he's the one asked to pick someone. Nobody
+    # else could order, so Pat ordered too (#178).
+    assert vacated.payload["member"]["id"] == house["Sam"].id and vacated.payload["roles"] == ["order", "pickup"]
 
 
 @pytest.mark.parametrize("use", ["offer_role", "toggle_role", "claim_coordinator", "post_offer", "join_offer"])

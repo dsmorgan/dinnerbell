@@ -222,8 +222,8 @@ def test_coverage_counts_active_members_who_are_in_in_answer_order() -> None:
 
 def test_cooking_needs_a_volunteer_on_the_cook_list_when_there_is_one() -> None:
     covered = Coverage(cooks=(1, 2))
-    assert covered.volunteers(Mode.COOK, frozenset()) == (1, 2)
-    assert covered.volunteers(Mode.COOK, frozenset({2, 5})) == (2,)
+    assert covered.for_role(AssignmentRole.COOK, frozenset()) == (1, 2)
+    assert covered.for_role(AssignmentRole.COOK, frozenset({2, 5})) == (2,)
     assert not covered.covers(Mode.COOK, frozenset({5}))
     assert not covered.covers(Mode.PICKUP, frozenset())
     assert Coverage(orderers=(4,)).covers(Mode.DELIVERY, frozenset())
@@ -264,9 +264,17 @@ def test_uncovered_proposals_never_win() -> None:
 
 
 def test_assign_roles() -> None:
-    assert ev.assign_roles(Mode.COOK, (4, 5), 9) == {AssignmentRole.COOK: 4, AssignmentRole.COORDINATOR: 9}
-    assert ev.assign_roles(Mode.DELIVERY, (4,), None) == {AssignmentRole.ORDER: 4}
-    assert ev.assign_roles(Mode.PICKUP, (), None) == {}
+    none = frozenset[int]()
+    assert ev.assign_roles(Mode.COOK, Coverage(cooks=(4, 5)), none, 9) == {
+        AssignmentRole.COOK: 4,
+        AssignmentRole.COORDINATOR: 9,
+    }
+    assert ev.assign_roles(Mode.DELIVERY, Coverage(orderers=(4,)), none, None) == {AssignmentRole.ORDER: 4}
+    assert ev.assign_roles(Mode.PICKUP, Coverage(), none, None) == {}
+    assert ev.assign_roles(Mode.PICKUP, Coverage(pickups=(4,), orderers=(5,)), none, None) == {
+        AssignmentRole.ORDER: 5,
+        AssignmentRole.PICKUP: 4,
+    }
 
 
 # Meal time (FR-19) ------------------------------------------------------------------------------

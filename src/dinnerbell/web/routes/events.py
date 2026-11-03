@@ -551,6 +551,32 @@ async def break_tie(
     return await _run(request, principal, context, db, event_id, came_from, action)
 
 
+@router.post("/events/{event_id}/proposals/{proposal_id}/way")
+async def set_way(
+    request: Request,
+    principal: GuestCSRFChecked,
+    context: Context,
+    db: Database,
+    event_id: RowId,
+    proposal_id: RowId,
+    mode: Field = "",
+    run: Run = "",
+    came_from: Annotated[str, Form(alias="from", max_length=10)] = "",
+) -> Response:
+    """Set a takeout pick to pickup or delivery while voting (#178). A guest coordinating may."""
+    seen = parse_id(run)
+    if seen is None:
+        return await _malformed(request, principal, context, db, event_id, came_from)
+
+    async def action() -> None:
+        chosen = choice(Mode, mode)
+        if chosen is None:
+            raise BadFormValue("Pick pickup or delivery.")
+        await coordinator.set_way(db, principal.member, event_id, proposal_id, chosen, run=seen, now=context.clock())
+
+    return await _run(request, principal, context, db, event_id, came_from, action)
+
+
 @router.post("/events/{event_id}/roles")
 async def choose_roles(
     request: Request,
@@ -560,10 +586,12 @@ async def choose_roles(
     event_id: RowId,
     mode: Field = "",
     member_id: Field = "",
+    pickup_id: Field = "",
     run: Run = "",
     came_from: Annotated[str, Form(alias="from", max_length=10)] = "",
 ) -> Response:
-    """**Assign roles**: the decided pick's mode and who does its role. A guest coordinating may."""
+    """**Assign roles**: the decided pick's mode, who cooks or orders it, and who picks it up
+    (#178). A guest coordinating may."""
     seen = parse_id(run)
     if seen is None:
         return await _malformed(request, principal, context, db, event_id, came_from)
@@ -578,6 +606,7 @@ async def choose_roles(
             event_id,
             mode=chosen,
             member_id=_member_id(member_id) if member_id else None,
+            pickup_id=_member_id(pickup_id) if pickup_id else None,
             run=seen,
             now=context.clock(),
         )

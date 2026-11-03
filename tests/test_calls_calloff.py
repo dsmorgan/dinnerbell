@@ -100,6 +100,7 @@ async def to_voting(house: House) -> int:
 async def decided(house: House) -> int:
     """Alex picks up; Sam coordinates; Kim's maybe turned out at the deadline."""
     event_id = await to_voting(house)
+    await house.settle_ways(event_id)  # Sam keeps each pick's way (#178)
     house.clock.now = VOTE_BY
     await house.tick()
     assert (await house.event(event_id)).state is EventState.DECIDED
@@ -156,7 +157,8 @@ async def test_the_coordinator_calls_off_a_decided_call(house: House) -> None:
     assert isinstance(cancelled, n.EventCancelled) and isinstance(dm, n.AssignmentCancelled)
     # Kim's maybe turned out at the deadline, so Kim, told then, isn't mentioned again.
     assert [p.name for p in cancelled.audience] == ["Alex", "Sam"]
-    assert (dm.member.name, dm.roles, dm.note) == ("Alex", (AssignmentRole.PICKUP,), "Snow day")
+    # Nobody else could order, so Alex orders it too (#178): one message, both roles.
+    assert (dm.member.name, dm.roles, dm.note) == ("Alex", (AssignmentRole.PICKUP, AssignmentRole.ORDER), "Snow day")
     assert dm.decision.proposal.item.name == "Siam Garden"
     assert dm.recipient_id == house["Alex"].id  # Sam coordinates and called it off: no DM to Sam
     assert (await cancel_audits(house))[-1] == {"from": "decided", "as": "coordinator", "note": "Snow day"}

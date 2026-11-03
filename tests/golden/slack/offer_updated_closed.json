@@ -69,6 +69,16 @@
           "url": "https://siam.example/menu"
         },
         {
+          "action_id": "link_order",
+          "text": {
+            "emoji": true,
+            "text": "Order online",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "url": "https://siam.example/order"
+        },
+        {
           "action_id": "link_event",
           "text": {
             "emoji": true,

@@ -1,0 +1,703 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+"""Takeout gets an orderer and a pickup person (#178).
+
+The rules first, in the domain: the default assignment, eligibility, when the roles or the way
+are unsettled, and who may set the way. Then the use cases against a migrated database with a
+fake clock: setting the way while voting, the decision's question and its timeout, Assign roles
+and Adjust with two roles, switching to delivery, credit when it's done, an admin's correction
+after (#162), a pickup offer, and the Slack and web surfaces."""
+
+from __future__ import annotations
+
+import json
+from collections.abc import AsyncIterator
+from dataclasses import replace
+from datetime import date, time, timedelta
+
+import pytest
+from fastapi.testclient import TestClient
+
+from dinnerbell.channels.slack import ids
+from dinnerbell.channels.slack.messages import render
+from dinnerbell.channels.slack.views import adjust_modal, adjust_opened, assign_modal, parse_adjust, parse_assign
+from dinnerbell.config import Settings
+from dinnerbell.db.contributions import ContributionRepository
+from dinnerbell.db.models import AssignmentRow, CatalogItemRow, ProposalRow
+from dinnerbell.domain import labels
+from dinnerbell.domain.catalog import Mode
+from dinnerbell.domain.contributions import Kind
+from dinnerbell.domain.events import (
+    STALE_CALL,
+    AssignmentRole,
+    Coverage,
+    Event,
+    EventKind,
+    EventRuleViolation,
+    EventState,
+    Proposal,
+    ProposalSource,
+    RoleOffer,
+    StaleRun,
+    Status,
+    Step,
+    check_can_set_way,
+    default_roles,
+    roles_unclear,
+    takeout_ways,
+    way_unsettled,
+)
+from dinnerbell.domain.guests import GuestAction, check_guest
+from dinnerbell.domain.meals import Slot
+from dinnerbell.domain.members import Capabilities, Member, Role
+from dinnerbell.services import call_context as cc
+from dinnerbell.services import calls, coordinator, event_views, guests, offers
+from dinnerbell.services.coordinator import Adjustment
+from dinnerbell.services.database import Database, open_database
+from dinnerbell.services.errors import NotFound
+from tests.conftest import invite, page
+from tests.support.calls import OPENS, RESPOND_BY, House, furnish, make_house
+from tests.support.clock import FakeClock
+from tests.support.fake_oidc import FakeProvider
+from tests.support.slack import Slack, wire
+from tests.support.web import add_item, submit
+from tests.test_auth_flow import member, rows
+from tests.test_coordinator import (
+    CTX,
+    act,
+    add_guest,
+    assigned,
+    at_deadline,
+    open_dinner,
+    pick_ids,
+    sent,
+    vote,
+)
+from tests.test_events_web import admin as admin  # the fixture, re-exported for pytest
+from tests.test_events_web import sign_in_as, start
+from tests.test_events_web import tick as web_tick
+
+pytestmark = pytest.mark.anyio
+
+
+@pytest.fixture
+async def database(migrated: Settings) -> AsyncIterator[Database]:
+    database = open_database(migrated.async_database_url)
+    yield database
+    await database.close()
+
+
+@pytest.fixture
+async def house(database: Database, clock: FakeClock, migrated: Settings) -> House:
+    return await furnish(await make_house(database.sessionmaker, clock, migrated.admin_email))
+
+
+ORDER, PICKUP, COOK, LEAD = AssignmentRole.ORDER, AssignmentRole.PICKUP, AssignmentRole.COOK, AssignmentRole.COORDINATOR
+
+
+# The rules, in the domain ---------------------------------------------------------------------------
+
+
+def test_pickup_goes_to_different_people_by_default() -> None:
+    covered = Coverage(pickups=(1, 2), orderers=(1, 3, 4))
+    assert default_roles(Mode.PICKUP, covered) == {ORDER: 3, PICKUP: 1}  # the first orderer who isn't them
+    assert default_roles(Mode.DELIVERY, covered) == {ORDER: 1}
+    assert default_roles(Mode.PICKUP, Coverage(pickups=(1,), orderers=(1,))) == {ORDER: 1, PICKUP: 1}
+    assert default_roles(Mode.PICKUP, Coverage(pickups=(1,))) == {ORDER: 1, PICKUP: 1}  # nobody else: they order too
+    assert default_roles(Mode.PICKUP, Coverage(orderers=(3,))) == {ORDER: 3}  # nobody to pick up
+    assert default_roles(Mode.COOK, Coverage(cooks=(5, 6)), frozenset({6})) == {COOK: 6}
+    assert default_roles(Mode.DELIVERY, Coverage()) == {}
+
+
+def test_choices_win_over_the_defaults_and_one_person_can_do_both() -> None:
+    covered = Coverage(pickups=(1, 2), orderers=(1, 3))
+    assert default_roles(Mode.PICKUP, covered, pickup=2) == {ORDER: 1, PICKUP: 2}
+    assert default_roles(Mode.PICKUP, covered, lead=2) == {ORDER: 2, PICKUP: 1}
+    assert default_roles(Mode.PICKUP, covered, lead=9, pickup=9) == {ORDER: 9, PICKUP: 9}
+    assert default_roles(Mode.DELIVERY, covered, lead=9, pickup=2) == {ORDER: 9}  # nobody picks up a delivery
+
+
+def test_a_pickup_volunteer_is_still_all_a_pickup_needs() -> None:
+    nobody = frozenset[int]()
+    assert Coverage(pickups=(1,), orderers=(2,)).covers(Mode.PICKUP, nobody)
+    assert Coverage(pickups=(1,)).covers(Mode.PICKUP, nobody)  # they order it too
+    assert not Coverage(orderers=(2,)).covers(Mode.PICKUP, nobody)
+    assert Coverage(orderers=(2,)).covers(Mode.DELIVERY, nobody)
+
+
+def test_when_the_takeout_roles_have_no_clear_owner() -> None:
+    assert not roles_unclear(Mode.PICKUP, Coverage(pickups=(1,), orderers=(1,)))  # they do both
+    assert not roles_unclear(Mode.PICKUP, Coverage(pickups=(1,), orderers=(1, 2)))  # one other orderer
+    assert roles_unclear(Mode.PICKUP, Coverage(pickups=(1,), orderers=(1, 2, 3)))  # two others could order
+    assert roles_unclear(Mode.PICKUP, Coverage(pickups=(1, 2), orderers=(3,)))  # two could pick up
+    assert roles_unclear(Mode.PICKUP, Coverage(orderers=(3,)))
+    assert not roles_unclear(Mode.DELIVERY, Coverage(orderers=(3,)))
+    assert roles_unclear(Mode.DELIVERY, Coverage(orderers=(3, 4)))
+    assert not roles_unclear(Mode.COOK, Coverage(cooks=(5,)))
+
+
+def test_the_way_is_open_only_at_a_place_with_both_until_someone_sets_it() -> None:
+    pick = Proposal(1, 1, Mode.PICKUP, 0, ProposalSource.SYSTEM, item_id=3)
+    both = frozenset({Mode.PICKUP, Mode.DELIVERY})
+    assert takeout_ways(both) == (Mode.PICKUP, Mode.DELIVERY)
+    assert takeout_ways({Mode.PICKUP}) == () and takeout_ways({Mode.COOK}) == ()
+    assert way_unsettled(pick, both)
+    assert not way_unsettled(replace(pick, mode_chosen=True), both)
+    assert not way_unsettled(pick, {Mode.PICKUP})
+
+
+def _event(state: EventState, coordinator_id: int | None = 2, kind: EventKind = EventKind.CALL) -> Event:
+    return Event(1, 1, kind, Slot.DINNER, date(2026, 10, 22), state, 1, OPENS, RESPOND_BY, 15, 45, None, coordinator_id)
+
+
+def _person(member_id: int, role: Role = Role.MEMBER, *, active: bool = True) -> Member:
+    return Member(member_id, 1, f"P{member_id}", None, role, Capabilities(), active)
+
+
+def test_who_may_set_the_way() -> None:
+    voting = _event(EventState.VOTING)
+    check_can_set_way(voting, _person(2))  # the coordinator
+    check_can_set_way(voting, _person(1, Role.ADMIN))  # any admin, as for roles (FR-61)
+    check_can_set_way(_event(EventState.VOTING, coordinator_id=9), _person(9, Role.GUEST))  # a guest coordinator
+    for event, actor, code in [
+        (voting, _person(3), "not_coordinator"),
+        (_event(EventState.DECIDED), _person(2), "voting_closed"),
+        (_event(EventState.COLLECTING), _person(2), "voting_closed"),
+        (voting, _person(2, active=False), "inactive"),
+        (_event(EventState.COLLECTING, kind=EventKind.OFFER), _person(2), "is_offer"),
+    ]:
+        with pytest.raises(EventRuleViolation) as refused:
+            check_can_set_way(event, actor)
+        assert refused.value.code == code
+    check_guest(voting, _person(9, Role.GUEST), GuestAction.SET_WAY, invited=True)  # while voting only
+    with pytest.raises(EventRuleViolation):
+        check_guest(_event(EventState.DECIDED), _person(9, Role.GUEST), GuestAction.SET_WAY, invited=True)
+
+
+def test_what_the_coordinator_is_asked_to_choose() -> None:
+    assert labels.roles_to_choose(Mode.COOK, way_open=False) == "who cooks"
+    assert labels.roles_to_choose(Mode.DELIVERY, way_open=False) == "who orders"
+    assert labels.roles_to_choose(Mode.PICKUP, way_open=False) == "who orders and who picks it up"
+    assert labels.roles_to_choose(Mode.PICKUP, way_open=True).startswith("pickup or delivery")
+
+
+def test_way_values_say_the_way_the_call_the_run_and_the_pick() -> None:
+    value = ids.way_value(Mode.DELIVERY, 12, 3, 45)
+    assert value == "delivery:12:3:45" and ids.parse_way(value) == (Mode.DELIVERY, 12, 3, 45)
+    for bad in ("cook:12:3:45", "delivery:12:3", "delivery:0:3:45", 7, "pickup:1:1:1:1"):
+        with pytest.raises(ids.BadValue):
+            ids.parse_way(bad)
+
+
+def test_an_adjust_modal_keeps_the_pickup_person_and_reads_one_from_before_without() -> None:
+    opened = ids.Opened(time(18, 30), 3, 2, Mode.PICKUP, 4)
+    assert opened.data()["pick"] == 4 and ids.Opened.parse(opened.data()) == opened
+    old = {"at": "18:30", "who": 4, "lead": 2, "how": "pickup"}  # opened before the upgrade
+    assert ids.Opened.parse(old) == ids.Opened(time(18, 30), 4, 2, Mode.PICKUP, None)
+    with pytest.raises(ids.BadValue):
+        ids.Opened.parse(old | {"pick": "4"})
+
+
+# Against the database --------------------------------------------------------------------------------
+
+
+async def to_voting(
+    house: House,
+    *eaters: str,
+    pickups: tuple[str, ...] = ("Alex",),
+    orders: tuple[str, ...] = (),
+    coordinator_name: str | None = "Alex",
+) -> int:
+    """``eaters`` are in (Alex always is); ``pickups`` offer to pick up, ``orders`` to order. Lee
+    can order whenever they're in. Siam Garden allows pickup and delivery; Taqueria, pickup only."""
+    event_id = await open_dinner(house)
+    for name in dict.fromkeys(("Alex", *eaters)):
+        await act(house, calls.respond, house[name], event_id, Status.IN)
+    for name in pickups:
+        await act(house, calls.offer_role, house[name], event_id, RoleOffer.PICKUP, True)
+    for name in orders:
+        await act(house, calls.offer_role, house[name], event_id, RoleOffer.ORDER, True)
+    if coordinator_name is not None:
+        await act(house, calls.claim_coordinator, house[coordinator_name], event_id)
+    house.clock.now = RESPOND_BY
+    await house.tick()
+    assert (await house.event(event_id)).state is EventState.VOTING
+    return event_id
+
+
+async def decide_on(house: House, event_id: int, place: str) -> None:
+    await vote(house, "Alex", event_id, (await pick_ids(house, event_id))[place])
+    await at_deadline(house, event_id)
+
+
+async def test_a_pickup_is_ordered_by_someone_else_when_someone_can(house: House) -> None:
+    event_id = await to_voting(house, "Lee", coordinator_name=None)
+    await decide_on(house, event_id, "Taqueria")
+    ctx = await house.context(event_id)
+    assert assigned(ctx) == {ORDER: house["Lee"].id, PICKUP: house["Alex"].id}
+    assert {n.member.id for n in await sent(house, "assignment_made")} == {house["Lee"].id, house["Alex"].id}
+    decision = cc.decision_info(ctx)
+    assert decision is not None and [a.role for a in decision.assignments] == [ORDER, PICKUP]
+    text = json.dumps(render((await sent(house, "decision_made"))[0], CTX).payload())
+    assert "Ordering:" in text and "Picking up:" in text
+
+
+async def test_with_nobody_else_who_can_order_the_pickup_person_orders_too(house: House) -> None:
+    event_id = await to_voting(house, "Sam", coordinator_name=None)  # nobody who's in can order
+    await decide_on(house, event_id, "Taqueria")
+    assert assigned(await house.context(event_id)) == {ORDER: house["Alex"].id, PICKUP: house["Alex"].id}
+    (told,) = await sent(house, "assignment_made")  # one message, naming both
+    assert told.member.id == house["Alex"].id and set(told.roles) == {ORDER, PICKUP}
+    assert "picking up and ordering" in json.dumps(render(told, CTX).payload())
+
+
+async def test_an_open_way_asks_the_coordinator_even_when_the_roles_are_clear(house: House) -> None:
+    event_id = await to_voting(house, "Lee")
+    await decide_on(house, event_id, "Siam Garden")
+    event = await house.event(event_id)
+    assert event.roles_due_at is not None
+    assert assigned(await house.context(event_id)) == {LEAD: house["Alex"].id}  # the roles wait
+    (ask,) = await sent(house, "roles_to_choose")
+    text = json.dumps(render(ask, CTX).payload())
+    assert "pickup or delivery, who orders, and who picks it up" in text and "it stays pickup" in text
+    (made,) = await sent(house, "decision_made")
+    assert "is choosing pickup or delivery" in json.dumps(render(made, CTX).payload())
+
+
+async def test_a_place_with_one_way_and_clear_roles_asks_nothing(house: House) -> None:
+    event_id = await to_voting(house, "Lee")
+    await decide_on(house, event_id, "Taqueria")
+    assert (await house.event(event_id)).roles_due_at is None
+    assert await sent(house, "roles_to_choose") == []
+    assert assigned(await house.context(event_id)) == {
+        ORDER: house["Lee"].id,
+        PICKUP: house["Alex"].id,
+        LEAD: house["Alex"].id,
+    }
+
+
+async def test_unclear_ordering_on_a_pickup_asks_the_coordinator(house: House) -> None:
+    event_id = await to_voting(house, "Lee", "Sam", orders=("Sam",))  # Sam and Lee could both order
+    await decide_on(house, event_id, "Taqueria")
+    assert (await house.event(event_id)).roles_due_at is not None
+    (ask,) = await sent(house, "roles_to_choose")
+    assert "who orders and who picks it up" in json.dumps(render(ask, CTX).payload())
+
+
+async def test_setting_the_way_while_voting_settles_it(house: House) -> None:
+    event_id = await to_voting(house, "Lee")
+    siam = (await pick_ids(house, event_id))["Siam Garden"]
+    await act(house, coordinator.set_way, house["Alex"], event_id, siam, Mode.PICKUP, run=1)  # the way it has
+    ctx = await house.context(event_id)
+    pick = ctx.proposal(siam)
+    assert pick is not None and pick.mode is Mode.PICKUP and pick.mode_chosen
+    info = cc.proposal_info(ctx, pick)
+    assert info.ways == (Mode.PICKUP, Mode.DELIVERY) and not info.way_open
+    (audit,) = [a for a in await house.audits() if a.action == "event.way_set"]
+    assert "pickup" in str(audit.payload)
+    updated = (await sent(house, "proposals_updated"))[-1]
+    assert "(chosen)" in json.dumps(render(updated, CTX).payload())
+    await decide_on(house, event_id, "Siam Garden")
+    assert (await house.event(event_id)).roles_due_at is None  # nothing left to ask
+    assert assigned(await house.context(event_id))[ORDER] == house["Lee"].id
+
+
+async def test_switching_a_pick_to_delivery_while_voting(house: House) -> None:
+    event_id = await to_voting(house, "Lee")
+    siam = (await pick_ids(house, event_id))["Siam Garden"]
+    await act(house, coordinator.set_way, house["Alex"], event_id, siam, Mode.DELIVERY, run=1)
+    await decide_on(house, event_id, "Siam Garden")
+    event = await house.event(event_id)
+    assert event.decided_mode is Mode.DELIVERY and event.roles_due_at is None
+    assert assigned(await house.context(event_id)) == {ORDER: house["Lee"].id, LEAD: house["Alex"].id}
+
+
+async def test_setting_the_way_is_refused_with_a_reason(house: House) -> None:
+    event_id = await to_voting(house, "Sam", "Lee", coordinator_name="Sam")
+    picks = await pick_ids(house, event_id)
+    for who, pick, mode, code in [
+        ("Lee", picks["Siam Garden"], Mode.DELIVERY, "not_coordinator"),
+        ("Sam", picks["Taqueria"], Mode.DELIVERY, "not_both_ways"),
+        ("Sam", picks["Siam Garden"], Mode.COOK, "not_both_ways"),
+    ]:
+        with pytest.raises(EventRuleViolation) as refused:
+            await act(house, coordinator.set_way, house[who], event_id, pick, mode, run=1)
+        assert refused.value.code == code, who
+    with pytest.raises(StaleRun):
+        await act(house, coordinator.set_way, house["Sam"], event_id, picks["Siam Garden"], Mode.DELIVERY, run=2)
+    await act(
+        house, coordinator.set_way, house["Alex"], event_id, picks["Siam Garden"], Mode.DELIVERY, run=1
+    )  # an admin
+    await act(house, calls.lock, house["Alex"], event_id, picks["Taqueria"])
+    with pytest.raises(EventRuleViolation) as refused:
+        await act(house, coordinator.set_way, house["Sam"], event_id, picks["Siam Garden"], Mode.PICKUP, run=1)
+    assert refused.value.code == "voting_closed"
+
+
+async def test_a_way_nobody_who_is_in_can_do_is_refused(house: House) -> None:
+    event_id = await to_voting(house, "Sam")  # Alex picks up; nobody who's in can order a delivery
+    siam = (await pick_ids(house, event_id))["Siam Garden"]
+    with pytest.raises(EventRuleViolation) as refused:
+        await act(house, coordinator.set_way, house["Alex"], event_id, siam, Mode.DELIVERY, run=1)
+    assert refused.value.code == "no_coverage" and "order" in str(refused.value)
+    pick = (await house.context(event_id)).proposal(siam)
+    assert pick is not None and pick.mode is Mode.PICKUP and not pick.mode_chosen
+
+
+async def test_the_coordinator_assigns_the_orderer_and_the_pickup_person(house: House) -> None:
+    event_id = await to_voting(house, "Lee", "Sam", "Kim")
+    await decide_on(house, event_id, "Siam Garden")
+    await act(
+        house,
+        coordinator.choose_roles,
+        house["Alex"],
+        event_id,
+        mode=Mode.PICKUP,
+        member_id=house["Kim"].id,
+        pickup_id=house["Sam"].id,
+        run=1,
+    )
+    ctx = await house.context(event_id)
+    assert assigned(ctx) == {ORDER: house["Kim"].id, PICKUP: house["Sam"].id, LEAD: house["Alex"].id}
+    told = {n.member.id: n for n in await sent(house, "assignment_made")}
+    assert set(told) == {house["Kim"].id, house["Sam"].id}
+    assert all(n.assigned_by is not None for n in told.values())  # neither offered
+    (audit,) = [a for a in await house.audits() if a.action == "event.roles_assigned"]
+    assert "'pickup': " in str(audit.payload) or '"pickup":' in str(audit.payload)
+
+
+async def test_one_person_can_take_every_role(house: House) -> None:
+    event_id = await to_voting(house, "Lee", "Sam")
+    await decide_on(house, event_id, "Taqueria")
+    await act(
+        house, coordinator.choose_roles, house["Alex"], event_id, member_id=house["Alex"].id, pickup_id=house["Alex"].id
+    )
+    assert assigned(await house.context(event_id)) == {
+        ORDER: house["Alex"].id,
+        PICKUP: house["Alex"].id,
+        LEAD: house["Alex"].id,
+    }
+
+
+async def test_switching_to_delivery_drops_the_pickup_person_who_is_told(house: House) -> None:
+    event_id = await to_voting(house, "Lee", "Sam", pickups=("Sam",))
+    siam = (await pick_ids(house, event_id))["Siam Garden"]
+    await act(house, coordinator.set_way, house["Alex"], event_id, siam, Mode.PICKUP, run=1)
+    await decide_on(house, event_id, "Siam Garden")
+    assert assigned(await house.context(event_id)) == {
+        ORDER: house["Lee"].id,
+        PICKUP: house["Sam"].id,
+        LEAD: house["Alex"].id,
+    }
+    await act(house, coordinator.choose_roles, house["Alex"], event_id, mode=Mode.DELIVERY, member_id=house["Lee"].id)
+    ctx = await house.context(event_id)
+    assert ctx.event.decided_mode is Mode.DELIVERY
+    assert assigned(ctx) == {ORDER: house["Lee"].id, LEAD: house["Alex"].id}  # the orderer stays
+    (ended,) = await sent(house, "assignment_ended")
+    assert ended.member.id == house["Sam"].id and ended.roles == (PICKUP,)
+    assert "no longer picking up" in json.dumps(render(ended, CTX).payload())
+    # Done: Lee ordered, and Sam gets no pickup credit.
+    await act(house, calls.mark_done, house["Alex"], event_id)
+    async with house.sessionmaker() as db:
+        counts = ContributionRepository(db)
+        assert await counts.credited(house.household.id, event_id, Kind.ORDERED) == {house["Lee"].id}
+        assert await counts.credited(house.household.id, event_id, Kind.PICKED_UP) == set()
+
+
+async def test_ordering_and_picking_up_count_separately_when_done(house: House) -> None:
+    event_id = await to_voting(house, "Lee", coordinator_name=None)
+    await decide_on(house, event_id, "Taqueria")
+    await act(house, calls.mark_done, house["Alex"], event_id)
+    async with house.sessionmaker() as db:
+        counts = ContributionRepository(db)
+        assert await counts.credited(house.household.id, event_id, Kind.ORDERED) == {house["Lee"].id}
+        assert await counts.credited(house.household.id, event_id, Kind.PICKED_UP) == {house["Alex"].id}
+
+
+async def test_an_admin_corrects_the_orderer_after_the_meal_and_the_count_moves(house: House) -> None:
+    event_id = await to_voting(house, "Lee", "Sam", coordinator_name=None)
+    await decide_on(house, event_id, "Taqueria")
+    await act(house, calls.mark_done, house["Alex"], event_id)
+    await act(house, calls.change_assignment, house["Alex"], event_id, ORDER, house["Sam"].id)
+    await act(house, calls.change_assignment, house["Alex"], event_id, PICKUP, house["Lee"].id)
+    async with house.sessionmaker() as db:
+        counts = ContributionRepository(db)
+        assert await counts.credited(house.household.id, event_id, Kind.ORDERED) == {house["Sam"].id}
+        assert await counts.credited(house.household.id, event_id, Kind.PICKED_UP) == {house["Lee"].id}
+    kinds = [str(a.payload) for a in await house.audits() if a.action == "event.contributions_recounted"]
+    assert len(kinds) == 2 and "ordered" in kinds[0] and "picked_up" in kinds[1]
+    with pytest.raises(EventRuleViolation) as refused:
+        await act(house, calls.change_assignment, house["Alex"], event_id, COOK, house["Sam"].id)
+    assert refused.value.code == "wrong_role"
+
+
+async def test_the_timeout_gives_both_roles_and_tells_each_person_once(house: House) -> None:
+    event_id = await to_voting(house, "Lee")
+    await decide_on(house, event_id, "Siam Garden")
+    due = (await house.event(event_id)).roles_due_at
+    assert due is not None
+    house.clock.now = due
+    assert Step.ASSIGN_ROLES in await house.tick()
+    ctx = await house.context(event_id)
+    assert ctx.event.decided_mode is Mode.PICKUP  # it stays the way it was
+    assert assigned(ctx) == {ORDER: house["Lee"].id, PICKUP: house["Alex"].id, LEAD: house["Alex"].id}
+    assert sorted(n.member.id for n in await sent(house, "assignment_made")) == sorted(
+        [house["Lee"].id, house["Alex"].id]
+    )
+    await house.tick()
+    assert len(await sent(house, "assignment_made")) == 2
+
+
+async def test_marking_done_while_the_coordinator_chooses_gives_both_roles(house: House) -> None:
+    event_id = await to_voting(house, "Lee")
+    await decide_on(house, event_id, "Siam Garden")
+    await act(house, calls.mark_done, house["Alex"], event_id)
+    async with house.sessionmaker() as db:
+        counts = ContributionRepository(db)
+        assert await counts.credited(house.household.id, event_id, Kind.ORDERED) == {house["Lee"].id}
+        assert await counts.credited(house.household.id, event_id, Kind.PICKED_UP) == {house["Alex"].id}
+
+
+async def test_a_pickup_offer_makes_the_offerer_order_and_pick_up(house: House) -> None:
+    form = offers.OfferInput(
+        slot=Slot.DINNER,
+        day=date(2026, 10, 22),
+        mode=Mode.PICKUP,
+        at=time(19),
+        capacity=2,
+        item_id=house.items["Taqueria"].id,
+    )
+    posted = await act(house, offers.post_offer, house["Sam"], form)
+    assert assigned(await house.context(posted.event_id)) == {ORDER: house["Sam"].id, PICKUP: house["Sam"].id}
+
+
+# Adjust (spec 5.7) --------------------------------------------------------------------------------------
+
+
+async def decided_pickup(house: House) -> int:
+    """Siam Garden, set to pickup while voting: Lee orders, Sam picks up, Alex coordinates."""
+    event_id = await to_voting(house, "Lee", "Sam", "Kim", pickups=("Sam",))
+    siam = (await pick_ids(house, event_id))["Siam Garden"]
+    await act(house, coordinator.set_way, house["Alex"], event_id, siam, Mode.PICKUP, run=1)
+    await decide_on(house, event_id, "Siam Garden")
+    return event_id
+
+
+async def opened(house: House, event_id: int) -> Adjustment:
+    view = await act(house, event_views.event_view, house["Alex"], event_id)
+    shown = adjust_opened(view)
+    return Adjustment(shown.meal_time, shown.assignee_id, shown.coordinator_id, shown.mode, shown.pickup_id)
+
+
+async def test_adjust_opens_with_both_roles_and_changes_the_pickup_person_alone(house: House) -> None:
+    event_id = await decided_pickup(house)
+    before = await opened(house, event_id)
+    assert (before.assignee_id, before.pickup_id, before.mode) == (house["Lee"].id, house["Sam"].id, Mode.PICKUP)
+    changed = await act(
+        house,
+        coordinator.adjust,
+        house["Alex"],
+        event_id,
+        replace(before, pickup_id=house["Kim"].id),
+        opened=before,
+        run=1,
+    )
+    assert changed.pickup_id == house["Kim"].id
+    assert assigned(await house.context(event_id)) == {
+        ORDER: house["Lee"].id,
+        PICKUP: house["Kim"].id,
+        LEAD: house["Alex"].id,
+    }
+    (ended,) = await sent(house, "assignment_ended")
+    assert ended.member.id == house["Sam"].id
+
+
+async def test_adjust_to_delivery_keeps_the_orderer(house: House) -> None:
+    event_id = await decided_pickup(house)
+    before = await opened(house, event_id)
+    await act(
+        house, coordinator.adjust, house["Alex"], event_id, replace(before, mode=Mode.DELIVERY), opened=before, run=1
+    )
+    ctx = await house.context(event_id)
+    assert ctx.event.decided_mode is Mode.DELIVERY
+    assert assigned(ctx) == {ORDER: house["Lee"].id, LEAD: house["Alex"].id}
+
+
+async def test_an_adjust_opened_before_the_pickup_person_showed_cannot_change_the_roles(house: House) -> None:
+    event_id = await decided_pickup(house)
+    before = replace(await opened(house, event_id), pickup_id=None)  # an old modal: no "pick"
+    with pytest.raises(coordinator.AdjustmentRefused) as refused:
+        await act(
+            house,
+            coordinator.adjust,
+            house["Alex"],
+            event_id,
+            replace(before, assignee_id=house["Kim"].id),
+            opened=before,
+            run=1,
+        )
+    assert refused.value.code == "plan_changed"
+    later = replace(before, meal_time=time(19, 30))  # the time still saves
+    assert (
+        await act(house, coordinator.adjust, house["Alex"], event_id, later, opened=before, run=1)
+    ).meal_time == time(19, 30)
+
+
+async def test_a_pickup_person_who_is_not_in_is_refused_beside_their_field(house: House) -> None:
+    event_id = await decided_pickup(house)
+    before = await opened(house, event_id)
+    outsider = await add_guest(house, "Pat")  # not invited, not in
+    wanted = replace(before, pickup_id=outsider.id)
+    async with house.sessionmaker() as db:
+        with pytest.raises(coordinator.AdjustmentRefused) as refused:
+            await coordinator.plan_adjustment(db, house["Alex"], event_id, wanted, opened=before, run=1)
+    assert refused.value.part == "pickup"
+
+
+# Slack ---------------------------------------------------------------------------------------------------
+
+
+async def test_the_modals_ask_who_orders_and_who_picks_up(house: House) -> None:
+    event_id = await decided_pickup(house)
+    view = await act(house, event_views.event_view, house["Alex"], event_id)
+    origin = ids.ViewOrigin(event_id, "C1", run=1)
+    blocks = {b.get("block_id"): b for b in assign_modal(view, origin)["blocks"]}
+    assert blocks["who"]["label"]["text"] == "Who orders" and blocks["pickup"]["label"]["text"] == "Who picks up"
+    assert blocks["who"]["element"]["initial_option"]["value"] == str(house["Lee"].id)
+    assert blocks["pickup"]["element"]["initial_option"]["value"] == str(house["Sam"].id)
+    values = {
+        "mode": {"value": {"selected_option": {"value": "pickup"}}},
+        "who": {"value": {"selected_option": {"value": str(house["Kim"].id)}}},
+        "pickup": {"value": {"selected_option": {"value": str(house["Kim"].id)}}},
+    }
+    form = parse_assign(values)
+    assert (form.mode, form.member_id, form.pickup_id) == (Mode.PICKUP, house["Kim"].id, house["Kim"].id)
+    adjust_origin = replace(origin, opened=adjust_opened(view))
+    adjust_blocks = {b.get("block_id"): b for b in adjust_modal(view, adjust_origin)["blocks"]}
+    assert {"who", "pickup", "mode"} <= set(adjust_blocks)
+    assert adjust_blocks["pickup"]["element"]["initial_option"]["value"] == str(house["Sam"].id)
+    parsed = parse_adjust(
+        values
+        | {
+            "meal_time": {"value": {"selected_time": "19:00"}},
+            "coordinator": {"value": {"selected_option": {"value": "1"}}},
+        }
+    )
+    assert parsed.pickup_id == house["Kim"].id
+
+
+async def test_the_proposals_message_offers_the_way_beside_a_place_with_both(house: House) -> None:
+    event_id = await to_voting(house, "Lee")
+    (ready,) = await sent(house, "proposals_ready")
+    payload = render(ready, CTX).payload()
+    picks = await pick_ids(house, event_id)
+    rows = {b["block_id"]: b for b in payload["blocks"] if b.get("block_id", "").startswith("proposal-actions-")}
+    siam_menu = [
+        e for e in rows[f"proposal-actions-{picks['Siam Garden']}"]["elements"] if e["action_id"] == ids.SET_WAY
+    ]
+    assert len(siam_menu) == 1
+    assert [o["value"] for o in siam_menu[0]["options"]] == [
+        ids.way_value(Mode.PICKUP, event_id, 1, picks["Siam Garden"]),
+        ids.way_value(Mode.DELIVERY, event_id, 1, picks["Siam Garden"]),
+    ]
+    assert not [e for e in rows[f"proposal-actions-{picks['Taqueria']}"]["elements"] if e["action_id"] == ids.SET_WAY]
+    assert "pickup or delivery with ⋯" in json.dumps(payload, ensure_ascii=False)
+
+
+async def test_a_guest_coordinator_sets_the_way(house: House) -> None:
+    pat = await add_guest(house, "Pat")
+    event_id = await open_dinner(house)
+    for name in ("Alex", "Lee"):
+        await act(house, calls.respond, house[name], event_id, Status.IN)
+    await act(house, calls.offer_role, house["Alex"], event_id, RoleOffer.PICKUP, True)
+    await act(house, guests.invite, house["Lee"], event_id, guest_id=pat.id)
+    await act(house, calls.respond, pat, event_id, Status.IN)
+    await act(house, calls.claim_coordinator, pat, event_id)
+    house.clock.now = RESPOND_BY
+    await house.tick()
+    siam = (await pick_ids(house, event_id))["Siam Garden"]
+    view = await act(house, event_views.event_view, pat, event_id)
+    assert view.can.set_way
+    await act(house, coordinator.set_way, pat, event_id, siam, Mode.DELIVERY, run=1)
+    pick = (await house.context(event_id)).proposal(siam)
+    assert pick is not None and pick.mode is Mode.DELIVERY
+
+
+# The web -------------------------------------------------------------------------------------------------
+
+
+def test_web_sets_the_way_while_voting_and_assigns_both_roles(
+    admin: TestClient, provider: FakeProvider, clock: FakeClock, migrated: Settings
+) -> None:
+    add_item(admin, "Pho Place", cuisines="Vietnamese", modes=["pickup", "delivery"])
+    invite(admin, "kim@example.com", "Kim")
+    event_id = start(admin)
+    assert submit(admin, f"/events/{event_id}/respond", {"status": "in"}).status_code == 303
+    assert submit(admin, f"/events/{event_id}/offer", {"role": "pickup", "offered": "1"}).status_code == 303
+    sign_in_as(admin, provider, "kim@example.com")  # not an admin
+    assert submit(admin, f"/events/{event_id}/coordinate", {}).status_code == 303
+    clock.advance(timedelta(minutes=90))
+    web_tick(admin, clock)
+    (item,) = [i for i in rows(migrated, CatalogItemRow) if i.name == "Pho Place"]
+    (pho,) = [p.id for p in rows(migrated, ProposalRow) if p.item_id == item.id]
+    html = page(admin.get(f"/events/{event_id}"))
+    assert f'action="/events/{event_id}/proposals/{pho}/way"' in html and "Not chosen yet" in html
+    assert submit(admin, f"/events/{event_id}/proposals/{pho}/way", {"mode": "pickup"}).status_code == 400  # no run
+    bad = submit(admin, f"/events/{event_id}/proposals/{pho}/way", {"mode": "cook", "run": "1"})
+    assert bad.status_code == 409 and "one way" in page(bad)
+    assert submit(admin, f"/events/{event_id}/proposals/{pho}/way", {"mode": "pickup", "run": "1"}).status_code == 303
+    (row,) = [p for p in rows(migrated, ProposalRow) if p.id == pho]
+    assert (row.mode, row.mode_chosen) == ("pickup", True)
+    assert submit(admin, f"/events/{event_id}/proposals/{pho}/lock", {}).status_code == 303
+    kim = member(migrated, "kim@example.com")
+    alex = member(migrated, "admin@example.com")
+    html = page(admin.get(f"/events/{event_id}"))
+    assert "Picking up: " in html and "Ordering: " in html
+    assert "<span>Who orders</span>" in html and "<span>Who picks up (pickup only)</span>" in html
+    assert '<option value="order">Ordering</option><option value="pickup">Picking up</option>' in html
+    form = {"mode": "pickup", "member_id": str(kim.id), "pickup_id": str(alex.id), "run": "1"}
+    assert submit(admin, f"/events/{event_id}/roles", form).status_code == 303
+    assert sorted((a.role, a.member_id) for a in rows(migrated, AssignmentRow) if a.role != "coordinator") == [
+        ("order", kim.id),
+        ("pickup", alex.id),
+    ]
+
+
+@pytest.fixture
+async def slack(house: House) -> AsyncIterator[Slack]:
+    wired = await wire(house)
+    yield wired
+    await wired.conn.stop()
+
+
+async def test_slack_sets_the_way_from_the_menu_beside_a_pick(slack: Slack, house: House) -> None:
+    event_id = await to_voting(house, "Lee", "Sam", coordinator_name="Sam")
+    siam = (await pick_ids(house, event_id))["Siam Garden"]
+    delivery = ids.way_value(Mode.DELIVERY, event_id, 1, siam)
+    await slack.click("Lee", ids.SET_WAY, None, selected=delivery)
+    assert slack.ephemerals("Lee")[-1] == "Only the coordinator or an admin can choose pickup or delivery."
+    await slack.click("Sam", ids.SET_WAY, None, selected=ids.way_value(Mode.DELIVERY, event_id, 2, siam))
+    assert slack.ephemerals("Sam")[-1] == STALE_CALL
+    await slack.click("Sam", ids.SET_WAY, None, selected=delivery)
+    assert slack.ephemerals("Sam")[-1] == "It's delivery if it wins."
+    pick = (await house.context(event_id)).proposal(siam)
+    assert pick is not None and (pick.mode, pick.mode_chosen) == (Mode.DELIVERY, True)
+    await slack.click("Alex", ids.SET_WAY, None, selected=ids.way_value(Mode.PICKUP, event_id, 1, siam))  # an admin
+    assert slack.ephemerals("Alex")[-1] == "It's pickup if it wins."
+
+
+async def test_a_pickup_with_nobody_to_pick_it_up_asks_who_will(house: House) -> None:
+    event_id = await to_voting(house, "Lee", pickups=(), coordinator_name="Alex")  # Lee can order: delivery only
+    siam = (await pick_ids(house, event_id))["Siam Garden"]
+    with pytest.raises(NotFound):
+        await act(house, coordinator.set_way, house["Alex"], event_id, 999_999, Mode.PICKUP, run=1)
+    await act(house, calls.lock, house["Alex"], event_id, siam)
+    assert (await house.event(event_id)).decided_mode is Mode.DELIVERY
+    with pytest.raises(EventRuleViolation) as refused:
+        await act(house, coordinator.choose_roles, house["Alex"], event_id, mode=Mode.PICKUP)
+    assert (refused.value.code, str(refused.value)) == ("no_one_chosen", "Pick who will pick it up.")
+    await act(house, coordinator.choose_roles, house["Alex"], event_id, mode=Mode.PICKUP, pickup_id=house["Lee"].id)
+    assert assigned(await house.context(event_id)) == {
+        ORDER: house["Lee"].id,
+        PICKUP: house["Lee"].id,
+        LEAD: house["Alex"].id,
+    }
