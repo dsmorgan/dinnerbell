@@ -195,6 +195,7 @@ CLOSED = {Window.RESPOND: "Responses are closed for {slot}.", Window.VOTE: "Voti
 VOTED = "Vote counted. Tap Vote again to take it back."
 SHUFFLED = "Shuffled: {replaced} replaced. Everyone sees the new set."
 ASSIGNED = "Assigned. {name} is told."
+ASSIGNED_NOBODY = "Assigned."
 WAY_SET = {Mode.PICKUP: "It's pickup if it wins.", Mode.DELIVERY: "It's delivery if it wins."}
 """The reply to setting a takeout pick's way while voting (#178)."""
 ADJUSTED_NOTHING = "Nothing changed."
@@ -1332,7 +1333,7 @@ class Interactions:
 
     async def _assign(self, member: Member, event_id: int, form: Any, run: int | None) -> str:
         async with self.sessionmaker() as db:
-            await coordinator.choose_roles(
+            told = await coordinator.choose_roles(
                 db,
                 member,
                 event_id,
@@ -1343,10 +1344,12 @@ class Interactions:
                 now=self.clock(),
             )
             view = await event_views.event_view(db, member, event_id, now=self.clock())
-        decided = view.decision.assignments if view.decision else ()
-        names = dict.fromkeys(a.member.name for a in decided if a.role is not AssignmentRole.COORDINATOR)
-        told = " and ".join(names) or "They"
-        return ASSIGNED.format(name=told) if len(names) < 2 else f"Assigned. {told} are told."
+        people = {p.id: p.name for p in view.members}
+        names = [people.get(held.member_id, "They") for held in told]  # only those told
+        if not names:
+            return ASSIGNED_NOBODY
+        joined = " and ".join(names)
+        return ASSIGNED.format(name=joined) if len(names) == 1 else f"Assigned. {joined} are told."
 
     # Adjust (spec 5.7) ------------------------------------------------------------------------
 

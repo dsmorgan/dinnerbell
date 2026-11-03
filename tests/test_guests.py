@@ -427,6 +427,7 @@ async def test_assignment_messages_for_a_guest_without_slack_go_to_the_inviter(h
     await act(house, calls.respond, house["Sam"], event_id, Status.IN)
     house.clock.now = RESPOND_BY
     await house.tick()
+    await house.settle_ways(event_id)  # nothing to ask the picked coordinator (#178, #179)
     ctx = await house.context(event_id)
     pick = next(p for p in ctx.proposals if p.mode is Mode.PICKUP)
     await act(house, calls.lock, house["Alex"], event_id, pick.id)
@@ -857,6 +858,7 @@ async def test_a_vote_decided_assignment_for_a_guest_without_slack_reaches_the_i
     await act(house, calls.respond, house["Sam"], event_id, Status.IN)
     house.clock.now = RESPOND_BY
     await house.tick()
+    await house.settle_ways(event_id)  # nothing to ask the picked coordinator (#178, #179)
     pick = next(p for p in (await house.context(event_id)).proposals if p.mode is Mode.PICKUP)
     await act(house, calls.vote, house["Sam"], event_id, pick.id)
     house.clock.now = VOTE_BY
@@ -1157,6 +1159,7 @@ async def test_removing_a_guest_from_a_decided_call_clears_their_role(house: Hou
     await act(house, calls.respond, house["Sam"], event_id, Status.IN)
     house.clock.now = RESPOND_BY
     await house.tick()
+    await house.settle_ways(event_id)  # nothing to ask the picked coordinator (#178, #179)
     pick = next(p for p in (await house.context(event_id)).proposals if p.mode is Mode.PICKUP)
     await act(house, calls.lock, house["Alex"], event_id, pick.id)
     assert any(

@@ -33,6 +33,7 @@ from dinnerbell.domain.events import (
     default_roles,
 )
 from dinnerbell.domain.guests import GuestAction, can_answer_for, check_can_invite, check_guest
+from dinnerbell.domain.labels import ROLE_WHO
 from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.members import Member
 from dinnerbell.services import call_context as cc
@@ -116,6 +117,20 @@ class RolesChoice:
     def lead(self) -> AssignmentRole:
         """The role "Who cooks" or "Who orders" names: the same for every way a place allows."""
         return LEAD_ROLE[self.mode]
+
+    @property
+    def lead_label(self) -> str:
+        """The lead field's label: "Who cooks" or "Who orders", or "Who cooks or orders" when the
+        place allows cooking and takeout both, since the field follows **How** (#178)."""
+        ways = {*self.modes, self.mode}
+        if Mode.COOK in ways and ways & {Mode.PICKUP, Mode.DELIVERY}:
+            return "Who cooks or orders"
+        return ROLE_WHO[self.lead]
+
+    @property
+    def pickup_hint(self) -> bool:
+        """Say "Who picks up" counts only for pickup: the place also allows delivery."""
+        return Mode.DELIVERY in self.modes
 
     @property
     def has_pickup(self) -> bool:

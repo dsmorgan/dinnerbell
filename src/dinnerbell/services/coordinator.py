@@ -306,12 +306,13 @@ async def choose_roles(
 
     Whoever is assigned is told, once, about all their roles. If they hadn't offered for a role,
     the message says the coordinator assigned it; they can't refuse in the app, but they can tell
-    the coordinator. Whoever loses a role before the meal is told too. Audited as
-    ``event.roles_assigned``; logged as ``assign_roles``.
+    the coordinator. Whoever loses a role before the meal, and has none new, is told too. Returns
+    the message to each person told, or held. Audited as ``event.roles_assigned``; logged as
+    ``assign_roles``.
 
     From Slack's Adjust, ``as_coordinator`` allows only the coordinator (spec 5.7), ``expect``
     checks under the lock that the call is still as the modal showed it, and with ``tell`` False
-    the messages to whoever is assigned are held and returned, for ``adjust`` to send once a
+    the messages to whoever is assigned are held, not sent, for ``adjust`` to send once a
     hand-off in the same save is done."""
     async with locked_event(db, actor.household_id, event_id, now) as event:
         await guest_rules.gate(db, event, actor, GuestAction.MANAGE_DECISION)
@@ -358,7 +359,8 @@ async def choose_roles(
         ahead = cc.before_the_meal(event, now)  # a correction afterward tells nobody (#154)
         if ahead and not was_pending:
             for gone, gone_roles in lost.items():
-                sent += cc.assignment_ended(ctx, gone, tuple(gone_roles), actor, now)
+                if gone not in made:  # told their new roles instead, such as a cook who now orders
+                    sent += cc.assignment_ended(ctx, gone, tuple(gone_roles), actor, now)
         if decision is not None and ahead:
             for who, assignment_id in made.items():
                 theirs = [role for role, person in roles.items() if person == who]
@@ -370,8 +372,7 @@ async def choose_roles(
                             ctx, who, assignment_id, decision, ctx.person(by) if by is not None else None
                         )
                     )
-                else:
-                    held.append(Held(who, assignment_id, by))
+                held.append(Held(who, assignment_id, by))
         await publish(db, ctx, *sent, now=now)
         lead_role = LEAD_ROLE[chosen_mode]
         lead = roles[lead_role]
@@ -634,7 +635,8 @@ async def adjust(
             )
             saved = replace(saved, meal_time=changes.meal_time)
         if changes.assignee_id is not None:
-            held = await choose_roles(
+            tell = changes.coordinator_id is None
+            chosen = await choose_roles(
                 db,
                 actor,
                 event_id,
@@ -643,10 +645,11 @@ async def adjust(
                 pickup_id=changes.pickup_id,
                 run=run,
                 as_coordinator=True,
-                tell=changes.coordinator_id is None,
+                tell=tell,
                 expect=_still(opened, "role"),
                 now=now,
             )
+            held = () if tell else chosen
             saved = replace(saved, assignee_id=changes.assignee_id, mode=changes.mode, pickup_id=changes.pickup_id)
         if changes.coordinator_id is not None:
             await hand_off(
