@@ -1,6 +1,6 @@
 # Coordinating a meal
 
-A coordinator steers one call: they keep the vote moving, and once the meal is decided they set the time, how the food arrives, and who cooks, picks up, or orders it. If nobody has claimed coordinating by the time voting starts, Dinnerbell picks someone who's in at random. Without a coordinator, the vote and the first person who offered decide everything. The precise rules are in [spec](spec.md) sections 5.7, 6.2, and 6.3 (FR-10, FR-58, FR-61).
+A coordinator steers one call: they keep the vote moving, and once the meal is decided they set the time, how the food arrives, and who cooks, orders, or picks it up. If nobody has claimed coordinating by the time voting starts, Dinnerbell picks someone who's in at random. Without a coordinator, the vote and the first person who offered decide everything. The precise rules are in [spec](spec.md) sections 5.7, 6.2, and 6.3 (FR-10, FR-58, FR-61).
 
 ## Become the coordinator
 
@@ -43,6 +43,7 @@ A call moves through three stages: answers, the vote, and the decision. The deci
 | Action | Slack | Web |
 |---|---|---|
 | Lock a proposal, which decides the call on it | **Lock this** on the proposals message | Call page |
+| Make a takeout proposal pickup or delivery, when its place allows both | ⋯ beside it on the proposals message | Call page |
 | Break a tie | **Break the tie** beside each tied proposal | Call page |
 | Shuffle the proposals, up to 3 times | **Shuffle proposals** on the proposals message | Call page |
 | Turn a late joiner's **Taking part** or **Vote counts** on or off | ⋯ beside them on the proposals message | Call page |
@@ -60,7 +61,7 @@ You can change any of these until the meal is marked done.
 |---|---|---|
 | Change the meal time | **Adjust** | **Change the time or who does what** |
 | Switch how you get it: cook, pickup, or delivery, among the ways the place allows | **Adjust** (**How**) | **Assign roles** |
-| Change who cooks, picks up, or orders, to anyone who's in | **Adjust** | **Assign roles**, or **Change the time or who does what** |
+| Change who cooks, orders, or picks up, to anyone who's in | **Adjust** | **Assign roles**, or **Change the time or who does what** |
 | Correct who did what after the meal, so the right person gets credit | **Adjust** | **Change the time or who does what** |
 | Hand off coordinating to someone who's in | **Adjust** | Call page |
 | Mark the meal done, once it's meal time | **Mark done** on the decision | Call page |
@@ -68,11 +69,26 @@ You can change any of these until the meal is marked done.
 
 **Adjust** is on the decision message, your App Home card, and any message that asks you to pick someone for a role. It opens with the plan as it is, and saves only what you change. If someone changed the same thing elsewhere while you had it open, Adjust doesn't overwrite it; it asks you to open Adjust again.
 
-When you switch how you get it, whoever you pick in **Who does it** does it the new way: for example, switching from pickup to delivery with Kim selected makes Kim the one who orders. When the decision leaves the role without a clear owner, because two people offered or nobody did, you get a message with **Assign roles** and 15 minutes to choose (an admin can change the time); after that, the first person who offered does it.
-
 Whoever you assign is told, and so is whoever no longer has the role. If they hadn't offered, the message says you assigned them, and that they can ask you to pick someone else. If you hand off in the same save, it names the new coordinator instead. From the meal time on, a change corrects the record and messages nobody.
 
 Contributions and badges count who did what when the meal is marked done, so a correction you make before then is what counts. After that, only an admin can correct it, and the counts follow the correction.
+
+### Takeout: who orders and who picks up
+
+A home meal has a cook, and delivery has someone who orders. Pickup has two roles: someone orders it, and someone picks it up. By default they're different people: the first person who offered to pick up picks it up, and the first person who can order who isn't them orders. If nobody else can order, the person picking up orders too, so someone who offered to pick up is all a pickup needs. You can give one person every role, coordinating included.
+
+While voting, you can make a takeout proposal pickup or delivery when its place allows both: ⋯ beside it on the proposals message, or the **Pickup** and **Delivery** buttons on the call page. Choosing the way it already has settles it too, and the proposal then says "(chosen)". An admin can do this as well.
+
+When you switch how you get it, the person ordering keeps ordering. Switching from pickup to delivery drops whoever was picking up, and they get no pickup credit. Switching from delivery to pickup gives pickup to whoever you pick in **Who picks up**, or to the first person who offered to pick up.
+
+### When the decision asks you to choose
+
+The decision asks you right away, with a message that has **Assign roles**, when either of these is true:
+
+- A role has no clear owner, because two people offered or nobody did. For pickup, ordering has no clear owner when more than one person besides the one picking up can order.
+- The winning proposal is takeout at a place that allows pickup and delivery, and nobody chose its way during the vote.
+
+In **Assign roles**, you choose how to get it, who cooks or orders, and who picks it up. You have 15 minutes to choose (an admin can change the time). After that, it stays the way it is, and the first people who offered do the roles.
 
 ## What an admin can do beyond that
 
@@ -85,6 +101,7 @@ Contributions and badges count who did what when the meal is marked done, so a c
 | Close a window early | Slack and web | While answers are open, or while voting |
 | Call off the call | Slack and web | Until it's done, including before it posts |
 | Lock a proposal | Slack and web | While voting |
+| Make a takeout proposal pickup or delivery | Slack and web | While voting |
 | Switch how you get it, and assign who does it | Web; in Slack, **Assign roles** while the role waits for a choice | Once decided |
 | Change the meal time, or who cooks, picks up, or orders | Web | Once decided |
 | Correct who did what after the meal is done | Web | Any time after |
@@ -96,7 +113,7 @@ When you correct who cooked, picked up, or ordered after the meal is done, Dinne
 
 ## What a guest coordinator can do
 
-A guest coordinator handles the logistics, but not the choice of meal. They can close answers early, change the meal time, how you get it, and who does it, hand off, and mark the meal done. They can't vote, lock, break a tie, shuffle, switch late joiners, **Decide now**, or call off the call. While a guest coordinates, an admin can do those, and a tied vote goes to whoever invited the guest, then to an admin.
+A guest coordinator handles the logistics, but not the choice of meal. They can close answers early, make a takeout proposal pickup or delivery during the vote, change the meal time, how you get it, and who does it, hand off, and mark the meal done. They can't vote, lock, break a tie, shuffle, switch late joiners, **Decide now**, or call off the call. While a guest coordinates, an admin can do those, and a tied vote goes to whoever invited the guest, then to an admin.
 
 ## When nobody coordinates, or someone drops out
 

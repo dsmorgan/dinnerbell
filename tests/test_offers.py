@@ -132,7 +132,11 @@ async def test_a_lunch_offer_with_capacity_3_fills_and_closes(house: House) -> N
         LUNCH_AT,
     )
     ctx = await house.context(offer_id)
-    assert [(a.role, a.member_id) for a in ctx.assignments] == [(AssignmentRole.PICKUP, house["Alex"].id)]
+    # Whoever offers a pickup orders it and picks it up (#178).
+    assert [(a.role, a.member_id) for a in ctx.assignments] == [
+        (AssignmentRole.ORDER, house["Alex"].id),
+        (AssignmentRole.PICKUP, house["Alex"].id),
+    ]
     assert ctx.response_of(house["Alex"].id) is not None  # the offerer eats, without taking a seat
     assert seats_taken(offer, ctx.responses) == 0
 
@@ -565,7 +569,7 @@ async def test_a_discarded_offer_leaves_nothing_behind(house: House) -> None:
         summary = await discard.discard_call(
             db, house.household.id, offer_id, actor=house["Alex"], instance_label="TEST", now=house.clock()
         )
-    assert summary.rows["response"] == 2 and summary.rows["assignment"] == 1
+    assert summary.rows["response"] == 2 and summary.rows["assignment"] == 2  # ordering and picking up (#178)
     with pytest.raises(NotFound):
         await act(house, offers.join, house["Sam"], offer_id)
     kinds = await house.kinds()

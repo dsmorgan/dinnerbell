@@ -63,6 +63,7 @@ from dinnerbell.domain.events import (
     roles_unclear,
     shuffle_candidates,
     stale_after,
+    takeout_ways,
     tie_line,
     tied_leaders,
     veto_participants,
@@ -403,6 +404,7 @@ def item_info(ctx: CallContext, proposal: Proposal) -> note.ItemInfo:
 
 
 def proposal_info(ctx: CallContext, proposal: Proposal) -> note.ProposalInfo:
+    item = ctx.items.get(proposal.item_id) if proposal.item_id is not None else None
     voters = ctx.votes.get(proposal.id, [])
     counted = ctx.counted(proposal.id)
     return note.ProposalInfo(
@@ -417,6 +419,8 @@ def proposal_info(ctx: CallContext, proposal: Proposal) -> note.ProposalInfo:
         uncounted=tuple(m for m in voters if m not in counted),
         warnings=late_warnings(ctx, proposal) if ctx.event.state in WARNING_STATES else (),
         tied=proposal.id in tied_ids(ctx),
+        ways=takeout_ways(item.modes) if item is not None else (),
+        mode_chosen=proposal.mode_chosen,
     )
 
 
@@ -479,15 +483,6 @@ def tie_note(ctx: CallContext) -> str | None:
     return tie_line(event.tie_how, by, coordinator=event.tie_by is not None and event.tie_by == event.coordinator_id)
 
 
-def role_volunteers(ctx: CallContext) -> tuple[int, ...]:
-    """Who offered for the decided pick's role, best first (FR-17)."""
-    event = ctx.event
-    if event.decided_mode is None or event.decided_item_id is None:
-        return ()
-    item = ctx.items.get(event.decided_item_id)
-    return ctx.coverage.volunteers(event.decided_mode, item.cook_ids if item else frozenset())
-
-
 def assign_roles_open(ctx: CallContext) -> bool:
     """Whether the decision message shows **Assign roles** (#87): while the coordinator's choice
     is pending, and, with nobody coordinating, while the role has no clear owner, for an admin."""
@@ -496,7 +491,10 @@ def assign_roles_open(ctx: CallContext) -> bool:
         return False
     if event.roles_due_at is not None:
         return True
-    return event.coordinator_id is None and roles_unclear(role_volunteers(ctx))
+    if event.coordinator_id is not None or event.decided_mode is None or event.decided_item_id is None:
+        return False
+    item = ctx.items.get(event.decided_item_id)
+    return roles_unclear(event.decided_mode, ctx.coverage, item.cook_ids if item else frozenset())
 
 
 def guest_dietary_notes(ctx: CallContext) -> tuple[str, ...]:

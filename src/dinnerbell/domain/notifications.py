@@ -126,6 +126,16 @@ class ProposalInfo:
     tied: bool = False
     """It shares the most votes (at least one) with another covered pick, so the coordinator can
     choose it with **Break the tie** (#87)."""
+    ways: tuple[Mode, ...] = ()
+    """Pickup and delivery, when its place allows both (#178): the ways the coordinator can set
+    it to while voting, or choose at the decision. Empty otherwise."""
+    mode_chosen: bool = False
+    """The coordinator or an admin set its way (#178), so it isn't asked again."""
+
+    @property
+    def way_open(self) -> bool:
+        """Its way, pickup or delivery, is still to choose (#178)."""
+        return bool(self.ways) and not self.mode_chosen
 
     @property
     def counted(self) -> tuple[PersonInfo, ...]:

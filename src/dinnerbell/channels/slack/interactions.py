@@ -101,8 +101,9 @@ from dinnerbell.config import is_test_instance
 from dinnerbell.domain.catalog import Mode
 from dinnerbell.domain.events import (
     GUESTS_DONT,
-    MODE_ROLE,
+    LEAD_ROLE,
     STALE_CALL,
+    AssignmentRole,
     EventRuleViolation,
     EventState,
     IllegalTransition,
@@ -194,6 +195,8 @@ CLOSED = {Window.RESPOND: "Responses are closed for {slot}.", Window.VOTE: "Voti
 VOTED = "Vote counted. Tap Vote again to take it back."
 SHUFFLED = "Shuffled: {replaced} replaced. Everyone sees the new set."
 ASSIGNED = "Assigned. {name} is told."
+WAY_SET = {Mode.PICKUP: "It's pickup if it wins.", Mode.DELIVERY: "It's delivery if it wins."}
+"""The reply to setting a takeout pick's way while voting (#178)."""
 ADJUSTED_NOTHING = "Nothing changed."
 NOBODY_IN = "Nobody's in, so there's nobody to assign."
 JOINED_LATE = "You're in for {slot}, joining late. Your vote shows, but counts only if the coordinator says so."
@@ -851,7 +854,7 @@ class Interactions:
         if member is None:
             return True
         action_id, value = acts[0].get("action_id"), acts[0].get("value")
-        if action_id in {ids.CALL_MENU, ids.LATE_MENU}:  # an overflow menu sends the option it picked
+        if action_id in {ids.CALL_MENU, ids.LATE_MENU, ids.SET_WAY}:  # an overflow menu sends the option it picked
             value = _get(acts[0], "selected_option", "value")
         tap_key = (source.user_id, str(action_id), str(value))
         if action_id in TOGGLES and self.recent.double_tap(source.user_id, str(action_id), value, self.clock()):
@@ -907,6 +910,11 @@ class Interactions:
             return await self._join_late(member, source, value, tap)
         if action_id == ids.LATE_MENU:
             return await self._switch_late(member, value)
+        if action_id == ids.SET_WAY:
+            mode, event_id, run, proposal_id = ids.parse_way(value)
+            async with self.sessionmaker() as db:
+                await coordinator.set_way(db, member, event_id, proposal_id, mode, run=run, now=self.clock())
+            return WAY_SET[mode]
         if action_id == ids.POST_NOW:
             event_id, run = ids.parse_card(value)
             return await self._post_now(member, event_id, run)
@@ -1325,11 +1333,20 @@ class Interactions:
     async def _assign(self, member: Member, event_id: int, form: Any, run: int | None) -> str:
         async with self.sessionmaker() as db:
             await coordinator.choose_roles(
-                db, member, event_id, mode=form.mode, member_id=form.member_id, run=run, now=self.clock()
+                db,
+                member,
+                event_id,
+                mode=form.mode,
+                member_id=form.member_id,
+                pickup_id=form.pickup_id,
+                run=run,
+                now=self.clock(),
             )
             view = await event_views.event_view(db, member, event_id, now=self.clock())
-        name = next((p.name for p in view.roles.people if p.id == form.member_id), "They") if view.roles else "They"
-        return ASSIGNED.format(name=name)
+        decided = view.decision.assignments if view.decision else ()
+        names = dict.fromkeys(a.member.name for a in decided if a.role is not AssignmentRole.COORDINATOR)
+        told = " and ".join(names) or "They"
+        return ASSIGNED.format(name=told) if len(names) < 2 else f"Assigned. {told} are told."
 
     # Adjust (spec 5.7) ------------------------------------------------------------------------
 
@@ -1382,11 +1399,11 @@ class Interactions:
                 changed = await coordinator.adjust(db, member, event_id, form, opened=opened, run=run, now=self.clock())
             except coordinator.PartlyAdjusted as exc:  # saved some, then the rest was refused
                 view = await event_views.event_view(db, member, event_id, now=self.clock())
-                shown = f"{adjusted(exc.saved, view)} The rest didn't change: {exc}"
+                shown = f"{adjusted(exc.saved, view, opened)} The rest didn't change: {exc}"
                 activity.refused(exc, shown, member, event_id=event_id, action=ids.ADJUST_VIEW)
                 return shown
             view = await event_views.event_view(db, member, event_id, now=self.clock())
-        return adjusted(changed, view)
+        return adjusted(changed, view, opened)
 
     # Call it off and Close now (FR-56) ---------------------------------------------------------
 
@@ -2026,6 +2043,7 @@ GUEST_TAPS = frozenset(
         ids.CALL_MENU,
         ids.ASSIGN_ROLES,
         ids.ADJUST,
+        ids.SET_WAY,
     }
 )
 """Buttons a guest may tap (#38): answering, the roles, and coordinating's logistics. Everything
@@ -2051,15 +2069,16 @@ JOIN_OFFER = (
 
 
 def _opened(opened: ids.Opened) -> Adjustment:
-    return Adjustment(opened.meal_time, opened.assignee_id, opened.coordinator_id, opened.mode)
+    return Adjustment(opened.meal_time, opened.assignee_id, opened.coordinator_id, opened.mode, opened.pickup_id)
 
 
 SWITCHED = {Mode.COOK: "It's home-cooked now.", Mode.PICKUP: "It's pickup now.", Mode.DELIVERY: "It's delivery now."}
 """Adjust's reply when it switched the way of getting the meal (#154)."""
 
 
-def adjusted(changed: Adjustment, view: EventView) -> str:
-    """The reply to an Adjust: what changed, in plain words (``tell`` escapes them)."""
+def adjusted(changed: Adjustment, view: EventView, opened: Adjustment | None = None) -> str:
+    """The reply to an Adjust: what changed, in plain words (``tell`` escapes them). A role whose
+    person is the same as ``opened`` showed, in the same way, goes unsaid (#178)."""
     if changed.empty:
         return ADJUSTED_NOTHING
     names = {p.id: p.name for p in view.members}
@@ -2069,8 +2088,16 @@ def adjusted(changed: Adjustment, view: EventView) -> str:
     if changed.mode is not None:
         said.append(SWITCHED[changed.mode])
     if changed.assignee_id is not None and view.roles is not None:
-        doing = ROLE_PHRASES[MODE_ROLE[view.roles.mode]]
-        said.append(f"{names.get(changed.assignee_id, 'They')} is {doing}, and is told.")
+        same_way = changed.mode is None
+        doing: dict[int, list[str]] = {}
+        if not (same_way and opened is not None and opened.assignee_id == changed.assignee_id):
+            doing[changed.assignee_id] = [ROLE_PHRASES[LEAD_ROLE[view.roles.mode]]]
+        pickup = changed.pickup_id if view.roles.mode is Mode.PICKUP else None  # #178
+        if pickup is not None and not (same_way and opened is not None and opened.pickup_id == pickup):
+            doing.setdefault(pickup, []).append(ROLE_PHRASES[AssignmentRole.PICKUP])
+        lines = [f"{names.get(who, 'They')} is {' and '.join(roles)}" for who, roles in doing.items()]
+        if lines:
+            said.append(f"{' and '.join(lines)}, and {'is' if len(lines) == 1 else 'they are'} told.")
     if changed.coordinator_id is not None:
         said.append(f"{names.get(changed.coordinator_id, 'They')} is coordinating now, and is told.")
     return " ".join(["Saved.", *said])

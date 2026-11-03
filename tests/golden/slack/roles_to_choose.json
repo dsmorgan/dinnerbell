@@ -2,7 +2,7 @@
   "blocks": [
     {
       "text": {
-        "text": "Hi Alex! You're coordinating dinner on Thursday, Oct 22: *Sam's Tacos* · Cook · Mexican. Nobody has a clear claim on the cook, so it's yours to choose. Tap *Assign roles* by *6:00 PM*. After that, the first person who offered does it.",
+        "text": "Hi Alex! You're coordinating dinner on Thursday, Oct 22: *Sam's Tacos* · Cook · Mexican. It's yours to choose who cooks. Tap *Assign roles* by *6:00 PM*. After that, the first person who offered does it.",
         "type": "mrkdwn"
       },
       "type": "section"
@@ -34,5 +34,5 @@
       "type": "actions"
     }
   ],
-  "text": "Choose who will cook Sam's Tacos by 6:00 PM."
+  "text": "Choose who cooks for Sam's Tacos by 6:00 PM."
 }

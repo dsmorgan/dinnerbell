@@ -11,7 +11,7 @@
     },
     {
       "text": {
-        "text": "*Sam's Tacos*: pick how to get it and who does it. Anyone who's in can. Someone who didn't offer is told you assigned them.",
+        "text": "*Sam's Tacos*: pick how to get it and who does it. Anyone who's in can, and one person can do it all. Someone who didn't offer is told you assigned them.",
         "type": "mrkdwn"
       },
       "type": "section"
@@ -90,10 +90,55 @@
       },
       "label": {
         "emoji": true,
-        "text": "Who",
+        "text": "Who cooks",
         "type": "plain_text"
       },
       "optional": false,
+      "type": "input"
+    },
+    {
+      "block_id": "pickup",
+      "element": {
+        "action_id": "value",
+        "initial_option": {
+          "text": {
+            "emoji": true,
+            "text": "Alex",
+            "type": "plain_text"
+          },
+          "value": "1"
+        },
+        "options": [
+          {
+            "text": {
+              "emoji": true,
+              "text": "Alex",
+              "type": "plain_text"
+            },
+            "value": "1"
+          },
+          {
+            "text": {
+              "emoji": true,
+              "text": "Sam",
+              "type": "plain_text"
+            },
+            "value": "2"
+          }
+        ],
+        "type": "static_select"
+      },
+      "hint": {
+        "emoji": true,
+        "text": "Only for pickup. Nobody picks up a delivery.",
+        "type": "plain_text"
+      },
+      "label": {
+        "emoji": true,
+        "text": "Who picks up",
+        "type": "plain_text"
+      },
+      "optional": true,
       "type": "input"
     }
   ],

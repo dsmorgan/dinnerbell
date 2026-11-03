@@ -418,10 +418,12 @@ async def test_a_guest_who_picks_up_earns_it_and_the_member_who_brought_them_hos
     await dinner(house, pickup=None, ins=("Alex", "Sam"), while_answering=invite)
     async with house.sessionmaker() as db:
         by_kind = await ContributionRepository(db).counts(house.household.id, riley[0].id)
-        assert by_kind == {Kind.PICKED_UP: 1}  # at the table, but that is for members to earn
+        # At the table too, but that is for members to earn. Nobody else could order, so Riley did (#178).
+        assert by_kind == {Kind.PICKED_UP: 1, Kind.ORDERED: 1}
         held = await BadgeRepository(db).for_member(house.household.id, riley[0].id)
         assert {(a.badge, a.tier) for a in held} == {
             (BadgeKey.ROAD_RUNNER, Tier.FIRST),
+            (BadgeKey.ORDER_UP, Tier.FIRST),
             (BadgeKey.ON_A_ROLL, Tier.FIRST),
         }
     assert (await counts(house, "Sam"))[Kind.HOSTED] == 1
@@ -448,7 +450,7 @@ async def test_a_guest_who_picks_up_earns_it_and_the_member_who_brought_them_hos
         assert {p.badge.key for p in own.progress} == {
             BadgeKey.CHEF, BadgeKey.ROAD_RUNNER, BadgeKey.ORDER_UP, BadgeKey.QUARTERBACK, BadgeKey.ON_A_ROLL,
         }  # fmt: skip
-        assert own.counts == {Kind.PICKED_UP: 1}
+        assert own.counts == {Kind.PICKED_UP: 1, Kind.ORDERED: 1}
     with pytest.raises(Forbidden):
         async with house.sessionmaker() as db:
             await stats.guest_stats(db, house["Alex"])
@@ -1175,7 +1177,7 @@ def held(found: list[tuple[str, BadgeKey, Tier, Announcement]]) -> set[tuple[str
 
 
 async def test_a_correction_after_done_moves_the_count_and_the_badges_and_is_audited(house: House) -> None:
-    event_id = await dinner(house)  # Alex picked up
+    event_id = await dinner(house)  # Alex picked up, and ordered, as nobody else could (#178)
     before = await awards(house)
     assert ("Alex", BadgeKey.ROAD_RUNNER, Tier.FIRST) in held(before)
     await correct(house, event_id, AssignmentRole.PICKUP, "Sam")
@@ -1184,7 +1186,7 @@ async def test_a_correction_after_done_moves_the_count_and_the_badges_and_is_aud
     assert Kind.PICKED_UP not in alex and sam[Kind.PICKED_UP] == 1
     assert alex[Kind.PARTICIPATED] == 1 and sam[Kind.COORDINATED] == 1  # the other counts stay
     after = await awards(house)
-    lost = {("Alex", BadgeKey.ROAD_RUNNER, Tier.FIRST), ("Alex", BadgeKey.ON_A_ROLL, Tier.FIRST)}
+    lost = {("Alex", BadgeKey.ROAD_RUNNER, Tier.FIRST)}  # ordering still keeps him on a roll
     earned = {("Sam", BadgeKey.ROAD_RUNNER, Tier.FIRST), ("Sam", BadgeKey.ON_A_ROLL, Tier.FIRST)}
     assert held(after) == (held(before) - lost) | earned
     # Earned by the correction, like any award: pending, for this call.
@@ -1202,7 +1204,6 @@ async def test_a_correction_after_done_moves_the_count_and_the_badges_and_is_aud
     assert (payload["removed"], payload["added"]) == ([house["Alex"].id], [house["Sam"].id])
     assert {(b["member_id"], b["badge"], b["tier"]) for b in payload["badges_revoked"]} == {
         (house["Alex"].id, "road_runner", "first"),
-        (house["Alex"].id, "on_a_roll", "first"),
     }
     assert {(b["member_id"], b["badge"], b["tier"]) for b in payload["badges_awarded"]} == {
         (house["Sam"].id, "road_runner", "first"),
@@ -1218,10 +1219,10 @@ async def test_a_badge_taken_back_before_its_post_is_never_announced_or_celebrat
         alex = await fun.den(db, house["Alex"], house.household, now=house.clock(), with_badge=True)
     announced = {(a.member_id, a.badge) for a in pending}
     assert (house["Alex"].id, BadgeKey.ROAD_RUNNER) not in announced
-    assert (house["Alex"].id, BadgeKey.ON_A_ROLL) not in announced
+    assert (house["Alex"].id, BadgeKey.ON_A_ROLL) in announced  # he still ordered it (#178)
     assert (house["Sam"].id, BadgeKey.ROAD_RUNNER) in announced
     assert alex.badge is not None
-    assert "Road Runner" not in alex.badge.caption and "On a Roll" not in alex.badge.caption
+    assert "Road Runner" not in alex.badge.caption
 
 
 async def test_a_correction_takes_back_only_the_tiers_the_count_no_longer_reaches(house: House) -> None:

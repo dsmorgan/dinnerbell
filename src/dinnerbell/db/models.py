@@ -425,6 +425,8 @@ class ProposalRow(Base):
     source: Mapped[str] = mapped_column(String(16))
     proposed_by: Mapped[int | None] = mapped_column(ForeignKey("member.id", ondelete="SET NULL"))
     created_at: Mapped[datetime] = mapped_column(UTCDateTime())
+    mode_chosen: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    """The coordinator or an admin set its way, pickup or delivery, during the vote (#178)."""
 
 
 class VoteRow(Base):

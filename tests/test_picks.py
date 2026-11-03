@@ -127,7 +127,7 @@ async def test_a_pickup_picks_winner_is_picked_up_by_whoever_added_it(house: Hou
     await act(house, calls.lock, house["Alex"], event_id, pho.id)
     ctx = await house.context(event_id)
     roles = {(a.role.value, a.member_id) for a in ctx.assignments if a.role.value != "coordinator"}  # #179
-    assert roles == {("pickup", house["Kim"].id)}
+    assert roles == {("pickup", house["Kim"].id), ("order", house["Lee"].id)}  # Lee, who can order, orders (#178)
 
 
 @pytest.mark.parametrize("answer", ["never", Status.OUT, Status.MAYBE])

@@ -6,7 +6,7 @@ Dinnerbell counts what each person does to get a meal on the table, and awards a
 
 A call or offer counts the moment it's done. Each person gets one count per kind for it:
 
-- **Cooked, picked up, ordered, coordinated:** whoever the meal assigned, guests included.
+- **Cooked, picked up, ordered, coordinated:** whoever the meal assigned, guests included. Ordering counts on a pickup too, apart from picking it up, so one person who does both gets both counts. Pickup meals done before Dinnerbell gave pickup an orderer keep the counts they had. If the coordinator switches a pickup to delivery, whoever was picking up gets no pickup count.
 - **At the table:** everyone who was in, including a late joiner who is taking part.
 - **Answered quickly:** any answer within 15 minutes of the call opening.
 - **Ideas:** the person whose proposal won; the person whose proposal was new to the household; and the person who added a catalog item the first time it was chosen.

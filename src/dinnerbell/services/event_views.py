@@ -20,7 +20,18 @@ from dinnerbell.domain import events as rules
 from dinnerbell.domain import notifications as note
 from dinnerbell.domain import offers
 from dinnerbell.domain.catalog import CatalogItem, Mode, Tag, TagKind, for_meal_first, meal_hint
-from dinnerbell.domain.events import Event, EventRuleViolation, EventState, Response, Window
+from dinnerbell.domain.events import (
+    LEAD_ROLE,
+    MODE_ROLES,
+    WORK_ROLES,
+    AssignmentRole,
+    Event,
+    EventRuleViolation,
+    EventState,
+    Response,
+    Window,
+    default_roles,
+)
 from dinnerbell.domain.guests import GuestAction, can_answer_for, check_can_invite, check_guest
 from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.members import Member
@@ -77,7 +88,9 @@ class Permissions:
     break_tie: bool = False
     """Choose among picks tied for the most votes (FR-16): ``coordinator.break_tie``."""
     choose_roles: bool = False
-    """Switch the decided pick's mode and assign its role (FR-61): ``coordinator.choose_roles``."""
+    """Switch the decided pick's mode and assign its roles (FR-61): ``coordinator.choose_roles``."""
+    set_way: bool = False
+    """Set takeout picks to pickup or delivery while voting (#178): ``coordinator.set_way``."""
     adjust: bool = False
     """**Adjust** in Slack (spec 5.7): the meal time, who does the role, and handing off, for the
     coordinator only: ``coordinator.adjust``."""
@@ -86,15 +99,31 @@ class Permissions:
 @dataclass(frozen=True, slots=True)
 class RolesChoice:
     """What the coordinator chooses from when assigning roles (FR-61): the pick's ways of getting
-    it, who's in, and who offered for each."""
+    it, who's in, who offered for each role, and whom to preselect."""
 
     mode: Mode
     modes: tuple[Mode, ...]
     people: tuple[note.PersonInfo, ...]
-    volunteers: dict[Mode, tuple[int, ...]]
-    """Who offered for each way, best first, to preselect."""
+    offered: dict[AssignmentRole, tuple[int, ...]]
+    """Who offered for each role, best first."""
+    chosen: dict[Mode, dict[AssignmentRole, int]]
+    """For each way, whom to preselect for each of its roles: whoever has the role now, or else
+    the first volunteers (``default_roles``, #178)."""
     due_at: datetime | None = None
     """While set, the automatic assignment waits for the choice until then."""
+
+    @property
+    def lead(self) -> AssignmentRole:
+        """The role "Who cooks" or "Who orders" names: the same for every way a place allows."""
+        return LEAD_ROLE[self.mode]
+
+    @property
+    def has_pickup(self) -> bool:
+        """The place allows pickup, so there's a pickup person to choose (#178)."""
+        return Mode.PICKUP in self.modes or self.mode is Mode.PICKUP
+
+    def preselected(self, role: AssignmentRole, mode: Mode | None = None) -> int | None:
+        return self.chosen.get(mode or self.mode, {}).get(role)
 
 
 @dataclass(frozen=True, slots=True)
@@ -155,6 +184,12 @@ class EventView:
     @property
     def id(self) -> int:
         return self.event.id
+
+    @property
+    def work_roles(self) -> tuple[AssignmentRole, ...]:
+        """The roles the decided way of getting the meal has (#178), for changing who does them."""
+        mode = self.event.decided_mode
+        return MODE_ROLES[mode] if mode is not None else ()
 
     def meal_hint(self, item: CatalogItem) -> str | None:
         """ "usually dinner" beside an item that isn't for the call's meal (#72). ``items`` lists
@@ -236,6 +271,7 @@ def _guest_permissions(base: Permissions, ctx: CallContext, actor: Member) -> Pe
         close_window=base.close_window if may(GuestAction.CLOSE_WINDOW) else None,
         choose_roles=base.choose_roles and may(GuestAction.MANAGE_DECISION),
         adjust=base.adjust and may(GuestAction.MANAGE_DECISION),
+        set_way=base.set_way and may(GuestAction.SET_WAY),
     )
 
 
@@ -284,6 +320,9 @@ def _member_permissions(
         break_tie=bool(cc.tied_ids(ctx)) and _allowed(lambda: rules.check_can_break_tie(event, actor)),
         choose_roles=event.state is EventState.DECIDED and _allowed(lambda: rules.check_can_choose_roles(event, actor)),
         adjust=_allowed(lambda: rules.check_can_adjust(event, actor)),
+        set_way=event.state is EventState.VOTING
+        and any(p.ways for p in cc.proposals(ctx))
+        and _allowed(lambda: rules.check_can_set_way(event, actor)),
     )
 
 
@@ -352,11 +391,18 @@ def _roles_choice(ctx: CallContext) -> RolesChoice | None:
         return None
     modes = tuple(m for m in Mode if m in item.modes)
     people = [ctx.members[r.member_id] for r in ctx.participants if r.member_id in ctx.members]
+    holders = {a.role: a.member_id for a in ctx.assignments}
+    chosen: dict[Mode, dict[AssignmentRole, int]] = {}
+    for way in dict.fromkeys((*modes, event.decided_mode)):
+        lead = holders.get(LEAD_ROLE[way])
+        pickup = holders.get(AssignmentRole.PICKUP) if way is Mode.PICKUP else None
+        chosen[way] = default_roles(way, ctx.coverage, item.cook_ids, lead=lead, pickup=pickup)
     return RolesChoice(
         mode=event.decided_mode,
         modes=modes,
         people=tuple(ctx.person(m.id) for m in sorted(people, key=lambda m: m.display_name.casefold()) if m.active),
-        volunteers={m: ctx.coverage.volunteers(m, item.cook_ids) for m in modes},
+        offered={role: ctx.coverage.for_role(role, item.cook_ids) for role in WORK_ROLES},
+        chosen=chosen,
         due_at=event.roles_due_at,
     )
 

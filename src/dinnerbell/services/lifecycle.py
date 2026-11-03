@@ -28,10 +28,11 @@ from dinnerbell.db.repositories import HouseholdRepository, MemberRepository
 from dinnerbell.domain import notifications as note
 from dinnerbell.domain.catalog import DEFAULT_MEALS, CatalogItem, ItemKind, Mode
 from dinnerbell.domain.events import (
+    LEAD_ROLE,
     MAX_PROPOSALS,
     MIN_HEAD_COUNT,
-    MODE_ROLE,
     AssignmentRole,
+    Coverage,
     EndReason,
     Event,
     EventRuleViolation,
@@ -50,6 +51,7 @@ from dinnerbell.domain.events import (
     coordinator_candidates,
     counted_votes,
     decide_winner,
+    default_roles,
     drops_coordinating,
     head_count,
     meal_time,
@@ -61,6 +63,7 @@ from dinnerbell.domain.events import (
     shifted_deadline,
     should_open_today,
     transition,
+    way_unsettled,
 )
 from dinnerbell.domain.guests import tie_breaker
 from dinnerbell.domain.household import Household
@@ -629,9 +632,14 @@ def misfit(
         if proposal.free_cuisine_id in group.vetoed_tags or needs:
             return EventRuleViolation(DOESNT_FIT, code="doesnt_fit")
         cooks = frozenset()
-    if not ctx.coverage.covers(proposal.mode, cooks):
-        return EventRuleViolation(f"Nobody who's in offered to {proposal.mode.verb} for that.", code=NO_COVERAGE)
-    return None
+    return uncovered(ctx.coverage, proposal.mode, cooks)
+
+
+def uncovered(coverage: Coverage, mode: Mode, cooks: frozenset[int]) -> EventRuleViolation | None:
+    """Why nobody who's in can get a pick ``mode``'s way (FR-17), or None if someone can."""
+    if coverage.covers(mode, cooks):
+        return None
+    return EventRuleViolation(f"Nobody who's in offered to {mode.verb} for that.", code=NO_COVERAGE)
 
 
 async def _as_catalog_item(db: AsyncSession, ctx: CallContext, proposal: Proposal) -> Proposal:
@@ -690,9 +698,10 @@ async def decide(
     ``tie_chosen`` says ``locked`` is the coordinator's choice among tied picks (#87), not a lock.
     Abandons the call when no proposal can be covered (spec 5.4).
 
-    When the winning pick's role has no clear owner and someone coordinates, the coordinator is
-    asked to choose (FR-61): the automatic assignment waits until they do, or until the household's
-    time to choose runs out (``assign_due_roles``)."""
+    When the winning pick's roles have no clear owner, or its way of getting it is still open (a
+    place with pickup and delivery whose way nobody set during the vote, #178), and someone
+    coordinates, the coordinator is asked to choose (FR-61): the automatic assignment waits until
+    they do, or until the household's time to choose runs out (``assign_due_roles``)."""
     ctx = await load(db, event)
     # First, before anything is written: a meal that would land after the call's day can't be
     # decided. A lock says so; the vote deadline ends the call quietly instead.
@@ -739,10 +748,11 @@ async def decide(
             return
         winner, tie, tie_by = found, chosen.tie, chosen.by
     item = ctx.items[winner.item_id] if winner.item_id is not None else await _catalog_free_text(db, ctx, winner, now)
-    volunteers = ctx.coverage.volunteers(winner.mode, item.cook_ids)
-    roles = assign_roles(winner.mode, volunteers, event.coordinator_id)
+    roles = assign_roles(winner.mode, ctx.coverage, item.cook_ids, event.coordinator_id)
     coordinator_member = ctx.members.get(event.coordinator_id) if event.coordinator_id is not None else None
-    asking = coordinator_member is not None and coordinator_member.active and roles_unclear(volunteers)
+    # The coordinator chooses when the roles have no clear owner, or the way is still open (#178).
+    unsettled = roles_unclear(winner.mode, ctx.coverage, item.cook_ids) or way_unsettled(winner, item.modes)
+    asking = coordinator_member is not None and coordinator_member.active and unsettled
     # The choice never outlasts the time to choose, nor the meal itself.
     due = min(now + timedelta(minutes=roles_choice_minutes(ctx.settings)), meal) if asking else None
     if asking:  # the role waits for the coordinator's choice
@@ -806,25 +816,31 @@ async def _announce_decision(
 
 async def assign_due_roles(db: AsyncSession, event: Event, now: datetime) -> None:
     """The coordinator's time to choose roles ran out (FR-61, ``Step.ASSIGN_ROLES``): the automatic
-    assignment stands, as it would have at the decision. The first volunteer takes the role, and
-    is told. Audited as ``event.roles_assigned`` with ``by`` None."""
+    assignment stands, as it would have at the decision, in the way the pick has now. The first
+    volunteers take the roles (``default_roles``), and each is told once. Audited as
+    ``event.roles_assigned`` with ``by`` None."""
     ctx = await load(db, event)
     mode, item = event.decided_mode, ctx.items.get(event.decided_item_id) if event.decided_item_id else None
     cleared = await EventRepository(db).save(replace(event, roles_due_at=None), now)
-    assigned = None
-    if mode is not None and item is not None:
-        volunteers = ctx.coverage.volunteers(mode, item.cook_ids)
-        if volunteers:
-            assigned = await AssignmentRepository(db).assign(
-                event.household_id, event.id, MODE_ROLE[mode], volunteers[0], now
-            )
+    roles = default_roles(mode, ctx.coverage, item.cook_ids) if mode is not None and item is not None else {}
+    had = {a.role: a.member_id for a in ctx.assignments}
+    repo = AssignmentRepository(db)
+    first: dict[int, int] = {}  # one message per person, keyed by their first new assignment
+    for role, who in roles.items():
+        if had.get(role) != who:
+            first.setdefault(who, (await repo.assign(event.household_id, event.id, role, who, now)).id)
     ctx = await load(db, cleared)
     decision = cc.decision_info(ctx)
     messages: list[note.Notification] = [*cc.decision_updated(ctx), cc.call_updated(ctx)]
-    if assigned is not None and decision is not None:
-        messages.append(cc.assignment_made(ctx, assigned.member_id, assigned.id, decision))
+    if decision is not None:
+        messages += [cc.assignment_made(ctx, who, assignment_id, decision) for who, assignment_id in first.items()]
     await publish(db, ctx, *messages, now=now)
-    payload = {"role": MODE_ROLE[mode].value if mode else None, "member_id": assigned.member_id if assigned else None}
+    lead = LEAD_ROLE[mode] if mode is not None else None
+    payload = {
+        "role": lead.value if lead is not None else None,
+        "member_id": roles.get(lead) if lead is not None else None,
+        "assignments": {role.value: who for role, who in roles.items()},
+    }
     await audit(db, event.household_id, None, "event.roles_assigned", _target(event), payload | {"by": None}, now)
 
 

@@ -35,6 +35,7 @@ from dinnerbell.domain.events import (
     TIE_BREAKERS,
     ActingAs,
     AssignmentRole,
+    Coverage,
     Details,
     Event,
     EventKind,
@@ -343,8 +344,8 @@ def test_who_may_choose_roles() -> None:
 
 
 def test_a_role_has_a_clear_owner_only_with_exactly_one_volunteer() -> None:
-    assert not roles_unclear((4,))
-    assert roles_unclear(()) and roles_unclear((4, 5))
+    assert not roles_unclear(Mode.DELIVERY, Coverage(orderers=(4,)))
+    assert roles_unclear(Mode.DELIVERY, Coverage()) and roles_unclear(Mode.DELIVERY, Coverage(orderers=(4, 5)))
 
 
 def test_the_automatic_assignment_is_due_when_the_coordinators_time_runs_out() -> None:
@@ -674,7 +675,7 @@ async def test_an_unclear_role_waits_for_the_coordinator_who_is_told(house: Hous
     assert "Assign roles" in json.dumps(render(ask, CTX).payload())
     (made,) = await sent(house, "decision_made")
     decision_post = json.dumps(render(made, CTX).payload())
-    assert "Assign roles" in decision_post and "is choosing who picks up" in decision_post
+    assert "Assign roles" in decision_post and "is choosing pickup or delivery" in decision_post
     (decided,) = [a for a in await house.audits() if a.action == "event.decided"]
     assert "roles_pending" in str(decided.payload)
 
@@ -687,11 +688,13 @@ async def test_a_lock_leaves_an_unclear_role_to_the_coordinator_too(house: House
 
 async def test_a_clear_role_is_assigned_at_once_with_no_question(house: House) -> None:
     event_id = await to_voting(house, "Sam", pickups=("Alex",))
+    await house.settle_ways(event_id)  # Siam Garden stays pickup (#178)
     await vote(house, "Alex", event_id, (await pick_ids(house, event_id))["Siam Garden"])
     await at_deadline(house, event_id)
     ctx = await house.context(event_id)
     assert (await house.event(event_id)).roles_due_at is None
-    assert assigned(ctx) == {AssignmentRole.PICKUP: house["Alex"].id, AssignmentRole.COORDINATOR: house["Alex"].id}
+    alex = house["Alex"].id  # nobody else can order, so he orders too (#178)
+    assert assigned(ctx) == {AssignmentRole.ORDER: alex, AssignmentRole.PICKUP: alex, AssignmentRole.COORDINATOR: alex}
     assert await sent(house, "roles_to_choose") == [] and len(await sent(house, "assignment_made")) == 1
     decision = cc.decision_info(ctx)
     assert decision is not None and not decision.assign_roles
@@ -699,7 +702,7 @@ async def test_a_clear_role_is_assigned_at_once_with_no_question(house: House) -
 
 async def test_the_coordinator_assigns_anyone_who_is_in_and_they_are_told_who_assigned_them(house: House) -> None:
     event_id = await two_pickups_decided(house)
-    await act(house, coordinator.choose_roles, house["Alex"], event_id, member_id=house["Lee"].id, run=1)
+    await act(house, coordinator.choose_roles, house["Alex"], event_id, pickup_id=house["Lee"].id, run=1)
     event, ctx = await house.event(event_id), await house.context(event_id)
     assert event.roles_due_at is None  # the choice is made
     assert assigned(ctx)[AssignmentRole.PICKUP] == house["Lee"].id
@@ -713,17 +716,18 @@ async def test_the_coordinator_assigns_anyone_who_is_in_and_they_are_told_who_as
 
 async def test_a_volunteer_is_told_without_being_told_they_were_assigned(house: House) -> None:
     event_id = await two_pickups_decided(house)
-    await act(house, coordinator.choose_roles, house["Alex"], event_id, member_id=house["Sam"].id)
-    (told,) = await sent(house, "assignment_made")
-    assert told.member.id == house["Sam"].id and told.assigned_by is None
+    await act(house, coordinator.choose_roles, house["Alex"], event_id, pickup_id=house["Sam"].id)
+    told = {n.member.id: n for n in await sent(house, "assignment_made")}  # Sam picks up; Lee, who can, orders
+    assert set(told) == {house["Sam"].id, house["Lee"].id}
+    assert told[house["Sam"].id].assigned_by is None and told[house["Lee"].id].assigned_by is None
 
 
 async def test_the_coordinator_can_take_the_role_themselves_and_is_told_it_once(house: House) -> None:
     event_id = await two_pickups_decided(house)
-    await act(house, coordinator.choose_roles, house["Alex"], event_id, member_id=house["Alex"].id)
+    await act(house, coordinator.choose_roles, house["Alex"], event_id, pickup_id=house["Alex"].id)
     ctx = await house.context(event_id)
     assert assigned(ctx)[AssignmentRole.PICKUP] == house["Alex"].id
-    (told,) = await sent(house, "assignment_made")
+    (told,) = [n for n in await sent(house, "assignment_made") if n.member.id == house["Alex"].id]
     assert told.member.id == house["Alex"].id and told.assigned_by is None
     assert set(told.roles) == {AssignmentRole.PICKUP, AssignmentRole.COORDINATOR}
 
@@ -798,21 +802,21 @@ async def test_the_automatic_assignment_stands_when_the_coordinator_does_not_act
     ctx = await house.context(event_id)
     assert (await house.event(event_id)).roles_due_at is None
     assert assigned(ctx)[AssignmentRole.PICKUP] == house["Alex"].id  # the first to offer, as it always was
-    (told,) = await sent(house, "assignment_made")
-    assert told.member.id == house["Alex"].id and told.assigned_by is None
+    told = {n.member.id: n for n in await sent(house, "assignment_made")}  # Alex picks up; Lee orders (#178)
+    assert set(told) == {house["Alex"].id, house["Lee"].id} and told[house["Alex"].id].assigned_by is None
     (audit,) = [a for a in await house.audits() if a.action == "event.roles_assigned"]
     assert "'by': None" in str(audit.payload) or '"by": null' in str(audit.payload)
     decision = cc.decision_info(ctx)
     assert decision is not None and not decision.assign_roles and decision.roles_due_at is None
     await house.tick()
-    assert len(await sent(house, "assignment_made")) == 1  # once
+    assert len(await sent(house, "assignment_made")) == 2  # once each
 
 
 async def test_a_coordinator_who_acts_in_time_is_not_overridden(house: House) -> None:
     event_id = await two_pickups_decided(house)
     due = (await house.event(event_id)).roles_due_at
     assert due is not None
-    await act(house, coordinator.choose_roles, house["Alex"], event_id, member_id=house["Lee"].id)
+    await act(house, coordinator.choose_roles, house["Alex"], event_id, pickup_id=house["Lee"].id)
     house.clock.now = due + timedelta(minutes=1)
     assert Step.ASSIGN_ROLES not in await house.tick()
     assert assigned(await house.context(event_id))[AssignmentRole.PICKUP] == house["Lee"].id
@@ -837,14 +841,15 @@ async def test_with_no_coordinator_the_role_is_assigned_now_and_an_admin_can_cho
     event_id = await two_pickups_decided(house, coordinator_name=None, lock=True)
     ctx = await house.context(event_id)
     assert (await house.event(event_id)).roles_due_at is None
-    assert assigned(ctx) == {AssignmentRole.PICKUP: house["Alex"].id}  # the automatic assignment, as before
+    # The automatic assignment, as before; Lee, who can order, orders (#178).
+    assert assigned(ctx) == {AssignmentRole.ORDER: house["Lee"].id, AssignmentRole.PICKUP: house["Alex"].id}
     assert await sent(house, "roles_to_choose") == []
     decision = cc.decision_info(ctx)
     assert decision is not None and decision.assign_roles  # Assign roles stays for an admin
     with pytest.raises(EventRuleViolation) as refused:
         await act(house, coordinator.choose_roles, house["Sam"], event_id, member_id=house["Sam"].id)
     assert refused.value.code == "not_coordinator"
-    await act(house, coordinator.choose_roles, house["Alex"], event_id, member_id=house["Lee"].id)
+    await act(house, coordinator.choose_roles, house["Alex"], event_id, pickup_id=house["Lee"].id)
     assert assigned(await house.context(event_id))[AssignmentRole.PICKUP] == house["Lee"].id
 
 
@@ -878,7 +883,7 @@ async def test_a_guest_coordinator_chooses_roles_and_gets_the_question_through_w
     assert (ask.member.id, ask.recipient_id) == (pat.id, house["Sam"].id)  # an unregistered guest: their inviter
     view = await act(house, event_views.event_view, pat, event_id)
     assert view.can.choose_roles and view.roles is not None
-    await act(house, coordinator.choose_roles, pat, event_id, member_id=house["Lee"].id)
+    await act(house, coordinator.choose_roles, pat, event_id, pickup_id=house["Lee"].id)
     assert assigned(await house.context(event_id))[AssignmentRole.PICKUP] == house["Lee"].id
 
 
@@ -1400,7 +1405,7 @@ def test_web_assign_roles(admin: TestClient, provider: FakeProvider, clock: Fake
     bad = submit(admin, f"/events/{event_id}/roles", {"mode": "teleport", "member_id": str(kim.id), "run": "1"})
     assert bad.status_code == 409 and "Pick how to get it" in page(bad)
     assert (
-        submit(admin, f"/events/{event_id}/roles", {"mode": "pickup", "member_id": str(kim.id), "run": "1"}).status_code
+        submit(admin, f"/events/{event_id}/roles", {"mode": "pickup", "pickup_id": str(kim.id), "run": "1"}).status_code
         == 303
     )
     assert [(a.role, a.member_id) for a in rows(migrated, AssignmentRow) if a.role == "pickup"] == [("pickup", kim.id)]
@@ -1494,13 +1499,16 @@ async def test_slack_assign_roles_opens_a_modal_for_the_coordinator_and_saves_th
     assert view["callback_id"] == ids.ASSIGN_VIEW and ids.ViewOrigin.decode(view["private_metadata"]).run == 1
     blocks = {b["block_id"]: b for b in view["blocks"] if b["type"] == "input"}
     assert {o["value"] for o in blocks["mode"]["element"]["options"]} == {"pickup", "delivery"}
-    who = blocks["who"]["element"]
+    who, pickup = blocks["who"]["element"], blocks["pickup"]["element"]
     assert {o["text"]["text"] for o in who["options"]} == {"Alex", "Lee", "Sam"}  # whoever is in
-    assert who["initial_option"]["text"]["text"] == "Alex"  # a volunteer, preselected
+    assert who["initial_option"]["text"]["text"] == "Lee"  # whoever can order, preselected (#178)
+    assert pickup["initial_option"]["text"]["text"] == "Alex"  # the first to offer to pick up
 
     origin = ids.ViewOrigin(event_id, CHANNEL, run=1)
     form = state(
-        mode={"selected_option": {"value": "pickup"}}, who={"selected_option": {"value": str(house["Lee"].id)}}
+        mode={"selected_option": {"value": "pickup"}},
+        who={"selected_option": {"value": str(house["Lee"].id)}},
+        pickup={"selected_option": {"value": str(house["Lee"].id)}},
     )
     await slack.submit("Alex", ids.ASSIGN_VIEW, form, event_id, origin=origin)
     assert slack.ephemerals("Alex")[-1] == "Assigned. Lee is told."
@@ -1566,7 +1574,7 @@ async def test_marking_done_ends_a_pending_role_choice_with_the_automatic_assign
     event, ctx = await house.event(event_id), await house.context(event_id)
     assert (event.state, event.roles_due_at) == (EventState.DONE, None)
     assert assigned(ctx)[AssignmentRole.PICKUP] == house["Alex"].id  # the first to offer
-    assert len(await sent(house, "assignment_made")) == 1
+    assert len(await sent(house, "assignment_made")) == 2  # Alex picks up; Lee orders (#178)
 
 
 async def test_the_time_to_choose_never_passes_the_meal(house: House) -> None:

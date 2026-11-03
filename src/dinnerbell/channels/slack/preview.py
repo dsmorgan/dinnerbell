@@ -564,7 +564,11 @@ ROLES_CHOICE = RolesChoice(
     mode=Mode.COOK,
     modes=(Mode.COOK, Mode.PICKUP),
     people=(ALEX, SAM),
-    volunteers={Mode.COOK: (SAM.id, ALEX.id), Mode.PICKUP: (ALEX.id,)},
+    offered={AssignmentRole.COOK: (SAM.id, ALEX.id), AssignmentRole.PICKUP: (ALEX.id,), AssignmentRole.ORDER: ()},
+    chosen={
+        Mode.COOK: {AssignmentRole.COOK: SAM.id},
+        Mode.PICKUP: {AssignmentRole.ORDER: ALEX.id, AssignmentRole.PICKUP: ALEX.id},
+    },
     due_at=ROLES_DUE,
 )
 ROLES_VIEW = replace(

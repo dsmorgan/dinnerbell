@@ -8,6 +8,7 @@ own markup and escaping.
 
 from __future__ import annotations
 
+from dinnerbell.domain.catalog import Mode
 from dinnerbell.domain.events import AssignmentRole, RoleOffer, Status, Window
 
 ANSWER_ORDER = (Status.IN, Status.MAYBE, Status.OUT)
@@ -29,6 +30,32 @@ ROLE_TITLES = {
     AssignmentRole.COORDINATOR: "Coordinating",
 }
 """Who does each role once it's decided."""
+ROLE_WHO = {AssignmentRole.COOK: "Who cooks", AssignmentRole.ORDER: "Who orders", AssignmentRole.PICKUP: "Who picks up"}
+"""The field that picks someone for each role, in **Assign roles** and **Adjust** (#178)."""
+PICKUP_ROLE = AssignmentRole.PICKUP
+PICKUP_MODE = Mode.PICKUP
+"""For the templates, which can't name an enum member themselves."""
+WAY_LABELS = {Mode.PICKUP: "Make it pickup", Mode.DELIVERY: "Make it delivery"}
+"""Setting a takeout pick's way while voting (#178)."""
+
+
+def roles_to_choose(mode: Mode, *, way_open: bool) -> str:
+    """What the coordinator chooses at the decision (#178), to follow "choose": "who cooks", "who
+    orders and who picks it up", or, with the way still open, "pickup or delivery, who orders,
+    and who picks it up"."""
+    if way_open:
+        return "pickup or delivery, who orders, and who picks it up"
+    return {Mode.COOK: "who cooks", Mode.PICKUP: "who orders and who picks it up", Mode.DELIVERY: "who orders"}[mode]
+
+
+def roles_fallback(mode: Mode, *, way_open: bool) -> str:
+    """What happens if the coordinator doesn't choose in time (#178), as a sentence's end:
+    "the first person who offered does it", or, for the two roles of a pickup, "the first
+    people who offered do them"."""
+    if way_open or mode is Mode.PICKUP:
+        return "the first people who offered do them"
+    return "the first person who offered does it"
+
 
 COORDINATE = "I'll coordinate"
 DETAILS = "Details"

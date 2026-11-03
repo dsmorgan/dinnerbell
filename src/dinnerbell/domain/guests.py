@@ -57,6 +57,8 @@ class GuestAction(StrEnum):
     LATE_SWITCHES = "late_switches"
     SHUFFLE = "shuffle"
     BREAK_TIE = "break_tie"
+    SET_WAY = "set_way"
+    """Set a takeout pick to pickup or delivery while voting (#178): logistics, like the roles."""
 
 
 ANSWERING = frozenset({EventState.COLLECTING})
@@ -72,6 +74,7 @@ GUEST_RULES: dict[GuestAction, frozenset[EventState]] = {
     # votes, which is choosing, not logistics.
     GuestAction.CLOSE_WINDOW: frozenset({EventState.COLLECTING}),
     GuestAction.MANAGE_DECISION: frozenset({EventState.DECIDED}),
+    GuestAction.SET_WAY: frozenset({EventState.VOTING}),
     GuestAction.MARK_DONE: frozenset({EventState.DECIDED}),
 }
 """What an invited guest may do, and in which states of the call. Every action not listed is
