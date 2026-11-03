@@ -784,6 +784,25 @@ async def test_a_guests_needs_hold_still_while_their_call_votes(house: House) ->
         await act(house, guests.set_my_needs, pat, frozenset())
 
 
+async def test_an_admin_cant_change_a_members_needs_while_their_call_votes(house: House) -> None:
+    """An admin changing a member's dietary needs (#181) is held to the same rule as the member,
+    and the refusal names the member."""
+    veg = house.tags["Vegetarian"].id
+    event_id = await open_dinner(house)
+    for name in ("Alex", "Sam"):
+        await act(house, calls.respond, house[name], event_id, Status.IN)
+    await act(house, calls.offer_role, house["Alex"], event_id, RoleOffer.PICKUP, True)
+    house.clock.now = RESPOND_BY
+    await house.tick()
+    with pytest.raises(EventRuleViolation, match="A call Sam is in is voting now, and its proposals already fit their"):
+        await act(house, guests.set_member_needs, house["Alex"], house["Sam"].id, frozenset({veg}))
+    with pytest.raises(Forbidden):
+        await act(house, guests.set_member_needs, house["Sam"], house["Alex"].id, frozenset({veg}))
+    with pytest.raises(NotFound):  # a guest's needs are on their row, not a Preferences page
+        await act(house, guests.set_member_needs, house["Alex"], house["Pat"].id, frozenset({veg}))
+    assert (await house.refresh("Sam")).dietary_needs == frozenset()
+
+
 async def test_a_deactivated_members_email_cant_come_back_as_a_guest(house: House) -> None:
     from dinnerbell.services import members as member_service
 

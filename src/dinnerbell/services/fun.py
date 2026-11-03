@@ -2,8 +2,9 @@
 """Fun mode (#153): each person's switch for Dinnerbone's Den, and what the den shows them.
 
 Members turn it on or off on Preferences, and guests on their dietary-needs page. Everything
-here acts on ``actor`` only. None of it is audited, like the other settings people change about
-themselves on Preferences: it changes nothing anyone else sees.
+here acts on ``actor`` only, except ``set_member_fun_mode``, an admin's switch for another member
+(#181). A person's own switch isn't audited, like the other settings people change about
+themselves on Preferences: it changes nothing anyone else sees. An admin's is.
 
 ``den`` is what Today's den shows: the scene, the call he follows and his pose, the quiet
 caption for that call, and the newest badge the actor earned that the den hasn't flipped for.
@@ -38,7 +39,9 @@ from dinnerbell.domain.fun import (
 from dinnerbell.domain.household import Household
 from dinnerbell.domain.members import Member
 from dinnerbell.services import guests as guest_rules
+from dinnerbell.services.common import audit
 from dinnerbell.services.errors import Forbidden
+from dinnerbell.services.preferences import member_for_admin
 from dinnerbell.services.variety import household_today
 
 Celebrate = Literal["decided", "done", "badge"]
@@ -68,6 +71,17 @@ async def set_my_fun_mode(db: AsyncSession, actor: Member, on: bool, *, now: dat
     if not actor.active:
         raise Forbidden("Sign in again.")
     updated = await MemberRepository(db).update(actor.household_id, actor.id, now, fun_mode=on)
+    await db.commit()
+    return updated
+
+
+async def set_member_fun_mode(db: AsyncSession, actor: Member, member_id: int, on: bool, *, now: datetime) -> Member:
+    """An admin turns another member's fun mode on or off (#181). Audited as
+    ``member.fun_mode_set``."""
+    member = await member_for_admin(db, actor, member_id)
+    updated = await MemberRepository(db).update(actor.household_id, member.id, now, fun_mode=on)
+    payload = {"from": member.fun_mode, "to": on}
+    await audit(db, actor.household_id, actor, "member.fun_mode_set", f"member:{member.id}", payload, now)
     await db.commit()
     return updated
 

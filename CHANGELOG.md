@@ -6,6 +6,10 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ## [Unreleased]
 
+### Added
+
+- **Admins can see and change a member's preferences** (#181). On **Admin** > **Members**, select **Preferences** on a member's row, or open the member and select their preferences. The page is the member's own **Preferences** page, with a banner that says whose it is: **I can usually**, reminders, dietary needs, fun mode, and every tag and item level. Each change is saved as the member's and audited with the admin as the actor and the member as the target: `member.preference_set` (with the level before and after), `member.settings_updated`, `member.needs_updated`, and `member.fun_mode_set`. The member isn't messaged, and their sign-in and sessions don't change. A member's own changes on **Preferences** stay unaudited. Guests have no **Preferences** page; an admin still changes a guest's dietary needs on their row in **Guests**. **Preferences** now says "Only you and the household's admins can see these."
+
 ### Changed
 
 - **Checkboxes on Preferences are all the same size** (#177). Under **I can usually** and **Reminders**, a long label no longer shrinks its checkbox, and each box lines up with the first line of its label. The hint under **Pick up** now sits on its own line beneath the label, so **Pick up** stays on one line. **Fun mode** is now a **Show Dinnerbone's Den** checkbox, like the page's other on and off settings, instead of **On** and **Off** buttons. The same checkbox fix applies wherever the app has a checkbox row, such as **Schedule** and the **Catalog**.
