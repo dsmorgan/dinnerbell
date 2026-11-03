@@ -203,6 +203,10 @@ def test_who_flips_the_switches() -> None:
     assert check_can_switch_late(voting, _person(2)) is ActingAs.COORDINATOR
     assert check_can_switch_late(_event(EventState.VOTING), admin) is ActingAs.ADMIN
     assert check_can_switch_late(voting, admin) is ActingAs.ADMIN  # alongside a member coordinating (#179)
+    assert check_can_switch_late(voting, _person(2), 2) is ActingAs.COORDINATOR  # their own row
+    with pytest.raises(EventRuleViolation) as own:
+        check_can_switch_late(voting, admin, 2)  # but not an admin: they reassign it instead
+    assert own.value.code == "coordinators_own"
     assert check_can_switch_late(replace(voting, coordinator_id=9), admin) is ActingAs.ADMIN  # #38
     for event, actor, code in [
         (voting, _person(3), "not_coordinator"),

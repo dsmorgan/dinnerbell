@@ -368,7 +368,7 @@ async def switch_late_joiner(
         await guest_rules.gate(db, event, actor, GuestAction.LATE_SWITCHES)
         check_run(event, run)
         ctx = await load(db, event)
-        capacity = check_can_switch_late(event, actor)
+        capacity = check_can_switch_late(event, actor, member_id)
         target = ctx.response_of(member_id)
         if member_id not in ctx.members:
             raise NotFound(NO_SUCH_MEMBER)

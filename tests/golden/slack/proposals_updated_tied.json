@@ -10,7 +10,7 @@
     {
       "elements": [
         {
-          "text": "Tied for the most votes. The coordinator can break the tie.",
+          "text": "Tied for the most votes. The coordinator or an admin can break the tie.",
           "type": "mrkdwn"
         }
       ],

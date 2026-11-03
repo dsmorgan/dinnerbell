@@ -540,7 +540,7 @@ def proposals_message(notification: note.ProposalsReady | note.ProposalsUpdated,
     if voting and event.shuffle_note:  # plain words: an edit pings nobody (#92)
         blocks.append(context(escape(event.shuffle_note)))
     if voting and any(p.tied for p in notification.proposals):
-        blocks.append(context("Tied for the most votes. The coordinator can break the tie."))
+        blocks.append(context("Tied for the most votes. The coordinator or an admin can break the tie."))
     # Only the first post mentions anyone (an edit that added a mention might ping it), and the
     # list comes after the instructions, so a big household can't push them out.
     blocks += _in_blocks(notification.participants, ctx, mention=isinstance(notification, note.ProposalsReady))
@@ -1241,9 +1241,10 @@ def coordinator_picked_message(notification: note.CoordinatorPicked, ctx: Render
         f"Nobody had claimed coordinating {slot} on {day}, so Dinnerbell picked you at random from everyone "
         f"who's in. While the vote is open, you can tap *{labels.LOCK}* on a pick to decide it, break a tie, or "
         "shuffle the picks. Once it's decided, you can change how you get it, such as pickup or delivery, "
-        "and who does it. If it isn't clear who does it, you'll be asked to choose, and if you don't within "
-        f"{minutes} minute{'' if minutes == 1 else 's'}, the first volunteer does it. If it doesn't suit you, "
-        "hand it off to someone who's in on the call's page. Thanks for steering!"
+        "and who does it. If it isn't clear who does it, you'll be asked to choose. If you don't within "
+        f"{minutes} minute{'' if minutes == 1 else 's'}, or by the meal time if that's sooner, the first person "
+        "who offered does it, if anyone did. If it doesn't suit you, hand it off to someone who's in on the "
+        "call's page. Thanks for steering!"
     )
     blocks = [section(text), actions(_web_button(ctx, event), block_id="more")]
     return _finish(f"You're coordinating {slot} on {day}.", blocks)

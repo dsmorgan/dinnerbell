@@ -975,13 +975,19 @@ def with_late_switches(
 
 
 LATE_SWITCHERS = "Only the coordinator or an admin can change that."
+COORDINATORS_OWN = (
+    "That's the coordinator's own vote, so only they can change it. To have someone else coordinate, "
+    "assign the coordinator on the web."
+)
 
 
-def check_can_switch_late(event: Event, actor: Member) -> ActingAs:
+def check_can_switch_late(event: Event, actor: Member, member_id: int | None = None) -> ActingAs:
     """Who flips a late joiner's switches, taking part and vote counts (#76): the coordinator,
     or any admin, alongside them (#179). Never a guest, even one coordinating, since choosing
     whose vote counts is picking the plan, not logistics (#38). Only while voting, the only time
-    anyone joins late. Returns the capacity they act in, for the audit row."""
+    anyone joins late. An admin can't flip the coordinator's own switches (``member_id``): a
+    coordinator's vote always counts, and taking part off would release them (FR-10), so an
+    admin reassigns coordinating instead. Returns the capacity they act in, for the audit row."""
     if not actor.active:
         raise EventRuleViolation("Only active members can change that.", code="inactive")
     if actor.is_guest:
@@ -991,6 +997,8 @@ def check_can_switch_late(event: Event, actor: Member) -> ActingAs:
     if is_coordinator(event, actor):
         return ActingAs.COORDINATOR
     if actor.is_admin:
+        if member_id is not None and member_id == event.coordinator_id:
+            raise EventRuleViolation(COORDINATORS_OWN, code="coordinators_own")
         return ActingAs.ADMIN
     raise EventRuleViolation(LATE_SWITCHERS, code="not_coordinator")
 

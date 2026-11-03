@@ -68,7 +68,7 @@ A verdict needs ratings from two people, each from roughly the last 3 months, an
 
 Each call has its own draw, so two calls with the same people and catalog can propose different places. Dinnerbell seeds the draw from the call itself, so the same call always gets the same proposals. If an admin re-runs a call, or someone starts a called-off call again, that's a new run, and it draws again.
 
-Proposals are listed in the order they were drawn, suggestions first. The order matters only when a vote ties. Ties go to the coordinator's choice, then the coordinator's vote, then an admin's vote when nobody coordinates, then the place you ate at longest ago (never counts as longest), and only then to the one drawn first. The decision says which rule decided it.
+Proposals are listed in the order they were drawn, suggestions first. The order matters only when a vote ties. Ties go to the choice of the coordinator or an admin, who can break a tie while voting, then the coordinator's vote, then an admin's vote when nobody coordinates, then the place you ate at longest ago (never counts as longest), and only then to the one drawn first. The decision says which rule decided it.
 
 ## Shuffling the proposals
 
