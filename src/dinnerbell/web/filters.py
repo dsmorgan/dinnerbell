@@ -37,6 +37,11 @@ def local_hhmm(moment: datetime | None, timezone: str) -> str:
     return "" if moment is None else hhmm(moment.astimezone(ZoneInfo(timezone)).time())
 
 
+def local_date(moment: datetime, timezone: str) -> date:
+    """A UTC moment's date in ``timezone``."""
+    return moment.astimezone(ZoneInfo(timezone)).date()
+
+
 def day(value: date) -> str:
     return f"{value.strftime('%a %b')} {value.day}"
 
@@ -50,5 +55,7 @@ def elapsed(value: timedelta) -> str:
 
 
 def register(env: Environment) -> None:
-    env.filters.update(clock=clock, wall=wall, hhmm=hhmm, local_hhmm=local_hhmm, day=day, elapsed=elapsed)
+    env.filters.update(
+        clock=clock, wall=wall, hhmm=hhmm, local_hhmm=local_hhmm, local_date=local_date, day=day, elapsed=elapsed
+    )
     env.globals.update(badge_svg=badge_svg, badge_name=badge_name, labels=labels)

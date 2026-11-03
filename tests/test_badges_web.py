@@ -199,11 +199,11 @@ def test_a_member_with_no_badges_sees_all_thirteen_softly(house: Settings, clien
     assert html.count('class="badge-row locked"') == 13
     assert html.count("Not earned yet") == 13
     assert "Meals cooked: 0 of 1 for First." in page(client.get("/stats"))
-    assert "Newly earned" not in html and "Lately earned" not in html  # on the Household tab
+    assert "Newly earned" not in html  # nothing new yet; the household's list is on its own tab
     assert inline_code(html)[1] == []
     check_structure(html)
     household = client.get("/stats/household").text
-    assert "Lately earned" in household and "No new badges yet" in household
+    assert "Newly earned" in household and "No new badges yet" in household
     assert inline_code(household)[1] == []
     check_structure(household)
 
@@ -224,6 +224,31 @@ def test_a_member_sees_tiers_progress_and_new_badges(house: Settings, client: Te
     check_structure(html)
 
 
+def test_newly_earned_on_yours_means_the_last_three_days(house: Settings, client: TestClient) -> None:
+    """#177: the owner asked for two or three days, not two weeks."""
+    me = member(house, "admin@example.com").id
+    award(house, me, "chef", Tier.FIRST, ago=timedelta(days=3, minutes=-1))
+    award(house, me, "scout", Tier.FIRST, ago=timedelta(days=3, minutes=1))
+    html = page(client.get("/stats"))
+    new = html[html.index("Newly earned") : html.index("Your badges")]
+    assert "Chef · First" in new and "Scout" not in new
+
+
+def test_the_household_tab_dates_each_new_badge_in_its_time_zone(house: Settings, client: TestClient) -> None:
+    """#177: "Newly earned", like the Yours tab, with the day each badge was earned."""
+    kim = member(house, "kim@example.com").id
+    award(house, kim, "chef", Tier.FIRST, ago=timedelta(days=9))
+    award(house, kim, "scout", Tier.FIRST, at=datetime(2026, 10, 22, 3, 0, tzinfo=UTC))  # 10 PM the 21st in Chicago
+    award(house, kim, "chef", Tier.BRONZE, ago=timedelta(hours=1))
+    html = page(client.get("/stats/household"))
+    assert '<h2 id="lately-title">Newly earned</h2>' in html and "Lately earned" not in html
+    new = html[html.index("lately-title") :]
+    dates = re.findall(r'<time class="small muted" datetime="([\d-]+)">([^<]+)</time>', new)
+    assert dates == [("2026-10-22", "Thu Oct 22"), ("2026-10-21", "Wed Oct 21"), ("2026-10-13", "Tue Oct 13")]
+    assert new.index("Chef · Bronze") < new.index("Scout · First") < new.index("Chef · First")
+    assert "Newest first." in new
+
+
 def test_the_household_view_lists_recent_badges_by_recency_without_ranking(house: Settings, client: TestClient) -> None:
     ids = {n: member(house, f"{n.lower()}@example.com").id for n in ("Kim", "Lee")}
     award(house, ids["Lee"], "chef", Tier.FIRST, ago=timedelta(hours=3))
@@ -233,7 +258,7 @@ def test_the_household_view_lists_recent_badges_by_recency_without_ranking(house
         house, ids["Lee"], "explorer", Tier.FIRST, ago=timedelta(hours=1, minutes=30), announcement=Announcement.SKIPPED
     )
     html = page(client.get("/stats/household"))
-    lately = html[html.index("Lately earned") :]
+    lately = html[html.index("lately-title") :]
     assert lately.index("Scout · Bronze") < lately.index("Scout · First") < lately.index("Chef · First")
     assert "Explorer" not in lately  # quiet awards are not news
     assert "4 badges earned together" in html
@@ -277,13 +302,13 @@ def test_stats_has_a_yours_tab_and_a_household_tab(house: Settings, client: Test
     assert '<a href="/stats" aria-current="page">Yours</a>' in tabs
     assert '<a href="/stats/household">Household</a>' in tabs
     assert "Newly earned" in mine and "Your badges" in mine and "Your counts" in mine
-    assert "house-title" not in mine and "Lately earned" not in mine
+    assert "house-title" not in mine and "lately-title" not in mine
     household = page(client.get("/stats/household"))
     tabs = household[household.index('<nav class="tabs" aria-label="Stats">') :].split("</nav>", 1)[0]
     assert '<a href="/stats">Yours</a>' in tabs
     assert '<a href="/stats/household" aria-current="page">Household</a>' in tabs
-    assert "The household" in household and "Lately earned" in household and "Chef · First" in household
-    assert "Newly earned" not in household and "Your badges" not in household and "Your counts" not in household
+    assert "The household" in household and "Newly earned" in household and "Chef · First" in household
+    assert "new-title" not in household and "Your badges" not in household and "Your counts" not in household
     # The main navigation still marks Stats on both tabs.
     assert 'aria-current="page">Stats' in household
     assert "<title>Household stats" in household
@@ -462,7 +487,7 @@ def test_the_household_view_lists_food_critic_like_any_badge_without_feedback_co
     award(house, kim, "food_critic", Tier.FIRST, ago=timedelta(hours=1))
     award(house, kim, "chef", Tier.FIRST, ago=timedelta(hours=2))
     html = page(client.get("/stats/household"))  # signed in as the admin
-    lately = html[html.index("Lately earned") :]
+    lately = html[html.index("lately-title") :]
     assert "Chef · First" in lately and "Food Critic · First" in lately
     assert "2 badges earned together" in html
     sign_in_as(client, provider, "kim@example.com")

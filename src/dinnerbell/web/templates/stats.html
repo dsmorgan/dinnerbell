@@ -43,10 +43,10 @@
   </dl>
 </section>
 <section class="card" aria-labelledby="lately-title">
-  <h2 id="lately-title">Lately earned</h2>
+  <h2 id="lately-title">Newly earned</h2>
   {% if household.recent %}
-  <ul class="badge-list">
-    {% for r in household.recent %}<li><strong>{{ r.member_name }}</strong> {{ badge_chip(r.award.badge.value, r.award.tier.value) }}</li>{% endfor %}
+  <ul class="badge-list recent-badges">
+    {% for r in household.recent %}{% set on = r.award.awarded_at|local_date(tz) %}<li><strong>{{ r.member_name }}</strong> {{ badge_chip(r.award.badge.value, r.award.tier.value) }} <time class="small muted" datetime="{{ on.isoformat() }}">{{ on|day }}</time></li>{% endfor %}
   </ul>
   <p class="small muted">Newest first.</p>
   {% else %}

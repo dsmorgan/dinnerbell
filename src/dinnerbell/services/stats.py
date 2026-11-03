@@ -38,8 +38,8 @@ from dinnerbell.services.errors import Forbidden
 
 RECENT_BADGES = 10
 GUESTS_ONLY = "That's for guests."
-NEW_FOR = timedelta(days=14)
-"""How long a badge counts as newly earned on the Stats page."""
+NEW_FOR = timedelta(days=3)
+"""How long a badge counts as newly earned on the Stats page's Yours tab (#177)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -72,7 +72,7 @@ class HouseholdStats:
 
 
 def newly_earned(stats: MemberStats, now: datetime) -> tuple[Award, ...]:
-    """The badges earned in the last two weeks, newest first. A badge earned quietly (the
+    """The badges earned in the last three days, newest first. A badge earned quietly (the
     backfill, a lowered count) is not news."""
     return tuple(
         a
