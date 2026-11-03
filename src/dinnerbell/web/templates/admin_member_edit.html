@@ -4,6 +4,7 @@
 {% block content %}
 <p><a href="/admin/members">← Members</a></p>
 <h1>{{ member.display_name }}</h1>
+{% if not member.is_guest %}<p><a class="button small" href="/admin/members/{{ member.id }}/preferences">{{ member.display_name }}'s preferences</a></p>{% endif %}
 {% if error %}<p class="alert error" role="alert">{{ error }}</p>{% endif %}
 <form method="post" action="/admin/members/{{ member.id }}" class="card stack">
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">

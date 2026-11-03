@@ -1,13 +1,20 @@
 {#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
 {% extends "base.html" %}
-{% block title %}Preferences{% endblock %}
+{% block title %}{% if editing %}{{ editing.display_name }}'s preferences{% else %}Preferences{% endif %}{% endblock %}
 {% macro row(target_type, target_id, name) -%}
 {% with target=target_type.value ~ ":" ~ target_id, stance=mine.stance(target_type, target_id), saved=false, rating_note=mine.rating_notes.get(target_id) if target_type == TargetType.ITEM else none %}{% include "_preference_row.html" %}{% endwith %}
 {%- endmacro %}
 {% block content %}
+{% if editing %}
+<p><a href="/admin/members#member-{{ editing.id }}">← Members</a></p>
+<h1>{{ editing.display_name }}'s preferences</h1>
+<p class="alert editing" role="note" id="editing-banner">You're editing {{ editing.display_name }}'s preferences. They aren't messaged, and each change is recorded in the audit log.</p>
+{% else %}
 <h1>Preferences</h1>
-<p class="muted">Only you can see these. Proposals respect them without saying who vetoed what.</p>
+<p class="muted">Only you and the household's admins can see these. Proposals respect them without saying who vetoed what.</p>
+{% endif %}
 {% if notice %}<p class="alert ok" role="status">{{ notice }}</p>{% endif %}
+{% if error %}<p class="alert error" role="alert">{{ error }}</p>{% endif %}
 
 <section class="card" id="vetoes" aria-labelledby="vetoes-heading">
   <h2 id="vetoes-heading">Your vetoes</h2>
@@ -23,7 +30,7 @@
 </section>
 
 {% if dietary_tags %}
-<form method="post" action="/me" class="card stack" id="dietary-needs">
+<form method="post" action="{{ needs_action }}" class="card stack" id="dietary-needs">
   <h2>Your dietary needs</h2>
   <p class="small muted">Every meal you're in or maybe for fits these, as a guest's needs do. Only the needs show, never whose.</p>
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
@@ -34,7 +41,7 @@
 </form>
 {% endif %}
 
-<form method="post" action="/preferences/settings" class="card stack">
+<form method="post" action="{{ prefs_base }}/settings" class="card stack">
   <h2>You</h2>
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   <fieldset class="field">

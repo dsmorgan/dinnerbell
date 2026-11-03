@@ -185,7 +185,7 @@ def test_a_failed_save_says_why_until_it_saves(client: TestClient) -> None:
     assert 'block: "nearest"' in script and "prefers-reduced-motion: reduce" in script
     # A failed preference row goes back to its saved level, and the banner stays until each card
     # or row that failed saves.
-    assert "elt.reset()" in script and "form[hx-post='/preferences/stance']" in script
+    assert "elt.reset()" in script and "form[hx-post$='/preferences/stance']" in script
     assert "unsaved[targetOf(event)] = true" in script and "delete unsaved[targetOf(event)]" in script
 
 

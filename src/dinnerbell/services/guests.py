@@ -64,6 +64,7 @@ from dinnerbell.services import call_context as cc
 from dinnerbell.services.call_context import load, locked_event, publish
 from dinnerbell.services.common import audit, require_admin
 from dinnerbell.services.errors import Forbidden, NotFound
+from dinnerbell.services.preferences import member_for_admin
 
 log = logging.getLogger(__name__)
 
@@ -319,27 +320,44 @@ async def set_my_needs(db: AsyncSession, actor: Member, needs: frozenset[int], *
     sets them on Preferences."""
     if not actor.active:
         raise Forbidden("Sign in again.")
-    check_dietary_needs(needs, dietary_tag_ids=await _dietary_tag_ids(db, actor.household_id))
+    return await _set_needs(db, actor, actor, needs, "guest.needs_updated", now=now)
+
+
+async def set_member_needs(
+    db: AsyncSession, actor: Member, member_id: int, needs: frozenset[int], *, now: datetime
+) -> Member:
+    """An admin sets another member's dietary needs on their Preferences (#181). Audited as
+    ``member.needs_updated``. A guest's are on their row instead (``update_guest``)."""
+    member = await member_for_admin(db, actor, member_id)
+    return await _set_needs(db, actor, member, needs, "member.needs_updated", now=now)
+
+
+async def _set_needs(
+    db: AsyncSession, actor: Member, member: Member, needs: frozenset[int], action: str, *, now: datetime
+) -> Member:
+    """``actor`` sets ``member``'s dietary needs, who may be themselves."""
+    check_dietary_needs(needs, dietary_tag_ids=await _dietary_tag_ids(db, member.household_id))
     # The picks of a call that's voting passed everyone's needs as they were (FR-29); a change
     # now would rule them out after the fact, as a member's guests' needs can't change then.
     events = EventRepository(db)
-    if needs != actor.dietary_needs:
-        for event_id in await events.open_ids(actor.household_id):  # any day, not just today
-            event = await events.get(actor.household_id, event_id)
+    if needs != member.dietary_needs:
+        for event_id in await events.open_ids(member.household_id):  # any day, not just today
+            event = await events.get(member.household_id, event_id)
             if event is None or event.state is not EventState.VOTING:
                 continue
-            responses = await ResponseRepository(db).for_event(actor.household_id, event.id)
-            answer = next((r for r in responses if r.member_id == actor.id), None)
+            responses = await ResponseRepository(db).for_event(member.household_id, event.id)
+            answer = next((r for r in responses if r.member_id == member.id), None)
             if answer is None or answer.status is Status.OUT:
                 continue
+            whose = ("you're", "your") if actor.id == member.id else (f"{member.display_name} is", "their")
             raise EventRuleViolation(
-                "A call you're in is voting now, and its proposals already fit your needs as they were. "
-                "Change them once it's decided.",
+                f"A call {whose[0]} in is voting now, and its proposals already fit {whose[1]} needs as they "
+                "were. Change them once it's decided.",
                 code="voting_needs",
             )
-    updated = await MemberRepository(db).update(actor.household_id, actor.id, now, dietary_needs=needs)
+    updated = await MemberRepository(db).update(member.household_id, member.id, now, dietary_needs=needs)
     payload = {"dietary_needs": sorted(needs)}
-    await audit(db, actor.household_id, actor, "guest.needs_updated", f"member:{actor.id}", payload, now)
+    await audit(db, member.household_id, actor, action, f"member:{member.id}", payload, now)
     await db.commit()
     return updated
 

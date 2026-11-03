@@ -17,6 +17,7 @@
   </div>
   <div class="member-actions">
     <a class="button small" href="/admin/members/{{ m.id }}">Edit</a>
+    <a class="button small" href="{{ '/preferences' if m.id == me.id else '/admin/members/%d/preferences'|format(m.id) }}">Preferences</a>
     {% if m.id != me.id %}
     {% set action = "reactivate" if not m.active else "deactivate" %}
     <form method="post" action="/admin/members/{{ m.id }}/{{ action }}"

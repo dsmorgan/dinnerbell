@@ -46,8 +46,9 @@
       unsaved[targetOf(event)] = true;
       var elt = event.detail && event.detail.elt;
       // A preference row shows the level tapped as soon as it's tapped. Put back the one it
-      // last saved, which the page rendered as checked.
-      if (elt instanceof HTMLFormElement && elt.matches("form[hx-post='/preferences/stance']")) {
+      // last saved, which the page rendered as checked. The row posts to /preferences/stance, or
+      // to /admin/members/{id}/preferences/stance when an admin edits someone else's (#181).
+      if (elt instanceof HTMLFormElement && elt.matches("form[hx-post$='/preferences/stance']")) {
         elt.reset();
       }
       setBanner(text);

@@ -48,7 +48,7 @@ def test_page_lists_tags_and_items(client: TestClient, provider: FakeProvider, m
     add_item(client, "Tacos", kind="home", cuisines="Mexican")
     response = client.get("/preferences")
     text = page(response)
-    assert "Only you can see these." in text
+    assert "Only you and the household's admins can see these." in text
     for heading in ("Cuisine", "Other", "Restaurants", "Home meals"):
         assert f"<h2>{heading}</h2>" in text
     assert checked_level(response.text, f"tag:{thai(migrated)}") == "0"
@@ -158,9 +158,11 @@ def sam_vetoes_thai(client: TestClient, provider: FakeProvider, migrated: Settin
     return member(migrated, "sam@example.com").id
 
 
-def test_admin_never_sees_another_members_preferences(
+def test_admin_never_sees_another_members_preferences_outside_admin(
     client: TestClient, migrated: Settings, sam_vetoes_thai: int
 ) -> None:
+    """Only Admin > Members opens another member's preferences (#181, test_admin_preferences.py):
+    /preferences takes no member ID, and no other page shows a stance."""
     sam_id = sam_vetoes_thai
     target = f"tag:{thai(migrated)}"
     for path in ("/preferences", f"/preferences?member_id={sam_id}", f"/preferences?member={sam_id}"):
@@ -173,7 +175,7 @@ def test_admin_never_sees_another_members_preferences(
         assert "veto" not in text.lower(), path
 
 
-def test_admin_cannot_write_another_members_preferences(
+def test_admin_cannot_write_another_members_preferences_on_preferences(
     client: TestClient, migrated: Settings, sam_vetoes_thai: int
 ) -> None:
     sam_id = sam_vetoes_thai

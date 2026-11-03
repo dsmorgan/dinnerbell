@@ -81,6 +81,7 @@ def build_app(settings: Settings, lifespan: Lifespan) -> FastAPI:
         admin.router,
         catalog.router,
         preferences.router,
+        preferences.admin_router,
         history.router,
         events.router,
         schedule.router,
