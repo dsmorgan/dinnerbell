@@ -11,7 +11,8 @@ first award, so even a repeated write queues nothing new.
 A post covers one done call: every badge it earned, for however many members. It keeps to a size
 a channel reads at a glance: a few members and a few badges each, with the rest counted. It lists
 members by name, never by what they earned, and says nothing about preferences or feedback.
-Awards for members who are no longer active are marked ``skipped``, not left pending.
+Awards for members who are no longer active, or for a guest unlinked from Slack before the post
+(#201), are marked ``skipped``, not left pending.
 
 Awards of ``SILENT_BADGES`` (Food Critic, earned when feedback is given, long after the call) queue
 no post and join none: they are marked ``announced`` in the same transaction, so they are not
@@ -48,10 +49,11 @@ def news_for(awards: Iterable[Award], members: dict[int, Member]) -> tuple[list[
     (``MAX_PEOPLE``). A badge earned at several tiers at once shows its highest. Each member's
     badges are in ``news_order`` (highest tier, then rarest ladder, then catalog order) before
     ``MAX_BADGES`` cuts them, so ``badges`` holds the most notable and ``rest`` the most common.
-    Members not in ``members`` are left out without being counted."""
+    Members not in ``members``, and guests no longer linked to Slack, are left out without being
+    counted: a post never names an unregistered guest (#201)."""
     best: dict[int, dict[str, Award]] = defaultdict(dict)
     for award in awards:
-        if award.member_id not in members:
+        if award.member_id not in members or not members[award.member_id].earns_badges:
             continue
         held = best[award.member_id].get(award.badge.value)
         if held is None or TIERS.index(award.tier) > TIERS.index(held.tier):
@@ -91,7 +93,7 @@ async def announce_household(db: AsyncSession, household_id: int, *, now: dateti
         pending = await badges.pending(household_id)  # again, under the lock: another tick may have won
         if not pending:
             return 0
-        members = {m.id: m for m in await MemberRepository(db).list(household_id) if m.active}
+        members = {m.id: m for m in await MemberRepository(db).list(household_id) if m.active and m.earns_badges}
         silent = [a for a in pending if a.badge in SILENT_BADGES and a.member_id in members]
         heard = [a for a in pending if a.badge not in SILENT_BADGES and a.member_id in members]
         by_call: dict[int | None, list[Award]] = defaultdict(list)

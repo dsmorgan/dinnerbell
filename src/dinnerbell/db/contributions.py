@@ -232,14 +232,15 @@ class BadgeRepository:
         )
         return [_award(r) for r in rows]
 
-    async def recent(self, household_id: int, limit: int) -> list[Award]:
-        """The newest awards in the household, newest first. Quiet awards (``skipped``: the
-        backfill, a lowered threshold) are not news, so they are left out."""
+    async def recent(self, household_id: int, limit: int, *, hide: Iterable[int] = ()) -> list[Award]:
+        """The newest awards in the household, newest first, leaving out ``hide``'s. Quiet awards
+        (``skipped``: the backfill, a lowered threshold) are not news, so they are left out."""
         rows = await self._session.scalars(
             select(BadgeAwardRow)
             .where(
                 BadgeAwardRow.household_id == household_id,
                 BadgeAwardRow.announcement != Announcement.SKIPPED.value,
+                BadgeAwardRow.member_id.not_in(list(hide)),
             )
             .order_by(BadgeAwardRow.awarded_at.desc(), BadgeAwardRow.id.desc())
             .limit(limit)

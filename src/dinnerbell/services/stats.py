@@ -118,10 +118,12 @@ async def household_stats(db: AsyncSession, actor: Member) -> HouseholdStats:
     require_member(actor)
     household_id = actor.household_id
     badges = BadgeRepository(db)
-    names = {m.id: m.display_name for m in await MemberRepository(db).list(household_id)}
+    everyone = await MemberRepository(db).list(household_id)
+    names = {m.id: m.display_name for m in everyone}
+    hide = [m.id for m in everyone if not m.earns_badges]  # a guest since unlinked from Slack (#201)
     recent = tuple(
         RecentBadge(names.get(a.member_id, "A former member"), a)
-        for a in await badges.recent(household_id, RECENT_BADGES)
+        for a in await badges.recent(household_id, RECENT_BADGES, hide=hide)
     )
     return HouseholdStats(
         meals=await MealLogRepository(db).count(household_id),

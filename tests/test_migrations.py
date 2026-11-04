@@ -1970,6 +1970,88 @@ def test_0025_marks_every_saved_answer_done_and_downgrade_drops_it(settings: Set
     assert _rows_outside_m4(settings) == before
 
 
+# 0028: unregistered guests earn no badges (#201) -------------------------------------------------
+
+
+def _news(*people: tuple[int, str]) -> list[dict[str, object]]:
+    return [{"person": {"id": i, "name": n}, "badges": [{"name": "Chef", "tier": "First"}]} for i, n in people]
+
+
+def _queued(settings: Settings) -> list[tuple[str, str, dict[str, object], bool]]:
+    engine = create_engine(settings.sync_database_url)
+    try:
+        with engine.connect() as c:
+            rows = c.execute(text("SELECT idempotency_key, kind, payload, delivered_at FROM outbox ORDER BY id")).all()
+    finally:
+        engine.dispose()
+    return [(key, kind, json.loads(payload), delivered is not None) for key, kind, payload, delivered in rows]
+
+
+def test_0028_takes_back_unregistered_guests_badges_and_keeps_their_contributions(settings: Settings) -> None:
+    """Up deletes the awards of guests with no Slack user, and takes them out of badge posts and
+    recaps still waiting to go: a post that named only them is deleted. A member's and a
+    registered guest's awards, every contribution, and posts already delivered stay. Down changes
+    nothing."""
+    _upgrade_to(settings, "0027_away")
+    _populate_calls(settings)
+    member = (
+        "INSERT INTO member (id, household_id, display_name, email, role, can_cook, can_pickup, can_order, "
+        "mute_dm_reminders, feedback_reminder, active, slack_link_locked, slack_user_id, created_at, updated_at) "
+    )
+    outbox = (
+        "INSERT INTO outbox (household_id, kind, payload, idempotency_key, created_at, updated_at, available_at, "
+        "attempts, delivered_at) VALUES "
+    )
+    both, guest_only = _news((1, "Sam"), (2, "Pat")), _news((2, "Pat"))
+    recap_payload = {"month": "2026-10-01", "meals": 1, "badges": both, "more_badges": 0}
+    _execute(
+        settings,
+        member + "VALUES (2, 1, 'Pat', NULL, 'guest', 0, 0, 0, 0, 0, 1, 0, NULL, :t, :t)",
+        member + "VALUES (3, 1, 'Riley', NULL, 'guest', 0, 0, 0, 0, 0, 1, 0, 'U07RILEY', :t, :t)",
+        "INSERT INTO contribution (household_id, member_id, kind, day, event_id, created_at) "
+        "VALUES (1, 2, 'picked_up', '2026-10-21', 1, :t), (1, 3, 'picked_up', '2026-10-21', 1, :t)",
+        "INSERT INTO badge_award (id, household_id, member_id, badge_key, tier, awarded_at, announcement) "
+        "VALUES (1, 1, 1, 'chef', 'first', :t, 'announced'), (2, 1, 2, 'road_runner', 'first', :t, 'announced'), "
+        "(3, 1, 2, 'on_a_roll', 'first', :t, 'pending'), (4, 1, 3, 'road_runner', 'first', :t, 'pending')",
+        outbox + f"(1, 'badges_earned', '{json.dumps({'key': 1, 'news': both})}', 'badges:1', :t, :t, :t, 0, NULL), "
+        f"(1, 'badges_earned', '{json.dumps({'key': 2, 'news': guest_only})}', 'badges:2', :t, :t, :t, 0, NULL), "
+        f"(1, 'badges_earned', '{json.dumps({'key': 5, 'news': guest_only})}', 'badges:5', :t, :t, :t, 1, :t), "
+        f"(1, 'monthly_recap', '{json.dumps(recap_payload)}', 'recap:2026-10', :t, :t, :t, 0, NULL)",
+    )
+    others = _rows_outside_m4(settings)
+    contributions_before = _contributions(settings)
+
+    _upgrade_to(settings, "0028_unregistered_guest_badges")
+    assert [(row[0], row[2]) for row in _badge_awards(settings)[1]] == [(1, 1), (4, 3)]
+    assert _contributions(settings) == contributions_before
+    queued = _queued(settings)
+    assert [(key, delivered) for key, _, _, delivered in queued] == [
+        ("event:2:run2:call_opened", True),
+        ("event:2:run2:call_updated:1", False),
+        ("badges:1", False),  # Sam is still in it
+        ("badges:5", True),  # delivered already: history, untouched
+        ("recap:2026-10", False),
+    ]
+    assert queued[2][2]["news"] == _news((1, "Sam"))
+    assert queued[3][2]["news"] == guest_only
+    assert queued[4][2] == recap_payload | {"badges": _news((1, "Sam"))}
+    after = _rows_outside_m4(settings)
+    assert {k: v for k, v in after.items() if k != "outbox"} == {k: v for k, v in others.items() if k != "outbox"}
+
+    _downgrade_to(settings, "0027_away")
+    assert [(row[0], row[2]) for row in _badge_awards(settings)[1]] == [(1, 1), (4, 3)]
+    assert _queued(settings) == queued
+
+
+def _contributions(settings: Settings) -> list[object]:
+    engine = create_engine(settings.sync_database_url)
+    try:
+        with engine.connect() as c:
+            return list(c.execute(text("SELECT * FROM contribution ORDER BY id")).all())
+    finally:
+        engine.dispose()
+
+
 def test_a_second_migrator_waits_then_reports_a_lock(settings: Settings, caplog: pytest.LogCaptureFixture) -> None:
     """Another process holding the write lock: the loser waits, then raises MigrationLocked
     instead of a raw "database is locked" (audit #14)."""

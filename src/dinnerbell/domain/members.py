@@ -113,6 +113,12 @@ class Member:
         return self.is_guest and self.slack_user_id is not None
 
     @property
+    def earns_badges(self) -> bool:
+        """Everyone but an unregistered guest (#201), who can't see or manage badges. Their
+        contributions still count; the badges they reach are awarded once they're registered."""
+        return not self.is_guest or self.slack_user_id is not None
+
+    @property
     def is_linked(self) -> bool:
         return self.oidc_subject is not None
 
