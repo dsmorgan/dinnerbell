@@ -4,7 +4,8 @@
 // HTMX swaps in successful responses only. When a request fails outright (no network, a server
 // error, an expired session, or no answer in time), show a banner so a tap that didn't save never
 // looks like it did. A preference row that failed goes back to the level it last saved. The
-// banner stays until each card or row that failed saves, or that card refreshes. A tap replaced
+// banner stays until each card or row that failed saves, gets a 409 (which swaps in the card as
+// the server has it, with the reason it refused), or refreshes. A tap replaced
 // by a second tap on another control (hx-sync) is aborted, which HTMX reports as
 // htmx:sendAbort, not a failure, so it raises nothing.
 (function () {
@@ -65,7 +66,9 @@
   });
   document.addEventListener("htmx:afterRequest", function (event) {
     var xhr = event.detail && event.detail.xhr;
-    if (!xhr || xhr.status < 200 || xhr.status >= 300) {
+    // HTMX swaps in a 409 too (responseHandling in base.html): the card as the server has it, with
+    // its own error at the top. That settles an earlier failed tap on it as a 2xx does.
+    if (!xhr || ((xhr.status < 200 || xhr.status >= 300) && xhr.status !== 409)) {
       return;
     }
     var target = event.detail.target;
@@ -267,7 +270,71 @@
   // The card is the poll's source, so it shares the card's hx-sync: a tap replaces a poll in
   // flight, and its answer can't overwrite the tap's. A poll never starts while a save is in
   // flight, since that would abort the save.
+  //
+  // A refresh that fails doesn't repeat every 45 seconds forever. A 403 or 404 (a guest no longer
+  // invited, a call that's gone) won't change, so that card stops refreshing; a save that swaps
+  // in a new card starts it again. No network, no answer in time, or another error slows every
+  // card's refresh, twice as long each round up to 10 minutes, and one that works goes back to
+  // 45 seconds. A 401 needs nothing: its HX-Redirect sends the page to sign in.
   var POLL_MS = 45000;
+  var POLL_MAX_MS = 600000;
+  var pollDelay = POLL_MS;
+  var pollStarted = 0; // when the current round started
+  var pollTimer = 0;
+  var slowed = false; // whether a failure in the current round already slowed the next
+  var answered = false; // whether a refresh in the current round worked
+
+  function isPoll(event) {
+    var target = event.detail && event.detail.target;
+    return !isSave(event) && target instanceof Element && target.hasAttribute("data-poll");
+  }
+
+  // Time the next round from the start of this one, so a failure that comes in late doesn't
+  // add its wait on top.
+  function nextRound() {
+    window.clearTimeout(pollTimer);
+    pollTimer = window.setTimeout(pollRound, Math.max(0, pollStarted + pollDelay - Date.now()));
+  }
+
+  // Once a round: three cards that can't reach the server wait twice as long, not eight times.
+  // A refresh in the same round that worked wins, so one card's error doesn't slow the rest.
+  function slowDown() {
+    if (slowed || answered) {
+      return;
+    }
+    slowed = true;
+    pollDelay = Math.min(pollDelay * 2, POLL_MAX_MS);
+    nextRound();
+  }
+
+  function pollFailed(event) {
+    if (isPoll(event)) {
+      slowDown();
+    }
+  }
+
+  document.addEventListener("htmx:sendError", pollFailed);
+  document.addEventListener("htmx:timeout", pollFailed);
+  // A poll a tap replaced ends in an abort, also with status 0, so only the error events above
+  // count a refresh that got no answer.
+  document.addEventListener("htmx:afterRequest", function (event) {
+    if (!isPoll(event)) {
+      return;
+    }
+    var status = event.detail.xhr ? event.detail.xhr.status : 0;
+    if (status >= 200 && status < 300) {
+      answered = true;
+      if (pollDelay !== POLL_MS) {
+        pollDelay = POLL_MS;
+        nextRound();
+      }
+    } else if (status === 403 || status === 404) {
+      event.detail.target.removeAttribute("data-poll");
+    } else if (status >= 400 && status !== 401) {
+      slowDown();
+    }
+  });
+
   var TYPING = "textarea, select, input:not([type=hidden]):not([type=radio]):not([type=checkbox])";
 
   // The option a drop-down select shows until someone picks another: the last one marked
@@ -315,7 +382,11 @@
     return false;
   }
 
-  window.setInterval(function () {
+  function pollRound() {
+    pollStarted = Date.now();
+    slowed = false;
+    answered = false;
+    nextRound();
     if (document.hidden || !window.htmx) {
       return;
     }
@@ -329,5 +400,8 @@
       }
       window.htmx.ajax("GET", card.getAttribute("data-poll"), { source: card, target: card, swap: "outerHTML" });
     }
-  }, POLL_MS);
+  }
+
+  pollStarted = Date.now();
+  nextRound();
 })();

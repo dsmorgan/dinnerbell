@@ -189,6 +189,40 @@ def test_a_failed_save_says_why_until_it_saves(client: TestClient) -> None:
     assert "unsaved[targetOf(event)] = true" in script and "delete unsaved[targetOf(event)]" in script
 
 
+def test_a_409_clears_the_failed_save_banner(admin: TestClient) -> None:  # noqa: F811
+    """A 409 swaps in the card as the server has it, with the reason at the top, so an earlier
+    failed tap on that card no longer shows the page's banner (#193). Before, only a 2xx cleared
+    it, and a card with no refresh left kept it until a reload."""
+    html = admin.get("/").text
+    config = re.search(r"<meta name=\"htmx-config\" content='([^']*)'>", html)
+    assert config is not None
+    assert {"code": "409", "swap": True, "error": False} in json.loads(config.group(1))["responseHandling"]
+    script = admin.get("/static/app.js").text
+    assert "if (!xhr || ((xhr.status < 200 || xhr.status >= 300) && xhr.status !== 409)) {" in script
+    cleared = script[script.index("xhr.status !== 409") :]
+    assert cleared.index("delete unsaved[targetOf(event)]") < cleared.index("});")  # in that listener
+
+
+def test_a_failing_refresh_backs_off_and_a_gone_card_stops(client: TestClient) -> None:
+    """A card refresh that fails doesn't repeat every 45 seconds forever (#193). A 403 or 404
+    stops that card's refresh; no network, a timeout, or another error doubles the wait for every
+    card, up to 10 minutes, once a round; one that works goes back to 45 seconds and wins over a failure
+    in the same round. A 401 is left to
+    its HX-Redirect, and a poll a tap aborted counts as neither."""
+    script = client.get("/static/app.js").text
+    assert "window.setInterval" not in script  # each round sets the next, so the wait can change
+    assert "var POLL_MS = 45000;" in script and "var POLL_MAX_MS = 600000;" in script
+    assert "pollDelay = Math.min(pollDelay * 2, POLL_MAX_MS);" in script
+    assert "if (slowed || answered) {\n      return;" in script  # once a round, and a refresh that worked wins
+    assert "slowed = false;\n    answered = false;" in script
+    assert 'document.addEventListener("htmx:sendError", pollFailed);' in script
+    assert 'document.addEventListener("htmx:timeout", pollFailed);' in script
+    assert "if (status >= 200 && status < 300) {\n      answered = true;\n      if (pollDelay !== POLL_MS) {" in script
+    assert 'status === 403 || status === 404) {\n      event.detail.target.removeAttribute("data-poll");' in script
+    assert "status >= 400 && status !== 401) {\n      slowDown();" in script
+    assert "pollStarted + pollDelay - Date.now()" in script  # timed from the round's start
+
+
 def test_a_repeat_tap_is_dropped_and_polls_share_the_cards_sync(client: TestClient) -> None:
     """The card's hx-sync aborts a request only in the browser, so a double tap on one control
     would reach the server twice. A poll shares that sync, so a tap replaces it, and it never
