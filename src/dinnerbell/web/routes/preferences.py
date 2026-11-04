@@ -48,7 +48,7 @@ NOTICES = {
     "settings": "Settings saved.",
     "saved": "Preference saved.",
     "away": "Away days saved.",
-    "back": "Away days cleared.",
+    "back": labels.AWAY_CLEARED,
 }
 FUN_CHOICES = {"on": True, "off": False}
 

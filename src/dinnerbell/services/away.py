@@ -70,15 +70,18 @@ async def set_member_away(
 
 async def away_until(db: AsyncSession, actor: Member, event_id: int, back: date, *, now: datetime) -> Member:
     """**Away until…** on a call: the actor is away from the call's day through the day before
-    ``back``. Any call in the household, in any state: the window is about days, not the call."""
+    ``back``, or from the first day of the window they have, when it reaches the call's day
+    (``away_from_call``). Any call in the household: the window is about days, not the call."""
     require_member(actor)
     event = await EventRepository(db).get(actor.household_id, event_id)
     if event is None:
         raise NotFound(NO_SUCH_CALL)
     if event.is_offer:
         raise EventRuleViolation(NOT_ON_AN_OFFER, code="is_offer")
-    away = away_from_call(event.day, back, await _today(db, actor, now))
-    return await _set(db, actor, actor, away, source="call", now=now)
+    me = await MemberRepository(db).get(actor.household_id, actor.id) or actor  # the window as it is now
+    today = await _today(db, me, now)
+    away = away_from_call(event.day, back, today, me.away_now(today))
+    return await _set(db, actor, me, away, source="call", now=now)
 
 
 async def clear_my_away(db: AsyncSession, actor: Member, *, now: datetime) -> Member:
@@ -87,13 +90,18 @@ async def clear_my_away(db: AsyncSession, actor: Member, *, now: datetime) -> Me
     return await _clear(db, actor, actor, now=now)
 
 
-async def back_on_call(db: AsyncSession, actor: Member, event_id: int, *, now: datetime) -> Member:
+async def back_on_call(db: AsyncSession, actor: Member, event_id: int, *, now: datetime) -> bool:
     """**I'm back** on a call's card, or Home: ``clear_my_away``, for a call in the actor's
-    household, as every button on a call is."""
+    household, as every button on a call is. Returns whether the window had started, so the
+    reply can welcome them back or only say it's cleared."""
     require_member(actor)
     if await EventRepository(db).get(actor.household_id, event_id) is None:
         raise NotFound(NO_SUCH_CALL)
-    return await _clear(db, actor, actor, now=now)
+    today = await _today(db, actor, now)
+    me = await MemberRepository(db).get(actor.household_id, actor.id) or actor
+    current = me.away_now(today)
+    await _clear(db, actor, me, now=now)
+    return current is not None and current.under_way(today)
 
 
 async def clear_member_away(db: AsyncSession, actor: Member, member_id: int, *, now: datetime) -> Member:
@@ -104,7 +112,10 @@ async def clear_member_away(db: AsyncSession, actor: Member, member_id: int, *, 
 
 async def _set(db: AsyncSession, actor: Member, member: Member, away: Away, *, source: str, now: datetime) -> Member:
     """Store ``away`` as ``member``'s window, answer the open calls it covers, audit, and commit.
-    The member's row is the transaction's first write, so it holds the write lock from there."""
+    The member's row is the transaction's first write, so it holds the write lock from there.
+    The window they have already changes nothing, and writes no audit row."""
+    if member.away == away:
+        return member
     updated = await MemberRepository(db).update(
         member.household_id, member.id, now, away_first=away.first, away_last=away.last
     )

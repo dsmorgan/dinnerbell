@@ -25,7 +25,7 @@
     {
       "elements": [
         {
-          "text": "It replaces any away days you set before. Change or clear them on Preferences.",
+          "text": "Away days that reach this call's day keep their first day; others are replaced. Change or clear them on Preferences.",
           "type": "mrkdwn"
         }
       ],

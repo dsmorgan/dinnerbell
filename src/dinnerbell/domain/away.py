@@ -61,8 +61,14 @@ def check_away(first: date, last: date, today: date) -> Away:
     return Away(first, last)
 
 
-def away_from_call(call_day: date, back: date, today: date) -> Away:
-    """**Away until…** on a call: away from the call's day through the day before ``back``."""
+def away_from_call(call_day: date, back: date, today: date, current: Away | None = None) -> Away:
+    """**Away until…** on a call: away from the call's day through the day before ``back``. A
+    ``current`` window that reaches the call's day (covers it, or ends the day before) keeps its
+    first day, so it's extended rather than cut short: away Monday to Wednesday, **Away until**
+    Sunday on Thursday's call is Monday to Saturday. A window apart from the call is replaced."""
     if back <= call_day:
         raise AwayRuleViolation("Pick a day after this call's day.", code="away_backwards")
-    return check_away(call_day, back - timedelta(days=1), today)
+    first = call_day
+    if current is not None and current.first <= call_day <= current.last + timedelta(days=1):
+        first = current.first
+    return check_away(first, back - timedelta(days=1), today)

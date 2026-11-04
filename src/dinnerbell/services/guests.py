@@ -243,13 +243,12 @@ async def _drop_from_call(db: AsyncSession, event: Event, guest_id: int, now: da
     ctx = await load(db, event)
     told: list[note.Notification] = []
     if vacated:
-        # Whoever can reassign it hears: the coordinator, or each admin when nobody coordinates.
+        # Whoever can reassign it hears: the coordinator, or each admin when nobody coordinates,
+        # but not one away that day (FR-63) while another admin isn't.
         coordinator = ctx.members.get(ctx.event.coordinator_id) if ctx.event.coordinator_id is not None else None
-        deciders = (
-            [coordinator]
-            if coordinator is not None and coordinator.active
-            else [m for m in ctx.active_members if m.is_admin]
-        )
+        admins = [m for m in ctx.active_members if m.is_admin]
+        around = [m for m in admins if not m.away_on(ctx.event.day)]
+        deciders = [coordinator] if coordinator is not None and coordinator.active else (around or admins)
         info, left = cc.event_info(ctx), ctx.person(guest_id)
         told = [note.RoleVacated(info, ctx.person(m.id), left, vacated) for m in deciders]
     await publish(db, ctx, cc.message_updated(ctx), *cc.decision_updated(ctx), *told, now=now)

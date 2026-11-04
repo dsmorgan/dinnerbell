@@ -114,7 +114,7 @@
     <summary class="small">{{ labels.AWAY_UNTIL }}</summary>
     <form method="post" autocomplete="off" action="{{ base }}/away" hx-post="{{ base }}/away" {{ swap|safe }} class="stack">
       {{ hidden() }}
-      <p class="small muted">Away from {{ e.day|day }} until the day you're back. {{ labels.AWAY_HINT }}</p>
+      <p class="small muted">Away from {{ e.day|day }} until the day you're back. {{ labels.AWAY_HINT }} {{ labels.AWAY_KEEPS }}</p>
       <label class="field"><span>{{ labels.AWAY_BACK_DAY }}</span><input type="date" name="back" min="{{ v.first_back_day.isoformat() }}" value="{{ v.first_back_day.isoformat() }}" required></label>
       <button type="submit" class="button primary">Save</button>
     </form>

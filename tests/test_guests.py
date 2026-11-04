@@ -1174,6 +1174,33 @@ async def test_removing_a_guest_from_a_decided_call_clears_their_role(house: Hou
     assert vacated.payload["member"]["id"] == house["Sam"].id and vacated.payload["roles"] == ["order", "pickup"]
 
 
+@pytest.mark.parametrize("another_admin", [True, False], ids=["another admin", "only admin"])
+async def test_a_vacated_role_skips_an_admin_away_unless_none_is_left(house: House, another_admin: bool) -> None:
+    """With nobody coordinating, each admin hears a role was left, but not one away that day
+    (FR-63), unless every admin is away: someone must hear."""
+    from dinnerbell.services import away
+    from tests.support.calls import nobody_coordinates
+
+    event_id = await open_dinner(house)
+    await invite(house, "Kim", "Pat", event_id)
+    pat = house["Pat"]
+    await act(house, calls.respond, pat, event_id, Status.IN)
+    await act(house, calls.offer_role, pat, event_id, RoleOffer.PICKUP, True)
+    await act(house, calls.respond, house["Sam"], event_id, Status.IN)
+    house.clock.now = RESPOND_BY
+    await house.tick()
+    await house.settle_ways(event_id)
+    pick = next(p for p in (await house.context(event_id)).proposals if p.mode is Mode.PICKUP)
+    await act(house, calls.lock, house["Alex"], event_id, pick.id)
+    await nobody_coordinates(house, event_id)
+    if another_admin:
+        await house.add_member("Dee", admin=True)
+    await act(house, away.set_my_away, house["Alex"], DAY, DAY)
+    await act(house, guests.remove, house["Alex"], pat.id)
+    told = {e.payload["member"]["id"] for e in await house.outbox() if e.kind == "role_vacated"}
+    assert told == {house["Dee"].id if another_admin else house["Alex"].id}
+
+
 @pytest.mark.parametrize("use", ["offer_role", "toggle_role", "claim_coordinator", "post_offer", "join_offer"])
 async def test_an_uninvited_guest_is_refused_each_action(house: House, use: str) -> None:
     """Each guard on its own line: these fail if the line that refuses an uninvited guest goes."""

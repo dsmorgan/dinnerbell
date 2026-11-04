@@ -69,6 +69,31 @@ def test_away_until_runs_from_the_calls_day_through_the_day_before_the_one_picke
             away_from_call(THU, back, THU)
 
 
+def test_away_until_keeps_the_first_day_of_a_window_that_reaches_the_call() -> None:
+    mon, wed = THU - timedelta(days=3), THU - timedelta(days=1)
+    # Away Monday to Wednesday, then Away until Sunday on Thursday's call: Monday to Saturday.
+    assert away_from_call(THU, SUN, THU - timedelta(days=4), Away(mon, wed)) == Away(mon, SAT)
+    assert away_from_call(FRI, SUN, THU, Away(wed, SAT)) == Away(wed, SAT)  # covers the call: kept
+    assert away_from_call(THU, FRI, THU, Away(SAT, SUN)) == Away(THU, THU)  # apart: replaced
+    assert away_from_call(SAT, SUN, THU, Away(THU, THU)) == Away(SAT, SAT)  # ends two days before: replaced
+
+
+def test_the_slack_modal_never_opens_on_a_day_it_refuses() -> None:
+    from dataclasses import replace
+
+    from dinnerbell.channels.slack import preview as samples
+    from dinnerbell.channels.slack.views import away_modal
+
+    def opens_on(window: Away | None) -> str:
+        view = replace(samples.COLLECTING_VIEW, away=window)
+        (picker,) = [b for b in away_modal(view, ids.ViewOrigin(7, None, run=1))["blocks"] if b.get("block_id")]
+        return str(picker["element"]["initial_date"])
+
+    assert opens_on(None) == "2026-10-23"  # the day after the call
+    assert opens_on(Away(THU, SAT)) == "2026-10-25"  # the day they're back
+    assert opens_on(Away(THU - timedelta(days=3), THU - timedelta(days=1))) == "2026-10-23"  # not the call's day
+
+
 def test_one_status_line_names_the_day_theyre_back() -> None:
     assert labels.away_status(Away(THU, SAT), THU) == "Away until Sun, Oct 25"
     assert labels.away_status(Away(FRI, SAT), THU) == "Away from Fri, Oct 23 until Sun, Oct 25"
@@ -283,6 +308,93 @@ async def test_away_until_on_a_call_needs_a_call_in_the_household(house: House) 
         await act(house, away.back_on_call, house["Kim"], event_id + 100)
 
 
+async def test_overriding_an_away_out_is_a_fresh_answer(house: House) -> None:
+    """In after the window answered Out is answered now: no Early Bird, and no place in line for a
+    role ahead of someone who answered on time."""
+    from dinnerbell.domain.contributions import DoneFacts, credits_for_done
+    from dinnerbell.domain.events import RoleOffer
+
+    await set_away(house, "Kim", THU, THU)
+    event_id = await open_dinner(house)
+    house.clock.advance(timedelta(minutes=5))
+    await act(house, calls.offer_role, house["Lee"], event_id, RoleOffer.PICKUP, True)
+    house.clock.advance(timedelta(minutes=15))
+    await act(house, calls.offer_role, house["Kim"], event_id, RoleOffer.PICKUP, True)
+    ctx = await house.context(event_id)
+    kims = ctx.response_of(house["Kim"].id)
+    assert kims is not None and kims.is_in and kims.responded_at == house.clock()
+    assert ctx.coverage.pickups == (house["Lee"].id, house["Kim"].id)
+    facts = DoneFacts(event=ctx.event, assignments=(), responses=tuple(ctx.responses), guest_ids=frozenset())
+    quick = {c.member_id for c in credits_for_done(facts) if c.kind is Kind.RESPONDED_ON_TIME}
+    assert quick == {house["Lee"].id}
+
+
+async def test_a_window_set_while_voting_or_decided_changes_nothing_on_that_call(house: House) -> None:
+    from dinnerbell.domain.events import RoleOffer
+
+    event_id = await open_dinner(house)
+    for name in ("Alex", "Sam"):
+        await act(house, calls.offer_role, house[name], event_id, RoleOffer.PICKUP, True)
+    house.clock.now = RESPOND_BY
+    await house.tick()
+    assert (await house.event(event_id)).state is EventState.VOTING
+    await set_away(house, "Kim", THU, FRI)
+    await set_away(house, "Sam", THU, FRI)
+    assert await answer(house, event_id, "Kim") is None
+    sams = await answer(house, event_id, "Sam")
+    assert sams is not None and sams.is_in and sams.away_until is None
+    await house.settle_ways(event_id)
+    pick = (await house.context(event_id)).proposals[0]
+    await act(house, calls.lock, house["Alex"], event_id, pick.id)
+    await act(house, away.clear_my_away, house["Kim"])
+    await set_away(house, "Lee", THU, THU)
+    assert await answer(house, event_id, "Lee") is None
+
+
+async def test_an_ad_hoc_call_and_starting_again_apply_away(house: House) -> None:
+    await set_away(house, "Kim", THU, THU)
+    lunch = await act(house, calls.start_call, house["Sam"], Slot.LUNCH, THU)  # today: opens at once
+    kims = await answer(house, lunch.id, "Kim")
+    assert lunch.state is EventState.COLLECTING and kims is not None and kims.away_until == FRI
+    await act(house, calls.cancel_call, house["Sam"], lunch.id)
+    house.clock.advance(timedelta(minutes=5))
+    again = await act(house, calls.start_call, house["Lee"], Slot.LUNCH, THU)  # starts it again
+    kims = await answer(house, lunch.id, "Kim")
+    assert again.run == 2 and kims is not None and kims.away_until == FRI
+    assert kims.updated_at is not None and kims.updated_at >= again.opens_at  # counts in this run
+
+
+async def test_joining_late_drops_the_mark_and_voting_never_picks_them_to_coordinate(house: House) -> None:
+    from dinnerbell.domain.events import RoleOffer
+
+    await set_away(house, "Kim", THU, THU)
+    await set_away(house, "Lee", THU, THU)
+    event_id = await open_dinner(house)
+    for name in ("Alex", "Sam"):
+        await act(house, calls.offer_role, house[name], event_id, RoleOffer.PICKUP, True)
+    house.clock.now = RESPOND_BY
+    await house.tick()
+    event = await house.event(event_id)
+    assert event.state is EventState.VOTING and event.coordinator_id in {house["Alex"].id, house["Sam"].id}
+    await act(house, calls.join_late, house["Kim"], event_id)
+    kims = await answer(house, event_id, "Kim")
+    assert kims is not None and kims.is_in and kims.late and kims.away_until is None
+    assert (await house.refresh("Kim")).away == Away(THU, THU)  # the window stays
+
+
+async def test_saving_the_same_window_again_writes_nothing(house: House) -> None:
+    await set_away(house, "Kim", THU, FRI)
+    await set_away(house, "Kim", THU, FRI)
+    assert len(await house.audits("member.away")) == 1
+
+
+async def test_away_until_on_a_later_call_extends_a_window_that_reaches_it(house: House) -> None:
+    await set_away(house, "Kim", THU, THU)
+    fri = await act(house, calls.start_call, house["Sam"], Slot.LUNCH, FRI)
+    await act(house, away.away_until, house["Kim"], fri.id, SUN)
+    assert (await house.refresh("Kim")).away == Away(THU, SAT)  # still away Thursday
+
+
 # Slack ----------------------------------------------------------------------------------------------
 
 
@@ -330,6 +442,18 @@ async def test_im_back_on_the_card_ends_the_window_and_asks_again(slack: Slack, 
     again = slack.cards("Kim")[-1]
     shown = [e["action_id"] for b in again["blocks"] if b["type"] == "actions" for e in b["elements"]]
     assert ids.AWAY in shown and ids.AWAY_BACK not in shown and "You haven't answered yet." in str(again["blocks"])
+
+
+async def test_im_back_on_home_welcomes_them_back_or_says_its_cleared(slack: Slack, house: House) -> None:
+    event_id = await open_dinner(house)
+    for first, last, said in ((THU, FRI, labels.AWAY_ENDED), (FRI, SAT, labels.AWAY_CLEARED)):
+        await set_away(house, "Kim", first, last)
+        await slack.open_home("Kim")
+        assert labels.away_status(Away(first, last), THU) in str(slack.last_home("Kim"))
+        await slack.click("Kim", ids.AWAY_BACK, ids.card_value(event_id, 1), home=True)
+        assert (await house.refresh("Kim")).away is None
+        home = str(slack.last_home("Kim"))
+        assert said in home and labels.AWAY_UNTIL in home
 
 
 async def test_a_guest_has_no_away_window(house: House) -> None:

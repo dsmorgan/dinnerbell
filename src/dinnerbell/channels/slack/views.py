@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import date, time, timedelta
+from datetime import date, time
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -402,13 +402,14 @@ def parse_cancel(values: Any) -> str | None:
 def away_modal(v: EventView, origin: ids.ViewOrigin) -> dict[str, Any]:
     """**Away until…**: the day the member is back. They're away from the call's day through the
     day before, and calls on those days answer them Out. It starts on the day they're back from
-    the window they have, if any, or the day after the call."""
-    back = v.away.back if v.away is not None else v.event.day + timedelta(days=1)
+    the window they have, if any and later than the call, or the day after the call."""
+    first_back = v.first_back_day
+    back = max(v.away.back, first_back) if v.away is not None else first_back
     when = day_label(v.event.day)
     blocks: list[Block] = [
         section(f"You're away from {when}, this call's day, until the day you pick. {labels.AWAY_HINT}"),
         _input("back", labels.AWAY_BACK_DAY, {"type": "datepicker", "initial_date": back.isoformat()}, optional=False),
-        context("It replaces any away days you set before. Change or clear them on Preferences."),
+        context(f"{labels.AWAY_KEEPS} Change or clear them on Preferences."),
     ]
     return _modal(labels.AWAY_UNTIL, ids.AWAY_VIEW, origin, blocks, "Save")
 
