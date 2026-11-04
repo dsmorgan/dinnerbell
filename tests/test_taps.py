@@ -205,22 +205,32 @@ def test_a_409_clears_the_failed_save_banner(admin: TestClient) -> None:  # noqa
 
 def test_a_failing_refresh_backs_off_and_a_gone_card_stops(client: TestClient) -> None:
     """A card refresh that fails doesn't repeat every 45 seconds forever (#193). A 403 or 404
-    stops that card's refresh; no network, a timeout, or another error doubles the wait for every
-    card, up to 10 minutes, once a round; one that works goes back to 45 seconds and wins over a failure
-    in the same round. A 401 is left to
-    its HX-Redirect, and a poll a tap aborted counts as neither."""
-    script = client.get("/static/app.js").text
+    stops that card's refresh. No network, a timeout, or another error doubles the wait for every
+    card, once a round, up to 10 minutes. Any request that works, a refresh or a tap's save, and
+    the browser coming back online, go back to 45 seconds. A 401 is left to its HX-Redirect, and
+    a poll a tap aborted counts as neither."""
+    script = re.sub(r"\s+", " ", client.get("/static/app.js").text)  # whitespace doesn't matter
     assert "window.setInterval" not in script  # each round sets the next, so the wait can change
     assert "var POLL_MS = 45000;" in script and "var POLL_MAX_MS = 600000;" in script
     assert "pollDelay = Math.min(pollDelay * 2, POLL_MAX_MS);" in script
-    assert "if (slowed || answered) {\n      return;" in script  # once a round, and a refresh that worked wins
-    assert "slowed = false;\n    answered = false;" in script
+    assert "pollStarted + pollDelay - Date.now()" in script  # timed from the round's start
+    # Only a refresh counts: a GET whose target is a card with data-poll, never a save.
+    assert 'return !isSave(event) && target instanceof Element && target.hasAttribute("data-poll");' in script
+    # Once a round, and a request that worked in the round wins over a failure.
+    assert "if (slowed || answered) { return; }" in script
+    assert "slowed = false; answered = false;" in script
+    # No answer: the error events count; an abort (a tap replaced the poll) doesn't.
     assert 'document.addEventListener("htmx:sendError", pollFailed);' in script
     assert 'document.addEventListener("htmx:timeout", pollFailed);' in script
-    assert "if (status >= 200 && status < 300) {\n      answered = true;\n      if (pollDelay !== POLL_MS) {" in script
-    assert 'status === 403 || status === 404) {\n      event.detail.target.removeAttribute("data-poll");' in script
-    assert "status >= 400 && status !== 401) {\n      slowDown();" in script
-    assert "pollStarted + pollDelay - Date.now()" in script  # timed from the round's start
+    assert re.search(r'addEventListener\("htmx:sendAbort"', script) is None
+    # Any 2xx resets the wait before the refresh-only checks, so a tap's save counts too.
+    listener = script[script.index('addEventListener("htmx:afterRequest", function (event) { var status') :]
+    listener = listener[: listener.index("});")]
+    reset = "if (status >= 200 && status < 300) { answered = true; backToNormal(); return; }"
+    assert reset in listener and listener.index(reset) < listener.index("if (!isPoll(event)) { return; }")
+    assert 'if (status === 403 || status === 404) { event.detail.target.removeAttribute("data-poll"); }' in listener
+    assert "else if (status >= 400 && status !== 401) { slowDown(); }" in listener
+    assert 'window.addEventListener("online", backToNormal);' in script
 
 
 def test_a_repeat_tap_is_dropped_and_polls_share_the_cards_sync(client: TestClient) -> None:
