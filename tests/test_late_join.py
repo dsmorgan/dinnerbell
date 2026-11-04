@@ -52,6 +52,7 @@ from dinnerbell.domain.events import (
     veto_participants,
 )
 from dinnerbell.domain.guests import REFUSED, GuestAction, GuestInput
+from dinnerbell.domain.labels import LATE_VOTE_NOTE
 from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.members import Capabilities, Member, Role
 from dinnerbell.domain.notifications import from_payload
@@ -777,7 +778,27 @@ async def test_slack_vote_from_someone_not_in_asks_then_joins_and_votes(slack: S
     await slack.click("Kim", ids.JOIN_LATE_VOTE, ids.proposal_value(event_id, taqueria), ephemeral=True)  # twice
     ctx = await house.context(event_id)
     assert ctx.votes[taqueria] == [house["Kim"].id] and ctx.counted(taqueria) == frozenset()
-    assert "joining late" in slack.ephemerals("Kim")[-1]
+    assert "joining late" in slack.ephemerals("Kim")[-1] and LATE_VOTE_NOTE[False] in slack.ephemerals("Kim")[-1]
+    assert LATE_VOTE_NOTE[False] in json.dumps(prompt.args["blocks"])
+
+
+async def test_slack_a_maybe_answers_closing_early_turned_out_hears_their_vote_counts(
+    slack: Slack, house: House
+) -> None:
+    """Kim was a maybe when the admin started the vote early, so she answered on time (FR-56)."""
+    event_id = await open_dinner(house)
+    for name, status in (("Alex", Status.IN), ("Sam", Status.IN), ("Kim", Status.MAYBE)):
+        await act(house, calls.respond, house[name], event_id, status)
+    await act(house, calls.offer_role, house["Alex"], event_id, RoleOffer.PICKUP, True)
+    await act(house, calls.close_window, house["Alex"], event_id)
+    await nobody_coordinates(house, event_id)
+    taqueria = (await picks(house, event_id))["Taqueria"]
+    await slack.click("Kim", ids.VOTE, ids.proposal_value(event_id, taqueria))
+    (prompt,) = [c for c in slack.fake.of("chat.postEphemeral") if c.args["text"] == JOIN_LATE_PROMPT]
+    assert LATE_VOTE_NOTE[True] in json.dumps(prompt.args["blocks"])
+    await slack.click("Kim", ids.JOIN_LATE_VOTE, ids.proposal_value(event_id, taqueria), ephemeral=True)
+    assert LATE_VOTE_NOTE[True] in slack.ephemerals("Kim")[-1]
+    assert (await house.context(event_id)).counted(taqueria) == frozenset({house["Kim"].id})
 
 
 async def test_slack_switches_on_the_proposals_message(slack: Slack, house: House) -> None:
@@ -867,6 +888,27 @@ def test_web_join_late_vote_and_switches(
     assert (late.status, late.vote_counts) == ("in", True)
     assert "not counted" not in page(admin.get(f"/events/{event_id}"))
     assert submit(admin, f"/events/{event_id}/join-late", {"run": "1"}).status_code == 303  # in already
+
+
+def test_web_hints_say_a_maybe_answers_closing_early_turned_out_has_a_vote_that_counts(
+    admin: TestClient, provider: FakeProvider
+) -> None:
+    invite(admin, "kim@example.com", "Kim")
+    event_id = start(admin)
+    sign_in_as(admin, provider, "kim@example.com")
+    assert submit(admin, f"/events/{event_id}/respond", {"status": "maybe"}).status_code == 303
+    admin.cookies.clear()
+    sign_in(admin, provider)  # the admin again: in with a guest, picking up
+    submit(admin, f"/events/{event_id}/respond", {"status": "in"})
+    submit(admin, f"/events/{event_id}/offer", {"role": "pickup", "offered": "1"})
+    submit(admin, f"/events/{event_id}/details", {"guests": "1"})
+    assert submit(admin, f"/events/{event_id}/close", {"run": "1", "window": "respond"}).status_code == 303
+
+    sign_in_as(admin, provider, "kim@example.com")
+    html = page(admin.get(f"/events/{event_id}"))
+    assert "You missed the answers, but you can still join." in html
+    assert html.count(LATE_VOTE_NOTE[True]) == 2  # joining, and adding a proposal
+    assert LATE_VOTE_NOTE[False] not in html
 
 
 def test_web_decision_leaves_a_late_joiners_own_needs_off_the_page(

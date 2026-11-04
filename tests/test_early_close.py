@@ -276,6 +276,25 @@ async def test_a_maybe_answers_closing_early_turned_out_gets_a_counting_vote(hou
     assert counts_vote(kim)
 
 
+async def test_a_maybe_start_the_vote_now_turned_out_gets_a_counting_vote(house: House) -> None:
+    event_id = await open_lunch(house, early=True)
+    await answer(house, event_id, ("Alex", Status.IN), ("Sam", Status.IN), ("Kim", Status.MAYBE))  # Lee hasn't
+    await act(house, calls.offer_role, house["Sam"], event_id, RoleOffer.PICKUP, True)
+    await act(house, calls.close_window, house["Alex"], event_id)
+    assert await act(house, calls.join_late, house["Kim"], event_id)
+    kim = (await house.context(event_id)).response_of(house["Kim"].id)
+    assert kim is not None and (kim.late, kim.vote_counts) == (True, True)
+
+
+async def test_start_the_vote_now_with_one_in_ends_the_call_without_a_decision_time(house: House) -> None:
+    """Fewer than two in: the call ends on-your-own, and keeps no vote deadline."""
+    event_id = await open_lunch(house, early=False)
+    await answer(house, event_id, ("Alex", Status.IN), ("Sam", Status.OUT), ("Kim", Status.OUT), ("Lee", Status.OUT))
+    await act(house, calls.close_window, house["Alex"], event_id)
+    event = await house.event(event_id)
+    assert (event.state, event.end_reason, event.vote_deadline) == (EventState.ABANDONED, EndReason.TOO_FEW, None)
+
+
 async def test_a_maybe_the_deadline_turned_out_joins_late_without_a_counting_vote(house: House) -> None:
     """At the deadline, the coordinator decides whether a late joiner's vote counts (#76)."""
     event_id = await open_lunch(house, early=False)

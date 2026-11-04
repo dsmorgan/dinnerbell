@@ -11,7 +11,7 @@
     },
     {
       "text": {
-        "text": "*You missed the answers. Join late?* Adding a proposal joins you late: you're in, and your vote shows, but counts only if the coordinator says so.",
+        "text": "*You missed the answers. Join late?* Adding a proposal joins you late, so you're in. Your vote shows, but counts only if the coordinator says so.",
         "type": "mrkdwn"
       },
       "type": "section"

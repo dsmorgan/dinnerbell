@@ -1038,18 +1038,24 @@ def with_late_join(current: Response | None, member_id: int, now: datetime) -> R
     role (``coverage``) starts now, after everyone who answered on time. Details left from an
     earlier answer, such as guests, their needs, and an eat window, are cleared, so joining
     never changes the head count or meal time on its own."""
-    cut_short = current is not None and current.maybe_at_deadline and current.vote_counts and not current.late
+    counts = late_vote_counts(current)
     base = with_status(current, member_id, Status.IN, now)
     return replace(
         base,
         late=True,
-        vote_counts=cut_short,
+        vote_counts=counts,
         responded_at=now,
         guests=0,
         guest_needs=frozenset(),
         eat_from=None,
         eat_until=None,
     )
+
+
+def late_vote_counts(current: Response | None) -> bool:
+    """Whether joining late gives ``current``'s member a vote that counts at once: they were a
+    maybe that answers closing early turned out (``resolve_maybes``), so they answered on time."""
+    return current is not None and current.maybe_at_deadline and current.vote_counts and not current.late
 
 
 def with_late_switches(
