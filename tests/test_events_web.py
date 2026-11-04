@@ -435,7 +435,8 @@ def voting(admin: TestClient, clock: FakeClock, migrated: Settings) -> Settings:
 
 
 def test_every_m2_post_route_is_enumerated(client: TestClient) -> None:
-    assert len(m2_posts(client)) == 36  # #87 added shuffle, break-tie, and roles; #177 the ranking reset; #178 way
+    # #87 added shuffle, break-tie, and roles; #177 the ranking reset; #178 way; #196 away and back
+    assert len(m2_posts(client)) == 38
 
 
 def test_every_admin_override_checks_for_an_admin_in_the_web_layer(client: TestClient) -> None:

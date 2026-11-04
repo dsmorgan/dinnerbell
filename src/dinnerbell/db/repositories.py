@@ -14,6 +14,7 @@ from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dinnerbell.db.models import AuditRow, HouseholdRow, MemberRow, SessionRow
+from dinnerbell.domain.away import Away
 from dinnerbell.domain.household import Household
 from dinnerbell.domain.members import Capabilities, Member, Role
 
@@ -51,6 +52,7 @@ def to_member(row: MemberRow) -> Member:
         slack_guest_account=row.slack_guest_account,
         fun_mode=row.fun_mode,
         fun_seen_award=row.fun_seen_award,
+        away=Away(row.away_first, row.away_last) if row.away_first and row.away_last else None,
     )
 
 

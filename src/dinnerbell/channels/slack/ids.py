@@ -57,7 +57,14 @@ CARD_ACTION_FOR_OFFER = {role: action for action, role in CARD_OFFER.items()}
 CARD_ACTION_FOR_WITHDRAW = {role: action for action, role in CARD_WITHDRAW.items()}
 CARD_COORDINATE = "card_coordinate"
 CARD_DETAILS = "card_details"
-CARD_ACTIONS = frozenset({*CARD_RESPOND, *CARD_OFFER, *CARD_WITHDRAW, CARD_COORDINATE, CARD_DETAILS})
+AWAY = "away"
+"""**Away until…** (FR-63, #196): beside In, Maybe, and Out on a card, a reminder, and Home, and
+beside **Answer** on the call message. Opens the modal for the day the tapper is back. Its value
+is a ``card_value``; the window starts on that call's day."""
+AWAY_BACK = "away_back"
+"""**I'm back**, or **Clear**, in place of **Away until…** while the tapper has a window: ends it
+now. A card button, so the card, reminder, or Home it's on shows the change. A ``card_value``."""
+CARD_ACTIONS = frozenset({*CARD_RESPOND, *CARD_OFFER, *CARD_WITHDRAW, CARD_COORDINATE, CARD_DETAILS, AWAY_BACK})
 ANSWER = "answer"
 """**Answer** on the call message while responses are open: posts the tapper's Your answer card.
 Its value is a ``card_value``, naming the run the message showed."""
@@ -151,6 +158,7 @@ INVITE_VIEW = "invite_modal"
 LOG_VIEW = "log_modal"
 ASSIGN_VIEW = "assign_modal"
 ADJUST_VIEW = "adjust_modal"
+AWAY_VIEW = "away_modal"
 
 MAX_ID = 2**63 - 1
 _DIGITS = re.compile(r"^[0-9]{1,19}$")

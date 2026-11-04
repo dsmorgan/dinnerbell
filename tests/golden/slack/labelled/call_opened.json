@@ -47,6 +47,16 @@
           "value": "7:1"
         },
         {
+          "action_id": "away",
+          "text": {
+            "emoji": true,
+            "text": "Away until…",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "7:1"
+        },
+        {
           "action_id": "link_event",
           "text": {
             "emoji": true,

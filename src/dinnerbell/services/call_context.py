@@ -321,6 +321,7 @@ def roster(ctx: CallContext) -> tuple[note.RosterEntry, ...]:
             note=r.note,
             late=r.late,
             vote_counts=r.late and r.vote_counts,
+            away_until=r.away_until,
         )
         for r in ctx.responses
     )
@@ -546,7 +547,11 @@ def message_updated(ctx: CallContext) -> note.CallUpdated | note.OfferUpdated:
 
 
 def call_opened(ctx: CallContext) -> note.CallOpened:
-    mentions = tuple(ctx.person(m.id) for m in sorted(ctx.active_members, key=lambda m: m.display_name.casefold()))
+    """The call's post, mentioning every active member it asks: not those away that day, whom
+    it answered Out already (FR-63)."""
+    away = {r.member_id for r in ctx.responses if r.away_until is not None}
+    members = sorted(ctx.active_members, key=lambda m: m.display_name.casefold())
+    mentions = tuple(ctx.person(m.id) for m in members if m.id not in away)
     return note.CallOpened(event_info(ctx), mentions, roster(ctx), waiting_on(ctx), ctx.head_count)
 
 

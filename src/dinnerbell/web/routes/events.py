@@ -45,6 +45,7 @@ from dinnerbell.domain.members import InvalidMemberInput
 from dinnerbell.domain.offers import MAX_CAPACITY
 from dinnerbell.services import (
     activity,
+    away,
     call_admin,
     calls,
     coordinator,
@@ -350,6 +351,45 @@ async def details(
             note=note,
         )
         await calls.save_details(db, principal.member, event_id, parsed, now=context.clock())
+
+    return await _run(request, principal, context, db, event_id, came_from, action)
+
+
+# Away until… (FR-63) ----------------------------------------------------------------------------
+
+
+@router.post("/events/{event_id}/away")
+async def away_until(
+    request: Request,
+    principal: CSRFChecked,
+    context: Context,
+    db: Database,
+    event_id: RowId,
+    back: Field = "",
+    came_from: Annotated[str, Form(alias="from", max_length=10)] = "",
+) -> Response:
+    """**Away until…**: away from the call's day through the day before ``back``."""
+
+    async def action() -> None:
+        day = iso_date(back, "Pick the day you're back.")
+        await away.away_until(db, principal.member, event_id, day, now=context.clock())
+
+    return await _run(request, principal, context, db, event_id, came_from, action)
+
+
+@router.post("/events/{event_id}/back")
+async def im_back(
+    request: Request,
+    principal: CSRFChecked,
+    context: Context,
+    db: Database,
+    event_id: RowId,
+    came_from: Annotated[str, Form(alias="from", max_length=10)] = "",
+) -> Response:
+    """**I'm back**, or **Clear**, on a call's card: the member's window ends now."""
+
+    async def action() -> None:
+        await away.back_on_call(db, principal.member, event_id, now=context.clock())
 
     return await _run(request, principal, context, db, event_id, came_from, action)
 

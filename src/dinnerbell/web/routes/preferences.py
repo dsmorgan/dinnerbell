@@ -22,18 +22,19 @@ from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import Response
 
+from dinnerbell.domain import labels
 from dinnerbell.domain.catalog import ItemKind, tags_by_kind
 from dinnerbell.domain.events import EventRuleViolation
 from dinnerbell.domain.members import Capabilities, InvalidMemberInput, Member
 from dinnerbell.domain.preferences import LEVEL_LABELS, LEVELS, NEUTRAL, InvalidPreference, Stance, TargetType
-from dinnerbell.services import activity, guests
+from dinnerbell.services import activity, away, guests
 from dinnerbell.services import preferences as preference_service
 from dinnerbell.services.errors import NotFound
 from dinnerbell.services.fun import set_member_fun_mode
 from dinnerbell.services.variety import household_today
 from dinnerbell.web.auth import AdminCSRFChecked, AdminPrincipal, Context, CSRFChecked, Database, Principal, SignedIn
 from dinnerbell.web.context import AppContext
-from dinnerbell.web.forms import RowId, checked, choice, parse_id
+from dinnerbell.web.forms import BadFormValue, RowId, checked, choice, iso_date, parse_id
 from dinnerbell.web.redirects import local_path, local_redirect
 from dinnerbell.web.render import is_htmx, render
 
@@ -42,7 +43,13 @@ admin_router = APIRouter(prefix="/admin/members/{member_id}/preferences")
 
 Checkbox = Annotated[str | None, Form()]
 Needs = Annotated[list[str] | None, Form()]
-NOTICES = {"settings": "Settings saved.", "saved": "Preference saved."}
+Day = Annotated[str, Form(max_length=10)]
+NOTICES = {
+    "settings": "Settings saved.",
+    "saved": "Preference saved.",
+    "away": "Away days saved.",
+    "back": "Away days cleared.",
+}
 FUN_CHOICES = {"on": True, "off": False}
 
 
@@ -91,6 +98,20 @@ class Whose:
             )
         return await preference_service.set_my_preference(db, actor, target_type, target_id, stance, now=now)
 
+    async def set_away(self, db: AsyncSession, context: AppContext, first: date, last: date) -> None:
+        actor, now = self.principal.member, context.clock()
+        if self.admin:
+            await away.set_member_away(db, actor, self.member.id, first, last, now=now)
+        else:
+            await away.set_my_away(db, actor, first, last, now=now)
+
+    async def clear_away(self, db: AsyncSession, context: AppContext) -> None:
+        actor, now = self.principal.member, context.clock()
+        if self.admin:
+            await away.clear_member_away(db, actor, self.member.id, now=now)
+        else:
+            await away.clear_my_away(db, actor, now=now)
+
     async def save_settings(
         self, db: AsyncSession, context: AppContext, settings: preference_service.MySettings
     ) -> None:
@@ -121,8 +142,10 @@ async def _page(
     status_code: int = 200,
 ) -> Response:
     principal = whose.principal
-    mine = await whose.preferences(db, household_today(principal.household, context.clock()))
+    today = household_today(principal.household, context.clock())
+    mine = await whose.preferences(db, today)
     base = whose.base
+    window = whose.member.away_now(today)
     page = {
         "mine": mine,
         "tag_groups": tags_by_kind(mine.tags),
@@ -140,6 +163,10 @@ async def _page(
         "fun_saved": notice == "fun",
         "error": error,
         "dietary_tags": await guests.dietary_tags(db, principal.member),
+        "today": today,
+        "away": window,
+        "away_line": labels.away_status(window, today) if window else None,
+        "away_end": labels.away_end(window, today) if window else None,
     }
     return await render(request, "preferences.html", page, status_code=status_code)
 
@@ -221,6 +248,22 @@ async def _save_stance(
     return local_redirect("/preferences?notice=saved#pref-{}-{}", target_type, target_id)
 
 
+async def _save_away(
+    request: Request, whose: Whose, context: AppContext, db: AsyncSession, first: str, last: str
+) -> Response:
+    """Set the window (FR-63), or show the page again with why not."""
+    try:
+        start = iso_date(first, "Pick the first day away.")
+        end = iso_date(last, "Pick the last day away.")
+        await whose.set_away(db, context, start, end)
+    except (BadFormValue, EventRuleViolation) as exc:
+        activity.refused(exc, str(exc), whose.principal.member, path=request.url.path)
+        return await _page(request, whose, context, db, error=str(exc), status_code=400)
+    if whose.admin:
+        return local_redirect("/admin/members/{}/preferences?notice=away#away", whose.member.id)
+    return local_redirect("/preferences?notice=away#away")
+
+
 # The signed-in member's own -------------------------------------------------------------------
 
 
@@ -245,6 +288,19 @@ async def save_settings(
     settings = _settings(can_cook, can_pickup, can_order, mute_dm_reminders, feedback_reminder)
     await _own(principal).save_settings(db, context, settings)
     return RedirectResponse("/preferences?notice=settings", status_code=303)
+
+
+@router.post("/away")
+async def save_away(
+    request: Request, principal: CSRFChecked, context: Context, db: Database, first: Day = "", last: Day = ""
+) -> Response:
+    return await _save_away(request, _own(principal), context, db, first, last)
+
+
+@router.post("/away/clear")
+async def clear_away(principal: CSRFChecked, context: Context, db: Database) -> Response:
+    await _own(principal).clear_away(db, context)
+    return RedirectResponse("/preferences?notice=back#away", status_code=303)
 
 
 @router.post("/stance")
@@ -288,6 +344,27 @@ async def save_member_settings(
     whose = await _theirs(principal, db, member_id)
     await whose.save_settings(db, context, settings)
     return local_redirect("/admin/members/{}/preferences?notice=settings", whose.member.id)
+
+
+@admin_router.post("/away")
+async def save_member_away(
+    request: Request,
+    principal: AdminCSRFChecked,
+    context: Context,
+    db: Database,
+    member_id: RowId,
+    first: Day = "",
+    last: Day = "",
+) -> Response:
+    whose = await _theirs(principal, db, member_id)
+    return await _save_away(request, whose, context, db, first, last)
+
+
+@admin_router.post("/away/clear")
+async def clear_member_away(principal: AdminCSRFChecked, context: Context, db: Database, member_id: RowId) -> Response:
+    whose = await _theirs(principal, db, member_id)
+    await whose.clear_away(db, context)
+    return local_redirect("/admin/members/{}/preferences?notice=back#away", whose.member.id)
 
 
 @admin_router.post("/stance")

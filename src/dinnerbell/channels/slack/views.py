@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import date, time
+from datetime import date, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -394,6 +394,28 @@ def parse_cancel(values: Any) -> str | None:
     if len(reason) > CANCEL_NOTE_MAX:  # Slack enforces max_length; this is a tampered payload
         raise FormError("reason", f"Keep the reason to {CANCEL_NOTE_MAX} characters.")
     return reason or None
+
+
+# Away until… (FR-63) ------------------------------------------------------------------------------
+
+
+def away_modal(v: EventView, origin: ids.ViewOrigin) -> dict[str, Any]:
+    """**Away until…**: the day the member is back. They're away from the call's day through the
+    day before, and calls on those days answer them Out. It starts on the day they're back from
+    the window they have, if any, or the day after the call."""
+    back = v.away.back if v.away is not None else v.event.day + timedelta(days=1)
+    when = day_label(v.event.day)
+    blocks: list[Block] = [
+        section(f"You're away from {when}, this call's day, until the day you pick. {labels.AWAY_HINT}"),
+        _input("back", labels.AWAY_BACK_DAY, {"type": "datepicker", "initial_date": back.isoformat()}, optional=False),
+        context("It replaces any away days you set before. Change or clear them on Preferences."),
+    ]
+    return _modal(labels.AWAY_UNTIL, ids.AWAY_VIEW, origin, blocks, "Save")
+
+
+def parse_away(values: Any) -> date:
+    """The day the member is back. ``away.away_until`` checks it against the call's day."""
+    return _day(values, "back")
 
 
 # Assign roles (FR-61) -----------------------------------------------------------------------------
@@ -974,7 +996,9 @@ def _event_card(
         # Slack doesn't fold it into "+ N more". A guest is in or out, with no details (#38).
         # Rows for a member's guests without Slack stay on the card: Home's budget (#51) has
         # no room for two blocks per guest.
-        answer = answer_actions(v.info, v.mine, guest=guest, can_invite=v.can.invite)
+        answer = answer_actions(v.info, v.mine, guest=guest, can_invite=v.can.invite, away_end=v.away_end)
+        if v.away_line is not None:
+            lines.append(f"_{escape(v.away_line)}_")
         rows = [
             actions(*answer.participation, block_id=f"answer-{v.id}"),
             actions(*answer.roles, block_id=f"roles-{v.id}"),

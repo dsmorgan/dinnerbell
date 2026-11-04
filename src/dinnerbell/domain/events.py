@@ -355,6 +355,11 @@ class Response:
     usual_offers_done: bool = False
     """Their usual offers have had their one turn on this call (``with_usual_offers``): turned
     on when they answered in, or skipped because they turned an offer off first (#180)."""
+    away_until: date | None = None
+    """Out because they're away (FR-63, #196), and the day they're back, which "away until" names.
+    Only ``services.away`` writes it, and their own answer clears it: ``with_status`` and
+    ``with_details`` here, and anything that counts them in (the repository keeps it only on an
+    out)."""
 
     @property
     def is_in(self) -> bool:
@@ -495,7 +500,7 @@ def with_status(current: Response | None, member_id: int, status: Status, now: d
     if current is None:
         return Response(member_id=member_id, status=status, responded_at=now)
     offers = frozenset() if status is Status.OUT else current.offers
-    return replace(current, status=status, offers=offers)
+    return replace(current, status=status, offers=offers, away_until=None)  # theirs now, not away's (#196)
 
 
 def with_offer(
@@ -547,6 +552,7 @@ def with_details(current: Response | None, member_id: int, details: Details, now
         eat_from=details.eat_from,
         eat_until=details.eat_until,
         note=details.note,
+        away_until=None,  # details are their own answer (#196)
     )
 
 

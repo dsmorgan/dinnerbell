@@ -12,7 +12,12 @@ from __future__ import annotations
 import re
 import unicodedata
 from dataclasses import dataclass
+from datetime import date
 from enum import StrEnum
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # ``domain.away`` reads ``domain.events``, which reads this module
+    from dinnerbell.domain.away import Away
 
 MAX_EMAIL_LENGTH = 254
 MAX_DISPLAY_NAME_LENGTH = 80
@@ -77,6 +82,17 @@ class Member:
     """Dinnerbone's Den and its celebrations on the web (#153). Off, the pages load none of it."""
     fun_seen_award: int = 0
     """The newest badge award whose backflip the den has shown them (#153): later ones flip once."""
+    away: Away | None = None
+    """Their away window (#196), as stored: it may have ended already. ``away_now`` is the one
+    that counts."""
+
+    def away_now(self, today: date) -> Away | None:
+        """Their away window, while it's upcoming or under way on ``today`` (FR-63)."""
+        return self.away if self.away is not None and self.away.current(today) else None
+
+    def away_on(self, day: date) -> bool:
+        """Whether their window covers ``day``, so that day's calls answer them Out (FR-63)."""
+        return self.away is not None and self.away.covers(day)
 
     @property
     def is_admin(self) -> bool:

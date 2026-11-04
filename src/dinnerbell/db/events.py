@@ -402,6 +402,7 @@ def _response(row: ResponseRow) -> Response:
         late=row.late,
         vote_counts=row.vote_counts,
         usual_offers_done=row.usual_offers_done,
+        away_until=row.away_until,
     )
 
 
@@ -449,8 +450,21 @@ class ResponseRepository:
         row.late = response.late
         row.vote_counts = response.vote_counts
         row.usual_offers_done = response.usual_offers_done
+        # Only an out can be away's (#196): whatever counted them in or made them a maybe was theirs.
+        row.away_until = response.away_until if response.status is Status.OUT else None
         row.updated_at = now
         await self._session.flush()
+
+    async def delete(self, household_id: int, event_id: int, member_id: int) -> None:
+        """Take back a member's answer, so they haven't answered: an out their away window wrote,
+        once the window no longer covers the call (#196)."""
+        await self._session.execute(
+            delete(ResponseRow).where(
+                ResponseRow.household_id == household_id,
+                ResponseRow.event_id == event_id,
+                ResponseRow.member_id == member_id,
+            )
+        )
 
     async def restore_maybes(self, household_id: int, event_id: int, now: datetime) -> None:
         """For a re-run: maybes the deadline turned out are maybes again, and whoever joined

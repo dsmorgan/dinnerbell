@@ -8,6 +8,9 @@ own markup and escaping.
 
 from __future__ import annotations
 
+from datetime import date
+
+from dinnerbell.domain.away import Away
 from dinnerbell.domain.catalog import Mode
 from dinnerbell.domain.events import AssignmentRole, RoleOffer, Status, Window
 
@@ -113,3 +116,43 @@ def mark_done_title(slot: str) -> str:
 def web_confirm(title: str, effect: str) -> str:
     """A confirmation as one line, for the web's browser dialog."""
     return f"{title} {effect}"
+
+
+# Away (FR-63, #196) -------------------------------------------------------------------------------
+
+AWAY_UNTIL = "Away until…"
+"""Beside In, Maybe, and Out: pick the day you're back, and calls until then answer you Out."""
+AWAY_BACK_DAY = "Back on"
+"""The date field **Away until…** opens."""
+AWAY_HINT = "Calls until then answer you Out. You can still say In to any of them."
+IM_BACK = "I'm back"
+"""Ends a window under way now."""
+CLEAR_AWAY = "Clear"
+"""Ends a window that hasn't started."""
+_DAYS = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+_MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+
+def short_day(day: date, *, weekday: bool = True) -> str:
+    """Wed, Nov 12, or Nov 12. English names, whatever the server's locale."""
+    month_day = f"{_MONTHS[day.month - 1]} {day.day}"
+    return f"{_DAYS[day.weekday()]}, {month_day}" if weekday else month_day
+
+
+def away_status(away: Away, today: date) -> str:
+    """The one status line for a window, wherever it shows: "Away until Wed, Nov 12", or, before
+    it starts, "Away from Mon, Nov 10 until Wed, Nov 12". "Until" names the day they're back."""
+    if away.first > today:
+        return f"Away from {short_day(away.first)} until {short_day(away.back)}"
+    return f"Away until {short_day(away.back)}"
+
+
+def away_end(away: Away, today: date) -> str:
+    """The button that ends a window now: **I'm back** once it's started, **Clear** before."""
+    return IM_BACK if away.first <= today else CLEAR_AWAY
+
+
+def away_marker(back: date, *, capital: bool = False) -> str:
+    """Beside an away member's Out on a roster: "away until Nov 12", or "Away until Nov 12"
+    where it starts a label, such as the web's chip."""
+    return f"{'Away' if capital else 'away'} until {short_day(back, weekday=False)}"

@@ -109,7 +109,8 @@ async def test_the_call_message_offers_one_answer_button_and_marks_nobody(slack:
     event_id = await open_call(house)
     await slack.drain()
     (post,) = slack.fake.of("chat.postMessage")
-    assert call_buttons(post.args["blocks"]) == [("answer", "primary"), ("link_event", None), ("call_menu", None)]
+    shared = [("answer", "primary"), ("away", None), ("link_event", None), ("call_menu", None)]  # Away: FR-63
+    assert call_buttons(post.args["blocks"]) == shared
     assert "✓" not in json.dumps(post.args["blocks"], ensure_ascii=False)
     (answer,) = [
         e for b in post.args["blocks"] if b["type"] == "actions" for e in b["elements"] if e["action_id"] == "answer"
@@ -119,7 +120,7 @@ async def test_the_call_message_offers_one_answer_button_and_marks_nobody(slack:
     await slack.tap_card("Kim", "card_in", slack.cards("Kim")[-1])
     await slack.drain()
     (update,) = slack.fake.of("chat.update")
-    assert call_buttons(update.args["blocks"]) == [("answer", "primary"), ("link_event", None), ("call_menu", None)]
+    assert call_buttons(update.args["blocks"]) == shared
 
 
 async def test_answer_posts_your_card_and_changes_nothing(slack: Slack, house: House) -> None:

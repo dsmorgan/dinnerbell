@@ -59,6 +59,25 @@
   <button type="submit" class="button primary">Save</button>
 </form>
 
+<section class="card stack" id="away" aria-labelledby="away-heading">
+  <h2 id="away-heading">Away</h2>
+  <p class="small muted">Calls on these days answer you Out, so nobody waits on you, and you get no reminders. You can still say In to any of them.</p>
+  {% if away %}
+  <form method="post" action="{{ prefs_base }}/away/clear" class="away-status small">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <span>{{ away_line }}</span> · <button type="submit" class="button small">{{ away_end }}</button>
+  </form>
+  {% endif %}
+  <form method="post" action="{{ prefs_base }}/away" class="stack">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="pair">
+      <label class="field"><span>First day away</span><input type="date" name="first" value="{{ away.first.isoformat() if away else '' }}" required></label>
+      <label class="field"><span>Last day away</span><input type="date" name="last" min="{{ today.isoformat() }}" value="{{ away.last.isoformat() if away else '' }}" required></label>
+    </div>
+    <button type="submit" class="button">{{ "Change away days" if away else "Save away days" }}</button>
+  </form>
+</section>
+
 {% include "_fun_mode.html" %}
 
 <section class="card">

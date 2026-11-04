@@ -1048,11 +1048,11 @@ def _catalog_columns(settings: Settings) -> list[str]:
 
 
 def _calls_before_late_join(settings: Settings) -> object:
-    """The call rows, without the columns 0014 and 0025 add to ``response`` at the end (#76,
-    #180), 0015 adds to ``event`` (#87), and 0026 adds to ``proposal`` (#178), for comparing with
+    """The call rows, without the columns 0014, 0025, and 0027 add to ``response`` at the end (#76,
+    #180, #196), 0015 adds to ``event`` (#87), and 0026 adds to ``proposal`` (#178), for comparing with
     rows read before ``dinnerbell migrate`` took the database to the head."""
     rows: dict[str, list[tuple[object, ...]]] = _snapshot(settings)["rows"]  # type: ignore[assignment]
-    added = len(LATE_COLUMNS) + len(USUAL_OFFERS_COLUMNS)
+    added = len(LATE_COLUMNS) + len(USUAL_OFFERS_COLUMNS) + len(AWAY_COLUMNS)
     return rows | {
         "response": [tuple(r)[:-added] for r in rows["response"]],
         "event": [tuple(r)[: -len(COORDINATOR_COLUMNS)] for r in rows["event"]],
@@ -1245,6 +1245,8 @@ def test_0013_refuses_to_run_with_foreign_keys_on(settings: Settings) -> None:
 LATE_COLUMNS = ("late", "vote_counts")
 USUAL_OFFERS_COLUMNS = ("usual_offers_done",)
 """What 0025 adds to ``response``, after ``LATE_COLUMNS`` (#180)."""
+AWAY_COLUMNS = ("away_until",)
+"""What 0027 adds to ``response``, after ``USUAL_OFFERS_COLUMNS`` (#196)."""
 
 
 def _response_table(settings: Settings) -> tuple[list[str], str]:
@@ -1275,7 +1277,7 @@ def test_0014_marks_every_answer_on_time_and_downgrade_drops_the_columns(
 
     assert cli.main(["migrate"]) == 0
     after, _ = _response_table(settings)
-    assert after == [*columns, *LATE_COLUMNS, *USUAL_OFFERS_COLUMNS]
+    assert after == [*columns, *LATE_COLUMNS, *USUAL_OFFERS_COLUMNS, *AWAY_COLUMNS]
     assert _calls_before_late_join(settings) == before["rows"] and _catalog(settings) == catalog
     engine = create_sync_engine(settings.sync_database_url)
     try:
@@ -1292,7 +1294,7 @@ def test_0014_marks_every_answer_on_time_and_downgrade_drops_the_columns(
     assert _snapshot(settings) == before and _catalog(settings) == catalog
 
     assert cli.main(["migrate"]) == 0
-    assert _response_table(settings)[0] == [*columns, *LATE_COLUMNS, *USUAL_OFFERS_COLUMNS]
+    assert _response_table(settings)[0] == [*columns, *LATE_COLUMNS, *USUAL_OFFERS_COLUMNS, *AWAY_COLUMNS]
     assert _calls_before_late_join(settings) == before["rows"]
     engine = create_sync_engine(settings.sync_database_url)
     try:
@@ -1435,8 +1437,8 @@ def test_0016_adds_contributions_and_badges_without_touching_a_row_and_downgrade
     after = _rows_outside_m4(settings)
     ours = {"household", "member", "response", "proposal"}
     assert {k: v for k, v in after.items() if k not in ours} == {k: v for k, v in before.items() if k not in ours}
-    assert [row[:-2] for row in after["member"]] == before["member"]  # 0022 and 0023 add two, last
-    assert [row[:-1] for row in after["response"]] == before["response"]  # 0025 adds one, last
+    assert [row[:-4] for row in after["member"]] == before["member"]  # 0022, 0023, and 0027 add four, last
+    assert [row[:-2] for row in after["response"]] == before["response"]  # 0025 and 0027 add two, last
     assert [row[:-1] for row in after["proposal"]] == before["proposal"]  # 0026 adds one, last
     (household,) = after["household"]
     assert json.loads(household[3]) == {"contributions_backfilled": "x", "keep": 1, "feedback_cap": 0}  # type: ignore[index]  # 0021
@@ -1497,7 +1499,7 @@ def test_0016_adds_contributions_and_badges_without_touching_a_row_and_downgrade
     assert {"contribution", "badge_award"} <= _tables(settings)
     again = _rows_outside_m4(settings)
     assert {k: v for k, v in again.items() if k not in ours} == {k: v for k, v in before.items() if k not in ours}
-    assert [row[:-2] for row in again["member"]] == before["member"]
+    assert [row[:-4] for row in again["member"]] == before["member"]
 
 
 # 0017: Slack badge art (#105) ------------------------------------------------------------------------
@@ -2048,4 +2050,25 @@ def test_0026_marks_picks_someone_added_as_chosen_and_downgrade_drops_it(setting
     assert [row[:-1] for row in after["proposal"]] == before["proposal"]  # the new column is last
     assert {k: v for k, v in after.items() if k != "proposal"} == {k: v for k, v in before.items() if k != "proposal"}
     _downgrade_to(settings, "0025_usual_offers_done")
+    assert _rows_outside_m4(settings) == before
+
+
+# 0027: away (#196) ------------------------------------------------------------------------------------
+
+
+def test_0027_adds_empty_away_columns_and_downgrade_drops_them(settings: Settings) -> None:
+    """Up adds ``member.away_first`` and ``away_last`` and ``response.away_until``, empty for every
+    row, so nobody is away and no answer is an away out. Down drops them and changes no row."""
+    _upgrade_to(settings, "0026_proposal_mode_chosen")
+    _populate_calls(settings)
+    before = _rows_outside_m4(settings)
+    assert before["member"] and before["response"]
+
+    _upgrade_to(settings, "0027_away")
+    after = _rows_outside_m4(settings)
+    assert {row[-2:] for row in after["member"]} == {(None, None)}
+    assert {row[-1] for row in after["response"]} == {None}
+    assert [row[:-2] for row in after["member"]] == before["member"]
+    assert [row[:-1] for row in after["response"]] == before["response"]
+    _downgrade_to(settings, "0026_proposal_mode_chosen")
     assert _rows_outside_m4(settings) == before

@@ -101,6 +101,9 @@ class MemberRow(Base):
     fun_seen_award: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
     """The newest ``badge_award.id`` the den has flipped for (#153); 0 for none. Not a foreign key:
     deleting an award must not touch the member."""
+    away_first: Mapped[date | None] = mapped_column(Date)
+    away_last: Mapped[date | None] = mapped_column(Date)
+    """The member's away window (#196, FR-63): both days or neither, both included."""
     created_at: Mapped[datetime] = mapped_column(UTCDateTime())
     updated_at: Mapped[datetime] = mapped_column(UTCDateTime())
 
@@ -355,7 +358,7 @@ class ResponseRow(Base):
     tag IDs; ``maybe_at_deadline`` marks a maybe the deadline turned into out. ``late`` marks
     someone who joined while voting (#76), and ``vote_counts`` whether the coordinator counts
     their votes. ``usual_offers_done`` marks that the member's usual offers had their one turn
-    on this call (#180)."""
+    on this call (#180). ``away_until`` marks an out their away window wrote (#196)."""
 
     __tablename__ = "response"
     __table_args__ = (
@@ -383,6 +386,8 @@ class ResponseRow(Base):
     late: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     vote_counts: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     usual_offers_done: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+    away_until: Mapped[date | None] = mapped_column(Date)
+    """Set on an out that their away window wrote (#196): the day they're back."""
 
 
 class SuggestionRow(Base):

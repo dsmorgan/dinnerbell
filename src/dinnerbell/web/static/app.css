@@ -562,6 +562,9 @@ ins { color: var(--ok); text-decoration: none; }
 .chip.role { background: var(--ok-soft); border-color: transparent; color: var(--ok); }
 /* Joining late (#76): who joined late, and picks that may not suit them. */
 .chip.late { font-style: italic; }
+/* Away (FR-63): an out the member's away window wrote, and their own status line. */
+.chip.away { font-style: italic; }
+.away-status { display: flex; flex-wrap: wrap; align-items: center; gap: 0.3rem 0.5rem; margin: 0.5rem 0; }
 .proposal .warning { color: var(--danger); margin: 0.2rem 0; }
 .join-late { margin: 0.5rem 0; }
 .details-form { margin: 0.4rem 0 0.6rem; }

@@ -105,6 +105,8 @@ class RosterEntry:
     """They joined while voting (#76). Out (``status``) means the coordinator switched them off."""
     vote_counts: bool = False
     """A late joiner whose votes the coordinator counts."""
+    away_until: date | None = None
+    """Out because they're away (FR-63), until this day: show it, such as "away until Nov 12"."""
 
 
 @dataclass(frozen=True, slots=True)
