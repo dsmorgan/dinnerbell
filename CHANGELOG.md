@@ -38,6 +38,7 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 ### Fixed
 
 - **Upgrade and restart steps work with secrets in files** (#193). Documentation only. The upgrade, rollback, and restart commands left out `-f compose.yaml -f compose.secrets.yaml`, so an install that keeps its secrets in files started without them and restarted in a loop. The docs now say to pass both `-f` options to every production compose command, and to add `-f compose.override.yaml` last if you have one, because compose stops reading it on its own once you pass `-f`. "Run compose with secret files" in `docs/setup.md` explains, and troubleshooting has a row for the restart loop.
+- **A card's refresh keeps what you haven't saved** (#193). A call or offer card refreshes every 45 seconds. When you ticked dietary needs in an offer's **Count me in** form and then waited, the refresh put the boxes back as they were, because it skipped a card only while you typed in one of its fields. Now a card also skips its refresh while any of its fields differs from what was saved: a ticked or cleared box, a changed number, or another choice in a list. Once you save, or put the field back, the card refreshes again.
 
 ### Upgrade notes
 
