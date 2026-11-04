@@ -5,7 +5,8 @@ An unregistered guest is a ``member`` row with the role ``guest`` and no ``slack
 #102 they earned badges like anyone; now they earn none. The upgrade deletes their awards,
 quietly: a pending one is never announced. Their contributions stay, so household totals and the
 monthly recap don't change, and the badges they reach are awarded, quietly, once an admin links
-them to Slack or promotes them.
+them to Slack or promotes them. This includes a guest unlinked from Slack, or linked to a member,
+before the upgrade.
 
 A badge post or a recap already queued and not yet delivered drops them too, and a badge post
 that names no one else is deleted. The app isn't running while it migrates, so no drainer holds
