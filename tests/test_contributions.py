@@ -1459,6 +1459,99 @@ async def test_a_post_with_no_badge_left_is_closed_unsent_even_after_a_failed_tr
     assert (row.delivered_at, row.last_error) == (house.clock.now, outbox.TAKEN_BACK)
 
 
+async def queue(house: House, post: note.Notification) -> None:
+    async with house.sessionmaker() as db:
+        await OutboxRepository(db).enqueue(house.household.id, None, post, house.clock())
+        await db.commit()
+
+
+async def hold(house: House, name: str, badge: BadgeKey, tier: Tier) -> None:
+    """An award ``name`` holds, already announced."""
+    async with house.sessionmaker() as db:
+        await BadgeRepository(db).add(
+            house.household.id, house[name].id, badge, tier, now=house.clock(), announcement=Announcement.ANNOUNCED
+        )
+        await db.commit()
+
+
+def first_of(*keys: BadgeKey) -> tuple[note.BadgeTier, ...]:
+    return tuple(note.BadgeTier(BY_KEY[k].name, Tier.FIRST.label) for k in keys)
+
+
+async def test_a_post_naming_only_members_past_the_first_ten_is_closed_unsent(house: House) -> None:
+    """As revision 0028 does: a post with nobody named would read "New badges for ." and then
+    "…and 3 more"."""
+    alex = note.BadgeNews(note.PersonInfo(house["Alex"].id, "Alex"), first_of(BadgeKey.ROAD_RUNNER))
+    await queue(house, note.BadgesEarned(house.household.id, 1, (alex,), more_people=3))
+    await hold(house, "Alex", BadgeKey.ROAD_RUNNER, Tier.FIRST)
+    assert await take_back(house, "Alex", BadgeKey.ROAD_RUNNER, Tier.FIRST) == 1
+    channel = RecordingChannel()
+    assert (await house.drain(channel)).superseded == 1
+    assert channel.sent == []
+    ((row, post),) = await badge_posts(house)
+    assert (post.news, post.more_people, row.last_error) == ((), 3, outbox.TAKEN_BACK)
+
+
+async def test_a_queued_recap_leaves_out_a_badge_taken_back_and_still_goes(house: House) -> None:
+    alex = note.PersonInfo(house["Alex"].id, "Alex")
+    sam = note.BadgeNews(note.PersonInfo(house["Sam"].id, "Sam"), first_of(BadgeKey.ROAD_RUNNER))
+    badges = (note.BadgeNews(alex, first_of(BadgeKey.ROAD_RUNNER, BadgeKey.ON_A_ROLL)), sam)
+    await queue(house, note.MonthlyRecap(house.household.id, date(2026, 10, 1), 12, badges=badges, more_badges=2))
+    for key in (BadgeKey.ROAD_RUNNER, BadgeKey.ON_A_ROLL):
+        await hold(house, "Alex", key, Tier.FIRST)
+
+    async def recap() -> tuple[OutboxRow, note.MonthlyRecap]:
+        async with house.sessionmaker() as db:
+            row = await db.scalar(select(OutboxRow).where(OutboxRow.kind == "monthly_recap"))
+        assert row is not None
+        post = note.from_payload(row.kind, dict(row.payload))
+        assert isinstance(post, note.MonthlyRecap)
+        return row, post
+
+    assert await take_back(house, "Alex", BadgeKey.ROAD_RUNNER, Tier.FIRST) == 1
+    _, post = await recap()
+    assert post.badges == (note.BadgeNews(alex, first_of(BadgeKey.ON_A_ROLL)), sam)  # Sam's same badge stays
+    assert (post.meals, post.more_badges) == (12, 2)
+    assert await take_back(house, "Alex", BadgeKey.ON_A_ROLL, Tier.FIRST) == 1
+    _, post = await recap()
+    assert post.badges == (sam,)
+    channel = RecordingChannel()
+    await house.drain(channel)
+    assert channel.kinds == ["monthly_recap"]  # the month is still news
+    row, _ = await recap()
+    assert row.delivered_at is not None and row.last_error is None
+
+
+class TakesBackWhileSending(RecordingChannel):
+    """Records each post it's handed, and has a correction take Alex's Road Runner back while it
+    sends a badge post: after the drainer claimed the row and read it."""
+
+    def __init__(self, house: House) -> None:
+        super().__init__()
+        self.house = house
+        self.posts: list[note.Notification] = []
+
+    async def deliver(self, notification: note.Notification, *, thread: Any = None) -> Any:
+        self.posts.append(notification)
+        if isinstance(notification, note.BadgesEarned):
+            assert await take_back(self.house, "Alex", BadgeKey.ROAD_RUNNER, Tier.FIRST) == 1
+        return await super().deliver(notification, thread=thread)
+
+
+async def test_a_post_in_a_drainers_hands_goes_out_as_it_was_claimed(house: House) -> None:
+    alex = note.BadgeNews(note.PersonInfo(house["Alex"].id, "Alex"), first_of(BadgeKey.ROAD_RUNNER))
+    claimed = note.BadgesEarned(house.household.id, 1, (alex,))
+    await queue(house, claimed)
+    await hold(house, "Alex", BadgeKey.ROAD_RUNNER, Tier.FIRST)
+    channel = TakesBackWhileSending(house)
+    result = await house.drain(channel)
+    assert (result.delivered, result.superseded) == (1, 0)
+    assert channel.posts == [claimed]  # the copy in flight, unchanged
+    ((row, now),) = await badge_posts(house)
+    assert row.delivered_at is not None and row.last_error is None  # delivered, not taken back
+    assert now.news == ()  # what a retry would have read
+
+
 async def test_a_badge_taken_back_lets_the_next_one_in_line_show(house: House) -> None:
     """A member's badges past ``MAX_BADGES`` are counted in ``more``; one taken back from those
     shown makes room for the first of them, as if it had never been earned."""

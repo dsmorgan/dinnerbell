@@ -138,7 +138,8 @@ async def drain(
             now = clock()
             claimed = await repo.claim(entry.id, token, now=now, until=now + LEASE)
             # Deliver the row as claimed, not as listed: an update may have coalesced into it
-            # since. Once claimed, nothing changes it, so this read is final.
+            # since. Updates never coalesce into a claimed row, so this read is final for this
+            # attempt; a correction may still trim a badge post, which a retry reads anew.
             current = await repo.get(entry.id) if claimed else None
             await db.commit()
             settled = current is not None and await _deliver(db, channel, current, token, clock, result)
@@ -249,10 +250,11 @@ async def _overtaken(db: AsyncSession, notification: Notification) -> str | None
     is overtaken when its call was called off or has started a newer run since it was queued; a
     row in ``STEP_BOUND``, also when the call has left the states its step is in. A
     ``CoordinatorPicked`` row, also when its member no longer coordinates. A ``BadgesEarned``
-    row is overtaken once a correction took back every badge it named
-    (``announcements.take_back``)."""
+    row is overtaken once a correction took back every badge of every member it names
+    (``announcements.take_back``), as revision 0028 deletes one: members counted in
+    ``more_people`` alone aren't a post."""
     if isinstance(notification, BadgesEarned):
-        return TAKEN_BACK if not notification.news and not notification.more_people else None
+        return None if notification.news else TAKEN_BACK
     if notification.kind not in CALL_OFF_SUPERSEDES and notification.kind not in STEP_BOUND:
         return None
     if isinstance(

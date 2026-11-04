@@ -18,8 +18,8 @@ Awards of ``SILENT_BADGES`` (Food Critic, earned when feedback is given, long af
 no post and join none: they are marked ``announced`` in the same transaction, so they are not
 pending, and the recap and the newest badges list them like any other.
 
-When an admin's correction takes an award back after its post was queued, ``take_back`` drops it
-from the post before it's sent (#193).
+When an admin's correction takes an award back after its post or the monthly recap was queued,
+``take_back`` drops it from them before they're sent (#193).
 """
 
 from __future__ import annotations
@@ -42,6 +42,8 @@ from dinnerbell.domain.notifications import (
     BadgeNews,
     BadgesEarned,
     BadgeTier,
+    MonthlyRecap,
+    Notification,
     PayloadError,
     PersonInfo,
     from_payload,
@@ -130,30 +132,48 @@ async def announce_household(db: AsyncSession, household_id: int, *, now: dateti
 
 
 async def take_back(db: AsyncSession, household_id: int, revoked: Sequence[Award]) -> int:
-    """Drop ``revoked`` from the household's badge posts that are queued and not sent yet, in the
-    caller's transaction (#193). A member left with no badge leaves the post, and a post left
-    naming nobody is closed unsent when a drainer reaches it (``outbox._overtaken``). A post in a
-    drainer's hands right now may still go out as it was; if that try fails, the retry doesn't.
-    Returns how many posts changed."""
+    """Drop ``revoked`` from the household's badge posts and monthly recaps that are queued and
+    not sent yet, in the caller's transaction (#193), as revision 0028 does for unregistered
+    guests. A member left with no badge leaves the post, and a badge post left naming nobody is
+    closed unsent when a drainer reaches it (``outbox._overtaken``); a recap still goes, without
+    them. A post in a drainer's hands right now may still go out as it was; if that try fails,
+    the retry doesn't. Returns how many posts changed.
+
+    A post names each badge at the highest tier earned in it, so taking back that tier drops the
+    badge from the post even when a lower tier earned with it still holds."""
     if not revoked:
         return 0
     gone = {(a.member_id, BadgeTier(BY_KEY[a.badge].name, a.tier.label)) for a in revoked}
     outbox = OutboxRepository(db)
     changed = 0
-    for entry in await outbox.unsent(household_id, BadgesEarned.kind):
-        try:
-            post = from_payload(entry.kind, entry.payload)
-        except PayloadError:
-            continue  # the drainer closes it as undeliverable
-        if not isinstance(post, BadgesEarned):  # pragma: no cover - the kind says it is
-            continue
-        news = tuple(kept for n in post.news if (kept := _without(n, gone)) is not None)
-        if news == post.news:
-            continue
-        if await outbox.set_payload(entry.id, to_payload(replace(post, news=news))):
-            changed += 1
-            log.info("badge post trimmed", extra={"household_id": household_id, "outbox_id": entry.id})
+    for kind in (BadgesEarned.kind, MonthlyRecap.kind):
+        for entry in await outbox.unsent(household_id, kind):
+            try:
+                post = from_payload(entry.kind, entry.payload)
+            except PayloadError:
+                continue  # the drainer closes it as undeliverable
+            trimmed = _trimmed(post, gone)
+            if trimmed is not None and await outbox.set_payload(entry.id, to_payload(trimmed)):
+                changed += 1
+                log.info(
+                    "badge post trimmed", extra={"household_id": household_id, "outbox_id": entry.id, "kind": kind}
+                )
     return changed
+
+
+def _trimmed(post: Notification, gone: set[tuple[int, BadgeTier]]) -> Notification | None:
+    """``post`` without the badges in ``gone``, or None when it names none of them."""
+    if isinstance(post, BadgesEarned):
+        news = _all_without(post.news, gone)
+        return None if news == post.news else replace(post, news=news)
+    if isinstance(post, MonthlyRecap):
+        badges = _all_without(post.badges, gone)
+        return None if badges == post.badges else replace(post, badges=badges)
+    return None  # pragma: no cover - only those two kinds are read
+
+
+def _all_without(people: tuple[BadgeNews, ...], gone: set[tuple[int, BadgeTier]]) -> tuple[BadgeNews, ...]:
+    return tuple(kept for n in people if (kept := _without(n, gone)) is not None)
 
 
 def _without(news: BadgeNews, gone: set[tuple[int, BadgeTier]]) -> BadgeNews | None:
