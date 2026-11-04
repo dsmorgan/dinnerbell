@@ -649,7 +649,7 @@ async def test_extend_shorten_and_close_windows(house: House) -> None:
     await act(house, call_admin.move_deadline, house["Alex"], event_id, Window.RESPOND, None)  # close now
     event = await house.event(event_id)
     assert event.state is EventState.VOTING  # advanced immediately, not at the next tick
-    assert event.vote_deadline == house.clock() + timedelta(minutes=45)
+    assert event.vote_deadline == VOTE_BY + timedelta(minutes=15)  # the decision time, after the extension
     await act(house, call_admin.move_deadline, house["Alex"], event_id, Window.VOTE, -240)  # in the past: closes
     assert (await house.event(event_id)).state is EventState.DECIDED
     moves = [a.payload for a in await house.audits() if a.action == "event.deadline_moved"]

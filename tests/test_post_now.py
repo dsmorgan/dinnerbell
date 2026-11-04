@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import AsyncIterator, Awaitable, Callable
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -19,7 +19,17 @@ from dinnerbell.channels.slack import ids
 from dinnerbell.channels.slack.interactions import OUT_OF_DATE, STALE
 from dinnerbell.config import Settings
 from dinnerbell.domain import notifications as n
-from dinnerbell.domain.events import EventRuleViolation, EventState, RoleOffer, StaleRun, Status, Step
+from dinnerbell.domain.events import (
+    EARLY_CLOSE_QUIET,
+    EndReason,
+    EventRuleViolation,
+    EventState,
+    RoleOffer,
+    StaleRun,
+    Status,
+    Step,
+    Window,
+)
 from dinnerbell.domain.meals import Slot
 from dinnerbell.services import call_admin, call_context, calls, event_views, lifecycle
 from dinnerbell.services.database import Database, open_database
@@ -203,6 +213,180 @@ async def test_answers_given_the_day_before_count_toward_closing_early(house: Ho
         await act(house, calls.respond, house[name], event_id, Status.OUT)
     assert await house.tick() == [Step.CLOSE_RESPONSES]
     assert (await house.event(event_id)).state is EventState.ABANDONED
+
+
+LUNCH_DECIDES = datetime(2026, 10, 23, 17, 0, tzinfo=UTC)
+"""Tomorrow's lunch vote deadline: its response deadline plus 30 minutes to vote."""
+
+
+async def everyone_in(house: House, event_id: int) -> None:
+    for name in ("Alex", "Sam", "Kim", "Lee"):
+        await act(house, calls.respond, house[name], event_id, Status.IN)
+    await act(house, calls.offer_role, house["Sam"], event_id, RoleOffer.PICKUP, True)
+
+
+async def test_everyone_answering_a_call_posted_early_votes_until_that_days_decision_time(house: House) -> None:
+    """Everyone answering opens voting at once (FR-56), and voting runs until the call's decision
+    time, which for a call posted early is on its day (FR-3), so it isn't decided the day before.
+    Nothing else from that day fires early, late, or twice."""
+    event_id = await schedule_lunch(house)
+    await act(house, calls.post_now, house["Kim"], event_id)
+    await everyone_in(house, event_id)
+    house.clock.now = OPENS + timedelta(minutes=11)
+    assert await house.tick() == [Step.CLOSE_RESPONSES]
+    event = await house.event(event_id)
+    assert (event.state, event.respond_deadline, event.vote_deadline) == (
+        EventState.VOTING,
+        house.clock(),
+        LUNCH_DECIDES,
+    )
+
+    steps: list[Step] = []
+    for at in (OPENS + timedelta(hours=1), LUNCH_POSTS, LUNCH_REMIND, LUNCH_BY, LUNCH_DECIDES - timedelta(seconds=1)):
+        house.clock.now = at
+        steps += await house.tick()  # today's dinner opens and expires meanwhile
+    event = await house.event(event_id)
+    assert (event.state, event.reminder_sent_at) == (EventState.VOTING, None)
+    assert Step.CLOSE_VOTING not in steps and Step.REMIND not in steps
+    house.clock.now = LUNCH_DECIDES
+    assert await house.tick() == [Step.CLOSE_VOTING]
+    event = await house.event(event_id)
+    assert (event.state, event.decided_at) == (EventState.DECIDED, LUNCH_DECIDES)
+
+
+async def test_everyone_answering_on_the_day_votes_until_the_decision_time(house: House) -> None:
+    """Members can vote for several picks, so voting doesn't end while they're still looking:
+    everyone answering opens voting at once, and it closes at the call's decision time (FR-56).
+    The same goes for an ad-hoc call for today."""
+    event_id = await schedule_lunch(house)
+    house.clock.now = LUNCH_POSTS
+    assert await house.tick() == [Step.OPEN]
+    await everyone_in(house, event_id)
+    house.clock.now += timedelta(minutes=10)
+    assert await house.tick() == [Step.CLOSE_RESPONSES]
+    event = await house.event(event_id)
+    assert (event.state, event.respond_deadline, event.vote_deadline) == (
+        EventState.VOTING,
+        house.clock(),
+        LUNCH_DECIDES,
+    )
+    first = (await house.context(event_id)).proposals[0].id
+    for name in ("Alex", "Sam", "Kim", "Lee"):  # everyone voting doesn't decide it either
+        await act(house, calls.vote, house[name], event_id, first)
+    house.clock.now = LUNCH_DECIDES - timedelta(seconds=1)
+    assert await house.tick() == []
+    house.clock.now = LUNCH_DECIDES
+    assert await house.tick() == [Step.CLOSE_VOTING]
+
+    # It's lunch's day now. Today's dinner call, started at 11 AM, opens at once.
+    dinner = await act(house, calls.start_call, house["Sam"], Slot.DINNER, TOMORROW)
+    assert (dinner.state, dinner.opens_at) == (EventState.COLLECTING, house.clock())
+    await everyone_in(house, dinner.id)
+    house.clock.now += timedelta(minutes=10)
+    assert await house.tick() == [Step.CLOSE_RESPONSES]
+    event = await house.event(dinner.id)
+    assert (event.state, event.respond_deadline) == (EventState.VOTING, house.clock())
+    assert event.vote_deadline == dinner.respond_deadline + timedelta(minutes=dinner.vote_minutes)
+
+
+async def open_lunch(house: House, *, early: bool) -> int:
+    """Tomorrow's lunch, posted now (``early``) or opened by the tick at its call time."""
+    event_id = await schedule_lunch(house)
+    if early:
+        await act(house, calls.post_now, house["Kim"], event_id)
+    else:
+        house.clock.now = LUNCH_POSTS
+        assert await house.tick() == [Step.OPEN]
+    return event_id
+
+
+async def answer(house: House, event_id: int, *answers: tuple[str, Status]) -> None:
+    for name, status in answers:
+        await act(house, calls.respond, house[name], event_id, status)
+
+
+EARLY_OR_NOT = pytest.mark.parametrize("early", [True, False], ids=["posted early", "on its day"])
+
+
+@EARLY_OR_NOT
+async def test_everyone_answering_in_out_or_maybe_votes_until_the_decision_time(house: House, early: bool) -> None:
+    """In, Out, and Maybe all count as answers (FR-56). Closing turns the maybe out, voting opens
+    at once, and the call decides at its decision time, not before."""
+    event_id = await open_lunch(house, early=early)
+    await answer(house, event_id, ("Alex", Status.IN), ("Sam", Status.IN), ("Kim", Status.MAYBE), ("Lee", Status.OUT))
+    await act(house, calls.offer_role, house["Sam"], event_id, RoleOffer.PICKUP, True)
+    house.clock.now += EARLY_CLOSE_QUIET
+    assert await house.tick() == [Step.CLOSE_RESPONSES]
+    event = await house.event(event_id)
+    assert (event.state, event.respond_deadline, event.vote_deadline) == (
+        EventState.VOTING,
+        house.clock(),
+        LUNCH_DECIDES,
+    )
+    house.clock.now = LUNCH_DECIDES - timedelta(seconds=1)
+    await house.tick()  # today's dinner expires, for a call posted early
+    assert (await house.event(event_id)).state is EventState.VOTING
+    house.clock.now = LUNCH_DECIDES
+    assert await house.tick() == [Step.CLOSE_VOTING]
+    event = await house.event(event_id)
+    assert (event.state, event.decided_at) == (EventState.DECIDED, LUNCH_DECIDES)
+
+
+@EARLY_OR_NOT
+@pytest.mark.parametrize("last", [Status.OUT, Status.MAYBE])
+async def test_nobody_in_ends_the_call_at_once(house: House, early: bool, last: Status) -> None:
+    """Everyone out, or all but one and they're a maybe: once the maybe is turned out, nobody is
+    in, so the call ends on-your-own without a vote at once, even the day before (FR-56)."""
+    event_id = await open_lunch(house, early=early)
+    await answer(house, event_id, ("Alex", Status.OUT), ("Sam", Status.OUT), ("Kim", Status.OUT), ("Lee", last))
+    assert await house.tick() == [Step.CLOSE_RESPONSES]
+    event = await house.event(event_id)
+    assert (event.state, event.end_reason, event.vote_deadline) == (EventState.ABANDONED, EndReason.TOO_FEW, None)
+
+
+@EARLY_OR_NOT
+async def test_all_out_but_a_lone_in_ends_the_call_after_the_quiet_spell(house: House, early: bool) -> None:
+    """A lone in gets the quiet spell to add a guest, which would make two, then the call ends
+    without a vote."""
+    event_id = await open_lunch(house, early=early)
+    await answer(house, event_id, ("Alex", Status.OUT), ("Sam", Status.OUT), ("Kim", Status.OUT), ("Lee", Status.IN))
+    assert await house.tick() == []
+    house.clock.now += EARLY_CLOSE_QUIET
+    assert await house.tick() == [Step.CLOSE_RESPONSES]
+    event = await house.event(event_id)
+    assert (event.state, event.end_reason) == (EventState.ABANDONED, EndReason.TOO_FEW)
+
+
+@EARLY_OR_NOT
+async def test_all_out_but_one_who_hasnt_answered_waits_for_them(house: House, early: bool) -> None:
+    """They could still come in with a guest, which makes two (``head_count``), so the call
+    isn't hopeless: it waits for them, or for its deadline."""
+    event_id = await open_lunch(house, early=early)
+    await answer(house, event_id, ("Alex", Status.OUT), ("Sam", Status.OUT), ("Kim", Status.OUT))
+    house.clock.now += timedelta(minutes=30)
+    await house.tick()  # today's dinner opens, for a call posted early
+    assert (await house.event(event_id)).state is EventState.COLLECTING
+
+
+async def test_start_the_vote_now_keeps_the_decision_time_and_decide_now_ends_it(house: House) -> None:
+    """**Start the vote now** opens voting at once, and voting still closes at the call's decision
+    time, on its day for a call posted early. Only the coordinator or an admin ends voting
+    sooner: **Decide now**, or an admin's shorter deadline."""
+    event_id = await schedule_lunch(house)
+    await act(house, calls.post_now, house["Kim"], event_id)
+    await everyone_in(house, event_id)
+    await act(house, calls.close_window, house["Alex"], event_id)
+    event = await house.event(event_id)
+    assert (event.state, event.respond_deadline, event.vote_deadline) == (
+        EventState.VOTING,
+        OPENS,
+        LUNCH_DECIDES,
+    )
+    await act(house, call_admin.move_deadline, house["Alex"], event_id, Window.VOTE, -15)
+    assert (await house.event(event_id)).vote_deadline == LUNCH_DECIDES - timedelta(minutes=15)
+    await act(house, calls.close_window, house["Alex"], event_id)
+    event = await house.event(event_id)
+    assert (event.state, event.decided_at) == (EventState.DECIDED, OPENS)
 
 
 async def test_today_lists_scheduled_calls_as_coming_up(house: House) -> None:

@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field, replace
-from datetime import UTC, date, datetime, time, timedelta
+from datetime import date, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from sqlalchemy.exc import IntegrityError
@@ -44,6 +44,7 @@ from dinnerbell.domain.events import (
     TieHow,
     Window,
     assign_roles,
+    call_ends_at,
     check_restart,
     check_run,
     check_window_change,
@@ -51,6 +52,7 @@ from dinnerbell.domain.events import (
     coordinator_candidates,
     counted_votes,
     decide_winner,
+    decision_deadline,
     default_roles,
     drops_coordinating,
     head_count,
@@ -344,12 +346,14 @@ async def move_window(
     """Move the open ``window``'s deadline by ``minutes``, or to now when None, and update the
     messages that show it. Returns the old and new deadlines. The caller holds the event's
     lock, checks who may, audits, and calls ``advance`` after its commit, so a deadline moved
-    into the past closes the window at once."""
+    into the past closes the window at once. Closing the response window keeps the call's
+    decision time for voting (``decision_deadline``)."""
     current = check_window_change(event, window)
     zone = (await load(db, event)).zone
-    midnight = datetime.combine(event.day + timedelta(days=1), time(0), tzinfo=zone).astimezone(UTC)
-    moved = shifted_deadline(current, minutes, now, latest=midnight)
+    moved = shifted_deadline(current, minutes, now, latest=call_ends_at(event.day, zone))
     changes = {"respond_deadline": moved} if window is Window.RESPOND else {"vote_deadline": moved}
+    if window is Window.RESPOND and minutes is None:  # Close now keeps the decision time (FR-56)
+        changes["vote_deadline"] = decision_deadline(event)
     event = await EventRepository(db).save(replace(event, **changes), now)  # type: ignore[arg-type]
     ctx = await load(db, event)
     await publish(db, ctx, cc.call_updated(ctx), *([cc.proposals_updated(ctx)] if ctx.proposals else []), now=now)
@@ -445,16 +449,19 @@ async def _close_responses(db: AsyncSession, event: Event, now: datetime) -> Non
     (fewer than two, or nothing fits) or open voting and tell the maybes they can still join
     late. Picks that offers added while responses were open (FR-5) stay if they still fit, after
     the ranked ones; ranking leaves their places out and still proposes its usual number (#77).
-    Before the deadline,
-    because everyone answered (FR-56), the deadline moves to now first, so voting gets its
-    usual length from now, as when the coordinator closes the window. A coordinator who was
-    still a maybe is out now (#154). Voting picks a member who's in to coordinate when nobody
-    does by then (#179, ``pick_coordinator``)."""
+    Before the deadline, because everyone answered (FR-56), the deadline moves to now first, as
+    when the coordinator closes the window: voting opens at once, and still closes at the call's
+    decision time (``decision_deadline``). A coordinator who was still a maybe is out now (#154).
+    Voting picks a member who's in to coordinate when nobody does by then (#179,
+    ``pick_coordinator``)."""
+    vote_deadline = decision_deadline(event)  # before the response deadline moves
     if now < event.respond_deadline:
         early = {"window": Window.RESPOND.value, "from": event.respond_deadline.isoformat(), "to": now.isoformat()}
         event = await EventRepository(db).save(replace(event, respond_deadline=now), now)
         await audit(db, event.household_id, None, "event.everyone_answered", _target(event), early, now)
     ctx = await load(db, event)
+    if vote_deadline >= call_ends_at(event.day, ctx.zone):  # too late to keep: the usual time to vote
+        vote_deadline = event.respond_deadline + timedelta(minutes=event.vote_minutes)
     group = await group_preferences(db, event.household_id, ctx.veto_people)
     attached = await _keep_attached(db, ctx, group, now)
     taken = frozenset(p.item_id for p in attached if p.item_id is not None)
@@ -488,7 +495,6 @@ async def _close_responses(db: AsyncSession, event: Event, now: datetime) -> Non
             source=ProposalSource.SYSTEM,
             now=now,
         )
-    vote_deadline = event.respond_deadline + timedelta(minutes=event.vote_minutes)
     picked = pick_coordinator(event, ctx.responses, ctx.members)  # after the maybes are out (#179)
     voting = replace(
         event,

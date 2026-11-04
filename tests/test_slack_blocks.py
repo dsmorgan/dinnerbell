@@ -750,6 +750,12 @@ def test_the_call_message_points_to_the_picks_and_then_names_the_result() -> Non
     voting = render(samples.NOTIFICATIONS["call_updated_voting"](), CTX)
     assert "Voting is open: the proposals are posted below. Vote by *5:15 PM*." in text_blocks(voting)
     assert "in the thread" not in json.dumps(voting.payload())
+    # A call posted early can vote the evening before, so it names the day voting closes (FR-3).
+    early = replace(samples.VOTING, early=True)
+    called = render(note.CallUpdated(early, samples.ROSTER, (), head_count=3), CTX)
+    assert "Vote by *5:15 PM* on Thursday, Oct 22." in text_blocks(called)
+    picks = render(note.ProposalsReady(early, samples.PROPOSALS, 3, participants=(samples.ALEX,)), CTX)
+    assert "Voting closes at *5:15 PM* on Thursday, Oct 22." in text_blocks(picks)
     decided = render(samples.NOTIFICATIONS["call_updated_decided"](), CTX)
     assert "It's decided: Sam's Tacos, cook, at 6:45 PM" in text_blocks(decided)
     without_plan = render(note.CallUpdated(replace(samples.DECIDED, plan=None)), CTX)
