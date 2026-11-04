@@ -37,7 +37,7 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ### Fixed
 
-- **Upgrade and restart steps work with secrets in files** (#193). Documentation only. The upgrade, roll back, and restart commands in `docs/install.md`, `docs/setup.md`, `docs/test-instance.md`, `docs/troubleshooting.md`, and `docs/configuration.md` left out `-f compose.yaml -f compose.secrets.yaml`, so an install that keeps its secrets in files started without them and restarted in a loop. Each page now says to add both `-f` options to every production compose command, and the upgrade and roll back steps show the full commands. A new section, "Run compose with secret files" in `docs/setup.md`, says that with `-f`, compose no longer reads `compose.override.yaml` on its own, so you add `-f compose.override.yaml` last if you have one; this matters for a digest pin or a mounted catalog. The comments in `compose.yaml`, `compose.secrets.yaml`, and `deploy/dinnerbell.service` say the same. Troubleshooting has a row for the restart loop.
+- **Upgrade and restart steps work with secrets in files** (#193). Documentation only. The upgrade, rollback, and restart commands left out `-f compose.yaml -f compose.secrets.yaml`, so an install that keeps its secrets in files started without them and restarted in a loop. The docs now say to pass both `-f` options to every production compose command, and to add `-f compose.override.yaml` last if you have one, because compose stops reading it on its own once you pass `-f`. "Run compose with secret files" in `docs/setup.md` explains, and troubleshooting has a row for the restart loop.
 
 ### Upgrade notes
 

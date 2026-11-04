@@ -74,7 +74,7 @@ To start with a catalog already loaded, import a file on first start, before you
    ```
 
 2. Edit `seed/my-catalog.yaml`. The format is in [catalog-format.md](catalog-format.md).
-3. Create `compose.override.yaml` next to `compose.yaml` with this content, to mount the file read-only. Both compose tools read it automatically, unless you pass `-f`, and git ignores it. With secrets in files, add `-f compose.override.yaml` after the other `-f` options.
+3. Create `compose.override.yaml` next to `compose.yaml` with this content, to mount the file read-only. Compose reads it automatically unless you pass `-f`, and git ignores it. With secrets in files, add `-f compose.override.yaml` last.
 
    ```yaml
    services:

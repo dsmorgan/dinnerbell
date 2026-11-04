@@ -272,7 +272,7 @@ The command prints the backup's name, such as `/data/backups/pre-upgrade-0.2.0-2
 
 Production runs a release tag, never `latest` or `main`, and your clone stays checked out at that release so that `compose.yaml` matches the image. Releases are listed in [CHANGELOG.md](../CHANGELOG.md). If you run a test instance, follow [Promote a release](test-instance.md#promote-a-release) instead, which rehearses on a copy of your data first.
 
-If you keep secrets in files, add `-f compose.yaml -f compose.secrets.yaml` to each `podman-compose` command below, as [Run compose with secret files](#run-compose-with-secret-files) shows. Without them, Dinnerbell starts without its secrets and restarts in a loop.
+If you keep secrets in files, add `-f compose.yaml -f compose.secrets.yaml` to each `podman-compose` command below, and `-f compose.override.yaml` last if you have one, as [Run compose with secret files](#run-compose-with-secret-files) shows. Without them, Dinnerbell starts without its secrets and restarts in a loop.
 
 1. Read the **Upgrade notes** of every release between yours and the new one.
 2. [Back up now](#back-up-now). Note the file name, and copy the backup off the host.
@@ -283,7 +283,7 @@ If you keep secrets in files, add `-f compose.yaml -f compose.secrets.yaml` to e
    git checkout vX.Y.Z
    ```
 
-4. Pull the image, and [verify it](#verify-an-image).
+4. Pull the image, and [verify it](#verify-an-image). If you pinned a digest in `compose.override.yaml`, update or remove the pin first, or the upgrade keeps the old image.
 
    ```sh
    podman-compose pull
@@ -295,7 +295,7 @@ If you keep secrets in files, add `-f compose.yaml -f compose.secrets.yaml` to e
    podman-compose down && podman-compose up -d
    ```
 
-   With secrets in files:
+   With secrets in files (add `-f compose.override.yaml` last if you have one):
 
    ```sh
    podman-compose -f compose.yaml -f compose.secrets.yaml down
@@ -310,7 +310,7 @@ If the upgrade notes say the Slack manifest changed, paste the new manifest unde
 
 ## Roll back
 
-To roll back, run the previous release on the backup you took before the upgrade. Anything recorded since that backup is lost, so roll back soon after a bad upgrade. If you keep secrets in files, add the compose files to each `podman-compose` command, as in [Upgrade](#upgrade).
+To roll back, run the previous release on the backup you took before the upgrade. Anything recorded since that backup is lost, so roll back soon after a bad upgrade. If you keep secrets in files, [add the compose files](#run-compose-with-secret-files) to each `podman-compose` command.
 
 1. Stop the service.
 
@@ -343,7 +343,7 @@ To roll back, run the previous release on the backup you took before the upgrade
    podman-compose up -d
    ```
 
-   With secrets in files:
+   With secrets in files (add `-f compose.override.yaml` last if you have one):
 
    ```sh
    podman-compose -f compose.yaml -f compose.secrets.yaml pull
@@ -432,7 +432,7 @@ When you pass `-f`, compose no longer reads `compose.override.yaml` on its own. 
 podman-compose -f compose.yaml -f compose.secrets.yaml -f compose.override.yaml up -d
 ```
 
-Elsewhere, these docs show plain `podman-compose` commands. Add the same `-f` options to each of them, and to the [boot unit](#start-at-boot) if you use it. The test instance needs none of this: `deploy/dinnerbell-test` picks its files itself.
+The [boot unit](#start-at-boot) needs the same `-f` options if you use it. The test instance needs none of this: `deploy/dinnerbell-test` picks its files itself.
 
 ### Start at boot
 
