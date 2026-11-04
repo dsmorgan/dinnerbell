@@ -42,11 +42,14 @@ from dinnerbell.channels.slack import ids
 from dinnerbell.channels.slack.api import SlackApi, SlackUnavailable, refusal, refused_blocks
 from dinnerbell.channels.slack.blocks import (
     Directory,
+    Mrkdwn,
     actions,
+    as_mrkdwn,
     button,
     day_label,
     escape,
     instance_banner,
+    link,
     local_clock,
     section,
     version_line,
@@ -326,9 +329,10 @@ class Published(Enum):
     HOME = "home"
 
 
-Done = str | Message | Reply | Published | None
-"""What an action replies: a line of text, a message with a channel link or buttons (never
-from Home), a ``Reply`` for both places, ``Published.HOME``, or nothing."""
+Done = str | Mrkdwn | Message | Reply | Published | None
+"""What an action replies: a line of text (``Mrkdwn`` when it has a link), a message with a
+channel link or buttons (never from Home), a ``Reply`` for both places, ``Published.HOME``, or
+nothing."""
 
 
 @dataclass(slots=True)
@@ -629,21 +633,22 @@ class Interactions:
 
     # Replies -----------------------------------------------------------------------------------
 
-    async def tell(self, source: Source, text: str, *, member: Member | None) -> None:
+    async def tell(self, source: Source, text: str | Mrkdwn, *, member: Member | None) -> None:
         """Say something only ``source.user_id`` sees: on their Home tab if they were there,
-        else an ephemeral message where they acted, else a direct message."""
+        else an ephemeral message where they acted, else a direct message. Plain ``text`` is
+        escaped, as service messages can quote what people typed; ``Mrkdwn`` is shown as it is."""
         try:
             if source.home:
                 if member is None:  # nobody to draw a Home for: just the words
                     view = {
                         "type": "home",
-                        "blocks": [{"type": "section", "text": {"type": "mrkdwn", "text": escape(text)}}],
+                        "blocks": [{"type": "section", "text": {"type": "mrkdwn", "text": as_mrkdwn(text)}}],
                     }
                     await self.api.publish_home(source.user_id, view)
                     return
                 await self.publish_home(source.user_id, member, notice=text)
                 return
-            safe = escape(text)  # service messages can quote what people typed
+            safe = as_mrkdwn(text)
             if source.channel_id is not None:
                 try:
                     await self.api.ephemeral(source.channel_id, source.user_id, safe)
@@ -669,11 +674,11 @@ class Interactions:
         except SLACK_ERRORS as exc:
             log.warning("slack reply failed", extra={"error": str(exc), "member_id": member.id})
 
-    async def publish_home(self, user_id: str, member: Member | None, notice: str | None = None) -> None:
+    async def publish_home(self, user_id: str, member: Member | None, notice: str | Mrkdwn | None = None) -> None:
         if member is None:
             view: dict[str, Any] = {
                 "type": "home",
-                "blocks": [{"type": "section", "text": {"type": "mrkdwn", "text": escape(notice or UNKNOWN_USER)}}],
+                "blocks": [{"type": "section", "text": {"type": "mrkdwn", "text": as_mrkdwn(notice or UNKNOWN_USER)}}],
             }
             if self.instance_label:
                 view["blocks"].insert(0, instance_banner(self.instance_label))
@@ -795,7 +800,7 @@ class Interactions:
         """Run one action and report how it went. ``work`` returns what to reply (``Done``).
         False if it failed unexpectedly (the person is told to try again), True otherwise,
         including when a rule refused it."""
-        notice: str | None = None
+        notice: str | Mrkdwn | None = None
         ok = True
         try:
             done = await work()
@@ -827,7 +832,7 @@ class Interactions:
             await self.tell(source, notice, member=member)
         return ok
 
-    async def _republish_home(self, source: Source, member: Member, notice: str | None) -> None:
+    async def _republish_home(self, source: Source, member: Member, notice: str | Mrkdwn | None) -> None:
         """Home after a tap there, with ``notice`` at the top. A failure is logged, not raised:
         the tap itself is done."""
         try:
@@ -1542,14 +1547,16 @@ class Interactions:
         await self.api.open_view(trigger, offer_modal(form, ids.FormOrigin(source.channel_id, home=source.home)))
         return None
 
-    async def _open_log(self, member: Member, source: Source, trigger: object) -> str | None:
+    async def _open_log(self, member: Member, source: Source, trigger: object) -> Mrkdwn | None:
         if not isinstance(trigger, str) or not trigger:
             raise ids.BadValue("no trigger")
         async with self.sessionmaker() as db:
             today = await slack_members.today(db, member, now=self.clock())
             form = await meals.log_form(db, member, today=today)
         if not form.items:
-            return f"The catalog is empty. Add something on <{self.links.url('/catalog')}|the catalog> first."
+            return Mrkdwn(
+                f"The catalog is empty. Add something on {link(self.links.url('/catalog'), 'the catalog')} first."
+            )
         await self.api.open_view(trigger, log_modal(form, ids.FormOrigin(source.channel_id, home=source.home)))
         return None
 
@@ -1715,14 +1722,16 @@ class Interactions:
             return None
         return person.email
 
-    async def _admin_guest(self, member: Member, action_id: str, value: object) -> str:
+    async def _admin_guest(self, member: Member, action_id: str, value: object) -> str | Mrkdwn:
         """**Make member** and **Remove** on an admin's message about a guest who joined."""
         guest_id = ids.parse_event(value)
         async with self.sessionmaker() as db:
             if action_id == ids.MAKE_MEMBER:
                 email = await self._email_of(db, member, guest_id)
                 if email is None:
-                    return NO_EMAIL.format(url=self.links.url("/admin/members#guests"))
+                    return Mrkdwn(
+                        NO_EMAIL.format(members=link(self.links.url("/admin/members#guests"), "the Members page"))
+                    )
                 promoted = await guests.promote(db, member, guest_id, Role.MEMBER, email=email, now=self.clock())
                 return f"{promoted.display_name} is a member now."
             removed = await guests.remove(db, member, guest_id, now=self.clock())
@@ -1919,7 +1928,7 @@ class Interactions:
         if member is None:
             return
 
-        async def work() -> str | None:
+        async def work() -> str | Mrkdwn | None:
             if sub == "offer":
                 return await self._open_offer(member, source, trigger)
             return await self._open_log(member, source, trigger)
@@ -2147,8 +2156,7 @@ JOINED = {
 
 
 NO_EMAIL = (
-    "Slack doesn't share their email, or they're a Slack guest, so make them a member on "
-    "<{url}|the Members page>, with their email."
+    "Slack doesn't share their email, or they're a Slack guest, so make them a member on {members}, with their email."
 )
 JOIN_OFFER = (
     "You're not in Dinnerbell yet. Join as a guest: household members can then invite you to meals, "

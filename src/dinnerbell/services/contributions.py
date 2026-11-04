@@ -60,7 +60,7 @@ from dinnerbell.domain.contributions import ROLE_KIND, Credit, DoneFacts, Kind, 
 from dinnerbell.domain.events import AssignmentRole, Event
 from dinnerbell.domain.meals import MealLog
 from dinnerbell.domain.members import Member
-from dinnerbell.services import activity
+from dinnerbell.services import activity, announcements
 from dinnerbell.services.common import audit, require_admin
 
 log = logging.getLogger(__name__)
@@ -180,7 +180,8 @@ async def recount_role(db: AsyncSession, actor: Member, event: Event, role: Assi
     tier first earned at a lower count before the admin raised it goes too, once the counts reached
     the raised count and then drop below it; one the counts never reached on the raised count
     stays, as a raised threshold takes nothing away. Taking an award back deletes it, so a pending
-    one is never announced, and the den never flips for it. Whoever has the role now gets the
+    one is never announced, and the den never flips for it, and drops it from a badge post that
+    is queued and not sent yet (``announcements.take_back``). Whoever has the role now gets the
     count and every tier it reaches, pending, like any badge earned when a call is done; one taken
     back and earned again is a new award. Running it again changes nothing, so correcting back
     restores the counts and the badges.
@@ -210,6 +211,7 @@ async def recount_role(db: AsyncSession, actor: Member, event: Event, role: Assi
             award = await BadgeRepository(db).revoke(household_id, member_id, badge, tier)
             if award is not None:
                 revoked.append(award)
+    await announcements.take_back(db, household_id, revoked)
     awarded = await _award(db, household_id, set(gaining), now, Announcement.PENDING, event.id)
     payload = {
         "role": role.value,

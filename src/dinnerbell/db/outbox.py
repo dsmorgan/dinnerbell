@@ -294,6 +294,29 @@ class OutboxRepository:
         )
         return _rowcount(result)
 
+    async def unsent(self, household_id: int, kind: str) -> list[OutboxEntry]:
+        """The household's rows of ``kind`` not delivered or given up on yet, oldest first,
+        including any a drainer holds."""
+        rows = await self._session.scalars(
+            select(OutboxRow)
+            .where(OutboxRow.household_id == household_id, OutboxRow.kind == kind, _pending())
+            .order_by(OutboxRow.id)
+            .execution_options(populate_existing=True)
+        )
+        return [_entry(row) for row in rows]
+
+    async def set_payload(self, entry_id: int, payload: dict[str, Any]) -> bool:
+        """Replace an undelivered row's content, keeping its key and its ``updated_at``: less to
+        say isn't newer news. A drainer that holds the row sends what it read already; a retry
+        reads this."""
+        result = await self._session.execute(
+            update(OutboxRow)
+            .where(OutboxRow.id == entry_id, _pending())
+            .values(payload=payload)
+            .execution_options(synchronize_session=False)
+        )
+        return _rowcount(result) == 1
+
     async def newer_update_exists(self, entry: OutboxEntry) -> bool:
         """Whether a later update to the same message is queued or sent, making ``entry`` stale."""
         newer = await self._session.scalar(
