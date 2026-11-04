@@ -47,6 +47,8 @@ from tests.test_contributions import dinner
 pytestmark = pytest.mark.anyio
 
 CHEF = ("chef", "gold")
+SETTLE = 1.0
+"""The most a test's teardown waits for pictures still being made, before it cancels them."""
 SCOUT = ("scout", "first")
 
 
@@ -58,8 +60,10 @@ async def database(migrated: Settings) -> AsyncIterator[Database]:
 
 
 @pytest.fixture
-async def house(database: Database, clock: FakeClock, migrated: Settings) -> House:
-    return await furnish(await make_house(database.sessionmaker, clock, migrated.admin_email))
+async def house(database: Database, clock: FakeClock, migrated: Settings) -> AsyncIterator[House]:
+    house = await furnish(await make_house(database.sessionmaker, clock, migrated.admin_email))
+    yield house
+    await house.close()  # stops every connection wire() made, before the database closes (#93)
 
 
 class Uploads:
@@ -82,7 +86,7 @@ class Uploads:
 
 
 def files(house: House, uploads: Uploads, *, art: Any = None, composite: Any = None, **options: Any) -> BadgeFiles:
-    return BadgeFiles(
+    badges = BadgeFiles(
         house.sessionmaker,
         art_for=art or (lambda k, t: f"{k}-{t.value}".encode()),
         composite_for=composite or (lambda held: ("grid:" + ",".join(f"{k}-{t.value}" for k, t in held)).encode()),
@@ -90,6 +94,8 @@ def files(house: House, uploads: Uploads, *, art: Any = None, composite: Any = N
         clock=house.clock,
         **options,
     )
+    house.closers.append(lambda: badges.settle(SETTLE))  # a picture a test started and didn't wait for
+    return badges
 
 
 # The cache -----------------------------------------------------------------------------------------
@@ -798,6 +804,16 @@ async def test_a_forget_during_a_prewarm_starts_no_second_one(house: House, monk
     assert conn._prewarm_task is running
     running.cancel()
     await conn.stop()
+
+
+async def test_closing_the_house_stops_the_connection_wire_made(house: House) -> None:
+    """The ``house`` fixture closes the house after each test, so no connection outlives its loop (#93)."""
+    slack = await wire(house)
+    socket = slack.conn.socket
+    assert socket is not None and await socket.is_connected()
+    await house.close()
+    assert socket.closed and house.closers == []  # type: ignore[attr-defined]
+    assert slack.conn._connect_task is not None and slack.conn._connect_task.done()
 
 
 async def test_a_forget_after_stop_starts_no_prewarm(house: House, monkeypatch: pytest.MonkeyPatch) -> None:
