@@ -193,14 +193,16 @@ def test_a_repeat_tap_is_dropped_and_polls_share_the_cards_sync(client: TestClie
     """The card's hx-sync aborts a request only in the browser, so a double tap on one control
     would reach the server twice. A poll shares that sync, so a tap replaces it, and it never
     starts during a save or skips a card just because a tapped button kept focus. It does skip a
-    card with a field changed and not saved, such as a ticked box in an offer's Join form, which
-    Safari doesn't focus (#193)."""
+    card with a field changed and not saved in a form that's showing, such as a ticked box in an
+    offer's Join form, which Safari doesn't focus (#193)."""
     script = client.get("/static/app.js").text
     assert '"htmx:confirm"' in script and 'elt.classList.contains("htmx-request")' in script
     assert "source: card, target: card" in script
     assert "input:not([type=hidden]):not([type=radio]):not([type=checkbox])" in script
     assert "card.contains(document.activeElement) && document.activeElement.matches(TYPING)" in script
     assert "|| unsavedIn(card)) {" in script
+    assert 'querySelectorAll("textarea, select, input:not([type=hidden])")' in script
+    assert '!fields[i].closest("details:not([open])")' in script  # a closed form's changes don't hold it
     assert "field.checked !== field.defaultChecked" in script
     assert "field.value !== field.defaultValue" in script
     assert "field.selectedIndex !== defaultIndex(field)" in script  # no option marked: the first one

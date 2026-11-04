@@ -51,7 +51,7 @@
   </p>
   {% set mine_in = v.mine is not none and v.mine.status.value == "in" %}
   {% if v.can.join or (mine_in and e.state.value == "collecting") %}
-  <form method="post" action="{{ base }}/join" hx-post="{{ base }}/join" {{ swap|safe }} class="stack">
+  <form method="post" autocomplete="off" action="{{ base }}/join" hx-post="{{ base }}/join" {{ swap|safe }} class="stack">
     {{ hidden() }}
     <input type="hidden" name="run" value="{{ e.run }}">
     <label class="field"><span>Guests you're bringing</span><input type="number" name="guests" min="0" max="20" inputmode="numeric" value="{{ v.mine.guests if mine_in else 0 }}"></label>
@@ -106,7 +106,7 @@
   {% if not as_guest %}
   <details class="details-form">
     <summary class="small">{{ labels.DETAILS }}</summary>
-    <form method="post" action="{{ base }}/details" hx-post="{{ base }}/details" {{ swap|safe }} class="stack">
+    <form method="post" autocomplete="off" action="{{ base }}/details" hx-post="{{ base }}/details" {{ swap|safe }} class="stack">
       {{ hidden() }}
       <p class="small muted">{{ labels.DETAILS_HINT }}</p>
       <label class="field"><span>Guests</span><input type="number" name="guests" min="0" max="20" inputmode="numeric" value="{{ mine.guests if mine else 0 }}"></label>
@@ -210,7 +210,7 @@
   {% if v.can.invite %}
   <details class="details-form">
     <summary class="small">Invite a guest</summary>
-    <form method="post" action="{{ base }}/guests" hx-post="{{ base }}/guests" {{ swap|safe }} class="stack">
+    <form method="post" autocomplete="off" action="{{ base }}/guests" hx-post="{{ base }}/guests" {{ swap|safe }} class="stack">
       {{ hidden() }}
       <input type="hidden" name="run" value="{{ e.run }}">
       <p class="small muted">Guests eat with you and can pitch in, but don't vote or suggest. If they have no Slack, you answer for them here.</p>
@@ -234,7 +234,7 @@
   {% endif %}
 
   {% if v.can.hand_off %}
-  <form method="post" action="{{ base }}/hand-off" hx-post="{{ base }}/hand-off" {{ swap|safe }} class="inline-form">
+  <form method="post" autocomplete="off" action="{{ base }}/hand-off" hx-post="{{ base }}/hand-off" {{ swap|safe }} class="inline-form">
     {{ hidden() }}
     <label class="field compact"><span>Hand off coordinating</span>
       <select name="member_id">{% for m in v.members if m.id != principal.member.id %}<option value="{{ m.id }}">{{ m.name }}</option>{% endfor %}</select>
@@ -289,7 +289,7 @@
   {% if v.can.propose %}
   <details class="details-form">
     <summary class="small">Add a proposal</summary>
-    <form method="post" action="{{ base }}/proposals" hx-post="{{ base }}/proposals" {{ swap|safe }}{% if v.can.join_late %} hx-confirm="{{ late_prompt }}"{% endif %} class="stack">
+    <form method="post" autocomplete="off" action="{{ base }}/proposals" hx-post="{{ base }}/proposals" {{ swap|safe }}{% if v.can.join_late %} hx-confirm="{{ late_prompt }}"{% endif %} class="stack">
       {{ hidden() }}
       {% if v.can.join_late %}
       <input type="hidden" name="join_late" value="1">
@@ -351,7 +351,7 @@
     {% set r = v.roles %}
     <details class="details-form"{% if d.assign_roles %} open{% endif %}>
       <summary class="small">Assign roles</summary>
-      <form method="post" action="{{ base }}/roles" hx-post="{{ base }}/roles" {{ swap|safe }} class="stack">
+      <form method="post" autocomplete="off" action="{{ base }}/roles" hx-post="{{ base }}/roles" {{ swap|safe }} class="stack">
         {{ hidden() }}
         <input type="hidden" name="run" value="{{ e.run }}">
         <p class="small muted">Pick how to get it and who does it. Anyone who's in can, one person can do it all, and whoever you assign without their offering is told you did.</p>
@@ -380,13 +380,13 @@
     <details class="details-form">
       <summary class="small">Change the time or who does what</summary>
       {% if e.state.value == "decided" %}
-      <form method="post" action="{{ base }}/meal-time" hx-post="{{ base }}/meal-time" {{ swap|safe }} class="inline-form">
+      <form method="post" autocomplete="off" action="{{ base }}/meal-time" hx-post="{{ base }}/meal-time" {{ swap|safe }} class="inline-form">
         {{ hidden() }}
         <label class="field compact"><span>Meal time</span><input type="time" name="at" value="{{ e.meal_time|local_hhmm(tz) }}"></label>
         <button type="submit" class="button small">Save time</button>
       </form>
       {% endif %}
-      <form method="post" action="{{ base }}/assignments" hx-post="{{ base }}/assignments" {{ swap|safe }} class="inline-form">
+      <form method="post" autocomplete="off" action="{{ base }}/assignments" hx-post="{{ base }}/assignments" {{ swap|safe }} class="inline-form">
         {{ hidden() }}
         <label class="field compact"><span>Role</span>
           <select name="role">{% for role in v.work_roles %}<option value="{{ role.value }}">{{ labels.ROLE_TITLES[role] }}</option>{% endfor %}</select>
@@ -410,7 +410,7 @@
     {% if v.can.cancel %}
     <details class="details-form calloff">
       <summary class="small">{{ labels.CALL_OFF }}</summary>
-      <form method="post" action="{{ base }}/cancel" hx-post="{{ base }}/cancel" {{ swap|safe }} hx-confirm="Call off {{ e.slot.value }} for everyone?" class="stack">
+      <form method="post" autocomplete="off" action="{{ base }}/cancel" hx-post="{{ base }}/cancel" {{ swap|safe }} hx-confirm="Call off {{ e.slot.value }} for everyone?" class="stack">
         {{ hidden() }}
         <input type="hidden" name="run" value="{{ e.run }}">
         <p class="small muted">Nobody eats together this time{% if e.state.value != "scheduled" %}, and everyone who's in hears about it{% endif %}.</p>
@@ -441,7 +441,7 @@
     </div>
     {% endif %}
     {% if e.state.is_open and e.state.value != "scheduled" %}
-    <form method="post" action="{{ base }}/admin/coordinator" hx-post="{{ base }}/admin/coordinator" {{ swap|safe }} class="inline-form">
+    <form method="post" autocomplete="off" action="{{ base }}/admin/coordinator" hx-post="{{ base }}/admin/coordinator" {{ swap|safe }} class="inline-form">
       {{ hidden() }}
       <label class="field compact"><span>Coordinator</span>
         <select name="member_id"><option value="">Nobody</option>{% for m in v.members %}<option value="{{ m.id }}"{% if v.info.coordinator and v.info.coordinator.id == m.id %} selected{% endif %}>{{ m.name }}</option>{% endfor %}</select>
