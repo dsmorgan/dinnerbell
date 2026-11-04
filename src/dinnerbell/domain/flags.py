@@ -4,7 +4,8 @@
 Use a flag only when a feature must ship to production turned off; test runs ``:main`` and
 needs none. Every flag here needs tests that run it both on and off, marked with
 ``@pytest.mark.flag("name", on=True)`` and ``on=False`` (tests/test_flags.py checks). Remove a
-flag one release after it turns on in production.
+flag one release after it turns on in production, and add its name to ``RETIRED``, so an install
+that still lists it starts, with a warning, instead of refusing.
 """
 
 from __future__ import annotations
@@ -28,6 +29,11 @@ _DEFINED: tuple[Flag, ...] = ()
 FLAGS: Mapping[str, Flag] = MappingProxyType({flag.name: flag for flag in _DEFINED})
 """Every flag the code knows, by name."""
 
+RETIRED: Mapping[str, str] = MappingProxyType({})
+"""Every flag removed from ``FLAGS``, by name, with the release that removed it, such as
+``0.14.0``. ``DINNERBELL_FEATURES`` may still name one after an upgrade: it's ignored, and the CLI
+warns. Never take a name off this list, and never reuse one."""
+
 
 class UnknownFlag(ValueError):
     """A flag name that isn't in ``FLAGS``."""
@@ -43,12 +49,19 @@ class HasFeatures(Protocol):
 
 
 def check(names: Iterable[str]) -> frozenset[str]:
-    """Return ``names`` as a set, or raise ``UnknownFlag`` for the first unregistered one."""
+    """Return the registered flags in ``names`` as a set, leaving out retired ones. Raise
+    ``UnknownFlag`` for the first name that is neither registered nor retired, so a typo still
+    stops startup."""
     found = frozenset(names)
     for name in sorted(found):
-        if name not in FLAGS:
+        if name not in FLAGS and name not in RETIRED:
             raise UnknownFlag(name)
-    return found
+    return frozenset(name for name in found if name not in RETIRED)
+
+
+def retired(names: Iterable[str]) -> list[str]:
+    """The retired flags in ``names``, sorted, for a warning."""
+    return sorted(name for name in set(names) if name in RETIRED)
 
 
 def enabled(source: HasFeatures | Set[str], name: str) -> bool:

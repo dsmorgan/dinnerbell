@@ -55,6 +55,22 @@ def test_registered_flags_are_well_formed() -> None:
         assert re.fullmatch(r"\d+\.\d+\.\d+", flag.added_in), name
 
 
+def test_retired_flags_are_well_formed_and_not_registered() -> None:
+    for name, removed_in in flags.RETIRED.items():
+        assert re.fullmatch(r"[a-z][a-z0-9_]{0,39}", name), name
+        assert re.fullmatch(r"\d+\.\d+\.\d+", removed_in), name
+        assert name not in flags.FLAGS, f"{name} is both registered and retired"
+
+
+def test_check_leaves_retired_flags_out(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(flags, "FLAGS", {DEMO.name: DEMO})
+    monkeypatch.setattr(flags, "RETIRED", {"gone": "0.13.0"})
+    assert flags.check(["demo", "gone"]) == frozenset({"demo"})
+    assert flags.retired(["demo", "gone", "gone"]) == ["gone"]
+    with pytest.raises(UnknownFlag, match="'gnoe'"):
+        flags.check(["gone", "gnoe"])
+
+
 def test_enabled_raises_on_an_unregistered_name() -> None:
     with pytest.raises(UnknownFlag, match="unknown feature flag 'no_such_flag'"):
         enabled(frozenset({"no_such_flag"}), "no_such_flag")

@@ -22,6 +22,7 @@ from dinnerbell.config import (
     Settings,
     is_test_instance,
     load_settings,
+    retired_feature_names,
     unknown_setting_names,
 )
 from dinnerbell.db.migrate import (
@@ -499,6 +500,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     if unknown := unknown_setting_names():  # names only: a typo may sit next to a real value
         logging.getLogger("dinnerbell.config").warning(
             "ignoring environment variables that match no setting (a typo?): %s", ", ".join(unknown)
+        )
+    if retired := retired_feature_names():
+        logging.getLogger("dinnerbell.config").warning(
+            "ignoring retired feature flags in DINNERBELL_FEATURES; remove them: %s", ", ".join(retired)
         )
     if args.command == "serve":  # the server's requests, taps, and jobs each start their own unit
         return _command(args, settings)

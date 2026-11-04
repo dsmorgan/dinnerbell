@@ -272,7 +272,7 @@ class Settings(BaseSettings):
     @classmethod
     def _parse_features(cls, value: object) -> object:
         if isinstance(value, str):
-            return frozenset(part.strip() for part in value.split(",") if part.strip())
+            return _feature_names(value)
         return value
 
     @field_validator("features")
@@ -429,6 +429,17 @@ def _read_secret_files(directory: Path, warnings: list[str] | None = None) -> di
         elif text:
             values[field] = text
     return values
+
+
+def _feature_names(value: str) -> frozenset[str]:
+    return frozenset(part.strip() for part in value.split(",") if part.strip())
+
+
+def retired_feature_names(environ: Mapping[str, str] | None = None) -> list[str]:
+    """The retired flags that ``DINNERBELL_FEATURES`` in ``environ`` (default: the process
+    environment) still names. ``Settings`` ignores them; the CLI warns once logging is set up."""
+    source = os.environ if environ is None else environ
+    return flags.retired(_feature_names(source.get(f"{ENV_PREFIX}FEATURES", "")))
 
 
 def unknown_setting_names(environ: Mapping[str, str] | None = None) -> list[str]:

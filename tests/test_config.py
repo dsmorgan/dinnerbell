@@ -437,6 +437,40 @@ def test_features_parse_a_comma_separated_list(monkeypatch: pytest.MonkeyPatch, 
         make_settings(tmp_path, features=frozenset({"gamma"}))
 
 
+def test_a_retired_flag_is_ignored_and_a_typo_still_stops_startup(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A flag removed one release after it turned on (ADR 0006) must not stop an install that still
+    lists it (#193). A name that was never a flag is still refused."""
+    from dinnerbell.config import retired_feature_names
+    from dinnerbell.domain import flags
+
+    monkeypatch.setattr(flags, "FLAGS", {"alpha": flags.Flag("alpha", "test", "0.0.0")})
+    monkeypatch.setattr(flags, "RETIRED", {"old_one": "0.13.0"})
+    set_env(monkeypatch, DINNERBELL_FEATURES="alpha, old_one")
+    assert load_settings().features == frozenset({"alpha"})
+    assert make_settings(tmp_path, features=frozenset({"old_one"})).features == frozenset()
+    assert retired_feature_names() == ["old_one"]
+    assert retired_feature_names({"DINNERBELL_FEATURES": "alpha"}) == []
+    assert "unknown feature flag 'old_won'" in error_for(monkeypatch, DINNERBELL_FEATURES="old_one,old_won")
+
+
+def test_serve_warns_once_about_retired_flags(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    from dinnerbell import main as main_module
+    from dinnerbell.domain import flags
+
+    monkeypatch.setattr(flags, "RETIRED", {"old_one": "0.13.0"})
+    set_env(monkeypatch, DINNERBELL_FEATURES="old_one")
+    monkeypatch.setattr(main_module, "_command", lambda args, settings: 0)
+    monkeypatch.setattr(main_module, "configure_logging", lambda *args: None)  # keep caplog's handler
+    with caplog.at_level("WARNING", logger="dinnerbell.config"):
+        assert main_module.main(["migrate"]) == 0
+    (message,) = [r.getMessage() for r in caplog.records if "retired feature flags" in r.getMessage()]
+    assert message.endswith(": old_one")
+
+
 def test_a_symlink_to_a_good_file_works(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     directory = secrets_from_files(monkeypatch, tmp_path, **SECRET_FILES)
     target = tmp_path / "store" / "key"
