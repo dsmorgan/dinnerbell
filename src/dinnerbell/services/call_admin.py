@@ -31,7 +31,7 @@ async def move_deadline(
 ) -> None:
     """Extend or shorten the open window by ``minutes``, or close it now when None. A deadline
     that lands in the past closes the window at once. The coordinator closes a window with
-    ``calls.close_window``."""
+    ``calls.close_window``, and moves the decision time with ``coordinator.move_decision_time``."""
     require_admin(actor, ADMINS_ONLY)
     async with locked_event(db, actor.household_id, event_id, now) as event:
         current, moved = await lifecycle.move_window(db, event, window, minutes, now)

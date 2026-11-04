@@ -258,11 +258,12 @@ def away_button(event: note.EventInfo) -> Block:
 
 
 def call_menu(event: note.EventInfo) -> list[Block]:
-    """The ⋯ menu for a posted call that's still open: **Call it off**, and Close now while a
-    window is open. Everyone sees the same message, so the menu lists what the call's state
-    allows; the server checks who may when someone picks one. Each value names the run the
-    message shows. Once decided, only **Call it off** is left; Slack has required two options
-    in an overflow menu, so it's a plain button then, which opens the same modal."""
+    """The ⋯ menu for a posted call that's still open: **Call it off**, Close now while a window
+    is open, and **Move the decision time** while voting (#198). Everyone sees the same message,
+    so the menu lists what the call's state allows; the server checks who may when someone picks
+    one. Each value names the run the message shows. Once decided, only **Call it off** is left;
+    Slack has required two options in an overflow menu, so it's a plain button then, which opens
+    the same modal."""
     if event.state not in {EventState.COLLECTING, EventState.VOTING, EventState.DECIDED}:
         return []
     call_off = ids.menu_value(ids.MenuChoice.CANCEL, event.id, event.run)
@@ -270,7 +271,11 @@ def call_menu(event: note.EventInfo) -> list[Block]:
     if window is None:
         return [button(CALL_OFF, ids.CANCEL_CALL, call_off)]
     close = ids.menu_value(ids.MenuChoice.CLOSE, event.id, event.run)
-    return [overflow(ids.CALL_MENU, [option(CALL_OFF, call_off), option(CLOSE_LABELS[window], close)])]
+    options = [option(CALL_OFF, call_off), option(CLOSE_LABELS[window], close)]
+    if window is Window.VOTE:
+        move = ids.menu_value(ids.MenuChoice.MOVE, event.id, event.run)
+        options.append(option(labels.MOVE_DECISION_TIME, move))
+    return [overflow(ids.CALL_MENU, options)]
 
 
 # The call message --------------------------------------------------------------------------------

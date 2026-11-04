@@ -80,6 +80,7 @@ from dinnerbell.channels.slack.views import (
     away_modal,
     cancel_modal,
     close_modal,
+    decision_time_modal,
     details_modal,
     feedback_modal,
     held_badges,
@@ -91,6 +92,7 @@ from dinnerbell.channels.slack.views import (
     parse_assign,
     parse_away,
     parse_cancel,
+    parse_decision_time,
     parse_details,
     parse_feedback,
     parse_invite,
@@ -117,6 +119,7 @@ from dinnerbell.domain.events import (
     check_can_cancel,
     check_can_choose_roles,
     check_can_close_window,
+    check_can_move_decision_time,
     check_can_respond,
     check_expected_window,
     check_run,
@@ -197,6 +200,8 @@ WITHDRAWN = {
 }
 CALLED_OFF = "You called off {slot} for {day}."
 CLOSED = {Window.RESPOND: "Responses are closed for {slot}.", Window.VOTE: "Voting is closed for {slot}."}
+MOVED = "Voting closes at {at} now."
+"""The reply to moving the decision time (#198); one moved into the past says ``CLOSED`` instead."""
 VOTED = "Vote counted. Tap Vote again to take it back."
 SHUFFLED = "Shuffled: {replaced} replaced. Everyone sees the new set."
 ASSIGNED = "Assigned. {name} is told."
@@ -426,6 +431,9 @@ class Interactions:
         async def away_view(ack: Ack, body: dict[str, Any]) -> None:
             await self._submission(ack, body, "away")
 
+        async def decision_time_view(ack: Ack, body: dict[str, Any]) -> None:
+            await self._submission(ack, body, "decision_time")
+
         async def offer_view(ack: Ack, body: dict[str, Any]) -> None:
             await self._form_submission(ack, body, "offer")
 
@@ -450,6 +458,7 @@ class Interactions:
         app.view(ids.ASSIGN_VIEW)(assign_view)
         app.view(ids.ADJUST_VIEW)(adjust_view)
         app.view(ids.AWAY_VIEW)(away_view)
+        app.view(ids.DECISION_TIME_VIEW)(decision_time_view)
         app.view(ids.OFFER_VIEW)(offer_view)
         app.view(ids.LOG_VIEW)(log_view)
         app.command(self.command)(command)
@@ -1435,9 +1444,10 @@ class Interactions:
     async def _open_end(
         self, member: Member, source: Source, choice: ids.MenuChoice, event_id: int, run: int, trigger: object
     ) -> str | None:
-        """Open Call it off's modal, or Close now's confirmation, for someone allowed to, on the
-        run of the call they tapped. Anyone else is told why not instead, with the rule's own
-        words. The modal keeps the run, and the service checks it again on submit."""
+        """Open Call it off's modal, Close now's confirmation, or **Move the decision time**
+        (#198), for someone allowed to, on the run of the call they tapped. Anyone else is told
+        why not instead, with the rule's own words. The modal keeps the run, and the service
+        checks it again on submit."""
         if not isinstance(trigger, str) or not trigger:
             raise ids.BadValue("no trigger")
         async with self.sessionmaker() as db:
@@ -1447,6 +1457,9 @@ class Interactions:
         if choice is ids.MenuChoice.CANCEL:
             check_can_cancel(view.event, member)
             await self.api.open_view(trigger, cancel_modal(view, origin))
+        elif choice is ids.MenuChoice.MOVE:
+            check_can_move_decision_time(view.event, member)
+            await self.api.open_view(trigger, decision_time_modal(view, origin))
         else:
             window = check_can_close_window(view.event, member)
             # Past the window's deadline the call is advancing, so there's nothing to confirm.
@@ -1462,6 +1475,16 @@ class Interactions:
             await calls.close_window(db, member, event_id, run=run, expected_window=window, now=self.clock())
             view = await event_views.event_view(db, member, event_id, now=self.clock())
         return CLOSED[window].format(slot=view.event.slot.value)
+
+    async def _move_decision_time(self, member: Member, event_id: int, minutes: int, run: int | None) -> str:
+        """Move the decision time ``minutes`` on ``run``, the run the modal was opened for. One
+        moved into the past closes voting, as **Decide now** does."""
+        async with self.sessionmaker() as db:
+            moved = await coordinator.move_decision_time(db, member, event_id, minutes, run=run, now=self.clock())
+            view = await event_views.event_view(db, member, event_id, now=self.clock())
+        if view.event.state is not EventState.VOTING:
+            return CLOSED[Window.VOTE].format(slot=view.event.slot.value)
+        return MOVED.format(at=local_clock(moved, view.info.timezone))
 
     async def _cancel(self, member: Member, event_id: int, reason: str | None, run: int | None) -> str:
         """Call off ``event_id``; ``run`` is the run the member saw, or None from the slash
@@ -1721,7 +1744,7 @@ class Interactions:
             origin = ids.ViewOrigin.decode(view.get("private_metadata"))
             if (origin.window is not None) != (kind == "close"):
                 raise ids.BadValue("bad metadata")  # only Close now's confirmation names a window
-            if origin.run is None and kind in {"cancel", "close", "feedback", "assign", "adjust", "away"}:
+            if origin.run is None and kind in NAMES_A_RUN:
                 raise ids.BadValue("bad metadata")  # these name a run; Details and a join-late pick may
             if (origin.opened is not None) != (kind == "adjust"):
                 raise ids.BadValue("bad metadata")  # only Adjust says what it opened with
@@ -1753,6 +1776,8 @@ class Interactions:
                 return await self._close(member, event_id, form, origin.run)
             if kind == "cancel":
                 return await self._cancel(member, event_id, form, origin.run)
+            if kind == "decision_time":
+                return await self._move_decision_time(member, event_id, form, origin.run)
             if kind == "feedback":
                 return await self._give_feedback(member, event_id, form, origin.run)
             if kind == "invite":
@@ -2082,8 +2107,11 @@ FORMS: dict[str, Callable[[Any], Any]] = {
     "assign": parse_assign,
     "adjust": parse_adjust,
     "away": parse_away,
+    "decision_time": parse_decision_time,
 }
 """Each modal's form parser, by kind. Close now's confirmation has no fields."""
+NAMES_A_RUN = frozenset({"cancel", "close", "feedback", "assign", "adjust", "away", "decision_time"})
+"""The modals whose metadata names the run they were opened for."""
 
 
 GUEST_TAPS = frozenset(

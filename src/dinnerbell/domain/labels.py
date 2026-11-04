@@ -93,6 +93,14 @@ CLOSE_EFFECT = {
     Window.VOTE: "Voting closes for everyone now, and the votes so far decide the plan.",
 }
 
+MOVE_DECISION_TIME = "Move the decision time"
+"""The coordinator's move of the decision time while voting (#198)."""
+DECISION_TIME_SHIFTS = {"plus15": 15, "plus30": 30, "minus15": -15}
+"""How far the coordinator moves the decision time, in minutes, by the web form's value: the
+admin's moves of the vote window, without closing it now, which is **Decide now**."""
+SHIFT_LABELS = {"plus15": "+15 min", "plus30": "+30 min", "minus15": "\u221215 min"}
+SHIFT_WORDS = {"plus15": "15 minutes later", "plus30": "30 minutes later", "minus15": "15 minutes earlier"}
+
 
 def decides_now(item: str) -> str:
     """What locking a proposal, or choosing it to break a tie, does."""

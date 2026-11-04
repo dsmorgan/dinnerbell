@@ -418,6 +418,16 @@
   </div>
   {% endif %}
 
+  {#- The coordinator moves the decision time while voting (#198); an admin's moves are under Admin. -#}
+  {% if v.can.move_vote and not v.can.move_window %}
+  <p class="row-label small muted" id="event-{{ e.id }}-decision-time">{{ labels.MOVE_DECISION_TIME }}</p>
+  <div class="button-row" role="group" aria-labelledby="event-{{ e.id }}-decision-time">
+    {% for shift, label in labels.SHIFT_LABELS.items() %}
+    {{ act(e.id, base ~ "/decision-time", label, "button small", {"shift": shift, "run": e.run}) }}
+    {% endfor %}
+  </div>
+  {% endif %}
+
   {% if v.can.close_window or v.can.cancel %}
   <div class="end-controls">
     {% if v.can.close_window %}

@@ -59,6 +59,10 @@ class Permissions:
     admin: bool = False
     rerun: bool = False
     move_window: Window | None = None
+    """The window an admin's **Admin** controls move (``call_admin.move_deadline``)."""
+    move_vote: bool = False
+    """Move the decision time while voting (#198): ``coordinator.move_decision_time``. The
+    coordinator's, a guest coordinator's too, and any admin's."""
     cancel: bool = False
     """Call it off (FR-56): ``calls.cancel_call``."""
     close_window: Window | None = None
@@ -306,6 +310,7 @@ def _guest_permissions(base: Permissions, ctx: CallContext, actor: Member) -> Pe
         choose_roles=base.choose_roles and may(GuestAction.MANAGE_DECISION),
         adjust=base.adjust and may(GuestAction.MANAGE_DECISION),
         set_way=base.set_way and may(GuestAction.SET_WAY),
+        move_vote=base.move_vote and may(GuestAction.MOVE_DECISION_TIME),
     )
 
 
@@ -338,6 +343,7 @@ def _member_permissions(
         rerun=admin
         and _allowed(lambda: rules.check_rerun(event, today, now=now, too_late_after=ctx.too_late_for(today))),
         move_window=_window(event) if admin else None,
+        move_vote=_allowed(lambda: rules.check_can_move_decision_time(event, actor)),
         cancel=_allowed(lambda: rules.check_can_cancel(event, actor)),
         close_window=_closable(event, actor, now),
         restart=actor.active and _allowed(lambda: _check_restart(ctx, today, now, any_time)),

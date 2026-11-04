@@ -159,11 +159,12 @@ LOG_VIEW = "log_modal"
 ASSIGN_VIEW = "assign_modal"
 ADJUST_VIEW = "adjust_modal"
 AWAY_VIEW = "away_modal"
+DECISION_TIME_VIEW = "decision_time_modal"
 
 MAX_ID = 2**63 - 1
 _DIGITS = re.compile(r"^[0-9]{1,19}$")
 _PAIR = re.compile(r"^([0-9]{1,19}):([0-9]{1,19})$")
-_MENU = re.compile(r"(cancel|close):([1-9][0-9]{0,18}):([1-9][0-9]{0,18})")
+_MENU = re.compile(r"(cancel|close|move):([1-9][0-9]{0,18}):([1-9][0-9]{0,18})")
 _WINDOW = re.compile(r"(respond|vote):([1-9][0-9]{0,18}):([1-9][0-9]{0,18})")
 _CARD = re.compile(r"([1-9][0-9]{0,18}):([1-9][0-9]{0,18})")
 _GUEST = re.compile(r"([1-9][0-9]{0,18}):([1-9][0-9]{0,18}):([1-9][0-9]{0,18})")
@@ -211,17 +212,20 @@ def parse_proposal(value: object) -> tuple[int, int]:
 class MenuChoice(StrEnum):
     CANCEL = "cancel"
     CLOSE = "close"
+    MOVE = "move"
+    """Move the decision time, while voting (#198)."""
 
 
 def menu_value(choice: MenuChoice, event_id: int, run: int) -> str:
-    """``cancel:<id>:<run>`` or ``close:<id>:<run>``. The run is the one the message shows, so
-    a message left over from before a re-run or a restart can't act on the newer run."""
+    """``cancel:<id>:<run>``, ``close:<id>:<run>``, or ``move:<id>:<run>``. The run is the one
+    the message shows, so a message left over from before a re-run or a restart can't act on the
+    newer run."""
     return f"{choice.value}:{event_id}:{run}"
 
 
 def parse_menu(value: object) -> tuple[MenuChoice, int, int]:
-    """``cancel:<id>:<run>`` or ``close:<id>:<run>``, exactly as ``menu_value`` writes them:
-    the choice, the event ID, and the run."""
+    """``cancel:<id>:<run>``, ``close:<id>:<run>``, or ``move:<id>:<run>``, exactly as
+    ``menu_value`` writes them: the choice, the event ID, and the run."""
     match = _MENU.fullmatch(value) if isinstance(value, str) else None
     if match is None:
         raise BadValue("not a menu value")
