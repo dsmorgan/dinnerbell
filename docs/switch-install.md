@@ -62,7 +62,7 @@ To run your own changes, build the image from your checkout with the `compose.bu
 podman-compose -f compose.yaml -f compose.build.yaml up -d --build
 ```
 
-Pass both `-f` options to every later compose command. With secrets in files, put `-f compose.secrets.yaml` between them. The image, `localhost/dinnerbell:dev`, has no attestations and isn't a release, so use it for development, not production.
+Pass both `-f` options to every later compose command. With secrets in files, also add `-f compose.secrets.yaml`, and `-f compose.override.yaml` last if you have one. The image, `localhost/dinnerbell:dev`, has no attestations and isn't a release, so use it for development, not production.
 
 ## Switch a source-built install to the prebuilt image
 

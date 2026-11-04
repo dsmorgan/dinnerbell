@@ -60,7 +60,7 @@ You need:
 1. Read the **Upgrade notes** of every release between yours and the new one. They say when `.env` needs a new setting.
 2. [Back up now](https://github.com/dsmorgan/dinnerbell/blob/main/docs/setup.md#back-up-now).
 3. In the directory that holds `dinnerbell`, download and check the new bundle as in steps 1 and 2, then extract it over the old one. It replaces the bundle's files, including `compose.yaml`, which names the new image, and keeps `.env`, `secrets/`, and `compose.override.yaml`. Keep your own changes in `compose.override.yaml`, never in the bundle's files.
-4. Pull the new image and recreate the service.
+4. Pull the new image and recreate the service. If you pinned a digest in `compose.override.yaml`, update or remove the pin first, or the upgrade keeps the old image.
 
    ```sh
    cd dinnerbell && podman-compose pull && podman-compose down && podman-compose up -d
@@ -76,6 +76,8 @@ You need:
    podman-compose -f compose.yaml -f compose.secrets.yaml down
    podman-compose -f compose.yaml -f compose.secrets.yaml up -d
    ```
+
+   With Docker, use `docker compose` in place of `podman-compose`.
 
 ## Options
 
