@@ -65,6 +65,7 @@ from dinnerbell.domain.events import (
     shifted_deadline,
     should_open_today,
     transition,
+    voting_closes,
     way_unsettled,
 )
 from dinnerbell.domain.guests import tie_breaker
@@ -346,13 +347,15 @@ async def move_window(
     """Move the open ``window``'s deadline by ``minutes``, or to now when None, and update the
     messages that show it. Returns the old and new deadlines. The caller holds the event's
     lock, checks who may, audits, and calls ``advance`` after its commit, so a deadline moved
-    into the past closes the window at once. Closing the response window keeps the call's
-    decision time for voting (``decision_deadline``)."""
+    into the past closes the window at once. Closing the response window now, by Close now or a
+    shorter deadline that lands in the past, keeps the call's decision time for voting
+    (``decision_deadline``), which ``_close_responses`` reads from ``vote_deadline``. A shorter
+    deadline still ahead moves the decision time as much."""
     current = check_window_change(event, window)
     zone = (await load(db, event)).zone
     moved = shifted_deadline(current, minutes, now, latest=call_ends_at(event.day, zone))
     changes = {"respond_deadline": moved} if window is Window.RESPOND else {"vote_deadline": moved}
-    if window is Window.RESPOND and minutes is None:  # Close now keeps the decision time (FR-56)
+    if window is Window.RESPOND and moved <= now:  # closed now: the decision time stays (FR-56)
         changes["vote_deadline"] = decision_deadline(event)
     event = await EventRepository(db).save(replace(event, **changes), now)  # type: ignore[arg-type]
     ctx = await load(db, event)
@@ -451,23 +454,26 @@ async def _close_responses(db: AsyncSession, event: Event, now: datetime) -> Non
     the ranked ones; ranking leaves their places out and still proposes its usual number (#77).
     Before the deadline, because everyone answered (FR-56), the deadline moves to now first, as
     when the coordinator closes the window: voting opens at once, and still closes at the call's
-    decision time (``decision_deadline``). A coordinator who was still a maybe is out now (#154).
-    Voting picks a member who's in to coordinate when nobody does by then (#179,
+    decision time (``voting_closes``). Maybes that closing early cut short get a counting vote
+    if they join late (``resolve_maybes``). A coordinator who was still a maybe is out now
+    (#154). Voting picks a member who's in to coordinate when nobody does by then (#179,
     ``pick_coordinator``)."""
-    vote_deadline = decision_deadline(event)  # before the response deadline moves
+    kept = decision_deadline(event)  # before the response deadline moves
+    # Early: everyone answered, or Close now moved the deadline and kept the decision time.
+    early = now < event.respond_deadline or event.vote_deadline is not None
     if now < event.respond_deadline:
-        early = {"window": Window.RESPOND.value, "from": event.respond_deadline.isoformat(), "to": now.isoformat()}
+        moved = {"window": Window.RESPOND.value, "from": event.respond_deadline.isoformat(), "to": now.isoformat()}
         event = await EventRepository(db).save(replace(event, respond_deadline=now), now)
-        await audit(db, event.household_id, None, "event.everyone_answered", _target(event), early, now)
+        await audit(db, event.household_id, None, "event.everyone_answered", _target(event), moved, now)
     ctx = await load(db, event)
-    if vote_deadline >= call_ends_at(event.day, ctx.zone):  # too late to keep: the usual time to vote
-        vote_deadline = event.respond_deadline + timedelta(minutes=event.vote_minutes)
+    vote_deadline = voting_closes(event, kept, ctx.zone)
+    event = replace(event, vote_deadline=None)  # until voting opens, if it does
     group = await group_preferences(db, event.household_id, ctx.veto_people)
     attached = await _keep_attached(db, ctx, group, now)
     taken = frozenset(p.item_id for p in attached if p.item_id is not None)
     snapshot = await ranking_snapshot(db, ctx, group, taken=taken)
     ranked = rank(snapshot)[: max(MAX_PROPOSALS - len(attached), 0)]  # FR-13: at most 10 picks in all
-    resolved = resolve_maybes(ctx.responses)
+    resolved = resolve_maybes(ctx.responses, early=early)
     for response in resolved:
         await ResponseRepository(db).save(event.household_id, event.id, response, now)
         if drops_coordinating(event, response):  # a maybe coordinator is out now, so isn't one (#154)

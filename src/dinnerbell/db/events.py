@@ -455,7 +455,8 @@ class ResponseRepository:
     async def restore_maybes(self, household_id: int, event_id: int, now: datetime) -> None:
         """For a re-run: maybes the deadline turned out are maybes again, and whoever joined
         late answers like anyone (#76): a late joiner taking part is in, one the coordinator
-        switched off is out, and a maybe who joined late is in rather than a maybe again."""
+        switched off is out, and a maybe who joined late is in rather than a maybe again. A maybe
+        again loses the counting vote that answers closing early gave them (``resolve_maybes``)."""
         where = (ResponseRow.household_id == household_id, ResponseRow.event_id == event_id)
         late = (*where, ResponseRow.late.is_(True))
         await self._session.execute(
@@ -483,7 +484,7 @@ class ResponseRepository:
                 ResponseRow.event_id == event_id,
                 ResponseRow.maybe_at_deadline.is_(True),
             )
-            .values(status=Status.MAYBE.value, maybe_at_deadline=False, updated_at=now)
+            .values(status=Status.MAYBE.value, maybe_at_deadline=False, vote_counts=False, updated_at=now)
             .execution_options(synchronize_session=False)
         )
 

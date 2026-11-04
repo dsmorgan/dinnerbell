@@ -79,7 +79,7 @@ CLOSE_SUBMIT = {Window.RESPOND: "Start the vote", Window.VOTE: "Decide now"}
 CLOSE_EFFECT = {
     Window.RESPOND: (
         "Responses close for everyone now, and the vote on the proposals starts. "
-        "If fewer than two people are in, everyone's on their own."
+        "Voting still closes at the usual time. If fewer than two people are in, everyone's on their own."
     ),
     Window.VOTE: "Voting closes for everyone now, and the votes so far decide the plan.",
 }

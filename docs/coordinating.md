@@ -38,7 +38,14 @@ A call moves through three stages: answers, the vote, and the decision. The deci
 | Call off the call | ⋯ menu on the call message, App Home | Call page |
 | Hand off coordinating | No | Call page |
 
-**Start the vote now** starts the vote at once, but the vote still ends at its usual time: the answer deadline plus the schedule's **Time to vote**. Answers also close on their own once everyone has answered In, Maybe, or Out, and the vote ends at the same usual time.
+**Start the vote now** starts the vote at once, but the vote still ends at its usual time: the answer deadline plus the schedule's **Time to vote**. With fewer than two in, it ends the call instead, and everyone's on their own.
+
+Answers also close on their own once everyone has answered:
+
+- When two or more are in, answers close after nobody has changed an answer for 10 minutes, and once someone has offered to cook, pick up, or order. The vote starts then, and ends at the same usual time. Maybes are out from then on, and if one joins late, their vote counts.
+- When everyone is out, the call ends at once, with no vote.
+- When one person is in and everyone else is out, they get 10 minutes to add a guest. Otherwise the call ends.
+- With fewer than two in, a maybe keeps answers open until the deadline, because they might still come.
 
 ### While voting
 

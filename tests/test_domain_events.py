@@ -790,14 +790,19 @@ def test_everyone_out_closes_as_soon_as_everyone_answered() -> None:
     assert due(answered((1, Status.OUT), (2, Status.OUT), (3, Status.OUT)), soon, Coverage()) is Step.CLOSE_RESPONSES
 
 
-def test_nobody_in_closes_as_soon_as_everyone_answered_maybes_too() -> None:
-    """Maybes have answered, and closing turns them out, so nobody in ends it on-your-own at once."""
-    soon = NOW + timedelta(minutes=2)
-    mixed = answered((1, Status.OUT), (2, Status.MAYBE), (3, Status.OUT))
-    assert due(mixed, soon, Coverage()) is Step.CLOSE_RESPONSES
-    assert (
-        due(answered((1, Status.MAYBE), (2, Status.MAYBE), (3, Status.MAYBE)), soon, Coverage()) is Step.CLOSE_RESPONSES
-    )
+def test_only_outs_end_a_call_early_a_maybe_waits_for_the_deadline() -> None:
+    """A maybe has answered, but with fewer than two in, they might still make it two, so the
+    call waits for its deadline. With two or more in, a maybe doesn't hold it up."""
+    later = QUIET + timedelta(minutes=30)
+    for waits in (
+        answered((1, Status.MAYBE), (2, Status.MAYBE), (3, Status.MAYBE)),
+        answered((1, Status.OUT), (2, Status.MAYBE), (3, Status.OUT)),
+        answered((1, Status.IN), (2, Status.MAYBE), (3, Status.MAYBE)),
+    ):
+        assert due(waits, later) is None
+    lone_in, *rest = answered((1, Status.IN), (2, Status.MAYBE), (3, Status.OUT))
+    assert due([replace(lone_in, guests=1), *rest], QUIET) is Step.CLOSE_RESPONSES  # a guest makes two
+    assert due(answered((1, Status.IN), (2, Status.IN), (3, Status.MAYBE)), QUIET) is Step.CLOSE_RESPONSES
 
 
 def test_all_out_but_one_who_hasnt_answered_waits_for_them() -> None:

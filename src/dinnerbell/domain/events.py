@@ -550,10 +550,13 @@ def with_details(current: Response | None, member_id: int, details: Details, now
     )
 
 
-def resolve_maybes(responses: Iterable[Response]) -> list[Response]:
-    """FR-9: unresolved maybes become out at the deadline. Returns only the changed responses."""
+def resolve_maybes(responses: Iterable[Response], *, early: bool = False) -> list[Response]:
+    """FR-9: unresolved maybes become out at the deadline, or when answers close ``early``
+    (FR-56). Returns only the changed responses. Answers that closed early cut a maybe short,
+    though they answered on time, so ``vote_counts`` marks that their vote counts if they join
+    late (``with_late_join``)."""
     return [
-        replace(r, status=Status.OUT, offers=frozenset(), maybe_at_deadline=True)
+        replace(r, status=Status.OUT, offers=frozenset(), maybe_at_deadline=True, vote_counts=early)
         for r in responses
         if r.status is Status.MAYBE
     ]
@@ -1030,15 +1033,17 @@ def check_can_join_late(event: Event, actor: Member, mine: Response | None) -> b
 
 def with_late_join(current: Response | None, member_id: int, now: datetime) -> Response:
     """``member_id``'s answer once they join late: in, marked late, with their vote not counted
-    until the coordinator says so. Their place in line for a role (``coverage``) starts now, after
-    everyone who answered on time. Details left from an earlier answer, such as guests, their
-    needs, and an eat window, are cleared, so joining never changes the head count or meal time
-    on its own."""
+    until the coordinator says so, unless answers closed early on their maybe
+    (``resolve_maybes``): they answered on time, so their vote counts. Their place in line for a
+    role (``coverage``) starts now, after everyone who answered on time. Details left from an
+    earlier answer, such as guests, their needs, and an eat window, are cleared, so joining
+    never changes the head count or meal time on its own."""
+    cut_short = current is not None and current.maybe_at_deadline and current.vote_counts and not current.late
     base = with_status(current, member_id, Status.IN, now)
     return replace(
         base,
         late=True,
-        vote_counts=False,
+        vote_counts=cut_short,
         responded_at=now,
         guests=0,
         guest_needs=frozenset(),
@@ -1488,18 +1493,28 @@ def stale_after(event: Event, *, usual_meal: time, zone: tzinfo) -> datetime:
 
 
 def call_ends_at(day: date, zone: tzinfo) -> datetime:
-    """Midnight after ``day`` in ``zone``: no deadline of a call for ``day`` runs past it."""
+    """Midnight after ``day`` in ``zone``. A call for ``day`` that's still undecided is stale by
+    then (``stale_after``), so no deadline of it runs past it."""
     return datetime.combine(day + timedelta(days=1), time(0), tzinfo=zone).astimezone(UTC)
 
 
 def decision_deadline(event: Event) -> datetime:
-    """When voting closes: the vote deadline, once there is one, or else the response deadline
-    plus the call's time to vote. Responses that close early, because everyone answered or by
-    Close now, keep this time: voting opens at once and runs until then, and only the
-    coordinator or an admin ends it sooner (FR-56). A late call whose decision time would be
-    past midnight (``call_ends_at``) gets its usual time to vote instead, from when responses
-    close: the caller checks."""
+    """The call's decision time: the vote deadline, once there is one, or else the response
+    deadline plus the call's time to vote. Answers that close early keep it (``voting_closes``),
+    so only the coordinator or an admin ends voting sooner (FR-56)."""
     return event.vote_deadline or event.respond_deadline + timedelta(minutes=event.vote_minutes)
+
+
+def voting_closes(event: Event, kept: datetime, zone: tzinfo) -> datetime:
+    """When voting closes, once answers close: ``kept``, the decision time from before they
+    closed (``decision_deadline``), so answers closing early, whether everyone answered or by
+    Close now, never decide the call sooner (FR-56). A call too late to decide on its day at
+    ``kept``, because the meal time, rounded up to the quarter hour (``meal_time``), would be
+    midnight or later, gets its usual time to vote from the close (``event.respond_deadline``)
+    instead."""
+    if round_up_to_quarter(kept) < call_ends_at(event.day, zone):
+        return kept
+    return event.respond_deadline + timedelta(minutes=event.vote_minutes)
 
 
 def closes_early(
@@ -1513,10 +1528,11 @@ def closes_early(
     """FR-56: whether a collecting call's responses close before the deadline.
 
     Every active member must have answered in this run (an answer kept from before a re-run or
-    restart doesn't count): in, out, or maybe, since closing turns maybes out. With nobody in,
-    it closes at once and ends on-your-own. With anyone in, it waits until no response has
-    changed for ``EARLY_CLOSE_QUIET``, so tapping In first and adding guests or an offer next is
-    never cut short; with two or more eating, someone must also be able to cook, pick up, or order
+    restart doesn't count): in, out, or maybe, since closing turns maybes out. With fewer than
+    two in and anyone a maybe, it waits for the deadline: only outs end a call early. With
+    nobody in, it closes at once and ends on-your-own. With anyone in, it waits until no
+    response has changed for ``EARLY_CLOSE_QUIET``, so tapping In first and adding guests or an
+    offer next is never cut short; with two or more eating, someone must also be able to cook, pick up, or order
     (``coverage``). Otherwise the call waits for its deadline, or for Close now.
 
     ``active_member_ids`` are the household's members and admins, whom the call waits for;
@@ -1544,6 +1560,8 @@ def early_close_at(
     answered = {r.member_id for r in this_run} & active
     if not active or answered != active:
         return None
+    if head_count(this_run) < MIN_HEAD_COUNT and any(r.status is Status.MAYBE for r in this_run):
+        return None  # only outs end a call early: a maybe might still make it two
     last_change = max(r.updated_at for r in this_run if r.updated_at is not None)
     if not any(r.is_in for r in this_run):
         return last_change
