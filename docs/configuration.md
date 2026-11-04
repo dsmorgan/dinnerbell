@@ -39,7 +39,7 @@ These settings are optional:
 |---|---|---|
 | `DINNERBELL_HOUSEHOLD_NAME` | `Home` | The household name shown in the app. Read on first start only; after that, the database keeps it. |
 | `DINNERBELL_TIMEZONE` | `America/New_York` | The household time zone, as an IANA name. It sets when calls go out and when the nightly backup runs. Read on first start only. |
-| `DINNERBELL_TRUSTED_PROXIES` | None | Comma-separated proxy IP addresses whose `X-Forwarded-For` header Dinnerbell trusts for client addresses. Without it, the rate limiter treats all clients as one, which is safe but stricter. Set one proxy address, never a range, and never an address that other clients share, such as a container gateway. |
+| `DINNERBELL_TRUSTED_PROXIES` | None | Comma-separated proxy IP addresses whose `X-Forwarded-For` header Dinnerbell trusts for client addresses. Set one proxy address, never a range, and never an address that other clients share, such as a container gateway. Without it, the rate limiter treats all clients as one, which is safe but stricter: see [The sign-in rate limit](#the-sign-in-rate-limit). |
 | `DINNERBELL_LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING`, or `ERROR`. At `DEBUG`, each request logs the direct peer address and the resolved client address, which helps you find your proxy's address. |
 | `DINNERBELL_SEED_FILE` | None | A catalog file to import on first start, while the catalog is empty. See [Load a catalog on first start](#load-a-catalog-on-first-start). |
 | `DINNERBELL_DATABASE_URL` | `sqlite:////data/dinnerbell.db` | The SQLite database. Keep it under `/data`, the container's only writable volume. Backups go to `backups/` next to the database file. |
@@ -52,6 +52,16 @@ The container image sets `DINNERBELL_BUILD` on builds from `main`. Don't add it 
 Dinnerbell warns at start about a `DINNERBELL_` variable it doesn't know, which is most likely a typo. The warning names the variable, never its value.
 
 To keep the four secrets out of `.env`, see [Keep secrets in files](setup.md#keep-secrets-in-files).
+
+## The sign-in rate limit
+
+Dinnerbell allows 20 requests a minute to the sign-in pages under `/auth/` from each client address. A sign-in takes two requests, and a sign-out one. Past the limit, the page says "Too many sign-in attempts. Wait a minute and try again."
+
+Dinnerbell knows a client's address only from the connection, or from `X-Forwarded-For` when the connection comes from an address in `DINNERBELL_TRUSTED_PROXIES`. Behind a reverse proxy, every connection comes from the proxy, so without that setting all clients share one count. One client that signs in over and over, or a script that hits `/auth/`, then makes everyone wait up to a minute to sign in.
+
+Under rootless podman, you usually can't set `DINNERBELL_TRUSTED_PROXIES`. Podman forwards each connection to a published port from the container network's gateway, such as `10.89.0.1`, whether it comes from your proxy or from another device that can reach the port. Trusting the gateway would let any device that reaches the port directly write its own `X-Forwarded-For` and choose its count. Leave the setting empty, and accept the shared count.
+
+To see the address that Dinnerbell sees, set `DINNERBELL_LOG_LEVEL=DEBUG` and sign in: each request logs `peer_ip`, the connection's address, and `client_ip`, the address the rate limit counts. You can trust the proxy only when `peer_ip` is an address that nothing but the proxy connects from.
 
 ## Compose settings
 

@@ -9,6 +9,7 @@ After you fix a setting, recreate the service: `podman-compose down && podman-co
 | Symptom | Cause | Fix |
 |---|---|---|
 | Slack says "redirect_uri did not match" after **Sign in** | The app's redirect URL isn't exactly `https://<host>/auth/callback`. | Fix it under **OAuth & Permissions** > **Redirect URLs**, and check `DINNERBELL_BASE_URL`. |
+| Sign-in says "Too many sign-in attempts" | More than 20 requests to the sign-in pages in a minute. Without `DINNERBELL_TRUSTED_PROXIES`, which rootless podman installs usually leave empty, every client behind your proxy counts together. | Wait a minute, and sign in again. See [The sign-in rate limit](configuration.md#the-sign-in-rate-limit). |
 | Sign-in returns to a Pangolin login page or loops | Pangolin authentication is on. | Turn off **Use Platform SSO**, and leave password, PIN, email OTP, and header auth off. |
 | Every form fails with "Cross-origin request refused", or sign-in loops to the start page | `DINNERBELL_BASE_URL` differs from the URL in the browser: another host, a LAN IP, an explicit `:443`, or `http://`. | Set it to exactly the URL people type. Open Dinnerbell only at that URL. |
 | Sign-in works, but Dinnerbell says you aren't invited | The Slack email differs from the invited one, or isn't verified. | Compare the emails on **Admin** > **Members** and in Slack, and fix the member's email or `DINNERBELL_ADMIN_EMAIL`. |
