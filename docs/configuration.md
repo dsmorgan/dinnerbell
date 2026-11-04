@@ -45,7 +45,7 @@ These settings are optional:
 | `DINNERBELL_DATABASE_URL` | `sqlite:////data/dinnerbell.db` | The SQLite database. Keep it under `/data`, the container's only writable volume. Backups go to `backups/` next to the database file. |
 | `DINNERBELL_OIDC_SCOPES` | `openid email profile` | Scopes requested at sign-in. They must include `openid` and `email`. |
 | `DINNERBELL_INSTANCE_LABEL` | None | Marks every page, Slack message, App Home, `/healthz`, and the logs, such as `TEST` on a [test instance](test-instance.md). Up to 16 letters, digits, spaces, or hyphens. Leave it empty in production. |
-| `DINNERBELL_FEATURES` | None | Comma-separated feature flags to turn on. Dinnerbell refuses to start on an unknown name; the list is in `src/dinnerbell/domain/flags.py`. |
+| `DINNERBELL_FEATURES` | None | Comma-separated feature flags to turn on. Dinnerbell refuses to start on an unknown name; the list is in `src/dinnerbell/domain/flags.py`. A flag that a release retired is ignored, with a warning in the log at startup, so remove it from this list when you see one. |
 
 The container image sets `DINNERBELL_BUILD` on builds from `main`. Don't add it to `.env`: even an empty line replaces the image's value.
 
