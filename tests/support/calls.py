@@ -6,6 +6,7 @@ and the 18:30 default meal time is 23:30."""
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from typing import Any
@@ -89,6 +90,15 @@ class House:
     people: dict[str, Member] = field(default_factory=dict)
     items: dict[str, CatalogItem] = field(default_factory=dict)
     tags: dict[str, Tag] = field(default_factory=dict)
+    closers: list[Callable[[], Awaitable[None]]] = field(default_factory=list, repr=False)
+    """What ``close`` awaits, newest first, such as ``SlackConnection.stop`` for each connection
+    ``tests.support.slack.wire`` made."""
+
+    async def close(self) -> None:
+        """Stop what the test started on this household, before its database closes (#93). A
+        fixture that yields the house awaits this after the test."""
+        while self.closers:
+            await self.closers.pop()()
 
     def __getitem__(self, name: str) -> Member:
         return self.people[name]

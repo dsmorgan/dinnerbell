@@ -60,6 +60,7 @@ def connection(
         **({"schema_revision": schema_revision()} | options),
     )
     conn.badge_files.pause = no_pause  # badge art waits and retries without real time passing
+    house.closers.append(conn.stop)  # the socket's connect task and any work left: see House.close
     return conn
 
 
