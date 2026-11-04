@@ -12,7 +12,7 @@ Both instances run from your production clone or bundle, as the same user:
 |---|---|---|
 | Command | `podman-compose ...` | `deploy/dinnerbell-test ...` |
 | Env file | `.env` | `.env.test` |
-| Secret files (optional) | `secrets/`, with `-f compose.yaml -f compose.secrets.yaml` | `secrets-test/`, used when the files are there |
+| Secret files (optional) | `secrets/`, with `-f compose.yaml -f compose.secrets.yaml` on [every command](setup.md#run-compose-with-secret-files) | `secrets-test/`, used when the files are there |
 | Image tag | The release in `compose.yaml` | `main` in a clone, the bundle's release in a bundle, or the release you're rehearsing |
 | Data volume | `dinnerbell_dinnerbell-data` | `dinnerbell-test_dinnerbell-data` |
 | Host port | 8013 | 8014 |
@@ -181,6 +181,8 @@ Use this checklist for every release: it runs the exact release on a fresh copy 
     podman-compose pull
     podman-compose down && podman-compose up -d
     ```
+
+    If production keeps its secrets in files, add `-f compose.yaml -f compose.secrets.yaml` to each command, and `-f compose.override.yaml` after them if you have one. See [Run compose with secret files](setup.md#run-compose-with-secret-files).
 
 11. Check production's footer and `/healthz`.
 12. Stop test: `deploy/dinnerbell-test down`.

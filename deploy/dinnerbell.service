@@ -11,7 +11,7 @@
 # Change nothing here; `systemctl --user edit dinnerbell.service` keeps your changes in a drop-in
 # that survives copying a newer version of this file. The unit must start Dinnerbell exactly as
 # you do, or `up -d` recreates the container differently. For another directory, or for secrets
-# in files:
+# in files (with a compose.override.yaml, add -f compose.override.yaml after the other two):
 #   [Service]
 #   WorkingDirectory=/srv/dinnerbell
 #   ExecStart=

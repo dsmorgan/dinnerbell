@@ -68,10 +68,19 @@ You need:
 
    With Docker: `cd dinnerbell && docker compose pull && docker compose down && docker compose up -d`
 
+   With secrets in files, name the compose files in each command. If you have a `compose.override.yaml`, add `-f compose.override.yaml` after them; see [Run compose with secret files](https://github.com/dsmorgan/dinnerbell/blob/main/docs/setup.md#run-compose-with-secret-files).
+
+   ```sh
+   cd dinnerbell
+   podman-compose -f compose.yaml -f compose.secrets.yaml pull
+   podman-compose -f compose.yaml -f compose.secrets.yaml down
+   podman-compose -f compose.yaml -f compose.secrets.yaml up -d
+   ```
+
 ## Options
 
 - **Other settings:** see the [configuration reference](https://github.com/dsmorgan/dinnerbell/blob/main/docs/configuration.md).
-- **Secrets in files:** to keep the four secrets out of `.env`, see [Keep secrets in files](https://github.com/dsmorgan/dinnerbell/blob/main/docs/setup.md#keep-secrets-in-files).
+- **Secrets in files:** to keep the four secrets out of `.env`, see [Keep secrets in files](https://github.com/dsmorgan/dinnerbell/blob/main/docs/setup.md#keep-secrets-in-files). After that, every compose command needs `-f compose.yaml -f compose.secrets.yaml`, including the upgrade commands.
 - **Start at boot:** with podman, Dinnerbell stays down after a reboot until you start it. The bundle's `deploy/dinnerbell.service` starts it at boot; rootful Docker needs nothing. See [Start at boot](https://github.com/dsmorgan/dinnerbell/blob/main/docs/setup.md#start-at-boot).
 - **Test instance:** run step 5 with `init --test --output /out/.env.test`. It writes the test settings and refuses production's secrets from `.env`. Start test with `deploy/dinnerbell-test up -d`, on port 8014; the bundle's script runs the bundle's version. See [Run a test instance](https://github.com/dsmorgan/dinnerbell/blob/main/docs/test-instance.md).
 - **Switch to a git clone, or from one:** see [Switch between a clone and the bundle](https://github.com/dsmorgan/dinnerbell/blob/main/docs/switch-install.md#switch-between-a-clone-and-the-bundle).
