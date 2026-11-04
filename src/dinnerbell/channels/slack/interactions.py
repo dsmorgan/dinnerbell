@@ -77,6 +77,7 @@ from dinnerbell.channels.slack.views import (
     adjust_opened,
     art_wanted,
     assign_modal,
+    away_modal,
     cancel_modal,
     close_modal,
     details_modal,
@@ -88,6 +89,7 @@ from dinnerbell.channels.slack.views import (
     offer_modal,
     parse_adjust,
     parse_assign,
+    parse_away,
     parse_cancel,
     parse_details,
     parse_feedback,
@@ -98,6 +100,7 @@ from dinnerbell.channels.slack.views import (
     proposal_modal,
 )
 from dinnerbell.config import is_test_instance
+from dinnerbell.domain import labels
 from dinnerbell.domain.catalog import Mode
 from dinnerbell.domain.events import (
     GUESTS_DONT,
@@ -135,6 +138,7 @@ from dinnerbell.domain.offers import OfferPath
 from dinnerbell.logs import member_id_var, start_unit
 from dinnerbell.services import (
     activity,
+    away,
     calls,
     coordinator,
     discard,
@@ -166,6 +170,7 @@ UNKNOWN_USER = (
     "I don't know your Slack account yet. Sign in to Dinnerbell on the web with Slack once, "
     "or ask the admin to link you on the Members page."
 )
+AWAY_ENDED = "Welcome back! Calls ask you again."
 INACTIVE = "Your Dinnerbell account is turned off. Ask the admin if that's a mistake."
 JOIN_FIRST = "You're not in Dinnerbell yet. Open the Dinnerbell app's Home tab to join, or ask the admin."
 """What the commands that only link or describe the app (help, prefs, catalog, history, version)
@@ -419,6 +424,9 @@ class Interactions:
         async def adjust_view(ack: Ack, body: dict[str, Any]) -> None:
             await self._submission(ack, body, "adjust")
 
+        async def away_view(ack: Ack, body: dict[str, Any]) -> None:
+            await self._submission(ack, body, "away")
+
         async def offer_view(ack: Ack, body: dict[str, Any]) -> None:
             await self._form_submission(ack, body, "offer")
 
@@ -442,6 +450,7 @@ class Interactions:
         app.view(ids.INVITE_VIEW)(invite_view)
         app.view(ids.ASSIGN_VIEW)(assign_view)
         app.view(ids.ADJUST_VIEW)(adjust_view)
+        app.view(ids.AWAY_VIEW)(away_view)
         app.view(ids.OFFER_VIEW)(offer_view)
         app.view(ids.LOG_VIEW)(log_view)
         app.command(self.command)(command)
@@ -889,6 +898,8 @@ class Interactions:
             return await self._guest_tap(member, source, action_id, value, tap)
         if action_id == ids.INVITE_GUEST:
             return await self._open_invite(member, source, value, trigger)
+        if action_id == ids.AWAY:
+            return await self._open_away(member, source, value, trigger)
         if action_id in {ids.MAKE_MEMBER, ids.REMOVE_GUEST}:
             return await self._admin_guest(member, action_id, value)
         if action_id in ids.CARD_ACTIONS:
@@ -1066,6 +1077,8 @@ class Interactions:
             can_invite=view.can.invite,
             guests=mine,
             not_for_you=view.not_for_me,
+            away_line=view.away_line,
+            away_end=view.away_end,
         )
 
     @contextlib.asynccontextmanager
@@ -1226,6 +1239,8 @@ class Interactions:
             await calls.offer_role(db, member, event_id, ids.CARD_OFFER[action_id], True, run=run, now=now)
         elif action_id in ids.CARD_WITHDRAW:
             await calls.offer_role(db, member, event_id, ids.CARD_WITHDRAW[action_id], False, run=run, now=now)
+        elif action_id == ids.AWAY_BACK:  # about the member, not the call, so any run will do (FR-63)
+            await away.back_on_call(db, member, event_id, now=now)
         else:
             await calls.claim_coordinator(db, member, event_id, run=run, now=now)
 
@@ -1563,6 +1578,32 @@ class Interactions:
 
         self._spawn(once())
 
+    # Away until… (FR-63) ----------------------------------------------------------------------
+
+    async def _open_away(self, member: Member, source: Source, value: object, trigger: object) -> str | None:
+        """**Away until…** on the call message, a card, a reminder, or Home: the modal for the day
+        they're back, naming the call and run it was drawn for. Their window starts on that
+        call's day, whatever its state now."""
+        event_id, run = ids.parse_card(value)
+        if not isinstance(trigger, str) or not trigger:
+            raise ids.BadValue("no trigger")
+        async with self.sessionmaker() as db:
+            view = await event_views.event_view(db, member, event_id, now=self.clock())
+        if view.event.is_offer:
+            raise ids.BadValue("Away until is drawn only on calls")
+        origin = ids.ViewOrigin(event_id, source.channel_id, home=source.home, run=run)
+        await self.api.open_view(trigger, away_modal(view, origin))
+        return None
+
+    async def _away(self, member: Member, event_id: int, back: date) -> str:
+        async with self.sessionmaker() as db:
+            updated = await away.away_until(db, member, event_id, back, now=self.clock())
+            today = await slack_members.today(db, member, now=self.clock())
+        window = updated.away_now(today)
+        if window is None:  # pragma: no cover - just set, and its last day hasn't passed
+            return AWAY_ENDED
+        return f"{labels.away_status(window, today)}. {labels.AWAY_HINT}"
+
     # Guests (#38) ------------------------------------------------------------------------------
 
     async def _open_invite(self, member: Member, source: Source, value: object, trigger: object) -> str | None:
@@ -1673,7 +1714,7 @@ class Interactions:
             origin = ids.ViewOrigin.decode(view.get("private_metadata"))
             if (origin.window is not None) != (kind == "close"):
                 raise ids.BadValue("bad metadata")  # only Close now's confirmation names a window
-            if origin.run is None and kind in {"cancel", "close", "feedback", "assign", "adjust"}:
+            if origin.run is None and kind in {"cancel", "close", "feedback", "assign", "adjust", "away"}:
                 raise ids.BadValue("bad metadata")  # these name a run; Details and a join-late pick may
             if (origin.opened is not None) != (kind == "adjust"):
                 raise ids.BadValue("bad metadata")  # only Adjust says what it opened with
@@ -1713,6 +1754,8 @@ class Interactions:
                 return await self._assign(member, event_id, form, origin.run)
             if kind == "adjust":
                 return await self._adjust(member, origin, form)
+            if kind == "away":
+                return await self._away(member, event_id, form)
             async with self.sessionmaker() as db:
                 if kind == "details":
                     await calls.save_details(db, member, event_id, form, run=origin.run, now=self.clock())
@@ -2031,6 +2074,7 @@ FORMS: dict[str, Callable[[Any], Any]] = {
     "invite": parse_invite,
     "assign": parse_assign,
     "adjust": parse_adjust,
+    "away": parse_away,
 }
 """Each modal's form parser, by kind. Close now's confirmation has no fields."""
 
@@ -2198,6 +2242,8 @@ def home_done(action_id: str, slot: str) -> str:
         return OFFERED[ids.CARD_OFFER[action_id]]
     if action_id in ids.CARD_WITHDRAW:
         return WITHDRAWN[ids.CARD_WITHDRAW[action_id]]
+    if action_id == ids.AWAY_BACK:
+        return AWAY_ENDED
     return CONFIRM[ids.COORDINATE].format(slot=slot)
 
 

@@ -10,15 +10,17 @@ from __future__ import annotations
 import functools
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
+from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dinnerbell.db.events import EventRepository
 from dinnerbell.db.repositories import HouseholdRepository
 from dinnerbell.domain import events as rules
+from dinnerbell.domain import labels, offers
 from dinnerbell.domain import notifications as note
-from dinnerbell.domain import offers
+from dinnerbell.domain.away import Away
 from dinnerbell.domain.catalog import CatalogItem, Mode, Tag, TagKind, for_meal_first, meal_hint
 from dinnerbell.domain.events import (
     LEAD_ROLE,
@@ -196,6 +198,12 @@ class EventView:
     """Shuffles a call has left (FR-61); 0 when none would change anything."""
     roles: RolesChoice | None = None
     """What **Assign roles** offers, for someone who may use it."""
+    away: Away | None = None
+    """The viewer's away window, while it's upcoming or under way (FR-63)."""
+    away_line: str | None = None
+    """Its status line, such as "Away until Wed, Nov 12" (``labels.away_status``)."""
+    away_end: str | None = None
+    """The button that ends it: **I'm back**, or **Clear** before it starts."""
 
     @property
     def late_vote_counts(self) -> bool:
@@ -205,6 +213,11 @@ class EventView:
     @property
     def id(self) -> int:
         return self.event.id
+
+    @property
+    def first_back_day(self) -> date:
+        """The earliest day **Away until…** can name: the day after the call's (FR-63)."""
+        return self.event.day + timedelta(days=1)
 
     @property
     def work_roles(self) -> tuple[AssignmentRole, ...]:
@@ -464,7 +477,16 @@ def view(ctx: CallContext, actor: Member, today: date, now: datetime, *, any_tim
         late=cc.late_joiners(ctx),
         shuffles_left=cc.shuffles_left(ctx),
         roles=_roles_choice(ctx) if ctx.event.state is EventState.DECIDED else None,
+        # The viewer as the call read them, so a window they just set or ended shows (FR-63).
+        **_away(ctx.members.get(actor.id, actor), today),
     )
+
+
+def _away(viewer: Member, today: date) -> dict[str, Any]:
+    away = viewer.away_now(today)
+    if away is None:
+        return {}
+    return {"away": away, "away_line": labels.away_status(away, today), "away_end": labels.away_end(away, today)}
 
 
 async def today_for(db: AsyncSession, actor: Member, *, now: datetime) -> date:

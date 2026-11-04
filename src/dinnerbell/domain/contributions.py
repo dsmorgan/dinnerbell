@@ -188,8 +188,10 @@ def _gambled(facts: DoneFacts, response: Response) -> bool:
 
 def _on_time(event: Event, response: Response) -> bool:
     """Answered a call within ``ON_TIME`` of its opening, with any answer. An offer has no
-    opening, and a late joiner missed the answers."""
+    opening, a late joiner missed the answers, and an away answer (#196) wasn't theirs."""
     if event.kind is not EventKind.CALL or response.late or response.responded_at is None:
+        return False
+    if response.away_until is not None:
         return False
     # A re-run moves the opening to now and keeps the old answers; they were not quick to this opening.
     return _within(event.opens_at, response.responded_at)

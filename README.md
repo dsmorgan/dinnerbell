@@ -41,7 +41,7 @@ flowchart TB
 ```
 
 1. **Dinnerbell asks.** At 3:00 PM, it posts in your family's Slack channel: who's eating tonight?
-2. **Everyone answers.** Tap **In**, **Maybe**, or **Out**, and say whether you can cook, pick up, or order. Dinnerbell reminds anyone who forgets.
+2. **Everyone answers.** Tap **In**, **Maybe**, or **Out**, and say whether you can cook, pick up, or order. Dinnerbell reminds anyone who forgets. Going away? Tap **Away until…**, and calls until you're back answer you Out.
 3. **Dinnerbell suggests three meals** from your family's list. It skips anything someone eating can't or won't eat, favors what people like, and mixes things up from day to day.
 4. **Everyone votes, and dinner is set.** Dinnerbell posts the plan and messages whoever is cooking, picking up, or ordering.
 5. **After dinner,** someone taps **Mark done**, or Dinnerbell does it two hours later. Rate the meal if you like, and new badges are announced.

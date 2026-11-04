@@ -581,7 +581,7 @@ async def test_home_shows_call_it_off_and_close_now_only_to_who_can(slack: Slack
     for who in ("Alex", "Sam", "Kim"):
         await slack.open_home(who)
     # Sam coordinates, so nobody is offered I'll coordinate (#84).
-    common = ["card_in", "card_maybe", "card_out", "card_offer_cook", "card_offer_pickup", "card_offer_order"]
+    common = ["card_in", "card_maybe", "card_out", "away", "card_offer_cook", "card_offer_pickup", "card_offer_order"]
     common += ["card_details", "invite_guest"]
     starts = ["make_offer", "start_call_lunch", "start_call_breakfast"]
     assert home_actions(slack, "Kim") == [*common, "link_event", *starts]

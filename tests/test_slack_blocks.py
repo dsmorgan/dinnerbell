@@ -152,9 +152,13 @@ def test_buttons_follow_the_state() -> None:
         payload = samples.preview(kind)
         return [e["action_id"] for b in payload["blocks"] if b["type"] == "actions" for e in b["elements"]]
 
-    # While responses are open, the call offers only Answer; the choices are on each card (#52).
-    assert action_ids("call_updated") == ["answer", "link_event", "call_menu"]
-    assert action_ids("call_opened") == ["answer", "link_event", "call_menu"]
+    # While responses are open, the call offers only Answer, and Away until… for whoever taps it
+    # (FR-63); the choices are on each card (#52).
+    assert action_ids("call_updated") == ["answer", "away", "link_event", "call_menu"]
+    assert action_ids("call_opened") == ["answer", "away", "link_event", "call_menu"]
+    # A member with a window gets I'm back in its place, wherever their answers are (FR-63).
+    assert "away_back" in action_ids("your_answer_away") and "away" not in action_ids("your_answer_away")
+    assert "away_back" in action_ids("home_away")
     # While voting, anyone who missed the answers can join late (#76).
     assert action_ids("call_updated_voting") == ["join_late", "link_event", "call_menu"]  # Alex coordinates already
     assert action_ids("call_updated_voting_no_coordinator") == [
@@ -467,8 +471,8 @@ def test_home_and_the_card_offer_the_same_answer_actions(
     assert mine_too == [e for e in card_rows["more"] if "url" not in e]
     on_home = [*home_rows["answer-7"], *home_rows["roles-7"], *mine_too]
     ids_shown = [e["action_id"] for e in on_home]
-    answers = ["card_in", "card_out"] if guest else ["card_in", "card_maybe", "card_out"]
-    assert ids_shown[: len(answers)] == answers  # first, then the roles
+    answers = ["card_in", "card_out"] if guest else ["card_in", "card_maybe", "card_out", "away"]
+    assert ids_shown[: len(answers)] == answers  # first, with Away until… for a member (FR-63), then the roles
     assert ids_shown[len(answers)] == ("card_withdraw_cook" if mine else "card_offer_cook")
     assert ("card_coordinate" in ids_shown) is (coordinator is None)
     assert ("card_details" in ids_shown) is ("invite_guest" in ids_shown) is (not guest)

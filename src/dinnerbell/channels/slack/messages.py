@@ -251,6 +251,12 @@ def answer_button(event: note.EventInfo) -> Block:
     )
 
 
+def away_button(event: note.EventInfo) -> Block:
+    """**Away until…** (FR-63): opens the modal for the day the tapper is back, for the run it
+    was drawn for. Away from this call's day until then."""
+    return button(labels.AWAY_UNTIL, ids.AWAY, ids.card_value(event.id, event.run))
+
+
 def call_menu(event: note.EventInfo) -> list[Block]:
     """The ⋯ menu for a posted call that's still open: **Call it off**, and Close now while a
     window is open. Everyone sees the same message, so the menu lists what the call's state
@@ -320,6 +326,12 @@ def _entry_line(entry: note.RosterEntry, ctx: RenderContext) -> str:
     return line
 
 
+def _named(entry: note.RosterEntry, ctx: RenderContext) -> str:
+    """A maybe or an out on the roster, with "(away until Nov 12)" when their window answered (FR-63)."""
+    who = ctx.directory.mention(entry.member)
+    return f"{who} ({labels.away_marker(entry.away_until)})" if entry.away_until is not None else who
+
+
 def _roster(
     event: note.EventInfo,
     roster: tuple[note.RosterEntry, ...],
@@ -336,7 +348,7 @@ def _roster(
         lines += [_entry_line(e, ctx) for e in by_status[Status.IN]]
     for status, label in ((Status.MAYBE, "Maybe"), (Status.OUT, "Out")):
         if by_status[status]:
-            lines.append(f"*{label}:* {ctx.directory.mentions(e.member for e in by_status[status])}")
+            lines.append(f"*{label}:* " + ", ".join(_named(e, ctx) for e in by_status[status]))
     if taken_off:
         lines.append(f"*Joined late, not taking part:* {ctx.directory.mentions(e.member for e in taken_off)}")
     if not roster:
@@ -424,6 +436,7 @@ def call_message(
         # Everyone sees this message, so it offers no choices, only the way to your own card,
         # where In, Maybe, Out, the offers, I'll coordinate, and Details are (issue #52).
         more.append(answer_button(event))
+        more.append(away_button(event))  # for whoever taps it, as Answer is (FR-63)
     if event.state is EventState.CANCELLED:
         more.append(restart_button(event))
     more.append(_web_button(ctx, event))
@@ -988,14 +1001,18 @@ def _offers(mine: Response) -> list[RoleOffer]:
     return [role for role in RoleOffer if role in mine.offers]
 
 
-def _mine_lines(event: note.EventInfo, mine: Response | None, member_id: int) -> list[str]:
-    """The member's own answer, offers, and coordinating, for their eyes only. Mentions would
-    look the same as names here, so names are plain."""
+def _mine_lines(
+    event: note.EventInfo, mine: Response | None, member_id: int, away_line: str | None = None
+) -> list[str]:
+    """The member's own answer, offers, and coordinating, for their eyes only, and their away
+    status line (FR-63). Mentions would look the same as names here, so names are plain."""
     lines: list[str] = []
     if mine is not None and mine.late:
         lines.append(_late_answer_line(mine))
     elif mine is not None:
         line = f"Your answer: *{ANSWER_WORDS[mine.status]}*"
+        if mine.away_until is not None and away_line is None:  # the status line says it otherwise
+            line += f" · {labels.away_marker(mine.away_until)}"
         if mine.guests and mine.status is not Status.OUT:
             line += f" · +{plural(mine.guests, 'guest')}"
         if mine.offers:
@@ -1006,6 +1023,8 @@ def _mine_lines(event: note.EventInfo, mine: Response | None, member_id: int) ->
     coordinating = coordinator_line(event, member_id)
     if coordinating is not None:
         lines.append(coordinating)
+    if away_line is not None:
+        lines.append(f"_{escape(away_line)}_")
     return lines
 
 
@@ -1044,6 +1063,8 @@ def your_answer_text(event: note.EventInfo, mine: Response | None, *, run: int |
     if mine is None:
         return f"{_title(event)}: you haven't answered yet"
     summary = ANSWER_WORDS[mine.status] + (" (joined late)" if mine.late else "")
+    if mine.away_until is not None:
+        summary += f" ({labels.away_marker(mine.away_until)})"
     if mine.guests and mine.status is not Status.OUT:
         summary += f" with {plural(mine.guests, 'guest')}"
     if mine.offers:
@@ -1104,6 +1125,8 @@ def your_answer(
     can_invite: bool = False,
     guests: tuple[CardGuest, ...] = (),
     not_for_you: tuple[str, ...] = (),
+    away_line: str | None = None,
+    away_end: str | None = None,
 ) -> Message:
     """The Your answer card: an ephemeral only ``member_id`` sees, with their answer and offers
     marked on the same buttons the call has (spec section 10). ``event`` is the call as it is now
@@ -1111,7 +1134,8 @@ def your_answer(
     replaces it, so ``run`` is the run the tapped card named, or None after a channel tap.
     ``notice`` is why a tap changed nothing, such as someone else coordinating already.
     ``not_for_you`` names the picks that miss a late joiner's own stances or needs (#76): only
-    they see it (FR-29)."""
+    they see it (FR-29). ``away_line`` and ``away_end`` are the member's away window's status
+    line and the button that ends it, while they have one (FR-63)."""
     title = f"*{_title(event)}*"
     if run is not None and run != event.run:
         # Another run's answers aren't what this card was about; don't mix them in.
@@ -1126,7 +1150,7 @@ def your_answer(
     if not live:
         status = escape(_call_status(event, picks="posted in the channel"))
         lines.append(f"*{MOVED_ON}* {status}" if moved_on else status)
-    lines += _mine_lines(event, mine, member_id)
+    lines += _mine_lines(event, mine, member_id, away_line)
     if not_for_you and late_answer(event, mine):
         lines.append(not_for_you_line(not_for_you))
     blocks: list[Block] = [section(join_lines(lines))]
@@ -1146,7 +1170,7 @@ def your_answer(
     closes = local_clock(event.respond_deadline, event.timezone)
     that_day = " that day" if event.early else ""
     blocks.append(context(f"Only you can see this. Tap to change your answer until *{closes}*{that_day}."))
-    answer = answer_actions(event, mine, guest=guest, can_invite=can_invite)
+    answer = answer_actions(event, mine, guest=guest, can_invite=can_invite, away_end=away_end)
     blocks.append(actions(*answer.participation, block_id="participation"))
     blocks.append(actions(*answer.roles, block_id="roles"))
     blocks += _guest_rows(event, guests)
@@ -1161,7 +1185,8 @@ class AnswerActions:
     five buttons into "+ N more", so no row here has more than four."""
 
     participation: list[Block]
-    """**In**, **Maybe**, and **Out**; a guest's are **In** and **Out** (#38)."""
+    """**In**, **Maybe**, and **Out**, then **Away until…**, or what ends the member's window
+    while they have one (FR-63); a guest's are **In** and **Out** (#38)."""
     roles: list[Block]
     """The role offers, each saying which way it goes, and **I'll coordinate** while nobody is."""
     more: list[Block]
@@ -1175,11 +1200,17 @@ class AnswerActions:
 
 
 def answer_actions(
-    event: note.EventInfo, mine: Response | None, *, guest: bool = False, can_invite: bool = False
+    event: note.EventInfo,
+    mine: Response | None,
+    *,
+    guest: bool = False,
+    can_invite: bool = False,
+    away_end: str | None = None,
 ) -> AnswerActions:
     """The answer buttons for ``event`` as it is now, drawn for its run (``ids.card_value``), with
     ``mine`` selected. The Your answer card and App Home both draw them here, so the two offer
-    the same actions with the same IDs and can't drift apart (#84)."""
+    the same actions with the same IDs and can't drift apart (#84). ``away_end`` is the label of
+    the button that ends the member's away window, while they have one (FR-63)."""
     value = ids.card_value(event.id, event.run)
     roles: list[Block] = []
     for role in RoleOffer:
@@ -1193,7 +1224,11 @@ def answer_actions(
         more.append(button(labels.DETAILS, ids.CARD_DETAILS, value))
     if can_invite:
         more.append(button("Invite a guest", ids.INVITE_GUEST, value))
-    return AnswerActions(_answer_buttons(value, mine, guest=guest), roles, more)
+    participation = _answer_buttons(value, mine, guest=guest)
+    if not guest:  # a guest has no away window (#38)
+        away = button(away_end, ids.AWAY_BACK, value) if away_end else button(labels.AWAY_UNTIL, ids.AWAY, value)
+        participation.append(away)
+    return AnswerActions(participation, roles, more)
 
 
 def maybe_resolved_message(notification: note.MaybeResolved, ctx: RenderContext) -> Message:

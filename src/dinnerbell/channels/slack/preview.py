@@ -30,6 +30,7 @@ from dinnerbell.channels.slack.views import (
     adjust_modal,
     adjust_opened,
     assign_modal,
+    away_modal,
     cancel_modal,
     close_modal,
     details_modal,
@@ -40,7 +41,9 @@ from dinnerbell.channels.slack.views import (
     offer_modal,
     proposal_modal,
 )
+from dinnerbell.domain import labels
 from dinnerbell.domain import notifications as note
+from dinnerbell.domain.away import Away
 from dinnerbell.domain.badges import (
     BADGES,
     BY_KEY,
@@ -131,6 +134,8 @@ ROSTER = (
     ),
     note.RosterEntry(KIM, Status.MAYBE),
 )
+AWAY_ENTRY = note.RosterEntry(LEE, Status.OUT, away_until=date(2026, 10, 27))
+"""Lee is away until Tuesday (FR-63), so the call answered them Out."""
 PROPOSALS = (
     note.ProposalInfo(
         21,
@@ -455,6 +460,7 @@ NOTIFICATIONS: dict[str, Callable[[], note.Notification]] = {
         CANCELLED, PAT, (AssignmentRole.PICKUP,), DECISION, cancelled_by=ALEX, note=REASON, via=KIM
     ),
     "call_updated_voting_late": lambda: note.CallUpdated(VOTING, LATE_ROSTER, (), head_count=4),
+    "call_updated_away": lambda: note.CallUpdated(event(), (*ROSTER, AWAY_ENTRY), (), head_count=3),
     "proposals_updated_late": lambda: note.ProposalsUpdated(VOTING, LATE_PROPOSALS, 4, LATE_JOINERS, (ALEX, SAM, KIM)),
     "proposals_updated_late_closed": lambda: note.ProposalsUpdated(
         DECIDED, LATE_PROPOSALS, 4, LATE_JOINERS[1:], (ALEX, SAM, KIM)
@@ -614,6 +620,15 @@ BREAKFAST_CALLED_OFF = replace(
     info=replace(CALLED_OFF_VIEW.info, id=9, slot=Slot.BREAKFAST, path="/events/9"),
 )
 """Today's breakfast, called off, which anyone may start again (#58)."""
+AWAY = Away(DAY, date(2026, 10, 26))
+AWAY_VIEW = replace(
+    COLLECTING_VIEW,
+    mine=Response(SAM.id, Status.OUT, away_until=AWAY.back),
+    away=AWAY,
+    away_line=labels.away_status(AWAY, DAY),
+    away_end=labels.away_end(AWAY, DAY),
+)
+"""Sam is away from today through Monday (FR-63): Home says so, with **I'm back**."""
 ORIGIN = ids.ViewOrigin(7, "C0DINNER")
 CALL_OFF_ORIGIN = replace(ORIGIN, run=1)
 """Call it off and Close now name the run they were opened for, as ``Interactions`` writes them."""
@@ -746,6 +761,8 @@ VIEWS: dict[str, Callable[[], dict[str, Any]]] = {
         NOBODY_IN_VIEW, replace(CALL_OFF_ORIGIN, opened=adjust_opened(NOBODY_IN_VIEW))
     ),
     "cancel_modal": lambda: cancel_modal(COLLECTING_VIEW, CALL_OFF_ORIGIN),
+    "away_modal": lambda: away_modal(COLLECTING_VIEW, CALL_OFF_ORIGIN),
+    "home_away": lambda: home_view(TodayView(DAY, [AWAY_VIEW], tuple(Slot)), HomeLinks(BASE_URL)),
     "cancel_modal_decided": lambda: cancel_modal(DECIDED_VIEW, replace(CALL_OFF_ORIGIN, home=True)),
     "close_modal": lambda: close_modal(COLLECTING_VIEW, replace(CALL_OFF_ORIGIN, window=Window.RESPOND)),
     "close_modal_vote": lambda: close_modal(VOTING_VIEW, replace(CALL_OFF_ORIGIN, window=Window.VOTE)),
@@ -880,6 +897,15 @@ CARDS: dict[str, CardSample] = {
     "your_answer_late_counts": _card(event(EventState.VOTING), replace(KIM_LATE, vote_counts=True)),
     "your_answer_taken_off": _card(VOTING, replace(KIM_LATE, status=Status.OUT), run=1),
     "your_answer_started_again": _card(replace(event(), run=2), KIM_IN, run=1),
+    "your_answer_away": lambda ctx: your_answer(
+        event(),
+        Response(KIM.id, Status.OUT, away_until=date(2026, 10, 27)),
+        KIM.id,
+        ctx,
+        run=1,
+        away_line=labels.away_status(AWAY, DAY),
+        away_end=labels.away_end(AWAY, DAY),
+    ).payload(),
     "response_reminder_answered": _reminder(event(), replace(KIM_IN, status=Status.MAYBE), run=1),
     "response_reminder_moved_on": _reminder(VOTING, KIM_IN, run=1),
     "response_reminder_started_again": _reminder(replace(event(), run=2), KIM_IN, run=1),

@@ -104,6 +104,22 @@
     {% if v.can.claim %}{{ act(e.id, base ~ "/coordinate", labels.COORDINATE, "button small choice") }}{% endif %}
   </div>
   {% if not as_guest %}
+  {#- Away (FR-63): the status line and what ends it, or Away until… for the day they're back. -#}
+  {% if v.away %}
+  <div class="away-status small" id="event-{{ e.id }}-away">
+    <span>{{ v.away_line }}</span> · {{ act(e.id, base ~ "/back", v.away_end, "button small") }}
+  </div>
+  {% else %}
+  <details class="details-form away-form">
+    <summary class="small">{{ labels.AWAY_UNTIL }}</summary>
+    <form method="post" autocomplete="off" action="{{ base }}/away" hx-post="{{ base }}/away" {{ swap|safe }} class="stack">
+      {{ hidden() }}
+      <p class="small muted">Away from {{ e.day|day }} until the day you're back. {{ labels.AWAY_HINT }}</p>
+      <label class="field"><span>{{ labels.AWAY_BACK_DAY }}</span><input type="date" name="back" min="{{ v.first_back_day.isoformat() }}" value="{{ v.first_back_day.isoformat() }}" required></label>
+      <button type="submit" class="button primary">Save</button>
+    </form>
+  </details>
+  {% endif %}
   <details class="details-form">
     <summary class="small">{{ labels.DETAILS }}</summary>
     <form method="post" autocomplete="off" action="{{ base }}/details" hx-post="{{ base }}/details" {{ swap|safe }} class="stack">
@@ -168,6 +184,7 @@
     <li class="status-{{ r.status.value }}">
       <strong>{{ r.member.name }}</strong>
       <span class="chip status">{{ r.status.value|capitalize }}</span>
+      {% if r.away_until %}<span class="chip away">{{ labels.away_marker(r.away_until, capital=True) }}</span>{% endif %}
       {% if r.late %}<span class="chip late">Joined late{% if r.status.value == "out" %}, not taking part{% elif r.vote_counts %}, vote counts{% endif %}</span>{% endif %}
       {% if r.guests %}<span class="chip">+{{ r.guests }} guest{{ "" if r.guests == 1 else "s" }}{% if r.guest_needs %}: {{ r.guest_needs|join(", ") }}{% endif %}</span>{% endif %}
       {% for o in r.offers %}<span class="chip offer">{{ labels.OFFERED_LABELS[o] }}</span>{% endfor %}

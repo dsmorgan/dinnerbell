@@ -390,6 +390,7 @@ async def test_home_shows_todays_calls_and_quick_buttons(slack: Slack, house: Ho
         "card_in",
         "card_maybe",
         "card_out",
+        "away",
         "card_offer_cook",
         "card_offer_pickup",
         "card_offer_order",

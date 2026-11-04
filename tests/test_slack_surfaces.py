@@ -57,7 +57,7 @@ def _rendered(kind: str) -> dict[str, Any]:
 def test_the_reminder_has_the_cards_rows_and_says_how_to_stop_reminders() -> None:
     blocks = _rendered("response_reminder")["blocks"]
     rows = {b["block_id"]: [e["action_id"] for e in b["elements"]] for b in blocks if b["type"] == "actions"}
-    assert rows["participation"] == ["card_in", "card_maybe", "card_out"]  # a row of their own (Q4)
+    assert rows["participation"] == ["card_in", "card_maybe", "card_out", "away"]  # a row of their own (Q4, FR-63)
     assert rows["roles"][:3] == ["card_offer_cook", "card_offer_pickup", "card_offer_order"]  # Q6
     assert rows["more"] == ["link_event"]
     assert "/preferences|your preferences>" in _text(blocks)  # gap 10

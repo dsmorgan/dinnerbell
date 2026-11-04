@@ -83,7 +83,7 @@ from dinnerbell.domain.schedule import (
     temperature,
     weights,
 )
-from dinnerbell.services import activity, contributions, feedback
+from dinnerbell.services import activity, away, contributions, feedback
 from dinnerbell.services import call_context as cc
 from dinnerbell.services.call_context import CallContext, load, locked_event, publish
 from dinnerbell.services.common import audit, is_unique_violation
@@ -189,6 +189,7 @@ async def open_call(db: AsyncSession, event: Event, now: datetime, *, actor: Mem
     early = event.opens_at if now < event.opens_at else None
     opened = replace(event, state=transition(event.state, EventState.COLLECTING), opens_at=min(event.opens_at, now))
     event = await EventRepository(db).save(opened, now)
+    await away.apply_to_call(db, event, now)  # members away that day are out (FR-63)
     ctx = await load(db, event)
     await publish(db, ctx, cc.call_opened(ctx), *cc.guest_invitations(ctx), now=now)
     payload = {
@@ -314,6 +315,7 @@ async def reopen(
     )
     fresh = await EventRepository(db).save(fresh, now)
     if not scheduled:  # a scheduled call is posted when the tick opens it
+        await away.apply_to_call(db, fresh, now)  # away outs count in this run too (FR-63)
         opened = await load(db, fresh)
         await publish(db, opened, cc.call_opened(opened), *cc.guest_invitations(opened), now=now)
     return fresh
