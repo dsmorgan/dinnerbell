@@ -273,6 +273,8 @@ class SlackConnection:
         self.interactions.register(self.app)
         self._task: asyncio.Task[None] | None = None
         self._prewarm_task: asyncio.Task[None] | None = None
+        self._stopping = False
+        """Set by ``stop``: no prewarm starts after it, even from a ``forget`` during its settle."""
         self.sleep: Callable[[float], Awaitable[None]] = asyncio.sleep
         """Waits for the badge art prewarm; tests pass one that doesn't."""
         state.configured = True
@@ -295,7 +297,10 @@ class SlackConnection:
     def _prewarm_again(self, household_id: int) -> None:
         """After Slack refused files and ``BadgeFiles.forget`` dropped them, upload them again in the
         background, so the next post finds them settled. One prewarm runs at a time: while one still
-        runs, this does nothing, and the next post uploads what that run had already passed."""
+        runs, this does nothing, and the next post uploads what that run had already passed. Once
+        ``stop`` has begun, it does nothing either: a task started then would outlive the shutdown."""
+        if self._stopping:
+            return
         if self._prewarm_task is None or self._prewarm_task.done():
             self._prewarm_task = asyncio.get_running_loop().create_task(self._prewarm(household_id))
 
@@ -330,6 +335,7 @@ class SlackConnection:
         def left(most: float) -> float:
             return max(0.0, min(most, end - loop.time()))
 
+        self._stopping = True
         for task in (self._task, self._connect_task, self._prewarm_task):
             if task is not None:
                 task.cancel()
