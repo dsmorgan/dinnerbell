@@ -800,6 +800,36 @@ async def test_a_forget_during_a_prewarm_starts_no_second_one(house: House, monk
     await conn.stop()
 
 
+async def test_a_forget_after_stop_starts_no_prewarm(house: House, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A task started once ``stop`` began would outlive the shutdown and run against a closing
+    database (#193)."""
+    from tests.support.fake_slack import FakeSlack
+
+    conn = await started_with_prewarm(house, FakeSlack(), monkeypatch)
+    finished = conn._prewarm_task
+    await conn.stop()
+    await conn.badge_files.forget(house.household.id, ["F-anything"])
+    assert conn._prewarm_task is finished and finished is not None and finished.done()
+
+
+async def test_a_forget_while_stop_settles_starts_no_prewarm(house: House, monkeypatch: pytest.MonkeyPatch) -> None:
+    """``stop`` waits for work already started, such as a Home view whose picture Slack refuses.
+    That work's ``forget`` comes after the prewarm task was cancelled, so it must not start another."""
+    from tests.support.fake_slack import FakeSlack
+
+    conn = await started_with_prewarm(house, FakeSlack(), monkeypatch)
+    finished = conn._prewarm_task
+    real_settle = conn.interactions.settle
+
+    async def settle_with_a_forget(limit: float = 1.0) -> None:
+        await conn.badge_files.forget(house.household.id, ["F-anything"])
+        await real_settle(limit)
+
+    monkeypatch.setattr(conn.interactions, "settle", settle_with_a_forget)
+    await conn.stop()
+    assert conn._prewarm_task is finished
+
+
 async def test_a_connection_that_never_prewarms_does_not_prewarm_after_a_forget(house: House) -> None:
     from tests.support.fake_slack import FakeSlack
 
