@@ -399,6 +399,31 @@ def test_a_guest_never_sees_votes_or_admin_controls(
     assert rows(migrated, VoteRow) == []
 
 
+def test_a_guest_coordinator_moves_the_decision_time_on_the_web(
+    admin: TestClient, provider: FakeProvider, clock: FakeClock, migrated: Settings
+) -> None:
+    """Coordinating's logistics include the decision time while voting (#198, FR-58)."""
+    from datetime import timedelta
+
+    event_id = start(admin)
+    pat = add_guest(admin, "Pat", slack="U07PAT")
+    submit(admin, f"/events/{event_id}/guests", {"guest_id": str(pat), "run": "1"})
+    submit(admin, f"/events/{event_id}/respond", {"status": "in"})
+    submit(admin, f"/events/{event_id}/offer", {"role": "pickup", "offered": "1"})
+    guest = as_guest(admin, provider)
+    submit(guest, f"/events/{event_id}/respond", {"status": "in"})
+    assert submit(guest, f"/events/{event_id}/coordinate", {}).status_code == 303
+    clock.advance(timedelta(minutes=90))
+    tick(guest, clock)
+    (before,) = [e.vote_deadline for e in rows(migrated, EventRow)]
+    html = page(guest.get(f"/events/{event_id}"))
+    assert "Move the decision time" in html and f'action="/events/{event_id}/admin/deadline"' not in html
+    assert submit(guest, f"/events/{event_id}/decision-time", {"shift": "plus15", "run": "1"}).status_code == 303
+    assert [e.vote_deadline for e in rows(migrated, EventRow)] == [before + timedelta(minutes=15)]
+    (audit,) = [a for a in rows(migrated, AuditRow) if a.action == "event.deadline_moved"]
+    assert audit.payload["as"] == "coordinator"
+
+
 def test_the_admin_links_a_guest_to_a_member_on_the_web(admin: TestClient, migrated: Settings) -> None:
     """Pat's Slack email isn't Kim's, so the page shows both and links only after the admin
     types Kim's name. Admins are never offered."""

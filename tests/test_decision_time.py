@@ -13,6 +13,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from dinnerbell.channels.slack import ids
+from dinnerbell.channels.slack.blocks import day_label
 from dinnerbell.channels.slack.interactions import CLOSED, MOVED
 from dinnerbell.channels.slack.views import FormError, parse_decision_time
 from dinnerbell.config import Settings
@@ -34,10 +35,10 @@ from dinnerbell.domain.events import (
 )
 from dinnerbell.domain.guests import GuestAction, check_guest
 from dinnerbell.domain.members import Role
-from dinnerbell.services import calls, coordinator, event_views, guests
+from dinnerbell.services import call_admin, calls, coordinator, event_views, guests
 from dinnerbell.services.database import Database, open_database
 from tests.conftest import invite, page
-from tests.support.calls import RESPOND_BY, VOTE_BY, House, furnish, make_house
+from tests.support.calls import OPENS, RESPOND_BY, VOTE_BY, House, furnish, make_house
 from tests.support.clock import FakeClock
 from tests.support.fake_oidc import FakeProvider
 from tests.support.fake_slack import CHANNEL, state
@@ -45,9 +46,11 @@ from tests.support.slack import Slack, wire
 from tests.support.web import submit
 from tests.test_auth_flow import rows
 from tests.test_coordinator import _event, _person, act, add_guest, open_dinner, sent, to_voting
+from tests.test_early_close import everyone_in, open_lunch
 from tests.test_events_web import admin as admin  # the fixture, re-exported for pytest
 from tests.test_events_web import sign_in_as, start
 from tests.test_events_web import tick as web_tick
+from tests.test_post_now import TOMORROW
 
 pytestmark = pytest.mark.anyio
 
@@ -67,23 +70,28 @@ async def house(database: Database, clock: FakeClock, migrated: Settings) -> Hou
 # The rule, in the domain ---------------------------------------------------------------------------
 
 
+BEFORE = VOTE_BY - timedelta(minutes=1)
+
+
 def test_who_may_move_the_decision_time() -> None:
     voting = replace(_event(EventState.VOTING, coordinator_id=2), vote_deadline=VOTE_BY)
-    assert check_can_move_decision_time(voting, _person(2)) is ActingAs.COORDINATOR
-    assert check_can_move_decision_time(voting, _person(1, Role.ADMIN)) is ActingAs.ADMIN
+    assert check_can_move_decision_time(voting, _person(2), now=BEFORE) is ActingAs.COORDINATOR
+    assert check_can_move_decision_time(voting, _person(1, Role.ADMIN), now=BEFORE) is ActingAs.ADMIN
     guest_coordinating = replace(voting, coordinator_id=9)
-    assert check_can_move_decision_time(guest_coordinating, _person(9, Role.GUEST)) is ActingAs.COORDINATOR
+    assert check_can_move_decision_time(guest_coordinating, _person(9, Role.GUEST), now=BEFORE) is ActingAs.COORDINATOR
     check_guest(guest_coordinating, _person(9, Role.GUEST), GuestAction.MOVE_DECISION_TIME, invited=True)
-    for event, actor, code in [
-        (voting, _person(3), "not_coordinator"),
-        (voting, _person(9, Role.GUEST), "not_coordinator"),
-        (voting, _person(2, active=False), "inactive"),
-        (_event(EventState.COLLECTING, coordinator_id=2), _person(2), "voting_closed"),
-        (_event(EventState.DECIDED, coordinator_id=2), _person(2), "voting_closed"),
-        (replace(voting, kind=EventKind.OFFER), _person(2), "is_offer"),
+    for event, actor, now, code in [
+        (voting, _person(3), BEFORE, "not_coordinator"),
+        (voting, _person(9, Role.GUEST), BEFORE, "not_coordinator"),
+        (voting, _person(2, active=False), BEFORE, "inactive"),
+        (_event(EventState.COLLECTING, coordinator_id=2), _person(2), BEFORE, "voting_closed"),
+        (_event(EventState.DECIDED, coordinator_id=2), _person(2), BEFORE, "voting_closed"),
+        (replace(voting, kind=EventKind.OFFER), _person(2), BEFORE, "is_offer"),
+        (voting, _person(2), VOTE_BY, "voting_closed"),  # passed: the scheduler's next tick decides
+        (voting, _person(1, Role.ADMIN), VOTE_BY + timedelta(seconds=20), "voting_closed"),
     ]:
         with pytest.raises(EventRuleViolation) as refused:
-            check_can_move_decision_time(event, actor)
+            check_can_move_decision_time(event, actor, now=now)
         assert refused.value.code == code
     with pytest.raises(EventRuleViolation) as refused:
         check_guest(_event(EventState.COLLECTING), _person(9, Role.GUEST), GuestAction.MOVE_DECISION_TIME, invited=True)
@@ -179,6 +187,58 @@ async def test_everyone_else_and_outside_voting_is_refused_with_a_reason(house: 
     assert await house.audits("event.deadline_moved") == []
 
 
+async def test_a_passed_deadline_waits_for_the_scheduler_and_never_reopens(house: House) -> None:
+    """Between a deadline and the scheduler's next tick, the window is still open in the database.
+    Moving its time later then would reopen a window that has closed, for anyone."""
+    event_id = await open_dinner(house)
+    for name in ("Alex", "Sam", "Lee"):
+        await act(house, calls.respond, house[name], event_id, Status.IN)
+    await act(house, calls.offer_role, house["Alex"], event_id, RoleOffer.PICKUP, True)
+    await act(house, calls.claim_coordinator, house["Sam"], event_id)
+    house.clock.now = RESPOND_BY  # answers are due; the tick hasn't run
+    with pytest.raises(EventRuleViolation) as refused:
+        await act(house, call_admin.move_deadline, house["Alex"], event_id, Window.RESPOND, 15)
+    assert refused.value.code == "responses_closed"
+    await house.tick()
+    house.clock.now = VOTE_BY + timedelta(seconds=20)  # the decision time has passed; the tick hasn't run
+    for who, move in [
+        ("Sam", lambda: act(house, coordinator.move_decision_time, house["Sam"], event_id, 15, run=1)),
+        ("Alex", lambda: act(house, coordinator.move_decision_time, house["Alex"], event_id, 30, run=1)),
+        ("Alex", lambda: act(house, call_admin.move_deadline, house["Alex"], event_id, Window.VOTE, 15)),
+    ]:
+        with pytest.raises(EventRuleViolation) as refused:
+            await move()
+        assert refused.value.code == "voting_closed", who
+    view = await act(house, event_views.event_view, house["Sam"], event_id)
+    assert not view.can.move_vote
+    assert await house.audits("event.deadline_moved") == []
+    await house.tick()
+    assert (await house.event(event_id)).vote_deadline == VOTE_BY
+
+
+async def test_after_a_hand_off_only_the_new_coordinator_moves_it(house: House) -> None:
+    event_id = await to_voting(house, "Sam", "Lee", coordinator_name="Sam")
+    await act(house, calls.hand_off, house["Sam"], event_id, house["Lee"].id, run=1)
+    with pytest.raises(EventRuleViolation) as refused:
+        await act(house, coordinator.move_decision_time, house["Sam"], event_id, 15, run=1)
+    assert refused.value.code == "not_coordinator"
+    await act(house, coordinator.move_decision_time, house["Lee"], event_id, 15, run=1)
+    (audit,) = await house.audits("event.deadline_moved")
+    assert (audit.actor_member_id, audit.payload["as"]) == (house["Lee"].id, "coordinator")
+
+
+async def test_the_admins_own_move_is_audited_as_admin(house: House) -> None:
+    event_id = await to_voting(house, "Sam", "Lee", coordinator_name="Sam")
+    await act(house, call_admin.move_deadline, house["Alex"], event_id, Window.VOTE, 15)
+    (audit,) = await house.audits("event.deadline_moved")
+    assert audit.payload == {
+        "window": "vote",
+        "from": VOTE_BY.isoformat(),
+        "to": (VOTE_BY + timedelta(minutes=15)).isoformat(),
+        "as": "admin",
+    }
+
+
 async def test_a_guest_coordinator_moves_it_but_never_to_now(house: House) -> None:
     pat = await add_guest(house, "Pat")
     event_id = await open_dinner(house)
@@ -235,6 +295,8 @@ def test_the_coordinator_moves_it_on_the_event_page(
     before = _vote_deadline(migrated, event_id)
     html = page(admin.get(f"/events/{event_id}"))
     assert "Move the decision time" in html and f'action="/events/{event_id}/decision-time"' in html
+    confirm = "Move voting 15 minutes earlier? If the new time has already passed, voting closes now"
+    assert html.count(f'hx-confirm="{confirm}') == 1  # only "minus15" asks, as Decide now does
     assert submit(admin, f"/events/{event_id}/decision-time", {"shift": "plus30"}).status_code == 400  # no run
     bad = submit(admin, f"/events/{event_id}/decision-time", {"shift": "close", "run": "1"})  # Decide now is apart
     assert bad.status_code == 409 and "Pick how to move the decision time." in page(bad)
@@ -303,7 +365,7 @@ async def test_the_modal_moves_it_and_says_when_voting_closes(slack: Slack, hous
     await slack.submit("Lee", ids.DECISION_TIME_VIEW, shift("plus15"), event_id, origin=origin)
     assert slack.ephemerals("Lee") == [DECISION_TIME_MOVERS]
     await slack.submit("Sam", ids.DECISION_TIME_VIEW, shift("plus15"), event_id, origin=origin)
-    assert slack.ephemerals("Sam") == [MOVED.format(at="5:30 PM")]
+    assert slack.ephemerals("Sam") == [MOVED.format(at="5:30 PM")] == ["Voting now closes at 5:30 PM."]
     assert (await house.event(event_id)).vote_deadline == VOTE_BY + timedelta(minutes=15)
     (audit,) = await house.audits("event.deadline_moved")
     assert (audit.actor_member_id, audit.payload["as"]) == (house["Sam"].id, "coordinator")
@@ -311,6 +373,18 @@ async def test_the_modal_moves_it_and_says_when_voting_closes(slack: Slack, hous
     await slack.submit("Sam", ids.DECISION_TIME_VIEW, shift("minus15"), event_id, origin=origin)
     assert slack.ephemerals("Sam")[-1] == CLOSED[Window.VOTE].format(slot="dinner")
     assert (await house.event(event_id)).state is EventState.DECIDED
+
+
+async def test_the_reply_names_the_day_for_a_call_posted_early(slack: Slack, house: House) -> None:
+    house.clock.now = OPENS
+    event_id = await open_lunch(house, early=True)  # tomorrow's lunch, posted today
+    await everyone_in(house, event_id)
+    house.clock.now = OPENS + timedelta(minutes=11)
+    await house.tick()
+    assert (await house.event(event_id)).state is EventState.VOTING
+    origin = ids.ViewOrigin(event_id, CHANNEL, run=1)
+    await slack.submit("Alex", ids.DECISION_TIME_VIEW, shift("plus15"), event_id, origin=origin)
+    assert slack.ephemerals("Alex") == [f"Voting now closes at 12:15 PM on {day_label(TOMORROW)}."]
 
 
 async def test_the_menu_refuses_while_answering(slack: Slack, house: House) -> None:

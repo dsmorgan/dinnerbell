@@ -1100,7 +1100,7 @@ def _ids(values: list[str] | None) -> frozenset[int]:
 
 # Admin overrides (FR-6, spec 5.7) ---------------------------------------------------------------
 
-DEADLINE_SHIFTS = {"plus30": 30, "plus15": 15, "minus15": -15, "close": None}
+DEADLINE_SHIFTS: dict[str, int | None] = {**DECISION_TIME_SHIFTS, "close": None}
 
 
 @router.post("/events/{event_id}/admin/deadline")

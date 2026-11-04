@@ -607,8 +607,6 @@ def close_modal(v: EventView, origin: ids.ViewOrigin) -> dict[str, Any]:
 
 # Move the decision time (#198) --------------------------------------------------------------------
 
-EARLIER_CLOSES = "If the new time has already passed, voting closes now, and the votes so far decide the plan."
-
 
 def decision_time_modal(v: EventView, origin: ids.ViewOrigin) -> dict[str, Any]:
     """**Move the decision time** from the ⋯ menu while voting: the time it is now, and how far
@@ -622,7 +620,7 @@ def decision_time_modal(v: EventView, origin: ids.ViewOrigin) -> dict[str, Any]:
     blocks = [
         _intro(v),
         section(f"Voting closes at *{closes}*."),
-        _input("shift", "Move it", shifts, optional=False, hint=EARLIER_CLOSES),
+        _input("shift", "How far", shifts, optional=False, hint=labels.EARLIER_CLOSES),
     ]
     return _modal(labels.MOVE_DECISION_TIME, ids.DECISION_TIME_VIEW, origin, blocks, "Move it")
 

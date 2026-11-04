@@ -10,7 +10,15 @@ from datetime import datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from dinnerbell.domain.events import Event, Window, check_assign_coordinator, check_rerun
+from dinnerbell.domain.events import (
+    ActingAs,
+    Event,
+    Window,
+    check_assign_coordinator,
+    check_deadline_ahead,
+    check_rerun,
+    check_window_change,
+)
 from dinnerbell.domain.members import Member
 from dinnerbell.services import activity, lifecycle
 from dinnerbell.services.call_context import load, locked_event
@@ -30,12 +38,18 @@ async def move_deadline(
     db: AsyncSession, actor: Member, event_id: int, window: Window, minutes: int | None, *, now: datetime
 ) -> None:
     """Extend or shorten the open window by ``minutes``, or close it now when None. A deadline
-    that lands in the past closes the window at once. The coordinator closes a window with
-    ``calls.close_window``, and moves the decision time with ``coordinator.move_decision_time``."""
+    that lands in the past closes the window at once. A deadline that has passed already doesn't
+    move (``check_deadline_ahead``). The coordinator closes a window with ``calls.close_window``,
+    and moves the decision time with ``coordinator.move_decision_time``. Audited with ``"as":
+    "admin"``, as the coordinator's move names its capacity."""
     require_admin(actor, ADMINS_ONLY)
     async with locked_event(db, actor.household_id, event_id, now) as event:
+        if minutes is not None:  # closing it now is harmless: the scheduler would close it anyway
+            check_window_change(event, window)
+            check_deadline_ahead(event, window, now=now)
         current, moved = await lifecycle.move_window(db, event, window, minutes, now)
-        payload = {"window": window.value, "from": current.isoformat(), "to": moved.isoformat()}
+        capacity = ActingAs.ADMIN.value
+        payload = {"window": window.value, "from": current.isoformat(), "to": moved.isoformat(), "as": capacity}
         await audit(db, actor.household_id, actor, "event.deadline_moved", _target(event), payload, now)
         activity.action(db, "move_deadline", event, actor, window=window.value, to=moved.isoformat())
     await lifecycle.advance(db, actor.household_id, event_id, now)

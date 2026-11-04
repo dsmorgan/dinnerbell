@@ -343,7 +343,7 @@ def _member_permissions(
         rerun=admin
         and _allowed(lambda: rules.check_rerun(event, today, now=now, too_late_after=ctx.too_late_for(today))),
         move_window=_window(event) if admin else None,
-        move_vote=_allowed(lambda: rules.check_can_move_decision_time(event, actor)),
+        move_vote=_allowed(lambda: rules.check_can_move_decision_time(event, actor, now=now)),
         cancel=_allowed(lambda: rules.check_can_cancel(event, actor)),
         close_window=_closable(event, actor, now),
         restart=actor.active and _allowed(lambda: _check_restart(ctx, today, now, any_time)),
