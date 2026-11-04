@@ -8,7 +8,7 @@ A call or offer counts the moment it's done. Each person gets one count per kind
 
 - **Cooked, picked up, ordered, coordinated:** whoever the meal assigned, guests included. Ordering counts on a pickup too, apart from picking it up, so one person who does both gets both counts. Pickup meals done before Dinnerbell gave pickup an orderer keep the counts they had. If the coordinator switches a pickup to delivery, whoever was picking up gets no pickup count.
 - **At the table:** everyone who was in, including a late joiner who is taking part.
-- **Answered quickly:** any answer within 15 minutes of the call opening.
+- **Answered quickly:** any answer within 15 minutes of the call opening, but not an Out your away days gave.
 - **Ideas:** the person whose proposal won; the person whose proposal was new to the household; and the person who added a catalog item the first time it was chosen.
 - **Hosting:** the member who brought guests.
 - **Leaving the choice to others (Gambler):** on a call with at least three proposals, a member who was in, not as a late joiner, and whose votes, when the call was done, were for every proposal or for none. Voting for none counts even when nobody voted. Votes you took back don't count, and offers have no proposals to vote on.

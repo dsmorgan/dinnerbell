@@ -496,11 +496,14 @@ def check_can_respond(event: Event, actor: Member, *, invited: bool = False) -> 
 
 
 def with_status(current: Response | None, member_id: int, status: Status, now: datetime) -> Response:
-    """A new status. Saying out withdraws role offers: someone who isn't there can't cook."""
+    """A new status. Saying out withdraws role offers: someone who isn't there can't cook. An
+    out their away window wrote (#196) becomes theirs, answered now: the window answered for
+    them, so it earns no quick answer and no place in line for a role (``coverage``)."""
     if current is None:
         return Response(member_id=member_id, status=status, responded_at=now)
     offers = frozenset() if status is Status.OUT else current.offers
-    return replace(current, status=status, offers=offers, away_until=None)  # theirs now, not away's (#196)
+    answered = now if current.away_until is not None else current.responded_at
+    return replace(current, status=status, offers=offers, responded_at=answered, away_until=None)
 
 
 def with_offer(
@@ -543,16 +546,18 @@ def with_usual_offers(response: Response, member: Member) -> Response:
 
 
 def with_details(current: Response | None, member_id: int, details: Details, now: datetime) -> Response:
-    """Details without a status yet count the member in."""
+    """Details without a status yet count the member in. On an away out (#196) they're the
+    member's own answer, answered now, as in ``with_status``."""
     base = current or Response(member_id=member_id, status=Status.IN, responded_at=now)
     return replace(
         base,
+        responded_at=now if base.away_until is not None else base.responded_at,
         guests=details.guests,
         guest_needs=details.guest_needs,
         eat_from=details.eat_from,
         eat_until=details.eat_until,
         note=details.note,
-        away_until=None,  # details are their own answer (#196)
+        away_until=None,
     )
 
 

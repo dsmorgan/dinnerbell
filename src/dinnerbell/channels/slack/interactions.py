@@ -170,7 +170,6 @@ UNKNOWN_USER = (
     "I don't know your Slack account yet. Sign in to Dinnerbell on the web with Slack once, "
     "or ask the admin to link you on the Members page."
 )
-AWAY_ENDED = "Welcome back! Calls ask you again."
 INACTIVE = "Your Dinnerbell account is turned off. Ask the admin if that's a mistake."
 JOIN_FIRST = "You're not in Dinnerbell yet. Open the Dinnerbell app's Home tab to join, or ask the admin."
 """What the commands that only link or describe the app (help, prefs, catalog, history, version)
@@ -1178,11 +1177,12 @@ class Interactions:
         or why nothing did, such as the call having moved on. A refusal is logged once, here,
         as on the card (#75)."""
         refusal: Exception | None = None
+        said: str | None = None
         async with self.sessionmaker() as db:
             try:
                 if action_id == ids.CARD_DETAILS:
                     return await self._card_details(db, member, source, event_id, run, trigger)
-                await self._card_change(db, member, action_id, event_id, run)
+                said = await self._card_change(db, member, action_id, event_id, run)
             except SHOWN_ERRORS as exc:
                 refusal = exc
             except IllegalTransition as exc:
@@ -1192,7 +1192,7 @@ class Interactions:
             moved_on = view.event.run != run or not card_live(view.info, view.mine)
             _refused(refusal, str(refusal), member, event_id, action_id, moved_on=moved_on)
             return str(refusal)
-        return home_done(action_id, view.event.slot.value)
+        return said or home_done(action_id, view.event.slot.value)
 
     async def _card_tap_locked(
         self,
@@ -1231,7 +1231,12 @@ class Interactions:
         await self._send_card(source, self._card(view, member, run=run, notice=notice), member, tap)
         return None
 
-    async def _card_change(self, db: AsyncSession, member: Member, action_id: str, event_id: int, run: int) -> None:
+    async def _card_change(
+        self, db: AsyncSession, member: Member, action_id: str, event_id: int, run: int
+    ) -> str | None:
+        """Act on a card button. Returns what Home says about it, when that depends on more than
+        the button: **I'm back** welcomes them back, or, before the window started, only says
+        it's cleared (FR-63)."""
         now = self.clock()
         if action_id in ids.CARD_RESPOND:
             await calls.respond(db, member, event_id, ids.CARD_RESPOND[action_id], run=run, now=now)
@@ -1240,9 +1245,11 @@ class Interactions:
         elif action_id in ids.CARD_WITHDRAW:
             await calls.offer_role(db, member, event_id, ids.CARD_WITHDRAW[action_id], False, run=run, now=now)
         elif action_id == ids.AWAY_BACK:  # about the member, not the call, so any run will do (FR-63)
-            await away.back_on_call(db, member, event_id, now=now)
+            started = await away.back_on_call(db, member, event_id, now=now)
+            return labels.AWAY_ENDED if started else labels.AWAY_CLEARED
         else:
             await calls.claim_coordinator(db, member, event_id, run=run, now=now)
+        return None
 
     async def _card_details(
         self, db: AsyncSession, member: Member, source: Source, event_id: int, run: int, trigger: object
@@ -1601,7 +1608,7 @@ class Interactions:
             today = await slack_members.today(db, member, now=self.clock())
         window = updated.away_now(today)
         if window is None:  # pragma: no cover - just set, and its last day hasn't passed
-            return AWAY_ENDED
+            return labels.AWAY_ENDED
         return f"{labels.away_status(window, today)}. {labels.AWAY_HINT}"
 
     # Guests (#38) ------------------------------------------------------------------------------
@@ -2242,8 +2249,6 @@ def home_done(action_id: str, slot: str) -> str:
         return OFFERED[ids.CARD_OFFER[action_id]]
     if action_id in ids.CARD_WITHDRAW:
         return WITHDRAWN[ids.CARD_WITHDRAW[action_id]]
-    if action_id == ids.AWAY_BACK:
-        return AWAY_ENDED
     return CONFIRM[ids.COORDINATE].format(slot=slot)
 
 
