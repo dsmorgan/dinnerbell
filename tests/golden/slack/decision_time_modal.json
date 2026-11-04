@@ -1,0 +1,83 @@
+{
+  "blocks": [
+    {
+      "elements": [
+        {
+          "text": "*Dinner · Thursday, Oct 22*",
+          "type": "mrkdwn"
+        }
+      ],
+      "type": "context"
+    },
+    {
+      "text": {
+        "text": "Voting closes at *5:15 PM*.",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "block_id": "shift",
+      "element": {
+        "action_id": "value",
+        "options": [
+          {
+            "text": {
+              "emoji": true,
+              "text": "15 minutes later",
+              "type": "plain_text"
+            },
+            "value": "plus15"
+          },
+          {
+            "text": {
+              "emoji": true,
+              "text": "30 minutes later",
+              "type": "plain_text"
+            },
+            "value": "plus30"
+          },
+          {
+            "text": {
+              "emoji": true,
+              "text": "15 minutes earlier",
+              "type": "plain_text"
+            },
+            "value": "minus15"
+          }
+        ],
+        "type": "radio_buttons"
+      },
+      "hint": {
+        "emoji": true,
+        "text": "If the new time has already passed, voting closes now, and the votes so far decide the plan.",
+        "type": "plain_text"
+      },
+      "label": {
+        "emoji": true,
+        "text": "Move it",
+        "type": "plain_text"
+      },
+      "optional": false,
+      "type": "input"
+    }
+  ],
+  "callback_id": "decision_time_modal",
+  "close": {
+    "emoji": true,
+    "text": "Cancel",
+    "type": "plain_text"
+  },
+  "private_metadata": "{\"event\":7,\"channel\":\"C0DINNER\",\"home\":false,\"run\":1}",
+  "submit": {
+    "emoji": true,
+    "text": "Move it",
+    "type": "plain_text"
+  },
+  "title": {
+    "emoji": true,
+    "text": "Move the decision time",
+    "type": "plain_text"
+  },
+  "type": "modal"
+}

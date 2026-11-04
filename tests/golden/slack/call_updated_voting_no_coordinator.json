@@ -79,6 +79,14 @@
                 "type": "plain_text"
               },
               "value": "close:7:1"
+            },
+            {
+              "text": {
+                "emoji": true,
+                "text": "Move the decision time",
+                "type": "plain_text"
+              },
+              "value": "move:7:1"
             }
           ],
           "type": "overflow"

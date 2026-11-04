@@ -605,6 +605,38 @@ def close_modal(v: EventView, origin: ids.ViewOrigin) -> dict[str, Any]:
     return _modal(CLOSE_LABELS[window], ids.CLOSE_VIEW, origin, blocks, CLOSE_SUBMIT[window], close="Not yet")
 
 
+# Move the decision time (#198) --------------------------------------------------------------------
+
+EARLIER_CLOSES = "If the new time has already passed, voting closes now, and the votes so far decide the plan."
+
+
+def decision_time_modal(v: EventView, origin: ids.ViewOrigin) -> dict[str, Any]:
+    """**Move the decision time** from the ⋯ menu while voting: the time it is now, and how far
+    to move it (``labels.DECISION_TIME_SHIFTS``). ``origin.run`` is the run of the call, which
+    saving checks again."""
+    deadline = v.event.vote_deadline
+    closes = local_clock(deadline, v.info.timezone) if deadline is not None else "the decision time"
+    if v.info.early:
+        closes += f" on {day_label(v.event.day)}"
+    shifts: Block = {"type": "radio_buttons", "options": [option(w, k) for k, w in labels.SHIFT_WORDS.items()]}
+    blocks = [
+        _intro(v),
+        section(f"Voting closes at *{closes}*."),
+        _input("shift", "Move it", shifts, optional=False, hint=EARLIER_CLOSES),
+    ]
+    return _modal(labels.MOVE_DECISION_TIME, ids.DECISION_TIME_VIEW, origin, blocks, "Move it")
+
+
+def parse_decision_time(values: Any) -> int:
+    """The minutes to move the decision time by, from the modal's choice."""
+    selected = _state(values, "shift").get("selected_option")
+    raw = selected.get("value") if isinstance(selected, dict) else None
+    minutes = labels.DECISION_TIME_SHIFTS.get(raw) if isinstance(raw, str) else None
+    if minutes is None:
+        raise FormError("shift", "Pick how to move it.")
+    return minutes
+
+
 # Feedback (FR-45 to FR-49) -------------------------------------------------------------------------
 
 PRIVATE = (

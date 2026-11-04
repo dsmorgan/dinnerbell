@@ -40,6 +40,7 @@ from dinnerbell.domain.events import (
     friendly,
 )
 from dinnerbell.domain.guests import GuestInput
+from dinnerbell.domain.labels import DECISION_TIME_SHIFTS
 from dinnerbell.domain.meals import PICK_SLOT, Slot
 from dinnerbell.domain.members import InvalidMemberInput
 from dinnerbell.domain.offers import MAX_CAPACITY
@@ -613,6 +614,32 @@ async def set_way(
         if chosen is None:
             raise BadFormValue("Pick pickup or delivery.")
         await coordinator.set_way(db, principal.member, event_id, proposal_id, chosen, run=seen, now=context.clock())
+
+    return await _run(request, principal, context, db, event_id, came_from, action)
+
+
+@router.post("/events/{event_id}/decision-time")
+async def move_decision_time(
+    request: Request,
+    principal: GuestCSRFChecked,
+    context: Context,
+    db: Database,
+    event_id: RowId,
+    shift: Field = "",
+    run: Run = "",
+    came_from: Annotated[str, Form(alias="from", max_length=10)] = "",
+) -> Response:
+    """Move the decision time while voting (#198): the coordinator, a guest coordinating too, or
+    an admin. An admin's own controls are under **Admin** (``move_deadline``)."""
+    seen = parse_id(run)
+    if seen is None:
+        return await _malformed(request, principal, context, db, event_id, came_from)
+
+    async def action() -> None:
+        minutes = DECISION_TIME_SHIFTS.get(shift)
+        if minutes is None:
+            raise BadFormValue("Pick how to move the decision time.")
+        await coordinator.move_decision_time(db, principal.member, event_id, minutes, run=seen, now=context.clock())
 
     return await _run(request, principal, context, db, event_id, came_from, action)
 

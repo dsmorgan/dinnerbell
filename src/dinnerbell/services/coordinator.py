@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """What the coordinator can do that others can't (FR-16, FR-61, #87): break a tie, shuffle the
-picks, and choose the winning pick's mode and who does its role; and, in Slack, adjust the plan
-once it's decided (spec 5.7).
+picks, move the decision time (#198), and choose the winning pick's mode and who does its role;
+and, in Slack, adjust the plan once it's decided (spec 5.7).
 
 Each is the coordinator's and every admin's alike (#179). A guest coordinator chooses roles,
 which is logistics, but not the plan (FR-58). Each takes the event's
@@ -30,12 +30,15 @@ from dinnerbell.domain.events import (
     EventState,
     IllegalTransition,
     ProposalSource,
+    Window,
     can_do,
     check_can_adjust,
     check_can_break_tie,
     check_can_choose_roles,
+    check_can_move_decision_time,
     check_can_set_way,
     check_can_shuffle,
+    check_guest_keeps_voting_open,
     check_run,
     default_roles,
     friendly,
@@ -228,6 +231,32 @@ async def set_way(
             switched=mode is not proposal.mode,
             **(activity.pick(ctx.items, proposal) | {"mode": mode}),
         )
+
+
+# Move the decision time (#198, FR-6) ------------------------------------------------------------
+
+
+async def move_decision_time(
+    db: AsyncSession, actor: Member, event_id: int, minutes: int, *, run: int | None = None, now: datetime
+) -> datetime:
+    """Move the decision time ``minutes`` later (negative is earlier) while voting
+    (``check_can_move_decision_time``): the coordinator, a guest coordinator too, or an admin. It
+    is the admin's vote-window move (``call_admin.move_deadline``), with its limits and updated
+    messages: a time that lands in the past closes voting at once, except for a guest
+    (``check_guest_keeps_voting_open``). Returns the new decision time. Audited as
+    ``event.deadline_moved``, with the capacity; logged as ``move_deadline``."""
+    async with locked_event(db, actor.household_id, event_id, now) as event:
+        await guest_rules.gate(db, event, actor, GuestAction.MOVE_DECISION_TIME)
+        check_run(event, run)
+        capacity = check_can_move_decision_time(event, actor)
+        check_guest_keeps_voting_open(event, actor, minutes, now=now)
+        current, moved = await lifecycle.move_window(db, event, Window.VOTE, minutes, now)
+        window = Window.VOTE.value
+        payload = {"window": window, "from": current.isoformat(), "to": moved.isoformat(), "as": capacity.value}
+        await audit(db, actor.household_id, actor, "event.deadline_moved", _target(event.id), payload, now)
+        activity.action(db, "move_deadline", event, actor, window=window, to=moved.isoformat(), capacity=capacity.value)
+    await lifecycle.advance(db, actor.household_id, event_id, now)
+    return moved
 
 
 # Choose the mode and assign the roles (FR-61) ---------------------------------------------------

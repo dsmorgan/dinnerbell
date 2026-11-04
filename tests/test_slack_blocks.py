@@ -220,12 +220,16 @@ def test_the_call_menu_offers_what_the_state_allows() -> None:
         return {"text": found["text"]["text"], "value": found["value"], "style": found.get("style")}
 
     assert menu("call_updated") == [("Call it off", "cancel:7:1"), ("Start the vote now", "close:7:1")]
-    assert menu("call_updated_voting") == [("Call it off", "cancel:7:1"), ("Decide now", "close:7:1")]
+    assert menu("call_updated_voting") == [
+        ("Call it off", "cancel:7:1"),
+        ("Decide now", "close:7:1"),
+        ("Move the decision time", "move:7:1"),  # #198
+    ]
     # Once decided, Call it off is the only option left: a plain button, never a one-option menu.
     called_off = {"text": "Call it off", "value": "cancel:7:1", "style": None}
     assert lone_button("call_updated_decided") == lone_button("decision_made") == called_off
     rerun = render(note.CallUpdated(replace(samples.VOTING, run=2)), CTX)
-    assert "cancel:7:2" in json.dumps(rerun.payload()) and "close:7:2" in json.dumps(rerun.payload())
+    assert all(f"{c}:7:2" in json.dumps(rerun.payload()) for c in ("cancel", "close", "move"))
     scheduled = render(note.CallUpdated(samples.event(EventState.SCHEDULED)), CTX)
     assert "call_menu" not in json.dumps(scheduled.payload())  # never posted, but just in case
 

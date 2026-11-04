@@ -59,6 +59,8 @@ class GuestAction(StrEnum):
     BREAK_TIE = "break_tie"
     SET_WAY = "set_way"
     """Set a takeout pick to pickup or delivery while voting (#178): logistics, like the roles."""
+    MOVE_DECISION_TIME = "move_decision_time"
+    """Move the decision time while voting (#198): logistics, as long as voting stays open."""
 
 
 ANSWERING = frozenset({EventState.COLLECTING})
@@ -75,6 +77,8 @@ GUEST_RULES: dict[GuestAction, frozenset[EventState]] = {
     GuestAction.CLOSE_WINDOW: frozenset({EventState.COLLECTING}),
     GuestAction.MANAGE_DECISION: frozenset({EventState.DECIDED}),
     GuestAction.SET_WAY: frozenset({EventState.VOTING}),
+    # The decision time, but never to now: that decides the plan (``check_guest_keeps_voting_open``).
+    GuestAction.MOVE_DECISION_TIME: frozenset({EventState.VOTING}),
     GuestAction.MARK_DONE: frozenset({EventState.DECIDED}),
 }
 """What an invited guest may do, and in which states of the call. Every action not listed is

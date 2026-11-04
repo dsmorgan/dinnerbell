@@ -33,6 +33,7 @@ from dinnerbell.channels.slack.views import (
     away_modal,
     cancel_modal,
     close_modal,
+    decision_time_modal,
     details_modal,
     feedback_modal,
     home_view,
@@ -766,6 +767,7 @@ VIEWS: dict[str, Callable[[], dict[str, Any]]] = {
     "cancel_modal_decided": lambda: cancel_modal(DECIDED_VIEW, replace(CALL_OFF_ORIGIN, home=True)),
     "close_modal": lambda: close_modal(COLLECTING_VIEW, replace(CALL_OFF_ORIGIN, window=Window.RESPOND)),
     "close_modal_vote": lambda: close_modal(VOTING_VIEW, replace(CALL_OFF_ORIGIN, window=Window.VOTE)),
+    "decision_time_modal": lambda: decision_time_modal(VOTING_VIEW, CALL_OFF_ORIGIN),
     "home": lambda: home_view(TodayView(DAY, [COLLECTING_VIEW], tuple(Slot)), HomeLinks(BASE_URL)),
     "home_decided": lambda: home_view(
         TodayView(DAY, [DECIDED_VIEW], tuple(Slot)), HomeLinks(BASE_URL), notice="Marked done. Thanks!"

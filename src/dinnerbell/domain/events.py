@@ -1178,6 +1178,36 @@ def check_can_set_way(event: Event, actor: Member) -> None:
         raise EventRuleViolation(WAY_SETTERS, code="not_coordinator")
 
 
+DECISION_TIME_MOVERS = "Only the coordinator or an admin can move the decision time."
+GUEST_DECIDES_NOW = (
+    "That would close voting now, and guests don't pick the plan. Pick a later time, or a member can decide now."
+)
+
+
+def check_can_move_decision_time(event: Event, actor: Member) -> ActingAs:
+    """Move the decision time earlier or later while voting (#198, FR-6): the coordinator, a
+    guest coordinator too (FR-58), or any admin. Returns the capacity they act in, for the audit
+    row. The admin moves either window from the web with ``call_admin.move_deadline``."""
+    if not actor.active:
+        raise EventRuleViolation("Only active members can move the decision time.", code="inactive")
+    if event.is_offer:
+        raise EventRuleViolation("An offer has no window to move. It closes at its time.", code="is_offer")
+    if event.state is not EventState.VOTING or event.vote_deadline is None:
+        raise EventRuleViolation("You can move the decision time only while voting is open.", code="voting_closed")
+    if is_coordinator(event, actor):
+        return ActingAs.COORDINATOR
+    if actor.is_admin:
+        return ActingAs.ADMIN
+    raise EventRuleViolation(DECISION_TIME_MOVERS, code="not_coordinator")
+
+
+def check_guest_keeps_voting_open(event: Event, actor: Member, minutes: int, *, now: datetime) -> None:
+    """A guest coordinator moves the decision time but never to now or before, which would close
+    voting and decide the plan: that's **Decide now**, which isn't a guest's (FR-58)."""
+    if actor.is_guest and event.vote_deadline is not None and event.vote_deadline + timedelta(minutes=minutes) <= now:
+        raise EventRuleViolation(GUEST_DECIDES_NOW, code="guests_dont")
+
+
 ADJUST_IS_THE_COORDINATORS = "Only the coordinator can adjust the plan here. An admin can change it on the web."
 
 
@@ -1444,8 +1474,8 @@ def shifted_deadline(current: datetime, minutes: int | None, now: datetime, *, l
 
 
 def check_window_change(event: Event, window: Window) -> datetime:
-    """The deadline the admin may move right now, or EventRuleViolation. An offer has no
-    windows: it closes at its time."""
+    """The deadline the admin, or the coordinator while voting, may move right now, or
+    EventRuleViolation. An offer has no windows: it closes at its time."""
     if event.is_offer:
         raise EventRuleViolation("An offer has no window to move. It closes at its time.", code="is_offer")
     if window is Window.RESPOND and event.state is EventState.COLLECTING:
