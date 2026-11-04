@@ -258,15 +258,62 @@
   // Calls still in progress (scheduled, collecting, voting, or decided) carry data-poll, the URL
   // of their card. Refresh them now and then, so a page left open shows the call opening,
   // voting, the decision, and Mark done at meal time. Skip a card while someone is using it: an
-  // open form, typing in a field, or a request in flight (Safari doesn't focus a tapped button).
-  // A focused button doesn't count: Chrome focuses a tapped one, and HTMX keeps that focus
-  // across the swap. Skip hidden tabs.
+  // open form, typing in a field, a field changed and not saved yet, or a request in flight
+  // (Safari doesn't focus a tapped button or checkbox). A focused button, checkbox, or radio
+  // doesn't count: Chrome focuses a tapped one, and HTMX keeps that focus across the swap. A
+  // ticked box that isn't saved still counts as changed, so an offer's Join form keeps it. A
+  // save swaps in a new card, whose fields start unchanged. Skip hidden tabs.
   //
   // The card is the poll's source, so it shares the card's hx-sync: a tap replaces a poll in
   // flight, and its answer can't overwrite the tap's. A poll never starts while a save is in
   // flight, since that would abort the save.
   var POLL_MS = 45000;
   var TYPING = "textarea, select, input:not([type=hidden]):not([type=radio]):not([type=checkbox])";
+
+  // The option a select shows until someone picks another: the last one marked selected, or
+  // else the first one that isn't disabled.
+  function defaultIndex(select) {
+    var first = -1;
+    for (var i = select.options.length - 1; i >= 0; i -= 1) {
+      if (select.options[i].defaultSelected) {
+        return i;
+      }
+      if (!select.options[i].disabled) {
+        first = i;
+      }
+    }
+    return first;
+  }
+
+  function changed(field) {
+    if (field.type === "checkbox" || field.type === "radio") {
+      return field.checked !== field.defaultChecked;
+    }
+    if (field instanceof HTMLSelectElement) {
+      if (!field.multiple) {
+        return field.selectedIndex !== defaultIndex(field);
+      }
+      for (var i = 0; i < field.options.length; i += 1) {
+        if (field.options[i].selected !== field.options[i].defaultSelected) {
+          return true;
+        }
+      }
+      return false;
+    }
+    // A number field with something that isn't a number in it reads as "".
+    return field.value !== field.defaultValue || Boolean(field.validity && field.validity.badInput);
+  }
+
+  function unsavedIn(card) {
+    var fields = card.querySelectorAll("textarea, select, input:not([type=hidden])");
+    for (var i = 0; i < fields.length; i += 1) {
+      if (changed(fields[i])) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   window.setInterval(function () {
     if (document.hidden || !window.htmx) {
       return;
@@ -276,7 +323,7 @@
       var card = cards[i];
       var busy = card.classList.contains("htmx-request") || card.querySelector(".htmx-request");
       var typing = card.contains(document.activeElement) && document.activeElement.matches(TYPING);
-      if (busy || typing || card.querySelector("details[open]")) {
+      if (busy || typing || card.querySelector("details[open]") || unsavedIn(card)) {
         continue;
       }
       window.htmx.ajax("GET", card.getAttribute("data-poll"), { source: card, target: card, swap: "outerHTML" });

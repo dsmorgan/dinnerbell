@@ -192,12 +192,18 @@ def test_a_failed_save_says_why_until_it_saves(client: TestClient) -> None:
 def test_a_repeat_tap_is_dropped_and_polls_share_the_cards_sync(client: TestClient) -> None:
     """The card's hx-sync aborts a request only in the browser, so a double tap on one control
     would reach the server twice. A poll shares that sync, so a tap replaces it, and it never
-    starts during a save or skips a card just because a tapped button kept focus."""
+    starts during a save or skips a card just because a tapped button kept focus. It does skip a
+    card with a field changed and not saved, such as a ticked box in an offer's Join form, which
+    Safari doesn't focus (#193)."""
     script = client.get("/static/app.js").text
     assert '"htmx:confirm"' in script and 'elt.classList.contains("htmx-request")' in script
     assert "source: card, target: card" in script
     assert "input:not([type=hidden]):not([type=radio]):not([type=checkbox])" in script
     assert "card.contains(document.activeElement) && document.activeElement.matches(TYPING)" in script
+    assert "|| unsavedIn(card)) {" in script
+    assert "field.checked !== field.defaultChecked" in script
+    assert "field.value !== field.defaultValue" in script
+    assert "field.selectedIndex !== defaultIndex(field)" in script  # no option marked: the first one
     css = client.get("/static/app.css").text
     assert "form.htmx-request button, form.submitting button, form.htmx-request .segments {" in css
     assert "\n.htmx-request button" not in css  # a poll in flight doesn't dim the whole card
