@@ -258,11 +258,11 @@
   // Calls still in progress (scheduled, collecting, voting, or decided) carry data-poll, the URL
   // of their card. Refresh them now and then, so a page left open shows the call opening,
   // voting, the decision, and Mark done at meal time. Skip a card while someone is using it: an
-  // open form, typing in a field, a field changed and not saved yet, or a request in flight
-  // (Safari doesn't focus a tapped button or checkbox). A focused button, checkbox, or radio
-  // doesn't count: Chrome focuses a tapped one, and HTMX keeps that focus across the swap. A
-  // ticked box that isn't saved still counts as changed, so an offer's Join form keeps it. A
-  // save swaps in a new card, whose fields start unchanged. Skip hidden tabs.
+  // open form, typing in a field, a field changed and not saved yet in a form that's showing, or
+  // a request in flight. Those last two don't rely on focus, which Safari doesn't give a tapped
+  // checkbox or button. A focused button, checkbox, or radio doesn't count: Chrome focuses a
+  // tapped one, and HTMX keeps that focus across the swap. A save swaps in a new card, whose
+  // fields start unchanged; a closed form's changes are dropped. Skip hidden tabs.
   //
   // The card is the poll's source, so it shares the card's hx-sync: a tap replaces a poll in
   // flight, and its answer can't overwrite the tap's. A poll never starts while a save is in
@@ -270,8 +270,9 @@
   var POLL_MS = 45000;
   var TYPING = "textarea, select, input:not([type=hidden]):not([type=radio]):not([type=checkbox])";
 
-  // The option a select shows until someone picks another: the last one marked selected, or
-  // else the first one that isn't disabled.
+  // The option a drop-down select shows until someone picks another: the last one marked
+  // selected, or else the first one that isn't disabled. This assumes a drop-down: a list box
+  // (size > 1) with none marked shows none, and cards have no list boxes.
   function defaultIndex(select) {
     var first = -1;
     for (var i = select.options.length - 1; i >= 0; i -= 1) {
@@ -300,14 +301,14 @@
       }
       return false;
     }
-    // A number field with something that isn't a number in it reads as "".
+    // A number or time field with something unfinished in it reads as "".
     return field.value !== field.defaultValue || Boolean(field.validity && field.validity.badInput);
   }
 
   function unsavedIn(card) {
     var fields = card.querySelectorAll("textarea, select, input:not([type=hidden])");
     for (var i = 0; i < fields.length; i += 1) {
-      if (changed(fields[i])) {
+      if (!fields[i].closest("details:not([open])") && changed(fields[i])) {
         return true;
       }
     }
