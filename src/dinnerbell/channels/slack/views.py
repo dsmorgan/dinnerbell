@@ -306,9 +306,10 @@ def proposal_modal(v: EventView, origin: ids.ViewOrigin) -> dict[str, Any]:
     and the modal names the run it asked about (``origin.run``)."""
     modes = [option(m.label, m.value) for m in Mode]
     late = origin.run is not None
+    join_late = f"*{JOIN_LATE_PROMPT}* {JOIN_LATE_TO_ADD} {labels.LATE_VOTE_NOTE[v.late_vote_counts]}"
     blocks: list[Block] = [
         _intro(v),
-        *([section(f"*{JOIN_LATE_PROMPT}* {JOIN_LATE_TO_ADD}")] if late else []),
+        *([section(join_late)] if late else []),
         context(ADD_PICK_NOTE),
         _input("mode", "How", {"type": "static_select", "options": modes}, optional=False),
     ]
@@ -325,9 +326,7 @@ def proposal_modal(v: EventView, origin: ids.ViewOrigin) -> dict[str, Any]:
     return _modal("Add a proposal", ids.PROPOSAL_VIEW, origin, blocks, "Join late and add" if late else "Add")
 
 
-JOIN_LATE_TO_ADD = (
-    "Adding a proposal joins you late: you're in, and your vote shows, but counts only if the coordinator says so."
-)
+JOIN_LATE_TO_ADD = "Adding a proposal joins you late, so you're in."
 ADD_PICK_NOTE = (
     "You'll be the one to pick it up, cook it, or order it, whichever way you choose. "
     "A home meal with a cook list you're not on needs one of its cooks to have offered to cook."

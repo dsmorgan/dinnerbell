@@ -1209,13 +1209,11 @@ def maybe_resolved_message(notification: note.MaybeResolved, ctx: RenderContext)
 LATE_VOTE = "Join late and vote"
 
 
-def join_late_vote_prompt(event_id: int, proposal_id: int) -> Message:
+def join_late_vote_prompt(event_id: int, proposal_id: int, *, counts: bool = False) -> Message:
     """The private reply to **Vote** from someone who isn't in (#76): it asks first, and its
-    button joins them late and casts that vote."""
-    text = (
-        f"*{JOIN_LATE_PROMPT}* Voting joins you late: you're in, and your vote shows, but counts only "
-        "if the coordinator says so."
-    )
+    button joins them late and casts that vote. ``counts``: their vote would count at once
+    (``late_vote_counts``)."""
+    text = f"*{JOIN_LATE_PROMPT}* Voting joins you late, so you're in. {labels.LATE_VOTE_NOTE[counts]}"
     join = button(LATE_VOTE, ids.JOIN_LATE_VOTE, ids.proposal_value(event_id, proposal_id), style="primary")
     return _finish(JOIN_LATE_PROMPT, [section(text), actions(join, block_id="join-late")])
 

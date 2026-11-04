@@ -121,6 +121,7 @@ from dinnerbell.domain.events import (
 )
 from dinnerbell.domain.feedback import InvalidFeedback
 from dinnerbell.domain.guests import REFUSED, GuestAction
+from dinnerbell.domain.labels import LATE_VOTE_NOTE
 from dinnerbell.domain.meals import InvalidMeal, Slot
 from dinnerbell.domain.members import Member, Role
 from dinnerbell.domain.notifications import (
@@ -200,12 +201,10 @@ WAY_SET = {Mode.PICKUP: "It's pickup if it wins.", Mode.DELIVERY: "It's delivery
 """The reply to setting a takeout pick's way while voting (#178)."""
 ADJUSTED_NOTHING = "Nothing changed."
 NOBODY_IN = "Nobody's in, so there's nobody to assign."
-JOINED_LATE = "You're in for {slot}, joining late. Your vote shows, but counts only if the coordinator says so."
+JOINED_LATE = "You're in for {slot}, joining late. {vote}"
 ALREADY_IN = "You're in for {slot} already."
-LATE_VOTED = (
-    "You're in for {slot}, joining late, and your vote is in. It counts only if the coordinator says so. "
-    "Tap Vote again to take it back."
-)
+LATE_VOTED = "You're in for {slot}, joining late, and your vote is in. {vote} Tap Vote again to take it back."
+"""``vote`` is ``labels.LATE_VOTE_NOTE`` for their answer now (``_late_vote``)."""
 LATE_SWITCHED = {
     (ids.LateSwitch.TAKING_PART, True): "{name} is taking part again.",
     (ids.LateSwitch.TAKING_PART, False): "{name} is out for this call now, and they've been told.",
@@ -956,7 +955,8 @@ class Interactions:
                 try:
                     voted = await calls.toggle_vote(db, member, event_id, proposal_id, now=now)
                 except JoinLateFirst as exc:  # they missed the answers: ask first (#76)
-                    prompt = join_late_vote_prompt(event_id, proposal_id)
+                    view = await event_views.event_view(db, member, event_id, now=now)
+                    prompt = join_late_vote_prompt(event_id, proposal_id, counts=view.late_vote_counts)
                     activity.refused(exc, prompt.text, member, event_id=event_id, action=action_id)
                     return prompt
                 return VOTED if voted else UNVOTED
@@ -964,7 +964,7 @@ class Interactions:
                 event_id, proposal_id = ids.parse_proposal(value)
                 await calls.vote(db, member, event_id, proposal_id, join_late=True, now=now)
                 view = await event_views.event_view(db, member, event_id, now=now)
-                return LATE_VOTED.format(slot=view.event.slot.value)
+                return LATE_VOTED.format(slot=view.event.slot.value, vote=_late_vote(view))
             if action_id == ids.LOCK:
                 event_id, proposal_id = ids.parse_proposal(value)
                 await calls.lock(db, member, event_id, proposal_id, now=now)
@@ -1021,7 +1021,7 @@ class Interactions:
             if self._on_call_message(source):
                 await self._send_card(source, self._card(view, member, run=run), member, tap)
                 return None
-        return (JOINED_LATE if joined else ALREADY_IN).format(slot=view.event.slot.value)
+        return (JOINED_LATE if joined else ALREADY_IN).format(slot=view.event.slot.value, vote=_late_vote(view))
 
     async def _switch_late(self, member: Member, value: object) -> str:
         """A pick from the ⋯ beside a late joiner on the proposals message: the coordinator's
@@ -2008,6 +2008,11 @@ def which_call(slots: Sequence[Slot], *, when: str, command: str, day: str) -> s
         when=when,
         tries=_series(tries, "or"),
     )
+
+
+def _late_vote(view: EventView) -> str:
+    """How a late joiner's vote counts, from their answer now (#76)."""
+    return LATE_VOTE_NOTE[view.mine is not None and view.mine.vote_counts]
 
 
 def _series(words: Sequence[str], joiner: str) -> str:

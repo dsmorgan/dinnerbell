@@ -141,7 +141,7 @@
   {% set late_prompt = "You missed the answers. Join late?" %}
   {% if v.can.join_late %}
   <div class="join-late">
-    <p class="small">You missed the answers, but you can still join. You'll be in, and your vote shows, but it counts only if the coordinator says so.</p>
+    <p class="small">You missed the answers, but you can still join. Joining makes you in. {{ labels.LATE_VOTE_NOTE[v.late_vote_counts] }}</p>
     <div class="button-row">{{ act(e.id, base ~ "/join-late", labels.JOIN_LATE, "button small primary", {"run": e.run}) }}</div>
   </div>
   {% endif %}
@@ -293,7 +293,7 @@
       {{ hidden() }}
       {% if v.can.join_late %}
       <input type="hidden" name="join_late" value="1">
-      <p class="small">You missed the answers, so adding a proposal joins you late. Your vote shows, but counts only if the coordinator says so.</p>
+      <p class="small">You missed the answers, so adding a proposal joins you late. {{ labels.LATE_VOTE_NOTE[v.late_vote_counts] }}</p>
       {% endif %}
       <label class="field"><span>How</span>
         <select name="mode"><option value="pickup">Pickup</option><option value="delivery">Delivery</option><option value="cook">Cook</option></select>

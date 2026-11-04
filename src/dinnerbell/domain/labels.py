@@ -73,6 +73,12 @@ SHUFFLE = "Shuffle proposals"
 VIEW_ON_WEB = "View on web"
 """Every link to an event's page, as a button or a line of text."""
 
+LATE_VOTE_NOTE = {
+    False: "Your vote shows, but counts only if the coordinator says so.",
+    True: "You answered on time, so your vote counts.",
+}
+"""How joining late counts your vote (#76), by ``domain.events.late_vote_counts``."""
+
 CLOSE_LABELS = {Window.RESPOND: "Start the vote now", Window.VOTE: "Decide now"}
 """Close now, named for what it does to the open window (FR-56)."""
 CLOSE_SUBMIT = {Window.RESPOND: "Start the vote", Window.VOTE: "Decide now"}

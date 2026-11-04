@@ -31,6 +31,7 @@ from dinnerbell.domain.events import (
     Response,
     Window,
     default_roles,
+    late_vote_counts,
 )
 from dinnerbell.domain.guests import GuestAction, can_answer_for, check_can_invite, check_guest
 from dinnerbell.domain.labels import ROLE_WHO
@@ -195,6 +196,11 @@ class EventView:
     """Shuffles a call has left (FR-61); 0 when none would change anything."""
     roles: RolesChoice | None = None
     """What **Assign roles** offers, for someone who may use it."""
+
+    @property
+    def late_vote_counts(self) -> bool:
+        """Whether the viewer's vote would count at once if they joined late (``late_vote_counts``)."""
+        return late_vote_counts(self.mine)
 
     @property
     def id(self) -> int:
