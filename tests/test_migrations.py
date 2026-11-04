@@ -1988,10 +1988,10 @@ def _queued(settings: Settings) -> list[tuple[str, str, dict[str, object], bool]
 
 
 def test_0028_takes_back_unregistered_guests_badges_and_keeps_their_contributions(settings: Settings) -> None:
-    """Up deletes the awards of guests with no Slack user, and takes them out of badge posts and
-    recaps still waiting to go: a post that named only them is deleted. A member's and a
-    registered guest's awards, every contribution, and posts already delivered stay. Down changes
-    nothing."""
+    """Up deletes the awards of guests with no Slack user, active or not, and takes them out of
+    badge posts and recaps still waiting to go: a post that named only them is deleted. A
+    member's and a registered guest's awards, every contribution, and posts already delivered or
+    given up on stay. Down changes nothing."""
     _upgrade_to(settings, "0027_away")
     _populate_calls(settings)
     member = (
@@ -2008,20 +2008,27 @@ def test_0028_takes_back_unregistered_guests_badges_and_keeps_their_contribution
         settings,
         member + "VALUES (2, 1, 'Pat', NULL, 'guest', 0, 0, 0, 0, 0, 1, 0, NULL, :t, :t)",
         member + "VALUES (3, 1, 'Riley', NULL, 'guest', 0, 0, 0, 0, 0, 1, 0, 'U07RILEY', :t, :t)",
+        # Removed by an admin: still a guest with no Slack user, so their awards go too.
+        member + "VALUES (4, 1, 'Jo', NULL, 'guest', 0, 0, 0, 0, 0, 0, 0, NULL, :t, :t)",
+        "UPDATE member SET join_refused = 1 WHERE id = 4",
         "INSERT INTO contribution (household_id, member_id, kind, day, event_id, created_at) "
         "VALUES (1, 2, 'picked_up', '2026-10-21', 1, :t), (1, 3, 'picked_up', '2026-10-21', 1, :t)",
         "INSERT INTO badge_award (id, household_id, member_id, badge_key, tier, awarded_at, announcement) "
         "VALUES (1, 1, 1, 'chef', 'first', :t, 'announced'), (2, 1, 2, 'road_runner', 'first', :t, 'announced'), "
-        "(3, 1, 2, 'on_a_roll', 'first', :t, 'pending'), (4, 1, 3, 'road_runner', 'first', :t, 'pending')",
+        "(3, 1, 2, 'on_a_roll', 'first', :t, 'pending'), (4, 1, 3, 'road_runner', 'first', :t, 'pending'), "
+        "(5, 1, 4, 'chef', 'first', :t, 'announced')",
         outbox + f"(1, 'badges_earned', '{json.dumps({'key': 1, 'news': both})}', 'badges:1', :t, :t, :t, 0, NULL), "
         f"(1, 'badges_earned', '{json.dumps({'key': 2, 'news': guest_only})}', 'badges:2', :t, :t, :t, 0, NULL), "
         f"(1, 'badges_earned', '{json.dumps({'key': 5, 'news': guest_only})}', 'badges:5', :t, :t, :t, 1, :t), "
+        f"(1, 'badges_earned', '{json.dumps({'key': 3, 'news': both})}', 'badges:3', :t, :t, :t, 5, NULL), "
         f"(1, 'monthly_recap', '{json.dumps(recap_payload)}', 'recap:2026-10', :t, :t, :t, 0, NULL)",
     )
+    _execute(settings, "UPDATE outbox SET failed_at = :t WHERE idempotency_key = 'badges:3'")
     others = _rows_outside_m4(settings)
     contributions_before = _contributions(settings)
 
     _upgrade_to(settings, "0028_unregistered_guest_badges")
+    # Pat's are gone, and so is Jo's: removed or not, a guest with no Slack user keeps none.
     assert [(row[0], row[2]) for row in _badge_awards(settings)[1]] == [(1, 1), (4, 3)]
     assert _contributions(settings) == contributions_before
     queued = _queued(settings)
@@ -2030,11 +2037,13 @@ def test_0028_takes_back_unregistered_guests_badges_and_keeps_their_contribution
         ("event:2:run2:call_updated:1", False),
         ("badges:1", False),  # Sam is still in it
         ("badges:5", True),  # delivered already: history, untouched
+        ("badges:3", False),  # given up on: never sent, so untouched
         ("recap:2026-10", False),
     ]
     assert queued[2][2]["news"] == _news((1, "Sam"))
     assert queued[3][2]["news"] == guest_only
-    assert queued[4][2] == recap_payload | {"badges": _news((1, "Sam"))}
+    assert queued[4][2]["news"] == both
+    assert queued[5][2] == recap_payload | {"badges": _news((1, "Sam"))}
     after = _rows_outside_m4(settings)
     assert {k: v for k, v in after.items() if k != "outbox"} == {k: v for k, v in others.items() if k != "outbox"}
 
