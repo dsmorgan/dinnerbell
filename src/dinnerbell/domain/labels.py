@@ -100,6 +100,9 @@ DECISION_TIME_SHIFTS = {"plus15": 15, "plus30": 30, "minus15": -15}
 admin's moves of the vote window, without closing it now, which is **Decide now**."""
 SHIFT_LABELS = {"plus15": "+15 min", "plus30": "+30 min", "minus15": "\u221215 min"}
 SHIFT_WORDS = {"plus15": "15 minutes later", "plus30": "30 minutes later", "minus15": "15 minutes earlier"}
+EARLIER_TITLE = "Move voting 15 minutes earlier?"
+EARLIER_CLOSES = "If the new time has already passed, voting closes now, and the votes so far decide the plan."
+"""What moving the decision time earlier can do, on the web's confirmation and Slack's modal."""
 
 
 def decides_now(item: str) -> str:

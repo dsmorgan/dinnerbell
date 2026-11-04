@@ -55,7 +55,7 @@
       },
       "label": {
         "emoji": true,
-        "text": "Move it",
+        "text": "How far",
         "type": "plain_text"
       },
       "optional": false,

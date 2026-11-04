@@ -248,7 +248,7 @@ async def move_decision_time(
     async with locked_event(db, actor.household_id, event_id, now) as event:
         await guest_rules.gate(db, event, actor, GuestAction.MOVE_DECISION_TIME)
         check_run(event, run)
-        capacity = check_can_move_decision_time(event, actor)
+        capacity = check_can_move_decision_time(event, actor, now=now)
         check_guest_keeps_voting_open(event, actor, minutes, now=now)
         current, moved = await lifecycle.move_window(db, event, Window.VOTE, minutes, now)
         window = Window.VOTE.value

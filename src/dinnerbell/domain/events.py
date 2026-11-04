@@ -1184,21 +1184,38 @@ GUEST_DECIDES_NOW = (
 )
 
 
-def check_can_move_decision_time(event: Event, actor: Member) -> ActingAs:
+def check_can_move_decision_time(event: Event, actor: Member, *, now: datetime) -> ActingAs:
     """Move the decision time earlier or later while voting (#198, FR-6): the coordinator, a
-    guest coordinator too (FR-58), or any admin. Returns the capacity they act in, for the audit
-    row. The admin moves either window from the web with ``call_admin.move_deadline``."""
+    guest coordinator too (FR-58), or any admin, until it has passed (``check_deadline_ahead``).
+    Returns the capacity they act in, for the audit row. The admin moves either window from the
+    web with ``call_admin.move_deadline``."""
     if not actor.active:
         raise EventRuleViolation("Only active members can move the decision time.", code="inactive")
     if event.is_offer:
         raise EventRuleViolation("An offer has no window to move. It closes at its time.", code="is_offer")
     if event.state is not EventState.VOTING or event.vote_deadline is None:
         raise EventRuleViolation("You can move the decision time only while voting is open.", code="voting_closed")
+    check_deadline_ahead(event, Window.VOTE, now=now)
     if is_coordinator(event, actor):
         return ActingAs.COORDINATOR
     if actor.is_admin:
         return ActingAs.ADMIN
     raise EventRuleViolation(DECISION_TIME_MOVERS, code="not_coordinator")
+
+
+WINDOW_PASSED = {
+    Window.RESPOND: ("Answers have closed, so their deadline can't move.", "responses_closed"),
+    Window.VOTE: ("Voting has closed, so the decision time can't move.", "voting_closed"),
+}
+
+
+def check_deadline_ahead(event: Event, window: Window, *, now: datetime) -> None:
+    """A deadline that has passed is the scheduler's to act on. Moving it later in the gap
+    before the next tick would reopen a window that has closed, so it's refused."""
+    deadline = event.respond_deadline if window is Window.RESPOND else event.vote_deadline
+    if deadline is not None and deadline <= now:
+        message, code = WINDOW_PASSED[window]
+        raise EventRuleViolation(message, code=code)
 
 
 def check_guest_keeps_voting_open(event: Event, actor: Member, minutes: int, *, now: datetime) -> None:

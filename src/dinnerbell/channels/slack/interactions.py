@@ -200,7 +200,7 @@ WITHDRAWN = {
 }
 CALLED_OFF = "You called off {slot} for {day}."
 CLOSED = {Window.RESPOND: "Responses are closed for {slot}.", Window.VOTE: "Voting is closed for {slot}."}
-MOVED = "Voting closes at {at} now."
+MOVED = "Voting now closes at {at}."
 """The reply to moving the decision time (#198); one moved into the past says ``CLOSED`` instead."""
 VOTED = "Vote counted. Tap Vote again to take it back."
 SHUFFLED = "Shuffled: {replaced} replaced. Everyone sees the new set."
@@ -1458,7 +1458,7 @@ class Interactions:
             check_can_cancel(view.event, member)
             await self.api.open_view(trigger, cancel_modal(view, origin))
         elif choice is ids.MenuChoice.MOVE:
-            check_can_move_decision_time(view.event, member)
+            check_can_move_decision_time(view.event, member, now=self.clock())
             await self.api.open_view(trigger, decision_time_modal(view, origin))
         else:
             window = check_can_close_window(view.event, member)
@@ -1484,7 +1484,8 @@ class Interactions:
             view = await event_views.event_view(db, member, event_id, now=self.clock())
         if view.event.state is not EventState.VOTING:
             return CLOSED[Window.VOTE].format(slot=view.event.slot.value)
-        return MOVED.format(at=local_clock(moved, view.info.timezone))
+        at = local_clock(moved, view.info.timezone)
+        return MOVED.format(at=f"{at} on {day_label(view.event.day)}" if view.info.early else at)
 
     async def _cancel(self, member: Member, event_id: int, reason: str | None, run: int | None) -> str:
         """Call off ``event_id``; ``run`` is the run the member saw, or None from the slash

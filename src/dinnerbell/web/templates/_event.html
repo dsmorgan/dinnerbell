@@ -423,7 +423,8 @@
   <p class="row-label small muted" id="event-{{ e.id }}-decision-time">{{ labels.MOVE_DECISION_TIME }}</p>
   <div class="button-row" role="group" aria-labelledby="event-{{ e.id }}-decision-time">
     {% for shift, label in labels.SHIFT_LABELS.items() %}
-    {{ act(e.id, base ~ "/decision-time", label, "button small", {"shift": shift, "run": e.run}) }}
+    {%- set confirm = labels.web_confirm(labels.EARLIER_TITLE, labels.EARLIER_CLOSES) if shift == "minus15" else None %}
+    {{ act(e.id, base ~ "/decision-time", label, "button small", {"shift": shift, "run": e.run}, confirm=confirm) }}
     {% endfor %}
   </div>
   {% endif %}
@@ -462,7 +463,7 @@
     <summary class="small">Admin</summary>
     {% if v.can.move_window %}
     <div class="button-row" role="group" aria-label="Move the {{ 'response' if v.can.move_window.value == 'respond' else 'vote' }} deadline">
-      {% for shift, label in (("plus15", "+15 min"), ("plus30", "+30 min"), ("minus15", "−15 min")) %}
+      {% for shift, label in labels.SHIFT_LABELS.items() %}
       {{ act(e.id, base ~ "/admin/deadline", label, "button small", {"window": v.can.move_window.value, "shift": shift}) }}
       {% endfor %}
     </div>
