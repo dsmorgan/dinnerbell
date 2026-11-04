@@ -455,7 +455,7 @@ def test_a_retired_flag_is_ignored_and_a_typo_still_stops_startup(
     assert "unknown feature flag 'old_won'" in error_for(monkeypatch, DINNERBELL_FEATURES="old_one,old_won")
 
 
-def test_serve_warns_once_about_retired_flags(
+def test_the_cli_warns_once_about_retired_flags(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     from dinnerbell import main as main_module

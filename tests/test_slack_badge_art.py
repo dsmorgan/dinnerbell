@@ -47,9 +47,9 @@ from tests.test_contributions import dinner
 pytestmark = pytest.mark.anyio
 
 CHEF = ("chef", "gold")
+SCOUT = ("scout", "first")
 SETTLE = 1.0
 """The most a test's teardown waits for pictures still being made, before it cancels them."""
-SCOUT = ("scout", "first")
 
 
 @pytest.fixture

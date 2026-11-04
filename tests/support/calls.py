@@ -90,15 +90,22 @@ class House:
     people: dict[str, Member] = field(default_factory=dict)
     items: dict[str, CatalogItem] = field(default_factory=dict)
     tags: dict[str, Tag] = field(default_factory=dict)
-    closers: list[Callable[[], Awaitable[None]]] = field(default_factory=list, repr=False)
+    closers: list[Callable[[], Awaitable[None]]] = field(default_factory=list, repr=False, compare=False)
     """What ``close`` awaits, newest first, such as ``SlackConnection.stop`` for each connection
     ``tests.support.slack.wire`` made."""
 
     async def close(self) -> None:
-        """Stop what the test started on this household, before its database closes (#93). A
-        fixture that yields the house awaits this after the test."""
+        """Stop what the test started on this household, before its database closes (#93). The
+        badge art tests' ``house`` fixture awaits this after each test. Every closer runs, even
+        after one raises; the first error is raised once all have run."""
+        error: BaseException | None = None
         while self.closers:
-            await self.closers.pop()()
+            try:
+                await self.closers.pop()()
+            except Exception as exc:
+                error = error or exc
+        if error is not None:
+            raise error
 
     def __getitem__(self, name: str) -> Member:
         return self.people[name]
