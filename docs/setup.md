@@ -2,7 +2,7 @@
 
 This guide installs Dinnerbell from a git clone. You create a Slack app, run the container, put it behind HTTPS, and sign your household in. To install from a release bundle without git, follow [install.md](install.md) instead. Once Dinnerbell works, harden it with [hardening.md](hardening.md).
 
-The commands use podman. With Docker, replace `podman-compose` with `docker compose` and `podman` with `docker`. The [configuration reference](configuration.md) lists every setting.
+The commands use podman. With Docker, replace `podman-compose` with `docker compose` and `podman` with `docker`. If you keep secrets in files, add the compose files to every `podman-compose` command, as [Run compose with secret files](#run-compose-with-secret-files) shows. The [configuration reference](configuration.md) lists every setting.
 
 <a id="status"></a>
 
@@ -272,6 +272,8 @@ The command prints the backup's name, such as `/data/backups/pre-upgrade-0.2.0-2
 
 Production runs a release tag, never `latest` or `main`, and your clone stays checked out at that release so that `compose.yaml` matches the image. Releases are listed in [CHANGELOG.md](../CHANGELOG.md). If you run a test instance, follow [Promote a release](test-instance.md#promote-a-release) instead, which rehearses on a copy of your data first.
 
+If you keep secrets in files, add `-f compose.yaml -f compose.secrets.yaml` to each `podman-compose` command below, as [Run compose with secret files](#run-compose-with-secret-files) shows. Without them, Dinnerbell starts without its secrets and restarts in a loop.
+
 1. Read the **Upgrade notes** of every release between yours and the new one.
 2. [Back up now](#back-up-now). Note the file name, and copy the backup off the host.
 3. Check out the new release, replacing `vX.Y.Z`.
@@ -293,6 +295,13 @@ Production runs a release tag, never `latest` or `main`, and your clone stays ch
    podman-compose down && podman-compose up -d
    ```
 
+   With secrets in files:
+
+   ```sh
+   podman-compose -f compose.yaml -f compose.secrets.yaml down
+   podman-compose -f compose.yaml -f compose.secrets.yaml up -d
+   ```
+
 6. Check that the page footer shows the new version, and that `/healthz` returns 200 with `"slack":"connected"`.
 
 Migrations run on start and only move forward: an older version refuses to open the upgraded database. To go back, see [Roll back](#roll-back).
@@ -301,7 +310,7 @@ If the upgrade notes say the Slack manifest changed, paste the new manifest unde
 
 ## Roll back
 
-To roll back, run the previous release on the backup you took before the upgrade. Anything recorded since that backup is lost, so roll back soon after a bad upgrade.
+To roll back, run the previous release on the backup you took before the upgrade. Anything recorded since that backup is lost, so roll back soon after a bad upgrade. If you keep secrets in files, add the compose files to each `podman-compose` command, as in [Upgrade](#upgrade).
 
 1. Stop the service.
 
@@ -334,6 +343,13 @@ To roll back, run the previous release on the backup you took before the upgrade
    podman-compose up -d
    ```
 
+   With secrets in files:
+
+   ```sh
+   podman-compose -f compose.yaml -f compose.secrets.yaml pull
+   podman-compose -f compose.yaml -f compose.secrets.yaml up -d
+   ```
+
 6. Check that the footer shows the previous version.
 
 When a fixed release ships, [upgrade](#upgrade) to it as usual.
@@ -350,7 +366,7 @@ gh attestation verify oci://ghcr.io/dsmorgan/dinnerbell@sha256:... \
   --source-ref refs/tags/vX.Y.Z
 ```
 
-The release notes on GitHub list each release's digest; compare it with yours. A release tag is never re-pushed, but to run exactly what you verified, pin `image:` to `ghcr.io/dsmorgan/dinnerbell@sha256:...` in a `compose.override.yaml`. Don't use `podman auto-update` or Watchtower: they follow moving tags.
+The release notes on GitHub list each release's digest; compare it with yours. A release tag is never re-pushed, but to run exactly what you verified, pin `image:` to `ghcr.io/dsmorgan/dinnerbell@sha256:...` in a `compose.override.yaml` (with secrets in files, [name it with `-f`](#run-compose-with-secret-files)). Don't use `podman auto-update` or Watchtower: they follow moving tags.
 
 ## Optional setup
 
@@ -393,7 +409,7 @@ By default, the four secrets (`DINNERBELL_SECRET_KEY`, `DINNERBELL_OIDC_CLIENT_S
    podman-compose -f compose.yaml -f compose.secrets.yaml up -d
    ```
 
-From now on, pass the same two `-f` options to every `up`. Without them, Dinnerbell stops with `NAME is required but not set`.
+From now on, pass the same two `-f` options to every production compose command. If you have a `compose.override.yaml`, add `-f compose.override.yaml` after them, in step 5 too. [Run compose with secret files](#run-compose-with-secret-files) explains why.
 
 To change a secret, delete its file, write it again, repeat step 3, and recreate the service. To go back to `.env`, put the lines back and run `up` without `compose.secrets.yaml`. For the test instance, see [Secrets in files for test](test-instance.md#secrets-in-files-for-test).
 
@@ -401,10 +417,22 @@ If Dinnerbell stops at start because of a secret file, the message names the fil
 
 | Message | Cause | Fix |
 |---|---|---|
-| `Can't read the secret file /run/secrets/NAME (PermissionError)` | The file isn't owned by UID 10001 with mode 600. | Repeat step 3. With SELinux enforcing and podman-compose 1.6.0 or later, add `x-podman.relabel: z` to the secret in a `compose.override.yaml` (untested). |
+| `Can't read the secret file /run/secrets/NAME (PermissionError)` | The file isn't owned by UID 10001 with mode 600. | Repeat step 3. With SELinux enforcing and podman-compose 1.6.0 or later, add `x-podman.relabel: z` to the secret in a `compose.override.yaml`, and add `-f compose.override.yaml` last (untested). |
 | `/run/secrets/NAME is a directory, not a file` | The file didn't exist when the engine mounted it, so the engine created a directory. | Remove the directory, create the file, and recreate the service. |
 | `NAME is required but not set` | The file is empty, or you started without `compose.secrets.yaml`. | Write the secret into the file, or add `-f compose.yaml -f compose.secrets.yaml`. |
 | `NAME is set in the environment ... with different values` | A line in `.env` and the file disagree. | Delete the line from `.env`. |
+
+#### Run compose with secret files
+
+After you move the secrets to files, pass `-f compose.yaml -f compose.secrets.yaml` to every production compose command, not only `up`: `pull`, `down`, `exec`, `run`, `logs`, and the rest. Without them, `up` starts Dinnerbell without its secrets, so it stops with `NAME is required but not set`, and compose restarts it in a loop. `run` starts a one-off container without them, so commands such as `catalog export` fail the same way.
+
+When you pass `-f`, compose no longer reads `compose.override.yaml` on its own. If you have one, add it last:
+
+```sh
+podman-compose -f compose.yaml -f compose.secrets.yaml -f compose.override.yaml up -d
+```
+
+Elsewhere, these docs show plain `podman-compose` commands. Add the same `-f` options to each of them, and to the [boot unit](#start-at-boot) if you use it. The test instance needs none of this: `deploy/dinnerbell-test` picks its files itself.
 
 ### Start at boot
 
@@ -430,7 +458,7 @@ Rootless podman has no daemon, so after a reboot Dinnerbell stays down until you
    [Service]
    # Only if your install isn't in ~/dinnerbell:
    WorkingDirectory=/srv/dinnerbell
-   # Only if you keep secrets in files:
+   # Only if you keep secrets in files (with a compose.override.yaml, add -f compose.override.yaml after them):
    ExecStart=
    ExecStart=/usr/bin/env podman-compose -f compose.yaml -f compose.secrets.yaml up -d
    # Only if `systemctl --version` is older than 244, such as on RHEL 8, which refuses the unit otherwise:

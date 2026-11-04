@@ -148,6 +148,8 @@ To copy a catalog between production and a [test instance](test-instance.md), ex
    deploy/dinnerbell-test run --rm -T dinnerbell catalog export > catalog.yaml   # test
    ```
 
+   If production keeps its secrets in files, add `-f compose.yaml -f compose.secrets.yaml` after `podman-compose`, or the export fails with `NAME is required but not set`. See [Run compose with secret files](setup.md#run-compose-with-secret-files).
+
 2. In the other instance, on the **Catalog** page, select **Import a catalog file**, upload `catalog.yaml`, and select **Preview**.
 3. Check what it adds and changes, then select **Apply**.
 

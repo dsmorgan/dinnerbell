@@ -35,6 +35,10 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 - **The Set up the household card on Today** (#177). Its **Manage members** and **Schedule** buttons repeated the menu's **Admin** and **Schedule** links, which show at every screen width.
 
+### Fixed
+
+- **Upgrade and restart steps work with secrets in files** (#193). Documentation only. The upgrade, roll back, and restart commands in `docs/install.md`, `docs/setup.md`, `docs/test-instance.md`, `docs/troubleshooting.md`, and `docs/configuration.md` left out `-f compose.yaml -f compose.secrets.yaml`, so an install that keeps its secrets in files started without them and restarted in a loop. Each page now says to add both `-f` options to every production compose command, and the upgrade and roll back steps show the full commands. A new section, "Run compose with secret files" in `docs/setup.md`, says that with `-f`, compose no longer reads `compose.override.yaml` on its own, so you add `-f compose.override.yaml` last if you have one; this matters for a digest pin or a mounted catalog. The comments in `compose.yaml`, `compose.secrets.yaml`, and `deploy/dinnerbell.service` say the same. Troubleshooting has a row for the restart loop.
+
 ### Upgrade notes
 
 - **Offers:** revision `0025_usual_offers_done` adds a column to call answers on the first start, and marks every answer already saved as having had its usual offers, so no saved answer changes and none gains an offer later. Members who haven't answered an open call yet get their usual offers when they answer **In**. To go back to 0.12.0, restore the backup you made before upgrading.

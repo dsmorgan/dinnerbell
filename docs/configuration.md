@@ -8,6 +8,8 @@ After you change `.env`, recreate the service so that the container picks up the
 podman-compose down && podman-compose up -d
 ```
 
+If you keep secrets in files, add `-f compose.yaml -f compose.secrets.yaml` to each command, as [Run compose with secret files](setup.md#run-compose-with-secret-files) shows.
+
 ## Settings
 
 These settings are required:
@@ -72,7 +74,7 @@ To start with a catalog already loaded, import a file on first start, before you
    ```
 
 2. Edit `seed/my-catalog.yaml`. The format is in [catalog-format.md](catalog-format.md).
-3. Create `compose.override.yaml` next to `compose.yaml` with this content, to mount the file read-only. Both compose tools read it automatically, and git ignores it.
+3. Create `compose.override.yaml` next to `compose.yaml` with this content, to mount the file read-only. Both compose tools read it automatically, unless you pass `-f`, and git ignores it. With secrets in files, add `-f compose.override.yaml` after the other `-f` options.
 
    ```yaml
    services:

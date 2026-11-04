@@ -2,7 +2,7 @@
 
 Find your symptom in the table. A startup error names the setting and how to fix it; [setup.md](setup.md#9-run-dinnerbell) has the rules for each value, and [Keep secrets in files](setup.md#keep-secrets-in-files) covers secret file errors. For the test instance, see [Troubleshoot the test instance](test-instance.md#troubleshoot-the-test-instance).
 
-After you fix a setting, recreate the service: `podman-compose down && podman-compose up -d`. With Docker, use `docker compose`.
+After you fix a setting, recreate the service: `podman-compose down && podman-compose up -d`. With Docker, use `docker compose`. If you keep secrets in files, add `-f compose.yaml -f compose.secrets.yaml` to each `podman-compose` command on this page, as [Run compose with secret files](setup.md#run-compose-with-secret-files) shows.
 
 ## Common problems
 
@@ -17,6 +17,7 @@ After you fix a setting, recreate the service: `podman-compose down && podman-co
 | Startup error about a token prefix | The tokens are swapped. | The app token starts with `xapp-`, and the bot token with `xoxb-`. |
 | The log warns `ignoring environment variables that match no setting` | A `DINNERBELL_` name in `.env` is misspelled, so that setting keeps its default. | Fix the name (see [configuration.md](configuration.md)). |
 | `migrate` or `serve` says `The database is locked` | Another process, such as `reset-history`, held the write lock. Nothing changed. | Wait for it to finish, and try again. |
+| After an upgrade or a restart, Dinnerbell restarts in a loop, and the log says `NAME is required but not set` | You keep secrets in files, but ran compose without `compose.secrets.yaml`. | Recreate the service with `-f compose.yaml -f compose.secrets.yaml`, and `-f compose.override.yaml` after them if you have one. See [Run compose with secret files](setup.md#run-compose-with-secret-files). |
 | Production starts with an empty database | You ran compose from another directory, with another project name, or as another user, so it created a new volume. | Run `podman-compose down`, and start it again as before. Your data is still in the old volume. |
 | `/healthz` reports `"slack": "not_configured"` | `DINNERBELL_SLACK_BOT_TOKEN`, `DINNERBELL_SLACK_APP_TOKEN` (in `.env` or its secret file), or `DINNERBELL_SLACK_CHANNEL` is missing. The log says which. | Set all three. |
 | `/healthz` reports `"slack": "disconnected"` for more than a minute | The host can't reach Slack. | Allow outbound HTTPS and WebSocket connections to `slack.com` and `wss-primary.slack.com`. |
