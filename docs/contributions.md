@@ -16,6 +16,8 @@ A call or offer counts the moment it's done. Each person gets one count per kind
 
 Only members earn the at-the-table, answered-quickly, idea, hosting, Gambler, and feedback counts: a guest doesn't choose the meal or give feedback.
 
+A guest without Slack, whom the inviting member answers for, earns no badges, because they can't see them. Their counts still go toward the household's totals and the monthly recap. When an admin links them to Slack or makes them a member, they get the badges those counts reach, without a post.
+
 A call counts once, even if two people tap **Mark done** together. Called-off and discarded calls, and meals logged by hand, count for nothing.
 
 When an admin corrects who cooked, picked up, or ordered after the meal is done, the count moves to the person who has the role now. They earn the badges it reaches, announced as usual, and the person who lost it loses each tier their counts no longer reach on the current counts, even a tier they first earned at a lower count before an admin raised it. A tier their counts never reached on the raised count stays, as it does when an admin raises one. A pending badge taken back is never announced, and the den never celebrates it. One already announced leaves Stats, App Home, the household's newest badges, and future recaps, but a post already sent or queued in Slack stays. See [Coordinating](coordinating.md#what-an-admin-can-do-beyond-that).
@@ -46,7 +48,7 @@ A guest sees **Your badges** only: the four pitching-in badges and On a Roll, wi
 
 ## App Home
 
-Each member's App Home has a short **Your badges** section with their own badges at their highest tiers, as art or text tags, and the badge closest to its next tier, such as "Next: Chef · Silver, 7 to go (43 of 50 meals cooked)". A guest's App Home has no badge section, though a guest's badges are still announced in the channel.
+Each member's App Home has a short **Your badges** section with their own badges at their highest tiers, as art or text tags, and the badge closest to its next tier, such as "Next: Chef · Silver, 7 to go (43 of 50 meals cooked)". A guest's App Home has no badge section, though a registered guest's badges are still announced in the channel.
 
 ## Changing the counts
 

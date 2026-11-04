@@ -30,6 +30,7 @@ from dinnerbell.db.models import (
     MealLogRow,
     ResponseRow,
 )
+from dinnerbell.domain import notifications as note
 from dinnerbell.domain.badges import (
     DEFAULT_LADDERS,
     Announcement,
@@ -46,7 +47,7 @@ from dinnerbell.domain.feedback import FeedbackInput, Rating
 from dinnerbell.domain.guests import GuestInput
 from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.members import Member, Role
-from dinnerbell.services import calls, contributions, feedback, fun, guests, offers, stats
+from dinnerbell.services import announcements, calls, contributions, feedback, fun, guests, offers, stats
 from dinnerbell.services.database import Database, open_database
 from dinnerbell.services.errors import Forbidden
 from dinnerbell.services.offers import OfferInput
@@ -407,37 +408,128 @@ async def test_the_first_start_on_three_ladders_awards_what_they_reach_quietly(h
 # Who counts: guests, late joiners, and offers --------------------------------------------------
 
 
-async def test_a_guest_who_picks_up_earns_it_and_the_member_who_brought_them_hosted(house: House) -> None:
+RILEYS_BADGES = {
+    (BadgeKey.ROAD_RUNNER, Tier.FIRST),
+    (BadgeKey.ORDER_UP, Tier.FIRST),
+    (BadgeKey.ON_A_ROLL, Tier.FIRST),
+}
+"""What Riley's pickup and order earn a guest who earns badges: Riley picks up, and nobody else
+could order, so Riley did (#178)."""
+
+
+async def riley_picks_up(house: House, *, slack_user_id: str | None = None) -> Member:
+    """A dinner Sam brings Riley to, a new guest who picks up: registered with ``slack_user_id``
+    before it's done, or never. Returns Riley as they are once it's done."""
     riley: list[Member] = []
 
     async def invite(event_id: int) -> None:
         invited = await act(house, guests.invite, house["Sam"], event_id, new_guest=GuestInput("Riley"))
         riley.append(invited.guest)
         await act(house, guests.answer_for, house["Sam"], event_id, riley[0].id, role=RoleOffer.PICKUP)
+        if slack_user_id is not None:
+            riley[0] = await act(house, guests.set_guest_slack_user, house["Alex"], riley[0].id, slack_user_id)
 
     await dinner(house, pickup=None, ins=("Alex", "Sam"), while_answering=invite)
+    return riley[0]
+
+
+async def held_by(house: House, member: Member) -> dict[tuple[BadgeKey, Tier], Announcement]:
     async with house.sessionmaker() as db:
-        by_kind = await ContributionRepository(db).counts(house.household.id, riley[0].id)
-        # At the table too, but that is for members to earn. Nobody else could order, so Riley did (#178).
-        assert by_kind == {Kind.PICKED_UP: 1, Kind.ORDERED: 1}
-        held = await BadgeRepository(db).for_member(house.household.id, riley[0].id)
-        assert {(a.badge, a.tier) for a in held} == {
-            (BadgeKey.ROAD_RUNNER, Tier.FIRST),
-            (BadgeKey.ORDER_UP, Tier.FIRST),
-            (BadgeKey.ON_A_ROLL, Tier.FIRST),
+        return {
+            (a.badge, a.tier): a.announcement
+            for a in await BadgeRepository(db).for_member(member.household_id, member.id)
         }
+
+
+async def test_an_unregistered_guest_who_picks_up_counts_it_and_earns_no_badge(house: House) -> None:
+    riley = await riley_picks_up(house)
+    async with house.sessionmaker() as db:
+        by_kind = await ContributionRepository(db).counts(house.household.id, riley.id)
+        # At the table too, but that is for members to earn.
+        assert by_kind == {Kind.PICKED_UP: 1, Kind.ORDERED: 1}
+        totals = await ContributionRepository(db).totals(house.household.id)
+    assert (totals[Kind.PICKED_UP], totals[Kind.ORDERED]) == (1, 1)  # the household's totals have it
+    assert await held_by(house, riley) == {}  # #201: they can't see or manage badges
     assert (await counts(house, "Sam"))[Kind.HOSTED] == 1
+    assert await announcements.announce_badges(house.sessionmaker, house.clock()) == 1
+    (post,) = [note.from_payload(e.kind, e.payload) for e in await house.outbox() if e.kind == "badges_earned"]
+    assert isinstance(post, note.BadgesEarned)
+    assert [n.person.name for n in post.news] == ["Alex", "Sam"]  # never Riley
+    # Catching up on start, or a lowered threshold, leaves them out too.
+    async with house.sessionmaker() as db:
+        await contributions.ensure_backfilled(db, house.household.id, now=house.clock())
+    await act(house, contributions.set_thresholds, house["Alex"], every(1, 2, 3, 4, 5))
+    assert await held_by(house, riley) == {}
+
+
+async def test_a_registered_guest_who_picks_up_earns_it(house: House) -> None:
+    riley = await riley_picks_up(house, slack_user_id="U07RILEY")
+    assert await held_by(house, riley) == dict.fromkeys(RILEYS_BADGES, Announcement.PENDING)
+    assert await announcements.announce_badges(house.sessionmaker, house.clock()) == 1
+    (post,) = [note.from_payload(e.kind, e.payload) for e in await house.outbox() if e.kind == "badges_earned"]
+    assert isinstance(post, note.BadgesEarned)
+    assert [n.person.name for n in post.news] == ["Alex", "Riley", "Sam"]
+
+
+async def test_linking_a_guest_to_slack_awards_what_they_reached_quietly_and_unlinking_keeps_it(
+    house: House,
+) -> None:
+    riley = await riley_picks_up(house)
+    await announcements.announce_badges(house.sessionmaker, house.clock())
+    before = await house.outbox()
+    async with house.sessionmaker() as db:
+        totals = await ContributionRepository(db).totals(house.household.id)
+
+    riley = await act(house, guests.set_guest_slack_user, house["Alex"], riley.id, "U07RILEY")
+    assert await held_by(house, riley) == dict.fromkeys(RILEYS_BADGES, Announcement.SKIPPED)
+    assert await announcements.announce_badges(house.sessionmaker, house.clock()) == 0
+    assert await house.outbox() == before  # never announced
+    async with house.sessionmaker() as db:
+        assert await ContributionRepository(db).totals(house.household.id) == totals
+        newest = await BadgeRepository(db).recent(house.household.id, 20)
+    assert newest and riley.id not in {a.member_id for a in newest}  # not news
+
+    riley = await act(house, guests.set_guest_slack_user, house["Alex"], riley.id, "")
+    assert not riley.earns_badges
+    assert await held_by(house, riley) == dict.fromkeys(RILEYS_BADGES, Announcement.SKIPPED)
+
+
+async def test_promoting_an_unregistered_guest_awards_what_they_reached_quietly(house: House) -> None:
+    riley = await riley_picks_up(house)
+    riley = await act(house, guests.promote, house["Alex"], riley.id, Role.MEMBER, email="riley@example.com")
+    assert await held_by(house, riley) == dict.fromkeys(RILEYS_BADGES, Announcement.SKIPPED)
+    assert await announcements.announce_badges(house.sessionmaker, house.clock()) == 1  # Alex's and Sam's
+    (post,) = [note.from_payload(e.kind, e.payload) for e in await house.outbox() if e.kind == "badges_earned"]
+    assert isinstance(post, note.BadgesEarned)
+    assert [n.person.name for n in post.news] == ["Alex", "Sam"]
+
+
+async def test_a_guest_unlinked_before_the_post_is_left_out_of_it_and_of_the_newest_badges(house: House) -> None:
+    riley = await riley_picks_up(house, slack_user_id="U07RILEY")
+    riley = await act(house, guests.set_guest_slack_user, house["Alex"], riley.id, "")
+    assert await announcements.announce_badges(house.sessionmaker, house.clock()) == 1
+    (post,) = [note.from_payload(e.kind, e.payload) for e in await house.outbox() if e.kind == "badges_earned"]
+    assert isinstance(post, note.BadgesEarned)
+    assert [n.person.name for n in post.news] == ["Alex", "Sam"]
+    assert await held_by(house, riley) == dict.fromkeys(RILEYS_BADGES, Announcement.SKIPPED)  # kept, quietly
+    async with house.sessionmaker() as db:
+        household = await stats.household_stats(db, house["Sam"])
+    assert "Riley" not in {r.member_name for r in household.recent}
+
+
+async def test_a_guest_sees_only_what_a_guest_earns(house: House) -> None:
+    riley = await riley_picks_up(house, slack_user_id="U07RILEY")
     assert Kind.HOSTED not in await counts(house, "Alex")
     with pytest.raises(Forbidden):  # the member view is for members; a guest has guest_stats
         async with house.sessionmaker() as db:
-            await stats.my_stats(db, riley[0])
+            await stats.my_stats(db, riley)
     async with house.sessionmaker() as db:
         # A stray count a guest can't earn (say, from before they were demoted) is not shown.
         event_id = await db.scalar(select(EventRow.id))
         db.add(
             ContributionRow(
                 household_id=house.household.id,
-                member_id=riley[0].id,
+                member_id=riley.id,
                 kind=Kind.PARTICIPATED.value,
                 day=DAY,
                 event_id=event_id,
@@ -445,8 +537,8 @@ async def test_a_guest_who_picks_up_earns_it_and_the_member_who_brought_them_hos
             )
         )
         await db.commit()
-        assert (await ContributionRepository(db).counts(house.household.id, riley[0].id))[Kind.PARTICIPATED] == 1
-        own = await stats.guest_stats(db, riley[0])
+        assert (await ContributionRepository(db).counts(house.household.id, riley.id))[Kind.PARTICIPATED] == 1
+        own = await stats.guest_stats(db, riley)
         assert {p.badge.key for p in own.progress} == {
             BadgeKey.CHEF, BadgeKey.ROAD_RUNNER, BadgeKey.ORDER_UP, BadgeKey.QUARTERBACK, BadgeKey.ON_A_ROLL,
         }  # fmt: skip

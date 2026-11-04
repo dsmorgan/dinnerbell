@@ -59,7 +59,7 @@ from dinnerbell.domain.members import (
     normalize_email,
     normalize_slack_user_id,
 )
-from dinnerbell.services import activity
+from dinnerbell.services import activity, contributions
 from dinnerbell.services import call_context as cc
 from dinnerbell.services.call_context import load, locked_event, publish
 from dinnerbell.services.common import audit, require_admin
@@ -369,7 +369,8 @@ async def set_guest_slack_user(
     db: AsyncSession, actor: Member, guest_id: int, slack_user_id: str, *, now: datetime
 ) -> Member:
     """An admin links a guest to a Slack user by hand, or unlinks them (spec 10, "Identity"):
-    the hourly email match never links a Slack guest. Locked, like a member's. Audited."""
+    the hourly email match never links a Slack guest. Locked, like a member's. Linking awards
+    the badges their counts reach, quietly (#201). Audited."""
     require_admin(actor, MANAGE_GUESTS)
     guest = await _guest(db, actor, guest_id)
     value = normalize_slack_user_id(slack_user_id)
@@ -386,6 +387,9 @@ async def set_guest_slack_user(
         changes["slack_guest_account"] = False
         await SessionRepository(db).delete_for_member(guest.id)
     updated = await members.update(actor.household_id, guest.id, now, **changes)
+    # Registered now: the badges their counts reached while they weren't, quietly (#201).
+    # Unlinking takes none away.
+    await contributions.catch_up(db, updated, now=now)
     action = "member.slack_user_set" if value else "member.slack_user_cleared"
     await audit(
         db, actor.household_id, actor, action, f"member:{guest.id}", {"from": guest.slack_user_id, "to": value}, now
@@ -398,8 +402,8 @@ async def promote(
     db: AsyncSession, actor: Member, guest_id: int, role: Role, *, email: str | None = None, now: datetime
 ) -> Member:
     """Only an admin makes a guest a member or an admin (#38 addendum). Every member has an
-    email, as members sign in by email first (FR-41), so one is required. Audited as
-    ``member.promoted``."""
+    email, as members sign in by email first (FR-41), so one is required. An unregistered guest
+    gets the badges their counts reach, quietly (#201). Audited as ``member.promoted``."""
     require_admin(actor, MANAGE_GUESTS)
     if role not in {Role.MEMBER, Role.ADMIN}:
         raise InvalidMemberInput("Make them a member or an admin.")
@@ -416,6 +420,7 @@ async def promote(
     # A guest's dietary needs come along: a need ("must be nut-free") has no exact veto to turn
     # into, so it stays a need, a hard constraint for members too, set on Preferences.
     updated = await members.update(actor.household_id, guest.id, now, role=role, email=clean, slack_email=None)
+    await contributions.catch_up(db, updated, now=now)  # an unregistered guest earned none (#201)
     payload = {"to": role.value}
     await audit(db, actor.household_id, actor, "member.promoted", f"member:{guest.id}", payload, now)
     await db.commit()

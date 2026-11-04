@@ -9,8 +9,9 @@ a role's count when an admin corrects who did it after the meal is done (#162), 
 badges the old assignee no longer reaches. A live award starts
 ``pending``: the channel is told later, by the Slack slice, which reads ``pending_announcements``
 and calls ``mark_announced``. Awards made while catching up (``ensure_backfilled``, including the
-one-time catch-up for the three ladders, and a lowered threshold) are ``skipped`` and never
-announced.
+one-time catch-up for the three ladders, a lowered threshold, and ``catch_up`` for a guest who
+becomes registered or a member) are ``skipped`` and never announced. An unregistered guest earns
+no badge (#201): their contributions count, and ``_award`` leaves them out.
 
 Nothing here logs or audits more than IDs, display names, kinds, and counts (SEC-5).
 """
@@ -260,11 +261,13 @@ async def _award(
     announcement: Announcement,
     event_id: int | None,
 ) -> list[Award]:
-    """Award every tier each member's counts reach that they don't hold yet."""
+    """Award every tier each member's counts reach that they don't hold yet. Every award goes
+    through here, so this is where an unregistered guest is left out (#201)."""
     ladders = ladders_from(await household_settings(db, household_id))
     contributions, badges = ContributionRepository(db), BadgeRepository(db)
+    earners = {m.id for m in await MemberRepository(db).list(household_id) if m.earns_badges}
     made: list[Award] = []
-    for member_id in sorted(member_ids):
+    for member_id in sorted(member_ids & earners):
         for badge, tier in await _reached(contributions, household_id, member_id, ladders):
             award = await badges.add(
                 household_id, member_id, badge, tier, now=now, announcement=announcement, event_id=event_id
@@ -272,6 +275,16 @@ async def _award(
             if award is not None:
                 made.append(award)
     return made
+
+
+async def catch_up(db: AsyncSession, member: Member, *, now: datetime) -> list[Award]:
+    """Award ``member`` every tier their recorded counts reach, quietly, in the caller's
+    transaction: for a guest who was just linked to Slack or promoted (#201), whose counts
+    earned nothing while they were unregistered. Nothing for someone who still earns none."""
+    awards = await _award(db, member.household_id, {member.id}, now, Announcement.SKIPPED, None)
+    if awards:
+        log.info("badges caught up", extra={"member_id": member.id, "badges": len(awards)})
+    return awards
 
 
 async def pending_announcements(db: AsyncSession, household_id: int) -> list[Award]:
