@@ -17,13 +17,17 @@ Awards for members who are no longer active, or for a guest unlinked from Slack 
 Awards of ``SILENT_BADGES`` (Food Critic, earned when feedback is given, long after the call) queue
 no post and join none: they are marked ``announced`` in the same transaction, so they are not
 pending, and the recap and the newest badges list them like any other.
+
+When an admin's correction takes an award back after its post was queued, ``take_back`` drops it
+from the post before it's sent (#193).
 """
 
 from __future__ import annotations
 
 import logging
 from collections import defaultdict
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
+from dataclasses import replace
 from datetime import datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -34,7 +38,15 @@ from dinnerbell.db.outbox import OutboxRepository
 from dinnerbell.db.repositories import HouseholdRepository, MemberRepository
 from dinnerbell.domain.badges import BY_KEY, SILENT_BADGES, TIERS, Award, news_order
 from dinnerbell.domain.members import Member
-from dinnerbell.domain.notifications import BadgeNews, BadgesEarned, BadgeTier, PersonInfo
+from dinnerbell.domain.notifications import (
+    BadgeNews,
+    BadgesEarned,
+    BadgeTier,
+    PayloadError,
+    PersonInfo,
+    from_payload,
+    to_payload,
+)
 
 log = logging.getLogger(__name__)
 
@@ -115,3 +127,44 @@ async def announce_household(db: AsyncSession, household_id: int, *, now: dateti
             "badge announcements queued", extra={"household_id": household_id, "posts": queued, "badges": len(heard)}
         )
     return queued
+
+
+async def take_back(db: AsyncSession, household_id: int, revoked: Sequence[Award]) -> int:
+    """Drop ``revoked`` from the household's badge posts that are queued and not sent yet, in the
+    caller's transaction (#193). A member left with no badge leaves the post, and a post left
+    naming nobody is closed unsent when a drainer reaches it (``outbox._overtaken``). A post in a
+    drainer's hands right now may still go out as it was; if that try fails, the retry doesn't.
+    Returns how many posts changed."""
+    if not revoked:
+        return 0
+    gone = {(a.member_id, BadgeTier(BY_KEY[a.badge].name, a.tier.label)) for a in revoked}
+    outbox = OutboxRepository(db)
+    changed = 0
+    for entry in await outbox.unsent(household_id, BadgesEarned.kind):
+        try:
+            post = from_payload(entry.kind, entry.payload)
+        except PayloadError:
+            continue  # the drainer closes it as undeliverable
+        if not isinstance(post, BadgesEarned):  # pragma: no cover - the kind says it is
+            continue
+        news = tuple(kept for n in post.news if (kept := _without(n, gone)) is not None)
+        if news == post.news:
+            continue
+        if await outbox.set_payload(entry.id, to_payload(replace(post, news=news))):
+            changed += 1
+            log.info("badge post trimmed", extra={"household_id": household_id, "outbox_id": entry.id})
+    return changed
+
+
+def _without(news: BadgeNews, gone: set[tuple[int, BadgeTier]]) -> BadgeNews | None:
+    """``news`` without the badges in ``gone``, or None when it has none left. The badges still
+    shown fill up to ``MAX_BADGES`` from ``rest``, as ``news_for`` would."""
+    every = (*news.badges, *news.rest)
+    kept = [b for b in every if (news.person.id, b) not in gone]
+    if len(kept) == len(every):
+        return news
+    unnamed = news.more - len(news.rest)  # counted but not named, by a post queued before ``rest``
+    if not kept and unnamed <= 0:
+        return None
+    rest = tuple(kept[MAX_BADGES:])
+    return replace(news, badges=tuple(kept[:MAX_BADGES]), rest=rest, more=unnamed + len(rest))

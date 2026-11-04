@@ -276,6 +276,23 @@ def test_user_text_is_escaped() -> None:
     )
 
 
+def test_a_reply_with_a_link_keeps_it_and_plain_words_are_escaped() -> None:
+    """#193: a reply built with ``link`` reaches Slack as a link, on Home too; text that isn't
+    ``Mrkdwn``, which may quote what someone typed, is escaped as before."""
+    reply = bk.Mrkdwn(f"Add something on {bk.link('https://db.example/catalog', 'the catalog')} first.")
+    assert bk.as_mrkdwn(reply) == "Add something on <https://db.example/catalog|the catalog> first."
+    typed = "<https://evil.example|click> <!channel> & co"
+    assert bk.as_mrkdwn(typed) == "&lt;https://evil.example|click&gt; &lt;!channel&gt; &amp; co"
+    today, links = TodayView(date(2026, 10, 22), [], tuple(Slot)), HomeLinks("https://db.example")
+    linked = home_view(today, links, reply)
+    check_view(linked)
+    assert linked["blocks"][1]["text"]["text"] == "*Add something on <https://db.example/catalog|the catalog> first.*"
+    plain = home_view(today, links, typed)
+    assert plain["blocks"][1]["text"]["text"] == "*&lt;https://evil.example|click&gt; &lt;!channel&gt; &amp; co*"
+    cut = home_view(today, links, bk.Mrkdwn("x" * 480 + bk.link("https://db.example/catalog", "the catalog")))
+    assert cut["blocks"][1]["text"]["text"] == "*" + "x" * 480 + "…*"  # never half a link
+
+
 def test_a_huge_roster_and_long_names_stay_within_slacks_limits() -> None:
     long = "N" * 80
     roster = tuple(

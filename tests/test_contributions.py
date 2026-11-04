@@ -28,10 +28,14 @@ from dinnerbell.db.models import (
     EventRow,
     HouseholdRow,
     MealLogRow,
+    OutboxRow,
     ResponseRow,
 )
+from dinnerbell.db.outbox import OutboxRepository
 from dinnerbell.domain import notifications as note
 from dinnerbell.domain.badges import (
+    BADGES,
+    BY_KEY,
     DEFAULT_LADDERS,
     Announcement,
     BadgeKey,
@@ -47,11 +51,21 @@ from dinnerbell.domain.feedback import FeedbackInput, Rating
 from dinnerbell.domain.guests import GuestInput
 from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.members import Member, Role
-from dinnerbell.services import announcements, calls, contributions, feedback, fun, guests, offers, stats
+from dinnerbell.services import announcements, calls, contributions, feedback, fun, guests, offers, outbox, stats
 from dinnerbell.services.database import Database, open_database
 from dinnerbell.services.errors import Forbidden
 from dinnerbell.services.offers import OfferInput
-from tests.support.calls import DONE_AT, OPENS, RESPOND_BY, VOTE_BY, House, dinner_id, furnish, make_house
+from tests.support.calls import (
+    DONE_AT,
+    OPENS,
+    RESPOND_BY,
+    VOTE_BY,
+    House,
+    RecordingChannel,
+    dinner_id,
+    furnish,
+    make_house,
+)
 from tests.support.clock import FakeClock
 
 pytestmark = pytest.mark.anyio
@@ -1360,6 +1374,120 @@ async def test_a_tier_earned_before_a_raised_threshold_goes_once_the_counts_reac
     assert (await counts(house, "Alex"))[Kind.PICKED_UP] == 2
     road = [t for who, badge, t, _ in await awards(house, "Alex") if badge is BadgeKey.ROAD_RUNNER]
     assert road == [Tier.FIRST]
+
+
+async def badge_posts(house: House) -> list[tuple[OutboxRow, note.BadgesEarned]]:
+    async with house.sessionmaker() as db:
+        found = await db.scalars(select(OutboxRow).where(OutboxRow.kind == "badges_earned").order_by(OutboxRow.id))
+        rows = list(found)
+    posts = [note.from_payload(r.kind, dict(r.payload)) for r in rows]
+    return [(r, p) for r, p in zip(rows, posts, strict=True) if isinstance(p, note.BadgesEarned)]
+
+
+def named(post: note.BadgesEarned) -> dict[str, set[str]]:
+    return {n.person.name: {f"{b.name} {b.tier}" for b in (*n.badges, *n.rest)} for n in post.news}
+
+
+ROAD_RUNNER = f"{BY_KEY[BadgeKey.ROAD_RUNNER].name} {Tier.FIRST.label}"
+
+
+async def test_a_badge_taken_back_after_its_post_was_queued_is_left_out_of_it(house: House) -> None:
+    """#193: the post still waiting to go out drops the badge; the rest of it goes as queued."""
+    event_id = await dinner(house)
+    assert await announcements.announce_badges(house.sessionmaker, house.clock()) == 1
+    ((_, before),) = await badge_posts(house)
+    assert ROAD_RUNNER in named(before)["Alex"]
+    await correct(house, event_id, AssignmentRole.PICKUP, "Sam")
+    ((row, after),) = await badge_posts(house)
+    assert named(after) == named(before) | {"Alex": named(before)["Alex"] - {ROAD_RUNNER}}
+    assert named(after)["Alex"]  # he still ordered it (#178)
+    assert (after.key, row.updated_at) == (before.key, DONE_AT)  # the same post, no newer for it
+    channel = RecordingChannel()
+    await house.drain(channel)
+    assert channel.kinds.count("badges_earned") == 1
+    ((delivered, _),) = await badge_posts(house)
+    assert delivered.delivered_at is not None and delivered.last_error is None
+    # Sam's Road Runner, earned by the correction, gets a post of its own.
+    assert await announcements.announce_badges(house.sessionmaker, house.clock()) == 1
+    (_, (_, sams)) = await badge_posts(house)
+    assert named(sams) == {"Sam": {ROAD_RUNNER, f"{BY_KEY[BadgeKey.ON_A_ROLL].name} {Tier.FIRST.label}"}}
+
+
+async def test_a_badge_post_already_sent_stays_as_it_was(house: House) -> None:
+    event_id = await dinner(house)
+    await announcements.announce_badges(house.sessionmaker, house.clock())
+    await house.drain(RecordingChannel())
+    ((sent, post),) = await badge_posts(house)
+    assert sent.delivered_at is not None
+    await correct(house, event_id, AssignmentRole.PICKUP, "Sam")
+    ((still, same),) = await badge_posts(house)
+    assert same == post and ROAD_RUNNER in named(same)["Alex"]
+    assert (still.delivered_at, still.last_error) == (sent.delivered_at, None)
+
+
+async def take_back(house: House, name: str, badge: BadgeKey, tier: Tier) -> int:
+    """Take back ``name``'s award as a correction does, without counts that reach it."""
+    async with house.sessionmaker() as db:
+        award = await BadgeRepository(db).revoke(house.household.id, house[name].id, badge, tier)
+        assert award is not None
+        changed = await announcements.take_back(db, house.household.id, [award])
+        await db.commit()
+    return changed
+
+
+async def test_a_post_with_no_badge_left_is_closed_unsent_even_after_a_failed_try(house: House) -> None:
+    async with house.sessionmaker() as db:
+        await BadgeRepository(db).add(
+            house.household.id,
+            house["Alex"].id,
+            BadgeKey.ROAD_RUNNER,
+            Tier.FIRST,
+            now=house.clock(),
+            announcement=Announcement.PENDING,
+        )
+        await db.commit()
+    assert await announcements.announce_badges(house.sessionmaker, house.clock()) == 1
+    channel = RecordingChannel(fail=1)
+    assert (await house.drain(channel)).retrying == 1  # tried once, so it waits to retry
+    assert await take_back(house, "Alex", BadgeKey.ROAD_RUNNER, Tier.FIRST) == 1
+    ((_, emptied),) = await badge_posts(house)
+    assert (emptied.news, emptied.more_people) == ((), 0)
+    house.clock.now += timedelta(hours=1)
+    assert (await house.drain(channel)).superseded == 1
+    assert channel.sent == []
+    ((row, _),) = await badge_posts(house)
+    assert (row.delivered_at, row.last_error) == (house.clock.now, outbox.TAKEN_BACK)
+
+
+async def test_a_badge_taken_back_lets_the_next_one_in_line_show(house: House) -> None:
+    """A member's badges past ``MAX_BADGES`` are counted in ``more``; one taken back from those
+    shown makes room for the first of them, as if it had never been earned."""
+    keys = [b.key for b in BADGES][: announcements.MAX_BADGES + 1]
+    tiers = tuple(note.BadgeTier(BY_KEY[k].name, Tier.FIRST.label) for k in keys)
+    alex = note.PersonInfo(house["Alex"].id, "Alex")
+    news = note.BadgeNews(alex, tiers[:-1], more=1, rest=tiers[-1:])
+    sam = note.BadgeNews(note.PersonInfo(house["Sam"].id, "Sam"), tiers[:1])
+    async with house.sessionmaker() as db:
+        await OutboxRepository(db).enqueue(
+            house.household.id, None, note.BadgesEarned(house.household.id, 1, (news, sam)), house.clock()
+        )
+        for key in keys[:2]:
+            await BadgeRepository(db).add(
+                house.household.id,
+                house["Alex"].id,
+                key,
+                Tier.FIRST,
+                now=house.clock(),
+                announcement=Announcement.ANNOUNCED,
+            )
+        await db.commit()
+    assert await take_back(house, "Alex", keys[1], Tier.FIRST) == 1
+    ((_, post),) = await badge_posts(house)
+    left = (tiers[0], *tiers[2:])
+    assert post.news == (note.BadgeNews(alex, left, more=0, rest=()), sam)  # Sam's same badge stays
+    assert await take_back(house, "Alex", keys[0], Tier.FIRST) == 1
+    ((_, post),) = await badge_posts(house)
+    assert post.news == (note.BadgeNews(alex, tiers[2:], more=0, rest=()), sam)
 
 
 async def test_correcting_back_restores_the_counts_and_the_badges_with_new_ids(house: House) -> None:

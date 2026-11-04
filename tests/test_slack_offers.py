@@ -12,6 +12,7 @@ from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
 
 import pytest
+from sqlalchemy import text
 
 from dinnerbell.channels.slack import ids
 from dinnerbell.channels.slack.interactions import MANY_OFFERS
@@ -25,7 +26,7 @@ from dinnerbell.services.database import Database, open_database
 from tests.support.calls import House, furnish, make_house
 from tests.support.clock import FakeClock
 from tests.support.fake_slack import CHANNEL, send, state, view_submission
-from tests.support.slack import SLACK_IDS, Slack, wire
+from tests.support.slack import BASE_URL, SLACK_IDS, Slack, wire
 
 pytestmark = pytest.mark.anyio
 
@@ -210,6 +211,18 @@ async def test_an_unlinked_person_cant_offer(slack: Slack, house: House) -> None
     assert await house.kinds() == []
     await slack.click("U09STRANGER", ids.MAKE_OFFER, ids.MAKE_OFFER, home=True)
     assert slack.fake.of("views.open") == []
+
+
+async def test_log_with_an_empty_catalog_links_the_catalog(slack: Slack, house: House) -> None:
+    """#193: the reply's link to the catalog is a link, not ``&lt;https://…|…&gt;``."""
+    async with house.sessionmaker() as db:
+        await db.execute(text("UPDATE catalog_item SET active = 0"))
+        await db.commit()
+    await slack.command("Sam", "log")
+    assert slack.fake.of("views.open") == []
+    assert (
+        slack.ephemerals("Sam")[-1] == f"The catalog is empty. Add something on <{BASE_URL}/catalog|the catalog> first."
+    )
 
 
 async def test_log_opens_a_modal_and_logs_the_meal(slack: Slack, house: House) -> None:

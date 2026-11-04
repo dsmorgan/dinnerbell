@@ -25,9 +25,11 @@ from dinnerbell.channels.slack.blocks import (
     MAX_OPTIONS,
     MAX_VIEW_BLOCKS,
     Block,
+    Mrkdwn,
     actions,
     button,
     clip,
+    clip_mrkdwn,
     confirm,
     context,
     day_label,
@@ -1239,7 +1241,7 @@ def _badges(stats: MemberStats, art: ArtIds, composite: str | None = None) -> li
 def home_view(
     today: TodayView,
     links: HomeLinks,
-    notice: str | None = None,
+    notice: str | Mrkdwn | None = None,
     *,
     label: str = "",
     awaiting: Sequence[Awaiting] = (),
@@ -1268,7 +1270,8 @@ def home_view(
     title = f"Today · {day_label(today.today)}"
     head: list[Block] = [header(f"{label} · {title}" if label else title)]
     if notice:
-        head.append(section(f"*{escape(clip(notice, 500))}*"))
+        line = clip_mrkdwn(notice.text, 500) if isinstance(notice, Mrkdwn) else escape(clip(notice, 500))
+        head.append(section(f"*{line}*"))
 
     def card(v: EventView) -> list[Block]:
         if v.offer is not None:

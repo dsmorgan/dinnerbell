@@ -54,6 +54,20 @@ def escape(text: str) -> str:
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
+@dataclass(frozen=True, slots=True)
+class Mrkdwn:
+    """A reply that is mrkdwn already, such as one with a link from ``link``: shown as it is,
+    never escaped again. Build it only from fixed words, ``escape``, and ``link``, never from
+    text a person typed."""
+
+    text: str
+
+
+def as_mrkdwn(text: str | Mrkdwn) -> str:
+    """``text`` ready for mrkdwn: plain words escaped, ``Mrkdwn`` as it is."""
+    return text.text if isinstance(text, Mrkdwn) else escape(text)
+
+
 def clip(text: str, limit: int) -> str:
     """Plain text cut to ``limit`` characters, with an ellipsis when cut."""
     return text if len(text) <= limit else text[: limit - 1] + ELLIPSIS

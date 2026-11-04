@@ -13,7 +13,8 @@ from typing import Any
 import pytest
 
 from dinnerbell.channels.slack import ids
-from dinnerbell.channels.slack.interactions import JOIN_OFFER, JOINED, UNKNOWN_USER
+from dinnerbell.channels.slack.blocks import Mrkdwn, link
+from dinnerbell.channels.slack.interactions import JOIN_OFFER, JOINED, UNKNOWN_USER, Source
 from dinnerbell.channels.slack.messages import MOVED_ON
 from dinnerbell.config import Settings
 from dinnerbell.db.repositories import MemberRepository
@@ -26,7 +27,7 @@ from dinnerbell.services.database import Database, open_database
 from tests.support.calls import OPENS, RESPOND_BY, House, dinner_id, furnish, make_house
 from tests.support.clock import FakeClock
 from tests.support.fake_slack import CHANNEL, OTHER_TEAM, send, state, view_submission
-from tests.support.slack import SLACK_IDS, Slack, wire
+from tests.support.slack import BASE_URL, SLACK_IDS, Slack, wire
 
 pytestmark = pytest.mark.anyio
 NEW = "U09NOVA"
@@ -111,6 +112,36 @@ async def test_someone_in_the_channel_joins_as_a_guest(slack: Slack, house: Hous
     assert promoted is not None and (promoted.role, promoted.email) == (Role.MEMBER, "nova@example.com")
     await slack.click("Sam", ids.REMOVE_GUEST, str(joined.id), channel="D02SAM")  # not an admin
     assert (await member_for(house, NEW)).active  # type: ignore[union-attr]
+
+
+async def test_make_member_without_an_email_links_the_members_page(slack: Slack, house: House) -> None:
+    """#193: the reply's link to the Members page is a link, not ``&lt;https://…|…&gt;``."""
+    await slack.click(NEW, ids.JOIN_DINNERBELL, ids.JOIN_DINNERBELL)
+    joined = await member_for(house, NEW)
+    assert joined is not None
+    await slack.click("Alex", ids.MAKE_MEMBER, str(joined.id), channel="D01ALEX")
+    text = slack.fake.of("chat.postEphemeral", "chat.postMessage")[-1].args["text"]
+    assert text == (
+        "Slack doesn't share their email, or they're a Slack guest, so make them a member on "
+        f"<{BASE_URL}/admin/members#guests|the Members page>, with their email."
+    )
+
+
+async def test_a_reply_escapes_plain_text_and_keeps_a_built_link(slack: Slack) -> None:
+    """``tell`` escapes what a service says, which can quote what someone typed, in a channel
+    and on a Home with nobody to draw; ``Mrkdwn`` built with ``link`` goes as it is."""
+    tell = slack.conn.interactions.tell
+    typed = "No such meal: <!channel> & <https://evil.example|click>"
+    escaped = "No such meal: &lt;!channel&gt; &amp; &lt;https://evil.example|click&gt;"
+    await tell(Source(SLACK_IDS["Sam"], CHANNEL), typed, member=None)
+    assert slack.ephemerals("Sam")[-1] == escaped
+    linked = Mrkdwn(f"See {link(f'{BASE_URL}/catalog', 'the catalog')}.")
+    await tell(Source(SLACK_IDS["Sam"], CHANNEL), linked, member=None)
+    assert slack.ephemerals("Sam")[-1] == f"See <{BASE_URL}/catalog|the catalog>."
+    await tell(Source(SLACK_IDS["Sam"], home=True), typed, member=None)
+    assert slack.last_home("Sam")["blocks"][0]["text"]["text"] == escaped
+    await tell(Source(SLACK_IDS["Sam"], home=True), linked, member=None)
+    assert slack.last_home("Sam")["blocks"][0]["text"]["text"] == f"See <{BASE_URL}/catalog|the catalog>."
 
 
 async def test_the_admin_removes_someone_who_joined(slack: Slack, house: House) -> None:

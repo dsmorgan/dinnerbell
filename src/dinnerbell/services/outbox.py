@@ -73,6 +73,7 @@ NO_THREAD = "no message to thread under"
 MIN_HOLD = timedelta(seconds=5)
 """The shortest a held row waits, even if the channel asks for less."""
 SUPERSEDED = "superseded by a newer update"
+TAKEN_BACK = "superseded: every badge in it was taken back"
 
 
 async def picks_posts(db: AsyncSession, household_id: int, events: list[EventInfo]) -> dict[int, MessageRef]:
@@ -247,11 +248,15 @@ async def _overtaken(db: AsyncSession, notification: Notification) -> str | None
     """Why ``notification`` is no longer worth sending, or None. A row in ``CALL_OFF_SUPERSEDES``
     is overtaken when its call was called off or has started a newer run since it was queued; a
     row in ``STEP_BOUND``, also when the call has left the states its step is in. A
-    ``CoordinatorPicked`` row, also when its member no longer coordinates."""
+    ``CoordinatorPicked`` row, also when its member no longer coordinates. A ``BadgesEarned``
+    row is overtaken once a correction took back every badge it named
+    (``announcements.take_back``)."""
+    if isinstance(notification, BadgesEarned):
+        return TAKEN_BACK if not notification.news and not notification.more_people else None
     if notification.kind not in CALL_OFF_SUPERSEDES and notification.kind not in STEP_BOUND:
         return None
     if isinstance(
-        notification, ScheduleChanged | GuestJoined | LinkNeeded | BadgesEarned | MonthlyRecap
+        notification, ScheduleChanged | GuestJoined | LinkNeeded | MonthlyRecap
     ):  # pragma: no cover - not one the sets above name
         return None
     event = await EventRepository(db).get(notification.event.household_id, notification.event.id)
