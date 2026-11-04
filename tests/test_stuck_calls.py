@@ -148,7 +148,7 @@ def test_closes_early_keeps_its_rules() -> None:
     assert not ev.closes_early(call, NOW + timedelta(hours=1), everyone, [1, 2], Coverage())
     assert not ev.closes_early(call, NOW, everyone, [1, 2], covered)  # still in the quiet spell
     assert ev.closes_early(call, NOW + ev.EARLY_CLOSE_QUIET, everyone, [1, 2], covered)
-    assert ev.closes_early(call, NOW, [responded(1, Status.MAYBE, NOW)], [1], covered)  # a maybe has answered
+    assert not ev.closes_early(call, STALE, [responded(1, Status.MAYBE, NOW)], [1], covered)  # a maybe waits
     assert ev.closes_early(call, NOW, [responded(1, Status.OUT, NOW)], [1], Coverage())
 
 

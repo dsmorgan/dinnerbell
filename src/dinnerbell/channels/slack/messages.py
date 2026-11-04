@@ -352,10 +352,10 @@ def _roster(
     return join_lines(lines)
 
 
-def _vote_closes(event: note.EventInfo) -> str:
-    """When voting closes, in bold. A call posted before its day can vote the evening before and
-    still close on its day (FR-3), so it names the day."""
-    at = f"*{local_clock(event.vote_deadline, event.timezone)}*" if event.vote_deadline else ""
+def _vote_closes(event: note.EventInfo, deadline: datetime) -> str:
+    """When voting closes, ``deadline``, in bold. A call posted before its day can vote the
+    evening before and still close on its day (FR-3), so it names the day."""
+    at = f"*{local_clock(deadline, event.timezone)}*"
     return f"{at} on {day_label(event.day)}" if event.early else at
 
 
@@ -370,7 +370,7 @@ def _call_status(event: note.EventInfo, *, picks: str = "posted below") -> str:
         case EventState.COLLECTING:
             return f"Who's in for {slot}? Answer by *{local_clock(event.respond_deadline, event.timezone)}*."
         case EventState.VOTING:
-            closes = f" Vote by {_vote_closes(event)}." if event.vote_deadline else ""
+            closes = f" Vote by {_vote_closes(event, event.vote_deadline)}." if event.vote_deadline else ""
             return f"Thanks for answering! Voting is open: the proposals are {picks}.{closes}"
         case EventState.DECIDED if event.plan is not None:
             plan = event.plan
@@ -549,7 +549,7 @@ def proposals_message(notification: note.ProposalsReady | note.ProposalsUpdated,
     voting = event.state is EventState.VOTING
     people = plural(notification.head_count, "person", "people")
     if voting:
-        closes = f" Voting closes at {_vote_closes(event)}." if event.vote_deadline else ""
+        closes = f" Voting closes at {_vote_closes(event, event.vote_deadline)}." if event.vote_deadline else ""
         intro = f"Vote for any you'd enjoy.{closes}"
     else:
         intro = "Voting is closed."
@@ -1138,7 +1138,7 @@ def your_answer(
         blocks.append(actions(*more, _web_button(ctx, event), block_id="more"))
         return labelled(_finish(text, blocks), ctx)
     if event.state is EventState.VOTING:  # a late joiner adds roles while voting (#76)
-        until = f" until voting closes at {_vote_closes(event)}" if event.vote_deadline else ""
+        until = f" until voting closes at {_vote_closes(event, event.vote_deadline)}" if event.vote_deadline else ""
         blocks.append(context(f"Only you can see this. Offer to pitch in{until}."))
         blocks.append(actions(*answer_actions(event, mine, guest=guest).roles, block_id="roles"))
         blocks.append(actions(_web_button(ctx, event), block_id="more"))

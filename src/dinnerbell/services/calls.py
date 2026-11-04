@@ -308,7 +308,8 @@ async def save_details(
 async def join_late(db: AsyncSession, actor: Member, event_id: int, *, run: int | None = None, now: datetime) -> bool:
     """**I'm in (late)**: a member who missed the answers joins while the call is voting
     (``check_can_join_late``). They're in, marked late, and their vote shows but doesn't count
-    until the coordinator says so. Returns whether they joined; someone already in changes
+    until the coordinator says so, unless answers closed early on their maybe
+    (``with_late_join``). Returns whether they joined; someone already in changes
     nothing. ``run``, when given, is the run the actor saw (``check_run``)."""
     async with locked_event(db, actor.household_id, event_id, now) as event:
         await guest_rules.gate(db, event, actor, GuestAction.JOIN_LATE)

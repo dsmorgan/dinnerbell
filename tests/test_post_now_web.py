@@ -104,3 +104,15 @@ def test_a_refused_post_now_after_starting_shows_on_the_new_calls_card(
     assert response.status_code == 409 and "Not now." in response.text
     assert 'action="/events/1/post-now"' in response.text  # the call was started; it's scheduled
     assert event_row(migrated, 1).state == "scheduled"
+
+
+def test_a_call_posted_early_names_the_day_voting_closes(house: TestClient, provider: FakeProvider) -> None:
+    """Voting can open the evening before and still close on the call's day (FR-3, FR-56)."""
+    event_id = start(house, post_now="1")
+    assert submit(house, f"/events/{event_id}/respond", {"status": "in"}).status_code == 303
+    assert submit(house, f"/events/{event_id}/offer", {"role": "pickup"}).status_code == 303
+    sign_in_as(house, provider, "sam@example.com")
+    assert submit(house, f"/events/{event_id}/coordinate", {}).status_code == 303
+    closed = submit(house, f"/events/{event_id}/close", {"run": "1", "window": "respond"})
+    assert closed.status_code == 303, page(closed)
+    assert "Vote by <strong>12:00 PM</strong> Fri Oct 23." in house.get(f"/events/{event_id}").text

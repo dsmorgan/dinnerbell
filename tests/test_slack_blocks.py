@@ -21,7 +21,7 @@ import pytest
 
 from dinnerbell.channels.slack import blocks as bk
 from dinnerbell.channels.slack import preview as samples
-from dinnerbell.channels.slack.messages import MAX_PROPOSALS, Message, RenderContext, render
+from dinnerbell.channels.slack.messages import MAX_PROPOSALS, Message, RenderContext, render, your_answer
 from dinnerbell.channels.slack.messages import labelled as labelled_message
 from dinnerbell.channels.slack.views import HomeLinks, home_view
 from dinnerbell.domain import notifications as note
@@ -756,6 +756,8 @@ def test_the_call_message_points_to_the_picks_and_then_names_the_result() -> Non
     assert "Vote by *5:15 PM* on Thursday, Oct 22." in text_blocks(called)
     picks = render(note.ProposalsReady(early, samples.PROPOSALS, 3, participants=(samples.ALEX,)), CTX)
     assert "Voting closes at *5:15 PM* on Thursday, Oct 22." in text_blocks(picks)
+    card = your_answer(early, replace(samples.KIM_OFFERS, late=True), samples.KIM.id, CTX)  # a late joiner
+    assert "Offer to pitch in until voting closes at *5:15 PM* on Thursday, Oct 22." in json.dumps(card.blocks)
     decided = render(samples.NOTIFICATIONS["call_updated_decided"](), CTX)
     assert "It's decided: Sam's Tacos, cook, at 6:45 PM" in text_blocks(decided)
     without_plan = render(note.CallUpdated(replace(samples.DECIDED, plan=None)), CTX)
