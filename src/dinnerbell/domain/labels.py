@@ -125,8 +125,10 @@ AWAY_UNTIL = "Away until…"
 AWAY_BACK_DAY = "Back on"
 """The date field **Away until…** opens."""
 AWAY_HINT = "Calls until then answer you Out. You can still say In to any of them."
-AWAY_KEEPS = "Away days that reach this call's day keep their first day; others are replaced."
-"""What **Away until…** does to the window a member has already."""
+AWAY_JOINS = (
+    "If these days touch away days you already set, they're joined into one stretch; otherwise they replace them."
+)
+"""What **Away until…** does to the window a member has already (``away.away_from_call``)."""
 AWAY_ENDED = "Welcome back! Calls ask you again."
 AWAY_CLEARED = "Away days cleared."
 IM_BACK = "I'm back"

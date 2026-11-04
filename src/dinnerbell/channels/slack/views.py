@@ -409,7 +409,7 @@ def away_modal(v: EventView, origin: ids.ViewOrigin) -> dict[str, Any]:
     blocks: list[Block] = [
         section(f"You're away from {when}, this call's day, until the day you pick. {labels.AWAY_HINT}"),
         _input("back", labels.AWAY_BACK_DAY, {"type": "datepicker", "initial_date": back.isoformat()}, optional=False),
-        context(f"{labels.AWAY_KEEPS} Change or clear them on Preferences."),
+        context(f"{labels.AWAY_JOINS} Change or clear them on Preferences."),
     ]
     return _modal(labels.AWAY_UNTIL, ids.AWAY_VIEW, origin, blocks, "Save")
 

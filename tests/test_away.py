@@ -69,12 +69,15 @@ def test_away_until_runs_from_the_calls_day_through_the_day_before_the_one_picke
             away_from_call(THU, back, THU)
 
 
-def test_away_until_keeps_the_first_day_of_a_window_that_reaches_the_call() -> None:
+def test_away_until_joins_a_window_it_touches_into_one_stretch() -> None:
     mon, wed = THU - timedelta(days=3), THU - timedelta(days=1)
     # Away Monday to Wednesday, then Away until Sunday on Thursday's call: Monday to Saturday.
     assert away_from_call(THU, SUN, THU - timedelta(days=4), Away(mon, wed)) == Away(mon, SAT)
-    assert away_from_call(FRI, SUN, THU, Away(wed, SAT)) == Away(wed, SAT)  # covers the call: kept
-    assert away_from_call(THU, FRI, THU, Away(SAT, SUN)) == Away(THU, THU)  # apart: replaced
+    assert away_from_call(FRI, SUN, THU, Away(wed, SAT)) == Away(wed, SAT)  # covers the call: joined
+    # Away Friday to Sunday, then Away until Friday on Thursday's call: Thursday to Sunday.
+    assert away_from_call(THU, FRI, THU, Away(FRI, SUN)) == Away(THU, SUN)
+    assert away_from_call(THU, SAT, THU, Away(FRI, FRI)) == Away(THU, FRI)  # inside it: the call's days
+    assert away_from_call(THU, FRI, THU, Away(SAT, SUN)) == Away(THU, THU)  # a day apart: replaced
     assert away_from_call(SAT, SUN, THU, Away(THU, THU)) == Away(SAT, SAT)  # ends two days before: replaced
 
 
@@ -393,6 +396,20 @@ async def test_away_until_on_a_later_call_extends_a_window_that_reaches_it(house
     fri = await act(house, calls.start_call, house["Sam"], Slot.LUNCH, FRI)
     await act(house, away.away_until, house["Kim"], fri.id, SUN)
     assert (await house.refresh("Kim")).away == Away(THU, SAT)  # still away Thursday
+
+
+async def test_away_until_before_a_window_joins_it_and_keeps_its_outs(house: House) -> None:
+    """Kim set Friday to Sunday, then picks Away until Friday on Thursday's call: she's away
+    Thursday to Sunday, and Friday's away Out stays."""
+    await set_away(house, "Kim", FRI, SAT)
+    fri = await act(house, calls.start_call, house["Sam"], Slot.LUNCH, FRI)
+    await act(house, calls.post_now, house["Sam"], fri.id)
+    event_id = await open_dinner(house)
+    await act(house, away.away_until, house["Kim"], event_id, FRI)
+    assert (await house.refresh("Kim")).away == Away(THU, SAT)
+    for call in (event_id, fri.id):
+        kims = await answer(house, call, "Kim")
+        assert kims is not None and kims.status is Status.OUT and kims.away_until == SUN
 
 
 # Slack ----------------------------------------------------------------------------------------------
