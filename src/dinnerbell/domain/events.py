@@ -1483,10 +1483,23 @@ def stale_after(event: Event, *, usual_meal: time, zone: tzinfo) -> datetime:
     plus two hours and the call's own vote deadline plus two hours, but never past midnight
     after its day. A late ad-hoc call keeps its evening; a call nobody could reach after a long
     outage doesn't decide dinner at 22:00 or on Saturday."""
-    midnight = datetime.combine(event.day + timedelta(days=1), time(0), tzinfo=zone).astimezone(UTC)
     usual = datetime.combine(event.day, usual_meal, tzinfo=zone).astimezone(UTC) + DONE_AFTER_MEAL
-    natural_end = event.vote_deadline or event.respond_deadline + timedelta(minutes=event.vote_minutes)
-    return min(midnight, max(usual, natural_end + DONE_AFTER_MEAL))
+    return min(call_ends_at(event.day, zone), max(usual, decision_deadline(event) + DONE_AFTER_MEAL))
+
+
+def call_ends_at(day: date, zone: tzinfo) -> datetime:
+    """Midnight after ``day`` in ``zone``: no deadline of a call for ``day`` runs past it."""
+    return datetime.combine(day + timedelta(days=1), time(0), tzinfo=zone).astimezone(UTC)
+
+
+def decision_deadline(event: Event) -> datetime:
+    """When voting closes: the vote deadline, once there is one, or else the response deadline
+    plus the call's time to vote. Responses that close early, because everyone answered or by
+    Close now, keep this time: voting opens at once and runs until then, and only the
+    coordinator or an admin ends it sooner (FR-56). A late call whose decision time would be
+    past midnight (``call_ends_at``) gets its usual time to vote instead, from when responses
+    close: the caller checks."""
+    return event.vote_deadline or event.respond_deadline + timedelta(minutes=event.vote_minutes)
 
 
 def closes_early(
@@ -1500,10 +1513,10 @@ def closes_early(
     """FR-56: whether a collecting call's responses close before the deadline.
 
     Every active member must have answered in this run (an answer kept from before a re-run or
-    restart doesn't count) and nobody may be a maybe. With everyone out, it closes at once and
-    ends on-your-own. With anyone in, it waits until no response has changed for
-    ``EARLY_CLOSE_QUIET``, so tapping In first and adding guests or an offer next is never cut
-    short; with two or more eating, someone must also be able to cook, pick up, or order
+    restart doesn't count): in, out, or maybe, since closing turns maybes out. With nobody in,
+    it closes at once and ends on-your-own. With anyone in, it waits until no response has
+    changed for ``EARLY_CLOSE_QUIET``, so tapping In first and adding guests or an offer next is
+    never cut short; with two or more eating, someone must also be able to cook, pick up, or order
     (``coverage``). Otherwise the call waits for its deadline, or for Close now.
 
     ``active_member_ids`` are the household's members and admins, whom the call waits for;
@@ -1522,14 +1535,14 @@ def early_close_at(
     guest_ids: Iterable[int] = (),
 ) -> datetime | None:
     """When ``closes_early`` turns true for these responses, or None if it doesn't: at the last
-    change when everyone is out, after ``EARLY_CLOSE_QUIET`` when anyone is in."""
+    change when nobody is in, after ``EARLY_CLOSE_QUIET`` when anyone is."""
     active = frozenset(active_member_ids)
     counted = active | frozenset(guest_ids)
     this_run = [
         r for r in responses if r.member_id in counted and r.updated_at is not None and r.updated_at >= event.opens_at
     ]
     answered = {r.member_id for r in this_run} & active
-    if not active or answered != active or any(r.status is Status.MAYBE for r in this_run):
+    if not active or answered != active:
         return None
     last_change = max(r.updated_at for r in this_run if r.updated_at is not None)
     if not any(r.is_in for r in this_run):

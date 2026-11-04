@@ -38,6 +38,8 @@ A call moves through three stages: answers, the vote, and the decision. The deci
 | Call off the call | ⋯ menu on the call message, App Home | Call page |
 | Hand off coordinating | No | Call page |
 
+**Start the vote now** starts the vote at once, but the vote still ends at its usual time: the answer deadline plus the schedule's **Time to vote**. Answers also close on their own once everyone has answered In, Maybe, or Out, and the vote ends at the same usual time.
+
 ### While voting
 
 | Action | Slack | Web |
@@ -52,6 +54,8 @@ A call moves through three stages: answers, the vote, and the decision. The deci
 | Hand off coordinating | No | Call page |
 
 Anyone can add a proposal; you don't need to coordinate.
+
+The vote runs until its usual time, even when everyone has voted, so people can look at every pick. To end it sooner, tap **Decide now**, **Lock this**, or **Break the tie**.
 
 ### Once it's decided, and after the meal
 

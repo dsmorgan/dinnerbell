@@ -585,7 +585,7 @@ async def test_the_coordinator_starts_the_vote_now_and_an_admin_decides_now(hous
     await act(house, calls.close_window, house["Sam"], event_id)
     event = await house.event(event_id)
     assert event.state is EventState.VOTING  # at once, not at the next tick
-    assert (event.respond_deadline, event.vote_deadline) == (house.clock(), house.clock() + timedelta(minutes=45))
+    assert (event.respond_deadline, event.vote_deadline) == (house.clock(), VOTE_BY)  # the decision time stays
     with pytest.raises(EventRuleViolation, match="coordinator or an admin"):
         await act(house, calls.close_window, house["Kim"], event_id)
     house.clock.now += timedelta(minutes=5)
@@ -611,12 +611,9 @@ async def test_everyone_answering_starts_the_vote_after_a_quiet_spell(house: Hou
     event_id = await open_dinner(house)
     await act(house, calls.respond, house["Alex"], event_id, Status.IN)
     await act(house, calls.respond, house["Sam"], event_id, Status.IN)
-    await act(house, calls.respond, house["Kim"], event_id, Status.MAYBE)
+    await act(house, calls.respond, house["Kim"], event_id, Status.MAYBE)  # a maybe has answered too
     await act(house, calls.respond, house["Lee"], event_id, Status.OUT)
     house.clock.now = OPENS + timedelta(minutes=20)
-    assert await house.tick() == []  # Kim is a maybe
-    await act(house, calls.respond, house["Kim"], event_id, Status.OUT)
-    house.clock.now += timedelta(minutes=15)
     assert await house.tick() == []  # quiet, but nobody can cook, pick up, or order yet
     await act(house, calls.offer_role, house["Sam"], event_id, RoleOffer.PICKUP, True)
     house.clock.now += timedelta(minutes=9)
@@ -625,7 +622,10 @@ async def test_everyone_answering_starts_the_vote_after_a_quiet_spell(house: Hou
     assert await house.tick() == [Step.CLOSE_RESPONSES]
     event = await house.event(event_id)
     assert event.state is EventState.VOTING
-    assert (event.respond_deadline, event.vote_deadline) == (house.clock(), house.clock() + timedelta(minutes=45))
+    # Voting opens at once and keeps the decision time; closing turned Kim's maybe out.
+    assert (event.respond_deadline, event.vote_deadline) == (house.clock(), VOTE_BY)
+    kim = (await house.context(event_id)).response_of(house["Kim"].id)
+    assert kim is not None and kim.status is Status.OUT and kim.maybe_at_deadline
     early = next(a for a in await house.audits() if a.action == "event.everyone_answered")
     assert (early.actor_member_id, early.payload["from"]) == (None, RESPOND_BY.isoformat())
 

@@ -790,6 +790,23 @@ def test_everyone_out_closes_as_soon_as_everyone_answered() -> None:
     assert due(answered((1, Status.OUT), (2, Status.OUT), (3, Status.OUT)), soon, Coverage()) is Step.CLOSE_RESPONSES
 
 
+def test_nobody_in_closes_as_soon_as_everyone_answered_maybes_too() -> None:
+    """Maybes have answered, and closing turns them out, so nobody in ends it on-your-own at once."""
+    soon = NOW + timedelta(minutes=2)
+    mixed = answered((1, Status.OUT), (2, Status.MAYBE), (3, Status.OUT))
+    assert due(mixed, soon, Coverage()) is Step.CLOSE_RESPONSES
+    assert (
+        due(answered((1, Status.MAYBE), (2, Status.MAYBE), (3, Status.MAYBE)), soon, Coverage()) is Step.CLOSE_RESPONSES
+    )
+
+
+def test_all_out_but_one_who_hasnt_answered_waits_for_them() -> None:
+    """They could still come in with a guest, which makes two (``head_count``), so it isn't
+    hopeless: the call waits for them, or for its deadline."""
+    all_but_one = answered((1, Status.OUT), (2, Status.OUT))
+    assert due(all_but_one, QUIET, Coverage()) is None
+
+
 def test_a_lone_in_gets_the_quiet_spell_to_add_a_guest() -> None:
     lone = answered((1, Status.IN), (2, Status.OUT), (3, Status.OUT))
     assert due(lone, NOW + timedelta(minutes=2)) is None
@@ -814,7 +831,8 @@ def test_two_or_more_eating_close_early_only_after_a_quiet_spell_with_coverage()
 
 def test_early_close_needs_every_active_member_to_answer_this_run() -> None:
     assert due(answered((1, Status.IN), (2, Status.IN)), QUIET) is None  # 3 hasn't answered
-    assert due(answered((1, Status.IN), (2, Status.IN), (3, Status.MAYBE)), QUIET) is None  # a maybe might come
+    # A maybe has answered: closing turns them out, and they can still join late.
+    assert due(answered((1, Status.IN), (2, Status.IN), (3, Status.MAYBE)), QUIET) is Step.CLOSE_RESPONSES
     # An inactive member's answer, maybe or not, doesn't count either way.
     extra = answered((1, Status.IN), (2, Status.IN), (3, Status.IN), (9, Status.MAYBE))
     assert due(extra, QUIET) is Step.CLOSE_RESPONSES
