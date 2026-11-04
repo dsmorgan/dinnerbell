@@ -274,8 +274,9 @@
   // A refresh that fails doesn't repeat every 45 seconds forever. A 403 or 404 (a guest no longer
   // invited, a call that's gone) won't change, so that card stops refreshing; a save that swaps
   // in a new card starts it again. No network, no answer in time, or another error slows every
-  // card's refresh, twice as long each round up to 10 minutes, and one that works goes back to
-  // 45 seconds. A 401 needs nothing: its HX-Redirect sends the page to sign in.
+  // card's refresh, twice as long each round up to 10 minutes. Any request that works, or the
+  // browser coming back online, goes back to 45 seconds. A 401 needs nothing: its HX-Redirect
+  // sends the page to sign in.
   var POLL_MS = 45000;
   var POLL_MAX_MS = 600000;
   var pollDelay = POLL_MS;
@@ -313,27 +314,39 @@
     }
   }
 
+  // Back to every 45 seconds, timed from the round's start, so a round overdue at that pace runs
+  // now: the cards that waited catch up at once.
+  function backToNormal() {
+    if (pollDelay !== POLL_MS) {
+      pollDelay = POLL_MS;
+      nextRound();
+    }
+  }
+
   document.addEventListener("htmx:sendError", pollFailed);
   document.addEventListener("htmx:timeout", pollFailed);
   // A poll a tap replaced ends in an abort, also with status 0, so only the error events above
   // count a refresh that got no answer.
   document.addEventListener("htmx:afterRequest", function (event) {
+    var status = event.detail && event.detail.xhr ? event.detail.xhr.status : 0;
+    // Any request that works, a tap's save as well as a refresh, means the server answers again,
+    // so the other cards don't keep waiting up to 10 minutes.
+    if (status >= 200 && status < 300) {
+      answered = true;
+      backToNormal();
+      return;
+    }
     if (!isPoll(event)) {
       return;
     }
-    var status = event.detail.xhr ? event.detail.xhr.status : 0;
-    if (status >= 200 && status < 300) {
-      answered = true;
-      if (pollDelay !== POLL_MS) {
-        pollDelay = POLL_MS;
-        nextRound();
-      }
-    } else if (status === 403 || status === 404) {
+    if (status === 403 || status === 404) {
       event.detail.target.removeAttribute("data-poll");
     } else if (status >= 400 && status !== 401) {
       slowDown();
     }
   });
+  // The browser says the network is back: don't wait out a long backoff to find out.
+  window.addEventListener("online", backToNormal);
 
   var TYPING = "textarea, select, input:not([type=hidden]):not([type=radio]):not([type=checkbox])";
 
