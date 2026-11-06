@@ -6,6 +6,10 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ## [Unreleased]
 
+### Security
+
+- **The base image moves to the current Python 3.12 slim digest**, which has the fixed `apt` for CVE-2026-109518. Grype found it at high severity in 0.13.0's image. Dinnerbell never runs `apt` once the image is built, so the flaw couldn't be reached in a running container, but the scan blocks CI until the image has the fix.
+
 ## [0.13.0] - 2026-11-04
 
 ### Added
