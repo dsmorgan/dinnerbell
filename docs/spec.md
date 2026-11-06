@@ -428,7 +428,7 @@ The adapter lives in `src/dinnerbell/channels/slack/`. `dinnerbell slack preview
 
 **Taking back a choice** (#207). Slack can't clear a select menu or a time once something is picked. So these menus, each next to a write-in field, start with a choice that picks nothing:
 
-- **From the catalog** in **Add a proposal** and **Make an offer**, and **Suggest something** in **Details**: **Nothing from the catalog**, under the heading **Write something in**.
+- **From the catalog** in **Add a proposal** and **Make an offer**, and **Suggest something** in **Details**: **Nothing from the catalog**, under the heading **Take back a pick**.
 - **A saved guest** in **Invite a guest**: **No saved guest**.
 
 Picking it counts as nothing picked, so you can write something in instead, or take back a saved suggestion. In **Add a proposal**, **Make an offer**, and **Invite a guest**, picking from the menu and writing something in as well is refused with a message that names that choice. **Details** also has **Clear a time**, with **No earliest time** and **No latest time**: a checked box removes that time from your eat window, even when a time is picked above it. The rating in **How was it?** has **No answer** for the same reason. Other menus have no such choice:

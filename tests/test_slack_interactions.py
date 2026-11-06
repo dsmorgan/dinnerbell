@@ -263,6 +263,42 @@ def test_both_clear_boxes_drop_both_picked_times() -> None:
     assert (details.eat_from, details.eat_until) == (None, None)
 
 
+COOK = {"selected_option": {"value": "cook"}}
+UNPICKED = {"selected_option": None}
+OFFER = {
+    "slot": {"selected_option": {"value": "dinner"}},
+    "day": {"selected_date": "2026-11-05"},
+    "mode": COOK,
+    "at": {"selected_time": "18:30"},
+    "capacity": {"value": "2"},
+}
+
+
+@pytest.mark.parametrize(
+    ("parse", "values", "block_id", "message"),
+    [
+        ("parse_proposal", state(mode=COOK, item=UNPICKED), "free_text", "NEITHER_ITEM"),
+        ("parse_proposal", state(mode=COOK), "free_text", "NO_CATALOG_ITEM"),
+        ("parse_offer", state(**OFFER, item=UNPICKED), "free_text", "NEITHER_ITEM"),
+        ("parse_offer", state(**OFFER), "free_text", "NO_CATALOG_ITEM"),
+        ("parse_invite", state(guest=UNPICKED), "name", "NEITHER_GUEST"),
+        ("parse_invite", state(), "name", "NO_GUEST_MENU"),
+    ],
+    ids=["proposal", "proposal-no-catalog", "offer", "offer-no-catalog", "invite", "invite-no-saved-guests"],
+)
+def test_picking_nothing_names_only_the_fields_the_modal_has(
+    parse: str, values: dict[str, object], block_id: str, message: str
+) -> None:
+    """#207: Slack posts every input block, picked or not, so a modal drawn without the catalog
+    menu, or without saved guests, has no such key and isn't told to pick from it."""
+    from dinnerbell.channels.slack import views
+
+    with pytest.raises(views.FormError) as refused:
+        getattr(views, parse)(values)
+    assert (refused.value.block_id, str(refused.value)) == (block_id, getattr(views, message))
+    assert views.NO_CATALOG_ITEM == "Type something new." and views.NO_GUEST_MENU == "Type the new guest's name."
+
+
 async def test_details_before_answering_turn_on_the_usual_offers(slack: Slack, house: House) -> None:
     """#180: saving Details first counts Lee in, so Lee's usual **I'll order** turns on too."""
     event_id = await open_call(house)
@@ -349,13 +385,13 @@ async def test_add_proposal_modal_and_submission(slack: Slack, house: House) -> 
     )
     assert body(await slack.submit("Sam", ids.PROPOSAL_VIEW, both, event_id))["errors"] == {
         "free_text": "Pick something from the catalog, or type something new, but not both. "
-        'To write something in, pick "Nothing from the catalog" first.'
+        'To keep what you typed, pick "Nothing from the catalog".'
     }
     groups = opened.args["view"]["blocks"]
     (item,) = [b for b in groups if b.get("block_id") == "item"]
     first = item["element"]["option_groups"][0]["options"]
     assert [(o["text"]["text"], o["value"]) for o in first] == [("Nothing from the catalog", "none")]
-    assert item["element"]["option_groups"][0]["label"]["text"] == "Write something in"
+    assert item["element"]["option_groups"][0]["label"]["text"] == "Take back a pick"
     nothing = state(mode={"selected_option": {"value": "cook"}}, item={"selected_option": {"value": "none"}})
     assert body(await slack.submit("Sam", ids.PROPOSAL_VIEW, nothing, event_id))["errors"] == {
         "free_text": "Pick something from the catalog, or type something new."
