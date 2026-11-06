@@ -5,7 +5,7 @@
 FROM ghcr.io/astral-sh/uv:0.13.6@sha256:af22a52f5eafef3d78e551599d405c02df61919d18028f0cea8eda93bc9986d0 AS uv
 
 # ---- build: resolve dependencies from uv.lock into /app/.venv -------------------------------
-FROM python:3.12-slim@sha256:aa943ce411423c7582288f18707ff66eddcbaeb510502d747a72aeb34f30d159 AS build
+FROM python:3.12-slim@sha256:4840d514c583a4d3d8cad3940e68dee6f0f6f3635c12fcd0a3d74c21a5b93a54 AS build
 COPY --from=uv /uv /usr/local/bin/uv
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
@@ -28,7 +28,7 @@ RUN uv --offline build --wheel --no-build-isolation --python /tmp/build-venv/bin
 
 # ---- runtime ---------------------------------------------------------------------------------
 # Keep this digest equal to the build stage's so the venv's interpreter matches.
-FROM python:3.12-slim@sha256:aa943ce411423c7582288f18707ff66eddcbaeb510502d747a72aeb34f30d159
+FROM python:3.12-slim@sha256:4840d514c583a4d3d8cad3940e68dee6f0f6f3635c12fcd0a3d74c21a5b93a54
 LABEL org.opencontainers.image.title="Dinnerbell" \
       org.opencontainers.image.description="Household meal coordination" \
       org.opencontainers.image.licenses="AGPL-3.0-or-later" \
