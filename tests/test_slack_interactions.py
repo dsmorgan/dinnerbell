@@ -161,6 +161,7 @@ async def test_details_opens_a_prefilled_modal(slack: Slack, house: House) -> No
         "guests",
         "eat_from",
         "eat_until",
+        "eat_clear",
         "suggest_item",
         "suggest_text",
         "note",
@@ -199,6 +200,53 @@ async def test_saving_details_calls_the_service(slack: Slack, house: House) -> N
     assert blocks["suggest_item"]["element"]["initial_option"]["value"] == str(tacos)
     assert blocks["suggest_text"]["element"]["initial_value"] == "Pho"
     assert blocks["note"]["element"]["initial_value"] == "Back at 6"
+
+
+async def test_details_can_take_back_a_saved_suggestion_and_eat_window(slack: Slack, house: House) -> None:
+    """#207: Slack can't clear a select or a timepicker, so the catalog's first choice picks
+    nothing and checkboxes clear a time. The saved suggestion still opens selected."""
+    event_id = await open_call(house)
+    tacos = house.items["Sam's Tacos"].id
+    saved = state(
+        eat_from={"selected_time": "18:30"},
+        eat_until={"selected_time": "20:00"},
+        suggest_item={"selected_option": {"value": str(tacos)}},
+    )
+    assert body(await slack.submit("Sam", ids.DETAILS_VIEW, saved, event_id)) == {}
+    await slack.click("Sam", "details", str(event_id))
+    blocks = {b.get("block_id"): b for b in slack.fake.of("views.open")[-1].args["view"]["blocks"]}
+    select = blocks["suggest_item"]["element"]
+    first = select["option_groups"][0]["options"]
+    assert [(o["text"]["text"], o["value"]) for o in first] == [("Nothing from the catalog", "none")]
+    assert select["initial_option"]["value"] == str(tacos)
+    clear = blocks["eat_clear"]["element"]
+    assert [o["value"] for o in clear["options"]] == ["eat_from", "eat_until"] and "initial_options" not in clear
+
+    switched = state(
+        eat_from={"selected_time": "18:30"},
+        eat_until={"selected_time": "20:00"},
+        eat_clear={"selected_options": [{"value": "eat_from"}]},
+        suggest_item={"selected_option": {"value": "none"}},
+        suggest_text={"value": "Pho"},
+    )
+    assert body(await slack.submit("Sam", ids.DETAILS_VIEW, switched, event_id)) == {}
+    ctx = await house.context(event_id)
+    mine = ctx.response_of(house["Sam"].id)
+    assert mine is not None and (mine.eat_from, mine.eat_until) == (None, time(20, 0))
+    assert {(s.item_id, s.free_text) for s in ctx.suggestions} == {(None, "Pho")}
+
+    # A cleared time drops out before the order check, so it can't be "before the earliest".
+    backwards = state(
+        eat_from={"selected_time": "21:00"},
+        eat_until={"selected_time": "20:00"},
+        eat_clear={"selected_options": [{"value": "eat_until"}]},
+        suggest_item={"selected_option": {"value": "none"}},
+    )
+    assert body(await slack.submit("Sam", ids.DETAILS_VIEW, backwards, event_id)) == {}
+    ctx = await house.context(event_id)
+    mine = ctx.response_of(house["Sam"].id)
+    assert mine is not None and (mine.eat_from, mine.eat_until) == (time(21, 0), None)
+    assert ctx.suggestions == []
 
 
 async def test_details_before_answering_turn_on_the_usual_offers(slack: Slack, house: House) -> None:
@@ -286,11 +334,18 @@ async def test_add_proposal_modal_and_submission(slack: Slack, house: House) -> 
         free_text={"value": "Enchiladas"},
     )
     assert "free_text" in body(await slack.submit("Sam", ids.PROPOSAL_VIEW, both, event_id))["errors"]
+    groups = opened.args["view"]["blocks"]
+    (item,) = [b for b in groups if b.get("block_id") == "item"]
+    first = item["element"]["option_groups"][0]["options"]
+    assert [(o["text"]["text"], o["value"]) for o in first] == [("Nothing from the catalog", "none")]
+    nothing = state(mode={"selected_option": {"value": "cook"}}, item={"selected_option": {"value": "none"}})
+    assert "free_text" in body(await slack.submit("Sam", ids.PROPOSAL_VIEW, nothing, event_id))["errors"]
     no_mode = state(free_text={"value": "Enchiladas"}, cuisine={"selected_option": {"value": str(mexican)}})
     assert "mode" in body(await slack.submit("Sam", ids.PROPOSAL_VIEW, no_mode, event_id))["errors"]
 
     good = state(
         mode={"selected_option": {"value": "pickup"}},
+        item={"selected_option": {"value": "none"}},  # picked, then switched to writing it in (#207)
         free_text={"value": "Enchiladas"},
         cuisine={"selected_option": {"value": str(mexican)}},
     )

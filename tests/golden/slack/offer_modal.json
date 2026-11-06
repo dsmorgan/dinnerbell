@@ -128,6 +128,23 @@
           {
             "label": {
               "emoji": true,
+              "text": "None",
+              "type": "plain_text"
+            },
+            "options": [
+              {
+                "text": {
+                  "emoji": true,
+                  "text": "Nothing from the catalog",
+                  "type": "plain_text"
+                },
+                "value": "none"
+              }
+            ]
+          },
+          {
+            "label": {
+              "emoji": true,
               "text": "Home meals",
               "type": "plain_text"
             },

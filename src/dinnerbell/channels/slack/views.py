@@ -171,6 +171,19 @@ def _item_groups(
     return groups, chosen
 
 
+NONE = "none"
+"""The value of a select's first choice that picks nothing, since Slack can't clear a select
+once something is picked (#207). Row IDs are digits, so it never matches one."""
+NOTHING_FROM_CATALOG = "Nothing from the catalog"
+NO_SAVED_GUEST = "No saved guest"
+
+
+def _with_none(groups: list[Block], label: str) -> list[Block]:
+    """Catalog ``groups`` with a first group of one choice, ``label``, that picks nothing (#207).
+    It's a group of its own, so each kind keeps its 100 items."""
+    return [{"label": plain("None", 75), "options": [option(label, NONE)]}, *groups]
+
+
 def _tag_options(tags: Iterable[Tag]) -> list[dict[str, Any]]:
     return [option(t.name, str(t.id)) for t in list(tags)[:MAX_OPTIONS]]
 
@@ -208,11 +221,13 @@ def details_modal(v: EventView, origin: ids.ViewOrigin) -> dict[str, Any]:
     blocks.append(
         _input("eat_until", "Latest you can eat", {"type": "timepicker", **_hhmm(mine.eat_until if mine else None)})
     )
+    clear: Block = {"type": "checkboxes", "options": list(CLEAR_TIMES.values())}
+    blocks.append(_input("eat_clear", "Clear a time", clear, hint=CLEAR_TIMES_HINT))
     groups, chosen_items = _item_groups(v.items, v.my_suggestion_ids[:1])
     if groups:
         select: Block = {
             "type": "static_select",
-            "option_groups": groups,
+            "option_groups": _with_none(groups, NOTHING_FROM_CATALOG),
             "placeholder": plain("Pick from the catalog"),
         }
         if chosen_items:
@@ -229,6 +244,11 @@ def details_modal(v: EventView, origin: ids.ViewOrigin) -> dict[str, Any]:
     return _modal("Your details", ids.DETAILS_VIEW, origin, blocks, "Save")
 
 
+CLEAR_TIMES = {"eat_from": option("No earliest time", "eat_from"), "eat_until": option("No latest time", "eat_until")}
+"""Slack can't empty a timepicker once it has a time, so these clear a saved one (#207)."""
+CLEAR_TIMES_HINT = "Slack can't empty a time once it's picked. Check one to remove it."
+
+
 def _state(values: Any, block_id: str) -> dict[str, Any]:
     block = values.get(block_id) if isinstance(values, dict) else None
     entry = block.get(VALUE) if isinstance(block, dict) else None
@@ -240,11 +260,16 @@ def _text(values: Any, block_id: str) -> str:
     return value if isinstance(value, str) else ""
 
 
-def _picked(values: Any, block_id: str) -> int | None:
+def _picked(values: Any, block_id: str, *, clearable: bool = False) -> int | None:
+    """The ID picked in a select, or None. In a ``clearable`` select, its ``NONE`` choice is None
+    too (#207); anywhere else, it's a value this app didn't write."""
     selected = _state(values, block_id).get("selected_option")
     if not isinstance(selected, dict):
         return None
-    return ids.parse_option_id(selected.get("value"))
+    value = selected.get("value")
+    if clearable and value == NONE:
+        return None
+    return ids.parse_option_id(value)
 
 
 def _picked_many(values: Any, block_id: str) -> frozenset[int]:
@@ -283,9 +308,14 @@ def parse_details(values: Any) -> Details:
     if guests > MAX_GUESTS:
         raise FormError("guests", f"Enter a whole number from 0 to {MAX_GUESTS}.")
     eat_from, eat_until = _time(values, "eat_from"), _time(values, "eat_until")
+    cleared = set(_picked_values(values, "eat_clear"))
+    if not cleared <= CLEAR_TIMES.keys():
+        raise ids.BadValue("not a time to clear")
+    eat_from = None if "eat_from" in cleared else eat_from
+    eat_until = None if "eat_until" in cleared else eat_until
     if eat_from and eat_until and eat_until < eat_from:
         raise FormError("eat_until", "The latest time can't be before the earliest.")
-    item = _picked(values, "suggest_item")
+    item = _picked(values, "suggest_item", clearable=True)
     text = _text(values, "suggest_text").strip()
     return Details(
         guests=guests,
@@ -317,7 +347,8 @@ def proposal_modal(v: EventView, origin: ids.ViewOrigin) -> dict[str, Any]:
     ]
     groups, _ = _item_groups(v.items, picked=v.picked_item_ids, hint=v.meal_hint)
     if groups:
-        blocks.append(_input("item", "From the catalog", {"type": "static_select", "option_groups": groups}))
+        catalog = {"type": "static_select", "option_groups": _with_none(groups, NOTHING_FROM_CATALOG)}
+        blocks.append(_input("item", "From the catalog", catalog))
     blocks.append(
         _input("free_text", "Or something new", {"type": "plain_text_input", "max_length": MAX_SUGGESTION_LENGTH})
     )
@@ -349,7 +380,7 @@ def parse_proposal(values: Any) -> ProposalInput:
     if raw not in {m.value for m in Mode}:
         raise FormError("mode", "Pick how you'd get it.")
     mode = Mode(str(raw))
-    item = _picked(values, "item")
+    item = _picked(values, "item", clearable=True)
     text = _text(values, "free_text").strip() or None
     cuisine = _picked(values, "cuisine")
     if (item is None) == (text is None):
@@ -644,7 +675,7 @@ PRIVATE = (
     '"Well liked" or "Recently late," never who said what. Your rating can also move your own score for it.'
 )
 THANKS = "thanks"
-NO_ANSWER = option("No answer", "none")
+NO_ANSWER = option("No answer", NONE)
 """Slack can't unselect a radio button, so this is how a rating is cleared, as on the web."""
 
 
@@ -786,7 +817,8 @@ def offer_modal(form: OfferForm, origin: ids.FormOrigin) -> dict[str, Any]:
     ]
     groups, _ = _item_groups(form.items, hint=form.meal_hint)
     if groups:
-        blocks.append(_input("item", "From the catalog", {"type": "static_select", "option_groups": groups}))
+        catalog = {"type": "static_select", "option_groups": _with_none(groups, NOTHING_FROM_CATALOG)}
+        blocks.append(_input("item", "From the catalog", catalog))
     blocks.append(
         _input("free_text", "Or something new", {"type": "plain_text_input", "max_length": MAX_SUGGESTION_LENGTH})
     )
@@ -836,7 +868,7 @@ def parse_offer(values: Any) -> OfferInput:
     raw = _text(values, "capacity").strip()
     if not (raw.isascii() and raw.isdigit() and len(raw) <= 3) or not 1 <= int(raw) <= MAX_CAPACITY:
         raise FormError("capacity", f"Enter a whole number from 1 to {MAX_CAPACITY}.")
-    item = _picked(values, "item")
+    item = _picked(values, "item", clearable=True)
     text = _text(values, "free_text").strip() or None
     cuisine = _picked(values, "cuisine")
     if (item is None) == (text is None):
@@ -899,13 +931,14 @@ def invite_modal(v: EventView, saved: Sequence[Member], origin: ids.ViewOrigin) 
     """Invite a saved guest or a new one to the call. A guest with Slack answers themselves;
     for one without, you answer and offer roles on your card."""
     invited = {g.person.id for g in v.guests}
-    choices = [option(m.display_name, str(m.id)) for m in saved if m.id not in invited][:MAX_OPTIONS]
+    choices = [option(m.display_name, str(m.id)) for m in saved if m.id not in invited][: MAX_OPTIONS - 1]
     blocks: list[Block] = [
         _intro(v),
         context("Guests eat with you and can pitch in, but don't vote or suggest. Their dietary needs always apply."),
     ]
     if choices:
-        blocks.append(_input("guest", "A saved guest", {"type": "static_select", "options": choices}))
+        guest = {"type": "static_select", "options": [option(NO_SAVED_GUEST, NONE), *choices]}  # #207
+        blocks.append(_input("guest", "A saved guest", guest))
     blocks.append(_input("name", "Or someone new", {"type": "plain_text_input", "max_length": MAX_DISPLAY_NAME_LENGTH}))
     if v.dietary_tags:
         needs: Block = {"type": "multi_static_select", "options": _tag_options(v.dietary_tags)}
@@ -916,7 +949,7 @@ def invite_modal(v: EventView, saved: Sequence[Member], origin: ids.ViewOrigin) 
 
 
 def parse_invite(values: Any) -> InviteInput:
-    guest = _picked(values, "guest")
+    guest = _picked(values, "guest", clearable=True)
     name = _text(values, "name").strip()
     if (guest is None) == (not name):
         raise FormError("name", "Pick a saved guest, or type a new guest's name, but not both.")

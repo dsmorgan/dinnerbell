@@ -203,6 +203,26 @@ async def test_the_offer_modal_flags_fields_before_closing(slack: Slack, house: 
     assert response.status == 200 and await house.kinds() == []
 
 
+async def test_nothing_from_the_catalog_lets_an_offer_write_something_in(slack: Slack, house: House) -> None:
+    """#207: Slack can't clear a select, so the catalog's first choice picks nothing."""
+    await slack.command("Kim", "offer")
+    (opened,) = slack.fake.of("views.open")
+    (item,) = [b for b in opened.args["view"]["blocks"] if b.get("block_id") == "item"]
+    first = item["element"]["option_groups"][0]["options"]
+    assert [(o["text"]["text"], o["value"]) for o in first] == [("Nothing from the catalog", "none")]
+
+    thai = house.tags["Thai"].id
+    values = offer_values(0, free_text={"value": "Green curry"}, cuisine={"selected_option": {"value": str(thai)}})
+    values["item"]["value"]["selected_option"] = {"value": "none"}
+    response = await submit_form(slack, "Kim", ids.OFFER_VIEW, values, ids.FormOrigin(CHANNEL))
+    assert json.loads(response.body or "{}") == {}
+    assert any("Posted your lunch offer" in text for text in slack.ephemerals("Kim"))
+    nothing = offer_values(0)
+    nothing["item"]["value"]["selected_option"] = {"value": "none"}
+    response = await submit_form(slack, "Kim", ids.OFFER_VIEW, nothing, ids.FormOrigin(CHANNEL))
+    assert "free_text" in json.loads(response.body)["errors"]  # nothing at all is still refused
+
+
 async def test_an_unlinked_person_cant_offer(slack: Slack, house: House) -> None:
     siam = house.items["Siam Garden"].id
     payload = view_submission("U09STRANGER", ids.OFFER_VIEW, offer_values(siam), ids.FormOrigin(CHANNEL).encode())
