@@ -230,12 +230,36 @@ async def test_tampered_modal_metadata_is_dropped(slack: Slack, house: House, me
         state(eat_from={"selected_time": "25:99"}),
         state(eat_from={"selected_time": "1830"}),
         state(suggest_item={"selected_option": {"value": "1; DROP TABLE"}}),
+        state(suggest_item={"selected_option": {"value": "None"}}),
+        state(eat_clear={"selected_options": [{"value": "note"}]}),
+        state(eat_clear={"selected_options": "eat_from"}),
     ],
 )
 async def test_tampered_modal_values_are_dropped(slack: Slack, house: House, values: dict[str, object]) -> None:
     event_id = await open_call(house)
     await slack.submit("Sam", ids.DETAILS_VIEW, values, event_id)
     assert await responses(house, event_id) == 0
+
+
+NONE = {"selected_option": {"value": "none"}}
+COOK = {"selected_option": {"value": "cook"}}
+
+
+@pytest.mark.parametrize(
+    ("parse", "values"),
+    [
+        ("parse_log", state(item=NONE)),
+        ("parse_assign", state(mode=COOK, who=NONE)),
+        ("parse_proposal", state(mode=COOK, free_text={"value": "Pho"}, cuisine=NONE)),
+        ("parse_details", state(guest_needs={"selected_options": [{"value": "none"}]})),
+    ],
+)
+def test_nothing_is_a_choice_only_in_the_menus_that_offer_it(parse: str, values: dict[str, object]) -> None:
+    """#207: the catalog menus and A saved guest offer "none"; anywhere else it's tampering."""
+    from dinnerbell.channels.slack import views
+
+    with pytest.raises(ids.BadValue):
+        getattr(views, parse)(values)
 
 
 async def test_slash_call_by_a_stranger_is_refused(slack: Slack, house: House) -> None:

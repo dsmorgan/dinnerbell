@@ -307,8 +307,11 @@ def test_the_offer_form_lists_its_meal_first_and_marks_the_rest(client: TestClie
 
 
 def _labels(view: dict[str, object]) -> list[str]:
+    """The catalog's labels, after its first choice, which picks nothing (#207)."""
     (block,) = [b for b in view["blocks"] if b.get("block_id") == "item"]  # type: ignore[attr-defined]
-    return [o["text"]["text"] for g in block["element"]["option_groups"] for o in g["options"]]
+    labels = [o["text"]["text"] for g in block["element"]["option_groups"] for o in g["options"]]
+    assert labels[0] == "Nothing from the catalog"
+    return labels[1:]
 
 
 def test_slack_lists_mark_items_for_other_meals() -> None:

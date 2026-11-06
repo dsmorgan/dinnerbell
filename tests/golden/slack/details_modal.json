@@ -100,6 +100,43 @@
       "type": "input"
     },
     {
+      "block_id": "eat_clear",
+      "element": {
+        "action_id": "value",
+        "options": [
+          {
+            "text": {
+              "emoji": true,
+              "text": "No earliest time",
+              "type": "plain_text"
+            },
+            "value": "eat_from"
+          },
+          {
+            "text": {
+              "emoji": true,
+              "text": "No latest time",
+              "type": "plain_text"
+            },
+            "value": "eat_until"
+          }
+        ],
+        "type": "checkboxes"
+      },
+      "hint": {
+        "emoji": true,
+        "text": "Slack can't empty a time once it's picked. Check one to remove it.",
+        "type": "plain_text"
+      },
+      "label": {
+        "emoji": true,
+        "text": "Clear a time",
+        "type": "plain_text"
+      },
+      "optional": true,
+      "type": "input"
+    },
+    {
       "block_id": "suggest_item",
       "element": {
         "action_id": "value",
@@ -112,6 +149,23 @@
           "value": "11"
         },
         "option_groups": [
+          {
+            "label": {
+              "emoji": true,
+              "text": "None",
+              "type": "plain_text"
+            },
+            "options": [
+              {
+                "text": {
+                  "emoji": true,
+                  "text": "Nothing from the catalog",
+                  "type": "plain_text"
+                },
+                "value": "none"
+              }
+            ]
+          },
           {
             "label": {
               "emoji": true,

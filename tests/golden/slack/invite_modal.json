@@ -26,6 +26,14 @@
           {
             "text": {
               "emoji": true,
+              "text": "No saved guest",
+              "type": "plain_text"
+            },
+            "value": "none"
+          },
+          {
+            "text": {
+              "emoji": true,
               "text": "Pat",
               "type": "plain_text"
             },

@@ -357,6 +357,8 @@ async def test_a_member_invites_from_the_card_and_answers_for_their_guest(slack:
     (opened,) = slack.fake.of("views.open")
     view = opened.args["view"]
     assert view["callback_id"] == ids.INVITE_VIEW
+    (guest,) = [b for b in view["blocks"] if b.get("block_id") == "guest"]
+    assert guest["element"]["options"][0]["text"]["text"] == "No saved guest"  # Slack can't clear a select (#207)
     origin = ids.ViewOrigin.decode(view["private_metadata"])
     assert origin.run == 1
     values = state(guest={"selected_option": {"value": str(house["Jo"].id)}})
@@ -418,7 +420,7 @@ async def test_an_invite_modal_naming_someone_new(slack: Slack, house: House) ->
         slack.conn.app, "interactive", view_submission(SLACK_IDS["Kim"], ids.INVITE_VIEW, both, origin.encode())
     )
     assert "name" in json.loads(response.body)["errors"]
-    new = state(name={"value": "Riley"})
+    new = state(guest={"selected_option": {"value": "none"}}, name={"value": "Riley"})  # No saved guest (#207)
     await send(slack.conn.app, "interactive", view_submission(SLACK_IDS["Kim"], ids.INVITE_VIEW, new, origin.encode()))
     await slack.conn.interactions.settle()
     ctx = await house.context(event_id)
