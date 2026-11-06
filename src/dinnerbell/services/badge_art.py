@@ -305,7 +305,7 @@ CompositeSource = Callable[[Sequence[Held]], bytes]
 ``composite_png`` is the built-in one. A source that draws from other art changes the PNG, so the
 hash changes and the picture uploads again."""
 COMPOSITE_COLUMNS = 7
-"""The most cells to a row. There are 13 badges, so with the empty corner cell, at most two rows."""
+"""Cells to a row. There are 13 badges, so with the empty corner cell, at most two rows."""
 CELL_WIDTH, CELL_HEIGHT = 64, 75
 """One badge's cell, in the composite's own units: the 120x140 drawing at about 64 px wide."""
 CELL_GAP = 6
@@ -320,12 +320,12 @@ def composite_grid(count: int) -> tuple[int, int]:
     """The columns and rows of the composite for ``count`` badges (#209).
 
     Slack's mobile app draws an "ALT" label over an image's bottom-left corner, so the grid keeps that
-    cell empty: it has ``count + 1`` cells, as few rows of at most ``COMPOSITE_COLUMNS`` as hold them,
-    and the cells spread evenly over those rows. 6 badges make one row of 7 cells; 7 make two rows of
-    4 rather than a row of 7 over a row with only the empty cell; 13 make two rows of 7."""
-    cells = count + 1
-    rows = -(-cells // COMPOSITE_COLUMNS)
-    return -(-cells // rows), rows
+    cell empty: ``count + 1`` cells, ``COMPOSITE_COLUMNS`` to a row. One row is only as wide as its
+    cells; more rows are always ``COMPOSITE_COLUMNS`` wide, so from 7 badges on the picture keeps one
+    width and Slack, which fits it to a width, draws every badge the same size. With 7 badges, the
+    second row holds only the empty cell."""
+    rows = -(-(count + 1) // COMPOSITE_COLUMNS)
+    return (COMPOSITE_COLUMNS if rows > 1 else count + 1), rows
 
 
 def cell_origin(index: int, count: int) -> tuple[int, int]:
