@@ -14,7 +14,7 @@ from typing import Any
 import pytest
 from sqlalchemy import text
 
-from dinnerbell.channels.slack import ids
+from dinnerbell.channels.slack import ids, views
 from dinnerbell.channels.slack.interactions import MANY_OFFERS
 from dinnerbell.config import Settings
 from dinnerbell.domain.catalog import Mode
@@ -196,7 +196,7 @@ async def test_the_offer_modal_flags_fields_before_closing(slack: Slack, house: 
     assert json.loads(response.body)["errors"] == {"capacity": "Enter a whole number from 1 to 20."}
     both = offer_values(siam, free_text={"value": "Pho"})
     response = await submit_form(slack, "Kim", ids.OFFER_VIEW, both, ids.FormOrigin(CHANNEL))
-    assert "free_text" in json.loads(response.body)["errors"]
+    assert json.loads(response.body)["errors"] == {"free_text": views.BOTH_ITEMS}
     payload = view_submission(SLACK_IDS["Kim"], ids.OFFER_VIEW, offer_values(siam), '{"event": 1}')
     response = await send(slack.conn.app, "interactive", payload)  # metadata this app didn't write
     await slack.conn.interactions.settle()
@@ -220,7 +220,7 @@ async def test_nothing_from_the_catalog_lets_an_offer_write_something_in(slack: 
     nothing = offer_values(0)
     nothing["item"]["value"]["selected_option"] = {"value": "none"}
     response = await submit_form(slack, "Kim", ids.OFFER_VIEW, nothing, ids.FormOrigin(CHANNEL))
-    assert "free_text" in json.loads(response.body)["errors"]  # nothing at all is still refused
+    assert json.loads(response.body)["errors"] == {"free_text": views.NEITHER_ITEM}  # nothing at all is refused
 
 
 async def test_an_unlinked_person_cant_offer(slack: Slack, house: House) -> None:

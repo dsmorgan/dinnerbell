@@ -249,6 +249,20 @@ async def test_details_can_take_back_a_saved_suggestion_and_eat_window(slack: Sl
     assert ctx.suggestions == []
 
 
+def test_both_clear_boxes_drop_both_picked_times() -> None:
+    """#207: a checked box wins over a time picked above it."""
+    from dinnerbell.channels.slack.views import parse_details
+
+    details = parse_details(
+        state(
+            eat_from={"selected_time": "18:00"},
+            eat_until={"selected_time": "19:30"},
+            eat_clear={"selected_options": [{"value": "eat_from"}, {"value": "eat_until"}]},
+        )
+    )
+    assert (details.eat_from, details.eat_until) == (None, None)
+
+
 async def test_details_before_answering_turn_on_the_usual_offers(slack: Slack, house: House) -> None:
     """#180: saving Details first counts Lee in, so Lee's usual **I'll order** turns on too."""
     event_id = await open_call(house)
@@ -333,13 +347,19 @@ async def test_add_proposal_modal_and_submission(slack: Slack, house: House) -> 
         item={"selected_option": {"value": str(house.items["Sam's Tacos"].id)}},
         free_text={"value": "Enchiladas"},
     )
-    assert "free_text" in body(await slack.submit("Sam", ids.PROPOSAL_VIEW, both, event_id))["errors"]
+    assert body(await slack.submit("Sam", ids.PROPOSAL_VIEW, both, event_id))["errors"] == {
+        "free_text": "Pick something from the catalog, or type something new, but not both. "
+        'To write something in, pick "Nothing from the catalog" first.'
+    }
     groups = opened.args["view"]["blocks"]
     (item,) = [b for b in groups if b.get("block_id") == "item"]
     first = item["element"]["option_groups"][0]["options"]
     assert [(o["text"]["text"], o["value"]) for o in first] == [("Nothing from the catalog", "none")]
+    assert item["element"]["option_groups"][0]["label"]["text"] == "Write something in"
     nothing = state(mode={"selected_option": {"value": "cook"}}, item={"selected_option": {"value": "none"}})
-    assert "free_text" in body(await slack.submit("Sam", ids.PROPOSAL_VIEW, nothing, event_id))["errors"]
+    assert body(await slack.submit("Sam", ids.PROPOSAL_VIEW, nothing, event_id))["errors"] == {
+        "free_text": "Pick something from the catalog, or type something new."
+    }
     no_mode = state(free_text={"value": "Enchiladas"}, cuisine={"selected_option": {"value": str(mexican)}})
     assert "mode" in body(await slack.submit("Sam", ids.PROPOSAL_VIEW, no_mode, event_id))["errors"]
 

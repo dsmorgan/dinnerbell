@@ -128,7 +128,7 @@
           {
             "label": {
               "emoji": true,
-              "text": "None",
+              "text": "Write something in",
               "type": "plain_text"
             },
             "options": [
