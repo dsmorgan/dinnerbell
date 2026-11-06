@@ -421,7 +421,7 @@ async def test_an_invite_modal_naming_someone_new(slack: Slack, house: House) ->
     )
     assert json.loads(response.body)["errors"] == {
         "name": "Pick a saved guest, or type a new guest's name, but not both. "
-        'To name someone new, pick "No saved guest" first.'
+        'To invite someone new, pick "No saved guest".'
     }
     neither = state(guest={"selected_option": {"value": "none"}})
     response = await send(

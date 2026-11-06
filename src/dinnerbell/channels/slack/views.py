@@ -176,25 +176,28 @@ NONE = "none"
 once something is picked (#207). Row IDs are digits, so it never matches one."""
 NOTHING_FROM_CATALOG = "Nothing from the catalog"
 NO_SAVED_GUEST = "No saved guest"
-WRITE_IN = "Write something in"
+TAKE_BACK = "Take back a pick"
 """The heading of the group that holds ``NOTHING_FROM_CATALOG``."""
 BOTH_ITEMS = (
     "Pick something from the catalog, or type something new, but not both. "
-    f'To write something in, pick "{NOTHING_FROM_CATALOG}" first.'
+    f'To keep what you typed, pick "{NOTHING_FROM_CATALOG}".'
 )
 NEITHER_ITEM = "Pick something from the catalog, or type something new."
+NO_CATALOG_ITEM = "Type something new."
+"""``NEITHER_ITEM`` for a modal drawn without the catalog menu, as for an empty catalog."""
 BOTH_GUESTS = (
-    "Pick a saved guest, or type a new guest's name, but not both. "
-    f'To name someone new, pick "{NO_SAVED_GUEST}" first.'
+    f'Pick a saved guest, or type a new guest\'s name, but not both. To invite someone new, pick "{NO_SAVED_GUEST}".'
 )
 NEITHER_GUEST = "Pick a saved guest, or type a new guest's name."
+NO_GUEST_MENU = "Type the new guest's name."
+"""``NEITHER_GUEST`` for a modal drawn without saved guests to pick."""
 
 
 def _with_none(groups: list[Block]) -> list[Block]:
-    """Catalog ``groups`` with a first group, "Write something in", whose one choice, "Nothing
+    """Catalog ``groups`` with a first group, "Take back a pick", whose one choice, "Nothing
     from the catalog", picks nothing (#207). It's a group of its own, so each kind keeps its 100
     items."""
-    return [{"label": plain(WRITE_IN, 75), "options": [option(NOTHING_FROM_CATALOG, NONE)]}, *groups]
+    return [{"label": plain(TAKE_BACK, 75), "options": [option(NOTHING_FROM_CATALOG, NONE)]}, *groups]
 
 
 def _one_of(picked: object, typed: object, block_id: str, neither: str, both: str) -> None:
@@ -203,6 +206,12 @@ def _one_of(picked: object, typed: object, block_id: str, neither: str, both: st
         raise FormError(block_id, neither)
     if picked is not None and typed is not None:
         raise FormError(block_id, both)
+
+
+def _shown(values: Any, block_id: str) -> bool:
+    """Whether the modal had the input ``block_id``: Slack posts every input block's state,
+    picked or not, so a missing one wasn't drawn."""
+    return isinstance(values, dict) and block_id in values
 
 
 def _tag_options(tags: Iterable[Tag]) -> list[dict[str, Any]]:
@@ -404,7 +413,7 @@ def parse_proposal(values: Any) -> ProposalInput:
     item = _picked(values, "item", clearable=True)
     text = _text(values, "free_text").strip() or None
     cuisine = _picked(values, "cuisine")
-    _one_of(item, text, "free_text", NEITHER_ITEM, BOTH_ITEMS)
+    _one_of(item, text, "free_text", NEITHER_ITEM if _shown(values, "item") else NO_CATALOG_ITEM, BOTH_ITEMS)
     if text is not None and cuisine is None:
         raise FormError("cuisine", "Pick a cuisine for it, so variety and vetoes still work.")
     return ProposalInput(mode, item, text, cuisine if text is not None else None)
@@ -891,7 +900,7 @@ def parse_offer(values: Any) -> OfferInput:
     item = _picked(values, "item", clearable=True)
     text = _text(values, "free_text").strip() or None
     cuisine = _picked(values, "cuisine")
-    _one_of(item, text, "free_text", NEITHER_ITEM, BOTH_ITEMS)
+    _one_of(item, text, "free_text", NEITHER_ITEM if _shown(values, "item") else NO_CATALOG_ITEM, BOTH_ITEMS)
     if text is not None and cuisine is None:
         raise FormError("cuisine", "Pick a cuisine for it, so variety and vetoes still work.")
     return OfferInput(
@@ -970,7 +979,7 @@ def invite_modal(v: EventView, saved: Sequence[Member], origin: ids.ViewOrigin) 
 def parse_invite(values: Any) -> InviteInput:
     guest = _picked(values, "guest", clearable=True)
     name = _text(values, "name").strip()
-    _one_of(guest, name or None, "name", NEITHER_GUEST, BOTH_GUESTS)
+    _one_of(guest, name or None, "name", NEITHER_GUEST if _shown(values, "guest") else NO_GUEST_MENU, BOTH_GUESTS)
     if len(name) > MAX_DISPLAY_NAME_LENGTH:  # Slack enforces max_length; this is a tampered payload
         raise FormError("name", f"Keep the name to {MAX_DISPLAY_NAME_LENGTH} characters.")
     if guest is not None:
