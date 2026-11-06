@@ -21,6 +21,7 @@ from dinnerbell.services.badge_art import (
     PNG_SCALE,
     Held,
     cell_origin,
+    composite_grid,
     composite_png,
     composite_size,
     composite_svg,
@@ -46,35 +47,68 @@ def cells(held: list[Held]) -> list[tuple[int, int]]:
     return [(int(x), int(y)) for x, y in re.findall(r'<svg x="(\d+)" y="(\d+)"', composite_svg(held))]
 
 
-def test_one_badge_is_one_cell() -> None:
-    assert composite_size(1) == (CELL_WIDTH, CELL_HEIGHT)
-    assert cells(some(1)) == [(0, 0)]
-    assert png_size(composite_png(some(1))) == (CELL_WIDTH * PNG_SCALE, CELL_HEIGHT * PNG_SCALE)
+STEP_X, STEP_Y = CELL_WIDTH + CELL_GAP, CELL_HEIGHT + CELL_GAP
+
+LAYOUTS = {
+    # badges: the rows of the grid, top to bottom; "B" is a badge, "_" an empty cell (#209)
+    1: ["_B"],
+    2: ["_BB"],
+    3: ["_BBB"],
+    4: ["_BBBB"],
+    5: ["_BBBBB"],
+    6: ["_BBBBBB"],
+    7: ["BBBB", "_BBB"],
+    8: ["BBBBB", "_BBB_"],
+    9: ["BBBBB", "_BBBB"],
+    10: ["BBBBBB", "_BBBB_"],
+    11: ["BBBBBB", "_BBBBB"],
+    12: ["BBBBBBB", "_BBBBB_"],
+    13: ["BBBBBBB", "_BBBBBB"],
+}
 
 
-def test_seven_badges_fill_one_row_with_small_gaps() -> None:
-    step = CELL_WIDTH + CELL_GAP
-    assert cells(some(7)) == [(i * step, 0) for i in range(7)]
-    assert composite_size(7) == (7 * CELL_WIDTH + 6 * CELL_GAP, CELL_HEIGHT)
-    assert CELL_GAP < CELL_WIDTH // 4 and 60 <= CELL_WIDTH <= 70  # about 64 px, small gaps
+def drawn(rows: list[str]) -> list[tuple[int, int]]:
+    """The cell origins a layout in ``LAYOUTS`` draws badges in, left to right and top to bottom."""
+    return [(c * STEP_X, r * STEP_Y) for r, row in enumerate(rows) for c, cell in enumerate(row) if cell == "B"]
 
 
-def test_the_eighth_badge_starts_a_second_row() -> None:
+@pytest.mark.parametrize("count", sorted(LAYOUTS))
+def test_each_count_leaves_the_bottom_left_cell_empty(count: int) -> None:
+    """Slack's mobile app draws an "ALT" label over the picture's bottom-left corner (#209)."""
+    rows = LAYOUTS[count]
+    width, height = composite_size(count)
+    assert (width, height) == (
+        len(rows[0]) * CELL_WIDTH + (len(rows[0]) - 1) * CELL_GAP,
+        len(rows) * CELL_HEIGHT + (len(rows) - 1) * CELL_GAP,
+    )
+    placed = cells(some(count))
+    assert placed == drawn(rows) == [cell_origin(i, count) for i in range(count)]
+    assert (0, height - CELL_HEIGHT) not in placed  # nothing under the label
+    assert all(x + CELL_WIDTH <= width and y + CELL_HEIGHT <= height for x, y in placed)
+    assert png_size(composite_png(some(count))) == (width * PNG_SCALE, height * PNG_SCALE)
+
+
+def test_the_layout_is_one_rule() -> None:
+    """The badges and the empty cell, in as few rows of at most 7 as hold them, spread evenly."""
     assert COMPOSITE_COLUMNS == 7
-    assert cell_origin(7) == (0, CELL_HEIGHT + CELL_GAP)
-    assert cells(some(8))[7] == (0, CELL_HEIGHT + CELL_GAP)
-    width, height = composite_size(8)
-    assert width == composite_size(7)[0] and height == 2 * CELL_HEIGHT + CELL_GAP
+    for count, rows in LAYOUTS.items():
+        assert composite_grid(count) == (len(rows[0]), len(rows))
+        assert sum(row.count("B") for row in rows) == count
+        assert len(rows) == -(-(count + 1) // COMPOSITE_COLUMNS)  # no row holds only the empty cell
+        assert all(len(row) == len(rows[0]) <= COMPOSITE_COLUMNS for row in rows)
+        assert rows[-1][0] == "_" and rows[-1][1] == "B"  # the last row starts one cell in
 
 
-def test_thirteen_badges_make_two_rows_of_seven_and_six() -> None:
+def test_the_cells_are_about_64_px_with_small_gaps() -> None:
+    assert CELL_GAP < CELL_WIDTH // 4 and 60 <= CELL_WIDTH <= 70
+
+
+def test_thirteen_badges_make_two_full_rows_with_the_second_one_cell_in() -> None:
     placed = cells(some(13))
-    assert len(placed) == 13
     rows = [[p for p in placed if p[1] == y] for y in sorted({p[1] for p in placed})]
     assert [len(r) for r in rows] == [7, 6]
-    assert [x for x, _ in rows[1]] == [x for x, _ in rows[0]][:6]  # the second row lines up under the first
-    width, height = composite_size(13)
-    assert png_size(composite_png(some(13))) == (width * PNG_SCALE, height * PNG_SCALE)
+    assert [x for x, _ in rows[1]] == [x for x, _ in rows[0]][1:]  # under the first row's last six
+    assert composite_size(13) == (7 * CELL_WIDTH + 6 * CELL_GAP, 2 * CELL_HEIGHT + CELL_GAP)
 
 
 def test_the_picture_is_a_transparent_png_with_no_text() -> None:

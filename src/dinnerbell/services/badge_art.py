@@ -13,7 +13,8 @@ drift apart:
 - ``standalone_svg`` is a complete, still SVG file with the stars drawn in.
 - ``png_for`` renders that SVG to a PNG. It is the built-in ``ArtSource``: what
   ``services.badge_files`` uploads to Slack unless it is given another source.
-- ``composite_png`` draws many badges in one grid PNG (#114), from the same standalone drawing. It is
+- ``composite_png`` draws many badges in one grid PNG (#114), from the same standalone drawing, with
+  the bottom-left cell left empty for Slack's "ALT" label (#209). It is
   the built-in ``CompositeSource``: what ``services.badge_files`` uploads for App Home unless it is
   given another.
 - ``icon_file`` and ``frame_file`` produce the files under ``static/badges/``. A test checks that
@@ -304,7 +305,7 @@ CompositeSource = Callable[[Sequence[Held]], bytes]
 ``composite_png`` is the built-in one. A source that draws from other art changes the PNG, so the
 hash changes and the picture uploads again."""
 COMPOSITE_COLUMNS = 7
-"""Badges to a row. There are 13 badges, so at most two rows of 7 and 6."""
+"""The most cells to a row. There are 13 badges, so with the empty corner cell, at most two rows."""
 CELL_WIDTH, CELL_HEIGHT = 64, 75
 """One badge's cell, in the composite's own units: the 120x140 drawing at about 64 px wide."""
 CELL_GAP = 6
@@ -315,26 +316,40 @@ def held_list(held: Mapping[BadgeKey, Tier]) -> tuple[Held, ...]:
     return tuple((b.key.value, held[b.key]) for b in BADGES if b.key in held)
 
 
-def cell_origin(index: int) -> tuple[int, int]:
-    """Where the ``index``-th badge's cell starts: left to right, ``COMPOSITE_COLUMNS`` to a row."""
-    row, column = divmod(index, COMPOSITE_COLUMNS)
+def composite_grid(count: int) -> tuple[int, int]:
+    """The columns and rows of the composite for ``count`` badges (#209).
+
+    Slack's mobile app draws an "ALT" label over an image's bottom-left corner, so the grid keeps that
+    cell empty: it has ``count + 1`` cells, as few rows of at most ``COMPOSITE_COLUMNS`` as hold them,
+    and the cells spread evenly over those rows. 6 badges make one row of 7 cells; 7 make two rows of
+    4 rather than a row of 7 over a row with only the empty cell; 13 make two rows of 7."""
+    cells = count + 1
+    rows = -(-cells // COMPOSITE_COLUMNS)
+    return -(-cells // rows), rows
+
+
+def cell_origin(index: int, count: int) -> tuple[int, int]:
+    """Where the ``index``-th of ``count`` badges' cell starts: left to right, a row at a time, with
+    the last row starting one cell in, past the empty bottom-left cell."""
+    columns, rows = composite_grid(count)
+    cell = index if index < (rows - 1) * columns else index + 1
+    row, column = divmod(cell, columns)
     return column * (CELL_WIDTH + CELL_GAP), row * (CELL_HEIGHT + CELL_GAP)
 
 
 def composite_size(count: int) -> tuple[int, int]:
-    """The composite's width and height for ``count`` badges: only as wide as its first row."""
-    columns = min(count, COMPOSITE_COLUMNS)
-    rows = -(-count // COMPOSITE_COLUMNS)
+    """The composite's width and height for ``count`` badges: only as wide as its widest row."""
+    columns, rows = composite_grid(count)
     return columns * CELL_WIDTH + (columns - 1) * CELL_GAP, rows * CELL_HEIGHT + (rows - 1) * CELL_GAP
 
 
 def composite_svg(held: Sequence[Held]) -> str:
     """The badges in ``held`` as one still SVG: each is the standalone drawing, nested in its cell,
-    on a transparent background."""
+    on a transparent background. The bottom-left cell stays empty (``composite_grid``)."""
     width, height = composite_size(len(held))
     cells = []
     for index, (key, tier) in enumerate(held):
-        x, y = cell_origin(index)
+        x, y = cell_origin(index, len(held))
         cells.append(
             f'<svg x="{x}" y="{y}" width="{CELL_WIDTH}" height="{CELL_HEIGHT}"'
             f' viewBox="0 0 {VIEW_WIDTH} {VIEW_HEIGHT}">{_standalone_body(key, Tier(tier), f"-{index}")}</svg>'
