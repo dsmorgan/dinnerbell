@@ -176,12 +176,33 @@ NONE = "none"
 once something is picked (#207). Row IDs are digits, so it never matches one."""
 NOTHING_FROM_CATALOG = "Nothing from the catalog"
 NO_SAVED_GUEST = "No saved guest"
+WRITE_IN = "Write something in"
+"""The heading of the group that holds ``NOTHING_FROM_CATALOG``."""
+BOTH_ITEMS = (
+    "Pick something from the catalog, or type something new, but not both. "
+    f'To write something in, pick "{NOTHING_FROM_CATALOG}" first.'
+)
+NEITHER_ITEM = "Pick something from the catalog, or type something new."
+BOTH_GUESTS = (
+    "Pick a saved guest, or type a new guest's name, but not both. "
+    f'To name someone new, pick "{NO_SAVED_GUEST}" first.'
+)
+NEITHER_GUEST = "Pick a saved guest, or type a new guest's name."
 
 
-def _with_none(groups: list[Block], label: str) -> list[Block]:
-    """Catalog ``groups`` with a first group of one choice, ``label``, that picks nothing (#207).
-    It's a group of its own, so each kind keeps its 100 items."""
-    return [{"label": plain("None", 75), "options": [option(label, NONE)]}, *groups]
+def _with_none(groups: list[Block]) -> list[Block]:
+    """Catalog ``groups`` with a first group, "Write something in", whose one choice, "Nothing
+    from the catalog", picks nothing (#207). It's a group of its own, so each kind keeps its 100
+    items."""
+    return [{"label": plain(WRITE_IN, 75), "options": [option(NOTHING_FROM_CATALOG, NONE)]}, *groups]
+
+
+def _one_of(picked: object, typed: object, block_id: str, neither: str, both: str) -> None:
+    """Refuse a form with neither or both of a pick and something typed, saying how to fix it."""
+    if picked is None and typed is None:
+        raise FormError(block_id, neither)
+    if picked is not None and typed is not None:
+        raise FormError(block_id, both)
 
 
 def _tag_options(tags: Iterable[Tag]) -> list[dict[str, Any]]:
@@ -227,7 +248,7 @@ def details_modal(v: EventView, origin: ids.ViewOrigin) -> dict[str, Any]:
     if groups:
         select: Block = {
             "type": "static_select",
-            "option_groups": _with_none(groups, NOTHING_FROM_CATALOG),
+            "option_groups": _with_none(groups),
             "placeholder": plain("Pick from the catalog"),
         }
         if chosen_items:
@@ -246,7 +267,7 @@ def details_modal(v: EventView, origin: ids.ViewOrigin) -> dict[str, Any]:
 
 CLEAR_TIMES = {"eat_from": option("No earliest time", "eat_from"), "eat_until": option("No latest time", "eat_until")}
 """Slack can't empty a timepicker once it has a time, so these clear a saved one (#207)."""
-CLEAR_TIMES_HINT = "Slack can't empty a time once it's picked. Check one to remove it."
+CLEAR_TIMES_HINT = "Slack can't empty a time once it's picked. A checked box removes its time, even one picked above."
 
 
 def _state(values: Any, block_id: str) -> dict[str, Any]:
@@ -347,7 +368,7 @@ def proposal_modal(v: EventView, origin: ids.ViewOrigin) -> dict[str, Any]:
     ]
     groups, _ = _item_groups(v.items, picked=v.picked_item_ids, hint=v.meal_hint)
     if groups:
-        catalog = {"type": "static_select", "option_groups": _with_none(groups, NOTHING_FROM_CATALOG)}
+        catalog = {"type": "static_select", "option_groups": _with_none(groups)}
         blocks.append(_input("item", "From the catalog", catalog))
     blocks.append(
         _input("free_text", "Or something new", {"type": "plain_text_input", "max_length": MAX_SUGGESTION_LENGTH})
@@ -383,8 +404,7 @@ def parse_proposal(values: Any) -> ProposalInput:
     item = _picked(values, "item", clearable=True)
     text = _text(values, "free_text").strip() or None
     cuisine = _picked(values, "cuisine")
-    if (item is None) == (text is None):
-        raise FormError("free_text", "Pick something from the catalog, or type something new, but not both.")
+    _one_of(item, text, "free_text", NEITHER_ITEM, BOTH_ITEMS)
     if text is not None and cuisine is None:
         raise FormError("cuisine", "Pick a cuisine for it, so variety and vetoes still work.")
     return ProposalInput(mode, item, text, cuisine if text is not None else None)
@@ -817,7 +837,7 @@ def offer_modal(form: OfferForm, origin: ids.FormOrigin) -> dict[str, Any]:
     ]
     groups, _ = _item_groups(form.items, hint=form.meal_hint)
     if groups:
-        catalog = {"type": "static_select", "option_groups": _with_none(groups, NOTHING_FROM_CATALOG)}
+        catalog = {"type": "static_select", "option_groups": _with_none(groups)}
         blocks.append(_input("item", "From the catalog", catalog))
     blocks.append(
         _input("free_text", "Or something new", {"type": "plain_text_input", "max_length": MAX_SUGGESTION_LENGTH})
@@ -871,8 +891,7 @@ def parse_offer(values: Any) -> OfferInput:
     item = _picked(values, "item", clearable=True)
     text = _text(values, "free_text").strip() or None
     cuisine = _picked(values, "cuisine")
-    if (item is None) == (text is None):
-        raise FormError("free_text", "Pick something from the catalog, or type something new, but not both.")
+    _one_of(item, text, "free_text", NEITHER_ITEM, BOTH_ITEMS)
     if text is not None and cuisine is None:
         raise FormError("cuisine", "Pick a cuisine for it, so variety and vetoes still work.")
     return OfferInput(
@@ -951,8 +970,7 @@ def invite_modal(v: EventView, saved: Sequence[Member], origin: ids.ViewOrigin) 
 def parse_invite(values: Any) -> InviteInput:
     guest = _picked(values, "guest", clearable=True)
     name = _text(values, "name").strip()
-    if (guest is None) == (not name):
-        raise FormError("name", "Pick a saved guest, or type a new guest's name, but not both.")
+    _one_of(guest, name or None, "name", NEITHER_GUEST, BOTH_GUESTS)
     if len(name) > MAX_DISPLAY_NAME_LENGTH:  # Slack enforces max_length; this is a tampered payload
         raise FormError("name", f"Keep the name to {MAX_DISPLAY_NAME_LENGTH} characters.")
     if guest is not None:

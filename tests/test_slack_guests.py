@@ -419,12 +419,42 @@ async def test_an_invite_modal_naming_someone_new(slack: Slack, house: House) ->
     response = await send(
         slack.conn.app, "interactive", view_submission(SLACK_IDS["Kim"], ids.INVITE_VIEW, both, origin.encode())
     )
-    assert "name" in json.loads(response.body)["errors"]
+    assert json.loads(response.body)["errors"] == {
+        "name": "Pick a saved guest, or type a new guest's name, but not both. "
+        'To name someone new, pick "No saved guest" first.'
+    }
+    neither = state(guest={"selected_option": {"value": "none"}})
+    response = await send(
+        slack.conn.app, "interactive", view_submission(SLACK_IDS["Kim"], ids.INVITE_VIEW, neither, origin.encode())
+    )
+    assert json.loads(response.body)["errors"] == {"name": "Pick a saved guest, or type a new guest's name."}
     new = state(guest={"selected_option": {"value": "none"}}, name={"value": "Riley"})  # No saved guest (#207)
     await send(slack.conn.app, "interactive", view_submission(SLACK_IDS["Kim"], ids.INVITE_VIEW, new, origin.encode()))
     await slack.conn.interactions.settle()
     ctx = await house.context(event_id)
     assert [m.display_name for m in ctx.guests] == ["Riley"]
+
+
+def test_an_invite_modal_keeps_no_saved_guest_first_within_100_options() -> None:
+    """#207: with more saved guests than Slack lists, **No saved guest** stays first and the
+    menu keeps to Slack's 100 options."""
+    from dataclasses import replace
+
+    from dinnerbell.channels.slack import preview as samples
+    from dinnerbell.channels.slack.views import invite_modal
+    from dinnerbell.domain.members import Capabilities
+    from dinnerbell.services.event_views import Permissions
+    from tests.support.blockkit import check_view
+
+    saved = [Member(100 + n, 1, f"Guest {n}", None, Role.GUEST, Capabilities(), True) for n in range(150)]
+    view = replace(samples.COLLECTING_VIEW, can=Permissions(respond=True, invite=True))
+    modal = invite_modal(view, saved, samples.CALL_OFF_ORIGIN)
+    check_view(modal)
+    (guest,) = [b for b in modal["blocks"] if b.get("block_id") == "guest"]
+    options = guest["element"]["options"]
+    assert len(options) == 100
+    assert (options[0]["text"]["text"], options[0]["value"]) == ("No saved guest", "none")
+    assert [o["value"] for o in options[1:3]] == ["100", "101"]
 
 
 # Who Slack says may join -------------------------------------------------------------------------

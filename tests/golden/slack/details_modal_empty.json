@@ -112,7 +112,7 @@
       },
       "hint": {
         "emoji": true,
-        "text": "Slack can't empty a time once it's picked. Check one to remove it.",
+        "text": "Slack can't empty a time once it's picked. A checked box removes its time, even one picked above.",
         "type": "plain_text"
       },
       "label": {
@@ -131,7 +131,7 @@
           {
             "label": {
               "emoji": true,
-              "text": "None",
+              "text": "Write something in",
               "type": "plain_text"
             },
             "options": [
