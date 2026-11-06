@@ -1131,30 +1131,16 @@ async def test_a_different_art_source_draws_another_picture(house: House) -> Non
     assert [c[1] for c in uploads.calls] == [b"grid:chef-gold,scout-first", b"another drawing"]
 
 
-def first_cell_layout(held: Any) -> bytes:
-    """The picture as releases before #209 drew it, for badges that fit one row: the first cell
-    holds a badge."""
-    step = badge_art.CELL_WIDTH + badge_art.CELL_GAP
-    width, height = len(held) * step - badge_art.CELL_GAP, badge_art.CELL_HEIGHT
-    cells = "".join(
-        f'<svg x="{i * step}" y="0" width="{badge_art.CELL_WIDTH}" height="{height}" viewBox="0 0 120 140">'
-        f"{badge_art._standalone_body(key, Tier(tier), f'-{i}')}</svg>"
-        for i, (key, tier) in enumerate(held)
-    )
-    svg = f'<svg xmlns="{badge_art.SVG_NS}" viewBox="0 0 {width} {height}">{cells}</svg>'
-    scale = badge_art.PNG_SCALE
-    return bytes(badge_art.resvg_py.svg_to_bytes(svg_string=svg, width=width * scale, height=height * scale))
-
-
 async def test_the_new_layout_uploads_each_members_picture_again_once(house: House) -> None:
-    """Moving the badges off the bottom-left cell (#209) changes the PNG, so its hash: after the
-    upgrade, Home shows the small icons, uploads the picture again once, and then shows it."""
+    """A picture stored before the layout changed (#209; a stub stands in for the old drawing) no
+    longer matches the PNG's hash: Home shows the small icons, uploads the picture again once, and
+    then shows it."""
     uploads = Uploads()
-    await make_picture(files(house, uploads, composite=first_cell_layout), house)
+    await make_picture(files(house, uploads, composite=lambda held: b"old layout"), house)
     house.clock.advance(COMPOSITE_SETTLE)
     upgraded = files(house, uploads, composite=badge_art.composite_png)  # a restart on the new release
     assert await make_picture(upgraded, house) is None  # stale: the small icons show meanwhile
-    assert [c[1] for c in uploads.calls] == [first_cell_layout(BOTH), badge_art.composite_png(BOTH)]
+    assert [c[1] for c in uploads.calls] == [b"old layout", badge_art.composite_png(BOTH)]
     house.clock.advance(COMPOSITE_SETTLE)
     assert await make_picture(upgraded, house) == "F2"
     assert len(uploads.calls) == 2

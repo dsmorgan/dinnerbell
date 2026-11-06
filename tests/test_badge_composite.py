@@ -57,11 +57,11 @@ LAYOUTS = {
     4: ["_BBBB"],
     5: ["_BBBBB"],
     6: ["_BBBBBB"],
-    7: ["BBBB", "_BBB"],
-    8: ["BBBBB", "_BBB_"],
-    9: ["BBBBB", "_BBBB"],
-    10: ["BBBBBB", "_BBBB_"],
-    11: ["BBBBBB", "_BBBBB"],
+    7: ["BBBBBBB", "_______"],
+    8: ["BBBBBBB", "_B_____"],
+    9: ["BBBBBBB", "_BB____"],
+    10: ["BBBBBBB", "_BBB___"],
+    11: ["BBBBBBB", "_BBBB__"],
     12: ["BBBBBBB", "_BBBBB_"],
     13: ["BBBBBBB", "_BBBBBB"],
 }
@@ -89,14 +89,17 @@ def test_each_count_leaves_the_bottom_left_cell_empty(count: int) -> None:
 
 
 def test_the_layout_is_one_rule() -> None:
-    """The badges and the empty cell, in as few rows of at most 7 as hold them, spread evenly."""
+    """The badges and the empty cell, 7 to a row; two rows are always 7 wide."""
     assert COMPOSITE_COLUMNS == 7
     for count, rows in LAYOUTS.items():
         assert composite_grid(count) == (len(rows[0]), len(rows))
         assert sum(row.count("B") for row in rows) == count
-        assert len(rows) == -(-(count + 1) // COMPOSITE_COLUMNS)  # no row holds only the empty cell
-        assert all(len(row) == len(rows[0]) <= COMPOSITE_COLUMNS for row in rows)
-        assert rows[-1][0] == "_" and rows[-1][1] == "B"  # the last row starts one cell in
+        assert len(rows) == -(-(count + 1) // COMPOSITE_COLUMNS)
+        assert all(len(row) == len(rows[0]) for row in rows)
+        assert len(rows[0]) == (count + 1 if len(rows) == 1 else COMPOSITE_COLUMNS)
+        assert all(set(row) == {"B"} for row in rows[:-1])  # full rows first
+        assert re.fullmatch("_B*_*", rows[-1])  # the last row starts one cell in
+    assert len({composite_size(n)[0] for n in range(7, 14)}) == 1  # Slack draws 7 to 13 badges one size
 
 
 def test_the_cells_are_about_64_px_with_small_gaps() -> None:
