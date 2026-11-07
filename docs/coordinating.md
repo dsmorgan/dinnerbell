@@ -81,13 +81,13 @@ You can change any of these until the meal is marked done.
 
 **Adjust** is on the decision message, your App Home card, and any message that asks you to pick someone for a role. It opens with the plan as it is, and saves only what you change. If someone changed the same thing elsewhere while you had it open, Adjust doesn't overwrite it; it asks you to open Adjust again.
 
-Whoever you assign is told, and so is whoever no longer has the role. If they hadn't offered, the message says you assigned them, and that they can ask you to pick someone else. If you hand off in the same save, it names the new coordinator instead. From the meal time on, a change corrects the record and messages nobody.
+Whoever you assign is told, and so is whoever no longer has the role. If they hadn't offered, the message says you assigned them, and that they can ask you to pick someone else. If you hand off in the same save, it names the new coordinator instead. From the meal time on, a change corrects the record and messages nobody, except that whoever you hand off to still gets a message, since the meal is theirs to finish.
 
 ### When you end up eating somewhere else
 
 Change the place to record where you're really eating. Choose any place in the catalog or type a new name, even if nobody offered, someone vetoed it, or you just had it. Pick a way the place allows; a new name needs one, because **Cook** makes it a home meal and **Pickup** or **Delivery** a restaurant. People keep their roles if the new way still has them. A role nobody has yet goes to the first person who offered, or to nobody, for you to assign.
 
-Each person who's in gets one message before the meal time, which says if they lost or gained a role, and the decision updates. From the meal time on, it corrects the record and messages nobody. Once the meal is marked done, you can't change the place. A guest coordinator can't change it; an admin can.
+Each person who's in gets one message before the meal time, which says if they lost or gained a role, and the decision updates. From the meal time on, it corrects the record and messages nobody, except whoever you hand off to in the same save. Once the meal is marked done, you can't change the place. A guest coordinator can't change it; an admin can.
 
 Contributions and badges count who did what when the meal is marked done, so a correction you make before then is what counts. After that, only an admin can correct it, and the counts follow the correction.
 

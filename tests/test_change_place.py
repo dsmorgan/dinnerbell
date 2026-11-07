@@ -1358,6 +1358,27 @@ async def test_a_guest_who_loses_a_role_is_told_through_whoever_invited_them(hou
     assert "Your guest Pat is no longer picking up." in json.dumps(render(through, CTX).payload())
 
 
+async def test_an_inviter_who_changes_the_place_is_not_told_their_guest_lost_a_role(house: House) -> None:
+    pat = await add_guest(house, "Pat")
+    event_id = await open_dinner(house)
+    for name in ("Alex", "Sam", "Lee"):
+        await act(house, calls.respond, house[name], event_id, Status.IN)
+    await act(house, guests.invite, house["Sam"], event_id, guest_id=pat.id)
+    await act(house, calls.respond, pat, event_id, Status.IN)
+    await act(house, calls.offer_role, pat, event_id, RoleOffer.PICKUP, True)
+    await act(house, calls.claim_coordinator, house["Sam"], event_id)
+    house.clock.now = RESPOND_BY
+    await house.tick()
+    await act(house, calls.lock, house["Sam"], event_id, (await pick_ids(house, event_id))["Taqueria"])
+    assert assigned(await house.context(event_id))[AssignmentRole.PICKUP] == pat.id
+    skip = len(await house.outbox())
+    await change(house, "Sam", event_id, item_id=tacos(house), mode=Mode.COOK)
+    assert AssignmentRole.PICKUP not in assigned(await house.context(event_id))
+    counted = await direct(house, skip)
+    assert house["Sam"].id not in counted and counted == {house["Alex"].id: 1, house["Lee"].id: 1}
+    assert not await sent(house, "assignment_ended")
+
+
 async def test_after_the_meal_time_no_case_messages_anyone(house: House) -> None:
     event_id = await decided(house)
     event = await house.event(event_id)
@@ -1366,3 +1387,24 @@ async def test_after_the_meal_time_no_case_messages_anyone(house: House) -> None
     skip = len(await house.outbox())
     await change(house, "Sam", event_id, name="Soup", mode=Mode.COOK, member_id=house["Lee"].id)
     assert await direct(house, skip) == {}
+
+
+async def test_after_the_meal_time_a_hand_off_still_tells_whoever_takes_over(house: House) -> None:
+    event_id = await decided(house)
+    opened = as_opened(await opened_now(house, event_id))
+    event = await house.event(event_id)
+    assert event.meal_time is not None
+    house.clock.now = event.meal_time
+    skip = len(await house.outbox())
+    wanted = replace(
+        opened,
+        assignee_id=house["Alex"].id,
+        coordinator_id=house["Lee"].id,
+        item_id=house.items["Taqueria"].id,
+        place_mode=Mode.PICKUP,
+    )
+    await act(house, coordinator.adjust, house["Sam"], event_id, wanted, opened=opened, run=1)
+    assert await direct(house, skip) == {house["Lee"].id: 1}  # not Alex, who got a role, or anyone else
+    (made,) = [n for n in (await sent(house, "assignment_made")) if n.member.id == house["Lee"].id][-1:]
+    assert AssignmentRole.COORDINATOR in made.roles and made.decision.proposal.item.name == "Taqueria"
+    assert not [e for e in (await house.outbox())[skip:] if e.kind == "place_changed"]

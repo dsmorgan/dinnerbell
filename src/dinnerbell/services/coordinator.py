@@ -1104,7 +1104,8 @@ async def change_place(
     The call's messages update in place. Before the meal, each person who's in gets one message
     (``cc.place_changed``): whoever gains a role hears in ``AssignmentMade``, which names the place
     and the old one, and whoever loses one hears it in ``PlaceChanged``. From the meal time on it
-    corrects the record and messages nobody (#154). Audited as ``event.place_changed``; logged as
+    corrects the record and messages nobody (#154), but a hand-off in the same save still tells
+    whoever takes over. Audited as ``event.place_changed``; logged as
     ``change_place``. ``as_coordinator`` and ``expect`` are for Slack's Adjust, as in
     ``choose_roles``. So is ``handing_to``, whom the same save hands coordinating to: the messages
     about new roles are held for ``adjust`` to send after the hand-off, and the hand-off's own
@@ -1157,7 +1158,10 @@ async def change_place(
             ended = {} if was_pending else lost  # they hadn't been told they had those
             everyone = cc.place_changed(ctx, was, actor, now, has_message=has_message, ended=ended)
         said = {message.member.id for message in everyone}
-        left = {who: gone for who, gone in lost.items() if who not in said}  # such as someone who isn't in
+        # Whoever else lost a role hears as usual, such as someone who isn't in, unless the message
+        # would go through the person who just made the change.
+        hosted = {who for who in lost if (via := cc.answering_for(ctx, who)) is not None and via.id == actor.id}
+        left = {who: gone for who, gone in lost.items() if who not in said | hosted}
         told, held = _role_messages(
             ctx,
             actor,
