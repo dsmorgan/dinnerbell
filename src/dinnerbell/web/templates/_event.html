@@ -4,10 +4,11 @@
     hx-sync lets a second tap replace one still in flight, so the last tap is the one shown and
     saved. -#}
 {#- Each button's id is stable across swaps, so HTMX puts focus back on it: the path after the
-    event, plus the field that tells its siblings apart. Vote and Voted share one. -#}
-{% macro act(eid, path, label, cls="button small", fields={}, confirm=None, pressed=None, current=False) -%}
+    event, plus the field that tells its siblings apart. Vote and Voted share one, and so does a way
+    and clearing it (#212): ``way`` names the way when the posted mode is "either". -#}
+{% macro act(eid, path, label, cls="button small", fields={}, confirm=None, pressed=None, current=False, way=None) -%}
 {%- set key = [path.split("/")[3:]|join("-")|replace("unvote", "vote")] -%}
-{%- set key = key + [fields.get("status"), fields.get("role"), fields.get("switch"), fields.get("window"), fields.get("shift"), fields.get("mode")] -%}
+{%- set key = key + [fields.get("status"), fields.get("role"), fields.get("switch"), fields.get("window"), fields.get("shift"), way or fields.get("mode")] -%}
 <form method="post" action="{{ path }}" class="inline" hx-post="{{ path }}" hx-target="#event-{{ eid }}" hx-swap="outerHTML"{% if confirm %} hx-confirm="{{ confirm }}"{% endif %}>
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   <input type="hidden" name="from" value="{{ from_page }}">
@@ -266,7 +267,7 @@
   {% if v.info.shuffle_note %}<p class="small muted shuffle-note">{{ v.info.shuffle_note }}</p>{% endif %}
   {% if v.can.break_tie %}<p class="small">Tied for the most votes. As {{ "coordinator" if principal.member.id == e.coordinator_id else "an admin" }}, you can choose one of the tied proposals.</p>{% endif %}
   {% if v.can.shuffle %}
-  <div class="button-row">{{ act(e.id, base ~ "/shuffle", labels.SHUFFLE, "button small", {"run": e.run}, confirm=labels.web_confirm(labels.SHUFFLE_TITLE, labels.SHUFFLE_EFFECT)) }}
+  <div class="button-row">{{ act(e.id, base ~ "/shuffle", labels.SHUFFLE, "button quiet", {"run": e.run}, confirm=labels.web_confirm(labels.SHUFFLE_TITLE, labels.SHUFFLE_EFFECT)) }}
     <span class="small muted">{{ v.shuffles_left }} left</span></div>
   {% endif %}
   <ol class="proposals">
@@ -283,21 +284,32 @@
       {% for w in p.info.warnings %}<p class="small warning">{{ w }}</p>{% endfor %}
       {#- Only the late joiner sees which picks miss their own stances or needs (FR-29). -#}
       {% if p.not_for_me %}<p class="small warning">⚠ This proposal doesn't fit your preferences.</p>{% endif %}
+      {#- Two tiers (#212): everyone's vote first, then the coordinator's and admins' quieter overrides. -#}
+      {% if v.can.vote or v.can.join_late %}
       <div class="button-row">
         {% if v.can.vote %}
-        {% if p.voted %}{{ act(e.id, base ~ "/proposals/" ~ p.info.id ~ "/unvote", "Voted", "button small choice", pressed=true) }}
-        {% else %}{{ act(e.id, base ~ "/proposals/" ~ p.info.id ~ "/vote", "Vote", "button small choice", pressed=false) }}{% endif %}
-        {% elif v.can.join_late %}
-        {{ act(e.id, base ~ "/proposals/" ~ p.info.id ~ "/vote", "Join late and vote", "button small", {"join_late": "1"}, confirm=late_prompt) }}
+        {% if p.voted %}{{ act(e.id, base ~ "/proposals/" ~ p.info.id ~ "/unvote", "Voted", "button small primary choice", pressed=true) }}
+        {% else %}{{ act(e.id, base ~ "/proposals/" ~ p.info.id ~ "/vote", "Vote", "button small primary choice", pressed=false) }}{% endif %}
+        {% else %}
+        {{ act(e.id, base ~ "/proposals/" ~ p.info.id ~ "/vote", "Join late and vote", "button small primary", {"join_late": "1"}, confirm=late_prompt) }}
         {% endif %}
-        {% if v.can.break_tie and p.info.tied %}{{ act(e.id, base ~ "/proposals/" ~ p.info.id ~ "/break-tie", labels.BREAK_TIE, "button small primary", {"run": e.run}, confirm=labels.web_confirm(labels.BREAK_TIE_TITLE, labels.decides_now(p.info.item.name))) }}{% endif %}
-        {% if v.can.lock %}{{ act(e.id, base ~ "/proposals/" ~ p.info.id ~ "/lock", labels.LOCK, "button small primary", confirm=labels.web_confirm(labels.LOCK_TITLE, labels.decides_now(p.info.item.name))) }}{% endif %}
       </div>
-      {#- The coordinator sets a takeout pick's way while voting (#178); choosing the way it has settles it. -#}
-      {% if v.can.set_way and p.info.ways %}
-      <div class="button-row way" role="group" aria-label="Pickup or delivery for {{ p.info.item.name }}">
-        {% for w in p.info.ways %}{{ act(e.id, base ~ "/proposals/" ~ p.info.id ~ "/way", w.label, "button small choice", {"mode": w.value, "run": e.run}, pressed=p.info.mode_chosen and p.info.mode == w) }}{% endfor %}
+      {% endif %}
+      {% set way = v.can.set_way and p.info.ways %}
+      {% set tie = v.can.break_tie and p.info.tied %}
+      {% if way or tie or v.can.lock %}
+      <div class="coordinator-row" role="group" aria-label="Coordinator actions for {{ p.info.item.name }}">
+        <span class="coordinator-label">Coordinator</span>
+        {#- The coordinator sets a takeout pick's way while voting (#178); choosing the way it has settles it,
+            and tapping the chosen way again clears it back to not chosen (#212). -#}
+        {% if way %}
+        <span class="way-pair" role="group" aria-label="Pickup or delivery for {{ p.info.item.name }}">
+          {%- for w in p.info.ways %}{% set on = p.info.mode_chosen and p.info.mode == w %}{{ act(e.id, base ~ "/proposals/" ~ p.info.id ~ "/way", w.label, "button quiet choice", {"mode": labels.EITHER_WAY_VALUE if on else w.value, "run": e.run}, pressed=on, way=w.value) }}{% endfor -%}
+        </span>
         {% if not p.info.mode_chosen %}<span class="small muted">Not chosen yet</span>{% endif %}
+        {% endif %}
+        {% if tie %}{{ act(e.id, base ~ "/proposals/" ~ p.info.id ~ "/break-tie", labels.BREAK_TIE, "button quiet", {"run": e.run}, confirm=labels.web_confirm(labels.BREAK_TIE_TITLE, labels.decides_now(p.info.item.name))) }}{% endif %}
+        {% if v.can.lock %}{{ act(e.id, base ~ "/proposals/" ~ p.info.id ~ "/lock", labels.LOCK, "button quiet", confirm=labels.web_confirm(labels.LOCK_TITLE, labels.decides_now(p.info.item.name))) }}{% endif %}
       </div>
       {% endif %}
     </li>

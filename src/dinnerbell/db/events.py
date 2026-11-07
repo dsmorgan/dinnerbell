@@ -702,6 +702,16 @@ class ProposalRepository:
             .execution_options(synchronize_session=False)
         )
 
+    async def clear_mode(self, household_id: int, proposal_id: int) -> None:
+        """A pick's way goes back to not chosen, keeping the way it has (#212): the coordinator or
+        an admin cleared it during the vote, so the decision asks about it again."""
+        await self._session.execute(
+            update(ProposalRow)
+            .where(ProposalRow.household_id == household_id, ProposalRow.id == proposal_id)
+            .values(mode_chosen=False)
+            .execution_options(synchronize_session=False)
+        )
+
     async def set_rank(self, household_id: int, proposal_id: int, rank: int) -> None:
         await self._session.execute(
             update(ProposalRow)

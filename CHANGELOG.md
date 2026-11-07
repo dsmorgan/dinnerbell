@@ -9,8 +9,13 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 ### Security
 
 - **The base image moves to the current Python 3.12 slim digest**, which has the fixed `apt` for CVE-2026-109518. Grype flagged the old `apt` in 0.13.0's image at high severity. Dinnerbell never runs `apt` once the image is built, so the flaw couldn't be reached in a running container, but the scan blocks CI until the image has the fix.
+### Changed
+
+- **Vote stands out on the call page** (#212). On each proposal, **Vote** is now the orange button that everyone taps, and **Voted** keeps its filled look. **Join late and vote** sits in the same spot. The coordinator's and admins' controls move to a quieter row below a thin line, labeled **Coordinator**: **Pickup** and **Delivery** side by side, then **Break the tie** and **Lock this**, which still ask you to confirm. Their buttons are smaller, with muted text and no border until you point at or move to them, and they're still easy to tap on a phone. **Shuffle proposals**, above the list, has the same quiet look. A member who isn't the coordinator or an admin sees only **Vote**, as before.
+
 ### Fixed
 
+- **Put a takeout proposal back to "either way"** (#212). While voting, after the coordinator or an admin chose **Pickup** or **Delivery** for a proposal whose place allows both, nothing put it back to not chosen. Now tap the chosen way again on the call page, or pick **Either way** in the ⋯ beside it on the proposals message. The proposal keeps the way it shows, without "(chosen)", and if it wins, the decision asks the coordinator to choose, as for a proposal nobody set. The same people can do it as can choose the way, a guest coordinator too. Audited as `event.way_set` with `mode: null`.
 - **Take back a choice in a Slack modal** (#207). Slack can't clear a select menu once something is picked, so after picking a catalog item you couldn't write something in, and **Details** couldn't take back a saved catalog suggestion. **From the catalog** in **Add a proposal** and **Make an offer**, and **Suggest something** in **Details**, now start with **Nothing from the catalog**, and **A saved guest** in **Invite a guest** starts with **No saved guest**. Pick it, then write something in, or save **Details** to remove your suggestion. Slack can't clear a time either, so **Details** has **Clear a time**: check **No earliest time** or **No latest time** to remove that time from your eat window. Before, you could remove a saved time only on the web, which matters because a saved earliest time sets the meal time.
 ### Fixed
 

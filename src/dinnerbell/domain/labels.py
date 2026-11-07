@@ -40,6 +40,11 @@ PICKUP_MODE = Mode.PICKUP
 """For the templates, which can't name an enum member themselves."""
 WAY_LABELS = {Mode.PICKUP: "Make it pickup", Mode.DELIVERY: "Make it delivery"}
 """Setting a takeout pick's way while voting (#178)."""
+EITHER_WAY = "Either way"
+"""Clearing a takeout pick's way while voting, back to not chosen (#212)."""
+EITHER_WAY_VALUE = "either"
+"""The form value that clears a pick's way on the event page (#212), beside ``pickup`` and
+``delivery``."""
 
 
 def roles_to_choose(mode: Mode, *, way_open: bool) -> str:
