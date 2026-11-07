@@ -124,4 +124,4 @@ See [CONTRIBUTING.md](CONTRIBUTING.md). Commits need a DCO sign-off.
 
 ## License
 
-[AGPL-3.0-or-later](LICENSE). See [ADR 0003](docs/adr/0003-agpl-license.md) for why.
+[AGPL-3.0-or-later](LICENSE). See [ADR 0003](docs/adr/0003-agpl-license.md) for why. The Figtree font in `src/dinnerbell/web/static/fonts/` is under the [SIL Open Font License 1.1](src/dinnerbell/web/static/fonts/Figtree-OFL-1.1.txt).

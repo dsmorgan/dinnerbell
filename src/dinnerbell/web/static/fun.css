@@ -75,7 +75,7 @@ body[data-period="late"] { --den-sky1: #121735; --den-sky2: #2f2a5a; }
   max-width: 520px;
   height: 50px;
   border: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: var(--radius-control);
   overflow: hidden;
   pointer-events: none;
   background: var(--surface);
@@ -289,7 +289,7 @@ body[data-season="winter"] .den.den-shake .den-cap-wheel { display: block; }
 .greeting { position: relative; }
 .den-caption {
   position: absolute; right: 0; top: calc(100% + 2px); z-index: 0; max-width: 100%; margin: 0;
-  padding: 2px 10px; border-radius: 999px; background: var(--text); color: var(--bg);
+  padding: 2px 10px; border-radius: var(--radius-pill); background: var(--text); color: var(--bg);
   font-size: 0.85rem; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   pointer-events: none;
 }
