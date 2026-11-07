@@ -87,7 +87,7 @@ Whoever you assign is told, and so is whoever no longer has the role. If they ha
 
 Change the place to record where you're really eating. Choose any place in the catalog or type a new name, even if nobody offered, someone vetoed it, or you just had it. Pick a way the place allows; a new name needs one, because **Cook** makes it a home meal and **Pickup** or **Delivery** a restaurant. People keep their roles if the new way still has them. A role nobody has yet goes to the first person who offered, or to nobody, for you to assign.
 
-Each person who's in gets one message before the meal time, which says if they lost or gained a role, and the decision updates. From the meal time on, it corrects the record and messages nobody, except whoever you hand off to in the same save. Once the meal is marked done, you can't change the place. A guest coordinator can't change it; an admin can.
+Each person who's in gets one message before the meal time, which says if they lost or gained a role, and the decision updates. From the meal time on, it corrects the record and messages nobody, except whoever you hand off to in the same save. Once the meal is marked done, only an admin can correct the place, on the web. A guest coordinator can't change it; an admin can.
 
 Contributions and badges count who did what when the meal is marked done, so a correction you make before then is what counts. After that, only an admin can correct it, and the counts follow the correction.
 
@@ -124,11 +124,22 @@ In **Assign roles**, you choose how to get it, who cooks or orders, and who pick
 | Change the meal time, or who cooks, picks up, or orders | Web | Once decided |
 | Change the place | Web | Once decided, until it's done |
 | Correct who did what after the meal is done | Web | Any time after |
+| Correct the place after the meal is done | Web, **Change the plan** | Any time after |
 | Break a tie, shuffle, switch late joiners | Slack and web | While voting, alongside the coordinator |
 
 **Adjust** in Slack is the coordinator's alone. An admin who taps it is told to use the web.
 
 When you correct who cooked, picked up, or ordered after the meal is done, Dinnerbell moves that meal's count from the old person to the new one. The new person earns any badge the count reaches, which is announced like any other. The old person loses each badge tier their counts no longer reach on the current counts, even one already announced, and even one first earned at a lower count before an admin raised it. A badge post or monthly recap still waiting to go out leaves it out, and a post about it that Slack already has stays. Correcting it back restores both. Each correction that moves a count writes an audit row, `event.contributions_recounted`, with who lost and gained the count and the badges taken back and awarded.
+
+When a meal was marked done before the household changed its mind, correct the place under **Change the plan** on the call's page. Choose any place in the catalog or type a new name, with a way the place allows, as you would before it's done. Only an admin can, and only on a call that's done.
+
+- **History, stats, and ranking** use the corrected place, and the variety window counts it on the meal's date.
+- **Feedback** on the meal moves to the corrected place. Answers that don't fit the new kind stop showing and counting: what went wrong on a home meal, and a thank-you on a restaurant. Correcting back brings them back, unless the person has saved their feedback since.
+- **Roles** stay with the people who have them if the new way has them. A role the new way doesn't have is dropped, with its count. A new role goes to whoever offered first, or to nobody, and you can correct that right below it.
+- **Counts and badges** for that meal follow the same rules as above, for cooking, picking up, ordering, suggesting, exploring, and adding the place to the catalog. Other meals keep theirs.
+- **Nobody gets a message.** The posted messages update, and a badge it earns is announced as usual.
+
+A correction writes `event.place_changed`, marked `after_done`, and `event.contributions_recounted` if any count moved.
 
 ## What a guest coordinator can do
 

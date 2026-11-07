@@ -58,6 +58,8 @@ class Permissions:
     mark_done: bool = False
     change_place: bool = False
     """Change the place after the decision (#219): never for a guest (FR-58)."""
+    correct_place: bool = False
+    """Correct the place after **Mark done** (#220): an admin's, ``coordinator.correct_place``."""
     admin: bool = False
     rerun: bool = False
     move_window: Window | None = None
@@ -342,6 +344,7 @@ def _member_permissions(
         manage=_allowed(lambda: rules.check_can_manage_decision(event, actor)),
         mark_done=_allowed(lambda: rules.check_can_mark_done(event, actor, mine, now=now)),
         change_place=_allowed(lambda: rules.check_can_change_place(event, actor)),
+        correct_place=_allowed(lambda: rules.check_can_correct_place(event, actor)),
         admin=admin,
         rerun=admin
         and _allowed(lambda: rules.check_rerun(event, today, now=now, too_late_after=ctx.too_late_for(today))),

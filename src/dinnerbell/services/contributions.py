@@ -6,7 +6,8 @@ feedback when a member gives it. Both record rows that ignore a repeat, so a cal
 or by two requests at once, counts once, and then award every badge tier the new counts reach.
 An award is one row per member, badge, and tier, so it happens once too. ``recount_role`` moves
 a role's count when an admin corrects who did it after the meal is done (#162), and takes back the
-badges the old assignee no longer reaches. A live award starts
+badges the old assignee no longer reaches. ``recount_place`` does the same for everything that
+depends on the place when an admin corrects that (#220). A live award starts
 ``pending``: the channel is told later, by the Slack slice, which reads ``pending_announcements``
 and calls ``mark_announced``. Awards made while catching up (``ensure_backfilled``, including the
 one-time catch-up for the three ladders, a lowered threshold, and ``catch_up`` for a guest who
@@ -58,7 +59,7 @@ from dinnerbell.domain.badges import (
 from dinnerbell.domain.catalog import CatalogItem
 from dinnerbell.domain.contributions import ROLE_KIND, Credit, DoneFacts, Kind, credits_for_done, newness_by_meal
 from dinnerbell.domain.events import AssignmentRole, Event
-from dinnerbell.domain.meals import MealLog
+from dinnerbell.domain.meals import MealLog, newest_first
 from dinnerbell.domain.members import Member
 from dinnerbell.services import activity, announcements
 from dinnerbell.services.common import audit, require_admin
@@ -142,6 +143,15 @@ async def _count_event(
     kinds: frozenset[Kind] | None = None,
 ) -> list[Credit]:
     """Record what ``event`` earned: every kind, or only ``kinds`` when catching up one."""
+    facts = await _done_facts(db, event, members, items, history)
+    credits = [c for c in credits_for_done(facts) if c.member_id in members and (kinds is None or c.kind in kinds)]
+    return await ContributionRepository(db).add(event.household_id, credits, day=event.day, now=now, event_id=event.id)
+
+
+async def _done_facts(
+    db: AsyncSession, event: Event, members: dict[int, Member], items: dict[int, CatalogItem], history: _History
+) -> DoneFacts:
+    """``event`` as ``credits_for_done`` reads it, as it is now."""
     household_id = event.household_id
     meal = history.by_event.get(event.id)
     item = items.get(meal.item_id) if meal is not None else None
@@ -152,7 +162,7 @@ async def _count_event(
         for voter in voters:
             voted.setdefault(voter, set()).add(proposal_id)
     votes = {member_id: frozenset(ids) for member_id, ids in voted.items()}
-    facts = DoneFacts(
+    return DoneFacts(
         event=event,
         assignments=tuple(
             (a.member_id, a.role) for a in await AssignmentRepository(db).for_event(household_id, event.id)
@@ -167,8 +177,6 @@ async def _count_event(
         picks=frozenset(p.id for p in proposals if not p.after_decision),
         votes=votes,
     )
-    credits = [c for c in credits_for_done(facts) if c.member_id in members and (kinds is None or c.kind in kinds)]
-    return await ContributionRepository(db).add(household_id, credits, day=event.day, now=now, event_id=event.id)
 
 
 # Correcting a done call (#162) -----------------------------------------------------------------
@@ -205,27 +213,134 @@ async def recount_role(db: AsyncSession, actor: Member, event: Event, role: Assi
     before = {m: await _reached(counts, household_id, m, ladders) for m in losing}
     await counts.remove(household_id, event.id, kind, losing)
     await counts.add(household_id, [Credit(m, kind) for m in gaining], day=event.day, now=now, event_id=event.id)
+    payload: dict[str, object] = {"role": role.value, "kind": kind.value, "removed": losing, "added": gaining}
+    counted = (kind.value, len(losing), len(gaining))
+    await _settle_recount(db, actor, event, members, before, set(gaining), payload, counted, now)
+
+
+PLACE_KINDS = (Kind.COOKED, Kind.PICKED_UP, Kind.ORDERED, Kind.SUGGESTED, Kind.EXPLORED)
+"""The kinds a call counts by its place and way, one per member, so the place decides who has them.
+``added_item`` depends on the place too, and goes by the item: see ``recount_place``."""
+
+
+async def recount_place(db: AsyncSession, actor: Member, event: Event, *, now: datetime) -> None:
+    """Make the done call's counts match the place an admin corrected it to (#220), in the caller's
+    transaction, which has already saved the call, its roles, and its meal. It treats badges as
+    ``recount_role`` does: whoever loses a count loses every tier their counts no longer reach, and
+    whoever gains one earns what it reaches, pending. Running it again changes nothing, so
+    correcting back restores the counts and the badges. A call that was never counted is left to
+    ``ensure_backfilled``, which counts it as corrected. Audited as
+    ``event.contributions_recounted`` when anything changed.
+
+    **The roles** a way has decide ``cooked``, ``picked_up``, and ``ordered``, so a way that drops a
+    role drops its count. **The winning proposal** decides ``suggested`` and ``explored``: a place
+    that wasn't a pick names nobody. Other kinds don't read the place, and ``gambled`` counts only
+    the picks people could vote on.
+
+    **``added_item``** is per item, the first time any call chose it, so a call losing the item
+    doesn't always lose the count. If another call chose the old item too, the count moves to the
+    first of those and its adder keeps it; otherwise it goes. The new item's adder earns one if this
+    call is now the item's first and nobody has it yet; if a later call holds it, it stays there.
+
+    **Other meals aren't recounted**, although this one may have changed how new their place was
+    (``newness_by_meal``). ``explored`` says what was new when that meal was counted, as it does
+    when someone logs or edits a meal by hand, and a correction doesn't take a badge from someone
+    who had no part in the meal corrected."""
+    household_id = event.household_id
+    counts = ContributionRepository(db)
+    if not await counts.counted(household_id, event.id):
+        return
+    members = {m.id: m for m in await MemberRepository(db).list(household_id)}
+    items = {i.id: i for i in await CatalogRepository(db).items(household_id)}
+    meals = await MealLogRepository(db).between(household_id, None, None)
+    facts = await _done_facts(db, event, members, items, _History(meals))
+    earned = [c for c in credits_for_done(facts) if c.member_id in members]
+    removed: dict[Kind, list[int]] = {}
+    gaining = [c for c in earned if c.kind is Kind.ADDED_ITEM]
+    for kind in PLACE_KINDS:
+        wanted = {c.member_id for c in earned if c.kind is kind}
+        had = await counts.credited(household_id, event.id, kind)
+        if had - wanted:
+            removed[kind] = sorted(had - wanted)
+        gaining += [c for c in earned if c.kind is kind and c.member_id not in had]
+    moved: list[int] = []
+    for member_id, item_id in await counts.item_credits(household_id, event.id):
+        if item_id == event.decided_item_id:
+            continue
+        if await _rehome_item_credit(counts, household_id, member_id, item_id, meals):
+            moved.append(item_id)
+        else:
+            removed.setdefault(Kind.ADDED_ITEM, []).append(member_id)
+    ladders = ladders_from(await household_settings(db, household_id))
+    losing = {m for who in removed.values() for m in who}
+    before = {m: await _reached(counts, household_id, m, ladders) for m in losing}
+    for kind, who in removed.items():
+        await counts.remove(household_id, event.id, kind, who)
+    added = await counts.add(household_id, gaining, day=event.day, now=now, event_id=event.id)
+    if not removed and not added and not moved:
+        return
+    gained: dict[str, list[int]] = {}
+    for credit in added:
+        gained.setdefault(credit.kind.value, []).append(credit.member_id)
+    payload: dict[str, object] = {
+        "for": "place",
+        "removed": {kind.value: who for kind, who in removed.items()},
+        "added": gained,
+        "item_credit_moved": moved,
+    }
+    counted = ("place", sum(map(len, removed.values())), len(added))
+    await _settle_recount(db, actor, event, members, before, {c.member_id for c in added}, payload, counted, now)
+
+
+async def _rehome_item_credit(
+    counts: ContributionRepository, household_id: int, member_id: int, item_id: int, meals: list[MealLog]
+) -> bool:
+    """Move ``member_id``'s ``added_item`` count for ``item_id`` to the first call that still chose
+    the item, and return whether there was one. A member has one such count a call, so a call
+    where they already have one is passed over."""
+    calls = [m for m in sorted(meals, key=newest_first) if m.item_id == item_id and m.event_id is not None]
+    for meal in calls:
+        if meal.event_id is not None and member_id not in await counts.credited(
+            household_id, meal.event_id, Kind.ADDED_ITEM
+        ):
+            await counts.move_item_credit(household_id, item_id, meal.event_id, meal.day)
+            return True
+    return False
+
+
+async def _settle_recount(
+    db: AsyncSession,
+    actor: Member,
+    event: Event,
+    members: dict[int, Member],
+    before: dict[int, list[tuple[BadgeKey, Tier]]],
+    gaining: set[int],
+    payload: dict[str, object],
+    counted: tuple[str, int, int],
+    now: datetime,
+) -> None:
+    """The counts have moved: take back each tier that ``before``'s members no longer reach, award
+    what ``gaining``'s reach, and audit and log it. ``payload`` is the audit row, without the
+    badges, and ``counted`` is the log line's kind, and how many counts it removed and added."""
+    household_id = event.household_id
+    counts = ContributionRepository(db)
+    ladders = ladders_from(await household_settings(db, household_id))
     revoked: list[Award] = []
-    for member_id in losing:
+    for member_id, reached in before.items():
         after = set(await _reached(counts, household_id, member_id, ladders))
-        for badge, tier in [t for t in before[member_id] if t not in after]:
+        for badge, tier in [t for t in reached if t not in after]:
             award = await BadgeRepository(db).revoke(household_id, member_id, badge, tier)
             if award is not None:
                 revoked.append(award)
     await announcements.take_back(db, household_id, revoked)
-    awarded = await _award(db, household_id, set(gaining), now, Announcement.PENDING, event.id)
-    payload = {
-        "role": role.value,
-        "kind": kind.value,
-        "removed": losing,
-        "added": gaining,
+    awarded = await _award(db, household_id, gaining, now, Announcement.PENDING, event.id)
+    payload = payload | {
         "badges_revoked": [_award_payload(a) for a in revoked],
         "badges_awarded": [_award_payload(a) for a in awarded],
     }
     await audit(db, household_id, actor, "event.contributions_recounted", f"event:{event.id}", payload, now)
-    activity.action(
-        db, "contributions_recounted", event, actor, kind=kind.value, removed=len(losing), added=len(gaining)
-    )
+    what, removed, added = counted
+    activity.action(db, "contributions_recounted", event, actor, kind=what, removed=removed, added=added)
     for award in revoked:
         activity.action(
             db, "badge_revoked", event, members.get(award.member_id), badge=award.badge.value, tier=award.tier.value

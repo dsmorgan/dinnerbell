@@ -17,7 +17,7 @@ how many thank-yous there were.
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta
 from enum import StrEnum
 
@@ -113,6 +113,16 @@ class FeedbackInput:
     def issues(self) -> tuple[PlaceIssue, ...]:
         """``place_issues`` in the order forms show them, so "Other" comes last."""
         return tuple(i for i in PlaceIssue if i in self.place_issues)
+
+
+def answers_for(answers: FeedbackInput, kind: ItemKind) -> FeedbackInput:
+    """The ``answers`` that make sense for a meal of ``kind``. An admin's correction of the place
+    (#220) can move feedback to the other kind: what went wrong is about a restaurant, and a
+    thank-you is about a home cook. The row keeps both, so correcting back restores them, and
+    nobody sees or counts them meanwhile."""
+    if kind is ItemKind.HOME:
+        return replace(answers, place_issues=frozenset(), issue_note=None)
+    return replace(answers, cook_thanks=False, cook_note=None)
 
 
 @dataclass(frozen=True, slots=True)

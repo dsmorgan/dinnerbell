@@ -416,9 +416,11 @@
         <label class="field compact"><span>Meal time</span><input type="time" name="at" value="{{ e.meal_time|local_hhmm(tz) }}"></label>
         <button type="submit" class="button small">Save time</button>
       </form>
-      {#- Where they're really eating (#219): it records what happened, so nothing here is held to what people offered or ruled out. Never a guest's (FR-58). -#}
-      {% if v.can.change_place %}
-      <form method="post" autocomplete="off" action="{{ base }}/place" hx-post="{{ base }}/place" {{ swap|safe }} class="stack">
+      {% endif %}
+      {#- Where they're really eating (#219): it records what happened, so nothing here is held to what people offered or ruled out. Never a guest's (FR-58). After Mark done it's an admin's correction (#220). -#}
+      {% if v.can.change_place or v.can.correct_place %}
+      {% set place_url = base ~ ("/admin/place" if v.can.correct_place else "/place") %}
+      <form method="post" autocomplete="off" action="{{ place_url }}" hx-post="{{ place_url }}" {{ swap|safe }} class="stack">
         {{ hidden() }}
         <input type="hidden" name="run" value="{{ e.run }}">
         <input type="hidden" name="opened_item" value="{{ e.decided_item_id }}">
@@ -434,10 +436,14 @@
         <label class="field"><span>How</span>
           <select name="mode"><option value="">Whichever the place allows</option><option value="pickup">Pickup</option><option value="delivery">Delivery</option><option value="cook">Cook</option></select>
         </label>
+        {% if v.can.correct_place %}
+        <p class="small muted">This corrects the record and messages nobody. History, stats, and ranking use the new place, feedback on the meal moves to it, and the meal's counts and badges follow. People keep their roles if the new way still has them. Something new needs a way: Cook makes it a home meal, and Pickup or Delivery a restaurant.</p>
+        <button type="submit" class="button small">Correct the place</button>
+        {% else %}
         <p class="small muted">Everyone who's in hears about it before the meal time. People keep their roles if the new way still has them. Something new needs a way: Cook makes it a home meal, and Pickup or Delivery a restaurant.</p>
         <button type="submit" class="button small">Change the place</button>
+        {% endif %}
       </form>
-      {% endif %}
       {% endif %}
       <form method="post" autocomplete="off" action="{{ base }}/assignments" hx-post="{{ base }}/assignments" {{ swap|safe }} class="inline-form">
         {{ hidden() }}

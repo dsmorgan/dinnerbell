@@ -529,7 +529,8 @@ class FeedbackRow(Base):
     meal, ``place_issues`` a JSON list of issue chips, and ``issue_note`` what went wrong for the
     "Other" chip. ``rating_saved_at`` is when the rating last changed, which a later stance
     edit overrides (FR-55); saving anything else leaves it. ``item_id`` through ``participants`` snapshot
-    the meal when the feedback was saved: the item, its kind and mode, the cook, and who ate.
+    the meal when the feedback was saved: the item, its kind and mode, the cook, and who ate. An
+    admin's correction of the place moves the item, its name and kind, and the mode (#220).
 
     Deleting the meal deletes its feedback (``meal_id`` cascades), so a discarded call that
     takes its meal log with it leaves nothing behind.
