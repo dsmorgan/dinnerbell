@@ -152,7 +152,7 @@ Coordinating means using Dinnerbell to steer a call, and guests have little or n
 | Situation | What happens |
 |---|---|
 | Nobody claims coordinating | When voting starts, Dinnerbell picks a member who's in at random, and tells them. If no member is in, nobody coordinates: the vote decides, a tie goes to the proposal more admins voted for, then the place eaten longest ago, then the order the proposals were drawn in, and the first person who offered does the role, which an admin can change. |
-| The coordinator says Out | They stop coordinating. The call says nobody coordinates, and anyone can tap **I'll coordinate**, which puts them in. |
+| The coordinator says Out | They stop coordinating. The call says nobody coordinates, and any member can tap **I'll coordinate**, which puts them in. |
 | The coordinator says Maybe | They keep coordinating. If they're still a maybe when answers close, they're out, and they stop coordinating. |
 | The coordinator, as a late joiner, is switched off | They're out, so they stop coordinating. |
 | An admin deactivates the coordinator | Nobody coordinates their open calls. |

@@ -2260,7 +2260,7 @@ def test_0029_rewrites_or_closes_each_queued_message_about_a_guest_coordinating(
 )
 @pytest.mark.parametrize("kind", ["roles_to_choose", "assignment_made", "decision_updated"])
 def test_0029_skips_a_row_it_cant_read(settings: Settings, kind: str, payload: str) -> None:
-    """A row that isn't what it should be can't stop the upgrade: it's left for the drainer."""
+    """A row that isn't what it should be can't stop the upgrade: the migration leaves it as it was."""
     _guest_on_a_decided_call(settings)
     _queue_0029(settings, (3, kind, "odd:row", payload))
     _upgrade_to(settings, "0029_guests_dont_coordinate")
