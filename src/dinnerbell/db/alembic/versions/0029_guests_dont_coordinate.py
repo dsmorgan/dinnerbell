@@ -13,21 +13,23 @@ Calls that are done, abandoned, or cancelled keep their history: their coordinat
 assignment, and the ``coordinated`` contributions and badges they earned. A re-run of one doesn't
 bring the guest back (``lifecycle.reopen``).
 
-What's queued and not yet delivered changes too, so that it doesn't say a guest coordinates. The
+What's queued and not yet delivered changes too, so that it doesn't say a guest coordinates now. The
 app isn't running while it migrates, so no drainer holds those rows:
 
 - ``roles_to_choose``, ``coordinating_given``, and ``role_vacated`` are closed unsent when addressed
-  to a guest: each tells a coordinator what to do, with a button that would refuse them.
+  to a guest: each tells a coordinator what to do. ``roles_to_choose`` and ``role_vacated`` also
+  carry a button that would refuse them.
 - ``assignment_made`` to a guest loses ``coordinator`` from its roles, and is closed unsent if that
   was its only role. A guest's other roles are still news.
-- Every row about a call that lost its coordinator stops naming the guest as coordinator, so an
-  update to a posted message says nobody coordinates, and a member isn't told to ask the guest.
+- Every row about a call that lost its coordinator loses its coordinator line and the coordinator's
+  assignment entry, so an update to a posted message says nobody coordinates. Two past-tense facts
+  stay, because they're true: ``assigned_by`` can still name the guest as who assigned someone, and
+  ``decision.tie_note`` can still say the guest broke a tie as coordinator.
 
 No other direct message needs it: ``coordinator_picked`` never goes to a guest, and
 ``assignment_ended``, ``assignment_cancelled``, and ``place_changed`` only name the roles that do
-the work. A row that doesn't read as an object is left alone: it can't stop the upgrade, and the
-drainer already fails such a row safely. Messages already posted still name the guest until the
-call's next change updates them.
+the work. A row that doesn't read as an object is left alone, so it can't stop the upgrade.
+Messages already posted still name the guest until the call's next change updates them.
 
 The downgrade restores nothing: that guest could take coordinating again by claiming it.
 

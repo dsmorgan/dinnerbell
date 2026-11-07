@@ -740,7 +740,7 @@ async def release_coordinator(
     """Nobody coordinates ``event`` any more, because its coordinator is out (#154,
     ``domain.events.drops_coordinating``), or was deactivated: ``why`` is ``out``,
     ``taken_off``, ``maybe`` (a maybe when answers closed), or ``deactivated``. The call's
-    messages update, as when an admin sets it to nobody, so anyone who's in can claim it;
+    messages update, as when an admin sets it to nobody, so any member can claim it;
     ``update`` False leaves that to a caller that updates them anyway. Audited as
     ``event.coordinator_released``, with ``actor`` whoever changed the answer or deactivated
     them (None for the scheduler). Returns the event as saved."""
