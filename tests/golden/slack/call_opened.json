@@ -17,7 +17,7 @@
     },
     {
       "text": {
-        "text": "No answers yet. Be the first!\n_Still to answer: Alex, Kim, Lee, Sam_\n_No coordinator yet. Anyone can tap *Answer*, then *I'll coordinate*, to steer the vote._",
+        "text": "No answers yet. Be the first!\n_Still to answer: Alex, Kim, Lee, Sam_\n_No coordinator yet. Any member can tap *Answer*, then *I'll coordinate*, to steer the vote._",
         "type": "mrkdwn"
       },
       "type": "section"

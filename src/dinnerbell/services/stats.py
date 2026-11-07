@@ -10,6 +10,7 @@ orders people by a count, and holds nothing from anyone's preferences or feedbac
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 
@@ -87,6 +88,12 @@ async def my_stats(db: AsyncSession, actor: Member) -> MemberStats:
     return await _standing(db, actor)
 
 
+def guest_kinds(counts: Mapping[Kind, int]) -> frozenset[Kind]:
+    """The counts a guest sees: the pitching-in ones, without coordinating unless they have some
+    from before guests stopped (#227)."""
+    return PITCHING_IN if counts.get(Kind.COORDINATED) else PITCHING_IN - {Kind.COORDINATED}
+
+
 async def guest_stats(db: AsyncSession, actor: Member) -> MemberStats:
     """A guest's own standing. A guest earns only the pitching-in badges (Chef, Road Runner,
     Order Up) and On a Roll, so those are the badges and counts they see, with Quarterback only
@@ -94,7 +101,7 @@ async def guest_stats(db: AsyncSession, actor: Member) -> MemberStats:
     if not (actor.active and actor.is_guest):
         raise Forbidden(GUESTS_ONLY)
     found = await _standing(db, actor)
-    kinds = PITCHING_IN if found.counts.get(Kind.COORDINATED) else PITCHING_IN - {Kind.COORDINATED}
+    kinds = guest_kinds(found.counts)
     shown = tuple(p for p in found.progress if p.badge.kind is None or p.badge.kind in kinds)
     counts = {kind: n for kind, n in found.counts.items() if kind in kinds}
     return replace(found, counts=counts, progress=shown)

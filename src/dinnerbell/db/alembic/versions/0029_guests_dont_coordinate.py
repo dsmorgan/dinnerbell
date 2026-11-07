@@ -13,10 +13,21 @@ Calls that are done, abandoned, or cancelled keep their history: their coordinat
 assignment, and the ``coordinated`` contributions and badges they earned. A re-run of one doesn't
 bring the guest back (``lifecycle.reopen``).
 
-A direct message about coordinating that's queued for a guest, or for the member who invited one,
-is closed unsent: the notification no longer knows how to reach that member, and it isn't true now.
-The app isn't running while it migrates, so no drainer holds those rows. Messages already posted
-still name the guest until the call's next change updates them.
+What's queued and not yet delivered changes too, so that it doesn't say a guest coordinates. The
+app isn't running while it migrates, so no drainer holds those rows:
+
+- ``roles_to_choose``, ``coordinating_given``, and ``role_vacated`` are closed unsent when addressed
+  to a guest: each tells a coordinator what to do, with a button that would refuse them.
+- ``assignment_made`` to a guest loses ``coordinator`` from its roles, and is closed unsent if that
+  was its only role. A guest's other roles are still news.
+- Every row about a call that lost its coordinator stops naming the guest as coordinator, so an
+  update to a posted message says nobody coordinates, and a member isn't told to ask the guest.
+
+No other direct message needs it: ``coordinator_picked`` never goes to a guest, and
+``assignment_ended``, ``assignment_cancelled``, and ``place_changed`` only name the roles that do
+the work. A row that doesn't read as an object is left alone: it can't stop the upgrade, and the
+drainer already fails such a row safely. Messages already posted still name the guest until the
+call's next change updates them.
 
 The downgrade restores nothing: that guest could take coordinating again by claiming it.
 
@@ -44,6 +55,9 @@ OPEN_STATES = "('scheduled', 'collecting', 'voting', 'decided')"
 """``EventState.is_open``, as it is today."""
 GUESTS = "SELECT id FROM member WHERE role = 'guest'"
 CLOSED_NOTE = "Guests no longer coordinate (#227)."
+COORDINATOR = "coordinator"
+COORDINATORS_ONLY = frozenset({"roles_to_choose", "coordinating_given", "role_vacated"})
+"""Direct messages that tell whoever coordinates what to do."""
 
 
 def upgrade() -> None:
@@ -81,19 +95,77 @@ def upgrade() -> None:
             f"AND event_id IN (SELECT id FROM event WHERE state IN {OPEN_STATES})"
         )
     )
+    cleared = {event_id for event_id, _, _ in calls}
     queued = bind.execute(
-        sa.text(
-            "SELECT id, payload FROM outbox WHERE delivered_at IS NULL AND failed_at IS NULL "
-            "AND kind IN ('roles_to_choose', 'coordinating_given')"
-        )
+        sa.text("SELECT id, event_id, kind, payload FROM outbox WHERE delivered_at IS NULL AND failed_at IS NULL")
     ).all()
-    for row_id, raw in queued:
-        payload: dict[str, Any] = json.loads(raw) if isinstance(raw, str) else raw
-        if (payload.get("member") or {}).get("id") in guests:
+    for row_id, event_id, kind, raw in queued:
+        payload = _object(raw)
+        if payload is None:
+            continue
+        changed = event_id in cleared and _forget_the_guest(payload, guests)
+        to_guest = _names_a_guest(payload.get("member"), guests)
+        if to_guest and kind in COORDINATORS_ONLY:
+            close = True
+        elif to_guest and kind == "assignment_made":
+            roles = payload.get("roles")
+            close = roles == [COORDINATOR]
+            if isinstance(roles, list) and COORDINATOR in roles and not close:
+                payload["roles"] = [role for role in roles if role != COORDINATOR]
+                changed = True
+        else:
+            close = False
+        if close:
             bind.execute(
                 sa.text("UPDATE outbox SET delivered_at = :now, last_error = :note WHERE id = :id"),
                 {"now": now, "note": CLOSED_NOTE, "id": row_id},
             )
+        elif changed:
+            bind.execute(
+                sa.text("UPDATE outbox SET payload = :payload WHERE id = :id"),
+                {"payload": json.dumps(payload), "id": row_id},
+            )
+
+
+def _object(raw: Any) -> dict[str, Any] | None:
+    """The row's payload, or None for one that isn't a JSON object."""
+    try:
+        payload = json.loads(raw) if isinstance(raw, str) else raw
+    except ValueError:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _names_a_guest(person: object, guests: set[int]) -> bool:
+    if not isinstance(person, dict):
+        return False
+    person_id = person.get("id")
+    return isinstance(person_id, int) and person_id in guests
+
+
+def _forget_the_guest(payload: dict[str, Any], guests: set[int]) -> bool:
+    """Take the guest out of what ``payload`` says about who coordinates. Returns whether it did."""
+    changed = False
+    event = payload.get("event")
+    if isinstance(event, dict) and _names_a_guest(event.get("coordinator"), guests):
+        event["coordinator"] = None
+        changed = True
+    decision = payload.get("decision")
+    held = decision.get("assignments") if isinstance(decision, dict) else None
+    if isinstance(decision, dict) and isinstance(held, list):
+        kept = [a for a in held if not _coordinating_guest(a, guests)]
+        if len(kept) != len(held):
+            decision["assignments"] = kept
+            changed = True
+    return changed
+
+
+def _coordinating_guest(assignment: object, guests: set[int]) -> bool:
+    return (
+        isinstance(assignment, dict)
+        and assignment.get("role") == COORDINATOR
+        and _names_a_guest(assignment.get("member"), guests)
+    )
 
 
 def downgrade() -> None:

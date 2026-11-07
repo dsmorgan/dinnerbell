@@ -614,13 +614,14 @@ def test_no_form_makes_a_member_a_guest(admin: TestClient, provider: FakeProvide
 def test_a_guest_sees_only_their_own_badges(admin: TestClient, provider: FakeProvider, migrated: Settings) -> None:
     """The Stats page for a guest (#15): their pitching-in badges, no counts that guests can't
     earn, no household view, and none of the members' names."""
-    from datetime import UTC, datetime
+    from datetime import UTC, date, datetime
 
     from sqlalchemy import create_engine
     from sqlalchemy.orm import Session
 
-    from dinnerbell.db.models import BadgeAwardRow, HouseholdRow
+    from dinnerbell.db.models import BadgeAwardRow, ContributionRow, HouseholdRow
 
+    event_id = start(admin)
     add_guest(admin, "Riley", slack="U07PAT")
     as_guest(admin, provider)
     engine = create_engine(migrated.sync_database_url)
@@ -644,6 +645,25 @@ def test_a_guest_sees_only_their_own_badges(admin: TestClient, provider: FakePro
     for hidden in ("Full Table", "Food Critic", "Meals shared", "The household", 'id="lately-title"', "Stats</a>"):
         assert hidden not in html
     assert "Meals cooked" in html
+    assert "Meals coordinated" not in html and "Quarterback" not in html  # guests no longer coordinate (#227)
     assert 'aria-label="Stats"' not in html and "/stats/household" not in html  # no tabs for a guest (#153)
     moved = admin.get("/stats/household")
     assert (moved.status_code, moved.headers["location"]) == (303, "/stats")
+    # A guest who coordinated before that keeps the count, and sees it.
+    engine = create_engine(migrated.sync_database_url)
+    with Session(engine) as db:
+        guest = next(m for m in rows(migrated, MemberRow) if m.slack_user_id == "U07PAT")
+        db.add(
+            ContributionRow(
+                household_id=db.query(HouseholdRow).one().id,
+                member_id=guest.id,
+                kind="coordinated",
+                day=date(2026, 10, 21),
+                event_id=event_id,
+                created_at=datetime.now(UTC),
+            )
+        )
+        db.commit()
+    engine.dispose()
+    html = page(admin.get("/stats"))
+    assert "Meals coordinated" in html and "Quarterback" in html and html.count("badge-row") == 5

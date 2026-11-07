@@ -365,9 +365,9 @@ def _roster(
     if event.coordinator is not None:
         lines.append(f"*Coordinator:* {ctx.directory.mention(event.coordinator)}")
     elif event.state is EventState.COLLECTING:
-        lines.append("_No coordinator yet. Anyone can tap *Answer*, then *I'll coordinate*, to steer the vote._")
+        lines.append("_No coordinator yet. Any member can tap *Answer*, then *I'll coordinate*, to steer the vote._")
     elif event.state is EventState.VOTING:
-        lines.append("_No coordinator yet. Anyone can tap *I'll coordinate* to steer the vote._")
+        lines.append("_No coordinator yet. Any member can tap *I'll coordinate* to steer the vote._")
     return join_lines(lines)
 
 
