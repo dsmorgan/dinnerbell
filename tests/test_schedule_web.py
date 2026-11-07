@@ -16,6 +16,7 @@ from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.schedule import DEFAULT_SLOTS, slot_fingerprint
 from tests.conftest import csrf_from, invite, page, sign_in
 from tests.support.fake_oidc import FakeProvider
+from tests.support.pages import inline_code
 from tests.support.web import submit
 from tests.test_auth_flow import member, rows
 from tests.test_events_web import ranking_form, sign_in_as
@@ -233,6 +234,29 @@ def test_reset_puts_every_ranking_setting_back_and_nothing_else(
     assert audit.payload["feedback_cap"] == {"from": 1, "to": 2}
     assert submit(client, "/admin/schedule/reset", {}).status_code == 303  # already the defaults: no row
     assert len([a for a in rows(migrated, AuditRow) if a.action == "household.ranking_reset"]) == 1
+
+
+def test_the_ranking_reset_asks_first_and_says_it_happened(
+    client: TestClient, provider: FakeProvider, migrated: Settings
+) -> None:
+    sign_in(client, provider)
+    html = client.get("/admin/schedule").text
+    form = html.split('action="/admin/schedule/reset"', 1)[1].split(">", 1)[0]
+    assert 'hx-boost="true"' in form  # a plain form's submit never reaches hx-confirm
+    assert (
+        "hx-confirm=\"Reset the ranking to the defaults? This replaces the household's weights, Randomness, "
+        "Feedback, proposals per call, variety window, and time to choose roles. This can't be undone.\""
+    ) in form
+    assert inline_code(html)[1] == []  # the CSP forbids inline code
+
+    assert submit(client, "/admin/schedule", ranking_form(feedback="1")).status_code == 303
+    boosted = {"HX-Request": "true", "HX-Boosted": "true"}  # what HTMX sends once it's confirmed
+    reset = submit(client, "/admin/schedule/reset", {}, **boosted)
+    assert (reset.status_code, reset.headers["location"]) == (303, "/admin/schedule?notice=reset")
+    assert rows(migrated, HouseholdRow)[0].settings["feedback_cap"] == 2
+    shown = client.get(reset.headers["location"], headers=boosted).text
+    assert '<p class="alert ok" role="status">Ranking reset to the defaults.' in shown
+    assert "<title>" in shown and "</main>" in shown  # a whole page, which HTMX swaps into the body
 
 
 def test_members_cannot_reset_the_ranking(client: TestClient, provider: FakeProvider, migrated: Settings) -> None:

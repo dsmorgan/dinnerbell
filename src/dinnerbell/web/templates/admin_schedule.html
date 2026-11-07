@@ -34,7 +34,8 @@
 </form>
 <details class="details-form">
   <summary class="small">Reset to defaults</summary>
-  <form method="post" action="/admin/schedule/reset" class="stack">
+  <form method="post" action="/admin/schedule/reset" class="stack" hx-boost="true"
+        hx-confirm="Reset the ranking to the defaults? This replaces the household's weights, Randomness, Feedback, proposals per call, variety window, and time to choose roles. This can't be undone.">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <p class="small muted">Every setting on this page goes back to what a new household starts with. That includes Feedback, so if it's off, ratings start moving scores. Call times, skipped days, and badge counts stay as they are.</p>
     <button type="submit" class="button small danger">Reset ranking</button>

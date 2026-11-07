@@ -22,7 +22,8 @@
   {% endfor %}
   <button type="submit" class="button primary block">Save badge counts</button>
 </form>
-<form method="post" action="/admin/badges/reset" class="stack">
+<form method="post" action="/admin/badges/reset" class="stack" hx-boost="true"
+      hx-confirm="Reset the badge counts to the defaults? This replaces the counts in all three ladders. Where a count drops, anyone who already has it earns that tier, quietly. This can't be undone.">
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   <p class="small muted">The defaults are 1, 10, 50, 100, 200 (Frequent); 1, 5, 20, 50, 100 (Occasional); and 1, 3, 10, 25, 50 (Rare).</p>
   <button type="submit" class="button block">Reset to defaults</button>

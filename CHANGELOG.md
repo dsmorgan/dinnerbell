@@ -24,6 +24,7 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 - **Shorter coordination messages in Slack** (#218). The direct messages about coordinating and roles now start with a bold headline, such as "You're picking up, ordering, and coordinating breakfast on Saturday, Nov 7.", with the place on its own line and short bullets for the facts and for what a coordinator can do. This covers being picked at random, being given coordinating, choosing roles, and being assigned a role. Roles read as a serial list wherever Dinnerbell lists them for you. "X assigned you this" keeps its own paragraph, above the bullets.
 - **The web's "nothing" choices are in square brackets too** (#218). The role form and the admin **Coordinator** form now offer **[Nobody]**, **Suggest from the catalog** offers **[Nothing]**, and the rating in **How was it?** offers **[No answer]**, matching Slack.
 - **Every expandable menu looks expandable** (#215). On the web, the title of every menu that opens, such as **Add a proposal** and **Admin**, now has the normal text color and the `+` or `−` marker that card headings have. **Call it off** stays red.
+- **Resetting to the defaults asks first** (#226). On **Admin > Ranking** and **Admin > Badges**, a reset now asks you to confirm and says what it replaces. After a reset, the page still says it happened.
 
 ### Fixed
 
