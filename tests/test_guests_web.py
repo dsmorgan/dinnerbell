@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import replace
+from datetime import timedelta
 from typing import Any
 
 import pytest
@@ -386,7 +387,6 @@ def test_a_guest_never_sees_votes_or_admin_controls(
     submit(admin, f"/events/{event_id}/details", {"guests": "1"})
     guest = as_guest(admin, provider)
     submit(guest, f"/events/{event_id}/respond", {"status": "in"})
-    from datetime import timedelta
 
     clock.advance(timedelta(minutes=90))
     tick(guest, clock)
