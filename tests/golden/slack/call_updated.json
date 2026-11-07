@@ -17,7 +17,7 @@
     },
     {
       "text": {
-        "text": "*In* · 3 people eating\n• <@U01ALEX> · can pick up\n• <@U02SAM> · +1 guest (Vegetarian) · can cook · eats after 6:40 PM · suggests Sam's Tacos\n    “Home late, but I'll cook if it's easy.”\n*Maybe:* <@U03KIM>\n_Still to answer: Lee_\n_No coordinator yet. Anyone can tap *Answer*, then *I'll coordinate*, to steer the vote._",
+        "text": "*In* · 3 people eating\n• <@U01ALEX> · can pick up\n• <@U02SAM> · +1 guest (Vegetarian) · can cook · eats after 6:40 PM · suggests Sam's Tacos\n    “Home late, but I'll cook if it's easy.”\n*Maybe:* <@U03KIM>\n_Still to answer: Lee_\n_No coordinator yet. Any member can tap *Answer*, then *I'll coordinate*, to steer the vote._",
         "type": "mrkdwn"
       },
       "type": "section"

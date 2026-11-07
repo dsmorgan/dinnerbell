@@ -16,7 +16,7 @@ from starlette.datastructures import FormData
 from starlette.responses import Response
 
 from dinnerbell.domain.badges import BADGES, LADDERS, TIERS, InvalidThresholds, Ladder
-from dinnerbell.domain.contributions import PITCHING_IN, Kind
+from dinnerbell.domain.contributions import Kind
 from dinnerbell.services import contributions, stats
 from dinnerbell.web.auth import AdminCSRFChecked, AdminPrincipal, Context, Database, GuestOrMember
 from dinnerbell.web.forms import BadFormValue
@@ -50,14 +50,13 @@ async def stats_page(request: Request, principal: GuestOrMember, context: Contex
     member = principal.member
     guest = member.is_guest
     mine = await (stats.guest_stats(db, member) if guest else stats.my_stats(db, member))
+    shown = stats.guest_kinds(mine.counts) if guest else KIND_LABELS
     page: dict[str, Any] = {
         "guest": guest,
         "tab": "mine",
         "mine": mine,
         "fresh": stats.newly_earned(mine, context.clock()),
-        "kinds": [
-            (label, mine.counts.get(kind, 0)) for kind, label in KIND_LABELS.items() if not guest or kind in PITCHING_IN
-        ],
+        "kinds": [(label, mine.counts.get(kind, 0)) for kind, label in KIND_LABELS.items() if kind in shown],
     }
     return await render(request, "stats.html", page)
 
