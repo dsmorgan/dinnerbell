@@ -708,6 +708,10 @@ def test_deadlines_never_move_past_midnight() -> None:
         ev.shifted_deadline(NOW + timedelta(hours=4), 90, NOW, latest=midnight)
     with pytest.raises(EventRuleViolation, match="past midnight"):  # at midnight, the call expires
         ev.shifted_deadline(NOW + timedelta(hours=4), 60, NOW, latest=midnight)
+    in_the_last_minute = midnight - timedelta(seconds=15)
+    assert ev.shifted_deadline(in_the_last_minute - timedelta(minutes=1), 1, NOW, latest=midnight) == (
+        midnight - timedelta(minutes=1)
+    )
 
 
 # Calling it off and closing early (FR-56) -------------------------------------------------------
