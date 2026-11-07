@@ -29,6 +29,7 @@ from dinnerbell.domain.events import (
     EventRuleViolation,
     EventState,
     IllegalTransition,
+    Proposal,
     ProposalSource,
     Window,
     can_do,
@@ -187,6 +188,13 @@ async def shuffle(db: AsyncSession, actor: Member, event_id: int, *, run: int | 
 NOT_BOTH_WAYS = "That place has one way to get it, so there's nothing to choose."
 
 
+def _way_changed(proposal: Proposal) -> str:
+    """Why a clear for a way that isn't the chosen one anymore is refused (#212)."""
+    if proposal.mode_chosen:
+        return f"Someone made it {proposal.mode.value} since you looked."
+    return "Someone set it back to either way since you looked."
+
+
 async def set_way(
     db: AsyncSession,
     actor: Member,
@@ -194,6 +202,7 @@ async def set_way(
     proposal_id: int,
     mode: Mode | None,
     *,
+    clears: Mode | None = None,
     run: int | None = None,
     now: datetime,
 ) -> None:
@@ -206,8 +215,12 @@ async def set_way(
 
     ``mode=None`` clears it (#212): the pick keeps the way it has, but nobody chose it, so the
     decision asks again. The same people may, with the same checks except coverage, which only a
-    way being set needs. Clearing a way that's open already is accepted, and audited, as setting
-    the way a pick has is: the tap says what the person wants, and the pick ends up that way."""
+    way being set needs. ``clears`` is the way the person saw chosen: the web and Slack send it,
+    and if that way isn't the chosen one anymore, because someone set another way or cleared it
+    meanwhile, the clear is refused (``way_changed``) and nothing is written. A clear without
+    ``clears`` of a way that's open already is accepted, and audited, as setting the way a pick
+    has is. The audit's ``mode`` is the way set, or None for a clear, and ``switched_from`` is
+    the way the pick had, chosen or not."""
     async with locked_event(db, actor.household_id, event_id, now) as event:
         await guest_rules.gate(db, event, actor, GuestAction.SET_WAY)
         check_run(event, run)
@@ -219,8 +232,15 @@ async def set_way(
         activity.about(**activity.pick(ctx.items, proposal))
         item = ctx.items.get(proposal.item_id) if proposal.item_id is not None else None
         ways = takeout_ways(item.modes) if item is not None else ()
-        if item is None or not ways or (mode is not None and mode not in ways):
+        if (
+            item is None
+            or not ways
+            or (mode is not None and mode not in ways)
+            or (clears is not None and clears not in ways)
+        ):
             raise EventRuleViolation(NOT_BOTH_WAYS, code="not_both_ways")
+        if mode is None and clears is not None and not (proposal.mode_chosen and proposal.mode is clears):
+            raise EventRuleViolation(_way_changed(proposal), code="way_changed")
         proposals = ProposalRepository(db)
         if mode is None:
             await proposals.clear_mode(actor.household_id, proposal.id)

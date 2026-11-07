@@ -533,10 +533,10 @@ ins { color: var(--ok); text-decoration: none; }
 .button.choice[aria-pressed="true"] { background: var(--text); border-color: var(--text); color: var(--bg); }
 /* Quiet (#212): the coordinator's and admins' overrides, and Shuffle, so everyone's Vote stands out.
    Smaller and muted, with no border until hovered or focused, and still a 40 px tap target. A
-   chosen way is tinted with the accent, not filled. */
+   chosen way has the accent's soft tint behind the text color, not a fill. */
 .button.quiet { min-height: 40px; padding: 0 0.65rem; border-color: transparent; background: transparent; color: var(--muted); font-size: 0.85rem; font-weight: 500; }
 .button.quiet:hover, .button.quiet:focus-visible { border-color: var(--line); color: var(--text); }
-.button.quiet.choice[aria-pressed="true"] { background: var(--accent-soft); border-color: transparent; color: var(--accent); font-weight: 600; }
+.button.quiet.choice[aria-pressed="true"] { background: var(--accent-soft); border-color: transparent; color: var(--text); font-weight: 600; }
 /* A proposal's second tier, below a thin divider: a muted label, then Pickup | Delivery joined as
    one control, Break the tie, and Lock this. */
 .coordinator-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.25rem 0.4rem; margin-top: 0.5rem; padding-top: 0.4rem; border-top: 1px solid var(--line); }

@@ -601,20 +601,30 @@ async def set_way(
     event_id: RowId,
     proposal_id: RowId,
     mode: Field = "",
+    clears: Field = "",
     run: Run = "",
     came_from: Annotated[str, Form(alias="from", max_length=10)] = "",
 ) -> Response:
     """Set a takeout pick to pickup or delivery while voting (#178), or, with ``mode=either``,
-    clear it back to not chosen (#212). A guest coordinating may."""
+    clear it back to not chosen (#212). A clear names the way it clears (``clears``), so a tap on
+    a page that shows a way someone has changed since is refused, not applied. A guest
+    coordinating may."""
     seen = parse_id(run)
     if seen is None:
         return await _malformed(request, principal, context, db, event_id, came_from)
 
     async def action() -> None:
-        chosen = None if mode == EITHER_WAY_VALUE else choice(Mode, mode)
-        if chosen is None and mode != EITHER_WAY_VALUE:
-            raise BadFormValue("Pick pickup or delivery.")
-        await coordinator.set_way(db, principal.member, event_id, proposal_id, chosen, run=seen, now=context.clock())
+        if mode == EITHER_WAY_VALUE:
+            chosen, cleared = None, choice(Mode, clears)
+            if cleared is None:
+                raise BadFormValue("Pick pickup or delivery.")
+        else:
+            chosen, cleared = choice(Mode, mode), None
+            if chosen is None or clears:
+                raise BadFormValue("Pick pickup or delivery.")
+        await coordinator.set_way(
+            db, principal.member, event_id, proposal_id, chosen, clears=cleared, run=seen, now=context.clock()
+        )
 
     return await _run(request, principal, context, db, event_id, came_from, action)
 

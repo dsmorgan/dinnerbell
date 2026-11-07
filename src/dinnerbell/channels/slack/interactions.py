@@ -939,9 +939,11 @@ class Interactions:
         if action_id == ids.LATE_MENU:
             return await self._switch_late(member, value)
         if action_id == ids.SET_WAY:
-            mode, event_id, run, proposal_id = ids.parse_way(value)
+            mode, event_id, run, proposal_id, clears = ids.parse_way(value)
             async with self.sessionmaker() as db:
-                await coordinator.set_way(db, member, event_id, proposal_id, mode, run=run, now=self.clock())
+                await coordinator.set_way(
+                    db, member, event_id, proposal_id, mode, clears=clears, run=run, now=self.clock()
+                )
             return WAY_SET[mode]
         if action_id == ids.POST_NOW:
             event_id, run = ids.parse_card(value)
