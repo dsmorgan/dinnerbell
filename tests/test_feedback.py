@@ -4,20 +4,21 @@ who may see what. Nobody ever sees who gave which rating."""
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from datetime import UTC, date, datetime, timedelta
-from typing import Any
 from zoneinfo import ZoneInfo
 
 import pytest
 from sqlalchemy import select
 
 from dinnerbell.config import Settings
+from dinnerbell.db.contributions import ContributionRepository
 from dinnerbell.db.events import AssignmentRepository
-from dinnerbell.db.feedback import FeedbackRepository
 from dinnerbell.db.models import FeedbackRow
 from dinnerbell.db.repositories import MemberRepository
 from dinnerbell.domain.catalog import ItemKind, Mode
+from dinnerbell.domain.contributions import Kind
 from dinnerbell.domain.events import AssignmentRole, StaleRun
 from dinnerbell.domain.feedback import (
     CookThanks,
@@ -292,27 +293,16 @@ async def test_the_window_closes_at_midnight_in_the_households_time_zone(house: 
     assert row.rating == "loved"
 
 
-async def test_a_double_submit_that_loses_the_insert_race_replaces_the_winner(
-    house: House, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Two first saves at once: the second finds no row, its insert hits the unique
-    constraint, and it saves again as an edit, so there's still one row, with its answer."""
+async def test_a_double_submit_leaves_one_row_and_one_count(house: House) -> None:
+    """Two first saves at once: the write lock makes one wait, and it then replaces the other."""
     meal_id = await meal_of(house, await done_dinner(house))
-    await give(house, "Kim", meal_id, FeedbackInput(rating=Rating.FINE))
-    real = FeedbackRepository._row
-    missed: list[bool] = []
-
-    async def miss_once(self: FeedbackRepository, *args: Any) -> FeedbackRow | None:
-        if not missed:
-            missed.append(True)
-            return None  # as if the other submit hadn't committed yet
-        return await real(self, *args)
-
-    monkeypatch.setattr(FeedbackRepository, "_row", miss_once)
-    saved = await give(house, "Kim", meal_id, FeedbackInput(rating=Rating.LOVED))
-    assert missed and saved is not None and saved.answers.rating is Rating.LOVED
+    answers = [FeedbackInput(rating=Rating.FINE), FeedbackInput(rating=Rating.LOVED)]
+    await asyncio.gather(*(give(house, "Kim", meal_id, a) for a in answers))
     (row,) = await rows(house)
-    assert row.rating == "loved"
+    assert row.rating in {"fine", "loved"}
+    async with house.sessionmaker() as db:
+        kim = await ContributionRepository(db).counts(house.household.id, house["Kim"].id)
+    assert kim[Kind.GAVE_FEEDBACK] == 1
 
 
 async def test_editing_a_logged_meal_drops_feedback_that_no_longer_fits(house: House) -> None:

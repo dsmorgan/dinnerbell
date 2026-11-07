@@ -136,7 +136,7 @@ When a meal was marked done before the household changed its mind, correct the p
 - **History, stats, and ranking** use the corrected place, and the variety window counts it on the meal's date.
 - **Feedback** on the meal moves to the corrected place. Answers that don't fit the new kind stop showing and counting: what went wrong on a home meal, and a thank-you on a restaurant. Correcting back brings them back, unless the person has saved their feedback since.
 - **Roles** stay with the people who have them if the new way has them. A role the new way doesn't have is dropped, with its count. A new role goes to whoever offered first, or to nobody, and you can correct that right below it.
-- **Counts and badges** for that meal follow the same rules as above, for cooking, picking up, ordering, suggesting, exploring, and adding the place to the catalog. Other meals keep theirs.
+- **Counts and badges** for that meal follow the same rules as above, for cooking, picking up, ordering, suggesting, exploring, and adding the place to the catalog. Other meals keep theirs. Correcting the place back restores them for the roles it kept. A role the other way dropped doesn't come back on its own: it goes to whoever offered first, so if you had named someone else, name them again in the role form below.
 - **Nobody gets a message.** The posted messages update, and a badge it earns is announced as usual.
 
 A correction writes `event.place_changed`, marked `after_done`, and `event.contributions_recounted` if any count moved.

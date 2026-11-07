@@ -4,6 +4,7 @@ the place, the feedback that moves with it, the counts and badges that follow, a
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from collections import Counter
@@ -13,10 +14,13 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select, text
+from sqlalchemy.exc import OperationalError
 
 from dinnerbell.channels.slack.messages import render
 from dinnerbell.config import Settings
 from dinnerbell.db.contributions import ContributionRepository
+from dinnerbell.db.engine import BUSY_TIMEOUT_MS
+from dinnerbell.db.events import EventRepository
 from dinnerbell.db.feedback import FeedbackRepository
 from dinnerbell.db.models import AuditRow, CatalogItemRow, ContributionRow, EventRow, FeedbackRow, MealLogRow
 from dinnerbell.domain.badges import Announcement, BadgeKey, Tier
@@ -915,3 +919,145 @@ def test_web_refuses_the_coordinator_and_a_member(
     assert "Noodle Bar" not in {i.name for i in rows(migrated, CatalogItemRow)}
     (event_row,) = rows(migrated, EventRow)
     assert event_row.decided_item_id == shown
+
+
+# Roles a way dropped, calls never counted, and feedback at the same moment ------------------------
+
+
+async def test_a_role_the_way_dropped_goes_to_its_first_volunteer_until_an_admin_names_someone_again(
+    house: House,
+) -> None:
+    """Sam never offered to pick up. The admin gave it to him, a delivery place dropped it, and
+    correcting back gives it to Alex, who offered. Naming Sam again restores what he had."""
+    event_id = await done_call(house)
+    await act(house, calls.change_assignment, house["Alex"], event_id, AssignmentRole.PICKUP, house["Sam"].id)
+    people = ("Alex", "Lee", "Sam")
+    counted = {name: await counts(house, name) for name in people}
+    badges = held(await awards(house))
+    road = ("Sam", BadgeKey.ROAD_RUNNER, Tier.FIRST)
+    assert counted["Sam"][Kind.PICKED_UP] == 1 and road in badges
+
+    await house.add_item("Noodle Bar", Mode.DELIVERY)
+    await correct(house, event_id, item_id=house.items["Noodle Bar"].id, mode=Mode.DELIVERY)
+    assert await credited(house, event_id, Kind.PICKED_UP) == set()
+    assert road not in held(await awards(house))
+
+    await to_siam(house, event_id)
+    assert await credited(house, event_id, Kind.PICKED_UP) == {house["Alex"].id}
+    assert Kind.PICKED_UP not in await counts(house, "Sam")
+    found = held(await awards(house))
+    assert road not in found and ("Alex", BadgeKey.ROAD_RUNNER, Tier.FIRST) in found
+
+    await act(house, calls.change_assignment, house["Alex"], event_id, AssignmentRole.PICKUP, house["Sam"].id)
+    assert {name: await counts(house, name) for name in people} == counted
+    assert held(await awards(house)) == badges
+
+
+async def forget_counts(house: House, event_id: int) -> None:
+    """As a failure at Mark done leaves a call: no count at all."""
+    async with house.sessionmaker() as db:
+        await db.execute(text("DELETE FROM contribution WHERE event_id = :id"), {"id": event_id})
+        await db.commit()
+
+
+async def uncounted_ids(house: House) -> list[int]:
+    async with house.sessionmaker() as db:
+        return [e.id for e in await EventRepository(db).done(house.household.id, uncounted=True)]
+
+
+async def backfill(house: House) -> None:
+    async with house.sessionmaker() as db:
+        await contributions.ensure_backfilled(db, house.household.id, now=house.clock())
+
+
+async def kims_dinners(house: House, count: int) -> list[int]:
+    """Done dinners on Pho House, which Kim adds to the catalog with the first and proposes again."""
+    first = await kims_dinner(house, n=0)
+    pho = (await house.event(first)).decided_item_id
+
+    async def add_it_again(event_id: int) -> None:
+        await act(house, calls.add_proposal, house["Kim"], event_id, Mode.PICKUP, item_id=pho)
+
+    later = [
+        await dinner(house, n=n, ins=("Alex", "Sam", "Kim"), while_voting=add_it_again, vote_for="Kim")
+        for n in range(1, count)
+    ]
+    await backfill(house)  # the first start's run, so the next counts only what has no counts
+    return [first, *later]
+
+
+async def test_a_call_never_counted_does_not_take_the_added_item_count_and_the_backfill_finds_it(
+    house: House,
+) -> None:
+    first, second = await kims_dinners(house, 2)
+    pho = (await house.event(first)).decided_item_id
+    assert pho is not None
+    kinds = {kind: await credited(house, second, kind) for kind in Kind}
+    await forget_counts(house, second)
+
+    await to_taqueria(house, first)
+    assert await item_credit_events(house, pho) == []  # no row on the call, so the backfill still finds it
+    assert await uncounted_ids(house) == [second]
+    assert ("Kim", BadgeKey.SCOUT, Tier.FIRST) not in held(await awards(house))
+
+    await backfill(house)
+    assert await uncounted_ids(house) == []
+    assert await item_credit_events(house, pho) == [second]
+    assert (await counts(house, "Kim"))[Kind.ADDED_ITEM] == 1
+    # Pho House is new at this call now, so its first-time counts are here as well.
+    kim = {house["Kim"].id}
+    wanted = kinds | {Kind.ADDED_ITEM: kim, Kind.EXPLORED: kim}
+    assert {kind: await credited(house, second, kind) for kind in Kind} == wanted
+    assert ("Kim", BadgeKey.SCOUT, Tier.FIRST, Announcement.SKIPPED) in await awards(house)
+
+
+async def test_the_added_item_count_passes_over_a_call_never_counted_for_a_counted_one(house: House) -> None:
+    first, second, third = await kims_dinners(house, 3)
+    pho = (await house.event(first)).decided_item_id
+    assert pho is not None
+    await forget_counts(house, second)
+
+    await to_taqueria(house, first)
+    assert await item_credit_events(house, pho) == [third]
+    assert await uncounted_ids(house) == [second]
+
+    await backfill(house)
+    assert await uncounted_ids(house) == []
+    assert await item_credit_events(house, pho) == [third]  # still once
+    assert (await counts(house, "Kim"))[Kind.ADDED_ITEM] == 1
+    assert await credited(house, second, Kind.PARTICIPATED) == {house["Alex"].id, house["Sam"].id, house["Kim"].id}
+
+
+@pytest.mark.parametrize("answers", [FeedbackInput(rating=Rating.LIKED), FeedbackInput()])
+async def test_feedback_holds_the_write_lock_from_reading_the_meal_to_saving(
+    house: House, monkeypatch: pytest.MonkeyPatch, answers: FeedbackInput
+) -> None:
+    """A correction can't commit between the read and the save: it needs this lock first. Another
+    connection, told not to wait, finds it taken right after the read."""
+    event_id = await done_call(house)
+    meal_id = (await meal_row(house, event_id)).id
+    real = feedback.meal_facts
+    tried: list[bool] = []
+
+    async def read_then_try_the_lock(*args: Any) -> Any:
+        facts = await real(*args)
+        async with house.sessionmaker() as other:
+            await other.execute(text("PRAGMA busy_timeout=0"))
+            with pytest.raises(OperationalError, match="locked"):
+                await other.execute(text("BEGIN IMMEDIATE"))
+            await other.execute(text(f"PRAGMA busy_timeout={BUSY_TIMEOUT_MS}"))
+        tried.append(True)
+        return facts
+
+    monkeypatch.setattr(feedback, "meal_facts", read_then_try_the_lock)
+    await give(house, "Lee", meal_id, answers)
+    assert tried
+
+
+async def test_feedback_and_a_correction_at_once_end_on_the_corrected_place(house: House) -> None:
+    """Whichever goes first, the row names the corrected place."""
+    event_id = await done_call(house)
+    meal_id = (await meal_row(house, event_id)).id
+    await asyncio.gather(give(house, "Lee", meal_id, FeedbackInput(rating=Rating.LIKED)), to_taqueria(house, event_id))
+    (row,) = await feedback_rows(house)
+    assert (row.item_id, row.item_name) == (house.items["Taqueria"].id, "Taqueria")

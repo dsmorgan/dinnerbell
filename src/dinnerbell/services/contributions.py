@@ -227,10 +227,12 @@ async def recount_place(db: AsyncSession, actor: Member, event: Event, *, now: d
     """Make the done call's counts match the place an admin corrected it to (#220), in the caller's
     transaction, which has already saved the call, its roles, and its meal. It treats badges as
     ``recount_role`` does: whoever loses a count loses every tier their counts no longer reach, and
-    whoever gains one earns what it reaches, pending. Running it again changes nothing, so
-    correcting back restores the counts and the badges. A call that was never counted is left to
-    ``ensure_backfilled``, which counts it as corrected. Audited as
-    ``event.contributions_recounted`` when anything changed.
+    whoever gains one earns what it reaches, pending. Running it again changes nothing. The counts
+    match the place and roles the corrected call has, so correcting back restores them, except that
+    a role the way dropped doesn't come back on its own: ``coordinator.correct_place`` gives it to
+    its first volunteer, and an admin who named someone else names them again, with
+    ``calls.change_assignment``. A call that was never counted is left to ``ensure_backfilled``,
+    which counts it as corrected. Audited as ``event.contributions_recounted`` when anything changed.
 
     **The roles** a way has decide ``cooked``, ``picked_up``, and ``ordered``, so a way that drops a
     role drops its count. **The winning proposal** decides ``suggested`` and ``explored``: a place
@@ -238,8 +240,8 @@ async def recount_place(db: AsyncSession, actor: Member, event: Event, *, now: d
     the picks people could vote on.
 
     **``added_item``** is per item, the first time any call chose it, so a call losing the item
-    doesn't always lose the count. If another call chose the old item too, the count moves to the
-    first of those and its adder keeps it; otherwise it goes. The new item's adder earns one if this
+    doesn't always lose the count. If another counted call chose the old item too, the count moves
+    to the first of those and its adder keeps it; otherwise it goes. The new item's adder earns one if this
     call is now the item's first and nobody has it yet; if a later call holds it, it stays there.
 
     **Other meals aren't recounted**, although this one may have changed how new their place was
@@ -295,15 +297,18 @@ async def recount_place(db: AsyncSession, actor: Member, event: Event, *, now: d
 async def _rehome_item_credit(
     counts: ContributionRepository, household_id: int, member_id: int, item_id: int, meals: list[MealLog]
 ) -> bool:
-    """Move ``member_id``'s ``added_item`` count for ``item_id`` to the first call that still chose
-    the item, and return whether there was one. A member has one such count a call, so a call
-    where they already have one is passed over."""
-    calls = [m for m in sorted(meals, key=newest_first) if m.item_id == item_id and m.event_id is not None]
-    for meal in calls:
-        if meal.event_id is not None and member_id not in await counts.credited(
-            household_id, meal.event_id, Kind.ADDED_ITEM
-        ):
-            await counts.move_item_credit(household_id, item_id, meal.event_id, meal.day)
+    """Move ``member_id``'s ``added_item`` count for ``item_id`` to the first counted call that
+    still chose the item, and return whether there was one. A member has one such count a call, so
+    a call where they already have one is passed over. So is a call never counted: any row would
+    stop ``ensure_backfilled`` from finding it, and with no other call to take the count, that
+    backfill adds it back when it counts the call."""
+    calls = [m.event_id for m in sorted(meals, key=newest_first) if m.item_id == item_id]
+    days = {m.event_id: m.day for m in meals}
+    for event_id in calls:
+        if event_id is None or not await counts.counted(household_id, event_id):
+            continue
+        if member_id not in await counts.credited(household_id, event_id, Kind.ADDED_ITEM):
+            await counts.move_item_credit(household_id, item_id, event_id, days[event_id])
             return True
     return False
 
