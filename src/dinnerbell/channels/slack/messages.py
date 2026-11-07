@@ -518,6 +518,10 @@ def _late_line(late: note.LateJoinerInfo, ctx: RenderContext) -> str:
     return f"{ctx.directory.mention(late.member)} joined late · {part} · {vote}"
 
 
+NEVER_MIND = "Never mind"
+"""A pick's second ⋯ option when there's no usable link to the web (#214)."""
+
+
 def late_menu(event: note.EventInfo, late: note.LateJoinerInfo) -> Block:
     """The coordinator's two switches for one late joiner (#76). Everyone sees the menu, so the
     server checks who picked it; each option names the run, and turns its switch the other way."""
@@ -533,18 +537,32 @@ def late_menu(event: note.EventInfo, late: note.LateJoinerInfo) -> Block:
     )
 
 
-def way_menu(event: note.EventInfo, proposal: note.ProposalInfo) -> Block:
-    """The ⋯ beside a takeout pick whose place allows pickup and delivery, while voting (#178):
-    the coordinator sets its way. Everyone sees it, so the server checks who picked it; each
-    option names the run. Picking the way it has settles it, so the decision doesn't ask. Once
-    it's chosen, **Either way** clears it, so the decision asks again (#212)."""
-    options = [
+def pick_menu(event: note.EventInfo, proposal: note.ProposalInfo, ctx: RenderContext) -> Block:
+    """The ⋯ beside a pick while voting (#214). Everyone sees it, so the server checks who picked
+    what; each option names the run. **Lock this**, and **Break the tie** while it's tied, open a
+    modal to confirm, as Slack has only one confirm per menu.
+
+    A takeout pick whose place allows pickup and delivery also lists its ways (#178). Picking the
+    way it has settles it, so the decision doesn't ask. Once it's chosen, **Either way** clears
+    it, so the decision asks again (#212). That's five options at most, Slack's limit for a menu.
+    A pick with only **Lock this** gets a link to the web, so the menu has the two options that
+    Slack's older docs required. Without a usable link, it gets an option that does nothing."""
+    options = [option(labels.LOCK, ids.pick_value(ids.PickChoice.LOCK, event.id, event.run, proposal.id))]
+    if proposal.tied:
+        tie = ids.pick_value(ids.PickChoice.BREAK_TIE, event.id, event.run, proposal.id)
+        options.append(option(labels.BREAK_TIE, tie))
+    options += [
         option(labels.WAY_LABELS[way], ids.way_value(way, event.id, event.run, proposal.id)) for way in proposal.ways
     ]
-    if proposal.mode_chosen:
+    if proposal.ways and proposal.mode_chosen:
         clear = ids.way_value(None, event.id, event.run, proposal.id, clears=proposal.mode)
         options.append(option(labels.EITHER_WAY, clear))
-    return overflow(ids.SET_WAY, options)
+    if len(options) < 2:
+        web = safe_url(ctx.url(event.path))
+        options.append(
+            option(labels.VIEW_ON_WEB, ids.PICK_NOTHING, url=web) if web else option(NEVER_MIND, ids.PICK_NOTHING)
+        )
+    return overflow(ids.PICK_MENU, options)
 
 
 def _late_blocks(notification: note.ProposalsReady | note.ProposalsUpdated, ctx: RenderContext) -> list[Block]:
@@ -579,7 +597,11 @@ def proposals_message(notification: note.ProposalsReady | note.ProposalsUpdated,
     if voting and event.shuffle_note:  # plain words: an edit pings nobody (#92)
         blocks.append(context(escape(event.shuffle_note)))
     if voting and any(p.tied for p in notification.proposals):
-        blocks.append(context("Tied for the most votes. The coordinator or an admin can break the tie."))
+        blocks.append(
+            context(
+                "Tied for the most votes. The coordinator or an admin can break the tie with ⋯ beside a tied proposal."
+            )
+        )
     # Only the first post mentions anyone (an edit that added a mention might ping it), and the
     # list comes after the instructions, so a big household can't push them out.
     blocks += _in_blocks(notification.participants, ctx, mention=isinstance(notification, note.ProposalsReady))
@@ -587,23 +609,15 @@ def proposals_message(notification: note.ProposalsReady | note.ProposalsUpdated,
     for number, proposal in enumerate(shown, start=1):
         blocks.append(section(_proposal_text(proposal, number, ctx), block_id=f"proposal-{proposal.id}"))
         if voting:
-            value = ids.proposal_value(event.id, proposal.id)
-            name = clip(proposal.item.name, 60)
-            lock = confirm(labels.LOCK_TITLE, labels.decides_now(name), labels.LOCK_SUBMIT)
-            row = [button("Vote", ids.VOTE, value, style="primary"), button(labels.LOCK, ids.LOCK, value, confirm=lock)]
-            if proposal.tied:
-                choose = confirm(labels.BREAK_TIE_TITLE, labels.decides_now(name), labels.BREAK_TIE_SUBMIT)
-                row.append(button(labels.BREAK_TIE, ids.BREAK_TIE, value, confirm=choose))
-            if proposal.ways:
-                row.append(way_menu(event, proposal))
-            blocks.append(actions(*row, block_id=f"proposal-actions-{proposal.id}"))
+            vote = button("Vote", ids.VOTE, ids.proposal_value(event.id, proposal.id), style="primary")
+            blocks.append(actions(vote, pick_menu(event, proposal, ctx), block_id=f"proposal-actions-{proposal.id}"))
     hidden = len(notification.proposals) - len(shown)
     if hidden:
         blocks.append(context(f"…and {plural(hidden, 'more proposal')} on the web."))
     blocks += _late_blocks(notification, ctx)
     if voting and any(p.ways and not p.mode_chosen for p in shown):  # #178
         who = "The coordinator or an admin" if event.coordinator is not None else "An admin"
-        blocks.append(context(f"{who} can make a proposal pickup or delivery with ⋯ beside it."))
+        blocks.append(context(f"{who} can choose pickup or delivery with ⋯ beside a proposal that allows both."))
     footer: list[Block] = []
     if voting:
         footer.append(button("Add proposal", ids.ADD_PROPOSAL, ids.event_value(event.id)))
@@ -1305,8 +1319,8 @@ def coordinator_picked_message(notification: note.CoordinatorPicked, ctx: Render
     minutes = notification.choose_minutes
     text = (
         f"Nobody had claimed coordinating {slot} on {day}, so Dinnerbell picked you at random from everyone "
-        f"who's in. While the vote is open, you can tap *{labels.LOCK}* on a pick to decide it, break a tie, "
-        "shuffle the picks, or make a takeout pick pickup or delivery with ⋯ beside it. Once it's decided, you "
+        f"who's in. While the vote is open, you can shuffle the picks, and with ⋯ beside a pick, you can decide it "
+        f"with *{labels.LOCK}*, break a tie, or make a takeout pick pickup or delivery. Once it's decided, you "
         "can change how you get it and who does it. If that isn't clear, you'll be asked to choose. If you "
         "don't within "
         f"{minutes} minute{'' if minutes == 1 else 's'}, or by the meal time if that's sooner, the first person "

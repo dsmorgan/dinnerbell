@@ -239,12 +239,18 @@ def confirm(title: str, text: str, yes: str, no: str = "Not yet") -> dict[str, A
     }
 
 
-def option(text: str, value: str) -> dict[str, Any]:
-    return {"text": plain(text, MAX_OPTION_TEXT), "value": value[:MAX_OPTION_VALUE]}
+def option(text: str, value: str, *, url: str | None = None) -> dict[str, Any]:
+    """``url`` opens a link in the browser, which only an overflow menu's option can do. Slack
+    still sends its click, which the app has to acknowledge."""
+    element = {"text": plain(text, MAX_OPTION_TEXT), "value": value[:MAX_OPTION_VALUE]}
+    if url is not None:
+        element["url"] = url
+    return element
 
 
 def overflow(action_id: str, options: Iterable[dict[str, Any]]) -> Block:
-    """A ⋯ menu. Slack has no confirm per option, only one for the whole menu."""
+    """A ⋯ menu. Slack has no confirm per option, only one for the whole menu. Give it at least
+    two options: Slack's older docs required two, so one option could get the whole post refused."""
     return {"type": "overflow", "action_id": action_id, "options": list(options)[:MAX_OVERFLOW_OPTIONS]}
 
 

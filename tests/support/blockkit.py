@@ -50,9 +50,13 @@ def check_mrkdwn(text: str, where: str) -> None:
     assert "<!" not in text, f"{where}: special mention in {text!r}"
 
 
-def check_option(option: Any, where: str) -> None:
+def check_option(option: Any, where: str, *, in_overflow: bool = False) -> None:
     check_text(option["text"], 75, f"{where}.text", plain_only=True)
     assert isinstance(option["value"], str) and 0 < len(option["value"]) <= 150, where
+    if in_overflow and "url" in option:
+        assert option["url"].startswith("https://") and len(option["url"]) <= 3000, f"{where}: bad url"
+    else:
+        assert "url" not in option, f"{where}: only an overflow menu's option takes a url"
 
 
 def check_image(element: dict[str, Any], where: str) -> None:
@@ -89,7 +93,7 @@ def check_element(element: Any, where: str, action_ids: set[str]) -> None:
         # Slack's reference says up to five; Slack has also rejected menus with fewer than two.
         assert 2 <= len(element["options"]) <= 5, f"{where}: an overflow menu has 2 to 5 options"
         for option in element["options"]:
-            check_option(option, f"{where}.option")
+            check_option(option, f"{where}.option", in_overflow=True)
         assert {"value", "style", "url"}.isdisjoint(element), f"{where}: overflow menus take options only"
     if kind in {"static_select", "multi_static_select"}:
         assert ("options" in element) != ("option_groups" in element), f"{where}: options xor option_groups"

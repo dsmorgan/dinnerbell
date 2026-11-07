@@ -102,6 +102,7 @@ from dinnerbell.channels.slack.views import (
     parse_log,
     parse_offer,
     parse_proposal,
+    pick_modal,
     proposal_modal,
 )
 from dinnerbell.config import is_test_instance
@@ -119,9 +120,11 @@ from dinnerbell.domain.events import (
     JoinLateFirst,
     RoleOffer,
     Window,
+    check_can_break_tie,
     check_can_cancel,
     check_can_choose_roles,
     check_can_close_window,
+    check_can_lock,
     check_can_move_decision_time,
     check_can_respond,
     check_expected_window,
@@ -442,6 +445,12 @@ class Interactions:
         async def decision_time_view(ack: Ack, body: dict[str, Any]) -> None:
             await self._submission(ack, body, "decision_time")
 
+        async def lock_view(ack: Ack, body: dict[str, Any]) -> None:
+            await self._submission(ack, body, "lock")
+
+        async def break_tie_view(ack: Ack, body: dict[str, Any]) -> None:
+            await self._submission(ack, body, "break_tie")
+
         async def offer_view(ack: Ack, body: dict[str, Any]) -> None:
             await self._form_submission(ack, body, "offer")
 
@@ -467,6 +476,8 @@ class Interactions:
         app.view(ids.ADJUST_VIEW)(adjust_view)
         app.view(ids.AWAY_VIEW)(away_view)
         app.view(ids.DECISION_TIME_VIEW)(decision_time_view)
+        app.view(ids.LOCK_VIEW)(lock_view)
+        app.view(ids.BREAK_TIE_VIEW)(break_tie_view)
         app.view(ids.OFFER_VIEW)(offer_view)
         app.view(ids.LOG_VIEW)(log_view)
         app.command(self.command)(command)
@@ -867,6 +878,8 @@ class Interactions:
         if source is None or not isinstance(acts, list) or len(acts) != 1 or not isinstance(acts[0], dict):
             log.warning("slack action payload refused")
             return True
+        if acts[0].get("action_id") == ids.PICK_MENU and _get(acts[0], "selected_option", "value") == ids.PICK_NOTHING:
+            return True  # a pick's link to the web opened the browser; there's nothing to do
         in_dm = source.channel_id is not None and source.channel_id != self.channel_id
         if (source.channel_id is None and not source.home) or (in_dm and not await self._is_their_dm(source)):
             log.warning("slack action from an unexpected channel refused")
@@ -880,7 +893,7 @@ class Interactions:
         if member is None:
             return True
         action_id, value = acts[0].get("action_id"), acts[0].get("value")
-        if action_id in {ids.CALL_MENU, ids.LATE_MENU, ids.SET_WAY}:  # an overflow menu sends the option it picked
+        if action_id in ids.OVERFLOW_MENUS:
             value = _get(acts[0], "selected_option", "value")
         tap_key = (source.user_id, str(action_id), str(value))
         if action_id in TOGGLES and self.recent.double_tap(source.user_id, str(action_id), value, self.clock()):
@@ -939,12 +952,12 @@ class Interactions:
         if action_id == ids.LATE_MENU:
             return await self._switch_late(member, value)
         if action_id == ids.SET_WAY:
-            mode, event_id, run, proposal_id, clears = ids.parse_way(value)
-            async with self.sessionmaker() as db:
-                await coordinator.set_way(
-                    db, member, event_id, proposal_id, mode, clears=clears, run=run, now=self.clock()
-                )
-            return WAY_SET[mode]
+            return await self._set_way(member, value)
+        if action_id == ids.PICK_MENU:
+            if ids.is_way_value(value):
+                return await self._set_way(member, value)
+            await self._open_pick(member, source, value, trigger)
+            return None
         if action_id == ids.POST_NOW:
             event_id, run = ids.parse_card(value)
             return await self._post_now(member, event_id, run)
@@ -1037,6 +1050,38 @@ class Interactions:
             return None
         view = await event_views.event_view(db, member, event_id, now=self.clock())
         return CONFIRM[action_id].format(slot=view.event.slot.value)
+
+    # The ⋯ beside a pick (#178, #214) ---------------------------------------------------------
+
+    async def _set_way(self, member: Member, value: object) -> str:
+        """A takeout pick's way, from the ⋯ beside it. The service checks who picked it, and the
+        run the message showed."""
+        mode, event_id, run, proposal_id, clears = ids.parse_way(value)
+        async with self.sessionmaker() as db:
+            await coordinator.set_way(db, member, event_id, proposal_id, mode, clears=clears, run=run, now=self.clock())
+        return WAY_SET[mode]
+
+    async def _open_pick(self, member: Member, source: Source, value: object, trigger: object) -> None:
+        """**Lock this** or **Break the tie** from the ⋯ beside a pick: open the modal to confirm,
+        for someone allowed to, on the run the message showed. Anyone else is told why not, with
+        the rule's own words. The services check again on submit, under the event's lock."""
+        choice, event_id, run, proposal_id = ids.parse_pick(value)
+        if not isinstance(trigger, str) or not trigger:
+            raise ids.BadValue("no trigger")
+        async with self.sessionmaker() as db:
+            view = await event_views.event_view(db, member, event_id, now=self.clock())
+        check_run(view.event, run)
+        if choice is ids.PickChoice.LOCK:
+            check_can_lock(view.event, member)
+        else:
+            check_can_break_tie(view.event, member)
+        pick = next((p.info for p in view.proposals if p.info.id == proposal_id), None)
+        if pick is None:
+            raise NotFound(calls.NO_SUCH_PROPOSAL)
+        if choice is ids.PickChoice.BREAK_TIE and not pick.tied:
+            raise EventRuleViolation(coordinator.NOT_TIED, code="not_tied")
+        origin = ids.ViewOrigin(event_id, source.channel_id, home=source.home, run=run, proposal=proposal_id)
+        await self.api.open_view(trigger, pick_modal(view, choice, pick.item.name, origin))
 
     # Joining late (#76) ------------------------------------------------------------------------
 
@@ -1764,7 +1809,15 @@ class Interactions:
                 raise ids.BadValue("bad metadata")  # these name a run; Details and a join-late pick may
             if (origin.opened is not None) != (kind == "adjust"):
                 raise ids.BadValue("bad metadata")  # only Adjust says what it opened with
-            form: Any = origin.window if kind == "close" else FORMS[kind](values)
+            if (origin.proposal is not None) != (kind in CONFIRMS_A_PICK):
+                raise ids.BadValue("bad metadata")  # only a pick's confirmation names a pick
+            form: Any
+            if kind == "close":
+                form = origin.window
+            elif kind in CONFIRMS_A_PICK:
+                form = origin.proposal
+            else:
+                form = FORMS[kind](values)
         except FormError as exc:
             await ack(response_action="errors", errors={exc.block_id: str(exc)})
             return
@@ -1807,6 +1860,12 @@ class Interactions:
             async with self.sessionmaker() as db:
                 if kind == "details":
                     await calls.save_details(db, member, event_id, form, run=origin.run, now=self.clock())
+                    return None
+                if kind == "lock":
+                    await calls.lock(db, member, event_id, form, run=origin.run, now=self.clock())
+                    return None
+                if kind == "break_tie":
+                    await coordinator.break_tie(db, member, event_id, form, run=origin.run, now=self.clock())
                     return None
                 await calls.add_proposal(
                     db,
@@ -2125,8 +2184,11 @@ FORMS: dict[str, Callable[[Any], Any]] = {
     "away": parse_away,
     "decision_time": parse_decision_time,
 }
-"""Each modal's form parser, by kind. Close now's confirmation has no fields."""
-NAMES_A_RUN = frozenset({"cancel", "close", "feedback", "assign", "adjust", "away", "decision_time"})
+"""Each modal's form parser, by kind. The confirmations of Close now and ``CONFIRMS_A_PICK`` have
+no fields."""
+CONFIRMS_A_PICK = frozenset({"lock", "break_tie"})
+"""The modals that confirm Lock this or Break the tie, whose metadata names the pick (#214)."""
+NAMES_A_RUN = frozenset({"cancel", "close", "feedback", "assign", "adjust", "away", "decision_time", *CONFIRMS_A_PICK})
 """The modals whose metadata names the run they were opened for."""
 
 
@@ -2147,10 +2209,12 @@ GUEST_TAPS = frozenset(
         ids.ASSIGN_ROLES,
         ids.ADJUST,
         ids.SET_WAY,
+        ids.PICK_MENU,
     }
 )
 """Buttons a guest may tap (#38): answering, the roles, and coordinating's logistics. Everything
-else is refused before any service runs; the services refuse it again."""
+else is refused before any service runs; the services refuse it again. ``PICK_MENU`` is here for
+a pick's ways: its **Lock this** and **Break the tie** refuse a guest before any modal opens."""
 JOINED = {
     guests.JoinedAs.GUEST: (
         "Welcome to Dinnerbell! You're in as a guest. When a member invites you to a meal, you'll get a "

@@ -358,7 +358,7 @@ async def test_a_member_invites_from_the_card_and_answers_for_their_guest(slack:
     view = opened.args["view"]
     assert view["callback_id"] == ids.INVITE_VIEW
     (guest,) = [b for b in view["blocks"] if b.get("block_id") == "guest"]
-    assert guest["element"]["options"][0]["text"]["text"] == "No saved guest"  # Slack can't clear a select (#207)
+    assert guest["element"]["options"][0]["text"]["text"] == "[No saved guest]"  # Slack can't clear a select (#207)
     origin = ids.ViewOrigin.decode(view["private_metadata"])
     assert origin.run == 1
     values = state(guest={"selected_option": {"value": str(house["Jo"].id)}})
@@ -421,7 +421,7 @@ async def test_an_invite_modal_naming_someone_new(slack: Slack, house: House) ->
     )
     assert json.loads(response.body)["errors"] == {
         "name": "Pick a saved guest, or type a new guest's name, but not both. "
-        'To invite someone new, pick "No saved guest".'
+        "To invite someone new, pick [No saved guest]."
     }
     neither = state(guest={"selected_option": {"value": "none"}})
     response = await send(
@@ -453,7 +453,7 @@ def test_an_invite_modal_keeps_no_saved_guest_first_within_100_options() -> None
     (guest,) = [b for b in modal["blocks"] if b.get("block_id") == "guest"]
     options = guest["element"]["options"]
     assert len(options) == 100
-    assert (options[0]["text"]["text"], options[0]["value"]) == ("No saved guest", "none")
+    assert (options[0]["text"]["text"], options[0]["value"]) == ("[No saved guest]", "none")
     assert [o["value"] for o in options[1:3]] == ["100", "101"]
 
 

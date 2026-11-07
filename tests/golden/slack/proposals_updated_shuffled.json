@@ -46,36 +46,27 @@
           "value": "7:21"
         },
         {
-          "action_id": "lock",
-          "confirm": {
-            "confirm": {
-              "emoji": true,
-              "text": "Lock it in",
-              "type": "plain_text"
+          "action_id": "pick_menu",
+          "options": [
+            {
+              "text": {
+                "emoji": true,
+                "text": "Lock this",
+                "type": "plain_text"
+              },
+              "value": "lock:7:1:21"
             },
-            "deny": {
-              "emoji": true,
-              "text": "Not yet",
-              "type": "plain_text"
-            },
-            "text": {
-              "emoji": true,
-              "text": "Sam's Tacos becomes the plan right away, and voting closes.",
-              "type": "plain_text"
-            },
-            "title": {
-              "emoji": true,
-              "text": "Lock this in?",
-              "type": "plain_text"
+            {
+              "text": {
+                "emoji": true,
+                "text": "View on web",
+                "type": "plain_text"
+              },
+              "url": "https://dinnerbell.example.com/events/7",
+              "value": "nothing"
             }
-          },
-          "text": {
-            "emoji": true,
-            "text": "Lock this",
-            "type": "plain_text"
-          },
-          "type": "button",
-          "value": "7:21"
+          ],
+          "type": "overflow"
         }
       ],
       "type": "actions"
@@ -103,36 +94,27 @@
           "value": "7:22"
         },
         {
-          "action_id": "lock",
-          "confirm": {
-            "confirm": {
-              "emoji": true,
-              "text": "Lock it in",
-              "type": "plain_text"
+          "action_id": "pick_menu",
+          "options": [
+            {
+              "text": {
+                "emoji": true,
+                "text": "Lock this",
+                "type": "plain_text"
+              },
+              "value": "lock:7:1:22"
             },
-            "deny": {
-              "emoji": true,
-              "text": "Not yet",
-              "type": "plain_text"
-            },
-            "text": {
-              "emoji": true,
-              "text": "Siam Garden becomes the plan right away, and voting closes.",
-              "type": "plain_text"
-            },
-            "title": {
-              "emoji": true,
-              "text": "Lock this in?",
-              "type": "plain_text"
+            {
+              "text": {
+                "emoji": true,
+                "text": "View on web",
+                "type": "plain_text"
+              },
+              "url": "https://dinnerbell.example.com/events/7",
+              "value": "nothing"
             }
-          },
-          "text": {
-            "emoji": true,
-            "text": "Lock this",
-            "type": "plain_text"
-          },
-          "type": "button",
-          "value": "7:22"
+          ],
+          "type": "overflow"
         }
       ],
       "type": "actions"
@@ -160,36 +142,27 @@
           "value": "7:23"
         },
         {
-          "action_id": "lock",
-          "confirm": {
-            "confirm": {
-              "emoji": true,
-              "text": "Lock it in",
-              "type": "plain_text"
+          "action_id": "pick_menu",
+          "options": [
+            {
+              "text": {
+                "emoji": true,
+                "text": "Lock this",
+                "type": "plain_text"
+              },
+              "value": "lock:7:1:23"
             },
-            "deny": {
-              "emoji": true,
-              "text": "Not yet",
-              "type": "plain_text"
-            },
-            "text": {
-              "emoji": true,
-              "text": "Taqueria <Lupita> & Co becomes the plan right away, and voting closes.",
-              "type": "plain_text"
-            },
-            "title": {
-              "emoji": true,
-              "text": "Lock this in?",
-              "type": "plain_text"
+            {
+              "text": {
+                "emoji": true,
+                "text": "View on web",
+                "type": "plain_text"
+              },
+              "url": "https://dinnerbell.example.com/events/7",
+              "value": "nothing"
             }
-          },
-          "text": {
-            "emoji": true,
-            "text": "Lock this",
-            "type": "plain_text"
-          },
-          "type": "button",
-          "value": "7:23"
+          ],
+          "type": "overflow"
         }
       ],
       "type": "actions"

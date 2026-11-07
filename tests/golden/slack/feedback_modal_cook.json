@@ -16,7 +16,7 @@
         "initial_option": {
           "text": {
             "emoji": true,
-            "text": "No answer",
+            "text": "[No answer]",
             "type": "plain_text"
           },
           "value": "none"
@@ -65,7 +65,7 @@
           {
             "text": {
               "emoji": true,
-              "text": "No answer",
+              "text": "[No answer]",
               "type": "plain_text"
             },
             "value": "none"

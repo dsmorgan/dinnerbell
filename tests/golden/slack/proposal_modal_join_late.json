@@ -80,7 +80,7 @@
               {
                 "text": {
                   "emoji": true,
-                  "text": "Nothing from the catalog",
+                  "text": "[Nothing from the catalog]",
                   "type": "plain_text"
                 },
                 "value": "none"

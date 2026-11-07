@@ -76,7 +76,7 @@ def fields(view: dict[str, Any]) -> dict[str, dict[str, Any]]:
 LOVED = {"selected_option": {"value": "loved"}}
 HATED = {"selected_option": {"value": "hated"}}
 NO_ANSWER = {"selected_option": {"value": "none"}}
-"""The rating as an untouched modal posts it: its radio buttons start on No answer."""
+"""The rating as an untouched modal posts it: its radio buttons start on [No answer]."""
 
 
 async def test_how_was_it_from_the_reminder_and_the_decision(slack: Slack, house: House) -> None:
@@ -226,7 +226,7 @@ async def test_a_rating_with_nothing_picked_asks_for_one(slack: Slack, house: Ho
     )
     assert json.loads(response.body) == {
         "response_action": "errors",
-        "errors": {"rating": "Pick a rating, or No answer."},
+        "errors": {"rating": "Pick a rating, or [No answer]."},
     }
     (row,) = await rows(house)
     assert row.rating == "loved"

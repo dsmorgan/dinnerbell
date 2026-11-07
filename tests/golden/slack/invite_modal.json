@@ -26,7 +26,7 @@
           {
             "text": {
               "emoji": true,
-              "text": "No saved guest",
+              "text": "[No saved guest]",
               "type": "plain_text"
             },
             "value": "none"

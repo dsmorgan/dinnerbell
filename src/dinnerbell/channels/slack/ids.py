@@ -26,6 +26,8 @@ COORDINATE = "coordinate"
 DETAILS = "details"
 VOTE = "vote"
 LOCK = "lock"
+"""**Lock this** on a proposals message posted before ``PICK_MENU`` (#214), which still works. Its
+value is a ``proposal_value``."""
 ADD_PROPOSAL = "add_proposal"
 MARK_DONE = "mark_done"
 START_CALL = {f"start_call_{slot.value}": slot for slot in Slot}
@@ -85,11 +87,21 @@ SHUFFLE = "shuffle"
 """**Shuffle proposals** in the proposals message footer (#87): the coordinator's. Its value is a
 ``card_value``, naming the run the message showed."""
 BREAK_TIE = "break_tie"
-"""**Break the tie** beside a proposal tied for the most votes (#87). Its value is a ``proposal_value``."""
+"""**Break the tie** on a proposals message posted before ``PICK_MENU`` (#214), which still works.
+Its value is a ``proposal_value``."""
 SET_WAY = "set_way"
-"""The ⋯ menu beside a takeout pick whose place allows pickup and delivery, on the proposals
-message while voting (#178): the coordinator or an admin sets its way, or, once it's chosen,
-clears it with **Either way** (#212). Each option's value is a ``way_value``."""
+"""The ⋯ menu of a takeout pick's ways on a proposals message posted before ``PICK_MENU`` (#214),
+which still works. Each option's value is a ``way_value``."""
+PICK_MENU = "pick_menu"
+"""The ⋯ menu beside every pick on the proposals message while voting (#214). **Lock this** and
+**Break the tie**, whose values are ``pick_value``s, open a modal to confirm. A takeout pick's
+ways (#178) and **Either way** (#212) have ``way_value``s. A pick with nothing else also gets a
+link to the web, whose value is ``PICK_NOTHING``, because a menu has at least two options."""
+PICK_NOTHING = "nothing"
+"""The value of a ``PICK_MENU`` option that does nothing here. Slack still sends a link's click,
+which the app acknowledges and ignores."""
+OVERFLOW_MENUS = frozenset({CALL_MENU, LATE_MENU, SET_WAY, PICK_MENU})
+"""The actions that send the option picked, instead of a button's own value."""
 EITHER_WAY = "either"
 """The prefix of a ``way_value`` that clears a pick's way (#212): ``either-pickup``."""
 ASSIGN_ROLES = "assign_roles"
@@ -162,6 +174,8 @@ ASSIGN_VIEW = "assign_modal"
 ADJUST_VIEW = "adjust_modal"
 AWAY_VIEW = "away_modal"
 DECISION_TIME_VIEW = "decision_time_modal"
+LOCK_VIEW = "lock_modal"
+BREAK_TIE_VIEW = "break_tie_modal"
 
 MAX_ID = 2**63 - 1
 _DIGITS = re.compile(r"^[0-9]{1,19}$")
@@ -173,6 +187,7 @@ _GUEST = re.compile(r"([1-9][0-9]{0,18}):([1-9][0-9]{0,18}):([1-9][0-9]{0,18})")
 _WAY = re.compile(
     r"(pickup|delivery|either-pickup|either-delivery):([1-9][0-9]{0,18}):([1-9][0-9]{0,18}):([1-9][0-9]{0,18})"
 )
+_PICK = re.compile(r"(lock|tie):([1-9][0-9]{0,18}):([1-9][0-9]{0,18}):([1-9][0-9]{0,18})")
 _LATE = re.compile(r"(part|vote):(on|off):([1-9][0-9]{0,18}):([1-9][0-9]{0,18}):([1-9][0-9]{0,18})")
 _CHANNEL = re.compile(r"^[CDG][A-Z0-9]{2,31}$")
 _MESSAGE_TS = re.compile(r"[0-9]{1,12}\.[0-9]{1,8}")
@@ -305,6 +320,32 @@ def parse_way(value: object) -> tuple[Mode | None, int, int, int, Mode | None]:
     return mode, _row_id(match.group(2)), _row_id(match.group(3)), _row_id(match.group(4)), clears
 
 
+def is_way_value(value: object) -> bool:
+    """Whether ``value`` has the shape ``way_value`` writes, as a ``PICK_MENU`` option's may."""
+    return isinstance(value, str) and _WAY.fullmatch(value) is not None
+
+
+class PickChoice(StrEnum):
+    """What a ``PICK_MENU`` option asks to confirm (#214)."""
+
+    LOCK = "lock"
+    BREAK_TIE = "tie"
+
+
+def pick_value(choice: PickChoice, event_id: int, run: int, proposal_id: int) -> str:
+    """``<lock|tie>:<id>:<run>:<proposal>``: confirm ``choice`` for a pick, on the run the proposals
+    message showed."""
+    return f"{choice.value}:{event_id}:{run}:{proposal_id}"
+
+
+def parse_pick(value: object) -> tuple[PickChoice, int, int, int]:
+    """``<lock|tie>:<id>:<run>:<proposal>``, exactly as ``pick_value`` writes it."""
+    match = _PICK.fullmatch(value) if isinstance(value, str) else None
+    if match is None:
+        raise BadValue("not a pick value")
+    return PickChoice(match.group(1)), _row_id(match.group(2)), _row_id(match.group(3)), _row_id(match.group(4))
+
+
 def guest_value(event_id: int, run: int, guest_id: int) -> str:
     """``<id>:<run>:<guest>``: a guest button on a member's card, for that call's run."""
     return f"{event_id}:{run}:{guest_id}"
@@ -423,6 +464,8 @@ class ViewOrigin:
     can't act on the newer run."""
     opened: Opened | None = None
     """What an Adjust modal showed when it opened. Only that modal sets it."""
+    proposal: int | None = None
+    """The pick that Lock this or Break the tie confirms (#214). Only those modals set it."""
 
     def encode(self) -> str:
         data: dict[str, object] = {"event": self.event_id, "channel": self.channel_id, "home": self.home}
@@ -432,6 +475,8 @@ class ViewOrigin:
             data["run"] = self.run
         if self.opened is not None:
             data["opened"] = self.opened.data()
+        if self.proposal is not None:
+            data["proposal"] = self.proposal
         return json.dumps(data, separators=(",", ":"))
 
     @classmethod
@@ -442,14 +487,19 @@ class ViewOrigin:
             data = json.loads(text)
         except ValueError:
             raise BadValue("bad metadata") from None
-        if not isinstance(data, dict) or set(data) - {"window", "run", "opened"} != {"event", "channel", "home"}:
+        if not isinstance(data, dict) or set(data) - {"window", "run", "opened", "proposal"} != {
+            "event",
+            "channel",
+            "home",
+        }:
             raise BadValue("bad metadata")
         event, channel, home = data["event"], data["channel"], data["home"]
-        window, run = data.get("window"), data.get("run")
+        window, run, proposal = data.get("window"), data.get("run"), data.get("proposal")
         if "window" in data and not (isinstance(window, str) and window in {w.value for w in Window}):
             raise BadValue("bad metadata")
-        if "run" in data and not (isinstance(run, int) and not isinstance(run, bool) and 1 <= run <= MAX_ID):
-            raise BadValue("bad metadata")
+        for number in [data[key] for key in ("run", "proposal") if key in data]:
+            if not isinstance(number, int) or isinstance(number, bool) or not 1 <= number <= MAX_ID:
+                raise BadValue("bad metadata")
         if not isinstance(home, bool):
             raise BadValue("bad metadata")
         if not isinstance(event, int) or isinstance(event, bool) or not 1 <= event <= MAX_ID:
@@ -457,7 +507,7 @@ class ViewOrigin:
         if channel is not None and not is_channel_id(channel):
             raise BadValue("bad metadata")
         opened = Opened.parse(data["opened"]) if "opened" in data else None
-        return cls(event, channel, home, Window(window) if window is not None else None, run, opened)
+        return cls(event, channel, home, Window(window) if window is not None else None, run, opened, proposal)
 
 
 @dataclass(frozen=True, slots=True)
