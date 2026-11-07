@@ -1061,13 +1061,16 @@ def test_the_quiet_style_keeps_its_tap_height_and_shows_a_border_on_hover_or_foc
     # A chosen way's text is the text color on the soft tint, for contrast in both themes.
     chosen = '.button.quiet.choice[aria-pressed="true"] { background: var(--accent-soft); border-color: transparent; '
     assert chosen + "color: var(--text);" in css
+    # Voted is "primary choice": the pressed rule outranks .button.primary, so it stays filled with the text color.
+    voted = '.button.choice[aria-pressed="true"] { background: var(--text); border-color: var(--text); '
+    assert voted + "color: var(--bg); }" in css
 
 
 def test_web_break_the_tie_comes_before_lock_in_the_quiet_row(
     admin: TestClient, provider: FakeProvider, clock: FakeClock, migrated: Settings
 ) -> None:
     event_id = web_voting(admin, provider, clock, migrated)
-    first, second, _third = web_proposal_ids(migrated)
+    first, second, third = web_proposal_ids(migrated)
     assert submit(admin, f"/events/{event_id}/proposals/{first}/vote", {}).status_code == 303
     sign_in_as(admin, provider, "kim@example.com")
     assert submit(admin, f"/events/{event_id}/proposals/{second}/vote", {}).status_code == 303
@@ -1081,5 +1084,5 @@ def test_web_break_the_tie_comes_before_lock_in_the_quiet_row(
         assert row.index(">Break the tie<") < row.index(">Lock this<")
         tie = row.index(">Break the tie<")
         assert 'hx-confirm="' in row[row.rindex("<form", 0, tie) : tie]
-    card = _proposal_card(html, _third)
+    card = _proposal_card(html, third)
     assert ">Break the tie<" not in card and ">Lock this<" in card  # not tied
