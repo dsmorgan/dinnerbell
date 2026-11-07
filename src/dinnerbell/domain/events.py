@@ -1188,6 +1188,20 @@ def check_can_change_place(event: Event, actor: Member) -> ActingAs:
     return ActingAs.COORDINATOR if is_coordinator(event, actor) else ActingAs.ADMIN
 
 
+def check_can_correct_place(event: Event, actor: Member) -> None:
+    """Correct the place after **Mark done** (#220, spec 5.7): an admin only, as with who did what
+    after the fact (#162). Not the coordinator, a guest, or an offer. Before done, it's
+    ``check_can_change_place``."""
+    if not actor.active:
+        raise EventRuleViolation("Only active members can change the decision.", code="inactive")
+    if event.is_offer:
+        raise EventRuleViolation(OFFER_CHANGE, code="is_offer")
+    if not actor.is_admin:
+        raise EventRuleViolation("Only an admin can correct the place once the meal is done.", code="not_admin")
+    if event.state is not EventState.DONE:
+        raise EventRuleViolation("You can correct the place once the meal is done.", code="not_done")
+
+
 WAY_SETTERS = "Only the coordinator or an admin can choose pickup or delivery."
 
 

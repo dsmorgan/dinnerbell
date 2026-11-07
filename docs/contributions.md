@@ -22,6 +22,8 @@ A call counts once, even if two people tap **Mark done** together. Called-off an
 
 When an admin corrects who cooked, picked up, or ordered after the meal is done, the count moves to the person who has the role now. They earn the badges it reaches, announced as usual, and the person who lost it loses each tier their counts no longer reach on the current counts, even a tier they first earned at a lower count before an admin raised it. A tier their counts never reached on the raised count stays, as it does when an admin raises one. A pending badge taken back is never announced, and the den never celebrates it. One already announced leaves Stats, App Home, the household's newest badges, and future recaps, and a badge post or recap that's still waiting to go out to Slack leaves it out. A post Slack already has stays. See [Coordinating](coordinating.md#what-an-admin-can-do-beyond-that).
 
+When an admin corrects the place after the meal is done (#220), the meal's counts follow the same way, with its badges. Cooked, picked up, and ordered follow the roles the new way has, so a way without a role takes that count away. The idea counts go by the corrected place: whoever proposed it, if it was a proposal, and whether it was new to the household, against the meals before this one. Adding to the catalog counts once per item: if another call also chose the old place, whoever added it keeps the count, and it moves to that call. Other meals keep the counts they have, even if the correction changes how new their place was: **Explorer** says what was new when a meal was counted, and a correction shouldn't cost someone a badge for a meal it didn't touch. A new name typed in for the correction earns nobody an idea count.
+
 ## Badges and tiers
 
 Each of the 13 badges has five tiers, **First**, **Bronze**, **Silver**, **Gold**, and **Diamond**, and climbs one of three ladders:
@@ -89,4 +91,4 @@ A member sees their own counts and progress. The household sees totals and the n
 
 ## Logs
 
-Counting writes `contributions_recorded` and `badge_earned` lines with the member ID and display name, the badge and tier, and the call. A correction after the meal writes `contributions_recounted`, and `badge_revoked` for each tier it takes back. They never carry emails or anything a member wrote.
+Counting writes `contributions_recorded` and `badge_earned` lines with the member ID and display name, the badge and tier, and the call. A correction after the meal, of who did what or of the place, writes `contributions_recounted`, and `badge_revoked` for each tier it takes back. They never carry emails or anything a member wrote.

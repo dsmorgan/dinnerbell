@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """What the coordinator can do that others can't (FR-16, FR-61, #87): break a tie, shuffle the
 picks, move the decision time (#198), and choose the winning pick's mode and who does its role;
-change the place after the decision (#219); and, in Slack, adjust the plan once it's decided
-(spec 5.7).
+change the place after the decision (#219), which an admin alone can correct after the meal is
+done (#220); and, in Slack, adjust the plan once it's decided (spec 5.7).
 
 Each is the coordinator's and every admin's alike (#179). A guest coordinator chooses roles,
 which is logistics, but not the plan (FR-58). Each takes the event's lock, checks the run the
@@ -21,6 +21,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from dinnerbell.db.catalog import CatalogRepository
 from dinnerbell.db.events import AssignmentRepository, EventRepository, ProposalRepository
+from dinnerbell.db.feedback import FeedbackRepository
+from dinnerbell.db.meals import MealLogRepository
 from dinnerbell.domain import notifications as note
 from dinnerbell.domain.catalog import (
     MODE_ORDER,
@@ -36,6 +38,7 @@ from dinnerbell.domain.events import (
     LEAD_ROLE,
     MODE_ROLES,
     WORK_ROLES,
+    ActingAs,
     Assignment,
     AssignmentRole,
     Event,
@@ -50,6 +53,7 @@ from dinnerbell.domain.events import (
     check_can_break_tie,
     check_can_change_place,
     check_can_choose_roles,
+    check_can_correct_place,
     check_can_move_decision_time,
     check_can_set_way,
     check_can_shuffle,
@@ -62,7 +66,7 @@ from dinnerbell.domain.events import (
 from dinnerbell.domain.guests import GuestAction
 from dinnerbell.domain.members import Member
 from dinnerbell.domain.ranking import rank
-from dinnerbell.services import activity, lifecycle, picks
+from dinnerbell.services import activity, contributions, lifecycle, picks
 from dinnerbell.services import call_context as cc
 from dinnerbell.services import guests as guest_rules
 from dinnerbell.services.call_context import CallContext, locked_event, publish
@@ -900,6 +904,7 @@ SAME_PLACE = "That's the place already. Pick another one, or type a new name."
 NOT_IN_CATALOG = "That place isn't in the catalog anymore. Pick another one, or type its name."
 PICK_THE_WAY = "Pick how to get it."
 NOT_A_CUISINE = "Pick a cuisine from the list, or leave it empty."
+NO_MEAL_LOGGED = "This meal is no longer in History, so there's nothing to correct."
 PLACE_OR_NAME = "Pick a place, or type a new one, but not both. To keep what you typed, pick {current}."
 
 
@@ -1202,3 +1207,106 @@ async def change_place(
             capacity=capacity.value,
         )
         return tuple(held)
+
+
+async def correct_place(
+    db: AsyncSession,
+    actor: Member,
+    event_id: int,
+    *,
+    item_id: int | None = None,
+    name: str | None = None,
+    cuisine_id: int | None = None,
+    mode: Mode | None = None,
+    opened_item_id: int | None,
+    run: int | None = None,
+    now: datetime,
+) -> None:
+    """Correct where a done call ate (#220, spec 5.7): an admin only, on the web, never an offer
+    (``check_can_correct_place``). What it accepts is what ``change_place`` accepts, and it treats
+    the proposal row and the roles the same way: nothing but the way can refuse the place, people
+    keep their roles if the way still has them, and a new role goes to its first volunteer, or to
+    nobody. ``opened_item_id`` and ``run`` are what the page showed; one changed since is refused.
+
+    It changes every stored copy of the place: the call, the meal log's item and cuisines, so
+    history, stats, ranking, and the variety window read the new place, and the feedback on the
+    meal, so ratings and issues count toward the new place (``FeedbackRepository.move_to``). The
+    counts and badges follow (``contributions.recount_place``). A meal an admin deleted from History
+    has nothing to correct, and is refused.
+
+    The call's messages update in place, as other corrections do, and it messages nobody. Audited as
+    ``event.place_changed`` with ``after_done``, and logged as ``change_place``, likewise."""
+    async with locked_event(db, actor.household_id, event_id, now) as event:
+        await guest_rules.gate(db, event, actor, GuestAction.CHANGE_PLACE)
+        check_run(event, run)
+        check_can_correct_place(event, actor)
+        old_item, old_mode = event.decided_item_id, event.decided_mode
+        if old_item is None or old_mode is None:  # pragma: no cover - a done call has both
+            raise EventRuleViolation("There's no decision to change.", code="not_decided")
+        household_id = event.household_id
+        meals = MealLogRepository(db)
+        meal_id = await meals.for_event(household_id, event.id)
+        meal = await meals.get(household_id, meal_id) if meal_id is not None else None
+        if meal is None:
+            raise EventRuleViolation(NO_MEAL_LOGGED, code="no_meal")
+        ctx = await cc.load(db, event)
+        place = await _place_asked(db, ctx, item_id=item_id, name=name, mode=mode, opened_item_id=opened_item_id)
+        if place is None:
+            raise EventRuleViolation(SAME_PLACE, code="same_place")
+        activity.about(item=place.item or place.name, mode=place.mode)
+        new_cuisine = _check_cuisine(ctx, place, cuisine_id)
+        roles = _roles_there(ctx, place, None, None)
+        before = {a.role: a for a in ctx.assignments if a.role in WORK_ROLES}
+        item, created = await _make_it_the_winner(db, ctx, place, new_cuisine, now)
+        await _save_roles(db, event, before, roles, now)
+        # How the old place won, a lock or a tie, no longer describes the plan.
+        corrected = replace(
+            event, decided_item_id=item.id, decided_mode=place.mode, locked_by=None, tie_how=None, tie_by=None
+        )
+        event = await EventRepository(db).save(corrected, now)
+        ctx = await cc.load(db, event)
+        await meals.update(
+            household_id,
+            meal.id,
+            day=meal.day,
+            slot=meal.slot,
+            item_id=item.id,
+            cuisines=lifecycle.meal_cuisines(ctx, item),
+            participants=meal.participants,
+            now=now,
+        )
+        moved = await FeedbackRepository(db).move_to(
+            household_id, meal.id, item_id=item.id, item_name=item.name, item_kind=item.kind, mode=place.mode
+        )
+        await publish(db, ctx, *cc.messages_for_state(ctx), now=now)
+        dropped = [role.value for role in before if role not in roles]
+        payload = {
+            "from_item_id": old_item,
+            "from_mode": old_mode.value,
+            "to_item_id": item.id,
+            "to_mode": place.mode.value,
+            "new_item": created,
+            "assignments": {role.value: who for role, who in roles.items()},
+            "dropped": dropped,
+            "feedback_moved": moved,
+            "after_done": True,
+            "as": ActingAs.ADMIN.value,
+        }
+        await audit(db, actor.household_id, actor, "event.place_changed", _target(event.id), payload, now)
+        activity.action(
+            db,
+            "change_place",
+            event,
+            actor,
+            item=item,
+            item_id=item.id,
+            mode=place.mode,
+            from_item_id=old_item,
+            from_mode=old_mode.value,
+            new_item=created,
+            dropped=dropped or None,
+            feedback_moved=moved,
+            after_done=True,
+            capacity=ActingAs.ADMIN.value,
+        )
+        await contributions.recount_place(db, actor, event, now=now)

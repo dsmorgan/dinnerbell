@@ -169,7 +169,13 @@ async def form(db: AsyncSession, actor: Member, meal_id: int, *, now: datetime) 
     facts = await meal_facts(db, actor.household_id, await _meal(db, actor, meal_id))
     check_can_give(actor, facts, await today_for(db, actor, now=now))
     mine = await FeedbackRepository(db).get(actor.household_id, meal_id, actor.id)
-    return FeedbackForm(facts, actor.id, mine.answers if mine else None, closes_on(facts.day))
+    return FeedbackForm(facts, actor.id, _shown(mine), closes_on(facts.day))
+
+
+def _shown(mine: Feedback | None) -> FeedbackInput | None:
+    """What a member's own feedback shows them. None when nothing they said applies now: a
+    correction moved the meal to the other kind (``answers_for``, #220)."""
+    return None if mine is None or mine.answers.is_empty else mine.answers
 
 
 async def form_for_event(db: AsyncSession, actor: Member, event_id: int, *, run: int, now: datetime) -> FeedbackForm:
@@ -250,7 +256,7 @@ async def for_meals(
     views: dict[int, MealFeedback] = {}
     for meal in meals:
         on_meal = by_meal.get(meal.id, [])
-        mine = next((f.answers for f in on_meal if f.member_id == actor.id), None)
+        mine = _shown(next((f for f in on_meal if f.member_id == actor.id), None))
         # The public count is about the meal's cook now; each note reaches only the cook it named.
         thanked = any(f.answers.cook_thanks for f in on_meal) and kinds.get(meal.item_id) is ItemKind.HOME
         cook = await _cook(db, actor.household_id, meal) if thanked else None

@@ -72,6 +72,30 @@ class ContributionRepository:
         )
         return set(rows)
 
+    async def item_credits(self, household_id: int, event_id: int) -> list[tuple[int, int]]:
+        """The call's ``added_item`` counts: who, and for which item."""
+        rows = await self._session.execute(
+            select(ContributionRow.member_id, ContributionRow.item_id).where(
+                ContributionRow.household_id == household_id,
+                ContributionRow.event_id == event_id,
+                ContributionRow.kind == Kind.ADDED_ITEM.value,
+            )
+        )
+        return [(member_id, item_id) for member_id, item_id in rows if item_id is not None]
+
+    async def move_item_credit(self, household_id: int, item_id: int, event_id: int, day: date) -> None:
+        """Hang the item's ``added_item`` count on another call that chose it, keeping the count, for
+        a correction of the place that takes it off the call it was on (#220)."""
+        await self._session.execute(
+            update(ContributionRow)
+            .where(
+                ContributionRow.household_id == household_id,
+                ContributionRow.kind == Kind.ADDED_ITEM.value,
+                ContributionRow.item_id == item_id,
+            )
+            .values(event_id=event_id, day=day)
+        )
+
     async def remove(self, household_id: int, event_id: int, kind: Kind, member_ids: Iterable[int]) -> int:
         """Delete the call's ``kind`` counts for ``member_ids``, for a correction after the meal
         (#162). Returns how many rows."""

@@ -874,7 +874,7 @@ async def finish(db: AsyncSession, event: Event, now: datetime, *, actor: Member
     meals = MealLogRepository(db)
     item = ctx.items.get(event.decided_item_id) if event.decided_item_id is not None else None
     if item is not None and await meals.for_event(event.household_id, event.id) is None:
-        cuisines = tuple(TagRef(t, ctx.tags[t].name) for t in sorted(ctx.cuisine_ids(item.tag_ids)))
+        cuisines = meal_cuisines(ctx, item)
         people = sorted((MemberRef(r.member_id, ctx.name(r.member_id)) for r in ctx.participants), key=_by_name)
         await meals.add(
             household_id=event.household_id,
@@ -899,6 +899,11 @@ async def finish(db: AsyncSession, event: Event, now: datetime, *, actor: Member
     reminders = feedback.reminders(ctx, item.name) if item is not None else []  # FR-48: only those who asked
     await publish(db, ctx, *cc.decision_updated(ctx), cc.message_updated(ctx), *reminders, now=now)
     await audit(db, event.household_id, actor, "event.done", _target(event), {"item_id": event.decided_item_id}, now)
+
+
+def meal_cuisines(ctx: CallContext, item: CatalogItem) -> tuple[TagRef, ...]:
+    """The cuisine snapshot a meal of ``item`` logs."""
+    return tuple(TagRef(t, ctx.tags[t].name) for t in sorted(ctx.cuisine_ids(item.tag_ids)))
 
 
 def _by_name(ref: MemberRef) -> str:

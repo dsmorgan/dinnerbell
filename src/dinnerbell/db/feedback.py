@@ -13,28 +13,32 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from dinnerbell.db.models import FeedbackRow, MealLogRow
 from dinnerbell.domain.catalog import ItemKind, Mode
-from dinnerbell.domain.feedback import Feedback, FeedbackInput, MealFacts, PlaceIssue, Rating
+from dinnerbell.domain.feedback import Feedback, FeedbackInput, MealFacts, PlaceIssue, Rating, answers_for
 from dinnerbell.domain.meals import MemberRef
 from dinnerbell.domain.ratings import Opinion
 
 
 def _feedback(row: FeedbackRow) -> Feedback:
     cook = MemberRef(row.cook_member_id, row.cook_name or "") if row.cook_member_id is not None else None
+    kind = ItemKind(row.item_kind)
     return Feedback(
         id=row.id,
         household_id=row.household_id,
         meal_id=row.meal_id,
         member_id=row.member_id,
-        answers=FeedbackInput(
-            rating=Rating(row.rating) if row.rating else None,
-            place_issues=frozenset(PlaceIssue(i) for i in row.place_issues),
-            issue_note=row.issue_note,
-            cook_thanks=row.cook_thanks,
-            cook_note=row.cook_note,
+        answers=answers_for(
+            FeedbackInput(
+                rating=Rating(row.rating) if row.rating else None,
+                place_issues=frozenset(PlaceIssue(i) for i in row.place_issues),
+                issue_note=row.issue_note,
+                cook_thanks=row.cook_thanks,
+                cook_note=row.cook_note,
+            ),
+            kind,
         ),
         item_id=row.item_id,
         item_name=row.item_name,
-        item_kind=ItemKind(row.item_kind),
+        item_kind=kind,
         mode=Mode(row.mode) if row.mode else None,
         cook=cook,
         participants=tuple(MemberRef(int(p["id"]), str(p["name"])) for p in row.participants),
@@ -107,6 +111,23 @@ class FeedbackRepository:
         gone = await self._session.execute(query.execution_options(synchronize_session=False))
         return int(getattr(gone, "rowcount", 0) or 0)
 
+    async def move_to(
+        self, household_id: int, meal_id: int, *, item_id: int, item_name: str, item_kind: ItemKind, mode: Mode
+    ) -> int:
+        """Point the feedback on ``meal_id`` at the place an admin corrected it to (#220), and return
+        how many rows moved. Nobody changed their answers, so ``rating_saved_at`` and ``updated_at``
+        stay, and so does the cook, who is whom a thank-you was written to (``thanks_for``)."""
+        rows = list(
+            await self._session.scalars(
+                select(FeedbackRow).where(FeedbackRow.household_id == household_id, FeedbackRow.meal_id == meal_id)
+            )
+        )
+        for row in rows:
+            row.item_id, row.item_name, row.item_kind = item_id, item_name, item_kind.value
+            row.mode = mode.value
+        await self._session.flush()
+        return len(rows)
+
     async def clear(self, household_id: int) -> int:
         """Delete all of the household's feedback, for ``scrub-test``. Returns how many rows."""
         found = await self._session.scalar(
@@ -156,7 +177,8 @@ class FeedbackRepository:
     ) -> list[Opinion]:
         """Ratings and issue checkboxes, with the meal's date and when each rating last changed, for
         ranking and the household hints (FR-55): by these members, or everyone, on these items,
-        or every item. Never the "Other" text or a note."""
+        or every item. Never the "Other" text or a note. Issues count only on a restaurant: a
+        correction can move them to a home meal (``answers_for``, #220)."""
         query: Any = (
             select(
                 FeedbackRow.member_id,
@@ -165,6 +187,7 @@ class FeedbackRepository:
                 func.coalesce(FeedbackRow.rating_saved_at, FeedbackRow.updated_at),
                 FeedbackRow.rating,
                 FeedbackRow.place_issues,
+                FeedbackRow.item_kind,
             )
             .join(MealLogRow, MealLogRow.id == FeedbackRow.meal_id)
             .where(FeedbackRow.household_id == household_id)
@@ -180,7 +203,9 @@ class FeedbackRepository:
                 day=day,
                 saved_at=saved,
                 rating=Rating(rating) if rating else None,
-                issues=frozenset(PlaceIssue(i) for i in issues or []),
+                issues=frozenset(PlaceIssue(i) for i in issues or []) if kind == ItemKind.RESTAURANT else frozenset(),
             )
-            for member, item, day, saved, rating, issues in await self._session.execute(query.order_by(FeedbackRow.id))
+            for member, item, day, saved, rating, issues, kind in await self._session.execute(
+                query.order_by(FeedbackRow.id)
+            )
         ]
