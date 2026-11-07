@@ -1258,8 +1258,9 @@ async def correct_place(
 
     It works from what the meal says, since a History edit before #224 could change the meal and
     leave the call (and its counts) behind. Correcting to the place the call still has moves the
-    meal back, and keeps the call's roles and how it won. Correcting to the place the meal already
-    has moves the call to it, as any other correction would.
+    meal back, and keeps the call's roles and how it won. Its counts stay too, unless other meals
+    have changed how new the place was: ``recount_place`` still runs, as with any correction.
+    Correcting to the place the meal already has moves the call to it, as any other correction would.
 
     It changes every stored copy of the place: the call, the meal log's item and cuisines, so
     history, stats, ranking, and the variety window read the new place, and the feedback on the

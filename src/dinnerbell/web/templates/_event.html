@@ -428,7 +428,7 @@
         <input type="hidden" name="run" value="{{ e.run }}">
         <input type="hidden" name="opened_item" value="{{ place_id }}">
         {% if place_id != e.decided_item_id %}
-        <p class="small warning">History says {{ place_name }}, but this call still says {{ d.proposal.item.name }}. Keep {{ place_name }} to bring the call into line, or choose a place.</p>
+        <p class="alert error small">History says {{ place_name }}, but this call still says {{ d.proposal.item.name }}. Keep {{ place_name }} to bring the call into line, or choose a place.</p>
         {% endif %}
         <label class="field"><span>Place</span>
           <select name="item_id"><option value="">Keep {{ place_name }}, or type a new one</option>{% for item in v.items if item.id != place_id %}{% set hint = v.meal_hint(item) %}<option value="{{ item.id }}">{{ item.name }}{% if hint %} ({{ hint }}){% endif %}</option>{% endfor %}</select>

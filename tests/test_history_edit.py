@@ -40,7 +40,7 @@ from dinnerbell.services import calls, coordinator, event_views, meals, offers
 from dinnerbell.services.coordinator import PLAN_CHANGED, SAME_PLACE, AdjustmentRefused
 from dinnerbell.services.errors import NotFound
 from dinnerbell.services.offers import OfferInput
-from tests.conftest import csrf_from, invite, page
+from tests.conftest import invite, page
 from tests.support.calls import House
 from tests.support.clock import FakeClock
 from tests.support.fake_oidc import FakeProvider
@@ -65,6 +65,7 @@ from tests.test_correct_place import (
 )
 from tests.test_events_web import admin as admin
 from tests.test_events_web import sign_in_as
+from tests.test_history import fill
 
 pytestmark = pytest.mark.anyio
 
@@ -371,7 +372,7 @@ async def test_a_save_and_a_correction_at_once_end_on_the_corrected_place(house:
 # Calls already out of step -------------------------------------------------------------------------
 
 
-async def test_correcting_to_the_place_the_call_still_has_moves_only_the_meal(house: House) -> None:
+async def test_correcting_to_the_place_the_call_still_has_moves_the_meal_back(house: House) -> None:
     """The meal says Taqueria and the call says Siam Garden. Correcting to Siam Garden isn't "the
     same place", and leaves the call, its roles, how it won, and its counts as they were."""
     event_id = await to_voting(house, "Sam", "Lee", pickups=("Alex",), coordinator_name="Sam")
@@ -425,12 +426,23 @@ async def test_correcting_to_the_place_the_call_has_in_another_way(house: House)
     event = await house.event(event_id)
     assert (event.decided_item_id, event.decided_mode) == (pho, Mode.DELIVERY)
     assert (await meal_of(house, event_id)).item_id == pho
+    assert await rows_outside_the_picks(house, event_id) == [(pho, "delivery")]
+
+    await to_taqueria_from_the_meal(house, event_id)  # a pick: the kept row goes, as any such row does
+    assert await rows_outside_the_picks(house, event_id) == []
+
+
+async def to_taqueria_from_the_meal(house: House, event_id: int) -> None:
+    await correct_meal(house, event_id, item_id=house.items["Taqueria"].id, mode=Mode.PICKUP)
+
+
+async def rows_outside_the_picks(house: House, event_id: int) -> list[tuple[int, str]]:
     async with house.sessionmaker() as db:
         found = await db.execute(
             text("SELECT item_id, mode FROM proposal WHERE event_id = :e AND rank = :r"),
             {"e": event_id, "r": AFTER_DECISION_RANK},
         )
-        assert [tuple(r) for r in found] == [(pho, "delivery")]
+        return [(row[0], row[1]) for row in found]
 
 
 @pytest.mark.parametrize(
@@ -493,6 +505,47 @@ async def test_bringing_the_call_into_line_works_for_a_place_out_of_the_catalog(
         await db.commit()
     await correct_meal(house, event_id)
     assert (await house.event(event_id)).decided_item_id == taqueria
+
+
+async def test_correcting_back_to_a_place_out_of_the_catalog_takes_its_name_and_a_way(house: House) -> None:
+    """The call's place isn't in the menu once it's inactive, so its name is the way back to it."""
+    event_id = await done_call(house)
+    await left_behind(house, event_id, "Taqueria")
+    siam = house.items["Siam Garden"].id
+    async with house.sessionmaker() as db:
+        await db.execute(text("UPDATE catalog_item SET active = 0 WHERE id = :i"), {"i": siam})
+        await db.commit()
+    with pytest.raises(AdjustmentRefused):
+        await correct_meal(house, event_id, item_id=siam)
+    await correct_meal(house, event_id, name="Siam Garden", mode=Mode.PICKUP)
+    assert (await meal_of(house, event_id)).item_id == siam
+    assert (await house.event(event_id)).decided_item_id == siam
+    assert not await recounts(house)
+
+
+async def test_correcting_back_recounts_when_another_meal_changed_how_new_the_place_was(house: House) -> None:
+    """Kim's Pho House was new to the household, and an old edit moved her dinner's meal away. Someone
+    then logs Pho House for the day before. Correcting back finds it wasn't new after all, so she
+    loses ``explored``, as any correction would. Her other counts, and the call's roles, stay."""
+    event_id = await kims_dinner(house)
+    pho = (await house.event(event_id)).decided_item_id
+    assert pho is not None
+    assert await credited(house, event_id, Kind.EXPLORED) == {house["Kim"].id}
+    picked_up = await credited(house, event_id, Kind.PICKED_UP)
+    await left_behind(house, event_id, "Taqueria")
+    earlier = MealInput(DAY - timedelta(days=1), Slot.DINNER, pho, frozenset({house["Lee"].id}))
+    await act(house, meals.log_meal, house["Lee"], earlier, today=DAY)
+
+    await correct_meal(house, event_id, item_id=pho)
+
+    assert await credited(house, event_id, Kind.EXPLORED) == set()
+    assert (await house.event(event_id)).decided_item_id == pho
+    assert await credited(house, event_id, Kind.SUGGESTED) == {house["Kim"].id}
+    assert await credited(house, event_id, Kind.PICKED_UP) == picked_up
+    assert await item_credit_events(house, pho) == [event_id]
+    (audit,) = await recounts(house)
+    assert audit.payload["removed"] == {"explored": [house["Kim"].id]}
+    assert ("Kim", BadgeKey.EXPLORER, Tier.FIRST) not in held(await awards(house))
 
 
 async def test_a_page_that_showed_the_calls_place_is_stale_when_the_meal_says_another(house: House) -> None:
@@ -718,31 +771,29 @@ def test_web_an_error_redisplaying_the_form_keeps_the_stamp_it_showed(admin: Tes
     assert the_meal(migrated).slot == "lunch"
 
 
+TOP_REFUSAL = '<p class="alert error" role="alert">This meal changed since you opened this page'
+
+
 @pytest.mark.parametrize("kind", ["manual", "call"])
-def test_web_a_stale_delete_lands_on_the_meal_with_why(
-    admin: TestClient, clock: FakeClock, migrated: Settings, kind: str
+@pytest.mark.parametrize("opened_on", ["edit", "history"])
+def test_web_a_stale_delete_says_why_at_the_top_of_the_page(
+    admin: TestClient, clock: FakeClock, migrated: Settings, kind: str, opened_on: str
 ) -> None:
+    """A boosted delete loses a redirect's fragment and lands at the top, so that's where it says."""
     if kind == "manual":
         row = web_manual(admin, migrated)
     else:
         web_done(admin, clock, migrated)
         row = the_meal(migrated)
     path = f"/history/meals/{row.id}"
-    stamp = stamp_of(page(admin.get(path)))
+    stamp = stamp_of(page(admin.get(path if opened_on == "edit" else "/history")))
     assert submit(admin, path, posted(row, slot="lunch", shown_meal=stamp)).status_code == 303
 
     boosted = {"HX-Request": "true", "HX-Boosted": "true"}
-    refused = admin.post(
-        f"{path}/delete",
-        data={"shown_meal": stamp, "csrf_token": csrf_from(admin)},
-        headers=boosted,
-        follow_redirects=False,
-    )
-    assert refused.status_code == 303
-    assert refused.headers["location"] == f"/history?notice=changed&meal={row.id}#meal-{row.id}"
+    refused = submit(admin, f"{path}/delete", {"shown_meal": stamp}, **boosted)
+    assert refused.status_code == 303 and refused.headers["location"] == "/history?notice=changed"
     html = page(admin.get(refused.headers["location"]))
-    assert 'class="alert error landed-notice" role="alert"' in html
-    assert "This meal changed since you opened this page" in html
+    assert TOP_REFUSAL in html and "landed-notice" not in html
     assert the_meal(migrated).id == row.id
 
     fresh = stamp_of(page(admin.get(path)))
@@ -751,10 +802,23 @@ def test_web_a_stale_delete_lands_on_the_meal_with_why(
     assert submit(admin, f"{path}/delete", {"shown_meal": fresh}).status_code == 404  # the second click
 
 
+def test_web_a_stale_delete_stays_on_the_meals_page(admin: TestClient, migrated: Settings) -> None:
+    """As a delete does, it returns to the page that lists the meal."""
+    me = member(migrated, "admin@example.com").id
+    row = web_manual(admin, migrated)
+    fill(migrated, row.item_id, me, 33)  # 33 dinners and 11 lunches: 45 meals, so the oldest is on page 3
+    oldest = min(rows(migrated, MealLogRow), key=lambda r: r.date)
+    refused = submit(admin, f"/history/meals/{oldest.id}/delete", {"shown_meal": "stale"})
+    assert refused.status_code == 303
+    assert refused.headers["location"] == "/history?page=3&notice=changed"
+    assert TOP_REFUSAL in page(admin.get(refused.headers["location"]))
+
+
 def test_web_a_top_of_page_refusal_shows_as_an_error(admin: TestClient, migrated: Settings) -> None:
     """The notice has its meal's entry only on the page that lists it."""
     html = page(admin.get("/history?notice=changed"))
-    assert 'class="alert error" role="alert"' in html and "This meal changed" in html
+    assert TOP_REFUSAL in html
+    assert TOP_REFUSAL in page(admin.get(f"/history?notice=changed&meal={web_manual(admin, migrated).id}"))
     assert 'class="alert ok" role="status"' in page(admin.get("/history?notice=deleted"))
 
 
@@ -786,7 +850,7 @@ def test_web_a_form_opened_before_a_correction_leaves_the_place_and_feedback_alo
     assert stale.status_code == 409 and "This meal changed" in stale.text and "Sam&#39;s Tacos" in stale.text
     old_page = submit(admin, path, posted(row))
     assert old_page.status_code == 400 and "came from a call" in old_page.text
-    assert submit(admin, f"{path}/delete", {"shown_meal": stamp}).status_code == 303  # refused: lands on the meal
+    assert submit(admin, f"{path}/delete", {"shown_meal": stamp}).status_code == 303  # refused: a redirect, with why
 
     assert the_meal(migrated).item_id == home
     (still,) = rows(migrated, FeedbackRow)
@@ -807,7 +871,7 @@ def test_web_change_the_plan_works_from_what_the_meal_says(
     place_menu = html.split(f'action="{url}"')[1].split('name="item_id"')[1].split("</select>")[0]
     assert "Keep Sam's Tacos, or type a new one" in place_menu
     assert f'value="{siam}"' in place_menu and f'value="{home}"' not in place_menu
-    assert "this call still says" in html
+    assert '<p class="alert error small">History says Sam\'s Tacos, but this call still says Siam Garden.' in html
 
     # Back to the place the call still names: the page's own choice.
     back = {"item_id": str(siam), "opened_item": str(home), "run": "1"}
