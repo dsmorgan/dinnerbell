@@ -645,6 +645,18 @@ def _assignments(assignments: Iterable[note.AssignmentInfo], ctx: RenderContext)
     return [f"*{ROLE_TITLES[a.role]}:* {ctx.directory.mention(a.member)}" for a in assignments]
 
 
+def _role_list(roles: Iterable[AssignmentRole]) -> str:
+    """Roles as a reader sees them: "cooking", "picking up and ordering", or "picking up,
+    ordering, and coordinating"."""
+    return _and([ROLE_PHRASES[r] for r in roles]) or "helping"
+
+
+def _place(proposal: note.ProposalInfo) -> str:
+    """The place, on its own line below a direct message's headline (#218):
+    "Sam's Tacos · Pickup · Mexican"."""
+    return f"{_item_name(proposal.item)} · {_kind(proposal)}"
+
+
 def _item_buttons(item: note.ItemInfo, mode: Mode) -> list[Block]:
     out: list[Block] = []
     if safe_url(item.url):
@@ -909,7 +921,7 @@ def link_needed_message(notification: note.LinkNeeded, ctx: RenderContext) -> Me
 def role_vacated_message(notification: note.RoleVacated, ctx: RenderContext) -> Message:
     """To the coordinator, or each admin with none: a guest who had a role left the call."""
     event = notification.event
-    role = " and ".join(ROLE_PHRASES[r] for r in notification.roles) or "helping"
+    role = _role_list(notification.roles)
     who = escape(notification.left.name)
     text = (
         f"Heads up, {escape(notification.member.name)}: {who} isn't coming to {_slot(event)} on "
@@ -1297,44 +1309,52 @@ def coordinating_given_message(notification: note.CoordinatingGiven, ctx: Render
     slot, day = _slot(event), day_label(event.day)
     if notification.via is not None:
         name = escape(notification.member.name)
-        reader = escape(notification.via.name)
-        text = f"Hi {reader}! {by} gave your guest {name} coordinating {slot} on {day}, so they're in."
+        lines = [
+            f"Hi {escape(notification.via.name)}! *Your guest {name} is coordinating {slot} on {day}.*",
+            f"{by} gave it to them, so they're in.",
+            f"If it doesn't work for them, tell {by}.",
+        ]
         plain = f"{notification.member.name} is coordinating {slot} on {day}."
     else:
-        late = " The vote has started, so you joined late, and your vote counts." if notification.late else ""
-        text = f"{by} gave you coordinating {slot} on {day}, so you're in.{late}"
+        lines = [f"*You're coordinating {slot} on {day}.*", f"{by} gave it to you, so you're in."]
+        if notification.late:
+            lines.append("The vote has started, so you joined late, and your vote counts.")
+        lines += [f"If it doesn't work for you, tell {by}.", "", "Thanks for steering!"]
         plain = f"You're coordinating {slot} on {day}."
-    text += f" If it doesn't work for you, tell {by}." + (
-        "" if notification.via is not None else " Thanks for steering!"
-    )
-    blocks = [section(text), actions(_web_button(ctx, event), block_id="more")]
+    blocks = [section(join_lines(lines)), actions(_web_button(ctx, event), block_id="more")]
     return _finish(plain, blocks)
 
 
 def coordinator_picked_message(notification: note.CoordinatorPicked, ctx: RenderContext) -> Message:
     """To the member voting picked to coordinate because nobody had (#179): why them, what a
-    coordinator can do, and that they can hand it off."""
+    coordinator can do, and that they can hand it off. It may arrive before or after the decision,
+    so it says when each thing applies."""
     event = notification.event
     slot, day = _slot(event), day_label(event.day)
-    minutes = notification.choose_minutes
-    text = (
-        f"Nobody had claimed coordinating {slot} on {day}, so Dinnerbell picked you at random from everyone "
-        f"who's in. While the vote is open, you can shuffle the picks, and with ⋯ beside a pick, you can decide it "
-        f"with *{labels.LOCK}*, break a tie, or make a takeout pick pickup or delivery. Once it's decided, you "
-        "can change how you get it and who does it. If that isn't clear, you'll be asked to choose. If you "
-        "don't within "
-        f"{minutes} minute{'' if minutes == 1 else 's'}, or by the meal time if that's sooner, the first person "
-        "who offered does it, if anyone did. If it doesn't suit you, hand it off to someone who's in on the "
-        "call's page. Thanks for steering!"
-    )
-    blocks = [section(text), actions(_web_button(ctx, event), block_id="more")]
+    lines = [
+        f"*You're coordinating {slot} on {day}.* Nobody had claimed it, so Dinnerbell picked you at random.",
+        "",
+        "*While the vote is open:*",
+        "• Tap ⋯ beside a pick to decide it, break a tie, or set pickup or delivery",
+        "• Shuffle the picks",
+        "",
+        "*After it's decided:*",
+        "• Change how you get it and who does it",
+        f"• If that isn't clear, choose within {_minutes(notification.choose_minutes)} or by the meal time. "
+        "Otherwise, the first person who offered does it.",
+        "",
+        "*Can't do it?* Hand it off on the call's page.",
+        "",
+        "Thanks for steering!",
+    ]
+    blocks = [section(join_lines(lines)), actions(_web_button(ctx, event), block_id="more")]
     return _finish(f"You're coordinating {slot} on {day}.", blocks)
 
 
 def assignment_ended_message(notification: note.AssignmentEnded, ctx: RenderContext) -> Message:
     """To someone whose role went to someone else, or whose way of getting it was switched (#154)."""
     event = notification.event
-    role = " and ".join(ROLE_PHRASES[r] for r in notification.roles) or "helping"
+    role = _role_list(notification.roles)
     slot, day, by = _slot(event), day_label(event.day), escape(notification.by.name)
     who = (
         f"Hi {escape(notification.via.name)}! {by} changed the plan for {slot} on {day}: your guest "
@@ -1348,19 +1368,16 @@ def assignment_ended_message(notification: note.AssignmentEnded, ctx: RenderCont
 
 
 def assignment_message(notification: note.AssignmentMade, ctx: RenderContext) -> Message:
-    event, decision = notification.event, notification.decision
+    event, decision, via = notification.event, notification.decision, notification.via
     proposal = decision.proposal
-    role = " and ".join(ROLE_PHRASES[r] for r in notification.roles) or "helping"
+    role = _role_list(notification.roles)
     when = local_clock(decision.meal_time, event.timezone)
-    who = (
-        f"Hi {escape(notification.via.name)}! Your guest {escape(notification.member.name)} is"
-        if notification.via is not None
-        else f"Thanks for pitching in, {escape(notification.member.name)}! You're"
-    )
+    doing = f"{role if notification.roles else 'helping with'} {_slot(event)} on {day_label(event.day)}"
+    name = escape(notification.member.name)
     lines = [
-        f"{who} *{role}* for {_slot(event)} on {day_label(event.day)}: *{_item_name(proposal.item)}* · "
-        f"{_kind(proposal)}.",
-        f"*When:* {when} · *Eating:* {_head_count(decision)}",
+        f"Hi {escape(via.name)}! *Your guest {name} is {doing}.*" if via else f"*You're {doing}.*",
+        _place(proposal),
+        "",
     ]
     by = notification.assigned_by
     if by is not None:  # they hadn't offered: say who asked, and whom to tell
@@ -1374,17 +1391,21 @@ def assignment_message(notification: note.AssignmentMade, ctx: RenderContext) ->
                 f"tell {escape(lead.name)}, who's coordinating and can pick someone else with *{ADJUST}* "
                 "on the decision"
             )
-        lines.insert(1, f"{escape(by.name)} assigned you this. If it doesn't work for you, {tell}.")
+        whom, they = (name, "them") if via else ("you", "you")
+        lines += [f"{escape(by.name)} assigned {whom} this. If it doesn't work for {they}, {tell}.", ""]
+    lines += [f"• *When:* {when}", f"• *Eating:* {_head_count(decision)}"]
     if decision.dietary_notes:
-        lines.append(f"*Dietary needs:* {escape(', '.join(decision.dietary_notes))}")
+        lines.append(f"• *Dietary needs:* {escape(', '.join(decision.dietary_notes))}")
     others = [a for a in decision.assignments if a.member.id != notification.member.id]
     if others:
         lines.append(
-            "*Also helping:* " + ", ".join(f"{escape(a.member.name)} ({ROLE_PHRASES[a.role]})" for a in others)
+            "• *Also helping:* " + ", ".join(f"{escape(a.member.name)} ({ROLE_PHRASES[a.role]})" for a in others)
         )
+    if via is None:
+        lines += ["", "Thanks for pitching in!"]
     buttons = [*_item_buttons(proposal.item, proposal.mode), _web_button(ctx, event)]
     blocks = [section(join_lines(lines)), actions(*buttons, block_id="more")]
-    subject = f"{notification.member.name} is" if notification.via is not None else "You're"
+    subject = f"{notification.member.name} is" if via is not None else "You're"
     return _finish(f"{subject} {role} for {_slot(event)} at {when}: {proposal.item.name}.", blocks)
 
 
@@ -1395,19 +1416,17 @@ def roles_to_choose_message(notification: note.RolesToChoose, ctx: RenderContext
     event, decision = notification.event, notification.decision
     proposal = decision.proposal
     until = local_clock(notification.due_at, event.timezone)
-    name = _item_name(proposal.item)
     what = labels.roles_to_choose(proposal.mode, way_open=proposal.way_open)
     fallback = labels.roles_fallback(proposal.mode, way_open=proposal.way_open)
     stays = f"it stays {proposal.mode.label.lower()}, and " if proposal.way_open else ""
-    after = f"After that, {stays}{fallback}."
-    reader = notification.via.name if notification.via else notification.member.name
     who = f"Your guest {escape(notification.member.name)} is" if notification.via else "You're"
-    text = (
-        f"Hi {escape(reader)}! {who} coordinating {_slot(event)} on {day_label(event.day)}: *{name}* · "
-        f"{_kind(proposal)}. It's yours to choose {what}. "
-        f"Tap *Assign roles* by *{until}*. {after}"
-    )
-    blocks = [section(text), actions(assign_roles_button(event), _web_button(ctx, event), block_id="more")]
+    lines = [
+        f"*{who} coordinating {_slot(event)} on {day_label(event.day)}.*",
+        _place(proposal),
+        "",
+        f"Tap *Assign roles* to choose {what} by *{until}*. After that, {stays}{fallback}.",
+    ]
+    blocks = [section(join_lines(lines)), actions(assign_roles_button(event), _web_button(ctx, event), block_id="more")]
     return _finish(f"Choose {what} for {proposal.item.name} by {until}.", blocks)
 
 
@@ -1487,7 +1506,7 @@ def cancelled_message(notification: note.EventCancelled, ctx: RenderContext) -> 
 
 def assignment_cancelled_message(notification: note.AssignmentCancelled, ctx: RenderContext) -> Message:
     event, proposal = notification.event, notification.decision.proposal
-    role = " and ".join(ROLE_PHRASES[r] for r in notification.roles) or "helping"
+    role = _role_list(notification.roles)
     via = notification.via
     reader, subject = (
         (via.name, f"Your guest {notification.member.name} is") if via else (notification.member.name, "You're")

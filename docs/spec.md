@@ -431,7 +431,7 @@ The adapter lives in `src/dinnerbell/channels/slack/`. `dinnerbell slack preview
 - **From the catalog** in **Add a proposal** and **Make an offer**, and **Suggest something** in **Details**: **[Nothing from the catalog]**, under the heading **Take back a pick**.
 - **A saved guest** in **Invite a guest**: **[No saved guest]**.
 
-Picking it counts as nothing picked, so you can write something in instead, or take back a saved suggestion. In **Add a proposal**, **Make an offer**, and **Invite a guest**, picking from the menu and writing something in as well is refused with a message that names that choice. **Details** also has **Clear a time**, with **No earliest time** and **No latest time**: a checked box removes that time from your eat window, even when a time is picked above it. The rating in **How was it?** has **[No answer]** for the same reason (the web's form says **No answer**). Other menus have no such choice:
+Picking it counts as nothing picked, so you can write something in instead, or take back a saved suggestion. In **Add a proposal**, **Make an offer**, and **Invite a guest**, picking from the menu and writing something in as well is refused with a message that names that choice. **Details** also has **Clear a time**, with **No earliest time** and **No latest time**: a checked box removes that time from your eat window, even when a time is picked above it. The rating in **How was it?** has **[No answer]** for the same reason. The web uses brackets for these choices too: **[No answer]** on the rating, **[Nothing]** in **Suggest from the catalog**, and **[Nobody]** in the role and admin **Coordinator** forms. Other menus have no such choice:
 
 - Required menus always need a choice.
 - **Cuisine** counts only for something new.

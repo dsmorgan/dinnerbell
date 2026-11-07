@@ -334,7 +334,7 @@ async def test_whoever_was_picked_breaks_a_tie(house: House) -> None:
     assert made.decision.tie_note == f"Tied; {coordinator.display_name} (coordinator) chose"
 
 
-@pytest.mark.parametrize(("minutes", "words"), [(1, "within 1 minute,"), (40, "within 40 minutes,")])
+@pytest.mark.parametrize(("minutes", "words"), [(1, "within 1 minute or"), (40, "within 40 minutes or")])
 async def test_the_message_names_the_households_time_to_choose(house: House, minutes: int, words: str) -> None:
     async with house.sessionmaker() as db:
         stored = await household_settings(db, house.household.id)
@@ -344,7 +344,7 @@ async def test_the_message_names_the_households_time_to_choose(house: House, min
     (told,) = await sent(house, "coordinator_picked")
     assert told.choose_minutes == minutes
     text = json.dumps(render(told, RenderContext("https://dinnerbell.example.com", Directory())).blocks)
-    assert words in text and "or by the meal time if that's sooner" in text and "if anyone did" in text
+    assert words in text and "by the meal time. Otherwise, the first person who offered does it." in text
 
 
 async def test_an_admin_cannot_switch_the_coordinators_own_late_row(house: House) -> None:

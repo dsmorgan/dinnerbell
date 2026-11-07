@@ -190,7 +190,7 @@ async def test_whoever_is_put_in_by_a_hand_off_is_told(house: House) -> None:
     (told,) = await sent(house, "coordinating_given")
     assert (told.member.id, told.by.id, told.late) == (house["Kim"].id, house["Lee"].id, False)
     text = json.dumps(render(told, CTX).payload())
-    assert "Lee gave you coordinating dinner" in text and "so you're in" in text
+    assert "You're coordinating dinner" in text and "Lee gave it to you, so you're in." in text
 
 
 async def test_an_admin_assigning_it_while_voting_says_they_joined_late(house: House) -> None:

@@ -2,7 +2,7 @@
   "blocks": [
     {
       "text": {
-        "text": "Alex gave you coordinating dinner on Thursday, Oct 22, so you're in. The vote has started, so you joined late, and your vote counts. If it doesn't work for you, tell Alex. Thanks for steering!",
+        "text": "*You're coordinating dinner on Thursday, Oct 22.*\nAlex gave it to you, so you're in.\nThe vote has started, so you joined late, and your vote counts.\nIf it doesn't work for you, tell Alex.\n\nThanks for steering!",
         "type": "mrkdwn"
       },
       "type": "section"

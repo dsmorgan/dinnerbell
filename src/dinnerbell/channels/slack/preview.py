@@ -243,6 +243,11 @@ PENDING_DECISION = replace(
     roles_due_at=ROLES_DUE,
     assign_roles=True,
 )
+PICKUP_DECISION = replace(DECISION, proposal=replace(PROPOSALS[0], mode=Mode.PICKUP), assignments=(), dietary_notes=())
+WAY_OPEN_DECISION = replace(
+    PENDING_DECISION,
+    proposal=replace(PROPOSALS[0], mode=Mode.PICKUP, ways=(Mode.PICKUP, Mode.DELIVERY)),
+)
 
 DINNER_SCHEDULE = note.SlotScheduleInfo(
     enabled=True,
@@ -377,6 +382,9 @@ NOTIFICATIONS: dict[str, Callable[[], note.Notification]] = {
         DECIDED, 33, SAM, (AssignmentRole.COOK, AssignmentRole.COORDINATOR), TWO_ROLES
     ),
     "assignment_made_order": lambda: note.AssignmentMade(DECIDED, 32, LEE, (AssignmentRole.ORDER,), DELIVERY),
+    "assignment_made_three_roles": lambda: note.AssignmentMade(
+        DECIDED, 37, ALEX, (AssignmentRole.PICKUP, AssignmentRole.ORDER, AssignmentRole.COORDINATOR), PICKUP_DECISION
+    ),
     "call_abandoned": lambda: note.CallAbandoned(event(EventState.ABANDONED), EndReason.TOO_FEW, head_count=1),
     "call_abandoned_no_coverage": lambda: note.CallAbandoned(event(EventState.ABANDONED), EndReason.NO_COVERAGE, 3),
     "call_abandoned_needs_unmet": lambda: note.CallAbandoned(
@@ -487,6 +495,9 @@ NOTIFICATIONS: dict[str, Callable[[], note.Notification]] = {
     "assignment_made_assigned_handed_off": lambda: note.AssignmentMade(
         replace(DECIDED, coordinator=KIM), 36, SAM, (AssignmentRole.COOK,), DECISION, assigned_by=ALEX
     ),
+    "assignment_made_assigned_for_guest": lambda: note.AssignmentMade(
+        DECIDED, 38, PAT, (AssignmentRole.PICKUP,), DECISION, via=KIM, assigned_by=ALEX
+    ),
     "coordinating_given": lambda: note.CoordinatingGiven(event(coordinator=KIM), KIM, ALEX, ROLES_DUE),
     "coordinating_given_late": lambda: note.CoordinatingGiven(
         replace(VOTING, coordinator=KIM), KIM, ALEX, ROLES_DUE, late=True
@@ -500,6 +511,8 @@ NOTIFICATIONS: dict[str, Callable[[], note.Notification]] = {
         DECIDED, PAT, (AssignmentRole.PICKUP,), ALEX, ROLES_DUE, via=KIM
     ),
     "roles_to_choose": lambda: note.RolesToChoose(DECIDED, ALEX, PENDING_DECISION, ROLES_DUE),
+    "roles_to_choose_way_open": lambda: note.RolesToChoose(DECIDED, ALEX, WAY_OPEN_DECISION, ROLES_DUE),
+    "roles_to_choose_for_guest": lambda: note.RolesToChoose(DECIDED, PAT, PENDING_DECISION, ROLES_DUE, via=KIM),
     "picks_shuffled": lambda: note.PicksShuffled(SHUFFLED_VOTING, ALEX, 2, 1),
     "feedback_reminder": lambda: note.FeedbackReminder(
         event(EventState.DONE, coordinator=ALEX), KIM, "Sam's Tacos", date(2026, 10, 29)

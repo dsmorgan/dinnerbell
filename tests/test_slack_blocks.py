@@ -136,7 +136,7 @@ def test_direct_messages_and_channel_posts_differ_where_they_should() -> None:
     opened = samples.preview("call_opened")
     assert "<@U01ALEX> <@U03KIM> Lee <@U02SAM>" in opened["blocks"][1]["text"]["text"]  # Lee has no Slack user
     assignment = samples.preview("assignment_made")
-    assert "You're *cooking*" in assignment["blocks"][0]["text"]["text"]
+    assert "*You're cooking dinner" in assignment["blocks"][0]["text"]["text"]
 
 
 def test_links_point_at_the_event_page() -> None:
