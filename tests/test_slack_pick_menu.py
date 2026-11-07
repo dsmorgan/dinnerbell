@@ -15,7 +15,7 @@ import pytest
 from dinnerbell.channels.slack import blocks as bk
 from dinnerbell.channels.slack import ids, views
 from dinnerbell.channels.slack import preview as samples
-from dinnerbell.channels.slack.interactions import OUT_OF_DATE, WAY_SET
+from dinnerbell.channels.slack.interactions import JOIN_OFFER, OUT_OF_DATE, WAY_SET
 from dinnerbell.channels.slack.messages import NEVER_MIND, RenderContext, pick_menu, render
 from dinnerbell.config import Settings
 from dinnerbell.domain import labels
@@ -484,7 +484,21 @@ async def test_other_menus_still_say_a_click_with_no_value_is_out_of_date(slack:
         payload = block_action(SLACK_IDS["Lee"], action_id, None, selected="x")
         del payload["actions"][0]["selected_option"]["value"]
         await slack._send("interactive", payload)
-        assert slack.ephemerals("Lee")[-1] == OUT_OF_DATE
+    assert slack.ephemerals("Lee") == [OUT_OF_DATE] * 3
+
+
+@pytest.mark.parametrize("value", ["", 123])
+async def test_a_menu_click_with_a_bad_value_is_out_of_date_not_a_no_op(slack: Slack, value: object) -> None:
+    payload = block_action(SLACK_IDS["Lee"], ids.PICK_MENU, None, selected="x")
+    payload["actions"][0]["selected_option"]["value"] = value
+    await slack._send("interactive", payload)
+    assert slack.ephemerals("Lee") == [OUT_OF_DATE]
+
+
+async def test_a_stranger_with_a_real_menu_value_is_still_asked_to_join(slack: Slack) -> None:
+    """Only the no-op is silent for someone Dinnerbell doesn't know."""
+    await slack.click("U0STRANGER", ids.PICK_MENU, None, selected=ids.pick_value(ids.PickChoice.LOCK, 1, 1, 1))
+    assert slack.ephemerals("U0STRANGER") == [JOIN_OFFER] and slack.fake.of("views.open") == []
 
 
 # Messages already posted ---------------------------------------------------------------------------
