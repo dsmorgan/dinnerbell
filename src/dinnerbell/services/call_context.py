@@ -268,6 +268,7 @@ def event_info(ctx: CallContext) -> note.EventInfo:
         respond_deadline=event.respond_deadline,
         vote_deadline=event.vote_deadline,
         coordinator=ctx.person(event.coordinator_id) if event.coordinator_id is not None else None,
+        coordinator_is_guest=event.coordinator_id is not None and ctx.is_guest(event.coordinator_id),
         end_reason=event.end_reason,
         ended_by=ctx.person(event.ended_by) if event.ended_by is not None else None,
         end_note=event.end_note,

@@ -59,6 +59,8 @@ class EventInfo:
     respond_deadline: datetime
     vote_deadline: datetime | None = None
     coordinator: PersonInfo | None = None
+    coordinator_is_guest: bool = False
+    """A guest coordinates (FR-58), so they can't break a tie: only an admin can (#214)."""
     end_reason: EndReason | None = None
     ended_by: PersonInfo | None = None
     """Who called the call off (FR-56), when it's cancelled."""

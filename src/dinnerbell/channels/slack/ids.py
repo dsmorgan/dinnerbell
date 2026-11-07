@@ -99,7 +99,7 @@ ways (#178) and **Either way** (#212) have ``way_value``s. A pick with nothing e
 link to the web, whose value is ``PICK_NOTHING``, because a menu has at least two options."""
 PICK_NOTHING = "nothing"
 """The value of a ``PICK_MENU`` option that does nothing here. Slack still sends a link's click,
-which the app acknowledges and ignores."""
+which the app acknowledges and ignores, as it does a ``PICK_MENU`` click with no value at all."""
 OVERFLOW_MENUS = frozenset({CALL_MENU, LATE_MENU, SET_WAY, PICK_MENU})
 """The actions that send the option picked, instead of a button's own value."""
 EITHER_WAY = "either"
