@@ -542,7 +542,8 @@ def way_menu(event: note.EventInfo, proposal: note.ProposalInfo) -> Block:
         option(labels.WAY_LABELS[way], ids.way_value(way, event.id, event.run, proposal.id)) for way in proposal.ways
     ]
     if proposal.mode_chosen:
-        options.append(option(labels.EITHER_WAY, ids.way_value(None, event.id, event.run, proposal.id)))
+        clear = ids.way_value(None, event.id, event.run, proposal.id, clears=proposal.mode)
+        options.append(option(labels.EITHER_WAY, clear))
     return overflow(ids.SET_WAY, options)
 
 

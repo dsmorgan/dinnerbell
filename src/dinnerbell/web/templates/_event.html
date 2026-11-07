@@ -304,7 +304,7 @@
             and tapping the chosen way again clears it back to not chosen (#212). -#}
         {% if way %}
         <span class="way-pair" role="group" aria-label="Pickup or delivery for {{ p.info.item.name }}">
-          {%- for w in p.info.ways %}{% set on = p.info.mode_chosen and p.info.mode == w %}{{ act(e.id, base ~ "/proposals/" ~ p.info.id ~ "/way", w.label, "button quiet choice", {"mode": labels.EITHER_WAY_VALUE if on else w.value, "run": e.run}, pressed=on, way=w.value) }}{% endfor -%}
+          {%- for w in p.info.ways %}{% set on = p.info.mode_chosen and p.info.mode == w %}{{ act(e.id, base ~ "/proposals/" ~ p.info.id ~ "/way", w.label, "button quiet choice", {"mode": labels.EITHER_WAY_VALUE, "clears": w.value, "run": e.run} if on else {"mode": w.value, "run": e.run}, pressed=on, way=w.value) }}{% endfor -%}
         </span>
         {% if not p.info.mode_chosen %}<span class="small muted">Not chosen yet</span>{% endif %}
         {% endif %}

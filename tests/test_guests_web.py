@@ -392,11 +392,40 @@ def test_a_guest_never_sees_votes_or_admin_controls(
     tick(guest, clock)
     html = page(guest.get(f"/events/{event_id}"))
     assert "Proposals" in html and ">Vote<" not in html and "Lock this" not in html and "Add a proposal" not in html
+    assert "coordinator-row" not in html and "Join late and vote" not in html  # neither tier (#212)
     assert "Admin" not in re.sub(r"<header.*?</header>", "", html, flags=re.S) and "Call it off" not in html
     proposal = rows(migrated, EventRow)[0]
     assert proposal.state == "voting"
     assert submit(guest, f"/events/{event_id}/proposals/1/vote", {}).status_code == 403
     assert rows(migrated, VoteRow) == []
+
+
+def test_a_guest_coordinator_gets_only_the_way_in_the_quiet_row(
+    admin: TestClient, provider: FakeProvider, clock: FakeClock, migrated: Settings
+) -> None:
+    """A guest can't vote, lock, or break a tie (FR-58), so a guest coordinating sees no Vote, and
+    the coordinator's row has only Pickup | Delivery (#212)."""
+    from datetime import timedelta
+
+    add_item(admin, "Pho Place", cuisines="Vietnamese", modes=["pickup", "delivery"])
+    event_id = start(admin)
+    pat = add_guest(admin, "Pat", slack="U07PAT")
+    submit(admin, f"/events/{event_id}/guests", {"guest_id": str(pat), "run": "1"})
+    submit(admin, f"/events/{event_id}/respond", {"status": "in"})
+    submit(admin, f"/events/{event_id}/offer", {"role": "pickup", "offered": "1"})
+    guest = as_guest(admin, provider)
+    submit(guest, f"/events/{event_id}/respond", {"status": "in"})
+    assert submit(guest, f"/events/{event_id}/coordinate", {}).status_code == 303
+    clock.advance(timedelta(minutes=90))
+    tick(guest, clock)
+    html = page(guest.get(f"/events/{event_id}"))
+    assert ">Vote<" not in html and "Join late and vote" not in html
+    assert html.count('<div class="coordinator-row"') == 1  # Pho Place, the one pick with two ways
+    row = html[html.index('<div class="coordinator-row"') :]
+    row = row[: row.index("</li>")]
+    assert ">Pickup</button>" in row and ">Delivery</button>" in row
+    assert "Break the tie" not in row and "Lock this" not in row
+    assert "Shuffle proposals" not in html
 
 
 def test_a_guest_coordinator_moves_the_decision_time_on_the_web(
