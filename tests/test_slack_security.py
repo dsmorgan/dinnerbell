@@ -181,9 +181,11 @@ async def test_another_households_ids_are_not_found(slack: Slack, house: House, 
     await slack.click("Alex", "respond_in", str(event))
     await slack.click("Alex", "vote", ids.proposal_value(event, proposal))
     await slack.click("Alex", "lock", ids.proposal_value(event, proposal))
+    pick = ids.pick_value(ids.PickChoice.LOCK, event, 1, proposal)
+    await slack.click("Alex", ids.PICK_MENU, None, selected=pick)
     await slack.click("Alex", "mark_done", str(event))
     await slack.click("Alex", "details", str(event))
-    assert slack.ephemerals("Alex") == ["No such call."] * 5
+    assert slack.ephemerals("Alex") == ["No such call."] * 6
     assert slack.fake.of("views.open") == []
 
     # Our own event with their proposal.

@@ -209,7 +209,7 @@ async def test_nothing_from_the_catalog_lets_an_offer_write_something_in(slack: 
     (opened,) = slack.fake.of("views.open")
     (item,) = [b for b in opened.args["view"]["blocks"] if b.get("block_id") == "item"]
     first = item["element"]["option_groups"][0]["options"]
-    assert [(o["text"]["text"], o["value"]) for o in first] == [("Nothing from the catalog", "none")]
+    assert [(o["text"]["text"], o["value"]) for o in first] == [("[Nothing from the catalog]", "none")]
 
     thai = house.tags["Thai"].id
     values = offer_values(0, free_text={"value": "Green curry"}, cuisine={"selected_option": {"value": str(thai)}})

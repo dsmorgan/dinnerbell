@@ -20,7 +20,7 @@ The same rule applies when someone hands coordinating to you or an admin assigns
 
 ### If nobody claims it
 
-When answers close and voting starts with nobody coordinating, Dinnerbell picks a coordinator at random from the members who said In. It never picks a guest or someone who was still a maybe. The call message names you, and you get a direct message saying you were picked and what you can do. You're a coordinator like any other: you can tap **Lock this**, break a tie, and shuffle the picks while voting, and once it's decided, change how you get it and who does it. When the decision leaves it unclear who does the role, you're asked to choose. If you don't within 15 minutes (an admin can change the time), or by the meal time if that's sooner, the first person who offered does it, if anyone did. You get credit for coordinating when the meal is done, as if you'd claimed it. If it doesn't suit you, hand it off on the call's page. Nobody gets picked when no member is in.
+When answers close and voting starts with nobody coordinating, Dinnerbell picks a coordinator at random from the members who said In. It never picks a guest or someone who was still a maybe. The call message names you, and you get a direct message saying you were picked and what you can do. You're a coordinator like any other: you can use **Lock this**, break a tie, and shuffle the picks while voting, and once it's decided, change how you get it and who does it. When the decision leaves it unclear who does the role, you're asked to choose. If you don't within 15 minutes (an admin can change the time), or by the meal time if that's sooner, the first person who offered does it, if anyone did. You get credit for coordinating when the meal is done, as if you'd claimed it. If it doesn't suit you, hand it off on the call's page. Nobody gets picked when no member is in.
 
 The pick is random, but reproducible: the same run of a call, with the same people in, always picks the same person. A re-run, or starting a called-off call again, picks again only if nobody coordinates by then.
 
@@ -51,9 +51,9 @@ Answers also close on their own once everyone has answered:
 
 | Action | Slack | Web |
 |---|---|---|
-| Lock a proposal, which decides the call on it | **Lock this** on the proposals message | Call page |
+| Lock a proposal, which decides the call on it | **Lock this** in the ⋯ beside it on the proposals message | Call page |
 | Make a takeout proposal pickup or delivery, when its place allows both | ⋯ beside it on the proposals message | Call page |
-| Break a tie | **Break the tie** beside each tied proposal | Call page |
+| Break a tie | **Break the tie** in the ⋯ beside each tied proposal | Call page |
 | Shuffle the proposals, up to 3 times | **Shuffle proposals** on the proposals message | Call page |
 | Turn a late joiner's **Taking part** or **Vote counts** on or off | ⋯ beside them on the proposals message | Call page |
 | Close the vote early (**Decide now**) | ⋯ menu on the call message, App Home | Call page |
@@ -62,7 +62,7 @@ Answers also close on their own once everyone has answered:
 
 Anyone can add a proposal; you don't need to coordinate.
 
-The vote runs until its usual time, even when everyone has voted, so people can look at every pick. To end it sooner, tap **Decide now**, **Lock this**, or **Break the tie**.
+The vote runs until its usual time, even when everyone has voted, so people can look at every pick. To end it sooner, use **Decide now**, **Lock this**, or **Break the tie**. In Slack, **Lock this** and **Break the tie** ask you to confirm in a small window first. Everyone sees the ⋯ beside a proposal, and anyone who can't use these options is told so right away.
 
 ### Once it's decided, and after the meal
 

@@ -619,14 +619,18 @@ async def test_the_proposals_message_offers_the_way_beside_a_place_with_both(hou
     picks = await pick_ids(house, event_id)
     rows = {b["block_id"]: b for b in payload["blocks"] if b.get("block_id", "").startswith("proposal-actions-")}
     siam_menu = [
-        e for e in rows[f"proposal-actions-{picks['Siam Garden']}"]["elements"] if e["action_id"] == ids.SET_WAY
+        e for e in rows[f"proposal-actions-{picks['Siam Garden']}"]["elements"] if e["action_id"] == ids.PICK_MENU
     ]
     assert len(siam_menu) == 1
     assert [o["value"] for o in siam_menu[0]["options"]] == [
+        ids.pick_value(ids.PickChoice.LOCK, event_id, 1, picks["Siam Garden"]),
         ids.way_value(Mode.PICKUP, event_id, 1, picks["Siam Garden"]),
         ids.way_value(Mode.DELIVERY, event_id, 1, picks["Siam Garden"]),
     ]
-    assert not [e for e in rows[f"proposal-actions-{picks['Taqueria']}"]["elements"] if e["action_id"] == ids.SET_WAY]
+    (taqueria_menu,) = [
+        e for e in rows[f"proposal-actions-{picks['Taqueria']}"]["elements"] if e["action_id"] == ids.PICK_MENU
+    ]
+    assert not any(ids.is_way_value(o["value"]) for o in taqueria_menu["options"])
     assert "pickup or delivery with ⋯" in json.dumps(payload, ensure_ascii=False)
 
 
@@ -827,7 +831,7 @@ def _menu_options(payload: dict[str, object], proposal_id: int) -> list[dict[str
     blocks = payload["blocks"]
     assert isinstance(blocks, list)
     (row,) = [b for b in blocks if b.get("block_id") == f"proposal-actions-{proposal_id}"]
-    (menu,) = [e for e in row["elements"] if e["action_id"] == ids.SET_WAY]
+    (menu,) = [e for e in row["elements"] if e["action_id"] == ids.PICK_MENU]
     options: list[dict[str, Any]] = menu["options"]
     return options
 
@@ -845,7 +849,12 @@ async def test_clearing_the_way_while_voting_opens_it_again(house: House) -> Non
     siam = (await pick_ids(house, event_id))["Siam Garden"]
     await act(house, coordinator.set_way, house["Sam"], event_id, siam, Mode.DELIVERY, run=1)
     chosen = render((await sent(house, "proposals_updated"))[-1], CTX).payload()
-    assert _menu(chosen, siam) == [labels.WAY_LABELS[Mode.PICKUP], labels.WAY_LABELS[Mode.DELIVERY], labels.EITHER_WAY]
+    assert _menu(chosen, siam) == [
+        labels.LOCK,
+        labels.WAY_LABELS[Mode.PICKUP],
+        labels.WAY_LABELS[Mode.DELIVERY],
+        labels.EITHER_WAY,
+    ]
     assert _menu_values(chosen, siam)[-1] == ids.way_value(None, event_id, 1, siam, clears=Mode.DELIVERY)
     await act(house, coordinator.set_way, house["Sam"], event_id, siam, None, run=1)
     ctx = await house.context(event_id)
@@ -856,7 +865,7 @@ async def test_clearing_the_way_while_voting_opens_it_again(house: House) -> Non
     assert cleared == {"proposal_id": siam, "mode": None, "switched_from": "delivery"}
     updated = render((await sent(house, "proposals_updated"))[-1], CTX).payload()
     assert "(chosen)" not in json.dumps(updated)
-    assert _menu(updated, siam) == [labels.WAY_LABELS[Mode.PICKUP], labels.WAY_LABELS[Mode.DELIVERY]]
+    assert _menu(updated, siam) == [labels.LOCK, labels.WAY_LABELS[Mode.PICKUP], labels.WAY_LABELS[Mode.DELIVERY]]
     assert "pickup or delivery with ⋯" in json.dumps(updated, ensure_ascii=False)
     await decide_on(house, event_id, "Siam Garden")
     assert (await house.event(event_id)).roles_due_at is not None  # the decision asks again

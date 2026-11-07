@@ -706,10 +706,14 @@ async def _votes_changed(db: AsyncSession, event: Event, now: datetime) -> None:
     await publish(db, ctx, cc.proposals_updated(ctx), now=now)
 
 
-async def lock(db: AsyncSession, actor: Member, event_id: int, proposal_id: int, *, now: datetime) -> None:
-    """FR-15: the coordinator, or an admin, decides the call now. Audited (SEC-9)."""
+async def lock(
+    db: AsyncSession, actor: Member, event_id: int, proposal_id: int, *, run: int | None = None, now: datetime
+) -> None:
+    """FR-15: the coordinator, or an admin, decides the call now. ``run``, when given, is the run
+    the actor saw (``check_run``). Audited (SEC-9)."""
     async with locked_event(db, actor.household_id, event_id, now) as event:
         await guest_rules.gate(db, event, actor, GuestAction.LOCK)
+        check_run(event, run)
         check_can_lock(event, actor)
         ctx = await load(db, event)
         proposal = _proposal_in(ctx, proposal_id)

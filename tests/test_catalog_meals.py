@@ -310,7 +310,7 @@ def _labels(view: dict[str, object]) -> list[str]:
     """The catalog's labels, after its first choice, which picks nothing (#207)."""
     (block,) = [b for b in view["blocks"] if b.get("block_id") == "item"]  # type: ignore[attr-defined]
     labels = [o["text"]["text"] for g in block["element"]["option_groups"] for o in g["options"]]
-    assert labels[0] == "Nothing from the catalog"
+    assert labels[0] == "[Nothing from the catalog]"
     return labels[1:]
 
 

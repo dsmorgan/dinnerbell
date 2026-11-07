@@ -40,6 +40,7 @@ from dinnerbell.channels.slack.views import (
     invite_modal,
     log_modal,
     offer_modal,
+    pick_modal,
     proposal_modal,
 )
 from dinnerbell.domain import labels
@@ -634,6 +635,9 @@ ORIGIN = ids.ViewOrigin(7, "C0DINNER")
 CALL_OFF_ORIGIN = replace(ORIGIN, run=1)
 """Call it off and Close now name the run they were opened for, as ``Interactions`` writes them."""
 
+PICK_ORIGIN = replace(CALL_OFF_ORIGIN, proposal=7)
+"""Lock this and Break the tie also name the pick they confirm (#214)."""
+
 EATERS = (MemberRef(1, "Alex"), MemberRef(2, "Sam"), MemberRef(3, "Kim"))
 CLOSES = date(2026, 10, 29)
 HOME_MEAL = MealFacts(51, DAY, Slot.DINNER, 11, "Sam's Tacos", ItemKind.HOME, Mode.COOK, MemberRef(2, "Sam"), EATERS, 7)
@@ -768,6 +772,8 @@ VIEWS: dict[str, Callable[[], dict[str, Any]]] = {
     "close_modal": lambda: close_modal(COLLECTING_VIEW, replace(CALL_OFF_ORIGIN, window=Window.RESPOND)),
     "close_modal_vote": lambda: close_modal(VOTING_VIEW, replace(CALL_OFF_ORIGIN, window=Window.VOTE)),
     "decision_time_modal": lambda: decision_time_modal(VOTING_VIEW, CALL_OFF_ORIGIN),
+    "lock_modal": lambda: pick_modal(VOTING_VIEW, ids.PickChoice.LOCK, "Siam Garden", PICK_ORIGIN),
+    "break_tie_modal": lambda: pick_modal(VOTING_VIEW, ids.PickChoice.BREAK_TIE, "Siam <Garden>", PICK_ORIGIN),
     "home": lambda: home_view(TodayView(DAY, [COLLECTING_VIEW], tuple(Slot)), HomeLinks(BASE_URL)),
     "home_decided": lambda: home_view(
         TodayView(DAY, [DECIDED_VIEW], tuple(Slot)), HomeLinks(BASE_URL), notice="Marked done. Thanks!"

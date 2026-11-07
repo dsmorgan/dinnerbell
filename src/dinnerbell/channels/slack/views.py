@@ -173,20 +173,22 @@ def _item_groups(
 
 NONE = "none"
 """The value of a select's first choice that picks nothing, since Slack can't clear a select
-once something is picked (#207). Row IDs are digits, so it never matches one."""
-NOTHING_FROM_CATALOG = "Nothing from the catalog"
-NO_SAVED_GUEST = "No saved guest"
+once something is picked (#207). Row IDs are digits, so it never matches one. Square brackets
+set these choices apart from real picks (#214), and they mean nothing to Slack's mrkdwn, unlike
+angle brackets."""
+NOTHING_FROM_CATALOG = "[Nothing from the catalog]"
+NO_SAVED_GUEST = "[No saved guest]"
 TAKE_BACK = "Take back a pick"
 """The heading of the group that holds ``NOTHING_FROM_CATALOG``."""
 BOTH_ITEMS = (
     "Pick something from the catalog, or type something new, but not both. "
-    f'To keep what you typed, pick "{NOTHING_FROM_CATALOG}".'
+    f"To keep what you typed, pick {NOTHING_FROM_CATALOG}."
 )
 NEITHER_ITEM = "Pick something from the catalog, or type something new."
 NO_CATALOG_ITEM = "Type something new."
 """``NEITHER_ITEM`` for a modal drawn without the catalog menu, as for an empty catalog."""
 BOTH_GUESTS = (
-    f'Pick a saved guest, or type a new guest\'s name, but not both. To invite someone new, pick "{NO_SAVED_GUEST}".'
+    f"Pick a saved guest, or type a new guest's name, but not both. To invite someone new, pick {NO_SAVED_GUEST}."
 )
 NEITHER_GUEST = "Pick a saved guest, or type a new guest's name."
 NO_GUEST_MENU = "Type the new guest's name."
@@ -194,8 +196,8 @@ NO_GUEST_MENU = "Type the new guest's name."
 
 
 def _with_none(groups: list[Block]) -> list[Block]:
-    """Catalog ``groups`` with a first group, "Take back a pick", whose one choice, "Nothing
-    from the catalog", picks nothing (#207). It's a group of its own, so each kind keeps its 100
+    """Catalog ``groups`` with a first group, "Take back a pick", whose one choice, "[Nothing
+    from the catalog]", picks nothing (#207). It's a group of its own, so each kind keeps its 100
     items."""
     return [{"label": plain(TAKE_BACK, 75), "options": [option(NOTHING_FROM_CATALOG, NONE)]}, *groups]
 
@@ -667,6 +669,25 @@ def close_modal(v: EventView, origin: ids.ViewOrigin) -> dict[str, Any]:
     return _modal(CLOSE_LABELS[window], ids.CLOSE_VIEW, origin, blocks, CLOSE_SUBMIT[window], close="Not yet")
 
 
+# Lock this and Break the tie (#214) ---------------------------------------------------------------
+
+PICK_MODALS = {
+    ids.PickChoice.LOCK: (labels.LOCK_TITLE, ids.LOCK_VIEW, labels.LOCK_SUBMIT),
+    ids.PickChoice.BREAK_TIE: (labels.BREAK_TIE_TITLE, ids.BREAK_TIE_VIEW, labels.BREAK_TIE_SUBMIT),
+}
+
+
+def pick_modal(v: EventView, choice: ids.PickChoice, item: str, origin: ids.ViewOrigin) -> dict[str, Any]:
+    """The confirmation for **Lock this** or **Break the tie** from the ⋯ beside a pick, which
+    can't confirm one option and not the others. ``item`` is the pick's name. ``origin.proposal``
+    is the pick, and ``origin.run`` the run of the call, which submitting checks again."""
+    if origin.proposal is None:
+        raise ValueError("a pick's confirmation needs the pick")
+    title, callback_id, submit = PICK_MODALS[choice]
+    blocks = [_intro(v), section(labels.decides_now(escape(item)))]
+    return _modal(title, callback_id, origin, blocks, submit, close="Not yet")
+
+
 # Move the decision time (#198) --------------------------------------------------------------------
 
 
@@ -704,7 +725,8 @@ PRIVATE = (
     '"Well liked" or "Recently late," never who said what. Your rating can also move your own score for it.'
 )
 THANKS = "thanks"
-NO_ANSWER = option("No answer", NONE)
+NO_ANSWER_LABEL = "[No answer]"
+NO_ANSWER = option(NO_ANSWER_LABEL, NONE)
 """Slack can't unselect a radio button, so this is how a rating is cleared, as on the web."""
 
 
@@ -777,7 +799,7 @@ def _picked_values(values: Any, block_id: str) -> list[str]:
     return [str(o.get("value")) for o in selected]
 
 
-PICK_A_RATING = "Pick a rating, or No answer."
+PICK_A_RATING = f"Pick a rating, or {NO_ANSWER_LABEL}."
 
 
 def parse_feedback(values: Any) -> FeedbackInput:

@@ -217,7 +217,7 @@ async def test_details_can_take_back_a_saved_suggestion_and_eat_window(slack: Sl
     blocks = {b.get("block_id"): b for b in slack.fake.of("views.open")[-1].args["view"]["blocks"]}
     select = blocks["suggest_item"]["element"]
     first = select["option_groups"][0]["options"]
-    assert [(o["text"]["text"], o["value"]) for o in first] == [("Nothing from the catalog", "none")]
+    assert [(o["text"]["text"], o["value"]) for o in first] == [("[Nothing from the catalog]", "none")]
     assert select["initial_option"]["value"] == str(tacos)
     clear = blocks["eat_clear"]["element"]
     assert [o["value"] for o in clear["options"]] == ["eat_from", "eat_until"] and "initial_options" not in clear
@@ -385,12 +385,12 @@ async def test_add_proposal_modal_and_submission(slack: Slack, house: House) -> 
     )
     assert body(await slack.submit("Sam", ids.PROPOSAL_VIEW, both, event_id))["errors"] == {
         "free_text": "Pick something from the catalog, or type something new, but not both. "
-        'To keep what you typed, pick "Nothing from the catalog".'
+        "To keep what you typed, pick [Nothing from the catalog]."
     }
     groups = opened.args["view"]["blocks"]
     (item,) = [b for b in groups if b.get("block_id") == "item"]
     first = item["element"]["option_groups"][0]["options"]
-    assert [(o["text"]["text"], o["value"]) for o in first] == [("Nothing from the catalog", "none")]
+    assert [(o["text"]["text"], o["value"]) for o in first] == [("[Nothing from the catalog]", "none")]
     assert item["element"]["option_groups"][0]["label"]["text"] == "Take back a pick"
     nothing = state(mode={"selected_option": {"value": "cook"}}, item={"selected_option": {"value": "none"}})
     assert body(await slack.submit("Sam", ids.PROPOSAL_VIEW, nothing, event_id))["errors"] == {
