@@ -136,7 +136,7 @@ cd "$(mktemp -d)" && npm pack @fontsource-variable/figtree@X.Y.Z && tar xzf font
 shasum -a 256 package/files/figtree-latin-wght-normal.woff2 package/files/figtree-latin-ext-wght-normal.woff2 package/LICENSE
 ```
 
-Copy each file to `src/dinnerbell/web/static/fonts/figtree-X.Y.Z-<subset>-wght-normal.woff2`, copy `package/LICENSE` over `Figtree-OFL-1.1.txt`, and delete the old font files. Then change the file names and the `unicode-range` lines in the `@font-face` rules at the top of `app.css` (the package's `wght.css` has them), the version and hashes in `tests/test_vendored_assets.py`, and the line in CLAUDE.md. Never edit the files by hand.
+Copy each file to `src/dinnerbell/web/static/fonts/figtree-X.Y.Z-<subset>-wght-normal.woff2`, copy `package/LICENSE` over `Figtree-OFL-1.1.txt`, and delete the old font files. Then change the file names and the `unicode-range` lines in the `@font-face` rules at the top of `app.css` (the package's `wght.css` has them), the version in the comment above those rules, the version and hashes in `tests/test_vendored_assets.py`, and the line in CLAUDE.md. Never edit the files by hand.
 
 ## Report a security problem
 
