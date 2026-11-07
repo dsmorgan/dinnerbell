@@ -1,43 +1,105 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
-/* Dinnerbell: mobile-first, light and dark, no build step. */
+/* Dinnerbell: mobile-first, light and dark, no build step. The Hearth theme (#230). */
 
+/* Figtree, vendored from npm @fontsource-variable/figtree@5.3.0 under the SIL Open Font License
+   1.1 (fonts/Figtree-OFL-1.1.txt). One variable file per subset covers every weight. Until it
+   loads, and for any character outside both subsets, the device font shows. */
+@font-face {
+  font-family: "Figtree";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 300 900;
+  src: url("fonts/figtree-5.3.0-latin-ext-wght-normal.woff2") format("woff2");
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: "Figtree";
+  font-style: normal;
+  font-display: swap;
+  font-weight: 300 900;
+  src: url("fonts/figtree-5.3.0-latin-wght-normal.woff2") format("woff2");
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+/* Colors. Every text color meets 4.5:1 on each background it sits on, in both themes. Text on
+   --accent-soft is --accent-soft-text; text on --accent is --accent-text. --hair is a divider
+   inside a card, lighter than --line. The page follows the device unless <html> carries
+   data-theme="light" or data-theme="dark" (#231), so the dark colors appear twice: for a dark
+   device without a light override, and for a dark override. */
 :root {
-  --bg: #fbf7f2;
+  --bg: #faf6f0;
   --surface: #ffffff;
-  --text: #2a2420;
-  --muted: #6f655d;
-  --line: #e7ded4;
-  --accent: #c2410c;
+  --text: #2b2320;
+  --muted: #6b5f56;
+  --line: #e6dccf;
+  --hair: #eee6db;
+  --accent: #b83f12;
   --accent-text: #ffffff;
-  --accent-soft: #fdebdf;
+  --accent-soft: #fbe7da;
+  --accent-soft-text: #8a2e0b;
+  --link: #a8390f;
   --ok: #166534;
   --ok-soft: #dcf3e3;
   --danger: #b91c1c;
   --danger-soft: #fde4e4;
   --press-filled: rgb(0 0 0 / 0.14);
-  --radius: 14px;
   --shadow: 0 1px 2px rgb(0 0 0 / 0.05), 0 4px 16px rgb(0 0 0 / 0.04);
-  --gutter: max(16px, env(safe-area-inset-left));
-  color-scheme: light dark;
+  color-scheme: light;
 }
 
 @media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #1b1714;
-    --surface: #26201c;
-    --text: #f3ece6;
-    --muted: #b3a79d;
-    --line: #3a322c;
-    --accent: #fb923c;
-    --accent-text: #1b1714;
-    --accent-soft: #43281a;
+  :root:not([data-theme="light"]) {
+    --bg: #1c1714;
+    --surface: #27201b;
+    --text: #f4ece4;
+    --muted: #b7aa9e;
+    --line: #3d342d;
+    --hair: #342c26;
+    --accent: #f08a4b;
+    --accent-text: #1c1714;
+    --accent-soft: #44291b;
+    --accent-soft-text: #ffc8a3;
+    --link: #f59e66;
     --ok: #86efac;
     --ok-soft: #173322;
     --danger: #fca5a5;
     --danger-soft: #3f1d1d;
     --press-filled: rgb(255 255 255 / 0.18);
     --shadow: none;
+    color-scheme: dark;
   }
+}
+
+:root[data-theme="dark"] {
+  --bg: #1c1714;
+  --surface: #27201b;
+  --text: #f4ece4;
+  --muted: #b7aa9e;
+  --line: #3d342d;
+  --hair: #342c26;
+  --accent: #f08a4b;
+  --accent-text: #1c1714;
+  --accent-soft: #44291b;
+  --accent-soft-text: #ffc8a3;
+  --link: #f59e66;
+  --ok: #86efac;
+  --ok-soft: #173322;
+  --danger: #fca5a5;
+  --danger-soft: #3f1d1d;
+  --press-filled: rgb(255 255 255 / 0.18);
+  --shadow: none;
+  color-scheme: dark;
+}
+
+/* Shape and type. Four radii: a card, a control (button, joined answer, proposal), an input
+   (field, level, menu link, alert), and a pill (chip, badge). */
+:root {
+  --radius-card: 14px;
+  --radius-control: 12px;
+  --radius-input: 10px;
+  --radius-pill: 999px;
+  --font: "Figtree", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --gutter: max(16px, env(safe-area-inset-left));
 }
 
 *, *::before, *::after { box-sizing: border-box; }
@@ -48,12 +110,13 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font: 17px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font: 17px/1.5 var(--font);
   padding-bottom: env(safe-area-inset-bottom);
 }
 
-a { color: var(--accent); }
+a { color: var(--link); }
 
+h1, h2, h3 { font-weight: 700; letter-spacing: -0.01em; }
 h1 { font-size: 1.6rem; line-height: 1.2; margin: 0.5rem 0 1rem; }
 h2 { font-size: 1.15rem; margin: 0 0 0.5rem; }
 p { margin: 0 0 0.75rem; }
@@ -69,7 +132,7 @@ p { margin: 0 0 0.75rem; }
   gap: 0.5rem 1rem;
   padding: calc(env(safe-area-inset-top) + 10px) var(--gutter) 10px;
   background: var(--bg);
-  border-bottom: 1px solid var(--line);
+  border-bottom: 1px solid var(--hair);
 }
 
 .brand {
@@ -91,14 +154,16 @@ p { margin: 0 0 0.75rem; }
   align-items: center;
   min-height: 44px;
   padding: 0 0.6rem;
-  border-radius: 10px;
+  border-radius: var(--radius-input);
   color: var(--muted);
   font: inherit;
   font-size: 0.95rem;
   text-decoration: none;
 }
 
-.nav a[aria-current="page"] { color: var(--text); background: var(--accent-soft); }
+/* The page you are on is where you are, not a choice you made, so it takes the soft tint, never
+   the selected fill. Tabs match. */
+.nav a[aria-current="page"] { color: var(--accent-soft-text); background: var(--accent-soft); font-weight: 600; }
 
 .page {
   max-width: 40rem;
@@ -116,7 +181,7 @@ p { margin: 0 0 0.75rem; }
 .card {
   background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: var(--radius);
+  border-radius: var(--radius-card);
   box-shadow: var(--shadow);
   padding: 1.1rem;
   margin-bottom: 1rem;
@@ -138,7 +203,7 @@ p { margin: 0 0 0.75rem; }
   min-height: 44px;
   padding: 0 1rem;
   border: 1px solid var(--line);
-  border-radius: 12px;
+  border-radius: var(--radius-control);
   background: var(--surface);
   color: var(--text);
   font: inherit;
@@ -167,7 +232,7 @@ input:not([type="checkbox"]), select {
   min-height: 44px;
   padding: 0.5rem 0.75rem;
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: var(--radius-input);
   background: var(--bg);
   color: var(--text);
   font: inherit;
@@ -182,10 +247,10 @@ input:disabled { opacity: 0.7; }
 .check { display: flex; align-items: flex-start; gap: 0.6rem; min-height: 44px; padding: calc((44px - 1lh) / 2) 0; }
 .check input { flex: none; width: 22px; height: 22px; margin: calc((1lh - 22px) / 2) 0 0; font: inherit; accent-color: var(--accent); }
 
-.alert { padding: 0.7rem 0.9rem; border-radius: 10px; margin-bottom: 1rem; }
+.alert { padding: 0.7rem 0.9rem; border-radius: var(--radius-input); margin-bottom: 1rem; }
 .alert.ok { background: var(--ok-soft); color: var(--ok); }
 .alert.error { background: var(--danger-soft); color: var(--danger); }
-.alert.editing { background: var(--accent-soft); color: var(--text); border-left: 4px solid var(--accent); }
+.alert.editing { background: var(--accent-soft); color: var(--accent-soft-text); border-left: 4px solid var(--accent); }
 #stuck-calls h2 { font-size: 1rem; }
 #stuck-calls ul { margin: 0.25rem 0 0; padding-left: 1.2rem; }
 #stuck-calls a { color: inherit; font-weight: 600; }
@@ -200,7 +265,7 @@ input:disabled { opacity: 0.7; }
   gap: 0.75rem;
   background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: var(--radius);
+  border-radius: var(--radius-card);
   padding: 0.9rem 1rem;
   margin-bottom: 0.6rem;
 }
@@ -215,14 +280,14 @@ input:disabled { opacity: 0.7; }
 .badge, .chip {
   display: inline-block;
   padding: 0.05rem 0.5rem;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   font-size: 0.75rem;
   font-weight: 600;
-  border: 1px solid var(--line);
+  border: 1px solid var(--hair);
   color: var(--muted);
 }
 
-.badge.accent { background: var(--accent-soft); border-color: transparent; color: var(--accent); }
+.badge.accent { background: var(--accent-soft); border-color: transparent; color: var(--accent-soft-text); }
 .badge.status-active { background: var(--ok-soft); border-color: transparent; color: var(--ok); }
 .chips { display: flex; flex-wrap: wrap; gap: 0.3rem; margin-top: 0.35rem; }
 .chips:empty { display: none; }
@@ -255,7 +320,7 @@ details[open] > summary { margin-bottom: 0.5rem; }
 .chip-toggle:active span {
   box-shadow: inset 0 0 0 100vmax color-mix(in srgb, currentColor 10%, transparent);
 }
-:is(.button.primary, .button.choice[aria-pressed="true"], .answer-option[aria-current="true"]):not(:disabled):active,
+:is(.button.primary:not(.choice), .button.choice[aria-pressed="true"], .answer-option[aria-current="true"]):not(:disabled):active,
 .segment:not(.level-zero, .level-neg, .level-pos):active input:checked + span,
 .chip-toggle:active input:checked + span {
   box-shadow: inset 0 0 0 100vmax var(--press-filled);
@@ -342,7 +407,7 @@ textarea {
   width: 100%;
   padding: 0.5rem 0.75rem;
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: var(--radius-input);
   background: var(--bg);
   color: var(--text);
   font: inherit;
@@ -356,7 +421,7 @@ textarea {
   line-height: 1.45;
 }
 textarea.code { font-size: 16px; white-space: pre; overflow-x: auto; }
-pre.code { background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 0.75rem; overflow-x: auto; }
+pre.code { background: var(--bg); border: 1px solid var(--hair); border-radius: var(--radius-input); padding: 0.75rem; overflow-x: auto; }
 code { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 0.85em; overflow-wrap: anywhere; }
 
 h3 { font-size: 1rem; margin: 1rem 0 0.4rem; }
@@ -375,7 +440,7 @@ h3 { font-size: 1rem; margin: 1rem 0 0.4rem; }
 .item, .meal {
   background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: var(--radius);
+  border-radius: var(--radius-card);
   padding: 0.9rem 1rem;
   margin-bottom: 0.6rem;
 }
@@ -393,7 +458,7 @@ a.chip::after { content: ""; position: absolute; inset: -6px 0; }
 .chips:has(> a.chip) > .chip { display: inline-flex; align-items: center; min-height: 32px; padding: 0 0.65rem; }
 .chip.mode, .chip.meal-chip { background: var(--bg); }
 .chip.meal-chip { font-style: italic; }  /* not .meal: that is the meal-log card */
-.chip.tag-cuisine { background: var(--accent-soft); border-color: transparent; color: var(--accent); }
+.chip.tag-cuisine { background: var(--accent-soft); border-color: transparent; color: var(--accent-soft-text); }
 ul.chips { list-style: none; padding: 0; margin: 0.35rem 0 0.75rem; }
 
 /* Tag pickers: checkboxes styled as toggle chips, at least 40px tall for thumbs. */
@@ -407,7 +472,7 @@ ul.chips { list-style: none; padding: 0; margin: 0.35rem 0 0.75rem; }
   min-height: 40px;
   padding: 0 0.85rem;
   border: 1px solid var(--line);
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   background: var(--bg);
   cursor: pointer;
   font-size: 0.95rem;
@@ -420,7 +485,7 @@ ul.chips { list-style: none; padding: 0; margin: 0.35rem 0 0.75rem; }
 .new-tags { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 0.5rem; align-items: end; }
 
 /* Tags page */
-.tag-list li { padding: 0.25rem 0; border-bottom: 1px solid var(--line); }
+.tag-list li { padding: 0.25rem 0; border-bottom: 1px solid var(--hair); }
 .tag-list li:last-child { border-bottom: 0; }
 .tag-line { display: flex; justify-content: space-between; gap: 0.5rem; align-items: center; }
 .tag-line > a { display: inline-flex; align-items: center; min-height: 44px; overflow-wrap: anywhere; }
@@ -430,7 +495,7 @@ ul.chips { list-style: none; padding: 0; margin: 0.35rem 0 0.75rem; }
 /* Import preview */
 .problems li, .summary li { padding: 0.3rem 0; overflow-wrap: anywhere; }
 .summary li::before { content: "• "; color: var(--muted); }
-.plan-list li { padding: 0.45rem 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.plan-list li { padding: 0.45rem 0; border-bottom: 1px solid var(--hair); overflow-wrap: anywhere; }
 .plan-list li:last-child { border-bottom: 0; }
 .changes { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 0.2rem 0.6rem; margin: 0.4rem 0 0; }
 .changes dt { color: var(--muted); }
@@ -439,7 +504,7 @@ del { color: var(--danger); }
 ins { color: var(--ok); text-decoration: none; }
 
 /* Preferences: a six-way segmented control per row, sized for thumbs on a phone. */
-.pref { padding: 0.55rem 0; border-bottom: 1px solid var(--line); }
+.pref { padding: 0.55rem 0; border-bottom: 1px solid var(--hair); }
 .pref:last-child { border-bottom: 0; }
 .pref form { margin: 0; }
 .levels { border: 0; margin: 0; padding: 0; min-width: 0; }
@@ -470,10 +535,14 @@ ins { color: var(--ok); text-decoration: none; }
   cursor: pointer;
   font-variant-numeric: tabular-nums;
 }
-.segment:first-child span { border-radius: 10px 0 0 10px; margin-left: 0; }
-.segment:last-child span { border-radius: 0 10px 10px 0; }
+.segment:first-child span { border-radius: var(--radius-input) 0 0 var(--radius-input); margin-left: 0; }
+.segment:last-child span { border-radius: 0 var(--radius-input) var(--radius-input) 0; }
 .segment input:focus-visible + span { outline: 3px solid var(--accent); outline-offset: -3px; }
-.segment input:checked + span { background: var(--text); border-color: var(--text); color: var(--bg); }
+/* Each level overlaps the one before it by a pixel, so a chosen level comes to the front and shows
+   all four edges (#230). A chosen meal is the accent fill, like every other choice; on a filled
+   level, the ring takes the text color, which contrasts with the fill. */
+.segment input:checked + span { position: relative; z-index: 1; background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+.segment:not(.level-zero, .level-neg, .level-pos) input:checked:focus-visible + span { outline-color: var(--accent-text); }
 /* Neutral is the default, so its selected state stays quiet. */
 .level-zero input:checked + span { background: var(--line); border-color: var(--muted); color: var(--text); }
 .level-veto input:checked + span { background: var(--danger); border-color: var(--danger); color: var(--surface); }
@@ -524,44 +593,47 @@ ins { color: var(--ok); text-decoration: none; }
 .save-banner { position: sticky; top: 0; z-index: 2; margin: 0; border-radius: 0; text-align: center; }
 .save-banner[hidden] { display: none; }
 .chip.veto { background: var(--danger-soft); border-color: transparent; color: var(--danger); }
-.pref:target { background: var(--accent-soft); border-radius: 10px; }
+.pref:target { background: var(--accent-soft); border-radius: var(--radius-input); }
 
 /* ---- M2: calls, proposals, decisions, schedule --------------------------------------------- */
 
 .event-head { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 0.3rem 0.6rem; }
 .event-head h2 a { display: inline-flex; align-items: center; min-height: 44px; margin: -9px 0; color: var(--text); text-decoration: none; }
 .event-when { margin: 0.3rem 0 0.75rem; }
-.badge.state-collecting, .badge.state-voting { background: var(--accent-soft); border-color: transparent; color: var(--accent); }
+.badge.state-collecting, .badge.state-voting { background: var(--accent-soft); border-color: transparent; color: var(--accent-soft-text); }
 .badge.state-decided, .badge.state-done { background: var(--ok-soft); border-color: transparent; color: var(--ok); }
 .event .button-row { margin-bottom: 0.6rem; gap: 0.4rem; }
-.button.choice[aria-pressed="true"] { background: var(--text); border-color: var(--text); color: var(--bg); }
+/* One look for every choice (#230): chosen is the accent fill, with a check on In, Maybe, or Out.
+   Vote is "primary choice": unchosen, an accent outline, so it still stands out; chosen, the fill. */
+.button.choice[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+.button.primary.choice:not([aria-pressed="true"]) { background: var(--surface); border-color: var(--accent); color: var(--accent); }
 /* Quiet (#212): the coordinator's and admins' overrides, and Shuffle, so everyone's Vote stands out.
    Smaller and muted, with no border until hovered or focused, and still a 40 px tap target. A
-   chosen way has the accent's soft tint behind the text color, not a fill. */
+   chosen way is the accent fill, like any choice. */
 .button.quiet { min-height: 40px; padding: 0 0.65rem; border-color: transparent; background: transparent; color: var(--muted); font-size: 0.85rem; font-weight: 500; }
 .button.quiet:hover, .button.quiet:focus-visible { border-color: var(--line); color: var(--text); }
-.button.quiet.choice[aria-pressed="true"] { background: var(--accent-soft); border-color: transparent; color: var(--text); font-weight: 600; }
+.button.quiet.choice[aria-pressed="true"] { background: var(--accent); border-color: transparent; color: var(--accent-text); font-weight: 600; }
 /* A proposal's second tier, below a thin divider: a muted label, then Pickup | Delivery joined as
    one control, Break the tie, and Lock this. */
-.coordinator-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.25rem 0.4rem; margin-top: 0.5rem; padding-top: 0.4rem; border-top: 1px solid var(--line); }
+.coordinator-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.25rem 0.4rem; margin-top: 0.5rem; padding-top: 0.4rem; border-top: 1px solid var(--hair); }
 .coordinator-label { margin-right: 0.2rem; color: var(--muted); font-size: 0.8rem; }
-.way-pair { display: inline-flex; border: 1px solid var(--line); border-radius: 10px; }
+/* The pair clips its ways to its corners, so a chosen way's fill meets the pair's edge. */
+.way-pair { display: inline-flex; border: 1px solid var(--line); border-radius: var(--radius-input); overflow: hidden; }
 .way-pair > form { display: flex; }
 .way-pair > form + form { border-left: 1px solid var(--line); }
 .way-pair .button.quiet { border: 0; border-radius: 0; }
-.way-pair > form:first-child .button.quiet { border-radius: 9px 0 0 9px; }
-.way-pair > form:last-child .button.quiet { border-radius: 0 9px 9px 0; }
 .way-pair .button.quiet:not([aria-pressed="true"]):hover { background: color-mix(in srgb, currentColor 8%, transparent); }
 /* Inside the joined control, so the neighbor can't cover the ring. */
 .way-pair .button.quiet:focus-visible { position: relative; z-index: 1; outline-offset: -3px; }
+.way-pair .button.quiet[aria-pressed="true"]:focus-visible { outline-color: var(--accent-text); }
 /* In, Maybe, Out (#149): one choice, so one joined control on a row of its own, the choice filled
    and checked. The role offers below it are separate toggles. */
 .row-label { margin: 0.5rem 0 0.3rem; }
 .segmented { display: flex; width: 100%; max-width: 26rem; margin: 0 0 0.6rem; }
 .segmented > form { display: flex; flex: 1 1 0; min-width: 0; }
 .segmented .answer-option { flex: 1 1 auto; min-width: 0; min-height: 44px; padding: 0 0.5rem; border-radius: 0; margin-left: -1px; }
-.segmented > form:first-child .answer-option { border-radius: 12px 0 0 12px; margin-left: 0; }
-.segmented > form:last-child .answer-option { border-radius: 0 12px 12px 0; }
+.segmented > form:first-child .answer-option { border-radius: var(--radius-control) 0 0 var(--radius-control); margin-left: 0; }
+.segmented > form:last-child .answer-option { border-radius: 0 var(--radius-control) var(--radius-control) 0; }
 .segmented .answer-option[aria-current="true"] { position: relative; z-index: 1; background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
 .segmented .answer-option[aria-current="true"]::before { content: "\2713\00a0"; }
 /* Inside the joined control, so a neighbor can't cover the ring; on the filled choice, the ring
@@ -570,16 +642,16 @@ ins { color: var(--ok); text-decoration: none; }
 .segmented .answer-option[aria-current="true"]:focus-visible { outline-color: var(--accent-text); }
 .chip.offer { border-style: dashed; }
 .roster, .proposals { list-style: none; padding: 0; margin: 0 0 0.75rem; }
-.roster li { padding: 0.45rem 0; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.roster li { padding: 0.45rem 0; border-bottom: 1px solid var(--hair); overflow-wrap: anywhere; }
 .roster li:last-child { border-bottom: 0; }
 .roster .chip { margin-left: 0.2rem; }
 .roster .status-out { opacity: 0.65; }
 .roster .note { white-space: pre-line; }
 .roster .time { white-space: nowrap; }
-.proposal { border: 1px solid var(--line); border-radius: 12px; padding: 0.7rem 0.8rem; margin-bottom: 0.5rem; }
+.proposal { border: 1px solid var(--line); border-radius: var(--radius-control); padding: 0.7rem 0.8rem; margin-bottom: 0.5rem; }
 .proposal p { margin: 0.3rem 0; }
 .proposal .button-row { margin: 0.4rem 0 0; }
-.decision { border-top: 1px solid var(--line); padding-top: 0.6rem; margin-top: 0.4rem; }
+.decision { border-top: 1px solid var(--hair); padding-top: 0.6rem; margin-top: 0.4rem; }
 .decision h3 { margin-top: 0; }
 .assignments { list-style: none; padding: 0; margin: 0.3rem 0 0.7rem; }
 .chip.role { background: var(--ok-soft); border-color: transparent; color: var(--ok); }
@@ -595,7 +667,7 @@ ins { color: var(--ok); text-decoration: none; }
 .pair { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.5rem; }
 .pair .field { margin-top: 0; }
 .admin-controls { border-top: 1px dashed var(--line); padding-top: 0.3rem; }
-.end-controls { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 0 0.6rem; border-top: 1px solid var(--line); padding-top: 0.4rem; }
+.end-controls { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 0 0.6rem; border-top: 1px solid var(--hair); padding-top: 0.4rem; }
 .end-controls > form { margin-top: 0.4rem; }
 .end-controls .calloff { flex: 1 1 12rem; }
 .calloff > summary, .calloff > summary::after { color: var(--danger); }
@@ -620,8 +692,8 @@ fieldset.card > .button.block { margin-bottom: 0; }
 .trio { display: grid; gap: 0.9rem 0.5rem; align-items: end; }
 @media (min-width: 36rem) { .trio { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.35fr); } }
 .tabs { display: flex; gap: 0.25rem; margin: 0.25rem 0 0.5rem; }
-.tabs a { display: inline-flex; align-items: center; min-height: 44px; padding: 0 0.8rem; border-radius: 10px; color: var(--muted); text-decoration: none; }
-.tabs a[aria-current="page"] { color: var(--text); background: var(--accent-soft); }
+.tabs a { display: inline-flex; align-items: center; min-height: 44px; padding: 0 0.8rem; border-radius: var(--radius-input); color: var(--muted); text-decoration: none; }
+.tabs a[aria-current="page"] { color: var(--accent-soft-text); background: var(--accent-soft); font-weight: 600; }
 
 /* ---- Test instance (DINNERBELL_INSTANCE_LABEL) --------------------------------------------- */
 
@@ -660,7 +732,7 @@ fieldset.card > .button.block { margin-bottom: 0; }
 .badge-info progress { width: 100%; height: 8px; accent-color: #1e8c8a; }
 .badge-info p { margin: 0.25rem 0 0; }
 .counts { margin: 0; display: grid; gap: 0.25rem; }
-.counts > div { display: flex; justify-content: space-between; gap: 1rem; border-bottom: 1px solid var(--line); padding: 0.25rem 0; }
+.counts > div { display: flex; justify-content: space-between; gap: 1rem; border-bottom: 1px solid var(--hair); padding: 0.25rem 0; }
 .counts dd { margin: 0; font-weight: 600; font-variant-numeric: tabular-nums; }
 
 /* Gold and Diamond sparkle: twinkling stars and a sheen that sweeps every few seconds. Without

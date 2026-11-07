@@ -127,6 +127,17 @@ shasum -a 256 package/dist/htmx.min.js
 
 Copy `package/dist/htmx.min.js` to `src/dinnerbell/web/static/htmx-X.Y.Z.min.js` and delete the old file. Then change the version in `HTMX_FILE` (`src/dinnerbell/web/render.py`), the version and hash in `tests/test_vendored_assets.py`, the paths in `tests/test_csrf_and_headers.py`, and the line in CLAUDE.md. Never edit the file by hand.
 
+## Update the vendored Figtree
+
+Figtree, the web pages' font, is vendored under `src/dinnerbell/web/static/fonts/` from the npm package `@fontsource-variable/figtree`: one variable `.woff2` for the latin subset, one for latin-ext, and the package's `LICENSE` (SIL Open Font License 1.1) as `Figtree-OFL-1.1.txt`. `tests/test_vendored_assets.py` checks their SHA-256 against the npm release. To update them:
+
+```sh
+cd "$(mktemp -d)" && npm pack @fontsource-variable/figtree@X.Y.Z && tar xzf fontsource-variable-figtree-X.Y.Z.tgz
+shasum -a 256 package/files/figtree-latin-wght-normal.woff2 package/files/figtree-latin-ext-wght-normal.woff2 package/LICENSE
+```
+
+Copy each file to `src/dinnerbell/web/static/fonts/figtree-X.Y.Z-<subset>-wght-normal.woff2`, copy `package/LICENSE` over `Figtree-OFL-1.1.txt`, and delete the old font files. Then change the file names and the `unicode-range` lines in the `@font-face` rules at the top of `app.css` (the package's `wght.css` has them), the version and hashes in `tests/test_vendored_assets.py`, and the line in CLAUDE.md. Never edit the files by hand.
+
 ## Report a security problem
 
 Don't open a public issue. Follow [SECURITY.md](SECURITY.md).

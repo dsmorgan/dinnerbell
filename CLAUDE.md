@@ -38,10 +38,10 @@ docker build -f Containerfile -t dinnerbell .
 ## Conventions
 
 - Every source file starts with `# SPDX-License-Identifier: AGPL-3.0-or-later` (`{#- ... -#}` in templates, `/* ... */` in CSS). A test checks this.
-- Dependencies must be AGPL-compatible (MIT, BSD, Apache-2.0, LGPL, MPL-2.0, 0BSD). Prefer the standard library.
+- Dependencies must be AGPL-compatible (MIT, BSD, Apache-2.0, LGPL, MPL-2.0, 0BSD). Prefer the standard library. OFL-1.1 is allowed for fonts only, with the license text beside the font files.
 - Times are UTC-aware `datetime`s everywhere; `UTCDateTime` handles SQLite. Get "now" from the injected clock.
 - Log member IDs, never emails, tokens, or secrets (SEC-5). Secrets are `SecretStr`.
-- Pages: no inline `<script>`, `style=`, or `on*=` attributes; the CSP forbids them. HTMX is vendored at `web/static/htmx-2.0.11.min.js` (npm `htmx.org@2.0.11`, sha256 `d6fdc75f204e6bdefa99b69bf1e6d4ac69b8a364f77929f45c13476b4000f717`).
+- Pages: no inline `<script>`, `style=`, or `on*=` attributes; the CSP forbids them. HTMX is vendored at `web/static/htmx-2.0.11.min.js` (npm `htmx.org@2.0.11`, sha256 `d6fdc75f204e6bdefa99b69bf1e6d4ac69b8a364f77929f45c13476b4000f717`). Figtree is vendored at `web/static/fonts/figtree-5.3.0-latin-wght-normal.woff2` (sha256 `4ba7d3d096695818fe0686be4f1e82c6b05134e18a22260336130335027462dd`) and `web/static/fonts/figtree-5.3.0-latin-ext-wght-normal.woff2` (sha256 `bf7828e2c258cffcfa50a048ee388a36b95bc16b452e8d36fa797635dbe15965`), from npm `@fontsource-variable/figtree@5.3.0`, with its license at `web/static/fonts/Figtree-OFL-1.1.txt`. The CSP keeps fonts to `'self'`.
 - Every state-changing route depends on `require_csrf`, `require_admin_csrf` (admin routes), or `csrf_if_signed_in` (sign-out). Every `/admin` route checks for an admin in the web layer too, not only in the service. Add routes with routers, never `add_route` or `mount`; `tests/test_architecture.py` fails on anything it can't audit.
 - Every admin action writes an audit row (SEC-9).
 

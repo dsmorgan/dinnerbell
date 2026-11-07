@@ -1028,12 +1028,14 @@ def test_the_quiet_style_keeps_its_tap_height_and_shows_a_border_on_hover_or_foc
     quiet = quiet[: quiet.index("}")]
     assert "min-height: 40px" in quiet and "border-color: transparent" in quiet and "color: var(--muted)" in quiet
     assert ".button.quiet:hover, .button.quiet:focus-visible { border-color: var(--line); color: var(--text); }" in css
-    # A chosen way's text is the text color on the soft tint, for contrast in both themes.
-    chosen = '.button.quiet.choice[aria-pressed="true"] { background: var(--accent-soft); border-color: transparent; '
-    assert chosen + "color: var(--text);" in css
-    # Voted is "primary choice": the pressed rule outranks .button.primary, so it stays filled with the text color.
-    voted = '.button.choice[aria-pressed="true"] { background: var(--text); border-color: var(--text); '
-    assert voted + "color: var(--bg); }" in css
+    # A chosen way is the accent fill with its own text color, like every choice (#230).
+    chosen = '.button.quiet.choice[aria-pressed="true"] { background: var(--accent); border-color: transparent; '
+    assert chosen + "color: var(--accent-text);" in css
+    # Voted is "primary choice": chosen, the accent fill; unchosen, an accent outline, so the two differ.
+    voted = '.button.choice[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); '
+    assert voted + "color: var(--accent-text); }" in css
+    vote = '.button.primary.choice:not([aria-pressed="true"]) { '
+    assert vote + "background: var(--surface); border-color: var(--accent); color: var(--accent); }" in css
 
 
 def test_web_break_the_tie_comes_before_lock_in_the_quiet_row(
