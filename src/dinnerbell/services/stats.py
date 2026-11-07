@@ -89,12 +89,14 @@ async def my_stats(db: AsyncSession, actor: Member) -> MemberStats:
 
 async def guest_stats(db: AsyncSession, actor: Member) -> MemberStats:
     """A guest's own standing. A guest earns only the pitching-in badges (Chef, Road Runner,
-    Order Up, Quarterback) and On a Roll, so those are the badges and counts they see."""
+    Order Up) and On a Roll, so those are the badges and counts they see, with Quarterback only
+    for a guest who coordinated before guests stopped (#227)."""
     if not (actor.active and actor.is_guest):
         raise Forbidden(GUESTS_ONLY)
     found = await _standing(db, actor)
-    shown = tuple(p for p in found.progress if p.badge.kind is None or p.badge.kind in PITCHING_IN)
-    counts = {kind: n for kind, n in found.counts.items() if kind in PITCHING_IN}
+    kinds = PITCHING_IN if found.counts.get(Kind.COORDINATED) else PITCHING_IN - {Kind.COORDINATED}
+    shown = tuple(p for p in found.progress if p.badge.kind is None or p.badge.kind in kinds)
+    counts = {kind: n for kind, n in found.counts.items() if kind in kinds}
     return replace(found, counts=counts, progress=shown)
 
 

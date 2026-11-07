@@ -502,9 +502,6 @@ NOTIFICATIONS: dict[str, Callable[[], note.Notification]] = {
     "coordinating_given_late": lambda: note.CoordinatingGiven(
         replace(VOTING, coordinator=KIM), KIM, ALEX, ROLES_DUE, late=True
     ),
-    "coordinating_given_for_guest": lambda: note.CoordinatingGiven(
-        event(coordinator=PAT), PAT, ALEX, ROLES_DUE, via=KIM
-    ),
     "coordinator_picked": lambda: note.CoordinatorPicked(replace(VOTING, coordinator=KIM), KIM),
     "assignment_ended": lambda: note.AssignmentEnded(DECIDED, SAM, (AssignmentRole.COOK,), ALEX, ROLES_DUE),
     "assignment_ended_for_guest": lambda: note.AssignmentEnded(
@@ -512,7 +509,6 @@ NOTIFICATIONS: dict[str, Callable[[], note.Notification]] = {
     ),
     "roles_to_choose": lambda: note.RolesToChoose(DECIDED, ALEX, PENDING_DECISION, ROLES_DUE),
     "roles_to_choose_way_open": lambda: note.RolesToChoose(DECIDED, ALEX, WAY_OPEN_DECISION, ROLES_DUE),
-    "roles_to_choose_for_guest": lambda: note.RolesToChoose(DECIDED, PAT, PENDING_DECISION, ROLES_DUE, via=KIM),
     "place_changed": lambda: note.PlaceChanged(DECIDED, SAM, "Siam Garden", DECISION, ALEX, ROLES_DUE),
     "place_changed_for_guest": lambda: note.PlaceChanged(
         DECIDED, SAM, "Siam Garden", DECISION, ALEX, ROLES_DUE, via=LEE
@@ -570,6 +566,7 @@ def _event_view(state: EventState, mine: Response | None, can: Permissions) -> E
         decision=DECISION if state is EventState.DECIDED else None,
         can=can,
         members=(ALEX, KIM, LEE, SAM),
+        coordinators=(ALEX, KIM, LEE, SAM),
         dietary_tags=TAGS,
         cuisine_tags=CUISINES,
         items=ITEMS,

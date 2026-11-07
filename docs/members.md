@@ -4,7 +4,7 @@ Admins manage the household on **Admin** > **Members**. This page explains guest
 
 ## Guests
 
-A guest eats with the household when a member invites them to a call. Guests answer In or Out and can pitch in, but never vote or suggest ([spec](spec.md) sections 3 and 5.5). A guest can also coordinate the meal's logistics; [Coordinating](coordinating.md#what-a-guest-coordinator-can-do) says what they can and can't do.
+A guest eats with the household when a member invites them to a call. Guests answer In or Out, can offer to cook, pick up, or order, and can be assigned those roles. They never vote, suggest, or coordinate ([spec](spec.md) sections 3 and 5.5). Make a guest a member, and they can [coordinate](coordinating.md).
 
 ## Join from the channel
 

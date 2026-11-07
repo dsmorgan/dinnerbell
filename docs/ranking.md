@@ -72,7 +72,7 @@ Proposals are listed in the order they were drawn, suggestions first. The order 
 
 ## Shuffling the proposals
 
-If the proposals don't appeal, the coordinator can tap **Shuffle proposals** while voting, or an admin can when nobody, or a guest, coordinates. A shuffle draws again with the call's next seed, so it's as reproducible as the first draw. Each call allows 3 shuffles.
+If the proposals don't appeal, the coordinator can tap **Shuffle proposals** while voting, or an admin can at any time. A shuffle draws again with the call's next seed, so it's as reproducible as the first draw. Each call allows 3 shuffles.
 
 - **Nobody has voted yet:** every drawn proposal is replaced.
 - **Someone has voted:** only proposals with no votes are replaced. A vote that doesn't count yet, such as a late joiner's, still keeps its proposal, because it is someone's choice.

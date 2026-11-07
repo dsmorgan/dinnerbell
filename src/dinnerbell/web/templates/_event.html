@@ -231,7 +231,7 @@
     <form method="post" autocomplete="off" action="{{ base }}/guests" hx-post="{{ base }}/guests" {{ swap|safe }} class="stack">
       {{ hidden() }}
       <input type="hidden" name="run" value="{{ e.run }}">
-      <p class="small muted">Guests eat with you and can pitch in, but don't vote or suggest. If they have no Slack, you answer for them here.</p>
+      <p class="small muted">Guests eat with you and can pitch in, but don't vote, suggest, or coordinate. If they have no Slack, you answer for them here.</p>
       {% if v.invitable %}
       <label class="field"><span>A saved guest</span>
         <select name="guest_id"><option value="">Someone new instead</option>{% for g in v.invitable %}<option value="{{ g.id }}">{{ g.name }}</option>{% endfor %}</select>
@@ -255,7 +255,7 @@
   <form method="post" autocomplete="off" action="{{ base }}/hand-off" hx-post="{{ base }}/hand-off" {{ swap|safe }} class="inline-form">
     {{ hidden() }}
     <label class="field compact"><span>Hand off coordinating</span>
-      <select name="member_id">{% for m in v.members if m.id != principal.member.id %}<option value="{{ m.id }}">{{ m.name }}</option>{% endfor %}</select>
+      <select name="member_id">{% for m in v.coordinators if m.id != principal.member.id %}<option value="{{ m.id }}">{{ m.name }}</option>{% endfor %}</select>
     </label>
     <button type="submit" class="button small">Hand off</button>
   </form>
@@ -374,7 +374,7 @@
     <ul class="chips assignments">
       {% for a in d.assignments %}<li class="chip role">{{ labels.ROLE_TITLES[a.role] }}: {{ a.member.name }}</li>{% endfor %}
     </ul>
-    {% if d.roles_due_at %}<p class="small">{% if v.info.coordinator %}{{ v.info.coordinator.name }} is choosing {{ labels.roles_to_choose(d.proposal.mode, way_open=d.proposal.way_open) }} until {{ d.roles_due_at|clock(tz) }}. If they don't, {{ labels.roles_fallback(d.proposal.mode, way_open=d.proposal.way_open) }}.{% endif %}</p>{% endif %}
+    {% if d.roles_due_at %}<p class="small">{% if v.info.coordinator %}{{ v.info.coordinator.name }} is choosing {{ labels.roles_to_choose(d.proposal.mode, way_open=d.proposal.way_open) }} until {{ d.roles_due_at|clock(tz) }}. If they don't, {{ labels.roles_fallback(d.proposal.mode, way_open=d.proposal.way_open) }}.{% else %}An admin can choose {{ labels.roles_to_choose(d.proposal.mode, way_open=d.proposal.way_open) }} until {{ d.roles_due_at|clock(tz) }}. If nobody does, {{ labels.roles_fallback(d.proposal.mode, way_open=d.proposal.way_open) }}.{% endif %}</p>{% endif %}
     {% if v.can.mark_done %}<div class="button-row">{{ act(e.id, base ~ "/done", labels.MARK_DONE, "button small", confirm=labels.web_confirm(labels.mark_done_title(e.slot.value), labels.MARK_DONE_EFFECT)) }}</div>{% endif %}
     {% if v.can.choose_roles and v.roles %}
     {% set r = v.roles %}
@@ -417,7 +417,7 @@
         <button type="submit" class="button small">Save time</button>
       </form>
       {% endif %}
-      {#- Where they're really eating (#219): it records what happened, so nothing here is held to what people offered or ruled out. Never a guest's (FR-58). After Mark done it's an admin's correction (#220). -#}
+      {#- Where they're really eating (#219): it records what happened, so nothing here is held to what people offered or ruled out. After Mark done it's an admin's correction (#220). -#}
       {% if v.can.change_place or v.can.correct_place %}
       {% set place_url = base ~ ("/admin/place" if v.can.correct_place else "/place") %}
       {#- A correction starts from what the meal says, which a History edit from before #224 can have left apart from the call. -#}
@@ -520,7 +520,7 @@
     <form method="post" autocomplete="off" action="{{ base }}/admin/coordinator" hx-post="{{ base }}/admin/coordinator" {{ swap|safe }} class="inline-form">
       {{ hidden() }}
       <label class="field compact"><span>Coordinator</span>
-        <select name="member_id"><option value="">[Nobody]</option>{% for m in v.members %}<option value="{{ m.id }}"{% if v.info.coordinator and v.info.coordinator.id == m.id %} selected{% endif %}>{{ m.name }}</option>{% endfor %}</select>
+        <select name="member_id"><option value="">[Nobody]</option>{% for m in v.coordinators %}<option value="{{ m.id }}"{% if v.info.coordinator and v.info.coordinator.id == m.id %} selected{% endif %}>{{ m.name }}</option>{% endfor %}</select>
       </label>
       <button type="submit" class="button small">Assign</button>
     </form>

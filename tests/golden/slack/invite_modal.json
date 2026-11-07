@@ -12,7 +12,7 @@
     {
       "elements": [
         {
-          "text": "Guests eat with you and can pitch in, but don't vote or suggest. Their dietary needs always apply.",
+          "text": "Guests eat with you and can pitch in, but don't vote, suggest, or coordinate. Their dietary needs always apply.",
           "type": "mrkdwn"
         }
       ],

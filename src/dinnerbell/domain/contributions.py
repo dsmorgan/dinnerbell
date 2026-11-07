@@ -8,7 +8,8 @@ that records them (live, and again for the backfill) and the tests share one def
 Who earns what:
 
 - **Pitching in** (``cooked``, ``picked_up``, ``ordered``, ``coordinated``) goes to whoever the
-  event assigned, a guest included: a guest who cooks cooked.
+  event assigned, a guest included: a guest who cooks cooked. Guests no longer coordinate (#227),
+  but a meal one coordinated before that keeps its count.
 - **Everything else** goes to members only. A guest comes by invitation, never chooses what's
   eaten, and gives no feedback (#38), so being at the table or answering quickly isn't theirs
   to earn. The member who brought them earns ``hosted``.

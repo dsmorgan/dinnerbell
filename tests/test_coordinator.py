@@ -60,14 +60,13 @@ from dinnerbell.domain.events import (
     tie_line,
     tied_leaders,
 )
-from dinnerbell.domain.guests import REFUSED, GuestAction
 from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.members import Capabilities, Member, Role
 from dinnerbell.domain.notifications import from_payload
 from dinnerbell.domain.preferences import Stance, TargetType
 from dinnerbell.domain.ranking import rank, ranking_seed
 from dinnerbell.logs import JsonFormatter
-from dinnerbell.services import activity, calls, coordinator, event_views, guests, lifecycle, offers
+from dinnerbell.services import activity, calls, coordinator, event_views, lifecycle, offers
 from dinnerbell.services import call_context as cc
 from dinnerbell.services.database import Database, open_database
 from dinnerbell.services.errors import NotFound
@@ -182,31 +181,30 @@ def test_most_votes_wins_without_a_tie() -> None:
 
 
 @pytest.mark.parametrize(
-    ("tallies", "coordinator", "admins_next", "winner", "how", "by"),
+    ("tallies", "coordinator", "winner", "how", "by"),
     [
         # The coordinator's counted vote on a tied pick comes first, even over an admin's.
-        ([tally(1, 1, 50), tally(2, 2, 7)], 7, True, 2, TieHow.COORDINATOR_VOTE, 7),
+        ([tally(1, 1, 50), tally(2, 2, 7)], 7, 2, TieHow.COORDINATOR_VOTE, 7),
         # A coordinator who voted for none of them leaves it to the next rule: the admins only
-        # break it with no coordinator, or a guest one.
-        ([tally(1, 1, 50), tally(2, 2, 8)], 7, False, 1, TieHow.RANDOM, None),
-        ([tally(1, 1, 50), tally(2, 2, 8)], 7, True, 1, TieHow.ADMIN_VOTE, 50),
+        # break it with no coordinator.
+        ([tally(1, 1, 50), tally(2, 2, 8)], 7, 1, TieHow.RANDOM, None),
         # No coordinator: the admin's vote.
-        ([tally(1, 1, 8), tally(2, 2, 50)], None, False, 2, TieHow.ADMIN_VOTE, 50),
+        ([tally(1, 1, 8), tally(2, 2, 50)], None, 2, TieHow.ADMIN_VOTE, 50),
         # Then the least recently eaten: never eaten counts as the longest ago.
-        ([tally(1, 1, 8, eaten=30), tally(2, 2, 9, eaten=10)], None, False, 1, TieHow.LEAST_RECENT, None),
-        ([tally(1, 1, 8, eaten=30), tally(2, 2, 9, eaten=None)], None, False, 2, TieHow.LEAST_RECENT, None),
-        ([tally(1, 1, 8, eaten=None), tally(2, 2, 9, eaten=400)], 7, False, 1, TieHow.LEAST_RECENT, None),
+        ([tally(1, 1, 8, eaten=30), tally(2, 2, 9, eaten=10)], None, 1, TieHow.LEAST_RECENT, None),
+        ([tally(1, 1, 8, eaten=30), tally(2, 2, 9, eaten=None)], None, 2, TieHow.LEAST_RECENT, None),
+        ([tally(1, 1, 8, eaten=None), tally(2, 2, 9, eaten=400)], 7, 1, TieHow.LEAST_RECENT, None),
         # Then the stored rank, which is the draw.
-        ([tally(1, 2, 8, eaten=5), tally(2, 1, 9, eaten=5)], 7, False, 2, TieHow.RANDOM, None),
-        ([tally(1, 1, 8), tally(2, 2, 9)], None, False, 1, TieHow.RANDOM, None),
+        ([tally(1, 2, 8, eaten=5), tally(2, 1, 9, eaten=5)], 7, 2, TieHow.RANDOM, None),
+        ([tally(1, 1, 8), tally(2, 2, 9)], None, 1, TieHow.RANDOM, None),
     ],
 )
 def test_the_tie_is_broken_in_order(
-    tallies: list[ProposalTally], coordinator: int | None, admins_next: bool, winner: int, how: TieHow, by: int | None
+    tallies: list[ProposalTally], coordinator: int | None, winner: int, how: TieHow, by: int | None
 ) -> None:
-    won = decide_winner(tallies, coordinator_id=coordinator, admin_ids=ADMINS, admins_next=admins_next)
+    won = decide_winner(tallies, coordinator_id=coordinator, admin_ids=ADMINS)
     assert won is not None and (won.tally.id, won.tie, won.by) == (winner, how, by)
-    chosen = choose_winner(tallies, coordinator_id=coordinator, admin_ids=ADMINS, admins_next=admins_next)
+    chosen = choose_winner(tallies, coordinator_id=coordinator, admin_ids=ADMINS)
     assert chosen is not None and chosen.id == winner
 
 
@@ -234,7 +232,7 @@ def test_how_a_tie_was_broken_is_said_in_words() -> None:
     assert tie_line(TieHow.CHOSE, "Kim", coordinator=True) == "Tied; Kim (coordinator) chose"
     assert tie_line(TieHow.CHOSE, "Alex") == "Tied; Alex chose"
     assert tie_line(TieHow.COORDINATOR_VOTE, "Kim", coordinator=True) == "Tied; Kim (coordinator) voted for it"
-    assert tie_line(TieHow.COORDINATOR_VOTE, "Pat") == "Tied; Pat voted for it"  # the inviter of a guest coordinator
+    assert tie_line(TieHow.COORDINATOR_VOTE, "Pat") == "Tied; Pat voted for it"  # no longer coordinating
     assert tie_line(TieHow.ADMIN_VOTE, None) == "Tied; an admin voted for it"
     assert tie_line(TieHow.LEAST_RECENT, None) == "Tied; least recently eaten"
     assert tie_line(TieHow.RANDOM, None) == "Tied; drawn at random"
@@ -301,7 +299,7 @@ def test_who_may_use_the_coordinators_picks_powers(check: Callable[[Event, Membe
     assert check(voting, _person(2)) is ActingAs.COORDINATOR
     assert check(_event(EventState.VOTING), admin) is ActingAs.ADMIN
     assert check(voting, admin) is ActingAs.ADMIN  # alongside a member coordinating (#179)
-    assert check(replace(voting, coordinator_id=9), admin) is ActingAs.ADMIN  # choosing isn't a guest's (#38)
+    assert check(replace(voting, coordinator_id=9), admin) is ActingAs.ADMIN  # a guest named on an old call
     assert check(replace(voting, coordinator_id=1), admin) is ActingAs.COORDINATOR  # an admin who coordinates
     for event, actor, code in [
         (voting, _person(3), "not_coordinator"),
@@ -328,8 +326,7 @@ def test_the_shuffle_limit_is_three() -> None:
 
 def test_who_may_choose_roles() -> None:
     decided = _event(EventState.DECIDED, coordinator_id=2)
-    check_can_choose_roles(decided, _person(2))  # the coordinator, a guest coordinator too (FR-58)
-    check_can_choose_roles(replace(decided, coordinator_id=9), _person(9, Role.GUEST))
+    check_can_choose_roles(decided, _person(2))  # the coordinator
     check_can_choose_roles(decided, _person(1, Role.ADMIN))  # an admin can always
     for event, actor, code in [
         (decided, _person(3), "not_coordinator"),
@@ -355,10 +352,6 @@ def test_the_automatic_assignment_is_due_when_the_coordinators_time_runs_out() -
     pending = replace(decided, roles_due_at=OPENS + timedelta(minutes=15))
     assert due_step(pending, OPENS + timedelta(minutes=14), stale_after=cutoff) is None
     assert due_step(pending, OPENS + timedelta(minutes=15), stale_after=cutoff) is Step.ASSIGN_ROLES
-
-
-def test_guests_are_refused_the_picks_powers_with_words_to_show() -> None:
-    assert "shuffle" in REFUSED[GuestAction.SHUFFLE] and "tie" in REFUSED[GuestAction.BREAK_TIE]
 
 
 # Fixtures for the services -------------------------------------------------------------------------
@@ -464,27 +457,6 @@ async def test_break_the_tie_is_refused_to_everyone_else(house: House) -> None:
             await act(house, coordinator.break_tie, house[who], event_id, picks["Siam Garden"])
         assert refused.value.code == "not_coordinator", who
     assert (await house.event(event_id)).state is EventState.VOTING
-
-
-async def test_a_guest_coordinator_cannot_break_a_tie_but_an_admin_can(house: House) -> None:
-    pat = await add_guest(house, "Pat")
-    event_id = await open_dinner(house)
-    for name in ("Alex", "Sam", "Lee"):
-        await act(house, calls.respond, house[name], event_id, Status.IN)
-    await act(house, calls.offer_role, house["Alex"], event_id, RoleOffer.PICKUP, True)
-    await act(house, guests.invite, house["Sam"], event_id, guest_id=pat.id)
-    await act(house, calls.respond, pat, event_id, Status.IN)
-    await act(house, calls.claim_coordinator, pat, event_id)
-    house.clock.now = RESPOND_BY
-    await house.tick()
-    picks = await pick_ids(house, event_id)
-    await vote(house, "Sam", event_id, picks["Siam Garden"])
-    await vote(house, "Lee", event_id, picks["Taqueria"])
-    with pytest.raises(EventRuleViolation) as refused:
-        await act(house, coordinator.break_tie, pat, event_id, picks["Siam Garden"])
-    assert refused.value.code == "guests_dont"
-    await act(house, coordinator.break_tie, house["Alex"], event_id, picks["Siam Garden"])
-    assert (await house.event(event_id)).tie_how is TieHow.CHOSE
 
 
 async def test_a_tie_is_not_broken_after_voting_closes(house: House) -> None:
@@ -864,29 +836,6 @@ async def test_only_the_coordinator_and_admins_choose_roles(house: House) -> Non
     await act(house, coordinator.choose_roles, house["Sam"], event_id, member_id=house["Lee"].id, run=1)
 
 
-async def test_a_guest_coordinator_chooses_roles_and_gets_the_question_through_whoever_invited_them(
-    house: House,
-) -> None:
-    pat = await add_guest(house, "Pat")
-    event_id = await open_dinner(house)
-    for name in ("Alex", "Sam", "Lee"):
-        await act(house, calls.respond, house[name], event_id, Status.IN)
-    for name in ("Alex", "Sam"):
-        await act(house, calls.offer_role, house[name], event_id, RoleOffer.PICKUP, True)
-    await act(house, guests.invite, house["Sam"], event_id, guest_id=pat.id)
-    await act(house, calls.respond, pat, event_id, Status.IN)
-    await act(house, calls.claim_coordinator, pat, event_id)
-    house.clock.now = RESPOND_BY
-    await house.tick()
-    await act(house, calls.lock, house["Alex"], event_id, (await pick_ids(house, event_id))["Siam Garden"])
-    (ask,) = await sent(house, "roles_to_choose")
-    assert (ask.member.id, ask.recipient_id) == (pat.id, house["Sam"].id)  # an unregistered guest: their inviter
-    view = await act(house, event_views.event_view, pat, event_id)
-    assert view.can.choose_roles and view.roles is not None
-    await act(house, coordinator.choose_roles, pat, event_id, pickup_id=house["Lee"].id)
-    assert assigned(await house.context(event_id))[AssignmentRole.PICKUP] == house["Lee"].id
-
-
 async def test_roles_cannot_be_chosen_before_the_decision_or_after_the_meal(house: House) -> None:
     event_id = await to_voting(house, "Sam", pickups=("Alex", "Sam"))
     with pytest.raises(EventRuleViolation) as refused:
@@ -1228,24 +1177,6 @@ async def test_an_admin_shuffles_when_nobody_coordinates_or_a_guest_does(house: 
     assert "'as': 'admin'" in str(audit.payload) or '"as": "admin"' in str(audit.payload)
 
 
-async def test_a_guest_coordinator_cannot_shuffle_but_an_admin_can(house: House) -> None:
-    pat = await add_guest(house, "Pat")
-    await stock(house, 9)
-    event_id = await open_dinner(house)
-    for name in ("Alex", "Sam"):
-        await act(house, calls.respond, house[name], event_id, Status.IN)
-    await act(house, calls.offer_role, house["Alex"], event_id, RoleOffer.PICKUP, True)
-    await act(house, guests.invite, house["Sam"], event_id, guest_id=pat.id)
-    await act(house, calls.respond, pat, event_id, Status.IN)
-    await act(house, calls.claim_coordinator, pat, event_id)
-    house.clock.now = RESPOND_BY
-    await house.tick()
-    with pytest.raises(EventRuleViolation) as refused:
-        await act(house, coordinator.shuffle, pat, event_id)
-    assert refused.value.code == "guests_dont"
-    await shuffle(house, "Alex", event_id)
-
-
 async def test_no_shuffling_once_voting_has_closed(house: House) -> None:
     event_id = await with_many_places(house, "Sam")
     await at_deadline(house, event_id)
@@ -1562,8 +1493,7 @@ async def test_slack_assign_roles_modal_checks_its_fields_and_its_run(slack: Sla
 async def test_the_picks_buttons_are_for_members_only(slack: Slack, house: House) -> None:
     from dinnerbell.channels.slack.interactions import GUEST_TAPS
 
-    assert ids.ASSIGN_ROLES in GUEST_TAPS  # a guest coordinating assigns roles (FR-58)
-    assert not {ids.SHUFFLE, ids.BREAK_TIE} & GUEST_TAPS
+    assert not {ids.ASSIGN_ROLES, ids.SHUFFLE, ids.BREAK_TIE} & GUEST_TAPS
 
 
 # Review follow-ups ---------------------------------------------------------------------------------

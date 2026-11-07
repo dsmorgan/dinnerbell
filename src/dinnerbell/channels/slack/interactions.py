@@ -928,7 +928,7 @@ class Interactions:
         self, member: Member, source: Source, action_id: str, value: object, trigger: object, tap: Tap
     ) -> Done:
         if member.is_guest and action_id not in GUEST_TAPS:
-            # Guests answer, offer roles, and coordinate logistics; the services check again (#38).
+            # Guests answer and offer roles; the services check again (#38).
             raise EventRuleViolation(GUESTS_DONT, code="guests_dont")
         if action_id in ids.GUEST_ACTIONS:
             return await self._guest_tap(member, source, action_id, value, tap)
@@ -2219,17 +2219,12 @@ GUEST_TAPS = frozenset(
         *ids.RESPOND,
         *ids.OFFER,
         ids.MARK_DONE,
-        ids.CLOSE_WINDOW,
-        ids.CALL_MENU,
-        ids.ASSIGN_ROLES,
-        ids.ADJUST,
-        ids.SET_WAY,
-        ids.PICK_MENU,
     }
 )
-"""Buttons a guest may tap (#38): answering, the roles, and coordinating's logistics. Everything
-else is refused before any service runs; the services refuse it again. ``PICK_MENU`` is here for
-a pick's ways: its **Lock this** and **Break the tie** refuse a guest before any modal opens."""
+"""Buttons that reach a service when a guest taps them (#38): answering and the roles. So do **I'll
+coordinate** and **Mark done**, which the channel's messages show to everyone: the service refuses
+them, and says why (``domain.guests.REFUSED``, #227). Everything else is refused here, before any
+service runs; the services refuse it again."""
 JOINED = {
     guests.JoinedAs.GUEST: (
         "Welcome to Dinnerbell! You're in as a guest. When a member invites you to a meal, you'll get a "

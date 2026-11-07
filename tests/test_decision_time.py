@@ -20,7 +20,6 @@ from dinnerbell.config import Settings
 from dinnerbell.db.models import EventRow
 from dinnerbell.domain.events import (
     DECISION_TIME_MOVERS,
-    GUEST_DECIDES_NOW,
     STALE_CALL,
     ActingAs,
     EventKind,
@@ -31,11 +30,9 @@ from dinnerbell.domain.events import (
     Status,
     Window,
     check_can_move_decision_time,
-    check_guest_keeps_voting_open,
 )
-from dinnerbell.domain.guests import GuestAction, check_guest
 from dinnerbell.domain.members import Role
-from dinnerbell.services import call_admin, calls, coordinator, event_views, guests
+from dinnerbell.services import call_admin, calls, coordinator, event_views
 from dinnerbell.services.database import Database, open_database
 from tests.conftest import invite, page
 from tests.support.calls import OPENS, RESPOND_BY, VOTE_BY, House, furnish, make_house
@@ -77,9 +74,6 @@ def test_who_may_move_the_decision_time() -> None:
     voting = replace(_event(EventState.VOTING, coordinator_id=2), vote_deadline=VOTE_BY)
     assert check_can_move_decision_time(voting, _person(2), now=BEFORE) is ActingAs.COORDINATOR
     assert check_can_move_decision_time(voting, _person(1, Role.ADMIN), now=BEFORE) is ActingAs.ADMIN
-    guest_coordinating = replace(voting, coordinator_id=9)
-    assert check_can_move_decision_time(guest_coordinating, _person(9, Role.GUEST), now=BEFORE) is ActingAs.COORDINATOR
-    check_guest(guest_coordinating, _person(9, Role.GUEST), GuestAction.MOVE_DECISION_TIME, invited=True)
     for event, actor, now, code in [
         (voting, _person(3), BEFORE, "not_coordinator"),
         (voting, _person(9, Role.GUEST), BEFORE, "not_coordinator"),
@@ -93,19 +87,6 @@ def test_who_may_move_the_decision_time() -> None:
         with pytest.raises(EventRuleViolation) as refused:
             check_can_move_decision_time(event, actor, now=now)
         assert refused.value.code == code
-    with pytest.raises(EventRuleViolation) as refused:
-        check_guest(_event(EventState.COLLECTING), _person(9, Role.GUEST), GuestAction.MOVE_DECISION_TIME, invited=True)
-    assert refused.value.code == "guest_not_now"
-
-
-def test_a_guest_never_moves_it_to_now_which_would_decide() -> None:
-    voting = replace(_event(EventState.VOTING, coordinator_id=9), vote_deadline=VOTE_BY)
-    guest, member = _person(9, Role.GUEST), _person(2)
-    check_guest_keeps_voting_open(voting, guest, -15, now=VOTE_BY - timedelta(minutes=16))
-    check_guest_keeps_voting_open(voting, member, -15, now=VOTE_BY)  # a member may: that's Decide now
-    with pytest.raises(EventRuleViolation) as refused:
-        check_guest_keeps_voting_open(voting, guest, -15, now=VOTE_BY - timedelta(minutes=15))
-    assert (refused.value.code, str(refused.value)) == ("guests_dont", GUEST_DECIDES_NOW)
 
 
 # The service ---------------------------------------------------------------------------------------
@@ -237,29 +218,6 @@ async def test_the_admins_own_move_is_audited_as_admin(house: House) -> None:
         "to": (VOTE_BY + timedelta(minutes=15)).isoformat(),
         "as": "admin",
     }
-
-
-async def test_a_guest_coordinator_moves_it_but_never_to_now(house: House) -> None:
-    pat = await add_guest(house, "Pat")
-    event_id = await open_dinner(house)
-    for name in ("Alex", "Lee"):
-        await act(house, calls.respond, house[name], event_id, Status.IN)
-    await act(house, calls.offer_role, house["Alex"], event_id, RoleOffer.PICKUP, True)
-    await act(house, guests.invite, house["Lee"], event_id, guest_id=pat.id)
-    await act(house, calls.respond, pat, event_id, Status.IN)
-    await act(house, calls.claim_coordinator, pat, event_id)
-    house.clock.now = RESPOND_BY
-    await house.tick()
-    assert (await act(house, event_views.event_view, pat, event_id)).can.move_vote
-    await act(house, coordinator.move_decision_time, pat, event_id, 30, run=1)
-    assert (await house.event(event_id)).vote_deadline == VOTE_BY + timedelta(minutes=30)
-    house.clock.now = VOTE_BY + timedelta(minutes=20)
-    with pytest.raises(EventRuleViolation) as refused:
-        await act(house, coordinator.move_decision_time, pat, event_id, -15, run=1)
-    assert refused.value.code == "guests_dont"
-    assert (await house.event(event_id)).state is EventState.VOTING
-    (audit,) = await house.audits("event.deadline_moved")
-    assert (audit.actor_member_id, audit.payload["as"]) == (pat.id, "coordinator")
 
 
 async def test_a_guest_not_invited_is_refused(house: House) -> None:

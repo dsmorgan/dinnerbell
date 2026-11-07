@@ -1,6 +1,6 @@
 # Coordinating a meal
 
-A coordinator steers one call: they keep the vote moving, and once the meal is decided they set the time, how the food arrives, and who cooks, orders, or picks it up. If nobody has claimed coordinating by the time voting starts, Dinnerbell picks someone who's in at random. Without a coordinator, the vote and the first person who offered decide everything. The precise rules are in [spec](spec.md) sections 5.7, 6.2, and 6.3 (FR-10, FR-58, FR-61).
+A coordinator steers one call: they keep the vote moving, and once the meal is decided they set the time, how the food arrives, and who cooks, orders, or picks it up. If nobody has claimed coordinating by the time voting starts, Dinnerbell picks someone who's in at random. Without a coordinator, the vote and the first person who offered decide everything. Only household members coordinate. The precise rules are in [spec](spec.md) sections 5.7, 6.2, and 6.3 (FR-10, FR-58, FR-61).
 
 ## Become the coordinator
 
@@ -14,7 +14,7 @@ Tap **I'll coordinate** while answers are open or during the vote, when nobody e
 | The call message | While voting |
 | The call's page on the web | While answers are open, and while voting |
 
-**Coordinating puts you in.** If you said Out or Maybe, or hadn't answered, tapping **I'll coordinate** changes your answer to In. During the vote, you join late (FR-60 in the [spec](spec.md#63-proposals-ranking-and-voting)): you're marked late, any guests or eat window on an earlier answer are cleared, and, unlike other late joiners, your vote counts. If you joined late already, your vote counts from then on. A guest who coordinates is in, but never marked late, so their dietary needs still count.
+**Coordinating puts you in.** If you said Out or Maybe, or hadn't answered, tapping **I'll coordinate** changes your answer to In. During the vote, you join late (FR-60 in the [spec](spec.md#63-proposals-ranking-and-voting)): you're marked late, any guests or eat window on an earlier answer are cleared, and, unlike other late joiners, your vote counts. If you joined late already, your vote counts from then on.
 
 The same rule applies when someone hands coordinating to you or an admin assigns it to you: you're in from then on, and if that changed your answer, you get a message saying so. After the decision, only someone who's already in can take over, because nobody joins a meal once it's decided. Someone the coordinator switched off during the vote can't take it on.
 
@@ -24,7 +24,7 @@ When answers close and voting starts with nobody coordinating, Dinnerbell picks 
 
 The pick is random, but reproducible: the same run of a call, with the same people in, always picks the same person. A re-run, or starting a called-off call again, picks again only if nobody coordinates by then.
 
-A guest invited to the call can coordinate too, with fewer powers. See [What a guest coordinator can do](#what-a-guest-coordinator-can-do).
+Guests don't coordinate. A guest can answer, offer to cook, pick up, or order, and be assigned those roles. See [What guests can't do](#what-guests-cant-do).
 
 ## What you can do at each stage
 
@@ -75,7 +75,7 @@ You can change any of these until the meal is marked done.
 | Switch how you get it: cook, pickup, or delivery, among the ways the place allows | **Adjust** (**How**) | **Assign roles** |
 | Change who cooks, orders, or picks up, to anyone who's in | **Adjust** | **Assign roles**, or **Change the plan** |
 | Correct who did what after the meal, so the right person gets credit | **Adjust** | **Change the plan** |
-| Hand off coordinating to someone who's in | **Adjust** | Call page |
+| Hand off coordinating to a member who's in | **Adjust** | Call page |
 | Mark the meal done, once it's meal time | **Mark done** on the decision | Call page |
 | Call off the meal | **Call it off** on the decision | Call page |
 
@@ -87,7 +87,7 @@ Whoever you assign is told, and so is whoever no longer has the role. If they ha
 
 Change the place to record where you're really eating. Choose any place in the catalog or type a new name, even if nobody offered, someone vetoed it, or you just had it. Pick a way the place allows; a new name needs one, because **Cook** makes it a home meal and **Pickup** or **Delivery** a restaurant. People keep their roles if the new way still has them. A role nobody has yet goes to the first person who offered, or to nobody, for you to assign.
 
-Each person who's in gets one message before the meal time, which says if they lost or gained a role, and the decision updates. From the meal time on, it corrects the record and messages nobody, except whoever you hand off to in the same save. Once the meal is marked done, only an admin can correct the place, on the web. A guest coordinator can't change it; an admin can.
+Each person who's in gets one message before the meal time, which says if they lost or gained a role, and the decision updates. From the meal time on, it corrects the record and messages nobody, except whoever you hand off to in the same save. Once the meal is marked done, only an admin can correct the place, on the web.
 
 Contributions and badges count who did what when the meal is marked done, so a correction you make before then is what counts. After that, only an admin can correct it, and the counts follow the correction.
 
@@ -143,9 +143,9 @@ A correction writes `event.place_changed`, marked `after_done`, and `event.contr
 
 **Change the plan** is the only way to change a call's place once it's done. **Edit** in History shows that place read-only and links here, so the call, its messages, its counts, and its feedback all stay together. If a History edit from an earlier version left a meal and its call on different places, **Change the plan** says so and starts from the meal's place. Keep that place to bring the call into line, or choose the place the call still names to move the meal back. If the call's place has left the catalog, it isn't in the menu, so type its name and choose a way. Moving the meal back keeps the call's roles and how it won. Its counts stay too, unless other meals have changed how new the place was, as with any correction. If you deleted the meal from History, there's nothing to correct, and the form doesn't appear.
 
-## What a guest coordinator can do
+## What guests can't do
 
-A guest coordinator handles the logistics, but not the choice of meal. They can close answers early, make a takeout proposal pickup or delivery during the vote, change the meal time, how you get it, and who does it, hand off, and mark the meal done. They can't vote, lock, break a tie, shuffle, change the place, switch late joiners, **Decide now**, or call off the call. While a guest coordinates, an admin can do those, and a tied vote goes to whoever invited the guest, then to an admin. If the guest has no Slack account, the member who invited them gets their messages, but can't choose the roles for them unless they're an admin. The message says an admin can choose, and an admin has **Assign roles** on the decision.
+Coordinating means using Dinnerbell to steer a call, and guests have little or no access to it, so only household members coordinate. A guest is never offered coordinating, and can't be handed it or assigned it. Dinnerbell's random pick never picks one. A guest who taps **I'll coordinate** or **Mark done** on a channel message is told why not, and a guest can't use any other power on this page. An admin who makes a guest a member lets them coordinate from then on.
 
 ## When nobody coordinates, or someone drops out
 

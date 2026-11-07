@@ -280,7 +280,6 @@ def event_info(ctx: CallContext) -> note.EventInfo:
         respond_deadline=event.respond_deadline,
         vote_deadline=event.vote_deadline,
         coordinator=ctx.person(event.coordinator_id) if event.coordinator_id is not None else None,
-        coordinator_is_guest=event.coordinator_id is not None and ctx.is_guest(event.coordinator_id),
         end_reason=event.end_reason,
         ended_by=ctx.person(event.ended_by) if event.ended_by is not None else None,
         end_note=event.end_note,
@@ -629,9 +628,7 @@ def roles_to_choose(ctx: CallContext, decision: note.DecisionInfo, due_at: datet
     coordinator_id = ctx.event.coordinator_id
     if coordinator_id is None:
         return None
-    return note.RolesToChoose(
-        event_info(ctx), ctx.person(coordinator_id), decision, due_at, answering_for(ctx, coordinator_id)
-    )
+    return note.RolesToChoose(event_info(ctx), ctx.person(coordinator_id), decision, due_at)
 
 
 def guest_invitations(ctx: CallContext) -> list[note.GuestInvited]:

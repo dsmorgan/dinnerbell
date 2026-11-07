@@ -5,16 +5,13 @@ the exact words; these pin the structure, and the cases a golden file can't show
 
 from __future__ import annotations
 
-import json
 from dataclasses import replace
 
 import pytest
 
-from dinnerbell.channels.slack import ids
 from dinnerbell.channels.slack import preview as samples
 from dinnerbell.channels.slack.blocks import MAX_SECTION
 from dinnerbell.channels.slack.messages import Message, RenderContext, render
-from dinnerbell.domain import labels
 from dinnerbell.domain import notifications as note
 from dinnerbell.domain.events import AssignmentRole
 from tests.support.blockkit import check_message
@@ -89,14 +86,6 @@ def test_given_coordinating_during_the_vote_says_you_joined_late() -> None:
     assert lines[2] == "The vote has started, so you joined late, and your vote counts."
 
 
-def test_given_coordinating_for_a_guest_names_the_guest_and_the_reader() -> None:
-    assert sample("coordinating_given_for_guest").split("\n") == [
-        "Hi Kim! *Your guest Pat is coordinating dinner on Thursday, Oct 22.*",
-        "Alex gave it to them, so they're in.",
-        "If it doesn't work for them, tell Alex.",
-    ]
-
-
 # Choosing roles ---------------------------------------------------------------------------------------
 
 
@@ -114,27 +103,6 @@ def test_choosing_roles_with_the_way_open_says_what_it_stays() -> None:
         "Tap *Assign roles* to choose pickup or delivery, who orders, and who picks it up by *6:00 PM*. "
         "After that, it stays pickup, and the first people who offered do them."
     )
-
-
-def test_choosing_roles_for_a_guest_says_its_your_guest_without_a_greeting() -> None:
-    text = sample("roles_to_choose_for_guest")
-    assert text.startswith("*Your guest Pat is coordinating dinner on Thursday, Oct 22.*\n")
-    assert "Hi " not in text and "Kim" not in text
-
-
-def test_choosing_roles_for_a_guest_says_an_admin_can_and_offers_no_button() -> None:
-    told = render(
-        note.RolesToChoose(samples.DECIDED, samples.PAT, samples.WAY_OPEN_DECISION, samples.ROLES_DUE, via=samples.KIM),
-        CTX,
-    )
-    assert body(told).endswith(
-        "An admin can choose pickup or delivery, who orders, and who picks it up by *6:00 PM*. "
-        "After that, it stays pickup, and the first people who offered do them."
-    )
-    assert "Tap" not in body(told) and "Assign roles" not in json.dumps(told.payload())
-    assert told.text.startswith("An admin can choose")
-    assert ids.ASSIGN_ROLES not in json.dumps(told.payload())
-    assert [b["text"]["text"] for b in told.blocks[1]["elements"]] == [labels.VIEW_ON_WEB]
 
 
 def test_choosing_roles_keeps_its_button() -> None:

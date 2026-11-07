@@ -473,8 +473,7 @@ class AssignmentRow(Base):
 
 class InvitationRow(Base):
     """A guest invited to one call (#38): they may answer it, and nothing else. ``invited_by``
-    is the member who invited them, who answers for a guest without Slack and breaks a tie
-    when the guest coordinates."""
+    is the member who invited them, who answers for a guest without Slack."""
 
     __tablename__ = "invitation"
     __table_args__ = (UniqueConstraint("event_id", "guest_id"),)

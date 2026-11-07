@@ -68,7 +68,6 @@ from dinnerbell.domain.events import (
     voting_closes,
     way_unsettled,
 )
-from dinnerbell.domain.guests import tie_breaker
 from dinnerbell.domain.household import Household
 from dinnerbell.domain.meals import MemberRef, Slot, TagRef
 from dinnerbell.domain.members import Member
@@ -276,8 +275,9 @@ async def reopen(
     decision, assignments, and who called it off are cleared. ``started_by``, when given (a
     member starting a called-off call again), becomes the starter, and the coordinator is
     cleared: whoever coordinated the call that was called off may not be around for this one.
-    An admin re-run keeps both. The run number goes up, so the channel posts a new call message and
-    the reminder can go out once more.
+    An admin re-run keeps both, except a guest who coordinated before guests stopped (#227): a
+    call that ended then still names them. The run number goes up, so the channel posts a new call
+    message and the reminder can go out once more.
     """
     event, household_id = ctx.event, ctx.event.household_id
     await ProposalRepository(db).clear(household_id, event.id)
@@ -287,12 +287,13 @@ async def reopen(
     due = schedule.opens_at(event.day, ctx.zone) if event.day > today else now
     scheduled = event.day > today and not posted_before_its_day(event, ctx.zone)
     opens_at = due if scheduled else now
+    stays = started_by is None and event.coordinator_id is not None and not ctx.is_guest(event.coordinator_id)
     fresh = replace(
         event,
         state=transition(event.state, EventState.SCHEDULED if scheduled else EventState.COLLECTING),
         run=event.run + 1,
         created_by=started_by.id if started_by is not None else event.created_by,
-        coordinator_id=None if started_by is not None else event.coordinator_id,
+        coordinator_id=event.coordinator_id if stays else None,
         opens_at=opens_at,
         respond_deadline=due + schedule.response_window,
         reminder_minutes=schedule.reminder_minutes,
@@ -752,11 +753,7 @@ async def decide(
             for p in ctx.proposals
         ]
         admins = frozenset(m.id for m in ctx.active_members if m.is_admin)
-        # A guest coordinating doesn't break a tie: whoever invited them does, then an admin (#38).
-        coordinator = ctx.members.get(event.coordinator_id) if event.coordinator_id is not None else None
-        breaker = tie_breaker(coordinator, ctx.invitations.get(coordinator.id) if coordinator else None)
-        guest_coordinating = coordinator is not None and coordinator.is_guest
-        chosen = decide_winner(tallies, coordinator_id=breaker, admin_ids=admins, admins_next=guest_coordinating)
+        chosen = decide_winner(tallies, coordinator_id=event.coordinator_id, admin_ids=admins)
         found = ctx.proposal(chosen.tally.id) if chosen is not None else None
         if chosen is None or found is None:
             await abandon(db, event, EndReason.NO_COVERAGE, now)

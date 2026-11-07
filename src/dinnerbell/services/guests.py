@@ -36,7 +36,6 @@ from dinnerbell.domain.events import (
     Status,
     check_can_respond,
     check_run,
-    drops_coordinating,
     with_offer,
     with_status,
 )
@@ -215,11 +214,8 @@ async def answer_for(
                 return
             answer = changed
         await ResponseRepository(db).save(actor.household_id, event.id, answer, now)
-        if drops_coordinating(event, answer):  # whoever coordinates is in (#154)
-            await cc.release_coordinator(db, event, actor, why="out", now=now)  # updates the messages
-        else:
-            ctx = await load(db, event)
-            await publish(db, ctx, cc.call_updated(ctx), now=now)
+        ctx = await load(db, event)
+        await publish(db, ctx, cc.call_updated(ctx), now=now)
         what: dict[str, Any] = {"answer": status.value} if status is not None else {"offered": offered}
         if role is not None:
             what["role"] = role.value
@@ -227,16 +223,13 @@ async def answer_for(
 
 
 async def _drop_from_call(db: AsyncSession, event: Event, guest_id: int, now: datetime) -> None:
-    """Take a guest out of a call they no longer belong to: their answer is out, and if they
-    were coordinating, nobody is, so a member can claim it. Updates the call's messages."""
+    """Take a guest out of a call they no longer belong to: their answer is out, and any role they
+    had is nobody's. Updates the call's messages."""
     ctx = await load(db, event)
     current = ctx.response_of(guest_id)
     if current is not None and current.status is not Status.OUT:
         out = replace(with_status(current, guest_id, Status.OUT, now), guests=0, guest_needs=frozenset())
         await ResponseRepository(db).save(event.household_id, event.id, out, now)
-    if ctx.event.coordinator_id == guest_id:
-        await EventRepository(db).save(replace(ctx.event, coordinator_id=None), now)
-        await AssignmentRepository(db).unassign(event.household_id, event.id, AssignmentRole.COORDINATOR)
     vacated = tuple(a.role for a in ctx.assignments if a.member_id == guest_id and a.role in WORK_ROLES)
     for role in vacated:
         await AssignmentRepository(db).unassign(event.household_id, event.id, role)

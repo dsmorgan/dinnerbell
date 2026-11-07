@@ -15,6 +15,7 @@ from dinnerbell.domain.events import (
     Event,
     Window,
     check_assign_coordinator,
+    check_can_coordinate,
     check_deadline_ahead,
     check_rerun,
     check_window_change,
@@ -77,15 +78,17 @@ async def rerun(db: AsyncSession, actor: Member, event_id: int, *, now: datetime
 async def assign_coordinator(
     db: AsyncSession, actor: Member, event_id: int, member_id: int | None, *, now: datetime
 ) -> None:
-    """FR-10: the admin assigns or replaces the coordinator, or clears it with None."""
+    """FR-10: the admin assigns or replaces the coordinator, or clears it with None. A guest is
+    refused (#227)."""
     require_admin(actor, ADMINS_ONLY)
     async with locked_event(db, actor.household_id, event_id, now) as event:
         check_assign_coordinator(event)
         if member_id is not None:
             ctx = await load(db, event)
             target = ctx.members.get(member_id)
-            if target is None or not target.active or (target.is_guest and not ctx.invited(target.id)):
+            if target is None or not target.active:
                 raise NotFound("No such member.")
+            check_can_coordinate(target)
         await set_coordinator(db, event, member_id, by=actor, now=now)
         payload = {"from": event.coordinator_id, "to": member_id}
         await audit(db, actor.household_id, actor, "event.coordinator_assigned", _target(event), payload, now)

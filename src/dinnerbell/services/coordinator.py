@@ -4,9 +4,9 @@ picks, move the decision time (#198), and choose the winning pick's mode and who
 change the place after the decision (#219), which an admin alone can correct after the meal is
 done (#220); and, in Slack, adjust the plan once it's decided (spec 5.7).
 
-Each is the coordinator's and every admin's alike (#179). A guest coordinator chooses roles,
-which is logistics, but not the plan (FR-58). Each takes the event's lock, checks the run the
-person saw, and is audited and logged (#75). Everything is scoped to the actor's household.
+Each is the coordinator's and every admin's alike (#179), and never a guest's (FR-58). Each takes
+the event's lock, checks the run the person saw, and is audited and logged (#75). Everything is
+scoped to the actor's household.
 """
 
 from __future__ import annotations
@@ -57,7 +57,6 @@ from dinnerbell.domain.events import (
     check_can_move_decision_time,
     check_can_set_way,
     check_can_shuffle,
-    check_guest_keeps_voting_open,
     check_run,
     default_roles,
     friendly,
@@ -96,7 +95,7 @@ async def break_tie(
     chose. A pick that isn't tied is refused; a vote that moved since the person looked changes
     what's tied, so a stale choice can't decide a pick that is no longer in the tie."""
     async with locked_event(db, actor.household_id, event_id, now) as event:
-        await guest_rules.gate(db, event, actor, GuestAction.BREAK_TIE)
+        await guest_rules.gate(db, event, actor, GuestAction.COORDINATE)
         check_run(event, run)
         ctx = await cc.load(db, event)
         capacity = check_can_break_tie(event, actor)
@@ -140,7 +139,7 @@ async def shuffle(db: AsyncSession, actor: Member, event_id: int, *, run: int | 
     says who shuffled and how many were replaced, and a note goes in the call's thread. Audited
     as ``event.shuffled``; logged as ``shuffle`` with the counts."""
     async with locked_event(db, actor.household_id, event_id, now) as event:
-        await guest_rules.gate(db, event, actor, GuestAction.SHUFFLE)
+        await guest_rules.gate(db, event, actor, GuestAction.COORDINATE)
         check_run(event, run)
         ctx = await cc.load(db, event)
         capacity = check_can_shuffle(event, actor)
@@ -226,7 +225,7 @@ async def set_way(
     now: datetime,
 ) -> None:
     """Set a takeout pick whose place allows both to pickup or delivery, while voting
-    (``check_can_set_way``): the coordinator, a guest coordinator too, or an admin. Setting it,
+    (``check_can_set_way``): the coordinator or an admin. Setting it,
     even to the way it has, settles it, so the decision doesn't ask the coordinator about it
     again (``domain.events.way_unsettled``). A way nobody who's in can do is refused, as the
     decision would pass the pick over. The proposals message updates in place. Audited as
@@ -241,7 +240,7 @@ async def set_way(
     has is. The audit's ``mode`` is the way set, or None for a clear, and ``switched_from`` is
     the way the pick had, chosen or not."""
     async with locked_event(db, actor.household_id, event_id, now) as event:
-        await guest_rules.gate(db, event, actor, GuestAction.SET_WAY)
+        await guest_rules.gate(db, event, actor, GuestAction.COORDINATE)
         check_run(event, run)
         check_can_set_way(event, actor)
         ctx = await cc.load(db, event)
@@ -294,16 +293,14 @@ async def move_decision_time(
     db: AsyncSession, actor: Member, event_id: int, minutes: int, *, run: int | None = None, now: datetime
 ) -> datetime:
     """Move the decision time ``minutes`` later (negative is earlier) while voting
-    (``check_can_move_decision_time``): the coordinator, a guest coordinator too, or an admin. It
-    is the admin's vote-window move (``call_admin.move_deadline``), with its limits and updated
-    messages: a time that lands in the past closes voting at once, except for a guest
-    (``check_guest_keeps_voting_open``). Returns the new decision time. Audited as
+    (``check_can_move_decision_time``): the coordinator or an admin. It is the admin's vote-window
+    move (``call_admin.move_deadline``), with its limits and updated messages: a time that lands
+    in the past closes voting at once. Returns the new decision time. Audited as
     ``event.deadline_moved``, with the capacity; logged as ``move_deadline``."""
     async with locked_event(db, actor.household_id, event_id, now) as event:
-        await guest_rules.gate(db, event, actor, GuestAction.MOVE_DECISION_TIME)
+        await guest_rules.gate(db, event, actor, GuestAction.COORDINATE)
         check_run(event, run)
         capacity = check_can_move_decision_time(event, actor, now=now)
-        check_guest_keeps_voting_open(event, actor, minutes, now=now)
         current, moved = await lifecycle.move_window(db, event, Window.VOTE, minutes, now)
         window = Window.VOTE.value
         payload = {"window": window, "from": current.isoformat(), "to": moved.isoformat(), "as": capacity.value}
@@ -458,7 +455,7 @@ async def choose_roles(
     place that allows more than one) and say who does its roles: ``member_id`` cooks or orders,
     and, for a pickup, ``pickup_id`` picks up (#178). Each is someone who's in, or the first
     volunteer when None; one person can take every role. Switching to delivery drops the pickup
-    person; the orderer stays. Allowed to the coordinator, a guest coordinator too, and an admin
+    person; the orderer stays. Allowed to the coordinator and an admin
     (``check_can_choose_roles``), while the call is decided. It ends the coordinator's time to
     choose (``Event.roles_due_at``): the assignment is theirs now.
 
@@ -473,7 +470,7 @@ async def choose_roles(
     the messages to whoever is assigned are held, not sent, for ``adjust`` to send once a
     hand-off in the same save is done."""
     async with locked_event(db, actor.household_id, event_id, now) as event:
-        await guest_rules.gate(db, event, actor, GuestAction.MANAGE_DECISION)
+        await guest_rules.gate(db, event, actor, GuestAction.COORDINATE)
         check_run(event, run)
         check_can_choose_roles(event, actor)
         if as_coordinator:
@@ -707,7 +704,7 @@ async def _plan(
     db: AsyncSession, ctx: CallContext, actor: Member, wanted: Adjustment, opened: Adjustment, run: int
 ) -> Adjustment:
     event = ctx.event
-    await guest_rules.gate(db, event, actor, GuestAction.MANAGE_DECISION)
+    await guest_rules.gate(db, event, actor, GuestAction.COORDINATE)
     check_run(event, run)
     check_can_adjust(event, actor)
     item = ctx.items.get(event.decided_item_id) if event.decided_item_id is not None else None
@@ -726,8 +723,6 @@ async def _plan(
     mode: Mode | None = None
     assignee: int | None = None
     pickup: int | None = None
-    if wanted.new_place is not None or wanted.item_id not in {None, opened.item_id}:
-        await guest_rules.gate(db, event, actor, GuestAction.CHANGE_PLACE)
     place = await _place_asked(
         db,
         ctx,
@@ -764,7 +759,6 @@ async def _plan(
         mode = chosen if mode_asked else None
     lead = wanted.coordinator_id
     if _asked("coordinator", lead, opened.coordinator_id, event.coordinator_id) and lead is not None:
-        await guest_rules.gate(db, event, actor, GuestAction.HAND_OFF)
         to: int = lead
         _part("coordinator", lambda: handoff_target(ctx, actor, to))
     else:
@@ -1121,7 +1115,7 @@ async def change_place(
     about new roles are held for ``adjust`` to send after the hand-off, and the hand-off's own
     message lists that person's roles without the old place, so they still get ``PlaceChanged``."""
     async with locked_event(db, actor.household_id, event_id, now) as event:
-        await guest_rules.gate(db, event, actor, GuestAction.CHANGE_PLACE)
+        await guest_rules.gate(db, event, actor, GuestAction.COORDINATE)
         check_run(event, run)
         capacity = check_can_change_place(event, actor)
         if as_coordinator:
@@ -1271,7 +1265,7 @@ async def correct_place(
     The call's messages update in place, as other corrections do, and it messages nobody. Audited as
     ``event.place_changed`` with ``after_done``, and logged as ``change_place``, likewise."""
     async with locked_event(db, actor.household_id, event_id, now) as event:
-        await guest_rules.gate(db, event, actor, GuestAction.CHANGE_PLACE)
+        await guest_rules.gate(db, event, actor, GuestAction.COORDINATE)
         check_run(event, run)
         check_can_correct_place(event, actor)
         old_item, old_mode = event.decided_item_id, event.decided_mode
