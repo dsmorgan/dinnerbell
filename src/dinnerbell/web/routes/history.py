@@ -261,7 +261,7 @@ async def posted_feedback(
     cook_thanks: FormText = "",
     cook_note: Annotated[str, Form(max_length=COOK_NOTE_MAX * 2)] = "",
 ) -> FeedbackInput:
-    """The feedback form as posted. Any rating but the five, including "No answer", is no answer.
+    """The feedback form as posted. Any rating but the five, including "[No answer]", is no answer.
     ``feedback.give`` checks the rest against the meal, including each note's length after
     trimming.
 

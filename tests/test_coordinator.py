@@ -1400,6 +1400,8 @@ def test_web_assign_roles(admin: TestClient, provider: FakeProvider, clock: Fake
     assert submit(admin, f"/events/{event_id}/proposals/{first}/lock", {}).status_code == 303
     html = page(admin.get(f"/events/{event_id}"))
     assert f'action="/events/{event_id}/roles"' in html and '<summary class="small">Assign roles</summary>' in html
+    assert html.count('<option value="">[Nobody]</option>') == 2  # the role form and the admin's Coordinator form
+    assert '<option value="">Nobody</option>' not in html
     kim = member(migrated, "kim@example.com")
     assert submit(admin, f"/events/{event_id}/roles", {"mode": "pickup", "member_id": str(kim.id)}).status_code == 400
     bad = submit(admin, f"/events/{event_id}/roles", {"mode": "teleport", "member_id": str(kim.id), "run": "1"})

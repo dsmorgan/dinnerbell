@@ -174,6 +174,11 @@ def test_details_roles_and_coordinating(admin: TestClient, migrated: Settings) -
         assert htmx(admin, f"/events/{event_id}/{path}", data).status_code == 409, path
 
 
+def test_suggesting_from_the_catalog_offers_nothing_in_brackets(admin: TestClient) -> None:
+    html = page(admin.get(f"/events/{start(admin)}"))
+    assert '<select name="suggestion_item">\n          <option value="">[Nothing]</option>' in html
+
+
 def test_hand_off_from_the_page(admin: TestClient, provider: FakeProvider, migrated: Settings) -> None:
     invite(admin, "sam@example.com", "Sam")
     event_id = start(admin)

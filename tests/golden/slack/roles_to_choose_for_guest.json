@@ -1,0 +1,38 @@
+{
+  "blocks": [
+    {
+      "text": {
+        "text": "*Your guest Pat is coordinating dinner on Thursday, Oct 22.*\nSam's Tacos · Cook · Mexican\n\nTap *Assign roles* to choose who cooks by *6:00 PM*. After that, the first person who offered does it.",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "block_id": "more",
+      "elements": [
+        {
+          "action_id": "assign_roles",
+          "text": {
+            "emoji": true,
+            "text": "Assign roles",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "7:1"
+        },
+        {
+          "action_id": "link_event",
+          "text": {
+            "emoji": true,
+            "text": "View on web",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "url": "https://dinnerbell.example.com/events/7"
+        }
+      ],
+      "type": "actions"
+    }
+  ],
+  "text": "Choose who cooks for Sam's Tacos by 6:00 PM."
+}

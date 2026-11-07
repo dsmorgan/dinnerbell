@@ -2,7 +2,7 @@
   "blocks": [
     {
       "text": {
-        "text": "Hi Kim! Alex gave your guest Pat coordinating dinner on Thursday, Oct 22, so they're in. If it doesn't work for you, tell Alex.",
+        "text": "Hi Kim! *Your guest Pat is coordinating dinner on Thursday, Oct 22.*\nAlex gave it to them, so they're in.\nIf it doesn't work for them, tell Alex.",
         "type": "mrkdwn"
       },
       "type": "section"

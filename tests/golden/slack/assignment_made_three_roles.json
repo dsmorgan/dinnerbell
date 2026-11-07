@@ -1,0 +1,28 @@
+{
+  "blocks": [
+    {
+      "text": {
+        "text": "*You're picking up, ordering, and coordinating dinner on Thursday, Oct 22.*\nSam's Tacos · Pickup · Mexican\n\n• *When:* 6:45 PM\n• *Eating:* 3 people (1 guest)\n\nThanks for pitching in!",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "block_id": "more",
+      "elements": [
+        {
+          "action_id": "link_event",
+          "text": {
+            "emoji": true,
+            "text": "View on web",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "url": "https://dinnerbell.example.com/events/7"
+        }
+      ],
+      "type": "actions"
+    }
+  ],
+  "text": "You're picking up, ordering, and coordinating for dinner at 6:45 PM: Sam's Tacos."
+}

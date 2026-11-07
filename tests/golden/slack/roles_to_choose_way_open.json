@@ -1,0 +1,38 @@
+{
+  "blocks": [
+    {
+      "text": {
+        "text": "*You're coordinating dinner on Thursday, Oct 22.*\nSam's Tacos · Pickup · Mexican\n\nTap *Assign roles* to choose pickup or delivery, who orders, and who picks it up by *6:00 PM*. After that, it stays pickup, and the first people who offered do them.",
+        "type": "mrkdwn"
+      },
+      "type": "section"
+    },
+    {
+      "block_id": "more",
+      "elements": [
+        {
+          "action_id": "assign_roles",
+          "text": {
+            "emoji": true,
+            "text": "Assign roles",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "value": "7:1"
+        },
+        {
+          "action_id": "link_event",
+          "text": {
+            "emoji": true,
+            "text": "View on web",
+            "type": "plain_text"
+          },
+          "type": "button",
+          "url": "https://dinnerbell.example.com/events/7"
+        }
+      ],
+      "type": "actions"
+    }
+  ],
+  "text": "Choose pickup or delivery, who orders, and who picks it up for Sam's Tacos by 6:00 PM."
+}

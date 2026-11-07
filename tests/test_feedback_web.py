@@ -49,7 +49,7 @@ def meal_id(settings: Settings, item_id: int) -> int:
 
 
 def give(client: TestClient, meal: int, **answers: object) -> httpx.Response:
-    """Post the form as a browser does: one rating is always checked, "No answer" at first."""
+    """Post the form as a browser does: one rating is always checked, "[No answer]" at first."""
     return submit(client, f"/history/meals/{meal}/feedback", {"rating": ""} | answers)
 
 
@@ -68,10 +68,10 @@ def test_feedback_from_history_and_an_edit_replaces_it(
     # app.css hides the box until Other is checked, unless it holds text (:placeholder-shown).
     assert '<fieldset class="field issues">' in form and 'class="field compact issue-note"' in form
     assert re.search(r'<input type="text" name="issue_note" maxlength="200" placeholder="[^"]+"', form)
-    # The five ratings, lowest first, then "No answer", which starts checked.
+    # The five ratings, lowest first, then "[No answer]", which starts checked.
     values = re.findall(r'name="rating" value="([a-z]*)"', form)
     assert values == ["hated", "disliked", "fine", "liked", "loved", ""]
-    assert 'name="rating" value="" checked' in form
+    assert 'name="rating" value="" checked' in form and "<span>[No answer]</span>" in form
     saved = give(client, siam, rating="liked", place_issues=["cold", "late", "bogus"], issue_note=" No forks ")
     assert saved.status_code == 303 and saved.headers["location"] == f"/history?notice=feedback&meal={siam}#meal-{siam}"
     (row,) = rows(migrated, FeedbackRow)

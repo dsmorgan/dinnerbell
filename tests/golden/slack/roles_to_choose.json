@@ -2,7 +2,7 @@
   "blocks": [
     {
       "text": {
-        "text": "Hi Alex! You're coordinating dinner on Thursday, Oct 22: *Sam's Tacos* · Cook · Mexican. It's yours to choose who cooks. Tap *Assign roles* by *6:00 PM*. After that, the first person who offered does it.",
+        "text": "*You're coordinating dinner on Thursday, Oct 22.*\nSam's Tacos · Cook · Mexican\n\nTap *Assign roles* to choose who cooks by *6:00 PM*. After that, the first person who offered does it.",
         "type": "mrkdwn"
       },
       "type": "section"

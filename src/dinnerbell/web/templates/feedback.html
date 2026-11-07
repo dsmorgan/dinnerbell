@@ -20,7 +20,7 @@
       {% for r in ratings %}
       <label class="chip-toggle"><input type="radio" name="rating" value="{{ r.value }}"{% if answers.rating == r %} checked{% endif %}><span>{{ r.label }}</span></label>
       {% endfor %}
-      <label class="chip-toggle"><input type="radio" name="rating" value=""{% if answers.rating is none %} checked{% endif %}><span>No answer</span></label>
+      <label class="chip-toggle"><input type="radio" name="rating" value=""{% if answers.rating is none %} checked{% endif %}><span>[No answer]</span></label>
     </div>
   </fieldset>
   {% if facts.has_place %}
