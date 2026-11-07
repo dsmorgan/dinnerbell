@@ -776,6 +776,44 @@ async def meal_time(
     return await _run(request, principal, context, db, event_id, came_from, action)
 
 
+@router.post("/events/{event_id}/place")
+async def change_place(
+    request: Request,
+    principal: GuestCSRFChecked,
+    context: Context,
+    db: Database,
+    event_id: RowId,
+    item_id: Field = "",
+    new_place: Field = "",
+    mode: Field = "",
+    cuisine_id: Field = "",
+    opened_item: Field = "",
+    run: Run = "",
+    came_from: Annotated[str, Form(alias="from", max_length=10)] = "",
+) -> Response:
+    """**Change the plan**: the place, once a call is decided (#219). ``opened_item`` is the place
+    the page showed, and ``run`` its run, so a page left open can't write over a newer change."""
+    seen, shown = parse_id(run), parse_id(opened_item)
+    if seen is None or shown is None or any(value and parse_id(value) is None for value in (item_id, cuisine_id)):
+        return await _malformed(request, principal, context, db, event_id, came_from)
+
+    async def action() -> None:
+        await coordinator.change_place(
+            db,
+            principal.member,
+            event_id,
+            item_id=parse_id(item_id),
+            name=new_place.strip() or None,
+            cuisine_id=parse_id(cuisine_id),
+            mode=choice(Mode, mode),
+            opened_item_id=shown,
+            run=seen,
+            now=context.clock(),
+        )
+
+    return await _run(request, principal, context, db, event_id, came_from, action)
+
+
 @router.post("/events/{event_id}/assignments")
 async def assignment(
     request: Request,

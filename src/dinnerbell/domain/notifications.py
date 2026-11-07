@@ -748,6 +748,32 @@ class CoordinatorPicked(_Notification):
 
 
 @dataclass(frozen=True, slots=True)
+class PlaceChanged(_Notification):
+    """The coordinator, or an admin (``by``), changed the place after the decision, before the
+    meal time (#219): one direct message to each person who's in, so nobody goes to the old one.
+    ``was`` is the old place's name; ``at`` keeps each change its own row."""
+
+    kind: ClassVar[str] = "place_changed"
+    event: EventInfo
+    member: PersonInfo
+    was: str
+    decision: DecisionInfo
+    by: PersonInfo
+    at: datetime
+    via: PersonInfo | None = None
+    """For a guest without Slack (#38), the member who invited them, who gets the message."""
+
+    @property
+    def idempotency_key(self) -> str:
+        stamp = int(self.at.timestamp() * 1_000_000)
+        return f"{self.event.key}:{self.kind}:member{self.member.id}:{stamp}"
+
+    @property
+    def recipient_id(self) -> int | None:
+        return self.via.id if self.via is not None else self.member.id
+
+
+@dataclass(frozen=True, slots=True)
 class AssignmentEnded(_Notification):
     """The coordinator, or an admin (``by``), gave ``member``'s role to someone else, or switched
     the way of getting the meal, before the meal time (#154): one direct message, so nobody
@@ -1039,6 +1065,7 @@ Notification = Union[  # noqa: UP007 - a runtime union, used for isinstance chec
     CoordinatingGiven,
     CoordinatorPicked,
     AssignmentEnded,
+    PlaceChanged,
     RolesToChoose,
     PicksShuffled,
     BadgesEarned,
@@ -1057,6 +1084,7 @@ CALL_OFF_SUPERSEDES = frozenset(
         CoordinatingGiven.kind,
         CoordinatorPicked.kind,
         AssignmentEnded.kind,
+        PlaceChanged.kind,
     }
 )
 """Direct messages a call-off makes wrong: "You're cooking" or "Are you in?" must never arrive

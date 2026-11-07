@@ -218,6 +218,12 @@ class CallContext:
         return next((p for p in self.proposals if p.id == proposal_id), None)
 
     @property
+    def picks(self) -> list[Proposal]:
+        """What the call offered to vote on: every proposal but a place someone changed the plan
+        to after the decision (#219), which only ``winner`` finds."""
+        return [p for p in self.proposals if not p.after_decision]
+
+    @property
     def winner(self) -> Proposal | None:
         event = self.event
         return next(
@@ -561,7 +567,7 @@ def call_updated(ctx: CallContext) -> note.CallUpdated:
 
 
 def proposals(ctx: CallContext) -> tuple[note.ProposalInfo, ...]:
-    return tuple(proposal_info(ctx, p) for p in ctx.proposals)
+    return tuple(proposal_info(ctx, p) for p in ctx.picks)
 
 
 def who_is_in(ctx: CallContext) -> tuple[note.PersonInfo, ...]:
@@ -667,6 +673,28 @@ def assignment_ended(
         return []
     person, via = ctx.person(member_id), answering_for(ctx, member_id)
     return [note.AssignmentEnded(event_info(ctx), person, roles, ctx.person(by.id), now, via=via)]
+
+
+def place_changed(ctx: CallContext, was: str, by: Member, now: datetime) -> list[note.Notification]:
+    """The direct messages about a place changed after the decision (#219): one to each person
+    who's in but whoever changed it. A guest without Slack is told through whoever invited them,
+    unless that person is in or made the change, and knows already."""
+    decision = decision_info(ctx)
+    if decision is None:  # pragma: no cover - the call was decided, and its place is what changed
+        return []
+    inside = {r.member_id for r in ctx.participants}
+    told: list[note.Notification] = []
+    for member_id in inside:
+        member = ctx.members.get(member_id)
+        if member is None or not member.active or member.id == by.id:
+            continue
+        via = answering_for(ctx, member.id)
+        if via is not None and (via.id == by.id or via.id in inside):
+            continue
+        told.append(
+            note.PlaceChanged(event_info(ctx), ctx.person(member.id), was, decision, ctx.person(by.id), now, via=via)
+        )
+    return told
 
 
 def messages_for_state(ctx: CallContext) -> list[note.Notification]:

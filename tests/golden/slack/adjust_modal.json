@@ -11,7 +11,7 @@
     },
     {
       "text": {
-        "text": "*Sam's Tacos*: change the time, how you get it, who does what, or who coordinates. Only what you change is saved.",
+        "text": "*Sam's Tacos*: change the time, the place, how you get it, who does what, or who coordinates. Only what you change is saved.",
         "type": "mrkdwn"
       },
       "type": "section"
@@ -29,6 +29,161 @@
         "type": "plain_text"
       },
       "optional": false,
+      "type": "input"
+    },
+    {
+      "block_id": "place",
+      "element": {
+        "action_id": "value",
+        "initial_option": {
+          "text": {
+            "emoji": true,
+            "text": "Sam's Tacos",
+            "type": "plain_text"
+          },
+          "value": "11"
+        },
+        "option_groups": [
+          {
+            "label": {
+              "emoji": true,
+              "text": "Home meals",
+              "type": "plain_text"
+            },
+            "options": [
+              {
+                "text": {
+                  "emoji": true,
+                  "text": "Sam's Tacos",
+                  "type": "plain_text"
+                },
+                "value": "11"
+              }
+            ]
+          },
+          {
+            "label": {
+              "emoji": true,
+              "text": "Restaurants",
+              "type": "plain_text"
+            },
+            "options": [
+              {
+                "text": {
+                  "emoji": true,
+                  "text": "Siam Garden",
+                  "type": "plain_text"
+                },
+                "value": "12"
+              }
+            ]
+          }
+        ],
+        "type": "static_select"
+      },
+      "hint": {
+        "emoji": true,
+        "text": "Change it if you're eating somewhere else, even if nobody offered or someone's vetoed it.",
+        "type": "plain_text"
+      },
+      "label": {
+        "emoji": true,
+        "text": "Place",
+        "type": "plain_text"
+      },
+      "optional": true,
+      "type": "input"
+    },
+    {
+      "block_id": "new_place",
+      "element": {
+        "action_id": "value",
+        "max_length": 100,
+        "type": "plain_text_input"
+      },
+      "label": {
+        "emoji": true,
+        "text": "Or a new place",
+        "type": "plain_text"
+      },
+      "optional": true,
+      "type": "input"
+    },
+    {
+      "block_id": "place_mode",
+      "element": {
+        "action_id": "value",
+        "options": [
+          {
+            "text": {
+              "emoji": true,
+              "text": "Cook",
+              "type": "plain_text"
+            },
+            "value": "cook"
+          },
+          {
+            "text": {
+              "emoji": true,
+              "text": "Pickup",
+              "type": "plain_text"
+            },
+            "value": "pickup"
+          },
+          {
+            "text": {
+              "emoji": true,
+              "text": "Delivery",
+              "type": "plain_text"
+            },
+            "value": "delivery"
+          }
+        ],
+        "type": "static_select"
+      },
+      "hint": {
+        "emoji": true,
+        "text": "Only if you change the place. For something new, Cook makes it a home meal, and Pickup or Delivery a restaurant.",
+        "type": "plain_text"
+      },
+      "label": {
+        "emoji": true,
+        "text": "How, at a new place",
+        "type": "plain_text"
+      },
+      "optional": true,
+      "type": "input"
+    },
+    {
+      "block_id": "place_cuisine",
+      "element": {
+        "action_id": "value",
+        "options": [
+          {
+            "text": {
+              "emoji": true,
+              "text": "Mexican",
+              "type": "plain_text"
+            },
+            "value": "43"
+          },
+          {
+            "text": {
+              "emoji": true,
+              "text": "Thai",
+              "type": "plain_text"
+            },
+            "value": "44"
+          }
+        ],
+        "type": "static_select"
+      },
+      "label": {
+        "emoji": true,
+        "text": "Cuisine of a new place",
+        "type": "plain_text"
+      },
+      "optional": true,
       "type": "input"
     },
     {
@@ -205,7 +360,7 @@
     "text": "Cancel",
     "type": "plain_text"
   },
-  "private_metadata": "{\"event\":7,\"channel\":\"C0DINNER\",\"home\":false,\"run\":1,\"opened\":{\"at\":\"18:45\",\"who\":2,\"lead\":1,\"how\":\"cook\"}}",
+  "private_metadata": "{\"event\":7,\"channel\":\"C0DINNER\",\"home\":false,\"run\":1,\"opened\":{\"at\":\"18:45\",\"who\":2,\"lead\":1,\"how\":\"cook\",\"place\":11}}",
   "submit": {
     "emoji": true,
     "text": "Save",

@@ -191,6 +191,8 @@ def _render(notification: note.Notification, ctx: RenderContext) -> Message:
             return coordinator_picked_message(notification, ctx)
         case note.AssignmentEnded():
             return assignment_ended_message(notification, ctx)
+        case note.PlaceChanged():
+            return place_changed_message(notification, ctx)
         case note.RolesToChoose():
             return roles_to_choose_message(notification, ctx)
         case note.PicksShuffled():
@@ -739,8 +741,9 @@ ADJUST = labels.ADJUST
 
 
 def adjust_button(event: note.EventInfo) -> Block:
-    """**Adjust** (spec 5.7): the coordinator's modal for the meal time, who does the role, and
-    handing off. Everyone sees the button on the decision; the service checks who tapped it."""
+    """**Adjust** (spec 5.7): the coordinator's modal for the meal time, the place, who does the
+    role, and handing off. Everyone sees the button on the decision; the service checks who
+    tapped it."""
     return button(ADJUST, ids.ADJUST, ids.card_value(event.id, event.run))
 
 
@@ -1365,6 +1368,26 @@ def assignment_ended_message(notification: note.AssignmentEnded, ctx: RenderCont
     blocks = [section(who), actions(_web_button(ctx, event), block_id="more")]
     subject = f"{notification.member.name} is" if notification.via is not None else "You're"
     return _finish(f"{subject} no longer {role} for {slot} on {day}.", blocks)
+
+
+def place_changed_message(notification: note.PlaceChanged, ctx: RenderContext) -> Message:
+    """To everyone who's in, when the place changed after the decision (#219), so nobody goes to
+    the old one."""
+    event, decision = notification.event, notification.decision
+    proposal = decision.proposal
+    slot, day, by = _slot(event), day_label(event.day), escape(notification.by.name)
+    now = f"*{_item_name(proposal.item)}* · {_kind(proposal)}"
+    was = escape(notification.was)
+    change = (
+        f"Hi {escape(notification.via.name)}! {by} changed the plan your guest {escape(notification.member.name)} "
+        f"is in for, {slot} on {day}: it's {now} now, not {was}."
+        if notification.via is not None
+        else f"{by} changed the plan for {slot} on {day}: it's {now} now, not {was}."
+    )
+    when = f"*When:* {local_clock(decision.meal_time, event.timezone)} · *Eating:* {_head_count(decision)}"
+    buttons = [*_item_buttons(proposal.item, proposal.mode), _web_button(ctx, event)]
+    blocks = [section(join_lines([change, when])), actions(*buttons, block_id="more")]
+    return _finish(f"{slot.capitalize()} on {day} is {proposal.item.name} now, not {notification.was}.", blocks)
 
 
 def assignment_message(notification: note.AssignmentMade, ctx: RenderContext) -> Message:

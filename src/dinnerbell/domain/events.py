@@ -385,6 +385,12 @@ class Suggestion:
     free_text: str | None = None
 
 
+AFTER_DECISION_RANK = 0
+"""The ``rank`` of the row for a place someone changed the plan to after the decision (#219). Picks
+rank from 1, so this row is never one of them: it exists so the decided place has a proposal, and
+nobody saw it or voted for it (``Proposal.after_decision``)."""
+
+
 @dataclass(frozen=True, slots=True)
 class Proposal:
     """A candidate for a call: a catalog item, or free text with a cuisine (FR-13)."""
@@ -404,6 +410,11 @@ class Proposal:
     """Someone chose its way (#178): the member who added it, the offer it came from, or the
     coordinator or an admin during the vote. A decision on it doesn't ask again
     (``way_unsettled``). Only a drawn pick starts without."""
+
+    @property
+    def after_decision(self) -> bool:
+        """Added when someone changed the place after the decision (#219), so not a pick."""
+        return self.rank == AFTER_DECISION_RANK
 
 
 @dataclass(frozen=True, slots=True)
@@ -1167,6 +1178,14 @@ def check_can_choose_roles(event: Event, actor: Member) -> None:
     check_can_manage_decision(event, actor)
     if event.state is not EventState.DECIDED:
         raise EventRuleViolation("There's no decision to change.", code="not_decided")
+
+
+def check_can_change_place(event: Event, actor: Member) -> ActingAs:
+    """Change the place after the decision (#219, spec 5.7): the coordinator, a guest coordinator
+    too (FR-58), or an admin, while the call is decided. Returns the capacity they act in, for
+    the audit row."""
+    check_can_choose_roles(event, actor)
+    return ActingAs.COORDINATOR if is_coordinator(event, actor) else ActingAs.ADMIN
 
 
 WAY_SETTERS = "Only the coordinator or an admin can choose pickup or delivery."

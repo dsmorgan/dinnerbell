@@ -666,7 +666,7 @@ async def _as_catalog_item(db: AsyncSession, ctx: CallContext, proposal: Proposa
     return proposal if item is None else replace(proposal, item_id=item.id)
 
 
-async def _catalog_free_text(db: AsyncSession, ctx: CallContext, proposal: Proposal, now: datetime) -> CatalogItem:
+async def catalog_free_text(db: AsyncSession, ctx: CallContext, proposal: Proposal, now: datetime) -> CatalogItem:
     """FR-13: a free-text proposal becomes a catalog item when it wins. It's for the call's meal
     and the default meals (#72), since it was proposed for this one."""
     household_id = ctx.event.household_id
@@ -762,7 +762,7 @@ async def decide(
             await abandon(db, event, EndReason.NO_COVERAGE, now)
             return
         winner, tie, tie_by = found, chosen.tie, chosen.by
-    item = ctx.items[winner.item_id] if winner.item_id is not None else await _catalog_free_text(db, ctx, winner, now)
+    item = ctx.items[winner.item_id] if winner.item_id is not None else await catalog_free_text(db, ctx, winner, now)
     roles = assign_roles(winner.mode, ctx.coverage, item.cook_ids, event.coordinator_id)
     coordinator_member = ctx.members.get(event.coordinator_id) if event.coordinator_id is not None else None
     # The coordinator chooses when the roles have no clear owner, or the way is still open (#178).

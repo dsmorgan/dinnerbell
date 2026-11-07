@@ -407,12 +407,32 @@
     {% endif %}
     {% if v.can.manage %}
     <details class="details-form">
-      <summary class="small">Change the time or who does what</summary>
+      <summary class="small">Change the plan</summary>
       {% if e.state.value == "decided" %}
       <form method="post" autocomplete="off" action="{{ base }}/meal-time" hx-post="{{ base }}/meal-time" {{ swap|safe }} class="inline-form">
         {{ hidden() }}
         <label class="field compact"><span>Meal time</span><input type="time" name="at" value="{{ e.meal_time|local_hhmm(tz) }}"></label>
         <button type="submit" class="button small">Save time</button>
+      </form>
+      {#- Where they're really eating (#219): it records what happened, so nothing here is held to what people offered or ruled out. -#}
+      <form method="post" autocomplete="off" action="{{ base }}/place" hx-post="{{ base }}/place" {{ swap|safe }} class="stack">
+        {{ hidden() }}
+        <input type="hidden" name="run" value="{{ e.run }}">
+        <input type="hidden" name="opened_item" value="{{ e.decided_item_id }}">
+        <label class="field"><span>Place</span>
+          <select name="item_id"><option value="">Keep {{ d.proposal.item.name }}, or type a new one</option>{% for item in v.items if item.id != e.decided_item_id %}{% set hint = v.meal_hint(item) %}<option value="{{ item.id }}">{{ item.name }}{% if hint %} ({{ hint }}){% endif %}</option>{% endfor %}</select>
+        </label>
+        <div class="pair">
+          <label class="field"><span>Or a new place</span><input type="text" name="new_place" maxlength="100"></label>
+          <label class="field"><span>Cuisine (optional)</span>
+            <select name="cuisine_id"><option value="">None</option>{% for tag in v.cuisine_tags %}<option value="{{ tag.id }}">{{ tag.name }}</option>{% endfor %}</select>
+          </label>
+        </div>
+        <label class="field"><span>How</span>
+          <select name="mode"><option value="">Whichever the place allows</option><option value="pickup">Pickup</option><option value="delivery">Delivery</option><option value="cook">Cook</option></select>
+        </label>
+        <p class="small muted">Everyone who's in hears about it before the meal time. People keep their roles if the new way still has them. Something new needs a way: Cook makes it a home meal, and Pickup or Delivery a restaurant.</p>
+        <button type="submit" class="button small">Change the place</button>
       </form>
       {% endif %}
       <form method="post" autocomplete="off" action="{{ base }}/assignments" hx-post="{{ base }}/assignments" {{ swap|safe }} class="inline-form">
