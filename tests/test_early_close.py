@@ -11,8 +11,10 @@ from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
+from sqlalchemy import text
 
 from dinnerbell.config import Settings
+from dinnerbell.db.meals import household_settings
 from dinnerbell.domain.events import (
     EARLY_CLOSE_QUIET,
     EndReason,
@@ -24,6 +26,7 @@ from dinnerbell.domain.events import (
     counts_vote,
 )
 from dinnerbell.domain.meals import Slot
+from dinnerbell.domain.schedule import check_schedule, slot_schedule
 from dinnerbell.services import call_admin, calls
 from dinnerbell.services.database import Database, open_database
 from tests.support.calls import OPENS, House, furnish, make_house
@@ -408,3 +411,103 @@ async def test_a_call_with_a_decision_time_after_midnight_votes_its_usual_length
     house.clock.now = local(OPENS.date(), 23, 5)
     assert await house.tick() == [Step.CLOSE_VOTING]
     assert (await house.event(event_id)).state is EventState.DECIDED
+
+
+async def all_but_lee_in(house: House, starts: datetime) -> int:
+    """Today's dinner started at ``starts``. Lee never answers, so answers stay open."""
+    house.clock.now = starts
+    dinner = await act(house, calls.start_call, house["Alex"], Slot.DINNER, OPENS.date())
+    for name in ("Alex", "Sam", "Kim"):
+        await act(house, calls.respond, house[name], dinner.id, Status.IN)
+    await act(house, calls.offer_role, house["Sam"], dinner.id, RoleOffer.PICKUP, True)
+    return int(dinner.id)
+
+
+async def decides_in_the_last_minute(house: House, event_id: int) -> None:
+    """Voting runs until 23:59 and no longer: the tick decides then, with the meal at 23:59."""
+    last_minute = local(OPENS.date(), 23, 59)
+    assert (await house.event(event_id)).vote_deadline == last_minute
+    house.clock.now = last_minute - timedelta(seconds=1)
+    assert await house.tick() == []
+    house.clock.now = last_minute
+    assert (await house.tick())[0] is Step.CLOSE_VOTING
+    event = await house.event(event_id)
+    assert (event.state, event.end_reason) == (EventState.DECIDED, None)
+    assert (event.decided_at, event.meal_time) == (last_minute, last_minute)
+
+
+async def test_answers_closing_at_their_deadline_decide_at_23_59_not_after_midnight(house: House) -> None:
+    """Regression (#215): started at 10:15 PM, its vote ran to 12:30 AM, and it expired at midnight."""
+    event_id = await all_but_lee_in(house, local(OPENS.date(), 22, 15))
+    house.clock.now = local(OPENS.date(), 23, 45)
+    assert await house.tick() == [Step.CLOSE_RESPONSES]
+    await decides_in_the_last_minute(house, event_id)
+
+
+async def test_close_now_with_a_vote_past_midnight_decides_at_23_59(house: House) -> None:
+    event_id = await all_but_lee_in(house, local(OPENS.date(), 22, 15))
+    house.clock.now = local(OPENS.date(), 23, 30)
+    await act(house, calls.close_window, house["Alex"], event_id)
+    await decides_in_the_last_minute(house, event_id)
+
+
+async def test_a_decision_time_in_the_last_minute_moves_to_23_59_when_answers_close(house: House) -> None:
+    """Started at 21:44:45, it would decide at 23:59:45, which the 30-second tick could miss."""
+    event_id = await late_dinner(house, local(OPENS.date(), 21, 44) + timedelta(seconds=45), closes=time(22, 0))
+    await decides_in_the_last_minute(house, event_id)
+
+
+async def test_a_move_into_the_last_minute_stops_at_23_59(house: House) -> None:
+    event_id = await late_dinner(house, local(OPENS.date(), 21, 30) + timedelta(seconds=45))
+    assert (await house.event(event_id)).vote_deadline == local(OPENS.date(), 23, 45) + timedelta(seconds=45)
+    await act(house, call_admin.move_deadline, house["Alex"], event_id, Window.VOTE, 14)  # 23:59:45
+    await decides_in_the_last_minute(house, event_id)
+
+
+async def test_answers_closing_in_the_last_minute_decide_at_once(house: House) -> None:
+    moment = local(OPENS.date(), 23, 59) + timedelta(seconds=30)
+    event_id = await all_but_lee_in(house, moment - timedelta(minutes=90))
+    house.clock.now = moment
+    assert (await house.tick())[:2] == [Step.CLOSE_RESPONSES, Step.CLOSE_VOTING]
+    event = await house.event(event_id)
+    assert (event.state, event.decided_at, event.meal_time) == (EventState.DECIDED, moment, moment)
+
+
+async def test_answers_still_open_at_midnight_expire_as_missed(house: House) -> None:
+    """Nobody has voted, so there's nothing to decide: this stays too late."""
+    event_id = await all_but_lee_in(house, local(OPENS.date(), 22, 45))  # answers close at 00:15
+    house.clock.now = local(OPENS.date() + timedelta(days=1), 0)
+    assert await house.tick() == [Step.EXPIRE]
+    event = await house.event(event_id)
+    assert (event.state, event.end_reason) == (EventState.ABANDONED, EndReason.MISSED)
+
+
+async def test_a_slot_thats_off_with_windows_ending_at_midnight_decides_at_23_59(house: House) -> None:
+    """``check_schedule`` lets a disabled slot's windows end at 24:00, and an ad-hoc call for a
+    later day uses them."""
+    async with house.sessionmaker() as db:
+        await db.execute(
+            text(
+                "UPDATE household SET settings = json_set(settings, "
+                "'$.slots.dinner.enabled', json('false'), '$.slots.dinner.call_time', '21:45')"
+            )
+        )
+        await db.commit()
+        schedule = slot_schedule(await household_settings(db, house["Alex"].household_id), Slot.DINNER)
+    assert not check_schedule(schedule).enabled
+    tomorrow = OPENS.date() + timedelta(days=1)
+    house.clock.now = OPENS
+    event = await act(house, calls.start_call, house["Alex"], Slot.DINNER, tomorrow)
+    house.clock.now = local(tomorrow, 21, 45)
+    assert await house.tick() == [Step.OPEN]
+    for name in ("Alex", "Sam", "Kim"):
+        await act(house, calls.respond, house[name], event.id, Status.IN)
+    await act(house, calls.offer_role, house["Sam"], event.id, RoleOffer.PICKUP, True)
+    house.clock.now = local(tomorrow, 23, 15)
+    assert await house.tick() == [Step.CLOSE_RESPONSES]
+    last_minute = local(tomorrow, 23, 59)
+    assert (await house.event(event.id)).vote_deadline == last_minute
+    house.clock.now = last_minute
+    assert (await house.tick())[0] is Step.CLOSE_VOTING
+    decided = await house.event(event.id)
+    assert (decided.state, decided.meal_time) == (EventState.DECIDED, last_minute)

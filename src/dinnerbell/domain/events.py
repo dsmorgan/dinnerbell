@@ -36,6 +36,9 @@ MAX_ADDED_PER_MEMBER = 3
 CANCEL_NOTE_MAX = 140
 """A call-off reason: one line, short enough for a Slack notification preview."""
 QUARTER_HOUR = timedelta(minutes=15)
+LAST_MINUTE = timedelta(minutes=1)
+"""How long before midnight a call's day has its last minute, 23:59 local: the latest a decision
+time runs and the latest rounding puts a meal time (#215). The tick runs twice within it."""
 LATEST_EAT_TIME = time(23, 45)
 """The latest eat time, the day's last quarter hour: a later one would round up past midnight."""
 
@@ -846,7 +849,7 @@ def meal_time(
     soonest = max(candidate, not_before.astimezone(UTC))
     rounded = round_up_to_quarter(soonest)
     ends = call_ends_at(day, zone)
-    return rounded if rounded < ends else max(ends - timedelta(minutes=1), soonest)
+    return rounded if rounded < ends else max(ends - LAST_MINUTE, soonest)
 
 
 # Who may do what ------------------------------------------------------------------------------
@@ -1481,8 +1484,10 @@ def check_restart(
 
 def shifted_deadline(current: datetime, minutes: int | None, now: datetime, *, latest: datetime) -> datetime:
     """A window's new deadline: ``minutes`` later (negative is earlier), or now when None.
-    Never earlier than now, so shortening past the present closes the window, and always before
-    ``latest``, midnight after the call's day, when the call would expire unfinished."""
+    Never earlier than now, so shortening past the present closes the window. Never ``latest``,
+    midnight after the call's day, or later, when the call would expire unfinished: a move that
+    far is refused, and one that lands in the last minute of the day stops at its start, so the
+    tick gets there first."""
     if minutes is None:
         return now
     if not -MAX_DEADLINE_SHIFT_MINUTES <= minutes <= MAX_DEADLINE_SHIFT_MINUTES:
@@ -1492,7 +1497,7 @@ def shifted_deadline(current: datetime, minutes: int | None, now: datetime, *, l
     moved = max(current + timedelta(minutes=minutes), now)
     if moved >= latest:
         raise EventRuleViolation("That would run past midnight, when the call ends.", code="bad_deadline")
-    return moved
+    return min(moved, latest - LAST_MINUTE)
 
 
 def check_window_change(event: Event, window: Window) -> datetime:
@@ -1579,10 +1584,12 @@ def voting_closes(event: Event, kept: datetime, zone: tzinfo) -> datetime:
     closed (``decision_deadline``), so answers closing early, whether everyone answered or by
     Close now, never decide the call sooner (FR-56). A ``kept`` of midnight or later is too late
     to decide on the call's day (``stale_after``), so voting gets its usual time from the close
-    (``event.respond_deadline``) instead."""
-    if kept < call_ends_at(event.day, zone):
-        return kept
-    return event.respond_deadline + timedelta(minutes=event.vote_minutes)
+    (``event.respond_deadline``) instead. Either way it stops at the day's last minute, so the
+    call decides rather than expiring at midnight (#215). Answers that close later than that
+    minute decide at once."""
+    ends = call_ends_at(event.day, zone)
+    closes = kept if kept < ends else event.respond_deadline + timedelta(minutes=event.vote_minutes)
+    return min(closes, ends - LAST_MINUTE)
 
 
 def closes_early(

@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 from collections.abc import AsyncIterator
 from dataclasses import replace
-from datetime import time
+from datetime import datetime, time
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -300,6 +300,29 @@ async def test_slack_adjust_with_nothing_changed_saves_nothing(slack: Slack, hou
     assert not response.body
     assert slack.ephemerals("Sam")[-1] == "Nothing changed."
     assert (len(await house.audits()), len(await house.outbox())) == (audits, outbox)
+
+
+async def test_slack_adjust_on_a_meal_with_seconds_doesnt_refuse_its_own_time(slack: Slack, house: House) -> None:
+    """A meal decided at 23:59:30 (#215) shows as 23:59. Saving that changes nothing, and a real
+    change to another part still saves, with the meal time left alone."""
+    event_id = await to_voting(house, "Sam", "Lee", pickups=("Alex",), coordinator_name="Sam")
+    await house.settle_ways(event_id)
+    moment = datetime(2026, 10, 22, 23, 59, 30, tzinfo=ZoneInfo("America/Chicago"))
+    house.clock.now = moment
+    await act(house, calls.lock, house["Sam"], event_id, (await pick_ids(house, event_id))["Siam Garden"])
+    await house.tick()
+    assert (await house.event(event_id)).meal_time == moment
+    origin = await opened_now(house, event_id)
+    unchanged = await slack.submit("Sam", ids.ADJUST_VIEW, form(house, at="23:59"), event_id, origin=origin)
+    assert not unchanged.body
+    assert slack.ephemerals("Sam")[-1] == "Nothing changed."
+    assert (await house.event(event_id)).meal_time == moment
+    early = await slack.submit("Sam", ids.ADJUST_VIEW, form(house, at="23:58"), event_id, origin=origin)
+    assert "after the decision" in json.loads(early.body)["errors"]["meal_time"]
+    other = await slack.submit("Sam", ids.ADJUST_VIEW, form(house, at="23:59", lead="Lee"), event_id, origin=origin)
+    assert not other.body
+    event = await house.event(event_id)
+    assert (event.coordinator_id, event.meal_time) == (house["Lee"].id, moment)
 
 
 async def test_slack_adjust_shows_a_refusal_next_to_its_field_and_keeps_the_modal(slack: Slack, house: House) -> None:

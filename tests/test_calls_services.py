@@ -1124,6 +1124,19 @@ async def test_a_meal_decided_in_the_last_minute_shows_and_saves_as_that_minute(
         await act(house, calls.set_meal_time, house["Alex"], event_id, time(23, 58))
 
 
+async def test_the_decisions_own_minute_means_the_decision_at_any_hour(house: House) -> None:
+    event_id = await to_voting(house)
+    moment = local(22, 18, 7) + timedelta(seconds=30)
+    house.clock.now = moment
+    await act(house, calls.lock, house["Alex"], event_id, (await proposal_ids(house, event_id))["Siam Garden"])
+    assert (await house.event(event_id)).meal_time == local(22, 18, 30)
+    await act(house, calls.set_meal_time, house["Alex"], event_id, time(18, 7))
+    assert (await house.event(event_id)).meal_time == moment
+    with pytest.raises(EventRuleViolation, match="after the decision"):
+        await act(house, calls.set_meal_time, house["Alex"], event_id, time(18, 6))
+    assert (await house.event(event_id)).meal_time == moment
+
+
 async def test_a_meal_decided_late_can_move_earlier_but_not_before_the_decision(house: House) -> None:
     event_id, ids = await late_tie(house)
     await decide_late(house, "lock", event_id, ids, local(22, 23, 53))
