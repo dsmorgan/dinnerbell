@@ -290,6 +290,30 @@ async def test_an_open_way_asks_the_coordinator_even_when_the_roles_are_clear(ho
     assert "is choosing pickup or delivery" in json.dumps(render(made, CTX).payload())
 
 
+@pytest.mark.parametrize(("host", "can_choose"), [("Alex", True), ("Lee", False)])
+async def test_a_guest_coordinators_host_is_told_an_admin_chooses(house: House, host: str, can_choose: bool) -> None:
+    pat = await add_guest(house, "Pat")
+    event_id = await open_dinner(house)
+    for name in ("Alex", "Lee"):
+        await act(house, calls.respond, house[name], event_id, Status.IN)
+    await act(house, calls.offer_role, house["Alex"], event_id, RoleOffer.PICKUP, True)
+    await act(house, guests.invite, house[host], event_id, guest_id=pat.id)
+    await act(house, calls.respond, pat, event_id, Status.IN)
+    await act(house, calls.claim_coordinator, pat, event_id)
+    house.clock.now = RESPOND_BY
+    await house.tick()
+    await decide_on(house, event_id, "Siam Garden")
+    (ask,) = await sent(house, "roles_to_choose")
+    assert ask.via is not None and ask.via.id == house[host].id
+    message = json.dumps(render(ask, CTX).payload())
+    assert "An admin can choose pickup or delivery" in message and ids.ASSIGN_ROLES not in message
+    # The decision has the button for everyone to see, and only an admin host gets past it.
+    (made,) = await sent(house, "decision_made")
+    assert ids.ASSIGN_ROLES in json.dumps(render(made, CTX).payload())
+    view = await act(house, event_views.event_view, house[host], event_id)
+    assert view.can.choose_roles is can_choose
+
+
 async def test_a_place_with_one_way_and_clear_roles_asks_nothing(house: House) -> None:
     event_id = await to_voting(house, "Lee")
     await decide_on(house, event_id, "Taqueria")

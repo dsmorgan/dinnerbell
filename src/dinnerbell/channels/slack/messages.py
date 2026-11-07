@@ -1336,12 +1336,12 @@ def coordinator_picked_message(notification: note.CoordinatorPicked, ctx: Render
         "",
         "*While the vote is open:*",
         "• Tap ⋯ beside a pick to decide it, break a tie, or set pickup or delivery",
-        "• Shuffle the picks",
+        "• Shuffle the proposals",
         "",
         "*After it's decided:*",
         "• Change how you get it and who does it",
-        f"• If that isn't clear, choose within {_minutes(notification.choose_minutes)} or by the meal time. "
-        "Otherwise, the first person who offered does it.",
+        f"• If that isn't clear, choose within {_minutes(notification.choose_minutes)}, or by the meal time if "
+        "sooner. Otherwise, the first person who offered does it.",
         "",
         "*Can't do it?* Hand it off on the call's page.",
         "",
@@ -1380,7 +1380,8 @@ def assignment_message(notification: note.AssignmentMade, ctx: RenderContext) ->
         "",
     ]
     by = notification.assigned_by
-    if by is not None:  # they hadn't offered: say who asked, and whom to tell
+    # They hadn't offered: say who asked, and whom to tell. A host who assigned their own guest knows.
+    if by is not None and (via is None or by.id != via.id):
         lead = event.coordinator
         if lead is None:
             tell = f"tell {escape(by.name)}"
@@ -1419,15 +1420,21 @@ def roles_to_choose_message(notification: note.RolesToChoose, ctx: RenderContext
     what = labels.roles_to_choose(proposal.mode, way_open=proposal.way_open)
     fallback = labels.roles_fallback(proposal.mode, way_open=proposal.way_open)
     stays = f"it stays {proposal.mode.label.lower()}, and " if proposal.way_open else ""
-    who = f"Your guest {escape(notification.member.name)} is" if notification.via else "You're"
+    if notification.via:  # the host can't choose for their guest, unless they're an admin (FR-58)
+        who = f"Your guest {escape(notification.member.name)} is"
+        ask = plain = "An admin can choose"
+        buttons = [_web_button(ctx, event)]
+    else:
+        who, ask, plain = "You're", "Tap *Assign roles* to choose", "Choose"
+        buttons = [assign_roles_button(event), _web_button(ctx, event)]
     lines = [
         f"*{who} coordinating {_slot(event)} on {day_label(event.day)}.*",
         _place(proposal),
         "",
-        f"Tap *Assign roles* to choose {what} by *{until}*. After that, {stays}{fallback}.",
+        f"{ask} {what} by *{until}*. After that, {stays}{fallback}.",
     ]
-    blocks = [section(join_lines(lines)), actions(assign_roles_button(event), _web_button(ctx, event), block_id="more")]
-    return _finish(f"Choose {what} for {proposal.item.name} by {until}.", blocks)
+    blocks = [section(join_lines(lines)), actions(*buttons, block_id="more")]
+    return _finish(f"{plain} {what} for {proposal.item.name} by {until}.", blocks)
 
 
 def picks_shuffled_message(notification: note.PicksShuffled) -> Message:
