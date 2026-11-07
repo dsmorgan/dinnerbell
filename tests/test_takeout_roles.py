@@ -10,6 +10,7 @@ after (#162), a pickup offer, and the Slack and web surfaces."""
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import AsyncIterator
 from dataclasses import replace
 from datetime import date, time, timedelta
@@ -55,7 +56,7 @@ from dinnerbell.services import calls, coordinator, event_views, guests, offers
 from dinnerbell.services.coordinator import Adjustment
 from dinnerbell.services.database import Database, open_database
 from dinnerbell.services.errors import NotFound
-from tests.conftest import invite, page
+from tests.conftest import invite, page, sign_in
 from tests.support.calls import OPENS, RESPOND_BY, House, furnish, make_house, nobody_coordinates
 from tests.support.clock import FakeClock
 from tests.support.fake_oidc import FakeProvider
@@ -191,7 +192,10 @@ def test_what_the_coordinator_is_asked_to_choose() -> None:
 def test_way_values_say_the_way_the_call_the_run_and_the_pick() -> None:
     value = ids.way_value(Mode.DELIVERY, 12, 3, 45)
     assert value == "delivery:12:3:45" and ids.parse_way(value) == (Mode.DELIVERY, 12, 3, 45)
-    for bad in ("cook:12:3:45", "delivery:12:3", "delivery:0:3:45", 7, "pickup:1:1:1:1"):
+    either = ids.way_value(None, 12, 3, 45)  # clears it (#212)
+    assert either == "either:12:3:45" and ids.parse_way(either) == (None, 12, 3, 45)
+    bad_values = ("cook:12:3:45", "delivery:12:3", "delivery:0:3:45", 7, "pickup:1:1:1:1", "Either:1:1:1", "none:1:1:1")
+    for bad in bad_values:
         with pytest.raises(ids.BadValue):
             ids.parse_way(bad)
 
@@ -800,3 +804,182 @@ async def test_a_cook_who_now_orders_hears_only_the_new_role(house: House) -> No
     assert await sent(house, "assignment_ended") == []
     (told,) = (await sent(house, "assignment_made"))[before:]
     assert (told.member.id, told.roles) == (house["Sam"].id, (ORDER,))
+
+
+# Clearing the way (#212) --------------------------------------------------------------------------------
+
+
+def _menu(payload: dict[str, object], proposal_id: int) -> list[str]:
+    """The labels in the ⋯ beside a pick on a proposals message."""
+    blocks = payload["blocks"]
+    assert isinstance(blocks, list)
+    (row,) = [b for b in blocks if b.get("block_id") == f"proposal-actions-{proposal_id}"]
+    (menu,) = [e for e in row["elements"] if e["action_id"] == ids.SET_WAY]
+    return [o["text"]["text"] for o in menu["options"]]
+
+
+async def test_clearing_the_way_while_voting_opens_it_again(house: House) -> None:
+    event_id = await to_voting(house, "Lee", "Sam", coordinator_name="Sam")
+    siam = (await pick_ids(house, event_id))["Siam Garden"]
+    await act(house, coordinator.set_way, house["Sam"], event_id, siam, Mode.DELIVERY, run=1)
+    chosen = render((await sent(house, "proposals_updated"))[-1], CTX).payload()
+    assert _menu(chosen, siam) == [labels.WAY_LABELS[Mode.PICKUP], labels.WAY_LABELS[Mode.DELIVERY], labels.EITHER_WAY]
+    await act(house, coordinator.set_way, house["Sam"], event_id, siam, None, run=1)
+    ctx = await house.context(event_id)
+    pick = ctx.proposal(siam)
+    assert pick is not None and (pick.mode, pick.mode_chosen) == (Mode.DELIVERY, False)  # the way it had, open
+    assert cc.proposal_info(ctx, pick).way_open
+    cleared = [a.payload for a in await house.audits() if a.action == "event.way_set"][-1]
+    assert cleared == {"proposal_id": siam, "mode": None, "switched_from": "delivery"}
+    updated = render((await sent(house, "proposals_updated"))[-1], CTX).payload()
+    assert "(chosen)" not in json.dumps(updated)
+    assert _menu(updated, siam) == [labels.WAY_LABELS[Mode.PICKUP], labels.WAY_LABELS[Mode.DELIVERY]]
+    assert "pickup or delivery with ⋯" in json.dumps(updated, ensure_ascii=False)
+    await decide_on(house, event_id, "Siam Garden")
+    assert (await house.event(event_id)).roles_due_at is not None  # the decision asks again
+    (ask,) = await sent(house, "roles_to_choose")
+    assert "pickup or delivery, who orders, and who picks it up" in json.dumps(render(ask, CTX).payload())
+
+
+async def test_clearing_the_way_is_refused_with_a_reason(house: House) -> None:
+    event_id = await to_voting(house, "Sam", "Lee", coordinator_name="Sam")
+    picks = await pick_ids(house, event_id)
+    refusals = [("Lee", picks["Siam Garden"], "not_coordinator"), ("Sam", picks["Taqueria"], "not_both_ways")]
+    for who, pick, code in refusals:
+        with pytest.raises(EventRuleViolation) as refused:
+            await act(house, coordinator.set_way, house[who], event_id, pick, None, run=1)
+        assert refused.value.code == code, who
+    with pytest.raises(StaleRun):
+        await act(house, coordinator.set_way, house["Sam"], event_id, picks["Siam Garden"], None, run=2)
+    with pytest.raises(NotFound):
+        await act(house, coordinator.set_way, house["Sam"], event_id, 999_999, None, run=1)
+    assert [a for a in await house.audits() if a.action == "event.way_set"] == []
+    await act(house, calls.lock, house["Alex"], event_id, picks["Taqueria"])
+    with pytest.raises(EventRuleViolation) as refused:
+        await act(house, coordinator.set_way, house["Sam"], event_id, picks["Siam Garden"], None, run=1)
+    assert refused.value.code == "voting_closed"
+
+
+async def test_clearing_an_open_way_is_accepted_as_setting_the_way_it_has_is(house: House) -> None:
+    """Nobody who's in can order, so setting delivery is refused; clearing needs no coverage, and
+    an admin may. The way was open already, so the pick is unchanged, but the tap is audited."""
+    event_id = await to_voting(house, "Sam")
+    siam = (await pick_ids(house, event_id))["Siam Garden"]
+    await act(house, coordinator.set_way, house["Alex"], event_id, siam, None, run=1)
+    pick = (await house.context(event_id)).proposal(siam)
+    assert pick is not None and (pick.mode, pick.mode_chosen) == (Mode.PICKUP, False)
+    (audit,) = [a for a in await house.audits() if a.action == "event.way_set"]
+    assert audit.payload == {"proposal_id": siam, "mode": None, "switched_from": "pickup"}
+
+
+async def test_a_guest_coordinator_clears_the_way(house: House) -> None:
+    pat = await add_guest(house, "Pat")
+    event_id = await open_dinner(house)
+    for name in ("Alex", "Lee"):
+        await act(house, calls.respond, house[name], event_id, Status.IN)
+    await act(house, calls.offer_role, house["Alex"], event_id, RoleOffer.PICKUP, True)
+    await act(house, guests.invite, house["Lee"], event_id, guest_id=pat.id)
+    await act(house, calls.respond, pat, event_id, Status.IN)
+    await act(house, calls.claim_coordinator, pat, event_id)
+    house.clock.now = RESPOND_BY
+    await house.tick()
+    siam = (await pick_ids(house, event_id))["Siam Garden"]
+    await act(house, coordinator.set_way, pat, event_id, siam, Mode.DELIVERY, run=1)
+    await act(house, coordinator.set_way, pat, event_id, siam, None, run=1)
+    pick = (await house.context(event_id)).proposal(siam)
+    assert pick is not None and (pick.mode, pick.mode_chosen) == (Mode.DELIVERY, False)
+
+
+async def test_slack_clears_the_way_with_either_way(slack: Slack, house: House) -> None:
+    event_id = await to_voting(house, "Lee", "Sam", coordinator_name="Sam")
+    siam = (await pick_ids(house, event_id))["Siam Garden"]
+    either = ids.way_value(None, event_id, 1, siam)
+    await slack.click("Sam", ids.SET_WAY, None, selected=ids.way_value(Mode.DELIVERY, event_id, 1, siam))
+    await slack.click("Lee", ids.SET_WAY, None, selected=either)
+    assert slack.ephemerals("Lee")[-1] == "Only the coordinator or an admin can choose pickup or delivery."
+    await slack.click("Sam", ids.SET_WAY, None, selected=either)
+    assert slack.ephemerals("Sam")[-1] == "It's either way again. If it wins, pickup or delivery gets chosen then."
+    pick = (await house.context(event_id)).proposal(siam)
+    assert pick is not None and (pick.mode, pick.mode_chosen) == (Mode.DELIVERY, False)
+
+
+def _proposal_card(html: str, item_id: int) -> str:
+    """The proposal on the event page whose way posts to ``item_id``'s pick, as one string."""
+    cards = re.findall(r'<li class="proposal">.*?</li>', html, re.S)
+    (card,) = [c for c in cards if f"/proposals/{item_id}/" in c]
+    return card
+
+
+def test_web_vote_card_puts_vote_first_and_the_coordinators_row_below(
+    admin: TestClient, provider: FakeProvider, clock: FakeClock, migrated: Settings
+) -> None:
+    """Vote is the primary button for everyone. The coordinator and an admin get a quiet row below
+    it: Pickup | Delivery, Break the tie when tied, and Lock this. A member sees only Vote. The
+    chosen way posts "either", so tapping it again clears it; its id stays the way's."""
+    add_item(admin, "Pho Place", cuisines="Vietnamese", modes=["pickup", "delivery"])
+    invite(admin, "kim@example.com", "Kim")
+    invite(admin, "lee@example.com", "Lee")
+    event_id = start(admin)
+    assert submit(admin, f"/events/{event_id}/respond", {"status": "in"}).status_code == 303
+    assert submit(admin, f"/events/{event_id}/offer", {"role": "pickup", "offered": "1"}).status_code == 303
+    sign_in_as(admin, provider, "lee@example.com")
+    assert submit(admin, f"/events/{event_id}/respond", {"status": "in"}).status_code == 303
+    sign_in_as(admin, provider, "kim@example.com")
+    assert submit(admin, f"/events/{event_id}/coordinate", {}).status_code == 303
+    clock.advance(timedelta(minutes=90))
+    web_tick(admin, clock)
+    (item,) = [i for i in rows(migrated, CatalogItemRow) if i.name == "Pho Place"]
+    (pho,) = [p.id for p in rows(migrated, ProposalRow) if p.item_id == item.id]
+    way = f"/events/{event_id}/proposals/{pho}/way"
+
+    card = _proposal_card(page(admin.get(f"/events/{event_id}")), pho)  # Kim coordinates
+    assert 'class="button small primary choice" aria-pressed="false">Vote<' in card
+    assert '<div class="coordinator-row"' in card and '<span class="coordinator-label">Coordinator</span>' in card
+    assert card.index(">Vote<") < card.index("coordinator-row")
+    assert 'class="button quiet choice" aria-pressed="false">Pickup<' in card
+    assert 'class="button quiet choice" aria-pressed="false">Delivery<' in card
+    assert "Not chosen yet" in card
+    lock = card.index(">Lock this<")
+    assert card.index(">Delivery</button>") < lock and 'class="button quiet">Lock this<' in card
+    assert 'hx-confirm="' in card[card.rindex("<form", 0, lock) : lock]  # still confirmed
+    assert "primary" not in card[card.index("coordinator-row") :]
+    html = page(admin.get(f"/events/{event_id}"))
+    assert 'class="button quiet">Shuffle proposals<' in html
+
+    assert submit(admin, way, {"mode": "pickup", "run": "1"}).status_code == 303
+    card = _proposal_card(page(admin.get(f"/events/{event_id}")), pho)
+    end = card.index(">Pickup</button>")
+    pressed = card[card.rindex("<form", 0, end) : end]
+    assert '<input type="hidden" name="mode" value="either">' in pressed and 'aria-pressed="true"' in pressed
+    assert f'id="event-{event_id}-proposals-{pho}-way-pickup"' in pressed  # the way's id, for the swap
+    assert "Not chosen yet" not in card
+    assert submit(admin, way, {"mode": "either", "run": "1"}).status_code == 303
+    (row,) = [p for p in rows(migrated, ProposalRow) if p.id == pho]
+    assert (row.mode, row.mode_chosen) == ("pickup", False)
+    for garbage in ("neither", "", "Either"):
+        refused = submit(admin, way, {"mode": garbage, "run": "1"})
+        assert refused.status_code == 409 and "Pick pickup or delivery." in page(refused), garbage
+
+    sign_in_as(admin, provider, "lee@example.com")  # a member: Vote only
+    card = _proposal_card(page(admin.get(f"/events/{event_id}")), pho)
+    assert 'class="button small primary choice" aria-pressed="false">Vote<' in card
+    assert "coordinator-row" not in card and ">Pickup</button>" not in card and ">Lock this<" not in card
+    assert submit(admin, f"/events/{event_id}/proposals/{pho}/vote", {}).status_code == 303
+    card = _proposal_card(page(admin.get(f"/events/{event_id}")), pho)
+    assert 'class="button small primary choice" aria-pressed="true">Voted<' in card
+    assert submit(admin, way, {"mode": "either", "run": "1"}).status_code == 409  # not the coordinator
+
+    admin.cookies.clear()
+    sign_in(admin, provider)  # an admin gets the coordinator's row too
+    card = _proposal_card(page(admin.get(f"/events/{event_id}")), pho)
+    assert "coordinator-row" in card and ">Lock this<" in card and ">Pickup</button>" in card
+
+
+def test_the_quiet_style_keeps_its_tap_height_and_shows_a_border_on_hover_or_focus(client: TestClient) -> None:
+    css = client.get("/static/app.css").text
+    quiet = css[css.index(".button.quiet {") :]
+    quiet = quiet[: quiet.index("}")]
+    assert "min-height: 40px" in quiet and "border-color: transparent" in quiet and "color: var(--muted)" in quiet
+    assert ".button.quiet:hover, .button.quiet:focus-visible { border-color: var(--line); color: var(--text); }" in css
+    assert css.index('.button.choice[aria-pressed="true"]') < css.index('.button.quiet.choice[aria-pressed="true"]')
+    assert css.index(".button.primary {") < css.index('.button.choice[aria-pressed="true"]')  # Voted isn't orange

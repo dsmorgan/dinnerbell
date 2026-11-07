@@ -40,7 +40,7 @@ from dinnerbell.domain.events import (
     friendly,
 )
 from dinnerbell.domain.guests import GuestInput
-from dinnerbell.domain.labels import DECISION_TIME_SHIFTS
+from dinnerbell.domain.labels import DECISION_TIME_SHIFTS, EITHER_WAY_VALUE
 from dinnerbell.domain.meals import PICK_SLOT, Slot
 from dinnerbell.domain.members import InvalidMemberInput
 from dinnerbell.domain.offers import MAX_CAPACITY
@@ -604,14 +604,15 @@ async def set_way(
     run: Run = "",
     came_from: Annotated[str, Form(alias="from", max_length=10)] = "",
 ) -> Response:
-    """Set a takeout pick to pickup or delivery while voting (#178). A guest coordinating may."""
+    """Set a takeout pick to pickup or delivery while voting (#178), or, with ``mode=either``,
+    clear it back to not chosen (#212). A guest coordinating may."""
     seen = parse_id(run)
     if seen is None:
         return await _malformed(request, principal, context, db, event_id, came_from)
 
     async def action() -> None:
-        chosen = choice(Mode, mode)
-        if chosen is None:
+        chosen = None if mode == EITHER_WAY_VALUE else choice(Mode, mode)
+        if chosen is None and mode != EITHER_WAY_VALUE:
             raise BadFormValue("Pick pickup or delivery.")
         await coordinator.set_way(db, principal.member, event_id, proposal_id, chosen, run=seen, now=context.clock())
 

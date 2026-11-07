@@ -531,6 +531,25 @@ ins { color: var(--ok); text-decoration: none; }
 .badge.state-decided, .badge.state-done { background: var(--ok-soft); border-color: transparent; color: var(--ok); }
 .event .button-row { margin-bottom: 0.6rem; gap: 0.4rem; }
 .button.choice[aria-pressed="true"] { background: var(--text); border-color: var(--text); color: var(--bg); }
+/* Quiet (#212): the coordinator's and admins' overrides, and Shuffle, so everyone's Vote stands out.
+   Smaller and muted, with no border until hovered or focused, and still a 40 px tap target. A
+   chosen way is tinted with the accent, not filled. */
+.button.quiet { min-height: 40px; padding: 0 0.65rem; border-color: transparent; background: transparent; color: var(--muted); font-size: 0.85rem; font-weight: 500; }
+.button.quiet:hover, .button.quiet:focus-visible { border-color: var(--line); color: var(--text); }
+.button.quiet.choice[aria-pressed="true"] { background: var(--accent-soft); border-color: transparent; color: var(--accent); font-weight: 600; }
+/* A proposal's second tier, below a thin divider: a muted label, then Pickup | Delivery joined as
+   one control, Break the tie, and Lock this. */
+.coordinator-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.25rem 0.4rem; margin-top: 0.5rem; padding-top: 0.4rem; border-top: 1px solid var(--line); }
+.coordinator-label { margin-right: 0.2rem; color: var(--muted); font-size: 0.8rem; }
+.way-pair { display: inline-flex; border: 1px solid var(--line); border-radius: 10px; }
+.way-pair > form { display: flex; }
+.way-pair > form + form { border-left: 1px solid var(--line); }
+.way-pair .button.quiet { border: 0; border-radius: 0; }
+.way-pair > form:first-child .button.quiet { border-radius: 9px 0 0 9px; }
+.way-pair > form:last-child .button.quiet { border-radius: 0 9px 9px 0; }
+.way-pair .button.quiet:not([aria-pressed="true"]):hover { background: color-mix(in srgb, currentColor 8%, transparent); }
+/* Inside the joined control, so the neighbor can't cover the ring. */
+.way-pair .button.quiet:focus-visible { position: relative; z-index: 1; outline-offset: -3px; }
 /* In, Maybe, Out (#149): one choice, so one joined control on a row of its own, the choice filled
    and checked. The role offers below it are separate toggles. */
 .row-label { margin: 0.5rem 0 0.3rem; }

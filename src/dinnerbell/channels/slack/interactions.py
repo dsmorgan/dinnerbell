@@ -209,8 +209,12 @@ VOTED = "Vote counted. Tap Vote again to take it back."
 SHUFFLED = "Shuffled: {replaced} replaced. Everyone sees the new set."
 ASSIGNED = "Assigned. {name} is told."
 ASSIGNED_NOBODY = "Assigned."
-WAY_SET = {Mode.PICKUP: "It's pickup if it wins.", Mode.DELIVERY: "It's delivery if it wins."}
-"""The reply to setting a takeout pick's way while voting (#178)."""
+WAY_SET: dict[Mode | None, str] = {
+    Mode.PICKUP: "It's pickup if it wins.",
+    Mode.DELIVERY: "It's delivery if it wins.",
+    None: "It's either way again. If it wins, pickup or delivery gets chosen then.",
+}
+"""The reply to setting a takeout pick's way while voting (#178), or clearing it (#212)."""
 ADJUSTED_NOTHING = "Nothing changed."
 NOBODY_IN = "Nobody's in, so there's nobody to assign."
 JOINED_LATE = "You're in for {slot}, joining late. {vote}"

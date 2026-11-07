@@ -88,7 +88,7 @@ Contributions and badges count who did what when the meal is marked done, so a c
 
 A home meal has a cook, and delivery has someone who orders. Pickup has two roles: someone orders it, and someone picks it up. By default they're different people: the first person who offered to pick up picks it up, and the first other person with **I'll order** on for the call orders. Someone who usually orders but turned **I'll order** off isn't picked, though they would be for delivery. If nobody else has it on, the person picking up orders too, so someone who offered to pick up is all a pickup needs. You can give one person every role, coordinating included.
 
-While voting, you can make a takeout proposal pickup or delivery when its place allows both: ⋯ beside it on the proposals message, or the **Pickup** and **Delivery** buttons on the call page. Choosing the way it already has settles it too, and the proposal then says "(chosen)". An admin can do this as well.
+While voting, you can make a takeout proposal pickup or delivery when its place allows both: ⋯ beside it on the proposals message, or the **Pickup** and **Delivery** buttons on the call page. Choosing the way it already has settles it too, and the proposal then says "(chosen)". To put it back to not chosen, so you're asked when it wins, pick **Either way** in the ⋯, or tap the chosen way again on the call page. An admin can do this as well.
 
 When you switch how you get it, the person ordering keeps ordering. Switching from pickup to delivery drops whoever was picking up, and they get no pickup credit. Switching from delivery to pickup gives pickup to whoever you pick in **Who picks up**, or to the first person who offered to pick up.
 

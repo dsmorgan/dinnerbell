@@ -88,8 +88,10 @@ BREAK_TIE = "break_tie"
 """**Break the tie** beside a proposal tied for the most votes (#87). Its value is a ``proposal_value``."""
 SET_WAY = "set_way"
 """The ⋯ menu beside a takeout pick whose place allows pickup and delivery, on the proposals
-message while voting (#178): the coordinator or an admin sets its way. Each option's value is a
-``way_value``."""
+message while voting (#178): the coordinator or an admin sets its way, or, once it's chosen,
+clears it with **Either way** (#212). Each option's value is a ``way_value``."""
+EITHER_WAY = "either"
+"""The way in a ``way_value`` that clears a pick's way (#212)."""
 ASSIGN_ROLES = "assign_roles"
 """**Assign roles** on the decision message and the coordinator's direct message (#87): opens the
 modal. Its value is a ``card_value``."""
@@ -168,7 +170,7 @@ _MENU = re.compile(r"(cancel|close|move):([1-9][0-9]{0,18}):([1-9][0-9]{0,18})")
 _WINDOW = re.compile(r"(respond|vote):([1-9][0-9]{0,18}):([1-9][0-9]{0,18})")
 _CARD = re.compile(r"([1-9][0-9]{0,18}):([1-9][0-9]{0,18})")
 _GUEST = re.compile(r"([1-9][0-9]{0,18}):([1-9][0-9]{0,18}):([1-9][0-9]{0,18})")
-_WAY = re.compile(r"(pickup|delivery):([1-9][0-9]{0,18}):([1-9][0-9]{0,18}):([1-9][0-9]{0,18})")
+_WAY = re.compile(r"(pickup|delivery|either):([1-9][0-9]{0,18}):([1-9][0-9]{0,18}):([1-9][0-9]{0,18})")
 _LATE = re.compile(r"(part|vote):(on|off):([1-9][0-9]{0,18}):([1-9][0-9]{0,18}):([1-9][0-9]{0,18})")
 _CHANNEL = re.compile(r"^[CDG][A-Z0-9]{2,31}$")
 _MESSAGE_TS = re.compile(r"[0-9]{1,12}\.[0-9]{1,8}")
@@ -279,18 +281,20 @@ def parse_late(value: object) -> tuple[LateSwitch, bool, int, int, int]:
     return switch, on, _row_id(match.group(3)), _row_id(match.group(4)), _row_id(match.group(5))
 
 
-def way_value(mode: Mode, event_id: int, run: int, proposal_id: int) -> str:
-    """``<pickup|delivery>:<id>:<run>:<proposal>``: set a takeout pick's way, on the run the
-    proposals message showed (#178)."""
-    return f"{mode.value}:{event_id}:{run}:{proposal_id}"
+def way_value(mode: Mode | None, event_id: int, run: int, proposal_id: int) -> str:
+    """``<pickup|delivery|either>:<id>:<run>:<proposal>``: set a takeout pick's way, or with
+    ``either`` (``mode=None``) clear it (#212), on the run the proposals message showed (#178)."""
+    return f"{mode.value if mode is not None else EITHER_WAY}:{event_id}:{run}:{proposal_id}"
 
 
-def parse_way(value: object) -> tuple[Mode, int, int, int]:
-    """``<pickup|delivery>:<id>:<run>:<proposal>``, exactly as ``way_value`` writes it."""
+def parse_way(value: object) -> tuple[Mode | None, int, int, int]:
+    """``<pickup|delivery|either>:<id>:<run>:<proposal>``, exactly as ``way_value`` writes it;
+    ``either`` is None, clearing the way."""
     match = _WAY.fullmatch(value) if isinstance(value, str) else None
     if match is None:
         raise BadValue("not a way value")
-    return Mode(match.group(1)), _row_id(match.group(2)), _row_id(match.group(3)), _row_id(match.group(4))
+    mode = None if match.group(1) == EITHER_WAY else Mode(match.group(1))
+    return mode, _row_id(match.group(2)), _row_id(match.group(3)), _row_id(match.group(4))
 
 
 def guest_value(event_id: int, run: int, guest_id: int) -> str:

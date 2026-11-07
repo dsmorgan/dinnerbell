@@ -192,7 +192,7 @@ async def set_way(
     actor: Member,
     event_id: int,
     proposal_id: int,
-    mode: Mode,
+    mode: Mode | None,
     *,
     run: int | None = None,
     now: datetime,
@@ -202,7 +202,12 @@ async def set_way(
     even to the way it has, settles it, so the decision doesn't ask the coordinator about it
     again (``domain.events.way_unsettled``). A way nobody who's in can do is refused, as the
     decision would pass the pick over. The proposals message updates in place. Audited as
-    ``event.way_set``; logged as ``set_way``."""
+    ``event.way_set``; logged as ``set_way``.
+
+    ``mode=None`` clears it (#212): the pick keeps the way it has, but nobody chose it, so the
+    decision asks again. The same people may, with the same checks except coverage, which only a
+    way being set needs. Clearing a way that's open already is accepted, and audited, as setting
+    the way a pick has is: the tap says what the person wants, and the pick ends up that way."""
     async with locked_event(db, actor.household_id, event_id, now) as event:
         await guest_rules.gate(db, event, actor, GuestAction.SET_WAY)
         check_run(event, run)
@@ -213,23 +218,33 @@ async def set_way(
             raise NotFound("No such proposal.")
         activity.about(**activity.pick(ctx.items, proposal))
         item = ctx.items.get(proposal.item_id) if proposal.item_id is not None else None
-        if item is None or mode not in takeout_ways(item.modes):
+        ways = takeout_ways(item.modes) if item is not None else ()
+        if item is None or not ways or (mode is not None and mode not in ways):
             raise EventRuleViolation(NOT_BOTH_WAYS, code="not_both_ways")
-        refusal = lifecycle.uncovered(ctx.coverage, mode, item.cook_ids)
-        if refusal is not None:
-            raise refusal
-        await ProposalRepository(db).set_mode(actor.household_id, proposal.id, mode)
+        proposals = ProposalRepository(db)
+        if mode is None:
+            await proposals.clear_mode(actor.household_id, proposal.id)
+        else:
+            refusal = lifecycle.uncovered(ctx.coverage, mode, item.cook_ids)
+            if refusal is not None:
+                raise refusal
+            await proposals.set_mode(actor.household_id, proposal.id, mode)
         ctx = await cc.load(db, event)
         await publish(db, ctx, cc.proposals_updated(ctx), now=now)
-        payload = {"proposal_id": proposal.id, "mode": mode.value, "switched_from": proposal.mode.value}
+        payload = {
+            "proposal_id": proposal.id,
+            "mode": mode.value if mode is not None else None,
+            "switched_from": proposal.mode.value,
+        }
         await audit(db, actor.household_id, actor, "event.way_set", _target(event.id), payload, now)
         activity.action(
             db,
             "set_way",
             event,
             actor,
-            switched=mode is not proposal.mode,
-            **(activity.pick(ctx.items, proposal) | {"mode": mode}),
+            switched=mode is not None and mode is not proposal.mode,
+            cleared=mode is None,
+            **(activity.pick(ctx.items, proposal) | {"mode": mode if mode is not None else proposal.mode}),
         )
 
 
