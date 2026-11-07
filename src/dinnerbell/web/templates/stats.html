@@ -22,7 +22,7 @@
 {% endif %}
 <section class="card" aria-labelledby="badges-title">
   <h2 id="badges-title">Your badges</h2>
-  {% if guest %}<p class="small muted">Guests earn badges for cooking, picking up, ordering, and coordinating.</p>{% endif %}
+  {% if guest %}<p class="small muted">Guests earn badges for cooking, picking up, and ordering.</p>{% endif %}
   <ul class="badge-grid">
     {% for p in mine.progress %}{{ badge_row(p) }}{% endfor %}
   </ul>

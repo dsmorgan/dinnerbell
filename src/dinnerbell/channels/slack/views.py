@@ -624,7 +624,7 @@ def _place_blocks(v: EventView, opened: ids.Opened) -> list[Block]:
 
 
 def adjust_modal(v: EventView, origin: ids.ViewOrigin) -> dict[str, Any]:
-    """**Adjust** (spec 5.7): the coordinator's meal time, the place (#219, not for a guest), the way of getting
+    """**Adjust** (spec 5.7): the coordinator's meal time, the place (#219), the way of getting
     the decided pick (when the place allows more than one, #154), who cooks or orders it and, at
     a place that allows pickup, who picks it up (#178), from the people who are in, and whom to
     hand coordinating to, each set to what ``origin.opened`` says they were. Saving changes only what
@@ -639,7 +639,7 @@ def adjust_modal(v: EventView, origin: ids.ViewOrigin) -> dict[str, Any]:
     people = [option(p.name, str(p.id)) for p in choice.people[:MAX_ASSIGN_PEOPLE]]
     other_ways = len(choice.modes) > 1 or (bool(choice.modes) and choice.mode not in choice.modes)
     switchable = other_ways and opened.mode is not None and bool(people)
-    place = "the place, " if v.can.change_place else ""  # never a guest's to change (FR-58)
+    place = "the place, " if v.can.change_place else ""
     what = f"the time, {place}how you get it, who does what" if switchable else f"the time, {place}who does what"
     blocks: list[Block] = [
         _intro(v),
@@ -665,12 +665,13 @@ def adjust_modal(v: EventView, origin: ids.ViewOrigin) -> dict[str, Any]:
     coordinator = opened.coordinator_id
     them = next((p for p in v.members if p.id == coordinator), None)
     leads = [option(them.name, str(them.id))] if them is not None else []
-    leads += [o for o in people if o["value"] != str(coordinator)]
+    members = {str(p.id) for p in v.coordinators}  # someone who's in may be a guest, who doesn't coordinate (#227)
+    leads += [o for o in people if o["value"] != str(coordinator) and o["value"] in members]
     if leads:
         lead: Block = {"type": "static_select", "options": leads[:MAX_ASSIGN_PEOPLE]}
         if leads[0]["value"] == str(coordinator):
             lead["initial_option"] = leads[0]
-        hint = "Hand it off to someone who's in. They're told, and the plan is theirs to change after."
+        hint = "Hand it off to a member who's in. They're told, and the plan is theirs to change after."
         blocks.append(_input("coordinator", "Coordinator", lead, optional=False, hint=hint))
     return _modal("Adjust the plan", ids.ADJUST_VIEW, origin, blocks, "Save")
 
@@ -1032,7 +1033,10 @@ def invite_modal(v: EventView, saved: Sequence[Member], origin: ids.ViewOrigin) 
     choices = [option(m.display_name, str(m.id)) for m in saved if m.id not in invited][: MAX_OPTIONS - 1]
     blocks: list[Block] = [
         _intro(v),
-        context("Guests eat with you and can pitch in, but don't vote or suggest. Their dietary needs always apply."),
+        context(
+            "Guests eat with you and can pitch in, but don't vote, suggest, or coordinate. "
+            "Their dietary needs always apply."
+        ),
     ]
     if choices:
         guest = {"type": "static_select", "options": [option(NO_SAVED_GUEST, NONE), *choices]}  # #207

@@ -495,7 +495,7 @@ def test_home_and_the_card_offer_the_same_answer_actions(
     answers = ["card_in", "card_out"] if guest else ["card_in", "card_maybe", "card_out", "away"]
     assert ids_shown[: len(answers)] == answers  # first, with Away until… for a member (FR-63), then the roles
     assert ids_shown[len(answers)] == ("card_withdraw_cook" if mine else "card_offer_cook")
-    assert ("card_coordinate" in ids_shown) is (coordinator is None)
+    assert ("card_coordinate" in ids_shown) is (coordinator is None and not guest)  # never a guest's (#227)
     assert ("card_details" in ids_shown) is ("invite_guest" in ids_shown) is (not guest)
     chosen = [e["text"]["text"] for e in on_home if e.get("style") == "primary"]
     assert chosen == (["✓ In", "✓ I can cook"] if mine else [])

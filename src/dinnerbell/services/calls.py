@@ -64,6 +64,7 @@ from dinnerbell.domain.events import (
     check_can_adjust,
     check_can_cancel,
     check_can_close_window,
+    check_can_coordinate,
     check_can_join_late,
     check_can_lock,
     check_can_manage_decision,
@@ -368,7 +369,7 @@ async def switch_late_joiner(
     Otherwise it's audited as ``event.late_joiner_changed`` and the call and proposals messages
     are updated."""
     async with locked_event(db, actor.household_id, event_id, now) as event:
-        await guest_rules.gate(db, event, actor, GuestAction.LATE_SWITCHES)
+        await guest_rules.gate(db, event, actor, GuestAction.COORDINATE)
         check_run(event, run)
         ctx = await load(db, event)
         capacity = check_can_switch_late(event, actor, member_id)
@@ -438,17 +439,17 @@ async def claim_coordinator(
         if actor.active and is_coordinator(event, actor):
             return
         mine = (await load(db, event)).response_of(actor.id)
-        check_claim_coordinator(event, actor, invited=await _invited(db, event, actor), mine=mine)
+        check_claim_coordinator(event, actor, mine=mine)
         await set_coordinator(db, event, actor.id, now=now)
         await audit(db, actor.household_id, actor, "event.coordinator_claimed", _target(event), {}, now)
         activity.action(db, "coordinate", event, actor)
 
 
 def handoff_target(ctx: CallContext, actor: Member, member_id: int) -> Member:
-    """Whom ``actor`` may hand coordinating to: a member, or a guest invited to the call. Once
-    it's decided, only someone who's in (``check_coordinator_in``)."""
+    """Whom ``actor`` may hand coordinating to: another active member, never a guest
+    (``check_handoff``). Once it's decided, only someone who's in (``check_coordinator_in``)."""
     target = ctx.members.get(member_id)
-    if target is None or (target.is_guest and not ctx.invited(target.id)):
+    if target is None:
         raise NotFound(NO_SUCH_MEMBER)
     check_handoff(ctx.event, actor, target)
     check_coordinator_in(ctx.event, ctx.response_of(target.id))
@@ -469,7 +470,7 @@ async def hand_off(
     ``expect``, from Slack's Adjust, checks under the lock that the call is still as the modal
     showed it, and raises if not."""
     async with locked_event(db, actor.household_id, event_id, now) as event:
-        await guest_rules.gate(db, event, actor, GuestAction.HAND_OFF)
+        await guest_rules.gate(db, event, actor, GuestAction.COORDINATE)
         check_run(event, run)
         ctx = await load(db, event)
         if expect is not None:
@@ -490,7 +491,8 @@ async def set_coordinator(
     voting; once decided, they must be in already (``check_coordinator_in``). When ``by``, who
     handed it off or assigned it, put someone else in that way, they're told
     (``CoordinatingGiven``). The caller checks who may, and audits. The same coordinator again
-    changes nothing and sends nothing."""
+    changes nothing and sends nothing. Every way to become coordinator comes through here, so
+    this is the last word on a guest (#227): they're refused."""
     if member_id == event.coordinator_id:
         return
     joined: Response | None = None
@@ -499,7 +501,9 @@ async def set_coordinator(
         current = before.response_of(member_id)
         check_coordinator_in(event, current)
         person = before.members.get(member_id)
-        joined = with_coordinating(event, current, member_id, now, guest=person is not None and person.is_guest)
+        if person is not None:
+            check_can_coordinate(person)
+        joined = with_coordinating(event, current, member_id, now)
         if joined is not None and person is not None:
             joined = with_usual_offers(joined, person)  # #180: as answering In does
         if joined is not None:
@@ -519,14 +523,7 @@ async def set_coordinator(
     ctx = await load(db, event)
     await publish(db, ctx, *cc.messages_for_state(ctx), now=now)
     if joined is not None and member_id is not None and by is not None and by.id != member_id:
-        given = note.CoordinatingGiven(
-            cc.event_info(ctx),
-            ctx.person(member_id),
-            ctx.person(by.id),
-            now,
-            late=joined.late,
-            via=cc.answering_for(ctx, member_id),
-        )
+        given = note.CoordinatingGiven(cc.event_info(ctx), ctx.person(member_id), ctx.person(by.id), now, joined.late)
         await publish(db, ctx, given, now=now)
     decision = cc.decision_info(ctx)
     if new_assignment is not None and decision is not None:
@@ -712,7 +709,7 @@ async def lock(
     """FR-15: the coordinator, or an admin, decides the call now. ``run``, when given, is the run
     the actor saw (``check_run``). Audited (SEC-9)."""
     async with locked_event(db, actor.household_id, event_id, now) as event:
-        await guest_rules.gate(db, event, actor, GuestAction.LOCK)
+        await guest_rules.gate(db, event, actor, GuestAction.COORDINATE)
         check_run(event, run)
         check_can_lock(event, actor)
         ctx = await load(db, event)
@@ -754,7 +751,7 @@ async def set_meal_time(
     ``as_coordinator``, from Slack's Adjust, allows only the coordinator (spec 5.7), and
     ``expect`` checks under the lock that the call is still as the modal showed it."""
     async with locked_event(db, actor.household_id, event_id, now) as event:
-        await guest_rules.gate(db, event, actor, GuestAction.MANAGE_DECISION)
+        await guest_rules.gate(db, event, actor, GuestAction.COORDINATE)
         check_run(event, run)
         check_can_manage_decision(event, actor)
         if as_coordinator:
@@ -791,7 +788,7 @@ async def change_assignment(
     if role not in ROLE_CHANGES:
         raise EventRuleViolation("Change the coordinator with hand off instead.", code="wrong_role")
     async with locked_event(db, actor.household_id, event_id, now) as event:
-        await guest_rules.gate(db, event, actor, GuestAction.MANAGE_DECISION)
+        await guest_rules.gate(db, event, actor, GuestAction.COORDINATE)
         check_can_manage_decision(event, actor)
         ctx = await load(db, event)
         mode = event.decided_mode
@@ -860,7 +857,7 @@ async def change_assignment(
 
 
 async def mark_done(db: AsyncSession, actor: Member, event_id: int, *, now: datetime) -> None:
-    """FR-21: any participant, the coordinator, or an admin marks the meal done."""
+    """FR-21: any member who's in, the coordinator, or an admin marks the meal done."""
     async with locked_event(db, actor.household_id, event_id, now) as event:
         await guest_rules.gate(db, event, actor, GuestAction.MARK_DONE)
         ctx = await load(db, event)
@@ -971,7 +968,7 @@ async def close_window(
     (``check_expected_window``): if another is open, or that one already closed, nothing
     changes. Audited as ``event.window_closed``."""
     async with locked_event(db, actor.household_id, event_id, now) as event:
-        await guest_rules.gate(db, event, actor, GuestAction.CLOSE_WINDOW)
+        await guest_rules.gate(db, event, actor, GuestAction.COORDINATE)
         check_run(event, run)
         window = check_can_close_window(event, actor)
         check_expected_window(event, window, expected_window, now=now)

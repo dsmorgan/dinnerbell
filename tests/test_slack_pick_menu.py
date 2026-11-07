@@ -40,7 +40,7 @@ from tests.support.calls import RESPOND_BY, House, furnish, make_house
 from tests.support.clock import FakeClock
 from tests.support.fake_slack import CHANNEL, block_action
 from tests.support.slack import SLACK_IDS, Slack, link, wire
-from tests.test_coordinator import act, add_guest, open_dinner, pick_ids, sent, to_voting, vote
+from tests.test_coordinator import act, add_guest, open_dinner, pick_ids, to_voting, vote
 
 pytestmark = pytest.mark.anyio
 
@@ -183,11 +183,10 @@ WAY_NOTE = "can choose pickup or delivery with ⋯ beside a proposal that allows
     [
         (samples.VOTING, "The coordinator or an admin", "The coordinator or an admin"),
         (replace(samples.VOTING, coordinator=None), "An admin", "An admin"),
-        (replace(samples.VOTING, coordinator_is_guest=True), "An admin", "The coordinator or an admin"),
     ],
 )
 def test_the_hints_name_who_can_use_the_menu(event: note.EventInfo, tie: str, way: str) -> None:
-    """Nobody coordinating leaves an admin. A guest coordinator can set a way, but not break a tie."""
+    """Nobody coordinating leaves an admin."""
     pick = replace(PICK, tied=True, ways=BOTH_WAYS)
     shown = json.dumps(render(note.ProposalsUpdated(event, (pick,), 3), CTX).blocks, ensure_ascii=False)
     assert f"Tied for the most votes. {tie} {TIE_NOTE}" in shown
@@ -392,8 +391,8 @@ async def test_a_pick_after_the_vote_is_refused_with_no_modal(slack: Slack, hous
     assert slack.fake.of("views.open") == []
 
 
-async def guest_coordinating(house: House) -> int:
-    """Pat, a guest with Slack, coordinates a vote on Siam Garden, whose place allows both ways."""
+async def guest_in_the_vote(house: House) -> int:
+    """Pat, a guest with Slack, is in a vote on Siam Garden, whose place allows both ways."""
     pat = await add_guest(house, "Pat")
     await link(house, "Pat", PAT)
     event_id = await open_dinner(house)
@@ -402,14 +401,13 @@ async def guest_coordinating(house: House) -> int:
     await act(house, calls.offer_role, house["Alex"], event_id, RoleOffer.PICKUP, True)
     await act(house, guests.invite, house["Lee"], event_id, guest_id=pat.id)
     await act(house, calls.respond, pat, event_id, Status.IN)
-    await act(house, calls.claim_coordinator, pat, event_id)
     house.clock.now = RESPOND_BY
     await house.tick()
     return event_id
 
 
-async def test_a_guest_coordinator_sets_the_way_from_the_menu_but_cant_lock(slack: Slack, house: House) -> None:
-    event_id = await guest_coordinating(house)
+async def test_a_guest_cant_use_the_menu_at_all(slack: Slack, house: House) -> None:
+    event_id = await guest_in_the_vote(house)
     siam = (await pick_ids(house, event_id))["Siam Garden"]
     await pick_opens(slack, PAT, ids.PickChoice.LOCK, event_id, siam)
     assert slack.ephemerals(PAT)[-1] == GUESTS_DONT
@@ -419,9 +417,9 @@ async def test_a_guest_coordinator_sets_the_way_from_the_menu_but_cant_lock(slac
 
     way = ids.way_value(Mode.DELIVERY, event_id, 1, siam)
     await slack.click(PAT, ids.PICK_MENU, None, selected=way)
-    assert slack.ephemerals(PAT)[-1] == WAY_SET[Mode.DELIVERY]
+    assert slack.ephemerals(PAT)[-1] == GUESTS_DONT
     pick = (await house.context(event_id)).proposal(siam)
-    assert pick is not None and (pick.mode, pick.mode_chosen) == (Mode.DELIVERY, True)
+    assert pick is not None and not pick.mode_chosen
 
 
 async def test_either_way_from_the_menu_clears_the_way_and_a_stale_one_is_refused(slack: Slack, house: House) -> None:
@@ -519,28 +517,8 @@ async def test_old_buttons_on_posted_messages_keep_working(slack: Slack, house: 
     assert (event.state, event.locked_by) == (EventState.DECIDED, house["Sam"].id)
 
 
-async def test_the_tied_hint_says_an_admin_when_a_guest_coordinates(slack: Slack, house: House) -> None:
-    """What the call says about its coordinator reaches the message, through the outbox."""
-    event_id = await guest_coordinating(house)
-    (ready,) = await sent(house, "proposals_ready")
-    assert ready.event.coordinator_is_guest
-    tied = (replace(ready.proposals[0], tied=True), *ready.proposals[1:])
-    shown = json.dumps(render(replace(ready, proposals=tied), CTX).blocks, ensure_ascii=False)
-    assert f"Tied for the most votes. An admin {TIE_NOTE}" in shown
-    assert "Lee" not in shown.split("Tied for the most votes.")[1].split(TIE_NOTE)[0]
-    assert (await house.event(event_id)).coordinator_id == house["Pat"].id
-
-
-async def test_a_notification_queued_before_the_field_existed_still_reads(slack: Slack, house: House) -> None:
-    await to_voting(house, "Sam", "Lee", coordinator_name="Sam")
-    (row,) = [e for e in await house.outbox() if e.kind == "proposals_ready"]
-    payload = json.loads(json.dumps(row.payload))
-    del payload["event"]["coordinator_is_guest"]
-    assert note.from_payload(row.kind, payload).event.coordinator_is_guest is False
-
-
 async def test_a_guest_still_cant_use_an_old_lock_or_tie_button(slack: Slack, house: House) -> None:
-    event_id = await guest_coordinating(house)
+    event_id = await guest_in_the_vote(house)
     value = ids.proposal_value(event_id, (await pick_ids(house, event_id))["Siam Garden"])
     for action_id in (ids.LOCK, ids.BREAK_TIE):
         await slack.click(PAT, action_id, value)

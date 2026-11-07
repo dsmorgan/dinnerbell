@@ -2052,6 +2052,236 @@ def test_0028_takes_back_unregistered_guests_badges_and_keeps_their_contribution
     assert _queued(settings) == queued
 
 
+# 0029: guests don't coordinate (#227) --------------------------------------------------------------
+
+
+def test_0029_clears_a_guest_coordinating_an_open_call_and_keeps_the_rest(settings: Settings) -> None:
+    """Up clears the coordinator, and the coordinating assignment, of each open call a guest
+    coordinates, audits it, and closes a queued message about it. A member's call, a guest's
+    other roles, and a call that's finished keep everything. Down changes nothing."""
+    _upgrade_to(settings, "0028_unregistered_guest_badges")
+    _populate_calls(settings)  # event 1 is done and event 2 voting
+    member = (
+        "INSERT INTO member (id, household_id, display_name, email, role, can_cook, can_pickup, can_order, "
+        "mute_dm_reminders, feedback_reminder, active, slack_link_locked, slack_user_id, created_at, updated_at) "
+    )
+    event = (
+        "INSERT INTO event (id, household_id, kind, slot, date, state, run, version, opens_at, respond_deadline, "
+        "reminder_minutes, vote_minutes, coordinator_id, roles_due_at, created_at, updated_at) VALUES "
+    )
+    outbox = (
+        "INSERT INTO outbox (household_id, event_id, kind, payload, idempotency_key, created_at, updated_at, "
+        "available_at, attempts, delivered_at) VALUES "
+    )
+    assign = "INSERT INTO assignment (household_id, event_id, member_id, role, created_at) VALUES "
+    ask = {"member": {"id": 2, "name": "Pat"}}
+    mine = {"member": {"id": 1, "name": "Sam"}}
+    _execute(
+        settings,
+        member + "VALUES (2, 1, 'Pat', NULL, 'guest', 0, 0, 0, 0, 0, 1, 0, 'U07PAT', :t, :t)",
+        member + "VALUES (3, 1, 'Jo', NULL, 'guest', 0, 0, 0, 0, 0, 1, 0, NULL, :t, :t)",
+        "UPDATE event SET coordinator_id = 2 WHERE id = 2",  # voting, a registered guest
+        event + "(3, 1, 'call', 'lunch', '2026-10-22', 'decided', 1, 1, :t, :t, 15, 45, 3, :t, :t, :t)",
+        event + "(4, 1, 'call', 'lunch', '2026-10-23', 'collecting', 1, 1, :t, :t, 15, 45, 3, NULL, :t, :t)",
+        event + "(5, 1, 'call', 'lunch', '2026-10-24', 'scheduled', 1, 1, :t, :t, 15, 45, 2, NULL, :t, :t)",
+        event + "(6, 1, 'call', 'lunch', '2026-10-25', 'collecting', 1, 1, :t, :t, 15, 45, 1, NULL, :t, :t)",
+        event + "(7, 1, 'call', 'lunch', '2026-10-26', 'done', 1, 1, :t, :t, 15, 45, 3, NULL, :t, :t)",
+        event + "(8, 1, 'call', 'lunch', '2026-10-27', 'abandoned', 1, 1, :t, :t, 15, 45, 2, NULL, :t, :t)",
+        event + "(9, 1, 'call', 'lunch', '2026-10-28', 'cancelled', 1, 1, :t, :t, 15, 45, 3, NULL, :t, :t)",
+        assign + "(1, 3, 3, 'coordinator', :t), (1, 3, 3, 'cook', :t), (1, 7, 3, 'coordinator', :t), "
+        "(1, 6, 1, 'coordinator', :t)",
+        "INSERT INTO response (household_id, event_id, member_id, status, guests, guest_needs, offers_cook, "
+        "offers_pickup, offers_order, maybe_at_deadline, responded_at, updated_at) "
+        "VALUES (1, 2, 2, 'in', 0, '[]', 0, 0, 0, 0, :t, :t)",
+        "INSERT INTO contribution (household_id, member_id, kind, day, event_id, created_at) "
+        "VALUES (1, 3, 'coordinated', '2026-10-26', 7, :t)",
+        "INSERT INTO badge_award (id, household_id, member_id, badge_key, tier, awarded_at, announcement) "
+        "VALUES (1, 1, 3, 'quarterback', 'first', :t, 'announced')",
+        outbox + f"(1, 3, 'roles_to_choose', '{json.dumps(ask)}', 'ask:guest', :t, :t, :t, 0, NULL), "
+        f"(1, 2, 'coordinating_given', '{json.dumps(ask)}', 'given:guest', :t, :t, :t, 0, NULL), "
+        f"(1, 6, 'roles_to_choose', '{json.dumps(mine)}', 'ask:member', :t, :t, :t, 0, NULL), "
+        f"(1, 3, 'roles_to_choose', '{json.dumps(ask)}', 'ask:sent', :t, :t, :t, 1, :t)",
+    )
+
+    def read(sql: str) -> list[tuple[object, ...]]:
+        engine = create_engine(settings.sync_database_url)
+        try:
+            with engine.connect() as c:
+                return [tuple(row) for row in c.execute(text(sql)).all()]
+        finally:
+            engine.dispose()
+
+    coordinators = "SELECT id, coordinator_id FROM event ORDER BY id"
+    assignments = "SELECT event_id, member_id, role FROM assignment WHERE member_id IN (1, 3) ORDER BY event_id, role"
+    others = "SELECT event_id, member_id, status FROM response ORDER BY event_id, member_id"
+    responses_before = read(others)
+    _upgrade_to(settings, "0029_guests_dont_coordinate")
+    assert read(coordinators) == [
+        (1, 1),  # done, a member
+        (2, None),
+        (3, None),
+        (4, None),
+        (5, None),
+        (6, 1),  # open, a member
+        (7, 3),  # done, a guest: their history
+        (8, 2),  # abandoned
+        (9, 3),  # cancelled
+    ]
+    assert read(assignments) == [
+        (1, 1, "pickup"),
+        (3, 3, "cook"),  # a guest keeps a role they were assigned
+        (6, 1, "coordinator"),
+        (7, 3, "coordinator"),
+    ]
+    assert read(others) == responses_before  # whoever was in stays in
+    assert read("SELECT roles_due_at IS NOT NULL FROM event WHERE id = 3") == [(1,)]  # the tick resolves it
+    assert read("SELECT member_id FROM contribution WHERE kind = 'coordinated'") == [(3,)]
+    assert read("SELECT member_id, badge_key FROM badge_award") == [(3, "quarterback")]
+    assert read(
+        "SELECT target, actor_member_id, payload FROM audit WHERE action = 'event.coordinator_released' ORDER BY target"
+    ) == [
+        ("event:2", None, json.dumps({"member_id": 2, "why": "guest"})),
+        ("event:3", None, json.dumps({"member_id": 3, "why": "guest"})),
+        ("event:4", None, json.dumps({"member_id": 3, "why": "guest"})),
+        ("event:5", None, json.dumps({"member_id": 2, "why": "guest"})),
+    ]
+    queued = dict(read("SELECT idempotency_key, delivered_at IS NOT NULL FROM outbox WHERE idempotency_key LIKE '%:%'"))
+    assert (queued["ask:guest"], queued["given:guest"], queued["ask:member"], queued["ask:sent"]) == (1, 1, 0, 1)
+
+    before = read(coordinators)
+    _downgrade_to(settings, "0028_unregistered_guest_badges")
+    assert read(coordinators) == before
+
+
+def _queue_0029(settings: Settings, *rows: tuple[int | None, str, str, object]) -> None:
+    """Queue ``(event_id, kind, key, payload)`` rows, with the payload as the app stores it."""
+    engine = create_sync_engine(settings.sync_database_url)
+    try:
+        with engine.begin() as c:
+            for event_id, kind, key, payload in rows:
+                c.execute(
+                    text(
+                        "INSERT INTO outbox (household_id, event_id, kind, payload, idempotency_key, created_at, "
+                        "updated_at, available_at, attempts) VALUES (1, :event, :kind, :payload, :key, :t, :t, :t, 0)"
+                    ),
+                    {
+                        "event": event_id,
+                        "kind": kind,
+                        "key": key,
+                        "payload": payload if isinstance(payload, str) else json.dumps(payload),
+                        "t": STAMP,
+                    },
+                )
+    finally:
+        engine.dispose()
+
+
+def _guest_on_a_decided_call(settings: Settings) -> None:
+    """Event 3 is decided, and Pat, a guest, coordinates it. Event 2 has a member coordinating."""
+    _upgrade_to(settings, "0028_unregistered_guest_badges")
+    _populate_calls(settings)
+    _execute(
+        settings,
+        "INSERT INTO member (id, household_id, display_name, email, role, can_cook, can_pickup, can_order, "
+        "mute_dm_reminders, feedback_reminder, active, slack_link_locked, slack_user_id, created_at, updated_at) "
+        "VALUES (2, 1, 'Pat', NULL, 'guest', 0, 0, 0, 0, 0, 1, 0, 'U07PAT', :t, :t)",
+        "UPDATE event SET coordinator_id = 1 WHERE id = 2",
+        "INSERT INTO event (id, household_id, kind, slot, date, state, run, version, opens_at, respond_deadline, "
+        "reminder_minutes, vote_minutes, coordinator_id, created_at, updated_at) VALUES "
+        "(3, 1, 'call', 'lunch', '2026-10-22', 'decided', 1, 1, :t, :t, 15, 45, 2, :t, :t)",
+    )
+
+
+def test_0029_rewrites_or_closes_each_queued_message_about_a_guest_coordinating(settings: Settings) -> None:
+    """With real payloads: a guest's message loses coordinating and keeps their other roles; one
+    that was only about coordinating is closed, and so is anything telling a coordinator what to
+    do. Each row left reads, and renders, and says nobody coordinates. A member's rows survive."""
+    from dataclasses import replace
+
+    from dinnerbell.channels.slack import preview as samples
+    from dinnerbell.channels.slack.messages import RenderContext, render
+    from dinnerbell.domain import notifications as note
+    from dinnerbell.domain.events import AssignmentRole
+    from dinnerbell.domain.notifications import to_payload
+
+    ctx = RenderContext(samples.BASE_URL, samples.DIRECTORY)
+    pat, sam = note.PersonInfo(2, "Pat"), note.PersonInfo(1, "Sam")
+    cook, lead = AssignmentRole.COOK, AssignmentRole.COORDINATOR
+    event = replace(samples.DECIDED, coordinator=pat)
+    decision = replace(samples.DECISION, assignments=(note.AssignmentInfo(lead, pat), note.AssignmentInfo(cook, sam)))
+    member_event = replace(samples.DECIDED, coordinator=sam)
+    rows: dict[str, tuple[int, note.Notification]] = {
+        "guest:both": (3, note.AssignmentMade(event, 1, pat, (cook, lead), decision)),
+        "guest:lead": (3, note.AssignmentMade(event, 2, pat, (lead,), decision)),
+        "guest:cook": (3, note.AssignmentMade(event, 3, pat, (cook,), decision)),
+        "guest:ask": (3, note.RolesToChoose(event, pat, decision, samples.ROLES_DUE)),
+        "guest:given": (3, note.CoordinatingGiven(event, pat, sam, samples.ROLES_DUE)),
+        "guest:vacated": (3, note.RoleVacated(event, pat, note.PersonInfo(9, "Jo"), (cook,))),
+        "member:told": (3, note.AssignmentMade(event, 4, sam, (cook,), decision)),
+        "member:update": (3, note.DecisionUpdated(event, decision)),
+        "other:lead": (2, note.AssignmentMade(member_event, 5, sam, (cook, lead), decision)),
+        "other:ask": (2, note.RolesToChoose(member_event, sam, decision, samples.ROLES_DUE)),
+        "other:given": (2, note.CoordinatingGiven(member_event, sam, pat, samples.ROLES_DUE)),
+        "other:vacated": (2, note.RoleVacated(member_event, sam, note.PersonInfo(9, "Jo"), (cook,))),
+    }
+    _guest_on_a_decided_call(settings)
+    _queue_0029(settings, *((e, n.kind, key, to_payload(n)) for key, (e, n) in rows.items()))
+    _upgrade_to(settings, "0029_guests_dont_coordinate")
+
+    found = {key: (kind, payload, sent) for key, kind, payload, sent in _queued(settings) if key in rows}
+    closed = {key for key, (_, _, sent) in found.items() if sent}
+    assert closed == {"guest:lead", "guest:ask", "guest:given", "guest:vacated"}
+
+    def decoded(key: str) -> note.AssignmentMade:
+        kind, payload, _ = found[key]
+        told = note.from_payload(kind, payload)
+        assert isinstance(told, note.AssignmentMade)
+        return told
+
+    both, cook_only = decoded("guest:both"), decoded("guest:cook")
+    assert both.roles == (cook,) and cook_only.roles == (cook,)
+    assert both.event.coordinator is None
+    assert "coordinating" not in json.dumps(render(both, ctx).payload()).lower()
+    told = decoded("member:told")
+    update = note.from_payload(found["member:update"][0], found["member:update"][1])
+    assert isinstance(update, note.DecisionUpdated)
+    assert told.event.coordinator is None and update.event.coordinator is None
+    assert [a.role for a in told.decision.assignments] == [cook] == [a.role for a in update.decision.assignments]
+    render(told, ctx), render(update, ctx)
+    # A call a member coordinates: every row just as it was queued.
+    for key in ("other:lead", "other:ask", "other:given", "other:vacated"):
+        assert found[key][1] == json.loads(json.dumps(to_payload(rows[key][1]))), key
+    assert decoded("other:lead").roles == (cook, lead)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    ['"a string"', "[1, 2]", "not json", "null", "7", '{"member": 5}', '{"member": {"id": [2]}, "roles": 5}'],
+)
+@pytest.mark.parametrize("kind", ["roles_to_choose", "assignment_made", "decision_updated"])
+def test_0029_skips_a_row_it_cant_read(settings: Settings, kind: str, payload: str) -> None:
+    """A row that isn't what it should be can't stop the upgrade: it's left for the drainer."""
+    _guest_on_a_decided_call(settings)
+    _queue_0029(settings, (3, kind, "odd:row", payload))
+    _upgrade_to(settings, "0029_guests_dont_coordinate")
+    engine = create_engine(settings.sync_database_url)
+    try:
+        with engine.connect() as c:
+            row = c.execute(text("SELECT payload, delivered_at FROM outbox WHERE idempotency_key = 'odd:row'")).one()
+            coordinator = c.execute(text("SELECT coordinator_id FROM event WHERE id = 3")).scalar_one()
+    finally:
+        engine.dispose()
+    assert (str(row[0]), row[1]) == (payload, None) and coordinator is None  # SQLite reads 7 as a number
+
+
+def test_0029_with_no_guests_changes_nothing(settings: Settings) -> None:
+    _upgrade_to(settings, "0028_unregistered_guest_badges")
+    _populate_calls(settings)
+    before = _snapshot(settings)
+    _upgrade_to(settings, "0029_guests_dont_coordinate")
+    assert _snapshot(settings) == before
+
+
 def _contributions(settings: Settings) -> list[object]:
     engine = create_engine(settings.sync_database_url)
     try:

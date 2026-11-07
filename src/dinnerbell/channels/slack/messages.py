@@ -365,9 +365,9 @@ def _roster(
     if event.coordinator is not None:
         lines.append(f"*Coordinator:* {ctx.directory.mention(event.coordinator)}")
     elif event.state is EventState.COLLECTING:
-        lines.append("_No coordinator yet. Anyone can tap *Answer*, then *I'll coordinate*, to steer the vote._")
+        lines.append("_No coordinator yet. Any member can tap *Answer*, then *I'll coordinate*, to steer the vote._")
     elif event.state is EventState.VOTING:
-        lines.append("_No coordinator yet. Anyone can tap *I'll coordinate* to steer the vote._")
+        lines.append("_No coordinator yet. Any member can tap *I'll coordinate* to steer the vote._")
     return join_lines(lines)
 
 
@@ -595,16 +595,12 @@ def proposals_message(notification: note.ProposalsReady | note.ProposalsUpdated,
         intro = f"Vote for any you'd enjoy.{closes}"
     else:
         intro = "Voting is closed."
-    # Who the hints name: a guest coordinator sets a pick's way, but can't break a tie (FR-58).
     who = "The coordinator or an admin" if event.coordinator is not None else "An admin"
-    tie_breaker = "An admin" if event.coordinator_is_guest else who
     blocks: list[Block] = [section(f"*{_post_title(event, 'proposals')}* for {people}\n{intro}")]
     if voting and event.shuffle_note:  # plain words: an edit pings nobody (#92)
         blocks.append(context(escape(event.shuffle_note)))
     if voting and any(p.tied for p in notification.proposals):
-        blocks.append(
-            context(f"Tied for the most votes. {tie_breaker} can break the tie with ⋯ beside a tied proposal.")
-        )
+        blocks.append(context(f"Tied for the most votes. {who} can break the tie with ⋯ beside a tied proposal."))
     # Only the first post mentions anyone (an edit that added a mention might ping it), and the
     # list comes after the instructions, so a big household can't push them out.
     blocks += _in_blocks(notification.participants, ctx, mention=isinstance(notification, note.ProposalsReady))
@@ -753,8 +749,10 @@ def _roles_pending(event: note.EventInfo, decision: note.DecisionInfo) -> str:
     proposal = decision.proposal
     what = labels.roles_to_choose(proposal.mode, way_open=proposal.way_open)
     until = local_clock(decision.roles_due_at, event.timezone) if decision.roles_due_at else ""
-    who = escape(event.coordinator.name) if event.coordinator else "The coordinator"  # plain: an edit pings nobody
     fallback = labels.roles_fallback(proposal.mode, way_open=proposal.way_open)
+    if event.coordinator is None:  # they left after the decision: the choice is an admin's until then
+        return f"_An admin can choose {what}, until {until}. If nobody does, {fallback}._"
+    who = escape(event.coordinator.name)  # plain: an edit pings nobody
     return f"_{who} is choosing {what}, until {until}. If they don't, {fallback}._"
 
 
@@ -1255,7 +1253,7 @@ def answer_actions(
         offered = mine is not None and role in mine.offers
         action = (ids.CARD_ACTION_FOR_WITHDRAW if offered else ids.CARD_ACTION_FOR_OFFER)[role]
         roles.append(choice_button(OFFER_LABELS[role], action, value, selected=offered))
-    if event.coordinator is None:
+    if event.coordinator is None and not guest:  # only household members coordinate (#227)
         roles.append(button(labels.COORDINATE, ids.CARD_COORDINATE, value))
     more: list[Block] = []
     if not guest:  # a guest has only In, Out, and the roles (#38)
@@ -1310,22 +1308,12 @@ def coordinating_given_message(notification: note.CoordinatingGiven, ctx: Render
     coordinating puts them in, so say so, and whom to tell if it doesn't work."""
     event, by = notification.event, escape(notification.by.name)
     slot, day = _slot(event), day_label(event.day)
-    if notification.via is not None:
-        name = escape(notification.member.name)
-        lines = [
-            f"Hi {escape(notification.via.name)}! *Your guest {name} is coordinating {slot} on {day}.*",
-            f"{by} gave it to them, so they're in.",
-            f"If it doesn't work for them, tell {by}.",
-        ]
-        plain = f"{notification.member.name} is coordinating {slot} on {day}."
-    else:
-        lines = [f"*You're coordinating {slot} on {day}.*", f"{by} gave it to you, so you're in."]
-        if notification.late:
-            lines.append("The vote has started, so you joined late, and your vote counts.")
-        lines += [f"If it doesn't work for you, tell {by}.", "", "Thanks for steering!"]
-        plain = f"You're coordinating {slot} on {day}."
+    lines = [f"*You're coordinating {slot} on {day}.*", f"{by} gave it to you, so you're in."]
+    if notification.late:
+        lines.append("The vote has started, so you joined late, and your vote counts.")
+    lines += [f"If it doesn't work for you, tell {by}.", "", "Thanks for steering!"]
     blocks = [section(join_lines(lines)), actions(_web_button(ctx, event), block_id="more")]
-    return _finish(plain, blocks)
+    return _finish(f"You're coordinating {slot} on {day}.", blocks)
 
 
 def coordinator_picked_message(notification: note.CoordinatorPicked, ctx: RenderContext) -> Message:
@@ -1452,21 +1440,14 @@ def roles_to_choose_message(notification: note.RolesToChoose, ctx: RenderContext
     what = labels.roles_to_choose(proposal.mode, way_open=proposal.way_open)
     fallback = labels.roles_fallback(proposal.mode, way_open=proposal.way_open)
     stays = f"it stays {proposal.mode.label.lower()}, and " if proposal.way_open else ""
-    if notification.via:  # the host can't choose for their guest, unless they're an admin (FR-58)
-        who = f"Your guest {escape(notification.member.name)} is"
-        ask = plain = "An admin can choose"
-        buttons = [_web_button(ctx, event)]
-    else:
-        who, ask, plain = "You're", "Tap *Assign roles* to choose", "Choose"
-        buttons = [assign_roles_button(event), _web_button(ctx, event)]
     lines = [
-        f"*{who} coordinating {_slot(event)} on {day_label(event.day)}.*",
+        f"*You're coordinating {_slot(event)} on {day_label(event.day)}.*",
         _place(proposal),
         "",
-        f"{ask} {what} by *{until}*. After that, {stays}{fallback}.",
+        f"Tap *Assign roles* to choose {what} by *{until}*. After that, {stays}{fallback}.",
     ]
-    blocks = [section(join_lines(lines)), actions(*buttons, block_id="more")]
-    return _finish(f"{plain} {what} for {proposal.item.name} by {until}.", blocks)
+    blocks = [section(join_lines(lines)), actions(assign_roles_button(event), _web_button(ctx, event), block_id="more")]
+    return _finish(f"Choose {what} for {proposal.item.name} by {until}.", blocks)
 
 
 def picks_shuffled_message(notification: note.PicksShuffled) -> Message:

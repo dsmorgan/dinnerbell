@@ -57,7 +57,7 @@ class Permissions:
     manage: bool = False
     mark_done: bool = False
     change_place: bool = False
-    """Change the place after the decision (#219): never for a guest (FR-58)."""
+    """Change the place after the decision (#219)."""
     correct_place: bool = False
     """Correct the place after **Mark done** (#220): an admin's, ``coordinator.correct_place``, while
     the meal is still in History."""
@@ -67,7 +67,7 @@ class Permissions:
     """The window an admin's **Admin** controls move (``call_admin.move_deadline``)."""
     move_vote: bool = False
     """Move the decision time while voting (#198): ``coordinator.move_decision_time``. The
-    coordinator's, a guest coordinator's too, and any admin's."""
+    coordinator's and any admin's."""
     cancel: bool = False
     """Call it off (FR-56): ``calls.cancel_call``."""
     close_window: Window | None = None
@@ -192,6 +192,8 @@ class EventView:
     decision: note.DecisionInfo | None
     can: Permissions
     members: tuple[note.PersonInfo, ...]
+    coordinators: tuple[note.PersonInfo, ...]
+    """``members`` without the guests: who can be handed coordinating, or assigned it (#227)."""
     dietary_tags: tuple[Tag, ...]
     cuisine_tags: tuple[Tag, ...]
     items: tuple[CatalogItem, ...]
@@ -300,25 +302,11 @@ def _offer_permissions(ctx: CallContext, actor: Member, now: datetime) -> Permis
     )
 
 
-def _guest_may(ctx: CallContext, actor: Member, action: GuestAction) -> bool:
-    return _allowed(lambda: check_guest(ctx.event, actor, action, invited=ctx.invited(actor.id)))
-
-
 def _guest_permissions(base: Permissions, ctx: CallContext, actor: Member) -> Permissions:
-    """``base`` cut down to what ``domain.guests`` lets an invited guest do (#38)."""
-    may = functools.partial(_guest_may, ctx, actor)
-    return Permissions(
-        respond=base.respond and may(GuestAction.ANSWER),  # never joins late, or switches (#76)
-        claim=base.claim and may(GuestAction.COORDINATE),
-        hand_off=base.hand_off and may(GuestAction.HAND_OFF),
-        manage=base.manage and may(GuestAction.MANAGE_DECISION),
-        mark_done=base.mark_done and may(GuestAction.MARK_DONE),
-        close_window=base.close_window if may(GuestAction.CLOSE_WINDOW) else None,
-        choose_roles=base.choose_roles and may(GuestAction.MANAGE_DECISION),
-        adjust=base.adjust and may(GuestAction.MANAGE_DECISION),
-        set_way=base.set_way and may(GuestAction.SET_WAY),
-        move_vote=base.move_vote and may(GuestAction.MOVE_DECISION_TIME),
-    )
+    """``base`` cut down to what ``domain.guests`` lets an invited guest do (#38): answer, which
+    takes the role offers with it. A guest never joins late, or switches (#76)."""
+    answers = _allowed(lambda: check_guest(ctx.event, actor, GuestAction.ANSWER, invited=ctx.invited(actor.id)))
+    return Permissions(respond=base.respond and answers)
 
 
 def permissions(ctx: CallContext, actor: Member, today: date, now: datetime, *, any_time: bool = False) -> Permissions:
@@ -339,7 +327,7 @@ def _member_permissions(
     admin = actor.active and actor.is_admin
     return Permissions(
         respond=_allowed(lambda: rules.check_can_respond(event, actor, invited=ctx.invited(actor.id))),
-        claim=_allowed(lambda: rules.check_claim_coordinator(event, actor, invited=ctx.invited(actor.id), mine=mine)),
+        claim=_allowed(lambda: rules.check_claim_coordinator(event, actor, mine=mine)),
         hand_off=rules.is_coordinator(event, actor) and event.state.is_open and event.state is not EventState.SCHEDULED,
         vote=_allowed(lambda: rules.check_can_vote(event, actor, mine)),
         propose=_allowed(lambda: rules.check_can_propose(event, actor)),
@@ -457,7 +445,7 @@ def _roles_choice(ctx: CallContext) -> RolesChoice | None:
 
 
 def view(ctx: CallContext, actor: Member, today: date, now: datetime, *, any_time: bool = False) -> EventView:
-    # Who can be handed coordinating or assigned a role: members, and guests invited to the call.
+    # Who can be assigned a role: members, and guests invited to the call.
     by_name = sorted([*ctx.active_members, *ctx.guests], key=lambda m: m.display_name.casefold())
     mine = [s for s in ctx.suggestions if s.member_id == actor.id]
     tags = sorted(ctx.tags.values(), key=lambda t: t.key)
@@ -483,6 +471,7 @@ def view(ctx: CallContext, actor: Member, today: date, now: datetime, *, any_tim
         decision=cc.decision_info(ctx),
         can=permissions(ctx, actor, today, now, any_time=any_time),
         members=tuple(ctx.person(m.id) for m in by_name),
+        coordinators=tuple(ctx.person(m.id) for m in by_name if not m.is_guest),
         dietary_tags=tuple(t for t in tags if t.kind is TagKind.DIETARY),
         cuisine_tags=tuple(t for t in tags if t.kind is TagKind.CUISINE),
         items=tuple(for_meal_first(active, ctx.event.slot.meal)),  # for the call's meal first (#72)

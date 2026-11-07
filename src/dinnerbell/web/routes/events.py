@@ -407,6 +407,8 @@ async def coordinate(
     event_id: RowId,
     came_from: Annotated[str, Form(alias="from", max_length=10)] = "",
 ) -> Response:
+    """**I'll coordinate**. Open to a guest only so that a page left open hears why not (#227)."""
+
     async def action() -> None:
         await calls.claim_coordinator(db, principal.member, event_id, now=context.clock())
 
@@ -423,7 +425,7 @@ def _member_id(value: str) -> int:
 @router.post("/events/{event_id}/hand-off")
 async def hand_off(
     request: Request,
-    principal: GuestCSRFChecked,
+    principal: CSRFChecked,
     context: Context,
     db: Database,
     event_id: RowId,
@@ -595,7 +597,7 @@ async def break_tie(
 @router.post("/events/{event_id}/proposals/{proposal_id}/way")
 async def set_way(
     request: Request,
-    principal: GuestCSRFChecked,
+    principal: CSRFChecked,
     context: Context,
     db: Database,
     event_id: RowId,
@@ -607,8 +609,7 @@ async def set_way(
 ) -> Response:
     """Set a takeout pick to pickup or delivery while voting (#178), or, with ``mode=either``,
     clear it back to not chosen (#212). A clear names the way it clears (``clears``), so a tap on
-    a page that shows a way someone has changed since is refused, not applied. A guest
-    coordinating may."""
+    a page that shows a way someone has changed since is refused, not applied."""
     seen = parse_id(run)
     if seen is None:
         return await _malformed(request, principal, context, db, event_id, came_from)
@@ -632,7 +633,7 @@ async def set_way(
 @router.post("/events/{event_id}/decision-time")
 async def move_decision_time(
     request: Request,
-    principal: GuestCSRFChecked,
+    principal: CSRFChecked,
     context: Context,
     db: Database,
     event_id: RowId,
@@ -640,8 +641,8 @@ async def move_decision_time(
     run: Run = "",
     came_from: Annotated[str, Form(alias="from", max_length=10)] = "",
 ) -> Response:
-    """Move the decision time while voting (#198): the coordinator, a guest coordinating too, or
-    an admin. An admin's own controls are under **Admin** (``move_deadline``)."""
+    """Move the decision time while voting (#198): the coordinator or an admin. An admin's
+    own controls are under **Admin** (``move_deadline``)."""
     seen = parse_id(run)
     if seen is None:
         return await _malformed(request, principal, context, db, event_id, came_from)
@@ -658,7 +659,7 @@ async def move_decision_time(
 @router.post("/events/{event_id}/roles")
 async def choose_roles(
     request: Request,
-    principal: GuestCSRFChecked,
+    principal: CSRFChecked,
     context: Context,
     db: Database,
     event_id: RowId,
@@ -671,7 +672,7 @@ async def choose_roles(
     came_from: Annotated[str, Form(alias="from", max_length=10)] = "",
 ) -> Response:
     """**Assign roles**: the decided pick's mode, who cooks or orders it, and who picks it up
-    (#178). A guest coordinating may. ``shown_item`` and ``shown_way`` are the place and way the
+    (#178). ``shown_item`` and ``shown_way`` are the place and way the
     page showed (#219), so a page left open can't put roles on a place changed since; a page
     drawn before it sent them isn't held to them."""
     seen = parse_id(run)
@@ -765,7 +766,7 @@ async def switch_late_joiner(
 @router.post("/events/{event_id}/meal-time")
 async def meal_time(
     request: Request,
-    principal: GuestCSRFChecked,
+    principal: CSRFChecked,
     context: Context,
     db: Database,
     event_id: RowId,
@@ -797,8 +798,7 @@ async def change_place(
     came_from: Annotated[str, Form(alias="from", max_length=10)] = "",
 ) -> Response:
     """**Change the plan**: the place, once a call is decided (#219). ``opened_item`` is the place
-    the page showed, and ``run`` its run, so a page left open can't write over a newer change. A
-    guest coordinating may not (FR-58)."""
+    the page showed, and ``run`` its run, so a page left open can't write over a newer change."""
     seen, shown = parse_id(run), parse_id(opened_item)
     if seen is None or shown is None or any(value and parse_id(value) is None for value in (item_id, cuisine_id)):
         return await _malformed(request, principal, context, db, event_id, came_from)
@@ -823,7 +823,7 @@ async def change_place(
 @router.post("/events/{event_id}/assignments")
 async def assignment(
     request: Request,
-    principal: GuestCSRFChecked,
+    principal: CSRFChecked,
     context: Context,
     db: Database,
     event_id: RowId,
@@ -846,7 +846,7 @@ async def assignment(
 @router.post("/events/{event_id}/done")
 async def done(
     request: Request,
-    principal: GuestCSRFChecked,
+    principal: CSRFChecked,
     context: Context,
     db: Database,
     event_id: RowId,
@@ -903,7 +903,7 @@ async def cancel(
 @router.post("/events/{event_id}/close")
 async def close(
     request: Request,
-    principal: GuestCSRFChecked,
+    principal: CSRFChecked,
     context: Context,
     db: Database,
     event_id: RowId,

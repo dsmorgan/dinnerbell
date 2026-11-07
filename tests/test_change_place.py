@@ -220,7 +220,7 @@ async def test_an_admin_may_change_it_but_not_as_slacks_adjust(house: House) -> 
     assert audit.payload["as"] == "admin" and audit.actor_member_id == house["Alex"].id
 
 
-async def guest_coordinating(house: House) -> tuple[int, Member]:
+async def guest_at_a_decided_call(house: House) -> tuple[int, Member]:
     """Pat, a guest, coordinates a call decided on Siam Garden. Taqueria was only a pick."""
     pat = await add_guest(house, "Pat")
     event_id = await open_dinner(house)
@@ -229,46 +229,22 @@ async def guest_coordinating(house: House) -> tuple[int, Member]:
     await act(house, calls.offer_role, house["Alex"], event_id, RoleOffer.PICKUP, True)
     await act(house, guests.invite, house["Sam"], event_id, guest_id=pat.id)
     await act(house, calls.respond, pat, event_id, Status.IN)
-    await act(house, calls.claim_coordinator, pat, event_id)
     house.clock.now = RESPOND_BY
     await house.tick()
     await act(house, calls.lock, house["Alex"], event_id, (await pick_ids(house, event_id))["Siam Garden"])
     return event_id, pat
 
 
-async def test_a_guest_coordinator_may_not_change_the_place(house: House) -> None:
-    event_id, pat = await guest_coordinating(house)
+async def test_a_guest_may_not_change_the_place(house: House) -> None:
+    event_id, pat = await guest_at_a_decided_call(house)
     siam = house.items["Siam Garden"].id
     for place in ({"item_id": tacos(house), "mode": Mode.COOK}, {"name": "Noodle Bar", "mode": Mode.PICKUP}):
         with pytest.raises(EventRuleViolation) as caught:
             await act(house, coordinator.change_place, pat, event_id, opened_item_id=siam, **place)
-        assert caught.value.code == "guests_dont" and str(caught.value) == REFUSED[GuestAction.CHANGE_PLACE]
+        assert caught.value.code == "guests_dont" and str(caught.value) == REFUSED[GuestAction.COORDINATE]
     ctx = await house.context(event_id)
     assert (await house.event(event_id)).decided_item_id == siam
     assert not [i for i in ctx.items.values() if i.name == "Noodle Bar"]
-
-
-async def test_a_guest_coordinators_adjust_has_no_place_and_refuses_one_sent_anyway(house: House) -> None:
-    event_id, pat = await guest_coordinating(house)
-    view = await act(house, event_views.event_view, pat, event_id)
-    assert view.can.adjust and not view.can.change_place
-    shown = adjust_opened(view)
-    built = adjust_modal(view, ids.ViewOrigin(event_id, CHANNEL, run=1, opened=shown))
-    text = json.dumps(built)
-    assert not {"place", "new_place", "place_mode", "place_cuisine"} & set(inputs(built))
-    assert "Sam's Tacos" not in text and "Taqueria" not in text and "the place" not in text
-    opened = Adjustment(
-        shown.meal_time, shown.assignee_id, shown.coordinator_id, shown.mode, shown.pickup_id, shown.item_id
-    )
-    forged = replace(opened, item_id=tacos(house), place_mode=Mode.COOK)
-    with pytest.raises(EventRuleViolation) as caught:
-        await act(house, coordinator.adjust, pat, event_id, forged, opened=opened, run=1)
-    assert caught.value.code == "guests_dont"
-    forged = replace(opened, new_place="Noodle Bar", place_mode=Mode.PICKUP)
-    with pytest.raises(EventRuleViolation) as caught:
-        await act(house, coordinator.adjust, pat, event_id, forged, opened=opened, run=1)
-    assert caught.value.code == "guests_dont"
-    assert (await house.event(event_id)).decided_item_id == house.items["Siam Garden"].id
 
 
 async def test_a_done_call_refuses_even_an_admin(house: House) -> None:

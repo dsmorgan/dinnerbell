@@ -17,6 +17,9 @@ from joserfc.jwk import RSAKey
 
 from dinnerbell.config import SLACK_ISSUER, Settings
 from dinnerbell.db.models import AuditRow, EventRow, InvitationRow, MemberRow, ResponseRow, VoteRow
+from dinnerbell.domain import labels
+from dinnerbell.domain.events import GUESTS_DONT_COORDINATE
+from dinnerbell.domain.guests import REFUSED, GuestAction
 from dinnerbell.services.guests import NotJoinable, SlackPerson
 from dinnerbell.web.auth import require_anyone, require_csrf_anyone
 from tests.conftest import csrf_from, invite, page, sign_in
@@ -52,15 +55,7 @@ GUEST_ROUTES = {
     ("GET", "/events/{event_id}/card"),
     ("POST", "/events/{event_id}/respond"),
     ("POST", "/events/{event_id}/offer"),
-    ("POST", "/events/{event_id}/coordinate"),
-    ("POST", "/events/{event_id}/hand-off"),
-    ("POST", "/events/{event_id}/meal-time"),
-    ("POST", "/events/{event_id}/assignments"),
-    ("POST", "/events/{event_id}/roles"),  # a guest coordinating assigns roles (FR-58, #87)
-    ("POST", "/events/{event_id}/proposals/{proposal_id}/way"),  # a guest coordinating sets the way (#178)
-    ("POST", "/events/{event_id}/decision-time"),  # a guest coordinating moves the decision time (#198)
-    ("POST", "/events/{event_id}/done"),
-    ("POST", "/events/{event_id}/close"),
+    ("POST", "/events/{event_id}/coordinate"),  # to say why not, to a page left open (#227)
 }
 """Every route a signed-in guest may use (#38). The rest refuse them before any handler runs."""
 PUBLIC = ("/auth/", "/healthz", "/static", "/favicon")
@@ -400,59 +395,6 @@ def test_a_guest_never_sees_votes_or_admin_controls(
     assert rows(migrated, VoteRow) == []
 
 
-def test_a_guest_coordinator_gets_only_the_way_in_the_quiet_row(
-    admin: TestClient, provider: FakeProvider, clock: FakeClock, migrated: Settings
-) -> None:
-    """A guest can't vote, lock, or break a tie (FR-58), so a guest coordinating sees no Vote, and
-    the coordinator's row has only Pickup | Delivery (#212)."""
-    from datetime import timedelta
-
-    add_item(admin, "Pho Place", cuisines="Vietnamese", modes=["pickup", "delivery"])
-    event_id = start(admin)
-    pat = add_guest(admin, "Pat", slack="U07PAT")
-    submit(admin, f"/events/{event_id}/guests", {"guest_id": str(pat), "run": "1"})
-    submit(admin, f"/events/{event_id}/respond", {"status": "in"})
-    submit(admin, f"/events/{event_id}/offer", {"role": "pickup", "offered": "1"})
-    guest = as_guest(admin, provider)
-    submit(guest, f"/events/{event_id}/respond", {"status": "in"})
-    assert submit(guest, f"/events/{event_id}/coordinate", {}).status_code == 303
-    clock.advance(timedelta(minutes=90))
-    tick(guest, clock)
-    html = page(guest.get(f"/events/{event_id}"))
-    assert ">Vote<" not in html and "Join late and vote" not in html
-    assert html.count('<div class="coordinator-row"') == 1  # Pho Place, the one pick with two ways
-    row = html[html.index('<div class="coordinator-row"') :]
-    row = row[: row.index("</li>")]
-    assert ">Pickup</button>" in row and ">Delivery</button>" in row
-    assert "Break the tie" not in row and "Lock this" not in row
-    assert "Shuffle proposals" not in html
-
-
-def test_a_guest_coordinator_moves_the_decision_time_on_the_web(
-    admin: TestClient, provider: FakeProvider, clock: FakeClock, migrated: Settings
-) -> None:
-    """Coordinating's logistics include the decision time while voting (#198, FR-58)."""
-    from datetime import timedelta
-
-    event_id = start(admin)
-    pat = add_guest(admin, "Pat", slack="U07PAT")
-    submit(admin, f"/events/{event_id}/guests", {"guest_id": str(pat), "run": "1"})
-    submit(admin, f"/events/{event_id}/respond", {"status": "in"})
-    submit(admin, f"/events/{event_id}/offer", {"role": "pickup", "offered": "1"})
-    guest = as_guest(admin, provider)
-    submit(guest, f"/events/{event_id}/respond", {"status": "in"})
-    assert submit(guest, f"/events/{event_id}/coordinate", {}).status_code == 303
-    clock.advance(timedelta(minutes=90))
-    tick(guest, clock)
-    (before,) = [e.vote_deadline for e in rows(migrated, EventRow)]
-    html = page(guest.get(f"/events/{event_id}"))
-    assert "Move the decision time" in html and f'action="/events/{event_id}/admin/deadline"' not in html
-    assert submit(guest, f"/events/{event_id}/decision-time", {"shift": "plus15", "run": "1"}).status_code == 303
-    assert [e.vote_deadline for e in rows(migrated, EventRow)] == [before + timedelta(minutes=15)]
-    (audit,) = [a for a in rows(migrated, AuditRow) if a.action == "event.deadline_moved"]
-    assert audit.payload["as"] == "coordinator"
-
-
 def test_the_admin_links_a_guest_to_a_member_on_the_web(admin: TestClient, migrated: Settings) -> None:
     """Pat's Slack email isn't Kim's, so the page shows both and links only after the admin
     types Kim's name. Admins are never offered."""
@@ -561,16 +503,125 @@ def test_linking_a_slack_guest_account_always_asks_for_the_members_name(admin: T
     assert linked.status_code == 303
 
 
+def test_a_guests_page_offers_no_coordinating_and_says_why_on_a_stale_tap(
+    admin: TestClient, provider: FakeProvider, migrated: Settings
+) -> None:
+    """#227: no **I'll coordinate** on a guest's page; a page left open is told why not."""
+    event_id = start(admin)
+    pat = add_guest(admin, "Pat", slack="U07PAT")
+    submit(admin, f"/events/{event_id}/guests", {"guest_id": str(pat), "run": "1"})
+    guest = as_guest(admin, provider)
+    html = page(guest.get(f"/events/{event_id}"))
+    assert "/coordinate" not in html and labels.COORDINATE not in html
+    assert submit(guest, f"/events/{event_id}/respond", {"status": "in"}).status_code == 303
+    refused = submit(guest, f"/events/{event_id}/coordinate", {})
+    assert REFUSED[GuestAction.COORDINATE] in page(refused)
+    (row,) = rows(migrated, EventRow)
+    assert row.coordinator_id is None
+    # Everything else a coordinator posts stops at the door, with nothing changed.
+    forms = {"member_id": "1", "shift": "plus15", "time": "19:00", "role": "pickup", "mode": "pickup", "run": "1"}
+    for path in ("hand-off", "meal-time", "assignments", "roles", "decision-time", "done", "close"):
+        assert submit(guest, f"/events/{event_id}/{path}", forms).status_code == 403, path
+
+
+def test_the_hand_off_and_coordinator_forms_list_only_members(
+    admin: TestClient, provider: FakeProvider, migrated: Settings
+) -> None:
+    """#227: a guest with Slack and one without, both invited. They're refused when forged."""
+    event_id = start(admin)
+    pat, jo = add_guest(admin, "Pat", slack="U07PAT"), add_guest(admin, "Jo")
+    for guest in (pat, jo):
+        submit(admin, f"/events/{event_id}/guests", {"guest_id": str(guest), "run": "1"})
+    submit(admin, f"/events/{event_id}/respond", {"status": "in"})
+    submit(admin, f"/events/{event_id}/coordinate", {})
+    html = page(admin.get(f"/events/{event_id}"))
+    for form in (f'action="/events/{event_id}/hand-off"', f'action="/events/{event_id}/admin/coordinator"'):
+        at = html[html.index(form) :]
+        select = at[: at.index("</select>")]
+        assert f'value="{pat}"' not in select and f'value="{jo}"' not in select, form
+    for guest in (pat, jo):
+        for path in ("hand-off", "admin/coordinator"):
+            refused = submit(admin, f"/events/{event_id}/{path}", {"member_id": str(guest)})
+            assert GUESTS_DONT_COORDINATE in page(refused), path
+    (row,) = rows(migrated, EventRow)
+    assert row.coordinator_id not in {pat, jo}
+
+
+def test_a_guest_who_is_in_can_still_be_assigned_a_role_on_the_web(
+    admin: TestClient, provider: FakeProvider, clock: FakeClock, migrated: Settings
+) -> None:
+    from datetime import timedelta
+
+    from dinnerbell.db.models import AssignmentRow, ProposalRow
+
+    event_id = start(admin)
+    pat = add_guest(admin, "Pat", slack="U07PAT")
+    submit(admin, f"/events/{event_id}/guests", {"guest_id": str(pat), "run": "1"})
+    submit(admin, f"/events/{event_id}/respond", {"status": "in"})
+    submit(admin, f"/events/{event_id}/offer", {"role": "pickup", "offered": "1"})
+    guest = as_guest(admin, provider)
+    submit(guest, f"/events/{event_id}/respond", {"status": "in"})
+    assert submit(guest, f"/events/{event_id}/offer", {"role": "pickup", "offered": "1"}).status_code == 303
+    clock.advance(timedelta(minutes=90))
+    tick(guest, clock)
+    guest.cookies.clear()
+    sign_in(guest, provider, claims=SLACK_ADMIN)
+    (first, *_) = sorted(rows(migrated, ProposalRow), key=lambda p: p.rank)
+    assert submit(guest, f"/events/{event_id}/proposals/{first.id}/lock", {}).status_code == 303
+    html = page(guest.get(f"/events/{event_id}"))
+    at = html[html.index(f'action="/events/{event_id}/assignments"') :]
+    assert f'value="{pat}"' in at[: at.index("</form>")]  # on the role form, for a guest who's in
+    form = {"role": "pickup", "member_id": str(pat)}
+    assert submit(guest, f"/events/{event_id}/assignments", form).status_code == 303
+    assert (pat, "pickup") in {(a.member_id, a.role) for a in rows(migrated, AssignmentRow)}
+
+
+def test_a_pending_choice_with_nobody_coordinating_says_an_admin_can_on_the_page(
+    admin: TestClient, clock: FakeClock, migrated: Settings
+) -> None:
+    """As after the upgrade (0029): the time to choose runs on, and the page says whose it is."""
+    from datetime import timedelta
+
+    from dinnerbell.db.models import CatalogItemRow, ProposalRow
+
+    add_item(admin, "Pho Place", cuisines="Vietnamese", modes=["pickup", "delivery"])
+    event_id = start(admin)
+    submit(admin, f"/events/{event_id}/guests", {"guest_id": str(add_guest(admin, "Jo")), "run": "1"})  # in at once
+    submit(admin, f"/events/{event_id}/respond", {"status": "in"})
+    submit(admin, f"/events/{event_id}/offer", {"role": "pickup", "offered": "1"})
+    submit(admin, f"/events/{event_id}/coordinate", {})
+    clock.advance(timedelta(minutes=90))
+    tick(admin, clock)
+    pho = next(i.id for i in rows(migrated, CatalogItemRow) if i.name == "Pho Place")
+    pick = next(p for p in rows(migrated, ProposalRow) if p.item_id == pho)
+    assert submit(admin, f"/events/{event_id}/proposals/{pick.id}/lock", {}).status_code == 303
+    assert "is choosing" in page(admin.get(f"/events/{event_id}"))
+    assert submit(admin, f"/events/{event_id}/admin/coordinator", {"member_id": ""}).status_code == 303
+    html = page(admin.get(f"/events/{event_id}"))
+    assert "An admin can choose" in html and "If nobody does" in html and "is choosing" not in html
+
+
+def test_no_form_makes_a_member_a_guest(admin: TestClient, provider: FakeProvider, migrated: Settings) -> None:
+    """Nobody is demoted to a guest, so a coordinator never becomes one: the admin's member form
+    refuses the role (#227), and a guest is only ever added, invited, or joined as one."""
+    assert submit(admin, "/admin/members", {"display_name": "Kim", "email": "kim@example.com", "role": "member"})
+    kim = next(m for m in rows(migrated, MemberRow) if m.display_name == "Kim")
+    form = {"display_name": "Kim", "email": "kim@example.com", "role": "guest"}
+    assert submit(admin, f"/admin/members/{kim.id}", form).status_code == 400
+    assert next(m for m in rows(migrated, MemberRow) if m.id == kim.id).role == "member"
+
+
 def test_a_guest_sees_only_their_own_badges(admin: TestClient, provider: FakeProvider, migrated: Settings) -> None:
     """The Stats page for a guest (#15): their pitching-in badges, no counts that guests can't
     earn, no household view, and none of the members' names."""
-    from datetime import UTC, datetime
+    from datetime import UTC, date, datetime
 
     from sqlalchemy import create_engine
     from sqlalchemy.orm import Session
 
-    from dinnerbell.db.models import BadgeAwardRow, HouseholdRow
+    from dinnerbell.db.models import BadgeAwardRow, ContributionRow, HouseholdRow
 
+    event_id = start(admin)
     add_guest(admin, "Riley", slack="U07PAT")
     as_guest(admin, provider)
     engine = create_engine(migrated.sync_database_url)
@@ -590,53 +641,29 @@ def test_a_guest_sees_only_their_own_badges(admin: TestClient, provider: FakePro
     engine.dispose()
     html = page(admin.get("/stats"))
     assert "<h1>Your badges</h1>" in html and 'aria-current="page">Your badges' in html
-    assert html.count("badge-row") == 5 and "Road Runner<span" in html and "Newly earned" in html
+    assert html.count("badge-row") == 4 and "Road Runner<span" in html and "Newly earned" in html
     for hidden in ("Full Table", "Food Critic", "Meals shared", "The household", 'id="lately-title"', "Stats</a>"):
         assert hidden not in html
     assert "Meals cooked" in html
+    assert "Meals coordinated" not in html and "Quarterback" not in html  # guests no longer coordinate (#227)
     assert 'aria-label="Stats"' not in html and "/stats/household" not in html  # no tabs for a guest (#153)
     moved = admin.get("/stats/household")
     assert (moved.status_code, moved.headers["location"]) == (303, "/stats")
-
-
-def test_a_guest_coordinator_sees_no_catalog_and_cant_post_the_place(
-    admin: TestClient, provider: FakeProvider, clock: FakeClock, migrated: Settings
-) -> None:
-    """Changing the place is choosing, not logistics (#219, FR-58): the page keeps the catalog
-    from them, and the route refuses them before any handler runs."""
-    from datetime import timedelta
-
-    from dinnerbell.db.models import CatalogItemRow, EventRow, ProposalRow
-
-    add_item(admin, "Sam's Tacos", kind="home", modes=["cook"], cuisines="Mexican")
-    add_item(admin, "Pho Place", cuisines="Vietnamese")
-    event_id = start(admin)
-    pat = add_guest(admin, "Pat", slack="U07PAT")
-    submit(admin, f"/events/{event_id}/guests", {"guest_id": str(pat), "run": "1"})
-    submit(admin, f"/events/{event_id}/respond", {"status": "in"})
-    submit(admin, f"/events/{event_id}/offer", {"role": "pickup", "offered": "1"})
-    guest = as_guest(admin, provider)
-    submit(guest, f"/events/{event_id}/respond", {"status": "in"})
-    assert submit(guest, f"/events/{event_id}/coordinate", {}).status_code == 303
-    clock.advance(timedelta(minutes=90))
-    tick(guest, clock)
-    (first, *_) = sorted(rows(migrated, ProposalRow), key=lambda p: p.rank)
-    guest.cookies.clear()
-    sign_in(guest, provider, claims=SLACK_ADMIN)
-    assert submit(guest, f"/events/{event_id}/proposals/{first.id}/lock", {}).status_code == 303
-    (row,) = rows(migrated, EventRow)
-    others = [i.name for i in rows(migrated, CatalogItemRow) if i.id != row.decided_item_id]
-    assert "Sam's Tacos" in others
-
-    guest = as_guest(guest, provider)
-    html = page(guest.get(f"/events/{event_id}"))
-    assert "Change the plan" in html and f'action="/events/{event_id}/meal-time"' in html  # logistics stay
-    assert f'action="/events/{event_id}/place"' not in html and 'name="new_place"' not in html
-    for name in others:
-        assert name.replace("'", "&#39;") not in html and name not in html
-    home = next(i.id for i in rows(migrated, CatalogItemRow) if i.name == "Sam's Tacos")
-    form = {"item_id": str(home), "mode": "cook", "opened_item": str(row.decided_item_id), "run": "1"}
-    assert submit(guest, f"/events/{event_id}/place", form).status_code == 403
-    assert rows(migrated, EventRow)[0].decided_item_id == row.decided_item_id
-    assert submit(guest, f"/events/{event_id}/place", form | {"item_id": "", "new_place": "Soup"}).status_code == 403
-    assert not [i for i in rows(migrated, CatalogItemRow) if i.name == "Soup"]
+    # A guest who coordinated before that keeps the count, and sees it.
+    engine = create_engine(migrated.sync_database_url)
+    with Session(engine) as db:
+        guest = next(m for m in rows(migrated, MemberRow) if m.slack_user_id == "U07PAT")
+        db.add(
+            ContributionRow(
+                household_id=db.query(HouseholdRow).one().id,
+                member_id=guest.id,
+                kind="coordinated",
+                day=date(2026, 10, 21),
+                event_id=event_id,
+                created_at=datetime.now(UTC),
+            )
+        )
+        db.commit()
+    engine.dispose()
+    html = page(admin.get("/stats"))
+    assert "Meals coordinated" in html and "Quarterback" in html and html.count("badge-row") == 5
