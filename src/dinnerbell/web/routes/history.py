@@ -148,7 +148,8 @@ async def _history_page(
     status_code: int = 200,
 ) -> Response:
     """``notice_meal`` is the meal a notice is about. When this page lists it, the notice shows
-    in that meal's entry instead of at the top. ``notice_refused`` shows it as an error."""
+    in that meal's entry instead of at the top. ``notice_refused`` shows the one at the top as an
+    error."""
     today = _today(context, principal)
     history = await meal_service.history(db, principal.member, page=page)
     window = await variety_window(db, principal.household.id, today)
@@ -200,7 +201,7 @@ async def history_page(
         db,
         page=shown,
         notice=NOTICES.get(notice) or REFUSALS.get(notice),
-        notice_meal=about,
+        notice_meal=None if notice in REFUSALS else about,
         notice_refused=notice in REFUSALS,
     )
 
@@ -282,15 +283,17 @@ async def update_meal(
 async def delete_meal(
     principal: CSRFChecked, context: Context, db: Database, meal_id: RowId, shown_meal: FormText = ""
 ) -> Response:
-    """Delete a meal. A form that showed it as it no longer is lands on the meal instead, with why:
-    the delete forms are boosted, and a redirect is what HTMX follows here as it does on success."""
+    """Delete a meal. A form that showed it as it no longer is returns to the page that lists it,
+    with why at the top, as a delete does. The delete forms are boosted, and HTMX drops a redirect's
+    fragment, so a notice in the meal's entry would land off screen."""
     meal = await meal_service.get_meal(db, principal.member, meal_id)
     page = await meal_service.history_page_of(db, principal.member, meal)  # where it was: its neighbors stay there
     try:
         await meal_service.delete_meal(db, principal.member, meal_id, now=context.clock(), shown=shown_meal)
     except StaleMeal:
-        fresh = await meal_service.get_meal(db, principal.member, meal_id)
-        return local_redirect(await _history_path(db, principal, fresh, "changed"))
+        if page == 1:
+            return local_redirect("/history?notice=changed")
+        return local_redirect("/history?page={}&notice=changed", page)
     if page == 1:
         return local_redirect("/history?notice=deleted")
     return local_redirect("/history?page={}&notice=deleted", page)

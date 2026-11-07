@@ -141,7 +141,7 @@ When a meal was marked done before the household changed its mind, correct the p
 
 A correction writes `event.place_changed`, marked `after_done`, and `event.contributions_recounted` if any count moved.
 
-**Change the plan** is the only way to change a call's place once it's done. **Edit** in History shows that place read-only and links here, so the call, its messages, its counts, and its feedback all stay together. If a History edit from an earlier version left a meal and its call on different places, **Change the plan** says so and starts from the meal's place. Keep that place to bring the call into line, or choose the place the call still names to move the meal back. If you deleted the meal from History, there's nothing to correct, and the form doesn't appear.
+**Change the plan** is the only way to change a call's place once it's done. **Edit** in History shows that place read-only and links here, so the call, its messages, its counts, and its feedback all stay together. If a History edit from an earlier version left a meal and its call on different places, **Change the plan** says so and starts from the meal's place. Keep that place to bring the call into line, or choose the place the call still names to move the meal back. If the call's place has left the catalog, it isn't in the menu, so type its name and choose a way. Moving the meal back keeps the call's roles and how it won. Its counts stay too, unless other meals have changed how new the place was, as with any correction. If you deleted the meal from History, there's nothing to correct, and the form doesn't appear.
 
 ## What a guest coordinator can do
 
