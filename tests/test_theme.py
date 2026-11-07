@@ -98,3 +98,27 @@ def test_the_browser_bar_matches_the_page_background() -> None:
     dark = tokens(block(':root[data-theme="dark"]'))
     assert f'<meta name="theme-color" content="{light["--bg"]}" media="(prefers-color-scheme: light)">' in BASE
     assert f'<meta name="theme-color" content="{dark["--bg"]}" media="(prefers-color-scheme: dark)">' in BASE
+
+
+def test_a_lifted_part_stays_inside_its_joined_control() -> None:
+    """A chosen level is z-index 1, like the sticky top bar. Without isolation it painted over the
+    bar when Preferences scrolled, and took taps meant for the menu (#233)."""
+    assert ".segments, .segmented, .way-pair { isolation: isolate; }" in CSS
+    lifted = [s for s, body in rules(CSS) if "z-index" in body and re.search(r"\.segment\b|\.segmented|\.way-pair", s)]
+    assert lifted  # the rules this guards
+    topbar = block(".topbar")
+    assert "position: sticky;" in topbar and "z-index: 1;" in topbar
+
+
+def test_dimmed_text_is_muted_not_faded() -> None:
+    """Fading text with opacity drops muted text under 4.5:1; dimmed rows take --muted instead.
+    Opacity stays for disabled inputs, the locked badge art, hidden inputs, and animations."""
+    for selector in (".member.inactive .member-main", ".item.inactive > :not(.item-actions)", ".roster .status-out"):
+        assert block(selector) == "color: var(--muted);", selector
+    allowed = {"input:disabled", ".badge-svg-locked"}
+    faded = [
+        s
+        for s, body in rules(CSS)
+        if re.search(r"opacity:\s*0?\.\d", body) and s not in allowed and not re.fullmatch(r"(to|from|[\d%, ]+)", s)
+    ]
+    assert faded == []

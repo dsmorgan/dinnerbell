@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import logging
+import mimetypes
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
 from pathlib import Path
@@ -49,6 +50,8 @@ from dinnerbell.web.routes import (
 log = logging.getLogger(__name__)
 
 STATIC_DIR = Path(__file__).parent / "static"
+
+
 AUTH_RATE_LIMIT = 20
 AUTH_RATE_WINDOW_SECONDS = 60.0
 DEFAULT_BODY_LIMIT = 64 * 1024
@@ -57,6 +60,13 @@ IMPORT_BODY_LIMIT = 2_200_000
 multipart overhead."""
 IMPORT_PATH_PREFIX = "/catalog/import/"
 Lifespan = Callable[[FastAPI], AbstractAsyncContextManager[None]]
+
+
+def register_static_types() -> None:
+    """Map the static files' extensions that Python's own table lacks. Python guesses a type from
+    the host's mime.types files, and the slim image has none, so .woff2 would go out as
+    application/octet-stream."""
+    mimetypes.add_type("font/woff2", ".woff2")
 
 
 def build_app(settings: Settings, lifespan: Lifespan) -> FastAPI:
@@ -73,6 +83,7 @@ def build_app(settings: Settings, lifespan: Lifespan) -> FastAPI:
         openapi_url=None,
         telemetry={"tracing": False, "metrics": False, "logs": False},
     )
+    register_static_types()
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
     for router in (
         health.router,

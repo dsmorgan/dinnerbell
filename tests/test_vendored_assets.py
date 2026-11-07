@@ -3,13 +3,22 @@
 fails CI."""
 
 import hashlib
+import mimetypes
 import re
+from collections.abc import Iterator
 from importlib.resources import files
 
+import httpx
+import pytest
 from fastapi.testclient import TestClient
 
+from dinnerbell.app_factory import create_app
+from dinnerbell.config import Settings
 from dinnerbell.web.middleware import CONTENT_SECURITY_POLICY, STATIC_CONTENT_SECURITY_POLICY
 from dinnerbell.web.render import HTMX_FILE
+from tests.conftest import BASE_URL
+from tests.support.clock import FakeClock
+from tests.support.fake_oidc import FakeProvider
 
 # SHA-256 of `package/dist/htmx.min.js` in the npm package `htmx.org` at HTMX_VERSION (`npm pack
 # htmx.org@2.0.11`, then `shasum -a 256 package/dist/htmx.min.js`). To update htmx, see
@@ -74,13 +83,28 @@ def test_the_stylesheet_loads_each_vendored_font_and_falls_back_to_the_device_fo
     assert "font: 17px/1.5 var(--font);" in css
 
 
-def test_fonts_are_served_from_self_as_static_files(client: TestClient) -> None:
-    for subset in FIGTREE_SHA256:
-        response = client.get(f"/static/fonts/{figtree_file(subset)}")
-        assert response.status_code == 200, subset
-        assert response.headers["content-type"] == "font/woff2", subset
-        assert response.headers["content-security-policy"] == STATIC_CONTENT_SECURITY_POLICY, subset
-        assert response.headers.get("cache-control") != "no-store", subset
+@pytest.fixture
+def no_host_mime_types(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Guess types as the slim image does: from Python's own table, with no /etc/mime.types."""
+    monkeypatch.setattr(mimetypes, "knownfiles", [])
+    mimetypes.init()
+    assert mimetypes.guess_type("x.woff2") == (None, None)  # what the image would serve without help
+    yield
+    monkeypatch.undo()
+    mimetypes.init()
+
+
+def test_fonts_are_served_from_self_as_static_files(
+    no_host_mime_types: None, migrated: Settings, clock: FakeClock, provider: FakeProvider
+) -> None:
+    app = create_app(migrated, clock=clock, oidc_transport=httpx.ASGITransport(app=provider.app))
+    with TestClient(app, base_url=BASE_URL, headers={"Origin": BASE_URL}) as client:
+        for subset in FIGTREE_SHA256:
+            response = client.get(f"/static/fonts/{figtree_file(subset)}")
+            assert response.status_code == 200, subset
+            assert response.headers["content-type"] == "font/woff2", subset
+            assert response.headers["content-security-policy"] == STATIC_CONTENT_SECURITY_POLICY, subset
+            assert response.headers.get("cache-control") != "no-store", subset
     # The page loads fonts from its own origin only: default-src covers fonts, and nothing widens it.
     policy = [part.strip() for part in CONTENT_SECURITY_POLICY.split(";")]
     assert "default-src 'self'" in policy
