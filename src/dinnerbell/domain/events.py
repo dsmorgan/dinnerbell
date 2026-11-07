@@ -1181,9 +1181,9 @@ def check_can_choose_roles(event: Event, actor: Member) -> None:
 
 
 def check_can_change_place(event: Event, actor: Member) -> ActingAs:
-    """Change the place after the decision (#219, spec 5.7): the coordinator, a guest coordinator
-    too (FR-58), or an admin, while the call is decided. Returns the capacity they act in, for
-    the audit row."""
+    """Change the place after the decision (#219, spec 5.7): the coordinator or an admin, while
+    the call is decided. Never a guest, even one coordinating (``GuestAction.CHANGE_PLACE``,
+    FR-58). Returns the capacity they act in, for the audit row."""
     check_can_choose_roles(event, actor)
     return ActingAs.COORDINATOR if is_coordinator(event, actor) else ActingAs.ADMIN
 

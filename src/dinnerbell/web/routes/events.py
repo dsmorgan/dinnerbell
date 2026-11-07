@@ -665,13 +665,17 @@ async def choose_roles(
     mode: Field = "",
     member_id: Field = "",
     pickup_id: Field = "",
+    shown_item: Field = "",
+    shown_way: Field = "",
     run: Run = "",
     came_from: Annotated[str, Form(alias="from", max_length=10)] = "",
 ) -> Response:
     """**Assign roles**: the decided pick's mode, who cooks or orders it, and who picks it up
-    (#178). A guest coordinating may."""
+    (#178). A guest coordinating may. ``shown_item`` and ``shown_way`` are the place and way the
+    page showed (#219), so a page left open can't put roles on a place changed since; a page
+    drawn before it sent them isn't held to them."""
     seen = parse_id(run)
-    if seen is None:
+    if seen is None or (shown_item and parse_id(shown_item) is None):
         return await _malformed(request, principal, context, db, event_id, came_from)
 
     async def action() -> None:
@@ -686,6 +690,7 @@ async def choose_roles(
             member_id=_member_id(member_id) if member_id else None,
             pickup_id=_member_id(pickup_id) if pickup_id else None,
             run=seen,
+            expect=coordinator.still_showing(parse_id(shown_item), choice(Mode, shown_way)),
             now=context.clock(),
         )
 
@@ -779,7 +784,7 @@ async def meal_time(
 @router.post("/events/{event_id}/place")
 async def change_place(
     request: Request,
-    principal: GuestCSRFChecked,
+    principal: CSRFChecked,
     context: Context,
     db: Database,
     event_id: RowId,
@@ -792,7 +797,8 @@ async def change_place(
     came_from: Annotated[str, Form(alias="from", max_length=10)] = "",
 ) -> Response:
     """**Change the plan**: the place, once a call is decided (#219). ``opened_item`` is the place
-    the page showed, and ``run`` its run, so a page left open can't write over a newer change."""
+    the page showed, and ``run`` its run, so a page left open can't write over a newer change. A
+    guest coordinating may not (FR-58)."""
     seen, shown = parse_id(run), parse_id(opened_item)
     if seen is None or shown is None or any(value and parse_id(value) is None for value in (item_id, cuisine_id)):
         return await _malformed(request, principal, context, db, event_id, came_from)

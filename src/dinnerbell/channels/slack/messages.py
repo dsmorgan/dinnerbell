@@ -1342,7 +1342,7 @@ def coordinator_picked_message(notification: note.CoordinatorPicked, ctx: Render
         "• Shuffle the proposals",
         "",
         "*After it's decided:*",
-        "• Change how you get it and who does it",
+        "• Change the place, how you get it, and who does it",
         f"• If that isn't clear, choose within {_minutes(notification.choose_minutes)}, or by the meal time if "
         "sooner. Otherwise, the first person who offered does it.",
         "",
@@ -1371,23 +1371,31 @@ def assignment_ended_message(notification: note.AssignmentEnded, ctx: RenderCont
 
 
 def place_changed_message(notification: note.PlaceChanged, ctx: RenderContext) -> Message:
-    """To everyone who's in, when the place changed after the decision (#219), so nobody goes to
-    the old one."""
-    event, decision = notification.event, notification.decision
+    """To each person who's in with no new role, when the place changed after the decision
+    (#219), so nobody goes to the old one. It says any role the new way took from them."""
+    event, decision, via = notification.event, notification.decision, notification.via
     proposal = decision.proposal
     slot, day, by = _slot(event), day_label(event.day), escape(notification.by.name)
-    now = f"*{_item_name(proposal.item)}* · {_kind(proposal)}"
-    was = escape(notification.was)
-    change = (
-        f"Hi {escape(notification.via.name)}! {by} changed the plan your guest {escape(notification.member.name)} "
-        f"is in for, {slot} on {day}: it's {now} now, not {was}."
-        if notification.via is not None
-        else f"{by} changed the plan for {slot} on {day}: it's {now} now, not {was}."
-    )
-    when = f"*When:* {local_clock(decision.meal_time, event.timezone)} · *Eating:* {_head_count(decision)}"
+    headline = f"*{by} changed the place for {slot} on {day}.*"
+    name = escape(notification.member.name)
+    lines = [f"Hi {escape(via.name)}! {headline}" if via else headline, _place(proposal), _was(notification.was), ""]
+    if notification.ended_roles:
+        gone = _role_list(notification.ended_roles)
+        lines += [f"Your guest {name} is no longer {gone}." if via else f"You're no longer {gone}.", ""]
+    elif via:
+        lines += [f"Your guest {name} is in for it.", ""]
+    lines += [
+        f"• *When:* {local_clock(decision.meal_time, event.timezone)}",
+        f"• *Eating:* {_head_count(decision)}",
+    ]
     buttons = [*_item_buttons(proposal.item, proposal.mode), _web_button(ctx, event)]
-    blocks = [section(join_lines([change, when])), actions(*buttons, block_id="more")]
+    blocks = [section(join_lines(lines)), actions(*buttons, block_id="more")]
     return _finish(f"{slot.capitalize()} on {day} is {proposal.item.name} now, not {notification.was}.", blocks)
+
+
+def _was(place: str) -> str:
+    """Below the new place, in a direct message about a changed place (#219)."""
+    return f"It was {escape(place)}."
 
 
 def assignment_message(notification: note.AssignmentMade, ctx: RenderContext) -> Message:
@@ -1400,6 +1408,7 @@ def assignment_message(notification: note.AssignmentMade, ctx: RenderContext) ->
     lines = [
         f"Hi {escape(via.name)}! *Your guest {name} is {doing}.*" if via else f"*You're {doing}.*",
         _place(proposal),
+        *([_was(notification.was)] if notification.was else []),
         "",
     ]
     by = notification.assigned_by

@@ -5,9 +5,8 @@ change the place after the decision (#219); and, in Slack, adjust the plan once 
 (spec 5.7).
 
 Each is the coordinator's and every admin's alike (#179). A guest coordinator chooses roles,
-which is logistics, but not what the vote picks (FR-58). Once it's decided, they can record a
-change of place too. Each takes the event's lock, checks the run the person saw, and is audited
-and logged (#75). Everything is scoped to the actor's household.
+which is logistics, but not the plan (FR-58). Each takes the event's lock, checks the run the
+person saw, and is audited and logged (#75). Everything is scoped to the actor's household.
 """
 
 from __future__ import annotations
@@ -325,6 +324,8 @@ class Held:
     member_id: int
     assignment_id: int
     by_id: int | None
+    was: str | None = None
+    """The old place, when a change of place gave them the role (#219)."""
 
 
 def _check_in(ctx: CallContext, who: int) -> Member:
@@ -407,11 +408,13 @@ def _role_messages(
     *,
     was_pending: bool,
     tell: bool,
+    was: str | None = None,
     now: datetime,
 ) -> tuple[list[note.Notification], list[Held]]:
     """The messages to whoever gained or lost a role, before the meal: a correction afterward
     tells nobody (#154). Whoever is assigned hears once, about all their roles, and with ``tell``
-    False that message is only held. Returns what to send, and each person told or held."""
+    False that message is only held. ``was`` is the old place, for a change of place (#219).
+    Returns what to send, and each person told or held."""
     decision = cc.decision_info(ctx)
     sent: list[note.Notification] = []
     held: list[Held] = []
@@ -426,10 +429,9 @@ def _role_messages(
             unasked = any(who not in offered[role] for role in theirs)
             by = actor.id if unasked and who != actor.id else None
             if tell:
-                sent.append(
-                    cc.assignment_made(ctx, who, assignment_id, decision, ctx.person(by) if by is not None else None)
-                )
-            held.append(Held(who, assignment_id, by))
+                person = ctx.person(by) if by is not None else None
+                sent.append(cc.assignment_made(ctx, who, assignment_id, decision, person, was=was))
+            held.append(Held(who, assignment_id, by, was))
     return sent, held
 
 
@@ -525,7 +527,22 @@ async def choose_roles(
 
 # Adjust the plan in Slack (spec 5.7) ------------------------------------------------------------
 
-PLAN_CHANGED = "The plan changed since you opened this. Open Adjust again."
+PLAN_CHANGED = "The plan changed since you opened this. Open it again."
+
+
+def still_showing(item_id: int | None, mode: Mode | None) -> Callable[[CallContext], None]:
+    """For **Assign roles**, under the lock: the call still has the place and way the modal or
+    page showed (#219), so roles chosen for one place never land on another. A modal or page
+    drawn before it carried them says None, and isn't held to them."""
+
+    def check(ctx: CallContext) -> None:
+        event = ctx.event
+        if (item_id is not None and event.decided_item_id != item_id) or (
+            mode is not None and event.decided_mode is not mode
+        ):
+            raise EventRuleViolation(PLAN_CHANGED, code="plan_changed")
+
+    return check
 
 
 @dataclass(frozen=True, slots=True)
@@ -627,13 +644,17 @@ def _role_now(ctx: CallContext) -> tuple[Mode | None, int | None, int | None]:
 
 def _role_as_opened(ctx: CallContext, opened: Adjustment) -> bool:
     mode, lead, pickup = _role_now(ctx)
-    return (opened.mode is None or mode == opened.mode) and lead == opened.assignee_id and pickup == opened.pickup_id
+    same_place = opened.item_id is None or ctx.event.decided_item_id == opened.item_id
+    same_way = opened.mode is None or mode == opened.mode
+    return same_place and same_way and lead == opened.assignee_id and pickup == opened.pickup_id
 
 
 def _role_part(ctx: CallContext, opened: Adjustment) -> str:
-    """Which field of the roles changed since the modal opened: the way, who cooks or orders, or
-    who picks up (#178)."""
+    """Which field of the roles changed since the modal opened: the place they apply to (#219),
+    the way, who cooks or orders, or who picks up (#178)."""
     mode, lead, _ = _role_now(ctx)
+    if opened.item_id is not None and ctx.event.decided_item_id != opened.item_id:
+        return "place"
     if opened.mode is not None and mode != opened.mode:
         return "mode"
     return "assignee" if lead != opened.assignee_id else "pickup"
@@ -700,6 +721,8 @@ async def _plan(
     mode: Mode | None = None
     assignee: int | None = None
     pickup: int | None = None
+    if wanted.new_place is not None or wanted.item_id not in {None, opened.item_id}:
+        await guest_rules.gate(db, event, actor, GuestAction.CHANGE_PLACE)
     place = await _place_asked(
         db,
         ctx,
@@ -798,7 +821,6 @@ async def adjust(
             )
             saved = replace(saved, meal_time=changes.meal_time)
         if changes.place_asked:
-            tell = changes.coordinator_id is None
             named = changes.assignee_id is not None or changes.pickup_id is not None
             chosen = await change_place(
                 db,
@@ -813,11 +835,11 @@ async def adjust(
                 pickup_id=changes.pickup_id,
                 run=run,
                 as_coordinator=True,
-                tell=tell,
+                handing_to=changes.coordinator_id,
                 expect=_still(opened, "role") if named else None,
                 now=now,
             )
-            held = () if tell else chosen
+            held = () if changes.coordinator_id is None else chosen
             saved = replace(
                 saved,
                 item_id=changes.item_id,
@@ -868,7 +890,8 @@ async def _tell_assigned(db: AsyncSession, actor: Member, event_id: int, held: H
         if event.state is not EventState.DECIDED or decision is None or not cc.before_the_meal(event, now):
             return
         by = ctx.person(held.by_id) if held.by_id is not None else None
-        await publish(db, ctx, cc.assignment_made(ctx, held.member_id, held.assignment_id, decision, by), now=now)
+        told = cc.assignment_made(ctx, held.member_id, held.assignment_id, decision, by, was=held.was)
+        await publish(db, ctx, told, now=now)
 
 
 # Change the place after the decision (#219, spec 5.7) -------------------------------------------
@@ -1062,12 +1085,12 @@ async def change_place(
     pickup_id: int | None = None,
     run: int | None = None,
     as_coordinator: bool = False,
-    tell: bool = True,
+    handing_to: int | None = None,
     expect: Callable[[CallContext], object] | None = None,
     now: datetime,
 ) -> tuple[Held, ...]:
     """Change where the call is eating, after the decision and until it's done (#219, spec 5.7):
-    the coordinator, a guest coordinator too, or an admin (``check_can_change_place``). The place
+    the coordinator or an admin, never a guest (``check_can_change_place``). The place
     is ``item_id``, an active catalog item, or ``name``, typed in, with an optional cuisine, and
     ``mode`` is a way it allows. ``opened_item_id`` is the place the person saw; one changed
     elsewhere since is refused.
@@ -1078,13 +1101,16 @@ async def change_place(
     nobody leaves that as it is: the time runs on, for the new place. How the old place won, a
     lock or a tie, no longer describes the plan, so the decision stops saying it.
 
-    The call's messages update in place. Before the meal, everyone who's in hears, and whoever
-    gains or loses a role is told as in ``choose_roles``; from the meal time on it corrects the
-    record and messages nobody (#154). Audited as ``event.place_changed``; logged as
-    ``change_place``. ``as_coordinator``, ``tell``, and ``expect`` are for Slack's Adjust, as in
-    ``choose_roles``."""
+    The call's messages update in place. Before the meal, each person who's in gets one message
+    (``cc.place_changed``): whoever gains a role hears in ``AssignmentMade``, which names the place
+    and the old one, and whoever loses one hears it in ``PlaceChanged``. From the meal time on it
+    corrects the record and messages nobody (#154). Audited as ``event.place_changed``; logged as
+    ``change_place``. ``as_coordinator`` and ``expect`` are for Slack's Adjust, as in
+    ``choose_roles``. So is ``handing_to``, whom the same save hands coordinating to: the messages
+    about new roles are held for ``adjust`` to send after the hand-off, and the hand-off's own
+    message lists that person's roles without the old place, so they still get ``PlaceChanged``."""
     async with locked_event(db, actor.household_id, event_id, now) as event:
-        await guest_rules.gate(db, event, actor, GuestAction.MANAGE_DECISION)
+        await guest_rules.gate(db, event, actor, GuestAction.CHANGE_PLACE)
         check_run(event, run)
         capacity = check_can_change_place(event, actor)
         if as_coordinator:
@@ -1125,8 +1151,25 @@ async def change_place(
         )
         was = cc.item_info(ctx, old).name
         ctx = await cc.load(db, event)
-        everyone = cc.place_changed(ctx, was, actor, now) if cc.before_the_meal(event, now) else []
-        told, held = _role_messages(ctx, actor, roles, offered, made, lost, was_pending=was_pending, tell=tell, now=now)
+        everyone: list[note.PlaceChanged] = []
+        if cc.before_the_meal(event, now):
+            has_message = set(made) - {handing_to}
+            ended = {} if was_pending else lost  # they hadn't been told they had those
+            everyone = cc.place_changed(ctx, was, actor, now, has_message=has_message, ended=ended)
+        said = {message.member.id for message in everyone}
+        left = {who: gone for who, gone in lost.items() if who not in said}  # such as someone who isn't in
+        told, held = _role_messages(
+            ctx,
+            actor,
+            roles,
+            offered,
+            made,
+            left,
+            was_pending=was_pending,
+            tell=handing_to is None,
+            was=was,
+            now=now,
+        )
         await publish(db, ctx, *cc.messages_for_state(ctx), *everyone, *told, now=now)
         dropped = [role.value for role in before if role not in roles]
         payload = {

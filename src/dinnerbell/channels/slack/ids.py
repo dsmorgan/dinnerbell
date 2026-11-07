@@ -471,6 +471,10 @@ class ViewOrigin:
     """What an Adjust modal showed when it opened. Only that modal sets it."""
     proposal: int | None = None
     """The pick that Lock this or Break the tie confirms (#214). Only those modals set it."""
+    place: int | None = None
+    """The place an Assign roles modal showed (#219). Only that modal sets it."""
+    way: Mode | None = None
+    """The way an Assign roles modal showed (#219). Only that modal sets it."""
 
     def encode(self) -> str:
         data: dict[str, object] = {"event": self.event_id, "channel": self.channel_id, "home": self.home}
@@ -482,6 +486,10 @@ class ViewOrigin:
             data["opened"] = self.opened.data()
         if self.proposal is not None:
             data["proposal"] = self.proposal
+        if self.place is not None:
+            data["place"] = self.place
+        if self.way is not None:
+            data["way"] = self.way.value
         return json.dumps(data, separators=(",", ":"))
 
     @classmethod
@@ -492,7 +500,7 @@ class ViewOrigin:
             data = json.loads(text)
         except ValueError:
             raise BadValue("bad metadata") from None
-        if not isinstance(data, dict) or set(data) - {"window", "run", "opened", "proposal"} != {
+        if not isinstance(data, dict) or set(data) - {"window", "run", "opened", "proposal", "place", "way"} != {
             "event",
             "channel",
             "home",
@@ -502,7 +510,10 @@ class ViewOrigin:
         window, run, proposal = data.get("window"), data.get("run"), data.get("proposal")
         if "window" in data and not (isinstance(window, str) and window in {w.value for w in Window}):
             raise BadValue("bad metadata")
-        for number in [data[key] for key in ("run", "proposal") if key in data]:
+        way = data.get("way")
+        if "way" in data and way not in {m.value for m in Mode}:
+            raise BadValue("bad metadata")
+        for number in [data[key] for key in ("run", "proposal", "place") if key in data]:
             if not isinstance(number, int) or isinstance(number, bool) or not 1 <= number <= MAX_ID:
                 raise BadValue("bad metadata")
         if not isinstance(home, bool):
@@ -512,7 +523,17 @@ class ViewOrigin:
         if channel is not None and not is_channel_id(channel):
             raise BadValue("bad metadata")
         opened = Opened.parse(data["opened"]) if "opened" in data else None
-        return cls(event, channel, home, Window(window) if window is not None else None, run, opened, proposal)
+        return cls(
+            event,
+            channel,
+            home,
+            Window(window) if window is not None else None,
+            run,
+            opened,
+            proposal,
+            data.get("place"),
+            Mode(way) if way is not None else None,
+        )
 
 
 @dataclass(frozen=True, slots=True)

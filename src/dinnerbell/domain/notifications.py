@@ -408,6 +408,9 @@ class AssignmentMade(_Notification):
     """For a guest without Slack (#38), the member who invited them, who gets the message."""
     assigned_by: PersonInfo | None = None
     """The coordinator who gave them the role without their offering for it (#87)."""
+    was: str | None = None
+    """The old place's name, when a change of place gave them the role (#219): this is their
+    only message about the change."""
 
     @property
     def idempotency_key(self) -> str:
@@ -750,8 +753,10 @@ class CoordinatorPicked(_Notification):
 @dataclass(frozen=True, slots=True)
 class PlaceChanged(_Notification):
     """The coordinator, or an admin (``by``), changed the place after the decision, before the
-    meal time (#219): one direct message to each person who's in, so nobody goes to the old one.
-    ``was`` is the old place's name; ``at`` keeps each change its own row."""
+    meal time (#219): one direct message to each person who's in and has no new role, whose
+    ``AssignmentMade`` names the place instead, so nobody goes to the old one. ``was`` is the old
+    place's name; ``at`` keeps each change its own row; ``ended_roles`` are the roles the new way
+    took from ``member``, so they need no ``AssignmentEnded``."""
 
     kind: ClassVar[str] = "place_changed"
     event: EventInfo
@@ -762,6 +767,7 @@ class PlaceChanged(_Notification):
     at: datetime
     via: PersonInfo | None = None
     """For a guest without Slack (#38), the member who invited them, who gets the message."""
+    ended_roles: tuple[AssignmentRole, ...] = ()
 
     @property
     def idempotency_key(self) -> str:

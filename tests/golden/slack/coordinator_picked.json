@@ -2,7 +2,7 @@
   "blocks": [
     {
       "text": {
-        "text": "*You're coordinating dinner on Thursday, Oct 22.* Nobody had claimed it, so Dinnerbell picked you at random.\n\n*While the vote is open:*\n• Tap ⋯ beside a pick to decide it, break a tie, or set pickup or delivery\n• Shuffle the proposals\n\n*After it's decided:*\n• Change how you get it and who does it\n• If that isn't clear, choose within 15 minutes, or by the meal time if sooner. Otherwise, the first person who offered does it.\n\n*Can't do it?* Hand it off on the call's page.\n\nThanks for steering!",
+        "text": "*You're coordinating dinner on Thursday, Oct 22.* Nobody had claimed it, so Dinnerbell picked you at random.\n\n*While the vote is open:*\n• Tap ⋯ beside a pick to decide it, break a tie, or set pickup or delivery\n• Shuffle the proposals\n\n*After it's decided:*\n• Change the place, how you get it, and who does it\n• If that isn't clear, choose within 15 minutes, or by the meal time if sooner. Otherwise, the first person who offered does it.\n\n*Can't do it?* Hand it off on the call's page.\n\nThanks for steering!",
         "type": "mrkdwn"
       },
       "type": "section"

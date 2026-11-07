@@ -517,6 +517,12 @@ NOTIFICATIONS: dict[str, Callable[[], note.Notification]] = {
     "place_changed_for_guest": lambda: note.PlaceChanged(
         DECIDED, SAM, "Siam Garden", DECISION, ALEX, ROLES_DUE, via=LEE
     ),
+    "place_changed_role_ended": lambda: note.PlaceChanged(
+        DECIDED, SAM, "Siam Garden", DECISION, ALEX, ROLES_DUE, ended_roles=(AssignmentRole.PICKUP,)
+    ),
+    "assignment_made_at_a_new_place": lambda: note.AssignmentMade(
+        DECIDED, 31, SAM, (AssignmentRole.COOK,), DECISION, was="Siam Garden"
+    ),
     "picks_shuffled": lambda: note.PicksShuffled(SHUFFLED_VOTING, ALEX, 2, 1),
     "feedback_reminder": lambda: note.FeedbackReminder(
         event(EventState.DONE, coordinator=ALEX), KIM, "Sam's Tacos", date(2026, 10, 29)
@@ -602,7 +608,7 @@ ROLES_VIEW = replace(
 ADJUST_VIEW = replace(
     DECIDED_VIEW,
     event=replace(DECIDED_VIEW.event, decided_item_id=TACOS.id),
-    can=Permissions(adjust=True),
+    can=Permissions(adjust=True, change_place=True),
     roles=replace(ROLES_CHOICE, due_at=None),
     decision=DECISION,
 )

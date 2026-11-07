@@ -55,7 +55,6 @@ GUEST_ROUTES = {
     ("POST", "/events/{event_id}/coordinate"),
     ("POST", "/events/{event_id}/hand-off"),
     ("POST", "/events/{event_id}/meal-time"),
-    ("POST", "/events/{event_id}/place"),
     ("POST", "/events/{event_id}/assignments"),
     ("POST", "/events/{event_id}/roles"),  # a guest coordinating assigns roles (FR-58, #87)
     ("POST", "/events/{event_id}/proposals/{proposal_id}/way"),  # a guest coordinating sets the way (#178)
@@ -598,3 +597,46 @@ def test_a_guest_sees_only_their_own_badges(admin: TestClient, provider: FakePro
     assert 'aria-label="Stats"' not in html and "/stats/household" not in html  # no tabs for a guest (#153)
     moved = admin.get("/stats/household")
     assert (moved.status_code, moved.headers["location"]) == (303, "/stats")
+
+
+def test_a_guest_coordinator_sees_no_catalog_and_cant_post_the_place(
+    admin: TestClient, provider: FakeProvider, clock: FakeClock, migrated: Settings
+) -> None:
+    """Changing the place is choosing, not logistics (#219, FR-58): the page keeps the catalog
+    from them, and the route refuses them before any handler runs."""
+    from datetime import timedelta
+
+    from dinnerbell.db.models import CatalogItemRow, EventRow, ProposalRow
+
+    add_item(admin, "Sam's Tacos", kind="home", modes=["cook"], cuisines="Mexican")
+    add_item(admin, "Pho Place", cuisines="Vietnamese")
+    event_id = start(admin)
+    pat = add_guest(admin, "Pat", slack="U07PAT")
+    submit(admin, f"/events/{event_id}/guests", {"guest_id": str(pat), "run": "1"})
+    submit(admin, f"/events/{event_id}/respond", {"status": "in"})
+    submit(admin, f"/events/{event_id}/offer", {"role": "pickup", "offered": "1"})
+    guest = as_guest(admin, provider)
+    submit(guest, f"/events/{event_id}/respond", {"status": "in"})
+    assert submit(guest, f"/events/{event_id}/coordinate", {}).status_code == 303
+    clock.advance(timedelta(minutes=90))
+    tick(guest, clock)
+    (first, *_) = sorted(rows(migrated, ProposalRow), key=lambda p: p.rank)
+    guest.cookies.clear()
+    sign_in(guest, provider, claims=SLACK_ADMIN)
+    assert submit(guest, f"/events/{event_id}/proposals/{first.id}/lock", {}).status_code == 303
+    (row,) = rows(migrated, EventRow)
+    others = [i.name for i in rows(migrated, CatalogItemRow) if i.id != row.decided_item_id]
+    assert "Sam's Tacos" in others
+
+    guest = as_guest(guest, provider)
+    html = page(guest.get(f"/events/{event_id}"))
+    assert "Change the plan" in html and f'action="/events/{event_id}/meal-time"' in html  # logistics stay
+    assert f'action="/events/{event_id}/place"' not in html and 'name="new_place"' not in html
+    for name in others:
+        assert name.replace("'", "&#39;") not in html and name not in html
+    home = next(i.id for i in rows(migrated, CatalogItemRow) if i.name == "Sam's Tacos")
+    form = {"item_id": str(home), "mode": "cook", "opened_item": str(row.decided_item_id), "run": "1"}
+    assert submit(guest, f"/events/{event_id}/place", form).status_code == 403
+    assert rows(migrated, EventRow)[0].decided_item_id == row.decided_item_id
+    assert submit(guest, f"/events/{event_id}/place", form | {"item_id": "", "new_place": "Soup"}).status_code == 403
+    assert not [i for i in rows(migrated, CatalogItemRow) if i.name == "Soup"]
