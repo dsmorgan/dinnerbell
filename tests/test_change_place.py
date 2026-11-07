@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections import Counter
 from collections.abc import AsyncIterator
 from dataclasses import replace
 from datetime import time, timedelta
@@ -33,6 +34,9 @@ from dinnerbell.domain.events import (
     StaleRun,
     Status,
 )
+from dinnerbell.domain.guests import REFUSED, GuestAction
+from dinnerbell.domain.members import Member
+from dinnerbell.domain.notifications import AssignmentMade, PlaceChanged, from_payload
 from dinnerbell.domain.preferences import Stance, TargetType
 from dinnerbell.logs import JsonFormatter
 from dinnerbell.services import activity, call_admin, calls, coordinator, event_views, feedback, guests
@@ -216,7 +220,8 @@ async def test_an_admin_may_change_it_but_not_as_slacks_adjust(house: House) -> 
     assert audit.payload["as"] == "admin" and audit.actor_member_id == house["Alex"].id
 
 
-async def test_a_guest_coordinator_may_change_it_as_with_the_rest_of_adjust(house: House) -> None:
+async def guest_coordinating(house: House) -> tuple[int, Member]:
+    """Pat, a guest, coordinates a call decided on Siam Garden. Taqueria was only a pick."""
     pat = await add_guest(house, "Pat")
     event_id = await open_dinner(house)
     for name in ("Alex", "Sam", "Lee"):
@@ -228,11 +233,42 @@ async def test_a_guest_coordinator_may_change_it_as_with_the_rest_of_adjust(hous
     house.clock.now = RESPOND_BY
     await house.tick()
     await act(house, calls.lock, house["Alex"], event_id, (await pick_ids(house, event_id))["Siam Garden"])
-    shown = (await house.event(event_id)).decided_item_id
-    await act(
-        house, coordinator.change_place, pat, event_id, item_id=tacos(house), mode=Mode.COOK, opened_item_id=shown
+    return event_id, pat
+
+
+async def test_a_guest_coordinator_may_not_change_the_place(house: House) -> None:
+    event_id, pat = await guest_coordinating(house)
+    siam = house.items["Siam Garden"].id
+    for place in ({"item_id": tacos(house), "mode": Mode.COOK}, {"name": "Noodle Bar", "mode": Mode.PICKUP}):
+        with pytest.raises(EventRuleViolation) as caught:
+            await act(house, coordinator.change_place, pat, event_id, opened_item_id=siam, **place)
+        assert caught.value.code == "guests_dont" and str(caught.value) == REFUSED[GuestAction.CHANGE_PLACE]
+    ctx = await house.context(event_id)
+    assert (await house.event(event_id)).decided_item_id == siam
+    assert not [i for i in ctx.items.values() if i.name == "Noodle Bar"]
+
+
+async def test_a_guest_coordinators_adjust_has_no_place_and_refuses_one_sent_anyway(house: House) -> None:
+    event_id, pat = await guest_coordinating(house)
+    view = await act(house, event_views.event_view, pat, event_id)
+    assert view.can.adjust and not view.can.change_place
+    shown = adjust_opened(view)
+    built = adjust_modal(view, ids.ViewOrigin(event_id, CHANNEL, run=1, opened=shown))
+    text = json.dumps(built)
+    assert not {"place", "new_place", "place_mode", "place_cuisine"} & set(inputs(built))
+    assert "Sam's Tacos" not in text and "Taqueria" not in text and "the place" not in text
+    opened = Adjustment(
+        shown.meal_time, shown.assignee_id, shown.coordinator_id, shown.mode, shown.pickup_id, shown.item_id
     )
-    assert (await house.event(event_id)).decided_item_id == tacos(house)
+    forged = replace(opened, item_id=tacos(house), place_mode=Mode.COOK)
+    with pytest.raises(EventRuleViolation) as caught:
+        await act(house, coordinator.adjust, pat, event_id, forged, opened=opened, run=1)
+    assert caught.value.code == "guests_dont"
+    forged = replace(opened, new_place="Noodle Bar", place_mode=Mode.PICKUP)
+    with pytest.raises(EventRuleViolation) as caught:
+        await act(house, coordinator.adjust, pat, event_id, forged, opened=opened, run=1)
+    assert caught.value.code == "guests_dont"
+    assert (await house.event(event_id)).decided_item_id == house.items["Siam Garden"].id
 
 
 async def test_a_done_call_refuses_even_an_admin(house: House) -> None:
@@ -460,8 +496,10 @@ async def test_a_role_the_new_way_does_not_have_is_dropped_and_its_holder_told(h
     await house.add_item("Noodle Bar", Mode.DELIVERY)
     await change(house, "Sam", event_id, item_id=house.items["Noodle Bar"].id, mode=Mode.DELIVERY)
     assert role_holders(await house.context(event_id)) == {AssignmentRole.ORDER: house["Lee"].id}
-    (ended,) = await sent(house, "assignment_ended")
-    assert (ended.member.id, ended.roles) == (house["Alex"].id, (AssignmentRole.PICKUP,))
+    assert not await sent(house, "assignment_ended")
+    (ended,) = [n for n in await sent(house, "place_changed") if n.member.id == house["Alex"].id]
+    assert ended.ended_roles == (AssignmentRole.PICKUP,)
+    assert "You're no longer picking up." in json.dumps(render(ended, CTX).payload())
     (audit,) = [a for a in await house.audits() if a.action == "event.place_changed"]
     assert audit.payload["dropped"] == ["pickup"]
     assert audit.payload["assignments"] == {"order": house["Lee"].id}
@@ -589,10 +627,10 @@ async def test_before_the_meal_everyone_in_hears_but_whoever_changed_it(house: H
     await change(house, "Sam", event_id, item_id=tacos(house), mode=Mode.COOK)
     assert await told(house, "place_changed") == {house["Alex"].id, house["Lee"].id}  # Kim never answered
     message = (await sent(house, "place_changed"))[0]
-    text = json.dumps(render(message, CTX).payload())
-    assert "Sam changed the plan" in text and "Sam's Tacos" in text and "not Siam Garden" in text
-    assert "6:30 PM" in text
-    assert await told(house, "assignment_ended") == {house["Alex"].id, house["Lee"].id}  # both lost their roles
+    text = json.dumps(render(message, CTX).payload(), ensure_ascii=False)
+    assert "*Sam changed the place for dinner" in text and "Sam's Tacos" in text and "It was Siam Garden." in text
+    assert "• *When:* 6:30 PM" in text
+    assert not await sent(house, "assignment_ended")  # their one message says what they lost
     assert {e.kind for e in await house.outbox()} >= {"decision_updated", "call_updated", "proposals_updated"}
 
 
@@ -629,7 +667,7 @@ async def test_a_guest_without_slack_is_told_through_whoever_invited_them_only_i
     assert {n.recipient_id for n in messages} == {house["Alex"].id, house["Lee"].id, house["Kim"].id}
     (through,) = [n for n in messages if n.via is not None]
     assert (through.member.id, through.via.id) == (jo.id, house["Kim"].id)
-    assert "your guest Jo" in json.dumps(render(through, CTX).payload())
+    assert "Your guest Jo is in for it." in json.dumps(render(through, CTX).payload())
 
 
 async def test_a_call_off_closes_the_message_unsent(house: House) -> None:
@@ -832,7 +870,7 @@ async def test_slack_saves_a_catalog_place_and_says_so(slack: Slack, house: Hous
     updated = json.dumps([c.args for c in slack.fake.of("chat.update")])
     assert "Dinner is decided: Taqueria" in updated  # the decision, in place
     direct = [c for c in slack.fake.of("chat.postMessage") if c.args["channel"] == "U04LEE"]
-    assert any("not Siam Garden" in json.dumps(c.args) for c in direct)
+    assert any("It was Siam Garden." in json.dumps(c.args) for c in direct)
 
 
 async def test_slack_saves_a_new_name_and_says_who_is_missing(slack: Slack, house: House) -> None:
@@ -1092,3 +1130,239 @@ async def test_everything_after_the_change_still_finds_the_place(house: House) -
     await act(house, calls.cancel_call, house["Sam"], event_id)
     (*_, cancelled) = await sent(house, "decision_updated")
     assert "~Noodle Bar~" in json.dumps(render(cancelled, CTX).payload())
+
+
+# A modal or page left open while the place changed --------------------------------------------------
+
+
+def as_opened(origin: ids.ViewOrigin) -> Adjustment:
+    shown = origin.opened
+    assert shown is not None
+    return Adjustment(
+        shown.meal_time, shown.assignee_id, shown.coordinator_id, shown.mode, shown.pickup_id, shown.item_id
+    )
+
+
+@pytest.mark.parametrize("part", ["assignee", "mode", "pickup"])
+async def test_adjust_opened_on_another_place_saves_no_roles_on_this_one(house: House, part: str) -> None:
+    event_id = await decided(house)
+    opened = as_opened(await opened_now(house, event_id))
+    await house.add_item("Noodle Bar", Mode.PICKUP, Mode.DELIVERY)
+    await change(house, "Alex", event_id, item_id=house.items["Noodle Bar"].id, mode=Mode.PICKUP)
+    before = (await house.event(event_id)), role_holders(await house.context(event_id))
+    audits = len(await house.audits())
+    field = {
+        "assignee": {"assignee_id": house["Alex"].id},
+        "mode": {"mode": Mode.DELIVERY},
+        "pickup": {"pickup_id": house["Lee"].id},
+    }
+    with pytest.raises(AdjustmentRefused) as caught:
+        await act(
+            house, coordinator.adjust, house["Sam"], event_id, replace(opened, **field[part]), opened=opened, run=1
+        )
+    assert (caught.value.part, caught.value.code, str(caught.value)) == (part, "plan_changed", PLAN_CHANGED)
+    assert (await house.event(event_id)).decided_item_id == before[0].decided_item_id
+    assert role_holders(await house.context(event_id)) == before[1] and len(await house.audits()) == audits
+
+
+async def test_the_role_step_under_the_lock_names_the_place_it_changed_from(house: House) -> None:
+    event_id = await decided(house)
+    opened = as_opened(await opened_now(house, event_id))
+    await change(house, "Alex", event_id, item_id=house.items["Taqueria"].id, mode=Mode.PICKUP)
+    with pytest.raises(AdjustmentRefused) as caught:
+        coordinator._still(opened, "role")(await house.context(event_id))
+    assert caught.value.part == "place"
+
+
+async def test_slack_adjust_opened_on_another_place_refuses_a_new_way_by_its_field(slack: Slack, house: House) -> None:
+    event_id = await decided(house)
+    origin = await opened_now(house, event_id)
+    await change(house, "Alex", event_id, item_id=house.items["Taqueria"].id, mode=Mode.PICKUP)
+    values = with_place(form(house), mode={"selected_option": {"value": "delivery"}})
+    response = await slack.submit("Sam", ids.ADJUST_VIEW, values, event_id, origin=origin)
+    assert json.loads(response.body)["errors"]["mode"] == PLAN_CHANGED
+    assert (await house.event(event_id)).decided_mode is Mode.PICKUP
+
+
+async def assign_form(house: House, way: str = "delivery") -> dict[str, Any]:
+    return state(mode={"selected_option": {"value": way}}, who={"selected_option": {"value": str(house["Lee"].id)}})
+
+
+async def test_slack_assign_roles_opened_on_another_place_or_way_saves_nothing(slack: Slack, house: House) -> None:
+    event_id = await pending(house)
+    await slack.click("Sam", ids.ASSIGN_ROLES, ids.card_value(event_id, 1))
+    (opened,) = slack.fake.of("views.open")
+    origin = ids.ViewOrigin.decode(opened.args["view"]["private_metadata"])
+    assert (origin.place, origin.way) == (house.items["Siam Garden"].id, Mode.PICKUP)
+    await house.add_item("Noodle Bar", Mode.PICKUP, Mode.DELIVERY)
+    await change(house, "Alex", event_id, item_id=house.items["Noodle Bar"].id, mode=Mode.PICKUP)
+    await slack.submit("Sam", ids.ASSIGN_VIEW, await assign_form(house), event_id, origin=origin)
+    assert slack.ephemerals("Sam")[-1] == PLAN_CHANGED
+    event = await house.event(event_id)
+    assert event.decided_mode is Mode.PICKUP and event.roles_due_at is not None
+    assert role_holders(await house.context(event_id)) == {}
+
+    same_place = replace(origin, place=event.decided_item_id, way=Mode.DELIVERY)  # the way moved on instead
+    await slack.submit("Sam", ids.ASSIGN_VIEW, await assign_form(house), event_id, origin=same_place)
+    assert slack.ephemerals("Sam")[-1] == PLAN_CHANGED
+    assert (await house.event(event_id)).decided_mode is Mode.PICKUP
+
+
+async def test_slack_assign_roles_opened_before_it_carried_the_place_still_works(slack: Slack, house: House) -> None:
+    event_id = await pending(house)
+    old = ids.ViewOrigin(event_id, CHANNEL, run=1)
+    await slack.submit("Sam", ids.ASSIGN_VIEW, await assign_form(house), event_id, origin=old)
+    event = await house.event(event_id)
+    assert event.decided_mode is Mode.DELIVERY and event.roles_due_at is None
+
+
+def test_view_origin_round_trips_what_assign_roles_showed() -> None:
+    origin = ids.ViewOrigin(5, CHANNEL, run=1, place=9, way=Mode.COOK)
+    assert ids.ViewOrigin.decode(origin.encode()) == origin
+    for bad in ({"place": "nine"}, {"way": "teleport"}):
+        with pytest.raises(ids.BadValue):
+            ids.ViewOrigin.decode(json.dumps({"event": 5, "channel": None, "home": False, **bad}))
+
+
+def test_web_assign_roles_left_open_is_refused_and_an_old_page_still_works(
+    admin: TestClient, clock: FakeClock, migrated: Settings
+) -> None:
+    event_id, shown, home = web_decided(admin, clock, migrated)
+    alex = member(migrated, "admin@example.com").id
+    html = page(admin.get(f"/events/{event_id}"))
+    assert f'name="shown_item" value="{shown}"' in html and 'name="shown_way" value="pickup"' in html
+    path = f"/events/{event_id}/roles"
+    roles = {"mode": "cook", "member_id": str(alex), "run": "1"}
+    place = {"item_id": str(home), "mode": "cook", "opened_item": str(shown), "run": "1"}
+    assert submit(admin, f"/events/{event_id}/place", place).status_code == 303
+    stale = submit(admin, path, roles | {"shown_item": str(shown), "shown_way": "pickup"})
+    assert stale.status_code == 409 and "The plan changed since you opened this. Open it again." in page(stale).replace(
+        "&#39;", "'"
+    )
+    way = submit(admin, path, roles | {"shown_item": str(home), "shown_way": "pickup"})
+    assert way.status_code == 409
+    assert submit(admin, path, roles | {"shown_item": "abc"}).status_code == 400
+    assert submit(admin, path, roles | {"shown_item": str(home), "shown_way": "cook"}).status_code == 303
+    assert submit(admin, path, roles).status_code == 303  # a page from before it sent them
+
+
+# One message per person ---------------------------------------------------------------------------------
+
+
+async def direct(house: House, skip: int) -> Counter[int | None]:
+    """How many direct messages each person gets from outbox rows after the first ``skip``."""
+    kinds = {"place_changed", "assignment_made", "assignment_ended"}
+    rows_ = (await house.outbox())[skip:]
+    return Counter(from_payload(e.kind, e.payload).recipient_id for e in rows_ if e.kind in kinds)
+
+
+async def test_a_lost_role_and_a_kept_one_each_get_the_one_message_about_the_change(house: House) -> None:
+    event_id = await decided(house)
+    skip = len(await house.outbox())
+    await house.add_item("Noodle Bar", Mode.DELIVERY)
+    await change(house, "Sam", event_id, item_id=house.items["Noodle Bar"].id, mode=Mode.DELIVERY)
+    assert await direct(house, skip) == {house["Alex"].id: 1, house["Lee"].id: 1}  # Sam changed it
+    by_person = {n.member.id: n for n in await sent(house, "place_changed")}
+    assert by_person[house["Lee"].id].ended_roles == ()
+    assert by_person[house["Alex"].id].ended_roles == (AssignmentRole.PICKUP,)
+
+
+async def test_a_new_role_is_the_one_message_and_it_names_the_old_place(house: House) -> None:
+    event_id = await to_voting(house, "Sam", "Lee", pickups=("Alex",), cooks=("Sam",), coordinator_name="Sam")
+    await house.settle_ways(event_id)
+    await vote(house, "Alex", event_id, (await pick_ids(house, event_id))["Siam Garden"])
+    await at_deadline(house, event_id)
+    skip = len(await house.outbox())
+    await change(house, "Alex", event_id, item_id=tacos(house), mode=Mode.COOK)
+    assert await direct(house, skip) == {house["Sam"].id: 1, house["Lee"].id: 1}  # Alex changed it
+    made = [n for n in await sent(house, "assignment_made") if n.member.id == house["Sam"].id][-1]
+    assert made.was == "Siam Garden"
+    text = json.dumps(render(made, CTX).payload(), ensure_ascii=False)
+    assert (
+        "*You're cooking and coordinating dinner" in text
+        and "It was Siam Garden." in text
+        and "• *When:* 6:30 PM" in text
+    )
+    (lee,) = await sent(house, "place_changed")
+    assert lee.ended_roles == (AssignmentRole.ORDER,)
+
+
+async def test_trading_one_role_for_another_is_one_message(house: House) -> None:
+    event_id = await decided(house)  # Lee orders, Alex picks up
+    skip = len(await house.outbox())
+    await change(
+        house,
+        "Sam",
+        event_id,
+        item_id=house.items["Taqueria"].id,
+        mode=Mode.PICKUP,
+        member_id=house["Alex"].id,
+        pickup_id=house["Lee"].id,
+    )
+    assert await direct(house, skip) == {house["Alex"].id: 1, house["Lee"].id: 1}
+    assert not await sent(house, "place_changed") and not await sent(house, "assignment_ended")
+
+
+async def test_whoever_changes_it_hears_only_about_a_role_they_took(house: House) -> None:
+    event_id = await decided(house)
+    skip = len(await house.outbox())
+    await change(house, "Sam", event_id, name="Soup", mode=Mode.COOK, member_id=house["Sam"].id)
+    counted = await direct(house, skip)
+    assert counted == {house["Sam"].id: 1, house["Alex"].id: 1, house["Lee"].id: 1}
+    assert house["Sam"].id not in await told(house, "place_changed")
+
+
+async def test_with_a_hand_off_the_new_coordinator_hears_of_the_place_and_of_their_roles(house: House) -> None:
+    event_id = await decided(house)
+    opened = as_opened(await opened_now(house, event_id))
+    skip = len(await house.outbox())
+    wanted = replace(
+        opened,
+        assignee_id=house["Alex"].id,  # Alex orders now, and hears from the held message
+        pickup_id=house["Lee"].id,  # Lee picks up and coordinates: the held message is skipped
+        coordinator_id=house["Lee"].id,
+        item_id=house.items["Taqueria"].id,
+        place_mode=Mode.PICKUP,
+    )
+    await act(house, coordinator.adjust, house["Sam"], event_id, wanted, opened=opened, run=1)
+    new = [from_payload(e.kind, e.payload) for e in (await house.outbox())[skip:]]
+    (place,) = [n for n in new if isinstance(n, PlaceChanged)]
+    assert (place.member.id, place.was, place.ended_roles) == (house["Lee"].id, "Siam Garden", (AssignmentRole.ORDER,))
+    made = {n.member.id: n for n in new if isinstance(n, AssignmentMade)}
+    assert set(made) == {house["Alex"].id, house["Lee"].id} and await direct(house, skip) == {
+        house["Alex"].id: 1,
+        house["Lee"].id: 2,  # the change, and the hand-off's own message with all their roles
+    }
+    assert made[house["Alex"].id].was == "Siam Garden"
+    assert made[house["Alex"].id].event.coordinator.id == house["Lee"].id
+    assert made[house["Lee"].id].was is None
+    assert set(made[house["Lee"].id].roles) == {AssignmentRole.PICKUP, AssignmentRole.COORDINATOR}
+
+
+async def test_a_guest_who_loses_a_role_is_told_through_whoever_invited_them(house: House) -> None:
+    pat = await add_guest(house, "Pat")
+    event_id = await open_dinner(house)
+    for name in ("Alex", "Sam", "Lee"):
+        await act(house, calls.respond, house[name], event_id, Status.IN)
+    await act(house, guests.invite, house["Lee"], event_id, guest_id=pat.id)
+    await act(house, calls.respond, pat, event_id, Status.IN)
+    await act(house, calls.offer_role, pat, event_id, RoleOffer.PICKUP, True)
+    await act(house, calls.claim_coordinator, house["Sam"], event_id)
+    house.clock.now = RESPOND_BY
+    await house.tick()
+    await act(house, calls.lock, house["Sam"], event_id, (await pick_ids(house, event_id))["Taqueria"])
+    assert assigned(await house.context(event_id))[AssignmentRole.PICKUP] == pat.id
+    await change(house, "Sam", event_id, item_id=tacos(house), mode=Mode.COOK)
+    (through,) = [n for n in await sent(house, "place_changed") if n.member.id == pat.id]
+    assert through.via is not None and through.via.id == house["Lee"].id
+    assert "Your guest Pat is no longer picking up." in json.dumps(render(through, CTX).payload())
+
+
+async def test_after_the_meal_time_no_case_messages_anyone(house: House) -> None:
+    event_id = await decided(house)
+    event = await house.event(event_id)
+    assert event.meal_time is not None
+    house.clock.now = event.meal_time
+    skip = len(await house.outbox())
+    await change(house, "Sam", event_id, name="Soup", mode=Mode.COOK, member_id=house["Lee"].id)
+    assert await direct(house, skip) == {}

@@ -61,6 +61,8 @@ class GuestAction(StrEnum):
     """Set a takeout pick to pickup or delivery while voting (#178): logistics, like the roles."""
     MOVE_DECISION_TIME = "move_decision_time"
     """Move the decision time while voting (#198): logistics, as long as voting stays open."""
+    CHANGE_PLACE = "change_place"
+    """Change the place after the decision (#219): that's what's chosen, not logistics."""
 
 
 ANSWERING = frozenset({EventState.COLLECTING})
@@ -91,6 +93,7 @@ REFUSED: dict[GuestAction, str] = {
     GuestAction.VOTE: "Guests don't vote, but thanks for joining!",
     GuestAction.PROPOSE: "Guests don't add proposals. Ask whoever invited you.",
     GuestAction.LOCK: "Guests don't pick the plan. A member who coordinates, or an admin, can lock it.",
+    GuestAction.CHANGE_PLACE: "Guests don't pick the plan. An admin can change the place.",
     GuestAction.CALL_OFF: "Only a household member can call it off.",
     GuestAction.START: "Only a household member can start a call.",
     GuestAction.POST_NOW: "Only a household member can post a call.",

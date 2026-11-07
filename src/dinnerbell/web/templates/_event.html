@@ -383,6 +383,8 @@
       <form method="post" autocomplete="off" action="{{ base }}/roles" hx-post="{{ base }}/roles" {{ swap|safe }} class="stack">
         {{ hidden() }}
         <input type="hidden" name="run" value="{{ e.run }}">
+        <input type="hidden" name="shown_item" value="{{ e.decided_item_id }}">
+        <input type="hidden" name="shown_way" value="{{ r.mode.value }}">
         <p class="small muted">Pick how to get it and who does it. Anyone who's in can, one person can do it all, and whoever you assign without their offering is told you did.</p>
         {% if r.modes|length > 1 %}
         <label class="field"><span>How</span>
@@ -414,7 +416,8 @@
         <label class="field compact"><span>Meal time</span><input type="time" name="at" value="{{ e.meal_time|local_hhmm(tz) }}"></label>
         <button type="submit" class="button small">Save time</button>
       </form>
-      {#- Where they're really eating (#219): it records what happened, so nothing here is held to what people offered or ruled out. -#}
+      {#- Where they're really eating (#219): it records what happened, so nothing here is held to what people offered or ruled out. Never a guest's (FR-58). -#}
+      {% if v.can.change_place %}
       <form method="post" autocomplete="off" action="{{ base }}/place" hx-post="{{ base }}/place" {{ swap|safe }} class="stack">
         {{ hidden() }}
         <input type="hidden" name="run" value="{{ e.run }}">
@@ -434,6 +437,7 @@
         <p class="small muted">Everyone who's in hears about it before the meal time. People keep their roles if the new way still has them. Something new needs a way: Cook makes it a home meal, and Pickup or Delivery a restaurant.</p>
         <button type="submit" class="button small">Change the place</button>
       </form>
+      {% endif %}
       {% endif %}
       <form method="post" autocomplete="off" action="{{ base }}/assignments" hx-post="{{ base }}/assignments" {{ swap|safe }} class="inline-form">
         {{ hidden() }}

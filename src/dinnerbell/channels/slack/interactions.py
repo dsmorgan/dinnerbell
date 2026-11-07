@@ -1420,11 +1420,19 @@ class Interactions:
             raise EventRuleViolation("Only the coordinator or an admin can assign roles.", code="not_coordinator")
         if not view.roles.people:  # Slack refuses a select with no options
             raise EventRuleViolation(NOBODY_IN, code="nobody_in")
-        origin = ids.ViewOrigin(event_id, source.channel_id, home=source.home, run=run)
+        origin = ids.ViewOrigin(
+            event_id,
+            source.channel_id,
+            home=source.home,
+            run=run,
+            place=view.event.decided_item_id,
+            way=view.event.decided_mode,
+        )
         await self.api.open_view(trigger, assign_modal(view, origin))
         return None
 
-    async def _assign(self, member: Member, event_id: int, form: Any, run: int | None) -> str:
+    async def _assign(self, member: Member, origin: ids.ViewOrigin, form: Any) -> str:
+        event_id = origin.event_id
         async with self.sessionmaker() as db:
             told = await coordinator.choose_roles(
                 db,
@@ -1433,7 +1441,8 @@ class Interactions:
                 mode=form.mode,
                 member_id=form.member_id,
                 pickup_id=form.pickup_id,
-                run=run,
+                run=origin.run,
+                expect=coordinator.still_showing(origin.place, origin.way),
                 now=self.clock(),
             )
             view = await event_views.event_view(db, member, event_id, now=self.clock())
@@ -1858,7 +1867,7 @@ class Interactions:
             if kind == "invite":
                 return await self._invite(member, event_id, form, origin.run)
             if kind == "assign":
-                return await self._assign(member, event_id, form, origin.run)
+                return await self._assign(member, origin, form)
             if kind == "adjust":
                 return await self._adjust(member, origin, form)
             if kind == "away":

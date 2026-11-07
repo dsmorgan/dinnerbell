@@ -85,9 +85,9 @@ Whoever you assign is told, and so is whoever no longer has the role. If they ha
 
 ### When you end up eating somewhere else
 
-Change the place to record where you're really eating. Choose any place in the catalog or type a new name, even if nobody offered, someone vetoed it, or you just had it. Pick a way the place allows; a new name needs one, because **Cook** makes it a home meal and **Pickup** or **Delivery** a restaurant. People keep their roles if the new way still has them. Whoever loses a role is told, and a role nobody has yet goes to the first person who offered, or to nobody, for you to assign.
+Change the place to record where you're really eating. Choose any place in the catalog or type a new name, even if nobody offered, someone vetoed it, or you just had it. Pick a way the place allows; a new name needs one, because **Cook** makes it a home meal and **Pickup** or **Delivery** a restaurant. People keep their roles if the new way still has them. A role nobody has yet goes to the first person who offered, or to nobody, for you to assign.
 
-Everyone who's in gets a message before the meal time, and the decision updates. From the meal time on, it corrects the record and messages nobody. Once the meal is marked done, you can't change the place.
+Each person who's in gets one message before the meal time, which says if they lost or gained a role, and the decision updates. From the meal time on, it corrects the record and messages nobody. Once the meal is marked done, you can't change the place. A guest coordinator can't change it; an admin can.
 
 Contributions and badges count who did what when the meal is marked done, so a correction you make before then is what counts. After that, only an admin can correct it, and the counts follow the correction.
 
@@ -122,6 +122,7 @@ In **Assign roles**, you choose how to get it, who cooks or orders, and who pick
 | Make a takeout proposal pickup or delivery | Slack and web | While voting |
 | Switch how you get it, and assign who does it | Web; in Slack, **Assign roles** while the role waits for a choice | Once decided |
 | Change the meal time, or who cooks, picks up, or orders | Web | Once decided |
+| Change the place | Web | Once decided, until it's done |
 | Correct who did what after the meal is done | Web | Any time after |
 | Break a tie, shuffle, switch late joiners | Slack and web | While voting, alongside the coordinator |
 
@@ -131,7 +132,7 @@ When you correct who cooked, picked up, or ordered after the meal is done, Dinne
 
 ## What a guest coordinator can do
 
-A guest coordinator handles the logistics, but not the choice of meal. They can close answers early, make a takeout proposal pickup or delivery during the vote, change the meal time, how you get it, and who does it, hand off, and mark the meal done. They can't vote, lock, break a tie, shuffle, switch late joiners, **Decide now**, or call off the call. While a guest coordinates, an admin can do those, and a tied vote goes to whoever invited the guest, then to an admin. If the guest has no Slack account, the member who invited them gets their messages, but can't choose the roles for them unless they're an admin. The message says an admin can choose, and an admin has **Assign roles** on the decision.
+A guest coordinator handles the logistics, but not the choice of meal. They can close answers early, make a takeout proposal pickup or delivery during the vote, change the meal time, how you get it, and who does it, hand off, and mark the meal done. They can't vote, lock, break a tie, shuffle, change the place, switch late joiners, **Decide now**, or call off the call. While a guest coordinates, an admin can do those, and a tied vote goes to whoever invited the guest, then to an admin. If the guest has no Slack account, the member who invited them gets their messages, but can't choose the roles for them unless they're an admin. The message says an admin can choose, and an admin has **Assign roles** on the decision.
 
 ## When nobody coordinates, or someone drops out
 

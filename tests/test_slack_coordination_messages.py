@@ -59,7 +59,7 @@ def test_picked_at_random_groups_what_you_can_do_by_when_you_can_do_it() -> None
     assert lines[vote - 1] == lines[decided - 1] == lines[hand_off - 1] == ""
     assert lines[vote + 1] == "• Tap ⋯ beside a pick to decide it, break a tie, or set pickup or delivery"
     assert lines[vote + 2] == "• Shuffle the proposals"
-    assert lines[decided + 1] == "• Change how you get it and who does it"
+    assert lines[decided + 1] == "• Change the place, how you get it, and who does it"
     assert lines[hand_off] == "*Can't do it?* Hand it off on the call's page."
     assert lines[-1] == "Thanks for steering!"
 

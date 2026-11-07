@@ -2,7 +2,7 @@
   "blocks": [
     {
       "text": {
-        "text": "Hi Lee! Alex changed the plan your guest Sam is in for, dinner on Thursday, Oct 22: it's *Sam's Tacos* · Cook · Mexican now, not Siam Garden.\n*When:* 6:45 PM · *Eating:* 3 people (1 guest)",
+        "text": "Hi Lee! *Alex changed the place for dinner on Thursday, Oct 22.*\nSam's Tacos · Cook · Mexican\nIt was Siam Garden.\n\nYour guest Sam is in for it.\n\n• *When:* 6:45 PM\n• *Eating:* 3 people (1 guest)",
         "type": "mrkdwn"
       },
       "type": "section"

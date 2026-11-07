@@ -15,7 +15,7 @@ writes the outbox, and records the audit row):
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Iterable
+from collections.abc import AsyncIterator, Collection, Iterable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
@@ -603,14 +603,17 @@ def assignment_made(
     assignment_id: int,
     decision: note.DecisionInfo,
     assigned_by: note.PersonInfo | None = None,
+    *,
+    was: str | None = None,
 ) -> note.AssignmentMade:
     """The direct message to ``member_id`` about all their roles, prompted by ``assignment_id``.
-    ``assigned_by`` is the coordinator who gave them a role they hadn't offered for (#87)."""
+    ``assigned_by`` is the coordinator who gave them a role they hadn't offered for (#87), and
+    ``was`` the old place, when a change of place gave it to them (#219)."""
     order = list(AssignmentRole)
     roles = sorted({a.role for a in ctx.assignments if a.member_id == member_id}, key=order.index)
     via = answering_for(ctx, member_id)
     return note.AssignmentMade(
-        event_info(ctx), assignment_id, ctx.person(member_id), tuple(roles), decision, via, assigned_by
+        event_info(ctx), assignment_id, ctx.person(member_id), tuple(roles), decision, via, assigned_by, was
     )
 
 
@@ -675,24 +678,45 @@ def assignment_ended(
     return [note.AssignmentEnded(event_info(ctx), person, roles, ctx.person(by.id), now, via=via)]
 
 
-def place_changed(ctx: CallContext, was: str, by: Member, now: datetime) -> list[note.Notification]:
-    """The direct messages about a place changed after the decision (#219): one to each person
-    who's in but whoever changed it. A guest without Slack is told through whoever invited them,
-    unless that person is in or made the change, and knows already."""
+def place_changed(
+    ctx: CallContext,
+    was: str,
+    by: Member,
+    now: datetime,
+    *,
+    has_message: Collection[int] = (),
+    ended: Mapping[int, Iterable[AssignmentRole]] | None = None,
+) -> list[note.PlaceChanged]:
+    """The direct messages about a place changed after the decision (#219), one to each person
+    who's in, but not whoever changed it, or anyone in ``has_message``, whose message about a new
+    role names the place. ``ended`` is the roles each person lost, which their message says. A
+    guest without Slack is told through whoever invited them, unless that person made the change,
+    or is in and knows already, and the guest lost no role."""
     decision = decision_info(ctx)
     if decision is None:  # pragma: no cover - the call was decided, and its place is what changed
         return []
+    lost = ended or {}
     inside = {r.member_id for r in ctx.participants}
-    told: list[note.Notification] = []
-    for member_id in inside:
+    told: list[note.PlaceChanged] = []
+    for member_id in inside - set(has_message):
         member = ctx.members.get(member_id)
         if member is None or not member.active or member.id == by.id:
             continue
         via = answering_for(ctx, member.id)
-        if via is not None and (via.id == by.id or via.id in inside):
+        roles = tuple(lost.get(member.id, ()))
+        if via is not None and (via.id == by.id or (via.id in inside and not roles)):
             continue
         told.append(
-            note.PlaceChanged(event_info(ctx), ctx.person(member.id), was, decision, ctx.person(by.id), now, via=via)
+            note.PlaceChanged(
+                event_info(ctx),
+                ctx.person(member.id),
+                was,
+                decision,
+                ctx.person(by.id),
+                now,
+                via=via,
+                ended_roles=roles,
+            )
         )
     return told
 

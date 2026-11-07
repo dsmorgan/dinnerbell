@@ -624,7 +624,7 @@ def _place_blocks(v: EventView, opened: ids.Opened) -> list[Block]:
 
 
 def adjust_modal(v: EventView, origin: ids.ViewOrigin) -> dict[str, Any]:
-    """**Adjust** (spec 5.7): the coordinator's meal time, the place (#219), the way of getting
+    """**Adjust** (spec 5.7): the coordinator's meal time, the place (#219, not for a guest), the way of getting
     the decided pick (when the place allows more than one, #154), who cooks or orders it and, at
     a place that allows pickup, who picks it up (#178), from the people who are in, and whom to
     hand coordinating to, each set to what ``origin.opened`` says they were. Saving changes only what
@@ -639,12 +639,13 @@ def adjust_modal(v: EventView, origin: ids.ViewOrigin) -> dict[str, Any]:
     people = [option(p.name, str(p.id)) for p in choice.people[:MAX_ASSIGN_PEOPLE]]
     other_ways = len(choice.modes) > 1 or (bool(choice.modes) and choice.mode not in choice.modes)
     switchable = other_ways and opened.mode is not None and bool(people)
-    what = "the time, the place, how you get it, who does what" if switchable else "the time, the place, who does what"
+    place = "the place, " if v.can.change_place else ""  # never a guest's to change (FR-58)
+    what = f"the time, {place}how you get it, who does what" if switchable else f"the time, {place}who does what"
     blocks: list[Block] = [
         _intro(v),
         section(f"*{escape(item)}*: change {what}, or who coordinates. Only what you change is saved."),
         _input("meal_time", "Meal time", {"type": "timepicker", **_hhmm(opened.meal_time)}, optional=False),
-        *_place_blocks(v, opened),
+        *(_place_blocks(v, opened) if v.can.change_place else ()),
     ]
     if switchable:
         modes = [option(m.label, m.value) for m in choice.modes]
