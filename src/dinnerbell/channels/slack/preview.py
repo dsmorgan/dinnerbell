@@ -513,6 +513,10 @@ NOTIFICATIONS: dict[str, Callable[[], note.Notification]] = {
     "roles_to_choose": lambda: note.RolesToChoose(DECIDED, ALEX, PENDING_DECISION, ROLES_DUE),
     "roles_to_choose_way_open": lambda: note.RolesToChoose(DECIDED, ALEX, WAY_OPEN_DECISION, ROLES_DUE),
     "roles_to_choose_for_guest": lambda: note.RolesToChoose(DECIDED, PAT, PENDING_DECISION, ROLES_DUE, via=KIM),
+    "place_changed": lambda: note.PlaceChanged(DECIDED, SAM, "Siam Garden", DECISION, ALEX, ROLES_DUE),
+    "place_changed_for_guest": lambda: note.PlaceChanged(
+        DECIDED, SAM, "Siam Garden", DECISION, ALEX, ROLES_DUE, via=LEE
+    ),
     "picks_shuffled": lambda: note.PicksShuffled(SHUFFLED_VOTING, ALEX, 2, 1),
     "feedback_reminder": lambda: note.FeedbackReminder(
         event(EventState.DONE, coordinator=ALEX), KIM, "Sam's Tacos", date(2026, 10, 29)
@@ -596,7 +600,11 @@ ROLES_VIEW = replace(
     DECIDED_VIEW, can=Permissions(mark_done=True, choose_roles=True), roles=ROLES_CHOICE, decision=PENDING_DECISION
 )
 ADJUST_VIEW = replace(
-    DECIDED_VIEW, can=Permissions(adjust=True), roles=replace(ROLES_CHOICE, due_at=None), decision=DECISION
+    DECIDED_VIEW,
+    event=replace(DECIDED_VIEW.event, decided_item_id=TACOS.id),
+    can=Permissions(adjust=True),
+    roles=replace(ROLES_CHOICE, due_at=None),
+    decision=DECISION,
 )
 """Alex coordinates the decided dinner, Sam's cooking, and Alex may adjust it (spec 5.7)."""
 NOBODY_IN_VIEW = replace(ADJUST_VIEW, roles=replace(ROLES_CHOICE, due_at=None, people=()))

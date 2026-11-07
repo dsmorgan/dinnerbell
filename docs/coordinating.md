@@ -70,10 +70,11 @@ You can change any of these until the meal is marked done.
 
 | Action | Slack | Web |
 |---|---|---|
-| Change the meal time | **Adjust** | **Change the time or who does what** |
+| Change the meal time | **Adjust** | **Change the plan** |
+| Change the place: any catalog place, or a new name | **Adjust** | **Change the plan** |
 | Switch how you get it: cook, pickup, or delivery, among the ways the place allows | **Adjust** (**How**) | **Assign roles** |
-| Change who cooks, orders, or picks up, to anyone who's in | **Adjust** | **Assign roles**, or **Change the time or who does what** |
-| Correct who did what after the meal, so the right person gets credit | **Adjust** | **Change the time or who does what** |
+| Change who cooks, orders, or picks up, to anyone who's in | **Adjust** | **Assign roles**, or **Change the plan** |
+| Correct who did what after the meal, so the right person gets credit | **Adjust** | **Change the plan** |
 | Hand off coordinating to someone who's in | **Adjust** | Call page |
 | Mark the meal done, once it's meal time | **Mark done** on the decision | Call page |
 | Call off the meal | **Call it off** on the decision | Call page |
@@ -81,6 +82,12 @@ You can change any of these until the meal is marked done.
 **Adjust** is on the decision message, your App Home card, and any message that asks you to pick someone for a role. It opens with the plan as it is, and saves only what you change. If someone changed the same thing elsewhere while you had it open, Adjust doesn't overwrite it; it asks you to open Adjust again.
 
 Whoever you assign is told, and so is whoever no longer has the role. If they hadn't offered, the message says you assigned them, and that they can ask you to pick someone else. If you hand off in the same save, it names the new coordinator instead. From the meal time on, a change corrects the record and messages nobody.
+
+### When you end up eating somewhere else
+
+Change the place to record where you're really eating. Choose any place in the catalog or type a new name, even if nobody offered, someone vetoed it, or you just had it. Pick a way the place allows; a new name needs one, because **Cook** makes it a home meal and **Pickup** or **Delivery** a restaurant. People keep their roles if the new way still has them. Whoever loses a role is told, and a role nobody has yet goes to the first person who offered, or to nobody, for you to assign.
+
+Everyone who's in gets a message before the meal time, and the decision updates. From the meal time on, it corrects the record and messages nobody. Once the meal is marked done, you can't change the place.
 
 Contributions and badges count who did what when the meal is marked done, so a correction you make before then is what counts. After that, only an admin can correct it, and the counts follow the correction.
 
@@ -99,7 +106,7 @@ The decision asks you right away, with a message that has **Assign roles**, when
 - A role has no clear owner, because two people offered or nobody did. For pickup, ordering has no clear owner when more than one person besides the one picking up has **I'll order** on.
 - The winning proposal is takeout at a place that allows pickup and delivery, and nobody chose its way: Dinnerbell drew it, and nobody set it during the vote. A proposal someone added, or an offer, has the way they chose.
 
-In **Assign roles**, you choose how to get it, who cooks or orders, and who picks it up. If you change only one role, with **Change the time or who does what**, the other roles go to the first people who offered. You have 15 minutes to choose (an admin can change the time). After that, it stays the way it is, and the first people who offered do the roles.
+In **Assign roles**, you choose how to get it, who cooks or orders, and who picks it up. If you change only one role, with **Change the plan**, the other roles go to the first people who offered. You have 15 minutes to choose (an admin can change the time). After that, it stays the way it is, and the first people who offered do the roles.
 
 ## What an admin can do beyond that
 

@@ -1,16 +1,18 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """What the coordinator can do that others can't (FR-16, FR-61, #87): break a tie, shuffle the
 picks, move the decision time (#198), and choose the winning pick's mode and who does its role;
-and, in Slack, adjust the plan once it's decided (spec 5.7).
+change the place after the decision (#219); and, in Slack, adjust the plan once it's decided
+(spec 5.7).
 
 Each is the coordinator's and every admin's alike (#179). A guest coordinator chooses roles,
-which is logistics, but not the plan (FR-58). Each takes the event's
-lock, checks the run the person saw, and is audited and logged (#75). Everything is scoped to the
-actor's household.
+which is logistics, but not what the vote picks (FR-58). Once it's decided, they can record a
+change of place too. Each takes the event's lock, checks the run the person saw, and is audited
+and logged (#75). Everything is scoped to the actor's household.
 """
 
 from __future__ import annotations
 
+import functools
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import datetime, time
@@ -18,14 +20,26 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from dinnerbell.db.catalog import CatalogRepository
 from dinnerbell.db.events import AssignmentRepository, EventRepository, ProposalRepository
 from dinnerbell.domain import notifications as note
-from dinnerbell.domain.catalog import CatalogItem, Mode
+from dinnerbell.domain.catalog import (
+    MODE_ORDER,
+    CatalogItem,
+    InvalidCatalogInput,
+    Mode,
+    TagKind,
+    kind_for,
+    normalize_item_name,
+)
 from dinnerbell.domain.events import (
+    AFTER_DECISION_RANK,
     LEAD_ROLE,
     MODE_ROLES,
     WORK_ROLES,
+    Assignment,
     AssignmentRole,
+    Event,
     EventRuleViolation,
     EventState,
     IllegalTransition,
@@ -35,6 +49,7 @@ from dinnerbell.domain.events import (
     can_do,
     check_can_adjust,
     check_can_break_tie,
+    check_can_change_place,
     check_can_choose_roles,
     check_can_move_decision_time,
     check_can_set_way,
@@ -48,7 +63,7 @@ from dinnerbell.domain.events import (
 from dinnerbell.domain.guests import GuestAction
 from dinnerbell.domain.members import Member
 from dinnerbell.domain.ranking import rank
-from dinnerbell.services import activity, lifecycle
+from dinnerbell.services import activity, lifecycle, picks
 from dinnerbell.services import call_context as cc
 from dinnerbell.services import guests as guest_rules
 from dinnerbell.services.call_context import CallContext, locked_event, publish
@@ -312,15 +327,21 @@ class Held:
     by_id: int | None
 
 
-def check_assignee(ctx: CallContext, item: CatalogItem, mode: Mode, who: int) -> Member:
-    """Who may do the decided pick's role: an active member or guest who's in, and on the cook
-    list of a home meal that has one."""
+def _check_in(ctx: CallContext, who: int) -> Member:
+    """``who`` is an active member or guest who's in."""
     target = ctx.members.get(who)
     if target is None or not target.active:
         raise NotFound("No such member.")
     response = ctx.response_of(who)
     if response is None or not response.is_in:
         raise EventRuleViolation("Pick someone who's in.", code="not_in")
+    return target
+
+
+def check_assignee(ctx: CallContext, item: CatalogItem, mode: Mode, who: int) -> Member:
+    """Who may do the decided pick's role: an active member or guest who's in, and on the cook
+    list of a home meal that has one."""
+    target = _check_in(ctx, who)
     if not can_do(item, mode, who):
         raise EventRuleViolation(
             f"{item.name} has a cook list, and {target.display_name} isn't on it.", code="cook_list"
@@ -345,6 +366,71 @@ def _roles(
         if role not in roles:
             raise EventRuleViolation(NO_ONE_CHOSEN.format(verb=ROLE_VERB[role]), code="no_one_chosen")
     return roles
+
+
+async def _save_roles(
+    db: AsyncSession,
+    event: Event,
+    before: dict[AssignmentRole, Assignment],
+    roles: dict[AssignmentRole, int],
+    now: datetime,
+) -> tuple[dict[int, int], dict[int, list[AssignmentRole]]]:
+    """Make ``roles`` who does what: a role the way doesn't have goes, and a new holder is
+    assigned. ``before`` is who did what, and ``event`` is the call as it was found, for whether
+    the coordinator was still choosing. Returns each person to tell, keyed to their first new
+    assignment, and what each person lost."""
+    assignments = AssignmentRepository(db)
+    for role in before:
+        if role not in roles:  # a role the new way doesn't have, such as pickup for delivery
+            await assignments.unassign(event.household_id, event.id, role)
+    made: dict[int, int] = {}
+    for role, who in roles.items():
+        had = before.get(role)
+        if had is None or had.member_id != who:
+            made.setdefault(who, (await assignments.assign(event.household_id, event.id, role, who, now)).id)
+        elif event.roles_due_at is not None:  # the automatic choice stands; they hadn't been told yet
+            made.setdefault(who, had.id)
+    lost: dict[int, list[AssignmentRole]] = {}
+    for role, had in before.items():
+        if roles.get(role) != had.member_id:
+            lost.setdefault(had.member_id, []).append(role)
+    return made, lost
+
+
+def _role_messages(
+    ctx: CallContext,
+    actor: Member,
+    roles: dict[AssignmentRole, int],
+    offered: dict[AssignmentRole, tuple[int, ...]],
+    made: dict[int, int],
+    lost: dict[int, list[AssignmentRole]],
+    *,
+    was_pending: bool,
+    tell: bool,
+    now: datetime,
+) -> tuple[list[note.Notification], list[Held]]:
+    """The messages to whoever gained or lost a role, before the meal: a correction afterward
+    tells nobody (#154). Whoever is assigned hears once, about all their roles, and with ``tell``
+    False that message is only held. Returns what to send, and each person told or held."""
+    decision = cc.decision_info(ctx)
+    sent: list[note.Notification] = []
+    held: list[Held] = []
+    ahead = cc.before_the_meal(ctx.event, now)
+    if ahead and not was_pending:
+        for gone, gone_roles in lost.items():
+            if gone not in made:  # told their new roles instead, such as a cook who now orders
+                sent += cc.assignment_ended(ctx, gone, tuple(gone_roles), actor, now)
+    if decision is not None and ahead:
+        for who, assignment_id in made.items():
+            theirs = [role for role, person in roles.items() if person == who]
+            unasked = any(who not in offered[role] for role in theirs)
+            by = actor.id if unasked and who != actor.id else None
+            if tell:
+                sent.append(
+                    cc.assignment_made(ctx, who, assignment_id, decision, ctx.person(by) if by is not None else None)
+                )
+            held.append(Held(who, assignment_id, by))
+    return sent, held
 
 
 async def choose_roles(
@@ -398,47 +484,14 @@ async def choose_roles(
         targets = {role: check_assignee(ctx, item, chosen_mode, who) for role, who in roles.items()}
         offered = {role: ctx.coverage.volunteers(chosen_mode, role, item.cook_ids) for role in roles}
         before = {a.role: a for a in ctx.assignments if a.role in WORK_ROLES}
-        assignments = AssignmentRepository(db)
         if chosen_mode is not current:
             await ProposalRepository(db).set_mode(actor.household_id, winner.id, chosen_mode)
-        for role in before:
-            if role not in roles:  # a role the new way doesn't have, such as pickup for delivery
-                await assignments.unassign(actor.household_id, event.id, role)
         was_pending = event.roles_due_at is not None
+        made, lost = await _save_roles(db, event, before, roles, now)
         event = await EventRepository(db).save(replace(event, decided_mode=chosen_mode, roles_due_at=None), now)
-        made: dict[int, int] = {}  # each person told, keyed to their first new assignment
-        for role, who in roles.items():
-            had = before.get(role)
-            if had is None or had.member_id != who:
-                made.setdefault(who, (await assignments.assign(actor.household_id, event.id, role, who, now)).id)
-            elif was_pending:  # the automatic choice stands; they hadn't been told yet
-                made.setdefault(who, had.id)
-        lost: dict[int, list[AssignmentRole]] = {}
-        for role, had in before.items():
-            if roles.get(role) != had.member_id:
-                lost.setdefault(had.member_id, []).append(role)
         ctx = await cc.load(db, event)
-        decision = cc.decision_info(ctx)
-        sent: list[note.Notification] = [*cc.decision_updated(ctx), cc.message_updated(ctx)]
-        held: list[Held] = []
-        ahead = cc.before_the_meal(event, now)  # a correction afterward tells nobody (#154)
-        if ahead and not was_pending:
-            for gone, gone_roles in lost.items():
-                if gone not in made:  # told their new roles instead, such as a cook who now orders
-                    sent += cc.assignment_ended(ctx, gone, tuple(gone_roles), actor, now)
-        if decision is not None and ahead:
-            for who, assignment_id in made.items():
-                theirs = [role for role, person in roles.items() if person == who]
-                unasked = any(who not in offered[role] for role in theirs)
-                by = actor.id if unasked and who != actor.id else None
-                if tell:
-                    sent.append(
-                        cc.assignment_made(
-                            ctx, who, assignment_id, decision, ctx.person(by) if by is not None else None
-                        )
-                    )
-                held.append(Held(who, assignment_id, by))
-        await publish(db, ctx, *sent, now=now)
+        told, held = _role_messages(ctx, actor, roles, offered, made, lost, was_pending=was_pending, tell=tell, now=now)
+        await publish(db, ctx, *cc.decision_updated(ctx), cc.message_updated(ctx), *told, now=now)
         lead_role = LEAD_ROLE[chosen_mode]
         lead = roles[lead_role]
         payload = {
@@ -479,16 +532,27 @@ PLAN_CHANGED = "The plan changed since you opened this. Open Adjust again."
 class Adjustment:
     """The coordinator's **Adjust** modal: the meal time (a wall time on the call's date), who
     cooks or orders the decided pick (``assignee_id``), who coordinates, the way of getting it
-    (``mode``: cook, pickup, or delivery), and who picks it up (``pickup_id``, #178). As asked
-    for, None leaves that part alone; as opened, it's what the modal showed, with ``mode`` None
-    for a modal opened before Adjust could switch it, and ``pickup_id`` None for one opened
-    before it showed the pickup person."""
+    (``mode``: cook, pickup, or delivery), who picks it up (``pickup_id``, #178), and the place
+    (#219): ``item_id`` from the catalog, or ``new_place`` typed in, with the way to get it there
+    (``place_mode``) and a new name's cuisine (``cuisine_id``). As asked for, None leaves that
+    part alone; as opened, it's what the modal showed, with ``mode`` None for a modal opened
+    before Adjust could switch it, ``pickup_id`` None for one opened before it showed the pickup
+    person, and ``item_id`` None for one opened before it showed the place."""
 
     meal_time: time | None = None
     assignee_id: int | None = None
     coordinator_id: int | None = None
     mode: Mode | None = None
     pickup_id: int | None = None
+    item_id: int | None = None
+    new_place: str | None = None
+    place_mode: Mode | None = None
+    cuisine_id: int | None = None
+
+    @property
+    def place_asked(self) -> bool:
+        """Whether this names a place: ``place_mode`` and ``cuisine_id`` say nothing without one."""
+        return self.item_id is not None or self.new_place is not None
 
     @property
     def empty(self) -> bool:
@@ -498,12 +562,14 @@ class Adjustment:
             and self.coordinator_id is None
             and self.mode is None
             and self.pickup_id is None
+            and not self.place_asked
         )
 
 
 class AdjustmentRefused(EventRuleViolation):
     """One part of an **Adjust** the rules refuse, so the modal can show why next to it. ``part``
-    is ``meal_time``, ``mode``, ``assignee``, ``pickup``, or ``coordinator``."""
+    is ``meal_time``, ``place``, ``new_place``, ``place_mode``, ``place_cuisine``, ``mode``,
+    ``assignee``, ``pickup``, or ``coordinator``."""
 
     def __init__(self, part: str, refusal: EventRuleViolation | NotFound) -> None:
         super().__init__(str(refusal), code=getattr(refusal, "code", "not_found"))
@@ -601,7 +667,9 @@ async def plan_adjustment(
     The way of getting it, who cooks or orders, and who picks up are one part, the roles:
     changing any saves them all, as **Assign roles** does, and each person must be able to do
     their role that way (FR-17, as ``choose_roles`` checks). A role nobody was picked for goes to
-    its first volunteer (#178)."""
+    its first volunteer (#178). A new place takes all of them with it, in ``change_place``, so the
+    way and the roles apply to it (#219): those it would keep or fill aren't in what this returns,
+    only whoever the person named."""
     event = await EventRepository(db).get(actor.household_id, event_id)
     if event is None:
         raise NotFound(cc.NO_SUCH_CALL)
@@ -632,7 +700,23 @@ async def _plan(
     mode: Mode | None = None
     assignee: int | None = None
     pickup: int | None = None
-    if mode_asked or who_asked or pickup_asked:
+    place = await _place_asked(
+        db,
+        ctx,
+        item_id=wanted.item_id,
+        name=wanted.new_place,
+        mode=wanted.place_mode,
+        how=wanted.mode if mode_asked else None,
+        opened_item_id=opened.item_id,
+    )
+    if place is not None:
+        if (who_asked or pickup_asked) and not _role_as_opened(ctx, opened):
+            raise _changed_since("assignee" if who_asked else "pickup")
+        assignee = wanted.assignee_id if who_asked else None
+        pickup = wanted.pickup_id if pickup_asked and place.mode is Mode.PICKUP else None
+        _check_cuisine(ctx, place, wanted.cuisine_id)
+        _check_named(ctx, place, assignee, pickup)
+    elif mode_asked or who_asked or pickup_asked:
         if not _role_as_opened(ctx, opened):
             raise _changed_since("mode" if mode_asked else "assignee" if who_asked else "pickup")
         chosen: Mode = wanted.mode if mode_asked and wanted.mode is not None else current
@@ -656,7 +740,19 @@ async def _plan(
         _part("coordinator", lambda: handoff_target(ctx, actor, to))
     else:
         lead = None
-    return Adjustment(meal, assignee, lead, mode, pickup)
+    if place is None:
+        return Adjustment(meal, assignee, lead, mode, pickup)
+    return Adjustment(
+        meal,
+        assignee,
+        lead,
+        None,
+        pickup,
+        item_id=place.item.id if place.name is None and place.item is not None else None,
+        new_place=place.name,
+        place_mode=place.mode,
+        cuisine_id=wanted.cuisine_id if place.item is None else None,
+    )
 
 
 async def adjust(
@@ -669,13 +765,15 @@ async def adjust(
     run: int,
     now: datetime,
 ) -> Adjustment:
-    """**Adjust** in Slack (spec 5.7): the coordinator changes the meal time, the way of getting
-    it and who does its roles, and who coordinates, in one modal. Only the parts they changed
-    from what the modal opened with change, each through the use case the web uses for it,
-    which checks its rules again under the event's lock, the coordinator's say included, and
-    is audited: ``calls.set_meal_time``, ``choose_roles``, then ``calls.hand_off``, last, since
-    handing off ends the actor's say over the rest. Each step also checks, under its lock, that
-    its part is still as the modal opened with (``_still``), so a change saved elsewhere since
+    """**Adjust** in Slack (spec 5.7): the coordinator changes the meal time, the place, the way
+    of getting it and who does its roles, and who coordinates, in one modal. Only the parts they
+    changed from what the modal opened with change, each through the use case the web uses for
+    it, which checks its rules again under the event's lock, the coordinator's say included, and
+    is audited: ``calls.set_meal_time``; ``change_place``, which saves the way and the roles with
+    it, since they apply to the new place, or else ``choose_roles``; then ``calls.hand_off``,
+    last, since handing off ends the actor's say over the rest. Each step also checks, under its
+    lock, that its part is still as the modal opened with (``_still``, and ``_place_asked`` for the
+    place), so a change saved elsewhere since
     ``plan_adjustment`` read the call is refused rather than written over. Returns what changed;
     an empty ``Adjustment`` changed nothing and sent nothing. A part refused after an earlier
     one was saved raises ``PartlyAdjusted``.
@@ -699,7 +797,37 @@ async def adjust(
                 now=now,
             )
             saved = replace(saved, meal_time=changes.meal_time)
-        if changes.assignee_id is not None:
+        if changes.place_asked:
+            tell = changes.coordinator_id is None
+            named = changes.assignee_id is not None or changes.pickup_id is not None
+            chosen = await change_place(
+                db,
+                actor,
+                event_id,
+                item_id=changes.item_id,
+                name=changes.new_place,
+                cuisine_id=changes.cuisine_id,
+                mode=changes.place_mode,
+                opened_item_id=opened.item_id,
+                member_id=changes.assignee_id,
+                pickup_id=changes.pickup_id,
+                run=run,
+                as_coordinator=True,
+                tell=tell,
+                expect=_still(opened, "role") if named else None,
+                now=now,
+            )
+            held = () if tell else chosen
+            saved = replace(
+                saved,
+                item_id=changes.item_id,
+                new_place=changes.new_place,
+                place_mode=changes.place_mode,
+                cuisine_id=changes.cuisine_id,
+                assignee_id=changes.assignee_id,
+                pickup_id=changes.pickup_id,
+            )
+        elif changes.assignee_id is not None:
             tell = changes.coordinator_id is None
             chosen = await choose_roles(
                 db,
@@ -741,3 +869,289 @@ async def _tell_assigned(db: AsyncSession, actor: Member, event_id: int, held: H
             return
         by = ctx.person(held.by_id) if held.by_id is not None else None
         await publish(db, ctx, cc.assignment_made(ctx, held.member_id, held.assignment_id, decision, by), now=now)
+
+
+# Change the place after the decision (#219, spec 5.7) -------------------------------------------
+
+SAME_PLACE = "That's the place already. Pick another one, or type a new name."
+NOT_IN_CATALOG = "That place isn't in the catalog anymore. Pick another one, or type its name."
+PICK_THE_WAY = "Pick how to get it."
+NOT_A_CUISINE = "Pick a cuisine from the list, or leave it empty."
+PLACE_OR_NAME = "Pick a place, or type a new one, but not both. To keep what you typed, pick {current}."
+
+
+@dataclass(frozen=True, slots=True)
+class _Place:
+    """The place someone asked for, and the way to get it: a catalog item, or, for a name the
+    catalog doesn't have yet, ``item`` None and ``name``."""
+
+    item: CatalogItem | None
+    name: str | None
+    mode: Mode
+
+
+def _way_there(item: CatalogItem, how: Mode | None, current: Mode | None) -> Mode:
+    """The way to get ``item`` when nobody picked one: the only one it has, or else ``how`` (the
+    way picked for the plan as it was), or the way the call has now, if it allows those."""
+    ways = [m for m in MODE_ORDER if m in item.modes]
+    if len(ways) == 1:
+        return ways[0]
+    for way in (how, current):
+        if way in ways and way is not None:
+            return way
+    raise AdjustmentRefused("place_mode", EventRuleViolation(PICK_THE_WAY, code="no_way_chosen"))
+
+
+async def _place_asked(
+    db: AsyncSession,
+    ctx: CallContext,
+    *,
+    item_id: int | None,
+    name: str | None,
+    mode: Mode | None,
+    how: Mode | None = None,
+    opened_item_id: int | None,
+) -> _Place | None:
+    """The place asked for, or None when it's the place shown and the place the call has. A place
+    changed elsewhere since it was shown is refused, so this never writes back over it. The
+    change records what happened, so only the way is checked (``check_mode``): vetoes, dietary
+    needs, the variety window, the meal, and who offered don't count here. A new name needs its
+    way, since the way says whether it's a home meal or a restaurant."""
+    event = ctx.event
+    picked = item_id if item_id != opened_item_id else None
+    if picked is None and name is None:
+        return None
+    if picked is not None and name is not None:
+        current = ctx.items[event.decided_item_id].name if event.decided_item_id in ctx.items else "the place shown"
+        both = EventRuleViolation(PLACE_OR_NAME.format(current=current), code="place_and_name")
+        raise AdjustmentRefused("new_place", both)
+    if event.decided_item_id != opened_item_id:
+        raise _changed_since("place" if picked is not None else "new_place")
+    if picked is not None:
+        item = ctx.items.get(picked)
+        if item is None or not item.active:
+            raise AdjustmentRefused("place", NotFound(NOT_IN_CATALOG))
+        way = mode or _way_there(item, how, event.decided_mode)
+        _part("place_mode", lambda: check_mode(item, way))
+        return _Place(item, None, way)
+    try:
+        clean = normalize_item_name(name or "")
+    except InvalidCatalogInput as exc:
+        raise AdjustmentRefused("new_place", EventRuleViolation(str(exc), code="invalid_name")) from None
+    if mode is None:
+        raise AdjustmentRefused("place_mode", EventRuleViolation(PICK_THE_WAY, code="no_way_chosen"))
+    found = await CatalogRepository(db).item_by_name(event.household_id, kind_for(mode), clean)
+    if found is not None and found.id == event.decided_item_id:
+        return None
+    if found is not None:
+        _part("place_mode", lambda: check_mode(found, mode))
+    return _Place(found, clean, mode)
+
+
+def _check_cuisine(ctx: CallContext, place: _Place, cuisine_id: int | None) -> int | None:
+    """The cuisine to give a new name, which is optional: the change records what happened, and
+    an admin can add it in the catalog. None for a place the catalog has."""
+    if place.item is not None or cuisine_id is None:
+        return None
+    tag = ctx.tags.get(cuisine_id)
+    if tag is None or tag.kind is not TagKind.CUISINE:
+        raise AdjustmentRefused("place_cuisine", EventRuleViolation(NOT_A_CUISINE, code="no_cuisine"))
+    return cuisine_id
+
+
+def _check_named(ctx: CallContext, place: _Place, lead: int | None, pickup: int | None) -> None:
+    """Whoever the change names for a role is someone who can do it (FR-17), as in **Assign
+    roles**. A person who just keeps their role isn't checked again: see ``_roles_there``."""
+    item = place.item
+
+    def check(who: int) -> None:
+        if item is None:  # something new has no cook list
+            _check_in(ctx, who)
+        else:
+            check_assignee(ctx, item, place.mode, who)
+
+    for part, who in (("assignee", lead), ("pickup", pickup)):
+        if who is not None:
+            _part(part, functools.partial(check, who))
+
+
+def _roles_there(ctx: CallContext, place: _Place, lead: int | None, pickup: int | None) -> dict[AssignmentRole, int]:
+    """Who does what at the new place. People keep their roles if the new way still has them, and
+    a role the new way has that nobody has yet goes to its first volunteer, or to nobody: the
+    change records what happened, so it isn't refused for that, and it isn't refused for a cook
+    off the new place's cook list. They may well have cooked it, and the coordinator can say
+    otherwise. ``lead`` and ``pickup`` are whoever the change names instead."""
+    holders = {a.role: a.member_id for a in ctx.assignments}
+    keeps_pickup = pickup if pickup is not None else holders.get(AssignmentRole.PICKUP)
+    return default_roles(
+        place.mode,
+        ctx.coverage,
+        place.item.cook_ids if place.item is not None else frozenset(),
+        lead=lead if lead is not None else holders.get(LEAD_ROLE[place.mode]),
+        pickup=keeps_pickup if place.mode is Mode.PICKUP else None,
+    )
+
+
+async def _make_it_the_winner(
+    db: AsyncSession, ctx: CallContext, place: _Place, cuisine_id: int | None, now: datetime
+) -> tuple[CatalogItem, bool]:
+    """Give the new place the proposal row that ``CallContext.winner`` finds, and return its
+    catalog item and whether it's new to the catalog.
+
+    A place that was a pick keeps its row, its rank, and its votes: it's chosen now, in this way,
+    and whoever added it did suggest where they ate. Any other place gets a row outside the picks
+    (``AFTER_DECISION_RANK``) that names nobody, so it earns nobody credit for suggesting it, or
+    for adding it to the catalog. A change of place from such a row removes it, so a call has at
+    most one, and the free-text path is the one a pick that wins takes."""
+    household_id = ctx.event.household_id
+    proposals = ProposalRepository(db)
+    winner = ctx.winner
+    if winner is not None and winner.after_decision:
+        await proposals.delete(household_id, winner.id)
+    target = Proposal(
+        0,
+        ctx.event.id,
+        place.mode,
+        AFTER_DECISION_RANK,
+        ProposalSource.COORDINATOR,
+        item_id=place.item.id if place.item is not None else None,
+        free_text=place.name if place.item is None else None,
+        free_cuisine_id=cuisine_id,
+        mode_chosen=True,
+    )
+    existing = picks.picked(ctx, target)
+    if existing is None:
+        row = await proposals.add(
+            household_id=household_id,
+            event_id=target.event_id,
+            mode=target.mode,
+            rank=target.rank,
+            source=target.source,
+            reasons=(),
+            now=now,
+            item_id=target.item_id,
+            free_text=target.free_text,
+            free_cuisine_id=target.free_cuisine_id,
+            mode_chosen=True,
+        )
+        if place.item is not None:
+            return place.item, False
+        return await lifecycle.catalog_free_text(db, ctx, row, now), True
+    if place.item is None:  # a free-text pick, which becomes a catalog item as a winning one does
+        item = await lifecycle.catalog_free_text(db, ctx, replace(existing, mode=place.mode), now)
+        created = True
+    else:
+        item, created = place.item, False
+        if existing.item_id is None:
+            await proposals.link_item(household_id, existing.id, item.id)
+    await proposals.set_mode(household_id, existing.id, place.mode)
+    return item, created
+
+
+async def change_place(
+    db: AsyncSession,
+    actor: Member,
+    event_id: int,
+    *,
+    item_id: int | None = None,
+    name: str | None = None,
+    cuisine_id: int | None = None,
+    mode: Mode | None = None,
+    opened_item_id: int | None,
+    member_id: int | None = None,
+    pickup_id: int | None = None,
+    run: int | None = None,
+    as_coordinator: bool = False,
+    tell: bool = True,
+    expect: Callable[[CallContext], object] | None = None,
+    now: datetime,
+) -> tuple[Held, ...]:
+    """Change where the call is eating, after the decision and until it's done (#219, spec 5.7):
+    the coordinator, a guest coordinator too, or an admin (``check_can_change_place``). The place
+    is ``item_id``, an active catalog item, or ``name``, typed in, with an optional cuisine, and
+    ``mode`` is a way it allows. ``opened_item_id`` is the place the person saw; one changed
+    elsewhere since is refused.
+
+    It records what happened, so nothing but the way can refuse it (``_place_asked``). People keep
+    their roles if the way still has them (``_roles_there``); ``member_id`` and ``pickup_id`` name
+    someone else, who must be able to do it. While the coordinator is still choosing roles, naming
+    nobody leaves that as it is: the time runs on, for the new place. How the old place won, a
+    lock or a tie, no longer describes the plan, so the decision stops saying it.
+
+    The call's messages update in place. Before the meal, everyone who's in hears, and whoever
+    gains or loses a role is told as in ``choose_roles``; from the meal time on it corrects the
+    record and messages nobody (#154). Audited as ``event.place_changed``; logged as
+    ``change_place``. ``as_coordinator``, ``tell``, and ``expect`` are for Slack's Adjust, as in
+    ``choose_roles``."""
+    async with locked_event(db, actor.household_id, event_id, now) as event:
+        await guest_rules.gate(db, event, actor, GuestAction.MANAGE_DECISION)
+        check_run(event, run)
+        capacity = check_can_change_place(event, actor)
+        if as_coordinator:
+            check_can_adjust(event, actor)
+        ctx = await cc.load(db, event)
+        if expect is not None:
+            expect(ctx)
+        old, old_mode = ctx.winner, event.decided_mode
+        if old is None or old_mode is None:  # pragma: no cover - a decided call has both
+            raise EventRuleViolation("There's no decision to change.", code="not_decided")
+        place = await _place_asked(db, ctx, item_id=item_id, name=name, mode=mode, opened_item_id=opened_item_id)
+        if place is None:
+            raise EventRuleViolation(SAME_PLACE, code="same_place")
+        activity.about(item=place.item or place.name, mode=place.mode)
+        new_cuisine = _check_cuisine(ctx, place, cuisine_id)
+        pickup = pickup_id if place.mode is Mode.PICKUP else None
+        _check_named(ctx, place, member_id, pickup)
+        was_pending = event.roles_due_at is not None
+        # Naming nobody while the coordinator chooses leaves the choice open; otherwise it ends.
+        waits = was_pending and member_id is None and pickup is None
+        roles = {} if waits else _roles_there(ctx, place, member_id, pickup)
+        cooks = place.item.cook_ids if place.item is not None else frozenset()
+        offered = {role: ctx.coverage.volunteers(place.mode, role, cooks) for role in roles}
+        before = {} if waits else {a.role: a for a in ctx.assignments if a.role in WORK_ROLES}
+        item, created = await _make_it_the_winner(db, ctx, place, new_cuisine, now)
+        made, lost = await _save_roles(db, event, before, roles, now)
+        event = await EventRepository(db).save(
+            replace(
+                event,
+                decided_item_id=item.id,
+                decided_mode=place.mode,
+                roles_due_at=event.roles_due_at if waits else None,
+                locked_by=None,
+                tie_how=None,
+                tie_by=None,
+            ),
+            now,
+        )
+        was = cc.item_info(ctx, old).name
+        ctx = await cc.load(db, event)
+        everyone = cc.place_changed(ctx, was, actor, now) if cc.before_the_meal(event, now) else []
+        told, held = _role_messages(ctx, actor, roles, offered, made, lost, was_pending=was_pending, tell=tell, now=now)
+        await publish(db, ctx, *cc.messages_for_state(ctx), *everyone, *told, now=now)
+        dropped = [role.value for role in before if role not in roles]
+        payload = {
+            "from_item_id": old.item_id,
+            "from_mode": old_mode.value,
+            "to_item_id": item.id,
+            "to_mode": place.mode.value,
+            "new_item": created,
+            "assignments": {role.value: who for role, who in roles.items()},
+            "dropped": dropped,
+            "as": capacity.value,
+        }
+        await audit(db, actor.household_id, actor, "event.place_changed", _target(event.id), payload, now)
+        activity.action(
+            db,
+            "change_place",
+            event,
+            actor,
+            item=item,
+            item_id=item.id,
+            mode=place.mode,
+            from_item_id=old.item_id,
+            from_mode=old_mode.value,
+            new_item=created,
+            dropped=dropped or None,
+            capacity=capacity.value,
+        )
+        return tuple(held)

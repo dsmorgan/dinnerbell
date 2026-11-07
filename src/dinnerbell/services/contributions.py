@@ -163,7 +163,8 @@ async def _count_event(
         winner=winner if meal is not None else None,
         newness=history.fresh[meal.id] if meal is not None else None,
         item_creator=item.created_by if item is not None and item.created_by in members else None,
-        picks=frozenset(p.id for p in proposals),
+        # A place changed after the decision (#219) wasn't there to vote on: Gambler counts the rest.
+        picks=frozenset(p.id for p in proposals if not p.after_decision),
         votes=votes,
     )
     credits = [c for c in credits_for_done(facts) if c.member_id in members and (kinds is None or c.kind in kinds)]

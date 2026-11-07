@@ -469,7 +469,7 @@ def view(ctx: CallContext, actor: Member, today: date, now: datetime, *, any_tim
                 actor.id in ctx.votes.get(p.id, []),
                 not_for_me=voting and not cc.fits_late_joiner(ctx, p, actor.id),
             )
-            for p in ctx.proposals
+            for p in ctx.picks
         ),
         decision=cc.decision_info(ctx),
         can=permissions(ctx, actor, today, now, any_time=any_time),

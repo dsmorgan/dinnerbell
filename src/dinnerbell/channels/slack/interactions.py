@@ -111,6 +111,7 @@ from dinnerbell.domain.catalog import Mode
 from dinnerbell.domain.events import (
     GUESTS_DONT,
     LEAD_ROLE,
+    MODE_ROLES,
     STALE_CALL,
     AssignmentRole,
     EventRuleViolation,
@@ -137,6 +138,7 @@ from dinnerbell.domain.labels import LATE_VOTE_NOTE
 from dinnerbell.domain.meals import InvalidMeal, Slot
 from dinnerbell.domain.members import Member, Role
 from dinnerbell.domain.notifications import (
+    DecisionInfo,
     GuestInvited,
     MessageRef,
     PermanentDeliveryError,
@@ -2239,11 +2241,31 @@ JOIN_OFFER = (
 
 
 def _opened(opened: ids.Opened) -> Adjustment:
-    return Adjustment(opened.meal_time, opened.assignee_id, opened.coordinator_id, opened.mode, opened.pickup_id)
+    return Adjustment(
+        opened.meal_time,
+        opened.assignee_id,
+        opened.coordinator_id,
+        opened.mode,
+        opened.pickup_id,
+        item_id=opened.item_id,
+    )
 
 
 SWITCHED = {Mode.COOK: "It's home-cooked now.", Mode.PICKUP: "It's pickup now.", Mode.DELIVERY: "It's delivery now."}
 """Adjust's reply when it switched the way of getting the meal (#154)."""
+
+
+def _place_said(decision: DecisionInfo) -> list[str]:
+    """Adjust's reply when it changed the place (#219): the place and the way, and any role the
+    way has that nobody does yet, since nothing stopped the change for it. While the coordinator
+    is choosing, that's what the choosing is for."""
+    proposal = decision.proposal
+    said = [f"It's {proposal.item.name}, {proposal.mode.label.lower()}, now."]
+    held = {a.role for a in decision.assignments}
+    empty = [ROLE_PHRASES[role] for role in MODE_ROLES[proposal.mode] if role not in held]
+    if empty and decision.roles_due_at is None:
+        said.append(f"Nobody is {' or '.join(empty)} yet.")
+    return said
 
 
 def adjusted(changed: Adjustment, view: EventView, opened: Adjustment | None = None) -> str:
@@ -2255,13 +2277,16 @@ def adjusted(changed: Adjustment, view: EventView, opened: Adjustment | None = N
     said: list[str] = []
     if changed.meal_time is not None and view.decision is not None:
         said.append(f"The meal time is {local_clock(view.decision.meal_time, view.info.timezone)}.")
+    if changed.place_asked and view.decision is not None:
+        said += _place_said(view.decision)
     if changed.mode is not None:
         said.append(SWITCHED[changed.mode])
-    if changed.assignee_id is not None and view.roles is not None:
+    if (changed.assignee_id is not None or changed.pickup_id is not None) and view.roles is not None:
         same_way = changed.mode is None
         doing: dict[int, list[str]] = {}
-        if not (same_way and opened is not None and opened.assignee_id == changed.assignee_id):
-            doing[changed.assignee_id] = [ROLE_PHRASES[LEAD_ROLE[view.roles.mode]]]
+        lead = changed.assignee_id
+        if lead is not None and not (same_way and opened is not None and opened.assignee_id == lead):
+            doing[lead] = [ROLE_PHRASES[LEAD_ROLE[view.roles.mode]]]
         pickup = changed.pickup_id if view.roles.mode is Mode.PICKUP else None  # #178
         if pickup is not None and not (same_way and opened is not None and opened.pickup_id == pickup):
             doing.setdefault(pickup, []).append(ROLE_PHRASES[AssignmentRole.PICKUP])

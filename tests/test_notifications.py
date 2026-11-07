@@ -185,6 +185,13 @@ EXAMPLES: list[tuple[n.Notification, str, str | None, str | None, int | None]] =
         KIM.id,  # once a run (#179)
     ),
     (
+        n.PlaceChanged(EVENT, PAT, "Siam Garden", DECISION, ALEX, WHEN, via=SAM),
+        f"event:7:run2:place_changed:member{PAT.id}:{int(WHEN.timestamp() * 1_000_000)}",
+        None,
+        None,
+        SAM.id,  # for a guest without Slack, whoever invited them
+    ),
+    (
         n.AssignmentEnded(EVENT, PAT, (AssignmentRole.PICKUP,), ALEX, WHEN, via=SAM),
         f"event:7:run2:assignment_ended:member{PAT.id}:{int(WHEN.timestamp() * 1_000_000)}",
         None,

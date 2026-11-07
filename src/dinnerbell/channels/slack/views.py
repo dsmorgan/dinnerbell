@@ -61,7 +61,7 @@ from dinnerbell.channels.slack.messages import (
 from dinnerbell.domain import labels
 from dinnerbell.domain import notifications as note
 from dinnerbell.domain.badges import BADGES, BadgeKey, Tier, highest_tiers, next_up
-from dinnerbell.domain.catalog import CatalogItem, ItemKind, Mode, Tag
+from dinnerbell.domain.catalog import MODE_ORDER, CatalogItem, ItemKind, Mode, Tag
 from dinnerbell.domain.events import (
     CANCEL_NOTE_MAX,
     JOIN_LATE_PROMPT,
@@ -563,6 +563,10 @@ def parse_assign(values: Any) -> AssignInput:
 
 ADJUST_BLOCKS = {
     "meal_time": "meal_time",
+    "place": "place",
+    "new_place": "new_place",
+    "place_mode": "place_mode",
+    "place_cuisine": "place_cuisine",
     "mode": "mode",
     "assignee": "who",
     "pickup": "pickup",
@@ -573,23 +577,57 @@ ADJUST_BLOCKS = {
 
 def adjust_opened(v: EventView) -> ids.Opened:
     """What an Adjust modal for ``v`` shows: the meal time, who cooks or orders, who
-    coordinates, the way of getting it, and who picks it up (#178), as they are now. It goes in
-    the modal's metadata, so saving can tell what the person changed from what changed elsewhere
-    since."""
+    coordinates, the way of getting it, who picks it up (#178), and the place (#219), as they
+    are now. It goes in the modal's metadata, so saving can tell what the person changed from
+    what changed elsewhere since."""
     choice, decision = v.roles, v.decision
     if choice is None or decision is None:
         raise ValueError("an Adjust modal needs a decided call")
     at = decision.meal_time.astimezone(ZoneInfo(v.info.timezone))
     holders = {a.role: a.member.id for a in decision.assignments}
     pickup = holders.get(AssignmentRole.PICKUP) if choice.mode is Mode.PICKUP else None
-    return ids.Opened(time(at.hour, at.minute), holders.get(choice.lead), v.event.coordinator_id, choice.mode, pickup)
+    lead = holders.get(choice.lead)
+    return ids.Opened(
+        time(at.hour, at.minute), lead, v.event.coordinator_id, choice.mode, pickup, v.event.decided_item_id
+    )
+
+
+PLACE_HINT = "Change it if you're eating somewhere else, even if nobody offered or someone's vetoed it."
+NEW_PLACE_WAY = "How, at a new place"
+NEW_PLACE_WAY_HINT = (
+    "Only if you change the place. For something new, Cook makes it a home meal, and Pickup or Delivery a restaurant."
+)
+
+
+def _place_blocks(v: EventView, opened: ids.Opened) -> list[Block]:
+    """The place in an Adjust modal (#219): the catalog, with the place as it is chosen, so
+    picking it again takes back a change; a new name; the way to get it there; and a new name's
+    cuisine. Slack can't redraw the ways when the place changes, so this way has its own field,
+    with every way on it, and ``coordinator.change_place`` checks it against the place."""
+    keep = (opened.item_id,) if opened.item_id is not None else ()
+    groups, kept = _item_groups(v.items, keep=keep, hint=v.meal_hint)
+    blocks: list[Block] = []
+    if groups:
+        catalog: Block = {"type": "static_select", "option_groups": groups}
+        if kept:  # a place taken out of the catalog since isn't listed, and leaving it empty keeps it
+            catalog["initial_option"] = kept[0]
+        blocks.append(_input("place", "Place", catalog, hint=PLACE_HINT))
+    blocks.append(
+        _input("new_place", "Or a new place", {"type": "plain_text_input", "max_length": MAX_SUGGESTION_LENGTH})
+    )
+    ways: Block = {"type": "static_select", "options": [option(m.label, m.value) for m in MODE_ORDER]}
+    blocks.append(_input("place_mode", NEW_PLACE_WAY, ways, hint=NEW_PLACE_WAY_HINT))
+    if v.cuisine_tags:
+        cuisines = {"type": "static_select", "options": _tag_options(v.cuisine_tags)}
+        blocks.append(_input("place_cuisine", "Cuisine of a new place", cuisines))
+    return blocks
 
 
 def adjust_modal(v: EventView, origin: ids.ViewOrigin) -> dict[str, Any]:
-    """**Adjust** (spec 5.7): the coordinator's meal time, the way of getting the decided pick
-    (when the place allows more than one, #154), who cooks or orders it and, at a place that
-    allows pickup, who picks it up (#178), from the people who are in, and whom to hand
-    coordinating to, each set to what ``origin.opened`` says they were. Saving changes only what
+    """**Adjust** (spec 5.7): the coordinator's meal time, the place (#219), the way of getting
+    the decided pick (when the place allows more than one, #154), who cooks or orders it and, at
+    a place that allows pickup, who picks it up (#178), from the people who are in, and whom to
+    hand coordinating to, each set to what ``origin.opened`` says they were. Saving changes only what
     the person changed. The modal names the run (``origin.run``), which saving checks. With
     nobody in to pick, the roles aren't asked: Slack refuses a select with no options. Slack
     can't redraw a field when another changes, so "Who picks up" shows whenever the place allows
@@ -601,11 +639,12 @@ def adjust_modal(v: EventView, origin: ids.ViewOrigin) -> dict[str, Any]:
     people = [option(p.name, str(p.id)) for p in choice.people[:MAX_ASSIGN_PEOPLE]]
     other_ways = len(choice.modes) > 1 or (bool(choice.modes) and choice.mode not in choice.modes)
     switchable = other_ways and opened.mode is not None and bool(people)
-    what = "the time, how you get it, who does what" if switchable else "the time, who does what"
+    what = "the time, the place, how you get it, who does what" if switchable else "the time, the place, who does what"
     blocks: list[Block] = [
         _intro(v),
         section(f"*{escape(item)}*: change {what}, or who coordinates. Only what you change is saved."),
         _input("meal_time", "Meal time", {"type": "timepicker", **_hhmm(opened.meal_time)}, optional=False),
+        *_place_blocks(v, opened),
     ]
     if switchable:
         modes = [option(m.label, m.value) for m in choice.modes]
@@ -650,12 +689,20 @@ def parse_adjust(values: Any) -> Adjustment:
     if raw is not None and raw not in {m.value for m in Mode}:
         raise FormError("mode", "Pick how to get it.")
     mode = Mode(str(raw)) if raw is not None else None
+    selected = _state(values, "place_mode").get("selected_option")
+    raw = selected.get("value") if isinstance(selected, dict) else None
+    if raw is not None and raw not in {m.value for m in Mode}:
+        raise FormError("place_mode", "Pick how to get it.")
     return Adjustment(
         meal_time=meal,
         assignee_id=_picked(values, "who"),
         coordinator_id=lead,
         mode=mode,
         pickup_id=_picked(values, "pickup"),
+        item_id=_picked(values, "place"),
+        new_place=_text(values, "new_place").strip() or None,
+        place_mode=Mode(str(raw)) if raw is not None else None,
+        cuisine_id=_picked(values, "place_cuisine"),
     )
 
 

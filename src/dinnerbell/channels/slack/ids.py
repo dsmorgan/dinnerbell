@@ -410,16 +410,18 @@ _HHMM = re.compile(r"([01][0-9]|2[0-3]):[0-5][0-9]")
 class Opened:
     """What an Adjust modal showed when it opened (spec 5.7): the meal time as ``HH:MM``, who
     cooked or ordered, who coordinated, the way of getting it (``mode``, #154), and who picked
-    it up (``pickup_id``, #178). Saving changes only the fields that differ from these, and
-    refuses one that changed elsewhere since. A modal opened before Adjust showed the way has no
-    ``mode``, and can't change it; one opened before it showed the pickup person has no
-    ``pick``, and reads as having shown nobody."""
+    it up (``pickup_id``, #178), and the place (``item_id``, #219). Saving changes only the
+    fields that differ from these, and refuses one that changed elsewhere since. A modal opened
+    before Adjust showed the way has no ``mode``, and can't change it; one opened before it
+    showed the pickup person has no ``pick``, and reads as having shown nobody; one opened before
+    it showed the place has no ``place``, and can't change it."""
 
     meal_time: time
     assignee_id: int | None
     coordinator_id: int | None
     mode: Mode | None = None
     pickup_id: int | None = None
+    item_id: int | None = None
 
     def data(self) -> dict[str, object]:
         at = f"{self.meal_time.hour:02d}:{self.meal_time.minute:02d}"
@@ -428,23 +430,26 @@ class Opened:
             data["how"] = self.mode.value
         if self.pickup_id is not None:
             data["pick"] = self.pickup_id
+        if self.item_id is not None:
+            data["place"] = self.item_id
         return data
 
     @classmethod
     def parse(cls, data: object) -> Opened:
-        if not isinstance(data, dict) or set(data) - {"how", "pick"} != {"at", "who", "lead"}:
+        if not isinstance(data, dict) or set(data) - {"how", "pick", "place"} != {"at", "who", "lead"}:
             raise BadValue("bad metadata")
         at, who, lead, how, pick = data["at"], data["who"], data["lead"], data.get("how"), data.get("pick")
+        place = data.get("place")
         if not isinstance(at, str) or not _HHMM.fullmatch(at):
             raise BadValue("bad metadata")
-        for value in (who, lead, pick):
+        for value in (who, lead, pick, place):
             if value is not None and not (
                 isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= MAX_ID
             ):
                 raise BadValue("bad metadata")
         if how is not None and how not in {m.value for m in Mode}:
             raise BadValue("bad metadata")
-        return cls(time.fromisoformat(at), who, lead, Mode(how) if how is not None else None, pick)
+        return cls(time.fromisoformat(at), who, lead, Mode(how) if how is not None else None, pick, place)
 
 
 @dataclass(frozen=True, slots=True)
