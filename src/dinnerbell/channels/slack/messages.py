@@ -593,14 +593,15 @@ def proposals_message(notification: note.ProposalsReady | note.ProposalsUpdated,
         intro = f"Vote for any you'd enjoy.{closes}"
     else:
         intro = "Voting is closed."
+    # Who the hints name: a guest coordinator sets a pick's way, but can't break a tie (FR-58).
+    who = "The coordinator or an admin" if event.coordinator is not None else "An admin"
+    tie_breaker = "An admin" if event.coordinator_is_guest else who
     blocks: list[Block] = [section(f"*{_post_title(event, 'proposals')}* for {people}\n{intro}")]
     if voting and event.shuffle_note:  # plain words: an edit pings nobody (#92)
         blocks.append(context(escape(event.shuffle_note)))
     if voting and any(p.tied for p in notification.proposals):
         blocks.append(
-            context(
-                "Tied for the most votes. The coordinator or an admin can break the tie with ⋯ beside a tied proposal."
-            )
+            context(f"Tied for the most votes. {tie_breaker} can break the tie with ⋯ beside a tied proposal.")
         )
     # Only the first post mentions anyone (an edit that added a mention might ping it), and the
     # list comes after the instructions, so a big household can't push them out.
@@ -616,7 +617,6 @@ def proposals_message(notification: note.ProposalsReady | note.ProposalsUpdated,
         blocks.append(context(f"…and {plural(hidden, 'more proposal')} on the web."))
     blocks += _late_blocks(notification, ctx)
     if voting and any(p.ways and not p.mode_chosen for p in shown):  # #178
-        who = "The coordinator or an admin" if event.coordinator is not None else "An admin"
         blocks.append(context(f"{who} can choose pickup or delivery with ⋯ beside a proposal that allows both."))
     footer: list[Block] = []
     if voting:

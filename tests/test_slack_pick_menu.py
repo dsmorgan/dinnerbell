@@ -31,7 +31,7 @@ from dinnerbell.domain.events import (
     Status,
     TieHow,
 )
-from dinnerbell.services import calls, guests
+from dinnerbell.services import call_admin, calls, guests
 from dinnerbell.services.calls import NO_SUCH_PROPOSAL
 from dinnerbell.services.coordinator import NOT_TIED
 from dinnerbell.services.database import Database, open_database
@@ -40,7 +40,7 @@ from tests.support.calls import RESPOND_BY, House, furnish, make_house
 from tests.support.clock import FakeClock
 from tests.support.fake_slack import CHANNEL, block_action
 from tests.support.slack import SLACK_IDS, Slack, link, wire
-from tests.test_coordinator import act, add_guest, open_dinner, pick_ids, to_voting, vote
+from tests.test_coordinator import act, add_guest, open_dinner, pick_ids, sent, to_voting, vote
 
 pytestmark = pytest.mark.anyio
 
@@ -174,6 +174,26 @@ def test_the_hints_point_to_the_menu() -> None:
     assert way_hint not in shown(replace(PICK, ways=BOTH_WAYS, mode_chosen=True))  # only for an open way
 
 
+TIE_NOTE = "can break the tie with ⋯ beside a tied proposal."
+WAY_NOTE = "can choose pickup or delivery with ⋯ beside a proposal that allows both."
+
+
+@pytest.mark.parametrize(
+    ("event", "tie", "way"),
+    [
+        (samples.VOTING, "The coordinator or an admin", "The coordinator or an admin"),
+        (replace(samples.VOTING, coordinator=None), "An admin", "An admin"),
+        (replace(samples.VOTING, coordinator_is_guest=True), "An admin", "The coordinator or an admin"),
+    ],
+)
+def test_the_hints_name_who_can_use_the_menu(event: note.EventInfo, tie: str, way: str) -> None:
+    """Nobody coordinating leaves an admin. A guest coordinator can set a way, but not break a tie."""
+    pick = replace(PICK, tied=True, ways=BOTH_WAYS)
+    shown = json.dumps(render(note.ProposalsUpdated(event, (pick,), 3), CTX).blocks, ensure_ascii=False)
+    assert f"Tied for the most votes. {tie} {TIE_NOTE}" in shown
+    assert f"{way} {WAY_NOTE}" in shown
+
+
 # Values and metadata -------------------------------------------------------------------------------
 
 
@@ -280,11 +300,19 @@ async def test_a_pick_no_longer_tied_by_submit_is_refused(slack: Slack, house: H
 async def test_a_modal_left_open_across_a_new_run_decides_nothing(slack: Slack, house: House) -> None:
     event_id = await to_voting(house, "Sam", "Lee", coordinator_name="Sam")
     picks = await pick_ids(house, event_id)
-    stale = ids.ViewOrigin(event_id, CHANNEL, run=2, proposal=picks["Siam Garden"])
-    for view_id in (ids.LOCK_VIEW, ids.BREAK_TIE_VIEW):
-        await slack.submit("Sam", view_id, {}, event_id, origin=stale)
+    await vote(house, "Alex", event_id, picks["Siam Garden"])
+    await vote(house, "Lee", event_id, picks["Taqueria"])
+    await pick_opens(slack, "Sam", ids.PickChoice.LOCK, event_id, picks["Siam Garden"])
+    await pick_opens(slack, "Sam", ids.PickChoice.BREAK_TIE, event_id, picks["Siam Garden"])
+    lock, tie = [c.args["view"] for c in slack.fake.of("views.open")]
+    await act(house, call_admin.rerun, house["Alex"], event_id)
+    assert (await house.event(event_id)).run == 2
+    for view in (lock, tie):
+        origin = ids.ViewOrigin.decode(view["private_metadata"])
+        await slack.submit("Sam", view["callback_id"], {}, event_id, origin=origin)
         assert slack.ephemerals("Sam")[-1] == STALE_CALL
-    assert (await house.event(event_id)).state is EventState.VOTING
+    event = await house.event(event_id)
+    assert event.state is not EventState.DECIDED and event.locked_by is None and event.tie_how is None
 
 
 @pytest.mark.parametrize("view_id", [ids.LOCK_VIEW, ids.BREAK_TIE_VIEW])
@@ -396,6 +424,25 @@ async def test_a_guest_coordinator_sets_the_way_from_the_menu_but_cant_lock(slac
     assert pick is not None and (pick.mode, pick.mode_chosen) == (Mode.DELIVERY, True)
 
 
+async def test_either_way_from_the_menu_clears_the_way_and_a_stale_one_is_refused(slack: Slack, house: House) -> None:
+    event_id = await to_voting(house, "Sam", "Lee", coordinator_name="Sam")
+    siam = (await pick_ids(house, event_id))["Siam Garden"]
+    await slack.click("Sam", ids.PICK_MENU, None, selected=ids.way_value(Mode.DELIVERY, event_id, 1, siam))
+
+    stale = ids.way_value(None, event_id, 1, siam, clears=Mode.PICKUP)  # a message that showed pickup chosen
+    await slack.click("Sam", ids.PICK_MENU, None, selected=stale)
+    assert slack.ephemerals("Sam")[-1] == "Someone made it delivery since you looked."
+    pick = (await house.context(event_id)).proposal(siam)
+    assert pick is not None and (pick.mode, pick.mode_chosen) == (Mode.DELIVERY, True)
+
+    either = ids.way_value(None, event_id, 1, siam, clears=Mode.DELIVERY)
+    await slack.click("Sam", ids.PICK_MENU, None, selected=either)
+    assert slack.ephemerals("Sam")[-1] == WAY_SET[None]
+    pick = (await house.context(event_id)).proposal(siam)
+    assert pick is not None and (pick.mode, pick.mode_chosen) == (Mode.DELIVERY, False)
+    assert slack.fake.of("views.open") == []
+
+
 async def test_a_member_setting_a_way_from_the_menu_gets_the_way_setters_refusal(slack: Slack, house: House) -> None:
     event_id = await to_voting(house, "Sam", "Lee", coordinator_name="Sam")
     siam = (await pick_ids(house, event_id))["Siam Garden"]
@@ -418,6 +465,28 @@ async def test_the_link_option_is_acknowledged_and_does_nothing(slack: Slack, ho
     assert slack.fake.of("views.open") == []
 
 
+@pytest.mark.parametrize("who", ["Lee", "U0STRANGER"])
+@pytest.mark.parametrize("missing", ["value", "selected_option"])
+async def test_a_menu_click_with_no_value_does_nothing(slack: Slack, who: str, missing: str) -> None:
+    """Slack's docs don't describe the payload for a click on an option with a ``url``, so **View
+    on web** can't show "That button is out of date." even if the click has no value."""
+    payload = block_action(SLACK_IDS.get(who, who), ids.PICK_MENU, None, selected=ids.PICK_NOTHING)
+    action = payload["actions"][0]
+    del (action if missing == "selected_option" else action["selected_option"])[missing]
+    response = await slack._send("interactive", payload)
+    assert response.status == 200
+    assert slack.fake.of("chat.postEphemeral") == [] and slack.fake.of("chat.postMessage") == []
+    assert slack.fake.of("views.open") == []
+
+
+async def test_other_menus_still_say_a_click_with_no_value_is_out_of_date(slack: Slack) -> None:
+    for action_id in (ids.CALL_MENU, ids.LATE_MENU, ids.SET_WAY):
+        payload = block_action(SLACK_IDS["Lee"], action_id, None, selected="x")
+        del payload["actions"][0]["selected_option"]["value"]
+        await slack._send("interactive", payload)
+        assert slack.ephemerals("Lee")[-1] == OUT_OF_DATE
+
+
 # Messages already posted ---------------------------------------------------------------------------
 
 
@@ -434,6 +503,26 @@ async def test_old_buttons_on_posted_messages_keep_working(slack: Slack, house: 
     assert slack.fake.of("views.open") == []
     event = await house.event(event_id)
     assert (event.state, event.locked_by) == (EventState.DECIDED, house["Sam"].id)
+
+
+async def test_the_tied_hint_says_an_admin_when_a_guest_coordinates(slack: Slack, house: House) -> None:
+    """What the call says about its coordinator reaches the message, through the outbox."""
+    event_id = await guest_coordinating(house)
+    (ready,) = await sent(house, "proposals_ready")
+    assert ready.event.coordinator_is_guest
+    tied = (replace(ready.proposals[0], tied=True), *ready.proposals[1:])
+    shown = json.dumps(render(replace(ready, proposals=tied), CTX).blocks, ensure_ascii=False)
+    assert f"Tied for the most votes. An admin {TIE_NOTE}" in shown
+    assert "Lee" not in shown.split("Tied for the most votes.")[1].split(TIE_NOTE)[0]
+    assert (await house.event(event_id)).coordinator_id == house["Pat"].id
+
+
+async def test_a_notification_queued_before_the_field_existed_still_reads(slack: Slack, house: House) -> None:
+    await to_voting(house, "Sam", "Lee", coordinator_name="Sam")
+    (row,) = [e for e in await house.outbox() if e.kind == "proposals_ready"]
+    payload = json.loads(json.dumps(row.payload))
+    del payload["event"]["coordinator_is_guest"]
+    assert note.from_payload(row.kind, payload).event.coordinator_is_guest is False
 
 
 async def test_a_guest_still_cant_use_an_old_lock_or_tie_button(slack: Slack, house: House) -> None:

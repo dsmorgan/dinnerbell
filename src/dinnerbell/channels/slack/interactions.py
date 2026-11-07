@@ -878,8 +878,12 @@ class Interactions:
         if source is None or not isinstance(acts, list) or len(acts) != 1 or not isinstance(acts[0], dict):
             log.warning("slack action payload refused")
             return True
-        if acts[0].get("action_id") == ids.PICK_MENU and _get(acts[0], "selected_option", "value") == ids.PICK_NOTHING:
-            return True  # a pick's link to the web opened the browser; there's nothing to do
+        if acts[0].get("action_id") == ids.PICK_MENU:
+            # A pick's link to the web opened the browser, so there's nothing to do. Slack's docs
+            # don't describe the payload for that click, so no value counts too: no error for it.
+            picked = _get(acts[0], "selected_option", "value")
+            if picked is None or picked == ids.PICK_NOTHING:
+                return True
         in_dm = source.channel_id is not None and source.channel_id != self.channel_id
         if (source.channel_id is None and not source.home) or (in_dm and not await self._is_their_dm(source)):
             log.warning("slack action from an unexpected channel refused")
