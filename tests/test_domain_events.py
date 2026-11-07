@@ -349,21 +349,49 @@ def test_meal_time_keeps_an_eat_window_in_the_day_and_leaves_the_day_only_once_i
     assert got == over and got.astimezone(CHICAGO).date() != day
 
 
-@pytest.mark.parametrize(
-    ("zone", "day", "fold"),
-    [
-        ("America/Chicago", date(2026, 3, 8), 0),  # springs forward at 2:00 that morning
-        ("America/Chicago", date(2026, 11, 1), 0),  # falls back at 2:00 that morning
-        ("America/Havana", date(2026, 3, 7), 0),  # springs forward at midnight, so 00:00 never comes
-        ("America/Sao_Paulo", date(2019, 2, 16), 1),  # falls back at midnight, so 23:59 comes twice
-    ],
-)
-def test_meal_time_finds_the_last_minute_of_a_day_with_a_clock_change(zone: str, day: date, fold: int) -> None:
+CLOCK_CHANGES = [
+    pytest.param("America/Chicago", date(2026, 3, 8), time(23, 59), id="springs forward at 2:00 that morning"),
+    pytest.param("America/Chicago", date(2026, 11, 1), time(23, 59), id="falls back at 2:00 that morning"),
+    pytest.param("America/Havana", date(2026, 3, 7), time(23, 59), id="springs forward at midnight, 00:00 never comes"),
+    pytest.param("America/Sao_Paulo", date(2019, 2, 16), time(23, 59), id="falls back at midnight, 23:59 comes twice"),
+    pytest.param("America/Nuuk", date(2026, 3, 28), time(22, 59), id="springs forward at 23:00, no 23:xx that day"),
+]
+"""Each zone and day with a clock change, and the wall time of that day's last minute."""
+
+
+@pytest.mark.parametrize(("zone", "day", "last"), CLOCK_CHANGES)
+def test_meal_time_finds_the_last_minute_of_a_day_with_a_clock_change(zone: str, day: date, last: time) -> None:
     local = ZoneInfo(zone)
-    now = datetime.combine(day, time(23, 53), tzinfo=local).replace(fold=fold).astimezone(UTC)
+    now = ev.call_ends_at(day, local) - timedelta(minutes=7)  # the second 23:53 on a day with two
     got = ev.meal_time([], day=day, zone=local, default=time(18, 30), not_before=now)
     assert got - now == timedelta(minutes=6)
-    assert got.astimezone(local).date() == day and got.astimezone(local).time() == time(23, 59)
+    assert got.astimezone(local).date() == day and got.astimezone(local).time() == last
+
+
+def test_meal_time_on_a_day_with_no_23_00_hour_stays_on_that_day() -> None:
+    """A usual meal time of 23:30 falls in the skipped hour, past the day's end, so the call would
+    have ended as missed hours early."""
+    nuuk = ZoneInfo("America/Nuuk")
+    day = date(2026, 3, 28)
+    now = datetime(2026, 3, 28, 18, 0, tzinfo=nuuk)
+    got = ev.meal_time([], day=day, zone=nuuk, default=time(23, 30), not_before=now)
+    assert got.astimezone(nuuk).date() == day and got.astimezone(nuuk).time() == time(22, 59)
+
+
+@pytest.mark.parametrize(("zone", "day", "last"), CLOCK_CHANGES)
+def test_deadlines_stop_at_the_last_minute_of_a_day_with_a_clock_change(zone: str, day: date, last: time) -> None:
+    local = ZoneInfo(zone)
+    ends = ev.call_ends_at(day, local)
+    last_minute = ends - timedelta(minutes=1)
+    assert last_minute.astimezone(local).date() == day and last_minute.astimezone(local).time() == last
+    closing = event(day=day, respond_deadline=ends - timedelta(minutes=30))
+    assert ev.voting_closes(closing, ends + timedelta(minutes=15), local) == last_minute  # past midnight
+    assert ev.voting_closes(closing, ends - timedelta(seconds=15), local) == last_minute  # in the last minute
+    now = ends - timedelta(hours=1)
+    moved = ev.shifted_deadline(ends - timedelta(seconds=75), 1, now, latest=ends)  # lands in the last minute
+    assert moved == last_minute
+    with pytest.raises(EventRuleViolation, match="past midnight"):
+        ev.shifted_deadline(last_minute, 1, now, latest=ends)
 
 
 # Permissions ----------------------------------------------------------------------------------
@@ -711,6 +739,10 @@ def test_deadlines_never_move_past_midnight() -> None:
     in_the_last_minute = midnight - timedelta(seconds=15)
     assert ev.shifted_deadline(in_the_last_minute - timedelta(minutes=1), 1, NOW, latest=midnight) == (
         midnight - timedelta(minutes=1)
+    )
+    # Never earlier than now: shortening inside the last minute stops at now.
+    assert ev.shifted_deadline(in_the_last_minute, -1, midnight - timedelta(seconds=50), latest=midnight) == (
+        midnight - timedelta(seconds=50)
     )
 
 
