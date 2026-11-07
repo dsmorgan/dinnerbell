@@ -14,6 +14,7 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import update
 
 from dinnerbell.channels.slack import ids
 from dinnerbell.channels.slack.messages import render
@@ -21,7 +22,6 @@ from dinnerbell.channels.slack.views import adjust_modal, adjust_opened, parse_a
 from dinnerbell.config import Settings
 from dinnerbell.db.contributions import ContributionRepository
 from dinnerbell.db.models import AuditRow, CatalogItemRow, EventRow, ProposalRow
-from dinnerbell.domain import notifications as note
 from dinnerbell.domain.catalog import ItemKind, Mode, TagKind
 from dinnerbell.domain.contributions import Kind
 from dinnerbell.domain.events import (
@@ -40,7 +40,7 @@ from dinnerbell.services import call_context as cc
 from dinnerbell.services.coordinator import PLAN_CHANGED, Adjustment, AdjustmentRefused
 from dinnerbell.services.preferences import set_my_preference
 from tests.conftest import invite, page, sign_in
-from tests.support.calls import RESPOND_BY, VOTE_BY, House
+from tests.support.calls import RESPOND_BY, VOTE_BY, House, RecordingChannel
 from tests.support.clock import FakeClock
 from tests.support.fake_oidc import FakeProvider
 from tests.support.fake_slack import CHANNEL, state
@@ -294,11 +294,19 @@ async def test_the_place_it_has_is_refused_since_nothing_would_change(house: Hou
     assert caught.value.code == "same_place"
 
 
-async def test_a_place_gone_from_the_catalog_or_someone_elses_is_refused(house: House) -> None:
+async def take_out_of_catalog(house: House, name: str) -> None:
+    async with house.sessionmaker() as db:
+        await db.execute(update(CatalogItemRow).where(CatalogItemRow.id == house.items[name].id).values(active=False))
+        await db.commit()
+
+
+async def test_a_place_not_in_the_catalog_or_taken_out_of_it_is_refused(house: House) -> None:
     event_id = await decided(house)
-    with pytest.raises(AdjustmentRefused) as caught:
-        await change(house, "Sam", event_id, item_id=999_999, mode=Mode.PICKUP)
-    assert caught.value.part == "place" and caught.value.code == "not_found"
+    await take_out_of_catalog(house, "Taqueria")
+    for item_id in (999_999, house.items["Taqueria"].id):
+        with pytest.raises(AdjustmentRefused) as caught:
+            await change(house, "Sam", event_id, item_id=item_id, mode=Mode.PICKUP)
+        assert caught.value.part == "place" and caught.value.code == "not_found"
 
 
 async def test_a_place_and_a_new_name_together_are_refused(house: House) -> None:
@@ -371,8 +379,11 @@ async def test_a_new_name_needs_its_way_and_a_valid_name_and_cuisine(house: Hous
     assert not [i for i in (await house.context(event_id)).items.values() if i.name == "Noodle Bar"]
 
 
-async def test_a_name_the_catalog_has_is_that_place_even_if_it_was_taken_out(house: House) -> None:
+@pytest.mark.parametrize("taken_out", [False, True])
+async def test_a_name_the_catalog_has_is_that_place_even_if_it_was_taken_out(house: House, taken_out: bool) -> None:
     event_id = await decided(house)
+    if taken_out:
+        await take_out_of_catalog(house, "Taqueria")
     items = len((await house.context(event_id)).items)
     await change(house, "Sam", event_id, name="taqueria", mode=Mode.PICKUP)
     ctx = await house.context(event_id)
@@ -622,7 +633,12 @@ async def test_a_guest_without_slack_is_told_through_whoever_invited_them_only_i
 
 
 async def test_a_call_off_closes_the_message_unsent(house: House) -> None:
-    assert note.PlaceChanged.kind in note.CALL_OFF_SUPERSEDES
+    event_id = await decided(house)
+    await change(house, "Sam", event_id, item_id=tacos(house), mode=Mode.COOK)
+    await act(house, calls.cancel_call, house["Sam"], event_id)
+    channel = RecordingChannel()
+    await house.drain(channel)
+    assert "place_changed" not in channel.kinds and "event_cancelled" in channel.kinds
 
 
 # Audit and log ------------------------------------------------------------------------------------------
@@ -660,7 +676,7 @@ async def test_it_is_logged_with_the_old_and_new_place(house: House, caplog: pyt
     assert line["event_id"] == event_id and line["dropped"] == ["order", "pickup"]
 
 
-async def test_a_refusal_is_logged_with_its_reason(house: House, caplog: pytest.LogCaptureFixture) -> None:
+async def test_a_refused_change_logs_no_change(house: House, caplog: pytest.LogCaptureFixture) -> None:
     event_id = await decided(house)
     with caplog.at_level(logging.INFO, logger=activity.log.name), pytest.raises(AdjustmentRefused) as caught:
         await change(house, "Sam", event_id, item_id=tacos(house), mode=Mode.PICKUP)
