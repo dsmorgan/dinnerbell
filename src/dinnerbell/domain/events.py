@@ -37,7 +37,7 @@ CANCEL_NOTE_MAX = 140
 """A call-off reason: one line, short enough for a Slack notification preview."""
 QUARTER_HOUR = timedelta(minutes=15)
 LATEST_EAT_TIME = time(23, 45)
-"""The latest eat time: later ones round the meal time up past midnight, off the call's day."""
+"""The latest eat time, the day's last quarter hour: a later one would round up past midnight."""
 
 
 class EventState(StrEnum):
@@ -837,11 +837,16 @@ def meal_time(
 ) -> datetime:
     """FR-19: the latest "earliest" across participants' eat windows, rounded up to the
     quarter hour. With no eat windows, the slot's usual meal time. Never before ``not_before``
-    (the decision), so a decision can't land in the past."""
+    (the decision), so a decision can't land in the past. When rounding would leave ``day``, the
+    day's last minute, 23:59 local, or the decision itself if that's later (#215). So only a
+    decision made after ``day`` gets a meal time off ``day``."""
     earliest = [r.eat_from for r in responses if r.is_in and r.eat_from is not None]
     wall = max(earliest) if earliest else default
     candidate = datetime.combine(day, wall, tzinfo=zone).astimezone(UTC)
-    return round_up_to_quarter(max(candidate, not_before.astimezone(UTC)))
+    soonest = max(candidate, not_before.astimezone(UTC))
+    rounded = round_up_to_quarter(soonest)
+    ends = call_ends_at(day, zone)
+    return rounded if rounded < ends else max(ends - timedelta(minutes=1), soonest)
 
 
 # Who may do what ------------------------------------------------------------------------------
@@ -1476,7 +1481,7 @@ def check_restart(
 
 def shifted_deadline(current: datetime, minutes: int | None, now: datetime, *, latest: datetime) -> datetime:
     """A window's new deadline: ``minutes`` later (negative is earlier), or now when None.
-    Never earlier than now, so shortening past the present closes the window, and never past
+    Never earlier than now, so shortening past the present closes the window, and always before
     ``latest``, midnight after the call's day, when the call would expire unfinished."""
     if minutes is None:
         return now
@@ -1485,7 +1490,7 @@ def shifted_deadline(current: datetime, minutes: int | None, now: datetime, *, l
             f"Move a deadline by at most {MAX_DEADLINE_SHIFT_MINUTES} minutes at a time.", code="bad_deadline"
         )
     moved = max(current + timedelta(minutes=minutes), now)
-    if moved > latest:
+    if moved >= latest:
         raise EventRuleViolation("That would run past midnight, when the call ends.", code="bad_deadline")
     return moved
 
@@ -1572,11 +1577,10 @@ def decision_deadline(event: Event) -> datetime:
 def voting_closes(event: Event, kept: datetime, zone: tzinfo) -> datetime:
     """When voting closes, once answers close: ``kept``, the decision time from before they
     closed (``decision_deadline``), so answers closing early, whether everyone answered or by
-    Close now, never decide the call sooner (FR-56). A call too late to decide on its day at
-    ``kept``, because the meal time, rounded up to the quarter hour (``meal_time``), would be
-    midnight or later, gets its usual time to vote from the close (``event.respond_deadline``)
-    instead."""
-    if round_up_to_quarter(kept) < call_ends_at(event.day, zone):
+    Close now, never decide the call sooner (FR-56). A ``kept`` of midnight or later is too late
+    to decide on the call's day (``stale_after``), so voting gets its usual time from the close
+    (``event.respond_deadline``) instead."""
+    if kept < call_ends_at(event.day, zone):
         return kept
     return event.respond_deadline + timedelta(minutes=event.vote_minutes)
 

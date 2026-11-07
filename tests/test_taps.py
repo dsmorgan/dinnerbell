@@ -360,3 +360,22 @@ def test_a_changed_choice_settles_and_saved_fades(admin: TestClient) -> None:  #
     rules = css[css.index(".saved { animation") : css.index("@keyframes saved-hide")]
     assert "visibility" not in rules  # faded, a screen reader still reads it
     assert ".saved { animation: saved-hide 0s 2s forwards; }" in "".join(motion_blocks(css, "reduce"))
+
+
+# Expandable menus (#215) --------------------------------------------------------------------------
+
+
+def test_every_expandable_menu_has_the_text_color_a_marker_and_its_tap_height(client: TestClient) -> None:
+    css = re.sub(r"/\*.*?\*/", "", client.get("/static/app.css").text, flags=re.DOTALL)
+    summary = "details > summary { list-style: none; cursor: pointer; display: flex; align-items: center; "
+    assert summary + "min-height: 44px; color: var(--text); }" in css
+    # A summary with no heading has its own marker, so one with a heading never shows two.
+    assert 'details > summary h2::after { content: " +"; color: var(--muted); }' in css
+    assert 'details[open] > summary h2::after { content: " \u2212"; }' in css
+    assert 'details > summary:not(:has(h2))::after { content: "+"; margin-left: 0.3em; color: var(--muted); }' in css
+    assert 'details[open] > summary:not(:has(h2))::after { content: "\u2212"; }' in css
+    # Nothing mutes a summary's own text again. Call it off stays red, marker too.
+    rules = re.findall(r"([^{}]+)\{([^{}]*)\}", css)
+    summaries = [(selector, body) for selector, body in rules if re.search(r"(?<![.\w-])summary", selector)]
+    assert [selector for selector, body in summaries if "::after" not in selector and "--muted" in body] == []
+    assert ".calloff > summary, .calloff > summary::after { color: var(--danger); }" in css
