@@ -1,5 +1,5 @@
 {#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
-{#- Expects: form, today, slots, restaurants, home_meals, people. -#}
+{#- Expects: form, today, slots, restaurants, home_meals, people. On a call's meal, also meal and call_place, and the place is read-only (#224). -#}
 <div class="new-tags">
   <label class="field compact">
     <span>Date</span>
@@ -14,6 +14,14 @@
     </div>
   </fieldset>
 </div>
+{% if call_place %}
+<div class="field">
+  <span>What we ate</span>
+  <p><strong>{{ meal.item_name }}</strong></p>
+  <input type="hidden" name="item_id" value="{{ meal.item_id }}">
+  <p class="small muted">This meal came from a call, so its place doesn't change here. {% if call_place.can_correct %}To correct it, use <a href="/events/{{ call_place.event_id }}#event-{{ call_place.event_id }}-plan">Change the plan</a> on the call's page.{% else %}An admin can correct it.{% endif %}</p>
+</div>
+{% else %}
 <label class="field">
   <span>What we ate</span>
   <select name="item_id" required>
@@ -26,6 +34,7 @@
     </optgroup>{% endif %}
   </select>
 </label>
+{% endif %}
 <fieldset class="field">
   <legend>Who ate</legend>
   {% for m in people %}

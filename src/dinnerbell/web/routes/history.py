@@ -21,7 +21,16 @@ from dinnerbell.domain.feedback import (
     PlaceIssue,
     Rating,
 )
-from dinnerbell.domain.meals import PICK_SLOT, InvalidMeal, MealInput, MealLog, Slot, can_change
+from dinnerbell.domain.meals import (
+    MEAL_CHANGED,
+    PICK_SLOT,
+    InvalidMeal,
+    MealInput,
+    MealLog,
+    Slot,
+    StaleMeal,
+    can_change,
+)
 from dinnerbell.services import catalog as catalog_service
 from dinnerbell.services import feedback as feedback_service
 from dinnerbell.services import meals as meal_service
@@ -42,6 +51,8 @@ NOTICES = {
     "feedback": "Thanks for the feedback! Only you see it.",
     "no_feedback": "Got it: no feedback from you on that meal.",
 }
+REFUSALS = {"changed": MEAL_CHANGED}
+"""Notices that say something didn't happen, which show as errors."""
 FormText = Annotated[str, Form(max_length=40)]
 
 
@@ -53,6 +64,8 @@ class MealForm:
     slot: str = Slot.DINNER.value
     item_id: str = ""
     participant_ids: set[int] = field(default_factory=set)
+    shown: str = ""
+    """The ``form_stamp`` the form showed, which redisplaying it after an error keeps (#224)."""
 
     @classmethod
     def from_meal(cls, meal: MealLog) -> MealForm:
@@ -61,6 +74,7 @@ class MealForm:
             slot=meal.slot.value,
             item_id=str(meal.item_id),
             participant_ids={p.id for p in meal.participants},
+            shown=meal.form_stamp,
         )
 
     def to_input(self) -> MealInput:
@@ -83,9 +97,10 @@ def posted_meal(
     slot: FormText = Slot.DINNER.value,
     item_id: FormText = "",
     participant_ids: Annotated[list[str] | None, Form()] = None,
+    shown_meal: FormText = "",
 ) -> MealForm:
     ids = {i for v in participant_ids or [] if (i := parse_id(v)) is not None}
-    return MealForm(day=day, slot=slot, item_id=item_id, participant_ids=ids)
+    return MealForm(day=day, slot=slot, item_id=item_id, participant_ids=ids, shown=shown_meal)
 
 
 PostedMeal = Annotated[MealForm, Depends(posted_meal)]
@@ -129,10 +144,11 @@ async def _history_page(
     error: str | None = None,
     notice: str | None = None,
     notice_meal: int | None = None,
+    notice_refused: bool = False,
     status_code: int = 200,
 ) -> Response:
     """``notice_meal`` is the meal a notice is about. When this page lists it, the notice shows
-    in that meal's entry instead of at the top."""
+    in that meal's entry instead of at the top. ``notice_refused`` shows it as an error."""
     today = _today(context, principal)
     history = await meal_service.history(db, principal.member, page=page)
     window = await variety_window(db, principal.household.id, today)
@@ -153,6 +169,7 @@ async def _history_page(
             "error": error,
             "notice": notice,
             "notice_meal": notice_meal,
+            "notice_refused": notice_refused,
             "can_change": lambda meal: can_change(principal.member, meal),
             "feedback": feedback,
         }
@@ -177,7 +194,14 @@ async def history_page(
     shown = page_number(page)
     about = parse_id(meal) if len(meal) <= 20 else None  # 20 digits is past any row ID; skip int() on more
     return await _history_page(
-        request, principal, context, db, page=shown, notice=NOTICES.get(notice), notice_meal=about
+        request,
+        principal,
+        context,
+        db,
+        page=shown,
+        notice=NOTICES.get(notice) or REFUSALS.get(notice),
+        notice_meal=about,
+        notice_refused=notice in REFUSALS,
     )
 
 
@@ -208,7 +232,13 @@ async def _edit_page(
     return await render(
         request,
         "meal_edit.html",
-        {"meal": meal, "form": form, "error": error, "today": _today(context, principal)}
+        {
+            "meal": meal,
+            "form": form,
+            "error": error,
+            "today": _today(context, principal),
+            "call_place": await meal_service.call_place(db, principal.member, meal),
+        }
         | await _choices(db, principal, editing=meal),
         status_code=status_code,
     )
@@ -230,8 +260,18 @@ async def update_meal(
 ) -> Response:
     try:
         meal = await meal_service.update_meal(
-            db, principal.member, meal_id, form.to_input(), today=_today(context, principal), now=context.clock()
+            db,
+            principal.member,
+            meal_id,
+            form.to_input(),
+            today=_today(context, principal),
+            now=context.clock(),
+            shown=form.shown,
         )
+    except StaleMeal as exc:  # the meal as it is now, to look at: the form showed something else
+        meal = await meal_service.get_meal(db, principal.member, meal_id)
+        fresh = MealForm.from_meal(meal)
+        return await _edit_page(request, principal, context, db, meal, fresh, error=str(exc), status_code=409)
     except (InvalidMeal, BadFormValue) as exc:
         meal = await meal_service.get_meal(db, principal.member, meal_id)
         return await _edit_page(request, principal, context, db, meal, form, error=str(exc), status_code=400)
@@ -239,10 +279,18 @@ async def update_meal(
 
 
 @router.post("/meals/{meal_id}/delete")
-async def delete_meal(principal: CSRFChecked, context: Context, db: Database, meal_id: RowId) -> Response:
+async def delete_meal(
+    principal: CSRFChecked, context: Context, db: Database, meal_id: RowId, shown_meal: FormText = ""
+) -> Response:
+    """Delete a meal. A form that showed it as it no longer is lands on the meal instead, with why:
+    the delete forms are boosted, and a redirect is what HTMX follows here as it does on success."""
     meal = await meal_service.get_meal(db, principal.member, meal_id)
     page = await meal_service.history_page_of(db, principal.member, meal)  # where it was: its neighbors stay there
-    await meal_service.delete_meal(db, principal.member, meal_id, now=context.clock())
+    try:
+        await meal_service.delete_meal(db, principal.member, meal_id, now=context.clock(), shown=shown_meal)
+    except StaleMeal:
+        fresh = await meal_service.get_meal(db, principal.member, meal_id)
+        return local_redirect(await _history_path(db, principal, fresh, "changed"))
     if page == 1:
         return local_redirect("/history?notice=deleted")
     return local_redirect("/history?page={}&notice=deleted", page)

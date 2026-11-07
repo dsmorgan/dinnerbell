@@ -105,6 +105,12 @@ class MealLogRepository:
         )
         return meal_id
 
+    async def by_event(self, household_id: int, event_id: int) -> MealLog | None:
+        """The meal a call logged, if it has logged one."""
+        query = self._select(household_id).where(MealLogRow.event_id == event_id)
+        found = (await self._session.execute(query)).first()
+        return None if found is None else _meal(found[0], found[1])
+
     async def last_eaten(self, household_id: int) -> dict[int, date]:
         rows = await self._session.execute(
             select(MealLogRow.item_id, func.max(MealLogRow.date))

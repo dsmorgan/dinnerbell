@@ -37,7 +37,7 @@ from dinnerbell.domain.events import (
 )
 from dinnerbell.domain.guests import GuestAction, can_answer_for, check_can_invite, check_guest
 from dinnerbell.domain.labels import ROLE_WHO
-from dinnerbell.domain.meals import Slot
+from dinnerbell.domain.meals import MealLog, Slot
 from dinnerbell.domain.members import Member
 from dinnerbell.services import call_context as cc
 from dinnerbell.services import guests as guest_rules
@@ -59,7 +59,8 @@ class Permissions:
     change_place: bool = False
     """Change the place after the decision (#219): never for a guest (FR-58)."""
     correct_place: bool = False
-    """Correct the place after **Mark done** (#220): an admin's, ``coordinator.correct_place``."""
+    """Correct the place after **Mark done** (#220): an admin's, ``coordinator.correct_place``, while
+    the meal is still in History."""
     admin: bool = False
     rerun: bool = False
     move_window: Window | None = None
@@ -206,6 +207,8 @@ class EventView:
     """Shuffles a call has left (FR-61); 0 when none would change anything."""
     roles: RolesChoice | None = None
     """What **Assign roles** offers, for someone who may use it."""
+    meal: MealLog | None = None
+    """The meal a done call logged, which **Change the plan** corrects from (#224)."""
     away: Away | None = None
     """The viewer's away window, while it's upcoming or under way (FR-63)."""
     away_line: str | None = None
@@ -344,7 +347,7 @@ def _member_permissions(
         manage=_allowed(lambda: rules.check_can_manage_decision(event, actor)),
         mark_done=_allowed(lambda: rules.check_can_mark_done(event, actor, mine, now=now)),
         change_place=_allowed(lambda: rules.check_can_change_place(event, actor)),
-        correct_place=_allowed(lambda: rules.check_can_correct_place(event, actor)),
+        correct_place=ctx.meal is not None and _allowed(lambda: rules.check_can_correct_place(event, actor)),
         admin=admin,
         rerun=admin
         and _allowed(lambda: rules.check_rerun(event, today, now=now, too_late_after=ctx.too_late_for(today))),
@@ -489,6 +492,7 @@ def view(ctx: CallContext, actor: Member, today: date, now: datetime, *, any_tim
         late=cc.late_joiners(ctx),
         shuffles_left=cc.shuffles_left(ctx),
         roles=_roles_choice(ctx) if ctx.event.state is EventState.DECIDED else None,
+        meal=ctx.meal,
         # The viewer as the call read them, so a window they just set or ended shows (FR-63).
         **_away(ctx.members.get(actor.id, actor), today),
     )

@@ -5,6 +5,11 @@ Any member logs a meal. Members edit and delete the meals they logged; the admin
 any. Each log snapshots the item's cuisine tags and the participants, so later catalog or
 member edits don't rewrite history. Editing a meal's item drops its feedback, and taking someone
 off a meal drops theirs, since it was about a meal they no longer ate.
+
+A call's meal keeps its place here: ``coordinator.correct_place`` is the one way to change it, since
+the call, its messages, its counts, and its feedback all follow (#224). An edit or delete from a
+form that showed the meal as it no longer is gets refused, so it can't put back what someone else
+just changed.
 """
 
 from __future__ import annotations
@@ -15,11 +20,26 @@ from datetime import date, datetime
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dinnerbell.db.catalog import CatalogRepository
+from dinnerbell.db.engine import write_transaction
+from dinnerbell.db.events import EventRepository
 from dinnerbell.db.feedback import FeedbackRepository
 from dinnerbell.db.meals import MealLogRepository
 from dinnerbell.db.repositories import MemberRepository
 from dinnerbell.domain.catalog import CatalogItem, TagKind
-from dinnerbell.domain.meals import MealInput, MealLog, MemberRef, TagRef, by_week, can_change, check_meal
+from dinnerbell.domain.events import Event, EventRuleViolation, check_can_correct_place
+from dinnerbell.domain.meals import (
+    CALL_PLACE_FIXED,
+    MEAL_CHANGED,
+    InvalidMeal,
+    MealInput,
+    MealLog,
+    MemberRef,
+    StaleMeal,
+    TagRef,
+    by_week,
+    can_change,
+    check_meal,
+)
 from dinnerbell.domain.members import Member
 from dinnerbell.domain.pages import Page, page_of
 from dinnerbell.services.common import audit, require_member
@@ -46,6 +66,15 @@ class LogForm:
     member_id: int
     items: tuple[CatalogItem, ...]
     people: tuple[MemberRef, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class CallPlace:
+    """A meal whose place belongs to its call (#224), for the form that shows it read-only.
+    ``can_correct`` says the person looking can correct it from the call's page."""
+
+    event_id: int
+    can_correct: bool
 
 
 async def log_form(db: AsyncSession, actor: Member, *, today: date) -> LogForm:
@@ -140,42 +169,81 @@ async def _changeable(db: AsyncSession, actor: Member, meal_id: int) -> MealLog:
     return meal
 
 
+def _check_shown(meal: MealLog, shown: str) -> None:
+    """Refuse a form that showed ``meal`` as it no longer is. ``shown`` is its ``form_stamp``. A page
+    from before the stamp (#224) sends none, and goes on as it did."""
+    if shown and shown != meal.form_stamp:
+        raise StaleMeal(MEAL_CHANGED)
+
+
+async def _call_of(db: AsyncSession, meal: MealLog) -> Event | None:
+    """The call that owns ``meal``'s place. None for a meal logged by hand, and for an offer's: an
+    offer can't be corrected (``check_can_correct_place``), so its meal's item stays editable here,
+    the only way to fix it."""
+    if meal.event_id is None:
+        return None
+    event = await EventRepository(db).get(meal.household_id, meal.event_id)
+    return None if event is None or event.is_offer else event
+
+
+async def call_place(db: AsyncSession, actor: Member, meal: MealLog) -> CallPlace | None:
+    """What the edit form says about a place it can't change: None when it can change it."""
+    event = await _call_of(db, meal)
+    if event is None:
+        return None
+    try:
+        check_can_correct_place(event, actor)
+    except EventRuleViolation:
+        return CallPlace(event.id, can_correct=False)
+    return CallPlace(event.id, can_correct=True)
+
+
 async def update_meal(
-    db: AsyncSession, actor: Member, meal_id: int, data: MealInput, *, today: date, now: datetime
+    db: AsyncSession, actor: Member, meal_id: int, data: MealInput, *, today: date, now: datetime, shown: str = ""
 ) -> MealLog:
-    existing = await _changeable(db, actor, meal_id)
-    cuisines, participants = await _snapshots(db, actor, data, today, editing=existing)
-    await MealLogRepository(db).update(
-        actor.household_id,
-        meal_id,
-        day=data.day,
-        slot=data.slot,
-        item_id=data.item_id,
-        cuisines=cuisines,
-        participants=participants,
-        now=now,
-    )
-    # Feedback was about the meal as it was: a different item makes all of it wrong, and someone
-    # taken off the meal didn't eat it. Only the number removed is audited (FR-49).
-    keep = None if data.item_id != existing.item_id else {p.id for p in participants}
-    dropped = await FeedbackRepository(db).prune(actor.household_id, meal_id, keep)
-    payload = _payload(data) | ({"feedback_removed": dropped} if dropped else {})
-    await audit(db, actor.household_id, actor, "meal.updated", f"meal:{meal_id}", payload, now)
-    await db.commit()
+    """Save an edit. ``shown`` is the ``form_stamp`` the form showed. It holds the write lock from
+    reading the meal to saving, the one lock ``locked_event`` also takes first, so a correction of
+    the place (#220) can't commit between the check and the write."""
+    async with write_transaction(db):
+        existing = await _changeable(db, actor, meal_id)
+        _check_shown(existing, shown)
+        if data.item_id != existing.item_id and await _call_of(db, existing) is not None:
+            raise InvalidMeal(CALL_PLACE_FIXED)
+        cuisines, participants = await _snapshots(db, actor, data, today, editing=existing)
+        await MealLogRepository(db).update(
+            actor.household_id,
+            meal_id,
+            day=data.day,
+            slot=data.slot,
+            item_id=data.item_id,
+            cuisines=cuisines,
+            participants=participants,
+            now=now,
+        )
+        # Feedback was about the meal as it was: a different item makes all of it wrong, and someone
+        # taken off the meal didn't eat it. Only the number removed is audited (FR-49).
+        keep = None if data.item_id != existing.item_id else {p.id for p in participants}
+        dropped = await FeedbackRepository(db).prune(actor.household_id, meal_id, keep)
+        payload = _payload(data) | ({"feedback_removed": dropped} if dropped else {})
+        await audit(db, actor.household_id, actor, "meal.updated", f"meal:{meal_id}", payload, now)
+        await db.commit()
     return await get_meal(db, actor, meal_id)
 
 
-async def delete_meal(db: AsyncSession, actor: Member, meal_id: int, *, now: datetime) -> None:
-    meal = await _changeable(db, actor, meal_id)
-    await MealLogRepository(db).delete(actor.household_id, meal_id)
-    payload: dict[str, object] = {
-        "date": meal.day.isoformat(),
-        "slot": meal.slot.value,
-        "item_id": meal.item_id,
-        "logged_by": meal.logged_by,
-    }
-    await audit(db, actor.household_id, actor, "meal.deleted", f"meal:{meal_id}", payload, now)
-    await db.commit()
+async def delete_meal(db: AsyncSession, actor: Member, meal_id: int, *, now: datetime, shown: str = "") -> None:
+    """Delete a meal. ``shown`` and the lock are as in ``update_meal``."""
+    async with write_transaction(db):
+        meal = await _changeable(db, actor, meal_id)
+        _check_shown(meal, shown)
+        await MealLogRepository(db).delete(actor.household_id, meal_id)
+        payload: dict[str, object] = {
+            "date": meal.day.isoformat(),
+            "slot": meal.slot.value,
+            "item_id": meal.item_id,
+            "logged_by": meal.logged_by,
+        }
+        await audit(db, actor.household_id, actor, "meal.deleted", f"meal:{meal_id}", payload, now)
+        await db.commit()
 
 
 async def history(db: AsyncSession, actor: Member, *, page: int = 1) -> History:

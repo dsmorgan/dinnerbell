@@ -5,8 +5,11 @@
 <p><a href="/history">← History</a></p>
 <h1>Edit meal</h1>
 {% if error %}<p class="alert error" role="alert">{{ error }}</p>{% endif %}
+{#- What the page showed when it was opened, so a save or delete can't undo a change made since (#224). Redisplaying the form after an error keeps it. -#}
+{% set stamp = form.shown or meal.form_stamp %}
 <form method="post" action="/history/meals/{{ meal.id }}" class="card stack">
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <input type="hidden" name="shown_meal" value="{{ stamp }}">
   {% include "_meal_fields.html" %}
   <p class="small muted">Saving takes a new snapshot of the item's cuisines and the people who ate.</p>
   <button type="submit" class="button primary block">Save</button>
@@ -14,6 +17,7 @@
 <form method="post" action="/history/meals/{{ meal.id }}/delete" class="card" hx-boost="true"
       hx-confirm="Delete this meal from history? This can't be undone.">
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <input type="hidden" name="shown_meal" value="{{ stamp }}">
   <button type="submit" class="button danger">Delete this meal</button>
 </form>
 {% endblock %}

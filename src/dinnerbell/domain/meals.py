@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date, timedelta
@@ -37,10 +38,24 @@ OF_THE_DAY = {slot: n for n, slot in enumerate(Slot)}
 sort meals of the same day by."""
 PICK_SLOT = "Pick breakfast, lunch, or dinner."
 """What a form says when its meal is missing or unknown."""
+MEAL_CHANGED = (
+    "This meal changed since you opened this page, so that didn't go through. "
+    "Look at it again, and try again if you still need to."
+)
+"""What a form from before someone else's change says (#224)."""
+CALL_PLACE_FIXED = (
+    "This meal came from a call, so its place can't change here. "
+    "An admin can correct it under Change the plan on the call's page."
+)
+"""What a changed item on a call's meal says (#224). Only ``correct_place`` changes that place."""
 
 
 class InvalidMeal(ValueError):
     """Meal input that can't be saved. The message is safe to show."""
+
+
+class StaleMeal(InvalidMeal):
+    """An edit or delete from a form that showed the meal as it no longer is (#224)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,6 +86,16 @@ class MealLog:
     participants: tuple[MemberRef, ...]
     logged_by: int | None
     event_id: int | None = None
+
+    @property
+    def form_stamp(self) -> str:
+        """What an edit or delete form shows of the meal, as one hidden field: its date, meal, item,
+        and who ate, the four things those forms can write back or remove (#224). It follows the
+        values, as ``opened_item`` does on a call, so a save that changed nothing leaves other
+        people's open forms good."""
+        people = ",".join(str(i) for i in sorted(p.id for p in self.participants))
+        shown = f"{self.day.isoformat()}|{self.slot.value}|{self.item_id}|{people}"
+        return hashlib.sha256(shown.encode()).hexdigest()[:32]
 
 
 @dataclass(frozen=True, slots=True)
