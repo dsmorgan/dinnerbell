@@ -482,9 +482,8 @@ async def test_answers_still_open_at_midnight_expire_as_missed(house: House) -> 
     assert (event.state, event.end_reason) == (EventState.ABANDONED, EndReason.MISSED)
 
 
-async def test_a_slot_thats_off_with_windows_ending_at_midnight_decides_at_23_59(house: House) -> None:
-    """``check_schedule`` lets a disabled slot's windows end at 24:00, and an ad-hoc call for a
-    later day uses them."""
+async def windows_end_at_midnight(house: House) -> None:
+    """Dinner is off, with a 21:45 call time: 90 minutes to answer and 45 to vote end at 24:00."""
     async with house.sessionmaker() as db:
         await db.execute(
             text(
@@ -495,6 +494,40 @@ async def test_a_slot_thats_off_with_windows_ending_at_midnight_decides_at_23_59
         await db.commit()
         schedule = slot_schedule(await household_settings(db, house["Alex"].household_id), Slot.DINNER)
     assert not check_schedule(schedule).enabled
+
+
+@pytest.mark.parametrize("closed_by", ["everyone answering", "close now"])
+async def test_a_call_posted_early_with_windows_ending_at_midnight_decides_on_its_day(
+    house: House, closed_by: str
+) -> None:
+    """Regression (#215): its decision time was midnight, so it fell back to the time to vote from
+    the close, and tomorrow's call decided today."""
+    await windows_end_at_midnight(house)
+    tomorrow = OPENS.date() + timedelta(days=1)
+    house.clock.now = OPENS
+    event = await act(house, calls.start_call, house["Alex"], Slot.DINNER, tomorrow)
+    await act(house, calls.post_now, house["Alex"], event.id)
+    await everyone_in(house, event.id)
+    if closed_by == "close now":
+        await act(house, calls.close_window, house["Alex"], event.id)
+    else:
+        house.clock.now += EARLY_CLOSE_QUIET
+        assert await house.tick() == [Step.CLOSE_RESPONSES]
+    last_minute = local(tomorrow, 23, 59)
+    assert (await house.event(event.id)).vote_deadline == last_minute
+    house.clock.now = OPENS + timedelta(hours=2)
+    assert await house.tick() == []
+    assert (await house.event(event.id)).state is EventState.VOTING
+    house.clock.now = last_minute
+    assert (await house.tick())[0] is Step.CLOSE_VOTING
+    decided = await house.event(event.id)
+    assert (decided.state, decided.meal_time) == (EventState.DECIDED, last_minute)
+
+
+async def test_a_slot_thats_off_with_windows_ending_at_midnight_decides_at_23_59(house: House) -> None:
+    """``check_schedule`` lets a disabled slot's windows end at 24:00, and an ad-hoc call for a
+    later day uses them."""
+    await windows_end_at_midnight(house)
     tomorrow = OPENS.date() + timedelta(days=1)
     house.clock.now = OPENS
     event = await act(house, calls.start_call, house["Alex"], Slot.DINNER, tomorrow)
