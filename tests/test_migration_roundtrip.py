@@ -38,7 +38,7 @@ from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, text
 
 from dinnerbell.config import Settings
-from dinnerbell.db.migrate import SCRIPT_LOCATION, IntegrityCheckFailed
+from dinnerbell.db.migrate import SCRIPT_LOCATION, IntegrityCheckFailed, head_revision
 from dinnerbell.services.database import open_database
 from tests.support.calls import furnish, make_house
 from tests.support.clock import FakeClock
@@ -189,6 +189,8 @@ def test_the_cli_path_refuses_a_downgrade_that_finds_a_dangling_reference(
         with engine.connect() as c:
             assert c.execute(text(schema)).all() == schema_before  # the rollback undid the DDL
             assert c.execute(text("SELECT name FROM tag")).all() == [("T",)]
-            assert c.execute(text("SELECT version_num FROM alembic_version")).scalar_one().startswith("0029")
+            assert (
+                c.execute(text("SELECT version_num FROM alembic_version")).scalar_one() == head_revision()
+            )  # still at head
     finally:
         engine.dispose()

@@ -437,8 +437,10 @@ async def guest_coordinates(house: House, event_id: int, name: str, migrated: Se
 
 
 def upgrade(migrated: Settings) -> None:
+    """Back to before 0029, then up to head, so 0029 runs on today's rows and every later
+    revision comes back for the app."""
     _downgrade_to(migrated, "0028_unregistered_guest_badges")
-    _upgrade_to(migrated, "0029_guests_dont_coordinate")
+    _upgrade_to(migrated, "head")
 
 
 @BOTH

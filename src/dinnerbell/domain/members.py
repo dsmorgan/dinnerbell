@@ -32,6 +32,14 @@ class Role(StrEnum):
     GUEST = "guest"
 
 
+class ColorMode(StrEnum):
+    """Light or dark on the web (#231): ``AUTO`` follows the device, the other two hold."""
+
+    AUTO = "auto"
+    LIGHT = "light"
+    DARK = "dark"
+
+
 class MemberStatus(StrEnum):
     INVITED = "invited"
     ACTIVE = "active"
@@ -82,6 +90,8 @@ class Member:
     """Dinnerbone's Den and its celebrations on the web (#153). Off, the pages load none of it."""
     fun_seen_award: int = 0
     """The newest badge award whose backflip the den has shown them (#153): later ones flip once."""
+    color_mode: ColorMode = ColorMode.AUTO
+    """Light or dark on the web (#231). Auto, the default, follows their device."""
     away: Away | None = None
     """Their away window (#196), as stored: it may have ended already. ``away_now`` is the one
     that counts."""

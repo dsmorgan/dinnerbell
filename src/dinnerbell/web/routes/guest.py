@@ -4,7 +4,8 @@ changes that matters to anyone else. Members set preferences instead, on the Pre
 
 ``/me/fun`` turns fun mode (#153) on or off for whoever is signed in, member or guest: the
 form is on this page for a guest and on Preferences for a member. ``/me/fun/seen`` is fun.js
-saying the den has flipped for their badges, so it won't again on any device."""
+saying the den has flipped for their badges, so it won't again on any device. ``/me/color-mode``
+sets light, dark, or auto (#231) for whoever is signed in, from the same two pages."""
 
 from __future__ import annotations
 
@@ -15,11 +16,12 @@ from fastapi.responses import RedirectResponse
 from starlette.responses import Response
 
 from dinnerbell.domain.events import EventRuleViolation
-from dinnerbell.domain.members import InvalidMemberInput
+from dinnerbell.domain.members import ColorMode, InvalidMemberInput
 from dinnerbell.services import activity, guests
+from dinnerbell.services.appearance import set_my_color_mode
 from dinnerbell.services.fun import saw_badges, set_my_fun_mode
 from dinnerbell.web.auth import Context, Database, GuestCSRFChecked, GuestOrMember
-from dinnerbell.web.forms import parse_id
+from dinnerbell.web.forms import choice, parse_id
 from dinnerbell.web.render import render
 
 router = APIRouter()
@@ -32,7 +34,13 @@ async def my_needs(request: Request, principal: GuestOrMember, db: Database, sav
     if not principal.member.is_guest:
         return RedirectResponse("/preferences", status_code=303)
     tags = await guests.dietary_tags(db, principal.member)
-    page = {"tags": tags, "mine": principal.member.dietary_needs, "saved": saved == "1", "fun_saved": saved == "fun"}
+    page = {
+        "tags": tags,
+        "mine": principal.member.dietary_needs,
+        "saved": saved == "1",
+        "fun_saved": saved == "fun",
+        "color_saved": saved == "color",
+    }
     return await render(request, "me.html", page)
 
 
@@ -72,6 +80,26 @@ async def save_my_fun_mode(
     if principal.member.is_guest:
         return RedirectResponse("/me?saved=fun#fun-mode", status_code=303)
     return RedirectResponse("/preferences?notice=fun#fun-mode", status_code=303)
+
+
+@router.post("/me/color-mode")
+async def save_my_color_mode(
+    request: Request,
+    principal: GuestCSRFChecked,
+    context: Context,
+    db: Database,
+    mode: Annotated[str, Form(max_length=5)] = "",
+) -> Response:
+    """Light, dark, or auto for the signed-in person (#231), from Preferences or a guest's page."""
+    chosen = choice(ColorMode, mode)
+    if chosen is None:
+        message = "Not a light, dark, or auto setting."
+        return await render(request, "error.html", {"title": "Not saved", "message": message}, status_code=400)
+    await set_my_color_mode(db, principal.member, chosen, now=context.clock())
+    # Back to the card, which says it saved.
+    if principal.member.is_guest:
+        return RedirectResponse("/me?saved=color#color-mode", status_code=303)
+    return RedirectResponse("/preferences?notice=color#color-mode", status_code=303)
 
 
 @router.post("/me/fun/seen")

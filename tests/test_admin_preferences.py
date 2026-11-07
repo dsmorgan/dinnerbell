@@ -59,7 +59,13 @@ def base(house: dict[str, Any], who: str = "sam") -> str:
     return f"/admin/members/{house[who]}/preferences"
 
 
-ACTIONS = ("member.preference_set", "member.settings_updated", "member.needs_updated", "member.fun_mode_set")
+ACTIONS = (
+    "member.preference_set",
+    "member.settings_updated",
+    "member.needs_updated",
+    "member.fun_mode_set",
+    "member.color_mode_set",
+)
 
 
 def admin_audit(settings: Settings, action: str) -> list[AuditRow]:
@@ -86,10 +92,11 @@ def test_admin_sees_a_members_preferences(client: TestClient, house: dict[str, A
     assert checked_level(response.text, f"tag:{house['thai']}") == "veto"
     assert 'name="can_cook" checked' in response.text  # Sam's, not the admin's
     # Every form posts to Sam's preferences, never the admin's own.
-    for path in ("/stance", "/settings", "/needs", "/fun"):
+    for path in ("/stance", "/settings", "/needs", "/fun", "/color-mode"):
         assert f'action="{base(house)}{path}"' in response.text, path
     assert f'hx-post="{base(house)}/stance"' in response.text
-    for own in ('action="/preferences/', 'action="/me"', 'action="/me/fun"', 'hx-post="/preferences'):
+    own_forms = ('action="/preferences/', 'action="/me"', 'action="/me/fun"', 'action="/me/color-mode"')
+    for own in (*own_forms, 'hx-post="/preferences'):
         assert own not in response.text, own
     # The admin's own page is unchanged, and doesn't show the banner.
     mine = client.get("/preferences")
@@ -128,10 +135,19 @@ def test_admin_changes_each_kind_of_preference(
     assert needs.headers["location"] == f"{base(house)}?notice=settings"
     fun = submit(client, f"{base(house)}/fun", {})  # the checkbox unchecked sends nothing: off
     assert fun.headers["location"] == f"{base(house)}?notice=fun#fun-mode"
+    # Light or dark (#231): Sam's card shows Sam's choice; the page itself stays in the admin's.
+    color = submit(client, f"{base(house)}/color-mode", {"mode": "dark"})
+    assert color.headers["location"] == f"{base(house)}?notice=color#color-mode"
+    after = client.get(color.headers["location"])
+    card = page(after).split('id="color-mode"', 1)[1].split("</form>", 1)[0]
+    assert "Saved." in card and 'value="dark" checked' in after.text
+    assert "data-theme" not in after.text  # the admin is still on auto
+    assert member(migrated, "sam@example.com").color_mode == "dark"
     sam = member(migrated, "sam@example.com")
     assert sam.dietary_needs == [house["veg"]] and not sam.fun_mode
     admin = member(migrated, "admin@example.com")
     assert admin.dietary_needs == [] and admin.fun_mode and not admin.can_order  # the admin's own: untouched
+    assert admin.color_mode == "auto"
 
     # Sam's own page shows what the admin saved, and Sam is still signed in on their device.
     mine = sam_client.get("/preferences")
@@ -140,6 +156,7 @@ def test_admin_changes_each_kind_of_preference(
     assert 'name="can_order" checked' in mine.text and 'name="mute_dm_reminders" checked' in mine.text
     assert f'value="{house["veg"]}" checked' in mine.text
     assert 'name="fun" value="on"' in mine.text and 'name="fun" value="on" checked' not in mine.text
+    assert '<html lang="en" data-theme="dark">' in mine.text and 'name="mode" value="dark" checked' in mine.text
     assert any(s.member_id == house["sam"] for s in rows(migrated, SessionRow))
     assert (sam.email, sam.oidc_subject) == ("sam@example.com", "subject-sam")
 
@@ -152,11 +169,13 @@ def test_each_change_is_audited_with_the_admin_and_the_member(
     submit(client, f"{base(house)}/settings", {"can_cook": "on", "feedback_reminder": "on"})
     submit(client, f"{base(house)}/needs", {"needs": [str(house["veg"])]})
     submit(client, f"{base(house)}/fun", {"fun": "off"})
+    submit(client, f"{base(house)}/color-mode", {"mode": "light"})
     expected = {
         "member.preference_set": {"target": f"tag:{house['thai']}", "name": "Thai", "from": "veto", "to": "0"},
         "member.settings_updated": {"feedback_reminder": True},
         "member.needs_updated": {"dietary_needs": [house["veg"]]},
         "member.fun_mode_set": {"from": True, "to": False},
+        "member.color_mode_set": {"from": "auto", "to": "light"},
     }
     for action, payload in expected.items():
         (row,) = admin_audit(migrated, action)
@@ -174,6 +193,10 @@ def test_the_stance_row_keeps_its_admin_url_when_a_save_fails(
     assert gone.status_code == 200 and "removed from the catalog" in gone.text
     assert htmx(client, f"{base(house)}/stance", {"target": "member:1", "level": "1"}).status_code == 400
     assert submit(client, f"{base(house)}/fun", {"fun": "maybe"}).status_code == 400
+    for mode in ("", "Dark", "blue"):
+        bad_mode = submit(client, f"{base(house)}/color-mode", {"mode": mode})
+        assert bad_mode.status_code == 400 and "Not a light, dark, or auto setting." in page(bad_mode), mode
+    assert member(migrated, "sam@example.com").color_mode == "auto"
     assert stances(migrated, "sam@example.com") == {("tag", house["thai"]): (True, 0)}
     assert not admin_audit(migrated, "member.preference_set")
 
@@ -189,11 +212,12 @@ def test_a_member_is_refused(
         ("/settings", {"can_cook": "on"}),
         ("/needs", {"needs": [str(house["veg"])]}),
         ("/fun", {"fun": "off"}),
+        ("/color-mode", {"mode": "dark"}),
     ):
         assert submit(client, f"{path}{suffix}", data).status_code == 403, suffix
     admin = member(migrated, "admin@example.com")
     assert stances(migrated, "admin@example.com") == {}
-    assert (admin.can_cook, admin.dietary_needs, admin.fun_mode) == (False, [], True)
+    assert (admin.can_cook, admin.dietary_needs, admin.fun_mode, admin.color_mode) == (False, [], True, "auto")
     assert not any_admin_audit(migrated)
 
 
@@ -203,11 +227,12 @@ def test_writes_need_the_csrf_token(client: TestClient, migrated: Settings, hous
         ("/settings", {"can_order": "on"}),
         ("/needs", {"needs": [str(house["veg"])]}),
         ("/fun", {"fun": "off"}),
+        ("/color-mode", {"mode": "dark"}),
     ):
         assert client.post(f"{base(house)}{suffix}", data=data).status_code == 403, suffix
     sam = member(migrated, "sam@example.com")
     assert stances(migrated, "sam@example.com") == {("tag", house["thai"]): (True, 0)}
-    assert (sam.can_order, sam.dietary_needs, sam.fun_mode) == (False, [], True)
+    assert (sam.can_order, sam.dietary_needs, sam.fun_mode, sam.color_mode) == (False, [], True, "auto")
 
 
 def eve(settings: Settings) -> int:
@@ -240,10 +265,11 @@ def test_another_households_member_is_not_found(client: TestClient, migrated: Se
         ("/settings", {"can_cook": "on"}),
         ("/needs", {"needs": [str(house["veg"])]}),
         ("/fun", {"fun": "off"}),
+        ("/color-mode", {"mode": "dark"}),
     ):
         assert submit(client, f"{path}{suffix}", data).status_code == 404, suffix
     evil = next(m for m in rows(migrated, MemberRow) if m.id == eve_id)
-    assert (evil.can_cook, evil.dietary_needs, evil.fun_mode) == (False, [], True)
+    assert (evil.can_cook, evil.dietary_needs, evil.fun_mode, evil.color_mode) == (False, [], True, "auto")
     assert not [p for p in rows(migrated, PreferenceRow) if p.member_id == eve_id]
     assert not [a for a in rows(migrated, AuditRow) if a.target == f"member:{eve_id}"]
 
@@ -257,6 +283,7 @@ def test_guests_and_missing_members_have_no_preferences_page(
         path = f"/admin/members/{member_id}/preferences"
         assert client.get(path).status_code == 404, member_id
         assert submit(client, f"{path}/fun", {"fun": "off"}).status_code == 404, member_id
+        assert submit(client, f"{path}/color-mode", {"mode": "dark"}).status_code == 404, member_id
     assert f"/admin/members/{pat}/preferences" not in client.get("/admin/members").text
     for bad in ("0", "-3", "9" * 25):
         assert client.get(f"/admin/members/{bad}/preferences").status_code == 404, bad
@@ -276,22 +303,24 @@ def test_the_admins_own_id_goes_to_their_own_page(
         ("/settings", {"can_cook": "on"}),
         ("/needs", {"needs": [str(house["veg"])]}),
         ("/fun", {"fun": "off"}),
+        ("/color-mode", {"mode": "dark"}),
     ):
         assert submit(client, f"{path}{suffix}", data).status_code == 404, suffix
     admin = member(migrated, "admin@example.com")
     assert stances(migrated, "admin@example.com") == {}
-    assert (admin.can_cook, admin.dietary_needs, admin.fun_mode) == (False, [], True)
+    assert (admin.can_cook, admin.dietary_needs, admin.fun_mode, admin.color_mode) == (False, [], True, "auto")
     assert not any_admin_audit(migrated)
 
 
 def test_a_save_that_changes_nothing_writes_no_audit_row(
     client: TestClient, migrated: Settings, house: dict[str, Any]
 ) -> None:
-    """Settings, dietary needs, and fun mode saved as they are write nothing to the audit log. A
+    """Settings, dietary needs, fun mode, and light or dark saved as they are write nothing to the audit log. A
     stance is always audited: saving one resets what the member's ratings say (FR-55)."""
     assert submit(client, f"{base(house)}/settings", {"can_cook": "on"}).status_code == 303  # Sam's as they are
     assert submit(client, f"{base(house)}/needs", {}).status_code == 303
     assert submit(client, f"{base(house)}/fun", {"fun": "on"}).status_code == 303
+    assert submit(client, f"{base(house)}/color-mode", {"mode": "auto"}).status_code == 303
     assert not any_admin_audit(migrated)
     htmx(client, f"{base(house)}/stance", {"target": f"tag:{house['thai']}", "level": "veto"})
     assert [a.action for a in any_admin_audit(migrated)] == ["member.preference_set"]
@@ -314,6 +343,7 @@ def test_a_members_own_changes_stay_unaudited_except_dietary_needs(
     htmx(client, "/preferences/stance", {"target": f"tag:{house['thai']}", "level": "2"})
     submit(client, "/preferences/settings", {"can_order": "on"})
     submit(client, "/me/fun", {"fun": "off"})
+    submit(client, "/me/color-mode", {"mode": "dark"})
     assert not any_admin_audit(migrated)
     # Except dietary needs, audited for members and guests alike, as before #181.
     submit(client, "/me", {"needs": [str(house["veg"])]})

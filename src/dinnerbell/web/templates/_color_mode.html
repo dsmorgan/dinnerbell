@@ -1,0 +1,22 @@
+{#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
+{#- Light, dark, or auto (#231), for whoever is signed in. Beside fun mode: on Preferences for a
+    member, and on a guest's own page. Auto, first and the default, follows the device. The
+    choice is one of three radios, so a save always sends one. color_saved says it just saved;
+    the route sends people back to #color-mode. An admin editing a member's preferences (#181)
+    passes color_action and color_member. -#}
+{% set color_now = (color_member|default(principal.member)).color_mode.value %}
+<form method="post" action="{{ color_action|default("/me/color-mode") }}" class="card stack" id="color-mode">
+  <h2>Light or dark</h2>
+  {% if color_saved %}<p class="alert ok" role="status">Saved.</p>{% endif %}
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <fieldset class="field compact" aria-describedby="color-mode-about">
+    <legend>Pages</legend>
+    <p class="small muted" id="color-mode-about">Auto matches your device's light or dark setting. Light or Dark stays that way on every device you sign in on.</p>
+    <div class="segments three">
+      {% for value, label in (("auto", "Auto"), ("light", "Light"), ("dark", "Dark")) %}
+      <label class="segment"><input type="radio" name="mode" value="{{ value }}"{% if color_now == value %} checked{% endif %}><span>{{ label }}</span></label>
+      {% endfor %}
+    </div>
+  </fieldset>
+  <button type="submit" class="button">Save</button>
+</form>
