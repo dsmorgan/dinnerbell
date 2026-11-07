@@ -432,6 +432,26 @@ def test_reset_puts_back_the_defaults_and_audits(admin: TestClient, migrated: Se
     assert 'name="threshold_frequent_first" value="1"' in admin.get("/admin/badges").text
 
 
+def test_the_reset_asks_first_and_says_it_happened(admin: TestClient, migrated: Settings) -> None:
+    html = admin.get("/admin/badges").text
+    form_tag = html.split('action="/admin/badges/reset"', 1)[1].split(">", 1)[0]
+    assert 'hx-boost="true"' in form_tag  # a plain form's submit never reaches hx-confirm
+    assert (
+        'hx-confirm="Reset the badge counts to the defaults? This replaces the counts in all three ladders. '
+        "Where a count drops, anyone who already has it earns that tier, quietly. This can't be undone.\""
+    ) in form_tag
+    assert inline_code(html)[1] == []  # the CSP forbids inline code
+
+    submit(admin, "/admin/badges", form(2, 4, 8, 16, 32))
+    boosted = {"HX-Request": "true", "HX-Boosted": "true"}  # what HTMX sends once it's confirmed
+    done = submit(admin, "/admin/badges/reset", {}, **boosted)
+    assert (done.status_code, done.headers["location"]) == (303, "/admin/badges?notice=reset")
+    assert rows(migrated, HouseholdRow)[0].settings["badge_thresholds"] == ladders_setting(DEFAULT_LADDERS)
+    shown = admin.get(done.headers["location"], headers=boosted).text
+    assert '<p class="alert ok" role="status">Badge counts reset to the defaults.</p>' in shown
+    assert "<title>" in shown and "</main>" in shown  # a whole page, which HTMX swaps into the body
+
+
 def resets(settings: Settings) -> list[AuditRow]:
     return [a for a in rows(settings, AuditRow) if a.action == "household.badge_thresholds_reset"]
 

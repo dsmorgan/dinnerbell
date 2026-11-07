@@ -238,6 +238,8 @@ def test_a_step_that_always_fails_is_stuck_after_an_hour(
     assert f'href="/events/{event_id}"' in admin.get("/admin/members").text
     assert 'id="stuck-calls"' in admin.get("/admin/schedule").text  # on every Admin tab
     assert "stuck-calls" not in admin.get("/admin/members", headers={"HX-Request": "true"}).text  # not on a fragment
+    boosted = {"HX-Request": "true", "HX-Boosted": "true"}
+    assert 'id="stuck-calls"' in admin.get("/admin/schedule?notice=reset", headers=boosted).text  # a whole page
     assert "stuck-calls" not in admin.get("/").text  # and only on Admin
     assert f'action="/events/{event_id}/cancel"' in admin.get(f"/events/{event_id}").text  # where the admin fixes it
 
