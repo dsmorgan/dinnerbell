@@ -5,8 +5,6 @@ guest's page are in ``test_admin_preferences`` and ``test_guests_web``."""
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 from fastapi.testclient import TestClient
 
@@ -16,15 +14,18 @@ from tests.conftest import ADMIN_EMAIL, invite, page, sign_in
 from tests.support.fake_oidc import FakeProvider
 from tests.support.web import submit
 from tests.test_auth_flow import member, rows
+from tests.test_theme import backgrounds
 
+# The browser bar's colors are the page backgrounds in app.css, light and forced dark.
+BG = backgrounds()
 AUTO_HEAD = (
     '<meta name="color-scheme" content="light dark">\n'
-    '  <meta name="theme-color" content="#fbf7f2" media="(prefers-color-scheme: light)">\n'
-    '  <meta name="theme-color" content="#1b1714" media="(prefers-color-scheme: dark)">\n'
+    f'  <meta name="theme-color" content="{BG["light"]}" media="(prefers-color-scheme: light)">\n'
+    f'  <meta name="theme-color" content="{BG["dark"]}" media="(prefers-color-scheme: dark)">\n'
 )
 FORCED_HEAD = {
-    "light": '<meta name="color-scheme" content="light">\n  <meta name="theme-color" content="#FAF6F0">\n',
-    "dark": '<meta name="color-scheme" content="dark">\n  <meta name="theme-color" content="#1C1714">\n',
+    mode: f'<meta name="color-scheme" content="{mode}">\n  <meta name="theme-color" content="{BG[mode]}">\n'
+    for mode in ("light", "dark")
 }
 SIGNED_IN = ("/", "/preferences", "/catalog", "/history", "/stats", "/schedule", "/admin/members")
 
@@ -124,10 +125,3 @@ def test_a_signed_in_error_page_keeps_the_choice(client: TestClient, provider: F
     missing = client.get("/events/99999")
     assert missing.status_code == 404
     assert '<html lang="en" data-theme="light">' in missing.text
-
-
-def test_the_den_follows_the_choice_too() -> None:
-    """fun.css keys the den's dark colors on the same attribute app.css does (#230)."""
-    css = (Path(__file__).parents[1] / "src/dinnerbell/web/static/fun.css").read_text()
-    assert ':root:not([data-theme="light"]) body[data-fun]' in css
-    assert ':root[data-theme="dark"] body[data-fun]' in css

@@ -9,6 +9,7 @@ from importlib.resources import files
 
 CSS = files("dinnerbell").joinpath("web", "static", "app.css").read_text()
 BASE = files("dinnerbell").joinpath("web", "templates", "base.html").read_text()
+FUN_CSS = files("dinnerbell").joinpath("web", "static", "fun.css").read_text()
 FILL = "background: var(--accent); border-color: var(--accent); color: var(--accent-text);"
 
 
@@ -25,6 +26,12 @@ def tokens(body: str) -> dict[str, str]:
 def block(start: str) -> str:
     """The body of the first rule whose selector is exactly `start`."""
     return next(body for selector, body in rules(CSS) if selector == start)
+
+
+def backgrounds() -> dict[str, str]:
+    """The page background, ``--bg``, of the light tokens on ``:root`` and the forced dark ones."""
+    light = tokens(CSS[CSS.index(":root {") : CSS.index("}", CSS.index(":root {"))])
+    return {"light": light["--bg"], "dark": tokens(block(':root[data-theme="dark"]'))["--bg"]}
 
 
 def test_every_chosen_control_is_the_accent_fill() -> None:
@@ -94,10 +101,26 @@ def test_dark_colors_follow_the_device_or_a_forced_theme() -> None:
 
 
 def test_the_browser_bar_matches_the_page_background() -> None:
-    light = tokens(CSS[CSS.index(":root {") : CSS.index("}", CSS.index(":root {"))])
-    dark = tokens(block(':root[data-theme="dark"]'))
-    assert f'<meta name="theme-color" content="{light["--bg"]}" media="(prefers-color-scheme: light)">' in BASE
-    assert f'<meta name="theme-color" content="{dark["--bg"]}" media="(prefers-color-scheme: dark)">' in BASE
+    bg = backgrounds()
+    assert f'<meta name="theme-color" content="{bg["light"]}" media="(prefers-color-scheme: light)">' in BASE
+    assert f'<meta name="theme-color" content="{bg["dark"]}" media="(prefers-color-scheme: dark)">' in BASE
+    # A forced Light or Dark (#231) gets one theme-color, with no media query.
+    assert f'<meta name="theme-color" content="{bg["light"]}">' in BASE
+    assert f'<meta name="theme-color" content="{bg["dark"]}">' in BASE
+
+
+def test_the_den_follows_a_forced_theme_too() -> None:
+    """fun.css's dark den colors take the same two routes as app.css's: the device's dark setting
+    unless the page is forced light, and a forced dark whatever the device says (#231)."""
+    dark = [(s, body) for s, body in rules(FUN_CSS) if "--den-floor:" in body and s != "body[data-fun]"]
+    assert sorted(s for s, _ in dark) == [
+        ':root:not([data-theme="light"]) body[data-fun]',
+        ':root[data-theme="dark"] body[data-fun]',
+    ]
+    assert dark[0][1] == dark[1][1]  # the same dark colors either way
+    media = FUN_CSS[FUN_CSS.index("@media (prefers-color-scheme: dark) {") :]
+    assert media.startswith('@media (prefers-color-scheme: dark) {\n  :root:not([data-theme="light"]) body[data-fun] {')
+    assert FUN_CSS.count("@media (prefers-color-scheme") == 1
 
 
 def test_a_lifted_part_stays_inside_its_joined_control() -> None:

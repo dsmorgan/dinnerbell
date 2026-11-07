@@ -51,7 +51,6 @@ log = logging.getLogger(__name__)
 
 STATIC_DIR = Path(__file__).parent / "static"
 
-
 AUTH_RATE_LIMIT = 20
 AUTH_RATE_WINDOW_SECONDS = 60.0
 DEFAULT_BODY_LIMIT = 64 * 1024
