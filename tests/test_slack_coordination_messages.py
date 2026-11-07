@@ -5,13 +5,16 @@ the exact words; these pin the structure, and the cases a golden file can't show
 
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 
 import pytest
 
+from dinnerbell.channels.slack import ids
 from dinnerbell.channels.slack import preview as samples
 from dinnerbell.channels.slack.blocks import MAX_SECTION
 from dinnerbell.channels.slack.messages import Message, RenderContext, render
+from dinnerbell.domain import labels
 from dinnerbell.domain import notifications as note
 from dinnerbell.domain.events import AssignmentRole
 from tests.support.blockkit import check_message
@@ -55,16 +58,17 @@ def test_picked_at_random_groups_what_you_can_do_by_when_you_can_do_it() -> None
     vote, decided, hand_off = lines.index("*While the vote is open:*"), lines.index("*After it's decided:*"), -3
     assert lines[vote - 1] == lines[decided - 1] == lines[hand_off - 1] == ""
     assert lines[vote + 1] == "• Tap ⋯ beside a pick to decide it, break a tie, or set pickup or delivery"
-    assert lines[vote + 2] == "• Shuffle the picks"
+    assert lines[vote + 2] == "• Shuffle the proposals"
     assert lines[decided + 1] == "• Change how you get it and who does it"
     assert lines[hand_off] == "*Can't do it?* Hand it off on the call's page."
     assert lines[-1] == "Thanks for steering!"
 
 
-@pytest.mark.parametrize(("minutes", "words"), [(1, "within 1 minute or"), (15, "within 15 minutes or")])
+@pytest.mark.parametrize(("minutes", "words"), [(1, "within 1 minute, or"), (15, "within 15 minutes, or")])
 def test_picked_at_random_counts_the_minutes_to_choose(minutes: int, words: str) -> None:
     event = replace(samples.VOTING, coordinator=samples.KIM)
-    assert words in body(render(note.CoordinatorPicked(event, samples.KIM, choose_minutes=minutes), CTX))
+    text = body(render(note.CoordinatorPicked(event, samples.KIM, choose_minutes=minutes), CTX))
+    assert f"{words} by the meal time if sooner. Otherwise, the first person who offered does it." in text
 
 
 # Being given coordinating ---------------------------------------------------------------------------
@@ -116,6 +120,21 @@ def test_choosing_roles_for_a_guest_says_its_your_guest_without_a_greeting() -> 
     text = sample("roles_to_choose_for_guest")
     assert text.startswith("*Your guest Pat is coordinating dinner on Thursday, Oct 22.*\n")
     assert "Hi " not in text and "Kim" not in text
+
+
+def test_choosing_roles_for_a_guest_says_an_admin_can_and_offers_no_button() -> None:
+    told = render(
+        note.RolesToChoose(samples.DECIDED, samples.PAT, samples.WAY_OPEN_DECISION, samples.ROLES_DUE, via=samples.KIM),
+        CTX,
+    )
+    assert body(told).endswith(
+        "An admin can choose pickup or delivery, who orders, and who picks it up by *6:00 PM*. "
+        "After that, it stays pickup, and the first people who offered do them."
+    )
+    assert "Tap" not in body(told) and "Assign roles" not in json.dumps(told.payload())
+    assert told.text.startswith("An admin can choose")
+    assert ids.ASSIGN_ROLES not in json.dumps(told.payload())
+    assert [b["text"]["text"] for b in told.blocks[1]["elements"]] == [labels.VIEW_ON_WEB]
 
 
 def test_choosing_roles_keeps_its_button() -> None:
@@ -183,6 +202,15 @@ def test_with_nobody_coordinating_being_assigned_says_to_tell_whoever_assigned_y
     event = replace(samples.DECIDED, coordinator=None)
     made = note.AssignmentMade(event, 31, samples.SAM, (COOK,), samples.DECISION, assigned_by=samples.ALEX)
     assert "\n\nAlex assigned you this. If it doesn't work for you, tell Alex.\n\n" in body(render(made, CTX))
+
+
+def test_a_host_who_assigned_their_own_guest_isnt_told_about_it() -> None:
+    by_host = note.AssignmentMade(
+        samples.DECIDED, 38, samples.PAT, (PICKUP,), samples.DECISION, via=samples.KIM, assigned_by=samples.KIM
+    )
+    text = body(render(by_host, CTX))
+    assert "assigned" not in text and "tell" not in text
+    assert text.startswith("Hi Kim! *Your guest Pat is picking up dinner")
 
 
 def test_an_assignment_without_roles_still_reads_right() -> None:
