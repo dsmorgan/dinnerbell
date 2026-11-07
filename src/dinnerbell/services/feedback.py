@@ -18,10 +18,10 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dinnerbell.db.catalog import CatalogRepository
+from dinnerbell.db.engine import write_transaction
 from dinnerbell.db.events import AssignmentRepository, EventRepository
 from dinnerbell.db.feedback import FeedbackRepository
 from dinnerbell.db.meals import MealLogRepository
@@ -48,7 +48,7 @@ from dinnerbell.domain.ratings import hints
 from dinnerbell.services import call_context as cc
 from dinnerbell.services import contributions
 from dinnerbell.services.call_context import NO_SUCH_CALL, CallContext
-from dinnerbell.services.common import is_unique_violation, require_member
+from dinnerbell.services.common import require_member
 from dinnerbell.services.errors import NotFound
 from dinnerbell.services.event_views import today_for
 
@@ -185,29 +185,25 @@ async def form_for_event(db: AsyncSession, actor: Member, event_id: int, *, run:
 
 async def give(db: AsyncSession, actor: Member, meal_id: int, data: FeedbackInput, *, now: datetime) -> Feedback | None:
     """Save ``actor``'s feedback on ``meal_id``, replacing any they gave before. Empty feedback
-    takes theirs back, and returns None. Raises InvalidFeedback or NotFound."""
-    meal = await _meal(db, actor, meal_id)
-    facts = await meal_facts(db, actor.household_id, meal)
-    check_can_give(actor, facts, await today_for(db, actor, now=now))
-    answers = clean(data, facts, actor.id)
+    takes theirs back, and returns None. Raises InvalidFeedback or NotFound.
+
+    It holds the write lock from reading the meal to saving, the one lock ``locked_event`` also
+    takes first, so its snapshot can't miss a correction of the place (#220) that commits in
+    between, and two first saves at once can't both insert."""
     repo = FeedbackRepository(db)
-    if answers.is_empty:
-        removed = await repo.delete(actor.household_id, meal_id, actor.id)
-        await db.commit()
-        if removed:
-            log.info("feedback removed", extra={"member_id": actor.id, "meal_id": meal_id})
-        return None
-    try:
+    async with write_transaction(db):
+        meal = await _meal(db, actor, meal_id)
+        facts = await meal_facts(db, actor.household_id, meal)
+        check_can_give(actor, facts, await today_for(db, actor, now=now))
+        answers = clean(data, facts, actor.id)
+        if answers.is_empty:
+            removed = await repo.delete(actor.household_id, meal_id, actor.id)
+            await db.commit()
+            if removed:
+                log.info("feedback removed", extra={"member_id": actor.id, "meal_id": meal_id})
+            return None
         saved = await repo.save(actor.household_id, actor.id, answers, facts, now)
         await contributions.record_feedback(db, actor, meal, now=now)  # FR-38, once per meal
-        await db.commit()
-    except IntegrityError as exc:
-        # A double submit inserted it first; this one replaces it.
-        await db.rollback()
-        if not is_unique_violation(exc):
-            raise
-        saved = await repo.save(actor.household_id, actor.id, answers, facts, now)
-        await contributions.record_feedback(db, actor, meal, now=now)
         await db.commit()
     log.info("feedback saved", extra={"member_id": actor.id, "meal_id": meal_id})
     return saved
