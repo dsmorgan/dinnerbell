@@ -5,9 +5,10 @@ Each member and guest chooses whether the web pages follow their device (``auto`
 ``light`` or ``dark``. Everyone who exists already starts on auto, which is how pages looked
 before, as new members and guests do. A check constraint keeps out any other value.
 
-SQLite adds the column, with its check, in place, so nothing is rebuilt. A downgrade drops it in
-place too (SQLite 3.35 or later), as 0025 does, so everyone's choice is lost and pages follow
-the device again.
+SQLite adds the column, with its check, in place, so nothing is rebuilt. A downgrade rebuilds
+``member`` in batch mode, as 0022's does, dropping the check and then the column: once a later
+revision has rebuilt the table, the check is a table constraint, and SQLite refuses to drop a
+column in place while one names it. Everyone's choice is lost and pages follow the device again.
 
 Revision ID: 0030_color_mode
 Revises: 0029_guests_dont_coordinate
@@ -36,4 +37,6 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.execute("ALTER TABLE member DROP COLUMN color_mode")
+    with op.batch_alter_table("member") as batch_op:
+        batch_op.drop_constraint(op.f("ck_member_color_mode"), type_="check")
+        batch_op.drop_column("color_mode")

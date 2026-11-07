@@ -428,6 +428,7 @@ async def save_member_color_mode(
     member_id: RowId,
     mode: Annotated[str, Form(max_length=5)] = "",
 ) -> Response:
+    """The form's radios always send one of ``auto``, ``light``, or ``dark``; anything else is refused."""
     chosen = choice(ColorMode, mode)
     if chosen is None:
         message = "Not a light, dark, or auto setting."

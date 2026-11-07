@@ -2442,3 +2442,44 @@ def test_0030_puts_everyone_on_auto_refuses_other_modes_and_downgrade_drops_it(s
     assert _rows_outside_m4(settings) == before
     _upgrade_to(settings, "0030_color_mode")
     assert _color_modes(settings) == [(1, "auto"), (2, "auto")]
+
+
+def _member_schema(settings: Settings) -> str:
+    engine = create_sync_engine(settings.sync_database_url)
+    try:
+        with engine.connect() as c:
+            sql: str = c.execute(text("SELECT sql FROM sqlite_master WHERE name = 'member'")).scalar_one()
+            return sql
+    finally:
+        engine.dispose()
+
+
+def test_0030_downgrades_after_a_later_revision_rebuilds_member(settings: Settings) -> None:
+    """A later revision that rebuilds ``member`` in batch mode turns the column's check into a
+    table constraint, which SQLite won't drop a column from in place. 0030's downgrade still
+    drops the column and its check, keeps the role check, and changes no other row."""
+    from alembic.operations import Operations
+
+    from dinnerbell.db.migrate import migration_engine
+
+    _upgrade_to(settings, "0029_guests_dont_coordinate")
+    _populate_calls(settings)
+    before = _rows_outside_m4(settings)
+    _upgrade_to(settings, "0030_color_mode")
+    engine = migration_engine(settings.sync_database_url)
+    try:
+        with (
+            engine.begin() as c,
+            Operations(MigrationContext.configure(c)).batch_alter_table("member", recreate="always"),
+        ):
+            pass  # a later revision's rebuild, changing nothing
+    finally:
+        engine.dispose()
+    assert "ck_member_color_mode" in _member_schema(settings)
+
+    _downgrade_to(settings, "0029_guests_dont_coordinate")
+    schema = _member_schema(settings)
+    assert "color_mode" not in schema and "ck_member_role" in schema
+    assert _rows_outside_m4(settings) == before
+    _upgrade_to(settings, "0030_color_mode")
+    assert _color_modes(settings)[0] == (1, "auto")
