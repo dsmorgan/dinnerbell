@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+from enum import StrEnum
 from typing import Any
 
 from sqlalchemy import delete, func, or_, select, update
@@ -16,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from dinnerbell.db.models import AuditRow, HouseholdRow, MemberRow, SessionRow
 from dinnerbell.domain.away import Away
 from dinnerbell.domain.household import Household
-from dinnerbell.domain.members import Capabilities, Member, Role
+from dinnerbell.domain.members import Capabilities, ColorMode, Member, Role
 
 
 @dataclass(frozen=True, slots=True)
@@ -52,6 +53,7 @@ def to_member(row: MemberRow) -> Member:
         slack_guest_account=row.slack_guest_account,
         fun_mode=row.fun_mode,
         fun_seen_award=row.fun_seen_award,
+        color_mode=ColorMode(row.color_mode),
         away=Away(row.away_first, row.away_last) if row.away_first and row.away_last else None,
     )
 
@@ -171,6 +173,7 @@ class MemberRepository:
             feedback_reminder=False,
             fun_mode=True,
             fun_seen_award=0,
+            color_mode=ColorMode.AUTO.value,
             active=True,
             created_at=now,
             updated_at=now,
@@ -203,6 +206,7 @@ class MemberRepository:
             feedback_reminder=False,
             fun_mode=True,
             fun_seen_award=0,
+            color_mode=ColorMode.AUTO.value,
             active=True,
             dietary_needs=sorted(dietary_needs),
             join_refused=False,
@@ -236,7 +240,7 @@ class MemberRepository:
         for name, value in values.items():
             if isinstance(value, frozenset):
                 value = sorted(value)  # dietary needs, stored as a JSON list
-            setattr(row, name, value.value if isinstance(value, Role) else value)
+            setattr(row, name, value.value if isinstance(value, StrEnum) else value)  # Role, ColorMode
         row.updated_at = now
         await self._session.flush()
         return to_member(row)

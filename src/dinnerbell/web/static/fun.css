@@ -51,9 +51,11 @@ body[data-fun] {
   --den-wash: transparent;
   --den-snow: #ffffff;
 }
+/* Dark on a dark device unless the viewer chose Light, and always for one who chose Dark (#231). */
 @media (prefers-color-scheme: dark) {
-  body[data-fun] { --den-floor: #6b5038; --den-wash: rgb(27 23 20 / 0.45); --den-snow: #e9eef3; }
+  :root:not([data-theme="light"]) body[data-fun] { --den-floor: #6b5038; --den-wash: rgb(27 23 20 / 0.45); --den-snow: #e9eef3; }
 }
+:root[data-theme="dark"] body[data-fun] { --den-floor: #6b5038; --den-wash: rgb(27 23 20 / 0.45); --den-snow: #e9eef3; }
 body[data-period="breakfast"] { --den-sky1: #ffc9a3; --den-sky2: #fff0d6; }
 body[data-period="lunch"] { --den-sky1: #8fcdf0; --den-sky2: #e6f6fc; }
 body[data-period="afternoon"] { --den-sky1: #f2b65a; --den-sky2: #fde9bf; }

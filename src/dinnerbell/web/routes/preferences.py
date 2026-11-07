@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Preferences: a member's vetoes, scores, capabilities, reminders, dietary needs, and fun mode.
+"""Preferences: a member's vetoes, scores, capabilities, reminders, dietary needs, fun mode, and
+light, dark, or auto.
 
 ``/preferences`` accepts no member ID. Every read and write there is for the signed-in member,
 admins included (FR-29).
@@ -25,10 +26,11 @@ from starlette.responses import Response
 from dinnerbell.domain import labels
 from dinnerbell.domain.catalog import ItemKind, tags_by_kind
 from dinnerbell.domain.events import EventRuleViolation
-from dinnerbell.domain.members import Capabilities, InvalidMemberInput, Member
+from dinnerbell.domain.members import Capabilities, ColorMode, InvalidMemberInput, Member
 from dinnerbell.domain.preferences import LEVEL_LABELS, LEVELS, NEUTRAL, InvalidPreference, Stance, TargetType
 from dinnerbell.services import activity, away, guests
 from dinnerbell.services import preferences as preference_service
+from dinnerbell.services.appearance import set_member_color_mode
 from dinnerbell.services.errors import NotFound
 from dinnerbell.services.fun import set_member_fun_mode
 from dinnerbell.services.variety import household_today
@@ -159,8 +161,11 @@ async def _page(
         "needs_action": f"{base}/needs" if whose.admin else "/me",
         "fun_action": f"{base}/fun" if whose.admin else "/me/fun",
         "fun_member": whose.member,
+        "color_action": f"{base}/color-mode" if whose.admin else "/me/color-mode",
+        "color_member": whose.member,
         "notice": NOTICES.get(notice),
         "fun_saved": notice == "fun",
+        "color_saved": notice == "color",
         "error": error,
         "dietary_tags": await guests.dietary_tags(db, principal.member),
         "today": today,
@@ -412,3 +417,21 @@ async def save_member_fun_mode(
     whose = await _theirs(principal, db, member_id)
     await set_member_fun_mode(db, principal.member, whose.member.id, on, now=context.clock())
     return local_redirect("/admin/members/{}/preferences?notice=fun#fun-mode", whose.member.id)
+
+
+@admin_router.post("/color-mode")
+async def save_member_color_mode(
+    request: Request,
+    principal: AdminCSRFChecked,
+    context: Context,
+    db: Database,
+    member_id: RowId,
+    mode: Annotated[str, Form(max_length=5)] = "",
+) -> Response:
+    chosen = choice(ColorMode, mode)
+    if chosen is None:
+        message = "Not a light, dark, or auto setting."
+        return await render(request, "error.html", {"title": "Not saved", "message": message}, status_code=400)
+    whose = await _theirs(principal, db, member_id)
+    await set_member_color_mode(db, principal.member, whose.member.id, chosen, now=context.clock())
+    return local_redirect("/admin/members/{}/preferences?notice=color#color-mode", whose.member.id)

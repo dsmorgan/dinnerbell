@@ -1437,7 +1437,7 @@ def test_0016_adds_contributions_and_badges_without_touching_a_row_and_downgrade
     after = _rows_outside_m4(settings)
     ours = {"household", "member", "response", "proposal"}
     assert {k: v for k, v in after.items() if k not in ours} == {k: v for k, v in before.items() if k not in ours}
-    assert [row[:-4] for row in after["member"]] == before["member"]  # 0022, 0023, and 0027 add four, last
+    assert [row[:-5] for row in after["member"]] == before["member"]  # 0022, 0023, 0027, and 0030 add five, last
     assert [row[:-2] for row in after["response"]] == before["response"]  # 0025 and 0027 add two, last
     assert [row[:-1] for row in after["proposal"]] == before["proposal"]  # 0026 adds one, last
     (household,) = after["household"]
@@ -1499,7 +1499,7 @@ def test_0016_adds_contributions_and_badges_without_touching_a_row_and_downgrade
     assert {"contribution", "badge_award"} <= _tables(settings)
     again = _rows_outside_m4(settings)
     assert {k: v for k, v in again.items() if k not in ours} == {k: v for k, v in before.items() if k not in ours}
-    assert [row[:-4] for row in again["member"]] == before["member"]
+    assert [row[:-5] for row in again["member"]] == before["member"]
 
 
 # 0017: Slack badge art (#105) ------------------------------------------------------------------------
@@ -2393,3 +2393,52 @@ def test_0027_adds_empty_away_columns_and_downgrade_drops_them(settings: Setting
     assert [row[:-1] for row in after["response"]] == before["response"]
     _downgrade_to(settings, "0026_proposal_mode_chosen")
     assert _rows_outside_m4(settings) == before
+
+
+# 0030: light, dark, or auto (#231) --------------------------------------------------------------------
+
+
+def _color_modes(settings: Settings) -> list[tuple[object, ...]]:
+    engine = create_sync_engine(settings.sync_database_url)
+    try:
+        with engine.connect() as c:
+            return [tuple(r) for r in c.execute(text("SELECT id, color_mode FROM member ORDER BY id"))]
+    finally:
+        engine.dispose()
+
+
+def test_0030_puts_everyone_on_auto_refuses_other_modes_and_downgrade_drops_it(settings: Settings) -> None:
+    """Up adds ``member.color_mode``, auto for every member and guest already there and for anyone
+    added later, and refuses a mode that isn't auto, light, or dark. Down drops the column and
+    changes no other row."""
+    _upgrade_to(settings, "0029_guests_dont_coordinate")
+    _populate_calls(settings)
+    _execute(
+        settings,
+        "INSERT INTO member (id, household_id, display_name, email, role, can_cook, can_pickup, can_order, "
+        "mute_dm_reminders, feedback_reminder, active, slack_link_locked, created_at, updated_at) "
+        "VALUES (2, 1, 'Pat', NULL, 'guest', 0, 0, 0, 0, 0, 1, 0, :t, :t)",
+    )
+    before = _rows_outside_m4(settings)
+
+    _upgrade_to(settings, "0030_color_mode")
+    assert _color_modes(settings) == [(1, "auto"), (2, "auto")]
+    after = _rows_outside_m4(settings)
+    assert [row[:-1] for row in after["member"]] == before["member"]  # the new column is last
+    assert {k: v for k, v in after.items() if k != "member"} == {k: v for k, v in before.items() if k != "member"}
+    _execute(
+        settings,
+        "INSERT INTO member (id, household_id, display_name, email, role, can_cook, can_pickup, can_order, "
+        "mute_dm_reminders, feedback_reminder, active, slack_link_locked, created_at, updated_at) "
+        "VALUES (3, 1, 'Lee', 'lee@example.com', 'member', 0, 0, 0, 0, 0, 1, 0, :t, :t)",
+        "UPDATE member SET color_mode = 'dark' WHERE id = 2",
+    )
+    assert _color_modes(settings) == [(1, "auto"), (2, "dark"), (3, "auto")]
+    with pytest.raises(IntegrityError, match="ck_member_color_mode"):
+        _execute(settings, "UPDATE member SET color_mode = 'Dark' WHERE id = 1")
+    _execute(settings, "DELETE FROM member WHERE id = 3", "UPDATE member SET color_mode = 'auto' WHERE id = 2")
+
+    _downgrade_to(settings, "0029_guests_dont_coordinate")
+    assert _rows_outside_m4(settings) == before
+    _upgrade_to(settings, "0030_color_mode")
+    assert _color_modes(settings) == [(1, "auto"), (2, "auto")]

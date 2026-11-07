@@ -50,6 +50,7 @@ GUEST_ROUTES = {
     ("GET", "/stats/household"),  # sends a guest to /stats: channel posts link it (#153)
     ("POST", "/me"),
     ("POST", "/me/fun"),  # fun mode on or off for themselves (#153)
+    ("POST", "/me/color-mode"),  # light, dark, or auto for themselves (#231)
     ("POST", "/me/fun/seen"),  # the den flipped for their own badges (#153)
     ("GET", "/events/{event_id}"),
     ("GET", "/events/{event_id}/card"),
@@ -230,6 +231,26 @@ def test_a_guest_turns_fun_mode_off_on_their_page(
     today = guest.get("/").text
     assert "data-fun" not in today and 'class="den' not in today
     assert {m.id: m.fun_mode for m in rows(migrated, MemberRow)} == {1: True, pat: False}
+
+
+def test_a_guest_chooses_light_or_dark_on_their_page(
+    admin: TestClient, provider: FakeProvider, migrated: Settings
+) -> None:
+    """A guest's light, dark, or auto (#231) is beside fun mode on their dietary-needs page, and
+    changes only their row and their pages."""
+    pat = add_guest(admin, "Pat", slack="U07PAT")
+    guest = as_guest(admin, provider)
+    me = guest.get("/me").text
+    assert 'action="/me/color-mode"' in me and 'name="mode" value="auto" checked' in me
+    assert me.index('id="fun-mode"') < me.index('id="color-mode"')
+    response = submit(guest, "/me/color-mode", {"mode": "dark"})
+    assert (response.status_code, response.headers["location"]) == (303, "/me?saved=color#color-mode")
+    me = page(guest.get(response.headers["location"]))
+    assert "Saved." in me.split('id="color-mode"', 1)[1].split("</form>", 1)[0]
+    assert "Saved." not in me.split('id="color-mode"', 1)[0]  # not on the needs or fun mode card
+    for path in ("/", "/me", "/stats"):
+        assert '<html lang="en" data-theme="dark">' in guest.get(path).text, path
+    assert {m.id: m.color_mode for m in rows(migrated, MemberRow)} == {1: "auto", pat: "dark"}
 
 
 # Members inviting and answering for guests -----------------------------------------------------------

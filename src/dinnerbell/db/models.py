@@ -66,6 +66,7 @@ class MemberRow(Base):
         UniqueConstraint("household_id", "oidc_subject"),
         UniqueConstraint("household_id", "slack_user_id"),
         CheckConstraint("role IN ('admin', 'member', 'guest')", name="role"),
+        CheckConstraint("color_mode IN ('auto', 'light', 'dark')", name="color_mode"),
         CheckConstraint(
             "(role = 'guest' AND email IS NULL) OR (role <> 'guest' AND email IS NOT NULL AND email <> '')",
             name="email",
@@ -101,6 +102,8 @@ class MemberRow(Base):
     fun_seen_award: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
     """The newest ``badge_award.id`` the den has flipped for (#153); 0 for none. Not a foreign key:
     deleting an award must not touch the member."""
+    color_mode: Mapped[str] = mapped_column(String(5), default="auto", server_default=text("'auto'"))
+    """Light or dark on the web (#231): ``auto`` (follow the device), ``light``, or ``dark``."""
     away_first: Mapped[date | None] = mapped_column(Date)
     away_last: Mapped[date | None] = mapped_column(Date)
     """The member's away window (#196, FR-63): both days or neither, both included."""

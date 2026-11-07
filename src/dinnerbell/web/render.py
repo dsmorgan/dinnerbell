@@ -11,6 +11,7 @@ from starlette.responses import Response
 
 from dinnerbell.config import is_test_instance
 from dinnerbell.domain.fun import Scene, scene
+from dinnerbell.domain.members import ColorMode
 from dinnerbell.services.household import current_household
 from dinnerbell.services.stuck import StuckCall, for_admin
 from dinnerbell.web import filters
@@ -64,6 +65,13 @@ def _fun_scene(request: Request) -> Scene | None:
     return scene(app_context(request).clock(), principal.household.timezone)
 
 
+def _color_mode(request: Request) -> ColorMode:
+    """The viewer's light, dark, or auto (#231). A signed-out page, such as signing in or an
+    error before sign-in, follows the device."""
+    principal = getattr(request.state, "principal", None)
+    return ColorMode.AUTO if principal is None else principal.member.color_mode
+
+
 async def render(
     request: Request, template: str, context: dict[str, Any] | None = None, status_code: int = 200
 ) -> Response:
@@ -80,6 +88,7 @@ async def render(
         "test_instance": is_test_instance(settings.instance_label),  # what only test may do (#60)
         "stuck_calls": _stuck_calls(request),
         "fun": _fun_scene(request),
+        "color_mode": _color_mode(request),
     }
     return TEMPLATES.TemplateResponse(request, template, base | (context or {}), status_code=status_code)
 
