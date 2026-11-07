@@ -408,7 +408,7 @@
     </details>
     {% endif %}
     {% if v.can.manage %}
-    <details class="details-form">
+    <details class="details-form" id="event-{{ e.id }}-plan">
       <summary class="small">Change the plan</summary>
       {% if e.state.value == "decided" %}
       <form method="post" autocomplete="off" action="{{ base }}/meal-time" hx-post="{{ base }}/meal-time" {{ swap|safe }} class="inline-form">
@@ -420,12 +420,18 @@
       {#- Where they're really eating (#219): it records what happened, so nothing here is held to what people offered or ruled out. Never a guest's (FR-58). After Mark done it's an admin's correction (#220). -#}
       {% if v.can.change_place or v.can.correct_place %}
       {% set place_url = base ~ ("/admin/place" if v.can.correct_place else "/place") %}
+      {#- A correction starts from what the meal says, which a History edit from before #224 can have left apart from the call. -#}
+      {% set place_id = v.meal.item_id if v.can.correct_place else e.decided_item_id %}
+      {% set place_name = v.meal.item_name if v.can.correct_place else d.proposal.item.name %}
       <form method="post" autocomplete="off" action="{{ place_url }}" hx-post="{{ place_url }}" {{ swap|safe }} class="stack">
         {{ hidden() }}
         <input type="hidden" name="run" value="{{ e.run }}">
-        <input type="hidden" name="opened_item" value="{{ e.decided_item_id }}">
+        <input type="hidden" name="opened_item" value="{{ place_id }}">
+        {% if place_id != e.decided_item_id %}
+        <p class="small warning">History says {{ place_name }}, but this call still says {{ d.proposal.item.name }}. Keep {{ place_name }} to bring the call into line, or choose a place.</p>
+        {% endif %}
         <label class="field"><span>Place</span>
-          <select name="item_id"><option value="">Keep {{ d.proposal.item.name }}, or type a new one</option>{% for item in v.items if item.id != e.decided_item_id %}{% set hint = v.meal_hint(item) %}<option value="{{ item.id }}">{{ item.name }}{% if hint %} ({{ hint }}){% endif %}</option>{% endfor %}</select>
+          <select name="item_id"><option value="">Keep {{ place_name }}, or type a new one</option>{% for item in v.items if item.id != place_id %}{% set hint = v.meal_hint(item) %}<option value="{{ item.id }}">{{ item.name }}{% if hint %} ({{ hint }}){% endif %}</option>{% endfor %}</select>
         </label>
         <div class="pair">
           <label class="field"><span>Or a new place</span><input type="text" name="new_place" maxlength="100"></label>

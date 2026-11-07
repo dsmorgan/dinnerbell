@@ -64,6 +64,7 @@ from dinnerbell.domain.events import (
     takeout_ways,
 )
 from dinnerbell.domain.guests import GuestAction
+from dinnerbell.domain.meals import MealLog
 from dinnerbell.domain.members import Member
 from dinnerbell.domain.ranking import rank
 from dinnerbell.services import activity, contributions, lifecycle, picks
@@ -735,6 +736,7 @@ async def _plan(
         mode=wanted.place_mode,
         how=wanted.mode if mode_asked else None,
         opened_item_id=opened.item_id,
+        current_item_id=ctx.event.decided_item_id,
     )
     if place is not None:
         if (who_asked or pickup_asked) and not _role_as_opened(ctx, opened):
@@ -939,21 +941,23 @@ async def _place_asked(
     mode: Mode | None,
     how: Mode | None = None,
     opened_item_id: int | None,
+    current_item_id: int | None,
 ) -> _Place | None:
-    """The place asked for, or None when it's the place shown and the place the call has. A place
-    changed elsewhere since it was shown is refused, so this never writes back over it. The
-    change records what happened, so only the way is checked (``check_mode``): vetoes, dietary
-    needs, the variety window, the meal, and who offered don't count here. A new name needs its
-    way, since the way says whether it's a home meal or a restaurant."""
+    """The place asked for, or None when it's the place shown and ``current_item_id``, the place
+    as it stands: the call's, or on a correction, the meal's. A place changed elsewhere since it
+    was shown is refused, so this never writes back over it. The change records what happened, so
+    only the way is checked (``check_mode``): vetoes, dietary needs, the variety window, the meal,
+    and who offered don't count here. A new name needs its way, since the way says whether it's a
+    home meal or a restaurant."""
     event = ctx.event
     picked = item_id if item_id != opened_item_id else None
     if picked is None and name is None:
         return None
     if picked is not None and name is not None:
-        current = ctx.items[event.decided_item_id].name if event.decided_item_id in ctx.items else "the place shown"
+        current = ctx.items[current_item_id].name if current_item_id in ctx.items else "the place shown"
         both = EventRuleViolation(PLACE_OR_NAME.format(current=current), code="place_and_name")
         raise AdjustmentRefused("new_place", both)
-    if event.decided_item_id != opened_item_id:
+    if current_item_id != opened_item_id:
         raise _changed_since("place" if picked is not None else "new_place")
     if picked is not None:
         item = ctx.items.get(picked)
@@ -969,7 +973,7 @@ async def _place_asked(
     if mode is None:
         raise AdjustmentRefused("place_mode", EventRuleViolation(PICK_THE_WAY, code="no_way_chosen"))
     found = await CatalogRepository(db).item_by_name(event.household_id, kind_for(mode), clean)
-    if found is not None and found.id == event.decided_item_id:
+    if found is not None and found.id == current_item_id:
         return None
     if found is not None:
         _part("place_mode", lambda: check_mode(found, mode))
@@ -1030,12 +1034,10 @@ async def _make_it_the_winner(
     and whoever added it did suggest where they ate. Any other place gets a row outside the picks
     (``AFTER_DECISION_RANK``) that names nobody, so it earns nobody credit for suggesting it, or
     for adding it to the catalog. A change of place from such a row removes it, so a call has at
-    most one, and the free-text path is the one a pick that wins takes."""
+    most one, and the free-text path is the one a pick that wins takes. A correction can name the
+    place the call already has, in another way (#224), and then the row stays."""
     household_id = ctx.event.household_id
     proposals = ProposalRepository(db)
-    winner = ctx.winner
-    if winner is not None and winner.after_decision:
-        await proposals.delete(household_id, winner.id)
     target = Proposal(
         0,
         ctx.event.id,
@@ -1048,6 +1050,9 @@ async def _make_it_the_winner(
         mode_chosen=True,
     )
     existing = picks.picked(ctx, target)
+    winner = ctx.winner
+    if winner is not None and winner.after_decision and (existing is None or existing.id != winner.id):
+        await proposals.delete(household_id, winner.id)
     if existing is None:
         row = await proposals.add(
             household_id=household_id,
@@ -1127,7 +1132,15 @@ async def change_place(
         old, old_mode = ctx.winner, event.decided_mode
         if old is None or old_mode is None:  # pragma: no cover - a decided call has both
             raise EventRuleViolation("There's no decision to change.", code="not_decided")
-        place = await _place_asked(db, ctx, item_id=item_id, name=name, mode=mode, opened_item_id=opened_item_id)
+        place = await _place_asked(
+            db,
+            ctx,
+            item_id=item_id,
+            name=name,
+            mode=mode,
+            opened_item_id=opened_item_id,
+            current_item_id=event.decided_item_id,
+        )
         if place is None:
             raise EventRuleViolation(SAME_PLACE, code="same_place")
         activity.about(item=place.item or place.name, mode=place.mode)
@@ -1209,6 +1222,21 @@ async def change_place(
         return tuple(held)
 
 
+def _into_line(ctx: CallContext, meal: MealLog, mode: Mode | None, opened_item_id: int | None) -> _Place:
+    """A correction that asks for the place the meal already says. That's refused, unless an earlier
+    History edit left the call on another place (#224): then it brings the call into line, in a way
+    the meal's place allows. It may be out of the catalog by now: the meal already says it."""
+    event = ctx.event
+    if event.decided_item_id == meal.item_id:
+        raise EventRuleViolation(SAME_PLACE, code="same_place")
+    if meal.item_id != opened_item_id:
+        raise _changed_since("place")
+    item = ctx.items[meal.item_id]
+    way = mode or _way_there(item, None, event.decided_mode)
+    _part("place_mode", lambda: check_mode(item, way))
+    return _Place(item, None, way)
+
+
 async def correct_place(
     db: AsyncSession,
     actor: Member,
@@ -1227,6 +1255,11 @@ async def correct_place(
     the proposal row and the roles the same way: nothing but the way can refuse the place, people
     keep their roles if the way still has them, and a new role goes to its first volunteer, or to
     nobody. ``opened_item_id`` and ``run`` are what the page showed; one changed since is refused.
+
+    It works from what the meal says, since a History edit before #224 could change the meal and
+    leave the call (and its counts) behind. Correcting to the place the call still has moves the
+    meal back, and keeps the call's roles and how it won. Correcting to the place the meal already
+    has moves the call to it, as any other correction would.
 
     It changes every stored copy of the place: the call, the meal log's item and cuisines, so
     history, stats, ranking, and the variety window read the new place, and the feedback on the
@@ -1250,19 +1283,34 @@ async def correct_place(
         if meal is None:
             raise EventRuleViolation(NO_MEAL_LOGGED, code="no_meal")
         ctx = await cc.load(db, event)
-        place = await _place_asked(db, ctx, item_id=item_id, name=name, mode=mode, opened_item_id=opened_item_id)
+        place = await _place_asked(
+            db,
+            ctx,
+            item_id=item_id,
+            name=name,
+            mode=mode,
+            opened_item_id=opened_item_id,
+            current_item_id=meal.item_id,
+        )
         if place is None:
-            raise EventRuleViolation(SAME_PLACE, code="same_place")
+            place = _into_line(ctx, meal, mode, opened_item_id)
         activity.about(item=place.item or place.name, mode=place.mode)
         new_cuisine = _check_cuisine(ctx, place, cuisine_id)
-        roles = _roles_there(ctx, place, None, None)
         before = {a.role: a for a in ctx.assignments if a.role in WORK_ROLES}
-        item, created = await _make_it_the_winner(db, ctx, place, new_cuisine, now)
-        await _save_roles(db, event, before, roles, now)
-        # How the old place won, a lock or a tie, no longer describes the plan.
-        corrected = replace(
-            event, decided_item_id=item.id, decided_mode=place.mode, locked_by=None, tie_how=None, tie_by=None
+        # Only the meal was out of step: the call already has this place, in this way, so it stays as it is.
+        as_it_was = (
+            place.item if place.item is not None and (place.item.id, place.mode) == (old_item, old_mode) else None
         )
+        if as_it_was is None:
+            roles = _roles_there(ctx, place, None, None)
+            item, created = await _make_it_the_winner(db, ctx, place, new_cuisine, now)
+        else:
+            roles = {role: a.member_id for role, a in before.items()}
+            item, created = as_it_was, False
+        await _save_roles(db, event, before, roles, now)
+        corrected = replace(event, decided_item_id=item.id, decided_mode=place.mode)
+        if item.id != old_item:  # how the old place won, a lock or a tie, no longer describes the plan
+            corrected = replace(corrected, locked_by=None, tie_how=None, tie_by=None)
         event = await EventRepository(db).save(corrected, now)
         ctx = await cc.load(db, event)
         await meals.update(
@@ -1292,6 +1340,8 @@ async def correct_place(
             "after_done": True,
             "as": ActingAs.ADMIN.value,
         }
+        if meal.item_id != old_item:  # what the meal said, which an earlier History edit left apart from the call
+            payload["from_meal_item_id"] = meal.item_id
         await audit(db, actor.household_id, actor, "event.place_changed", _target(event.id), payload, now)
         activity.action(
             db,

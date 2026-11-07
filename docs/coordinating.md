@@ -141,6 +141,8 @@ When a meal was marked done before the household changed its mind, correct the p
 
 A correction writes `event.place_changed`, marked `after_done`, and `event.contributions_recounted` if any count moved.
 
+**Change the plan** is the only way to change a call's place once it's done. **Edit** in History shows that place read-only and links here, so the call, its messages, its counts, and its feedback all stay together. If a History edit from an earlier version left a meal and its call on different places, **Change the plan** says so and starts from the meal's place. Keep that place to bring the call into line, or choose the place the call still names to move the meal back. If you deleted the meal from History, there's nothing to correct, and the form doesn't appear.
+
 ## What a guest coordinator can do
 
 A guest coordinator handles the logistics, but not the choice of meal. They can close answers early, make a takeout proposal pickup or delivery during the vote, change the meal time, how you get it, and who does it, hand off, and mark the meal done. They can't vote, lock, break a tie, shuffle, change the place, switch late joiners, **Decide now**, or call off the call. While a guest coordinates, an admin can do those, and a tied vote goes to whoever invited the guest, then to an admin. If the guest has no Slack account, the member who invited them gets their messages, but can't choose the roles for them unless they're an admin. The message says an admin can choose, and an admin has **Assign roles** on the decision.

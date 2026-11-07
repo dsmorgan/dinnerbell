@@ -34,7 +34,7 @@ from dinnerbell.db.events import (
     SuggestionRepository,
     VoteRepository,
 )
-from dinnerbell.db.meals import household_settings
+from dinnerbell.db.meals import MealLogRepository, household_settings
 from dinnerbell.db.outbox import OutboxRepository
 from dinnerbell.db.repositories import HouseholdRepository, MemberRepository
 from dinnerbell.domain import notifications as note
@@ -69,6 +69,7 @@ from dinnerbell.domain.events import (
     veto_participants,
 )
 from dinnerbell.domain.household import Household
+from dinnerbell.domain.meals import MealLog
 from dinnerbell.domain.members import Member
 from dinnerbell.domain.offers import seats_taken
 from dinnerbell.domain.ranking import GroupPreferences
@@ -121,6 +122,8 @@ class CallContext:
     late_preferences: dict[int, GroupPreferences] = field(default_factory=dict)
     """Each late joiner's own stances, while they take part (#76). They never filter, and only
     that late joiner may see what they rule out (``fits_late_joiner``, FR-29)."""
+    meal: MealLog | None = None
+    """The meal a done call logged: None before done, and once an admin deletes it from History."""
 
     def invited(self, member_id: int) -> bool:
         return member_id in self.invitations
@@ -240,6 +243,8 @@ async def load(db: AsyncSession, event: Event) -> CallContext:
     fresh = await EventRepository(db).get(household_id, event.id)
     responses = await ResponseRepository(db).for_event(household_id, event.id)
     late = late_people(responses)
+    state = (fresh or event).state
+    meal = await MealLogRepository(db).by_event(household_id, event.id) if state is EventState.DONE else None
     return CallContext(
         household=household,
         settings=await household_settings(db, household_id),
@@ -254,6 +259,7 @@ async def load(db: AsyncSession, event: Event) -> CallContext:
         tags={t.id: t for t in await catalog.tags(household_id)},
         invitations=await InvitationRepository(db).for_event(household_id, event.id),
         late_preferences={m: await group_preferences(db, household_id, frozenset({m})) for m in late},
+        meal=meal,
     )
 
 

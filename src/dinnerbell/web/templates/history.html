@@ -5,7 +5,7 @@
 {% block title %}History{% endblock %}
 {% block content %}
 <h1>History</h1>
-{% if notice and not notice_meal %}<p class="alert ok" role="status">{{ notice }}</p>{% endif %}
+{% if notice and not notice_meal %}<p class="alert {{ 'error' if notice_refused else 'ok' }}" role="{{ 'alert' if notice_refused else 'status' }}">{{ notice }}</p>{% endif %}
 {% if error %}<p class="alert error" role="alert">{{ error }}</p>{% endif %}
 
 <section class="card" aria-labelledby="variety-heading">
@@ -43,7 +43,7 @@
     {% for meal in meals %}
     <li class="meal" id="meal-{{ meal.id }}">
       {#- The redirect scrolls here, so a notice about this meal shows here, not off screen at the top. -#}
-      {% if notice and meal.id == notice_meal %}<p class="alert ok landed-notice" role="status">{{ notice }}</p>{% endif %}
+      {% if notice and meal.id == notice_meal %}<p class="alert {{ 'error' if notice_refused else 'ok' }} landed-notice" role="{{ 'alert' if notice_refused else 'status' }}">{{ notice }}</p>{% endif %}
       {% set fb = feedback.get(meal.id) %}
       <div class="meal-details">
         <div class="meal-when small muted">{{ meal.day.strftime("%a %b") }} {{ meal.day.day }} · {{ meal.slot.value|capitalize }}</div>
@@ -61,6 +61,7 @@
           <form method="post" action="/history/meals/{{ meal.id }}/delete" class="inline" hx-boost="true"
                 hx-confirm="Delete this meal from history? This can't be undone.">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <input type="hidden" name="shown_meal" value="{{ meal.form_stamp }}">
             <button type="submit" class="button small danger">Delete</button>
           </form>
         </div>
