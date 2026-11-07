@@ -84,14 +84,20 @@ def test_the_stylesheet_loads_each_vendored_font_and_falls_back_to_the_device_fo
 
 
 @pytest.fixture
-def no_host_mime_types(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
-    """Guess types as the slim image does: from Python's own table, with no /etc/mime.types."""
-    monkeypatch.setattr(mimetypes, "knownfiles", [])
-    mimetypes.init()
-    assert mimetypes.guess_type("x.woff2") == (None, None)  # what the image would serve without help
-    yield
-    monkeypatch.undo()
-    mimetypes.init()
+def no_host_mime_types() -> Iterator[None]:
+    """Guess types as the slim image does: from Python's own table, with no /etc/mime.types, and
+    without .woff2, which Python's table lacks before 3.14. Its own MonkeyPatch, so the restore
+    leaves the test's other patches alone, and runs even if the setup fails."""
+    with pytest.MonkeyPatch.context() as patch:
+        try:
+            patch.setattr(mimetypes, "knownfiles", [])
+            mimetypes.init()
+            mimetypes.types_map.pop(".woff2", None)
+            assert mimetypes.guess_type("x.woff2") == (None, None)  # what the image would serve without help
+            yield
+        finally:
+            patch.undo()
+            mimetypes.init()
 
 
 def test_fonts_are_served_from_self_as_static_files(

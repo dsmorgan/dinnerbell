@@ -2475,11 +2475,14 @@ def test_0030_downgrades_after_a_later_revision_rebuilds_member(settings: Settin
             pass  # a later revision's rebuild, changing nothing
     finally:
         engine.dispose()
-    assert "ck_member_color_mode" in _member_schema(settings)
+    # The rebuild moved the check off the column into a table-level clause of its own.
+    clauses = [line.strip().rstrip(",") for line in _member_schema(settings).splitlines()]
+    assert "color_mode VARCHAR(5) DEFAULT 'auto' NOT NULL" in clauses
+    assert "CONSTRAINT ck_member_color_mode CHECK (color_mode IN ('auto', 'light', 'dark'))" in clauses
 
     _downgrade_to(settings, "0029_guests_dont_coordinate")
     schema = _member_schema(settings)
-    assert "color_mode" not in schema and "ck_member_role" in schema
+    assert "color_mode" not in schema and "ck_member_role" in schema and "ck_member_email" in schema
     assert _rows_outside_m4(settings) == before
     _upgrade_to(settings, "0030_color_mode")
     assert _color_modes(settings)[0] == (1, "auto")
