@@ -317,6 +317,55 @@ def test_meal_time_falls_back_to_the_slot_and_never_precedes_the_decision() -> N
     )
 
 
+@pytest.mark.parametrize(
+    ("decided", "expected"),
+    [
+        (time(23, 44, 1), time(23, 45)),  # rounding stays on the day: nothing changes
+        (time(23, 45), time(23, 45)),
+        (time(23, 45, 1), time(23, 59)),
+        (time(23, 53), time(23, 59)),
+        (time(23, 59), time(23, 59)),
+        (time(23, 59, 30), time(23, 59, 30)),  # never before the decision
+    ],
+)
+def test_meal_time_stays_on_its_day_when_rounding_would_leave_it(decided: time, expected: time) -> None:
+    day = date(2026, 10, 22)
+    now = datetime.combine(day, decided, tzinfo=CHICAGO)
+    got = ev.meal_time([], day=day, zone=CHICAGO, default=time(18, 30), not_before=now)
+    assert got == datetime.combine(day, expected, tzinfo=CHICAGO)
+
+
+def test_meal_time_keeps_an_eat_window_in_the_day_and_leaves_the_day_only_once_it_is_over() -> None:
+    day = date(2026, 10, 22)
+    early = datetime(2026, 10, 22, 12, 0, tzinfo=CHICAGO)
+    last_window = [Response(1, Status.IN, eat_from=time(23, 45))]
+    got = ev.meal_time(last_window, day=day, zone=CHICAGO, default=time(18, 30), not_before=early)
+    assert got == datetime(2026, 10, 22, 23, 45, tzinfo=CHICAGO)
+    saved_before_the_limit = [Response(1, Status.IN, eat_from=time(23, 50))]
+    got = ev.meal_time(saved_before_the_limit, day=day, zone=CHICAGO, default=time(18, 30), not_before=early)
+    assert got == datetime(2026, 10, 22, 23, 59, tzinfo=CHICAGO)
+    over = datetime(2026, 10, 23, 0, 0, 5, tzinfo=CHICAGO)
+    got = ev.meal_time([], day=day, zone=CHICAGO, default=time(18, 30), not_before=over)
+    assert got == over and got.astimezone(CHICAGO).date() != day
+
+
+@pytest.mark.parametrize(
+    ("zone", "day", "fold"),
+    [
+        ("America/Chicago", date(2026, 3, 8), 0),  # springs forward at 2:00 that morning
+        ("America/Chicago", date(2026, 11, 1), 0),  # falls back at 2:00 that morning
+        ("America/Havana", date(2026, 3, 7), 0),  # springs forward at midnight, so 00:00 never comes
+        ("America/Sao_Paulo", date(2019, 2, 16), 1),  # falls back at midnight, so 23:59 comes twice
+    ],
+)
+def test_meal_time_finds_the_last_minute_of_a_day_with_a_clock_change(zone: str, day: date, fold: int) -> None:
+    local = ZoneInfo(zone)
+    now = datetime.combine(day, time(23, 53), tzinfo=local).replace(fold=fold).astimezone(UTC)
+    got = ev.meal_time([], day=day, zone=local, default=time(18, 30), not_before=now)
+    assert got - now == timedelta(minutes=6)
+    assert got.astimezone(local).date() == day and got.astimezone(local).time() == time(23, 59)
+
+
 # Permissions ----------------------------------------------------------------------------------
 
 
@@ -657,6 +706,8 @@ def test_deadlines_never_move_past_midnight() -> None:
     assert ev.shifted_deadline(NOW, 240, NOW, latest=midnight) == NOW + timedelta(hours=4)
     with pytest.raises(EventRuleViolation, match="past midnight"):
         ev.shifted_deadline(NOW + timedelta(hours=4), 90, NOW, latest=midnight)
+    with pytest.raises(EventRuleViolation, match="past midnight"):  # at midnight, the call expires
+        ev.shifted_deadline(NOW + timedelta(hours=4), 60, NOW, latest=midnight)
 
 
 # Calling it off and closing early (FR-56) -------------------------------------------------------

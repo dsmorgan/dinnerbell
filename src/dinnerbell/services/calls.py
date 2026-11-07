@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import replace
-from datetime import UTC, date, datetime, time
+from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from sqlalchemy.exc import IntegrityError
@@ -726,12 +726,17 @@ async def lock(
 
 
 def meal_at(ctx: CallContext, at: time) -> datetime:
-    """``at``, a wall time on the call's date, as the meal time: never before the decision (FR-19)."""
+    """``at``, a wall time on the call's date, as the meal time: never before the decision (FR-19).
+    A wall time has no seconds, so the decision's own minute means the decision itself. A meal
+    decided at 23:59:30 shows as 23:59, and saving that as it stands isn't refused (#215)."""
     event = ctx.event
     meal = datetime.combine(event.day, at, tzinfo=ctx.zone).astimezone(UTC)
-    if event.decided_at is not None and meal < event.decided_at:
-        raise EventRuleViolation("Pick a meal time after the decision. Check AM and PM.", code="bad_time")
-    return meal
+    decided = event.decided_at
+    if decided is None or meal >= decided:
+        return meal
+    if decided - meal < timedelta(minutes=1):
+        return decided
+    raise EventRuleViolation("Pick a meal time after the decision. Check AM and PM.", code="bad_time")
 
 
 async def set_meal_time(

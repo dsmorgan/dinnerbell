@@ -7,7 +7,7 @@ counting vote if they join late."""
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -367,13 +367,13 @@ async def test_a_call_posted_early_for_the_day_clocks_go_back(house: House) -> N
 # Late calls --------------------------------------------------------------------------------------
 
 
-async def late_dinner(house: House, starts: datetime) -> int:
-    """Today's dinner started at ``starts``, everyone in, closed at 9:40 PM: 90 minutes to answer
-    and 45 to vote."""
+async def late_dinner(house: House, starts: datetime, closes: time = time(21, 40)) -> int:
+    """Today's dinner started at ``starts``, everyone in, closed at ``closes``: 90 minutes to
+    answer and 45 to vote."""
     house.clock.now = starts
     dinner = await act(house, calls.start_call, house["Alex"], Slot.DINNER, OPENS.date())
     await everyone_in(house, dinner.id)
-    house.clock.now = local(OPENS.date(), 21, 40)
+    house.clock.now = local(OPENS.date(), closes.hour, closes.minute)
     await act(house, calls.close_window, house["Alex"], dinner.id)
     return int(dinner.id)
 
@@ -389,11 +389,22 @@ async def test_a_late_call_keeps_a_decision_time_of_11_45_pm(house: House) -> No
     assert (event.state, event.meal_time) == (EventState.DECIDED, quarter_to)
 
 
-async def test_a_late_call_too_late_to_decide_on_its_day_votes_its_usual_length(house: House) -> None:
-    """Started at 9:31 PM, it would decide at 11:46 PM, and its meal would round up to midnight,
-    the next day. So voting gets its usual 45 minutes from the close, as before."""
+async def test_a_late_call_keeps_a_decision_time_after_11_45_pm(house: House) -> None:
+    """Started at 9:31 PM, it decides at 11:46 PM, with the meal at the last minute of its day (#215)."""
     event_id = await late_dinner(house, local(OPENS.date(), 21, 31))
-    assert (await house.event(event_id)).vote_deadline == local(OPENS.date(), 22, 25)
-    house.clock.now = local(OPENS.date(), 22, 25)
+    deadline = local(OPENS.date(), 23, 46)
+    assert (await house.event(event_id)).vote_deadline == deadline
+    house.clock.now = deadline
+    assert await house.tick() == [Step.CLOSE_VOTING]
+    event = await house.event(event_id)
+    assert (event.state, event.meal_time) == (EventState.DECIDED, local(OPENS.date(), 23, 59))
+
+
+async def test_a_call_with_a_decision_time_after_midnight_votes_its_usual_length(house: House) -> None:
+    """Started at 10:15 PM, it would decide at 12:30 AM, the next day. So voting gets its usual
+    45 minutes from the close, as before."""
+    event_id = await late_dinner(house, local(OPENS.date(), 22, 15), closes=time(22, 20))
+    assert (await house.event(event_id)).vote_deadline == local(OPENS.date(), 23, 5)
+    house.clock.now = local(OPENS.date(), 23, 5)
     assert await house.tick() == [Step.CLOSE_VOTING]
     assert (await house.event(event_id)).state is EventState.DECIDED

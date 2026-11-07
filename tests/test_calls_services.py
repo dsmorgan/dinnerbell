@@ -36,13 +36,14 @@ from dinnerbell.domain.notifications import CallUpdated, from_payload
 from dinnerbell.domain.preferences import Stance, TargetType
 from dinnerbell.domain.ranking import RankingSnapshot, rank, ranking_seed
 from dinnerbell.domain.schedule import Weights
-from dinnerbell.services import call_admin, calls, event_views, lifecycle
+from dinnerbell.services import call_admin, calls, coordinator, event_views, lifecycle
 from dinnerbell.services import catalog as catalog_service
 from dinnerbell.services import schedule as schedule_service
-from dinnerbell.services.call_context import CallContext
+from dinnerbell.services.call_context import CallContext, locked_event
 from dinnerbell.services.database import Database, open_database
 from dinnerbell.services.errors import Forbidden, NotFound
 from dinnerbell.services.preferences import group_preferences, set_my_preference
+from dinnerbell.web.filters import clock, local_hhmm
 from tests.support.calls import OPENS, RESPOND_BY, VOTE_BY, House, dinner_id, furnish, make_house, nobody_coordinates
 from tests.support.clock import FakeClock
 
@@ -1057,19 +1058,132 @@ async def late_vote(house: House) -> int:
     return int(event.id)
 
 
-async def test_a_lock_that_would_put_the_meal_after_midnight_is_refused(house: House) -> None:
-    """Regression: the lock silently expired the call instead of saying why."""
+LAST_MINUTE = local(22, 23, 59)
+"""The last minute of the day ``late_vote``'s call is for."""
+
+
+async def late_tie(house: House) -> tuple[int, dict[str, int]]:
+    """``late_vote``, with Alex and Sam each voting for a different pick."""
     event_id = await late_vote(house)
     ids = await proposal_ids(house, event_id)
-    house.clock.now = local(22, 23, 53)  # rounds up to 00:00, which isn't the call's day
-    with pytest.raises(EventRuleViolation, match="after midnight"):
+    await act(house, calls.vote, house["Alex"], event_id, ids["Siam Garden"])
+    await act(house, calls.vote, house["Sam"], event_id, ids["Taqueria"])
+    return event_id, ids
+
+
+async def decide_late(house: House, way: str, event_id: int, ids: dict[str, int], at: datetime) -> None:
+    """Decide the call at ``at`` by ``way``, as the person or the scheduler does."""
+    if way == "decision time":
+        minutes = (at - local(22, 22, 55)) // timedelta(minutes=1)  # the move is in whole minutes
+        await act(house, call_admin.move_deadline, house["Alex"], event_id, Window.VOTE, minutes)
+    house.clock.now = at
+    if way == "lock":
         await act(house, calls.lock, house["Alex"], event_id, ids["Siam Garden"])
+    elif way == "break the tie":
+        await act(house, coordinator.break_tie, house["Alex"], event_id, ids["Siam Garden"])
+    elif way == "decide now":
+        await act(house, calls.close_window, house["Alex"], event_id)
+    else:
+        await house.tick()
+
+
+EVERY_WAY = ("lock", "break the tie", "decide now", "decision time")
+
+
+@pytest.mark.parametrize("way", EVERY_WAY)
+async def test_every_way_of_deciding_late_puts_the_meal_at_the_last_minute_of_the_day(house: House, way: str) -> None:
+    """Regression (#215): from 23:46, a lock was refused and a vote ended the call as missed."""
+    event_id, ids = await late_tie(house)
+    await decide_late(house, way, event_id, ids, local(22, 23, 53))  # would round up to 00:00
+    event = await house.event(event_id)
+    assert (event.state, event.end_reason) == (EventState.DECIDED, None)
+    assert (event.decided_at, event.meal_time) == (local(22, 23, 53), LAST_MINUTE)
+    assert "decision_made" in await house.kinds()
+
+
+@pytest.mark.parametrize("way", EVERY_WAY)
+async def test_a_decision_in_the_last_minute_of_the_day_eats_at_that_moment(house: House, way: str) -> None:
+    event_id, ids = await late_tie(house)
+    moment = LAST_MINUTE + timedelta(seconds=30)
+    await decide_late(house, way, event_id, ids, moment)
+    event = await house.event(event_id)
+    assert (event.state, event.decided_at, event.meal_time) == (EventState.DECIDED, moment, moment)
+
+
+async def test_a_meal_decided_in_the_last_minute_shows_and_saves_as_that_minute(house: House) -> None:
+    """Regression (#215): the form shows 23:59 for a meal at 23:59:30, and saving it as it stands
+    must not refuse its own value as before the decision."""
+    event_id, ids = await late_tie(house)
+    moment = LAST_MINUTE + timedelta(seconds=30)
+    await decide_late(house, "lock", event_id, ids, moment)
+    meal = (await house.event(event_id)).meal_time
+    assert clock(meal, "America/Chicago") == "11:59 PM" and local_hhmm(meal, "America/Chicago") == "23:59"
+    await act(house, calls.set_meal_time, house["Alex"], event_id, time(23, 59))
+    assert (await house.event(event_id)).meal_time == moment  # still not before the decision
+    with pytest.raises(EventRuleViolation, match="after the decision"):
+        await act(house, calls.set_meal_time, house["Alex"], event_id, time(23, 58))
+
+
+async def test_a_meal_decided_late_can_move_earlier_but_not_before_the_decision(house: House) -> None:
+    event_id, ids = await late_tie(house)
+    await decide_late(house, "lock", event_id, ids, local(22, 23, 53))
+    await act(house, calls.set_meal_time, house["Alex"], event_id, time(23, 54))
+    assert (await house.event(event_id)).meal_time == local(22, 23, 54)
+    with pytest.raises(EventRuleViolation, match="after the decision"):
+        await act(house, calls.set_meal_time, house["Alex"], event_id, time(23, 52))
+
+
+async def test_the_time_to_choose_roles_ends_by_the_last_minute_and_the_meal_finishes_after_midnight(
+    house: House,
+) -> None:
+    """The choice never outlasts the meal, and a meal at 23:59 is done two hours later, as any is."""
+    event_id, ids = await late_tie(house)
+    await act(house, calls.claim_coordinator, house["Sam"], event_id)
+    await decide_late(house, "lock", event_id, ids, local(22, 23, 53))
+    assert (await house.event(event_id)).roles_due_at == LAST_MINUTE
+    house.clock.now = LAST_MINUTE
+    assert await house.tick() == [Step.ASSIGN_ROLES]
+    house.clock.now = local(23, 1, 58)
+    assert await house.tick() == []
+    house.clock.now = local(23, 1, 59)
+    assert await house.tick() == [Step.MARK_DONE]
+    assert (await house.event(event_id)).state is EventState.DONE
+
+
+async def test_a_free_text_winner_decided_late_goes_in_the_catalog(house: House) -> None:
+    event_id = await late_vote(house)
+    thai = house.tags["Thai"].id
+    pho = await act(
+        house, calls.add_proposal, house["Sam"], event_id, Mode.PICKUP, free_text="Late Pho", cuisine_id=thai
+    )
+    await act(house, calls.vote, house["Sam"], event_id, pho.id)
+    await decide_late(house, "decision time", event_id, {}, local(22, 23, 53))
+    stored = await house.event(event_id)
+    assert (stored.state, stored.meal_time) == (EventState.DECIDED, LAST_MINUTE)
+    async with house.sessionmaker() as db:
+        assert await db.scalar(select(CatalogItemRow).where(CatalogItemRow.name == "Late Pho")) is not None
+
+
+AFTER_ITS_DAY = local(23, 0) + timedelta(seconds=5)
+"""After midnight, before the next tick expires the call."""
+
+
+@pytest.mark.parametrize("way", ["lock", "break the tie"])
+async def test_a_lock_after_the_calls_day_is_refused(house: House, way: str) -> None:
+    """The gap between midnight and the tick that expires the call. The refusal says why."""
+    event_id, ids = await late_tie(house)
+    with pytest.raises(EventRuleViolation, match="this call's day is over") as refused:
+        await decide_late(house, way, event_id, ids, AFTER_ITS_DAY)
+    assert refused.value.code == "too_late"
     assert (await house.event(event_id)).state is EventState.VOTING
+    assert await house.tick() == [Step.EXPIRE]
 
 
-async def test_a_vote_that_would_put_the_meal_after_midnight_expires_without_side_effects(house: House) -> None:
+@pytest.mark.parametrize("way", ["decide now", "tick", "decide"])
+async def test_a_vote_after_the_calls_day_expires_without_side_effects(house: House, way: str) -> None:
     """Regression: a free-text winner was added to the catalog (and audited) before the decision
-    turned out too late to make."""
+    turned out too late to make. Decide now and the tick expire the call before they'd decide;
+    ``decide`` keeps its own check behind them."""
     event_id = await late_vote(house)
     thai = house.tags["Thai"].id
     pho = await act(
@@ -1077,8 +1191,15 @@ async def test_a_vote_that_would_put_the_meal_after_midnight_expires_without_sid
     )
     await act(house, calls.vote, house["Sam"], event_id, pho.id)
     await act(house, call_admin.move_deadline, house["Alex"], event_id, Window.VOTE, 58)  # 23:53
-    house.clock.now = local(22, 23, 53)
-    assert await house.tick() == [Step.CLOSE_VOTING]
+    house.clock.now = AFTER_ITS_DAY
+    if way == "decide now":
+        await act(house, calls.close_window, house["Alex"], event_id)
+    elif way == "tick":
+        assert await house.tick() == [Step.EXPIRE]
+    else:
+        household_id = house["Alex"].household_id
+        async with house.sessionmaker() as db, locked_event(db, household_id, event_id, AFTER_ITS_DAY) as event:
+            await lifecycle.decide(db, event, AFTER_ITS_DAY)
     stored = await house.event(event_id)
     assert (stored.state, stored.end_reason, stored.decided_item_id) == (EventState.ABANDONED, EndReason.MISSED, None)
     assert "decision_made" not in await house.kinds()
@@ -1237,6 +1358,8 @@ async def test_a_window_cannot_be_moved_past_midnight(house: House) -> None:
     event_id = await late_vote(house)  # voting until 22:55
     with pytest.raises(EventRuleViolation, match="past midnight"):
         await act(house, call_admin.move_deadline, house["Alex"], event_id, Window.VOTE, 90)
+    with pytest.raises(EventRuleViolation, match="past midnight"):  # at midnight, it would expire, not decide
+        await act(house, call_admin.move_deadline, house["Alex"], event_id, Window.VOTE, 65)
     await act(house, call_admin.move_deadline, house["Alex"], event_id, Window.VOTE, 60)
     assert (await house.event(event_id)).vote_deadline == local(22, 23, 55)
 

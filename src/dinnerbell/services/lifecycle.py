@@ -717,12 +717,13 @@ async def decide(
     coordinates, the coordinator is asked to choose (FR-61): the automatic assignment waits until
     they do, or until the household's time to choose runs out (``assign_due_roles``)."""
     ctx = await load(db, event)
-    # First, before anything is written: a meal that would land after the call's day can't be
-    # decided. A lock says so; the vote deadline ends the call quietly instead.
+    # First, before anything is written: a call whose day is over can't be decided. A lock says
+    # so; the vote deadline ends the call quietly instead. Only a meal time off the day shows it,
+    # since ``meal_time`` keeps a decision made on the day on that day (#215).
     meal = meal_time(ctx.responses, day=event.day, zone=ctx.zone, default=ctx.schedule.meal_time, not_before=now)
     if meal.astimezone(ctx.zone).date() != event.day:
         if locked is not None:
-            raise EventRuleViolation("It's too late to decide: the meal would be after midnight.", code="too_late")
+            raise EventRuleViolation("It's too late to decide: this call's day is over.", code="too_late")
         await expire(db, event, now)
         return
     group = await group_preferences(db, event.household_id, ctx.veto_people)
