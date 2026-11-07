@@ -43,11 +43,12 @@ async def _household_name(request: Request) -> str:
 def _stuck_calls(request: Request) -> list[StuckCall]:
     """The household's stuck calls (#142) as the latest call tick found them, for the banner on
     every Admin tab. Admins only, and never for an HTMX fragment, which has no banner. A boosted
-    form gets a whole page, so it keeps the banner."""
+    form and HTMX's history restore (Back or Forward) get a whole page, so they keep the banner."""
     principal = getattr(request.state, "principal", None)
     if principal is None or not principal.member.is_admin:
         return []
-    fragment = is_htmx(request) and request.headers.get("HX-Boosted") != "true"
+    whole_page = "true" in (request.headers.get("HX-Boosted"), request.headers.get("HX-History-Restore-Request"))
+    fragment = is_htmx(request) and not whole_page
     if not request.url.path.startswith("/admin") or fragment:
         return []
     context = app_context(request)
