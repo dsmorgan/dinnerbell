@@ -59,8 +59,6 @@ class EventInfo:
     respond_deadline: datetime
     vote_deadline: datetime | None = None
     coordinator: PersonInfo | None = None
-    coordinator_is_guest: bool = False
-    """A guest coordinates (FR-58), so they can't break a tie: only an admin can (#214)."""
     end_reason: EndReason | None = None
     ended_by: PersonInfo | None = None
     """Who called the call off (FR-56), when it's cancelled."""
@@ -432,8 +430,6 @@ class RolesToChoose(_Notification):
     member: PersonInfo
     decision: DecisionInfo
     due_at: datetime
-    via: PersonInfo | None = None
-    """For a guest coordinating without Slack (#38), the member who invited them."""
 
     @property
     def idempotency_key(self) -> str:
@@ -441,7 +437,7 @@ class RolesToChoose(_Notification):
 
     @property
     def recipient_id(self) -> int | None:
-        return self.via.id if self.via is not None else self.member.id
+        return self.member.id
 
 
 @dataclass(frozen=True, slots=True)
@@ -715,8 +711,6 @@ class CoordinatingGiven(_Notification):
     at: datetime
     late: bool = False
     """They joined late, as voting had started."""
-    via: PersonInfo | None = None
-    """For a guest without Slack (#38), the member who invited them, who gets the message."""
 
     @property
     def idempotency_key(self) -> str:
@@ -725,7 +719,7 @@ class CoordinatingGiven(_Notification):
 
     @property
     def recipient_id(self) -> int | None:
-        return self.via.id if self.via is not None else self.member.id
+        return self.member.id
 
 
 @dataclass(frozen=True, slots=True)

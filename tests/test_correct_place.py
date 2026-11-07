@@ -56,7 +56,7 @@ from tests.support.clock import FakeClock
 from tests.support.fake_oidc import FakeProvider
 from tests.support.web import htmx, submit
 from tests.test_auth_flow import rows
-from tests.test_change_place import guest_coordinating, tacos, web_decided
+from tests.test_change_place import guest_at_a_decided_call, tacos, web_decided
 from tests.test_contributions import DAY, LUNCH_AT, MORNING, awards, counts, dinner, held
 from tests.test_coordinator import CTX, act, at_deadline, open_dinner, pick_ids, sent, to_voting, vote
 from tests.test_coordinator import database as database  # the fixtures, re-exported for pytest
@@ -166,12 +166,12 @@ async def test_only_an_admin_may_so_not_the_coordinator_or_a_member(house: House
     assert (await meal_row(house, event_id)).item_id == house.items["Siam Garden"].id
 
 
-async def test_a_guest_coordinator_is_refused(house: House) -> None:
-    event_id, pat = await guest_coordinating(house)
+async def test_a_guest_is_refused(house: House) -> None:
+    event_id, pat = await guest_at_a_decided_call(house)
     meal_time = (await house.event(event_id)).meal_time
     assert meal_time is not None
     house.clock.now = meal_time
-    await act(house, calls.mark_done, pat, event_id)
+    await act(house, calls.mark_done, house["Alex"], event_id)
     with pytest.raises(EventRuleViolation) as caught:
         await act(
             house,
@@ -182,7 +182,7 @@ async def test_a_guest_coordinator_is_refused(house: House) -> None:
             mode=Mode.COOK,
             opened_item_id=house.items["Siam Garden"].id,
         )
-    assert caught.value.code == "guests_dont" and str(caught.value) == REFUSED[GuestAction.CHANGE_PLACE]
+    assert caught.value.code == "guests_dont" and str(caught.value) == REFUSED[GuestAction.COORDINATE]
 
 
 async def test_a_call_that_is_not_done_is_refused(house: House) -> None:

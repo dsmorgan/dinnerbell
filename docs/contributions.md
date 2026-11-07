@@ -6,7 +6,7 @@ Dinnerbell counts what each person does to get a meal on the table, and awards a
 
 A call or offer counts the moment it's done. Each person gets one count per kind for it:
 
-- **Cooked, picked up, ordered, coordinated:** whoever the meal assigned, guests included. Ordering counts on a pickup too, apart from picking it up, so one person who does both gets both counts. Pickup meals done before Dinnerbell gave pickup an orderer keep the counts they had. If the coordinator switches a pickup to delivery, whoever was picking up gets no pickup count.
+- **Cooked, picked up, ordered, coordinated:** whoever the meal assigned, guests included, except that guests no longer coordinate. What a guest coordinated before that stays counted. Ordering counts on a pickup too, apart from picking it up, so one person who does both gets both counts. Pickup meals done before Dinnerbell gave pickup an orderer keep the counts they had. If the coordinator switches a pickup to delivery, whoever was picking up gets no pickup count.
 - **At the table:** everyone who was in, including a late joiner who is taking part.
 - **Answered quickly:** any answer within 15 minutes of the call opening, but not an Out your away days gave.
 - **Ideas:** the person whose proposal won; the person whose proposal was new to the household; and the person who added a catalog item the first time it was chosen. If the coordinator changed the place after the decision, these go by the place they ate at: whoever proposed it, if it was a proposal, and whoever added it to the catalog. A new name typed in for the change earns nobody an idea count.
@@ -46,7 +46,7 @@ Each badge is a tier frame with its own icon: Chef (chef hat), Road Runner (car)
 
 **Stats** in the navigation shows each badge at your tier, with progress to the next ("Meals cooked: 63 of 100 for Gold"), the badges you earned in the last three days, and your counts. Badges you haven't earned yet show softly, with the count that earns the first tier. Members also have a **Household** tab with household totals, and the newest badges with who earned them and when; badge posts and the monthly recap in the channel link to it. Nobody is ranked, and nobody sees another member's counts.
 
-A guest sees **Your badges** only: the four pitching-in badges and On a Roll, with no Household tab. A guest who follows a channel post's link to it lands on **Your badges**.
+A guest sees **Your badges** only: the pitching-in badges for cooking, picking up, and ordering, On a Roll, and Quarterback if they earned it before guests stopped coordinating, with no Household tab. A guest who follows a channel post's link to it lands on **Your badges**.
 
 ## App Home
 

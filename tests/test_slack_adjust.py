@@ -15,23 +15,20 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from dinnerbell.channels.slack import ids
-from dinnerbell.channels.slack.interactions import GUEST_TAPS
 from dinnerbell.channels.slack.messages import render
 from dinnerbell.channels.slack.views import adjust_opened
-from dinnerbell.domain.catalog import Mode
 from dinnerbell.domain.events import (
     ADJUST_IS_THE_COORDINATORS,
+    GUESTS_DONT_COORDINATE,
     STALE_CALL,
     AssignmentRole,
     EventRuleViolation,
-    RoleOffer,
     StaleRun,
-    Status,
 )
-from dinnerbell.services import calls, coordinator, event_views, guests
+from dinnerbell.services import calls, coordinator, event_views
 from dinnerbell.services.coordinator import Adjustment, AdjustmentRefused
 from dinnerbell.services.errors import NotFound
-from tests.support.calls import RESPOND_BY, VOTE_BY, House
+from tests.support.calls import VOTE_BY, House
 from tests.support.fake_slack import CHANNEL, state
 from tests.support.slack import Slack, wire
 from tests.test_coordinator import (
@@ -40,7 +37,6 @@ from tests.test_coordinator import (
     add_guest,
     assigned,
     at_deadline,
-    open_dinner,
     pick_ids,
     sent,
     to_voting,
@@ -158,7 +154,7 @@ async def test_each_refused_part_names_itself_and_nothing_changes(house: House) 
         (replace(as_is(house), meal_time=time(16, 0)), "meal_time", "after the decision"),
         (replace(as_is(house), assignee_id=house["Kim"].id), "assignee", "Pick someone who's in."),
         (replace(as_is(house), pickup_id=house["Kim"].id), "pickup", "Pick someone who's in."),
-        (replace(as_is(house), coordinator_id=pat.id), "coordinator", "No such member."),
+        (replace(as_is(house), coordinator_id=pat.id), "coordinator", GUESTS_DONT_COORDINATE),
     ):
         with pytest.raises(AdjustmentRefused) as refused:
             await adjust(house, "Sam", event_id, wanted)
@@ -187,31 +183,6 @@ async def test_a_done_meal_is_not_adjusted(house: House) -> None:
     with pytest.raises(EventRuleViolation) as refused:
         await adjust(house, "Sam", event_id, replace(as_is(house), meal_time=time(19, 0)))
     assert refused.value.code == "not_decided"
-
-
-def test_a_guest_coordinator_may_tap_adjust() -> None:
-    assert ids.ADJUST in GUEST_TAPS  # their logistics (FR-58); the service checks the rest
-
-
-async def test_a_guest_coordinator_adjusts_the_plan(house: House) -> None:
-    pat = await add_guest(house, "Pat")
-    event_id = await open_dinner(house)
-    for name in ("Alex", "Sam", "Lee"):
-        await act(house, calls.respond, house[name], event_id, Status.IN)
-    await act(house, calls.offer_role, house["Alex"], event_id, RoleOffer.PICKUP, True)
-    await act(house, guests.invite, house["Sam"], event_id, guest_id=pat.id)
-    await act(house, calls.respond, pat, event_id, Status.IN)
-    await act(house, calls.claim_coordinator, pat, event_id)
-    house.clock.now = RESPOND_BY
-    await house.tick()
-    await act(house, calls.lock, house["Alex"], event_id, (await pick_ids(house, event_id))["Siam Garden"])
-    assert (await act(house, event_views.event_view, pat, event_id)).can.adjust
-    await act(house, coordinator.choose_roles, pat, event_id, mode=Mode.PICKUP)  # Pat keeps it pickup (#178)
-    wanted = Adjustment(time(19, 0), house["Lee"].id, house["Sam"].id, pickup_id=house["Lee"].id)
-    opened = Adjustment(time(18, 30), house["Lee"].id, pat.id, pickup_id=house["Alex"].id)
-    assert await act(house, coordinator.adjust, pat, event_id, wanted, opened=opened, run=1) == wanted
-    event, ctx = await house.event(event_id), await house.context(event_id)
-    assert (event.coordinator_id, assigned(ctx)[AssignmentRole.PICKUP]) == (house["Sam"].id, house["Lee"].id)
 
 
 # Slack -----------------------------------------------------------------------------------------------

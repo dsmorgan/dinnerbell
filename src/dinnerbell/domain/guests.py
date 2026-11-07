@@ -7,18 +7,18 @@ place that says what a guest may do, by action and by the call's state (``GUEST_
 use case a guest can reach asks ``check_guest`` first; members and admins pass through it
 untouched. Anything a guest may not do raises ``EventRuleViolation`` with words to show them.
 
-The rules, as David confirmed them on 2026-10-24:
+The rules, as David confirmed them on 2026-10-24, with rule 2 changed on 2026-11-07 (#227), when
+guests stopped coordinating:
 
 1. A guest is in only by invitation, one call at a time (``invitation``), and only to a call.
-2. Once in, a guest can answer In or Out, offer to cook, pick up, or order, and coordinate the
-   logistics: close the window, mark it done, change the meal time or who does what, and hand
-   coordinating to someone else. They can't vote, add a proposal, suggest, veto, lock a pick,
-   or break a tie; with a guest coordinating, the tie goes to whoever invited them, then to an
-   admin.
+2. Once in, a guest can answer In or Out and offer to cook, pick up, or order, and can be assigned
+   those roles. A guest never coordinates, however it would come to them: coordinating means using
+   Dinnerbell to steer a call, and a guest has little or no access to it. So they can't do what a
+   coordinator does either, or mark the meal done. They can't vote, add a proposal, suggest, or
+   veto.
 3. Nor can a guest start, schedule, post, call off, or re-run a call, make or join an offer, give
    feedback, invite anyone, or change anything but their own dietary needs.
-4. A guest doesn't join a call late (#76): they come by invitation while answers are open. Nor
-   does a guest coordinating flip a late joiner's switches; an admin does.
+4. A guest doesn't join a call late (#76): they come by invitation while answers are open.
 """
 
 from __future__ import annotations
@@ -27,7 +27,15 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import StrEnum
 
-from dinnerbell.domain.events import GUEST_NOT_INVITED, Event, EventKind, EventRuleViolation, EventState, Status
+from dinnerbell.domain.events import (
+    GUEST_NOT_INVITED,
+    GUESTS_DONT_COORDINATE,
+    Event,
+    EventKind,
+    EventRuleViolation,
+    EventState,
+    Status,
+)
 from dinnerbell.domain.members import InvalidMemberInput, Member, normalize_display_name
 
 
@@ -38,13 +46,11 @@ class GuestAction(StrEnum):
     OFFER_ROLE = "offer_role"
     DETAILS = "details"
     COORDINATE = "coordinate"
-    HAND_OFF = "hand_off"
-    CLOSE_WINDOW = "close_window"
-    MANAGE_DECISION = "manage_decision"
+    """Take on coordinating, or use anything only a coordinator can (#227). Slack's channel messages
+    show these buttons to everyone, so a guest can still tap one and needs a reason."""
     MARK_DONE = "mark_done"
     VOTE = "vote"
     PROPOSE = "propose"
-    LOCK = "lock"
     CALL_OFF = "call_off"
     START = "start"
     POST_NOW = "post_now"
@@ -54,46 +60,25 @@ class GuestAction(StrEnum):
     FEEDBACK = "feedback"
     INVITE = "invite"
     JOIN_LATE = "join_late"
-    LATE_SWITCHES = "late_switches"
-    SHUFFLE = "shuffle"
-    BREAK_TIE = "break_tie"
-    SET_WAY = "set_way"
-    """Set a takeout pick to pickup or delivery while voting (#178): logistics, like the roles."""
-    MOVE_DECISION_TIME = "move_decision_time"
-    """Move the decision time while voting (#198): logistics, as long as voting stays open."""
-    CHANGE_PLACE = "change_place"
-    """Change the place after the decision (#219): that's what's chosen, not logistics."""
 
 
 ANSWERING = frozenset({EventState.COLLECTING})
-OPEN = frozenset({EventState.COLLECTING, EventState.VOTING, EventState.DECIDED})
 
 GUEST_RULES: dict[GuestAction, frozenset[EventState]] = {
     GuestAction.VIEW: frozenset(EventState),
     GuestAction.ANSWER: ANSWERING,
     GuestAction.OFFER_ROLE: ANSWERING,
-    GuestAction.COORDINATE: frozenset({EventState.COLLECTING, EventState.VOTING}),
-    GuestAction.HAND_OFF: OPEN,
-    # Close now only while answers are open: "Decide now" while voting picks the plan from the
-    # votes, which is choosing, not logistics.
-    GuestAction.CLOSE_WINDOW: frozenset({EventState.COLLECTING}),
-    GuestAction.MANAGE_DECISION: frozenset({EventState.DECIDED}),
-    GuestAction.SET_WAY: frozenset({EventState.VOTING}),
-    # The decision time, but never to now: that decides the plan (``check_guest_keeps_voting_open``).
-    GuestAction.MOVE_DECISION_TIME: frozenset({EventState.VOTING}),
-    GuestAction.MARK_DONE: frozenset({EventState.DECIDED}),
 }
 """What an invited guest may do, and in which states of the call. Every action not listed is
-refused in every state: ``REFUSED`` says why. The use case still checks its own rules after
-this, such as only the coordinator closing a window."""
+refused in every state: ``REFUSED`` says why."""
 
 REFUSED: dict[GuestAction, str] = {
     GuestAction.MAYBE: "As a guest, you're in or out.",
     GuestAction.DETAILS: "As a guest, ask whoever invited you to add details.",
+    GuestAction.COORDINATE: GUESTS_DONT_COORDINATE,
+    GuestAction.MARK_DONE: "A household member marks the meal done, or it ends on its own after the meal.",
     GuestAction.VOTE: "Guests don't vote, but thanks for joining!",
     GuestAction.PROPOSE: "Guests don't add proposals. Ask whoever invited you.",
-    GuestAction.LOCK: "Guests don't pick the plan. A member who coordinates, or an admin, can lock it.",
-    GuestAction.CHANGE_PLACE: "Guests don't pick the plan. An admin can change the place.",
     GuestAction.CALL_OFF: "Only a household member can call it off.",
     GuestAction.START: "Only a household member can start a call.",
     GuestAction.POST_NOW: "Only a household member can post a call.",
@@ -103,11 +88,6 @@ REFUSED: dict[GuestAction, str] = {
     GuestAction.FEEDBACK: "Thanks! Feedback is for household members.",
     GuestAction.INVITE: "Only a household member can invite a guest.",
     GuestAction.JOIN_LATE: "Guests come by invitation while answers are open. Ask whoever invited you.",
-    GuestAction.LATE_SWITCHES: "Guests don't decide that. A member who coordinates, or an admin, can.",
-    GuestAction.SHUFFLE: (
-        "Guests don't pick the plan. A member who coordinates, or an admin, can shuffle the proposals."
-    ),
-    GuestAction.BREAK_TIE: "Guests don't pick the plan. A member who coordinates, or an admin, can break the tie.",
 }
 NOT_INVITED = GUEST_NOT_INVITED
 NOT_NOW = "That isn't open to guests right now."
@@ -158,16 +138,6 @@ def can_answer_for(guest: Member, actor: Member, inviter_id: int | None) -> bool
         and actor.is_member
         and (actor.id == inviter_id or actor.is_admin)
     )
-
-
-def tie_breaker(coordinator: Member | None, inviter_id: int | None) -> int | None:
-    """Whose vote breaks a tie at the deadline (FR-16): the coordinator, or, when the
-    coordinator is a guest, whoever invited them; None leaves it to the admins."""
-    if coordinator is None:
-        return None
-    if coordinator.is_guest:
-        return inviter_id
-    return coordinator.id
 
 
 @dataclass(frozen=True, slots=True)

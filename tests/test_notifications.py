@@ -206,13 +206,6 @@ EXAMPLES: list[tuple[n.Notification, str, str | None, str | None, int | None]] =
         ALEX.id,  # the coordinator (#87)
     ),
     (
-        n.RolesToChoose(EVENT, PAT, DECISION, WHEN, via=SAM),
-        f"event:7:run2:roles_to_choose:member{PAT.id}",
-        None,
-        None,
-        SAM.id,  # a guest coordinating without Slack: the member who invited them
-    ),
-    (
         n.AssignmentMade(EVENT, 13, SAM, (AssignmentRole.PICKUP,), DECISION, assigned_by=ALEX),
         f"event:7:run2:assignment_made:member{SAM.id}:13",
         None,

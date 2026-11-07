@@ -18,7 +18,7 @@ from dinnerbell.channels.slack.interactions import JOIN_OFFER, JOINED, UNKNOWN_U
 from dinnerbell.channels.slack.messages import MOVED_ON
 from dinnerbell.config import Settings
 from dinnerbell.db.repositories import MemberRepository
-from dinnerbell.domain.events import GUESTS_DONT, EventState, RoleOffer, Status
+from dinnerbell.domain.events import GUEST_NOT_INVITED, GUESTS_DONT, EventState, RoleOffer, Status
 from dinnerbell.domain.guests import REFUSED, GuestAction
 from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.members import Member, Role
@@ -230,7 +230,6 @@ async def test_a_guest_sees_only_their_invitations_and_answers_in_or_out(slack: 
         ids.CARD_ACTION_FOR_STATUS[Status.IN],
         ids.CARD_ACTION_FOR_STATUS[Status.OUT],
         *ids.CARD_OFFER,  # the role offers, as on their card and Home (#149)
-        ids.CARD_COORDINATE,
         "link_event",
     }
     await slack.open_home(PAT)
@@ -240,7 +239,6 @@ async def test_a_guest_sees_only_their_invitations_and_answers_in_or_out(slack: 
         ids.CARD_ACTION_FOR_STATUS[Status.IN],
         ids.CARD_ACTION_FOR_STATUS[Status.OUT],
         *ids.CARD_OFFER,
-        ids.CARD_COORDINATE,
         "link_event",
     }
     await slack.click(PAT, ids.CARD_ACTION_FOR_STATUS[Status.IN], ids.card_value(event_id, 1), home=True)
@@ -277,6 +275,11 @@ async def test_a_guest_sees_only_their_invitations_and_answers_in_or_out(slack: 
         (ids.POST_NOW, "card"),
         (ids.JOIN_OFFER, "card"),
         (ids.MAKE_MEMBER, "jo"),
+        (ids.CLOSE_WINDOW, "card"),
+        (ids.CALL_MENU, "cancel"),
+        (ids.ASSIGN_ROLES, "card"),
+        (ids.ADJUST, "card"),
+        (ids.SET_WAY, "card"),
     ],
 )
 async def test_every_other_button_is_refused_to_a_guest(
@@ -299,6 +302,60 @@ async def test_every_other_button_is_refused_to_a_guest(
     expected = REFUSED[GuestAction.MAYBE] if action_id == ids.ACTION_FOR_STATUS[Status.MAYBE] else GUESTS_DONT
     assert slack.ephemerals(PAT)[-1] == expected
     assert await house.kinds() == before and slack.fake.of("views.open") == []
+
+
+@pytest.mark.parametrize("action_id", [ids.COORDINATE, ids.CALL_COORDINATE, ids.CARD_COORDINATE])
+async def test_ill_coordinate_on_a_channel_message_tells_a_guest_why_not(
+    slack: Slack, house: House, action_id: str
+) -> None:
+    """The call message's button is everyone's to see, and an older card may still have one (#227)."""
+    event_id = await open_dinner(house)
+    async with house.sessionmaker() as db:
+        await guests.invite(db, house["Kim"], event_id, guest_id=house["Pat"].id, now=house.clock())
+    value = str(event_id) if action_id == ids.COORDINATE else ids.card_value(event_id, 1)
+    if action_id == ids.CARD_COORDINATE:  # a Home from before #227
+        await slack.click(PAT, action_id, value, home=True)
+        assert REFUSED[GuestAction.COORDINATE] in json.dumps(slack.last_home(PAT))
+    else:
+        await slack.click(PAT, action_id, value)
+        assert slack.ephemerals(PAT)[-1] == REFUSED[GuestAction.COORDINATE]
+    assert (await house.context(event_id)).event.coordinator_id is None
+
+
+async def test_a_guest_not_invited_who_taps_ill_coordinate_is_told_only_that(slack: Slack, house: House) -> None:
+    event_id = await open_dinner(house)
+    await slack.click(PAT, ids.COORDINATE, str(event_id))
+    assert slack.ephemerals(PAT)[-1] == GUEST_NOT_INVITED
+
+
+async def test_a_guest_who_taps_mark_done_is_told_why_not(slack: Slack, house: House) -> None:
+    event_id = await open_dinner(house)
+    async with house.sessionmaker() as db:
+        await guests.invite(db, house["Kim"], event_id, guest_id=house["Pat"].id, now=house.clock())
+        await calls.respond(db, house["Pat"], event_id, Status.IN, now=house.clock())
+    await slack.click(PAT, ids.MARK_DONE, str(event_id))
+    assert slack.ephemerals(PAT)[-1] == REFUSED[GuestAction.MARK_DONE]
+
+
+async def test_a_card_and_a_home_never_offer_a_guest_coordinating(slack: Slack, house: House) -> None:
+    """A registered guest's invitation, card, and Home, and the inviter's rows for one without Slack."""
+    event_id = await open_dinner(house)
+    async with house.sessionmaker() as db:
+        await guests.invite(db, house["Kim"], event_id, guest_id=house["Pat"].id, now=house.clock())
+        await guests.invite(db, house["Kim"], event_id, guest_id=house["Jo"].id, now=house.clock())
+    await slack.drain()
+    (dm,) = [c for c in slack.fake.of("chat.postMessage") if c.args["channel"] == PAT]
+    blocks = dm.args["blocks"] if isinstance(dm.args["blocks"], list) else json.loads(dm.args["blocks"])
+    assert ids.CARD_COORDINATE not in buttons(blocks)
+    await slack.open_home(PAT)
+    assert ids.CARD_COORDINATE not in buttons(slack.last_home(PAT)["blocks"])
+    await slack.click(PAT, ids.ANSWER, ids.card_value(event_id, 1))
+    assert ids.CARD_COORDINATE not in buttons(slack.cards(PAT)[-1]["blocks"])
+    # The member still has their own, and nothing on Jo's row coordinates.
+    await slack.click(SLACK_IDS["Kim"], ids.ANSWER, ids.card_value(event_id, 1))
+    shown = [e for b in slack.cards(SLACK_IDS["Kim"])[-1]["blocks"] if b["type"] == "actions" for e in b["elements"]]
+    assert [e["action_id"] for e in shown].count(ids.CARD_COORDINATE) == 1
+    assert any(e["action_id"] in ids.GUEST_RESPOND for e in shown)
 
 
 MAX_ROW = 5

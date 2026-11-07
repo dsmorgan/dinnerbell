@@ -128,6 +128,8 @@ OFFER_JOIN_INSTEAD = "This is an offer: tap Count me in to join it."
 OFFER_CHANGE = "To change an offer, call it off and post a new one."
 NO_COORDINATOR = "An offer has no coordinator: whoever made it is in charge."
 GUESTS_DONT = "Guests can answer and pitch in, but not that."
+GUESTS_DONT_COORDINATE = "Only household members coordinate."
+"""FR-58, #227: to a guest who tries it, and to whoever tries to give it to a guest."""
 GUEST_NOT_INVITED = "You haven't been invited to this one. Ask a household member to invite you."
 """For a guest at a rule only members may use (#38). ``domain.guests`` has the full matrix."""
 JOIN_LATE_PROMPT = "You missed the answers. Join late?"
@@ -698,16 +700,13 @@ def decide_winner(
     *,
     coordinator_id: int | None,
     admin_ids: frozenset[int],
-    admins_next: bool = False,
 ) -> Winner | None:
     """The proposal that wins at the vote deadline, or None if none is covered (FR-16).
 
     Most counted votes wins. A tie goes, in this order, to the tied proposal the coordinator
-    voted for; the one more admins voted for (only with no coordinator, or when ``admins_next``);
-    the one eaten longest ago, where never eaten is the longest; then the stored rank. Each rule
-    only narrows the tied proposals, and the one that leaves a single proposal is how the tie was
-    broken. ``admins_next`` lets admins break a tie ``coordinator_id``'s vote didn't: with a guest
-    coordinating, ``coordinator_id`` is whoever invited them, and admins come after them (#38).
+    voted for; the one more admins voted for (only with no coordinator); the one eaten longest
+    ago, where never eaten is the longest; then the stored rank. Each rule only narrows the tied
+    proposals, and the one that leaves a single proposal is how the tie was broken.
     """
     eligible = [t for t in tallies if t.covered]
     if not eligible:
@@ -722,7 +721,7 @@ def decide_winner(
         voted = [t for t in tied if coordinator_id in t.voters]
         if voted and len(voted) < len(tied):
             tied, how, by = voted, TieHow.COORDINATOR_VOTE, coordinator_id
-    if len(tied) > 1 and (coordinator_id is None or admins_next):
+    if len(tied) > 1 and coordinator_id is None:
         most = max(len(t.voters & admin_ids) for t in tied)
         picked = [t for t in tied if len(t.voters & admin_ids) == most]
         if most and len(picked) < len(tied):
@@ -746,10 +745,9 @@ def choose_winner(
     *,
     coordinator_id: int | None,
     admin_ids: frozenset[int],
-    admins_next: bool = False,
 ) -> ProposalTally | None:
     """``decide_winner``'s proposal, without how a tie was broken."""
-    winner = decide_winner(tallies, coordinator_id=coordinator_id, admin_ids=admin_ids, admins_next=admins_next)
+    winner = decide_winner(tallies, coordinator_id=coordinator_id, admin_ids=admin_ids)
     return None if winner is None else winner.tally
 
 
@@ -870,16 +868,19 @@ def is_coordinator(event: Event, actor: Member) -> bool:
     return event.coordinator_id is not None and event.coordinator_id == actor.id
 
 
-def check_claim_coordinator(
-    event: Event, actor: Member, *, invited: bool = False, mine: Response | None = None
-) -> None:
-    """A guest claims coordinating only on a call they're ``invited`` to (#38). Claiming puts
-    them in (``with_coordinating``), so a late joiner the coordinator switched off (``mine``)
-    can't claim it, as they can't rejoin on their own (#76)."""
+def check_can_coordinate(person: Member) -> None:
+    """Only household members coordinate (FR-10, FR-58, #227): a guest never does, however it
+    would come to them."""
+    if person.is_guest:
+        raise EventRuleViolation(GUESTS_DONT_COORDINATE, code="guests_dont")
+
+
+def check_claim_coordinator(event: Event, actor: Member, *, mine: Response | None = None) -> None:
+    """Claiming puts someone in (``with_coordinating``), so a late joiner the coordinator switched
+    off (``mine``) can't claim it, as they can't rejoin on their own (#76)."""
     if not actor.active:
         raise EventRuleViolation("Only active members can coordinate.", code="inactive")
-    if actor.is_guest and not invited:
-        raise EventRuleViolation(GUEST_NOT_INVITED, code="not_invited")
+    check_can_coordinate(actor)
     if event.is_offer:
         raise EventRuleViolation(NO_COORDINATOR, code="is_offer")
     if event.state not in {EventState.COLLECTING, EventState.VOTING}:
@@ -907,23 +908,20 @@ def check_coordinator_in(event: Event, response: Response | None) -> None:
         raise EventRuleViolation(COORDINATOR_NOT_IN, code="not_in")
 
 
-def with_coordinating(
-    event: Event, current: Response | None, member_id: int, now: datetime, *, guest: bool = False
-) -> Response | None:
+def with_coordinating(event: Event, current: Response | None, member_id: int, now: datetime) -> Response | None:
     """The answer of whoever takes on coordinating, by claiming it, a hand-off, or an admin
     (#154): coordinating puts them in. None when nothing changes. While answers are open
     they're in, as tapping In does. While voting a member joins late, as **I'm in (late)**
     does, so their guests and stances don't change the picks (FR-60), but their vote counts, as
     a coordinator's always has; a late joiner already in gets a counting vote too. They can
-    switch it off like anyone's. A ``guest`` is in, never late: a guest doesn't vote, and their
-    own dietary needs must always hold (FR-57), which a late joiner's don't. Once decided nobody
-    joins, so ``check_coordinator_in`` refuses anyone who isn't in."""
+    switch it off like anyone's. Once decided nobody joins, so ``check_coordinator_in`` refuses
+    anyone who isn't in."""
     voting = event.state is EventState.VOTING
     if current is not None and current.is_in:
-        if voting and current.late and not current.vote_counts and not guest:
+        if voting and current.late and not current.vote_counts:
             return replace(current, vote_counts=True)
         return None
-    if voting and not guest:
+    if voting:
         return replace(with_late_join(current, member_id, now), vote_counts=True)
     return with_status(current, member_id, Status.IN, now)
 
@@ -980,6 +978,7 @@ def check_handoff(event: Event, actor: Member, target: Member) -> None:
         raise EventRuleViolation("This call is over.", code="call_finished")
     if not target.active or target.id == actor.id:
         raise EventRuleViolation("Pick another active member.", code="bad_member")
+    check_can_coordinate(target)
 
 
 def check_can_vote(event: Event, actor: Member, response: Response | None) -> None:
@@ -1110,11 +1109,10 @@ COORDINATORS_OWN = (
 
 def check_can_switch_late(event: Event, actor: Member, member_id: int | None = None) -> ActingAs:
     """Who flips a late joiner's switches, taking part and vote counts (#76): the coordinator,
-    or any admin, alongside them (#179). Never a guest, even one coordinating, since choosing
-    whose vote counts is picking the plan, not logistics (#38). Only while voting, the only time
-    anyone joins late. An admin can't flip the coordinator's own switches (``member_id``): a
-    coordinator's vote always counts, and taking part off would release them (FR-10), so an
-    admin reassigns coordinating instead. Returns the capacity they act in, for the audit row."""
+    or any admin, alongside them (#179). Only while voting, the only time anyone joins late. An
+    admin can't flip the coordinator's own switches (``member_id``): a coordinator's vote always
+    counts, and taking part off would release them (FR-10), so an admin reassigns coordinating
+    instead. Returns the capacity they act in, for the audit row."""
     if not actor.active:
         raise EventRuleViolation("Only active members can change that.", code="inactive")
     if actor.is_guest:
@@ -1136,8 +1134,7 @@ TIE_BREAKERS = "Only the coordinator or an admin can break a tie."
 
 def _check_picks_power(event: Event, actor: Member, *, refusal: str, closed: str) -> ActingAs:
     """Who may use a power over the picks while voting (#87): the coordinator, or any admin,
-    alongside them (#179). Never a guest, even one coordinating, since choosing the plan isn't
-    a guest's (#38). Returns the capacity they act in, for the audit row."""
+    alongside them (#179). Returns the capacity they act in, for the audit row."""
     if not actor.active:
         raise EventRuleViolation("Only active members can do that.", code="inactive")
     if actor.is_guest:
@@ -1172,9 +1169,9 @@ def check_can_break_tie(event: Event, actor: Member) -> ActingAs:
 
 
 def check_can_choose_roles(event: Event, actor: Member) -> None:
-    """Choose the winning pick's mode and who does its role (FR-61): the coordinator, a guest
-    coordinator too (FR-58), or an admin, while the call is decided. It is
-    ``check_can_manage_decision`` for a call that hasn't been marked done."""
+    """Choose the winning pick's mode and who does its role (FR-61): the coordinator or an admin,
+    while the call is decided. It is ``check_can_manage_decision`` for a call that hasn't been
+    marked done."""
     check_can_manage_decision(event, actor)
     if event.state is not EventState.DECIDED:
         raise EventRuleViolation("There's no decision to change.", code="not_decided")
@@ -1182,8 +1179,7 @@ def check_can_choose_roles(event: Event, actor: Member) -> None:
 
 def check_can_change_place(event: Event, actor: Member) -> ActingAs:
     """Change the place after the decision (#219, spec 5.7): the coordinator or an admin, while
-    the call is decided. Never a guest, even one coordinating (``GuestAction.CHANGE_PLACE``,
-    FR-58). Returns the capacity they act in, for the audit row."""
+    the call is decided. Returns the capacity they act in, for the audit row."""
     check_can_choose_roles(event, actor)
     return ActingAs.COORDINATOR if is_coordinator(event, actor) else ActingAs.ADMIN
 
@@ -1207,8 +1203,7 @@ WAY_SETTERS = "Only the coordinator or an admin can choose pickup or delivery."
 
 def check_can_set_way(event: Event, actor: Member) -> None:
     """Set a takeout pick to pickup or delivery during the vote (#178): who may choose the roles
-    after the decision (FR-61), the coordinator, a guest coordinator too (FR-58), or any admin,
-    while voting is open."""
+    after the decision (FR-61), the coordinator or any admin, while voting is open."""
     if not actor.active:
         raise EventRuleViolation("Only active members can change the proposals.", code="inactive")
     if event.is_offer:
@@ -1220,16 +1215,12 @@ def check_can_set_way(event: Event, actor: Member) -> None:
 
 
 DECISION_TIME_MOVERS = "Only the coordinator or an admin can move the decision time."
-GUEST_DECIDES_NOW = (
-    "That would close voting now, and guests don't pick the plan. Pick a later time, or a member can decide now."
-)
 
 
 def check_can_move_decision_time(event: Event, actor: Member, *, now: datetime) -> ActingAs:
-    """Move the decision time earlier or later while voting (#198, FR-6): the coordinator, a
-    guest coordinator too (FR-58), or any admin, until it has passed (``check_deadline_ahead``).
-    Returns the capacity they act in, for the audit row. The admin moves either window from the
-    web with ``call_admin.move_deadline``."""
+    """Move the decision time earlier or later while voting (#198, FR-6): the coordinator or any
+    admin, until it has passed (``check_deadline_ahead``). Returns the capacity they act in, for
+    the audit row. The admin moves either window from the web with ``call_admin.move_deadline``."""
     if not actor.active:
         raise EventRuleViolation("Only active members can move the decision time.", code="inactive")
     if event.is_offer:
@@ -1259,20 +1250,13 @@ def check_deadline_ahead(event: Event, window: Window, *, now: datetime) -> None
         raise EventRuleViolation(message, code=code)
 
 
-def check_guest_keeps_voting_open(event: Event, actor: Member, minutes: int, *, now: datetime) -> None:
-    """A guest coordinator moves the decision time but never to now or before, which would close
-    voting and decide the plan: that's **Decide now**, which isn't a guest's (FR-58)."""
-    if actor.is_guest and event.vote_deadline is not None and event.vote_deadline + timedelta(minutes=minutes) <= now:
-        raise EventRuleViolation(GUEST_DECIDES_NOW, code="guests_dont")
-
-
 ADJUST_IS_THE_COORDINATORS = "Only the coordinator can adjust the plan here. An admin can change it on the web."
 
 
 def check_can_adjust(event: Event, actor: Member) -> None:
     """**Adjust** in Slack (spec 5.7): the meal time, who does the role, and handing off, in one
-    modal. Only the coordinator, a guest coordinator too (FR-58), while the call is decided; an
-    admin's overrides stay on the web."""
+    modal. Only the coordinator, while the call is decided; an admin's overrides stay on the
+    web."""
     if not event.is_offer and not is_coordinator(event, actor):
         raise EventRuleViolation(ADJUST_IS_THE_COORDINATORS, code="not_coordinator")
     check_can_choose_roles(event, actor)
@@ -1340,8 +1324,7 @@ def check_cook_list(item: CatalogItem, mode: Mode, actor: Member, *, ask: str) -
 
 
 def check_can_lock(event: Event, actor: Member) -> None:
-    """FR-15: the coordinator, or the admin, locks a proposal during the vote window. A guest
-    coordinator can't: picking between proposals isn't theirs (#38)."""
+    """FR-15: the coordinator, or the admin, locks a proposal during the vote window."""
     if actor.is_guest:
         raise EventRuleViolation(GUESTS_DONT, code="guests_dont")
     if event.state is not EventState.VOTING:
@@ -1366,9 +1349,11 @@ def check_can_manage_decision(event: Event, actor: Member) -> None:
 
 
 def check_can_mark_done(event: Event, actor: Member, response: Response | None, *, now: datetime) -> None:
-    """FR-21: any participant marks a decided event done; so can the coordinator and admin.
+    """FR-21: any member who's in marks a decided event done; so can the coordinator and admin.
     Members can only once it's meal time, so a stray tap can't end the call early; admins can
-    any time, to correct the record."""
+    any time, to correct the record. A guest can't (#227): the meal ends on its own."""
+    if actor.is_guest:
+        raise EventRuleViolation(GUESTS_DONT, code="guests_dont")
     if event.state is not EventState.DECIDED:
         raise EventRuleViolation("Only a decided meal can be marked done.", code="not_decided")
     participant = response is not None and response.is_in

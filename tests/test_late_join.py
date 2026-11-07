@@ -689,7 +689,6 @@ async def test_guests_still_come_only_by_invitation(house: House) -> None:
     for name in ("Alex", "Sam"):
         await act(house, calls.respond, house[name], event_id, Status.IN)
     await act(house, guests.answer_for, house["Kim"], event_id, pat.id, status=Status.OUT)
-    await act(house, calls.claim_coordinator, pat, event_id)
     await act(house, calls.offer_role, house["Alex"], event_id, RoleOffer.PICKUP, True)
     house.clock.now = RESPOND_BY
     await house.tick()
@@ -698,9 +697,9 @@ async def test_guests_still_come_only_by_invitation(house: House) -> None:
         await act(house, calls.join_late, pat, event_id)
     with pytest.raises(EventRuleViolation, match=REFUSED[GuestAction.VOTE]):
         await act(house, calls.vote, pat, event_id, taqueria, join_late=True)
-    # A guest coordinating doesn't flip the switches; an admin does (#38).
+    # A guest doesn't flip the switches; an admin does (#38).
     await act(house, calls.join_late, house["Kim"], event_id)
-    with pytest.raises(EventRuleViolation, match=REFUSED[GuestAction.LATE_SWITCHES]):
+    with pytest.raises(EventRuleViolation, match=REFUSED[GuestAction.COORDINATE]):
         await act(house, calls.switch_late_joiner, pat, event_id, house["Kim"].id, vote_counts=True)
     await act(house, calls.switch_late_joiner, house["Alex"], event_id, house["Kim"].id, vote_counts=True)
     kim = await mine(house, event_id, "Kim")

@@ -554,9 +554,27 @@ async def test_a_guest_sees_only_what_a_guest_earns(house: House) -> None:
         assert (await ContributionRepository(db).counts(house.household.id, riley.id))[Kind.PARTICIPATED] == 1
         own = await stats.guest_stats(db, riley)
         assert {p.badge.key for p in own.progress} == {
-            BadgeKey.CHEF, BadgeKey.ROAD_RUNNER, BadgeKey.ORDER_UP, BadgeKey.QUARTERBACK, BadgeKey.ON_A_ROLL,
-        }  # fmt: skip
+            BadgeKey.CHEF,
+            BadgeKey.ROAD_RUNNER,
+            BadgeKey.ORDER_UP,
+            BadgeKey.ON_A_ROLL,
+        }
         assert own.counts == {Kind.PICKED_UP: 1, Kind.ORDERED: 1}
+        # Quarterback shows only for a guest who coordinated before guests stopped (#227).
+        db.add(
+            ContributionRow(
+                household_id=house.household.id,
+                member_id=riley.id,
+                kind=Kind.COORDINATED.value,
+                day=DAY,
+                event_id=event_id,
+                created_at=DONE_AT,
+            )
+        )
+        await db.commit()
+        own = await stats.guest_stats(db, riley)
+        assert BadgeKey.QUARTERBACK in {p.badge.key for p in own.progress}
+        assert own.counts == {Kind.PICKED_UP: 1, Kind.ORDERED: 1, Kind.COORDINATED: 1}
     with pytest.raises(Forbidden):
         async with house.sessionmaker() as db:
             await stats.guest_stats(db, house["Alex"])

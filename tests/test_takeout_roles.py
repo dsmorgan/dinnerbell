@@ -53,7 +53,7 @@ from dinnerbell.domain.guests import GuestAction, check_guest
 from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.members import Capabilities, Member, Role
 from dinnerbell.services import call_context as cc
-from dinnerbell.services import calls, coordinator, event_views, guests, offers
+from dinnerbell.services import calls, coordinator, event_views, offers
 from dinnerbell.services.coordinator import Adjustment
 from dinnerbell.services.database import Database, open_database
 from dinnerbell.services.errors import NotFound
@@ -169,7 +169,6 @@ def test_who_may_set_the_way() -> None:
     voting = _event(EventState.VOTING)
     check_can_set_way(voting, _person(2))  # the coordinator
     check_can_set_way(voting, _person(1, Role.ADMIN))  # any admin, as for roles (FR-61)
-    check_can_set_way(_event(EventState.VOTING, coordinator_id=9), _person(9, Role.GUEST))  # a guest coordinator
     for event, actor, code in [
         (voting, _person(3), "not_coordinator"),
         (_event(EventState.DECIDED), _person(2), "voting_closed"),
@@ -180,9 +179,8 @@ def test_who_may_set_the_way() -> None:
         with pytest.raises(EventRuleViolation) as refused:
             check_can_set_way(event, actor)
         assert refused.value.code == code
-    check_guest(voting, _person(9, Role.GUEST), GuestAction.SET_WAY, invited=True)  # while voting only
     with pytest.raises(EventRuleViolation):
-        check_guest(_event(EventState.DECIDED), _person(9, Role.GUEST), GuestAction.SET_WAY, invited=True)
+        check_guest(voting, _person(9, Role.GUEST), GuestAction.COORDINATE, invited=True)
 
 
 def test_what_the_coordinator_is_asked_to_choose() -> None:
@@ -288,30 +286,6 @@ async def test_an_open_way_asks_the_coordinator_even_when_the_roles_are_clear(ho
     assert "pickup or delivery, who orders, and who picks it up" in text and "it stays pickup" in text
     (made,) = await sent(house, "decision_made")
     assert "is choosing pickup or delivery" in json.dumps(render(made, CTX).payload())
-
-
-@pytest.mark.parametrize(("host", "can_choose"), [("Alex", True), ("Lee", False)])
-async def test_a_guest_coordinators_host_is_told_an_admin_chooses(house: House, host: str, can_choose: bool) -> None:
-    pat = await add_guest(house, "Pat")
-    event_id = await open_dinner(house)
-    for name in ("Alex", "Lee"):
-        await act(house, calls.respond, house[name], event_id, Status.IN)
-    await act(house, calls.offer_role, house["Alex"], event_id, RoleOffer.PICKUP, True)
-    await act(house, guests.invite, house[host], event_id, guest_id=pat.id)
-    await act(house, calls.respond, pat, event_id, Status.IN)
-    await act(house, calls.claim_coordinator, pat, event_id)
-    house.clock.now = RESPOND_BY
-    await house.tick()
-    await decide_on(house, event_id, "Siam Garden")
-    (ask,) = await sent(house, "roles_to_choose")
-    assert ask.via is not None and ask.via.id == house[host].id
-    message = json.dumps(render(ask, CTX).payload())
-    assert "An admin can choose pickup or delivery" in message and ids.ASSIGN_ROLES not in message
-    # The decision has the button for everyone to see, and only an admin host gets past it.
-    (made,) = await sent(house, "decision_made")
-    assert ids.ASSIGN_ROLES in json.dumps(render(made, CTX).payload())
-    view = await act(house, event_views.event_view, house[host], event_id)
-    assert view.can.choose_roles is can_choose
 
 
 async def test_a_place_with_one_way_and_clear_roles_asks_nothing(house: House) -> None:
@@ -658,25 +632,6 @@ async def test_the_proposals_message_offers_the_way_beside_a_place_with_both(hou
     assert "pickup or delivery with ⋯" in json.dumps(payload, ensure_ascii=False)
 
 
-async def test_a_guest_coordinator_sets_the_way(house: House) -> None:
-    pat = await add_guest(house, "Pat")
-    event_id = await open_dinner(house)
-    for name in ("Alex", "Lee"):
-        await act(house, calls.respond, house[name], event_id, Status.IN)
-    await act(house, calls.offer_role, house["Alex"], event_id, RoleOffer.PICKUP, True)
-    await act(house, guests.invite, house["Lee"], event_id, guest_id=pat.id)
-    await act(house, calls.respond, pat, event_id, Status.IN)
-    await act(house, calls.claim_coordinator, pat, event_id)
-    house.clock.now = RESPOND_BY
-    await house.tick()
-    siam = (await pick_ids(house, event_id))["Siam Garden"]
-    view = await act(house, event_views.event_view, pat, event_id)
-    assert view.can.set_way
-    await act(house, coordinator.set_way, pat, event_id, siam, Mode.DELIVERY, run=1)
-    pick = (await house.context(event_id)).proposal(siam)
-    assert pick is not None and pick.mode is Mode.DELIVERY
-
-
 # The web -------------------------------------------------------------------------------------------------
 
 
@@ -953,24 +908,6 @@ async def test_clearing_an_open_way_is_accepted_as_setting_the_way_it_has_is(hou
     assert pick is not None and (pick.mode, pick.mode_chosen) == (Mode.PICKUP, False)
     (audit,) = [a for a in await house.audits() if a.action == "event.way_set"]
     assert audit.payload == {"proposal_id": siam, "mode": None, "switched_from": "pickup"}
-
-
-async def test_a_guest_coordinator_clears_the_way(house: House) -> None:
-    pat = await add_guest(house, "Pat")
-    event_id = await open_dinner(house)
-    for name in ("Alex", "Lee"):
-        await act(house, calls.respond, house[name], event_id, Status.IN)
-    await act(house, calls.offer_role, house["Alex"], event_id, RoleOffer.PICKUP, True)
-    await act(house, guests.invite, house["Lee"], event_id, guest_id=pat.id)
-    await act(house, calls.respond, pat, event_id, Status.IN)
-    await act(house, calls.claim_coordinator, pat, event_id)
-    house.clock.now = RESPOND_BY
-    await house.tick()
-    siam = (await pick_ids(house, event_id))["Siam Garden"]
-    await act(house, coordinator.set_way, pat, event_id, siam, Mode.DELIVERY, run=1)
-    await act(house, coordinator.set_way, pat, event_id, siam, None, run=1)
-    pick = (await house.context(event_id)).proposal(siam)
-    assert pick is not None and (pick.mode, pick.mode_chosen) == (Mode.DELIVERY, False)
 
 
 async def test_slack_clears_the_way_with_either_way(slack: Slack, house: House) -> None:

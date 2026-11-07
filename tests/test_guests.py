@@ -34,7 +34,6 @@ from dinnerbell.domain.guests import (
     GuestAction,
     GuestInput,
     check_guest,
-    tie_breaker,
 )
 from dinnerbell.domain.identity import Allow, IdentityClaims, Refusal, Refuse, decide_sign_in
 from dinnerbell.domain.meals import MealInput, Slot
@@ -133,24 +132,16 @@ def test_the_guest_matrix_by_call_state(action: GuestAction, state: EventState) 
 
 
 def test_the_matrix_refuses_influence_everywhere() -> None:
-    for action in (GuestAction.VOTE, GuestAction.PROPOSE, GuestAction.LOCK, GuestAction.DETAILS, GuestAction.MAYBE):
+    for action in (
+        GuestAction.VOTE,
+        GuestAction.PROPOSE,
+        GuestAction.COORDINATE,
+        GuestAction.DETAILS,
+        GuestAction.MAYBE,
+    ):
         assert action not in GUEST_RULES
     with pytest.raises(EventRuleViolation, match=NOT_INVITED):
         check_guest(None, GUEST, GuestAction.ANSWER, invited=False)
-
-
-def test_a_guest_coordinator_never_breaks_a_tie() -> None:
-    assert tie_breaker(GUEST, 2) == 2  # whoever invited them
-    assert tie_breaker(GUEST, None) is None  # then the admins
-    assert tie_breaker(MEMBER, None) == MEMBER.id
-    assert tie_breaker(None, 2) is None
-    from dinnerbell.domain.events import ProposalTally, choose_winner
-
-    tied = [ProposalTally(1, 1, True, frozenset({5})), ProposalTally(2, 2, True, frozenset({1}))]
-    admins = frozenset({1})
-    # The inviter (7) didn't vote, so an admin's vote breaks the tie, not ranking order.
-    assert choose_winner(tied, coordinator_id=7, admin_ids=admins, admins_next=True).id == 2  # type: ignore[union-attr]
-    assert choose_winner(tied, coordinator_id=7, admin_ids=admins).id == 1  # type: ignore[union-attr]
 
 
 # Inviting and answering --------------------------------------------------------------------------
@@ -259,7 +250,6 @@ async def test_an_invited_guest_answers_in_or_out_and_pitches_in(house: House) -
         await act(house, calls.respond, pat, event_id, Status.MAYBE)
     with pytest.raises(EventRuleViolation, match="details"):
         await act(house, calls.save_details, pat, event_id, Details(guests=2, suggestion_texts=("Pizza",)))
-    await act(house, calls.claim_coordinator, pat, event_id)
     view = await act(house, event_views.event_view, pat, event_id)
     assert (view.can.respond, view.can.vote, view.can.propose, view.can.cancel, view.can.invite) == (
         True,
@@ -268,18 +258,16 @@ async def test_an_invited_guest_answers_in_or_out_and_pitches_in(house: House) -
         False,
         False,
     )
-    assert view.invitable == () and view.can.close_window is not None  # a coordinating guest closes it
+    assert view.invitable == () and view.can.close_window is None
 
 
 async def test_every_influence_and_member_action_is_refused_to_a_guest(house: House) -> None:
     """#38: a guest never reaches a vote, a proposal, a suggestion, a veto, the catalog,
-    history, the schedule, offers, or feedback, and can't start, post, or call off a call, even
-    while coordinating."""
+    history, the schedule, offers, or feedback, and can't start, post, or call off a call."""
     event_id = await open_dinner(house)
     pat = house["Pat"]
     await invite(house, "Kim", "Pat", event_id)
     await act(house, calls.respond, pat, event_id, Status.IN)
-    await act(house, calls.claim_coordinator, pat, event_id)
     for name in ("Alex", "Sam"):
         await act(house, calls.respond, house[name], event_id, Status.IN)
     await act(house, calls.offer_role, house["Alex"], event_id, RoleOffer.PICKUP, True)
@@ -395,29 +383,6 @@ async def test_a_guests_dietary_needs_are_hard_constraints_and_their_stances_nev
     await house.tick()
     decided = next(e for e in await house.outbox() if e.kind == "decision_made")
     assert decided.payload["decision"]["dietary_notes"] == ["Vegetarian"]
-
-
-async def test_a_guest_coordinating_leaves_the_tie_to_whoever_invited_them(house: House) -> None:
-    event_id = await open_dinner(house)
-    await invite(house, "Kim", "Pat", event_id)
-    pat = house["Pat"]
-    await act(house, calls.respond, pat, event_id, Status.IN)
-    await act(house, calls.claim_coordinator, pat, event_id)
-    for name in ("Alex", "Kim"):
-        await act(house, calls.respond, house[name], event_id, Status.IN)
-    await act(house, calls.offer_role, house["Alex"], event_id, RoleOffer.PICKUP, True)
-    await act(house, calls.offer_role, house["Alex"], event_id, RoleOffer.ORDER, True)
-    house.clock.now = RESPOND_BY
-    await house.tick()
-    picks = (await house.context(event_id)).proposals
-    assert len(picks) >= 2
-    first, second = picks[0], picks[1]
-    await act(house, calls.vote, house["Alex"], event_id, first.id)  # an admin's vote
-    await act(house, calls.vote, house["Kim"], event_id, second.id)  # the inviter's vote
-    house.clock.now = VOTE_BY
-    await house.tick()
-    event = await house.event(event_id)
-    assert (event.decided_item_id, event.decided_mode) == (second.item_id, second.mode)
 
 
 async def test_assignment_messages_for_a_guest_without_slack_go_to_the_inviter(house: House) -> None:
@@ -698,22 +663,6 @@ async def test_a_call_off_mentions_guests_who_were_in_and_a_discard_takes_invita
             db, house.household.id, event_id, actor=house["Alex"], instance_label="TEST", now=house.clock()
         )
     assert summary.rows["invitation"] == 1
-
-
-async def test_a_guest_who_leaves_a_call_leaves_no_coordinator_behind(house: House) -> None:
-    event_id = await open_dinner(house)
-    await invite(house, "Kim", "Pat", event_id)
-    await act(house, calls.respond, house["Pat"], event_id, Status.IN)
-    await act(house, calls.claim_coordinator, house["Pat"], event_id)
-    await act(house, guests.uninvite, house["Kim"], event_id, house["Pat"].id)
-    assert (await house.event(event_id)).coordinator_id is None
-    await invite(house, "Kim", "Pat", event_id)
-    await act(house, calls.respond, house["Pat"], event_id, Status.IN)
-    await act(house, calls.claim_coordinator, house["Pat"], event_id)
-    await act(house, guests.remove, house["Alex"], house["Pat"].id)
-    ctx = await house.context(event_id)
-    assert ctx.event.coordinator_id is None and ctx.response_of(house["Pat"].id).status is Status.OUT  # type: ignore[union-attr]
-    assert ctx.head_count == 0
 
 
 async def test_relinking_a_guests_slack_signs_out_the_old_account(house: House) -> None:
@@ -1230,15 +1179,14 @@ async def test_an_uninvited_guest_is_refused_each_action(house: House, use: str)
 
 def test_the_domain_refuses_an_uninvited_guest_on_its_own() -> None:
     """A second layer under ``guests.gate``: the rules themselves need the invitation."""
-    from dinnerbell.domain.events import check_can_respond, check_claim_coordinator
+    from dinnerbell.domain.events import check_can_respond
     from dinnerbell.domain.offers import check_can_join
 
     collecting = call(EventState.COLLECTING)
-    for check in (check_can_respond, check_claim_coordinator):
-        with pytest.raises(EventRuleViolation, match=NOT_INVITED):
-            check(collecting, GUEST)
-        check(collecting, GUEST, invited=True)
-        check(collecting, MEMBER)
+    with pytest.raises(EventRuleViolation, match=NOT_INVITED):
+        check_can_respond(collecting, GUEST)
+    check_can_respond(collecting, GUEST, invited=True)
+    check_can_respond(collecting, MEMBER)
     offer = Event(2, 1, EventKind.OFFER, Slot.LUNCH, DAY, EventState.COLLECTING, 1, OPENS, RESPOND_BY, 0, 0, capacity=3)
     with pytest.raises(EventRuleViolation, match="bring you along"):
         check_can_join(offer, GUEST)
@@ -1352,23 +1300,6 @@ async def test_dietary_needs_are_capped_at_five(house: House) -> None:
     with pytest.raises(InvalidMemberInput, match="up to 5"):
         await act(house, guests.set_my_needs, house["Pat"], frozenset(t.id for t in tags))
     await act(house, guests.set_my_needs, house["Pat"], frozenset(t.id for t in tags[:5]))
-
-
-async def test_a_guest_coordinator_closes_answers_but_not_the_vote(house: House) -> None:
-    event_id = await open_dinner(house)
-    await invite(house, "Kim", "Pat", event_id)
-    pat = house["Pat"]
-    await act(house, calls.respond, pat, event_id, Status.IN)
-    await act(house, calls.claim_coordinator, pat, event_id)
-    for name in ("Alex", "Sam"):
-        await act(house, calls.respond, house[name], event_id, Status.IN)
-    await act(house, calls.offer_role, house["Alex"], event_id, RoleOffer.PICKUP, True)
-    await act(house, calls.close_window, pat, event_id)  # "Start the vote now": logistics
-    assert (await house.event(event_id)).state is EventState.VOTING
-    with pytest.raises(EventRuleViolation):  # "Decide now" picks the plan
-        await act(house, calls.close_window, pat, event_id)
-    view = await act(house, event_views.event_view, pat, event_id)
-    assert view.can.close_window is None
 
 
 async def test_when_dietary_needs_rule_out_every_pick_the_call_says_so(house: House) -> None:
