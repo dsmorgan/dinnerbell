@@ -69,7 +69,8 @@ Releases follow [Semantic Versioning](https://semver.org/), and [CHANGELOG.md](C
    - `version` in `pyproject.toml`, then run `uv lock` to update the version recorded in `uv.lock`.
    - The default tag in `compose.yaml`: `${DINNERBELL_TAG:-X.Y.Z}`. Production checks out the release tag, so its `compose.yaml` always names the matching image.
    - `CHANGELOG.md`: retitle `[Unreleased]` to `[X.Y.Z] - YYYY-MM-DD`, check that it has **Upgrade notes**, add a new empty `[Unreleased]` section above it, add the link `[X.Y.Z]: https://github.com/dsmorgan/dinnerbell/releases/tag/vX.Y.Z` at the bottom, and point `[Unreleased]` at `https://github.com/dsmorgan/dinnerbell/compare/vX.Y.Z...HEAD`.
-2. Merge it once CI passes.
+2. Merge it once CI passes. If the `Containerfile` pins a Debian package from security updates, check first that
+   it still installs: a tag builds without cache, so a version Debian has replaced fails the release.
 3. Tag the release commit on `main`, and push the tag. Check that `git log -1` shows the release commit before you tag. CI builds, scans, publishes, and attests the image.
 
    ```sh

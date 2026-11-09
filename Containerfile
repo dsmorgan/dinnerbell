@@ -34,7 +34,8 @@ LABEL org.opencontainers.image.title="Dinnerbell" \
       org.opencontainers.image.licenses="AGPL-3.0-or-later" \
       org.opencontainers.image.source="https://github.com/dsmorgan/dinnerbell"
 # Debian's security fix for zlib (CVE-2026-85091, CVE-2026-76844), which this base digest predates.
-# Pinned, so the build stays reproducible. Remove this step once python:3.12-slim ships it.
+# Pinned so every build gets the same zlib. When Debian replaces this version, the build fails:
+# update the pin, or remove this step if python:3.12-slim has the fix.
 RUN apt-get update \
  && apt-get install --yes --no-install-recommends zlib1g=1:1.3.dfsg+really1.3.1-1+deb13u1 \
  && rm -rf /var/lib/apt/lists/*
