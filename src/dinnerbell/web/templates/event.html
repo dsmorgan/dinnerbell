@@ -2,7 +2,19 @@
 {% extends "base.html" %}
 {% block title %}{{ v.event.slot.value|capitalize }} {{ v.event.day|day }}{% endblock %}
 {% block content %}
+{% if den %}
+{#- Fun mode (#241): the den fills the rest of the top row, beside the way back to Today, as it
+    does beside the greeting on Today, and follows this call. -#}
+<div class="greeting greeting-back">
+  <p class="small"><a href="/">Today</a></p>
+  {% include "_den.html" %}
+  <p class="den-caption" role="status" aria-live="polite" hidden></p>
+</div>
+{% include "_den_state.html" %}
+<div class="edge-wx" aria-hidden="true">{% for _ in range(18) %}<i></i>{% endfor %}</div>
+{% else %}
 <p class="small"><a href="/">Today</a></p>
+{% endif %}
 {% include "_event.html" %}
 {% if meal_feedback %}
 {% set meal, fb = meal_feedback %}

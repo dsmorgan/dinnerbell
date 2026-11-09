@@ -483,3 +483,75 @@ def test_no_snow_on_a_turning_wheel() -> None:
     assert ".den[data-walking] .den-spokes, .den.den-shake .den-spokes { animation: none; }" in FUN_CSS
     script = (STATIC / "fun.js").read_text()
     assert '"den-shake"' in script and '"den-rebuild"' in script
+
+
+# The den on a call's page (#241) --------------------------------------------------------------------
+
+
+def den_state(html: str) -> str:
+    match = re.search(r'<div id="den-state" hidden[^>]*></div>', html)
+    assert match, "no den state"
+    return match.group(0)
+
+
+def call(client: TestClient, day: str = "2026-10-22") -> int:
+    response = submit(client, "/events", {"slot": "dinner", "day": day, "post_now": "1"})
+    assert response.status_code == 303, page(response)
+    return int(response.headers["location"].rsplit("/", 1)[1])
+
+
+def test_a_calls_page_has_the_den_following_that_call(client: TestClient, provider: FakeProvider) -> None:
+    """The den sits beside the way back to Today, as beside the greeting there, and follows the
+    call on the page, not Today's next open call. Its card's refresh keeps it on that call."""
+    sign_in(client, provider)
+    first = call(client)
+    later = call(client, "2026-10-24")
+    assert f'data-event="{first}"' in den_state(client.get("/").text)  # Today: the next open call
+    html = client.get(f"/events/{later}").text
+    row = html.split('<div class="greeting greeting-back">\n', 1)[1].split('<section class="card event', 1)[0]
+    assert row.startswith('  <p class="small"><a href="/">Today</a></p>\n')
+    assert '<div class="den" data-pose="laps" aria-hidden="true">' in row
+    assert '<p class="den-caption" role="status" aria-live="polite" hidden></p>' in html
+    state = den_state(html)
+    assert f'data-event="{later}"' in state and 'data-pose="laps"' in state and "hx-swap-oob" not in state
+    assert "data-badge" not in state  # badges flip on Today only
+    assert html.count('<div class="edge-wx" aria-hidden="true">') == 1 and "style=" not in html
+    assert FUN_ASSETS in html
+
+    refreshed = client.get(f"/events/{later}/card?from=event", headers={"HX-Request": "true"}).text
+    state = den_state(refreshed)
+    assert f'data-event="{later}"' in state and 'hx-swap-oob="true"' in state
+    on_today = client.get(f"/events/{later}/card?from=today", headers={"HX-Request": "true"}).text
+    assert f'data-event="{first}"' in den_state(on_today)  # Today's den keeps the next open call
+
+
+def test_a_call_thats_over_leaves_him_to_the_clock(client: TestClient, provider: FakeProvider) -> None:
+    """On its page, a call that's called off follows the same rule as on Today: he follows the
+    clock, 1 PM in Chicago, so he potters about, and follows no call."""
+    sign_in(client, provider)
+    event_id = call(client)
+    response = submit(client, f"/events/{event_id}/cancel", {"run": "1", "from": "event"})
+    assert response.status_code == 303, page(response)
+    state = den_state(client.get(f"/events/{event_id}").text)
+    assert 'data-pose="potter"' in state and "data-event" not in state
+
+
+def test_with_fun_mode_off_a_calls_page_carries_none_of_it(client: TestClient, provider: FakeProvider) -> None:
+    sign_in(client, provider)
+    event_id = call(client)
+    with_den = client.get(f"/events/{event_id}").text
+    assert submit(client, "/me/fun").status_code == 303  # unchecked: off
+    html = client.get(f"/events/{event_id}").text
+    for absent in ("data-fun", "fun.css", "fun.js", 'class="den', "den-state", "den.svg", "edge-wx", "greeting"):
+        assert absent not in html, absent
+    back = r'<main class="page">\s*<p class="small"><a href="/">Today</a></p>\s*<section class="card event'
+    assert re.search(back, html)
+    card = client.get(f"/events/{event_id}/card?from=event", headers={"HX-Request": "true"}).text
+    assert "den-state" not in card
+    plain = re.sub(
+        r'<div class="greeting greeting-back">.*?<div class="edge-wx" aria-hidden="true">(?:<i></i>)+</div>\n',
+        '<p class="small"><a href="/">Today</a></p>\n',
+        with_den.replace(FUN_ASSETS, "").replace(FUN_BODY, ""),
+        flags=re.DOTALL,
+    )
+    assert " ".join(html.split()) == " ".join(plain.split())  # otherwise the page as it was

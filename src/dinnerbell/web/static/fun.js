@@ -2,17 +2,22 @@
 // Fun mode (#153): Dinnerbone's Den. Loaded only for a viewer who has fun mode on; with it off,
 // no page links this file. Loaded from /static, so the CSP needs no inline code.
 //
-// The server draws the den: the scene on <body>, his pose on .den (data-pose), and what the den
-// knows in #den-state (the call he follows, its quiet caption, and a badge to flip for). A card
-// swapped into Today brings a fresh #den-state out of band, so this script only follows it:
+// The den is on Today, where he follows the next open call, and on a call's own page (#241),
+// where he follows that call. The server draws it: the scene on <body>, his pose on .den
+// (data-pose), and what the den knows in #den-state (the call he follows, its quiet caption, and
+// on Today a badge to flip for). A card swapped into the page brings a fresh #den-state out of
+// band, so this script only follows it:
 //
 // - It walks him from spot to spot when the pose changes. fun.css places every pose, so a walk
 //   animates `left` from where he stands to where the new pose puts him.
 // - While answers are open, he runs laps around the card of the call he follows, on a track
-//   over the page, sized to it only during a lap. A lap pauses while the page scrolls and gives
-//   up when his state changes or the window is resized; the next one measures again.
+//   over the page, sized to it only during a lap. The lap is one Web Animation of transform, which
+//   the browser runs off the main thread, so he keeps running while the page scrolls (#242). When
+//   the window is resized or a card is swapped in, the lap measures the card again, and if it
+//   moved or changed size, he carries on around the new outline from as far round as he was;
+//   only a change to his state ends a lap.
 // - Celebrations: the server sends HX-Trigger "dinnerbell:celebrate" only to the member who
-//   locked or marked done the call on Today. Everyone else gets the quiet caption, once per call
+//   locked or marked done the call on the page. Everyone else gets the quiet caption, once per call
 //   and state per tab (sessionStorage). A badge flips once, for the member who earned it: the
 //   server keeps the marker, and this script tells it after the flip, once the page is in view.
 // - Tap him: a hop, puffed cheeks, and a heart. Asleep, he opens an eye and rolls over.
@@ -26,7 +31,7 @@
 
   var den = document.querySelector(".den");
   if (!den) {
-    return; // the den is on Today only
+    return; // the den is on Today and a call's page only
   }
   var ham = den.querySelector(".den-ham");
   var heart = den.querySelector(".den-heart");
@@ -36,7 +41,7 @@
     walk: null,
     lap: null,
     lapTimer: 0,
-    scrollTimer: 0,
+    lapShape: null, // the outline the running lap follows, so a remeasure that finds it unmoved does nothing
     sayTimer: 0,
     gait: null,
     gaitUntil: 0,
@@ -221,19 +226,21 @@
     S.track.style.setProperty("height", document.documentElement.scrollHeight + "px");
   }
 
-  // Centre points and headings, feet against each edge of the card from outside, clockwise.
+  // Centre points and headings, feet against each edge of the card from outside, clockwise. He
+  // starts and ends where he stands in the den, measured from the layout (offsetLeft and the
+  // rest), so his sniffing in the den doesn't move the start.
   function lapPoints(card) {
     var sx = window.scrollX;
     var sy = window.scrollY;
     var c = card.getBoundingClientRect();
-    var h = ham.getBoundingClientRect();
+    var d = den.getBoundingClientRect();
     var L = c.left + sx;
     var T = c.top + sy;
     var R = c.right + sx;
     var B = c.bottom + sy;
     var half = RUNNER_H / 2;
-    var x0 = h.left + sx + h.width / 2;
-    var y0 = h.bottom + sy - half;
+    var x0 = d.left + sx + den.clientLeft + ham.offsetLeft + ham.offsetWidth / 2;
+    var y0 = d.top + sy + den.clientTop + ham.offsetTop + ham.offsetHeight - half;
     var xs = Math.min(Math.max(x0, L + RUNNER_W), R - RUNNER_W);
     return [
       [x0, y0, 0],
@@ -251,13 +258,8 @@
     ];
   }
 
-  function runLap() {
-    var card = lapCard();
-    if (!card || document.hidden || den.getAttribute("data-pose") !== "laps" || !moving()) {
-      scheduleLap(5000);
-      return;
-    }
-    runnerParts();
+  // The keyframes and duration of a lap around ``card`` now, and the outline it follows.
+  function lapPath(card) {
     var points = lapPoints(card);
     var lengths = [0];
     var total = 0;
@@ -272,9 +274,38 @@
       var y = p[1] - RUNNER_H / 2;
       return { transform: "translate(" + x + "px, " + y + "px) rotate(" + p[2] + "deg)", offset: lengths[n] / total };
     });
+    var shape = points.map(function (p) {
+      return [p[0], p[1]];
+    });
+    var bottom = 0;
+    points.forEach(function (p) {
+      bottom = Math.max(bottom, p[1] + RUNNER_H);
+    });
+    return { frames: frames, duration: total * LAP_PACE, shape: shape, bottom: bottom };
+  }
+
+  // The track covers the page and the lap, wherever the card has gone. It only grows during a
+  // lap: shrinking it then could move the page under someone's finger.
+  function coverTrack(bottom) {
+    var height = parseFloat(S.track.style.getPropertyValue("height")) || 0;
+    if (bottom > height) {
+      S.track.style.setProperty("height", Math.ceil(bottom) + "px");
+    }
+  }
+
+  function runLap() {
+    var card = lapCard();
+    if (!card || document.hidden || den.getAttribute("data-pose") !== "laps" || !moving()) {
+      scheduleLap(5000);
+      return;
+    }
+    runnerParts();
+    var path = lapPath(card);
+    coverTrack(path.bottom);
+    S.lapShape = path.shape;
     ham.classList.add("den-away");
     S.runner.classList.add("den-on");
-    S.lap = S.runner.animate(frames, { duration: total * LAP_PACE, easing: "linear" });
+    S.lap = S.runner.animate(path.frames, { duration: path.duration, easing: "linear" });
     S.lap.onfinish = function () {
       S.lap = null;
       S.runner.classList.remove("den-on");
@@ -284,33 +315,57 @@
     };
   }
 
-  window.addEventListener(
-    "scroll",
-    function () {
-      if (!S.lap) {
-        return;
+  // The card moved or changed size mid-lap, as when the window turns or a refreshed card has
+  // another answer on it: the same lap follows the new outline from the same share of the way
+  // round, so he never jumps back to the den or stops. An unmoved card changes nothing, as when
+  // Safari's toolbar slides away while the page scrolls and only the window's height changes.
+  // A card that's gone (a swap that dropped it) leaves him to finish the lap he's on.
+  // Whether two outlines are the same, give or take a pixel or two of rounding.
+  function sameShape(a, b) {
+    if (!a || !b || a.length !== b.length) {
+      return false;
+    }
+    for (var i = 0; i < a.length; i += 1) {
+      if (Math.abs(a[i][0] - b[i][0]) > 2 || Math.abs(a[i][1] - b[i][1]) > 2) {
+        return false;
       }
-      S.lap.pause();
-      window.clearTimeout(S.scrollTimer);
-      S.scrollTimer = window.setTimeout(function () {
-        if (S.lap) {
-          S.lap.play();
-        }
-      }, 250);
-    },
-    { passive: true },
-  );
+    }
+    return true;
+  }
 
-  var resizeTimer = 0;
-  window.addEventListener("resize", function () {
-    window.clearTimeout(resizeTimer);
-    resizeTimer = window.setTimeout(function () {
-      if (S.lap) {
-        stopLaps();
-        scheduleLap(1000);
-      }
-    }, 200);
-  });
+  function remeasureLap() {
+    if (!S.lap) {
+      return;
+    }
+    var card = lapCard();
+    if (!card) {
+      return;
+    }
+    var path = lapPath(card);
+    if (sameShape(path.shape, S.lapShape)) {
+      return;
+    }
+    var timing = S.lap.effect.getTiming();
+    var done = Math.min(1, Math.max(0, (S.lap.currentTime || 0) / (Number(timing.duration) || 1)));
+    coverTrack(path.bottom);
+    S.lapShape = path.shape;
+    S.lap.effect.setKeyframes(path.frames);
+    S.lap.effect.updateTiming({ duration: path.duration });
+    S.lap.currentTime = done * path.duration;
+  }
+
+  var remeasureTimer = 0;
+  function remeasureSoon() {
+    window.clearTimeout(remeasureTimer);
+    remeasureTimer = window.setTimeout(remeasureLap, 150);
+  }
+
+  // Nothing listens for scroll: the lap runs through it. A resize, or anything that moves the page
+  // under the card (a card above it growing, a font arriving), measures it again.
+  window.addEventListener("resize", remeasureSoon);
+  if (window.ResizeObserver) {
+    new window.ResizeObserver(remeasureSoon).observe(document.body);
+  }
 
   // Celebrations ----------------------------------------------------------------------------
 
@@ -372,7 +427,7 @@
       });
   }
 
-  // The member who locked or marked done the call on Today: the bell and a sprint to the bowl,
+  // The member who locked or marked done the call on the page: the bell and a sprint to the bowl,
   // or a pat of the belly and a waddle to bed. The den's state arrives with the same response
   // and moves him; this sets how he goes. Their quiet caption is this one.
   document.addEventListener("dinnerbell:celebrate", function (e) {
@@ -466,10 +521,12 @@
     }
   }
 
-  // A swap that changes nothing about him leaves a running lap alone; one that does moves him
-  // (setPose stops the lap), and the next lap measures the card again.
+  // A swap that changes nothing about him leaves a running lap alone, but the card it brought may
+  // be another size, so the lap measures it again; one that changes him moves him (setPose stops
+  // the lap), and the next lap measures the card afresh.
   document.addEventListener("htmx:afterSettle", function () {
     apply(false);
+    remeasureSoon();
   });
 
   // Taps ------------------------------------------------------------------------------------

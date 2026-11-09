@@ -535,5 +535,5 @@
   <p class="small"><a class="button small danger" href="{{ base }}/admin/discard">Discard (test)</a></p>
   {% endif %}
 </section>
-{#- Swapped into Today, the card brings the den's state along (#153). -#}
+{#- Swapped into Today or a call's page, the card brings the den's state along (#153, #241). -#}
 {% if den_oob %}{% with den=den_oob, oob=true %}{% include "_den_state.html" %}{% endwith %}{% endif %}

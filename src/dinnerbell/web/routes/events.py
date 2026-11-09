@@ -115,20 +115,30 @@ async def _card(
     status = status_code or (409 if error else 200)
     page = {"v": view, "from_page": came_from, "error": error}
     if is_htmx(request):
-        page |= await _den_update(request, principal, context, db, came_from)
+        page |= await _den_update(request, principal, context, db, came_from, event_id)
         return await render(request, "_event.html", page, status_code=status)
-    return await render(request, "event.html", page | {"from_page": "event"}, status_code=status)
+    page |= {"from_page": "event"} | await _event_den(principal, context, db, event_id)
+    return await render(request, "event.html", page, status_code=status)
+
+
+async def _event_den(principal: Principal, context: AppContext, db: Database, event_id: int) -> dict[str, object]:
+    """The den on a call's own page (#241), following that call: ``den`` for ``event.html``, or
+    nothing with fun mode off. Badges flip on Today only."""
+    if not principal.member.fun_mode:
+        return {}
+    return {"den": await fun.den(db, principal.member, principal.household, now=context.clock(), event_id=event_id)}
 
 
 async def _den_update(
-    request: Request, principal: Principal, context: AppContext, db: Database, came_from: str
+    request: Request, principal: Principal, context: AppContext, db: Database, came_from: str, event_id: int
 ) -> dict[str, object]:
-    """A card swapped into Today brings the den's state along (#153), out of band, so the den
-    follows the call as cards change: ``den_oob`` for ``_event.html``. Nothing for the event
-    page, which has no den, or with fun mode off."""
-    if came_from != "today" or not principal.member.fun_mode or not is_htmx(request):
+    """A card swapped in brings the den's state along (#153), out of band, so the den follows
+    the call as cards change: ``den_oob`` for ``_event.html``. On Today, he follows the next
+    open call; on the call's own page, that call (#241). Nothing with fun mode off."""
+    if not principal.member.fun_mode or not is_htmx(request):
         return {}
-    return {"den_oob": await fun.den(db, principal.member, principal.household, now=context.clock())}
+    follow = None if came_from == "today" else event_id
+    return {"den_oob": await fun.den(db, principal.member, principal.household, now=context.clock(), event_id=follow)}
 
 
 async def _celebrating(
@@ -140,11 +150,11 @@ async def _celebrating(
     kind: fun.Celebrate,
     response: Response,
 ) -> Response:
-    """Celebrate on Today for the member who just decided or finished the call (#153): an
-    ``HX-Trigger`` that ``fun.js`` plays. Only on a card swapped in after success (never a 409,
-    a stale run, or a redirect), and only with their fun mode on. Everyone else sees the quiet
-    caption the den's state carries."""
-    if response.status_code != 200 or came_from != "today" or not is_htmx(request):
+    """Celebrate for the member who just decided or finished the call (#153), on Today or the
+    call's own page, wherever the den is (#241): an ``HX-Trigger`` that ``fun.js`` plays. Only on
+    a card swapped in after success (never a 409, a stale run, or a redirect), and only with
+    their fun mode on. Everyone else sees the quiet caption the den's state carries."""
+    if response.status_code != 200 or not is_htmx(request):
         return response
     payload = await fun.celebration(db, principal.member, event_id, kind)
     if payload is not None:
@@ -197,7 +207,8 @@ async def event_page(
         db, principal.member, event_id, now=context.clock(), any_time=_any_time(context)
     )
     meal = await feedback.event_meal(db, principal.member, event_id, now=context.clock())
-    return await render(request, "event.html", {"v": view, "from_page": "event", "meal_feedback": meal})
+    page = {"v": view, "from_page": "event", "meal_feedback": meal}
+    return await render(request, "event.html", page | await _event_den(principal, context, db, event_id))
 
 
 @router.get("/events/{event_id}/card")
@@ -214,7 +225,7 @@ async def event_card(
         db, principal.member, event_id, now=context.clock(), any_time=_any_time(context)
     )
     page: dict[str, object] = {"v": view, "from_page": "today" if came_from == "today" else "event"}
-    page |= await _den_update(request, principal, context, db, came_from)
+    page |= await _den_update(request, principal, context, db, came_from, event_id)
     return await render(request, "_event.html", page)
 
 

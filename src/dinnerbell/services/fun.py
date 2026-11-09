@@ -6,8 +6,9 @@ here acts on ``actor`` only, except ``set_member_fun_mode``, an admin's switch f
 (#181). A person's own switch isn't audited, like the other settings people change about
 themselves on Preferences: it changes nothing anyone else sees. An admin's is.
 
-``den`` is what Today's den shows: the scene, the call he follows and his pose, the quiet
-caption for that call, and the newest badge the actor earned that the den hasn't flipped for.
+``den`` is what the den shows: the scene, the call he follows and his pose, the quiet caption for
+that call, and on Today the newest badge the actor earned that the den hasn't flipped for. On
+Today he follows the next open call; on a call's own page (#241), that call.
 ``celebration`` is what the member who locked or marked done a call on the web gets instead of
 the quiet caption.
 """
@@ -99,12 +100,27 @@ async def _caption(db: AsyncSession, event: Event) -> str | None:
     return decided_caption(None if item is None else item.name, event.slot.value)
 
 
-async def den(db: AsyncSession, actor: Member, household: Household, *, now: datetime, with_badge: bool = False) -> Den:
-    """What Today's den shows the actor at ``now``. He follows the calls they see on Today: a
-    guest's, only the ones they're invited to. ``with_badge`` adds the newest live badge they
-    earned since the den last flipped for one (announced or waiting to be; never one made
-    quietly, such as a catch-up)."""
-    events = await EventRepository(db).for_today(household.id, household_today(household, now))
+async def den(
+    db: AsyncSession,
+    actor: Member,
+    household: Household,
+    *,
+    now: datetime,
+    with_badge: bool = False,
+    event_id: int | None = None,
+) -> Den:
+    """What the den shows the actor at ``now``. On Today he follows the calls they see there: a
+    guest's, only the ones they're invited to. With ``event_id``, the den on that call's page
+    (#241): he follows that call alone, by the same rule, so a call that's over, called off, or
+    not posted yet leaves him to the clock, and a guest's den follows it only if they're invited.
+    ``with_badge`` adds the newest live badge they earned since the den last flipped for one
+    (announced or waiting to be; never one made quietly, such as a catch-up)."""
+    repo = EventRepository(db)
+    if event_id is None:
+        events = await repo.for_today(household.id, household_today(household, now))
+    else:
+        event = await repo.get(household.id, event_id)
+        events = [] if event is None else [event]
     if actor.is_guest:
         invited = set(await guest_rules.invited_events(db, actor)) if actor.active else set()
         events = [e for e in events if e.id in invited]

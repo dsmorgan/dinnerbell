@@ -233,6 +233,28 @@ def test_a_guest_turns_fun_mode_off_on_their_page(
     assert {m.id: m.fun_mode for m in rows(migrated, MemberRow)} == {1: True, pat: False}
 
 
+def test_a_guests_den_follows_the_call_on_its_page_only_when_invited(
+    admin: TestClient, provider: FakeProvider, migrated: Settings
+) -> None:
+    """On a call's page (#241), a guest's den follows that call, by their own page rules: they
+    see the page, and so the den, only for a call they're invited to."""
+    event_id = start(admin)
+    pat = add_guest(admin, "Pat", slack="U07PAT")
+    guest = as_guest(admin, provider)
+    assert guest.get(f"/events/{event_id}").status_code == 404
+    as_admin(guest, provider)
+    assert submit(admin, f"/events/{event_id}/guests", {"guest_id": str(pat), "run": "1"}).status_code == 303
+    guest = as_guest(admin, provider)
+    html = guest.get(f"/events/{event_id}").text
+    assert '<div class="greeting greeting-back">' in html
+    assert re.search(rf'<div id="den-state" hidden data-pose="laps"[^>]* data-event="{event_id}"', html)
+    card = guest.get(f"/events/{event_id}/card?from=event", headers={"HX-Request": "true"}).text
+    assert re.search(rf'<div id="den-state" hidden[^>]* data-event="{event_id}"[^>]* hx-swap-oob="true"', card)
+    assert submit(guest, "/me/fun", {"fun": "off"}).status_code == 303
+    html = guest.get(f"/events/{event_id}").text
+    assert "den-state" not in html and "fun.js" not in html
+
+
 def test_a_guest_chooses_light_or_dark_on_their_page(
     admin: TestClient, provider: FakeProvider, migrated: Settings
 ) -> None:
