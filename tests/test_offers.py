@@ -294,7 +294,7 @@ async def test_every_call_action_is_refused_on_an_offer(house: House) -> None:
         (calls.respond, (kim, offer_id, Status.IN), {}),
         (calls.offer_role, (kim, offer_id, RoleOffer.COOK, True), {}),
         (calls.toggle_role, (kim, offer_id, RoleOffer.PICKUP), {}),
-        (calls.save_details, (kim, offer_id, Details(guests=5)), {}),
+        (calls.save_details, (kim, offer_id, Details(note="Five of us")), {}),
         (calls.claim_coordinator, (kim, offer_id), {}),
         (calls.close_window, (alex, offer_id), {}),
         (calls.post_now, (kim, offer_id), {}),

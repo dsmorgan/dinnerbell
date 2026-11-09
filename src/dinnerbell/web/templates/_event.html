@@ -22,6 +22,28 @@
 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
 <input type="hidden" name="from" value="{{ from_page }}">
 {%- endmacro %}
+{#- A guest on the roster (#238): "Guest invited by Sam", then, for whoever answers for them,
+    their dietary needs, In and Out, and the role offers, and Take off the call for whoever may. -#}
+{% macro guest_of(g) -%}
+<span class="small muted guest-of">Guest{% if g.invited_by %} invited by {{ g.invited_by.name }}{% endif %}</span>
+{%- if g.needs %} <span class="chip">Needs {{ g.needs|join(", ") }}</span>{% endif %}
+{%- endmacro %}
+{% macro guest_controls(g, e, base) -%}
+{% if g.answerable %}
+<div class="segmented answer" role="group" aria-label="Is {{ g.person.name }} in?">
+  {% for status in labels.GUEST_ANSWER_ORDER %}
+  {{ act(e.id, base ~ "/guests/" ~ g.person.id ~ "/answer", labels.ANSWER_LABELS[status], "button answer-option", {"status": status.value, "run": e.run}, current=(g.answer is not none and g.answer.status == status)) }}
+  {% endfor %}
+</div>
+<div class="button-row roles" role="group" aria-label="What {{ g.person.name }} can do">
+  {% for role, label in labels.OFFERED_LABELS.items() %}
+  {% set offered = g.answer is not none and role in g.answer.offers %}
+  {{ act(e.id, base ~ "/guests/" ~ g.person.id ~ "/answer", label, "button small choice", {"role": role.value, "offered": "0" if offered else "1", "run": e.run}, pressed=offered) }}
+  {% endfor %}
+</div>
+{% endif %}
+{% if g.removable %}<div class="button-row">{{ act(e.id, base ~ "/guests/" ~ g.person.id ~ "/remove", "Take off the call", "button small", confirm="Take " ~ g.person.name ~ " off this call?") }}</div>{% endif %}
+{%- endmacro %}
 {% set e = v.event %}{% set tz = v.info.timezone %}{% set base = "/events/" ~ e.id %}
 {#- A guest is in or out, with no details, and sees only what they may do (#38). -#}
 {% set as_guest = principal.member.is_guest %}
@@ -126,16 +148,6 @@
     <form method="post" autocomplete="off" action="{{ base }}/details" hx-post="{{ base }}/details" {{ swap|safe }} class="stack">
       {{ hidden() }}
       <p class="small muted">{{ labels.DETAILS_HINT }}</p>
-      <label class="field"><span>Guests</span><input type="number" name="guests" min="0" max="20" inputmode="numeric" value="{{ mine.guests if mine else 0 }}"></label>
-      {% if v.dietary_tags %}
-      <fieldset class="field"><legend>Guests' dietary needs</legend>
-        <div class="chip-picker">
-          {% for tag in v.dietary_tags %}
-          <label class="chip-toggle"><input type="checkbox" name="guest_needs" value="{{ tag.id }}"{% if mine and tag.id in mine.guest_needs %} checked{% endif %}><span>{{ tag.name }}</span></label>
-          {% endfor %}
-        </div>
-      </fieldset>
-      {% endif %}
       <div class="pair">
         <label class="field"><span>Earliest</span><input type="time" name="eat_from" value="{{ mine.eat_from|hhmm if mine else '' }}"></label>
         <label class="field"><span>Latest</span><input type="time" name="eat_until" value="{{ mine.eat_until|hhmm if mine else '' }}"></label>
@@ -178,13 +190,17 @@
   <div class="button-row">{{ act(e.id, base ~ "/coordinate", labels.COORDINATE, "button small") }}</div>
   {% endif %}
 
-  {% if v.roster or v.waiting_on %}
+  {#- Each guest once (#238): on the roster, marked as a guest, with what the viewer may do for
+      them. A guest with no answer yet gets a row while answers are open. -#}
+  {% if v.roster or v.waiting_on or v.unanswered_guests %}
   <h3>Who's in <span class="muted small">· {{ v.head_count }} eating</span></h3>
   <ul class="roster">
     {% for r in v.roster %}
+    {% set g = v.guest(r.member.id) %}
     <li class="status-{{ r.status.value }}">
       <strong>{{ r.member.name }}</strong>
       <span class="chip status">{{ r.status.value|capitalize }}</span>
+      {% if g %}{{ guest_of(g) }}{% endif %}
       {% if r.away_until %}<span class="chip away">{{ labels.away_marker(r.away_until, capital=True) }}</span>{% endif %}
       {% if r.late %}<span class="chip late">Joined late{% if r.status.value == "out" %}, not taking part{% elif r.vote_counts %}, vote counts{% endif %}</span>{% endif %}
       {% if r.guests %}<span class="chip">+{{ r.guests }} guest{{ "" if r.guests == 1 else "s" }}{% if r.guest_needs %}: {{ r.guest_needs|join(", ") }}{% endif %}</span>{% endif %}
@@ -192,39 +208,23 @@
       {% if r.eat_from or r.eat_until %}<span class="small muted time">{{ r.eat_from|wall }}{% if r.eat_until %}–{{ r.eat_until|wall }}{% endif %}</span>{% endif %}
       {% if r.suggestions %}<div class="small">Suggests {{ r.suggestions|join(", ") }}</div>{% endif %}
       {% if r.note %}<div class="small muted note">{{ r.note }}</div>{% endif %}
+      {% if g %}{{ guest_controls(g, e, base) }}{% endif %}
     </li>
     {% endfor %}
+    {% if e.state.value == "collecting" %}
+    {% for g in v.unanswered_guests %}
+    <li class="status-none">
+      <strong>{{ g.person.name }}</strong>
+      <span class="chip status">No answer yet</span>
+      {{ guest_of(g) }}
+      {{ guest_controls(g, e, base) }}
+    </li>
+    {% endfor %}
+    {% endif %}
   </ul>
   {% if v.waiting_on and e.state.value == "collecting" %}<p class="small muted">Waiting on {{ v.waiting_on|map(attribute="name")|join(", ") }}.</p>{% endif %}
   {% endif %}
 
-  {% if v.guests or v.can.invite %}
-  <h3>Guests</h3>
-  <ul class="roster guests">
-    {% for g in v.guests %}
-    <li>
-      <strong>{{ g.person.name }}</strong>
-      <span class="chip status">{{ g.answer.status.value|capitalize if g.answer else "No answer yet" }}</span>
-      {% if g.answer %}{% for o in g.answer.offers %}<span class="chip offer">{{ labels.OFFERED_LABELS[o] }}</span>{% endfor %}{% endif %}
-      {% if g.needs %}<span class="chip">Needs {{ g.needs|join(", ") }}</span>{% endif %}
-      {% if g.invited_by %}<span class="small muted">invited by {{ g.invited_by.name }}</span>{% endif %}
-      {% if g.answerable %}
-      <div class="segmented answer" role="group" aria-label="Is {{ g.person.name }} in?">
-        {% for status in labels.GUEST_ANSWER_ORDER %}
-        {{ act(e.id, base ~ "/guests/" ~ g.person.id ~ "/answer", labels.ANSWER_LABELS[status], "button answer-option", {"status": status.value, "run": e.run}, current=(g.answer is not none and g.answer.status == status)) }}
-        {% endfor %}
-      </div>
-      <div class="button-row roles" role="group" aria-label="What {{ g.person.name }} can do">
-        {% for role, label in labels.OFFERED_LABELS.items() %}
-        {% set offered = g.answer is not none and role in g.answer.offers %}
-        {{ act(e.id, base ~ "/guests/" ~ g.person.id ~ "/answer", label, "button small choice", {"role": role.value, "offered": "0" if offered else "1", "run": e.run}, pressed=offered) }}
-        {% endfor %}
-      </div>
-      {% endif %}
-      {% if g.removable %}{{ act(e.id, base ~ "/guests/" ~ g.person.id ~ "/remove", "Take off the call", "button small", confirm="Take " ~ g.person.name ~ " off this call?") }}{% endif %}
-    </li>
-    {% endfor %}
-  </ul>
   {% if v.can.invite %}
   <details class="details-form">
     <summary class="small">Invite a guest</summary>
@@ -248,7 +248,6 @@
       <button type="submit" class="button primary">Invite</button>
     </form>
   </details>
-  {% endif %}
   {% endif %}
 
   {% if v.can.hand_off %}

@@ -227,8 +227,6 @@ async def test_tampered_modal_metadata_is_dropped(slack: Slack, house: House, me
 @pytest.mark.parametrize(
     "values",
     [
-        state(guest_needs={"selected_options": [{"value": "x"}]}),
-        state(guest_needs={"selected_options": "nope"}),
         state(eat_from={"selected_time": "25:99"}),
         state(eat_from={"selected_time": "1830"}),
         state(suggest_item={"selected_option": {"value": "1; DROP TABLE"}}),
@@ -253,7 +251,7 @@ COOK = {"selected_option": {"value": "cook"}}
         ("parse_log", state(item=NONE)),
         ("parse_assign", state(mode=COOK, who=NONE)),
         ("parse_proposal", state(mode=COOK, free_text={"value": "Pho"}, cuisine=NONE)),
-        ("parse_details", state(guest_needs={"selected_options": [{"value": "none"}]})),
+        ("parse_details", state(eat_clear={"selected_options": [{"value": "none"}]})),
     ],
 )
 def test_nothing_is_a_choice_only_in_the_menus_that_offer_it(parse: str, values: dict[str, object]) -> None:

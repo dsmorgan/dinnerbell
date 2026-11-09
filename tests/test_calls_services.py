@@ -23,7 +23,6 @@ from dinnerbell.domain.events import (
     EndReason,
     EventRuleViolation,
     EventState,
-    InvalidResponse,
     JoinLateFirst,
     RoleOffer,
     Status,
@@ -111,7 +110,7 @@ async def test_fewer_than_two_people_abandons(house: House) -> None:
 async def test_one_person_with_a_guest_is_enough(house: House) -> None:
     event_id = await open_dinner(house)
     await act(house, calls.offer_role, house["Alex"], event_id, RoleOffer.PICKUP, True)
-    await act(house, calls.save_details, house["Alex"], event_id, Details(guests=1))
+    await house.legacy_guests(event_id, "Alex", 1)  # a count saved before #240 still counts
     house.clock.now = RESPOND_BY
     await house.tick()
     assert (await house.event(event_id)).state is EventState.VOTING
@@ -390,7 +389,7 @@ async def test_proposals_respect_vetoes_and_guest_needs_without_naming_anyone(
     for name in ("Alex", "Kim", "Lee"):
         await act(house, calls.respond, house[name], event_id, Status.IN)
     await act(house, calls.offer_role, house["Alex"], event_id, RoleOffer.PICKUP, True)
-    await act(house, calls.save_details, house["Kim"], event_id, Details(guests=1, guest_needs=frozenset({vegan.id})))
+    await house.legacy_guests(event_id, "Kim", 1, frozenset({vegan.id}))
     house.clock.now = RESPOND_BY
     await house.tick()
     assert sorted(await proposal_ids(house, event_id)) == ["Green Bowl", "Seoul Food"]
@@ -444,10 +443,7 @@ async def test_responses_and_details(house: House) -> None:
     await act(house, calls.offer_role, sam, event_id, RoleOffer.COOK, True)
     await act(house, calls.offer_role, sam, event_id, RoleOffer.ORDER, False)
     await act(house, calls.offer_role, house["Kim"], event_id, RoleOffer.ORDER, False)  # nothing to withdraw
-    vegan = await house.tag("Vegan", TagKind.DIETARY)
     details = Details(
-        guests=2,
-        guest_needs=frozenset({vegan.id}),
         eat_from=time(18),
         eat_until=time(19, 30),
         suggestion_item_ids=(house.items["Taqueria"].id,),
@@ -459,15 +455,26 @@ async def test_responses_and_details(house: House) -> None:
     ctx = await house.context(event_id)
     mine = ctx.response_of(sam.id)
     assert mine is not None
-    assert (mine.status, mine.offers, mine.guests, mine.note) == (Status.IN, {RoleOffer.COOK}, 2, "running late Zq7x")
+    assert (mine.status, mine.offers, mine.guests, mine.note) == (Status.IN, {RoleOffer.COOK}, 0, "running late Zq7x")
     assert [(s.item_id, s.free_text) for s in ctx.suggestions] == [(house.items["Taqueria"].id, None), (None, "Ramen")]
     call = next(e for e in await house.outbox() if e.kind == "call_updated")
     (entry,) = call.payload["roster"]
-    assert entry["guest_needs"] == ["Vegan"] and entry["suggestions"] == ["Taqueria", "Ramen"]
-    with pytest.raises(InvalidResponse, match="dietary"):
-        await act(house, calls.save_details, sam, event_id, Details(guest_needs=frozenset({house.tags["Thai"].id})))
+    assert entry["guest_needs"] == [] and entry["suggestions"] == ["Taqueria", "Ramen"]
     await act(house, calls.respond, sam, event_id, Status.OUT)
     assert (await house.context(event_id)).response_of(sam.id).offers == frozenset()  # type: ignore[union-attr]
+
+
+async def test_details_keep_a_guest_count_saved_before_they_lost_it(house: House) -> None:
+    """#240: Details has no guest count, so saving it leaves one an answer saved before, which
+    keeps counting, needs included, until the call ends. Nothing saves a new one."""
+    vegan = await house.tag("Vegan", TagKind.DIETARY)
+    event_id = await open_dinner(house)
+    await house.legacy_guests(event_id, "Sam", 2, frozenset({vegan.id}))
+    await act(house, calls.save_details, house["Sam"], event_id, Details(eat_from=time(18), note="Late"))
+    ctx = await house.context(event_id)
+    mine = ctx.response_of(house["Sam"].id)
+    assert mine is not None and (mine.guests, mine.guest_needs, mine.note) == (2, {vegan.id}, "Late")
+    assert ctx.head_count == 3 and ctx.guest_needs == {vegan.id}
 
 
 async def test_responses_close_at_the_deadline(house: House) -> None:
@@ -984,8 +991,7 @@ async def test_guest_needs_without_guests_are_ignored(house: House) -> None:
     vegan = await house.tag("Vegan", TagKind.DIETARY)
     event_id = await open_dinner(house)
     await act(house, calls.offer_role, house["Alex"], event_id, RoleOffer.PICKUP, True)
-    await act(house, calls.save_details, house["Sam"], event_id, Details(guests=0, guest_needs=frozenset({vegan.id})))
-    assert (await house.context(event_id)).response_of(house["Sam"].id).guest_needs == frozenset()  # type: ignore[union-attr]
+    await act(house, calls.respond, house["Sam"], event_id, Status.IN)
     async with house.sessionmaker() as db:  # a row saved before the fix
         await db.execute(text("UPDATE response SET guest_needs = :needs"), {"needs": f"[{vegan.id}]"})
         await db.commit()

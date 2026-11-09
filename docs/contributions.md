@@ -10,7 +10,7 @@ A call or offer counts the moment it's done. Each person gets one count per kind
 - **At the table:** everyone who was in, including a late joiner who is taking part.
 - **Answered quickly:** any answer within 15 minutes of the call opening, but not an Out your away days gave.
 - **Ideas:** the person whose proposal won; the person whose proposal was new to the household; and the person who added a catalog item the first time it was chosen. If the coordinator changed the place after the decision, these go by the place they ate at: whoever proposed it, if it was a proposal, and whoever added it to the catalog. A new name typed in for the change earns nobody an idea count.
-- **Hosting:** the member who brought guests.
+- **Hosting:** the member who invited a guest who was in, or brought guests to an offer. A head count of guests saved on a call before #240 counts too.
 - **Leaving the choice to others (Gambler):** on a call with at least three proposals, a member who was in, not as a late joiner, and whose votes, when the call was done, were for every proposal or for none. Voting for none counts even when nobody voted. Votes you took back don't count, and offers have no proposals to vote on.
 - **Feedback:** the first time you give feedback on a meal. Changing it, or taking it back and giving it again, doesn't count again.
 

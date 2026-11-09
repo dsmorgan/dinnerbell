@@ -21,7 +21,7 @@ from dinnerbell.channels.slack.interactions import (
     parse_call_args,
 )
 from dinnerbell.config import Settings
-from dinnerbell.domain.catalog import Mode
+from dinnerbell.domain.catalog import Mode, TagKind
 from dinnerbell.domain.events import EventRuleViolation, EventState, IllegalTransition, RoleOffer, Status
 from dinnerbell.domain.meals import Slot
 from dinnerbell.services import calls
@@ -157,8 +157,7 @@ async def test_details_opens_a_prefilled_modal(slack: Slack, house: House) -> No
     assert call.args["trigger_id"].startswith("1234.5678.trigger")
     assert view["callback_id"] == ids.DETAILS_VIEW
     assert ids.ViewOrigin.decode(view["private_metadata"]) == ids.ViewOrigin(event_id, "C0DINNER", run=1)
-    assert [b.get("block_id") for b in view["blocks"][1:]] == [
-        "guests",
+    assert [b.get("block_id") for b in view["blocks"][1:]] == [  # no guest count (#240)
         "eat_from",
         "eat_until",
         "eat_clear",
@@ -172,7 +171,6 @@ async def test_saving_details_calls_the_service(slack: Slack, house: House) -> N
     event_id = await open_call(house)
     tacos = house.items["Sam's Tacos"].id
     values = state(
-        guests={"type": "number_input", "value": "2"},
         eat_from={"type": "timepicker", "selected_time": "18:30"},
         eat_until={"type": "timepicker", "selected_time": None},
         suggest_item={"type": "static_select", "selected_option": {"value": str(tacos), "text": {}}},
@@ -185,7 +183,7 @@ async def test_saving_details_calls_the_service(slack: Slack, house: House) -> N
     mine = ctx.response_of(house["Sam"].id)
     assert mine is not None and (mine.status, mine.guests, mine.eat_from, mine.note) == (
         Status.IN,
-        2,
+        0,
         time(18, 30),
         "Back at 6",
     )
@@ -195,7 +193,7 @@ async def test_saving_details_calls_the_service(slack: Slack, house: House) -> N
     slack.fake.clear()
     await slack.click("Sam", "details", str(event_id))
     blocks = {b.get("block_id"): b for b in slack.fake.of("views.open")[0].args["view"]["blocks"]}
-    assert blocks["guests"]["element"]["initial_value"] == "2"
+    assert "guests" not in blocks and "guest_needs" not in blocks
     assert blocks["eat_from"]["element"]["initial_time"] == "18:30"
     assert blocks["suggest_item"]["element"]["initial_option"]["value"] == str(tacos)
     assert blocks["suggest_text"]["element"]["initial_value"] == "Pho"
@@ -302,18 +300,37 @@ def test_picking_nothing_names_only_the_fields_the_modal_has(
 async def test_details_before_answering_turn_on_the_usual_offers(slack: Slack, house: House) -> None:
     """#180: saving Details first counts Lee in, so Lee's usual **I'll order** turns on too."""
     event_id = await open_call(house)
-    values = state(guests={"type": "number_input", "value": "1"})
+    values = state(note={"type": "plain_text_input", "value": "Home by six"})
     response = await slack.submit("Lee", ids.DETAILS_VIEW, values, event_id)
     assert response.status == 200
     mine = (await house.context(event_id)).response_of(house["Lee"].id)
     assert mine is not None and (mine.status, mine.offers) == (Status.IN, frozenset({RoleOffer.ORDER}))
 
 
+async def test_a_details_modal_opened_before_the_upgrade_saves_and_ignores_its_guest_count(
+    slack: Slack, house: House
+) -> None:
+    """#240: a Details modal opened before the upgrade still has **Guests you're bringing** and
+    **Guests' dietary needs**. Submitting it saves the rest and leaves a saved count as it is,
+    whatever the old fields hold, without an error on a field the modal no longer explains."""
+    event_id = await open_call(house)
+    veg = await house.tag("Vegetarian", TagKind.DIETARY)
+    await house.legacy_guests(event_id, "Sam", 1, frozenset({veg.id}))
+    for guests, needs in (("3", [{"value": str(veg.id)}]), ("-1", []), ("lots", [{"value": "x"}]), ("21", "nope")):
+        values = state(
+            guests={"type": "number_input", "value": guests},
+            guest_needs={"type": "multi_static_select", "selected_options": needs},
+            note={"type": "plain_text_input", "value": f"Old modal {guests}"},
+        )
+        response = await slack.submit("Sam", ids.DETAILS_VIEW, values, event_id)
+        assert response.status == 200 and body(response) == {}
+        mine = (await house.context(event_id)).response_of(house["Sam"].id)
+        assert mine is not None and (mine.guests, mine.guest_needs, mine.note) == (1, {veg.id}, f"Old modal {guests}")
+
+
 @pytest.mark.parametrize(
     ("values", "errors"),
     [
-        (state(guests={"value": "-1"}), {"guests": "Enter a whole number from 0 to 20."}),
-        (state(guests={"value": "21"}), {"guests": "Enter a whole number from 0 to 20."}),
         (
             state(eat_from={"selected_time": "19:00"}, eat_until={"selected_time": "18:00"}),
             {"eat_until": "The latest time can't be before the earliest."},

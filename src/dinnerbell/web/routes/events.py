@@ -338,8 +338,6 @@ async def details(
     context: Context,
     db: Database,
     event_id: RowId,
-    guests: Field = "0",
-    guest_needs: Many = None,
     eat_from: Field = "",
     eat_until: Field = "",
     suggestion_item: Field = "",
@@ -347,14 +345,12 @@ async def details(
     note: Annotated[str, Form(max_length=400)] = "",
     came_from: Annotated[str, Form(alias="from", max_length=10)] = "",
 ) -> Response:
-    """FR-8: guests, their dietary needs, an eat window, a suggestion, and a note."""
+    """FR-8: an eat window, a suggestion, and a note. A page from before #240 also posts a guest
+    count and guests' needs, which go unread: guests come by invitation."""
 
     async def action() -> None:
-        count = optional_int(guests, f"Guests is a whole number from 0 to {MAX_GUESTS}.") or 0
         item = parse_id(suggestion_item)
         parsed = Details(
-            guests=count,
-            guest_needs=frozenset(i for v in guest_needs or [] if (i := parse_id(v)) is not None),
             eat_from=_wall_time(eat_from, "Enter the earliest time as HH:MM."),
             eat_until=_wall_time(eat_until, "Enter the latest time as HH:MM."),
             suggestion_item_ids=(item,) if item is not None else (),

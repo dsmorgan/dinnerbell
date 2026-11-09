@@ -52,14 +52,14 @@ async def house(database: Database, clock: FakeClock, migrated: Settings) -> Hou
 
 
 async def answer(house: House, event_id: int) -> None:
-    """Alex is in and can pick up; Sam is in, cooks, brings a guest, and suggests tacos; Kim
+    """Alex is in and can pick up; Sam is in, cooks, eats from 6:40, and suggests tacos; Kim
     says maybe; Lee never answers."""
     now = house.clock()
     async with house.sessionmaker() as db:
         await calls.respond(db, house["Alex"], event_id, Status.IN, now=now)
         await calls.offer_role(db, house["Alex"], event_id, RoleOffer.PICKUP, True, now=now)
         await calls.offer_role(db, house["Sam"], event_id, RoleOffer.COOK, True, now=now)
-        details = Details(guests=1, eat_from=time(18, 40), suggestion_item_ids=(house.items["Sam's Tacos"].id,))
+        details = Details(eat_from=time(18, 40), suggestion_item_ids=(house.items["Sam's Tacos"].id,))
         await calls.save_details(db, house["Sam"], event_id, details, now=now)
         await calls.respond(db, house["Kim"], event_id, Status.MAYBE, now=now)
 

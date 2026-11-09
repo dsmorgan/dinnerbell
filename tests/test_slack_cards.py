@@ -526,11 +526,11 @@ async def test_details_from_the_card_name_the_run(slack: Slack, house: House) ->
     assert origin == ids.ViewOrigin(event_id, CHANNEL, run=1)
     assert slack.fake.of("response_url", "chat.postEphemeral") == []
 
-    await slack.submit("Kim", ids.DETAILS_VIEW, state(guests={"value": "2"}), event_id, origin=origin)
-    assert (await house.context(event_id)).response_of(house["Kim"].id).guests == 2  # type: ignore[union-attr]
+    await slack.submit("Kim", ids.DETAILS_VIEW, state(note={"value": "Home by six"}), event_id, origin=origin)
+    assert (await house.context(event_id)).response_of(house["Kim"].id).note == "Home by six"  # type: ignore[union-attr]
     stale = ids.ViewOrigin(event_id, CHANNEL, run=2)
-    await slack.submit("Kim", ids.DETAILS_VIEW, state(guests={"value": "3"}), event_id, origin=stale)
-    assert (await house.context(event_id)).response_of(house["Kim"].id).guests == 2  # type: ignore[union-attr]
+    await slack.submit("Kim", ids.DETAILS_VIEW, state(note={"value": "Home by seven"}), event_id, origin=stale)
+    assert (await house.context(event_id)).response_of(house["Kim"].id).note == "Home by six"  # type: ignore[union-attr]
     assert slack.ephemerals("Kim") == ["That can't happen anymore."]
 
 

@@ -10,66 +10,6 @@
       "type": "context"
     },
     {
-      "block_id": "guests",
-      "element": {
-        "action_id": "value",
-        "initial_value": "1",
-        "is_decimal_allowed": false,
-        "max_value": "20",
-        "min_value": "0",
-        "type": "number_input"
-      },
-      "label": {
-        "emoji": true,
-        "text": "Guests you're bringing",
-        "type": "plain_text"
-      },
-      "optional": true,
-      "type": "input"
-    },
-    {
-      "block_id": "guest_needs",
-      "element": {
-        "action_id": "value",
-        "initial_options": [
-          {
-            "text": {
-              "emoji": true,
-              "text": "Vegetarian",
-              "type": "plain_text"
-            },
-            "value": "41"
-          }
-        ],
-        "options": [
-          {
-            "text": {
-              "emoji": true,
-              "text": "Vegetarian",
-              "type": "plain_text"
-            },
-            "value": "41"
-          },
-          {
-            "text": {
-              "emoji": true,
-              "text": "Gluten-free",
-              "type": "plain_text"
-            },
-            "value": "42"
-          }
-        ],
-        "type": "multi_static_select"
-      },
-      "label": {
-        "emoji": true,
-        "text": "Guests' dietary needs",
-        "type": "plain_text"
-      },
-      "optional": true,
-      "type": "input"
-    },
-    {
       "block_id": "eat_from",
       "element": {
         "action_id": "value",

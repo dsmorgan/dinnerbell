@@ -430,8 +430,8 @@ def test_views_for_an_empty_catalog_and_a_busy_day() -> None:
     proposal = proposal_modal(empty, samples.ORIGIN)
     for view in (details, proposal):
         check_view(view)
-    assert {b.get("block_id") for b in details["blocks"]} >= {"guests", "suggest_text"}
-    assert not {"guest_needs", "suggest_item"} & {b.get("block_id") for b in details["blocks"]}
+    assert {b.get("block_id") for b in details["blocks"]} >= {"eat_from", "suggest_text"}
+    assert not {"guests", "guest_needs", "suggest_item"} & {b.get("block_id") for b in details["blocks"]}
     assert [b.get("block_id") for b in proposal["blocks"][2:]] == ["mode", "free_text"]
 
     voting = replace(samples.VOTING_VIEW, mine=None, can=Permissions())

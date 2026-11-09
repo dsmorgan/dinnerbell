@@ -271,7 +271,7 @@ def test_an_admin_keeps_the_admin_controls_without_a_second_row(admin: TestClien
     event_id = start(admin)
     submit(admin, f"/events/{event_id}/respond", {"status": "in"})
     submit(admin, f"/events/{event_id}/offer", {"role": "pickup", "offered": "1"})
-    submit(admin, f"/events/{event_id}/details", {"guests": "1"})
+    submit(admin, f"/events/{event_id}/guests", {"name": "Jo", "run": "1"})
     clock.advance(timedelta(minutes=90))
     web_tick(admin, clock)
     html = page(admin.get(f"/events/{event_id}"))

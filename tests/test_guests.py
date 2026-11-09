@@ -249,7 +249,7 @@ async def test_an_invited_guest_answers_in_or_out_and_pitches_in(house: House) -
     with pytest.raises(EventRuleViolation, match="in or out"):
         await act(house, calls.respond, pat, event_id, Status.MAYBE)
     with pytest.raises(EventRuleViolation, match="details"):
-        await act(house, calls.save_details, pat, event_id, Details(guests=2, suggestion_texts=("Pizza",)))
+        await act(house, calls.save_details, pat, event_id, Details(suggestion_texts=("Pizza",)))
     view = await act(house, event_views.event_view, pat, event_id)
     assert (view.can.respond, view.can.vote, view.can.propose, view.can.cancel, view.can.invite) == (
         True,
