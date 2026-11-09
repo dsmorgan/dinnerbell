@@ -9,6 +9,7 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 ### Security
 
 - **The base image moves to the current Python 3.12 slim digest**, which has the fixed `apt` for CVE-2026-109518. Grype flagged the old `apt` in 0.13.0's image at high severity. Dinnerbell never runs `apt` once the image is built, so the flaw couldn't be reached in a running container, but the scan blocks CI until the image has the fix.
+- **The image installs Debian's fixed zlib** (CVE-2026-85091 and CVE-2026-76844, both high). No `python:3.12-slim` digest has it yet, so the image installs `zlib1g` 1:1.3.dfsg+really1.3.1-1+deb13u1 from Debian security until one does. Dinnerbell doesn't compress anything itself; Python and its libraries load zlib for compressed data, such as gzip.
 
 ### Added
 
