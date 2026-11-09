@@ -6,6 +6,8 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-11-08
+
 ### Security
 
 - **The base image moves to the current Python 3.12 slim digest**, which has the fixed `apt` for CVE-2026-109518. Grype flagged the old `apt` in 0.13.0's image at high severity. Dinnerbell never runs `apt` once the image is built, so the flaw couldn't be reached in a running container, but the scan blocks CI until the image has the fix.
@@ -609,7 +611,8 @@ The source-built version, never published as an image. It covers milestones M0 t
 - **M1:** the catalog with file import, preferences and vetoes, meal history, and the members admin page.
 - **M2:** dinner calls in Slack: the scheduled call, reminders, ranked proposals and votes, the decision, assignments, the abandon path, admin overrides, App Home, and `/dinnerbell call`.
 
-[Unreleased]: https://github.com/dsmorgan/dinnerbell/compare/v0.13.0...HEAD
+[Unreleased]: https://github.com/dsmorgan/dinnerbell/compare/v0.14.0...HEAD
+[0.14.0]: https://github.com/dsmorgan/dinnerbell/releases/tag/v0.14.0
 [0.13.0]: https://github.com/dsmorgan/dinnerbell/releases/tag/v0.13.0
 [0.12.0]: https://github.com/dsmorgan/dinnerbell/releases/tag/v0.12.0
 [0.11.0]: https://github.com/dsmorgan/dinnerbell/releases/tag/v0.11.0
