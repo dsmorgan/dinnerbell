@@ -20,25 +20,25 @@
   <div class="filter-grid">
     <label class="field"><span class="small muted">Kind</span>
       <select name="kind">
-        <option value="">All kinds</option>
+        <option value="">[All kinds]</option>
         {% for k in kinds %}<option value="{{ k.value }}"{% if search.kind == k %} selected{% endif %}>{{ k.label }}s</option>{% endfor %}
       </select>
     </label>
     <label class="field"><span class="small muted">Way</span>
       <select name="mode">
-        <option value="">Any way</option>
+        <option value="">[Any way]</option>
         {% for m in modes %}<option value="{{ m.value }}"{% if search.mode == m %} selected{% endif %}>{{ m.label }}</option>{% endfor %}
       </select>
     </label>
     <label class="field"><span class="small muted">Meal</span>
       <select name="meal">
-        <option value="">Any meal</option>
+        <option value="">[Any meal]</option>
         {% for m in meals %}<option value="{{ m.value }}"{% if search.meal == m %} selected{% endif %}>{{ m.label }}</option>{% endfor %}
       </select>
     </label>
     <label class="field"><span class="small muted">Tag</span>
       <select name="tag">
-        <option value="">Any tag</option>
+        <option value="">[Any tag]</option>
         {% for kind, group in tag_groups.items() if group %}
         <optgroup label="{{ kind.value|capitalize }}">
           {% for t in group %}<option value="{{ t.id }}"{% if search.tag_id == t.id %} selected{% endif %}>{{ t.name }}</option>{% endfor %}
@@ -48,7 +48,7 @@
     </label>
     <label class="field"><span class="small muted">Show</span>
       <select name="status">
-        {% for s in statuses %}<option value="{{ s.value }}"{% if search.status == s %} selected{% endif %}>{{ s.value|capitalize }}</option>{% endfor %}
+        {% for s in statuses %}<option value="{{ s.value }}"{% if search.status == s %} selected{% endif %}>{{ "[All]" if s.value == "all" else s.value|capitalize }}</option>{% endfor %}
       </select>
     </label>
   </div>

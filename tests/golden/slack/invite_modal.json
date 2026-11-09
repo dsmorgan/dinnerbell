@@ -48,6 +48,11 @@
             "value": "10"
           }
         ],
+        "placeholder": {
+          "emoji": true,
+          "text": "[No saved guest]",
+          "type": "plain_text"
+        },
         "type": "static_select"
       },
       "label": {
@@ -95,6 +100,11 @@
             "value": "42"
           }
         ],
+        "placeholder": {
+          "emoji": true,
+          "text": "[No dietary needs]",
+          "type": "plain_text"
+        },
         "type": "multi_static_select"
       },
       "hint": {

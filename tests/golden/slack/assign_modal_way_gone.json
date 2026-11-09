@@ -30,6 +30,11 @@
             "value": "pickup"
           }
         ],
+        "placeholder": {
+          "emoji": true,
+          "text": "[Choose a way]",
+          "type": "plain_text"
+        },
         "type": "static_select"
       },
       "label": {
@@ -70,6 +75,11 @@
             "value": "2"
           }
         ],
+        "placeholder": {
+          "emoji": true,
+          "text": "[Choose someone]",
+          "type": "plain_text"
+        },
         "type": "static_select"
       },
       "label": {
@@ -110,6 +120,11 @@
             "value": "2"
           }
         ],
+        "placeholder": {
+          "emoji": true,
+          "text": "[Choose someone]",
+          "type": "plain_text"
+        },
         "type": "static_select"
       },
       "label": {

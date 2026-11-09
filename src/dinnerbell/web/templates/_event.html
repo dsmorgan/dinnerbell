@@ -154,7 +154,7 @@
       </div>
       <label class="field"><span>Suggest from the catalog</span>
         <select name="suggestion_item">
-          <option value="">[Nothing]</option>
+          <option value="">{{ labels.NOTHING_FROM_CATALOG }}</option>
           {% for item in v.items %}<option value="{{ item.id }}"{% if item.id in v.my_suggestion_ids %} selected{% endif %}>{{ item.name }}</option>{% endfor %}
         </select>
       </label>
@@ -235,7 +235,7 @@
       <p class="small muted">Guests eat with you and can pitch in, but don't vote, suggest, or coordinate. If they have no Slack, you answer for them here.</p>
       {% if v.invitable %}
       <label class="field"><span>A saved guest</span>
-        <select name="guest_id"><option value="">Someone new instead</option>{% for g in v.invitable %}<option value="{{ g.id }}">{{ g.name }}</option>{% endfor %}</select>
+        <select name="guest_id"><option value="">{{ labels.NO_SAVED_GUEST }}</option>{% for g in v.invitable %}<option value="{{ g.id }}">{{ g.name }}</option>{% endfor %}</select>
       </label>
       {% endif %}
       <label class="field"><span>Someone new</span><input type="text" name="name" maxlength="80"></label>
@@ -251,11 +251,12 @@
   </details>
   {% endif %}
 
-  {% if v.can.hand_off %}
+  {% set hand_to = v.coordinators|rejectattr("id", "equalto", principal.member.id)|list if v.can.hand_off else [] %}
+  {% if hand_to %}
   <form method="post" autocomplete="off" action="{{ base }}/hand-off" hx-post="{{ base }}/hand-off" {{ swap|safe }} class="inline-form">
     {{ hidden() }}
     <label class="field compact"><span>Hand off coordinating</span>
-      <select name="member_id">{% for m in v.coordinators if m.id != principal.member.id %}<option value="{{ m.id }}">{{ m.name }}</option>{% endfor %}</select>
+      <select name="member_id" required><option value="">{{ labels.CHOOSE_SOMEONE }}</option>{% for m in hand_to %}<option value="{{ m.id }}">{{ m.name }}</option>{% endfor %}</select>
     </label>
     <button type="submit" class="button small">Hand off</button>
   </form>
@@ -328,12 +329,12 @@
         <select name="mode"><option value="pickup">Pickup</option><option value="delivery">Delivery</option><option value="cook">Cook</option></select>
       </label>
       <label class="field"><span>From the catalog</span>
-        <select name="item_id"><option value="">Something new instead</option>{% for item in v.items %}{% set hint = v.meal_hint(item) %}<option value="{{ item.id }}">{{ item.name }}{% if hint %} ({{ hint }}){% endif %}{% if item.id in v.picked_item_ids %} (already proposed){% endif %}</option>{% endfor %}</select>
+        <select name="item_id"><option value="">{{ labels.NOTHING_FROM_CATALOG }}</option>{% for item in v.items %}{% set hint = v.meal_hint(item) %}<option value="{{ item.id }}">{{ item.name }}{% if hint %} ({{ hint }}){% endif %}{% if item.id in v.picked_item_ids %} (already proposed){% endif %}</option>{% endfor %}</select>
       </label>
       <div class="pair">
         <label class="field"><span>New place or dish</span><input type="text" name="free_text" maxlength="100"></label>
         <label class="field"><span>Cuisine</span>
-          <select name="cuisine_id"><option value="">Pick one</option>{% for tag in v.cuisine_tags %}<option value="{{ tag.id }}">{{ tag.name }}</option>{% endfor %}</select>
+          <select name="cuisine_id"><option value="">{{ labels.CHOOSE_CUISINE }}</option>{% for tag in v.cuisine_tags %}<option value="{{ tag.id }}">{{ tag.name }}</option>{% endfor %}</select>
         </label>
       </div>
       <p class="small muted">You'll be the one to pick it up, cook it, or order it, whichever way you choose. A home meal with a cook list you're not on needs one of its cooks to have offered to cook.</p>
@@ -431,16 +432,16 @@
         <p class="alert error small">History says {{ place_name }}, but this call still says {{ d.proposal.item.name }}. Keep {{ place_name }} to bring the call into line, or choose a place.</p>
         {% endif %}
         <label class="field"><span>Place</span>
-          <select name="item_id"><option value="">Keep {{ place_name }}, or type a new one</option>{% for item in v.items if item.id != place_id %}{% set hint = v.meal_hint(item) %}<option value="{{ item.id }}">{{ item.name }}{% if hint %} ({{ hint }}){% endif %}</option>{% endfor %}</select>
+          <select name="item_id"><option value="">{{ labels.keep_place(place_name) }}</option>{% for item in v.items if item.id != place_id %}{% set hint = v.meal_hint(item) %}<option value="{{ item.id }}">{{ item.name }}{% if hint %} ({{ hint }}){% endif %}</option>{% endfor %}</select>
         </label>
         <div class="pair">
           <label class="field"><span>Or a new place</span><input type="text" name="new_place" maxlength="100"></label>
           <label class="field"><span>Cuisine (optional)</span>
-            <select name="cuisine_id"><option value="">None</option>{% for tag in v.cuisine_tags %}<option value="{{ tag.id }}">{{ tag.name }}</option>{% endfor %}</select>
+            <select name="cuisine_id"><option value="">{{ labels.NO_CUISINE }}</option>{% for tag in v.cuisine_tags %}<option value="{{ tag.id }}">{{ tag.name }}</option>{% endfor %}</select>
           </label>
         </div>
         <label class="field"><span>How</span>
-          <select name="mode"><option value="">Whichever the place allows</option><option value="pickup">Pickup</option><option value="delivery">Delivery</option><option value="cook">Cook</option></select>
+          <select name="mode"><option value="">{{ labels.WHICHEVER_WAY }}</option><option value="pickup">Pickup</option><option value="delivery">Delivery</option><option value="cook">Cook</option></select>
         </label>
         {% if v.can.correct_place %}
         <p class="small muted">This corrects the record and messages nobody. History, stats, and ranking use the new place, feedback on the meal moves to it, and the meal's counts and badges follow. People keep their roles if the new way still has them. Something new needs a way: Cook makes it a home meal, and Pickup or Delivery a restaurant.</p>
@@ -457,7 +458,7 @@
           <select name="role">{% for role in v.work_roles %}<option value="{{ role.value }}">{{ labels.ROLE_TITLES[role] }}</option>{% endfor %}</select>
         </label>
         <label class="field compact"><span>Who</span>
-          <select name="member_id"><option value="">[Nobody]</option>{% for m in v.members %}<option value="{{ m.id }}">{{ m.name }}</option>{% endfor %}</select>
+          <select name="member_id"><option value="">{{ labels.NOBODY }}</option>{% for m in v.members %}<option value="{{ m.id }}">{{ m.name }}</option>{% endfor %}</select>
         </label>
         <button type="submit" class="button small">Assign</button>
       </form>
@@ -520,7 +521,7 @@
     <form method="post" autocomplete="off" action="{{ base }}/admin/coordinator" hx-post="{{ base }}/admin/coordinator" {{ swap|safe }} class="inline-form">
       {{ hidden() }}
       <label class="field compact"><span>Coordinator</span>
-        <select name="member_id"><option value="">[Nobody]</option>{% for m in v.coordinators %}<option value="{{ m.id }}"{% if v.info.coordinator and v.info.coordinator.id == m.id %} selected{% endif %}>{{ m.name }}</option>{% endfor %}</select>
+        <select name="member_id"><option value="">{{ labels.NOBODY }}</option>{% for m in v.coordinators %}<option value="{{ m.id }}"{% if v.info.coordinator and v.info.coordinator.id == m.id %} selected{% endif %}>{{ m.name }}</option>{% endfor %}</select>
       </label>
       <button type="submit" class="button small">Assign</button>
     </form>

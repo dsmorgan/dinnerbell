@@ -40,7 +40,34 @@ PICKUP_MODE = Mode.PICKUP
 """For the templates, which can't name an enum member themselves."""
 WAY_LABELS = {Mode.PICKUP: "Make it pickup", Mode.DELIVERY: "Make it delivery"}
 """Setting a takeout pick's way while voting (#178)."""
-EITHER_WAY = "Either way"
+
+# Choices that stand for no selection (#214, #218, #239) -----------------------------------------
+# Every menu choice or placeholder that picks nothing reads in square brackets, on the web and in
+# Slack, so it can't be mistaken for a real pick. A real choice of nothing names what it is
+# ("[Nobody]"); a menu that needs a pick asks for one ("[Choose someone]"). Square brackets mean
+# nothing to Slack's mrkdwn, unlike angle brackets. tests/test_none_choices.py checks every menu.
+
+NOTHING_FROM_CATALOG = "[Nothing from the catalog]"
+NO_SAVED_GUEST = "[No saved guest]"
+NO_ANSWER = "[No answer]"
+NOBODY = "[Nobody]"
+NO_CUISINE = "[No cuisine]"
+NO_DIETARY_NEEDS = "[No dietary needs]"
+WHICHEVER_WAY = "[Whichever the place allows]"
+"""The way when changing the place: none chosen, so one the place allows (#219)."""
+CHOOSE_FROM_CATALOG = "[Choose from the catalog]"
+CHOOSE_CUISINE = "[Choose a cuisine]"
+CHOOSE_WAY = "[Choose a way]"
+CHOOSE_SOMEONE = "[Choose someone]"
+CHOOSE_WHO_ATE = "[Choose who ate]"
+
+
+def keep_place(name: str) -> str:
+    """The choice that keeps the place as it is, when changing it (#219)."""
+    return f"[Keep {name}]"
+
+
+EITHER_WAY = "[Either way]"
 """Clearing a takeout pick's way while voting, back to not chosen (#212)."""
 EITHER_WAY_VALUE = "either"
 """The form value that clears a pick's way on the event page (#212), beside ``pickup`` and

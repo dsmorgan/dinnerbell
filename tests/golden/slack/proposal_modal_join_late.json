@@ -55,6 +55,11 @@
             "value": "delivery"
           }
         ],
+        "placeholder": {
+          "emoji": true,
+          "text": "[Choose a way]",
+          "type": "plain_text"
+        },
         "type": "static_select"
       },
       "label": {
@@ -122,6 +127,11 @@
             ]
           }
         ],
+        "placeholder": {
+          "emoji": true,
+          "text": "[Nothing from the catalog]",
+          "type": "plain_text"
+        },
         "type": "static_select"
       },
       "label": {
@@ -169,6 +179,11 @@
             "value": "44"
           }
         ],
+        "placeholder": {
+          "emoji": true,
+          "text": "[Choose a cuisine]",
+          "type": "plain_text"
+        },
         "type": "static_select"
       },
       "hint": {

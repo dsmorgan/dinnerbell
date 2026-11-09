@@ -25,7 +25,7 @@
 <label class="field">
   <span>What we ate</span>
   <select name="item_id" required>
-    <option value="">Choose from the catalog</option>
+    <option value="">{{ labels.CHOOSE_FROM_CATALOG }}</option>
     {% if restaurants %}<optgroup label="Restaurants">
       {% for i in restaurants %}<option value="{{ i.id }}"{% if form.item_id == i.id|string %} selected{% endif %}>{{ i.name }}</option>{% endfor %}
     </optgroup>{% endif %}

@@ -79,6 +79,11 @@
             ]
           }
         ],
+        "placeholder": {
+          "emoji": true,
+          "text": "[Keep Sam's Tacos]",
+          "type": "plain_text"
+        },
         "type": "static_select"
       },
       "hint": {
@@ -139,6 +144,11 @@
             "value": "delivery"
           }
         ],
+        "placeholder": {
+          "emoji": true,
+          "text": "[Whichever the place allows]",
+          "type": "plain_text"
+        },
         "type": "static_select"
       },
       "hint": {
@@ -176,6 +186,11 @@
             "value": "44"
           }
         ],
+        "placeholder": {
+          "emoji": true,
+          "text": "[No cuisine]",
+          "type": "plain_text"
+        },
         "type": "static_select"
       },
       "label": {
@@ -218,7 +233,7 @@
         ],
         "placeholder": {
           "emoji": true,
-          "text": "Pick someone who's in",
+          "text": "[Choose someone]",
           "type": "plain_text"
         },
         "type": "static_select"
@@ -261,6 +276,11 @@
             "value": "2"
           }
         ],
+        "placeholder": {
+          "emoji": true,
+          "text": "[Choose someone]",
+          "type": "plain_text"
+        },
         "type": "static_select"
       },
       "hint": {

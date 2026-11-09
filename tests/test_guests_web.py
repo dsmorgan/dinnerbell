@@ -661,6 +661,7 @@ def test_the_hand_off_and_coordinator_forms_list_only_members(
     admin: TestClient, provider: FakeProvider, migrated: Settings
 ) -> None:
     """#227: a guest with Slack and one without, both invited. They're refused when forged."""
+    invite(admin, "sam@example.com", "Sam")  # someone to hand off to, so the form shows (#239)
     event_id = start(admin)
     pat, jo = add_guest(admin, "Pat", slack="U07PAT"), add_guest(admin, "Jo")
     for guest in (pat, jo):
