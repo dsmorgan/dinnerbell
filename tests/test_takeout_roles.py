@@ -1037,8 +1037,9 @@ def test_the_quiet_style_keeps_its_tap_height_and_shows_a_border_on_hover_or_foc
     assert vote + "color: var(--accent-text); }" in css
     assert '.button.primary.choice:not([aria-pressed="true"])' not in css
     voted = '.button.primary.choice[aria-pressed="true"] { background: var(--accent-soft); '
-    assert voted + "border-color: var(--accent-soft); color: var(--accent-soft-text); }" in css
-    assert '.button.primary.choice[aria-pressed="true"]::before { content: "\\2713\\00a0"; }' in css
+    assert voted + "border-color: var(--accent); color: var(--accent-soft-text); }" in css
+    check = '.button.primary.choice[aria-pressed="true"]::before { content: "\\2713\\00a0"; '
+    assert check + 'content: "\\2713\\00a0" / ""; }' in css
 
 
 def test_web_break_the_tie_comes_before_lock_in_the_quiet_row(
