@@ -179,7 +179,19 @@ def test_details_roles_and_coordinating(admin: TestClient, migrated: Settings) -
 
 def test_suggesting_from_the_catalog_offers_nothing_in_brackets(admin: TestClient) -> None:
     html = page(admin.get(f"/events/{start(admin)}"))
-    assert '<select name="suggestion_item">\n          <option value="">[Nothing]</option>' in html
+    assert '<select name="suggestion_item">\n          <option value="">[Nothing from the catalog]</option>' in html
+
+
+def test_hand_off_asks_for_someone_and_needs_someone_to_hand_to(admin: TestClient) -> None:
+    """#239: the menu starts on a bracketed choice the browser won't send, and with nobody else to
+    take it, there's no form at all."""
+    event_id = start(admin)
+    submit(admin, f"/events/{event_id}/coordinate")
+    assert f'action="/events/{event_id}/hand-off"' not in page(admin.get(f"/events/{event_id}"))
+    invite(admin, "sam@example.com", "Sam")
+    html = page(admin.get(f"/events/{event_id}"))
+    form = html.split(f'action="/events/{event_id}/hand-off"')[1].split("</select>")[0]
+    assert '<select name="member_id" required><option value="">[Choose someone]</option>' in form and ">Sam<" in form
 
 
 def test_hand_off_from_the_page(admin: TestClient, provider: FakeProvider, migrated: Settings) -> None:

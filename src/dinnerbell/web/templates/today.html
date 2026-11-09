@@ -78,12 +78,12 @@
       <label class="field"><span>Time</span><input type="time" name="at" value="{{ f.defaults[f.slot].at|hhmm }}" required></label>
     </div>
     <label class="field"><span>From the catalog</span>
-      <select name="item_id"><option value="">Something new instead</option>{% for item in f.items %}{% set hint = f.meal_hint(item) %}<option value="{{ item.id }}">{{ item.name }}{% if hint %} ({{ hint }}){% endif %}</option>{% endfor %}</select>
+      <select name="item_id"><option value="">{{ labels.NOTHING_FROM_CATALOG }}</option>{% for item in f.items %}{% set hint = f.meal_hint(item) %}<option value="{{ item.id }}">{{ item.name }}{% if hint %} ({{ hint }}){% endif %}</option>{% endfor %}</select>
     </label>
     <div class="pair">
       <label class="field"><span>New place or dish</span><input type="text" name="free_text" maxlength="100"></label>
       <label class="field"><span>Cuisine</span>
-        <select name="cuisine_id"><option value="">Pick one</option>{% for tag in f.cuisine_tags %}<option value="{{ tag.id }}">{{ tag.name }}</option>{% endfor %}</select>
+        <select name="cuisine_id"><option value="">{{ labels.CHOOSE_CUISINE }}</option>{% for tag in f.cuisine_tags %}<option value="{{ tag.id }}">{{ tag.name }}</option>{% endfor %}</select>
       </label>
     </div>
     <label class="field"><span>Spare servings</span><input type="number" name="capacity" min="1" max="20" inputmode="numeric" value="{{ f.capacity }}" required></label>

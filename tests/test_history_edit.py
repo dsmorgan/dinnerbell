@@ -869,7 +869,7 @@ def test_web_change_the_plan_works_from_what_the_meal_says(
     html = page(admin.get(f"/events/{event_id}"))
     assert f'name="opened_item" value="{home}"' in html
     place_menu = html.split(f'action="{url}"')[1].split('name="item_id"')[1].split("</select>")[0]
-    assert "Keep Sam's Tacos, or type a new one" in place_menu
+    assert "[Keep Sam's Tacos]" in place_menu
     assert f'value="{siam}"' in place_menu and f'value="{home}"' not in place_menu
     assert '<p class="alert error small">History says Sam\'s Tacos, but this call still says Siam Garden.' in html
 

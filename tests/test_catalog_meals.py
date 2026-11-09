@@ -17,6 +17,7 @@ from dinnerbell.channels.slack.views import offer_modal, proposal_modal
 from dinnerbell.config import Settings
 from dinnerbell.db.catalog import meals_from_bits, meals_to_bits
 from dinnerbell.db.models import CatalogItemRow, ProposalRow
+from dinnerbell.domain import labels
 from dinnerbell.domain.catalog import (
     DEFAULT_MEALS,
     MEAL_ORDER,
@@ -280,7 +281,7 @@ def test_add_a_proposal_lists_the_calls_meal_first_and_marks_the_rest(
     assert f"Usually for {usually[topped]}." in html
     marked = {name: f"{name} (usually {meal})" for name, meal in usually.items()}
     assert select_options(html, "item_id") == [
-        "Something new instead",
+        labels.NOTHING_FROM_CATALOG,
         "Siam Garden (already proposed)",
         "Taqueria (already proposed)",
         *(f"{marked[name]} (already proposed)" if name == topped else marked[name] for name in usually),
@@ -299,7 +300,7 @@ def test_the_offer_form_lists_its_meal_first_and_marks_the_rest(client: TestClie
     html = page(client.get("/"))
     assert '<option value="dinner" selected>Dinner</option>' in html
     assert select_options(html, "item_id") == [
-        "Something new instead",
+        labels.NOTHING_FROM_CATALOG,
         "Siam Garden",
         "Bagel Barn (usually breakfast)",
         "Deli (usually lunch)",

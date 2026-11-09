@@ -175,8 +175,8 @@ NONE = "none"
 once something is picked (#207). Row IDs are digits, so it never matches one. Square brackets
 set these choices apart from real picks (#214), and they mean nothing to Slack's mrkdwn, unlike
 angle brackets."""
-NOTHING_FROM_CATALOG = "[Nothing from the catalog]"
-NO_SAVED_GUEST = "[No saved guest]"
+NOTHING_FROM_CATALOG = labels.NOTHING_FROM_CATALOG
+NO_SAVED_GUEST = labels.NO_SAVED_GUEST
 TAKE_BACK = "Take back a pick"
 """The heading of the group that holds ``NOTHING_FROM_CATALOG``."""
 BOTH_ITEMS = (
@@ -199,6 +199,21 @@ def _with_none(groups: list[Block]) -> list[Block]:
     from the catalog]", picks nothing (#207). It's a group of its own, so each kind keeps its 100
     items."""
     return [{"label": plain(TAKE_BACK, 75), "options": [option(NOTHING_FROM_CATALOG, NONE)]}, *groups]
+
+
+def _placeholder(text: str) -> Block:
+    """A select's ``placeholder``, which shows while nothing is picked. Like a choice that picks
+    nothing, it's in square brackets (#239): the choice it stands for when leaving it empty is
+    one, or "[Choose ...]" when the menu needs a pick."""
+    return {"placeholder": plain(text, 150)}
+
+
+NOTHING_PICKED = _placeholder(NOTHING_FROM_CATALOG)
+"""A catalog menu with ``_with_none``: left empty, it means the same as its none choice."""
+CHOOSE_FROM_CATALOG = _placeholder(labels.CHOOSE_FROM_CATALOG)
+CHOOSE_CUISINE = _placeholder(labels.CHOOSE_CUISINE)
+CHOOSE_WAY = _placeholder(labels.CHOOSE_WAY)
+CHOOSE_SOMEONE = _placeholder(labels.CHOOSE_SOMEONE)
 
 
 def _one_of(picked: object, typed: object, block_id: str, neither: str, both: str) -> None:
@@ -244,7 +259,7 @@ def details_modal(v: EventView, origin: ids.ViewOrigin) -> dict[str, Any]:
         select: Block = {
             "type": "static_select",
             "option_groups": _with_none(groups),
-            "placeholder": plain("Pick from the catalog"),
+            "placeholder": plain(labels.NOTHING_FROM_CATALOG),
         }
         if chosen_items:
             select["initial_option"] = chosen_items[0]
@@ -353,17 +368,17 @@ def proposal_modal(v: EventView, origin: ids.ViewOrigin) -> dict[str, Any]:
         _intro(v),
         *([section(join_late)] if late else []),
         context(ADD_PICK_NOTE),
-        _input("mode", "How", {"type": "static_select", "options": modes}, optional=False),
+        _input("mode", "How", {"type": "static_select", "options": modes, **CHOOSE_WAY}, optional=False),
     ]
     groups, _ = _item_groups(v.items, picked=v.picked_item_ids, hint=v.meal_hint)
     if groups:
-        catalog = {"type": "static_select", "option_groups": _with_none(groups)}
+        catalog = {"type": "static_select", "option_groups": _with_none(groups), **NOTHING_PICKED}
         blocks.append(_input("item", "From the catalog", catalog))
     blocks.append(
         _input("free_text", "Or something new", {"type": "plain_text_input", "max_length": MAX_SUGGESTION_LENGTH})
     )
     if v.cuisine_tags:
-        cuisines = {"type": "static_select", "options": _tag_options(v.cuisine_tags)}
+        cuisines = {"type": "static_select", "options": _tag_options(v.cuisine_tags), **CHOOSE_CUISINE}
         hint = "Needed for something new, so variety and vetoes still work."
         blocks.append(_input("cuisine", "Cuisine", cuisines, hint=hint))
     return _modal("Add a proposal", ids.PROPOSAL_VIEW, origin, blocks, "Join late and add" if late else "Add")
@@ -475,12 +490,10 @@ class AssignInput:
     """Who picks up, for a pickup (#178); None for the first who offered."""
 
 
-def _people_select(choice: RolesChoice, preselect: int | None, placeholder: str | None = None) -> Block:
+def _people_select(choice: RolesChoice, preselect: int | None) -> Block:
     """A select of the people who are in, with ``preselect`` chosen."""
     people = [option(p.name, str(p.id)) for p in choice.people[:MAX_ASSIGN_PEOPLE]]
-    element: Block = {"type": "static_select", "options": people}
-    if placeholder is not None:
-        element["placeholder"] = plain(placeholder)
+    element: Block = {"type": "static_select", "options": people, **CHOOSE_SOMEONE}
     current = next((o for o in people if preselect is not None and o["value"] == str(preselect)), None)
     if current is not None:
         element["initial_option"] = current
@@ -509,7 +522,7 @@ def assign_modal(v: EventView, origin: ids.ViewOrigin) -> dict[str, Any]:
         ),
     ]
     modes = [option(m.label, m.value) for m in choice.modes]
-    how: Block = {"type": "static_select", "options": modes}
+    how: Block = {"type": "static_select", "options": modes, **CHOOSE_WAY}
     current = next((o for o in modes if o["value"] == choice.mode.value), None)
     if current is not None:  # the catalog may have dropped the decided way since
         how["initial_option"] = current
@@ -584,19 +597,24 @@ def _place_blocks(v: EventView, opened: ids.Opened) -> list[Block]:
     with every way on it, and ``coordinator.change_place`` checks it against the place."""
     keep = (opened.item_id,) if opened.item_id is not None else ()
     groups, kept = _item_groups(v.items, keep=keep, hint=v.meal_hint)
+    place = v.decision.proposal.item.name if v.decision is not None else "the place"
     blocks: list[Block] = []
     if groups:
-        catalog: Block = {"type": "static_select", "option_groups": groups}
+        catalog: Block = {"type": "static_select", "option_groups": groups, **_placeholder(labels.keep_place(place))}
         if kept:  # a place taken out of the catalog since isn't listed, and leaving it empty keeps it
             catalog["initial_option"] = kept[0]
         blocks.append(_input("place", "Place", catalog, hint=PLACE_HINT))
     blocks.append(
         _input("new_place", "Or a new place", {"type": "plain_text_input", "max_length": MAX_SUGGESTION_LENGTH})
     )
-    ways: Block = {"type": "static_select", "options": [option(m.label, m.value) for m in MODE_ORDER]}
+    ways: Block = {
+        "type": "static_select",
+        "options": [option(m.label, m.value) for m in MODE_ORDER],
+        **_placeholder(labels.WHICHEVER_WAY),
+    }
     blocks.append(_input("place_mode", NEW_PLACE_WAY, ways, hint=NEW_PLACE_WAY_HINT))
     if v.cuisine_tags:
-        cuisines = {"type": "static_select", "options": _tag_options(v.cuisine_tags)}
+        cuisines = {"type": "static_select", "options": _tag_options(v.cuisine_tags), **_placeholder(labels.NO_CUISINE)}
         blocks.append(_input("place_cuisine", "Cuisine of a new place", cuisines))
     return blocks
 
@@ -627,16 +645,16 @@ def adjust_modal(v: EventView, origin: ids.ViewOrigin) -> dict[str, Any]:
     ]
     if switchable:
         modes = [option(m.label, m.value) for m in choice.modes]
-        how: Block = {"type": "static_select", "options": modes}
+        how: Block = {"type": "static_select", "options": modes, **CHOOSE_WAY}
         way = next((o for o in modes if o["value"] == choice.mode.value), None)
         if way is not None:  # the catalog may have dropped the decided way since
             how["initial_option"] = way
         blocks.append(_input("mode", "How", how, optional=False))
     if people:
-        who = _people_select(choice, opened.assignee_id, "Pick someone who's in")
+        who = _people_select(choice, opened.assignee_id)
         blocks.append(_input("who", choice.lead_label, who, optional="initial_option" not in who))
         if choice.has_pickup and (switchable or choice.mode is Mode.PICKUP):
-            pickup = _people_select(choice, opened.pickup_id, "Pick someone who's in")
+            pickup = _people_select(choice, opened.pickup_id)
             hint = PICKUP_HINT if switchable and choice.pickup_hint else None
             optional = "initial_option" not in pickup
             blocks.append(_input("pickup", ROLE_WHO[AssignmentRole.PICKUP], pickup, optional=optional, hint=hint))
@@ -646,7 +664,7 @@ def adjust_modal(v: EventView, origin: ids.ViewOrigin) -> dict[str, Any]:
     members = {str(p.id) for p in v.coordinators}  # someone who's in may be a guest, who doesn't coordinate (#227)
     leads += [o for o in people if o["value"] != str(coordinator) and o["value"] in members]
     if leads:
-        lead: Block = {"type": "static_select", "options": leads[:MAX_ASSIGN_PEOPLE]}
+        lead: Block = {"type": "static_select", "options": leads[:MAX_ASSIGN_PEOPLE], **CHOOSE_SOMEONE}
         if leads[0]["value"] == str(coordinator):
             lead["initial_option"] = leads[0]
         hint = "Hand it off to a member who's in. They're told, and the plan is theirs to change after."
@@ -752,7 +770,7 @@ PRIVATE = (
     '"Well liked" or "Recently late," never who said what. Your rating can also move your own score for it.'
 )
 THANKS = "thanks"
-NO_ANSWER_LABEL = "[No answer]"
+NO_ANSWER_LABEL = labels.NO_ANSWER
 NO_ANSWER = option(NO_ANSWER_LABEL, NONE)
 """Slack can't unselect a radio button, so this is how a rating is cleared, as on the web."""
 
@@ -895,13 +913,13 @@ def offer_modal(form: OfferForm, origin: ids.FormOrigin) -> dict[str, Any]:
     ]
     groups, _ = _item_groups(form.items, hint=form.meal_hint)
     if groups:
-        catalog = {"type": "static_select", "option_groups": _with_none(groups)}
+        catalog = {"type": "static_select", "option_groups": _with_none(groups), **NOTHING_PICKED}
         blocks.append(_input("item", "From the catalog", catalog))
     blocks.append(
         _input("free_text", "Or something new", {"type": "plain_text_input", "max_length": MAX_SUGGESTION_LENGTH})
     )
     if form.cuisine_tags:
-        cuisines = {"type": "static_select", "options": _tag_options(form.cuisine_tags)}
+        cuisines = {"type": "static_select", "options": _tag_options(form.cuisine_tags), **CHOOSE_CUISINE}
         blocks.append(_input("cuisine", "Cuisine", cuisines, hint="Needed for something new."))
     blocks.append(_input("at", "Time", {"type": "timepicker", **_hhmm(defaults.at)}, optional=False))
     spare: Block = {
@@ -969,13 +987,15 @@ def log_modal(form: LogForm, origin: ids.FormOrigin) -> dict[str, Any]:
     It starts with today's dinner and the member who opened it."""
     groups, _ = _item_groups(form.items)
     people = [option(p.name, str(p.id)) for p in form.people[:MAX_OPTIONS]]
-    who: Block = {"type": "multi_static_select", "options": people}
+    who: Block = {"type": "multi_static_select", "options": people, **_placeholder(labels.CHOOSE_WHO_ATE)}
     mine = [o for o in people if o["value"] == str(form.member_id)]
     if mine:
         who["initial_options"] = mine
     blocks: list[Block] = [
         context("Logged meals count for variety and history. Feedback on them is on the History page."),
-        _input("item", "What", {"type": "static_select", "option_groups": groups}, optional=False),
+        _input(
+            "item", "What", {"type": "static_select", "option_groups": groups, **CHOOSE_FROM_CATALOG}, optional=False
+        ),
         _input("slot", "Meal", _select(SLOT_OPTIONS.values(), SLOT_OPTIONS[Slot.DINNER]), optional=False),
         _input("day", "Day", {"type": "datepicker", "initial_date": form.today.isoformat()}, optional=False),
         _input("who", "Who ate", who, optional=False),
@@ -1017,11 +1037,19 @@ def invite_modal(v: EventView, saved: Sequence[Member], origin: ids.ViewOrigin) 
         ),
     ]
     if choices:
-        guest = {"type": "static_select", "options": [option(NO_SAVED_GUEST, NONE), *choices]}  # #207
+        guest = {
+            "type": "static_select",
+            "options": [option(NO_SAVED_GUEST, NONE), *choices],
+            **_placeholder(NO_SAVED_GUEST),
+        }  # #207
         blocks.append(_input("guest", "A saved guest", guest))
     blocks.append(_input("name", "Or someone new", {"type": "plain_text_input", "max_length": MAX_DISPLAY_NAME_LENGTH}))
     if v.dietary_tags:
-        needs: Block = {"type": "multi_static_select", "options": _tag_options(v.dietary_tags)}
+        needs: Block = {
+            "type": "multi_static_select",
+            "options": _tag_options(v.dietary_tags),
+            **_placeholder(labels.NO_DIETARY_NEEDS),
+        }
         blocks.append(
             _input("needs", "Their dietary needs", needs, hint="For someone new. A saved guest keeps theirs.")
         )

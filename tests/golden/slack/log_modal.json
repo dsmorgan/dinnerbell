@@ -49,6 +49,11 @@
             ]
           }
         ],
+        "placeholder": {
+          "emoji": true,
+          "text": "[Choose from the catalog]",
+          "type": "plain_text"
+        },
         "type": "static_select"
       },
       "label": {
@@ -162,6 +167,11 @@
             "value": "2"
           }
         ],
+        "placeholder": {
+          "emoji": true,
+          "text": "[Choose who ate]",
+          "type": "plain_text"
+        },
         "type": "multi_static_select"
       },
       "label": {

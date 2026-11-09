@@ -50,7 +50,7 @@
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
           <label class="field compact"><span class="small muted">Merge into</span>
             <select name="into" required>
-              <option value="">Choose a tag</option>
+              <option value="">[Choose a tag]</option>
               {% for other in all_tags if other.id != t.id %}<option value="{{ other.id }}">{{ other.name }} ({{ other.kind.value }})</option>{% endfor %}
             </select></label>
           <label class="check small"><input type="checkbox" name="confirm" required> Merge {{ t.name }} for good. This can't be undone.</label>
