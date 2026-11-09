@@ -33,6 +33,11 @@ LABEL org.opencontainers.image.title="Dinnerbell" \
       org.opencontainers.image.description="Household meal coordination" \
       org.opencontainers.image.licenses="AGPL-3.0-or-later" \
       org.opencontainers.image.source="https://github.com/dsmorgan/dinnerbell"
+# Debian's security fix for zlib (CVE-2026-85091, CVE-2026-76844), which this base digest predates.
+# Pinned, so the build stays reproducible. Remove this step once python:3.12-slim ships it.
+RUN apt-get update \
+ && apt-get install --yes --no-install-recommends zlib1g=1:1.3.dfsg+really1.3.1-1+deb13u1 \
+ && rm -rf /var/lib/apt/lists/*
 # Remove pip and ensurepip's bundled pip wheel: the app runs from /app/.venv, which has none, and
 # nothing in the image installs packages. This keeps pip's advisories out of the image scan.
 RUN python -m pip uninstall --yes pip \
