@@ -688,7 +688,7 @@ async def choose_roles(
     async def action() -> None:
         chosen = choice(Mode, mode)
         if chosen is None:
-            raise BadFormValue("Pick how to get it.")
+            raise BadFormValue("Choose how to get it.")
         await coordinator.choose_roles(
             db,
             principal.member,

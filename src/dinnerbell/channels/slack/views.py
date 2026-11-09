@@ -545,11 +545,11 @@ def parse_assign(values: Any) -> AssignInput:
     selected = _state(values, "mode").get("selected_option")
     raw = selected.get("value") if isinstance(selected, dict) else None
     if raw not in {m.value for m in Mode}:
-        raise FormError("mode", "Pick how to get it.")
+        raise FormError("mode", "Choose how to get it.")
     mode = Mode(str(raw))
     member = _picked(values, "who")
     if member is None:
-        raise FormError("who", "Pick who does it.")
+        raise FormError("who", "Choose who does it.")
     return AssignInput(mode, member, _picked(values, "pickup"))
 
 
@@ -654,10 +654,12 @@ def adjust_modal(v: EventView, origin: ids.ViewOrigin) -> dict[str, Any]:
             how["initial_option"] = way
         blocks.append(_input("mode", "How", how, optional=False))
     if people:
-        who = _people_select(choice, opened.assignee_id, first_who_offered=True)
+        # Left empty, a role nobody holds goes to its first volunteer; one held by someone no
+        # longer listed, such as a member made inactive, keeps them (#239).
+        who = _people_select(choice, opened.assignee_id, first_who_offered=opened.assignee_id is None)
         blocks.append(_input("who", choice.lead_label, who, optional="initial_option" not in who))
         if choice.has_pickup and (switchable or choice.mode is Mode.PICKUP):
-            pickup = _people_select(choice, opened.pickup_id, first_who_offered=True)
+            pickup = _people_select(choice, opened.pickup_id, first_who_offered=opened.pickup_id is None)
             hint = PICKUP_HINT if switchable and choice.pickup_hint else None
             optional = "initial_option" not in pickup
             blocks.append(_input("pickup", ROLE_WHO[AssignmentRole.PICKUP], pickup, optional=optional, hint=hint))
@@ -684,16 +686,16 @@ def parse_adjust(values: Any) -> Adjustment:
         raise FormError("meal_time", "Pick a meal time.")
     lead = _picked(values, "coordinator")
     if lead is None:
-        raise FormError("coordinator", "Pick who coordinates.")
+        raise FormError("coordinator", "Choose who coordinates.")
     selected = _state(values, "mode").get("selected_option")
     raw = selected.get("value") if isinstance(selected, dict) else None
     if raw is not None and raw not in {m.value for m in Mode}:
-        raise FormError("mode", "Pick how to get it.")
+        raise FormError("mode", "Choose how to get it.")
     mode = Mode(str(raw)) if raw is not None else None
     selected = _state(values, "place_mode").get("selected_option")
     raw = selected.get("value") if isinstance(selected, dict) else None
     if raw is not None and raw not in {m.value for m in Mode}:
-        raise FormError("place_mode", "Pick how to get it.")
+        raise FormError("place_mode", "Choose how to get it.")
     return Adjustment(
         meal_time=meal,
         assignee_id=_picked(values, "who"),
