@@ -6,6 +6,14 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ## [Unreleased]
 
+### Added
+
+- **Dinnerbone's Den on a call's page** (#241). With fun mode on, a call's own page, the one **View on web** in Slack opens, now has the den at the top, beside **Today**, as Today has it beside the greeting. There it follows that call rather than Today's next open call: laps while it takes answers, the wheel while it's voting, eating once it's decided. Locking or marking done the call on its page celebrates as it does on Today, and its card's refresh keeps the den current. Badges still flip on Today only. With fun mode off, the page is as before.
+
+### Fixed
+
+- **Dinnerbone keeps running while you scroll** (#242). During a lap around the call card, scrolling paused him until it ended, and on a phone, the toolbar sliding away mid-scroll sent him back to the den to start over. Now he runs through a scroll, and when the window changes size, the phone turns, or the card grows or moves, he carries on around the card from where he was.
+
 ## [0.14.0] - 2026-11-08
 
 ### Security

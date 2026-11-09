@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Fun mode's motion and celebrations (#153): the den's state riding along with every card swapped
-into Today, the celebration only the member who locked or marked done the call gets, the quiet
+into Today or a call's page (#241), the celebration only the member who locked or marked done the call gets, the quiet
 caption everyone else gets, and the badge flip for the member who earned it, once."""
 
 from __future__ import annotations
@@ -95,19 +95,26 @@ def test_locking_and_marking_done_on_today_celebrate_for_the_actor(
     assert again.status_code == 409 and celebration(again) is None
 
 
-def test_no_celebration_off_today_without_htmx_or_with_fun_mode_off(
+def test_a_calls_page_celebrates_too_and_its_den_follows_that_call(
     admin: TestClient,  # noqa: F811
     clock: FakeClock,
     migrated: Settings,
 ) -> None:
+    """The call's own page has the den too (#241): locking there celebrates for the actor, and
+    the card brings the den's state for that call, not Today's next open call."""
     event_id = start(admin)
     to_voting(admin, clock, event_id)
+    later = submit(admin, "/events", {"slot": "dinner", "day": "2026-10-24", "post_now": "1"})
+    assert later.status_code == 303, page(later)
     first, _ = proposal_ids(migrated)
-    # From the event page, which has no den: no celebration, and no den state.
     on_page = htmx(admin, f"/events/{event_id}/proposals/{first}/lock", {"from": "event"})
-    assert on_page.status_code == 200 and celebration(on_page) is None and "den-state" not in on_page.text
+    assert on_page.status_code == 200
+    payload = celebration(on_page)
+    assert payload is not None and payload["kind"] == "decided" and payload["event"] == event_id
+    state = den_state(on_page.text)
+    assert f'data-event="{event_id}"' in state and 'data-pose="eat"' in state and 'hx-swap-oob="true"' in state
     # A plain form post redirects: never on a 303.
-    plain = submit(admin, f"/events/{event_id}/done", TODAY)
+    plain = submit(admin, f"/events/{event_id}/done", {"from": "event"})
     assert plain.status_code == 303 and celebration(plain) is None
 
 
@@ -221,6 +228,19 @@ def test_a_badge_flips_once_for_the_member_who_earned_it(
 
 
 # fun.js -------------------------------------------------------------------------------------------
+
+
+def test_a_lap_runs_through_a_scroll_and_a_resize() -> None:
+    """#242: nothing pauses a lap while the page scrolls, and a resize or a swapped card measures
+    the card again and keeps his place on the lap, instead of sending him back to the den.
+    Measured in headless Chrome on the pull request; this guards against the old handlers."""
+    script = (STATIC / "fun.js").read_text()
+    assert '"scroll"' not in script and ".pause()" not in script
+    resize = script.split('window.addEventListener("resize", ', 1)[1].split(")", 1)[0]
+    assert resize == "remeasureSoon"
+    remeasure = script.split("function remeasureLap() {", 1)[1].split("\n  }\n", 1)[0]
+    assert "stopLaps" not in remeasure and "S.lap.effect.setKeyframes(" in remeasure
+    assert "S.lap.currentTime = done * path.duration;" in remeasure
 
 
 def test_fun_js_writes_text_only_and_is_static(client: TestClient) -> None:
