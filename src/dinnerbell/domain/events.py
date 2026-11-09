@@ -1622,9 +1622,9 @@ def closes_early(
     restart doesn't count): in, out, or maybe, since closing turns maybes out. With fewer than
     two in and anyone a maybe, it waits for the deadline: only outs end a call early. With
     nobody in, it closes at once and ends on-your-own. With anyone in, it waits until no
-    response has changed for ``EARLY_CLOSE_QUIET``, so tapping In first and adding guests or an
-    offer next is never cut short; with two or more eating, someone must also be able to cook, pick up, or order
-    (``coverage``). Otherwise the call waits for its deadline, or for Close now.
+    response has changed for ``EARLY_CLOSE_QUIET``, so tapping In first and inviting a guest or
+    adding an offer next is never cut short; with two or more eating, someone must also be able
+    to cook, pick up, or order (``coverage``). Otherwise the call waits for its deadline, or for Close now.
 
     ``active_member_ids`` are the household's members and admins, whom the call waits for;
     ``guest_ids`` are the guests invited to it (#38). Nobody waits for a guest, but a guest's
