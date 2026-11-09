@@ -203,6 +203,10 @@ class EventView:
     """Guests invited to the call (#38). The page lists each once, on the roster (#238):
     ``guest`` marks a roster entry and carries its controls, and ``unanswered_guests`` are the
     ones with no answer yet."""
+    guest_ids: frozenset[int] = frozenset()
+    """Every guest with an answer on the roster, invited or not anymore: one taken off the call,
+    removed, or switched off keeps their answer, and the roster still marks them a guest
+    (#238)."""
     invitable: tuple[note.PersonInfo, ...] = ()
     """Saved guests the viewer could invite: only for a member who may invite (#38)."""
     late: tuple[note.LateJoinerInfo, ...] = ()
@@ -489,6 +493,7 @@ def view(ctx: CallContext, actor: Member, today: date, now: datetime, *, any_tim
         items=tuple(for_meal_first(active, ctx.event.slot.meal)),  # for the call's meal first (#72)
         offer=cc.offer_info(ctx) if ctx.event.is_offer else None,
         guests=_guest_views(ctx, actor),
+        guest_ids=frozenset(r.member_id for r in ctx.responses if ctx.is_guest(r.member_id)),
         invitable=_invitable(ctx, actor),
         late=cc.late_joiners(ctx),
         shuffles_left=cc.shuffles_left(ctx),

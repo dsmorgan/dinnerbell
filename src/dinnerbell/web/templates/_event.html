@@ -191,8 +191,9 @@
   {% endif %}
 
   {#- Each guest once (#238): on the roster, marked as a guest, with what the viewer may do for
-      them. A guest with no answer yet gets a row while answers are open. -#}
-  {% if v.roster or v.waiting_on or v.unanswered_guests %}
+      them. A guest with no answer yet gets a row while answers are open, and one no longer
+      invited (taken off, removed, or switched off) keeps "Guest" on their answer's row. -#}
+  {% if v.roster or v.waiting_on or (v.unanswered_guests and e.state.value == "collecting") %}
   <h3>Who's in <span class="muted small">· {{ v.head_count }} eating</span></h3>
   <ul class="roster">
     {% for r in v.roster %}
@@ -200,7 +201,7 @@
     <li class="status-{{ r.status.value }}">
       <strong>{{ r.member.name }}</strong>
       <span class="chip status">{{ r.status.value|capitalize }}</span>
-      {% if g %}{{ guest_of(g) }}{% endif %}
+      {% if g %}{{ guest_of(g) }}{% elif r.member.id in v.guest_ids %}<span class="small muted guest-of">Guest</span>{% endif %}
       {% if r.away_until %}<span class="chip away">{{ labels.away_marker(r.away_until, capital=True) }}</span>{% endif %}
       {% if r.late %}<span class="chip late">Joined late{% if r.status.value == "out" %}, not taking part{% elif r.vote_counts %}, vote counts{% endif %}</span>{% endif %}
       {% if r.guests %}<span class="chip">+{{ r.guests }} guest{{ "" if r.guests == 1 else "s" }}{% if r.guest_needs %}: {{ r.guest_needs|join(", ") }}{% endif %}</span>{% endif %}

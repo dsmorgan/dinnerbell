@@ -341,6 +341,29 @@ def test_a_guest_shows_once_on_the_roster_marked_with_who_invited_them(
     assert ">Out<" in out and "Guest invited by admin" in out and "/remove" not in out  # a guest removes nobody
 
 
+def test_a_guest_taken_off_or_removed_stays_marked_a_guest_on_the_roster(admin: TestClient, migrated: Settings) -> None:
+    """#238: a guest taken off the call keeps their answer, out, with no invitation, and a guest
+    removed on Admin > Members keeps theirs too. Their rows still say "Guest", without "invited
+    by", and with no controls, while a guest who stays keeps theirs."""
+    event_id = start(admin)
+    submit(admin, f"/events/{event_id}/respond", {"status": "in"})
+    for name in ("Jo", "Kai", "Ren"):
+        assert submit(admin, f"/events/{event_id}/guests", {"name": name, "run": "1"}).status_code == 303
+    ids = {m.display_name: m.id for m in rows(migrated, MemberRow)}
+    assert submit(admin, f"/events/{event_id}/guests/{ids['Jo']}/remove", {}).status_code == 303
+    assert submit(admin, f"/admin/guests/{ids['Ren']}/remove", {}).status_code == 303
+
+    roster = _roster(page(admin.get(f"/events/{event_id}")))
+    for name in ("Jo", "Ren"):
+        gone = _row(roster, name)
+        assert ">Guest</span>" in gone and "invited by" not in gone, name
+        assert "/answer" not in gone and "/remove" not in gone, name
+    assert ">Out<" in _row(roster, "Jo")
+    stays = _row(roster, "Kai")
+    assert "Guest invited by admin" in stays and f"/guests/{ids['Kai']}/remove" in stays
+    assert "Guest" not in _row(roster, "admin")
+
+
 def test_a_guest_who_never_answered_leaves_the_roster_once_answers_close(
     admin: TestClient, clock: FakeClock, migrated: Settings
 ) -> None:
