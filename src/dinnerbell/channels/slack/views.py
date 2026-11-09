@@ -65,7 +65,6 @@ from dinnerbell.domain.catalog import MODE_ORDER, CatalogItem, ItemKind, Mode, T
 from dinnerbell.domain.events import (
     CANCEL_NOTE_MAX,
     JOIN_LATE_PROMPT,
-    MAX_GUESTS,
     MAX_NOTE_LENGTH,
     MAX_SUGGESTION_LENGTH,
     AssignmentRole,
@@ -228,25 +227,10 @@ def _intro(v: EventView) -> Block:
 
 
 def details_modal(v: EventView, origin: ids.ViewOrigin) -> dict[str, Any]:
-    """FR-8: guests, their dietary needs, an eat window, a suggestion, and a note, prefilled
-    with the member's current response."""
+    """FR-8: an eat window, a suggestion, and a note, prefilled with the member's current
+    response. Guests come by invitation: **Invite a guest** (#240)."""
     mine = v.mine
     blocks: list[Block] = [_intro(v)]
-    guests: Block = {
-        "type": "number_input",
-        "is_decimal_allowed": False,
-        "min_value": "0",
-        "max_value": str(MAX_GUESTS),
-    }
-    if mine and mine.guests:
-        guests["initial_value"] = str(mine.guests)
-    blocks.append(_input("guests", "Guests you're bringing", guests))
-    if v.dietary_tags:
-        needs: Block = {"type": "multi_static_select", "options": _tag_options(v.dietary_tags)}
-        chosen = [o for o in needs["options"] if mine and int(o["value"]) in mine.guest_needs]
-        if chosen:
-            needs["initial_options"] = chosen
-        blocks.append(_input("guest_needs", "Guests' dietary needs", needs))
     blocks.append(
         _input("eat_from", "Earliest you can eat", {"type": "timepicker", **_hhmm(mine.eat_from if mine else None)})
     )
@@ -332,13 +316,9 @@ class FormError(ValueError):
 
 
 def parse_details(values: Any) -> Details:
-    """The Details modal's state as ``Details``. Raises FormError or ids.BadValue."""
-    raw_guests = _text(values, "guests").strip()
-    if raw_guests and not (raw_guests.isascii() and raw_guests.isdigit() and len(raw_guests) <= 3):
-        raise FormError("guests", f"Enter a whole number from 0 to {MAX_GUESTS}.")
-    guests = int(raw_guests) if raw_guests else 0
-    if guests > MAX_GUESTS:
-        raise FormError("guests", f"Enter a whole number from 0 to {MAX_GUESTS}.")
+    """The Details modal's state as ``Details``. Raises FormError or ids.BadValue. A modal opened
+    before #240 also has ``guests`` and ``guest_needs``, which go unread: guests come by
+    invitation, and a count saved before stays as it is."""
     eat_from, eat_until = _time(values, "eat_from"), _time(values, "eat_until")
     cleared = set(_picked_values(values, "eat_clear"))
     if not cleared <= CLEAR_TIMES.keys():
@@ -350,8 +330,6 @@ def parse_details(values: Any) -> Details:
     item = _picked(values, "suggest_item", clearable=True)
     text = _text(values, "suggest_text").strip()
     return Details(
-        guests=guests,
-        guest_needs=_picked_many(values, "guest_needs"),
         eat_from=eat_from,
         eat_until=eat_until,
         suggestion_item_ids=(item,) if item is not None else (),

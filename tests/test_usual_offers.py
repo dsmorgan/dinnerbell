@@ -118,14 +118,14 @@ async def test_adding_a_pick_while_answers_are_open_counts_you_in_with_only_its_
 
 async def test_details_before_answering_turn_them_on(house: House) -> None:
     event_id = await open_dinner(house)
-    await act(house, calls.save_details, house["Pat"], event_id, Details(guests=1))
+    await act(house, calls.save_details, house["Pat"], event_id, Details(note="Home by six"))
     assert await answer(house, event_id, "Pat") == (Status.IN, frozenset({COOK, PICKUP}))
 
 
 async def test_details_after_maybe_turn_none_on(house: House) -> None:
     event_id = await open_dinner(house)
     await act(house, calls.respond, house["Pat"], event_id, Status.MAYBE)
-    await act(house, calls.save_details, house["Pat"], event_id, Details(guests=1))
+    await act(house, calls.save_details, house["Pat"], event_id, Details(note="Home by six"))
     assert await answer(house, event_id, "Pat") == (Status.MAYBE, frozenset())
 
 

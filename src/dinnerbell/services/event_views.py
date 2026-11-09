@@ -200,7 +200,9 @@ class EventView:
     offer: note.OfferInfo | None = None
     """The offer, when the event is one (FR-4)."""
     guests: tuple[GuestView, ...] = ()
-    """Guests invited to the call (#38)."""
+    """Guests invited to the call (#38). The page lists each once, on the roster (#238):
+    ``guest`` marks a roster entry and carries its controls, and ``unanswered_guests`` are the
+    ones with no answer yet."""
     invitable: tuple[note.PersonInfo, ...] = ()
     """Saved guests the viewer could invite: only for a member who may invite (#38)."""
     late: tuple[note.LateJoinerInfo, ...] = ()
@@ -226,6 +228,16 @@ class EventView:
     @property
     def id(self) -> int:
         return self.event.id
+
+    def guest(self, person_id: int) -> GuestView | None:
+        """The guest ``person_id`` is on this call, or None for a household member (#238)."""
+        return next((g for g in self.guests if g.person.id == person_id), None)
+
+    @property
+    def unanswered_guests(self) -> tuple[GuestView, ...]:
+        """Invited guests with no answer yet, which the roster doesn't list (#238). Only a guest
+        with Slack can be one: a guest without is in once invited."""
+        return tuple(g for g in self.guests if g.answer is None)
 
     @property
     def first_back_day(self) -> date:

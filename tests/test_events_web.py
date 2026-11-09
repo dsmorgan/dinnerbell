@@ -63,10 +63,10 @@ def tick(client: TestClient, clock: FakeClock) -> None:
 
 
 def to_voting(client: TestClient, clock: FakeClock, event_id: int) -> None:
-    """Admin is in and picks up; a guest makes two; then responses close."""
+    """Admin is in and picks up; a guest they invite makes two; then responses close."""
     submit(client, f"/events/{event_id}/respond", {"status": "in"})
     submit(client, f"/events/{event_id}/offer", {"role": "pickup", "offered": "1"})
-    submit(client, f"/events/{event_id}/details", {"guests": "1"})
+    submit(client, f"/events/{event_id}/guests", {"name": "Jo", "run": "1"})
     clock.advance(timedelta(minutes=90))
     tick(client, clock)
 
@@ -121,7 +121,7 @@ def test_details_before_answering_turn_on_your_usual_offers(admin: TestClient, m
     """#180: saving Details first counts you in, as In does, so your usual offers turn on."""
     submit(admin, "/preferences/settings", {"can_pickup": "on"})
     event_id = start(admin)
-    submit(admin, f"/events/{event_id}/details", {"guests": "1"})
+    submit(admin, f"/events/{event_id}/details", {"note": "Home by six"})
     (response,) = rows(migrated, ResponseRow)
     assert response.status == "in"
     assert (response.offers_cook, response.offers_pickup, response.offers_order) == (False, True, False)
@@ -152,7 +152,6 @@ def test_details_roles_and_coordinating(admin: TestClient, migrated: Settings) -
         (
             "details",
             {
-                "guests": "2",
                 "eat_from": "18:00",
                 "eat_until": "19:30",
                 "note": "<script>x</script>",
@@ -163,11 +162,15 @@ def test_details_roles_and_coordinating(admin: TestClient, migrated: Settings) -
         assert submit(admin, f"/events/{event_id}/{path}", data).status_code == 303, path
     html = admin.get(f"/events/{event_id}").text
     assert "&lt;script&gt;x&lt;/script&gt;" in html and "<script>x" not in html
-    assert "Can order" in html and "+2 guests" in html and "Suggests Pho" in html and "Coordinator: admin" in html
+    assert "Can order" in html and "guest" not in html.split("Who's in", 1)[1].split("</ul>", 1)[0]
+    assert "Suggests Pho" in html and "Coordinator: admin" in html
     (response,) = rows(migrated, ResponseRow)
-    assert (response.offers_cook, response.offers_order, response.guests) == (False, True, 2)
-    bad = htmx(admin, f"/events/{event_id}/details", {"guests": "lots"})
-    assert bad.status_code == 409 and "whole number" in bad.text
+    assert (response.offers_cook, response.offers_order, response.guests) == (False, True, 0)
+    # A page from before #240 posts a guest count and needs, which go unread (#240).
+    old = htmx(admin, f"/events/{event_id}/details", {"guests": "lots", "guest_needs": "x", "note": "Old page"})
+    assert old.status_code == 200
+    (response,) = rows(migrated, ResponseRow)
+    assert (response.guests, response.guest_needs, response.note) == (0, [], "Old page")
     bad_time = htmx(admin, f"/events/{event_id}/details", {"eat_from": "noon"})
     assert bad_time.status_code == 409 and "HH:MM" in page(bad_time)
     for path, data in [("respond", {"status": "hungry"}), ("offer", {"role": "juggle"}), ("hand-off", {})]:

@@ -997,7 +997,7 @@ def web_decided(admin: TestClient, clock: FakeClock, migrated: Settings) -> tupl
     event_id = start(admin)
     assert submit(admin, f"/events/{event_id}/respond", {"status": "in"}).status_code == 303
     assert submit(admin, f"/events/{event_id}/offer", {"role": "pickup", "offered": "1"}).status_code == 303
-    assert submit(admin, f"/events/{event_id}/details", {"guests": "1"}).status_code == 303
+    assert submit(admin, f"/events/{event_id}/guests", {"name": "Jo", "run": "1"}).status_code == 303
     assert submit(admin, f"/events/{event_id}/coordinate", {}).status_code == 303
     clock.advance(timedelta(minutes=90))
     web_tick(admin, clock)

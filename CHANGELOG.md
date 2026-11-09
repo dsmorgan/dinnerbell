@@ -10,9 +10,18 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 - **Dinnerbone's Den on a call's page** (#241). With fun mode on, a call's own page, the one **View on web** in Slack opens, now has the den at the top, beside **Today**, as Today has it beside the greeting. There it follows that call rather than Today's next open call: laps while it takes answers, the wheel while it's voting, eating once it's decided. Locking or marking done the call on its page celebrates as it does on Today, and its card's refresh keeps the den current. Badges still flip on Today only. With fun mode off, the page is as before.
 
+### Changed
+
+- **A guest shows once on a call's page** (#238). A guest who was in used to be listed twice: in **Who's in**, and again under **Guests** with "invited by". Now **Who's in** lists each guest once, marked "Guest invited by Sam", and the **Guests** list is gone. Everything you could do there is on the guest's row: their dietary needs, **In** and **Out** and the roles for a guest you answer for, and **Take off the call**. A guest who's out stays on the list as out. A guest with Slack who hasn't answered yet has a row marked **No answer yet** while answers are open, and leaves the list when answers close, as a member who never answered does. **Invite a guest** is where it was. The Slack call message already listed each guest once, and App Home has no roster, so they don't change.
+- **Details no longer asks how many guests you're bringing** (#240). On a call, guests come only from **Invite a guest**, which names each one and their dietary needs, so **Details** on the web and in Slack drops **Guests** and **Guests' dietary needs**, and keeps your eat window, a suggestion, and a note. A guest count already saved on a call keeps counting: in the head count, ranking, the decision, history, stats, and hosting badges. Offers keep their guest count, since an offer has no invitations.
+
 ### Fixed
 
 - **Dinnerbone keeps running while you scroll** (#242). During a lap around the call card, scrolling paused him until it ended, and on a phone, the toolbar sliding away mid-scroll sent him back to the den to start over. Now he runs through a scroll, and when the window changes size, the phone turns, or the card grows or moves, he carries on around the card's new outline at his usual pace instead of starting over.
+
+### Upgrade notes
+
+- **Guest counts on open calls (#240):** nothing in the database changes. A call open at the upgrade keeps any guest count already saved on it, and it counts until the call ends; saving **Details** leaves it as it is, and nobody can change it there anymore, so to bring someone else, invite them as a guest. A **Details** page or Slack modal opened before the upgrade still saves: its guest count and guests' dietary needs are ignored, whatever they say.
 
 ## [0.14.0] - 2026-11-08
 

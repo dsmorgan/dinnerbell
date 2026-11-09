@@ -67,7 +67,7 @@ def roles_fallback(mode: Mode, *, way_open: bool) -> str:
 
 COORDINATE = "I'll coordinate"
 DETAILS = "Details"
-DETAILS_HINT = "Guests, times, a suggestion, or a note."
+DETAILS_HINT = "Times, a suggestion, or a note. To bring someone, invite them as a guest."
 JOIN_LATE = "I'm in (late)"
 COUNT_ME_IN = "Count me in"
 CANT_MAKE_IT = "Can't make it"

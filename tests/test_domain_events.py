@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import importlib.util
 import itertools
-from dataclasses import replace
+from dataclasses import fields, replace
 from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -137,24 +137,28 @@ def test_a_maybe_who_offers_stays_maybe_and_withdrawing_needs_a_response() -> No
 
 
 def test_details_count_you_in_and_keep_status() -> None:
-    details = Details(guests=2, guest_needs=frozenset({9}), eat_from=time(18), note="hi")
+    details = Details(eat_from=time(18), note="hi")
     fresh = ev.with_details(None, 3, details, NOW)
-    assert (fresh.status, fresh.guests, fresh.head_count) == (Status.IN, 2, 3)
+    assert (fresh.status, fresh.guests, fresh.head_count) == (Status.IN, 0, 1)
     maybe = ev.with_details(ev.with_status(None, 3, Status.MAYBE, NOW), 3, details, NOW)
     assert maybe.status is Status.MAYBE and maybe.head_count == 0
 
 
+def test_details_have_no_guest_count_and_keep_one_saved_before() -> None:
+    """#240: guests come by invitation. A count an answer saved before stays, and counts."""
+    assert not {"guests", "guest_needs"} & {f.name for f in fields(Details)}
+    saved = Response(3, Status.IN, guests=2, guest_needs=frozenset({9}))
+    kept = ev.with_details(saved, 3, Details(eat_from=time(18), note="hi"), NOW)
+    assert (kept.guests, kept.guest_needs, kept.head_count, kept.note) == (2, frozenset({9}), 3, "hi")
+
+
 def test_check_details_normalizes_and_rejects() -> None:
     ok = ev.check_details(
-        Details(guests=1, suggestion_item_ids=(4, 4), suggestion_texts=("  Tacos  please ", " "), note="  a  b "),
-        dietary_tag_ids=[9],
+        Details(suggestion_item_ids=(4, 4), suggestion_texts=("  Tacos  please ", " "), note="  a  b "),
         active_item_ids=[4],
     )
     assert (ok.suggestion_item_ids, ok.suggestion_texts, ok.note) == ((4,), ("Tacos please",), "a b")
     bad = [
-        (Details(guests=21), "Guests"),
-        (Details(guests=-1), "Guests"),
-        (Details(guest_needs=frozenset({8})), "dietary"),
         (Details(eat_from=time(19), eat_until=time(18)), "latest"),
         (Details(suggestion_item_ids=(5,)), "catalog"),
         (Details(suggestion_texts=("x" * 101,)), "at most 100"),
@@ -164,7 +168,7 @@ def test_check_details_normalizes_and_rejects() -> None:
     ]
     for details, message in bad:
         with pytest.raises(InvalidResponse, match=message):
-            ev.check_details(details, dietary_tag_ids=[9], active_item_ids=[4])
+            ev.check_details(details, active_item_ids=[4])
 
 
 def test_resolve_maybes_turns_only_maybes_out() -> None:
@@ -701,20 +705,13 @@ def test_windows_count_elapsed_time_across_a_daylight_saving_change() -> None:
     assert deadline.astimezone(CHICAGO).time() == time(4, 0)  # 01:30 CST + 90 elapsed minutes
 
 
-def test_details_drop_guest_needs_without_guests() -> None:
-    clean = ev.check_details(Details(guests=0, guest_needs=frozenset({9})), dietary_tag_ids=[9], active_item_ids=[])
-    assert clean.guest_needs == frozenset()
-
-
 def test_eat_windows_end_by_a_quarter_to_midnight() -> None:
     """Regression: an eat time of 23:46 rounded the meal to 00:00 and expired a normal call."""
-    ok = ev.check_details(
-        Details(eat_from=time(23, 45), eat_until=time(23, 45)), dietary_tag_ids=[], active_item_ids=[]
-    )
+    ok = ev.check_details(Details(eat_from=time(23, 45), eat_until=time(23, 45)), active_item_ids=[])
     assert ok.eat_from == time(23, 45)
     for details in (Details(eat_from=time(23, 46)), Details(eat_until=time(23, 59))):
         with pytest.raises(InvalidResponse, match="11:45 PM"):
-            ev.check_details(details, dietary_tag_ids=[], active_item_ids=[])
+            ev.check_details(details, active_item_ids=[])
 
 
 def test_schedules_stay_within_the_day() -> None:

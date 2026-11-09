@@ -7,7 +7,7 @@ and the 18:30 default meal time is 23:30."""
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime
 from typing import Any
 
@@ -15,12 +15,12 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from dinnerbell.db.catalog import CatalogRepository, ItemValues
-from dinnerbell.db.events import EventRepository
+from dinnerbell.db.events import EventRepository, ResponseRepository
 from dinnerbell.db.models import AuditRow, MealLogRow, MemberRow, ProposalRow
 from dinnerbell.db.outbox import OutboxEntry, OutboxRepository
 from dinnerbell.db.repositories import MemberRepository, to_member
 from dinnerbell.domain.catalog import DEFAULT_MEALS, CatalogItem, ItemKind, Meal, Mode, Tag, TagKind
-from dinnerbell.domain.events import Event
+from dinnerbell.domain.events import Event, Response, Status
 from dinnerbell.domain.household import Household
 from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.members import Capabilities, Member, Role
@@ -194,6 +194,18 @@ class House:
     async def context(self, event_id: int) -> CallContext:
         async with self.sessionmaker() as db:
             return await load(db, await self.event(event_id))
+
+    async def legacy_guests(self, event_id: int, name: str, guests: int, needs: frozenset[int] = frozenset()) -> None:
+        """Give ``name``'s answer a head count of guests, as **Details** saved one before #240:
+        a call keeps a count saved then, though nothing saves a new one. Counts them in if they
+        hadn't answered. Nothing is posted, so a message shows it from its next update."""
+        current = (await self.context(event_id)).response_of(self[name].id)
+        base = current or Response(self[name].id, Status.IN, responded_at=self.clock())
+        async with self.sessionmaker() as db:
+            await ResponseRepository(db).save(
+                self.household.id, event_id, replace(base, guests=guests, guest_needs=needs), self.clock()
+            )
+            await db.commit()
 
     async def settle_ways(self, event_id: int) -> None:
         """Settle the way of every takeout pick on the call as it is, as the coordinator would

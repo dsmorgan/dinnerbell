@@ -579,7 +579,7 @@ async def test_a_late_joiners_own_needs_stay_off_the_decision_for_everyone_else(
     event_id = await open_dinner(house)
     await act(house, calls.respond, house["Alex"], event_id, Status.IN)
     await act(house, calls.respond, house["Sam"], event_id, Status.IN)
-    await act(house, calls.save_details, house["Sam"], event_id, Details(guests=1, guest_needs=frozenset({gf.id})))
+    await house.legacy_guests(event_id, "Sam", 1, frozenset({gf.id}))
     await act(house, calls.offer_role, house["Alex"], event_id, RoleOffer.PICKUP, True)
     await act(house, calls.claim_coordinator, house["Alex"], event_id)
     house.clock.now = RESPOND_BY
@@ -619,7 +619,8 @@ async def test_joining_late_changes_neither_the_head_count_nor_the_meal_time_bey
     event_id = await open_dinner(house)
     await act(house, calls.respond, house["Alex"], event_id, Status.IN)
     await act(house, calls.respond, house["Sam"], event_id, Status.IN)
-    await act(house, calls.save_details, house["Kim"], event_id, Details(guests=3, eat_from=time(19, 45)))
+    await act(house, calls.save_details, house["Kim"], event_id, Details(eat_from=time(19, 45)))
+    await house.legacy_guests(event_id, "Kim", 3)
     await act(house, calls.respond, house["Kim"], event_id, Status.OUT)  # out keeps the details
     await act(house, calls.offer_role, house["Alex"], event_id, RoleOffer.PICKUP, True)
     house.clock.now = RESPOND_BY
@@ -900,7 +901,7 @@ def test_web_hints_say_a_maybe_answers_closing_early_turned_out_has_a_vote_that_
     sign_in(admin, provider)  # the admin again: in with a guest, picking up
     submit(admin, f"/events/{event_id}/respond", {"status": "in"})
     submit(admin, f"/events/{event_id}/offer", {"role": "pickup", "offered": "1"})
-    submit(admin, f"/events/{event_id}/details", {"guests": "1"})
+    submit(admin, f"/events/{event_id}/guests", {"name": "Jo", "run": "1"})
     assert submit(admin, f"/events/{event_id}/close", {"run": "1", "window": "respond"}).status_code == 303
 
     sign_in_as(admin, provider, "kim@example.com")
@@ -966,7 +967,7 @@ async def _gluten_free_vote(house: House) -> tuple[int, int, int]:
     event_id = await open_dinner(house)
     for name in ("Alex", "Sam", "Lee"):
         await act(house, calls.respond, house[name], event_id, Status.IN)
-    await act(house, calls.save_details, house["Sam"], event_id, Details(guests=1, guest_needs=frozenset({gf.id})))
+    await house.legacy_guests(event_id, "Sam", 1, frozenset({gf.id}))
     await act(house, calls.offer_role, house["Alex"], event_id, RoleOffer.PICKUP, True)
     house.clock.now = RESPOND_BY
     await house.tick()

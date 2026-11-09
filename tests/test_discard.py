@@ -100,7 +100,7 @@ async def done_dinner(house: House, channel: RecordingChannel) -> int:
 def _details_with_suggestion() -> Any:
     from dinnerbell.domain.events import Details
 
-    return Details(guests=1, suggestion_texts=("Soup",))
+    return Details(suggestion_texts=("Soup",))
 
 
 def event_linked_tables() -> set[str]:

@@ -1,7 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Guests at a dinner call (spec 5.5, FR-8): the issue #13 rehearsal of a dinner with two guests,
 one of them vegetarian. Their dietary need is a hard filter alongside members' vetoes, they count
-toward the head count, and the decision message and the assignee's direct message both say so."""
+toward the head count, and the decision message and the assignee's direct message both say so.
+Details no longer takes a head count of guests (#240), so this is a count saved before then,
+which keeps counting; invited guests are in ``test_guests``."""
 
 from __future__ import annotations
 
@@ -12,7 +14,7 @@ import pytest
 from dinnerbell.config import Settings
 from dinnerbell.db.outbox import OutboxEntry
 from dinnerbell.domain.catalog import Mode, TagKind
-from dinnerbell.domain.events import Details, EventState, RoleOffer, Status
+from dinnerbell.domain.events import EventState, RoleOffer, Status
 from dinnerbell.domain.notifications import AssignmentMade, DecisionMade, PersonInfo, ProposalsReady, from_payload
 from dinnerbell.domain.preferences import Stance, TargetType
 from dinnerbell.services import call_context as cc
@@ -59,9 +61,8 @@ async def test_a_dinner_with_two_guests_one_vegetarian(house: House) -> None:
         await calls.respond(db, house["Alex"], event_id, Status.IN, now=house.clock())
         await calls.offer_role(db, house["Alex"], event_id, RoleOffer.PICKUP, True, now=house.clock())
         await calls.respond(db, house["Kim"], event_id, Status.IN, now=house.clock())
-        # Sam brings two guests; one is vegetarian, so the guests need vegetarian food.
-        details = Details(guests=2, guest_needs=frozenset({veg}))
-        await calls.save_details(db, house["Sam"], event_id, details, now=house.clock())
+    # Sam brings two guests; one is vegetarian, so the guests need vegetarian food.
+    await house.legacy_guests(event_id, "Sam", 2, frozenset({veg}))
 
     ctx = await house.context(event_id)
     assert ctx.head_count == 5

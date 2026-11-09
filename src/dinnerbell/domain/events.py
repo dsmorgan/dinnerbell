@@ -27,7 +27,7 @@ MIN_HEAD_COUNT = 2
 DONE_AFTER_MEAL = timedelta(hours=2)
 EARLY_CLOSE_QUIET = timedelta(minutes=10)
 """How long responses must sit unchanged before a call with people in closes early: time to
-add guests, an eat window, a suggestion, or an offer to cook after tapping In."""
+invite a guest, or add an eat window, a suggestion, or an offer to cook after tapping In."""
 MAX_DEADLINE_SHIFT_MINUTES = 240
 AD_HOC_DAYS_AHEAD = 7
 MAX_PROPOSALS = 10
@@ -428,10 +428,10 @@ class Assignment:
 
 @dataclass(frozen=True, slots=True)
 class Details:
-    """The Details form (FR-8), already parsed. Validated by ``check_details``."""
+    """The Details form (FR-8), already parsed. Validated by ``check_details``. It has no guest
+    count: a call's guests come only from invitations (#240), and a count saved on an answer
+    before that stays as it is (``with_details``). An offer keeps its own (``domain.offers``)."""
 
-    guests: int = 0
-    guest_needs: frozenset[int] = frozenset()
     eat_from: time | None = None
     eat_until: time | None = None
     suggestion_item_ids: tuple[int, ...] = ()
@@ -470,12 +470,8 @@ def clean_text(value: str | None, limit: int, what: str) -> str | None:
     return text
 
 
-def check_details(details: Details, *, dietary_tag_ids: Iterable[int], active_item_ids: Iterable[int]) -> Details:
+def check_details(details: Details, *, active_item_ids: Iterable[int]) -> Details:
     """Validate the Details form and return it with text normalized."""
-    if not 0 <= details.guests <= MAX_GUESTS:
-        raise InvalidResponse(f"Guests run from 0 to {MAX_GUESTS}.")
-    if not details.guest_needs <= set(dietary_tag_ids):
-        raise InvalidResponse("Guest needs must be dietary tags. Reload the page and try again.")
     if any(t is not None and t > LATEST_EAT_TIME for t in (details.eat_from, details.eat_until)):
         raise InvalidResponse("Pick eating times by 11:45 PM.")
     if details.eat_from and details.eat_until and details.eat_until < details.eat_from:
@@ -487,8 +483,6 @@ def check_details(details: Details, *, dietary_tag_ids: Iterable[int], active_it
     if len(set(details.suggestion_item_ids)) + len(texts) > MAX_SUGGESTIONS:
         raise InvalidResponse(f"Suggest up to {MAX_SUGGESTIONS} things.")
     return Details(
-        guests=details.guests,
-        guest_needs=details.guest_needs if details.guests else frozenset(),  # no guests, no guest needs
         eat_from=details.eat_from,
         eat_until=details.eat_until,
         suggestion_item_ids=tuple(dict.fromkeys(details.suggestion_item_ids)),
@@ -563,13 +557,12 @@ def with_usual_offers(response: Response, member: Member) -> Response:
 
 def with_details(current: Response | None, member_id: int, details: Details, now: datetime) -> Response:
     """Details without a status yet count the member in. On an away out (#196) they're the
-    member's own answer, answered now, as in ``with_status``."""
+    member's own answer, answered now, as in ``with_status``. Details has no guest count
+    (#240), so a count saved before that keeps counting until the call ends."""
     base = current or Response(member_id=member_id, status=Status.IN, responded_at=now)
     return replace(
         base,
         responded_at=now if base.away_until is not None else base.responded_at,
-        guests=details.guests,
-        guest_needs=details.guest_needs,
         eat_from=details.eat_from,
         eat_until=details.eat_until,
         note=details.note,

@@ -294,6 +294,73 @@ def test_a_member_invites_and_answers_for_a_guest_without_slack(admin: TestClien
     assert rows(migrated, InvitationRow) == []
 
 
+def _roster(html: str) -> list[str]:
+    """The rows of **Who's in**, one string each."""
+    found = re.search(r'<ul class="roster">(.*?)</ul>', html, re.S)
+    assert found is not None
+    return re.findall(r"<li[^>]*>.*?</li>", found.group(1), re.S)
+
+
+def _row(rows_: list[str], name: str) -> str:
+    (row,) = [r for r in rows_ if f"<strong>{name}</strong>" in r]
+    return row
+
+
+def test_a_guest_shows_once_on_the_roster_marked_with_who_invited_them(
+    admin: TestClient, provider: FakeProvider, migrated: Settings
+) -> None:
+    """#238: each guest is listed once, in **Who's in**, marked "Guest invited by …", with the
+    controls for them on their row. **Invite a guest** stays; there's no second list. A guest
+    with Slack who hasn't answered has a row while answers are open, and one who's out stays."""
+    event_id = start(admin)
+    submit(admin, f"/events/{event_id}/respond", {"status": "in"})
+    submit(admin, f"/events/{event_id}/guests", {"name": "Jo", "run": "1"})
+    pat = add_guest(admin, "Pat", slack="U07PAT")
+    submit(admin, f"/events/{event_id}/guests", {"guest_id": str(pat), "run": "1"})
+    jo = next(m.id for m in rows(migrated, MemberRow) if m.display_name == "Jo")
+
+    html = page(admin.get(f"/events/{event_id}"))
+    assert "<h3>Guests</h3>" not in html and "Invite a guest" in html
+    assert html.count("<strong>Jo</strong>") == 1 and html.count("<strong>Pat</strong>") == 1
+    roster = _roster(html)
+    assert len(roster) == 3
+    assert "Guest invited by" not in _row(roster, "admin")
+    mine = _row(roster, "Jo")
+    assert "Guest invited by admin" in mine and ">In<" in mine
+    assert f"/events/{event_id}/guests/{jo}/answer" in mine and f"/events/{event_id}/guests/{jo}/remove" in mine
+    waiting = _row(roster, "Pat")  # Slack, so Pat answers; the admin can still take them off
+    assert "No answer yet" in waiting and "Guest invited by admin" in waiting
+    assert f"/guests/{pat}/answer" not in waiting and f"/events/{event_id}/guests/{pat}/remove" in waiting
+    assert "2 eating" in html
+
+    guest = as_guest(admin, provider)
+    assert submit(guest, f"/events/{event_id}/respond", {"status": "out"}).status_code == 303
+    seen = page(guest.get(f"/events/{event_id}"))
+    assert seen.count("<strong>Pat</strong>") == 1
+    out = _row(_roster(seen), "Pat")
+    assert ">Out<" in out and "Guest invited by admin" in out and "/remove" not in out  # a guest removes nobody
+
+
+def test_a_guest_who_never_answered_leaves_the_roster_once_answers_close(
+    admin: TestClient, clock: FakeClock, migrated: Settings
+) -> None:
+    """As a member who never answered does (#238): their row was only for answering, or taking
+    them off, which end with the answers."""
+    event_id = start(admin)
+    submit(admin, f"/events/{event_id}/respond", {"status": "in"})
+    submit(admin, f"/events/{event_id}/offer", {"role": "pickup", "offered": "1"})
+    submit(admin, f"/events/{event_id}/guests", {"name": "Jo", "run": "1"})
+    pat = add_guest(admin, "Pat", slack="U07PAT")
+    submit(admin, f"/events/{event_id}/guests", {"guest_id": str(pat), "run": "1"})
+    clock.advance(timedelta(minutes=90))
+    tick(admin, clock)
+    assert next(e for e in rows(migrated, EventRow) if e.id == event_id).state == "voting"
+    html = page(admin.get(f"/events/{event_id}"))
+    assert "<strong>Pat</strong>" not in html and "No answer yet" not in html
+    jo = _row(_roster(html), "Jo")
+    assert "Guest invited by admin" in jo and "/answer" not in jo and "/remove" not in jo
+
+
 # Admin > Members ---------------------------------------------------------------------------------
 
 
@@ -422,7 +489,7 @@ def test_a_guest_never_sees_votes_or_admin_controls(
     submit(admin, f"/events/{event_id}/guests", {"guest_id": str(pat), "run": "1"})
     submit(admin, f"/events/{event_id}/respond", {"status": "in"})
     submit(admin, f"/events/{event_id}/offer", {"role": "pickup", "offered": "1"})
-    submit(admin, f"/events/{event_id}/details", {"guests": "1"})
+    submit(admin, f"/events/{event_id}/details", {"note": "Home by six"})
     guest = as_guest(admin, provider)
     submit(guest, f"/events/{event_id}/respond", {"status": "in"})
 

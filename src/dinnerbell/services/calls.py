@@ -276,17 +276,13 @@ async def toggle_role(db: AsyncSession, actor: Member, event_id: int, role: Role
 async def save_details(
     db: AsyncSession, actor: Member, event_id: int, details: Details, *, run: int | None = None, now: datetime
 ) -> None:
-    """FR-8: guests, guest needs, eat window, suggestions, and a note."""
+    """FR-8: an eat window, suggestions, and a note. Guests come by invitation (#240)."""
     async with locked_event(db, actor.household_id, event_id, now) as event:
         await guest_rules.gate(db, event, actor, GuestAction.DETAILS)
         check_run(event, run)
         check_can_respond(event, actor, invited=await _invited(db, event, actor))
         ctx = await load(db, event)
-        clean = check_details(
-            details,
-            dietary_tag_ids=[t.id for t in ctx.tags.values() if t.kind is TagKind.DIETARY],
-            active_item_ids=[i.id for i in ctx.items.values() if i.active],
-        )
+        clean = check_details(details, active_item_ids=[i.id for i in ctx.items.values() if i.active])
         current = ctx.response_of(actor.id)
         new = with_details(current, actor.id, clean, now)
         if current is None:  # Details counted them in (#180)
@@ -298,9 +294,7 @@ async def save_details(
         await _roster_changed(db, event, now)
         suggestions = len(clean.suggestion_item_ids) + len(clean.suggestion_texts)
         note_length = len(clean.note or "")  # the note is theirs to write, so only its length (SEC-5)
-        activity.action(
-            db, "details", event, actor, guests=clean.guests, suggestions=suggestions, note_length=note_length
-        )
+        activity.action(db, "details", event, actor, suggestions=suggestions, note_length=note_length)
 
 
 # Joining late (#76) -------------------------------------------------------------------------------

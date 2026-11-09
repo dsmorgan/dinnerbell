@@ -81,7 +81,6 @@ async def test_a_dinner_decided_in_slack(slack: Slack) -> None:
     await slack.tap_card("Sam", "card_details", slack.cards("Sam")[-1])
     tacos = house.items["Sam's Tacos"].id
     details = state(
-        guests={"value": "1"},
         eat_from={"selected_time": "18:40"},
         suggest_item={"selected_option": {"value": str(tacos)}},
     )
@@ -160,7 +159,7 @@ async def test_a_dinner_decided_in_slack(slack: Slack) -> None:
     assert [x["text"]["text"] for x in dm.args["blocks"][1]["elements"]][:3] == ["In", "Maybe", "✓ Out"]
     assert "<@U01ALEX> <@U03KIM> <@U04LEE> <@U02SAM>" in block_text(posts[0], 1)  # everyone mentioned
     roster = block_text(updates[0], 2)
-    assert "*In* · 3 people eating" in roster and "<@U02SAM> · +1 guest · can cook" in roster
+    assert "*In* · 2 people eating" in roster and "<@U02SAM> · can cook" in roster
     assert "*Maybe:* <@U03KIM>" in roster and "Still to answer: Lee" in roster
     assert "*Out:* <@U03KIM>, <@U04LEE>" in block_text(updates[2], 2)
     assert "*Coordinator:* <@U02SAM>" in json.dumps(updates[2].args["blocks"])  # names who voting picked

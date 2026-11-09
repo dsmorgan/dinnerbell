@@ -31,9 +31,10 @@ from dinnerbell.domain.events import (
     Step,
     Window,
 )
+from dinnerbell.domain.guests import GuestInput
 from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.notifications import DeliveryResult, HeldDelivery, MessageRef, PermanentDeliveryError
-from dinnerbell.services import call_admin, calls, event_views, lifecycle
+from dinnerbell.services import call_admin, calls, event_views, guests, lifecycle
 from dinnerbell.services.database import Database, open_database
 from dinnerbell.services.errors import Forbidden, NotFound
 from dinnerbell.services.lifecycle import CallExists
@@ -640,7 +641,7 @@ async def test_in_first_and_details_next_is_never_cut_short(house: House) -> Non
     assert await house.tick() == []
     house.clock.now += timedelta(minutes=2)
     await act(house, calls.offer_role, house["Alex"], event_id, RoleOffer.PICKUP, True)
-    await act(house, calls.save_details, house["Sam"], event_id, Details(guests=1))
+    await act(house, calls.save_details, house["Sam"], event_id, Details(note="Home by six"))
     assert (await house.event(event_id)).state is EventState.COLLECTING
 
 
@@ -805,7 +806,7 @@ async def test_a_lone_in_gets_time_to_add_a_guest(house: House) -> None:
     house.clock.now = OPENS + timedelta(minutes=1)
     assert await house.tick() == []
     house.clock.now += timedelta(minutes=3)
-    await act(house, calls.save_details, house["Alex"], event_id, Details(guests=1))
+    await act(house, guests.invite, house["Alex"], event_id, new_guest=GuestInput("Jo", frozenset()))
     await act(house, calls.offer_role, house["Alex"], event_id, RoleOffer.PICKUP, True)
     house.clock.now += timedelta(minutes=10)
     assert await house.tick() == [Step.CLOSE_RESPONSES]

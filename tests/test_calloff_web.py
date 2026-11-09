@@ -76,7 +76,7 @@ def call_in(client: TestClient, provider: FakeProvider, clock: FakeClock, settin
     for path, data in [
         ("respond", {"status": "in"}),
         ("offer", {"role": "pickup", "offered": "1"}),
-        ("details", {"guests": "1"}),
+        ("guests", {"name": "Jo", "run": "1"}),
         ("coordinate", {}),
     ]:
         assert submit(client, f"/events/{event_id}/{path}", data).status_code == 303, path
@@ -430,7 +430,8 @@ def test_a_card_left_open_cannot_act_on_a_newer_run(
     run 1's card, Pat's and an admin's, are refused and run 2 is untouched."""
     event_id = call_in(house, provider, clock, migrated, "collecting")
     card = house.get(f"/events/{event_id}").text
-    assert card.count('name="run" value="1"') == 3  # Close now, Call it off, and Invite a guest
+    # Close now, Call it off, Invite a guest, and In, Out, and the three roles for Jo, their guest.
+    assert card.count('name="run" value="1"') == 8
     assert submit(house, f"/events/{event_id}/cancel", {"run": "1"}).status_code == 303
     sign_in_as(house, provider, CREW["other"])
     assert 'name="run" value="1"' in house.get(f"/events/{event_id}").text  # Start dinner again
