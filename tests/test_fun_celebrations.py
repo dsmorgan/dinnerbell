@@ -232,7 +232,7 @@ def test_a_badge_flips_once_for_the_member_who_earned_it(
 
 def test_a_lap_runs_through_a_scroll_and_a_resize() -> None:
     """#242: nothing pauses a lap while the page scrolls, and a resize or a swapped card measures
-    the card again and keeps his place on the lap, instead of sending him back to the den.
+    the card again and keeps the distance he's run, instead of sending him back to the den.
     Measured in headless Chrome on the pull request; this guards against the old handlers."""
     script = (STATIC / "fun.js").read_text()
     assert '"scroll"' not in script and ".pause()" not in script
@@ -240,7 +240,7 @@ def test_a_lap_runs_through_a_scroll_and_a_resize() -> None:
     assert resize == "remeasureSoon"
     remeasure = script.split("function remeasureLap() {", 1)[1].split("\n  }\n", 1)[0]
     assert "stopLaps" not in remeasure and "S.lap.effect.setKeyframes(" in remeasure
-    assert "S.lap.currentTime = done * path.duration;" in remeasure
+    assert "S.lap.currentTime = Math.min(run, path.duration);" in remeasure  # the distance he's run
 
 
 def test_fun_js_writes_text_only_and_is_static(client: TestClient) -> None:
