@@ -319,7 +319,7 @@ async def test_slack_adjust_switches_the_way(slack: Slack, house: House) -> None
     assert (await house.event(event_id)).decided_mode is Mode.DELIVERY
     bad = form | state(mode={"selected_option": {"value": "teleport"}})
     refused = await slack.submit("Sam", ids.ADJUST_VIEW, bad, event_id, origin=origin)
-    assert json.loads(refused.body)["errors"] == {"mode": "Pick how to get it."}
+    assert json.loads(refused.body)["errors"] == {"mode": "Choose how to get it."}
 
 
 async def test_slack_card_coordinate_puts_you_in_and_out_lets_it_go(slack: Slack, house: House) -> None:

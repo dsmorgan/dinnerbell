@@ -17,6 +17,7 @@ import pytest
 from dinnerbell.channels.slack import ids
 from dinnerbell.channels.slack.messages import render
 from dinnerbell.channels.slack.views import adjust_opened
+from dinnerbell.domain import labels
 from dinnerbell.domain.events import (
     ADJUST_IS_THE_COORDINATORS,
     GUESTS_DONT_COORDINATE,
@@ -306,7 +307,7 @@ async def test_slack_adjust_shows_a_refusal_next_to_its_field_and_keeps_the_moda
     assert json.loads(out.body)["errors"] == {"pickup": "Pick someone who's in."}
     missing = state(meal_time={"selected_time": "18:30"})
     nobody = await slack.submit("Sam", ids.ADJUST_VIEW, missing, event_id, origin=origin)
-    assert json.loads(nobody.body)["errors"] == {"coordinator": "Pick who coordinates."}
+    assert json.loads(nobody.body)["errors"] == {"coordinator": "Choose who coordinates."}
     # Nothing was saved: not even the role, which was fine in the first one.
     assert assigned(await house.context(event_id))[AssignmentRole.PICKUP] == house["Alex"].id
     assert await meal(house, event_id) == time(18, 30)
@@ -412,3 +413,24 @@ async def test_each_step_checks_the_coordinator_again_under_the_lock(house: Hous
                 await use()
         assert refused.value.code == "not_coordinator"
     assert await meal(house, event_id) == time(18, 30)
+
+
+@pytest.mark.parametrize(
+    ("holder", "placeholder", "optional"),
+    [(None, labels.FIRST_WHO_OFFERED, True), (999_999, labels.CHOOSE_SOMEONE, True)],
+)
+def test_adjust_says_first_who_offered_only_for_a_role_nobody_holds(
+    holder: int | None, placeholder: str, optional: bool
+) -> None:
+    """#239: left empty, a role nobody holds goes to its first volunteer, but one held by someone
+    the menu can't list, such as a member made inactive, keeps them, so it doesn't say so."""
+    from dinnerbell.channels.slack import preview as samples
+    from dinnerbell.channels.slack.views import adjust_modal
+
+    opened = replace(adjust_opened(samples.ADJUST_VIEW), assignee_id=holder, pickup_id=holder)
+    modal = adjust_modal(samples.ADJUST_VIEW, replace(samples.CALL_OFF_ORIGIN, opened=opened))
+    inputs = {b["block_id"]: b for b in modal["blocks"] if b["type"] == "input"}
+    for block in ("who", "pickup"):
+        element = inputs[block]["element"]
+        assert "initial_option" not in element and inputs[block]["optional"] is optional, block
+        assert element["placeholder"]["text"] == placeholder, block

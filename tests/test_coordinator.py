@@ -1336,7 +1336,7 @@ def test_web_assign_roles(admin: TestClient, provider: FakeProvider, clock: Fake
     kim = member(migrated, "kim@example.com")
     assert submit(admin, f"/events/{event_id}/roles", {"mode": "pickup", "member_id": str(kim.id)}).status_code == 400
     bad = submit(admin, f"/events/{event_id}/roles", {"mode": "teleport", "member_id": str(kim.id), "run": "1"})
-    assert bad.status_code == 409 and "Pick how to get it" in page(bad)
+    assert bad.status_code == 409 and "Choose how to get it" in page(bad)
     assert (
         submit(admin, f"/events/{event_id}/roles", {"mode": "pickup", "pickup_id": str(kim.id), "run": "1"}).status_code
         == 303
@@ -1475,10 +1475,10 @@ async def test_slack_assign_roles_modal_checks_its_fields_and_its_run(slack: Sla
     origin = ids.ViewOrigin(event_id, CHANNEL, run=1)
     nobody = state(mode={"selected_option": {"value": "pickup"}})
     response = await slack.submit("Alex", ids.ASSIGN_VIEW, nobody, event_id, origin=origin)
-    assert response.body and "Pick who does it" in response.body
+    assert response.body and "Choose who does it" in response.body
     nothing = state(who={"selected_option": {"value": str(house["Sam"].id)}})
     response = await slack.submit("Alex", ids.ASSIGN_VIEW, nothing, event_id, origin=origin)
-    assert response.body and "Pick how to get it" in response.body
+    assert response.body and "Choose how to get it" in response.body
     full = state(
         mode={"selected_option": {"value": "pickup"}}, who={"selected_option": {"value": str(house["Sam"].id)}}
     )

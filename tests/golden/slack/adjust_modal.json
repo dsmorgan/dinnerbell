@@ -278,7 +278,7 @@
         ],
         "placeholder": {
           "emoji": true,
-          "text": "[First who offered]",
+          "text": "[Choose someone]",
           "type": "plain_text"
         },
         "type": "static_select"

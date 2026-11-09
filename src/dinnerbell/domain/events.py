@@ -970,7 +970,7 @@ def check_handoff(event: Event, actor: Member, target: Member) -> None:
     if event.state not in {EventState.COLLECTING, EventState.VOTING, EventState.DECIDED}:
         raise EventRuleViolation("This call is over.", code="call_finished")
     if not target.active or target.id == actor.id:
-        raise EventRuleViolation("Pick another active member.", code="bad_member")
+        raise EventRuleViolation("Choose another active member.", code="bad_member")
     check_can_coordinate(target)
 
 
