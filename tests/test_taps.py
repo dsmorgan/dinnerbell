@@ -287,6 +287,9 @@ def test_a_tap_shows_at_once_and_moves_only_with_motion_allowed(client: TestClie
     )
     assert tint + "color-mix(in srgb, currentColor 10%, transparent);" in css  # toward the text on a light fill
     assert tint + "var(--press-filled);" in css  # away from the text on a filled choice
+    # Filled buttons take the dark press; Voted, a light tint, keeps the light one (#212).
+    filled = ':is(.button.primary:not([aria-pressed="true"]), .button.choice[aria-pressed="true"]:not(.primary), '
+    assert filled + '.answer-option[aria-current="true"]):not(:disabled):active,' in css
     assert "--press-filled: rgb(0 0 0 / 0.14);" in css and "--press-filled: rgb(255 255 255 / 0.18);" in css
     assert "a.chip:active { border-color: currentColor; }" in css
     moving = motion_blocks(css, "no-preference")

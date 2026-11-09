@@ -34,7 +34,8 @@ def backgrounds() -> dict[str, str]:
     return {"light": light["--bg"], "dark": tokens(block(':root[data-theme="dark"]'))["--bg"]}
 
 
-def test_every_chosen_control_is_the_accent_fill() -> None:
+def test_every_chosen_control_but_voted_is_the_accent_fill() -> None:
+    """Voted is the one exception: a done vote is the soft tint, so Vote stays the loudest button."""
     chosen = [
         '.segmented .answer-option[aria-current="true"]',
         ".chip-toggle input:checked + span",
@@ -45,6 +46,8 @@ def test_every_chosen_control_is_the_accent_fill() -> None:
         assert FILL in block(selector), selector
     quiet = block('.button.quiet.choice[aria-pressed="true"]')
     assert "background: var(--accent);" in quiet and "color: var(--accent-text);" in quiet
+    voted = block('.button.primary.choice[aria-pressed="true"]')
+    assert "background: var(--accent-soft);" in voted and "color: var(--accent-soft-text);" in voted
     # Nothing chosen is filled with the text color any more.
     assert [s for s, body in rules(CSS) if "background: var(--text)" in body] == []
 

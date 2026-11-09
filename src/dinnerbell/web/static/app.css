@@ -613,8 +613,10 @@ ins { color: var(--ok); text-decoration: none; }
    Vote is the exception: it's the action everyone takes, so it keeps the primary fill until you
    vote. Voted is done, not a next step, so it drops to the soft tint with a check (#212). */
 .button.choice[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
-.button.primary.choice[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent-soft); color: var(--accent-soft-text); }
-.button.primary.choice[aria-pressed="true"]::before { content: "\2713\00a0"; }
+.button.primary.choice[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-soft-text); }
+/* The check is for the eye; the button already says it's pressed, so screen readers skip it. A
+   browser without alternative text for content keeps the first line. */
+.button.primary.choice[aria-pressed="true"]::before { content: "\2713\00a0"; content: "\2713\00a0" / ""; }
 /* Quiet (#212): the coordinator's and admins' overrides, and Shuffle, so everyone's Vote stands out.
    Smaller and muted, with no border until hovered or focused, and still a 40 px tap target. A
    chosen way is the accent fill, like any choice. */
@@ -643,7 +645,7 @@ ins { color: var(--ok); text-decoration: none; }
 .segmented > form:first-child .answer-option { border-radius: var(--radius-control) 0 0 var(--radius-control); margin-left: 0; }
 .segmented > form:last-child .answer-option { border-radius: 0 var(--radius-control) var(--radius-control) 0; }
 .segmented .answer-option[aria-current="true"] { position: relative; z-index: 1; background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
-.segmented .answer-option[aria-current="true"]::before { content: "\2713\00a0"; }
+.segmented .answer-option[aria-current="true"]::before { content: "\2713\00a0"; content: "\2713\00a0" / ""; }
 /* Inside the joined control, so a neighbor can't cover the ring; on the filled choice, the ring
    takes the text color, which contrasts with the accent fill. */
 .segmented .answer-option:focus-visible { position: relative; z-index: 2; outline-offset: -3px; }
