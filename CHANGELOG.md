@@ -6,6 +6,12 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ## [Unreleased]
 
+## [0.15.0] - 2026-11-09
+
+### Security
+
+- **pydantic 2.14.2** fixes two medium-severity validation bypasses (GHSA-qpmf-fgh3-ff25 and GHSA-3r8g-cqwr-jr29). Both need a model, `TypedDict`, or dataclass that allows extra fields, which Dinnerbell never uses, so neither could be reached. Routine updates come with it: pydantic-settings 2.16.2 and python-multipart 0.0.33 in the image, uv 0.13.7 for the build, and newer development tools.
+
 ### Added
 
 - **Dinnerbone's Den on a call's page** (#241). With fun mode on, a call's own page, the one **View on web** in Slack opens, now has the den at the top, beside **Today**, as Today has it beside the greeting. There it follows that call rather than Today's next open call: laps while it takes answers, the wheel while it's voting, eating once it's decided. Locking or marking done the call on its page celebrates as it does on Today, and its card's refresh keeps the den current. Badges still flip on Today only. With fun mode off, the page is as before.
@@ -635,7 +641,8 @@ The source-built version, never published as an image. It covers milestones M0 t
 - **M1:** the catalog with file import, preferences and vetoes, meal history, and the members admin page.
 - **M2:** dinner calls in Slack: the scheduled call, reminders, ranked proposals and votes, the decision, assignments, the abandon path, admin overrides, App Home, and `/dinnerbell call`.
 
-[Unreleased]: https://github.com/dsmorgan/dinnerbell/compare/v0.14.0...HEAD
+[Unreleased]: https://github.com/dsmorgan/dinnerbell/compare/v0.15.0...HEAD
+[0.15.0]: https://github.com/dsmorgan/dinnerbell/releases/tag/v0.15.0
 [0.14.0]: https://github.com/dsmorgan/dinnerbell/releases/tag/v0.14.0
 [0.13.0]: https://github.com/dsmorgan/dinnerbell/releases/tag/v0.13.0
 [0.12.0]: https://github.com/dsmorgan/dinnerbell/releases/tag/v0.12.0
