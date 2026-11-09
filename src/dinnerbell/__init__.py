@@ -1,4 +1,4 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Dinnerbell: household meal coordination."""
 
-__version__ = "0.14.0"
+__version__ = "0.15.0"
