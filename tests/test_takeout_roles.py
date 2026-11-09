@@ -1031,11 +1031,14 @@ def test_the_quiet_style_keeps_its_tap_height_and_shows_a_border_on_hover_or_foc
     # A chosen way is the accent fill with its own text color, like every choice (#230).
     chosen = '.button.quiet.choice[aria-pressed="true"] { background: var(--accent); border-color: transparent; '
     assert chosen + "color: var(--accent-text);" in css
-    # Voted is "primary choice": chosen, the accent fill; unchosen, an accent outline, so the two differ.
-    voted = '.button.choice[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); '
-    assert voted + "color: var(--accent-text); }" in css
-    vote = '.button.primary.choice:not([aria-pressed="true"]) { '
-    assert vote + "background: var(--surface); border-color: var(--accent); color: var(--accent); }" in css
+    # Vote keeps the primary fill, the action everyone takes; Voted drops to the soft tint with a
+    # check, so it doesn't read as a next step (#212).
+    vote = ".button.primary { background: var(--accent); border-color: var(--accent); "
+    assert vote + "color: var(--accent-text); }" in css
+    assert '.button.primary.choice:not([aria-pressed="true"])' not in css
+    voted = '.button.primary.choice[aria-pressed="true"] { background: var(--accent-soft); '
+    assert voted + "border-color: var(--accent-soft); color: var(--accent-soft-text); }" in css
+    assert '.button.primary.choice[aria-pressed="true"]::before { content: "\\2713\\00a0"; }' in css
 
 
 def test_web_break_the_tie_comes_before_lock_in_the_quiet_row(

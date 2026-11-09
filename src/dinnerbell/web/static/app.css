@@ -322,7 +322,7 @@ details[open] > summary { margin-bottom: 0.5rem; }
 .chip-toggle:active span {
   box-shadow: inset 0 0 0 100vmax color-mix(in srgb, currentColor 10%, transparent);
 }
-:is(.button.primary:not(.choice), .button.choice[aria-pressed="true"], .answer-option[aria-current="true"]):not(:disabled):active,
+:is(.button.primary:not([aria-pressed="true"]), .button.choice[aria-pressed="true"]:not(.primary), .answer-option[aria-current="true"]):not(:disabled):active,
 .segment:not(.level-zero, .level-neg, .level-pos):active input:checked + span,
 .chip-toggle:active input:checked + span {
   box-shadow: inset 0 0 0 100vmax var(--press-filled);
@@ -610,9 +610,11 @@ ins { color: var(--ok); text-decoration: none; }
 .badge.state-decided, .badge.state-done { background: var(--ok-soft); border-color: transparent; color: var(--ok); }
 .event .button-row { margin-bottom: 0.6rem; gap: 0.4rem; }
 /* One look for every choice (#230): chosen is the accent fill, with a check on In, Maybe, or Out.
-   Vote is "primary choice": unchosen, an accent outline, so it still stands out; chosen, the fill. */
+   Vote is the exception: it's the action everyone takes, so it keeps the primary fill until you
+   vote. Voted is done, not a next step, so it drops to the soft tint with a check (#212). */
 .button.choice[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
-.button.primary.choice:not([aria-pressed="true"]) { background: var(--surface); border-color: var(--accent); color: var(--accent); }
+.button.primary.choice[aria-pressed="true"] { background: var(--accent-soft); border-color: var(--accent-soft); color: var(--accent-soft-text); }
+.button.primary.choice[aria-pressed="true"]::before { content: "\2713\00a0"; }
 /* Quiet (#212): the coordinator's and admins' overrides, and Shuffle, so everyone's Vote stands out.
    Smaller and muted, with no border until hovered or focused, and still a 40 px tap target. A
    chosen way is the accent fill, like any choice. */
