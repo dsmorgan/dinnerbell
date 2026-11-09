@@ -12,7 +12,7 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ### Fixed
 
-- **Dinnerbone keeps running while you scroll** (#242). During a lap around the call card, scrolling paused him until it ended, and on a phone, the toolbar sliding away mid-scroll sent him back to the den to start over. Now he runs through a scroll, and when the window changes size, the phone turns, or the card grows or moves, he carries on around the card from where he was.
+- **Dinnerbone keeps running while you scroll** (#242). During a lap around the call card, scrolling paused him until it ended, and on a phone, the toolbar sliding away mid-scroll sent him back to the den to start over. Now he runs through a scroll, and when the window changes size, the phone turns, or the card grows or moves, he carries on around the card's new outline at his usual pace instead of starting over.
 
 ## [0.14.0] - 2026-11-08
 

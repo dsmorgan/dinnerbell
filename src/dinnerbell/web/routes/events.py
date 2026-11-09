@@ -146,7 +146,6 @@ async def _celebrating(
     principal: Principal,
     db: Database,
     event_id: int,
-    came_from: str,
     kind: fun.Celebrate,
     response: Response,
 ) -> Response:
@@ -556,7 +555,7 @@ async def lock(
 ) -> Response:
     """FR-15: the coordinator or an admin; the service checks which."""
     response = await _on_proposal(request, principal, context, db, event_id, proposal_id, came_from, calls.lock)
-    return await _celebrating(request, principal, db, event_id, came_from, "decided", response)
+    return await _celebrating(request, principal, db, event_id, "decided", response)
 
 
 # The coordinator's powers (FR-16, FR-61) -------------------------------------------------------
@@ -867,7 +866,7 @@ async def done(
         await calls.mark_done(db, principal.member, event_id, now=context.clock())
 
     response = await _run(request, principal, context, db, event_id, came_from, action)
-    return await _celebrating(request, principal, db, event_id, came_from, "done", response)
+    return await _celebrating(request, principal, db, event_id, "done", response)
 
 
 # Calling it off and closing early (FR-56) -------------------------------------------------------

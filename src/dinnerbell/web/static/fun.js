@@ -14,7 +14,7 @@
 //   over the page, sized to it only during a lap. The lap is one Web Animation of transform, which
 //   the browser runs off the main thread, so he keeps running while the page scrolls (#242). When
 //   the window is resized or a card is swapped in, the lap measures the card again, and if it
-//   moved or changed size, he carries on around the new outline from as far round as he was;
+//   moved or changed size, he carries on around the new outline, keeping the distance he's run;
 //   only a change to his state ends a lap.
 // - Celebrations: the server sends HX-Trigger "dinnerbell:celebrate" only to the member who
 //   locked or marked done the call on the page. Everyone else gets the quiet caption, once per call
@@ -315,11 +315,6 @@
     };
   }
 
-  // The card moved or changed size mid-lap, as when the window turns or a refreshed card has
-  // another answer on it: the same lap follows the new outline from the same share of the way
-  // round, so he never jumps back to the den or stops. An unmoved card changes nothing, as when
-  // Safari's toolbar slides away while the page scrolls and only the window's height changes.
-  // A card that's gone (a swap that dropped it) leaves him to finish the lap he's on.
   // Whether two outlines are the same, give or take a pixel or two of rounding.
   function sameShape(a, b) {
     if (!a || !b || a.length !== b.length) {
@@ -333,6 +328,13 @@
     return true;
   }
 
+  // The card moved or changed size mid-lap, as when the window turns or a refreshed card has
+  // another answer on it: the same lap follows the new outline, so he never jumps back to the den
+  // or stops. He keeps the distance he's run, since his pace is constant: where the track behind
+  // him is unchanged he stays put, and a card that grows ahead of him only makes the lap longer.
+  // A lap now shorter than his run so far ends there. An unmoved card changes nothing, as when
+  // Safari's toolbar slides away while the page scrolls and only the window's height changes.
+  // A card that's gone (a swap that dropped it) leaves him to finish the lap he's on.
   function remeasureLap() {
     if (!S.lap) {
       return;
@@ -345,13 +347,12 @@
     if (sameShape(path.shape, S.lapShape)) {
       return;
     }
-    var timing = S.lap.effect.getTiming();
-    var done = Math.min(1, Math.max(0, (S.lap.currentTime || 0) / (Number(timing.duration) || 1)));
+    var run = Math.max(0, Number(S.lap.currentTime) || 0);
     coverTrack(path.bottom);
     S.lapShape = path.shape;
     S.lap.effect.setKeyframes(path.frames);
     S.lap.effect.updateTiming({ duration: path.duration });
-    S.lap.currentTime = done * path.duration;
+    S.lap.currentTime = Math.min(run, path.duration);
   }
 
   var remeasureTimer = 0;
