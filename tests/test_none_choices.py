@@ -53,10 +53,6 @@ SELECTS = {
 }
 WITH_OPTIONS = {*SELECTS, "overflow", "radio_buttons"}
 
-UNTOUCHED = {("details_modal", "guest_needs"), ("details_modal_empty", "guest_needs")}
-"""Details' guest dietary needs leave with the guest count (#240), so they keep Slack's own
-placeholder until then."""
-
 
 def bracketed(text: str) -> bool:
     text = text.strip()
@@ -239,11 +235,10 @@ def test_slack_none_choices_are_bracketed(kind: str) -> None:
             assert bracketed(text) or not none_like(text), f"{where}: {text!r}"
         if element["type"] not in SELECTS:
             continue
+        # Even one with an initial option here may be drawn without one, as for a coordinator gone.
         placeholder = element.get("placeholder")
-        if placeholder is not None:
-            assert bracketed(placeholder["text"]), f"{where}: placeholder {placeholder['text']!r}"
-        else:  # even one with an initial option here may be drawn without one, as for a coordinator gone
-            assert (kind, block_id) in UNTOUCHED, f"{where} has no placeholder, so it can show Slack's own"
+        assert placeholder is not None, f"{where} has no placeholder, so it can show Slack's own"
+        assert bracketed(placeholder["text"]), f"{where}: placeholder {placeholder['text']!r}"
 
 
 def words(module: Any, node: ast.expr) -> str | None:
@@ -313,8 +308,7 @@ def test_every_slack_select_has_a_placeholder() -> None:
     item" without one, so every select has one, whether or not a sample starts it on a choice."""
     found = list(select_literals())
     assert len(found) > 10
-    missing = [where for where, function, placeholder in found if not placeholder and function != "details_modal"]
-    assert missing == []  # Details' guest dietary needs leave with the guest count (#240)
+    assert [where for where, _, placeholder in found if not placeholder] == []
 
 
 CHECKBOXES = {o["text"]["text"] for o in views.CLEAR_TIMES.values()}
