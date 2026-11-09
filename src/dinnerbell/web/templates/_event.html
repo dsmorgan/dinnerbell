@@ -251,12 +251,11 @@
   </details>
   {% endif %}
 
-  {% set hand_to = v.coordinators|rejectattr("id", "equalto", principal.member.id)|list if v.can.hand_off else [] %}
-  {% if hand_to %}
+  {% if v.can.hand_off and v.hand_off_to %}
   <form method="post" autocomplete="off" action="{{ base }}/hand-off" hx-post="{{ base }}/hand-off" {{ swap|safe }} class="inline-form">
     {{ hidden() }}
     <label class="field compact"><span>Hand off coordinating</span>
-      <select name="member_id" required><option value="">{{ labels.CHOOSE_SOMEONE }}</option>{% for m in hand_to %}<option value="{{ m.id }}">{{ m.name }}</option>{% endfor %}</select>
+      <select name="member_id" required><option value="">{{ labels.CHOOSE_SOMEONE }}</option>{% for m in v.hand_off_to %}<option value="{{ m.id }}">{{ m.name }}</option>{% endfor %}</select>
     </label>
     <button type="submit" class="button small">Hand off</button>
   </form>

@@ -229,7 +229,7 @@ def test_vote_lock_and_mark_done(admin: TestClient, clock: FakeClock, migrated: 
     htmx(admin, f"/events/{event_id}/proposals/{first}/unvote", {})
     assert rows(migrated, VoteRow) == []
     added = htmx(admin, f"/events/{event_id}/proposals", {"mode": "pickup", "free_text": "Pho Place", "cuisine_id": ""})
-    assert added.status_code == 409 and "Pick a cuisine" in added.text
+    assert added.status_code == 409 and "Choose a cuisine" in added.text
     assert htmx(admin, f"/events/{event_id}/proposals", {"mode": "teleport"}).status_code == 409
     assert htmx(admin, f"/events/{event_id}/proposals", {"mode": "pickup"}).status_code == 409
     locked = htmx(admin, f"/events/{event_id}/proposals/{second}/lock", {})
@@ -239,7 +239,7 @@ def test_vote_lock_and_mark_done(admin: TestClient, clock: FakeClock, migrated: 
     assert htmx(admin, f"/events/{event_id}/meal-time", {"at": ""}).status_code == 409
     assert htmx(admin, f"/events/{event_id}/assignments", {"role": "chef"}).status_code == 409
     malformed = htmx(admin, f"/events/{event_id}/assignments", {"role": "pickup", "member_id": "abc"})
-    assert malformed.status_code == 409 and "Pick a member" in malformed.text  # not a silent unassign
+    assert malformed.status_code == 409 and "Choose someone" in malformed.text  # not a silent unassign
     assert "Picking up: admin" in page(malformed)
     assert htmx(admin, f"/events/{event_id}/assignments", {"role": "pickup", "member_id": ""}).status_code == 200
     assert "done? This ends the meal and adds it to the history." in admin.get(f"/events/{event_id}").text

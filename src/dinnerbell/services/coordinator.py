@@ -899,7 +899,7 @@ async def _tell_assigned(db: AsyncSession, actor: Member, event_id: int, held: H
 SAME_PLACE = "That's the place already. Pick another one, or type a new name."
 NOT_IN_CATALOG = "That place isn't in the catalog anymore. Pick another one, or type its name."
 PICK_THE_WAY = "Pick how to get it."
-NOT_A_CUISINE = "Pick a cuisine from the list, or leave it empty."
+NOT_A_CUISINE = "Choose a cuisine from the list, or leave it empty."
 NO_MEAL_LOGGED = "This meal is no longer in History, so there's nothing to correct."
 PLACE_OR_NAME = "Pick a place, or type a new one, but not both. To keep what you typed, pick {current}."
 

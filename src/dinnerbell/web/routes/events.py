@@ -424,7 +424,7 @@ async def coordinate(
 def _member_id(value: str) -> int:
     member_id = parse_id(value)
     if member_id is None:
-        raise BadFormValue("Pick a member.")
+        raise BadFormValue("Choose someone.")
     return member_id
 
 

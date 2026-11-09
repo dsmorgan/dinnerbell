@@ -303,7 +303,7 @@ async def test_members_add_catalog_and_free_text_proposals(house: House) -> None
     noodles = await house.add_item("Noodle Bar", Mode.PICKUP, cuisine="Thai")
     with pytest.raises(EventRuleViolation, match="isn't available by delivery"):
         await act(house, calls.add_proposal, house["Sam"], event_id, Mode.DELIVERY, item_id=noodles.id)
-    with pytest.raises(EventRuleViolation, match="Pick a cuisine"):
+    with pytest.raises(EventRuleViolation, match="Choose a cuisine"):
         await act(house, calls.add_proposal, house["Sam"], event_id, Mode.PICKUP, free_text="Pho Place")
     with pytest.raises(EventRuleViolation, match="Enter a name"):
         await act(house, calls.add_proposal, house["Sam"], event_id, Mode.PICKUP, free_text="  ", cuisine_id=1)
@@ -549,6 +549,23 @@ async def test_coordinator_changes_after_the_decision_update_the_assignment(hous
     await act(house, call_admin.assign_coordinator, house["Alex"], event_id, None)
     ctx = await house.context(event_id)
     assert AssignmentRole.COORDINATOR not in {a.role for a in ctx.assignments}
+
+
+async def test_the_hand_off_menu_offers_only_whom_a_hand_off_accepts(house: House) -> None:
+    """#239: the web's hand-off form lists whom ``calls.hand_off`` would accept, and hides when
+    that's nobody. Once it's decided, Kim, who isn't in, can't take it."""
+    event_id = await to_voting(house)
+    await act(house, calls.claim_coordinator, house["Sam"], event_id)
+
+    async def hand_to(name: str) -> set[str]:
+        view = await act(house, event_views.event_view, house[name], event_id)
+        return {p.name for p in view.hand_off_to}
+
+    assert await hand_to("Sam") == {"Alex", "Kim", "Lee"}  # while voting, a hand-off puts them in
+    assert await hand_to("Alex") == set()  # only the coordinator hands off
+    house.clock.now = VOTE_BY
+    await house.tick()
+    assert await hand_to("Sam") == {"Alex"}
 
 
 # After the decision -----------------------------------------------------------------------------

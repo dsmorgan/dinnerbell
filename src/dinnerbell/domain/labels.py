@@ -12,6 +12,7 @@ from datetime import date
 
 from dinnerbell.domain.away import Away
 from dinnerbell.domain.catalog import Mode
+from dinnerbell.domain.catalog import Status as ItemStatus
 from dinnerbell.domain.events import AssignmentRole, RoleOffer, Status, Window
 
 ANSWER_ORDER = (Status.IN, Status.MAYBE, Status.OUT)
@@ -60,6 +61,11 @@ CHOOSE_CUISINE = "[Choose a cuisine]"
 CHOOSE_WAY = "[Choose a way]"
 CHOOSE_SOMEONE = "[Choose someone]"
 CHOOSE_WHO_ATE = "[Choose who ate]"
+CHOOSE_MEAL = "[Choose a meal]"
+FIRST_WHO_OFFERED = "[First who offered]"
+"""An optional role left empty: its first volunteer does it (FR-17, #178)."""
+ITEM_STATUS_LABELS = {ItemStatus.ACTIVE: "Active", ItemStatus.INACTIVE: "Inactive", ItemStatus.ALL: "[All]"}
+"""The catalog's **Show** filter, where **[All]** filters nothing."""
 
 
 def keep_place(name: str) -> str:

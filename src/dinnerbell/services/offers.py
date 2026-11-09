@@ -213,7 +213,9 @@ async def _offered_item(db: AsyncSession, actor: Member, data: OfferInput, now: 
             tags = {t.id: t for t in await catalog.tags(household_id)}
             cuisine = tags.get(data.cuisine_id) if data.cuisine_id is not None else None
             if cuisine is None or cuisine.kind is not TagKind.CUISINE:
-                raise EventRuleViolation("Pick a cuisine for it, so variety and vetoes still work.", code="no_cuisine")
+                raise EventRuleViolation(
+                    "Choose a cuisine for it, so variety and vetoes still work.", code="no_cuisine"
+                )
             values = ItemValues(
                 kind=kind,
                 name=name,
