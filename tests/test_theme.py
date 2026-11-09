@@ -74,6 +74,11 @@ def test_a_chosen_segment_comes_to_the_front_and_shows_all_four_edges() -> None:
     assert "position: relative; z-index: 1;" in block('.segmented .answer-option[aria-current="true"]')
 
 
+def test_the_chosen_answer_shows_a_check_that_screen_readers_skip() -> None:
+    check = block('.segmented .answer-option[aria-current="true"]::before')
+    assert 'content: "\\2713\\00a0"; content: "\\2713\\00a0" / "";' in check
+
+
 def test_corners_come_from_the_four_radii() -> None:
     scale = next(tokens(body) for selector, body in rules(CSS) if selector == ":root" and "--radius-card" in body)
     assert {k: scale[k] for k in ("--radius-card", "--radius-control", "--radius-input", "--radius-pill")} == {
