@@ -48,7 +48,7 @@
     </label>
     <label class="field"><span class="small muted">Show</span>
       <select name="status">
-        {% for s in statuses %}<option value="{{ s.value }}"{% if search.status == s %} selected{% endif %}>{{ "[All]" if s.value == "all" else s.value|capitalize }}</option>{% endfor %}
+        {% for s in statuses %}<option value="{{ s.value }}"{% if search.status == s %} selected{% endif %}>{{ labels.ITEM_STATUS_LABELS[s] }}</option>{% endfor %}
       </select>
     </label>
   </div>

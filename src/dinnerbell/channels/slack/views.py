@@ -214,6 +214,7 @@ CHOOSE_FROM_CATALOG = _placeholder(labels.CHOOSE_FROM_CATALOG)
 CHOOSE_CUISINE = _placeholder(labels.CHOOSE_CUISINE)
 CHOOSE_WAY = _placeholder(labels.CHOOSE_WAY)
 CHOOSE_SOMEONE = _placeholder(labels.CHOOSE_SOMEONE)
+FIRST_WHO_OFFERED = _placeholder(labels.FIRST_WHO_OFFERED)
 
 
 def _one_of(picked: object, typed: object, block_id: str, neither: str, both: str) -> None:
@@ -259,7 +260,7 @@ def details_modal(v: EventView, origin: ids.ViewOrigin) -> dict[str, Any]:
         select: Block = {
             "type": "static_select",
             "option_groups": _with_none(groups),
-            "placeholder": plain(labels.NOTHING_FROM_CATALOG),
+            **NOTHING_PICKED,
         }
         if chosen_items:
             select["initial_option"] = chosen_items[0]
@@ -410,7 +411,7 @@ def parse_proposal(values: Any) -> ProposalInput:
     cuisine = _picked(values, "cuisine")
     _one_of(item, text, "free_text", NEITHER_ITEM if _shown(values, "item") else NO_CATALOG_ITEM, BOTH_ITEMS)
     if text is not None and cuisine is None:
-        raise FormError("cuisine", "Pick a cuisine for it, so variety and vetoes still work.")
+        raise FormError("cuisine", "Choose a cuisine for it, so variety and vetoes still work.")
     return ProposalInput(mode, item, text, cuisine if text is not None else None)
 
 
@@ -490,10 +491,12 @@ class AssignInput:
     """Who picks up, for a pickup (#178); None for the first who offered."""
 
 
-def _people_select(choice: RolesChoice, preselect: int | None) -> Block:
-    """A select of the people who are in, with ``preselect`` chosen."""
+def _people_select(choice: RolesChoice, preselect: int | None, *, first_who_offered: bool = False) -> Block:
+    """A select of the people who are in, with ``preselect`` chosen. ``first_who_offered`` is for
+    a role that, left empty, goes to its first volunteer, which the placeholder says (#239)."""
     people = [option(p.name, str(p.id)) for p in choice.people[:MAX_ASSIGN_PEOPLE]]
-    element: Block = {"type": "static_select", "options": people, **CHOOSE_SOMEONE}
+    placeholder = FIRST_WHO_OFFERED if first_who_offered else CHOOSE_SOMEONE
+    element: Block = {"type": "static_select", "options": people, **placeholder}
     current = next((o for o in people if preselect is not None and o["value"] == str(preselect)), None)
     if current is not None:
         element["initial_option"] = current
@@ -530,7 +533,7 @@ def assign_modal(v: EventView, origin: ids.ViewOrigin) -> dict[str, Any]:
     lead = _people_select(choice, choice.preselected(choice.lead))
     blocks.append(_input("who", choice.lead_label, lead, optional=False))
     if choice.has_pickup:
-        pickup = _people_select(choice, choice.preselected(AssignmentRole.PICKUP, Mode.PICKUP))
+        pickup = _people_select(choice, choice.preselected(AssignmentRole.PICKUP, Mode.PICKUP), first_who_offered=True)
         hint = PICKUP_HINT if choice.pickup_hint else None
         blocks.append(_input("pickup", ROLE_WHO[AssignmentRole.PICKUP], pickup, optional=True, hint=hint))
     return _modal("Assign roles", ids.ASSIGN_VIEW, origin, blocks, "Assign")
@@ -651,10 +654,10 @@ def adjust_modal(v: EventView, origin: ids.ViewOrigin) -> dict[str, Any]:
             how["initial_option"] = way
         blocks.append(_input("mode", "How", how, optional=False))
     if people:
-        who = _people_select(choice, opened.assignee_id)
+        who = _people_select(choice, opened.assignee_id, first_who_offered=True)
         blocks.append(_input("who", choice.lead_label, who, optional="initial_option" not in who))
         if choice.has_pickup and (switchable or choice.mode is Mode.PICKUP):
-            pickup = _people_select(choice, opened.pickup_id)
+            pickup = _people_select(choice, opened.pickup_id, first_who_offered=True)
             hint = PICKUP_HINT if switchable and choice.pickup_hint else None
             optional = "initial_option" not in pickup
             blocks.append(_input("pickup", ROLE_WHO[AssignmentRole.PICKUP], pickup, optional=optional, hint=hint))
@@ -886,11 +889,10 @@ SLOT_OPTIONS = {slot: option(slot.value.capitalize(), slot.value) for slot in Sl
 MODE_OPTIONS = {mode: option(mode.label, mode.value) for mode in Mode}
 
 
-def _select(options: Iterable[dict[str, Any]], initial: dict[str, Any] | None = None) -> Block:
-    element: Block = {"type": "static_select", "options": list(options)}
-    if initial is not None:
-        element["initial_option"] = initial
-    return element
+def _select(options: Iterable[dict[str, Any]], initial: dict[str, Any], placeholder: str) -> Block:
+    """A select that starts on ``initial``. It still has its ``placeholder`` (#239), as every select
+    does, so none shows Slack's own "Select an item"."""
+    return {"type": "static_select", "options": list(options), "initial_option": initial, **_placeholder(placeholder)}
 
 
 def offer_modal(form: OfferForm, origin: ids.FormOrigin) -> dict[str, Any]:
@@ -902,14 +904,21 @@ def offer_modal(form: OfferForm, origin: ids.FormOrigin) -> dict[str, Any]:
         context(
             "Posts in the Dinnerbell channel. If that meal's call is open already, it's added there as a proposal."
         ),
-        _input("slot", "Meal", _select(SLOT_OPTIONS.values(), SLOT_OPTIONS[form.slot]), optional=False),
+        _input(
+            "slot", "Meal", _select(SLOT_OPTIONS.values(), SLOT_OPTIONS[form.slot], labels.CHOOSE_MEAL), optional=False
+        ),
         _input(
             "day",
             "Day",
             {"type": "datepicker", "initial_date": form.today.isoformat()},
             optional=False,
         ),
-        _input("mode", "How", _select(MODE_OPTIONS.values(), MODE_OPTIONS[defaults.mode]), optional=False),
+        _input(
+            "mode",
+            "How",
+            _select(MODE_OPTIONS.values(), MODE_OPTIONS[defaults.mode], labels.CHOOSE_WAY),
+            optional=False,
+        ),
     ]
     groups, _ = _item_groups(form.items, hint=form.meal_hint)
     if groups:
@@ -969,7 +978,7 @@ def parse_offer(values: Any) -> OfferInput:
     cuisine = _picked(values, "cuisine")
     _one_of(item, text, "free_text", NEITHER_ITEM if _shown(values, "item") else NO_CATALOG_ITEM, BOTH_ITEMS)
     if text is not None and cuisine is None:
-        raise FormError("cuisine", "Pick a cuisine for it, so variety and vetoes still work.")
+        raise FormError("cuisine", "Choose a cuisine for it, so variety and vetoes still work.")
     return OfferInput(
         slot=slot,
         day=_day(values, "day"),
@@ -996,7 +1005,12 @@ def log_modal(form: LogForm, origin: ids.FormOrigin) -> dict[str, Any]:
         _input(
             "item", "What", {"type": "static_select", "option_groups": groups, **CHOOSE_FROM_CATALOG}, optional=False
         ),
-        _input("slot", "Meal", _select(SLOT_OPTIONS.values(), SLOT_OPTIONS[Slot.DINNER]), optional=False),
+        _input(
+            "slot",
+            "Meal",
+            _select(SLOT_OPTIONS.values(), SLOT_OPTIONS[Slot.DINNER], labels.CHOOSE_MEAL),
+            optional=False,
+        ),
         _input("day", "Day", {"type": "datepicker", "initial_date": form.today.isoformat()}, optional=False),
         _input("who", "Who ate", who, optional=False),
     ]

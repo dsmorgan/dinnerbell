@@ -102,6 +102,11 @@
             "value": "dinner"
           }
         ],
+        "placeholder": {
+          "emoji": true,
+          "text": "[Choose a meal]",
+          "type": "plain_text"
+        },
         "type": "static_select"
       },
       "label": {

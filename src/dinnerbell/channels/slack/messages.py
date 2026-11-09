@@ -545,7 +545,7 @@ def pick_menu(event: note.EventInfo, proposal: note.ProposalInfo, ctx: RenderCon
     modal to confirm, as Slack has only one confirm per menu.
 
     A takeout pick whose place allows pickup and delivery also lists its ways (#178). Picking the
-    way it has settles it, so the decision doesn't ask. Once it's chosen, **Either way** clears
+    way it has settles it, so the decision doesn't ask. Once it's chosen, **[Either way]** clears
     it, so the decision asks again (#212). That's five options at most, Slack's limit for a menu.
     A pick with only **Lock this** gets a link to the web, so the menu has the two options that
     Slack's older docs required. Without a usable link, it gets an option that does nothing."""

@@ -209,6 +209,10 @@ class EventView:
     (#238)."""
     invitable: tuple[note.PersonInfo, ...] = ()
     """Saved guests the viewer could invite: only for a member who may invite (#38)."""
+    hand_off_to: tuple[note.PersonInfo, ...] = ()
+    """Whom the viewer could hand coordinating to, as ``calls.handoff_target`` allows: another
+    active member, not switched off, and once it's decided, someone who's in. Empty for anyone
+    but the coordinator, so the web's hand-off form shows only when someone can take it (#239)."""
     late: tuple[note.LateJoinerInfo, ...] = ()
     """Who joined late (#76), with the coordinator's switches."""
     shuffles_left: int = 0
@@ -293,6 +297,16 @@ def _allowed(check: Callable[[], object]) -> bool:
     except EventRuleViolation:
         return False
     return True
+
+
+def _can_hand_to(ctx: CallContext, actor: Member, target: Member) -> bool:
+    """The checks ``calls.handoff_target`` makes, so the menu offers only whom it accepts."""
+
+    def check() -> None:
+        rules.check_handoff(ctx.event, actor, target)
+        rules.check_coordinator_in(ctx.event, ctx.response_of(target.id))
+
+    return _allowed(check)
 
 
 def _window(event: Event) -> Window | None:
@@ -495,6 +509,7 @@ def view(ctx: CallContext, actor: Member, today: date, now: datetime, *, any_tim
         guests=_guest_views(ctx, actor),
         guest_ids=frozenset(r.member_id for r in ctx.responses if ctx.is_guest(r.member_id)),
         invitable=_invitable(ctx, actor),
+        hand_off_to=tuple(ctx.person(m.id) for m in by_name if _can_hand_to(ctx, actor, m)),
         late=cc.late_joiners(ctx),
         shuffles_left=cc.shuffles_left(ctx),
         roles=_roles_choice(ctx) if ctx.event.state is EventState.DECIDED else None,

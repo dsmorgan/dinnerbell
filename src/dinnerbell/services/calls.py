@@ -628,7 +628,7 @@ def _candidate(
         return Proposal(0, ctx.event.id, mode, 0, source, item_id=item.id, reasons=reasons)
     tag = ctx.tags.get(cuisine_id) if cuisine_id is not None else None
     if tag is None or tag.kind is not TagKind.CUISINE:
-        raise EventRuleViolation("Pick a cuisine for it, so variety and vetoes still work.", code="no_cuisine")
+        raise EventRuleViolation("Choose a cuisine for it, so variety and vetoes still work.", code="no_cuisine")
     name = _free_name(free_text)
     return Proposal(0, ctx.event.id, mode, 0, source, free_text=name, free_cuisine_id=tag.id, reasons=reasons)
 

@@ -95,7 +95,7 @@ which still works. Each option's value is a ``way_value``."""
 PICK_MENU = "pick_menu"
 """The ⋯ menu beside every pick on the proposals message while voting (#214). **Lock this** and
 **Break the tie**, whose values are ``pick_value``s, open a modal to confirm. A takeout pick's
-ways (#178) and **Either way** (#212) have ``way_value``s. A pick with nothing else also gets a
+ways (#178) and **[Either way]** (#212) have ``way_value``s. A pick with nothing else also gets a
 link to the web, whose value is ``PICK_NOTHING``, because a menu has at least two options."""
 PICK_NOTHING = "nothing"
 """The value of a ``PICK_MENU`` option that does nothing here. Slack still sends a link's click,

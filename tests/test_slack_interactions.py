@@ -393,7 +393,7 @@ async def test_add_proposal_modal_and_submission(slack: Slack, house: House) -> 
     mexican = house.tags["Mexican"].id
     missing_cuisine = state(mode={"selected_option": {"value": "cook"}}, free_text={"value": "Enchiladas"})
     response = await slack.submit("Sam", ids.PROPOSAL_VIEW, missing_cuisine, event_id)
-    assert body(response)["errors"] == {"cuisine": "Pick a cuisine for it, so variety and vetoes still work."}
+    assert body(response)["errors"] == {"cuisine": "Choose a cuisine for it, so variety and vetoes still work."}
 
     both = state(
         mode={"selected_option": {"value": "cook"}},
