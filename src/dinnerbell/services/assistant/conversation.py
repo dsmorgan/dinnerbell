@@ -180,9 +180,19 @@ def _combined(model: str, parts: Sequence[TokenUsage]) -> TokenUsage:
 
 async def _shielded(cleanup: Awaitable[None]) -> None:
     """Run ``cleanup`` to the end even if this task is cancelled meanwhile, so a reservation is
-    always settled or released and its transaction always ends. The app runs on asyncio."""
+    always settled or released and its transaction always ends. A cancel still ends this task,
+    but only once ``cleanup`` is done: whoever waits for the cancelled task, such as shutdown
+    before it closes the database, waits for the settle too. The app runs on asyncio."""
     task = asyncio.ensure_future(cleanup)
-    await asyncio.shield(task)
+    try:
+        await asyncio.shield(task)
+    except asyncio.CancelledError:
+        while not task.done():
+            try:
+                await asyncio.shield(task)
+            except asyncio.CancelledError:
+                continue  # cancelled again: the cleanup still comes first
+        raise
 
 
 async def _call(
