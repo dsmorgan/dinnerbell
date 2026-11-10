@@ -1,0 +1,30 @@
+{#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
+{#- Expects: d, a DraftView still waiting, or None once it's used; outcome (optional) with text,
+    ok, and link, after Confirm or Cancel; draft_id when d is None. A catalog draft's Confirm
+    loads the add-only import preview as a whole page, so it never posts through HTMX. -#}
+{%- set id = d.id if d else draft_id %}
+<article class="card draft{% if not d %} draft-done{% endif %}" id="draft-{{ id }}"{% if d %} aria-labelledby="draft-{{ id }}-title"{% else %} aria-label="Draft"{% endif %}>
+  {%- if outcome %}
+  <p class="alert {{ 'ok' if outcome.ok else 'error' }}" role="{{ 'status' if outcome.ok else 'alert' }}">{{ outcome.text }}{% if outcome.link %} <a href="{{ outcome.link[0] }}">{{ outcome.link[1] }}</a>{% endif %}</p>
+  {%- endif %}
+  {%- if d %}
+  <p class="draft-label small"><span class="badge accent">Draft</span> <span class="muted">Nothing changes until you confirm.</span></p>
+  <h3 id="draft-{{ id }}-title" class="draft-title">{{ d.title }}</h3>
+  <p class="small muted draft-will">Confirm will:</p>
+  <ul class="draft-lines">
+    {%- for line in d.confirm_lines %}
+    <li>{{ line }}</li>
+    {%- endfor %}
+  </ul>
+  <div class="button-row">
+    <form method="post" action="/assistant/drafts/{{ id }}/confirm" class="inline"{% if d.kind != "catalog" %} hx-post="/assistant/drafts/{{ id }}/confirm" hx-target="#draft-{{ id }}" hx-swap="outerHTML" hx-disabled-elt="find button"{% endif %}>
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button type="submit" class="button primary" aria-describedby="draft-{{ id }}-title">Confirm</button>
+    </form>
+    <form method="post" action="/assistant/drafts/{{ id }}/cancel" class="inline" hx-post="/assistant/drafts/{{ id }}/cancel" hx-target="#draft-{{ id }}" hx-swap="outerHTML" hx-disabled-elt="find button">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <button type="submit" class="button" aria-describedby="draft-{{ id }}-title">Cancel</button>
+    </form>
+  </div>
+  {%- endif %}
+</article>

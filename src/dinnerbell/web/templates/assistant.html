@@ -1,0 +1,48 @@
+{#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
+{#- Expects: conversation (hours, keeps_history), turns (what the log shows), drafts (cards still waiting), notice, outcome (a draft's result, for a page posted without HTMX), send_timeout, max_chars. -#}
+{% extends "base.html" %}
+{% block title %}Assistant{% endblock %}
+{% block content %}
+<h1>Assistant</h1>
+<p class="muted">Ask in plain words, such as "something we haven't had in a month" or "tacos at 7, I'll cook." Only you see this conversation. The assistant drafts; nothing changes until you tap <strong>Confirm</strong>.</p>
+{% if notice %}<p class="alert ok" role="status">{{ notice }}</p>{% endif %}
+{% if outcome %}<p class="alert assistant-outcome {{ 'ok' if outcome.ok else 'error' }}" role="{{ 'status' if outcome.ok else 'alert' }}">{{ outcome.text }}{% if outcome.link %} <a href="{{ outcome.link[0] }}">{{ outcome.link[1] }}</a>{% endif %}</p>{% endif %}
+
+<section class="assistant" aria-labelledby="conversation-heading">
+  <h2 id="conversation-heading">Conversation</h2>
+  {% if conversation.keeps_history %}
+  <p class="small muted">Dinnerbell keeps this conversation for {{ conversation.hours }} hour{{ "" if conversation.hours == 1 else "s" }} after your last message, so you can follow up.</p>
+  {% else %}
+  <p class="small muted assistant-hours-zero" role="note">Nothing is kept: each message stands alone, and only your latest message and its answer show here.</p>
+  {% endif %}
+  <div id="assistant-log" class="assistant-log" role="log" aria-live="polite" aria-relevant="additions" aria-labelledby="conversation-heading">
+    {%- for t in turns %}{% include "_assistant_turn.html" %}{% endfor %}
+    {%- for d in drafts %}{% include "_assistant_draft.html" %}{% endfor %}
+  </div>
+  <p class="assistant-empty small muted">No messages yet.</p>
+
+  <form id="ask" method="post" action="/assistant" class="card stack assistant-form"
+        hx-post="/assistant" hx-target="#assistant-log" hx-swap="beforeend" hx-disabled-elt="find button"
+        hx-request='{"timeout": {{ send_timeout }}}' data-reset-on-success>
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label class="field">
+      <span>Message</span>
+      <textarea name="message" rows="3" maxlength="{{ max_chars }}" required autocomplete="off" aria-describedby="ask-help"></textarea>
+    </label>
+    <p id="ask-help" class="small muted">Replies are plain text, and links in them aren't clickable.</p>
+    <div class="button-row">
+      <button type="submit" class="button primary">Send</button>
+      <p class="assistant-thinking small muted" aria-hidden="true">The assistant is thinking…</p>
+    </div>
+  </form>
+</section>
+
+{% if conversation.keeps_history or drafts %}
+<form method="post" action="/assistant/start-over" class="card stack">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <h2>Start over</h2>
+  <p class="small muted">Deletes this conversation and cancels its drafts. Your next message starts fresh.</p>
+  <div class="button-row"><button type="submit" class="button">Start over</button></div>
+</form>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,4 @@
+{#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
+{#- Expects: turns (the member's message and the reply), drafts (cards to show after them). HTMX adds this to the conversation's log. -#}
+{%- for t in turns %}{% include "_assistant_turn.html" %}{% endfor %}
+{%- for d in drafts %}{% include "_assistant_draft.html" %}{% endfor %}

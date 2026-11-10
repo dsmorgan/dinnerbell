@@ -61,6 +61,9 @@
       <a href="/history"{% if path.startswith("/history") %} aria-current="page"{% endif %}>History</a>
       <a href="/stats"{% if path.startswith("/stats") %} aria-current="page"{% endif %}>Stats</a>
       <a href="/schedule"{% if path.startswith("/schedule") %} aria-current="page"{% endif %}>Schedule</a>
+      {% if assistant_link %}
+      <a href="/assistant"{% if path.startswith("/assistant") %} aria-current="page"{% endif %}>Assistant</a>
+      {% endif %}
       {% if principal.member.is_admin %}
       <a href="/admin/members"{% if path.startswith("/admin") %} aria-current="page"{% endif %}>Admin</a>
       {% endif %}
