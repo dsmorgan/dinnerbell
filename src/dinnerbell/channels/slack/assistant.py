@@ -67,10 +67,14 @@ _PING = re.compile(r"@(here|channel|everyone)\b", re.IGNORECASE)
 _SPACES = re.compile(r"[ \t]{2,}")
 WORD_JOINER = "\u2060"
 _HTTP = re.compile(r"\bhttp(s?)(?=:)", re.IGNORECASE)
-_SCHEME = re.compile(r"(?<=[A-Za-z0-9+.-]):(?=/)")
-_DOTS = "[.\uff0e\u3002\uff61]"
-"""A dot, or a full-width or ideographic one, which Slack may also read as a domain's."""
-_DOMAIN = re.compile(rf"(?<![\w.-])(?:[\w-]+{_DOTS})+[^\W\d_][\w-]*[^\W_](?![\w-])")
+_SCHEME = re.compile(r":(?=//)")
+_BARE_SCHEME = re.compile(r"\b(mailto|tel|sms|slack):", re.IGNORECASE)
+_WWW = re.compile(r"\bwww[.\uff0e\u3002\uff61]", re.IGNORECASE)
+_DOT = re.compile(r"(?<=[^\W_])[.\uff0e\u3002\uff61](?=[^\W\d_])(?![A-Za-z](?:\W|$))")
+"""A dot, or a full-width or ideographic one, between a letter or digit and a letter, wherever it
+is: in a domain, whatever markup or punctuation is around it. Not before a lone ASCII letter (the
+``g`` of ``e.g.``, the ``S`` of ``U.S.``): no domain ends in one, since every top-level domain has
+two letters or more. A dot before a digit or a space (``$3.50``, ``Done. Next``) stays."""
 _IP = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}\b")
 
 
@@ -119,12 +123,15 @@ def readable(text: str, bot_user_id: str | None) -> str:
 
 
 def defang(text: str) -> str:
-    """``text`` with every URL and bare domain made unlinkable: ``http`` and ``https`` become
-    ``hxxp`` and ``hxxps``, any other scheme's ``:`` becomes ``[:]``, and each dot of a domain
-    (an email's included) or an IP address becomes ``[.]``. Slack links none of them."""
+    """``text`` with every URL and bare domain made unlinkable, without needing to recognize
+    one: ``http`` and ``https`` become ``hxxp`` and ``hxxps``; ``://``, and ``mailto:`` and the
+    like, get ``[:]``; and ``www.``, every ``_DOT``, and each dot of an IP address become
+    ``[.]``. Slack links none of them."""
     text = _HTTP.sub(lambda m: f"hxxp{m.group(1).lower()}", text)
     text = _SCHEME.sub("[:]", text)
-    text = _DOMAIN.sub(lambda m: re.sub(_DOTS, "[.]", m.group(0)), text)
+    text = _BARE_SCHEME.sub(lambda m: f"{m.group(1)}[:]", text)
+    text = _WWW.sub(lambda m: f"{m.group(0)[:3]}[.]", text)
+    text = _DOT.sub("[.]", text)
     return _IP.sub(lambda m: m.group(0).replace(".", "[.]"), text)
 
 
