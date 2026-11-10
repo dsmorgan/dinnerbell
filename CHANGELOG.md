@@ -14,10 +14,17 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
   - The assistant's one tool so far looks up catalog items by name or tag, acting as the member with a member's permissions, even for an admin.
   - `DINNERBELL_ASSISTANT_MODEL` picks `claude-sonnet-5-5` (the default), `claude-opus-5-5`, or `claude-haiku-5-5`; Dinnerbell refuses to start on a model it has no prices for.
   - `dinnerbell scrub-test` turns the assistant off and deletes every conversation.
+- **The assistant's candidates, drafts, and Confirm, still behind the flag** (#17). Four more tools, each acting as the member with a member's permissions, even for an admin:
+  - **Find candidates**, for a call that's voting: what passes ranking's filters for everyone who's in, in name order, optionally narrowed by days since eaten, cuisine, or mode. Reasons come only from variety, novelty, suggestions, the usual mode, volunteer fit, and meal fit, with members as "Member 1" and so on; never hints, favorites, or what the filters removed. Before voting, the assistant says to ask once voting opens.
+  - **Draft a proposal** of a candidate, **draft an offer** of a catalog item, and **draft catalog items** in the catalog file format. A catalog draft drops entries the catalog has already and lists them, and strips `cooks` and `active`.
+  - Each draft says what **Confirm** does, such as join late, take the role the mode needs, or replace a scheduled call, lasts 30 minutes, and only its member can confirm it, once. Confirm runs the same service as the form, which checks everything again, so a stale draft gets the usual error and nothing changes. A catalog draft's Confirm opens the import preview, which only adds, even if a matching item appeared meanwhile.
+  - The tools pick the call the member names, then the conversation's, then the only open one, and ask when several are open.
+  - Expired drafts are deleted every 5 minutes, and `dinnerbell scrub-test` and `dinnerbell reset-history` delete them all. The Confirm and Cancel buttons come with the web page and Slack entry points.
 
 ### Upgrade notes
 
 - **Migration 0031** adds two empty tables, `assistant_usage` and `assistant_conversation`. It changes no existing row, and nothing reads the tables unless the assistant is configured. A downgrade to 0.15.0 drops them, with any usage and conversations in them.
+- **Migration 0032** adds one empty table, `assistant_draft`, for the assistant's drafts. It changes no existing row, and nothing writes the table unless the assistant is on. A downgrade to 0031 drops it, with any drafts still waiting for Confirm.
 - **New dependency:** the image now includes Anthropic's `anthropic` SDK and its dependencies (Apache-2.0, MIT, and BSD). Dinnerbell sends nothing to Anthropic unless you set the key and the flag.
 - **The cap is per database:** production and a test instance each keep their own. If you turn the assistant on, also set a monthly spend limit on the key's workspace in the Anthropic Console as a backstop, and give the test instance its own key.
 - **Keeping the key in a file:** `compose.secrets.yaml` doesn't mount `DINNERBELL_ANTHROPIC_API_KEY`, so installs that keep secrets in files need no new file. To keep the key in one, see "The assistant" in [docs/configuration.md](docs/configuration.md#the-assistant).

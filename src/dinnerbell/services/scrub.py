@@ -178,6 +178,7 @@ class ScrubSummary:
     badges_quieted: int = 0
     assistant_turned_off: bool = False
     conversations_deleted: int = 0
+    drafts_deleted: int = 0
 
     def lines(self) -> list[str]:
         return [
@@ -198,11 +199,12 @@ class ScrubSummary:
     def _assistant_lines(self) -> list[str]:
         """Only when the scrub changed something, so an install without the assistant reads
         nothing about it."""
-        if not (self.assistant_turned_off or self.conversations_deleted):
+        if not (self.assistant_turned_off or self.conversations_deleted or self.drafts_deleted):
             return []
         return [
             f"Assistant turned off: {'yes' if self.assistant_turned_off else 'no, it was off'}",
             f"Assistant conversations deleted: {self.conversations_deleted}",
+            f"Assistant drafts deleted: {self.drafts_deleted}",
         ]
 
 
@@ -308,7 +310,7 @@ async def _scrub(db: AsyncSession, *, instance_label: str, keep: Iterable[str], 
     redacted += await AuditRepository(db).redact_about(household.id, GUEST_SLACK_AUDIT, about_guests, scrubbed)
     pending, rows = await OutboxRepository(db).clear(household.id)
     feedback_deleted = await FeedbackRepository(db).clear(household.id)
-    assistant_was_on, conversations_deleted = await forget_for_test(db, household.id)
+    forgotten = await forget_for_test(db, household.id)
     # So test never holds production's feedback or counts: the counts, and the badges that come from them.
     await ContributionRepository(db).clear_feedback(household.id)
     await BadgeRepository(db).clear(household.id, [b.key for b in BADGES if b.kind is Kind.GAVE_FEEDBACK])
@@ -332,8 +334,9 @@ async def _scrub(db: AsyncSession, *, instance_label: str, keep: Iterable[str], 
         guests_scrubbed=guests,
         audit_rows_redacted=redacted,
         badges_quieted=quieted,
-        assistant_turned_off=assistant_was_on,
-        conversations_deleted=conversations_deleted,
+        assistant_turned_off=forgotten.was_on,
+        conversations_deleted=forgotten.conversations,
+        drafts_deleted=forgotten.drafts,
     )
     summary_payload = {"kept_member_ids": sorted(kept_ids), "instance_label": instance_label} | asdict(summary)
     target = f"household:{household.id}"

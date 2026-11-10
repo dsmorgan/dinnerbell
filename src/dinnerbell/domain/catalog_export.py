@@ -92,6 +92,24 @@ _Dumper.add_representer(_Inline, _represent_inline)
 _Dumper.add_representer(str, _represent_str)
 
 
+def dump_document(document: dict[str, Any]) -> str:
+    """``document`` written as a catalog file, in the layout of the format's examples. Lists of
+    plain strings, such as tags, modes, and meals, are written inline."""
+    return yaml.dump(_inline_lists(document), Dumper=_Dumper, sort_keys=False, allow_unicode=True, width=MAX_LINE)
+
+
+def _inline_lists(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {key: _inline_lists(item) for key, item in value.items()}
+    if isinstance(value, _Inline):
+        return value
+    if isinstance(value, list):
+        if value and all(isinstance(item, str) for item in value):
+            return _Inline(value)
+        return [_inline_lists(item) for item in value]
+    return value
+
+
 def export_catalog(tags: Iterable[Tag], items: Iterable[CatalogItem]) -> CatalogExport:
     """Write a household's tags and items as a catalog file, sorted by name."""
     by_id = {tag.id: tag for tag in tags}
@@ -107,9 +125,8 @@ def export_catalog(tags: Iterable[Tag], items: Iterable[CatalogItem]) -> Catalog
         "restaurants": sections[ItemKind.RESTAURANT],
         "home_meals": sections[ItemKind.HOME],
     }
-    body = yaml.dump(document, Dumper=_Dumper, sort_keys=False, allow_unicode=True, width=MAX_LINE)
     return CatalogExport(
-        text=HEADER + body,
+        text=HEADER + dump_document(document),
         restaurants=len(sections[ItemKind.RESTAURANT]),
         home_meals=len(sections[ItemKind.HOME]),
         tags=len(ordered),

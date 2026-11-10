@@ -126,15 +126,23 @@ async def purge_sessions(ctx: JobContext) -> None:
 
 
 async def purge_conversations(ctx: JobContext) -> None:
-    """Delete assistant conversations past Admin's Conversation hours (ADR 0009). Runs whether
-    or not the assistant is on, so turning it off never keeps a conversation longer."""
+    """Delete assistant conversations past Admin's Conversation hours, and drafts that expired
+    (ADR 0009). Runs whether or not the assistant is on, so turning it off never keeps either
+    longer. A failure in one never stops the other."""
     try:
         removed = await retention.purge_idle_conversations(ctx.sessionmaker, ctx.clock())
     except Exception:
         log.exception("assistant conversation purge failed")
+    else:
+        if removed:
+            log.info("idle assistant conversations removed", extra={"count": removed})
+    try:
+        drafts = await retention.purge_expired_drafts(ctx.sessionmaker, ctx.clock())
+    except Exception:
+        log.exception("assistant draft purge failed")
         return
-    if removed:
-        log.info("idle assistant conversations removed", extra={"count": removed})
+    if drafts:
+        log.info("expired assistant drafts removed", extra={"count": drafts})
 
 
 async def call_tick(ctx: JobContext) -> None:

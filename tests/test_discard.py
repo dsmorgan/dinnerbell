@@ -128,8 +128,10 @@ async def leftovers(house: House, event_id: int) -> dict[str, int]:
 def test_discard_handles_every_table_that_refers_to_an_event() -> None:
     """A new table that refers to events must be added to ``EVENT_ROWS`` (or be the outbox), so
     discarding a call can't leave its rows behind. Feedback refers to the meal log, not the event;
-    ``test_discarding_a_done_call_deletes_its_feedback`` covers it."""
-    handled = {model.__tablename__ for model in EVENT_ROWS} | {"outbox", "badge_award"}
+    ``test_discarding_a_done_call_deletes_its_feedback`` covers it. An assistant draft names the
+    call it was made against, with no foreign key: it lasts 30 minutes, and Confirm on a
+    discarded call gets the service's own refusal, since event IDs are never reused."""
+    handled = {model.__tablename__ for model in EVENT_ROWS} | {"outbox", "badge_award", "assistant_draft"}
     assert event_linked_tables() == handled
 
 

@@ -13,6 +13,7 @@ like a call's; the rules there know offers.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, replace
 from datetime import date, datetime, time
 from zoneinfo import ZoneInfo
@@ -162,8 +163,18 @@ async def offer_form(db: AsyncSession, actor: Member, *, now: datetime) -> Offer
 # Posting --------------------------------------------------------------------------------------
 
 
-async def post_offer(db: AsyncSession, actor: Member, data: OfferInput, *, now: datetime) -> Posted:
-    """Post ``data`` for ``actor`` (FR-4, FR-5), and commit. Audited."""
+OfferCheck = Callable[[Event | None, OfferPath], Awaitable[None]]
+"""Called inside ``post_offer``'s transaction with the slot's call that day and what the offer
+will do to it, before anything is written. It raises to refuse, and anything it writes commits
+with the offer, or rolls back with it."""
+
+
+async def post_offer(
+    db: AsyncSession, actor: Member, data: OfferInput, *, now: datetime, expect: OfferCheck | None = None
+) -> Posted:
+    """Post ``data`` for ``actor`` (FR-4, FR-5), and commit. Audited. ``expect``, from an
+    assistant's draft (spec 6.14), checks under the write lock that the offer still does what
+    the draft said, and uses the draft in the same transaction."""
     if not actor.active:
         raise EventRuleViolation("Only active members can make an offer.", code="inactive")
     activity.about(item=data.free_text, item_id=data.item_id, mode=data.mode)
@@ -178,6 +189,8 @@ async def post_offer(db: AsyncSession, actor: Member, data: OfferInput, *, now: 
         item = await _offered_item(db, actor, data, now)
         call = await EventRepository(db).call_for(actor.household_id, data.slot, data.day)
         path = offer_path(call, data.mode)
+        if expect is not None:
+            await expect(call, path)
         if path is OfferPath.ATTACH and call is not None:
             posted = await _attach(db, actor, call, item, data.mode, now)
         else:

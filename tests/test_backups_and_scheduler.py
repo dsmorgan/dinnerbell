@@ -367,5 +367,11 @@ async def test_purge_conversations_job(
         raise RuntimeError("database is locked")
 
     monkeypatch.setattr(runner.retention, "purge_idle_conversations", broken)
+    monkeypatch.setattr(runner.retention, "purge_expired_drafts", removed)
     await runner.purge_conversations(job_context)  # logged, never raised
     assert "assistant conversation purge failed" in caplog.text
+    assert "expired assistant drafts removed" in caplog.text  # a failed conversation purge doesn't stop it
+
+    monkeypatch.setattr(runner.retention, "purge_expired_drafts", broken)
+    await runner.purge_conversations(job_context)
+    assert "assistant draft purge failed" in caplog.text

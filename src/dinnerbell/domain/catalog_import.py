@@ -12,7 +12,7 @@ import hashlib
 import json
 import re
 from collections.abc import Callable, Iterable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from dinnerbell.domain.catalog import (
@@ -172,8 +172,23 @@ class ImportPlan:
         return hashlib.sha256(json.dumps(body, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
 
-def plan_import(parsed: ParsedCatalog, snapshot: CatalogSnapshot) -> ImportPlan:
-    return _Planner(snapshot).plan(parsed)
+def plan_import(parsed: ParsedCatalog, snapshot: CatalogSnapshot, *, add_only: bool = False) -> ImportPlan:
+    """The plan for ``parsed``. With ``add_only``, as for an assistant's catalog draft (spec
+    6.14), an entry naming an item the catalog has, in either state, is left out before
+    planning, so it creates no tag and changes nothing; the plan lists it as unchanged."""
+    if not add_only:
+        return _Planner(snapshot).plan(parsed)
+    existing = {(item.kind, item.key): item for item in snapshot.items}
+    kept: list[LocatedEntry] = []
+    skipped: list[UnchangedItem] = []
+    for located in parsed.entries:
+        item = existing.get((located.kind, name_key(located.entry.name)))
+        if item is None:
+            kept.append(located)
+        else:
+            skipped.append(UnchangedItem(located.location, item.id, item.kind, item.name))
+    plan = _Planner(snapshot).plan(ParsedCatalog(tags=parsed.tags, entries=tuple(kept), errors=parsed.errors))
+    return replace(plan, unchanged=(*plan.unchanged, *skipped))
 
 
 @dataclass

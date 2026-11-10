@@ -189,12 +189,17 @@ def test_only_the_anthropic_client_imports_the_sdk() -> None:
 
 
 def test_assistant_tools_never_act_as_an_admin() -> None:
-    """Every tool runs as ``tool_actor``: a member's role, never an admin's (spec 6.14, **Scope**).
-    No tool code checks for an admin, calls an admin-only use case, or names ``ActingAs.ADMIN``."""
-    source = (PACKAGE / "services" / "assistant" / "tools.py").read_text()
-    for forbidden in ("ActingAs", "require_admin", "is_admin", "Role.ADMIN"):
-        assert forbidden not in source, forbidden
-    assert "replace(member, role=Role.MEMBER)" in source
+    """Every tool, and Confirm on a draft, runs as ``tool_actor``: a member's role, never an
+    admin's (spec 6.14, **Scope**). No tool code checks for an admin, calls an admin-only use
+    case, or names ``ActingAs.ADMIN``."""
+    assistant = PACKAGE / "services" / "assistant"
+    for name in ("tools.py", "candidates.py", "drafts.py", "acting.py"):
+        source = (assistant / name).read_text()
+        for forbidden in ("ActingAs", "require_admin", "is_admin", "Role.ADMIN", "ranking_settings("):
+            assert forbidden not in source, (name, forbidden)
+    assert "replace(member, role=Role.MEMBER)" in (assistant / "acting.py").read_text()
+    for name in ("tools.py", "drafts.py"):
+        assert "tool_actor(member)" in (assistant / name).read_text(), name
 
 
 def test_the_assistant_layers_import_nothing_from_web_or_channels() -> None:

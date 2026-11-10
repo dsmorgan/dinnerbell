@@ -727,3 +727,33 @@ class AssistantConversationRow(Base):
     transcript: Mapped[list[dict[str, str]]] = mapped_column(JSON, default=list)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime())
     last_message_at: Mapped[datetime] = mapped_column(UTCDateTime())
+
+
+class AssistantDraftRow(Base):
+    """A change the assistant drafted for one member (spec 6.14, **Drafts**): a proposal, an
+    offer, or catalog items. ``payload`` holds what the service needs; ``title`` and ``lines``
+    say what **Confirm** does, as the member saw it. Only ``member_id`` confirms it, once, before
+    ``expires_at``; ``used_at`` is set by a Confirm or a Cancel. ``event_id`` and ``run`` are the
+    call it was made against, where there is one: a plain column, so discarding a call never
+    waits on a draft, and a draft whose call is gone gets the service's own refusal. The
+    scheduler deletes drafts once they expire."""
+
+    __tablename__ = "assistant_draft"
+    __table_args__ = (
+        CheckConstraint("kind IN ('proposal', 'offer', 'catalog')", name="kind"),
+        Index("ix_assistant_draft_household_expires", "household_id", "expires_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    household_id: Mapped[int] = mapped_column(ForeignKey("household.id", ondelete="CASCADE"))
+    member_id: Mapped[int] = mapped_column(ForeignKey("member.id", ondelete="CASCADE"), index=True)
+    conversation_key: Mapped[str] = mapped_column(String(80))
+    kind: Mapped[str] = mapped_column(String(16))
+    payload: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)
+    event_id: Mapped[int | None] = mapped_column(Integer)
+    run: Mapped[int | None] = mapped_column(Integer)
+    title: Mapped[str] = mapped_column(String(200))
+    lines: Mapped[list[str]] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime())
+    expires_at: Mapped[datetime] = mapped_column(UTCDateTime())
+    used_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
