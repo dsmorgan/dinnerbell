@@ -7,8 +7,10 @@ import asyncio
 import logging
 import socket
 import ssl
+import threading
 from collections.abc import AsyncIterator, Callable, Iterable, Sequence
 from ipaddress import ip_address
+from pathlib import Path
 from typing import Any
 
 import httpcore
@@ -27,6 +29,19 @@ from dinnerbell.services import safe_fetch
 from dinnerbell.services.safe_fetch import MAX_BYTES, USER_AGENT, FetchedPage, decode, extract_html, fetch_page
 
 pytestmark = pytest.mark.anyio
+
+
+@pytest.fixture(autouse=True)
+def no_network(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fail any test here that would reach the network, such as through a patch that stopped working."""
+
+    def refuse(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("a safe_fetch test tried to use the network")
+
+    monkeypatch.setattr(socket.socket, "connect", refuse)
+    monkeypatch.setattr(socket.socket, "connect_ex", refuse)
+    monkeypatch.setattr(socket, "getaddrinfo", refuse)
+
 
 PUBLIC_V4 = "93.184.215.14"
 PUBLIC_V6 = "2606:2800:21f:cb07:6820:80da:af6b:8b2c"
@@ -141,6 +156,13 @@ def test_empty_or_garbled_answers_are_refused(answers: list[str], reason: FetchF
         ("https://127.1/", FetchFailure.HOST),
         ("https://2130706433/", FetchFailure.HOST),
         ("https://0x7f.0.0.1/", FetchFailure.HOST),
+        ("https://0x7f.0.0.0x1/", FetchFailure.HOST),
+        ("https://1.1.1.0x1/", FetchFailure.HOST),
+        ("https://menu.example.0X/", FetchFailure.HOST),
+        ("https://faß.example.com/", FetchFailure.IDNA),
+        ("https://menuς.example.com/", FetchFailure.IDNA),
+        ("https://me\u200dnu.example.com/", FetchFailure.IDNA),
+        ("https://me\u200cnu.example.com/", FetchFailure.IDNA),
         ("https://example.com\\.evil.example.org/", FetchFailure.HOST),
         ("https://exa_mple-.com/", FetchFailure.HOST),
         ("https://" + "a" * 64 + ".example.com/", FetchFailure.HOST),
@@ -156,7 +178,6 @@ def test_refuses_urls(url: str, reason: FetchFailure) -> None:
         parse_target(url)
     assert caught.value.reason is reason
     assert caught.value.message
-    assert "10.0.0.1" not in caught.value.message
 
 
 def test_accepts_https_names_and_public_literals() -> None:
@@ -165,6 +186,7 @@ def test_accepts_https_names_and_public_literals() -> None:
     assert target.url == "https://menu.example.com/dinner%20menu?day=fri"
     assert parse_target("https://example.com").path == "/"
     assert parse_target("https://café.example.com/").host == "xn--caf-dma.example.com"
+    assert parse_target("https://menu.example.0xfood/").host == "menu.example.0xfood"  # not a hex number
     literal = parse_target(f"https://[{PUBLIC_V6}]/menu")
     assert literal.address == ip_address(PUBLIC_V6)
     assert literal.url == f"https://[{PUBLIC_V6}]/menu"
@@ -327,24 +349,31 @@ async def test_scheme_and_userinfo_are_refused_before_any_lookup() -> None:
 async def test_redirect_to_a_private_name_is_refused_without_connecting() -> None:
     table = {"menu.example.com": [PUBLIC_V4], "internal.example.org": ["10.0.0.5"]}
     outcome = await fetch("https://menu.example.com/", lambda _: redirect("https://internal.example.org/admin"), table)
-    assert outcome.reason is FetchFailure.ADDRESS
+    assert outcome.reason is FetchFailure.REDIRECT
+    assert outcome.error is not None
+    assert outcome.error.detail is FetchFailure.ADDRESS
+    assert "redirects" in outcome.error.message
     assert outcome.lookups == ["menu.example.com", "internal.example.org"]
     assert len(outcome.requests) == 1
 
 
 @pytest.mark.parametrize(
-    ("location", "reason"),
+    ("location", "detail"),
     [
         ("https://169.254.169.254/latest/meta-data/", FetchFailure.ADDRESS),
         ("https://[::1]/", FetchFailure.ADDRESS),
         ("http://menu.example.com/", FetchFailure.SCHEME),
         ("https://menu.example.com:8443/", FetchFailure.PORT),
         ("https://localhost/", FetchFailure.HOST),
+        ("https://nowhere.example.net/", FetchFailure.DNS),
     ],
 )
-async def test_every_redirect_is_checked_like_the_first_url(location: str, reason: FetchFailure) -> None:
+async def test_every_redirect_is_checked_like_the_first_url(location: str, detail: FetchFailure) -> None:
+    """A refused redirect is the site's doing, so the member hears "redirects", not that their link is bad."""
     outcome = await fetch("https://menu.example.com/", lambda _: redirect(location), {"menu.example.com": [PUBLIC_V4]})
-    assert outcome.reason is reason
+    assert outcome.reason is FetchFailure.REDIRECT
+    assert outcome.error is not None
+    assert outcome.error.detail is detail
     assert len(outcome.requests) == 1
 
 
@@ -560,7 +589,12 @@ async def test_logs_name_the_host_reason_and_duration_but_never_the_page(caplog:
     await fetch("not a url", lambda _: page(), table)
     fetched, refused, invalid = caplog.records
     assert (fetched.message, fetched.host, fetched.duration_ms) == ("page fetched", "menu.example.com", 0)  # type: ignore[attr-defined]
-    assert (refused.message, refused.host, refused.reason) == ("page fetch refused", "menu.example.com", "address")  # type: ignore[attr-defined]
+    assert (refused.message, refused.host, refused.reason, refused.detail) == (  # type: ignore[attr-defined]
+        "page fetch refused",
+        "menu.example.com",
+        "redirect",
+        "address",
+    )
     assert invalid.host is None  # type: ignore[attr-defined]
     for record in caplog.records:
         logged = f"{record.getMessage()} {vars(record)}"
@@ -570,10 +604,31 @@ async def test_logs_name_the_host_reason_and_duration_but_never_the_page(caplog:
         assert "internal.example.org" not in logged
 
 
-async def test_without_a_transport_the_fetcher_makes_and_closes_its_own() -> None:
-    with pytest.raises(FetchError) as caught:
-        await fetch_page("https://menu.example.com/", resolver=Resolver({"menu.example.com": ["10.0.0.1"]}))
-    assert caught.value.reason is FetchFailure.ADDRESS
+async def test_without_a_transport_the_fetcher_makes_and_closes_its_own(monkeypatch: pytest.MonkeyPatch) -> None:
+    network = FakeNetwork([http_response("200 OK", {"Content-Type": HTML}, b"<p>Tacos</p>")])
+    made: list[httpx.AsyncHTTPTransport] = []
+    closed: list[httpx.AsyncHTTPTransport] = []
+    real_new_transport = safe_fetch.new_transport
+
+    def new_transport() -> httpx.AsyncHTTPTransport:
+        transport = real_new_transport()
+        use_network(monkeypatch, transport, network)
+        real_aclose = transport.aclose
+
+        async def aclose() -> None:
+            closed.append(transport)
+            await real_aclose()
+
+        monkeypatch.setattr(transport, "aclose", aclose)
+        made.append(transport)
+        return transport
+
+    monkeypatch.setattr(safe_fetch, "new_transport", new_transport)
+    result = await fetch_page("https://menu.example.com/", resolver=Resolver({"menu.example.com": [PUBLIC_V4]}))
+    assert result.text == "Tacos"
+    assert network.connects == [(PUBLIC_V4, 443)]
+    assert len(made) == 1
+    assert closed == made
 
 
 async def test_system_resolver_returns_every_address(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -588,17 +643,82 @@ async def test_system_resolver_returns_every_address(monkeypatch: pytest.MonkeyP
     assert await safe_fetch.system_resolver("menu.example.com") == [PUBLIC_V4, PUBLIC_V6]
 
 
+async def test_system_resolver_runs_on_its_own_threads(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A lookup the deadline abandons keeps its thread, so lookups never use the default executor."""
+    threads: list[str] = []
+
+    def getaddrinfo(*args: Any, **kwargs: Any) -> list[Any]:
+        threads.append(threading.current_thread().name)
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (PUBLIC_V4, 443))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", getaddrinfo)
+    await safe_fetch.system_resolver("menu.example.com")
+    assert threads[0].startswith("dinnerbell-dns")
+
+
+async def test_a_fetch_waits_for_a_free_slot_within_its_own_deadline() -> None:
+    slots = safe_fetch._fetch_slots()
+    for _ in range(safe_fetch.MAX_CONCURRENT_FETCHES):
+        await slots.acquire()
+    try:
+        resolver = Resolver({"menu.example.com": [PUBLIC_V4]})
+        with pytest.raises(FetchError) as caught:
+            await fetch_page(
+                "https://menu.example.com/", resolver=resolver, transport=Recorder(page).transport, deadline=0
+            )
+        assert caught.value.reason is FetchFailure.TIMEOUT
+        assert resolver.lookups == []
+
+        waiting = asyncio.create_task(
+            fetch_page("https://menu.example.com/", resolver=resolver, transport=Recorder(lambda _: page()).transport)
+        )
+        await asyncio.sleep(0)
+        assert not waiting.done()
+        assert resolver.lookups == []
+        slots.release()
+        assert (await waiting).title == "Menu"
+        await slots.acquire()
+    finally:
+        for _ in range(safe_fetch.MAX_CONCURRENT_FETCHES):
+            slots.release()
+    assert not slots.locked()
+
+
+async def test_a_failure_while_extracting_is_a_fetch_error(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    def broken(*args: Any) -> Any:
+        raise UnicodeDecodeError("punycode", b"", 0, 1, "invalid")
+
+    monkeypatch.setattr(safe_fetch, "_extract", broken)
+    caplog.set_level(logging.INFO, logger="dinnerbell.services.safe_fetch")
+    outcome = await fetch("https://menu.example.com/", lambda _: page(), {"menu.example.com": [PUBLIC_V4]})
+    assert outcome.reason is FetchFailure.ENCODING
+    assert caplog.records[-1].reason == "encoding"  # type: ignore[attr-defined]
+    assert not safe_fetch._fetch_slots().locked()
+
+
 # --- The real transport: the TCP connection goes to the checked IP, TLS to the name -------------
 
 
 class FakeStream(httpcore.AsyncNetworkStream):
-    def __init__(self, backend: FakeNetwork, response: bytes) -> None:
+    def __init__(self, backend: FakeNetwork, response: bytes | None) -> None:
         self.backend = backend
         self.response = response
         self.sent = b""
+        self.reads = 0
         self.closed = False
 
     async def read(self, max_bytes: int, timeout: float | None = None) -> bytes:  # noqa: ASYNC109
+        """The response, or with None, headers that trickle in a byte at a time and never end.
+
+        Each trickled read is quick, so only a deadline on the whole fetch stops it; ``timeout``,
+        the per-read limit, is ignored on purpose.
+        """
+        self.reads += 1
+        if self.response is None:
+            await asyncio.sleep(0.001)
+            return b"HTTP/1.1 200 OK\r\n" if self.reads == 1 else b"X"
         data, self.response = self.response[:max_bytes], self.response[max_bytes:]
         return data
 
@@ -624,7 +744,7 @@ class FakeStream(httpcore.AsyncNetworkStream):
 class FakeNetwork(httpcore.AsyncNetworkBackend):
     """Records every TCP connection and TLS handshake, and answers each with the next response."""
 
-    def __init__(self, responses: Iterable[bytes]) -> None:
+    def __init__(self, responses: Iterable[bytes | None]) -> None:
         self.responses = iter(responses)
         self.connects: list[tuple[str, int]] = []
         self.tls: list[tuple[str | None, bool, ssl.VerifyMode]] = []
@@ -647,12 +767,21 @@ class FakeNetwork(httpcore.AsyncNetworkBackend):
         raise AssertionError("the fetcher never retries")
 
 
+def use_network(monkeypatch: pytest.MonkeyPatch, transport: httpx.AsyncHTTPTransport, network: FakeNetwork) -> None:
+    """Run the real transport over ``network``. ``setattr`` raises if httpx moves the attribute."""
+    pool = transport._pool  # type: ignore[attr-defined]
+    assert isinstance(pool, httpcore.AsyncConnectionPool)
+    monkeypatch.setattr(pool, "_network_backend", network)
+
+
 def http_response(status: str, headers: dict[str, str], body: bytes = b"") -> bytes:
     lines = [f"HTTP/1.1 {status}", f"Content-Length: {len(body)}", *(f"{k}: {v}" for k, v in headers.items())]
     return ("\r\n".join(lines) + "\r\n\r\n").encode() + body
 
 
-async def test_the_real_transport_pins_each_hop_and_never_reuses_a_connection() -> None:
+async def test_the_real_transport_pins_each_hop_and_never_reuses_a_connection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     network = FakeNetwork(
         [
             http_response("301 Moved Permanently", {"Location": "https://www.example.org/menu"}),
@@ -660,7 +789,7 @@ async def test_the_real_transport_pins_each_hop_and_never_reuses_a_connection() 
         ]
     )
     transport = safe_fetch.new_transport()
-    transport._pool._network_backend = network  # type: ignore[attr-defined]
+    use_network(monkeypatch, transport, network)
     table = {"menu.example.com": [PUBLIC_V4], "www.example.org": [PUBLIC_V4]}  # one IP, two names
     try:
         result = await fetch_page("https://menu.example.com/", resolver=Resolver(table), transport=transport)
@@ -677,6 +806,60 @@ async def test_the_real_transport_pins_each_hop_and_never_reuses_a_connection() 
     assert b"\r\nHost: www.example.org\r\n" in second.sent
     assert first.closed
     assert second.closed
+
+
+async def test_the_real_transport_connects_to_a_checked_ipv6_address(monkeypatch: pytest.MonkeyPatch) -> None:
+    network = FakeNetwork([http_response("200 OK", {"Content-Type": HTML}, b"<p>Tacos</p>")])
+    transport = safe_fetch.new_transport()
+    use_network(monkeypatch, transport, network)
+    try:
+        result = await fetch_page(
+            "https://menu.example.com/", resolver=Resolver({"menu.example.com": [PUBLIC_V6]}), transport=transport
+        )
+    finally:
+        await transport.aclose()
+    assert result.text == "Tacos"
+    assert network.connects == [(PUBLIC_V6, 443)]
+    assert network.tls == [("menu.example.com", True, ssl.CERT_REQUIRED)]
+    assert b"\r\nHost: menu.example.com\r\n" in network.streams[0].sent
+
+
+async def test_proxy_and_ca_variables_change_nothing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    for name in ("HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy"):
+        monkeypatch.setenv(name, "http://proxy.example.net:3128")
+    # With trust_env on, httpx would load these and fail on the missing file.
+    monkeypatch.setenv("SSL_CERT_FILE", str(tmp_path / "missing.pem"))
+    monkeypatch.setenv("SSL_CERT_DIR", str(tmp_path / "missing"))
+    network = FakeNetwork([http_response("200 OK", {"Content-Type": HTML}, b"<p>Tacos</p>")])
+    transport = safe_fetch.new_transport()
+    use_network(monkeypatch, transport, network)
+    try:
+        await fetch_page(
+            "https://menu.example.com/", resolver=Resolver({"menu.example.com": [PUBLIC_V4]}), transport=transport
+        )
+    finally:
+        await transport.aclose()
+    assert network.connects == [(PUBLIC_V4, 443)]
+    assert network.tls == [("menu.example.com", True, ssl.CERT_REQUIRED)]
+
+
+async def test_the_deadline_cuts_off_headers_that_trickle_in(monkeypatch: pytest.MonkeyPatch) -> None:
+    network = FakeNetwork([None])
+    transport = safe_fetch.new_transport()
+    use_network(monkeypatch, transport, network)
+    try:
+        with pytest.raises(FetchError) as caught:
+            await fetch_page(
+                "https://menu.example.com/",
+                resolver=Resolver({"menu.example.com": [PUBLIC_V4]}),
+                transport=transport,
+                deadline=0.05,
+            )
+    finally:
+        await transport.aclose()
+    assert caught.value.reason is FetchFailure.TIMEOUT
+    assert network.connects == [(PUBLIC_V4, 443)]
+    assert network.streams[0].reads > 1  # it was reading headers when the deadline hit
 
 
 # --- Decoding and text -------------------------------------------------------------------------
@@ -705,11 +888,53 @@ async def test_the_real_transport_pins_each_hop_and_never_reuses_a_connection() 
         (b"Caf\xe9", "text/plain", None, "Caf�"),
         (b"Caf\xe9", "text/plain", "no-such-charset", "Caf�"),
         (b"Caf\xe9", "text/plain", "rot13", "Caf�"),  # a codec, but not a text encoding
-        (b'<meta charset="hex">Caf\xe9', "text/html", None, '<meta charset="hex">Caf�'),
+        (b'<meta charset="hex">Caf\xe9', "text/html", None, '<meta charset="hex">Caf\ufffd'),
+        ("Ελληνικά".encode("iso8859-7"), "text/plain", " ISO-8859-7 ", "Ελληνικά"),
+        ("Привет".encode("koi8-r"), "text/plain", "koi8-r", "Привет"),
+        ("€".encode("cp874"), "text/plain", "windows-874", "€"),
+        ("中文".encode("gbk"), "text/plain", "gb2312", "中文"),
+        (b"\xff\xfeM\x00e\x00", "text/html", "iso-8859-2", "Me"),  # a BOM beats the header
+        (b"\xff\xfeM\x00e\x00", "text/plain", None, "Me"),
+        (b"\xfe\xff\x00M\x00e", "text/plain", None, "Me"),
+        ('<meta charset="utf-16le"><p>é'.encode(), "text/html", None, '<meta charset="utf-16le"><p>é'),
+        (
+            b'<?xml version="1.0" encoding="iso-8859-15"?><p>\xa4</p>',
+            "application/xhtml+xml",
+            None,
+            '<?xml version="1.0" encoding="iso-8859-15"?><p>€</p>',
+        ),
+        (
+            b'<?xml version="1.0" encoding="iso-8859-15"?>\xa4',
+            "text/html",
+            None,
+            '<?xml version="1.0" encoding="iso-8859-15"?>\ufffd',
+        ),
     ],
 )
 def test_decodes_by_the_declared_charset_or_utf8(body: bytes, mime: str, charset: str | None, expected: str) -> None:
     assert decode(body, mime, charset) == expected
+
+
+SLOW_OR_RAISING = ["punycode", "idna", "undefined"]
+"""Codecs Python has but no browser does: punycode is slow on large input, and all three raise."""
+
+
+@pytest.mark.parametrize("charset", SLOW_OR_RAISING)
+@pytest.mark.parametrize("where", ["header", "meta"])
+async def test_charsets_no_browser_uses_fall_back_to_utf8(charset: str, where: str) -> None:
+    head = f'<meta charset="{charset}">' if where == "meta" else ""
+    body = f"{head}<p>Café</p>".encode() + b"\xff" + b"a" * 100_000
+    content_type = f"text/html; charset={charset}" if where == "header" else "text/html"
+    outcome = await fetch(
+        "https://menu.example.com/", lambda _: page(body, content_type), {"menu.example.com": [PUBLIC_V4]}
+    )
+    assert outcome.page is not None
+    assert outcome.page.text.startswith("Café\n\ufffd")
+
+
+@pytest.mark.parametrize("label", [*SLOW_OR_RAISING, "rot13", "hex", "utf-7", "x-user-defined", "a" * 41, "../x", None])
+def test_only_web_encodings_are_used(label: str | None) -> None:
+    assert safe_fetch.web_encoding(label) is None
 
 
 async def test_charset_from_the_header_reaches_the_text() -> None:
@@ -747,6 +972,45 @@ def test_extracts_readable_text_and_the_title() -> None:
     assert "color" not in text
     assert "hidden" not in text
     assert "JavaScript" not in text
+
+
+def test_inline_elements_are_separated_and_pre_keeps_its_lines() -> None:
+    html = """<span>Tacos</span><span>$4</span>
+    <table><tr><td>Burrito</td><td>$8</td></tr><tr><th>Torta</th><th>$9</th></tr></table>
+    <pre>Mon  closed
+Tue  5-9</pre><p>Ta<b>co</b>s, <i>al</i> pastor.</p>"""
+    assert extract_html(html)[1].splitlines() == [
+        "Tacos $4",
+        "Burrito $8",
+        "Torta $9",
+        "Mon closed",
+        "Tue 5-9",
+        "Tacos, al pastor.",
+    ]
+
+
+def test_template_content_is_skipped() -> None:
+    assert extract_html("<p>Menu</p><template><p>Hidden</p></template>") == (None, "Menu")
+
+
+def test_the_title_comes_from_the_head_only() -> None:
+    assert extract_html("<svg><title>Icon</title></svg><p>Menu</p>") == (None, "Icon\nMenu")
+    assert extract_html("<body><p>Menu</p><title>Late</title></body>") == (None, "Menu\nLate")
+    assert extract_html("<title>First</title><title>Second</title><p>Menu</p>") == ("First", "Second\nMenu")
+
+
+def test_a_long_title_is_cut_at_300_characters() -> None:
+    title, text = extract_html("<title>" + "Taco " * 100 + "</title><p>Menu</p>")
+    assert title is not None
+    assert len(title) == 299  # cut at 300, then the trailing space
+    assert text == "Menu"
+
+
+def test_a_title_that_never_closes_is_dropped_and_the_page_kept() -> None:
+    assert extract_html("<title>Taco Tuesday<p>Tacos &amp; more</p><script>x()</script>") == (
+        None,
+        "Taco Tuesday\nTacos & more",
+    )
 
 
 def test_a_page_without_a_title_has_none() -> None:
