@@ -645,15 +645,16 @@ async def test_system_resolver_returns_every_address(monkeypatch: pytest.MonkeyP
 
 async def test_system_resolver_runs_on_its_own_threads(monkeypatch: pytest.MonkeyPatch) -> None:
     """A lookup the deadline abandons keeps its thread, so lookups never use the default executor."""
-    threads: list[str] = []
+    threads: list[threading.Thread] = []
 
     def getaddrinfo(*args: Any, **kwargs: Any) -> list[Any]:
-        threads.append(threading.current_thread().name)
+        threads.append(threading.current_thread())
         return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (PUBLIC_V4, 443))]
 
     monkeypatch.setattr(socket, "getaddrinfo", getaddrinfo)
     await safe_fetch.system_resolver("menu.example.com")
-    assert threads[0].startswith("dinnerbell-dns")
+    assert threads[0].name.startswith("dinnerbell-dns")
+    assert threads[0].daemon
 
 
 async def test_a_fetch_waits_for_a_free_slot_within_its_own_deadline() -> None:
@@ -694,8 +695,53 @@ async def test_a_failure_while_extracting_is_a_fetch_error(
     caplog.set_level(logging.INFO, logger="dinnerbell.services.safe_fetch")
     outcome = await fetch("https://menu.example.com/", lambda _: page(), {"menu.example.com": [PUBLIC_V4]})
     assert outcome.reason is FetchFailure.ENCODING
-    assert caplog.records[-1].reason == "encoding"  # type: ignore[attr-defined]
+    failed, refused = caplog.records
+    assert (failed.levelname, failed.message) == ("WARNING", "page extraction failed")
+    assert (failed.host, failed.error) == ("menu.example.com", "UnicodeDecodeError")  # type: ignore[attr-defined]
+    assert failed.exc_info is None
+    assert "invalid" not in f"{failed.getMessage()} {vars(failed)}"  # never the exception's message
+    assert refused.reason == "encoding"  # type: ignore[attr-defined]
     assert not safe_fetch._fetch_slots().locked()
+
+
+def test_fetch_slots_forget_closed_loops() -> None:
+    async def touch() -> None:
+        safe_fetch._fetch_slots()
+
+    for _ in range(3):
+        asyncio.run(touch())
+
+    async def check() -> None:
+        safe_fetch._fetch_slots()
+        assert list(safe_fetch._LIMITS) == [asyncio.get_running_loop()]
+
+    asyncio.run(check())
+
+
+def test_dns_threads_are_daemons_twice_the_fetch_limit() -> None:
+    assert safe_fetch.DNS_THREADS == 2 * safe_fetch.MAX_CONCURRENT_FETCHES
+    assert safe_fetch._DNS_POOL.workers == safe_fetch.DNS_THREADS
+
+
+def test_the_daemon_pool_runs_work_skips_cancelled_work_and_returns_errors() -> None:
+    pool = safe_fetch._DaemonPool(1, "test-pool")
+    gate = threading.Event()
+    ran: list[str] = []
+
+    def blocked() -> str:
+        gate.wait(10)
+        return threading.current_thread().name
+
+    first = pool.submit(blocked)
+    second = pool.submit(ran.append, "second")
+    assert second.cancel()  # still queued behind the first
+    gate.set()
+    name = first.result(timeout=10)
+    assert name.startswith("test-pool-")
+    assert all(thread.daemon for thread in pool._threads)
+    failing = pool.submit(int, "not a number")
+    assert isinstance(failing.exception(timeout=10), ValueError)
+    assert ran == []
 
 
 # --- The real transport: the TCP connection goes to the checked IP, TLS to the name -------------
@@ -712,12 +758,14 @@ class FakeStream(httpcore.AsyncNetworkStream):
     async def read(self, max_bytes: int, timeout: float | None = None) -> bytes:  # noqa: ASYNC109
         """The response, or with None, headers that trickle in a byte at a time and never end.
 
-        Each trickled read is quick, so only a deadline on the whole fetch stops it; ``timeout``,
-        the per-read limit, is ignored on purpose.
+        Each trickled read moves the network's fake clock 10 ms and yields to the loop, so only a
+        deadline on the whole fetch stops it; ``timeout``, the per-read limit, is ignored on purpose.
         """
         self.reads += 1
         if self.response is None:
-            await asyncio.sleep(0.001)
+            assert self.backend.clock is not None
+            self.backend.clock.now += 0.01
+            await asyncio.sleep(0)
             return b"HTTP/1.1 200 OK\r\n" if self.reads == 1 else b"X"
         data, self.response = self.response[:max_bytes], self.response[max_bytes:]
         return data
@@ -741,10 +789,21 @@ class FakeStream(httpcore.AsyncNetworkStream):
         return None
 
 
+class FakeTime:
+    """A clock that only the test moves. As the loop's ``time``, it drives ``asyncio.timeout``."""
+
+    def __init__(self, now: float) -> None:
+        self.now = now
+
+    def __call__(self) -> float:
+        return self.now
+
+
 class FakeNetwork(httpcore.AsyncNetworkBackend):
     """Records every TCP connection and TLS handshake, and answers each with the next response."""
 
-    def __init__(self, responses: Iterable[bytes | None]) -> None:
+    def __init__(self, responses: Iterable[bytes | None], clock: FakeTime | None = None) -> None:
+        self.clock = clock
         self.responses = iter(responses)
         self.connects: list[tuple[str, int]] = []
         self.tls: list[tuple[str | None, bool, ssl.VerifyMode]] = []
@@ -844,22 +903,29 @@ async def test_proxy_and_ca_variables_change_nothing(monkeypatch: pytest.MonkeyP
 
 
 async def test_the_deadline_cuts_off_headers_that_trickle_in(monkeypatch: pytest.MonkeyPatch) -> None:
-    network = FakeNetwork([None])
+    """Fake time, not real waiting: each read costs 10 ms of the loop's clock, so a 1-second deadline
+    stops the fetch on the 101st read, though no single read is slow."""
+    loop = asyncio.get_running_loop()
+    clock = FakeTime(loop.time())
+    network = FakeNetwork([None], clock=clock)
     transport = safe_fetch.new_transport()
     use_network(monkeypatch, transport, network)
+    loop.time = clock  # type: ignore[method-assign]
     try:
         with pytest.raises(FetchError) as caught:
             await fetch_page(
                 "https://menu.example.com/",
                 resolver=Resolver({"menu.example.com": [PUBLIC_V4]}),
                 transport=transport,
-                deadline=0.05,
+                clock=clock,
+                deadline=1.0,
             )
     finally:
+        del loop.time  # type: ignore[method-assign]
         await transport.aclose()
     assert caught.value.reason is FetchFailure.TIMEOUT
     assert network.connects == [(PUBLIC_V4, 443)]
-    assert network.streams[0].reads > 1  # it was reading headers when the deadline hit
+    assert network.streams[0].reads == 101
 
 
 # --- Decoding and text -------------------------------------------------------------------------
@@ -937,6 +1003,38 @@ def test_only_web_encodings_are_used(label: str | None) -> None:
     assert safe_fetch.web_encoding(label) is None
 
 
+@pytest.mark.parametrize(
+    ("label", "codec"),
+    [
+        ("ibm866", "cp866"),
+        ("x-mac-cyrillic", "mac-cyrillic"),
+        ("iso-8859-8-i", "iso8859-8"),
+        ("windows-31j", "cp932"),
+        ("ms932", "cp932"),
+        ("ms_kanji", "cp932"),
+        ("shift_jis", "cp932"),
+        ("x-sjis", "cp932"),
+        ("cp949", "cp949"),
+        ("windows-949", "cp949"),
+        ("euc-kr", "cp949"),
+        ("big5", "big5hkscs"),
+        ("big5-hkscs", "big5hkscs"),
+        ("x-gbk", "gbk"),
+        ("gb2312", "gbk"),
+        ("tis-620", "cp874"),
+        ("dos-874", "cp874"),
+        ("x-euc-jp", "euc_jp"),
+        ("unicode-1-1-utf-8", "utf-8"),
+        ("unicodefffe", "utf-16-be"),
+        ("csunicode", "utf-16-le"),
+        ("x-cp1252", "cp1252"),
+        ("latin1", "cp1252"),
+    ],
+)
+def test_web_encoding_labels_map_as_browsers_do(label: str, codec: str) -> None:
+    assert safe_fetch.web_encoding(label) == codec
+
+
 async def test_charset_from_the_header_reaches_the_text() -> None:
     response = page("<p>Crème brûlée</p>".encode("cp1252"), 'text/html; charset="windows-1252"')
     outcome = await fetch("https://menu.example.com/", lambda _: response, {"menu.example.com": [PUBLIC_V4]})
@@ -987,6 +1085,20 @@ Tue  5-9</pre><p>Ta<b>co</b>s, <i>al</i> pastor.</p>"""
         "Tue 5-9",
         "Tacos, al pastor.",
     ]
+
+
+@pytest.mark.parametrize(
+    ("html", "text"),
+    [
+        ("<pre>x = a ? b : c</pre>", "x = a ? b : c"),
+        ("<p>Call us :)</p>", "Call us :)"),
+        ("<p>Tacos ( <a>today</a> ) !</p>", "Tacos ( today ) !"),
+        ("<p>See <a>more</a>. Or <span>not</span>, (<a>x</a>)</p>", "See more. Or not, (x)"),
+        ("<p>a\x00b</p>", "a\ufffdb"),
+    ],
+)
+def test_only_separators_the_extractor_added_are_removed(html: str, text: str) -> None:
+    assert extract_html(html) == (None, text)
 
 
 def test_template_content_is_skipped() -> None:

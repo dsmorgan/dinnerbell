@@ -18,14 +18,16 @@ import asyncio
 import codecs
 import functools
 import logging
+import queue
 import re
 import socket
+import threading
 import time
-import weakref
 from collections.abc import Awaitable, Callable, Sequence
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Executor, Future
 from dataclasses import dataclass
 from html.parser import HTMLParser
+from typing import Any, ParamSpec, TypeVar
 
 import httpx
 
@@ -70,10 +72,55 @@ _HEADERS = {
     "Accept-Encoding": "identity",
 }
 
-_DNS_POOL = ThreadPoolExecutor(max_workers=MAX_CONCURRENT_FETCHES, thread_name_prefix="dinnerbell-dns")
+DNS_THREADS = 2 * MAX_CONCURRENT_FETCHES
+"""Twice the fetch limit, so lookups abandoned past their deadline don't starve later fetches."""
+
+_P = ParamSpec("_P")
+_T = TypeVar("_T")
+
+
+class _DaemonPool(Executor):
+    """A fixed pool of daemon threads.
+
+    ``ThreadPoolExecutor``'s threads are joined at exit, so one lookup stuck in the system
+    resolver would hold up shutdown. A lookup cancelled before it starts never runs.
+    """
+
+    def __init__(self, workers: int, name: str) -> None:
+        self.workers = workers
+        self._name = name
+        self._work: queue.SimpleQueue[tuple[Future[Any], Callable[[], Any]]] = queue.SimpleQueue()
+        self._threads: list[threading.Thread] = []
+        self._lock = threading.Lock()
+
+    def submit(self, fn: Callable[_P, _T], /, *args: _P.args, **kwargs: _P.kwargs) -> Future[_T]:
+        future: Future[_T] = Future()
+        self._work.put((future, functools.partial(fn, *args, **kwargs)))
+        with self._lock:
+            while len(self._threads) < self.workers:
+                thread = threading.Thread(target=self._run, name=f"{self._name}-{len(self._threads)}", daemon=True)
+                thread.start()
+                self._threads.append(thread)
+        return future
+
+    def _run(self) -> None:
+        while True:
+            future, call = self._work.get()
+            if not future.set_running_or_notify_cancel():
+                continue
+            try:
+                result = call()
+            except BaseException as exc:  # handed to the waiting coroutine, as ThreadPoolExecutor does
+                future.set_exception(exc)
+            else:
+                future.set_result(result)
+
+
+_DNS_POOL = _DaemonPool(DNS_THREADS, "dinnerbell-dns")
 """Lookups run here, not in the default executor: a lookup the deadline gave up on keeps its
 thread until the system resolver returns, and must not starve the rest of the app."""
-_LIMITS: weakref.WeakKeyDictionary[asyncio.AbstractEventLoop, asyncio.Semaphore] = weakref.WeakKeyDictionary()
+_LIMITS: dict[asyncio.AbstractEventLoop, asyncio.Semaphore] = {}
+"""One semaphore per event loop. A semaphore holds its loop, so closed loops are pruned by hand."""
 
 Resolver = Callable[[str], Awaitable[Sequence[str]]]
 """Resolves a host name to address strings, as ``getaddrinfo`` does."""
@@ -110,6 +157,8 @@ def new_transport() -> httpx.AsyncHTTPTransport:
 def _fetch_slots() -> asyncio.Semaphore:
     """At most ``MAX_CONCURRENT_FETCHES`` fetches at once, per event loop."""
     loop = asyncio.get_running_loop()
+    for closed in [other for other in _LIMITS if other.is_closed()]:
+        del _LIMITS[closed]
     slots = _LIMITS.get(loop)
     if slots is None:
         slots = _LIMITS[loop] = asyncio.Semaphore(MAX_CONCURRENT_FETCHES)
@@ -155,7 +204,13 @@ async def _fetch_page(
     started: float,
     deadline: float,
 ) -> FetchedPage:
-    """Wait for a slot and fetch within the deadline, then extract the text while holding the slot."""
+    """Wait for a slot and fetch within the deadline, then extract the text while holding the slot.
+
+    Extraction runs after the deadline, in a worker thread. It's linear in the 2 MB body, and
+    holding the slot bounds how many run at once. A fetch cancelled during extraction releases
+    its slot while its thread finishes, so for a moment more than ``MAX_CONCURRENT_FETCHES``
+    extractions can run.
+    """
     slots = _fetch_slots()
     acquired = False
     try:
@@ -170,7 +225,9 @@ async def _fetch_page(
             raise FetchError(FetchFailure.TIMEOUT) from None
         try:
             title, text = await asyncio.to_thread(_extract, body, mime, charset)
-        except Exception:
+        except Exception as exc:
+            # The type only: an exception's message can quote the page.
+            log.warning("page extraction failed", extra={"host": target.host, "error": type(exc).__name__})
             raise FetchError(FetchFailure.ENCODING) from None
     finally:
         if acquired:
@@ -313,13 +370,28 @@ _WEB_ENCODINGS = frozenset(
         "utf-8", "utf-16-le", "utf-16-be", "cp874", "cp1250", "cp1251", "cp1252", "cp1253", "cp1254",
         "cp1255", "cp1256", "cp1257", "cp1258", "iso8859-2", "iso8859-3", "iso8859-4", "iso8859-5",
         "iso8859-6", "iso8859-7", "iso8859-8", "iso8859-10", "iso8859-13", "iso8859-14", "iso8859-15",
-        "iso8859-16", "koi8-r", "koi8-u", "mac-roman", "shift_jis", "euc_jp", "iso2022_jp", "gb18030",
-        "gbk", "big5", "euc_kr",
+        "iso8859-16", "koi8-r", "koi8-u", "cp866", "mac-roman", "mac-cyrillic", "cp932", "euc_jp",
+        "iso2022_jp", "gb18030", "gbk", "big5hkscs", "cp949",
     }
 )  # fmt: skip
 """The WHATWG Encoding Standard's encodings, by Python's codec name. Any other label, such as
 ``punycode`` or ``idna``, is ignored: those are slow, or raise instead of replacing bad bytes."""
-_LABEL_ALIASES = {"windows-874": "cp874", "x-mac-roman": "mac-roman", "x-sjis": "shift_jis"}
+_LABEL_ALIASES = {
+    "windows-874": "cp874",
+    "dos-874": "cp874",
+    "x-mac-roman": "mac-roman",
+    "x-mac-cyrillic": "mac-cyrillic",
+    "iso-8859-8-i": "iso8859-8",
+    "x-sjis": "cp932",
+    "windows-31j": "cp932",
+    "windows-949": "cp949",
+    "x-gbk": "gbk",
+    "x-euc-jp": "euc_jp",
+    "x-cp1252": "cp1252",
+    "unicode-1-1-utf-8": "utf-8",
+    "unicodefffe": "utf-16-be",
+    "csunicode": "utf-16-le",
+}
 """WHATWG labels Python's codec registry doesn't know."""
 _CODEC_ALIASES = {
     "iso8859-1": "cp1252",
@@ -328,8 +400,13 @@ _CODEC_ALIASES = {
     "iso8859-11": "cp874",
     "gb2312": "gbk",
     "utf-16": "utf-16-le",
+    "shift_jis": "cp932",
+    "euc_kr": "cp949",
+    "big5": "big5hkscs",
+    "tis-620": "cp874",
 }
-"""Where WHATWG sends a label to a different encoding than Python would."""
+"""Where WHATWG, and so every browser, sends a label to a different encoding than Python would:
+Windows code pages are supersets of the standards they're named for."""
 _BOMS = ((b"\xef\xbb\xbf", "utf-8"), (b"\xff\xfe", "utf-16-le"), (b"\xfe\xff", "utf-16-be"))
 _ENCODING_LABEL = re.compile(r"[A-Za-z0-9_.:-]{1,40}")
 _META_CHARSET = re.compile(rb"""<meta[^>]+charset\s*=\s*["']?\s*([A-Za-z0-9_.:-]+)""", re.IGNORECASE)
@@ -387,15 +464,19 @@ def _extract(body: bytes, mime: str, charset: str | None) -> tuple[str | None, s
 
 _WHITESPACE = re.compile(r"\s+")
 _SPACES = re.compile(r"[^\S\n]+")
-_SPACE_BEFORE_PUNCTUATION = re.compile(r" +([,.;:!?)\]])")
+_SEPARATOR = "\x00"
+"""What the extractor puts between elements. Page text never has it: NUL becomes U+FFFD."""
+_NEEDLESS_SEPARATOR = re.compile(r"\x00+(?=[,.;:!?)\]])|(?<=[(\[])\x00+")
+"""A separator before closing punctuation or after an opening bracket, as in ``<a>more</a>.``"""
 
 
 def extract_html(html: str) -> tuple[str | None, str]:
     """The head's title and the page's readable text.
 
     Script, style, noscript, and template are dropped. Blocks start new lines, other elements
-    are separated by a space, and ``<pre>`` keeps its line breaks. A title over 300 characters
-    is cut there; one whose ``</title>`` never comes is dropped, and the text after it kept.
+    are separated by a space unless punctuation follows, and ``<pre>`` keeps its line breaks.
+    A title over 300 characters is cut there; one whose ``</title>`` never comes is dropped, and
+    the text after it kept.
     """
     parser = _TextExtractor()
     parser.feed(html)
@@ -405,8 +486,8 @@ def extract_html(html: str) -> tuple[str | None, str]:
         parser.feed(html)
         parser.close()
     title = " ".join("".join(parser.title).split())[:MAX_TITLE_LENGTH].strip() or None
-    text = _collapse("".join(parser.parts))
-    return title, _SPACE_BEFORE_PUNCTUATION.sub(r"\1", text)
+    text = _NEEDLESS_SEPARATOR.sub("", "".join(parser.parts)).replace(_SEPARATOR, " ")
+    return title, _collapse(text)
 
 
 def _collapse(text: str) -> str:
@@ -482,11 +563,12 @@ class _TextExtractor(HTMLParser):
         if tag in self.BLOCK:
             self.parts.append("\n")
         elif tag not in self.FORMATTING:
-            self.parts.append(" ")
+            self.parts.append(_SEPARATOR)
 
     def handle_data(self, data: str) -> None:
         if self._skip:
             return
+        data = data.replace(_SEPARATOR, "\ufffd")
         if self._in_title:
             self.title.append(data)
         elif self._pre:
