@@ -615,7 +615,9 @@ async def preview_import(
         except UnicodeDecodeError:
             content = ""
     elif not content.strip():
-        return await _import_page(request, context, principal, notice="Paste a catalog file or choose one to upload.")
+        return await _import_page(
+            request, context, principal, notice="Paste a catalog file or choose one to upload.", add_only=form.add_only
+        )
     plan = await catalog_service.preview_import(db, principal.household.id, source, add_only=form.add_only)
     return await _import_page(
         request,

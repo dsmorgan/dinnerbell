@@ -247,7 +247,8 @@ CALL_PROPERTIES: dict[str, Any] = {
 
 
 async def find_candidates_tool(ctx: ToolContext, raw: Mapping[str, Any]) -> str:
-    """Candidates for a voting call, in name order, with the call's basics."""
+    """Candidates for a voting call, the call's meal first and then other meals, each in name
+    order, with the call's basics."""
     _fields(raw, "slot", "day", "not_eaten_in_days", "cuisine", "mode")
     today = await _today(ctx)
     event = await _call(ctx, raw, today)

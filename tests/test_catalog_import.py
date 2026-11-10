@@ -436,5 +436,23 @@ def test_a_token_without_the_mark_imports_as_always(
     token = token_in(response)
     assert token and "add_only" not in signed(client, token)
     assert 'name="add_only"' not in page(response)
+    assert "Items that match by name are updated" in page(response)
     assert apply(client, DRAFTED, token).status_code == 303
     assert notes(migrated)["Siam Garden"] == "Changed by a draft"
+
+
+def test_a_blank_preview_again_keeps_the_page_add_only(
+    client: TestClient, provider: FakeProvider, migrated: Settings
+) -> None:
+    sign_in(client, provider)
+    assert add_item(client, "Siam Garden").status_code == 303
+    assert 'name="add_only" value="1"' in page(add_only_preview(client, DRAFTED))
+    blank = submit(client, "/catalog/import/preview", {"content": "  ", "add_only": "1"})
+    text = page(blank)
+    assert 'name="add_only" value="1"' in text and "Items that match by name are updated" not in text
+    pasted = add_only_preview(client, DRAFTED)  # the member pastes the file again on that page
+    token = token_in(pasted)
+    assert token and signed(client, token)["add_only"] == "true"
+    applied = submit(client, "/catalog/import/apply", {"content": DRAFTED, "token": token, "add_only": "1"})
+    assert applied.status_code == 303
+    assert notes(migrated) == {"Siam Garden": None, "Noodle Bar": None}

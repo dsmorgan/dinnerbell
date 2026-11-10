@@ -638,7 +638,9 @@ async def test_an_offer_takes_over_the_places_pick_in_another_mode_and_says_so(h
     curry = (await proposals(house, event_id))["Curry Leaf"]
     assert (curry.mode, curry.proposed_by) == ("pickup", None)  # ranking's pick
     draft, lines = await offer_draft(house, "Sam", offer("Curry Leaf", "delivery", at="19:00"))
-    assert lines[0] == "It changes today's dinner pick Curry Leaf from pickup to delivery, and its votes stay."
+    assert lines[0] == (
+        "It changes today's dinner pick Curry Leaf from pickup to delivery. It becomes your pick, and its votes stay."
+    )
     [row] = await draft_rows(house)
     assert row.title == "Offer to order Curry Leaf for today's dinner call"
     confirmed = await confirm(house, "Sam", draft)
@@ -1002,6 +1004,18 @@ async def test_the_purge_deletes_expired_drafts_and_scrub_test_deletes_all(house
         summary = await scrub.scrub_test(db, instance_label="TEST", keep=[house["Alex"].email or ""], now=house.clock())
     assert summary.drafts_deleted == 1 and "Assistant drafts deleted: 1" in summary.lines()
     assert await draft_rows(house) == []
+
+
+def test_a_takeover_while_answers_are_open_says_youre_in_and_not_votes() -> None:
+    from dinnerbell.domain.assistant_drafts import OfferPlan, offer_lines
+
+    plan = OfferPlan(OfferOutcome.JOIN, 1, 1, EventState.COLLECTING, takes_over=Mode.PICKUP)
+    lines = offer_lines(plan, slot=Slot.DINNER, when="today", mode=Mode.DELIVERY, item="Curry Leaf")
+    assert (
+        lines[0]
+        == "It changes today's dinner pick Curry Leaf from pickup to delivery. It becomes your pick, and you're in."
+    )
+    assert OfferPlan.from_json(plan.to_json()) == plan
 
 
 def test_offer_outcomes_follow_offer_path() -> None:
