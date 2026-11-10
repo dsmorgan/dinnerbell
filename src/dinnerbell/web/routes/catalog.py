@@ -38,7 +38,7 @@ from dinnerbell.domain.pages import page_of
 from dinnerbell.services import catalog as catalog_service
 from dinnerbell.services import feedback as feedback_service
 from dinnerbell.services.assistant import drafts as assistant_drafts
-from dinnerbell.services.assistant.drafts import CatalogReady
+from dinnerbell.services.assistant.drafts import IMPORT_LINK_LIFETIME, CatalogReady
 from dinnerbell.services.assistant.runtime import AssistantConfig
 from dinnerbell.services.clock import Clock
 from dinnerbell.services.errors import NotFound
@@ -53,9 +53,9 @@ from dinnerbell.web.signing import SignedPayload, derive_key
 router = APIRouter(prefix="/catalog")
 
 IMPORT_PREVIEW_LIFETIME = timedelta(minutes=30)
-DRAFT_LINK_LIFETIME = timedelta(hours=24)
+DRAFT_LINK_LIFETIME = IMPORT_LINK_LIFETIME
 """How long the link a Slack Confirm gives to a catalog draft's import works: it sits in Slack.
-The draft itself goes sooner, when the purge deletes it (30 minutes after it was made)."""
+Confirm keeps the draft as long (``drafts.IMPORT_LINK_LIFETIME``)."""
 MAX_DRAFT_LINK = 1000
 NOTICES = {
     "created": "Saved to the catalog.",
@@ -548,7 +548,7 @@ async def draft_import_link(
         raise gone
     config = AssistantConfig.from_settings(context.settings)
     try:
-        ready = await assistant_drafts.ready_for_import(db, config, principal.member, draft_id)
+        ready = await assistant_drafts.ready_for_import(db, config, principal.member, draft_id, now=context.clock())
     except NotFound:
         raise gone from None
     return await draft_import_page(request, context, principal, ready)

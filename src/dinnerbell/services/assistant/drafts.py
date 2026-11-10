@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -88,6 +88,9 @@ NOT_A_CANDIDATE = (
     "a name and mode it returns. Don't say why something isn't there: you don't know."
 )
 MAX_ERRORS_SHOWN = 10
+IMPORT_LINK_LIFETIME = timedelta(hours=24)
+"""How long a confirmed catalog draft is kept, and its import link works: a link from Slack's
+Confirm can sit there a while before the member opens it."""
 
 
 class DraftUnavailable(EventRuleViolation):
@@ -365,9 +368,13 @@ def _check_usable(draft: Draft, now: datetime) -> None:
         raise DraftUnavailable(EXPIRED)
 
 
-async def _use(db: AsyncSession, draft: Draft, member: Member, now: datetime) -> None:
-    """Use the draft in the caller's write transaction, or raise why it can't be."""
-    if not await AssistantRepository(db).use_draft(member.household_id, draft.id, member.id, now):
+async def _use(
+    db: AsyncSession, draft: Draft, member: Member, now: datetime, *, keep_until: datetime | None = None
+) -> None:
+    """Use the draft in the caller's write transaction, or raise why it can't be. ``keep_until``
+    keeps it past its 30 minutes, as a confirmed catalog draft is kept for its import link."""
+    repo = AssistantRepository(db)
+    if not await repo.use_draft(member.household_id, draft.id, member.id, now, keep_until=keep_until):
         latest = await AssistantRepository(db).draft(member.household_id, draft.id)
         if latest is None:  # pragma: no cover - deleted between the read and the write
             raise NotFound(NO_SUCH_DRAFT)
@@ -463,7 +470,7 @@ async def _confirm_catalog(db: AsyncSession, actor: Member, draft: Draft, now: d
             )
         if not plan.items_to_create:
             raise EventRuleViolation("The catalog has all of those now, so there's nothing to add.", code="stale_draft")
-        await _use(db, draft, actor, now)
+        await _use(db, draft, actor, now, keep_until=now + IMPORT_LINK_LIFETIME)
         await db.commit()
     return CatalogReady(
         content=content,
@@ -487,15 +494,20 @@ async def cancel_draft(db: AsyncSession, clock: Clock, member: Member, draft_id:
     log.info("assistant draft cancelled", extra={"member_id": member.id, "draft_id": draft.id})
 
 
-async def ready_for_import(db: AsyncSession, config: AssistantConfig, member: Member, draft_id: int) -> CatalogReady:
+async def ready_for_import(
+    db: AsyncSession, config: AssistantConfig, member: Member, draft_id: int, *, now: datetime
+) -> CatalogReady:
     """The import preview for ``member``'s catalog draft that Confirm used, re-planned add-only
     against the catalog now: for the web link a Slack Confirm gives (``CatalogReady``'s import,
     reached by a GET). Only Confirm makes that link, so a used draft here is a confirmed one.
     Anything else raises NotFound, the same for each: someone else's draft, one waiting or gone,
-    another kind, a guest or inactive member, or the assistant not available."""
+    another kind, a guest or inactive member, the assistant not available, or kept past
+    ``IMPORT_LINK_LIFETIME`` (the purge may not have run yet)."""
     repo = AssistantRepository(db)
     draft = await repo.draft(member.household_id, draft_id) if member.is_member else None
     if draft is None or draft.member_id != member.id or draft.kind is not DraftKind.CATALOG or draft.used_at is None:
+        raise NotFound(NO_SUCH_DRAFT)
+    if draft.expired(now):
         raise NotFound(NO_SUCH_DRAFT)
     if not await available(db, config, member):
         raise NotFound(NO_SUCH_DRAFT)
