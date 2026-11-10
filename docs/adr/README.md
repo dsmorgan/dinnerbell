@@ -12,3 +12,4 @@ Each ADR records one decision and the reasoning behind it, in under about 1,000 
 | [0006](0006-test-instance.md) | Test in a second instance of the same image, not a second channel | Accepted |
 | [0007](0007-seeded-weighted-ranking.md) | Seeded, weighted random ranking among places that pass every filter | Accepted |
 | [0008](0008-feedback-informed-ranking.md) | Ratings move the rater's own score, and the household sees a hint | Accepted |
+| [0009](0009-optional-assistant.md) | An optional assistant drafts through the domain API, and a member confirms | Proposed |
