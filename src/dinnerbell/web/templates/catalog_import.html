@@ -94,7 +94,7 @@
     <button type="submit" class="button{% if not token %} primary{% endif %}">{% if plan %}Preview again{% else %}Preview{% endif %}</button>
     {% if token %}<button type="submit" class="button primary" formaction="/catalog/import/apply">Apply</button>{% endif %}
   </div>
-  <p class="small muted">Imports never delete. Items that match by name are updated; everything else stays as it is. If any entry has a problem, nothing is saved.</p>
+  {% if not add_only %}<p class="small muted">Imports never delete. Items that match by name are updated; everything else stays as it is. If any entry has a problem, nothing is saved.</p>{% endif %}
 </form>
 
 <details class="card">

@@ -167,8 +167,9 @@ class OfferPlan:
         )
 
     def same(self, other: OfferPlan) -> bool:
-        """Whether ``other`` does what this one said, ignoring ``scheduled``, which only words
-        a hold and can't change while it holds."""
+        """Whether ``other`` does what this one said, ignoring ``scheduled``. That only words a
+        hold, and it can change while the outcome doesn't, such as when the day's answer window
+        passes or Admin turns the slot's schedule off; either way the offer still holds the slot."""
         return (self.outcome, self.call_id, self.run, self.state, self.takes_over) == (
             other.outcome,
             other.call_id,
@@ -182,9 +183,10 @@ def offer_lines(plan: OfferPlan, *, slot: Slot, when: str, mode: Mode, item: str
     """What confirming an offer does, one of four (spec 6.14, **Drafts**), then the role the
     offerer takes. ``when`` is the day in words, and ``item`` the item's name."""
     if plan.outcome is OfferOutcome.JOIN and plan.takes_over is not None:
+        after = "and you're in" if plan.state is EventState.COLLECTING else "and its votes stay"
         first = (
             f"It changes {when}'s {slot.value} pick {item} from {plan.takes_over.label.lower()} to "
-            f"{mode.label.lower()}, and its votes stay."
+            f"{mode.label.lower()}. It becomes your pick, {after}."
         )
     elif plan.outcome is OfferOutcome.JOIN:
         stage = "voting" if plan.state is EventState.VOTING else "collecting answers"

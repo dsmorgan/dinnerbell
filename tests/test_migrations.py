@@ -2521,6 +2521,8 @@ def test_0032_adds_the_assistant_drafts_table_and_downgrade_drops_it(settings: S
         assert set(inspect(engine).get_table_names()) >= M6_DRAFT_TABLES
         with engine.connect() as c:
             assert c.execute(text("SELECT count(*) FROM assistant_draft")).scalar_one() == 0
+            table = c.execute(text("SELECT sql FROM sqlite_master WHERE name = 'assistant_draft'")).scalar_one()
+        assert "AUTOINCREMENT" in table  # a purge that empties it never lets an ID come back
         _downgrade_to(settings, "0031_assistant")
         assert not M6_DRAFT_TABLES & set(inspect(engine).get_table_names())
         assert set(inspect(engine).get_table_names()) >= M6_TABLES
