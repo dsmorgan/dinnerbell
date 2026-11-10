@@ -258,23 +258,40 @@
     }
   });
 
-  // A form marked data-reset-on-success, such as the Assistant page's message box, empties once
-  // HTMX has its answer (a 2xx), and keeps the text when it failed, so nothing typed is lost.
-  // Focus goes back to its first field for the next message.
-  document.addEventListener("htmx:afterRequest", function (event) {
+  // A form marked data-reset-on-success, such as the Assistant page's message box, empties its
+  // text once HTMX has its answer (a 2xx), and keeps it when the request failed, so nothing typed
+  // is lost. The box stays editable while the reply is on its way, which can take a while, so it
+  // empties only if it still holds what was sent: a follow-up typed meanwhile stays, and keeps
+  // its focus.
+  var SENT = "data-sent";
+  var TEXT_FIELD = "textarea, input:not([type=hidden]):not([type=checkbox]):not([type=radio])";
+
+  function resettable(event) {
     var elt = event.detail && event.detail.elt;
-    var xhr = event.detail && event.detail.xhr;
-    if (!(elt instanceof HTMLFormElement) || !elt.hasAttribute("data-reset-on-success")) {
-      return;
-    }
-    if (!xhr || xhr.status < 200 || xhr.status >= 300) {
-      return;
-    }
-    elt.reset();
-    var field = elt.querySelector("textarea, input:not([type=hidden])");
+    return elt instanceof HTMLFormElement && elt.hasAttribute("data-reset-on-success") ? elt : null;
+  }
+
+  document.addEventListener("htmx:beforeRequest", function (event) {
+    var form = resettable(event);
+    var field = form && form.querySelector(TEXT_FIELD);
     if (field) {
-      field.focus();
+      field.setAttribute(SENT, field.value);
     }
+  });
+  document.addEventListener("htmx:afterRequest", function (event) {
+    var form = resettable(event);
+    var field = form && form.querySelector(TEXT_FIELD);
+    if (!field) {
+      return;
+    }
+    var sent = field.getAttribute(SENT);
+    field.removeAttribute(SENT);
+    var xhr = event.detail.xhr;
+    if (!xhr || xhr.status < 200 || xhr.status >= 300 || field.value !== sent) {
+      return;
+    }
+    field.value = "";
+    field.focus();
   });
 
   // Calls still in progress (scheduled, collecting, voting, or decided) carry data-poll, the URL
