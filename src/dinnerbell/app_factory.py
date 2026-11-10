@@ -76,37 +76,45 @@ def create_app(
         state = SchedulerState(started_at=clock())
         slack_state = SlackState()
         anthropic = _anthropic(settings) if model_client is None else None
-        assistant = _assistant(settings, model_client or anthropic, clock)
-        app.state.assistant = assistant
-        slack = _slack(settings, database.sessionmaker, clock, slack_state, slack_client, slack_socket, assistant)
-        channel: Channel = slack.channel if slack else NullChannel()
-        app.state.dinnerbell = AppContext(
-            settings=settings,
-            clock=clock,
-            cookies=CookieNames.for_settings(settings),
-            csrf_key=derive_key(secret, "csrf"),
-            login_state=SignedPayload(derive_key(secret, "login-state"), LOGIN_STATE_LIFETIME, clock),
-            sessionmaker=database.sessionmaker,
-            oidc=_oidc_client(settings, http, clock),
-            scheduler_state=state,
-            slack_state=slack_state,
-            slack_people=slack.people if slack else None,
-        )
-        jobs = JobContext(
-            state=state,
-            clock=clock,
-            zone=ZoneInfo(household.timezone),  # the household row, not the env var, is authoritative
-            database_path=settings.database_path,
-            backup_dir=settings.backup_dir,
-            sessionmaker=database.sessionmaker,
-            channel=channel,
-        )
-        app.state.jobs = jobs
-        app.state.slack = slack
-        if slack is not None:
-            await slack.start(prewarm_household=household.id if prewarm_badge_art else None)
-        scheduler = build_scheduler(jobs)
-        scheduler.start()
+        try:
+            assistant = _assistant(settings, model_client or anthropic, clock)
+            app.state.assistant = assistant
+            slack = _slack(settings, database.sessionmaker, clock, slack_state, slack_client, slack_socket, assistant)
+            channel: Channel = slack.channel if slack else NullChannel()
+            app.state.dinnerbell = AppContext(
+                settings=settings,
+                clock=clock,
+                cookies=CookieNames.for_settings(settings),
+                csrf_key=derive_key(secret, "csrf"),
+                login_state=SignedPayload(derive_key(secret, "login-state"), LOGIN_STATE_LIFETIME, clock),
+                sessionmaker=database.sessionmaker,
+                oidc=_oidc_client(settings, http, clock),
+                scheduler_state=state,
+                slack_state=slack_state,
+                slack_people=slack.people if slack else None,
+            )
+            jobs = JobContext(
+                state=state,
+                clock=clock,
+                zone=ZoneInfo(household.timezone),  # the household row, not the env var, is authoritative
+                database_path=settings.database_path,
+                backup_dir=settings.backup_dir,
+                sessionmaker=database.sessionmaker,
+                channel=channel,
+            )
+            app.state.jobs = jobs
+            app.state.slack = slack
+            if slack is not None:
+                await slack.start(prewarm_household=household.id if prewarm_badge_art else None)
+            scheduler = build_scheduler(jobs)
+            scheduler.start()
+        except BaseException:
+            # Startup failed: close what's open, so nothing outlives the app.
+            if anthropic is not None:
+                await anthropic.close()
+            await http.aclose()
+            await database.close()
+            raise
         log.info("dinnerbell started")
         try:
             yield
