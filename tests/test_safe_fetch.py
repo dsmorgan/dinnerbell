@@ -1101,6 +1101,17 @@ def test_only_separators_the_extractor_added_are_removed(html: str, text: str) -
     assert extract_html(html) == (None, text)
 
 
+def test_a_long_run_of_empty_elements_collapses_to_one_space() -> None:
+    # 100,000 separators that no punctuation follows: before the runs were collapsed, the
+    # punctuation pattern backtracked over the whole run from each position, which is quadratic.
+    html = "<p>Tacos" + "<span></span>" * 100_000 + "al pastor</p>"
+    assert extract_html(html) == (None, "Tacos al pastor")
+
+
+def test_separators_before_punctuation_go_even_after_empty_elements() -> None:
+    assert extract_html("<p>See <a>more</a><span></span><i></i>.</p>") == (None, "See more.")
+
+
 def test_template_content_is_skipped() -> None:
     assert extract_html("<p>Menu</p><template><p>Hidden</p></template>") == (None, "Menu")
 

@@ -466,7 +466,10 @@ _WHITESPACE = re.compile(r"\s+")
 _SPACES = re.compile(r"[^\S\n]+")
 _SEPARATOR = "\x00"
 """What the extractor puts between elements. Page text never has it: NUL becomes U+FFFD."""
-_NEEDLESS_SEPARATOR = re.compile(r"\x00+(?=[,.;:!?)\]])|(?<=[(\[])\x00+")
+_SEPARATORS = re.compile(r"\x00+")
+"""A run of separators, collapsed to one first so that ``_NEEDLESS_SEPARATOR`` never backtracks
+over a long run (a page of empty ``<span>`` elements), which would be quadratic."""
+_NEEDLESS_SEPARATOR = re.compile(r"\x00(?=[,.;:!?)\]])|(?<=[(\[])\x00")
 """A separator before closing punctuation or after an opening bracket, as in ``<a>more</a>.``"""
 
 
@@ -486,7 +489,8 @@ def extract_html(html: str) -> tuple[str | None, str]:
         parser.feed(html)
         parser.close()
     title = " ".join("".join(parser.title).split())[:MAX_TITLE_LENGTH].strip() or None
-    text = _NEEDLESS_SEPARATOR.sub("", "".join(parser.parts)).replace(_SEPARATOR, " ")
+    joined = _SEPARATORS.sub(_SEPARATOR, "".join(parser.parts))
+    text = _NEEDLESS_SEPARATOR.sub("", joined).replace(_SEPARATOR, " ")
     return title, _collapse(text)
 
 
@@ -562,7 +566,7 @@ class _TextExtractor(HTMLParser):
     def _separate(self, tag: str) -> None:
         if tag in self.BLOCK:
             self.parts.append("\n")
-        elif tag not in self.FORMATTING:
+        elif tag not in self.FORMATTING and (not self.parts or self.parts[-1] != _SEPARATOR):
             self.parts.append(_SEPARATOR)
 
     def handle_data(self, data: str) -> None:
