@@ -23,7 +23,7 @@ from dinnerbell.db.repositories import MemberRepository
 from dinnerbell.domain.assistant import AssistantSettings, web_key
 from dinnerbell.domain.members import Member, Role
 from dinnerbell.services import catalog as catalog_service
-from dinnerbell.services.assistant import admin, drafts
+from dinnerbell.services.assistant import admin, drafts, retention
 from dinnerbell.services.assistant.drafts import CatalogReady
 from dinnerbell.services.assistant.runtime import AssistantConfig
 from dinnerbell.services.database import open_database
@@ -129,6 +129,7 @@ def test_the_drafts_member_gets_the_add_only_preview_and_apply_only_adds(
     assert response.status_code == 200
     text = page(response)
     assert 'name="add_only" value="1"' in text and "only adds new items" in text
+    assert '<a href="/catalog" aria-current="page">Catalog</a>' in text  # the nav says Catalog
     assert "Dumpling House" in text and "Changed by the draft" in text  # the file, shown as it is
     token = token_in(response)
     assert token
@@ -213,18 +214,20 @@ def test_only_a_confirmed_catalog_draft_of_the_members_is_ready(
         await admin.update_assistant(db, config, alex, AssistantSettings(enabled=True), now=clock())
         draft = await drafts.draft_catalog_items(db, alex, web_key(alex.id), DRAFTED, now=clock())
         with pytest.raises(NotFound):  # still waiting for Confirm
-            await drafts.ready_for_import(db, config, alex, draft.id)
+            await drafts.ready_for_import(db, config, alex, draft.id, now=clock())
         await drafts.confirm_draft(db, clock, config, alex, draft.id)
-        ready = await drafts.ready_for_import(db, config, alex, draft.id)
+        ready = await drafts.ready_for_import(db, config, alex, draft.id, now=clock())
         assert ready.add_only and ready.member_id == alex.id and ready.content == drafted_content(ready)
         with pytest.raises(NotFound):
-            await drafts.ready_for_import(db, AssistantConfig(key_set=True, flag_on=False), alex, draft.id)
+            await drafts.ready_for_import(db, AssistantConfig(key_set=True, flag_on=False), alex, draft.id, now=clock())
         with pytest.raises(NotFound):
-            await drafts.ready_for_import(db, config, alex, draft.id + 1)
+            await drafts.ready_for_import(db, config, alex, draft.id + 1, now=clock())
         with pytest.raises(NotFound):  # a guest's, or an inactive member's, never is
-            await drafts.ready_for_import(db, config, replace(alex, role=Role.GUEST), draft.id)
+            await drafts.ready_for_import(db, config, replace(alex, role=Role.GUEST), draft.id, now=clock())
         with pytest.raises(NotFound):  # someone else's
-            await drafts.ready_for_import(db, config, replace(alex, id=alex.id + 100), draft.id)
+            await drafts.ready_for_import(db, config, replace(alex, id=alex.id + 100), draft.id, now=clock())
+        with pytest.raises(NotFound):  # kept past its day, before the purge has run
+            await drafts.ready_for_import(db, config, alex, draft.id, now=clock() + timedelta(hours=25))
 
     run(migrated, work)
     [row] = rows(migrated, AssistantDraftRow)
@@ -256,3 +259,46 @@ def test_the_app_builds_slacks_import_link_from_the_base_url(migrated: Settings,
     assert url.startswith(f"{BASE_URL}/catalog/import/draft?t=")
     (token,) = parse_qs(urlsplit(url).query)["t"]
     assert _draft_link_signer(configured, clock).loads(token) == {"draft": "5", "member": "6"}
+
+
+def purge(settings: Settings, clock: FakeClock) -> int:
+    async def go() -> int:
+        database = open_database(settings.async_database_url)
+        try:
+            return await retention.purge_expired_drafts(database.sessionmaker, clock())
+        finally:
+            await database.close()
+
+    removed: int = asyncio.run(go())
+    return removed
+
+
+@pytest.mark.flag("assistant", on=True)
+def test_a_confirmed_catalog_draft_is_kept_for_its_link(
+    client: TestClient, provider: FakeProvider, migrated: Settings, clock: FakeClock
+) -> None:
+    """Confirmed at minute 29 of its 30: 23 hours on, the purge keeps it and the link works; 25
+    hours on, the purge has deleted it and the link gets 404."""
+    sign_in(client, provider)
+    config = AssistantConfig.from_settings(migrated)
+
+    async def draft(db: Any, alex: Member) -> int:
+        await admin.update_assistant(db, config, alex, AssistantSettings(enabled=True), now=clock())
+        made = await drafts.draft_catalog_items(db, alex, web_key(alex.id), DRAFTED, now=clock())
+        return made.id
+
+    async def confirm(db: Any, alex: Member) -> str:
+        assert isinstance(await drafts.confirm_draft(db, clock, config, alex, draft_id), CatalogReady)
+        return draft_import_url(migrated, clock, draft_id, alex.id)
+
+    draft_id: int = run(migrated, draft)
+    clock.now += timedelta(minutes=29)
+    url: str = run(migrated, confirm)
+    confirmed_at = clock.now
+    clock.now = confirmed_at + timedelta(hours=23)
+    assert purge(migrated, clock) == 0
+    assert client.get(path(url)).status_code == 200
+    clock.now = confirmed_at + timedelta(hours=25)
+    assert purge(migrated, clock) == 1
+    assert client.get(path(url)).status_code == 404
+    assert rows(migrated, AssistantDraftRow) == []

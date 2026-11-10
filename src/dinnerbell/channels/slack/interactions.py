@@ -322,6 +322,8 @@ class Tap:
     message_ts: str | None = None
     ephemeral: bool = False
     response_url: str | None = None
+    thread_ts: str | None = None
+    """The thread the message is in, when the container says so: where a reply in its place goes."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -921,6 +923,7 @@ class Interactions:
             message_ts=ids.message_ts(container.get("message_ts")),
             ephemeral=container.get("is_ephemeral") is True,
             response_url=ids.response_url(body.get("response_url")),
+            thread_ts=ids.message_ts(container.get("thread_ts")),
         )
         # Debug: the action's own line, or its refusal, says what came of it at info (#75).
         log.debug("slack action", extra={"member_id": member.id, "action": str(action_id)[:40]})

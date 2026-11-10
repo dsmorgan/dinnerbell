@@ -241,9 +241,15 @@ class AssistantRepository:
         )
         return int(found or 0)
 
-    async def use_draft(self, household_id: int, draft_id: int, member_id: int, now: datetime) -> bool:
+    async def use_draft(
+        self, household_id: int, draft_id: int, member_id: int, now: datetime, *, keep_until: datetime | None = None
+    ) -> bool:
         """Mark the draft used, if it's ``member_id``'s, unused, and unexpired. Returns whether it
-        was: of two at once, only the first finds it unused, since SQLite has one writer."""
+        was: of two at once, only the first finds it unused, since SQLite has one writer.
+        ``keep_until`` moves its expiry, so the purge keeps a used draft that long."""
+        values: dict[str, datetime] = {"used_at": now}
+        if keep_until is not None:
+            values["expires_at"] = keep_until
         result = await self._session.execute(
             update(AssistantDraftRow)
             .where(
@@ -253,7 +259,7 @@ class AssistantRepository:
                 AssistantDraftRow.used_at.is_(None),
                 AssistantDraftRow.expires_at > now,
             )
-            .values(used_at=now)
+            .values(**values)
             .execution_options(synchronize_session=False)
         )
         return int(getattr(result, "rowcount", 0) or 0) == 1

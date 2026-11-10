@@ -7,7 +7,7 @@ the real services. Slack is ``FakeSlack``; nothing reaches Slack or Anthropic.""
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from datetime import timedelta
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
@@ -23,6 +23,7 @@ from dinnerbell.channels.slack.assistant import (
     IMPORT_READY,
     PROPOSED,
     REVIEW_IMPORT,
+    SIGN_IN_FIRST,
     WORD_JOINER,
     draft_card,
     mention_only_line,
@@ -49,7 +50,7 @@ from dinnerbell.web.routes.catalog import draft_import_url
 from tests.support.calls import OPENS, RESPOND_BY, House, dinner_id, furnish, make_house, nobody_coordinates
 from tests.support.clock import FakeClock
 from tests.support.fake_model import FakeModel, answer, tool_call
-from tests.support.fake_slack import BOT_USER, CHANNEL, RESPONSE_URL, block_action, next_ts, send
+from tests.support.fake_slack import BOT_USER, CHANNEL, RESPONSE_URL, Failure, block_action, next_ts, send
 from tests.support.slack import SLACK_IDS, Slack, wire
 
 pytestmark = pytest.mark.anyio
@@ -200,6 +201,14 @@ async def tap_dm(slack: Slack, who: str, action_id: str, card: dict[str, Any], *
 
 async def tap_thread(slack: Slack, who: str, action_id: str, card: dict[str, Any], **kwargs: Any) -> None:
     await slack.click(who, action_id, card_values(card)[action_id], **{"ephemeral": True, **kwargs})
+
+
+async def until(condition: Callable[[], bool]) -> None:
+    for _ in range(1000):  # up to 10 seconds on a slow runner
+        if condition():
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError("timed out")
 
 
 def updated(slack: Slack) -> list[dict[str, Any]]:
@@ -355,14 +364,46 @@ async def test_cancel_replaces_the_card_and_changes_nothing_else(house: House, m
 
 @pytest.mark.flag("assistant", on=True)
 async def test_a_double_tap_leaves_the_card_showing_the_first_result(
+    house: House, model: FakeModel, slack: Slack, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Two taps at once: the first holds Confirm up; the second waits for it, finds the draft
+    used, and leaves the card the first replaced."""
+    event_id = await to_voting(house)
+    card = await dm_card(slack, model, "Kim", "draft_proposal", PROPOSE)
+    gate, calls_made = asyncio.Event(), []
+    real = slack_assistant.confirm_draft
+
+    async def held(*args: Any) -> Any:
+        calls_made.append(args[-1])
+        await gate.wait()
+        return await real(*args)
+
+    monkeypatch.setattr(slack_assistant, "confirm_draft", held)
+    value = card_values(card)[ids.DRAFT_CONFIRM]
+    for _ in range(2):
+        tap = block_action("U03KIM", ids.DRAFT_CONFIRM, value, channel="D03KIM", message_ts=CARD_TS)
+        assert (await send(slack.conn.app, "interactive", tap)).status == 200
+    await until(lambda: len(calls_made) == 1)
+    assert len(slack.conn.interactions.tasks) == 2  # both taken; the second waits its turn
+    gate.set()
+    await slack.conn.interactions.settle()
+    assert [u["text"] for u in updated(slack)] == [PROPOSED]
+    assert slack.ephemerals("Kim") == [] and await pho_corner(house, event_id) is not None
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_a_card_slack_wouldnt_replace_never_ignores_the_next_tap(
     house: House, model: FakeModel, slack: Slack
 ) -> None:
+    """The first tap's result reached the member another way, so the card still has its
+    buttons. A second tap there says the draft was used, rather than nothing at all."""
     await to_voting(house)
-    card = await dm_card(slack, model, "Kim", "draft_proposal", PROPOSE)
-    await tap_dm(slack, "Kim", ids.DRAFT_CONFIRM, card)
-    await tap_dm(slack, "Kim", ids.DRAFT_CONFIRM, card)
-    assert [u["text"] for u in updated(slack)] == [PROPOSED]
-    assert slack.ephemerals("Kim") == []
+    card = await thread_card(slack, model, "Kim", "draft_proposal", PROPOSE)
+    slack.fake.fail("response_url", Failure("expired_url", status=404))
+    await tap_thread(slack, "Kim", ids.DRAFT_CONFIRM, card)
+    assert slack.ephemerals("Kim") == [PROPOSED]
+    await tap_thread(slack, "Kim", ids.DRAFT_CONFIRM, card)
+    assert replaced(slack)[-1]["text"] == USED
 
 
 @pytest.mark.flag("assistant", on=True)
@@ -373,11 +414,12 @@ async def test_a_refusal_replaces_the_card_with_the_services_words(
     card = await thread_card(slack, model, "Kim", "draft_proposal", PROPOSE)
 
     async def refusing(*args: Any) -> Any:
-        raise EventRuleViolation("Pho Corner & <Friends> isn't open tonight.", code="closed")
+        raise EventRuleViolation("Pho Corner & <Friends> at noodles.example isn't open tonight.", code="closed")
 
     monkeypatch.setattr(slack_assistant, "confirm_draft", refusing)
     await tap_thread(slack, "Kim", ids.DRAFT_CONFIRM, card)
-    assert replaced(slack)[-1]["text"] == "Pho Corner &amp; &lt;Friends&gt; isn't open tonight."
+    shown = "Pho Corner &amp; &lt;Friends&gt; at noodles[.]example isn't open tonight."
+    assert replaced(slack)[-1]["text"] == shown  # the service's words, made safe as a reply is
 
 
 @pytest.mark.flag("assistant", on=True)
@@ -535,6 +577,7 @@ async def test_a_catalog_confirm_links_the_add_only_import_from_the_base_url(
     [update] = updated(slack)
     url = card_values(update)[ids.DRAFT_IMPORT_LINK]
     assert url.startswith(f"{settings.base_url}/catalog/import/draft?t=") and "evil" not in url
+    assert update["blocks"][-1] == {"type": "context", "elements": [{"type": "mrkdwn", "text": SIGN_IN_FIRST}]}
     [button] = [e for b in update["blocks"] if b["type"] == "actions" for e in b["elements"]]
     assert (button["text"]["text"], button["style"], "value" in button) == (REVIEW_IMPORT, "primary", False)
     assert update["text"] == f"{IMPORT_READY} <{url}|{REVIEW_IMPORT}>"
@@ -556,7 +599,7 @@ async def test_the_import_links_click_is_acknowledged_and_ignored(house: House, 
 
 
 @pytest.mark.flag("assistant", on=True)
-async def test_the_mention_only_line_comes_once_even_when_the_first_reply_was_ephemeral(
+async def test_the_mention_only_line_reaches_each_member_once_and_then_the_thread(
     house: House, slack: Slack, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     async def drafting(*args: Any, **kwargs: Any) -> Reply:
@@ -564,11 +607,22 @@ async def test_the_mention_only_line_comes_once_even_when_the_first_reply_was_ep
 
     monkeypatch.setattr(slack_assistant, "converse", drafting)
     root = next_ts()
+    note = mention_only_line(BOT_USER)
     await slack.mention("Kim", f"<@{BOT_USER}> propose", ts=root)
     await slack.mention("Kim", f"<@{BOT_USER}> and again", thread_ts=root)
-    bodies = [e["text"] for e in ephemerals(slack) if not e.get("blocks")]
-    assert len(bodies) == 2
-    assert mention_only_line(BOT_USER) in bodies[0] and mention_only_line(BOT_USER) not in bodies[1]
+    await slack.mention("Lee", f"<@{BOT_USER}> me too", thread_ts=root)
+    bodies = [(e["user"], note in e["text"]) for e in ephemerals(slack) if not e.get("blocks")]
+    assert bodies == [("U03KIM", True), ("U03KIM", False), ("U04LEE", True)]  # once to each
+    assert posts(slack) == []
+    plain = Reply("Taqueria, then.")
+    monkeypatch.setattr(slack_assistant, "converse", lambda *args, **kwargs: _returning(plain))
+    await slack.mention("Kim", f"<@{BOT_USER}> what's the pick?", thread_ts=root)
+    await slack.mention("Kim", f"<@{BOT_USER}> thanks", thread_ts=root)
+    assert [note in p["text"] for p in posts(slack)] == [True, False]  # then once to the thread
+
+
+async def _returning(reply: Reply) -> Reply:
+    return reply
 
 
 @pytest.mark.flag("assistant", on=True)
@@ -587,8 +641,6 @@ async def test_a_reply_of_only_drafts_posts_only_the_cards(
 async def test_a_card_slack_refuses_is_logged_and_the_rest_still_go(
     house: House, slack: Slack, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from tests.support.fake_slack import Failure
-
     async def drafting(*args: Any, **kwargs: Any) -> Reply:
         return Reply("Two drafts.", (DraftView(1, "proposal", "One", ()), DraftView(2, "offer", "Two", ())))
 
@@ -598,3 +650,51 @@ async def test_a_card_slack_refuses_is_logged_and_the_rest_still_go(
     body, one, two = ephemerals(slack)  # each tried, though the first two were refused
     assert body["text"].startswith("Two drafts.") and (one["text"], two["text"]) == ("One", "Two")
     assert slack.conn.assistant is not None and len(slack.conn.assistant.replied) == 0
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_a_result_slack_wont_put_on_the_card_goes_in_its_thread(
+    house: House, model: FakeModel, slack: Slack
+) -> None:
+    await to_voting(house)
+    card = await thread_card(slack, model, "Kim", "draft_proposal", PROPOSE)
+    root = "1790000555.000100"
+    payload = block_action("U03KIM", ids.DRAFT_CONFIRM, card_values(card)[ids.DRAFT_CONFIRM], ephemeral=True)
+    payload["container"]["thread_ts"] = root
+    slack.fake.fail("response_url", Failure("expired_url", status=404))
+    await send(slack.conn.app, "interactive", payload)
+    await slack.conn.interactions.settle()
+    [told] = ephemerals(slack)
+    assert (told["user"], told["thread_ts"], told["text"]) == ("U03KIM", root, PROPOSED)
+    assert posts(slack) == [] and updated(slack) == []
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_a_link_that_cant_be_built_leaves_the_draft_waiting(house: House, model: FakeModel, slack: Slack) -> None:
+    """The link comes first, so a draft is never used without one."""
+    from dinnerbell.channels.slack.interactions import BROKEN
+
+    card = await dm_card(slack, model, "Sam", "draft_catalog_items", {"catalog_file": CATALOG})
+    assert slack.conn.assistant is not None
+
+    def broken(draft_id: int, member_id: int) -> str:
+        raise RuntimeError("no link")
+
+    slack.conn.assistant.import_link = broken
+    await tap_dm(slack, "Sam", ids.DRAFT_CONFIRM, card)
+    assert slack.ephemerals("Sam") == [BROKEN] and updated(slack) == []
+    [row] = await draft_rows(house)
+    assert row.used_at is None
+
+
+def test_an_offer_result_naming_a_domain_isnt_a_link() -> None:
+    from datetime import date
+
+    from dinnerbell.domain.meals import Slot
+    from dinnerbell.domain.offers import OfferPath
+    from dinnerbell.services.assistant.drafts import OfferConfirmed
+    from dinnerbell.services.offers import Posted
+
+    done = OfferConfirmed(Posted(OfferPath.ATTACH, 1, Slot.DINNER, date(2026, 10, 22), "noodles.example"))
+    text = slack_assistant.confirmed_text(done)
+    assert "noodles[.]example is a proposal on it now" in text and "noodles.example" not in text
