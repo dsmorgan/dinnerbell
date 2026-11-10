@@ -14,6 +14,7 @@ from fastapi.responses import RedirectResponse
 from starlette.datastructures import UploadFile as StarletteUploadFile
 from starlette.responses import Response
 
+from dinnerbell.config import Settings
 from dinnerbell.domain.catalog import (
     DEFAULT_MEALS,
     MEAL_ORDER,
@@ -36,9 +37,13 @@ from dinnerbell.domain.catalog_import import ImportPlan
 from dinnerbell.domain.pages import page_of
 from dinnerbell.services import catalog as catalog_service
 from dinnerbell.services import feedback as feedback_service
+from dinnerbell.services.assistant import drafts as assistant_drafts
 from dinnerbell.services.assistant.drafts import CatalogReady
+from dinnerbell.services.assistant.runtime import AssistantConfig
+from dinnerbell.services.clock import Clock
+from dinnerbell.services.errors import NotFound
 from dinnerbell.services.variety import household_today
-from dinnerbell.web.auth import AdminCSRFChecked, Context, CSRFChecked, Database, Principal, SignedIn
+from dinnerbell.web.auth import AdminCSRFChecked, Context, CSRFChecked, Database, MaybePrincipal, Principal, SignedIn
 from dinnerbell.web.context import AppContext, app_context
 from dinnerbell.web.forms import BadFormValue, RowId, choice, optional_int, page_number, parse_id, split_names
 from dinnerbell.web.redirects import local_path, local_redirect
@@ -48,6 +53,10 @@ from dinnerbell.web.signing import SignedPayload, derive_key
 router = APIRouter(prefix="/catalog")
 
 IMPORT_PREVIEW_LIFETIME = timedelta(minutes=30)
+DRAFT_LINK_LIFETIME = timedelta(hours=24)
+"""How long the link a Slack Confirm gives to a catalog draft's import works: it sits in Slack.
+The draft itself goes sooner, when the purge deletes it (30 minutes after it was made)."""
+MAX_DRAFT_LINK = 1000
 NOTICES = {
     "created": "Saved to the catalog.",
     "updated": "Changes saved.",
@@ -510,6 +519,39 @@ async def draft_import_page(
 ) -> Response:
     """The import preview for an assistant's catalog draft, for the entry point Confirm opens."""
     return await _import_page(request, context, principal, content=ready.content, plan=ready.plan, add_only=True)
+
+
+def _draft_link_signer(settings: Settings, clock: Clock) -> SignedPayload:
+    key = derive_key(settings.secret_key.get_secret_value(), "assistant-draft-import-link")
+    return SignedPayload(key, DRAFT_LINK_LIFETIME, clock)
+
+
+def draft_import_url(settings: Settings, clock: Clock, draft_id: int, member_id: int) -> str:
+    """The web link to a confirmed catalog draft's add-only import preview, for **Review the
+    import** in Slack. Built from ``base_url`` only, and signed with its own key: the draft and
+    its member, for ``DRAFT_LINK_LIFETIME``."""
+    token = _draft_link_signer(settings, clock).dumps({"draft": str(draft_id), "member": str(member_id)})
+    return f"{settings.base_url}/catalog/import/draft?{urlencode({'t': token})}"
+
+
+@router.get("/import/draft")
+async def draft_import_link(
+    request: Request, principal: MaybePrincipal, context: Context, db: Database, t: str = ""
+) -> Response:
+    """The add-only import preview a Slack Confirm links to. It changes nothing: Apply is the
+    import's own POST. Anything but the token's member, signed in, while the assistant is
+    available, gets the same 404, so the link tells nobody else anything."""
+    gone = NotFound("That page doesn't exist.")
+    signed = _draft_link_signer(context.settings, context.clock).loads(t) if len(t) <= MAX_DRAFT_LINK else None
+    draft_id = parse_id(signed.get("draft")) if signed is not None else None
+    if principal is None or signed is None or draft_id is None or signed.get("member") != str(principal.member.id):
+        raise gone
+    config = AssistantConfig.from_settings(context.settings)
+    try:
+        ready = await assistant_drafts.ready_for_import(db, config, principal.member, draft_id)
+    except NotFound:
+        raise gone from None
+    return await draft_import_page(request, context, principal, ready)
 
 
 async def _import_page(

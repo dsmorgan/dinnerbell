@@ -35,6 +35,7 @@ from dinnerbell.services.health import SchedulerState, SlackState, schema_revisi
 from dinnerbell.web.app import build_app
 from dinnerbell.web.context import LOGIN_STATE_LIFETIME, AppContext, CookieNames
 from dinnerbell.web.oidc import OIDCClient
+from dinnerbell.web.routes.catalog import draft_import_url
 from dinnerbell.web.signing import SignedPayload, derive_key
 
 log = logging.getLogger(__name__)
@@ -170,6 +171,7 @@ def _slack(
         version=settings.version_label,
         schema_revision=schema_revision(),
         assistant=assistant,
+        import_link=lambda draft_id, member_id: draft_import_url(settings, clock, draft_id, member_id),
     )
 
 

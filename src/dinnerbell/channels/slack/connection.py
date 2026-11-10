@@ -48,7 +48,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from dinnerbell import __version__
 from dinnerbell.channels.slack.api import SlackApi, SlackAuthError, SlackUnavailable, webhook_client
-from dinnerbell.channels.slack.assistant import SlackAssistant
+from dinnerbell.channels.slack.assistant import ImportLink, SlackAssistant
 from dinnerbell.channels.slack.channel import HOLD_RETRY_SECONDS, Audience, Hold, HoldScope, SlackChannel
 from dinnerbell.channels.slack.interactions import DEFAULT_COMMAND, Interactions
 from dinnerbell.channels.slack.people import ChannelPeople
@@ -201,6 +201,7 @@ class SlackConnection:
         art_for: ArtSource = png_for,
         composite_for: CompositeSource = composite_png,
         assistant: Assistant | None = None,
+        import_link: ImportLink | None = None,
     ) -> None:
         """A non-empty ``instance_label`` (``DINNERBELL_INSTANCE_LABEL``, such as test's) also
         limits DMs and mentions to the channel's members. ``version`` is
@@ -208,7 +209,8 @@ class SlackConnection:
         both read once at startup for ``/dinnerbell version``. ``assistant`` is the optional
         assistant (ADR 0009), built only with ``DINNERBELL_ANTHROPIC_API_KEY``; with it, DMs and
         mentions are answered while it's available (``SlackAssistant``), and without it they're
-        never even listened for."""
+        never even listened for. ``import_link`` builds a catalog draft's link to the web's
+        import preview; the assistant needs it."""
         client = web_client or AsyncWebClient(token=bot_token, timeout=WEB_TIMEOUT_SECONDS)
         self.api = SlackApi(client, webhook=webhook)
         self.api.on_auth_error = self._token_refused
@@ -279,6 +281,8 @@ class SlackConnection:
         self.interactions.register(self.app)
         self.assistant: SlackAssistant | None = None
         if assistant is not None:
+            if import_link is None:
+                raise ValueError("the assistant in Slack needs import_link for catalog drafts")
             self.assistant = SlackAssistant(
                 self.api,
                 assistant=assistant,
@@ -286,9 +290,11 @@ class SlackConnection:
                 channel_id=channel_id,
                 team_id=lambda: self.team_id,
                 spawn=self.interactions._spawn,  # its tasks, which shutdown settles
+                import_link=import_link,
             )
             self.assistant.register(self.app)
             self.interactions.home_hint = self.assistant.home_hint
+            self.interactions.draft_tap = self.assistant.draft_tap
         self._task: asyncio.Task[None] | None = None
         self._prewarm_task: asyncio.Task[None] | None = None
         self._stopping = False

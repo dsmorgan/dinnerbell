@@ -83,6 +83,8 @@ Dinnerbell reads only direct messages to it and messages that mention it, and on
 
 Replies can't mention anyone or ping the channel, and they hold no links: Dinnerbell writes any address the assistant gives in a form Slack doesn't link, such as `hxxps[:]//example[.]com`.
 
+Each draft the assistant makes comes as a card with **Confirm** and **Cancel**: in a channel thread, only the member who asked sees it. A catalog draft's **Confirm** gives a **Review the import** link, the one link Dinnerbell builds itself, from `DINNERBELL_BASE_URL`, to the web's add-only import preview. It works only for that member, signed in, for 24 hours or until the draft is deleted, whichever comes first.
+
 On Admin > **Assistant**, the admin also sets the household's **Monthly cap**, $1 to $100 in US dollars a calendar month in the household's time zone ($5 by default), and **Conversation hours**, how long Dinnerbell keeps a conversation after its last message, 0 to 168 (24 by default). Before each request to Anthropic, Dinnerbell sets aside the most that request could cost and refuses it if that would pass the cap, so spending never does; the page shows this month's usage in total and for each member. Every change there is in the audit log.
 
 The cap is kept in the database, so it covers one installation: production and a [test instance](test-instance.md) each have their own cap and usage. As a backstop, also set a monthly spend limit on the key's workspace in the Anthropic Console, and give the test instance its own key, so its spending shows apart and a limit on one doesn't stop the other.
