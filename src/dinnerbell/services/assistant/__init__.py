@@ -6,5 +6,6 @@
   ``anthropic`` package.
 - ``conversation``: ``converse``, the bounded tool loop with its cost reservations.
 - ``tools``: the tool registry and the actor wrapper. ``prompt``: the system prompt.
+- ``menu_links``: drafting catalog items from a menu link, in a separate call with no tools.
 - ``admin``: Admin's **Assistant** settings and usage. ``retention``: deleting idle conversations.
 """

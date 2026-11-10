@@ -9,8 +9,9 @@ the forms, and read household settings directly, never through an admin-only use
 A tool returns text for the model: data, never instructions (the system prompt says so). A
 tool marked ``private_only`` is offered only in a private conversation (the web page, a DM).
 The first build's tools work in any conversation: look up catalog items, find candidates, and
-draft a proposal, an offer, or catalog items. A draft changes nothing until its member confirms
-it (``drafts.confirm_draft``).
+draft a proposal, an offer, or catalog items, from a catalog file or from a menu link
+(``menu_links``). A draft changes nothing until its member confirms it
+(``drafts.confirm_draft``).
 """
 
 from __future__ import annotations
@@ -38,6 +39,7 @@ from dinnerbell.services.assistant import drafts
 from dinnerbell.services.assistant.acting import ToolRefusal, tool_actor
 from dinnerbell.services.assistant.candidates import CallRef, call_basics, find_candidates, resolve_call
 from dinnerbell.services.assistant.drafts import DraftView, OfferRequest
+from dinnerbell.services.assistant.menu_links import NOT_HERE, LinkCalls, draft_from_link
 from dinnerbell.services.errors import Forbidden, NotFound
 from dinnerbell.services.variety import household_today
 
@@ -68,6 +70,9 @@ class ToolSession:
     pseudonyms: Pseudonyms = field(default_factory=Pseudonyms)
     call_id: int | None = None
     drafts: list[DraftView] = field(default_factory=list)
+    links: LinkCalls | None = None
+    """The fetch and the drafting call for menu links, from ``converse``. None outside a
+    message, where ``draft_catalog_from_link`` refuses."""
 
     def label(self, member_id: int) -> str:
         self.pseudonyms = self.pseudonyms.with_member(member_id)
@@ -443,7 +448,72 @@ DRAFT_CATALOG_ITEMS = Tool(
 )
 
 
-TOOLS: tuple[Tool, ...] = (LOOK_UP_CATALOG_ITEMS, FIND_CANDIDATES, DRAFT_PROPOSAL, DRAFT_OFFER, DRAFT_CATALOG_ITEMS)
+MAX_LINK_CHARS = 2_048
+LINK_KINDS = ["", *(kind.value for kind in (ItemKind.RESTAURANT, ItemKind.HOME))]
+
+
+async def draft_catalog_from_link_tool(ctx: ToolContext, raw: Mapping[str, Any]) -> str:
+    _fields(raw, "url", "kind")
+    url = raw.get("url")
+    if not isinstance(url, str) or not url.strip():
+        raise ToolInputError("url is the link the member gave, starting with https://.")
+    if len(url) > MAX_LINK_CHARS:
+        raise ToolInputError(f"url is at most {MAX_LINK_CHARS:,} characters.")
+    kind = _enum(raw, "kind", LINK_KINDS)
+    if ctx.session.links is None:
+        raise ToolRefusal(NOT_HERE)
+    drafted = await draft_from_link(
+        ctx.db,
+        ctx.actor,
+        ctx.session.key,
+        ctx.session.links,
+        url.strip(),
+        ItemKind(kind) if kind else None,
+        label=ctx.session.label(ctx.actor.id),
+        now=ctx.now,
+    )
+    ctx.session.drafts.append(drafted.view)
+    return drafted.summary
+
+
+DRAFT_CATALOG_FROM_LINK = Tool(
+    name="draft_catalog_from_link",
+    description=(
+        "Draft new catalog items from a web page the member links to, such as a restaurant's menu or a recipe. "
+        "Call this when the member gives a link and wants what's on it in the catalog. Dinnerbell reads the page "
+        "itself and drafts the items in a separate step; you never see the page. Items the catalog has already "
+        "are dropped and listed. Returns how many items the draft adds, the ones left out, and the draft's ID, "
+        "or why the page couldn't be read. Dinnerbell shows the member the draft's items with Confirm, which "
+        "opens the import preview; nothing changes until they import it there."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "url": {
+                "type": "string",
+                "description": "The link exactly as the member wrote it, starting with https://.",
+            },
+            "kind": {
+                "type": "string",
+                "enum": LINK_KINDS,
+                "description": "restaurant for a place to eat, home for a recipe, or an empty string when unsure.",
+            },
+        },
+        "required": ["url", "kind"],
+        "additionalProperties": False,
+    },
+    run=draft_catalog_from_link_tool,
+)
+
+
+TOOLS: tuple[Tool, ...] = (
+    LOOK_UP_CATALOG_ITEMS,
+    FIND_CANDIDATES,
+    DRAFT_PROPOSAL,
+    DRAFT_OFFER,
+    DRAFT_CATALOG_ITEMS,
+    DRAFT_CATALOG_FROM_LINK,
+)
 """Every tool, in the order requests list them. Later tools come in follow-up issues."""
 
 

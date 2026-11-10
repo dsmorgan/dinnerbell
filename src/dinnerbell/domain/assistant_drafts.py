@@ -16,12 +16,21 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta
 from enum import StrEnum
+from ipaddress import ip_address
 from typing import Any
 
-from dinnerbell.domain.catalog import MODE_ORDER, CatalogItem, ItemKind, Mode, name_key
+from dinnerbell.domain.catalog import MAX_URL_LENGTH, MODE_ORDER, CatalogItem, ItemKind, Mode, name_key
 from dinnerbell.domain.catalog_export import dump_document
-from dinnerbell.domain.catalog_file import FORMAT_VERSION, HomeMealEntry, ParsedCatalog, RestaurantEntry
+from dinnerbell.domain.catalog_file import (
+    FORMAT_VERSION,
+    HomeMealEntry,
+    LocatedEntry,
+    ParsedCatalog,
+    RestaurantEntry,
+    TagSection,
+)
 from dinnerbell.domain.events import Event, EventState
+from dinnerbell.domain.fetch_policy import FetchError, parse_target
 from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.offers import OfferPath, offer_path
 from dinnerbell.domain.ranking import (
@@ -330,6 +339,99 @@ def clean_catalog(parsed: ParsedCatalog, items: Iterable[CatalogItem]) -> CleanC
         document["tags"] = tags
     document.update({name: entries for name, entries in sections.items() if entries})
     return CleanCatalog(text=dump_document(document), added=tuple(added), dropped=tuple(dropped), tags=tags)
+
+
+MAX_LINK_ITEMS = 20
+"""The most entries one menu link drafts: a menu page is usually one place, a list page a few."""
+LINK_URL_FIELDS = ("url", "order_url")
+LINK_DROPPED_FIELDS = frozenset({"notes"})
+"""Fields a link draft never carries: free text a page could fill with anything, such as a phone
+number to call with a card. Members add notes themselves."""
+
+
+@dataclass(frozen=True, slots=True)
+class LinkCatalog:
+    """What a drafting call read from a page, kept to what an injected page can't misuse:
+    ``parsed`` holds the first ``MAX_LINK_ITEMS`` entries, without ``notes``, with ``url`` and
+    ``order_url`` only on the page's own site, and only the declared tags those entries use.
+    ``links_dropped`` counts the links taken out, and ``items_cut`` the entries past the limit."""
+
+    parsed: ParsedCatalog
+    links_dropped: int = 0
+    items_cut: int = 0
+
+
+def on_site(url: str, hosts: Iterable[str]) -> bool:
+    """Whether ``url`` is an HTTPS link Dinnerbell would fetch, on one of ``hosts`` or a
+    subdomain of one. ``hosts`` are names as ``fetch_policy.parse_target`` writes them; an IP
+    address matches only itself."""
+    try:
+        target = parse_target(url)
+    except FetchError:
+        return False
+    for host in hosts:
+        if target.host == host:
+            return True
+        if target.address is None and not _is_address(host) and target.host.endswith(f".{host}"):
+            return True
+    return False
+
+
+def _is_address(host: str) -> bool:
+    try:
+        ip_address(host)
+    except ValueError:
+        return False
+    return True
+
+
+def _from_page(entry: RestaurantEntry | HomeMealEntry, hosts: tuple[str, ...]) -> tuple[Any, int]:
+    fields = entry.model_dump(mode="json", exclude_unset=True)
+    dropped = 0
+    for name in LINK_URL_FIELDS:
+        value = fields.get(name)
+        if value is not None and not on_site(str(value), hosts):
+            del fields[name]
+            dropped += 1
+    for name in LINK_DROPPED_FIELDS:
+        fields.pop(name, None)
+    return type(entry).model_validate(fields), dropped
+
+
+def _used_tags(tags: TagSection | None, entries: Iterable[LocatedEntry]) -> TagSection | None:
+    if tags is None:
+        return None
+    used = {name_key(tag) for located in entries for tag in [*located.entry.cuisine, *(located.entry.tags or [])]}
+    kept = {
+        kind: [tag for tag in names if name_key(tag) in used]
+        for kind, names in tags.model_dump(exclude_none=True).items()
+    }
+    kept = {kind: names for kind, names in kept.items() if names}
+    return TagSection.model_validate(kept) if kept else None
+
+
+def from_link(
+    parsed: ParsedCatalog, hosts: Iterable[str], *, page_url: str | None = None, max_items: int = MAX_LINK_ITEMS
+) -> LinkCatalog:
+    """``parsed``, a drafting call's answer, as ``LinkCatalog`` keeps it. ``hosts`` are the
+    link's host and the host it redirected to. ``page_url`` becomes the ``url`` of a lone entry
+    that has none, when the catalog can hold it: a menu link's draft is usually that one place.
+    The caller checks ``parsed.errors`` first; entries that parsed validate again unchanged.
+    Raises ``ValueError`` only if that ever stops holding."""
+    sites = tuple(hosts)
+    kept: list[LocatedEntry] = []
+    links_dropped = 0
+    for located in parsed.entries[:max_items]:
+        entry, dropped = _from_page(located.entry, sites)
+        links_dropped += dropped
+        kept.append(LocatedEntry(located.location, entry))
+    fits = page_url is not None and len(page_url) <= MAX_URL_LENGTH and on_site(page_url, sites)
+    if fits and len(kept) == 1 and kept[0].entry.url is None:
+        only = kept[0]
+        fields = only.entry.model_dump(mode="json", exclude_unset=True) | {"url": page_url}
+        kept[0] = LocatedEntry(only.location, type(only.entry).model_validate(fields))
+    clean = ParsedCatalog(tags=_used_tags(parsed.tags, kept), entries=tuple(kept), errors=())
+    return LinkCatalog(clean, links_dropped=links_dropped, items_cut=max(0, len(parsed.entries) - max_items))
 
 
 def catalog_lines(clean: CleanCatalog) -> tuple[str, ...]:
