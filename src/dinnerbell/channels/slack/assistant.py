@@ -79,9 +79,6 @@ ABBREVIATIONS = ("e.g.", "i.e.", "a.m.", "p.m.", "u.s.", "vs.", "etc.")
 _IP = re.compile(r"\b\d{1,3}(?:[.\u3002]\d{1,3}){3}\b")
 """An IPv4 address, with dots or ideographic dots (what NFKC leaves of the other variants)."""
 ZWJ = "\u200d"
-BLACK_FLAG = "\U0001f3f4"
-TAGS = range(0xE0020, 0xE0080)
-"""Tag characters, which spell a subdivision flag after ``BLACK_FLAG``."""
 SKIN_TONES = range(0x1F3FB, 0x1F400)
 
 
@@ -171,20 +168,14 @@ def _emoji(char: str) -> bool:
 def without_format_characters(text: str) -> str:
     """``text`` without Unicode format characters (category ``Cf``): soft hyphens, zero-width
     spaces and joiners, word joiners, byte order marks, and bidi controls, which can hide a
-    domain's dot from any check. Two kinds stay, since neither can sit next to a dot: a zero-width
-    joiner between two emoji (the one in 🧑‍🍳), and the tag characters of a flag sequence that
-    starts with ``BLACK_FLAG``."""
+    domain's dot from any check. Tag characters go too, flags included: they're invisible and
+    could carry hidden text, so a subdivision flag shows as a plain black flag. Only a zero-width
+    joiner between two emoji (the one in 🧑‍🍳) stays: it can't carry text or sit next to a dot."""
     out: list[str] = []
-    in_flag = False
     for index, char in enumerate(text):
         if unicodedata.category(char) != "Cf":
-            in_flag = char == BLACK_FLAG
             out.append(char)
             continue
-        if ord(char) in TAGS and in_flag:
-            out.append(char)
-            continue
-        in_flag = False
         if char == ZWJ and index + 1 < len(text) and _emoji(text[index + 1]):
             before = len(out) - 1
             while before >= 0 and unicodedata.category(out[before]).startswith("M"):
