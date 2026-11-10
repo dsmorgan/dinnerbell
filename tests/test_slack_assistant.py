@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import asyncio
 import copy
+import random
+import unicodedata
 from collections.abc import AsyncIterator, Mapping
 from pathlib import Path
 from typing import Any
@@ -20,6 +22,7 @@ from sqlalchemy import select
 from dinnerbell.app_factory import create_app
 from dinnerbell.channels.slack import assistant as slack_assistant
 from dinnerbell.channels.slack.assistant import (
+    DOTS,
     MAX_REPLY,
     STILL_ON_IT,
     TEXT_ONLY,
@@ -472,6 +475,97 @@ def test_every_url_and_bare_domain_is_defanged(raw: str, defanged: str) -> None:
 @pytest.mark.parametrize("text", NORMAL)
 def test_normal_text_keeps_its_dots(text: str) -> None:
     assert defang(text) == text
+
+
+ACUTE = "\u0301"  # a combining mark
+BYPASSES = [
+    (f"evil{ACUTE}.example", f"evil{ACUTE}[.]example"),
+    ("evil\u200b.example", "evil[.]example"),  # a zero-width space before the dot
+    ("evil.\u00adexample", "evil[.]example"),  # a soft hyphen after it
+    (f"evil.{ACUTE}example", f"evil[.]{ACUTE}example"),  # a mark after the dot
+    ("evil.\u200d\u2060\ufeff\u202eexample", "evil[.]example"),  # joiners, a BOM, a bidi control
+    ("ht\u200btps://evil.example", "hxxps[:]//evil[.]example"),
+    ("www\u200b.evil.example", "www[.]evil[.]example"),
+    ("evil\uff0eexample evil\u3002example evil\uff61example", "evil[.]example evil[.]example evil[.]example"),
+    ("evil.пример evil.παράδειγμα", "evil[.]пример evil[.]παράδειγμα"),
+    ("3.evil", "3[.]evil"),
+    ("Done.Next", "Done[.]Next"),
+    ("e.g.evil", "e[.]g[.]evil"),  # not a whole token, so not kept
+    ("xe.g. tacos", "xe[.]g. tacos"),
+    (f"e.g.{ACUTE}evil", f"e[.]g[.]{ACUTE}evil"),
+]
+
+
+@pytest.mark.parametrize(("raw", "defanged"), BYPASSES)
+def test_marks_and_invisible_characters_cant_hide_a_dot(raw: str, defanged: str) -> None:
+    assert defang(raw) == defanged
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["e.g. tacos", "i.e., pizza", "at 7 p.m.", "8 a.m.!", "the U.S. menu", "Tacos vs. pizza", "pans etc.", "E.G. this"],
+)
+def test_the_abbreviations_keep_their_dots(text: str) -> None:
+    assert defang(text) == text
+
+
+def _dot_before_a_letter(text: str) -> bool:
+    """Whether a dot-like character in ``text``, outside ``ABBREVIATIONS``, comes right before a
+    letter, combining marks skipped. Format characters count as nothing, as Slack may drop them."""
+    visible = "".join(c for c in text if unicodedata.category(c) != "Cf")
+    kept = slack_assistant._kept_dots(visible)
+    for index, char in enumerate(visible):
+        if char in DOTS and index not in kept:
+            following = index + 1
+            while following < len(visible) and unicodedata.category(visible[following]).startswith("M"):
+                following += 1
+            if following < len(visible) and unicodedata.category(visible[following]).startswith("L"):
+                return True
+    return False
+
+
+@pytest.mark.parametrize("seed", range(20))
+def test_no_reply_keeps_a_dot_before_a_letter(seed: int) -> None:
+    """Property-style: random text of letters, digits, dots, marks, and format characters."""
+    pieces = [
+        *"abcxyzEVIL",
+        *"пример",
+        *"αβγ",
+        *"例え",
+        *"0123456789",
+        *sorted(DOTS),
+        ACUTE,
+        "\u0308",
+        "\u200b",
+        "\u200c",
+        "\u200d",
+        "\u00ad",
+        "\u2060",
+        "\ufeff",
+        "\u202e",
+        " ",
+        "-",
+        "_",
+        "*",
+        "/",
+        ":",
+        "e.g.",
+        "U.S.",
+        "www.",
+        "https://",
+    ]
+    rng = random.Random(seed)  # noqa: S311 - reproducible test data, not a secret
+    for _ in range(200):
+        text = "".join(rng.choice(pieces) for _ in range(rng.randint(1, 40)))
+        out = defang(text)
+        assert not _dot_before_a_letter(out), (text, out)
+        assert "://" not in out
+        assert not any(unicodedata.category(c) == "Cf" for c in out)
+
+
+def test_safe_reply_strips_format_characters_before_breaking_pings() -> None:
+    reply = safe_reply("evil\u200b.example @\u200bhere")
+    assert reply == f"evil[.]example @{WORD_JOINER}here"
 
 
 @pytest.mark.flag("assistant", on=True)
