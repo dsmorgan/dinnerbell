@@ -245,7 +245,10 @@ class SlackApi:
         except TRANSPORT_ERRORS as exc:
             self._raise(method, exc)
 
-    async def post(self, channel: str, message: dict[str, Any], *, thread_ts: str | None = None) -> MessageRef:
+    async def post(
+        self, channel: str, message: dict[str, Any], *, thread_ts: str | None = None, unfurl_media: bool | None = None
+    ) -> MessageRef:
+        """Post ``message``. Links never unfurl; ``unfurl_media=False`` stops media previews too."""
         response = await self._call(
             "chat.postMessage",
             lambda: self.client.chat_postMessage(
@@ -254,6 +257,7 @@ class SlackApi:
                 blocks=message.get("blocks"),
                 thread_ts=thread_ts,
                 unfurl_links=False,
+                unfurl_media=unfurl_media,
             ),
         )
         return MessageRef(str(response["channel"]), str(response["ts"]))
@@ -266,10 +270,20 @@ class SlackApi:
             ),
         )
 
-    async def ephemeral(self, channel: str, user: str, text: str, blocks: list[dict[str, Any]] | None = None) -> None:
+    async def ephemeral(
+        self,
+        channel: str,
+        user: str,
+        text: str,
+        blocks: list[dict[str, Any]] | None = None,
+        *,
+        thread_ts: str | None = None,
+    ) -> None:
         await self._call(
             "chat.postEphemeral",
-            lambda: self.client.chat_postEphemeral(channel=channel, user=user, text=text, blocks=blocks),
+            lambda: self.client.chat_postEphemeral(
+                channel=channel, user=user, text=text, blocks=blocks, thread_ts=thread_ts
+            ),
         )
 
     async def replace_original(self, response_url: str, message: dict[str, Any]) -> None:

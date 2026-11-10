@@ -22,7 +22,9 @@ from dinnerbell.channels.slack import assistant as slack_assistant
 from dinnerbell.channels.slack.assistant import (
     MAX_REPLY,
     STILL_ON_IT,
+    TEXT_ONLY,
     WORD_JOINER,
+    defang,
     home_line,
     mention_only_line,
     readable,
@@ -190,14 +192,16 @@ async def test_with_the_switch_off_dms_and_mentions_are_ignored(
         pytest.param({"ts": "not-a-ts"}, id="a-bad-ts"),
         pytest.param({"thread_ts": "nope"}, id="a-bad-thread"),
         pytest.param({"channel": "nope"}, id="a-bad-channel"),
-        pytest.param({"text": None}, id="no-text"),
-        pytest.param({"text": f"<@{BOT_USER}>  "}, id="only-the-mention"),
+        pytest.param({"edited": {"user": "U02SAM", "ts": "1.2"}}, id="edited"),
+        pytest.param({"subtype": "file_share", "bot_id": "B0OTHER"}, id="a-bots-file"),
+        pytest.param({"user": None}, id="no-user"),
     ],
 )
 async def test_dms_dinnerbell_never_answers(
     settings: Settings, house: House, model: FakeModel, helper: Assistant, slack: Slack, event: dict[str, Any]
 ) -> None:
     await switch_on(house, helper)
+    event = dict(event)
     user = event.pop("user", SLACK_IDS["Sam"])
     payload = message_event(user, "What Thai places do we have?", channel=SAM_DM)
     payload["team_id"] = event.pop("team", TEAM)
@@ -206,6 +210,60 @@ async def test_dms_dinnerbell_never_answers(
     for _ in range(3):  # Bolt runs auto-acknowledged event listeners in its own future
         await asyncio.sleep(0)
     await slack.conn.interactions.settle()
+    await nothing_happened(slack, model, house)
+    assert len(seen(slack)) == 0  # dropped as it arrived, before any lookup
+
+
+def seen(slack: Slack) -> Any:
+    assert slack.conn.assistant is not None
+    return slack.conn.assistant.seen
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_a_dm_of_only_the_mention_is_taken_but_sends_nothing(
+    settings: Settings, house: House, model: FakeModel, helper: Assistant, slack: Slack
+) -> None:
+    await switch_on(house, helper)
+    await slack.dm("Sam", f"<@{BOT_USER}>  ")
+    await nothing_happened(slack, model, house)
+    assert len(seen(slack)) == 1
+
+
+@pytest.mark.flag("assistant", on=True)
+@pytest.mark.parametrize(
+    "event",
+    [
+        pytest.param({"subtype": "file_share", "files": [{"id": "F1"}]}, id="a-file"),
+        pytest.param({"files": [{"id": "F1"}], "text": "Look"}, id="a-file-with-a-caption"),
+        pytest.param({"text": None}, id="no-text"),
+        pytest.param({"text": "   "}, id="blank"),
+    ],
+)
+async def test_a_dm_without_text_gets_the_text_only_line_and_sends_nothing(
+    settings: Settings, house: House, model: FakeModel, helper: Assistant, slack: Slack, event: dict[str, Any]
+) -> None:
+    await switch_on(house, helper)
+    payload = message_event("U02SAM", "", channel=SAM_DM)
+    payload["event"].update(event)
+    await send(slack.conn.app, "events_api", payload)
+    await _until(lambda: len(posts(slack)) == 1)
+    await slack.conn.interactions.settle()
+    (reply,) = posts(slack)
+    assert reply["text"] == TEXT_ONLY and reply["thread_ts"] == payload["event"]["ts"]
+    assert model.requests == [] and await conversations(house) == []
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_a_guests_file_gets_nothing(
+    settings: Settings, house: House, model: FakeModel, helper: Assistant, slack: Slack
+) -> None:
+    await switch_on(house, helper)
+    async with house.sessionmaker() as db:
+        await MemberRepository(db).update(
+            house.household.id, house["Sam"].id, house.clock(), role=Role.GUEST, email=None
+        )
+        await db.commit()
+    await slack.dm("Sam", "", subtype="file_share", files=[{"id": "F1"}])
     await nothing_happened(slack, model, house)
 
 
@@ -218,14 +276,32 @@ async def test_dms_dinnerbell_never_answers(
         pytest.param({"team": OTHER_TEAM}, id="another-workspace"),
         pytest.param({"bot_id": "B0OTHER"}, id="a-bot"),
         pytest.param({"subtype": "thread_broadcast"}, id="a-subtype"),
+        pytest.param({"subtype": "file_share"}, id="a-file-share"),
+        pytest.param({"edited": {"user": "U02SAM", "ts": "1.2"}}, id="edited"),
+        pytest.param({"files": [{"id": "F1"}]}, id="with-a-file"),
+        pytest.param({"text": None}, id="no-text"),
     ],
 )
 async def test_mentions_dinnerbell_never_answers(
     settings: Settings, house: House, model: FakeModel, helper: Assistant, slack: Slack, options: dict[str, Any]
 ) -> None:
     await switch_on(house, helper)
-    await slack.mention("Sam", f"<@{BOT_USER}> what's for dinner?", **options)
+    options = dict(options)
+    payload = message_event(
+        SLACK_IDS["Sam"],
+        f"<@{BOT_USER}> what's for dinner?",
+        kind="app_mention",
+        channel=options.pop("channel", CHANNEL),
+        channel_type=None,
+    )
+    payload["team_id"] = options.pop("team", TEAM)
+    payload["event"].update(options)
+    await send(slack.conn.app, "events_api", payload)
+    for _ in range(3):
+        await asyncio.sleep(0)
+    await slack.conn.interactions.settle()
     await nothing_happened(slack, model, house)
+    assert len(seen(slack)) == 0
 
 
 @pytest.mark.flag("assistant", on=True)
@@ -247,6 +323,7 @@ async def test_only_active_members_get_an_answer(
     await slack.dm(sender, "What Thai places do we have?")
     await slack.mention(sender, f"<@{BOT_USER}> what's for dinner?")
     await nothing_happened(slack, model, house)
+    assert len(seen(slack)) == 2  # taken, then dropped at the member check
     await slack.open_home(sender)
     assert all("Message Dinnerbell" not in str(c.args["view"]) for c in slack.fake.of("views.publish"))
 
@@ -353,6 +430,70 @@ async def test_model_text_cant_ping_mention_or_link(
     assert "&lt;!channel&gt;" in text and "&lt;@U02SAM&gt;" in text and "&amp; more" in text
     assert f"@{WORD_JOINER}here" in text and f"@{WORD_JOINER}Everyone" in text
     assert "@here" not in text.replace(f"@{WORD_JOINER}here", "")
+    assert reply["unfurl_links"] is False and reply["unfurl_media"] is False
+
+
+LINKS = [
+    ("https://evil.example/login", "hxxps[:]//evil[.]example/login"),
+    ("http://evil.example", "hxxp[:]//evil[.]example"),
+    ("HTTPS://Evil.Example", "hxxps[:]//Evil[.]Example"),
+    ("go to evil.example now", "go to evil[.]example now"),
+    ("www.evil.example/menu?x=1", "www[.]evil[.]example/menu?x=1"),
+    ("sub.evil.co.uk/a/b", "sub[.]evil[.]co[.]uk/a/b"),
+    ("mail sam@evil.example", "mail sam@evil[.]example"),
+    ("ftp://files.example", "ftp[:]//files[.]example"),
+    ("http://10.0.0.1/x", "hxxp[:]//10[.]0[.]0[.]1/x"),
+    ("evil\uff0eexample", "evil[.]example"),
+    ("$12.50, e.g. 3.5 stars, v1.2", "$12.50, e.g. 3.5 stars, v1.2"),
+]
+
+
+@pytest.mark.parametrize(("raw", "defanged"), LINKS)
+def test_every_url_and_bare_domain_is_defanged(raw: str, defanged: str) -> None:
+    assert defang(raw) == defanged
+    assert safe_reply(raw) == defanged
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_no_reply_carries_a_link_dm_or_channel(
+    settings: Settings, house: House, model: FakeModel, helper: Assistant, slack: Slack
+) -> None:
+    await switch_on(house, helper)
+    text = " ".join(raw for raw, _ in LINKS)
+    model.script = [answer(text), answer(text)]
+    await slack.dm("Sam", "Links?")
+    await slack.mention("Sam", f"<@{BOT_USER}> links?")
+    for reply in posts(slack):
+        for raw, defanged in LINKS[:-1]:
+            assert defanged in reply["text"] and raw not in reply["text"]
+        assert "http" not in reply["text"].lower().replace("hxxp", "")
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_a_url_the_member_typed_is_defanged_when_the_model_quotes_it(
+    settings: Settings, house: House, model: FakeModel, helper: Assistant, slack: Slack
+) -> None:
+    await switch_on(house, helper)
+    model.script = [answer('You said "see https://phish.example/pay".')]
+    await slack.dm("Sam", "see <https://phish.example/pay>")
+    assert user_texts(model) == ["see https://phish.example/pay"]  # the model reads it as typed
+    (reply,) = posts(slack)
+    assert "hxxps[:]//phish[.]example/pay" in reply["text"] and "https://" not in reply["text"]
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_a_restored_name_that_looks_like_a_domain_is_defanged(
+    settings: Settings, house: House, model: FakeModel, helper: Assistant, slack: Slack
+) -> None:
+    await switch_on(house, helper)
+    async with house.sessionmaker() as db:
+        repo = MemberRepository(db)
+        await repo.update(house.household.id, house["Sam"].id, house.clock(), display_name="sam.example")
+        await db.commit()
+    model.script = [answer("Member 1, you're in.")]
+    await slack.dm("Sam", "Am I in?")
+    (reply,) = posts(slack)
+    assert reply["text"] == "sam[.]example, you're in."
 
 
 @pytest.mark.flag("assistant", on=True)
@@ -373,41 +514,119 @@ async def test_other_peoples_mentions_never_leave_the_house(
     settings: Settings, house: House, model: FakeModel, helper: Assistant, slack: Slack
 ) -> None:
     await switch_on(house, helper)
-    await slack.dm("Sam", "Can <@U03KIM> cook? Ask <!here> in <#C0DINNER|dinnerbell>, see <https://m.example|the menu>")
-    assert user_texts(model) == ["Can @someone cook? Ask @here in #dinnerbell, see the menu (https://m.example)"]
+    await slack.dm("Sam", "Can <@U03KIM> cook? Ask <!subteam^S01|@cooks> in <#C0DINNER|dinnerbell>, <!here>")
+    assert user_texts(model) == ["Can @someone cook? Ask @group in #channel, @here"]
     assert "U03KIM" not in model.sent and "Kim" not in model.sent
 
 
+class Slow(FakeModel):
+    """Holds every request until ``gate`` is set."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.gate = asyncio.Event()
+        self.started = 0
+
+    async def create(self, request: Mapping[str, Any]) -> ModelReply:
+        self.started += 1
+        await self.gate.wait()
+        return await super().create(request)
+
+
+def slow_model(slack: Slack) -> Slow:
+    slow = Slow()
+    assert slack.conn.assistant is not None
+    object.__setattr__(slack.conn.assistant.assistant, "client", slow)
+    return slow
+
+
+async def answering(slack: Slack) -> None:
+    await _until(lambda: bool(slack.conn.assistant and slack.conn.assistant.answering))
+
+
 @pytest.mark.flag("assistant", on=True)
-async def test_a_second_message_while_answering_gets_one_still_on_it(
+async def test_a_member_has_one_answer_in_flight_across_conversations(
     settings: Settings, house: House, helper: Assistant, slack: Slack
 ) -> None:
     await switch_on(house, helper)
-    gate = asyncio.Event()
-
-    class Slow(FakeModel):
-        async def create(self, request: Mapping[str, Any]) -> ModelReply:
-            await gate.wait()
-            return await super().create(request)
-
-    slow = Slow()
-    object.__setattr__(slack.conn.assistant.assistant, "client", slow)  # type: ignore[union-attr]
-    root = next_ts()
+    slow = slow_model(slack)
     app = slack.conn.app
-    await send(app, "events_api", message_event("U02SAM", "First", channel=SAM_DM, ts=root))
-    await _until(lambda: bool(slack.conn.assistant and slack.conn.assistant.answering))
-    for text in ("Second", "Third"):
-        await send(app, "events_api", message_event("U02SAM", text, channel=SAM_DM, thread_ts=root))
+    await send(app, "events_api", message_event("U02SAM", "First", channel=SAM_DM))
+    await answering(slack)
+    second = next_ts()
+    await send(app, "events_api", message_event("U02SAM", "Second", channel=SAM_DM, ts=second))  # a new thread
     await _until(lambda: len(posts(slack)) == 1)
-    assert posts(slack)[0]["text"] == STILL_ON_IT and posts(slack)[0]["thread_ts"] == root
-    await send(app, "events_api", message_event("U03KIM", "Mine", channel="D03KIM"))  # someone else isn't held up
-    gate.set()
+    assert posts(slack)[0]["text"] == STILL_ON_IT and posts(slack)[0]["thread_ts"] == second
+    for text in ("Third", "Fourth"):  # one notice per answer in flight
+        await send(app, "events_api", message_event("U02SAM", text, channel=SAM_DM))
+    await send(app, "events_api", message_event("U03KIM", "Mine", channel="D03KIM"))  # Kim isn't held up
+    await _until(lambda: slow.started == 2)
+    slow.gate.set()
     await slack.conn.interactions.settle()
     texts = [p["text"] for p in posts(slack)]
     assert texts.count(STILL_ON_IT) == 1 and texts.count("OK") == 2
-    assert sorted(user_texts(slow)) == ["First", "Mine"]  # neither Second nor Third was sent
-    await slack.dm("Sam", "Fourth", thread_ts=root)  # free again
+    assert sorted(user_texts(slow)) == ["First", "Mine"]  # nothing else was sent
+    assert len(await conversations(house)) == 2
+    await slack.dm("Sam", "Fifth", thread_ts=second)  # free again
     assert posts(slack)[-1]["text"] == "OK"
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_in_the_channel_the_busy_notice_is_an_ephemeral_in_the_thread(
+    settings: Settings, house: House, helper: Assistant, slack: Slack
+) -> None:
+    await switch_on(house, helper)
+    slow = slow_model(slack)
+    app = slack.conn.app
+    await send(app, "events_api", message_event("U02SAM", "First", channel=SAM_DM))
+    await answering(slack)
+    root = next_ts()
+    mention = message_event("U02SAM", f"<@{BOT_USER}> hi", kind="app_mention", channel=CHANNEL, channel_type=None)
+    mention["event"]["ts"] = root
+    await send(app, "events_api", mention)
+    await _until(lambda: bool(slack.fake.of("chat.postEphemeral")))
+    (notice,) = [c.args for c in slack.fake.of("chat.postEphemeral")]
+    assert (notice["channel"], notice["user"], notice["thread_ts"], notice["text"]) == (
+        CHANNEL,
+        "U02SAM",
+        root,
+        STILL_ON_IT,
+    )
+    assert posts(slack) == []
+    slow.gate.set()
+    await slack.conn.interactions.settle()
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_a_refused_busy_notice_is_logged(
+    settings: Settings, house: House, helper: Assistant, slack: Slack, caplog: Any
+) -> None:
+    await switch_on(house, helper)
+    slow = slow_model(slack)
+    slack.fake.fail("chat.postEphemeral", Failure("not_in_channel"))
+    app = slack.conn.app
+    await send(app, "events_api", message_event("U02SAM", "First", channel=SAM_DM))
+    await answering(slack)
+    mention = message_event("U02SAM", f"<@{BOT_USER}> hi", kind="app_mention", channel=CHANNEL, channel_type=None)
+    await send(app, "events_api", mention)
+    await _until(lambda: "slack assistant reply failed" in caplog.text)
+    slow.gate.set()
+    await slack.conn.interactions.settle()
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_anything_that_breaks_outside_converse_is_logged(
+    settings: Settings, house: House, helper: Assistant, slack: Slack, monkeypatch: pytest.MonkeyPatch, caplog: Any
+) -> None:
+    await switch_on(house, helper)
+
+    async def broken(*args: Any) -> None:
+        raise RuntimeError("database down")
+
+    monkeypatch.setattr(slack_assistant.slack_members, "member_for_slack_user", broken)
+    await slack.dm("Sam", "Zq7x secret words")
+    assert "the assistant's slack message failed" in caplog.text
+    assert "Zq7x" not in caplog.text and posts(slack) == []
 
 
 async def _until(check: Any) -> None:
@@ -432,15 +651,26 @@ async def test_a_message_delivered_twice_is_answered_once(
 
 
 @pytest.mark.flag("assistant", on=True)
-async def test_someone_elses_dm_conversation_gets_no_answer(
+async def test_after_a_relink_the_new_member_cant_continue_the_old_members_dm(
     settings: Settings, house: House, model: FakeModel, helper: Assistant, slack: Slack, caplog: Any
 ) -> None:
     await switch_on(house, helper)
     root = next_ts()
     await slack.dm("Sam", "Hi", ts=root)
-    await slack.dm("Kim", "Me too", channel=SAM_DM, thread_ts=root)  # can't happen in Slack, but refused anyway
-    assert len(posts(slack)) == 1 and len(model.requests) == 1
+    (before,) = await conversations(house)
+    model.requests.clear()
+    slack.fake.clear()
+    await link(house, "Sam", None)  # the admin moves Sam's Slack user to Kim
+    await link(house, "Kim", SLACK_IDS["Sam"])
+    await slack.dm("Sam", "Still me?", thread_ts=root)  # now Kim, in Sam's old DM thread
+    await nothing_happened_since(slack, model)
+    (after,) = await conversations(house)
+    assert (after.owner_member_id, after.transcript) == (house["Sam"].id, before.transcript)
     assert "isn't theirs" in caplog.text
+
+
+async def nothing_happened_since(slack: Slack, model: FakeModel) -> None:
+    assert model.requests == [] and posts(slack) == [] and slack.fake.of("chat.postEphemeral") == []
 
 
 @pytest.mark.flag("assistant", on=True)
@@ -514,11 +744,14 @@ def test_home_line_without_the_bots_user() -> None:
         (f"<@{BOT_USER}|dinnerbell>   tacos?", "tacos?"),
         ("<@U02SAM> and <@W03KIM|kim>", "@someone and @someone"),
         ("<#C0DINNER>", "#channel"),
+        ("<#C0DINNER|dinnerbell>", "#channel"),
         ("<!channel> <!everyone>", "@channel @everyone"),
-        ("<!subteam^S01|@cooks> please", "@cooks please"),
+        ("<!subteam^S01|@cooks> please", "@group please"),
+        ("<!subteam^S01> please", "@group please"),
         ("<!date^1392734382^{date}|Feb 18, 2014>", "Feb 18, 2014"),
         ("<https://a.example>", "https://a.example"),
         ("<https://a.example|https://a.example>", "https://a.example"),
+        ("<https://m.example|the menu>", "the menu (https://m.example)"),
         ("fish &amp; chips &lt;3 &gt; ok", "fish & chips <3 > ok"),
         ("one\n  two   three  ", "one\ntwo three"),
     ],
@@ -627,3 +860,27 @@ def test_what_is_remembered_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
     for item in ("a", "b", "a", "c"):
         remembered.add(item)
     assert "a" in remembered and "c" in remembered and "b" not in remembered
+
+
+def test_a_failed_startup_still_closes_anthropics_client(
+    tmp_path: Path, clock: FakeClock, provider: FakeProvider, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dinnerbell import app_factory
+
+    closed: list[bool] = []
+
+    class Client(FakeModel):
+        async def close(self) -> None:
+            closed.append(True)
+
+    def broken(jobs: Any) -> Any:
+        raise RuntimeError("no scheduler")
+
+    monkeypatch.setattr(app_factory, "_anthropic", lambda settings: Client())
+    monkeypatch.setattr(app_factory, "build_scheduler", broken)
+    configured = make_settings(tmp_path, anthropic_api_key=KEY)
+    run_migrations(configured.sync_database_url, configured.database_path)
+    app = create_app(configured, clock=clock, oidc_transport=httpx.ASGITransport(app=provider.app))
+    with pytest.raises(RuntimeError, match="no scheduler"), TestClient(app, base_url=BASE_URL):
+        pass
+    assert closed == [True]

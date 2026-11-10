@@ -6,12 +6,15 @@ set ``DINNERBELL_ANTHROPIC_API_KEY``; without it, nothing here is registered.
 Each message is acknowledged at once (Bolt acknowledges events itself) and answered in a tracked
 task. Dinnerbell ignores, with no reply and nothing stored or sent:
 
-- anything from a bot, Dinnerbell included, and anything with a ``subtype``: edits, deletions,
-  joins, and bot messages;
-- a mention outside the household channel, and a message from another workspace;
+- anything from a bot, Dinnerbell included, and anything with a ``subtype`` or ``edited``: edits,
+  deletions, joins, and bot messages;
+- a mention outside the household channel, a mention with no text or with files, and a message
+  from another workspace;
 - a Slack user who isn't an active member: a guest, a deactivated member, or someone no member
   is linked to;
 - everything, while the assistant isn't available (the flag or Admin's switch is off).
+
+A DM with a file, or with no text, gets ``TEXT_ONLY`` and is sent nowhere.
 
 **Conversations** are Slack threads, keyed by channel and thread root (``slack_key``). A
 top-level DM or mention starts one, and Dinnerbell replies in its thread. A mention in a thread
@@ -20,9 +23,10 @@ reminder. DMs are private to their member. A channel thread is shared: each mess
 author. Dinnerbell's first reply in a channel thread says it sees only messages that mention it.
 
 **Replies** are plain text: the model's text is escaped, so it can't make a mention, a channel
-ping, or a link, and it's cut to Slack's length. While a member's message is being answered, a
-second one from them in the same conversation isn't sent; Dinnerbell says once that it's still
-on the last one.
+ping, or a link, and every URL and bare domain in it is defanged (``hxxps://evil[.]example``), so
+Slack can't turn one into a link either. It's cut to Slack's length. A member has one message
+answered at a time, across all their conversations: while one is, a new one isn't sent, and
+Dinnerbell says once, in the new one's thread, that it's still on the last one.
 """
 
 from __future__ import annotations
@@ -56,11 +60,18 @@ MAX_REPLY = MAX_FALLBACK
 REMEMBERED = 2048
 """How many messages, and channel threads replied in, are remembered; the oldest go first."""
 STILL_ON_IT = "I'm still on your last message. Send this one again once I've answered."
+TEXT_ONLY = "I can read only text messages."
 SLACK_TS = re.compile(r"\d{1,12}\.\d{1,8}")
 _ENTITY = re.compile(r"<([^<>]*)>")
 _PING = re.compile(r"@(here|channel|everyone)\b", re.IGNORECASE)
 _SPACES = re.compile(r"[ \t]{2,}")
-WORD_JOINER = "⁠"
+WORD_JOINER = "\u2060"
+_HTTP = re.compile(r"\bhttp(s?)(?=:)", re.IGNORECASE)
+_SCHEME = re.compile(r"(?<=[A-Za-z0-9+.-]):(?=/)")
+_DOTS = "[.\uff0e\u3002\uff61]"
+"""A dot, or a full-width or ideographic one, which Slack may also read as a domain's."""
+_DOMAIN = re.compile(rf"(?<![\w.-])(?:[\w-]+{_DOTS})+[^\W\d_][\w-]*[^\W_](?![\w-])")
+_IP = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}\b")
 
 
 def mention_only_line(bot_user_id: str) -> str:
@@ -76,9 +87,13 @@ def home_line(bot_user_id: str | None, channel_id: str) -> str:
 
 def readable(text: str, bot_user_id: str | None) -> str:
     """A Slack message as the plain text a member would type on the web. Dinnerbell's own
-    mention goes. Anyone else's mention becomes "@someone", so no Slack ID or name leaves the
-    house. A channel reads as its name, a link as its label and address, and ``&amp;``,
-    ``&lt;``, and ``&gt;`` as the characters they stand for."""
+    mention goes. Anyone else's mention becomes "@someone", a user group "@group", and a channel
+    "#channel", so no Slack ID or name leaves the house. A link reads as its label and address,
+    and ``&amp;``, ``&lt;``, and ``&gt;`` as the characters they stand for.
+
+    TODO(#17): map a mentioned member to the conversation's pseudonym ("Member 2"), so the
+    meaning survives and ``restore_names`` brings the name back. That needs the pseudonym map,
+    which ``services.assistant`` keeps."""
 
     def swap(match: re.Match[str]) -> str:
         inner = match.group(1)
@@ -86,12 +101,14 @@ def readable(text: str, bot_user_id: str | None) -> str:
         if target.startswith("@"):
             return "" if target[1:] == bot_user_id else "@someone"
         if target.startswith("#"):
-            return f"#{label}" if label else "#channel"
+            return "#channel"
         if target.startswith("!"):
             special = target[1:]
             if special in {"here", "channel", "everyone"}:
                 return f"@{special}"
-            return label  # a user group's handle, or a date's fallback text
+            if special.startswith("subteam^"):
+                return "@group"
+            return label  # a date's fallback text
         if label and label != target:
             return f"{label} ({target})"
         return target
@@ -101,12 +118,26 @@ def readable(text: str, bot_user_id: str | None) -> str:
     return "\n".join(_SPACES.sub(" ", line).strip() for line in plain.splitlines()).strip()
 
 
+def defang(text: str) -> str:
+    """``text`` with every URL and bare domain made unlinkable: ``http`` and ``https`` become
+    ``hxxp`` and ``hxxps``, any other scheme's ``:`` becomes ``[:]``, and each dot of a domain
+    (an email's included) or an IP address becomes ``[.]``. Slack links none of them."""
+    text = _HTTP.sub(lambda m: f"hxxp{m.group(1).lower()}", text)
+    text = _SCHEME.sub("[:]", text)
+    text = _DOMAIN.sub(lambda m: re.sub(_DOTS, "[.]", m.group(0)), text)
+    return _IP.sub(lambda m: m.group(0).replace(".", "[.]"), text)
+
+
 def safe_reply(text: str, limit: int = MAX_REPLY) -> str:
-    """The model's text, ready for Slack: ``&``, ``<``, and ``>`` escaped, so it can make no
-    mention, ``<!channel>`` or ``<!here>`` ping, or link of its own; a bare ``@here``,
-    ``@channel``, or ``@everyone`` broken with a word joiner, so it never pings either; and cut
-    to ``limit`` characters without splitting an escape."""
-    safe = _PING.sub(lambda m: f"@{WORD_JOINER}{m.group(1)}", escape(text.strip()))
+    """The model's text, ready for Slack. Every URL and bare domain is defanged, since model text
+    can carry an injected link and Dinnerbell would post it in its own voice; ``&``, ``<``, and
+    ``>`` are escaped, so it can make no mention, ``<!channel>`` or ``<!here>`` ping, or link of
+    its own; a bare ``@here``, ``@channel``, or ``@everyone`` is broken with a word joiner, so it
+    never pings either; and it's cut to ``limit`` characters without splitting an escape.
+
+    A later change may add a Links line that Dinnerbell builds itself from the catalog URLs that
+    tools returned; those would be the only clickable links in a reply."""
+    safe = _PING.sub(lambda m: f"@{WORD_JOINER}{m.group(1)}", escape(defang(text.strip())))
     return clip_mrkdwn(safe, limit) if len(safe) > limit else safe
 
 
@@ -122,6 +153,8 @@ class Incoming:
     text: str
     private: bool
     """A DM (private to its member), rather than a mention in the household channel."""
+    unreadable: bool = False
+    """A DM with a file or without text: it gets ``TEXT_ONLY``, and nothing is sent anywhere."""
 
 
 class _Bounded:
@@ -132,6 +165,9 @@ class _Bounded:
 
     def __contains__(self, item: str) -> bool:
         return item in self._items
+
+    def __len__(self) -> int:
+        return len(self._items)
 
     def add(self, item: str) -> None:
         self._items.pop(item, None)
@@ -167,9 +203,9 @@ class SlackAssistant:
         """Messages already taken, by channel and ``ts``: Slack can deliver an event again."""
         self.replied = _Bounded()
         """Channel threads Dinnerbell has answered in since it started, by conversation key."""
-        self.answering: set[tuple[int, str]] = set()
-        """(member, conversation key) while that member's message is being answered."""
-        self.told: set[tuple[int, str]] = set()
+        self.answering: set[int] = set()
+        """Members with a message being answered, in any conversation: one at a time each."""
+        self.told: set[int] = set()
         """Of those, the ones already told ``STILL_ON_IT``, so a burst gets one notice."""
 
     def register(self, app: AsyncApp) -> None:
@@ -198,23 +234,30 @@ class SlackAssistant:
         team = self.team_id()
         if team is None or body.get("team_id") != team:
             return None
-        if event.get("bot_id") or event.get("subtype") or event.get("bot_profile"):
-            return None  # bots, Dinnerbell included; edits, deletions, joins
+        if event.get("bot_id") or event.get("bot_profile") or event.get("edited"):
+            return None  # bots, Dinnerbell included; edits
+        subtype = event.get("subtype")
+        if subtype and (mention or subtype != "file_share"):
+            return None  # deletions, joins, bot messages, and edits that come as a subtype
         user, channel, ts, text = (event.get(k) for k in ("user", "channel", "ts", "text"))
-        if not (isinstance(user, str) and isinstance(channel, str) and isinstance(ts, str) and isinstance(text, str)):
+        if not (isinstance(user, str) and isinstance(channel, str) and isinstance(ts, str)):
             return None
         if user == self.bot_user_id or not is_channel_id(channel) or not SLACK_TS.fullmatch(ts):
             return None
         root = event.get("thread_ts") or ts
         if not isinstance(root, str) or not SLACK_TS.fullmatch(root):
             return None
+        has_text = isinstance(text, str) and bool(text.strip())
         if mention:
             if channel != self.channel_id:
                 return None  # Dinnerbell answers mentions only in the household channel
-            return Incoming(user, channel, ts, root, text, private=False)
+            if not has_text or event.get("files"):
+                return None  # a channel thread stays quiet about what it can't read
+            return Incoming(user, channel, ts, root, str(text), private=False)
         if event.get("channel_type") != "im" or not channel.startswith("D"):
             return None  # the household channel's messages come as mentions, if at all
-        return Incoming(user, channel, ts, root, text, private=True)
+        unreadable = subtype == "file_share" or bool(event.get("files")) or not has_text
+        return Incoming(user, channel, ts, root, str(text or ""), private=True, unreadable=unreadable)
 
     # Answering ---------------------------------------------------------------------------------
 
@@ -229,11 +272,21 @@ class SlackAssistant:
         return member
 
     async def answer(self, incoming: Incoming) -> None:
+        """Answer ``incoming``, logging anything that breaks (never the message's text)."""
+        try:
+            await self._answer(incoming)
+        except Exception:
+            log.exception("the assistant's slack message failed")
+
+    async def _answer(self, incoming: Incoming) -> None:
         member = await self._member(incoming.user)
         if member is None:
             log.debug("slack message to the assistant ignored")
             return
         member_id_var.set(member.id)
+        if incoming.unreadable:
+            await self._post(incoming, member, TEXT_ONLY)
+            return
         try:
             key = slack_key(incoming.channel, incoming.root)
         except InvalidConversationKey:
@@ -241,18 +294,17 @@ class SlackAssistant:
         text = readable(incoming.text, self.bot_user_id)
         if not text:
             return
-        busy = (member.id, key)
-        if busy in self.answering:
-            if busy not in self.told:
-                self.told.add(busy)
-                await self._post(incoming, member, STILL_ON_IT)
+        if member.id in self.answering:
+            if member.id not in self.told:
+                self.told.add(member.id)
+                await self._busy(incoming, member)
             return
-        self.answering.add(busy)
+        self.answering.add(member.id)
         try:
             reply_text = await self._converse(member, key, incoming, text)
         finally:
-            self.answering.discard(busy)
-            self.told.discard(busy)
+            self.answering.discard(member.id)
+            self.told.discard(member.id)
         if reply_text is None:
             return
         body = safe_reply(reply_text)
@@ -280,13 +332,27 @@ class SlackAssistant:
         return None if reply is None else reply.text
 
     async def _post(self, incoming: Incoming, member: Member, text: str) -> bool:
-        """Post ``text`` in the message's thread, already safe for Slack. False if Slack refused."""
+        """Post ``text`` in the message's thread, already safe for Slack. False if Slack refused.
+        Nothing unfurls: neither links nor media."""
         try:
-            await self.api.post(incoming.channel, {"text": text or ELLIPSIS}, thread_ts=incoming.root)
+            await self.api.post(
+                incoming.channel, {"text": text or ELLIPSIS}, thread_ts=incoming.root, unfurl_media=False
+            )
         except SLACK_ERRORS as exc:
             log.warning("slack assistant reply failed", extra={"error": str(exc), "member_id": member.id})
             return False
         return True
+
+    async def _busy(self, incoming: Incoming, member: Member) -> None:
+        """``STILL_ON_IT``, in the new message's thread: in a DM, a reply; in the channel, an
+        ephemeral only the member sees."""
+        if incoming.private:
+            await self._post(incoming, member, STILL_ON_IT)
+            return
+        try:
+            await self.api.ephemeral(incoming.channel, incoming.user, STILL_ON_IT, thread_ts=incoming.root)
+        except SLACK_ERRORS as exc:
+            log.warning("slack assistant reply failed", extra={"error": str(exc), "member_id": member.id})
 
     # App Home ----------------------------------------------------------------------------------
 

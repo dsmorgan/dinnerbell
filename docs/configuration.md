@@ -67,7 +67,7 @@ Otherwise, nothing changes: no page, tab, or reply mentions the assistant, and D
 
 ### Talk to it in Slack
 
-Members talk to the assistant in their direct message with Dinnerbell, or by mentioning @Dinnerbell in the household channel. Dinnerbell replies in the message's thread. Its App Home shows a line saying so while the assistant answers that member. For Slack to deliver those messages, the app needs the assistant variant of its manifest: `deploy/slack-app-manifest.assistant.yaml`. It's the default manifest plus a writable **Messages** tab, the `im:history` and `app_mentions:read` scopes, and the `message.im` and `app_mention` events.
+Members talk to the assistant in their direct message with Dinnerbell, or by mentioning @Dinnerbell in the household channel. Dinnerbell replies in the message's thread. Its App Home shows a line saying so while the assistant answers that member. For Slack to deliver those messages, the app needs the assistant variant of its manifest: `deploy/slack-app-manifest.assistant.yaml`. It's the default manifest plus a writable **Messages** tab, the `im:history` and `app_mentions:read` scopes, and the `message.im` and `app_mention` events. Apply it before you turn on **Turn on the assistant**: App Home tells members they can message Dinnerbell as soon as the switch is on.
 
 1. At [api.slack.com/apps](https://api.slack.com/apps), open the Dinnerbell app and select **App Manifest**.
 2. Paste the contents of `deploy/slack-app-manifest.assistant.yaml`, set your hostname in `redirect_urls` again, and select **Save Changes**.
@@ -75,7 +75,9 @@ Members talk to the assistant in their direct message with Dinnerbell, or by men
 
 To turn the assistant off for good, paste `deploy/slack-app-manifest.yaml` again and reinstall. Until you do, Dinnerbell ignores DMs and mentions while the assistant is off, and Slack shows members a Messages tab they can type in that gets no answers.
 
-Dinnerbell reads only direct messages to it and messages that mention it. It answers active members only: a guest, a deactivated member, or someone not linked to a member gets no reply, and their message is neither stored nor sent. A direct message thread is private to its member. A channel thread is shared: everyone sees it, and each message acts as the member who wrote it.
+Dinnerbell reads only direct messages to it and messages that mention it, and only their text: a direct message with a file gets "I can read only text messages." It answers one message per member at a time, and active members only: a guest, a deactivated member, or someone not linked to a member gets no reply, and their message is neither stored nor sent. A direct message thread is private to its member. A channel thread is shared: everyone sees it, and each message acts as the member who wrote it.
+
+Replies can't mention anyone or ping the channel, and they hold no links: Dinnerbell writes any address the assistant gives in a form Slack doesn't link, such as `hxxps://example[.]com`.
 
 On Admin > **Assistant**, the admin also sets the household's **Monthly cap**, $1 to $100 in US dollars a calendar month in the household's time zone ($5 by default), and **Conversation hours**, how long Dinnerbell keeps a conversation after its last message, 0 to 168 (24 by default). Before each request to Anthropic, Dinnerbell sets aside the most that request could cost and refuses it if that would pass the cap, so spending never does; the page shows this month's usage in total and for each member. Every change there is in the audit log.
 
