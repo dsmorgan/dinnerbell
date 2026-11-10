@@ -65,15 +65,16 @@ from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.members import Member
 from dinnerbell.domain.offers import OfferPath, check_capacity, offer_time
 from dinnerbell.domain.schedule import slot_schedule
-from dinnerbell.services import calls, offers, picks
+from dinnerbell.services import calls, lifecycle, offers, picks
 from dinnerbell.services import catalog as catalog_service
 from dinnerbell.services.assistant.acting import ToolRefusal, tool_actor
-from dinnerbell.services.assistant.candidates import Labeler, find_candidates
+from dinnerbell.services.assistant.candidates import Labeler, as_proposer, find_candidates
 from dinnerbell.services.assistant.runtime import AssistantConfig, available
 from dinnerbell.services.call_context import load
 from dinnerbell.services.clock import Clock
 from dinnerbell.services.errors import Forbidden, NotFound
 from dinnerbell.services.offers import OfferInput, Posted
+from dinnerbell.services.preferences import group_preferences
 from dinnerbell.services.variety import household_today
 
 log = logging.getLogger(__name__)
@@ -88,6 +89,12 @@ NOT_A_CANDIDATE = (
     "That isn't one of this call's candidates in that mode. Call find_candidates, and draft only "
     "a name and mode it returns. Don't say why something isn't there: you don't know."
 )
+NOT_A_PICK = (
+    "That can't join this call's vote in that mode. Offer it for another meal or day, or draft a proposal of "
+    "a name and mode find_candidates returns. Don't say why: you don't know."
+)
+"""An offer that would join a vote as a pick the call's filters refuse: as ``NOT_A_CANDIDATE``,
+it says nothing about whose stance or need it misses."""
 MAX_ERRORS_SHOWN = 10
 IMPORT_LINK_LIFETIME = timedelta(hours=24)
 """How long a confirmed catalog draft is kept, and its import link works: a link from Slack's
@@ -229,8 +236,10 @@ async def _offer_plan(
     """What posting the offer will do, by ``post_offer``'s own rules (FR-5). For a join, it
     checks the place's pick as ``offers._attach`` does: refused, with the service's words, when
     the call has it in the same mode or someone else added it, and otherwise taken over in the
-    offer's mode. ``drafting`` adds the refusal ``_attach`` gives a voter who isn't in; Confirm
-    leaves that to the service."""
+    offer's mode. ``drafting`` adds the refusal ``_attach`` gives a voter who isn't in, and, for
+    a vote, ``NOT_A_PICK`` when the pick misses the call's filters, as a proposal draft does
+    (ADR 0005); Confirm leaves both to the service. While answers are open, who's in can still
+    change, so the filters wait for Confirm, and the draft says the same whoever answers (FR-29)."""
     outcome = offer_outcome(call, request.mode)
     if call is None or outcome is not OfferOutcome.JOIN:
         schedule = slot_schedule(await household_settings(db, actor.household_id), request.slot)
@@ -250,6 +259,10 @@ async def _offer_plan(
     existing = picks.picked(ctx, candidate)
     if existing is not None and (existing.mode is request.mode or existing.proposed_by not in (None, actor.id)):
         raise picks.already_a_pick(ctx, existing)
+    if drafting and call.state is EventState.VOTING:
+        group = await group_preferences(db, actor.household_id, ctx.veto_people)
+        if lifecycle.misfit(as_proposer(ctx, actor, now), candidate, group) is not None:
+            raise ToolRefusal(NOT_A_PICK)
     return OfferPlan(outcome, call.id, call.run, call.state, takes_over=existing.mode if existing else None)
 
 

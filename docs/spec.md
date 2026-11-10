@@ -360,7 +360,7 @@ Only private-only tools send the member's own personal data, and only when the m
 - **Find candidates**, for a voting call only. It runs ranking's hard filters, with the member counted as able to take the role a pick needs, since adding one volunteers them, optionally narrowed by days since eaten, cuisine, or mode, and returns candidates in name order. Their reasons come only from variety, novelty, suggestions, the default mode, volunteer fit, and meal fit. It never returns what the filters removed. Before voting, the assistant says to ask once voting opens.
 - **Look up catalog items** by name or tag: name, kind, tags, modes, and meals.
 - **Draft a proposal**, for a voting call.
-- **Draft an offer** of an existing catalog item.
+- **Draft an offer** of an existing catalog item. One that would join a voting call as a pick is drafted only when the pick passes the call's filters, with a refusal that says nothing about why; while answers are open, the filters wait for **Confirm**, so the draft is the same whoever has answered.
 - **Draft catalog items** in the [catalog file format](catalog-format.md). An entry matching an existing item is dropped and listed, and `cooks` and `active` are stripped.
 - **Draft catalog items from a menu link** the member gives, as a catalog draft (**Menu links**, below).
 
