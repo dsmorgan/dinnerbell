@@ -11,10 +11,11 @@ from typing import Any
 
 import httpx2
 import pytest
+from anthropic.types.beta import BetaMessage
 from pydantic import SecretStr
 
 from dinnerbell.domain.assistant import TokenUsage
-from dinnerbell.services.assistant.anthropic_client import AnthropicModelClient, echoed_content
+from dinnerbell.services.assistant.anthropic_client import AnthropicModelClient, echoed_content, to_reply
 from dinnerbell.services.assistant.client import ModelCallFailed
 from dinnerbell.services.assistant.conversation import build_request
 from dinnerbell.services.assistant.tools import TOOLS
@@ -157,7 +158,58 @@ def test_the_echo_keeps_only_text_before_the_boundary_and_everything_after() -> 
         {"type": "tool_use", "id": "toolu_1", "name": "x", "input": {}},
     ]
     assert echoed_content(blocks) == [blocks[2], blocks[4], blocks[6], blocks[7]]
-    assert echoed_content(blocks[6:]) == blocks[6:]
+    assert echoed_content(blocks[4:]) == [blocks[4], blocks[6], blocks[7]]
+
+
+@pytest.mark.parametrize("kinds", [("thinking", "text", "tool_use"), ("thinking", "text"), ("text",), ()])
+def test_without_a_fallback_the_echo_is_the_blocks_unchanged(kinds: tuple[str, ...]) -> None:
+    examples: dict[str, dict[str, object]] = {
+        "thinking": {"type": "thinking", "thinking": "", "signature": "sig"},
+        "text": {"type": "text", "text": "Let me look."},
+        "tool_use": {"type": "tool_use", "id": "toolu_1", "name": "look_up_catalog_items", "input": {}},
+    }
+    blocks = [examples[kind] for kind in kinds]
+    assert echoed_content(blocks) == blocks
+
+
+def beta_message(
+    content: list[dict[str, Any]],
+    usage: dict[str, Any],
+    *,
+    model: str = "claude-sonnet-5-5",
+    stop_reason: str = "end_turn",
+) -> BetaMessage:
+    return BetaMessage.model_validate(
+        {
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "model": model,
+            "content": content,
+            "stop_reason": stop_reason,
+            "stop_sequence": None,
+            "usage": usage,
+        }
+    )
+
+
+def test_an_unexpected_iteration_is_priced_counted_and_logged(caplog: pytest.LogCaptureFixture) -> None:
+    attempt = {"input_tokens": 50, "output_tokens": 5, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0}
+    message = beta_message(
+        [{"type": "text", "text": "Hi."}],
+        {
+            "input_tokens": 50,
+            "output_tokens": 5,
+            "iterations": [{"type": "compaction", **attempt}, {"type": "message", **attempt}],
+        },
+        model="claude-opus-5-5",
+    )
+    reply = to_reply(message, requested="claude-opus-5-5")
+    # Neither names a model: the costliest of Opus 5.5, its fallbacks (Opus 5, Opus 4.8), and the message's.
+    assert reply.usage == (TokenUsage("claude-opus-5", 50, 5), TokenUsage("claude-opus-5", 50, 5))
+    [error] = [r for r in caplog.records if r.levelname == "ERROR"]
+    assert error.getMessage() == "assistant reply has an unexpected iteration"
+    assert error.iteration_type == "compaction"
 
 
 @pytest.mark.parametrize(

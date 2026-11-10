@@ -4,6 +4,7 @@ module that imports ``anthropic`` (tests/test_architecture.py checks)."""
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -11,8 +12,10 @@ import anthropic
 from anthropic.types.beta import BetaMessage
 from pydantic import SecretStr
 
-from dinnerbell.domain.assistant import TokenUsage, costlier
+from dinnerbell.domain.assistant import PRICE_TABLE, TokenUsage, costlier
 from dinnerbell.services.assistant.client import ModelCallFailed, ModelReply
+
+log = logging.getLogger(__name__)
 
 TIMEOUT_SECONDS = 300.0
 """Each read on the stream, and the connection. A stream sends events as the model writes, so a
@@ -61,35 +64,51 @@ class AnthropicModelClient:
 
 
 def echoed_content(blocks: Sequence[dict[str, object]]) -> list[dict[str, object]]:
-    """The blocks to send back as the assistant turn, after a server-side fallback too. Before
-    the last ``fallback`` block, only text goes back: the declined model's thinking and tool
+    """The blocks to send back as the assistant turn. Without a server-side fallback, exactly
+    the blocks the model sent, unchanged, as preserved thinking requires. After one, only text
+    goes back from before the last ``fallback`` block: the declined model's thinking and tool
     calls don't, and its text is what the fallback model continued from. The ``fallback``
     markers themselves are audit markers and stay out. Dinnerbell sends no server tools, so
     there are no server-tool pairs to keep."""
     last = max((n for n, block in enumerate(blocks) if block.get("type") == "fallback"), default=-1)
+    if last < 0:
+        return list(blocks)
     before = [block for block in blocks[:last] if block.get("type") == "text"]
     return [*before, *blocks[last + 1 :]]
 
 
+KNOWN_ITERATIONS = ("message", "fallback_message")
+"""Iteration types Dinnerbell expects. It asks for no compaction and no advisor, so anything
+else is unexpected: it's still priced and counted, and logged."""
+
+
+def _tokens(attempt: object, name: str) -> int:
+    value = getattr(attempt, name, 0)
+    return value if isinstance(value, int) and not isinstance(value, bool) else 0
+
+
 def to_reply(message: BetaMessage, *, requested: str = "") -> ModelReply:
-    """The reply, with one usage entry per attempt. An attempt that names no model is priced as
-    the costlier of the requested model and the message's: during a stream the SDK moves the
-    message's model to the fallback's, so either may be the one that ran it."""
+    """The reply, with one usage entry per billed attempt. An attempt that names no model is
+    priced as the costliest of the requested model, the models its fallback can run on, and the
+    message's model: during a stream the SDK moves the message's model to the fallback's, so
+    any of them may be the one that ran it."""
     blocks = [block.to_dict(mode="json") for block in message.content]
     usage = message.usage
+    card = PRICE_TABLE.get(requested)
+    unnamed = costlier(*(requested or str(message.model),), *(card.falls_back_to if card else ()), str(message.model))
     parts: list[TokenUsage] = []
     for attempt in usage.iterations or ():
-        if attempt.type not in ("message", "fallback_message"):
-            continue  # compaction and advisor iterations: Dinnerbell asks for neither
+        kind = str(getattr(attempt, "type", ""))
+        if kind not in KNOWN_ITERATIONS:
+            log.error("assistant reply has an unexpected iteration", extra={"iteration_type": kind[:40]})
+        named = getattr(attempt, "model", None) if kind in KNOWN_ITERATIONS else None
         parts.append(
             TokenUsage(
-                model=str(
-                    getattr(attempt, "model", None) or costlier(requested or str(message.model), str(message.model))
-                ),
-                input_tokens=attempt.input_tokens,
-                output_tokens=attempt.output_tokens,
-                cache_read_tokens=attempt.cache_read_input_tokens,
-                cache_write_tokens=attempt.cache_creation_input_tokens,
+                model=str(named or unnamed),
+                input_tokens=_tokens(attempt, "input_tokens"),
+                output_tokens=_tokens(attempt, "output_tokens"),
+                cache_read_tokens=_tokens(attempt, "cache_read_input_tokens"),
+                cache_write_tokens=_tokens(attempt, "cache_creation_input_tokens"),
             )
         )
     if not parts:

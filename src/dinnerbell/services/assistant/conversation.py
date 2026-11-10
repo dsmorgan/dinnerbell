@@ -16,7 +16,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -159,6 +159,13 @@ def _combined(model: str, parts: Sequence[TokenUsage]) -> TokenUsage:
     )
 
 
+async def _shielded(cleanup: Awaitable[None]) -> None:
+    """Run ``cleanup`` to the end even if this task is cancelled meanwhile, so a reservation is
+    always settled or released and its transaction always ends. The app runs on asyncio."""
+    task = asyncio.ensure_future(cleanup)
+    await asyncio.shield(task)
+
+
 async def _call(
     db: AsyncSession,
     assistant: Assistant,
@@ -167,10 +174,12 @@ async def _call(
     request: Mapping[str, Any],
     *,
     earlier_output_tokens: int = 0,
-) -> ModelReply:
-    """Reserve, call, and settle one request. Raises ``_Refused`` when the call can't run.
-    ``earlier_output_tokens`` is what this message's earlier calls wrote: their thinking goes
-    back in this request as signed blocks and bills as input, though the bytes don't show it."""
+) -> tuple[ModelReply, bool]:
+    """Reserve, call, and settle one request. Returns the reply, and whether it overran: cost
+    more than the reservation, or billed a model the table doesn't price. Either way its cost is
+    recorded as it was, and the message makes no further calls. Raises ``_Refused`` when the
+    call can't run. ``earlier_output_tokens`` is what this message's earlier calls wrote: their
+    thinking goes back in this request as signed blocks and bills as input."""
     household_id = member.household_id
     model = str(request["model"])
     reserved = reservation_micros(
@@ -198,38 +207,49 @@ async def _call(
             await repo.settle(household_id, usage_id, TokenUsage(model), reserved, assistant.clock())
             await db.commit()
 
+    async def release() -> None:
+        async with write_transaction(db):
+            await repo.release(household_id, usage_id)
+            await db.commit()
+
     try:
         reply = await assistant.client.create(request)
     except ModelCallFailed as exc:
-        if exc.maybe_billed:
-            await keep_reservation()
-        else:
-            async with write_transaction(db):
-                await repo.release(household_id, usage_id)
-                await db.commit()
         log.warning("assistant model call failed", extra={"member_id": member.id, **exc.log_fields()})
+        await _shielded(keep_reservation() if exc.maybe_billed else release())
         raise _Refused(FAILED) from None
     except asyncio.CancelledError:
-        await keep_reservation()  # the request may be running still; never leave it reserved
+        # The request may be running still, so it stays reserved; log first, then settle shielded.
         log.error("assistant model call cancelled", extra={"member_id": member.id})
+        await _shielded(keep_reservation())
         raise
     except Exception:
-        await keep_reservation()
         log.exception("assistant model call broke", extra={"member_id": member.id})
+        await _shielded(keep_reservation())
         raise _Refused(FAILED) from None
+    over = False
     for part in reply.usage:
         if not known_model(part.model):
-            # Priced at the ceiling, which holds the cap; the table needs the model's prices.
+            # Priced at the ceiling; the table needs the model's prices.
             log.error(
                 "assistant model not in the price table", extra={"model": part.model[:64], "member_id": member.id}
             )
+            over = True
     cost = total_cost_micros(reply.usage)
-    async with write_transaction(db):
-        await repo.settle(household_id, usage_id, _combined(reply.model, reply.usage), cost, assistant.clock())
-        await db.commit()
-    if cost > reserved:  # pragma: no cover - the bound makes this impossible; say so if it ever isn't
-        log.error("assistant call cost more than its reservation", extra={"member_id": member.id})
-    return reply
+
+    async def settle() -> None:
+        async with write_transaction(db):
+            await repo.settle(household_id, usage_id, _combined(reply.model, reply.usage), cost, assistant.clock())
+            await db.commit()
+
+    await _shielded(settle())
+    if cost > reserved:
+        log.error(
+            "assistant call cost more than its reservation",
+            extra={"member_id": member.id, "cost_micros": cost, "reserved_micros": reserved},
+        )
+        over = True
+    return reply, over
 
 
 def _over_covered(reply: ModelReply, model: str, member: Member) -> bool:
@@ -250,27 +270,32 @@ async def _keep(
     member: Member,
     key: str,
     private: bool,
-    hours: int,
     sent: Pseudonyms,
     asked: Turn,
     answered: Turn,
 ) -> None:
-    """Add one exchange to the stored conversation. It reads the conversation again under the
-    write lock, so an exchange saved by another message in the same thread meanwhile is kept,
-    and this one goes after it. A member that one labeled first keeps that label, and anyone
-    new gets the next number; the exchange's labels are rewritten to match."""
+    """Add one exchange to the stored conversation. It reads the conversation and the settings
+    again under the write lock: a conversation that changed hands keeps nothing, a switch turned
+    off keeps nothing, Conversation hours are the current ones, and an exchange saved by another
+    message in the same thread meanwhile is kept, with this one after it. A member that one
+    labeled first keeps that label, and anyone new gets the next number; the exchange's labels
+    are rewritten to match."""
     household_id = member.household_id
     repo = AssistantRepository(db)
     async with write_transaction(db):
-        if hours == 0:
-            await repo.delete_conversation(household_id, key)
-            await db.commit()
-            return
         now = assistant.clock()
         latest = await repo.conversation(household_id, key)
         if latest is not None and (latest.private != private or (private and latest.owner_member_id != member.id)):
-            # Changed hands since ``converse`` checked: never merge into someone else's conversation.
+            # Changed hands since ``converse`` checked: never touch someone else's conversation.
             log.warning("assistant exchange not kept: the conversation changed hands", extra={"member_id": member.id})
+            return
+        settings = assistant_settings(await household_settings(db, household_id))  # as they are now
+        if not settings.enabled:
+            return  # turned off meanwhile: keep nothing new
+        hours = settings.conversation_hours
+        if hours == 0:
+            await repo.delete_conversation(household_id, key)
+            await db.commit()
             return
         if latest is not None and latest.expired(now, hours):
             latest = None
@@ -316,11 +341,11 @@ async def _run_loop(
             return FAILED, False  # refuse further calls in this message
         request = build_request(assistant.config.model, tools, messages, keeps_history=keeps_history)
         try:
-            reply = await _call(db, assistant, member, zone, request, earlier_output_tokens=written)
+            reply, overran = await _call(db, assistant, member, zone, request, earlier_output_tokens=written)
         except _Refused as refused:
             return refused.reply, False
         written += sum(part.output_tokens for part in reply.usage)
-        over = _over_covered(reply, str(request["model"]), member)
+        over = _over_covered(reply, str(request["model"]), member) or overran
         # Check why it stopped before running any tool: a refusal or a cut-off can leave a
         # tool call half-written.
         if reply.stop_reason == "refusal":
@@ -391,7 +416,7 @@ async def converse(
         db, assistant, member, zone, _messages(sent, current), private=private, keeps_history=hours > 0
     )
     if answered:
-        await _keep(db, assistant, member, key, private, hours, pseudonyms, current, Turn("assistant", answer))
+        await _keep(db, assistant, member, key, private, pseudonyms, current, Turn("assistant", answer))
     names = {m.id: m.display_name for m in await MemberRepository(db).list(household.id)}
     log.info("assistant replied", extra={"member_id": member.id, "answered": answered})
     return Reply(pseudonyms.restore_names(answer, names))
