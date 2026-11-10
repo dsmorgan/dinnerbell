@@ -352,7 +352,10 @@ async def test_a_menu_page_becomes_a_catalog_draft_and_matches_are_dropped(
 
     [row] = await rows(house, AssistantDraftRow)
     assert row.payload["added"] == ["Basil House"] and row.payload["dropped"] == ["SIAM GARDEN"]
-    assert "order.menu.example.com" in row.payload["content"] and "Lao" not in row.payload["content"]
+    stored = parse_catalog(row.payload["content"])
+    [basil] = stored.entries
+    assert basil.entry.order_url == "https://order.menu.example.com/basil-house"
+    assert stored.tags is not None and stored.tags.cuisine == ["Thai"]  # Lao was declared but unused
     async with house.sessionmaker() as db:
         ready = await drafts.confirm_draft(db, house.clock, CONFIGURED, house["Sam"], view.id)
     assert isinstance(ready, CatalogReady) and [i.state.name for i in ready.plan.items_to_create] == ["Basil House"]
@@ -436,8 +439,10 @@ restaurants:
     assert len(model.requests) == 3
     [row] = await rows(house, AssistantDraftRow)
     content = row.payload["content"]
-    assert "example.net" not in content and "Ignore" not in content and "notes" not in content
-    assert f"url: {LINK}" in content  # its off-site link was dropped, so it gets the page's own
+    assert "Ignore" not in content and "notes" not in content
+    [basil] = parse_catalog(content).entries
+    assert basil.entry.order_url is None
+    assert basil.entry.url == LINK  # its off-site link was dropped, so it gets the page's own
     assert await rows(house, ProposalRow) == []
     [result] = results(model.requests[-1])
     assert "It left out links to other websites." in result["content"]
@@ -546,7 +551,8 @@ async def test_a_long_page_is_cut_to_the_cap_and_the_model_is_told(
     [result] = results(model.requests[-1])
     assert "read only the start of the page" in result["content"]
     [row] = await rows(house, AssistantDraftRow)
-    assert f"url: {LINK}" in row.payload["content"]  # a lone entry gets the page's link
+    [basil] = parse_catalog(row.payload["content"]).entries
+    assert basil.entry.url == LINK  # a lone entry gets the page's link
 
 
 @pytest.mark.flag("assistant", on=True)
