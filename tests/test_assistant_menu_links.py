@@ -14,6 +14,7 @@ import re
 import unicodedata
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass, field, replace
+from datetime import timedelta
 from typing import Any
 
 import pytest
@@ -29,7 +30,7 @@ from dinnerbell.domain.fetch_policy import FetchError, FetchFailure
 from dinnerbell.services.assistant import admin, drafts, menu_links, tools
 from dinnerbell.services.assistant.client import ModelReply
 from dinnerbell.services.assistant.conversation import AT_CAP, FAILED, TURNED_OFF, Assistant, Reply, converse
-from dinnerbell.services.assistant.drafts import LINK_NOT_IMPORTABLE, CatalogReady
+from dinnerbell.services.assistant.drafts import IMPORT_LINK_LIFETIME, LINK_NOT_IMPORTABLE, CatalogReady
 from dinnerbell.services.assistant.menu_links import (
     CAP_TOO_LOW,
     MAX_LINK_FETCHES,
@@ -859,3 +860,21 @@ async def test_with_the_draft_limit_reached_nothing_is_fetched_or_called(
     [result] = results(model.requests[-1])
     assert result["is_error"] and result["content"] == drafts.TOO_MANY
     assert fetch.asked == [] and len(model.requests) == 2
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_a_confirmed_link_draft_is_kept_for_its_import_link(
+    house: House, helper: Assistant, model: FakeModel
+) -> None:
+    model.script = [tool_call("draft_catalog_from_link", link()), answer(ONE), answer("Drafted.")]
+    [view] = (await ask(house, helper)).drafts
+    house.clock.advance(timedelta(minutes=29))
+    confirmed_at = house.clock()
+    async with house.sessionmaker() as db:
+        assert isinstance(await drafts.confirm_draft(db, house.clock, CONFIGURED, house["Sam"], view.id), CatalogReady)
+    [row] = await rows(house, AssistantDraftRow)
+    assert row.used_at == confirmed_at and row.expires_at == confirmed_at + IMPORT_LINK_LIFETIME
+    house.clock.advance(timedelta(hours=23))
+    async with house.sessionmaker() as db:
+        ready = await drafts.ready_for_import(db, CONFIGURED, house["Sam"], view.id, now=house.clock())
+    assert [i.state.name for i in ready.plan.items_to_create] == ["Basil House"]

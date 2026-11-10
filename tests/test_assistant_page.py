@@ -6,6 +6,7 @@ Cancel, the add-only catalog import, and reply text that never becomes HTML. The
 
 from __future__ import annotations
 
+import asyncio
 import re
 from collections.abc import Iterator
 from datetime import date, timedelta
@@ -19,6 +20,7 @@ from joserfc.jwk import RSAKey
 from dinnerbell.app_factory import create_app
 from dinnerbell.config import SLACK_ISSUER, Settings
 from dinnerbell.db.models import AssistantConversationRow, AssistantDraftRow, CatalogItemRow, EventRow, MemberRow
+from dinnerbell.db.repositories import MemberRepository
 from dinnerbell.domain.catalog import Mode
 from dinnerbell.domain.events import EventRuleViolation, EventState, IllegalTransition, Proposal, ProposalSource
 from dinnerbell.domain.meals import Slot
@@ -26,12 +28,15 @@ from dinnerbell.domain.offers import OfferPath
 from dinnerbell.services.assistant import drafts
 from dinnerbell.services.assistant.conversation import FAILED
 from dinnerbell.services.assistant.drafts import EXPIRED, NO_SUCH_DRAFT, USED, OfferConfirmed, ProposalConfirmed
+from dinnerbell.services.database import open_database
+from dinnerbell.services.household import current_household
 from dinnerbell.services.offers import Posted
 from dinnerbell.web.routes import assistant_page
 from tests.conftest import BASE_URL, csrf_from, invite, page, sign_in
 from tests.support.clock import FakeClock
 from tests.support.fake_model import FakeModel, answer, failure, tool_call, usage
 from tests.support.fake_oidc import FakeProvider
+from tests.support.links import MENU_LINK, link_draft
 from tests.support.web import add_item, htmx, submit
 from tests.test_auth_flow import rows
 
@@ -608,6 +613,39 @@ def test_a_catalog_confirm_opens_an_add_only_preview_that_never_updates_a_match(
     assert applied.status_code == 303 and applied.headers["location"].startswith("/catalog?notice=imported&created=1")
     items = {item.name: item for item in rows(migrated, CatalogItemRow)}
     assert "Lentil Soup" in items and items["Noodle Bar"].notes is None
+
+
+@pytest.mark.flag("assistant", on=True)
+def test_a_link_drafts_confirm_opens_its_preview_with_only_what_dinnerbell_kept(
+    client: TestClient, provider: FakeProvider, migrated: Settings, clock: FakeClock
+) -> None:
+    furnish(client, provider)
+    as_who(client, provider, "kim")
+
+    async def drafted() -> int:
+        database = open_database(migrated.async_database_url)
+        try:
+            async with database.sessionmaker() as db:
+                household = await current_household(db)
+                kim = next(m for m in await MemberRepository(db).list(household.id) if m.email == "kim@example.com")
+                return (await link_draft(db, kim, now=clock())).view.id
+        finally:
+            await database.close()
+
+    draft = asyncio.run(drafted())
+    assert f'action="/assistant/drafts/{draft}/confirm"' in page(client.get("/assistant"))
+    preview = submit(client, f"/assistant/drafts/{draft}/confirm")
+    assert preview.status_code == 200
+    shown = page(preview)
+    assert "only adds new items" in shown and "Add 1 item" in shown and "Basil House" in shown
+    assert MENU_LINK in shown and "pay.example.net" not in shown and "Pay ahead" not in shown
+    content = re.search(r'<textarea name="content"[^>]*>\n?(.*?)</textarea>', shown, re.S)
+    token = re.search(r'name="token" value="([^"]+)"', preview.text)
+    assert content and token
+    applied = submit(client, "/catalog/import/apply", {"content": content.group(1), "token": token.group(1)})
+    assert applied.status_code == 303 and applied.headers["location"].startswith("/catalog?notice=imported&created=1")
+    basil = next(row for row in rows(migrated, CatalogItemRow) if row.name == "Basil House")
+    assert basil.url == MENU_LINK and basil.order_url is None and basil.notes is None
 
 
 # Escaping --------------------------------------------------------------------------------------
