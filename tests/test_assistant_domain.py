@@ -25,6 +25,7 @@ from dinnerbell.domain.assistant import (
     TokenUsage,
     Turn,
     assistant_settings,
+    attempts_covered,
     check_assistant_settings,
     check_key,
     cost_micros,
@@ -122,6 +123,13 @@ def test_each_fallback_is_bounded_at_its_targets_highest_prices() -> None:
     assert fallback_prices(PRICE_TABLE["claude-haiku-5-5"]) is None
 
 
+def test_a_reservation_covers_the_model_and_one_hop_per_fallback_model() -> None:
+    assert attempts_covered("claude-sonnet-5-5") == 2
+    assert attempts_covered("claude-opus-5-5") == 3
+    assert attempts_covered("claude-haiku-5-5") == 1
+    assert attempts_covered("claude-mystery") == 1
+
+
 def test_the_ceiling_is_above_every_price_in_the_table() -> None:
     for card in PRICE_TABLE.values():
         assert card.highest.most(UNKNOWN_MODEL_PRICES) == UNKNOWN_MODEL_PRICES
@@ -176,8 +184,9 @@ def test_the_reservation_covers_the_worst_usage(model: str, payload_bytes: int, 
         ]
         for usage in worst:
             # A declined attempt, then the dearest of its fallback models; or the fallback alone (sticky).
-            second = max((cost_micros(replace(usage, model=t)) for t in targets), default=0)
-            assert bound >= cost_micros(usage) + second
+            # One hop per fallback model, each one billing, at the dearest of them.
+            hop = max((cost_micros(replace(usage, model=t)) for t in targets), default=0)
+            assert bound >= cost_micros(usage) + len(targets) * hop
 
 
 def test_a_fallback_adds_an_attempt_at_its_targets_prices() -> None:
@@ -186,7 +195,7 @@ def test_a_fallback_adds_an_attempt_at_its_targets_prices() -> None:
 
     # 10,000 input tokens at the cache-write price and 6,000 output, then again on the fallback.
     assert bound("claude-sonnet-5-5") == (25_000 + 60_000) * 2
-    assert bound("claude-opus-5-5") == (50_000 + 120_000) + (62_500 + 150_000)
+    assert bound("claude-opus-5-5") == (50_000 + 120_000) + 2 * (62_500 + 150_000)  # two possible hops
     assert bound("claude-haiku-5-5") == 1_250 + 3_000  # no server-side fallback
     assert bound("claude-mystery") == 125_000 + 300_000
     assert bound("claude-sonnet-5-5", extra=2_000) == (30_000 + 60_000) * 2

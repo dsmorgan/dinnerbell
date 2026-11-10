@@ -329,6 +329,55 @@ class TestAssistantOn:
             )
         assert await conversations(house) == []
 
+    async def test_more_billed_attempts_than_reserved_are_recorded_logged_and_stop_the_message(
+        self, house: House, helper: Assistant, model: FakeModel, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        await switch(house, helper)
+        hops = (usage(), TokenUsage("claude-sonnet-5", 1_000, 200), TokenUsage("claude-sonnet-5", 1_000, 200))
+        model.script = [replace(_lookup("", ""), usage=hops), answer("Never sent.")]
+        assert await ask(house, helper, "Sam", "Everything?") == Reply(FAILED)
+        assert len(model.requests) == 1  # no further call in this message
+        [row] = await usage_rows(house)
+        assert row.cost_micros == sum(cost_micros(part) for part in hops)
+        [error] = [r for r in caplog.records if r.getMessage() == "assistant call billed more attempts than reserved"]
+        assert (error.levelname, error.attempts, error.covered) == ("ERROR", 3, 2)
+        model.script = [answer("Taqueria.", parts=hops)]  # a final answer still reaches the member
+        assert await ask(house, helper, "Sam", "Tacos?") == Reply("Taqueria.")
+
+    async def test_an_exchange_isnt_kept_in_a_conversation_that_changed_hands(
+        self, house: House, helper: Assistant, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        await switch(house, helper)
+        thread = slack_key("C0HOUSE", "1730000000.000500")
+        kim = house["Kim"]
+
+        class Swaps(FakeModel):
+            async def create(self, request: Any) -> Any:
+                # While Sam waits, the key becomes a private conversation of Kim's.
+                async with house.sessionmaker() as db:
+                    from dinnerbell.db.assistant import AssistantRepository
+                    from dinnerbell.domain.assistant import Conversation, Pseudonyms, Turn
+
+                    taken = Conversation(
+                        thread,
+                        True,
+                        kim.id,
+                        Pseudonyms({kim.id: 1}),
+                        (Turn("user", "Mine", "Member 1"),),
+                        house.clock(),
+                    )
+                    await AssistantRepository(db).save_conversation(house.household.id, taken, house.clock())
+                    await db.commit()
+                return await super().create(request)
+
+        reply = await ask(house, replace(helper, client=Swaps()), "Sam", "Sam's question", key=thread, private=False)
+        assert reply == Reply("OK")
+        [row] = await conversations(house)
+        assert (row.private, row.owner_member_id) == (True, kim.id)
+        assert row.transcript == [{"role": "user", "text": "Mine", "author": "Member 1"}]
+        assert row.pseudonyms == {str(kim.id): 1}
+        assert any(r.getMessage().startswith("assistant exchange not kept") for r in caplog.records)
+
     async def test_a_failure_logs_what_anthropic_said(
         self, house: House, helper: Assistant, model: FakeModel, caplog: pytest.LogCaptureFixture
     ) -> None:
