@@ -85,7 +85,7 @@ secrets:
 
 Then add `-f compose.override.yaml` last to every command that already names `compose.secrets.yaml`.
 
-`dinnerbell scrub-test` turns the assistant off and deletes every conversation, so a test copy never sends production's conversations.
+`dinnerbell scrub-test` turns the assistant off and deletes every conversation and draft, so a test copy never sends production's conversations or confirms production's drafts.
 
 ## The sign-in rate limit
 

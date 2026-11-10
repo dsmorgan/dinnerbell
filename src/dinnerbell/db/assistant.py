@@ -1,15 +1,18 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""The assistant's usage rows and conversations (ADR 0009)."""
+"""The assistant's usage rows, conversations, and drafts (ADR 0009)."""
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from dinnerbell.db.models import AssistantConversationRow, AssistantUsageRow
+from dinnerbell.db.models import AssistantConversationRow, AssistantDraftRow, AssistantUsageRow
 from dinnerbell.domain.assistant import Conversation, Pseudonyms, TokenUsage, turns_from_json
+from dinnerbell.domain.assistant_drafts import Draft, DraftKind
 
 RESERVED = "reserved"
 SETTLED = "settled"
@@ -23,6 +26,24 @@ def _conversation(row: AssistantConversationRow) -> Conversation:
         pseudonyms=Pseudonyms.from_json(row.pseudonyms),
         turns=turns_from_json(row.transcript),
         last_message_at=row.last_message_at,
+    )
+
+
+def _draft(row: AssistantDraftRow) -> Draft:
+    return Draft(
+        id=row.id,
+        household_id=row.household_id,
+        member_id=row.member_id,
+        conversation_key=row.conversation_key,
+        kind=DraftKind(row.kind),
+        payload=dict(row.payload),
+        title=row.title,
+        lines=tuple(str(line) for line in row.lines),
+        created_at=row.created_at,
+        expires_at=row.expires_at,
+        event_id=row.event_id,
+        run=row.run,
+        used_at=row.used_at,
     )
 
 
@@ -145,5 +166,110 @@ class AssistantRepository:
         statement = delete(AssistantConversationRow).where(AssistantConversationRow.household_id == household_id)
         if last_before is not None:
             statement = statement.where(AssistantConversationRow.last_message_at <= last_before)
+        result = await self._session.execute(statement)
+        return int(getattr(result, "rowcount", 0) or 0)
+
+    # Drafts ------------------------------------------------------------------------------------
+
+    async def add_draft(
+        self,
+        household_id: int,
+        *,
+        member_id: int,
+        conversation_key: str,
+        kind: DraftKind,
+        payload: Mapping[str, Any],
+        title: str,
+        lines: Sequence[str],
+        event_id: int | None,
+        run: int | None,
+        now: datetime,
+        expires_at: datetime,
+    ) -> Draft:
+        row = AssistantDraftRow(
+            household_id=household_id,
+            member_id=member_id,
+            conversation_key=conversation_key,
+            kind=kind.value,
+            payload=dict(payload),
+            event_id=event_id,
+            run=run,
+            title=title[:200],
+            lines=list(lines),
+            created_at=now,
+            expires_at=expires_at,
+            used_at=None,
+        )
+        self._session.add(row)
+        await self._session.flush()
+        return _draft(row)
+
+    async def draft(self, household_id: int, draft_id: int) -> Draft | None:
+        row = await self._session.scalar(
+            select(AssistantDraftRow).where(
+                AssistantDraftRow.household_id == household_id, AssistantDraftRow.id == draft_id
+            )
+        )
+        return None if row is None else _draft(row)
+
+    async def drafts_waiting(self, household_id: int, member_id: int, key: str, now: datetime) -> list[Draft]:
+        """``member_id``'s drafts in the conversation ``key`` that still wait for Confirm, oldest first."""
+        rows = await self._session.scalars(
+            select(AssistantDraftRow)
+            .where(
+                AssistantDraftRow.household_id == household_id,
+                AssistantDraftRow.member_id == member_id,
+                AssistantDraftRow.conversation_key == key,
+                AssistantDraftRow.used_at.is_(None),
+                AssistantDraftRow.expires_at > now,
+            )
+            .order_by(AssistantDraftRow.id)
+        )
+        return [_draft(row) for row in rows]
+
+    async def waiting_drafts(self, household_id: int, member_id: int, now: datetime) -> int:
+        """How many of ``member_id``'s drafts still wait for Confirm."""
+        found = await self._session.scalar(
+            select(func.count())
+            .select_from(AssistantDraftRow)
+            .where(
+                AssistantDraftRow.household_id == household_id,
+                AssistantDraftRow.member_id == member_id,
+                AssistantDraftRow.used_at.is_(None),
+                AssistantDraftRow.expires_at > now,
+            )
+        )
+        return int(found or 0)
+
+    async def use_draft(self, household_id: int, draft_id: int, member_id: int, now: datetime) -> bool:
+        """Mark the draft used, if it's ``member_id``'s, unused, and unexpired. Returns whether it
+        was: of two at once, only the first finds it unused, since SQLite has one writer."""
+        result = await self._session.execute(
+            update(AssistantDraftRow)
+            .where(
+                AssistantDraftRow.household_id == household_id,
+                AssistantDraftRow.id == draft_id,
+                AssistantDraftRow.member_id == member_id,
+                AssistantDraftRow.used_at.is_(None),
+                AssistantDraftRow.expires_at > now,
+            )
+            .values(used_at=now)
+            .execution_options(synchronize_session=False)
+        )
+        return int(getattr(result, "rowcount", 0) or 0) == 1
+
+    async def any_expired_drafts(self, household_id: int, now: datetime | None) -> bool:
+        """Whether ``delete_drafts`` with the same arguments would delete anything."""
+        statement = select(AssistantDraftRow.id).where(AssistantDraftRow.household_id == household_id)
+        if now is not None:
+            statement = statement.where(AssistantDraftRow.expires_at <= now)
+        return await self._session.scalar(statement.limit(1)) is not None
+
+    async def delete_drafts(self, household_id: int, now: datetime | None) -> int:
+        """Delete the drafts that expired by ``now``, used or not, or every draft when it's
+        None. Returns how many."""
+        statement = delete(AssistantDraftRow).where(AssistantDraftRow.household_id == household_id)
+        if now is not None:
+            statement = statement.where(AssistantDraftRow.expires_at <= now)
         result = await self._session.execute(statement)
         return int(getattr(result, "rowcount", 0) or 0)

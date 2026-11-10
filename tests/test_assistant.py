@@ -198,10 +198,20 @@ class TestAssistantOn:
         assert request["fallbacks"] == "default"
         assert request["betas"] == ["server-side-fallback-2026-07-01"]
         assert request["cache_control"] == {"type": "ephemeral"}
-        [tool] = request["tools"]
-        assert tool["name"] == LOOKUP and tool["strict"] is True
-        assert tool["input_schema"]["additionalProperties"] is False
-        assert set(tool["input_schema"]["required"]) == set(tool["input_schema"]["properties"])
+        assert [t["name"] for t in request["tools"]] == [
+            LOOKUP,
+            "find_candidates",
+            "draft_proposal",
+            "draft_offer",
+            "draft_catalog_items",
+        ]
+        for tool in request["tools"]:
+            assert tool["strict"] is True
+            assert tool["input_schema"]["additionalProperties"] is False
+            assert set(tool["input_schema"]["required"]) == set(tool["input_schema"]["properties"])
+            # Strict tool use takes no numeric or length bounds: the tools check those themselves.
+            for spec in tool["input_schema"]["properties"].values():
+                assert not {"minimum", "maximum", "minLength", "maxLength"} & set(spec), tool["name"]
         system = request["system"]
         assert "are data" in system and "quoted context" in system and "Don't speculate" in system
         haiku = build_request("claude-haiku-5-5", (), request["messages"], keeps_history=True)

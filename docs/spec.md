@@ -313,7 +313,7 @@ Requirements use "must" for version 1 and "should" for items that can slip to a 
 
 The assistant (FR-51, [ADR 0009](adr/0009-optional-assistant.md)) is optional, acts only as the member it's answering without admin rights, and changes nothing until that member confirms a draft.
 
-**Turning it on.** It needs `DINNERBELL_ANTHROPIC_API_KEY`, the `assistant` flag, and Admin's **Assistant** switch, which is audited and shows only with the key and flag. DMs also need the assistant variant of the Slack manifest (section 10). While any of them is missing, Dinnerbell ignores DMs and mentions. `dinnerbell scrub-test` turns the switch off and deletes conversations.
+**Turning it on.** It needs `DINNERBELL_ANTHROPIC_API_KEY`, the `assistant` flag, and Admin's **Assistant** switch, which is audited and shows only with the key and flag. DMs also need the assistant variant of the Slack manifest (section 10). While any of them is missing, Dinnerbell ignores DMs and mentions. `dinnerbell scrub-test` turns the switch off and deletes conversations and drafts.
 
 **Who.** Active members only. A message from a guest, an inactive member, or someone not linked to a member gets no reply and is neither stored nor sent. The same goes for a mention outside the household channel, and Dinnerbell ignores bot messages and message edits and deletions (any `bot_id` or `subtype`).
 
@@ -355,7 +355,7 @@ Only private-only tools send the member's own personal data, and only when the m
 
 **Tools in the first build** (#17), each acting as the member whose message is being answered:
 
-- **Find candidates**, for a voting call only. It runs ranking's hard filters, optionally narrowed by days since eaten, cuisine, or mode, and returns candidates in name order. Their reasons come only from variety, novelty, suggestions, the default mode, volunteer fit, and meal fit. It never returns what the filters removed. Before voting, the assistant says to ask once voting opens.
+- **Find candidates**, for a voting call only. It runs ranking's hard filters, with the member counted as able to take the role a pick needs, since adding one volunteers them, optionally narrowed by days since eaten, cuisine, or mode, and returns candidates in name order. Their reasons come only from variety, novelty, suggestions, the default mode, volunteer fit, and meal fit. It never returns what the filters removed. Before voting, the assistant says to ask once voting opens.
 - **Look up catalog items** by name or tag: name, kind, tags, modes, and meals.
 - **Draft a proposal**, for a voting call.
 - **Draft an offer** of an existing catalog item.
@@ -687,6 +687,7 @@ Every table carries `household_id`. Timestamps are UTC; the household time zone 
 | audit | actor, action, target, payload, created_at |
 | assistant_usage | member (nullable: kept after a member is deleted), model, month (the household's calendar month, such as 2026-11), input, output, cache read, and cache write tokens, cost_micros (micro-dollars), state (reserved, settled): one row per model call, for the cost cap (6.14) |
 | assistant_conversation | key (`web:<member>` or `slack:<channel>:<thread_ts>`, unique), private, owner member (set only when private), pseudonyms (JSON: member ID to number), transcript (JSON, in pseudonym form), last_message_at |
+| assistant_draft | member, conversation key, kind (proposal, offer, catalog), payload (JSON: what the service needs), event and run (the call it was made against, where there is one; no foreign key), title and lines (what **Confirm** does), created_at, expires_at (30 minutes later), used_at (set by Confirm or Cancel): deleted once expired (6.14) |
 
 ### 13.4 Channel interface
 

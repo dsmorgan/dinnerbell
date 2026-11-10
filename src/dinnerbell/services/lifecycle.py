@@ -405,6 +405,17 @@ def guest_needs(ctx: CallContext) -> frozenset[int]:
     return ctx.guest_needs
 
 
+def suggester_ids(ctx: CallContext) -> dict[int, tuple[int, ...]]:
+    """Who suggested each catalog item for the call and counts for ranking (FR-28): members
+    whose stances apply, each credited once, in the order they suggested it."""
+    who = ctx.veto_people
+    found: dict[int, dict[int, None]] = {}
+    for suggestion in ctx.suggestions:
+        if suggestion.item_id is not None and suggestion.member_id in who:
+            found.setdefault(suggestion.item_id, {})[suggestion.member_id] = None
+    return {item: tuple(by_member) for item, by_member in found.items()}
+
+
 async def ranking_snapshot(
     db: AsyncSession,
     ctx: CallContext,
@@ -423,10 +434,6 @@ async def ranking_snapshot(
     household_id, day = ctx.event.household_id, ctx.event.day
     window = await variety_window(db, household_id, day)
     who = ctx.veto_people
-    suggesters: dict[int, dict[int, str]] = {}  # item -> {member ID: name}, credited once per member
-    for suggestion in ctx.suggestions:
-        if suggestion.item_id is not None and suggestion.member_id in who:
-            suggesters.setdefault(suggestion.item_id, {})[suggestion.member_id] = ctx.name(suggestion.member_id)
     return RankingSnapshot(
         items=tuple(rank_item(ctx, item) for item in ctx.items.values() if item.active),
         preferences=await with_ratings(db, household_id, who, group, day=day, cap=feedback_cap(ctx.settings)),
@@ -439,7 +446,7 @@ async def ranking_snapshot(
         recent_items={i.item_id: i.days_since for i in window.items},
         recent_cuisines={c.tag_id: c.days_since for c in window.cuisines},
         last_eaten_days={i: max((day - d).days, 0) for i, d in (await last_eaten(db, household_id)).items()},
-        suggesters={i: tuple(by_member.values()) for i, by_member in suggesters.items()},
+        suggesters={i: tuple(ctx.name(m) for m in ids) for i, ids in suggester_ids(ctx).items()},
         member_names={m.id: m.display_name for m in ctx.members.values()},
         cuisine_names={t.id: t.name for t in ctx.tags.values()},
         limit=proposal_count(ctx.settings),

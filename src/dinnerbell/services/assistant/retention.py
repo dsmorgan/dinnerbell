@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Deleting conversations once Admin's Conversation hours pass (spec 6.14, **History**), and
-forgetting them all for ``scrub-test``."""
+"""Deleting conversations once Admin's Conversation hours pass (spec 6.14, **History**) and
+drafts once they expire (**Drafts**), and forgetting both for ``scrub-test``."""
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -34,13 +35,38 @@ async def purge_idle_conversations(sessionmaker: async_sessionmaker[AsyncSession
     return removed
 
 
-async def forget_for_test(db: AsyncSession, household_id: int) -> tuple[bool, int]:
+async def purge_expired_drafts(sessionmaker: async_sessionmaker[AsyncSession], now: datetime) -> int:
+    """Delete every household's drafts that expired by ``now``, confirmed or not. Idempotent.
+    Returns how many it deleted."""
+    async with sessionmaker() as db:
+        households = await HouseholdRepository(db).all()
+    removed = 0
+    for household in households:
+        async with sessionmaker() as db:
+            repo = AssistantRepository(db)
+            if not await repo.any_expired_drafts(household.id, now):
+                continue  # nothing to delete, so no write lock
+            async with write_transaction(db):
+                removed += await repo.delete_drafts(household.id, now)
+                await db.commit()
+    return removed
+
+
+@dataclass(frozen=True, slots=True)
+class Forgotten:
+    was_on: bool
+    conversations: int
+    drafts: int
+
+
+async def forget_for_test(db: AsyncSession, household_id: int) -> Forgotten:
     """For ``scrub-test``, in its transaction: turn Admin's Assistant switch off and delete every
-    conversation. Returns whether the switch was on and how many conversations went. Usage rows
+    conversation and draft. Says whether the switch was on and how many of each went. Usage rows
     stay: they hold member IDs and token counts, no text."""
     stored = await household_settings(db, household_id)
     was_on = assistant_settings(stored).enabled
     if ENABLED_KEY in stored:
         await HouseholdRepository(db).update_settings(household_id, stored | {ENABLED_KEY: False})
-    deleted = await AssistantRepository(db).delete_idle(household_id, None)
-    return was_on, deleted
+    repo = AssistantRepository(db)
+    conversations = await repo.delete_idle(household_id, None)
+    return Forgotten(was_on, conversations, await repo.delete_drafts(household_id, None))

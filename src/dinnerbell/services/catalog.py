@@ -347,9 +347,12 @@ def content_digest(source: str | bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-async def preview_import(db: AsyncSession, household_id: int, source: str | bytes) -> ImportPlan:
-    """Plan an import without saving anything."""
-    return plan_import(parse_catalog(source), await snapshot(db, household_id))
+async def preview_import(
+    db: AsyncSession, household_id: int, source: str | bytes, *, add_only: bool = False
+) -> ImportPlan:
+    """Plan an import without saving anything. ``add_only`` leaves out every entry naming an
+    item the catalog has, as an import from an assistant's draft does (spec 6.14)."""
+    return plan_import(parse_catalog(source), await snapshot(db, household_id), add_only=add_only)
 
 
 async def apply_import(
@@ -361,14 +364,17 @@ async def apply_import(
     now: datetime,
     expected_fingerprint: str | None = None,
     action: str = "catalog.imported",
+    add_only: bool = False,
 ) -> ImportPlan:
     """Re-plan ``source`` against the current catalog and apply it in one transaction.
+    ``add_only`` re-plans as ``preview_import`` does with it, so an item that appeared since the
+    preview is left alone, never changed.
 
     Raises ImportRejected if the file has errors and ImportChanged if the plan no longer
     matches ``expected_fingerprint`` (the preview the person confirmed). Either way, and on any
     failure while saving, nothing is written.
     """
-    plan = await preview_import(db, household_id, source)
+    plan = await preview_import(db, household_id, source, add_only=add_only)
     if not plan.ok:
         raise ImportRejected(plan)
     if expected_fingerprint is not None and plan.fingerprint() != expected_fingerprint:
@@ -396,7 +402,7 @@ async def apply_import(
         await db.rollback()
         if not is_unique_violation(exc):
             raise
-        raise ImportChanged(await preview_import(db, household_id, source)) from None
+        raise ImportChanged(await preview_import(db, household_id, source, add_only=add_only)) from None
     except BaseException:
         await db.rollback()
         raise

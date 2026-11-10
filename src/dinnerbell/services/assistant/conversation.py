@@ -44,9 +44,10 @@ from dinnerbell.domain.assistant import (
 )
 from dinnerbell.domain.members import Member
 from dinnerbell.services.assistant.client import ModelCallFailed, ModelClient, ModelReply
+from dinnerbell.services.assistant.drafts import DraftView
 from dinnerbell.services.assistant.prompt import system_prompt
 from dinnerbell.services.assistant.runtime import AssistantConfig, available
-from dinnerbell.services.assistant.tools import Tool, run_tool, tools_for
+from dinnerbell.services.assistant.tools import Tool, ToolSession, run_tool, tools_for
 from dinnerbell.services.clock import Clock
 from dinnerbell.services.errors import Forbidden, NotFound
 
@@ -88,10 +89,11 @@ class Assistant:
 
 @dataclass(frozen=True, slots=True)
 class Reply:
-    """The reply to show the member, with names put back. ``drafts`` come in a later issue."""
+    """The reply to show the member, with names put back, and the drafts this message made,
+    each for a card with **Confirm** and **Cancel**. Only the member answered sees them."""
 
     text: str
-    drafts: tuple[object, ...] = ()
+    drafts: tuple[DraftView, ...] = ()
 
 
 class _Refused(Exception):
@@ -330,6 +332,7 @@ async def _run_loop(
     *,
     private: bool,
     keeps_history: bool,
+    session: ToolSession,
 ) -> tuple[str, bool]:
     """The model and tool loop. Returns the reply text, and whether the model answered (so the
     exchange is worth keeping) rather than Dinnerbell replying for it."""
@@ -367,6 +370,7 @@ async def _run_loop(
                 member=member,
                 private=private,
                 now=assistant.clock(),
+                session=session,
             )
             entry: dict[str, Any] = {"type": "tool_result", "tool_use_id": call.get("id"), "content": result.content}
             if result.is_error:
@@ -377,10 +381,19 @@ async def _run_loop(
 
 
 async def converse(
-    db: AsyncSession, assistant: Assistant, member: Member, key: str, *, private: bool, text: str
+    db: AsyncSession,
+    assistant: Assistant,
+    member: Member,
+    key: str,
+    *,
+    private: bool,
+    text: str,
+    call_id: int | None = None,
 ) -> Reply | None:
     """Answer ``member``'s ``text`` in the conversation ``key`` (``domain.assistant.web_key`` or
     ``slack_key``). ``private`` is True for the web page and DMs, False for a channel thread.
+    ``call_id`` is the conversation's call, for a Slack thread rooted under a Dinnerbell post
+    about one: the call tools use when the member names none (spec 6.14).
 
     Returns None, storing and sending nothing, when the assistant doesn't answer this member
     (``available``) or the message is empty. Raises Forbidden for a private conversation that
@@ -412,11 +425,20 @@ async def converse(
     history = stored.turns if stored else ()
     sent = recent_turns(history, MAX_HISTORY_BYTES - current.size)
     zone = ZoneInfo(household.timezone)
+    session = ToolSession(key=key, pseudonyms=pseudonyms, call_id=call_id)
     answer, answered = await _run_loop(
-        db, assistant, member, zone, _messages(sent, current), private=private, keeps_history=hours > 0
+        db,
+        assistant,
+        member,
+        zone,
+        _messages(sent, current),
+        private=private,
+        keeps_history=hours > 0,
+        session=session,
     )
+    pseudonyms = session.pseudonyms  # with anyone the tools named
     if answered:
         await _keep(db, assistant, member, key, private, pseudonyms, current, Turn("assistant", answer))
     names = {m.id: m.display_name for m in await MemberRepository(db).list(household.id)}
-    log.info("assistant replied", extra={"member_id": member.id, "answered": answered})
-    return Reply(pseudonyms.restore_names(answer, names))
+    log.info("assistant replied", extra={"member_id": member.id, "answered": answered, "drafts": len(session.drafts)})
+    return Reply(pseudonyms.restore_names(answer, names), tuple(session.drafts))

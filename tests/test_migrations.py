@@ -26,6 +26,7 @@ M3_TABLES = {"feedback", "invitation"}
 M4_TABLES = {"contribution", "badge_award", "slack_badge_file", "slack_badge_composite"}
 M7_TABLES = {"stance_edit"}
 M6_TABLES = {"assistant_usage", "assistant_conversation"}
+M6_DRAFT_TABLES = {"assistant_draft"}
 
 
 def test_migrates_an_empty_database(settings: Settings) -> None:
@@ -34,7 +35,7 @@ def test_migrates_an_empty_database(settings: Settings) -> None:
     engine = create_engine(settings.sync_database_url)
     try:
         inspector = inspect(engine)
-        everything = M0_TABLES | M1_TABLES | M2_TABLES | M3_TABLES | M4_TABLES | M6_TABLES | M7_TABLES
+        everything = M0_TABLES | M1_TABLES | M2_TABLES | M3_TABLES | M4_TABLES | M6_TABLES | M6_DRAFT_TABLES | M7_TABLES
         assert set(inspector.get_table_names()) == everything | {"alembic_version"}
         for table in everything - {"household"}:
             assert "household_id" in {c["name"] for c in inspector.get_columns(table)}, table
@@ -461,7 +462,7 @@ def _snapshot(settings: Settings) -> dict[str, object]:
                 text(
                     "SELECT name, sql FROM sqlite_master WHERE type = 'index' AND sql IS NOT NULL "
                     "AND tbl_name NOT IN ('contribution', 'badge_award', 'slack_badge_file', 'slack_badge_composite', "
-                    "'stance_edit', 'assistant_usage', 'assistant_conversation') "
+                    "'stance_edit', 'assistant_usage', 'assistant_conversation', 'assistant_draft') "
                     "ORDER BY name"
                 )
             ).all()
@@ -1412,6 +1413,7 @@ def _rows_outside_m4(settings: Settings) -> dict[str, list[object]]:
                     "slack_badge_composite",
                     "assistant_usage",
                     "assistant_conversation",
+                    "assistant_draft",
                     "stance_edit",
                     "alembic_version",
                 }
@@ -2505,5 +2507,22 @@ def test_0031_adds_the_assistant_tables_and_downgrade_drops_them(settings: Setti
             assert c.execute(text("SELECT count(*) FROM assistant_conversation")).scalar_one() == 0
         _downgrade_to(settings, "0030_color_mode")
         assert not M6_TABLES & set(inspect(engine).get_table_names())
+    finally:
+        engine.dispose()
+
+
+def test_0032_adds_the_assistant_drafts_table_and_downgrade_drops_it(settings: Settings) -> None:
+    """The assistant's drafts (ADR 0009) start empty; a downgrade drops them."""
+    _upgrade_to(settings, "0031_assistant")
+    engine = create_engine(settings.sync_database_url)
+    try:
+        assert not M6_DRAFT_TABLES & set(inspect(engine).get_table_names())
+        run_migrations(settings.sync_database_url, settings.database_path)
+        assert set(inspect(engine).get_table_names()) >= M6_DRAFT_TABLES
+        with engine.connect() as c:
+            assert c.execute(text("SELECT count(*) FROM assistant_draft")).scalar_one() == 0
+        _downgrade_to(settings, "0031_assistant")
+        assert not M6_DRAFT_TABLES & set(inspect(engine).get_table_names())
+        assert set(inspect(engine).get_table_names()) >= M6_TABLES
     finally:
         engine.dispose()

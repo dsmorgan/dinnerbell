@@ -27,6 +27,7 @@ from dinnerbell.config import Settings
 from dinnerbell.db.events import EVENT_ROWS
 from dinnerbell.db.models import (
     AssistantConversationRow,
+    AssistantDraftRow,
     AssistantUsageRow,
     Base,
     InvitationRow,
@@ -148,6 +149,21 @@ async def lived_in(house: House) -> int:
                 last_message_at=now,
             )
         )
+        db.add(
+            AssistantDraftRow(
+                household_id=household_id,
+                member_id=kim,
+                conversation_key=f"web:{kim}",
+                kind="proposal",
+                payload={"item_id": 1, "mode": "pickup", "join_late": False},
+                event_id=event_id,
+                run=1,
+                title="Propose Siam Garden (pickup)",
+                lines=["It's added to the vote as a proposal."],
+                created_at=now,
+                expires_at=now + timedelta(minutes=30),
+            )
+        )
         expires = now + timedelta(days=30)
         db.add(
             SessionRow(
@@ -204,6 +220,7 @@ EXPECTED_CLEAR = {
     "contribution",
     "badge_award",
     "assistant_conversation",
+    "assistant_draft",
 }
 
 
