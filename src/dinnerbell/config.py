@@ -22,7 +22,7 @@ from sqlalchemy.exc import ArgumentError
 
 from dinnerbell import __version__
 from dinnerbell.domain import flags
-from dinnerbell.domain.assistant import DEFAULT_MODEL, PRICE_TABLE
+from dinnerbell.domain.assistant import DEFAULT_MODEL, MODELS
 from dinnerbell.domain.members import InvalidMemberInput, normalize_email
 
 ENV_PREFIX = "DINNERBELL_"
@@ -299,8 +299,8 @@ class Settings(BaseSettings):
     @classmethod
     def _check_assistant_model(cls, value: str) -> str:
         # The cost cap needs the model's prices, so a model the table doesn't price can't run.
-        if value not in PRICE_TABLE:
-            raise ValueError(f"must be one of {', '.join(sorted(PRICE_TABLE))}, the models Dinnerbell has prices for")
+        if value not in MODELS:
+            raise ValueError(f"must be one of {', '.join(sorted(MODELS))}, the models Dinnerbell has prices for")
         return value
 
     @field_validator("instance_label")

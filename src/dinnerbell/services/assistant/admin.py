@@ -106,8 +106,13 @@ async def update_assistant(
     return True
 
 
+def expiry_cutoff(hours: int, now: datetime) -> datetime | None:
+    """The last-message time at or before which a conversation is past ``hours``; None at 0,
+    when every conversation is."""
+    return None if hours == 0 else now - timedelta(hours=hours)
+
+
 async def delete_expired(db: AsyncSession, household_id: int, hours: int, now: datetime) -> int:
     """Delete the conversations whose last message is ``hours`` or more ago (all of them at 0),
     in the caller's transaction."""
-    cutoff = None if hours == 0 else now - timedelta(hours=hours)
-    return await AssistantRepository(db).delete_idle(household_id, cutoff)
+    return await AssistantRepository(db).delete_idle(household_id, expiry_cutoff(hours, now))

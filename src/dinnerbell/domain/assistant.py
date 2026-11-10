@@ -13,7 +13,6 @@ import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, tzinfo
-from functools import reduce
 from typing import Any
 
 from dinnerbell.domain.members import Member
@@ -135,9 +134,9 @@ class PriceCard:
     standard: Prices
     long: Prices | None = None
     long_over: int = 0
-    server_fallback: bool = False
-    """The model takes Anthropic's server-side refusal fallback (``fallbacks: "default"``), so a
-    request can run twice: on this model, then on the fallback model."""
+    falls_back_to: tuple[str, ...] = ()
+    """The models Anthropic's server-side refusal fallback (``fallbacks: "default"``) can run a
+    declined request on. Empty for a model that has no server-side fallback."""
 
     def prices_for(self, prompt_tokens: int) -> Prices:
         if self.long is not None and prompt_tokens > self.long_over:
@@ -150,15 +149,20 @@ class PriceCard:
 
 
 DEFAULT_MODEL = "claude-sonnet-5-5"
-PRICE_TABLE: Mapping[str, PriceCard] = {
-    # Anthropic's first-party prices per million tokens, from the claude-api skill (cached
-    # 2026-10-06). Cache writes are 5-minute writes, 1.25 times the input price.
-    "claude-sonnet-5-5": PriceCard(
-        Prices(dollars("2"), dollars("10"), dollars("0.20"), dollars("2.50")), server_fallback=True
-    ),
-    "claude-opus-5-5": PriceCard(
-        Prices(dollars("4"), dollars("20"), dollars("0.20"), dollars("5")), server_fallback=True
-    ),
+
+
+def _card(input_: str, output: str, cache_read: str, cache_write: str, *falls_back_to: str) -> PriceCard:
+    prices = Prices(dollars(input_), dollars(output), dollars(cache_read), dollars(cache_write))
+    return PriceCard(prices, falls_back_to=falls_back_to)
+
+
+# Anthropic's first-party prices per million tokens: input, output, cache read, and 5-minute
+# cache write (1.25 times input), from the claude-api skill and Anthropic's pricing page
+# (checked 2026-11-10). The pricing page lists Sonnet 5.5's cache reads at $0.10; the table
+# keeps the skill's $0.20, the higher of the two, so the cap never undercounts.
+MODELS: Mapping[str, PriceCard] = {
+    "claude-sonnet-5-5": _card("2", "10", "0.20", "2.50", "claude-sonnet-5"),
+    "claude-opus-5-5": _card("4", "20", "0.20", "5", "claude-opus-5", "claude-opus-4-8"),
     # Two rate cards by prompt length; cache reads are 0.1 times input, writes 1.25 times.
     "claude-haiku-5-5": PriceCard(
         Prices(dollars("0.10"), dollars("0.50"), dollars("0.01"), dollars("0.125")),
@@ -166,16 +170,44 @@ PRICE_TABLE: Mapping[str, PriceCard] = {
         long_over=100_000,
     ),
 }
+"""The models ``DINNERBELL_ASSISTANT_MODEL`` may name."""
+
+FALLBACK_MODELS: Mapping[str, PriceCard] = {
+    "claude-sonnet-5": _card("2", "10", "0.20", "2.50"),
+    "claude-opus-5": _card("5", "25", "0.50", "6.25"),
+    "claude-opus-4-8": _card("5", "25", "0.50", "6.25"),
+}
+"""Models a server-side fallback can run on, priced for settling; never chosen to run."""
+
+PRICE_TABLE: Mapping[str, PriceCard] = {**MODELS, **FALLBACK_MODELS}
+
+UNKNOWN_MODEL_PRICES = Prices(dollars("10"), dollars("50"), dollars("1"), dollars("12.50"))
+"""The ceiling for a model the table doesn't know: Claude Fable 5.1's prices, Anthropic's
+highest for a current model, with Claude Fable 5's $1 cache reads, the highest of those."""
 
 
-def _highest_prices(cards: Iterable[PriceCard]) -> Prices:
-    first, *rest = cards
-    return reduce(lambda found, card: found.most(card.highest), rest, first.highest)
+def known_model(model: str) -> bool:
+    return model in PRICE_TABLE
 
 
-MOST_EXPENSIVE = _highest_prices(PRICE_TABLE.values())
-"""Each price at the table's highest, for a model the table doesn't know, such as the model a
-fallback ran on."""
+def _rank(model: str) -> tuple[int, int, int, int]:
+    card = PRICE_TABLE.get(model)
+    prices = UNKNOWN_MODEL_PRICES if card is None else card.highest
+    return (prices.output, prices.input, prices.cache_write, prices.cache_read)
+
+
+def costlier(*models: str) -> str:
+    """The model among ``models`` with the higher prices, for an attempt the API doesn't name."""
+    return max(models, key=_rank)
+
+
+def fallback_prices(card: PriceCard) -> Prices | None:
+    """The highest prices among the models ``card``'s fallback can run on, or None without one."""
+    found: Prices | None = None
+    for target in card.falls_back_to:
+        prices = PRICE_TABLE[target].highest
+        found = prices if found is None else found.most(prices)
+    return found
 
 
 @dataclass(frozen=True, slots=True)
@@ -199,9 +231,9 @@ def _cost(tokens: int, price_per_million: int) -> int:
 
 def cost_micros(usage: TokenUsage) -> int:
     """What ``usage`` cost, in micro-dollars, at its model's prices. A model the table doesn't
-    know, such as a fallback's, costs the table's highest prices."""
+    know costs ``UNKNOWN_MODEL_PRICES``."""
     card = PRICE_TABLE.get(usage.model)
-    prices = MOST_EXPENSIVE if card is None else card.prices_for(usage.prompt_tokens)
+    prices = UNKNOWN_MODEL_PRICES if card is None else card.prices_for(usage.prompt_tokens)
     return (
         _cost(usage.input_tokens, prices.input)
         + _cost(usage.output_tokens, prices.output)
@@ -219,22 +251,25 @@ def _attempt_bound(prices: Prices, input_tokens: int, max_tokens: int) -> int:
     return _cost(input_tokens, worst_input) + _cost(max_tokens, prices.output)
 
 
-def reservation_micros(model: str, *, payload_bytes: int, max_tokens: int) -> int:
+def reservation_micros(model: str, *, payload_bytes: int, max_tokens: int, extra_input_tokens: int = 0) -> int:
     """The most one request can cost, in micro-dollars, to reserve before sending it.
 
     A token is never shorter than a byte of the text it encodes, so the request's UTF-8 byte
-    length, plus ``OVERHEAD_TOKENS`` for what the API adds, bounds its input tokens. Every input
-    token is priced at the higher of the input and cache-write prices, and ``max_tokens`` of
-    output (thinking included) at the output price. A model with a server-side fallback can run
-    the request a second time on a model the table may not know, so that attempt is bounded
-    again at the table's highest prices."""
-    input_tokens = payload_bytes + OVERHEAD_TOKENS
+    length, plus ``OVERHEAD_TOKENS`` for what the API adds, bounds its input tokens.
+    ``extra_input_tokens`` covers input the bytes don't show: the thinking of this message's
+    earlier calls, which goes back as signed blocks and bills as input. Every input token is
+    priced at the higher of the input and cache-write prices, and ``max_tokens`` of output
+    (thinking included) at the output price. A model with a server-side fallback can run the
+    request again on a fallback model, or a sticky conversation can run it there instead, so a
+    second attempt is bounded at the highest prices among its fallback models."""
+    input_tokens = payload_bytes + OVERHEAD_TOKENS + extra_input_tokens
     card = PRICE_TABLE.get(model)
     if card is None:
-        return _attempt_bound(MOST_EXPENSIVE, input_tokens, max_tokens)
+        return _attempt_bound(UNKNOWN_MODEL_PRICES, input_tokens, max_tokens)
     bound = _attempt_bound(card.prices_for(input_tokens), input_tokens, max_tokens)
-    if card.server_fallback:
-        bound += _attempt_bound(MOST_EXPENSIVE, input_tokens, max_tokens)
+    fallback = fallback_prices(card)
+    if fallback is not None:
+        bound += _attempt_bound(fallback, input_tokens, max_tokens)
     return bound
 
 
@@ -285,6 +320,27 @@ class Pseudonyms:
             if isinstance(key, str) and key.isdigit() and isinstance(value, int) and not isinstance(value, bool):
                 numbers[int(key)] = value
         return cls(numbers)
+
+    def onto(self, base: Pseudonyms) -> Pseudonyms:
+        """``base`` with every member this map has added, in this map's order. Someone ``base``
+        already labels keeps their label, and anyone else gets the next number in ``base``: for
+        saving an exchange onto a conversation another message saved meanwhile."""
+        merged = base
+        for member_id, _ in sorted(self.numbers.items(), key=lambda item: item[1]):
+            merged = merged.with_member(member_id)
+        return merged
+
+    def relabel(self, text: str, target: Pseudonyms) -> str:
+        """``text`` written with this map's labels, rewritten with ``target``'s, in one pass, so
+        a label that moved can't be rewritten twice. Labels ``target`` doesn't hold stay."""
+        by_number = {number: member_id for member_id, number in self.numbers.items()}
+
+        def swap(match: re.Match[str]) -> str:
+            member_id = by_number.get(int(match.group(1)))
+            label = target.label(member_id) if member_id is not None else None
+            return label or match.group(0)
+
+        return _LABEL.sub(swap, text)
 
     def restore_names(self, text: str, names: Mapping[int, str]) -> str:
         """``text`` with each label this conversation gave a member replaced by their name in

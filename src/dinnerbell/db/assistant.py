@@ -132,6 +132,13 @@ class AssistantRepository:
             )
         )
 
+    async def any_idle(self, household_id: int, last_before: datetime | None) -> bool:
+        """Whether ``delete_idle`` with the same arguments would delete anything."""
+        statement = select(AssistantConversationRow.id).where(AssistantConversationRow.household_id == household_id)
+        if last_before is not None:
+            statement = statement.where(AssistantConversationRow.last_message_at <= last_before)
+        return await self._session.scalar(statement.limit(1)) is not None
+
     async def delete_idle(self, household_id: int, last_before: datetime | None) -> int:
         """Delete the conversations whose last message is at or before ``last_before``, or every
         conversation when it's None. Returns how many."""

@@ -12,13 +12,15 @@ import pytest
 
 from dinnerbell.domain import assistant
 from dinnerbell.domain.assistant import (
-    MOST_EXPENSIVE,
+    MODELS,
     OVERHEAD_TOKENS,
     PRICE_TABLE,
+    UNKNOWN_MODEL_PRICES,
     AssistantSettings,
     Conversation,
     InvalidAssistantSettings,
     InvalidConversationKey,
+    Prices,
     Pseudonyms,
     TokenUsage,
     Turn,
@@ -26,7 +28,9 @@ from dinnerbell.domain.assistant import (
     check_assistant_settings,
     check_key,
     cost_micros,
+    costlier,
     dollars,
+    fallback_prices,
     format_dollars,
     month_key,
     recent_turns,
@@ -99,15 +103,35 @@ def test_availability_matrix(configured: bool, switch_on: bool, member: Member, 
 # Prices and cost -------------------------------------------------------------------------------
 
 
-def test_the_table_prices_three_models_with_cache_writes_at_a_quarter_more() -> None:
-    assert set(PRICE_TABLE) == {"claude-sonnet-5-5", "claude-opus-5-5", "claude-haiku-5-5"}
+def test_the_table_prices_three_models_and_their_fallbacks() -> None:
+    assert set(MODELS) == {"claude-sonnet-5-5", "claude-opus-5-5", "claude-haiku-5-5"}
+    assert set(PRICE_TABLE) == set(MODELS) | {"claude-sonnet-5", "claude-opus-5", "claude-opus-4-8"}
     for card in PRICE_TABLE.values():
         for prices in filter(None, (card.standard, card.long)):
             assert prices.cache_write * 4 == prices.input * 5
             assert prices.cache_read < prices.input
+        assert set(card.falls_back_to) <= set(PRICE_TABLE)
     sonnet = PRICE_TABLE["claude-sonnet-5-5"].standard
     assert (sonnet.input, sonnet.output, sonnet.cache_read) == (2_000_000, 10_000_000, 200_000)
-    assert PRICE_TABLE["claude-opus-5-5"].standard == MOST_EXPENSIVE
+    assert PRICE_TABLE["claude-opus-5"].standard == Prices(5_000_000, 25_000_000, 500_000, 6_250_000)
+
+
+def test_each_fallback_is_bounded_at_its_targets_highest_prices() -> None:
+    assert fallback_prices(PRICE_TABLE["claude-sonnet-5-5"]) == PRICE_TABLE["claude-sonnet-5"].standard
+    assert fallback_prices(PRICE_TABLE["claude-opus-5-5"]) == PRICE_TABLE["claude-opus-5"].standard
+    assert fallback_prices(PRICE_TABLE["claude-haiku-5-5"]) is None
+
+
+def test_the_ceiling_is_above_every_price_in_the_table() -> None:
+    for card in PRICE_TABLE.values():
+        assert card.highest.most(UNKNOWN_MODEL_PRICES) == UNKNOWN_MODEL_PRICES
+    assert Prices(10_000_000, 50_000_000, 1_000_000, 12_500_000) == UNKNOWN_MODEL_PRICES
+
+
+def test_an_attempt_without_a_model_is_priced_as_the_costlier() -> None:
+    assert costlier("claude-opus-5-5", "claude-opus-5") == "claude-opus-5"
+    assert costlier("claude-sonnet-5-5", "claude-sonnet-5") == "claude-sonnet-5-5"  # equal: the first
+    assert costlier("claude-haiku-5-5", "claude-mystery") == "claude-mystery"
 
 
 def test_dollars_are_exact() -> None:
@@ -124,9 +148,10 @@ def test_cost_counts_every_kind_of_token_and_rounds_up() -> None:
     assert cost_micros(TokenUsage("claude-haiku-5-5", input_tokens=1)) == 1  # $0.0000001, rounded up
 
 
-def test_an_unknown_model_costs_the_highest_prices() -> None:
-    fallback = TokenUsage("claude-sonnet-5", 1_000, 1_000)
-    assert cost_micros(fallback) == cost_micros(TokenUsage("claude-opus-5-5", 1_000, 1_000)) == 24_000
+def test_a_fallback_model_costs_its_own_prices_and_an_unknown_one_the_ceiling() -> None:
+    assert cost_micros(TokenUsage("claude-sonnet-5", 1_000, 1_000)) == 2_000 + 10_000
+    assert cost_micros(TokenUsage("claude-opus-4-8", 1_000, 1_000, cache_read_tokens=1_000)) == 5_000 + 25_000 + 500
+    assert cost_micros(TokenUsage("claude-mystery", 1_000, 1_000)) == 10_000 + 50_000
 
 
 def test_a_long_haiku_prompt_costs_its_long_rate() -> None:
@@ -136,30 +161,35 @@ def test_a_long_haiku_prompt_costs_its_long_rate() -> None:
     assert cost_micros(long) == 30_000 + 2_500 + 2_001
 
 
-@pytest.mark.parametrize("model", sorted(PRICE_TABLE))
+@pytest.mark.parametrize("model", sorted(MODELS))
 @pytest.mark.parametrize("payload_bytes", [0, 5_000, 99_000, 250_000])
-def test_the_reservation_covers_the_worst_usage(model: str, payload_bytes: int) -> None:
+@pytest.mark.parametrize("extra", [0, 3_000])
+def test_the_reservation_covers_the_worst_usage(model: str, payload_bytes: int, extra: int) -> None:
     max_tokens = 6_000
-    bound = reservation_micros(model, payload_bytes=payload_bytes, max_tokens=max_tokens)
-    most = payload_bytes + OVERHEAD_TOKENS
+    bound = reservation_micros(model, payload_bytes=payload_bytes, max_tokens=max_tokens, extra_input_tokens=extra)
+    most = payload_bytes + OVERHEAD_TOKENS + extra
+    targets = PRICE_TABLE[model].falls_back_to
     for split in (0, most // 3, most):  # input, cache read, and cache write in any mix
         worst = [
             TokenUsage(model, input_tokens=split, output_tokens=max_tokens, cache_write_tokens=most - split),
             TokenUsage(model, cache_read_tokens=split, output_tokens=max_tokens, cache_write_tokens=most - split),
         ]
-        attempts = 2 if PRICE_TABLE[model].server_fallback else 1
         for usage in worst:
-            fallback = replace(usage, model="claude-sonnet-5")  # unknown, so the highest prices
-            assert bound >= cost_micros(usage) + (attempts - 1) * cost_micros(fallback)
+            # A declined attempt, then the dearest of its fallback models; or the fallback alone (sticky).
+            second = max((cost_micros(replace(usage, model=t)) for t in targets), default=0)
+            assert bound >= cost_micros(usage) + second
 
 
-def test_a_fallback_doubles_the_bound_at_the_highest_prices() -> None:
-    sonnet = reservation_micros("claude-sonnet-5-5", payload_bytes=8_000, max_tokens=6_000)
-    haiku = reservation_micros("claude-haiku-5-5", payload_bytes=8_000, max_tokens=6_000)
-    # 10,000 input tokens at $2.50 and 6,000 output at $10, then again at $5 and $20.
-    assert sonnet == (25_000 + 60_000) + (50_000 + 120_000)
-    assert haiku == 1_250 + 3_000  # no server-side fallback
-    assert reservation_micros("unknown", payload_bytes=8_000, max_tokens=6_000) == 50_000 + 120_000
+def test_a_fallback_adds_an_attempt_at_its_targets_prices() -> None:
+    def bound(model: str, extra: int = 0) -> int:
+        return reservation_micros(model, payload_bytes=8_000, max_tokens=6_000, extra_input_tokens=extra)
+
+    # 10,000 input tokens at the cache-write price and 6,000 output, then again on the fallback.
+    assert bound("claude-sonnet-5-5") == (25_000 + 60_000) * 2
+    assert bound("claude-opus-5-5") == (50_000 + 120_000) + (62_500 + 150_000)
+    assert bound("claude-haiku-5-5") == 1_250 + 3_000  # no server-side fallback
+    assert bound("claude-mystery") == 125_000 + 300_000
+    assert bound("claude-sonnet-5-5", extra=2_000) == (30_000 + 60_000) * 2
 
 
 def test_format_dollars_rounds_up_to_the_cent() -> None:
@@ -191,6 +221,17 @@ def test_pseudonyms_are_fixed_and_only_added_to() -> None:
 def test_reading_pseudonyms_skips_what_isnt_one() -> None:
     assert Pseudonyms.from_json(["x"]) == Pseudonyms()
     assert Pseudonyms.from_json({"7": 1, "x": 2, "8": True, "9": "3"}).numbers == {7: 1}
+
+
+def test_an_exchange_saved_onto_a_newer_map_keeps_labels_and_relabels_its_text() -> None:
+    sent = Pseudonyms({7: 1, 5: 2})  # Sam, then Kim, as this message saw it
+    saved_meanwhile = Pseudonyms({7: 1, 3: 2})  # Sam, then Lee, saved by another message
+    merged = sent.onto(saved_meanwhile)
+    assert merged.numbers == {7: 1, 3: 2, 5: 3}
+    assert sent.relabel("Member 2 asked Member 1; Member 9 isn't anyone.", merged) == (
+        "Member 3 asked Member 1; Member 9 isn't anyone."
+    )
+    assert sent.onto(Pseudonyms()) == sent
 
 
 def test_names_come_back_only_for_labels_the_conversation_gave() -> None:

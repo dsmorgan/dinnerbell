@@ -192,6 +192,15 @@ class ScrubSummary:
             f"Guests made anonymous: {self.guests_scrubbed}",
             f"Audit rows about guests redacted: {self.audit_rows_redacted}",
             f"Badges not yet announced, now quiet: {self.badges_quieted}",
+            *self._assistant_lines(),
+        ]
+
+    def _assistant_lines(self) -> list[str]:
+        """Only when the scrub changed something, so an install without the assistant reads
+        nothing about it."""
+        if not (self.assistant_turned_off or self.conversations_deleted):
+            return []
+        return [
             f"Assistant turned off: {'yes' if self.assistant_turned_off else 'no, it was off'}",
             f"Assistant conversations deleted: {self.conversations_deleted}",
         ]

@@ -19,6 +19,7 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 - **Migration 0031** adds two empty tables, `assistant_usage` and `assistant_conversation`. It changes no existing row, and nothing reads the tables unless the assistant is configured. A downgrade to 0.15.0 drops them, with any usage and conversations in them.
 - **New dependency:** the image now includes Anthropic's `anthropic` SDK and its dependencies (Apache-2.0, MIT, and BSD). Dinnerbell sends nothing to Anthropic unless you set the key and the flag.
+- **The cap is per database:** production and a test instance each keep their own. If you turn the assistant on, also set a monthly spend limit on the key's workspace in the Anthropic Console as a backstop, and give the test instance its own key.
 - **Keeping the key in a file:** `compose.secrets.yaml` doesn't mount `DINNERBELL_ANTHROPIC_API_KEY`, so installs that keep secrets in files need no new file. To keep the key in one, see "The assistant" in [docs/configuration.md](docs/configuration.md#the-assistant).
 
 ## [0.15.0] - 2026-11-09

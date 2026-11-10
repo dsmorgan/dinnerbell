@@ -11,16 +11,21 @@ import anthropic
 from anthropic.types.beta import BetaMessage
 from pydantic import SecretStr
 
-from dinnerbell.domain.assistant import TokenUsage
+from dinnerbell.domain.assistant import TokenUsage, costlier
 from dinnerbell.services.assistant.client import ModelCallFailed, ModelReply
 
-TIMEOUT_SECONDS = 90.0
+TIMEOUT_SECONDS = 300.0
+"""Each read on the stream, and the connection. A stream sends events as the model writes, so a
+long answer never waits this long for one."""
+MAYBE_BILLED_STATUSES = frozenset({408, 502, 504})
+"""Errors that can come after the API ran the request: a timeout, or a gateway that lost the reply."""
 
 
 class AnthropicModelClient:
-    """Sends each request once. The SDK's own retries are off: a timed-out request may still
-    run and bill, and each request is covered by one reservation, so a retry would spend
-    outside the cap."""
+    """Streams each request once and returns the final message (``get_final_message``), so a
+    long answer can't hit a request timeout. The SDK's own retries are off: a timed-out request
+    may still run and bill, and each request is covered by one reservation, so a retry would
+    spend outside the cap."""
 
     def __init__(self, api_key: SecretStr, *, http_client: Any = None) -> None:
         self._client = anthropic.AsyncAnthropic(
@@ -28,29 +33,48 @@ class AnthropicModelClient:
         )
 
     async def create(self, request: Mapping[str, Any]) -> ModelReply:
+        opened = False
         try:
-            message = await self._client.beta.messages.create(**request)
-        except anthropic.APIStatusError:
-            # The API answered with an error (bad request, rate limit, overloaded), so it ran nothing.
-            raise ModelCallFailed(maybe_billed=False) from None
-        except anthropic.APIError:
+            async with self._client.beta.messages.stream(**request) as stream:
+                opened = True  # from here the request is running, and may bill
+                message = await stream.get_final_message()
+        except anthropic.APIStatusError as exc:
+            # An error answer before the stream opened ran nothing, unless the status says it may have.
+            raise ModelCallFailed(
+                maybe_billed=opened or exc.status_code in MAYBE_BILLED_STATUSES,
+                status=exc.status_code,
+                error_type=type(exc).__name__,
+                request_id=exc.request_id,
+            ) from None
+        except anthropic.APIError as exc:
             # A timeout, a dropped connection, or a reply the SDK couldn't read: it may have run.
-            raise ModelCallFailed(maybe_billed=True) from None
-        return to_reply(message)
+            raise ModelCallFailed(maybe_billed=True, error_type=type(exc).__name__) from None
+        try:
+            return to_reply(message, requested=str(request.get("model", "")))
+        except Exception:
+            raise ModelCallFailed(
+                maybe_billed=True, error_type="unreadable reply", request_id=getattr(message, "_request_id", None)
+            ) from None
 
     async def close(self) -> None:
         await self._client.close()
 
 
-def _after_last_fallback(blocks: Sequence[dict[str, object]]) -> list[dict[str, object]]:
-    """The blocks to send back as the assistant turn. After a server-side fallback, what came
-    before the last ``fallback`` block belongs to the model that declined, so only the blocks
-    after it are echoed; the ``fallback`` marker itself is only an audit marker."""
+def echoed_content(blocks: Sequence[dict[str, object]]) -> list[dict[str, object]]:
+    """The blocks to send back as the assistant turn, after a server-side fallback too. Before
+    the last ``fallback`` block, only text goes back: the declined model's thinking and tool
+    calls don't, and its text is what the fallback model continued from. The ``fallback``
+    markers themselves are audit markers and stay out. Dinnerbell sends no server tools, so
+    there are no server-tool pairs to keep."""
     last = max((n for n, block in enumerate(blocks) if block.get("type") == "fallback"), default=-1)
-    return list(blocks[last + 1 :])
+    before = [block for block in blocks[:last] if block.get("type") == "text"]
+    return [*before, *blocks[last + 1 :]]
 
 
-def to_reply(message: BetaMessage) -> ModelReply:
+def to_reply(message: BetaMessage, *, requested: str = "") -> ModelReply:
+    """The reply, with one usage entry per attempt. An attempt that names no model is priced as
+    the costlier of the requested model and the message's: during a stream the SDK moves the
+    message's model to the fallback's, so either may be the one that ran it."""
     blocks = [block.to_dict(mode="json") for block in message.content]
     usage = message.usage
     parts: list[TokenUsage] = []
@@ -59,7 +83,9 @@ def to_reply(message: BetaMessage) -> ModelReply:
             continue  # compaction and advisor iterations: Dinnerbell asks for neither
         parts.append(
             TokenUsage(
-                model=str(getattr(attempt, "model", None) or message.model),
+                model=str(
+                    getattr(attempt, "model", None) or costlier(requested or str(message.model), str(message.model))
+                ),
                 input_tokens=attempt.input_tokens,
                 output_tokens=attempt.output_tokens,
                 cache_read_tokens=attempt.cache_read_input_tokens,
@@ -77,7 +103,7 @@ def to_reply(message: BetaMessage) -> ModelReply:
             )
         )
     return ModelReply(
-        content=tuple(_after_last_fallback(blocks)),
+        content=tuple(echoed_content(blocks)),
         stop_reason=message.stop_reason,
         model=str(message.model),
         usage=tuple(parts),
