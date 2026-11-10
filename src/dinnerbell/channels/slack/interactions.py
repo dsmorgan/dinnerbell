@@ -398,6 +398,8 @@ class Interactions:
         """Slack user ID to the bot's DM with them, as conversations.open reported it."""
         self.card_locks: dict[tuple[str, int], _CardLock] = {}
         """Per (Slack user, event), while a tap holds or waits for it; see ``_card_lock``."""
+        self.home_hint: Callable[[AsyncSession, Member], Awaitable[str | None]] | None = None
+        """App Home's line about the optional assistant, when one is built (``SlackAssistant``)."""
 
     @property
     def any_time(self) -> bool:
@@ -705,6 +707,7 @@ class Interactions:
                 awaiting = await feedback.awaiting(db, member, now=self.clock())
                 badges = await self._badges(db, member)
                 picks = await self._picks_links(db, member, today)
+                hint = await self.home_hint(db, member) if self.home_hint and member.is_member else None
             fresh: set[str] = set()
             art = await self._badge_art(member, badges, fresh)
             picture = await self._badge_picture(member, badges, fresh)
@@ -722,6 +725,7 @@ class Interactions:
                     badge_art=art,
                     badge_composite=picture,
                     picks=picks,
+                    assistant_hint=hint,
                 )
 
             try:

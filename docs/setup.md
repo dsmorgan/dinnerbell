@@ -42,6 +42,8 @@ Don't edit files in your clone, including the manifest. Local edits block `git c
 5. Select **Next**, then **Create**.
 6. Optional: under **Basic Information** > **Display Information**, upload `deploy/slack-app-icon-1024.png` as the app icon.
 
+If you plan to turn on the optional assistant, paste `deploy/slack-app-manifest.assistant.yaml` instead. You can also switch later, as [The assistant](configuration.md#talk-to-it-in-slack) describes.
+
 To keep a copy of the manifest with your hostname, write it to a file ending in `.local.yaml`, which git ignores:
 
 ```sh

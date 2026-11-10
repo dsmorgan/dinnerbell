@@ -402,6 +402,53 @@ def home_opened(user: str, *, team: str = TEAM, tab: str = "home") -> dict[str, 
     }
 
 
+_message_ts = itertools.count(1)
+
+
+def next_ts() -> str:
+    """A fresh message ``ts``, as Slack mints one per message."""
+    return f"{1_790_000_000 + next(_message_ts)}.000100"
+
+
+def message_event(
+    user: str,
+    text: str,
+    *,
+    kind: str = "message",
+    channel: str = "D02SAM",
+    channel_type: str | None = "im",
+    ts: str | None = None,
+    thread_ts: str | None = None,
+    team: str = TEAM,
+    **extra: Any,
+) -> dict[str, Any]:
+    """A ``message`` event (``kind``), by default a top-level DM, or with ``kind="app_mention"``
+    a mention. ``extra`` goes in the event, such as ``subtype`` or ``bot_id``."""
+    event: dict[str, Any] = {
+        "type": kind,
+        "user": user,
+        "text": text,
+        "ts": ts or next_ts(),
+        "channel": channel,
+        "event_ts": "1.2",
+        **extra,
+    }
+    if channel_type is not None:
+        event["channel_type"] = channel_type
+    if thread_ts is not None:
+        event["thread_ts"] = thread_ts
+    return {
+        "token": "legacy-verification-token",
+        "team_id": team,
+        "api_app_id": "A0DINNER",
+        "event": event,
+        "type": "event_callback",
+        "event_id": f"Ev{next(_envelopes)}",
+        "event_time": 1,
+        "authorizations": [{"team_id": team, "user_id": BOT_USER, "is_bot": True}],
+    }
+
+
 def state(**fields: dict[str, Any]) -> dict[str, Any]:
     """view.state.values with each block's single input under action ID "value"."""
     return {block_id: {"value": entry} for block_id, entry in fields.items()}

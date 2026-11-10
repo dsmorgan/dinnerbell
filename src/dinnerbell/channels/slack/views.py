@@ -1407,6 +1407,7 @@ def home_view(
     badge_art: ArtIds | None = None,
     badge_composite: str | None = None,
     picks: Mapping[int, str] | None = None,
+    assistant_hint: str | None = None,
 ) -> dict[str, Any]:
     """Each member's Home tab. ``picks`` maps a voting call's ID to its picks post in the channel,
     which its card links (#149). ``label``, the instance label, prefixes the header when set.
@@ -1421,7 +1422,10 @@ def home_view(
     most ``MAX_OLDER_CALLS`` calls still open from earlier days, newest first (#51). It leaves
     room for the version footer (``blocks.with_version_footer``) within Slack's 100 blocks, and
     keeps the start buttons and the links: when cards don't all fit, the least important ones
-    are left to the web, whole, and a line says how many."""
+    are left to the web, whole, and a line says how many.
+
+    ``assistant_hint``, mrkdwn Dinnerbell builds, is one line above the links saying the member
+    can message or mention Dinnerbell, while the optional assistant answers them (ADR 0009)."""
     picks = picks or {}
     title = f"Today · {day_label(today.today)}"
     head: list[Block] = [header(f"{label} · {title}" if label else title)]
@@ -1456,6 +1460,7 @@ def home_view(
     tail: list[Block] = [
         *_awaiting(awaiting, links),
         *(_badges(badges, badge_art or {}, badge_composite) if badges is not None else []),
+        *([context(assistant_hint)] if assistant_hint else []),
         divider(),
         context(
             f"<{links.url('/preferences')}|Your preferences> · <{links.url('/catalog')}|Catalog> · "
