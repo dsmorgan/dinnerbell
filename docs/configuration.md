@@ -77,7 +77,7 @@ To turn the assistant off for good, paste `deploy/slack-app-manifest.yaml` again
 
 Dinnerbell reads only direct messages to it and messages that mention it, and only their text: a direct message with a file gets "I can read only text messages." It answers one message per member at a time, and active members only: a guest, a deactivated member, or someone not linked to a member gets no reply, and their message is neither stored nor sent. A direct message thread is private to its member. A channel thread is shared: everyone sees it, and each message acts as the member who wrote it.
 
-Replies can't mention anyone or ping the channel, and they hold no links: Dinnerbell writes any address the assistant gives in a form Slack doesn't link, such as `hxxps://example[.]com`.
+Replies can't mention anyone or ping the channel, and they hold no links: Dinnerbell writes any address the assistant gives in a form Slack doesn't link, such as `hxxps[:]//example[.]com`.
 
 On Admin > **Assistant**, the admin also sets the household's **Monthly cap**, $1 to $100 in US dollars a calendar month in the household's time zone ($5 by default), and **Conversation hours**, how long Dinnerbell keeps a conversation after its last message, 0 to 168 (24 by default). Before each request to Anthropic, Dinnerbell sets aside the most that request could cost and refuses it if that would pass the cap, so spending never does; the page shows this month's usage in total and for each member. Every change there is in the audit log.
 

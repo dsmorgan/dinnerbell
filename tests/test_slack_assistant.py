@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import random
+import re
 import unicodedata
 from collections.abc import AsyncIterator, Mapping
 from pathlib import Path
@@ -514,11 +515,34 @@ def test_the_abbreviations_keep_their_dots(text: str) -> None:
     assert defang(text) == text
 
 
+KEPT = re.compile(r"(?i)(e\.g\.|i\.e\.|a\.m\.|p\.m\.|u\.s\.|vs\.|etc\.)")
+
+
+def _kept(text: str) -> set[int]:
+    """The rule, written out again: the dots of an allowlisted abbreviation with no letter, digit,
+    or mark right before it, and no letter or digit after it, marks skipped."""
+    kept: set[int] = set()
+    for start in range(len(text)):
+        found = KEPT.match(text, start)
+        if found is None:
+            continue
+        before = text[start - 1] if start else " "
+        after = found.end()
+        while after < len(text) and unicodedata.category(text[after]).startswith("M"):
+            after += 1
+        if before.isalnum() or unicodedata.category(before).startswith("M"):
+            continue
+        if after < len(text) and text[after].isalnum():
+            continue
+        kept.update(start + n for n, char in enumerate(found.group(0)) if char == ".")
+    return kept
+
+
 def _dot_before_a_letter(text: str) -> bool:
-    """Whether a dot-like character in ``text``, outside ``ABBREVIATIONS``, comes right before a
+    """Whether a dot-like character in ``text``, outside the allowlist, comes right before a
     letter, combining marks skipped. Format characters count as nothing, as Slack may drop them."""
     visible = "".join(c for c in text if unicodedata.category(c) != "Cf")
-    kept = slack_assistant._kept_dots(visible)
+    kept = _kept(visible)
     for index, char in enumerate(visible):
         if char in DOTS and index not in kept:
             following = index + 1
@@ -529,53 +553,97 @@ def _dot_before_a_letter(text: str) -> bool:
     return False
 
 
+PIECES = [
+    *"abcxyzEVIL",
+    *"пример",
+    *"αβγ",
+    *"例え",
+    *"0123456789",
+    *sorted(DOTS),
+    ACUTE,
+    "\u0308",
+    "\u200b",
+    "\u200c",
+    "\u200d",
+    "\u00ad",
+    "\u2060",
+    "\ufeff",
+    "\u202e",
+    " ",
+    "-",
+    "_",
+    "*",
+    "/",
+    ":",
+    "\u24d4",  # So: an enclosed letter
+    "\u2167",  # Nl: a Roman numeral
+    "\u00b2",  # No: a superscript digit
+    "\u2460",  # No: a circled digit
+    "\uff45",  # a fullwidth letter
+    "\uff11",  # a fullwidth digit
+    "\ufb01",  # the fi ligature
+    "\u2102",  # a letterlike symbol
+    "\uff1a\uff0f\uff0f",  # a fullwidth ://
+    "\uff1c",  # a fullwidth <
+    "\ufe64",  # a small <
+    "\uff06",  # a fullwidth &
+    "\uff20here",  # a fullwidth @here
+    "@here",
+    "@Channel",
+    "<!channel>",
+    "<@U02SAM>",
+    "&lt;",
+    "&",
+    ">",
+    "e.g.",
+    "U.S.",
+    "etc.",
+    "vs.",
+    "www.",
+    "https://",
+]
+_LOOSE_AMP = re.compile(r"&(?!amp;|lt;|gt;)")
+_BARE_PING = re.compile(r"@(here|channel|everyone)", re.IGNORECASE)
+
+
 @pytest.mark.parametrize("seed", range(20))
-def test_no_reply_keeps_a_dot_before_a_letter(seed: int) -> None:
-    """Property-style: random text of letters, digits, dots, marks, and format characters."""
-    pieces = [
-        *"abcxyzEVIL",
-        *"пример",
-        *"αβγ",
-        *"例え",
-        *"0123456789",
-        *sorted(DOTS),
-        ACUTE,
-        "\u0308",
-        "\u200b",
-        "\u200c",
-        "\u200d",
-        "\u00ad",
-        "\u2060",
-        "\ufeff",
-        "\u202e",
-        " ",
-        "-",
-        "_",
-        "*",
-        "/",
-        ":",
-        "\u24d4",  # So: an enclosed letter
-        "\u2167",  # Nl: a Roman numeral
-        "\u00b2",  # No: a superscript digit
-        "\u2460",  # No: a circled digit
-        "\uff45",  # a fullwidth letter
-        "\uff11",  # a fullwidth digit
-        "\ufb01",  # the fi ligature
-        "\u2102",  # a letterlike symbol
-        "\uff1a\uff0f\uff0f",  # a fullwidth ://
-        "e.g.",
-        "U.S.",
-        "www.",
-        "https://",
-    ]
+def test_no_reply_keeps_a_link_ping_or_markup(seed: int) -> None:
+    """Property-style: random text of letters, digits, dots, marks, format characters,
+    compatibility forms, markup, and pings, through ``safe_reply``."""
     rng = random.Random(seed)  # noqa: S311 - reproducible test data, not a secret
     for _ in range(200):
-        text = "".join(rng.choice(pieces) for _ in range(rng.randint(1, 40)))
-        out = defang(text)
-        folded = unicodedata.normalize("NFKC", out)
-        assert not _dot_before_a_letter(folded), (text, out)
-        assert "://" not in folded
-        assert not any(unicodedata.category(c) == "Cf" for c in out)
+        text = "".join(rng.choice(PIECES) for _ in range(rng.randint(1, 40)))
+        out = safe_reply(text)
+        for form in (out, unicodedata.normalize("NFKC", out)):
+            assert not _dot_before_a_letter(form), (text, out)
+            assert "://" not in form, (text, out)
+            assert "<" not in form and ">" not in form, (text, out)
+            assert not _LOOSE_AMP.search(form), (text, out)
+            assert not _BARE_PING.search(form), (text, out)
+        assert all(c == WORD_JOINER for c in out if unicodedata.category(c) == "Cf"), (text, out)
+
+
+EMOJI = [
+    ("\U0001f9d1\u200d\U0001f373", "\U0001f9d1\u200d\U0001f373"),  # cook
+    ("\U0001f9d1\U0001f3fd\u200d\U0001f373", "\U0001f9d1\U0001f3fd\u200d\U0001f373"),  # with a skin tone
+    ("\U0001f441\ufe0f\u200d\U0001f5e8\ufe0f", "\U0001f441\ufe0f\u200d\U0001f5e8\ufe0f"),  # a variation selector
+    ("\U0001f3f4\U000e0067\U000e0062\U000e0073\U000e0063\U000e0074\U000e007f",) * 2,  # Scotland's flag
+    ("a\u200d\U0001f373", "a\U0001f373"),  # not between two emoji
+    ("\U0001f373\u200d.evil", "\U0001f373[.]evil"),
+    ("\U000e0067.evil", "[.]evil"),  # a tag outside a flag
+]
+
+
+@pytest.mark.parametrize(("raw", "kept"), EMOJI)
+def test_emoji_sequences_keep_their_joiners_and_tags(raw: str, kept: str) -> None:
+    assert defang(raw) == kept
+
+
+@pytest.mark.parametrize(
+    "raw", ["127.0.0.1", "127\u30020\u30020\u30021", "127\uff0e0\uff0e0\uff0e1", "127\uff610\uff610\uff611"]
+)
+def test_ip_addresses_with_any_dot_are_defanged(raw: str) -> None:
+    assert defang(raw) == "127[.]0[.]0[.]1"
 
 
 def test_safe_reply_strips_format_characters_before_breaking_pings() -> None:
@@ -991,25 +1059,73 @@ def test_what_is_remembered_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "a" in remembered and "c" in remembered and "b" not in remembered
 
 
-def test_a_failed_startup_still_closes_anthropics_client(
+def test_a_failed_startup_closes_everything_it_opened(
     tmp_path: Path, clock: FakeClock, provider: FakeProvider, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Slack started, then the scheduler failed: Slack stops, and Anthropic's client, the HTTP
+    client, and the database close, newest first."""
     from dinnerbell import app_factory
 
-    closed: list[bool] = []
+    closed: list[str] = []
 
     class Client(FakeModel):
         async def close(self) -> None:
-            closed.append(True)
+            closed.append("anthropic")
 
     def broken(jobs: Any) -> Any:
         raise RuntimeError("no scheduler")
 
+    real_open = app_factory.open_database
+
+    def recording_open(url: str) -> Any:
+        database = real_open(url)
+        real_close = database.close
+
+        async def close() -> None:
+            closed.append("database")
+            await real_close()
+
+        object.__setattr__(database, "close", close)
+        return database
+
     monkeypatch.setattr(app_factory, "_anthropic", lambda settings: Client())
     monkeypatch.setattr(app_factory, "build_scheduler", broken)
-    configured = make_settings(tmp_path, anthropic_api_key=KEY)
+    monkeypatch.setattr(app_factory, "open_database", recording_open)
+    client = _app_client(tmp_path, clock, provider, anthropic_api_key=KEY)
+    with pytest.raises(RuntimeError, match="no scheduler"), client:
+        pass
+    state = client.app.state  # type: ignore[attr-defined]
+    assert state.slack._stopping and state.slack._task.cancelled()  # Slack started, then stopped
+    assert state.dinnerbell.oidc._http.is_closed
+    assert closed == ["anthropic", "database"]
+
+
+def test_a_failed_bootstrap_closes_the_database(
+    tmp_path: Path, clock: FakeClock, provider: FakeProvider, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from dinnerbell import app_factory
+
+    async def broken(*args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError("no household")
+
+    monkeypatch.setattr(app_factory, "bootstrap", broken)
+    configured = make_settings(tmp_path)
     run_migrations(configured.sync_database_url, configured.database_path)
     app = create_app(configured, clock=clock, oidc_transport=httpx.ASGITransport(app=provider.app))
-    with pytest.raises(RuntimeError, match="no scheduler"), TestClient(app, base_url=BASE_URL):
-        pass
-    assert closed == [True]
+    with pytest.raises(RuntimeError, match="no household"), TestClient(app, base_url=BASE_URL):
+        pass  # the leak check fails the test if the database stays open
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_cancelling_an_answer_mid_converse_frees_the_member(
+    settings: Settings, house: House, helper: Assistant, slack: Slack
+) -> None:
+    await switch_on(house, helper)
+    slow = slow_model(slack)
+    await send(slack.conn.app, "events_api", message_event("U02SAM", "First", channel=SAM_DM))
+    await _until(lambda: slow.started == 1)
+    assert slack.conn.assistant is not None and slack.conn.assistant.answering == {house["Sam"].id}
+    for task in list(slack.conn.interactions.tasks):
+        task.cancel()
+    await slack.conn.interactions.settle()
+    assert slack.conn.assistant.answering == set() and slack.conn.assistant.told == set()

@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from contextlib import AsyncExitStack, asynccontextmanager
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -60,23 +60,30 @@ def create_app(
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        database = open_database(settings.async_database_url)
-        async with database.sessionmaker() as db:
-            household = await bootstrap(
-                db,
-                household_name=settings.household_name,
-                timezone=settings.timezone,
-                admin_email=settings.admin_email,
-                now=clock(),
-            )
-            await catalog_service.seed_from_file(db, household, settings.seed_file, now=clock())
-            await contributions.ensure_backfilled(db, household.id, now=clock())
-        http = httpx.AsyncClient(transport=oidc_transport, timeout=OIDC_TIMEOUT_SECONDS, follow_redirects=False)
-        secret = settings.secret_key.get_secret_value()
-        state = SchedulerState(started_at=clock())
-        slack_state = SlackState()
-        anthropic = _anthropic(settings) if model_client is None else None
-        try:
+        # Each resource joins the stack as it opens, so a failure anywhere, at startup or at
+        # shutdown, closes everything opened so far, newest first, and one close failing
+        # doesn't stop the rest.
+        async with AsyncExitStack() as stack:
+            database = open_database(settings.async_database_url)
+            stack.push_async_callback(database.close)
+            async with database.sessionmaker() as db:
+                household = await bootstrap(
+                    db,
+                    household_name=settings.household_name,
+                    timezone=settings.timezone,
+                    admin_email=settings.admin_email,
+                    now=clock(),
+                )
+                await catalog_service.seed_from_file(db, household, settings.seed_file, now=clock())
+                await contributions.ensure_backfilled(db, household.id, now=clock())
+            http = httpx.AsyncClient(transport=oidc_transport, timeout=OIDC_TIMEOUT_SECONDS, follow_redirects=False)
+            stack.push_async_callback(http.aclose)
+            secret = settings.secret_key.get_secret_value()
+            state = SchedulerState(started_at=clock())
+            slack_state = SlackState()
+            anthropic = _anthropic(settings) if model_client is None else None
+            if anthropic is not None:
+                stack.push_async_callback(anthropic.close)
             assistant = _assistant(settings, model_client or anthropic, clock)
             app.state.assistant = assistant
             slack = _slack(settings, database.sessionmaker, clock, slack_state, slack_client, slack_socket, assistant)
@@ -104,31 +111,27 @@ def create_app(
             )
             app.state.jobs = jobs
             app.state.slack = slack
+            deadline: list[float] = []  # set when shutdown begins: one for the scheduler and Slack
             if slack is not None:
+                connection = slack
+
+                async def stop_slack() -> None:
+                    await connection.stop(deadline[0] if deadline else None)
+
+                stack.push_async_callback(stop_slack)  # before start: a half-started Slack stops too
                 await slack.start(prewarm_household=household.id if prewarm_badge_art else None)
             scheduler = build_scheduler(jobs)
             scheduler.start()
-        except BaseException:
-            # Startup failed: close what's open, so nothing outlives the app.
-            if anthropic is not None:
-                await anthropic.close()
-            await http.aclose()
-            await database.close()
-            raise
-        log.info("dinnerbell started")
-        try:
+
+            async def stop_jobs() -> None:
+                # One deadline for both, inside podman's 10-second stop timeout: the scheduler's
+                # jobs first (a drain may be mid-delivery), then Slack, with whatever time is left.
+                deadline.append(asyncio.get_running_loop().time() + SHUTDOWN_SECONDS)
+                await stop_scheduler(scheduler, jobs, grace=SHUTDOWN_SECONDS - CANCEL_UNWIND_SECONDS)
+
+            stack.push_async_callback(stop_jobs)
+            log.info("dinnerbell started")
             yield
-        finally:
-            # One deadline for both, inside podman's 10-second stop timeout: the scheduler's jobs
-            # first (a drain may be mid-delivery), then Slack, with whatever time is left.
-            deadline = asyncio.get_running_loop().time() + SHUTDOWN_SECONDS
-            await stop_scheduler(scheduler, jobs, grace=SHUTDOWN_SECONDS - CANCEL_UNWIND_SECONDS)
-            if slack is not None:
-                await slack.stop(deadline)
-            if anthropic is not None:
-                await anthropic.close()
-            await http.aclose()
-            await database.close()
 
     return build_app(settings, lifespan)
 
