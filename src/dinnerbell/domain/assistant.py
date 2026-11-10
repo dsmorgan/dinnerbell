@@ -252,7 +252,9 @@ def _attempt_bound(prices: Prices, input_tokens: int, max_tokens: int) -> int:
 
 
 def reservation_micros(model: str, *, payload_bytes: int, max_tokens: int, extra_input_tokens: int = 0) -> int:
-    """The most one request can cost, in micro-dollars, to reserve before sending it.
+    """What to reserve for one request, in micro-dollars: an upper bound on what it can cost,
+    given the assumptions here. Dinnerbell still checks each reply against it (``converse``
+    ends the message on an overrun), since the API's billing can change.
 
     A token is never shorter than a byte of the text it encodes, so the request's UTF-8 byte
     length, plus ``OVERHEAD_TOKENS`` for what the API adds, bounds its input tokens.
@@ -261,8 +263,9 @@ def reservation_micros(model: str, *, payload_bytes: int, max_tokens: int, extra
     priced at the higher of the input and cache-write prices, and ``max_tokens`` of output
     (thinking included) at the output price. A model with a server-side fallback can run the
     request again on each of its fallback models in turn, each one billing, or a sticky
-    conversation can run it there instead, so each possible hop adds an attempt at the highest
-    prices among those models (``attempts_covered``)."""
+    conversation can run it there instead (``attempts_covered``). Each hop is priced at the
+    highest prices among those models, and its input grows by ``max_tokens`` per earlier hop,
+    because after a decline mid-stream the next model reads the partial text as context."""
     input_tokens = payload_bytes + OVERHEAD_TOKENS + extra_input_tokens
     card = PRICE_TABLE.get(model)
     if card is None:
@@ -270,7 +273,8 @@ def reservation_micros(model: str, *, payload_bytes: int, max_tokens: int, extra
     bound = _attempt_bound(card.prices_for(input_tokens), input_tokens, max_tokens)
     fallback = fallback_prices(card)
     if fallback is not None:
-        bound += len(card.falls_back_to) * _attempt_bound(fallback, input_tokens, max_tokens)
+        for hop in range(1, len(card.falls_back_to) + 1):
+            bound += _attempt_bound(fallback, input_tokens + hop * max_tokens, max_tokens)
     return bound
 
 
@@ -340,13 +344,15 @@ class Pseudonyms:
 
     def relabel(self, text: str, target: Pseudonyms) -> str:
         """``text`` written with this map's labels, rewritten with ``target``'s, in one pass, so
-        a label that moved can't be rewritten twice. Labels ``target`` doesn't hold stay."""
+        a label that moved can't be rewritten twice. A label this map doesn't hold, such as one
+        the model invented or quoted, becomes "a member", so it can never later show a real
+        person's name."""
         by_number = {number: member_id for member_id, number in self.numbers.items()}
 
         def swap(match: re.Match[str]) -> str:
             member_id = by_number.get(int(match.group(1)))
             label = target.label(member_id) if member_id is not None else None
-            return label or match.group(0)
+            return label or "a member"
 
         return _LABEL.sub(swap, text)
 

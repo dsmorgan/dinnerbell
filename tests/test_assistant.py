@@ -378,6 +378,104 @@ class TestAssistantOn:
         assert row.pseudonyms == {str(kim.id): 1}
         assert any(r.getMessage().startswith("assistant exchange not kept") for r in caplog.records)
 
+    async def test_a_real_reply_goes_back_unchanged_and_answers_once(self, house: House, helper: Assistant) -> None:
+        """``to_reply`` and ``echoed_content`` on SDK messages, not the fake's dicts."""
+        from anthropic.types.beta import BetaMessage
+
+        from dinnerbell.services.assistant.anthropic_client import to_reply
+
+        tokens = {"input_tokens": 900, "output_tokens": 60}
+        blocks = [
+            {"type": "thinking", "thinking": "", "signature": "sig-1"},
+            {"type": "text", "text": "Let me look."},
+            {"type": "tool_use", "id": "toolu_9", "name": LOOKUP, "input": {"name": "siam", "tag": ""}},
+        ]
+        messages = [
+            BetaMessage.model_validate(
+                {
+                    "id": f"msg_{n}",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-sonnet-5-5",
+                    "content": content,
+                    "stop_reason": stop,
+                    "stop_sequence": None,
+                    "usage": tokens,
+                }
+            )
+            for n, (content, stop) in enumerate(
+                [(blocks, "tool_use"), ([blocks[0], {"type": "text", "text": "Siam Garden is there."}], "end_turn")]
+            )
+        ]
+
+        class Real(FakeModel):
+            async def create(self, request: Any) -> Any:
+                self.requests.append(json.loads(json.dumps(request)))
+                return to_reply(messages[len(self.requests) - 1], requested=request["model"])
+
+        await switch(house, helper)
+        real = Real()
+        reply = await ask(house, replace(helper, client=real), "Sam", "Is Siam Garden there?")
+        assert reply == Reply("Siam Garden is there.")
+        echoed = real.requests[1]["messages"][-2]
+        assert echoed == {"role": "assistant", "content": blocks}  # exactly what came, nothing doubled
+
+    @pytest.mark.parametrize(
+        "parts",
+        [(usage(10_000_000, 1_000),), (TokenUsage("claude-mystery-9", 100, 10),)],
+        ids=["cost-over-reservation", "unknown-model"],
+    )
+    async def test_any_overrun_is_recorded_and_ends_the_message(
+        self, house: House, helper: Assistant, model: FakeModel, caplog: pytest.LogCaptureFixture, parts: Any
+    ) -> None:
+        await switch(house, helper, cap_dollars=100)
+        model.script = [replace(_lookup("", ""), usage=parts), answer("Never sent.")]
+        assert await ask(house, helper, "Sam", "Everything?") == Reply(FAILED)
+        assert len(model.requests) == 1
+        [row] = await usage_rows(house)
+        assert row.cost_micros == sum(cost_micros(part) for part in parts)
+        assert [r.levelname for r in caplog.records if r.levelname == "ERROR"] == ["ERROR"]
+
+    async def test_the_save_uses_the_settings_as_they_are_then(self, house: House, helper: Assistant) -> None:
+        await switch(house, helper)
+        changes = iter([{"enabled": False}, {"conversation_hours": 0}])
+
+        class Changes(FakeModel):
+            async def create(self, request: Any) -> Any:
+                await switch(house, helper, **next(changes))  # the admin saves while the model answers
+                return await super().create(request)
+
+        changing = replace(helper, client=Changes())
+        await ask(house, changing, "Sam", "First")  # switched off meanwhile: nothing kept
+        assert await conversations(house) == []
+        await switch(house, helper)
+        await ask(house, helper, "Sam", "Second")
+        assert len(await conversations(house)) == 1
+        await ask(house, changing, "Sam", "Third")  # hours set to 0 meanwhile: the conversation goes
+        assert await conversations(house) == []
+
+    async def test_a_conversation_that_changed_hands_isnt_deleted_at_zero_hours(
+        self, house: House, helper: Assistant
+    ) -> None:
+        await switch(house, helper, conversation_hours=0)
+        thread = slack_key("C0HOUSE", "1730000000.000600")
+        kim = house["Kim"]
+
+        class Swaps(FakeModel):
+            async def create(self, request: Any) -> Any:
+                async with house.sessionmaker() as db:
+                    from dinnerbell.db.assistant import AssistantRepository
+                    from dinnerbell.domain.assistant import Conversation, Pseudonyms
+
+                    taken = Conversation(thread, True, kim.id, Pseudonyms({kim.id: 1}), (), house.clock())
+                    await AssistantRepository(db).save_conversation(house.household.id, taken, house.clock())
+                    await db.commit()
+                return await super().create(request)
+
+        await ask(house, replace(helper, client=Swaps()), "Sam", "Hi", key=thread, private=False)
+        [row] = await conversations(house)
+        assert row.owner_member_id == kim.id  # someone else's: left alone, even at 0 hours
+
     async def test_a_failure_logs_what_anthropic_said(
         self, house: House, helper: Assistant, model: FakeModel, caplog: pytest.LogCaptureFixture
     ) -> None:
@@ -403,7 +501,9 @@ class TestAssistantOn:
         assert row.state == "settled" and row.cost_micros > 0
         assert any(r.levelname == "ERROR" and r.getMessage() == "assistant model call broke" for r in caplog.records)
 
-    async def test_a_cancelled_call_keeps_its_reservation(self, house: House, helper: Assistant) -> None:
+    async def test_a_cancelled_call_keeps_its_reservation(
+        self, house: House, helper: Assistant, caplog: pytest.LogCaptureFixture
+    ) -> None:
         await switch(house, helper)
         started = asyncio.Event()
 
@@ -419,6 +519,9 @@ class TestAssistantOn:
             await task
         [row] = await usage_rows(house)
         assert row.state == "settled" and row.cost_micros > 0
+        assert any(
+            r.levelname == "ERROR" and r.getMessage() == "assistant model call cancelled" for r in caplog.records
+        )
 
     async def test_two_messages_at_once_with_room_for_one_reservation(self, house: House, helper: Assistant) -> None:
         await switch(house, helper, cap_dollars=1)

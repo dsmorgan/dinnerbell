@@ -184,21 +184,26 @@ def test_the_reservation_covers_the_worst_usage(model: str, payload_bytes: int, 
         ]
         for usage in worst:
             # A declined attempt, then the dearest of its fallback models; or the fallback alone (sticky).
-            # One hop per fallback model, each one billing, at the dearest of them.
-            hop = max((cost_micros(replace(usage, model=t)) for t in targets), default=0)
-            assert bound >= cost_micros(usage) + len(targets) * hop
+            # One hop per fallback model, each one billing at the dearest of them, and each reading
+            # the partial text of the attempts before it.
+            hops = 0
+            for k in range(1, len(targets) + 1):
+                grown = replace(usage, cache_write_tokens=usage.cache_write_tokens + k * max_tokens)
+                hops += max(cost_micros(replace(grown, model=t)) for t in targets)
+            assert bound >= cost_micros(usage) + hops
 
 
 def test_a_fallback_adds_an_attempt_at_its_targets_prices() -> None:
     def bound(model: str, extra: int = 0) -> int:
         return reservation_micros(model, payload_bytes=8_000, max_tokens=6_000, extra_input_tokens=extra)
 
-    # 10,000 input tokens at the cache-write price and 6,000 output, then again on the fallback.
-    assert bound("claude-sonnet-5-5") == (25_000 + 60_000) * 2
-    assert bound("claude-opus-5-5") == (50_000 + 120_000) + 2 * (62_500 + 150_000)  # two possible hops
+    # 10,000 input tokens at the cache-write price and 6,000 output; then each hop on the fallback,
+    # its input grown by 6,000 tokens of partial text per earlier attempt.
+    assert bound("claude-sonnet-5-5") == (25_000 + 60_000) + (40_000 + 60_000)
+    assert bound("claude-opus-5-5") == (50_000 + 120_000) + (100_000 + 150_000) + (137_500 + 150_000)
     assert bound("claude-haiku-5-5") == 1_250 + 3_000  # no server-side fallback
     assert bound("claude-mystery") == 125_000 + 300_000
-    assert bound("claude-sonnet-5-5", extra=2_000) == (30_000 + 60_000) * 2
+    assert bound("claude-sonnet-5-5", extra=2_000) == (30_000 + 60_000) + (45_000 + 60_000)
 
 
 def test_format_dollars_rounds_up_to_the_cent() -> None:
@@ -237,8 +242,9 @@ def test_an_exchange_saved_onto_a_newer_map_keeps_labels_and_relabels_its_text()
     saved_meanwhile = Pseudonyms({7: 1, 3: 2})  # Sam, then Lee, saved by another message
     merged = sent.onto(saved_meanwhile)
     assert merged.numbers == {7: 1, 3: 2, 5: 3}
+    # A label the conversation never gave, such as one the model made up, can't later show a name.
     assert sent.relabel("Member 2 asked Member 1; Member 9 isn't anyone.", merged) == (
-        "Member 3 asked Member 1; Member 9 isn't anyone."
+        "Member 3 asked Member 1; a member isn't anyone."
     )
     assert sent.onto(Pseudonyms()) == sent
 
