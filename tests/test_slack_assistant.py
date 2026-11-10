@@ -444,14 +444,34 @@ LINKS = [
     ("ftp://files.example", "ftp[:]//files[.]example"),
     ("http://10.0.0.1/x", "hxxp[:]//10[.]0[.]0[.]1/x"),
     ("evil\uff0eexample", "evil[.]example"),
+    ("_evil.example_", "_evil[.]example_"),
+    ("evil.example-", "evil[.]example-"),
+    ("~evil.example~", "~evil[.]example~"),
+    ("*evil.example*", "*evil[.]example*"),
+    ("`evil.example`", "`evil[.]example`"),
+    ("evil.example/path?x=1", "evil[.]example/path?x=1"),
+    ("sub.evil.example", "sub[.]evil[.]example"),
+    ("EVIL.EXAMPLE", "EVIL[.]EXAMPLE"),
+    ("xn--fa-hia.example", "xn--fa-hia[.]example"),
+    ("смотри пример.рф", "смотри пример[.]рф"),
+    ("例え.jp", "例え[.]jp"),
+    ("(evil.example), «evil.example»", "(evil[.]example), «evil[.]example»"),
+    ("www.1example", "www[.]1example"),
+    ("mailto:sam@evil.example", "mailto[:]sam@evil[.]example"),
     ("$12.50, e.g. 3.5 stars, v1.2", "$12.50, e.g. 3.5 stars, v1.2"),
 ]
+NORMAL = ["$3.50", "3.5 stars", "e.g. tacos", "Done. Next", "i.e. the U.S. one"]
 
 
 @pytest.mark.parametrize(("raw", "defanged"), LINKS)
 def test_every_url_and_bare_domain_is_defanged(raw: str, defanged: str) -> None:
     assert defang(raw) == defanged
     assert safe_reply(raw) == defanged
+
+
+@pytest.mark.parametrize("text", NORMAL)
+def test_normal_text_keeps_its_dots(text: str) -> None:
+    assert defang(text) == text
 
 
 @pytest.mark.flag("assistant", on=True)
