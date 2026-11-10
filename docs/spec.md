@@ -783,4 +783,3 @@ The table is in build order. M0 through M2 are the minimum for the household to 
 | [0007](adr/0007-seeded-weighted-ranking.md) | Seeded, weighted random ranking among places that pass every filter |
 | [0008](adr/0008-feedback-informed-ranking.md) | Ratings move the rater's own score, and the household sees a hint |
 | [0009](adr/0009-optional-assistant.md) | An optional assistant drafts through the domain API, and a member confirms (proposed) |
-| [0007](adr/0007-seeded-weighted-ranking.md) | Ranking draws at random among the places that pass every filter, weighted by score, from an explicit seed |
