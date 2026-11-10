@@ -323,7 +323,7 @@ The assistant (FR-51, [ADR 0009](adr/0009-optional-assistant.md)) is optional, a
 - A mention in the thread under a Dinnerbell post, such as a call or a reminder, starts one rooted there, and that post's call is the default call.
 - In a channel thread, Dinnerbell sees only messages that mention it. Its first reply there says so.
 
-A message runs for at most 100 seconds, under the 2 minutes the web page waits: each model call gets the time left and is cut off when it runs out, with its reservation kept, since it may have run. Then the reply says it ran out of time, and nothing of the message is kept.
+A message runs for at most 100 seconds, under the 2 minutes the web page waits: each model call, each tool, and each menu link's fetch and text extraction get the time left and are cut off when it runs out. A model call cut off keeps its reservation, since it may have run. Then the reply says it ran out of time, and nothing of the message is kept.
 
 The web page and DMs are private to the member; the admin doesn't see them. In a channel thread, the current author's message is the request. Other members' earlier messages are sent as quoted context, each labeled with its pseudonym.
 

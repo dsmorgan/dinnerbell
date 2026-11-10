@@ -8,9 +8,12 @@ the reservation to what the API reported, cache tokens included. Nothing waits o
 while holding the write lock.
 
 A message has ``MESSAGE_SECONDS`` in all, under the web page's wait for a reply, so a member who
-gives up and sends it again isn't charged for an answer still running. Each model call gets what
-time is left, and is cancelled when it runs out; its reservation stays spent, since it may have
-run. Once the time is up, the message makes no further calls, and nothing of it is kept.
+gives up and sends it again isn't charged for an answer still running. Each model call, each
+tool, and each menu link's fetch with its text extraction get only the time left, and are
+cancelled when it runs out; a model call's reservation stays spent, since it may have run. Once
+the time is up, the message makes no further calls and runs no further tools, and nothing of it
+is kept. Only the database work around them is outside the deadline: reading the conversation
+before the first call, settling a reservation, and the reply's few writes after the last.
 
 What goes out is the system prompt, the conversation in pseudonym form ("Member 1"), and what
 tools return. Names come back only in the reply text the member sees. A menu link's drafting
@@ -192,6 +195,12 @@ async def _shielded(cleanup: Awaitable[None]) -> None:
                 await asyncio.shield(task)
             except asyncio.CancelledError:
                 continue  # cancelled again: the cleanup still comes first
+            except Exception:  # retrieved and logged below; the cancel is what ends this task
+                break
+        failed = None if task.cancelled() else task.exception()
+        if failed is not None:
+            # The type only: a database error's message can quote its parameters.
+            log.error("assistant cleanup failed while cancelled", extra={"error": type(failed).__name__})
         raise
 
 
@@ -353,7 +362,17 @@ class _LinkCalls:
         return self.assistant.config.model
 
     async def fetch(self, url: str) -> FetchedPage:
-        return await self.assistant.fetch(url)
+        """The fetch, and its text extraction, in the time the message has left: past it, the
+        model is told so, as for any other fetch error."""
+        left = _seconds_left(self.assistant, self.deadline)
+        if left <= 0:
+            raise ToolRefusal(OUT_OF_TIME)
+        try:
+            async with asyncio.timeout(left):
+                return await self.assistant.fetch(url)
+        except TimeoutError:
+            log.info("assistant link fetch ran out of time", extra={"member_id": self.member.id})
+            raise ToolRefusal(OUT_OF_TIME) from None
 
     def _reserved(self, request: Mapping[str, Any]) -> int:
         return reservation_micros(
@@ -489,15 +508,23 @@ async def _run_loop(
         messages.append({"role": "assistant", "content": [dict(block) for block in reply.content]})
         results: list[dict[str, Any]] = []
         for call in calls:
-            result = await run_tool(
-                str(call.get("name", "")),
-                call.get("input"),
-                db=db,
-                member=member,
-                private=private,
-                now=assistant.clock(),
-                session=session,
-            )
+            left = _seconds_left(assistant, deadline)
+            if left <= 0:
+                return OUT_OF_TIME, False
+            try:
+                async with asyncio.timeout(left):
+                    result = await run_tool(
+                        str(call.get("name", "")),
+                        call.get("input"),
+                        db=db,
+                        member=member,
+                        private=private,
+                        now=assistant.clock(),
+                        session=session,
+                    )
+            except TimeoutError:
+                log.warning("assistant tool ran out of time", extra={"member_id": member.id})
+                return OUT_OF_TIME, False
             entry: dict[str, Any] = {"type": "tool_result", "tool_use_id": call.get("id"), "content": result.content}
             if result.is_error:
                 entry["is_error"] = True
