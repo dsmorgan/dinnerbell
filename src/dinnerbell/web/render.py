@@ -12,6 +12,7 @@ from starlette.responses import Response
 from dinnerbell.config import is_test_instance
 from dinnerbell.domain.fun import Scene, scene
 from dinnerbell.domain.members import ColorMode
+from dinnerbell.services.assistant.runtime import AssistantConfig
 from dinnerbell.services.household import current_household
 from dinnerbell.services.stuck import StuckCall, for_admin
 from dinnerbell.web import filters
@@ -89,6 +90,8 @@ async def render(
         "stuck_calls": _stuck_calls(request),
         "fun": _fun_scene(request),
         "color_mode": _color_mode(request),
+        # Admin > Assistant shows only with the operator's key and flag (ADR 0009).
+        "assistant_admin": AssistantConfig.from_settings(settings).configured,
     }
     return TEMPLATES.TemplateResponse(request, template, base | (context or {}), status_code=status_code)
 

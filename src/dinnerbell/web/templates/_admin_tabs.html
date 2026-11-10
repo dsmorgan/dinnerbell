@@ -4,6 +4,7 @@
   <a href="/admin/members"{% if path.startswith("/admin/members") %} aria-current="page"{% endif %}>Members</a>
   <a href="/admin/schedule"{% if path.startswith("/admin/schedule") %} aria-current="page"{% endif %}>Ranking</a>
   <a href="/admin/badges"{% if path.startswith("/admin/badges") %} aria-current="page"{% endif %}>Badges</a>
+  {% if assistant_admin %}<a href="/admin/assistant"{% if path.startswith("/admin/assistant") %} aria-current="page"{% endif %}>Assistant</a>{% endif %}
 </nav>
 {% if stuck_calls %}
 <section class="alert error" role="status" aria-labelledby="stuck-heading" id="stuck-calls">

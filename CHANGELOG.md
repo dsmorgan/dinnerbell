@@ -6,6 +6,21 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ## [Unreleased]
 
+### Added
+
+- **The optional assistant's core, behind a flag** (#17, [ADR 0009](docs/adr/0009-optional-assistant.md)). Nothing changes unless an operator sets `DINNERBELL_ANTHROPIC_API_KEY` and adds `assistant` to `DINNERBELL_FEATURES`; then Admin gains an **Assistant** tab. There the admin turns the assistant on, sets the household's **Monthly cap** ($1 to $100 a calendar month in the household's time zone, $5 by default) and **Conversation hours** (0 to 168, 24 by default), and sees this month's usage in total and per member. Each change is audited as `household.assistant_updated`. Members can't talk to it yet: the web page, Slack DMs and mentions, and drafts come in later releases. This release adds what they build on:
+  - Before each request to Anthropic, Dinnerbell reserves the most the request can cost and refuses it if that would pass the cap, then settles the reservation to what the request cost, cache tokens included. At the cap, the assistant says it's unavailable until next month.
+  - Conversations are stored with members as "Member 1", "Member 2", and so on, and deleted once Conversation hours pass, every 5 minutes, or at once when the admin lowers the setting. No names, emails, Slack IDs, preferences, vetoes, ratings, or notes are sent.
+  - The assistant's one tool so far looks up catalog items by name or tag, acting as the member with a member's permissions, even for an admin.
+  - `DINNERBELL_ASSISTANT_MODEL` picks `claude-sonnet-5-5` (the default), `claude-opus-5-5`, or `claude-haiku-5-5`; Dinnerbell refuses to start on a model it has no prices for.
+  - `dinnerbell scrub-test` turns the assistant off and deletes every conversation.
+
+### Upgrade notes
+
+- **Migration 0031** adds two empty tables, `assistant_usage` and `assistant_conversation`. It changes no existing row, and nothing reads the tables unless the assistant is configured. A downgrade to 0.15.0 drops them, with any usage and conversations in them.
+- **New dependency:** the image now includes Anthropic's `anthropic` SDK and its dependencies (Apache-2.0, MIT, and BSD). Dinnerbell sends nothing to Anthropic unless you set the key and the flag.
+- **Keeping the key in a file:** `compose.secrets.yaml` doesn't mount `DINNERBELL_ANTHROPIC_API_KEY`, so installs that keep secrets in files need no new file. To keep the key in one, see "The assistant" in [docs/configuration.md](docs/configuration.md#the-assistant).
+
 ## [0.15.0] - 2026-11-09
 
 ### Security

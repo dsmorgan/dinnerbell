@@ -9,7 +9,7 @@ from datetime import timedelta
 from html import unescape
 from typing import Any
 
-import httpx
+import httpx2
 import pytest
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
@@ -562,7 +562,7 @@ def test_htmx_errors_swap_in_place(admin: TestClient) -> None:
         headers={"HX-Request": "true", "X-CSRF-Token": csrf_from(admin)},
     )
     assert response.status_code == 409 and "Pick in, out, or maybe." in page(response)
-    assert isinstance(response, httpx.Response)
+    assert isinstance(response, httpx2.Response)  # the test client's, which is httpx2 once installed
 
 
 def test_open_cards_refresh_themselves(admin: TestClient, clock: FakeClock, migrated: Settings) -> None:

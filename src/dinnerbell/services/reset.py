@@ -60,6 +60,7 @@ KEEP: Final = frozenset(
         "stance_edit",  # when each stance was set, which wins over earlier ratings (FR-55)
         "slack_badge_file",  # the badge art uploaded to Slack: not history, and reusable (#105)
         "slack_badge_composite",  # members' badge pictures: a cache Home checks by hash (#114)
+        "assistant_usage",  # the assistant's spending: clearing it would let this month pass its cap
     }
 )
 """Tables the reset leaves alone."""
@@ -76,6 +77,7 @@ CLEAR: Final = frozenset(
         "meal_log",  # what the household ate
         "feedback",  # and how it was
         "outbox",  # notifications, sent and unsent, and where each Slack message landed
+        "assistant_conversation",  # conversations with the assistant, which talk about those calls
         "contribution",  # what each member did for those meals (M4) ...
         "badge_award",  # ... and the badges it earned
     }

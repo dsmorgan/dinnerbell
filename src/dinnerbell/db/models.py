@@ -4,6 +4,7 @@ M2: dinner calls (event, response, suggestion, proposal, vote, assignment) and t
 M3: feedback on meals, offers (an event's ``capacity``), guests (a member's ``guest`` role
 and the ``invitation`` table, #38), and the meals each catalog item is for (#72). M4: contributions and badge awards.
 M7: ``stance_edit``, so a stance set on Preferences wins over earlier ratings (FR-55).
+M6: the optional assistant's ``assistant_usage`` and ``assistant_conversation`` (ADR 0009).
 
 Every table carries ``household_id`` (the household table's own key is that ID).
 Changing a model requires a new Alembic revision; see CLAUDE.md.
@@ -669,3 +670,60 @@ class SlackBadgeCompositeRow(Base):
     content_hash: Mapped[str] = mapped_column(String(64))
     file_id: Mapped[str] = mapped_column(String(64))
     uploaded_at: Mapped[datetime] = mapped_column(UTCDateTime())
+
+
+class AssistantUsageRow(Base):
+    """One model call the assistant made (ADR 0009, spec 6.14 **Cost cap**). Before the call,
+    the row is ``reserved`` at the most the call can cost; after it, ``settled`` at what it
+    cost, with the tokens the API reported. Both count toward the month's cap, so spending never
+    passes it. ``month`` is the calendar month in the household's time zone, such as
+    ``2026-11``. A member who is deleted leaves their rows, with no member, so the month's total
+    stays right."""
+
+    __tablename__ = "assistant_usage"
+    __table_args__ = (
+        CheckConstraint("state IN ('reserved', 'settled')", name="state"),
+        CheckConstraint("cost_micros >= 0", name="cost"),
+        Index("ix_assistant_usage_household_month", "household_id", "month"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    household_id: Mapped[int] = mapped_column(ForeignKey("household.id", ondelete="CASCADE"))
+    member_id: Mapped[int | None] = mapped_column(ForeignKey("member.id", ondelete="SET NULL"), index=True)
+    model: Mapped[str] = mapped_column(String(64))
+    month: Mapped[str] = mapped_column(String(7))
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    cache_read_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    cache_write_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    cost_micros: Mapped[int] = mapped_column(Integer)
+    """Micro-dollars: the reservation while ``reserved``, the call's cost once ``settled``."""
+    state: Mapped[str] = mapped_column(String(8))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime())
+    updated_at: Mapped[datetime] = mapped_column(UTCDateTime())
+
+
+class AssistantConversationRow(Base):
+    """A conversation with the assistant (spec 6.14 **Conversations**), by ``key``:
+    ``web:<member_id>`` for the web's Assistant page, or ``slack:<channel>:<thread_ts>`` for a
+    Slack thread. A private one (the web page, a DM) belongs to ``owner_member_id``; a channel
+    thread has no owner. ``pseudonyms`` maps member IDs to their numbers ("Member 1"), fixed
+    and only added to, and ``transcript`` holds the turns in that pseudonym form. Admin's
+    **Conversation hours** after ``last_message_at``, the scheduler deletes it."""
+
+    __tablename__ = "assistant_conversation"
+    __table_args__ = (
+        UniqueConstraint("household_id", "key"),
+        CheckConstraint("(private = 1) = (owner_member_id IS NOT NULL)", name="owner"),
+        Index("ix_assistant_conversation_household_last", "household_id", "last_message_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    household_id: Mapped[int] = mapped_column(ForeignKey("household.id", ondelete="CASCADE"))
+    key: Mapped[str] = mapped_column(String(80))
+    private: Mapped[bool] = mapped_column(Boolean)
+    owner_member_id: Mapped[int | None] = mapped_column(ForeignKey("member.id", ondelete="CASCADE"), index=True)
+    pseudonyms: Mapped[dict[str, int]] = mapped_column(JSON, default=dict)
+    transcript: Mapped[list[dict[str, str]]] = mapped_column(JSON, default=list)
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime())
+    last_message_at: Mapped[datetime] = mapped_column(UTCDateTime())

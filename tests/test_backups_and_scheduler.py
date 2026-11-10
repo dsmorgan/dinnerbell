@@ -137,7 +137,14 @@ async def test_build_scheduler_schedules_jobs(job_context: runner.JobContext) ->
     jobs = await _started_jobs(scheduler)
     # Regression: catch-up used to be a second job that could overlap the nightly one and
     # delete its .partial file. Now there is one backup job, moved to run now.
-    assert set(jobs) == {"heartbeat", "nightly_backup", "purge_sessions", "call_tick", "drain_outbox"}
+    assert set(jobs) == {
+        "heartbeat",
+        "nightly_backup",
+        "purge_sessions",
+        "purge_conversations",
+        "call_tick",
+        "drain_outbox",
+    }
     for name, seconds in (("call_tick", 30), ("drain_outbox", 5)):
         assert jobs[name].trigger.interval == timedelta(seconds=seconds)
         assert jobs[name].max_instances == 1  # a slow tick never overlaps the next one
@@ -341,3 +348,24 @@ def test_stale_partials_go_even_when_the_backup_then_fails(migrated: Settings, m
     with pytest.raises(OSError, match="disk full"):
         backups.run_backup(migrated.database_path, migrated.backup_dir, date(2026, 10, 22), now=NOW)
     assert not stale.exists()
+
+
+@pytest.mark.anyio
+async def test_purge_conversations_job(
+    job_context: runner.JobContext, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    await runner.purge_conversations(job_context)  # nothing to purge; must not fail
+
+    async def removed(*args: object) -> int:
+        return 2
+
+    monkeypatch.setattr(runner.retention, "purge_idle_conversations", removed)
+    await runner.purge_conversations(job_context)
+    assert "idle assistant conversations removed" in caplog.text
+
+    async def broken(*args: object) -> int:
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(runner.retention, "purge_idle_conversations", broken)
+    await runner.purge_conversations(job_context)  # logged, never raised
+    assert "assistant conversation purge failed" in caplog.text

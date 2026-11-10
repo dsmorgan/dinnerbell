@@ -372,7 +372,7 @@ The call is the one the member names, then the thread's call, then the only open
 
 **Data sent.** The conversation, the call's meal, time, and roles offered, and what tools return, with members as pseudonyms. Names inside members' messages or item names go out as written. No preferences, vetoes, ratings, hints, notes, emails, Slack IDs, or guest details are sent, except the member's own personal data through the private-only tools above, when they ask.
 
-**Cost cap.** The cap is in US dollars per calendar month in the household's time zone, $5 by default. Before each model call, Dinnerbell reserves the call's input plus `max_tokens` of output at the model's prices, and refuses the call if that would pass the cap. Afterward, it stores the model, the member, token counts (cache reads and writes included), and the cost at that call's prices. Admin shows usage per member.
+**Cost cap.** The cap is in US dollars per calendar month in the household's time zone, $5 by default, from $1 to $100. Before each model call, Dinnerbell reserves the most the call can cost: its input, bounded by the request's size in bytes, at the higher of the input and cache-write prices, plus `max_tokens` of output, at the model's prices; with Anthropic's server-side refusal fallback, the same bound again at the highest prices in Dinnerbell's table. It refuses the call if spending plus reservations would pass the cap. A model the table doesn't know, such as a fallback's, is charged at the table's highest prices. Afterward, it stores the model, the member, token counts (cache reads and writes included), and the cost at that call's prices. Admin shows usage per member.
 
 **Menu links.** HTTPS only. Every address, after DNS and on each redirect, must be public, and the connection goes to the address checked. A fetch is limited to 2 MB and 10 seconds, and keeps only text. The page goes to a drafting call with no tools, which must answer in the catalog file format.
 
@@ -663,7 +663,7 @@ Every table carries `household_id`. Timestamps are UTC; the household time zone 
 
 | Table | Key fields |
 |---|---|
-| household | name, timezone, settings (JSON: slots, weights, ranking temperature, Feedback (`feedback_cap`), variety window, badge thresholds, slack channel) |
+| household | name, timezone, settings (JSON: slots, weights, ranking temperature, Feedback (`feedback_cap`), variety window, badge thresholds, slack channel, and the assistant's switch, monthly cap, and Conversation hours) |
 | member | display name, email (members sign in with it; a guest never has one), slack_email (a joined guest's Slack email, never used to sign in), slack_guest_account, oidc_subject, slack_user_id, slack_link_locked, role (admin, member, guest), can_cook, can_pickup, can_order, mute_dm_reminders, feedback_reminder, fun_mode (FR-62, default on), color_mode (FR-64: auto, light, or dark; default auto), fun_seen_award (the newest badge award the den has flipped for), away_first and away_last (the away window, FR-63), dietary_needs (a guest's dietary tags), join_refused (an admin removed this guest), active |
 | tag | kind (cuisine, protein, dietary, other), name |
 | catalog_item | kind (home, restaurant), name, notes, url, order_url, modes (cook, pickup, delivery), meals (bits: breakfast 1, lunch 2, dinner 4; 1 to 7, default 6), default_servings, created_by, active |
@@ -685,6 +685,8 @@ Every table carries `household_id`. Timestamps are UTC; the household time zone 
 | outbox | event, notification type, payload (JSON), idempotency_key, message_key, thread_key, available_at, claim_token, claimed_until, attempts, last_error, delivered_at, failed_at, and the delivered message's reference |
 | session | id, member, created_at, expires_at, last_seen |
 | audit | actor, action, target, payload, created_at |
+| assistant_usage | member (nullable: kept after a member is deleted), model, month (the household's calendar month, such as 2026-11), input, output, cache read, and cache write tokens, cost_micros (micro-dollars), state (reserved, settled): one row per model call, for the cost cap (6.14) |
+| assistant_conversation | key (`web:<member>` or `slack:<channel>:<thread_ts>`, unique), private, owner member (set only when private), pseudonyms (JSON: member ID to number), transcript (JSON, in pseudonym form), last_message_at |
 
 ### 13.4 Channel interface
 
@@ -728,6 +730,8 @@ All configuration comes from environment variables with a `DINNERBELL_` prefix, 
 | `DINNERBELL_LOG_LEVEL` | Default `INFO` |
 | `DINNERBELL_SLACK_COMMAND` | Slash command the app registers and names in replies, default `/dinnerbell`. Must match the Slack app manifest. The test instance uses `/dinnerbell-test` |
 | `DINNERBELL_INSTANCE_LABEL` | Empty in production. When set (at most 16 characters from `A-Z`, `a-z`, `0-9`, space, and hyphen), shows a marker such as `TEST` on the web, in Slack posts, on App Home, in `/healthz`, and in logs; limits mentions and direct messages to members of `DINNERBELL_SLACK_CHANNEL`; and allows `dinnerbell scrub-test`, discarding a call (**Discard (test)**, `/dinnerbell-test discard`, `dinnerbell discard-call`), and starting a called-off call again at any time (#60). See ADR 0006 |
+| `DINNERBELL_ANTHROPIC_API_KEY` | Optional secret: the assistant's Anthropic API key (6.14). Read from the environment, or from `/run/secrets`, which `compose.secrets.yaml` doesn't mount for it |
+| `DINNERBELL_ASSISTANT_MODEL` | The assistant's model, default `claude-sonnet-5-5`. Startup refuses one without prices in Dinnerbell's table: `claude-sonnet-5-5`, `claude-opus-5-5`, or `claude-haiku-5-5` |
 | `DINNERBELL_FEATURES` | Comma-separated feature flags to turn on. Unknown names stop startup. Retired names, listed in `flags.RETIRED`, are ignored with a warning. Flags exist only for features that must ship turned off, and each is removed one release after it turns on in production |
 | `DINNERBELL_BUILD` | Set by the image, not the operator: the short commit hash of a `main` build, shown after the version in the footer and `/healthz` (`0.2.0+abc1234`). Empty on release images |
 | `DINNERBELL_TAG` | Compose only, not read by the app: image tag. Defaults to the release the checkout is on; release commits bump it. Set only by `deploy/dinnerbell-test`, never in `.env` |

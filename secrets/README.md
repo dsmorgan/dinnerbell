@@ -16,6 +16,7 @@ Compose then mounts each file at `/run/secrets/<name>` in the container. The tes
 | `DINNERBELL_OIDC_CLIENT_SECRET` | Sign-in client secret |
 | `DINNERBELL_SLACK_BOT_TOKEN` | Slack bot token, `xoxb-...` |
 | `DINNERBELL_SLACK_APP_TOKEN` | Slack app-level token, `xapp-...` |
+| `DINNERBELL_ANTHROPIC_API_KEY` | Optional: the assistant's Anthropic API key. `compose.secrets.yaml` doesn't mount it; see "The assistant" in `docs/configuration.md` |
 
 Each `*.example` file here is a placeholder. Create the real file next to it without the
 `.example` suffix, with one line and no trailing newline. Git ignores everything in this directory
