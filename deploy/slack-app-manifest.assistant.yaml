@@ -1,0 +1,74 @@
+# Dinnerbell Slack app manifest, with the optional assistant (ADR 0009).
+#
+# Apply this in place of slack-app-manifest.yaml only when you turn the
+# assistant on (DINNERBELL_ANTHROPIC_API_KEY and the assistant flag). It is
+# slack-app-manifest.yaml plus a writable Messages tab, the im:history and
+# app_mentions:read scopes, and the message.im and app_mention events, so
+# members can message Dinnerbell and mention it in the channel. Paste it under
+# App Manifest, then reinstall the app. See "The assistant" in
+# docs/configuration.md.
+#
+# Paste this file into api.slack.com/apps > Create New App > From a manifest.
+# Don't edit this file in your clone. After you paste it, change
+# dinnerbell.example.com in redirect_urls to your public hostname in Slack's
+# manifest editor, before you select Next. The path must stay /auth/callback.
+# To keep a copy with your hostname, write it to a *.local.yaml file, which git
+# ignores. See docs/setup.md.
+
+display_information:
+  name: Dinnerbell
+  description: Household meal coordination. Calls, votes, and decisions for who eats what, when.
+  background_color: "#8a4b1f"
+
+features:
+  # The Home tab shows each member's dashboard. The Messages tab shows
+  # private notifications, and members can message the assistant there.
+  app_home:
+    home_tab_enabled: true
+    messages_tab_enabled: true
+    messages_tab_read_only_enabled: false
+  bot_user:
+    display_name: dinnerbell
+    always_online: true
+  slash_commands:
+    # Socket Mode delivers commands over the WebSocket, so no url field is
+    # needed. Slack's manifest reference lists url as optional.
+    - command: /dinnerbell
+      description: Start, offer, log, or call off a meal, see the schedule, or open your preferences
+      usage_hint: "[call | offer | log | cancel | schedule | prefs | catalog | history | version | help]"
+      should_escape: false
+
+oauth_config:
+  redirect_urls:
+    # Used by Sign in with Slack. Edit the hostname before you paste.
+    - https://dinnerbell.example.com/auth/callback
+  scopes:
+    bot:
+      - chat:write          # post calls, proposals, decisions, and recaps
+      - channels:read       # check the bot is in the household channel (conversations.info)
+      - files:write         # upload the badge art PNGs (files.upload); never shared in a channel
+      - im:write            # direct messages; also checks a DM button came from the member's own DM
+      - users:read          # needed by users:read.email
+      - users:read.email    # link members by email (users.lookupByEmail)
+      - commands            # the /dinnerbell slash command
+      - im:history          # read members' direct messages to Dinnerbell (the assistant)
+      - app_mentions:read   # read messages that mention Dinnerbell (the assistant)
+    user:
+      # Sign in with Slack (OpenID Connect) for the web app.
+      - openid
+      - email
+      - profile
+
+settings:
+  event_subscriptions:
+    # No request_url: Socket Mode delivers events over the WebSocket.
+    bot_events:
+      - app_home_opened
+      - message.im          # direct messages to Dinnerbell (the assistant)
+      - app_mention         # mentions of Dinnerbell in the channel (the assistant)
+  # Enables buttons, menus, and modals. No request_url in Socket Mode.
+  interactivity:
+    is_enabled: true
+  org_deploy_enabled: false
+  socket_mode_enabled: true
+  token_rotation_enabled: false

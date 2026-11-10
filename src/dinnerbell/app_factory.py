@@ -24,6 +24,10 @@ from dinnerbell.config import Settings
 from dinnerbell.scheduler.runner import CANCEL_UNWIND_SECONDS, JobContext, build_scheduler, stop_scheduler
 from dinnerbell.services import catalog as catalog_service
 from dinnerbell.services import contributions
+from dinnerbell.services.assistant.anthropic_client import AnthropicModelClient
+from dinnerbell.services.assistant.client import ModelClient
+from dinnerbell.services.assistant.conversation import Assistant
+from dinnerbell.services.assistant.runtime import AssistantConfig
 from dinnerbell.services.bootstrap import bootstrap
 from dinnerbell.services.clock import Clock, utc_now
 from dinnerbell.services.database import open_database
@@ -47,10 +51,12 @@ def create_app(
     slack_client: AsyncWebClient | None = None,
     slack_socket: SocketFactory = BoltSocket,
     prewarm_badge_art: bool = False,
+    model_client: ModelClient | None = None,
 ) -> FastAPI:
     """Build the app. ``oidc_transport`` lets tests route provider calls to a fake in-process;
-    ``slack_client`` and ``slack_socket`` do the same for Slack. ``prewarm_badge_art`` (the CLI
-    sets it) uploads the badge art to Slack in the background once connected (#112)."""
+    ``slack_client`` and ``slack_socket`` do the same for Slack, and ``model_client`` for the
+    assistant's model, in place of Anthropic. ``prewarm_badge_art`` (the CLI sets it) uploads
+    the badge art to Slack in the background once connected (#112)."""
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -69,7 +75,10 @@ def create_app(
         secret = settings.secret_key.get_secret_value()
         state = SchedulerState(started_at=clock())
         slack_state = SlackState()
-        slack = _slack(settings, database.sessionmaker, clock, slack_state, slack_client, slack_socket)
+        anthropic = _anthropic(settings) if model_client is None else None
+        assistant = _assistant(settings, model_client or anthropic, clock)
+        app.state.assistant = assistant
+        slack = _slack(settings, database.sessionmaker, clock, slack_state, slack_client, slack_socket, assistant)
         channel: Channel = slack.channel if slack else NullChannel()
         app.state.dinnerbell = AppContext(
             settings=settings,
@@ -108,6 +117,8 @@ def create_app(
             await stop_scheduler(scheduler, jobs, grace=SHUTDOWN_SECONDS - CANCEL_UNWIND_SECONDS)
             if slack is not None:
                 await slack.stop(deadline)
+            if anthropic is not None:
+                await anthropic.close()
             await http.aclose()
             await database.close()
 
@@ -121,6 +132,7 @@ def _slack(
     state: SlackState,
     client: AsyncWebClient | None,
     socket: SocketFactory,
+    assistant: Assistant | None = None,
 ) -> SlackConnection | None:
     """The Slack connection when the bot token, app token, and channel are all set."""
     bot, app_token, channel = settings.slack_bot_token, settings.slack_app_token, settings.slack_channel
@@ -146,7 +158,22 @@ def _slack(
         instance_label=settings.instance_label,
         version=settings.version_label,
         schema_revision=schema_revision(),
+        assistant=assistant,
     )
+
+
+def _anthropic(settings: Settings) -> AnthropicModelClient | None:
+    """Anthropic's client, only when the operator set ``DINNERBELL_ANTHROPIC_API_KEY`` (ADR 0009)."""
+    key = settings.anthropic_api_key
+    return AnthropicModelClient(key) if key is not None else None
+
+
+def _assistant(settings: Settings, client: ModelClient | None, clock: Clock) -> Assistant | None:
+    """What ``converse`` needs, when there's a key and so a client. Without one, nothing about
+    the assistant is built, and Slack never listens for DMs or mentions."""
+    if client is None or settings.anthropic_api_key is None:
+        return None
+    return Assistant(AssistantConfig.from_settings(settings), client, clock)
 
 
 def _oidc_client(settings: Settings, http: httpx.AsyncClient, clock: Clock) -> OIDCClient:

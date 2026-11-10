@@ -25,6 +25,7 @@ from tests.support.fake_slack import (
     FakeSocket,
     block_action,
     home_opened,
+    message_event,
     send,
     slash,
     view_submission,
@@ -112,6 +113,17 @@ class Slack:
 
     async def command(self, who: str, text: str, **kwargs: Any) -> BoltResponse:
         return await self._send("slash_commands", slash(SLACK_IDS.get(who, who), text, **kwargs))
+
+    async def dm(self, who: str, text: str, **kwargs: Any) -> BoltResponse:
+        """A direct message to Dinnerbell from ``who``, in their DM (``D`` plus their ID's rest)."""
+        user = SLACK_IDS.get(who, who)
+        options: dict[str, Any] = {"channel": "D" + user[1:]} | kwargs
+        return await self._send("events_api", message_event(user, text, **options))
+
+    async def mention(self, who: str, text: str, **kwargs: Any) -> BoltResponse:
+        """A message in the household channel that mentions Dinnerbell (``app_mention``)."""
+        options: dict[str, Any] = {"kind": "app_mention", "channel": CHANNEL, "channel_type": None} | kwargs
+        return await self._send("events_api", message_event(SLACK_IDS.get(who, who), text, **options))
 
     async def open_home(self, who: str, **kwargs: Any) -> BoltResponse:
         return await self._send("events_api", home_opened(SLACK_IDS.get(who, who), **kwargs))

@@ -33,6 +33,8 @@ Use the same workspace as production.
 
 Never reuse production's tokens: Socket Mode delivers each event to one connection, so two instances on one app split button taps between them.
 
+To try the optional assistant on test, paste `deploy/slack-app-manifest.assistant.test.yaml` instead, or paste it later under **App Manifest** and reinstall the test app. It's the test manifest plus a writable **Messages** tab, the `im:history` and `app_mentions:read` scopes, and the `message.im` and `app_mention` events. See [The assistant](configuration.md#talk-to-it-in-slack).
+
 ## Write .env.test
 
 `dinnerbell init --test` writes `.env.test` from your answers: the test app's values, the test hostname, and production's team ID. It generates a new secret key, sets the `TEST` label, the `/dinnerbell-test` command, and the household name `Test`, and refuses production's secrets, client ID, and URL from the `.env` next to it. From your install's directory, replacing `X.Y.Z` with the release production runs (0.10.0 or later), run:

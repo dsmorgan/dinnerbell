@@ -5,5 +5,6 @@
 - ``channel``: ``SlackChannel``, the ``Channel`` protocol over the Web API.
 - ``messages`` and ``views``: Block Kit for notifications, modals, and the Home tab.
 - ``interactions``: buttons, modals, the Home tab, and the slash command.
+- ``assistant``: the optional assistant's DMs and mentions (ADR 0009).
 - ``preview``: sample messages for ``dinnerbell slack preview``.
 """

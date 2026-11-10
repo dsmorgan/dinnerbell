@@ -36,6 +36,8 @@ compose.secrets.yaml compose.secrets.yaml
 .env.test.example .env.test.example
 deploy/slack-app-manifest.yaml deploy/slack-app-manifest.yaml
 deploy/slack-app-manifest.test.yaml deploy/slack-app-manifest.test.yaml
+deploy/slack-app-manifest.assistant.yaml deploy/slack-app-manifest.assistant.yaml
+deploy/slack-app-manifest.assistant.test.yaml deploy/slack-app-manifest.assistant.test.yaml
 deploy/dinnerbell-test deploy/dinnerbell-test
 deploy/check-secrets deploy/check-secrets
 deploy/compose.test.yaml deploy/compose.test.yaml

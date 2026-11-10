@@ -48,12 +48,14 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from dinnerbell import __version__
 from dinnerbell.channels.slack.api import SlackApi, SlackAuthError, SlackUnavailable, webhook_client
+from dinnerbell.channels.slack.assistant import SlackAssistant
 from dinnerbell.channels.slack.channel import HOLD_RETRY_SECONDS, Audience, Hold, HoldScope, SlackChannel
 from dinnerbell.channels.slack.interactions import DEFAULT_COMMAND, Interactions
 from dinnerbell.channels.slack.people import ChannelPeople
 from dinnerbell.domain.members import SLACK_USER_ID_PATTERN
 from dinnerbell.domain.notifications import PermanentDeliveryError
 from dinnerbell.services import slack_members
+from dinnerbell.services.assistant.conversation import Assistant
 from dinnerbell.services.badge_art import ArtSource, CompositeSource, composite_png, png_for
 from dinnerbell.services.badge_files import BadgeFiles
 from dinnerbell.services.clock import Clock
@@ -198,11 +200,15 @@ class SlackConnection:
         schema_revision: str,
         art_for: ArtSource = png_for,
         composite_for: CompositeSource = composite_png,
+        assistant: Assistant | None = None,
     ) -> None:
         """A non-empty ``instance_label`` (``DINNERBELL_INSTANCE_LABEL``, such as test's) also
         limits DMs and mentions to the channel's members. ``version`` is
         ``Settings.version_label`` and ``schema_revision`` is ``services.health.schema_revision()``,
-        both read once at startup for ``/dinnerbell version``."""
+        both read once at startup for ``/dinnerbell version``. ``assistant`` is the optional
+        assistant (ADR 0009), built only with ``DINNERBELL_ANTHROPIC_API_KEY``; with it, DMs and
+        mentions are answered while it's available (``SlackAssistant``), and without it they're
+        never even listened for."""
         client = web_client or AsyncWebClient(token=bot_token, timeout=WEB_TIMEOUT_SECONDS)
         self.api = SlackApi(client, webhook=webhook)
         self.api.on_auth_error = self._token_refused
@@ -271,6 +277,18 @@ class SlackConnection:
             raise_error_for_unhandled_request=False,
         )
         self.interactions.register(self.app)
+        self.assistant: SlackAssistant | None = None
+        if assistant is not None:
+            self.assistant = SlackAssistant(
+                self.api,
+                assistant=assistant,
+                sessionmaker=sessionmaker,
+                channel_id=channel_id,
+                team_id=lambda: self.team_id,
+                spawn=self.interactions._spawn,  # its tasks, which shutdown settles
+            )
+            self.assistant.register(self.app)
+            self.interactions.home_hint = self.assistant.home_hint
         self._task: asyncio.Task[None] | None = None
         self._prewarm_task: asyncio.Task[None] | None = None
         self._stopping = False
@@ -436,6 +454,8 @@ class SlackConnection:
         self.team_id = identity.team_id
         self.interactions.team_id = identity.team_id
         self.interactions.team_url = identity.url
+        if self.assistant is not None:
+            self.assistant.bot_user_id = identity.bot_user_id
         if self.socket is None:
             try:
                 await self._check_app_token()
