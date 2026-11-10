@@ -13,7 +13,7 @@ from dinnerbell.db.engine import write_transaction
 from dinnerbell.db.meals import household_settings
 from dinnerbell.db.repositories import HouseholdRepository
 from dinnerbell.domain.assistant import ENABLED_KEY, assistant_settings
-from dinnerbell.services.assistant.admin import delete_expired
+from dinnerbell.services.assistant.admin import delete_expired, expiry_cutoff
 
 
 async def purge_idle_conversations(sessionmaker: async_sessionmaker[AsyncSession], now: datetime) -> int:
@@ -23,10 +23,14 @@ async def purge_idle_conversations(sessionmaker: async_sessionmaker[AsyncSession
         households = await HouseholdRepository(db).all()
     removed = 0
     for household in households:
-        async with sessionmaker() as db, write_transaction(db):
+        async with sessionmaker() as db:
             hours = assistant_settings(await household_settings(db, household.id)).conversation_hours
-            removed += await delete_expired(db, household.id, hours, now)
-            await db.commit()
+            if not await AssistantRepository(db).any_idle(household.id, expiry_cutoff(hours, now)):
+                continue  # nothing to delete, so no write lock
+            async with write_transaction(db):
+                hours = assistant_settings(await household_settings(db, household.id)).conversation_hours
+                removed += await delete_expired(db, household.id, hours, now)
+                await db.commit()
     return removed
 
 

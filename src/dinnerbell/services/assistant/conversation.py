@@ -13,6 +13,7 @@ tools return. Names come back only in the reply text the member sees.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from collections.abc import Mapping, Sequence
@@ -34,6 +35,7 @@ from dinnerbell.domain.assistant import (
     Turn,
     assistant_settings,
     check_key,
+    known_model,
     month_key,
     recent_turns,
     reservation_micros,
@@ -135,7 +137,7 @@ def build_request(
     if tools:
         request["tools"] = [tool.definition() for tool in tools]
     card = PRICE_TABLE.get(model)
-    if card is not None and card.server_fallback:
+    if card is not None and card.falls_back_to:
         request["fallbacks"] = "default"
         request["betas"] = [FALLBACK_BETA]
     return request
@@ -157,12 +159,25 @@ def _combined(model: str, parts: Sequence[TokenUsage]) -> TokenUsage:
 
 
 async def _call(
-    db: AsyncSession, assistant: Assistant, member: Member, zone: ZoneInfo, request: Mapping[str, Any]
+    db: AsyncSession,
+    assistant: Assistant,
+    member: Member,
+    zone: ZoneInfo,
+    request: Mapping[str, Any],
+    *,
+    earlier_output_tokens: int = 0,
 ) -> ModelReply:
-    """Reserve, call, and settle one request. Raises ``_Refused`` when the call can't run."""
+    """Reserve, call, and settle one request. Raises ``_Refused`` when the call can't run.
+    ``earlier_output_tokens`` is what this message's earlier calls wrote: their thinking goes
+    back in this request as signed blocks and bills as input, though the bytes don't show it."""
     household_id = member.household_id
     model = str(request["model"])
-    reserved = reservation_micros(model, payload_bytes=request_bytes(request), max_tokens=int(request["max_tokens"]))
+    reserved = reservation_micros(
+        model,
+        payload_bytes=request_bytes(request),
+        max_tokens=int(request["max_tokens"]),
+        extra_input_tokens=earlier_output_tokens,
+    )
     repo = AssistantRepository(db)
     async with write_transaction(db):
         settings = assistant_settings(await household_settings(db, household_id))
@@ -175,17 +190,38 @@ async def _call(
             raise _Refused(AT_CAP)
         usage_id = await repo.reserve(household_id, member.id, model, month, reserved, now)
         await db.commit()
+
+    async def keep_reservation() -> None:
+        """The call may have run, so its worst case stays spent."""
+        async with write_transaction(db):
+            await repo.settle(household_id, usage_id, TokenUsage(model), reserved, assistant.clock())
+            await db.commit()
+
     try:
         reply = await assistant.client.create(request)
     except ModelCallFailed as exc:
-        async with write_transaction(db):
-            if exc.maybe_billed:  # it may have run, so its worst case stays spent
-                await repo.settle(household_id, usage_id, TokenUsage(model), reserved, assistant.clock())
-            else:
+        if exc.maybe_billed:
+            await keep_reservation()
+        else:
+            async with write_transaction(db):
                 await repo.release(household_id, usage_id)
-            await db.commit()
-        log.warning("assistant model call failed", extra={"member_id": member.id, "maybe_billed": exc.maybe_billed})
+                await db.commit()
+        log.warning("assistant model call failed", extra={"member_id": member.id, **exc.log_fields()})
         raise _Refused(FAILED) from None
+    except asyncio.CancelledError:
+        await keep_reservation()  # the request may be running still; never leave it reserved
+        log.error("assistant model call cancelled", extra={"member_id": member.id})
+        raise
+    except Exception:
+        await keep_reservation()
+        log.exception("assistant model call broke", extra={"member_id": member.id})
+        raise _Refused(FAILED) from None
+    for part in reply.usage:
+        if not known_model(part.model):
+            # Priced at the ceiling, which holds the cap; the table needs the model's prices.
+            log.error(
+                "assistant model not in the price table", extra={"model": part.model[:64], "member_id": member.id}
+            )
     cost = total_cost_micros(reply.usage)
     async with write_transaction(db):
         await repo.settle(household_id, usage_id, _combined(reply.model, reply.usage), cost, assistant.clock())
@@ -193,6 +229,48 @@ async def _call(
     if cost > reserved:  # pragma: no cover - the bound makes this impossible; say so if it ever isn't
         log.error("assistant call cost more than its reservation", extra={"member_id": member.id})
     return reply
+
+
+async def _keep(
+    db: AsyncSession,
+    assistant: Assistant,
+    member: Member,
+    key: str,
+    private: bool,
+    hours: int,
+    sent: Pseudonyms,
+    asked: Turn,
+    answered: Turn,
+) -> None:
+    """Add one exchange to the stored conversation. It reads the conversation again under the
+    write lock, so an exchange saved by another message in the same thread meanwhile is kept,
+    and this one goes after it. A member that one labeled first keeps that label, and anyone
+    new gets the next number; the exchange's labels are rewritten to match."""
+    household_id = member.household_id
+    repo = AssistantRepository(db)
+    async with write_transaction(db):
+        if hours == 0:
+            await repo.delete_conversation(household_id, key)
+            await db.commit()
+            return
+        now = assistant.clock()
+        latest = await repo.conversation(household_id, key)
+        if latest is not None and latest.expired(now, hours):
+            latest = None
+        pseudonyms = sent.onto(latest.pseudonyms if latest else Pseudonyms())
+        asked = Turn(asked.role, asked.text, pseudonyms.label(member.id))
+        answered = Turn(answered.role, sent.relabel(answered.text, pseudonyms))
+        history = latest.turns if latest else ()
+        kept = Conversation(
+            key=key,
+            private=private,
+            owner_member_id=member.id if private else None,
+            pseudonyms=pseudonyms,
+            turns=recent_turns([*history, asked, answered], MAX_STORED_BYTES),
+            last_message_at=now,
+        )
+        await repo.save_conversation(household_id, kept, now)
+        await db.commit()
 
 
 def _reply_text(content: Sequence[Mapping[str, Any]]) -> str:
@@ -214,12 +292,14 @@ async def _run_loop(
     """The model and tool loop. Returns the reply text, and whether the model answered (so the
     exchange is worth keeping) rather than Dinnerbell replying for it."""
     tools = tools_for(private)
+    written = 0  # output tokens of this message's calls so far
     for _ in range(MAX_MODEL_CALLS):
         request = build_request(assistant.config.model, tools, messages, keeps_history=keeps_history)
         try:
-            reply = await _call(db, assistant, member, zone, request)
+            reply = await _call(db, assistant, member, zone, request, earlier_output_tokens=written)
         except _Refused as refused:
             return refused.reply, False
+        written += sum(part.output_tokens for part in reply.usage)
         # Check why it stopped before running any tool: a refusal or a cut-off can leave a
         # tool call half-written.
         if reply.stop_reason == "refusal":
@@ -290,21 +370,7 @@ async def converse(
         db, assistant, member, zone, _messages(sent, current), private=private, keeps_history=hours > 0
     )
     if answered:
-        async with write_transaction(db):
-            if hours == 0:
-                await repo.delete_conversation(household.id, key)
-            else:
-                turns = recent_turns([*history, current, Turn("assistant", answer)], MAX_STORED_BYTES)
-                kept = Conversation(
-                    key=key,
-                    private=private,
-                    owner_member_id=member.id if private else None,
-                    pseudonyms=pseudonyms,
-                    turns=turns,
-                    last_message_at=assistant.clock(),
-                )
-                await repo.save_conversation(household.id, kept, assistant.clock())
-            await db.commit()
+        await _keep(db, assistant, member, key, private, hours, pseudonyms, current, Turn("assistant", answer))
     names = {m.id: m.display_name for m in await MemberRepository(db).list(household.id)}
     log.info("assistant replied", extra={"member_id": member.id, "answered": answered})
     return Reply(pseudonyms.restore_names(answer, names))

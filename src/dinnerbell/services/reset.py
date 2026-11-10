@@ -109,8 +109,14 @@ def refusal(calls: Collection[OpenCall]) -> str:
     return "\n".join([OPEN_CALLS, *(f"  {call.line()}" for call in calls)])
 
 
+QUIET_WHEN_EMPTY = ("assistant_",)
+"""Tables of an optional feature, which the counts leave out while they're empty, so a
+household that never set up the assistant reads nothing about it."""
+
+
 def _counts_line(counts: Mapping[str, int]) -> str:
-    return ", ".join(f"{table} {count}" for table, count in sorted(counts.items()))
+    shown = {t: n for t, n in counts.items() if n or not t.startswith(QUIET_WHEN_EMPTY)}
+    return ", ".join(f"{table} {count}" for table, count in sorted(shown.items()))
 
 
 @dataclass(frozen=True, slots=True)

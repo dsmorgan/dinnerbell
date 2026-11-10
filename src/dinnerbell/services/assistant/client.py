@@ -30,12 +30,27 @@ class ModelReply:
 
 class ModelCallFailed(Exception):
     """The call returned no reply. ``maybe_billed`` is False only when the API answered with an
-    error, so it ran nothing; otherwise (a timeout, a dropped connection) the request may have
-    run and been billed, and its reservation stands."""
+    error that means it ran nothing; otherwise (a timeout, a dropped connection, a gateway
+    error, a reply that couldn't be read) the request may have run and been billed, and its
+    reservation stands. ``status``, ``error_type``, and ``request_id`` are for the log: none is
+    secret."""
 
-    def __init__(self, *, maybe_billed: bool) -> None:
+    def __init__(
+        self, *, maybe_billed: bool, status: int | None = None, error_type: str = "", request_id: str | None = None
+    ) -> None:
         super().__init__("the model call failed")
         self.maybe_billed = maybe_billed
+        self.status = status
+        self.error_type = error_type
+        self.request_id = request_id
+
+    def log_fields(self) -> dict[str, object]:
+        return {
+            "maybe_billed": self.maybe_billed,
+            "status": self.status,
+            "error_type": self.error_type,
+            "anthropic_request_id": self.request_id,
+        }
 
 
 class ModelClient(Protocol):

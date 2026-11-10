@@ -5,6 +5,7 @@ every tool runs as, retention, and scrub-test. Every model call goes to ``FakeMo
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import AsyncIterator
 from dataclasses import replace
@@ -34,6 +35,7 @@ from dinnerbell.domain.preferences import Stance, TargetType
 from dinnerbell.services import feedback, meals, scrub
 from dinnerbell.services import schedule as schedule_service
 from dinnerbell.services.assistant import admin, conversation, retention, tools
+from dinnerbell.services.assistant.client import ModelCallFailed
 from dinnerbell.services.assistant.conversation import (
     AT_CAP,
     FAILED,
@@ -237,17 +239,50 @@ class TestAssistantOn:
         assert [r.cost_micros for r in rows] == [cost_micros(first), cost_micros(second)]
         assert {r.member_id for r in rows} == {house["Sam"].id} and {r.month for r in rows} == {"2026-10"}
 
-    async def test_a_fallback_is_settled_at_every_attempt_and_an_unknown_model_at_the_highest_prices(
+    async def test_a_fallback_is_settled_at_every_attempt_at_each_models_prices(
         self, house: House, helper: Assistant, model: FakeModel
     ) -> None:
         await switch(house, helper)
         declined = usage(900, 40)
-        rescued = TokenUsage("claude-sonnet-5", 900, 100)  # not in the table
+        rescued = TokenUsage("claude-sonnet-5", 900, 100)
         model.script = [answer("Taqueria.", parts=(declined, rescued), model="claude-sonnet-5")]
         await ask(house, helper, "Sam", "Tacos?")
         [row] = await usage_rows(house)
         assert row.model == "claude-sonnet-5" and (row.input_tokens, row.output_tokens) == (1_800, 140)
-        assert row.cost_micros == cost_micros(declined) + 900 * 4 + 100 * 20
+        assert row.cost_micros == cost_micros(declined) + 900 * 2 + 100 * 10
+
+    async def test_an_unknown_model_costs_the_ceiling_and_is_logged_as_an_error(
+        self, house: House, helper: Assistant, model: FakeModel, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        await switch(house, helper)
+        mystery = TokenUsage("claude-mystery-9", 1_000, 100)
+        model.script = [answer("Taqueria.", parts=(mystery,), model="claude-mystery-9")]
+        await ask(house, helper, "Sam", "Tacos?")
+        [row] = await usage_rows(house)
+        assert row.cost_micros == 1_000 * 10 + 100 * 50
+        [error] = [r for r in caplog.records if r.levelname == "ERROR"]
+        assert error.getMessage() == "assistant model not in the price table"
+        assert error.model == "claude-mystery-9"
+
+    async def test_each_call_reserves_for_the_thinking_earlier_calls_sent_back(
+        self, house: House, helper: Assistant, model: FakeModel, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        await switch(house, helper)
+        extras: list[int] = []
+        real = conversation.reservation_micros
+
+        def spy(model_id: str, **kwargs: Any) -> int:
+            extras.append(kwargs["extra_input_tokens"])
+            return real(model_id, **kwargs)
+
+        monkeypatch.setattr(conversation, "reservation_micros", spy)
+        model.script = [
+            replace(_lookup("", ""), usage=(usage(output_tokens=700),)),
+            replace(_lookup("", "Thai"), usage=(usage(output_tokens=300), usage(output_tokens=50))),
+            answer("Siam Garden."),
+        ]
+        await ask(house, helper, "Sam", "Thai?")
+        assert extras == [0, 700, 1_050]
 
     async def test_the_month_rolls_over_in_the_households_time_zone(
         self, house: House, helper: Assistant, model: FakeModel
@@ -293,6 +328,125 @@ class TestAssistantOn:
                 "claude-sonnet-5-5", payload_bytes=request_bytes(request), max_tokens=6_000
             )
         assert await conversations(house) == []
+
+    async def test_a_failure_logs_what_anthropic_said(
+        self, house: House, helper: Assistant, model: FakeModel, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        await switch(house, helper)
+        model.script = [
+            ModelCallFailed(maybe_billed=False, status=529, error_type="OverloadedError", request_id="req_1")
+        ]
+        assert await ask(house, helper, "Sam", "Hello") == Reply(FAILED)
+        [line] = [r for r in caplog.records if r.getMessage() == "assistant model call failed"]
+        assert (line.status, line.error_type, line.anthropic_request_id) == (
+            529,
+            "OverloadedError",
+            "req_1",
+        )
+
+    async def test_any_other_error_keeps_the_reservation_and_fails_quietly(
+        self, house: House, helper: Assistant, model: FakeModel, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        await switch(house, helper)
+        model.script = [RuntimeError("bug in the client")]
+        assert await ask(house, helper, "Sam", "Hello") == Reply(FAILED)
+        [row] = await usage_rows(house)
+        assert row.state == "settled" and row.cost_micros > 0
+        assert any(r.levelname == "ERROR" and r.getMessage() == "assistant model call broke" for r in caplog.records)
+
+    async def test_a_cancelled_call_keeps_its_reservation(self, house: House, helper: Assistant) -> None:
+        await switch(house, helper)
+        started = asyncio.Event()
+
+        class Hangs(FakeModel):
+            async def create(self, request: Any) -> Any:
+                started.set()
+                await asyncio.Event().wait()  # until cancelled
+
+        task = asyncio.create_task(ask(house, replace(helper, client=Hangs()), "Sam", "Hello"))
+        await asyncio.wait_for(started.wait(), 10)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        [row] = await usage_rows(house)
+        assert row.state == "settled" and row.cost_micros > 0
+
+    async def test_two_messages_at_once_with_room_for_one_reservation(self, house: House, helper: Assistant) -> None:
+        await switch(house, helper, cap_dollars=1)
+        request = build_request(
+            "claude-sonnet-5-5", tools.tools_for(True), conversation._messages((), _turn("Hello")), keeps_history=True
+        )
+        need = reservation_micros("claude-sonnet-5-5", payload_bytes=request_bytes(request), max_tokens=6_000)
+        await _spend(house, 1_000_000 - need - need // 2)  # room for one reservation, not two
+        release = asyncio.Event()
+
+        class Waits(FakeModel):
+            async def create(self, request: Any) -> Any:
+                await release.wait()  # holds its reservation until the other message is done
+                return await super().create(request)
+
+        held = replace(helper, client=Waits())
+
+        async def go(name: str) -> Reply | None:
+            try:
+                return await ask(house, held, name, "Hello")
+            finally:
+                release.set()
+
+        replies = await asyncio.wait_for(asyncio.gather(go("Sam"), go("Alex")), 10)
+        assert sorted(r.text for r in replies if r is not None) == sorted([AT_CAP, "OK"])
+        assert len(held.client.requests) == 1  # type: ignore[attr-defined]
+
+    async def test_two_members_at_once_in_one_thread_both_keep_their_exchange(
+        self, house: House, helper: Assistant
+    ) -> None:
+        await switch(house, helper)
+        both = asyncio.Event()
+
+        class Together(FakeModel):
+            async def create(self, request: Any) -> Any:
+                self.requests.append(request)
+                if len(self.requests) == 2:
+                    both.set()
+                await both.wait()  # neither answers until both have read the empty thread
+                return answer("Member 1 asked first.")
+
+        client = Together()
+        thread = slack_key("C0HOUSE", "1730000000.000400")
+        together = replace(helper, client=client)
+        await asyncio.wait_for(
+            asyncio.gather(
+                ask(house, together, "Sam", "Sam's question", key=thread, private=False),
+                ask(house, together, "Kim", "Kim's question", key=thread, private=False),
+            ),
+            10,
+        )
+        [row] = await conversations(house)
+        sam, kim = str(house["Sam"].id), str(house["Kim"].id)
+        assert sorted(row.pseudonyms.values()) == [1, 2] and set(row.pseudonyms) == {sam, kim}
+        turns = row.transcript
+        assert len(turns) == 4 and {t["text"] for t in turns[::2]} == {"Sam's question", "Kim's question"}
+        for asked, answered in zip(turns[::2], turns[1::2], strict=True):
+            assert answered["text"] == f"{asked['author']} asked first."  # each answer names its own asker
+
+    async def test_the_purge_takes_no_write_lock_when_nothing_is_idle(
+        self, house: House, helper: Assistant, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        await switch(house, helper)
+        await ask(house, helper, "Sam", "Hello")
+        locks: list[object] = []
+        real = retention.write_transaction
+
+        def counting(db: Any) -> Any:
+            locks.append(db)
+            return real(db)
+
+        monkeypatch.setattr(retention, "write_transaction", counting)
+        assert await retention.purge_idle_conversations(house.sessionmaker, house.clock()) == 0
+        assert locks == []
+        house.clock.advance(timedelta(hours=24))
+        assert await retention.purge_idle_conversations(house.sessionmaker, house.clock()) == 1
+        assert len(locks) == 1
 
     @pytest.mark.parametrize(("reason", "reply"), [("refusal", REFUSED), ("max_tokens", TOO_LONG_ANSWER)])
     async def test_a_refusal_or_a_cut_off_runs_no_tool(
@@ -658,6 +812,7 @@ class TestAssistantOn:
                 db, instance_label="TEST", keep=[house["Alex"].email or ""], now=house.clock()
             )
         assert not again.assistant_turned_off and again.conversations_deleted == 0
+        assert not any("Assistant" in line for line in again.lines())  # nothing to say
 
 
 def _turn(text: str) -> Any:

@@ -67,6 +67,8 @@ Otherwise, nothing changes: no page, tab, or reply mentions the assistant, and D
 
 On Admin > **Assistant**, the admin also sets the household's **Monthly cap**, $1 to $100 in US dollars a calendar month in the household's time zone ($5 by default), and **Conversation hours**, how long Dinnerbell keeps a conversation after its last message, 0 to 168 (24 by default). Before each request to Anthropic, Dinnerbell sets aside the most that request could cost and refuses it if that would pass the cap, so spending never does; the page shows this month's usage in total and for each member. Every change there is in the audit log.
 
+The cap is kept in the database, so it covers one installation: production and a [test instance](test-instance.md) each have their own cap and usage. As a backstop, also set a monthly spend limit on the key's workspace in the Anthropic Console, and give the test instance its own key, so its spending shows apart and a limit on one doesn't stop the other.
+
 Dinnerbell sends Anthropic the conversation and what the assistant looks up, with members as "Member 1", "Member 2", and so on. It never sends names, emails, Slack IDs, preferences, vetoes, ratings, or notes, except what a member writes in their own message. Your Anthropic API terms govern how long Anthropic keeps requests.
 
 `compose.secrets.yaml` doesn't mount the key, because every file it lists must exist and the key is optional. To keep the key in a file, create `secrets/DINNERBELL_ANTHROPIC_API_KEY` the way [Keep secrets in files](setup.md#keep-secrets-in-files) describes, and add a `compose.override.yaml` next to `compose.yaml`:

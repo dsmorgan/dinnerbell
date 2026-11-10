@@ -412,10 +412,9 @@ async def test_the_preview_counts_by_table(house: House) -> None:
     lines = found.lines()
     assert lines[0] == "Household: Home"
     assert lines[1].startswith(
-        "Deletes: assignment 0, assistant_conversation 0, badge_award 0, contribution 0, event 1, feedback 0, "
-        "invitation 0,"
+        "Deletes: assignment 0, badge_award 0, contribution 0, event 1, feedback 0, invitation 0,"
     )
-    assert lines[2].startswith("Keeps: assistant_usage 0, audit ")
+    assert lines[2].startswith("Keeps: audit ")
     assert lines[4] == "Days off kept: dinner on 2026-10-22"
     assert found.posts_again == ()  # it stays called off
 
@@ -569,11 +568,10 @@ def test_the_command_backs_up_then_resets_production(production: Path, capsys: p
     out = capsys.readouterr().out
     assert f"Database: {production}" in out and "Household: Home" in out
     assert re.search(
-        r"Deletes: assignment \d+, assistant_conversation 0, badge_award \d+, contribution \d+, event 1, feedback 0, "
-        r"invitation 0, meal_log 1,",
+        r"Deletes: assignment \d+, badge_award \d+, contribution \d+, event 1, feedback 0, invitation 0, meal_log 1,",
         out,
     )
-    assert "Keeps: assistant_usage 0, audit " in out and "catalog_item 3," in out and "member 4," in out
+    assert "Keeps: audit " in out and "catalog_item 3," in out and "member 4," in out
     assert "Reset the history." in out
 
     (backup,) = backups_in(production)
