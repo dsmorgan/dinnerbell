@@ -303,7 +303,7 @@ Requirements use "must" for version 1 and "should" for items that can slip to a 
 | ID | Requirement | Phase |
 |---|---|---|
 | FR-50 | Each member may paste a Google Calendar secret iCal URL. The app polls it read-only and shows "busy at usual dinner time" as a hint on the call roster. Never writes to any calendar. | Calendar |
-| FR-51 | **Optional assistant** ([ADR 0009](adr/0009-optional-assistant.md), proposed). A member can ask the assistant in natural language: "something we haven't had in a month that works for everyone in," or "tacos at 7, I'll cook." The assistant acts as the member through the same domain API, never with admin rights, never bypasses filters, and changes nothing until the member confirms. The first build drafts proposals, offers, and catalog items. See [6.14](#614-assistant). | Assistant |
+| FR-51 | **Optional assistant** ([ADR 0009](adr/0009-optional-assistant.md)). A member can ask the assistant in natural language: "something we haven't had in a month that works for everyone in," or "tacos at 7, I'll cook." The assistant acts as the member through the same domain API, never with admin rights, never bypasses filters, and changes nothing until the member confirms. The first build drafts proposals, offers, and catalog items. See [6.14](#614-assistant). | Assistant |
 | FR-52 | A Discord adapter implements the channel interface. | Channels |
 | FR-53 | Web push for Home Screen web apps as an optional additional channel. | Channels |
 | FR-54 | Multiple households per deployment. | Multi-tenant |
@@ -327,22 +327,31 @@ The web page and DMs are private to the member; the admin doesn't see them. In a
 
 **History.** Kept for Admin's **Conversation hours**, 0 to 168 (default 24) after the last message, then deleted, including when the admin lowers the setting. It covers Dinnerbell's copy only; Slack keeps its thread, and backups taken meanwhile keep their copy until they're deleted. At 0, each message stands alone, and a follow-up's reply says Dinnerbell can't see earlier messages. History is stored in pseudonym form, with each conversation's pseudonym map fixed and only added to. The history sent to the model has a size limit, dropping the oldest turns first.
 
-**Scope.** The assistant can do what the member can, through the same services, and never what only an admin can. Every tool passes the services the member with admin rights removed, so an admin using the assistant gets a member's permissions, and no service's admin path is ever taken. Tests check that no tool reaches `require_admin` or an `/admin` route.
+**Scope.** The assistant can do what the member can, through the same services, and never what only an admin can. One wrapper builds every tool's actor as `dataclasses.replace(member, role=Role.MEMBER)`, so an admin using the assistant gets a member's permissions, and no `is_admin` branch in domain or service code ever passes. Rules that match on the member's ID still apply, such as being the call's coordinator. Tests check that an admin who isn't the coordinator is refused by every tool, and that no tool ever acts as `ActingAs.ADMIN`. Tools read household settings directly, never through a use case that calls `require_admin`, such as `schedule.ranking_settings`.
 
-- **Never tools:**
-  - Members and guests: inviting, deactivating, promoting, linking, removing, and editing another member's preferences.
-  - Household settings: ranking weights, temperature, Feedback, the channel, the deadline, joining, the Admin schedule page and its resets, and the assistant's own switch, cap, and Conversation hours.
-  - Badges, contribution counts, and their resets.
-  - Merging and renaming tags.
-  - Call overrides (FR-6): extending, shortening, locking, cancelling, re-running, and skipping calls as an admin, and correcting a meal's place after it's done.
-- **Any conversation, including a channel thread:** call actions the member takes in public anyway. These are answering in, out, or maybe; voting; suggesting; proposing; offering and taking back an offer; inviting a guest and answering for them; taking or giving up a role; joining late; starting an ad-hoc call (FR-3); logging a meal; and adding or editing catalog items.
+Tools fall into three groups, by the rule the services already apply:
+
+- **Never tools:** anything allowed only because the actor is an admin. For example:
+  - Members and guest records: inviting, editing, deactivating, reactivating, promoting, linking, Slack ID mapping (FR-42), importing from the channel, and anything on another member's preferences, dietary needs, away days, fun mode, or color mode.
+  - Household settings: ranking weights, temperature, Feedback, joining, the Admin schedule page and its resets, and the assistant's own settings and usage view.
+  - Badges, contribution counts, and their resets; merging and renaming tags.
+  - Admin overrides on calls (FR-6, 5.7), such as:
+    - extending, shortening, locking, cancelling, re-running, and skipping calls
+    - reassigning the coordinator
+    - correcting assignments or the place after a meal
+    - marking done early
+    - acting for a guest someone else invited
+    - editing someone else's logged meal
+    - discarding a call on the test instance
+    - the stuck-calls view
+    - any coordinator action an admin takes without being the coordinator
 - **Private conversations only** (the web page and DMs):
-  - Coordinating: assigning roles, locking a pick, breaking a tie, changing the plan, handing off, marking done, and calling off a call (FR-56).
-  - The member's own preferences, vetoes, ratings and feedback, and going away.
-  
-  Only these tools send the member's own preferences or ratings, and only when they ask. Nobody else's ever go.
+  - Anything allowed because the member is the call's coordinator, or the member who started an ad-hoc call. Examples are assigning roles, locking a pick, breaking a tie, shuffling, choosing pickup or delivery, moving the decision time, closing a window early, letting late joiners in, changing the plan or the place, handing off, marking done early, and calling off a call (FR-56).
+  - Changing a slot's standing schedule (FR-44), which changes it for the whole household.
+  - The member's own preferences, vetoes, dietary needs, ratings and feedback (rating, issues, and note), and away days.
+- **Any conversation, including a channel thread:** everything else a member can do. Examples are answering in, out, or maybe; joining late; voting; suggesting; proposing; making, joining, or taking back an offer, and adding a guest to it; inviting a guest and answering for them; taking or giving up a role; marking done at meal time, once in; posting a scheduled call early; starting an ad-hoc call (FR-3) or restarting a called-off one; logging, editing, or deleting their own meals; and adding, editing, or deactivating catalog items.
 
-Each tool beyond the first build is a follow-up issue under ADR 0009. A catalog edit drafts a before-and-after diff for **Confirm**, separate from the add-only import draft.
+Only private-only tools send the member's own personal data, and only when the member asks. Nobody else's preferences, ratings, or hints are ever sent, and stored guest details aren't either. A guest the member names in their own message goes out as written. Each tool beyond the first build is a follow-up issue under ADR 0009. A catalog edit drafts a before-and-after diff for **Confirm**, separate from the add-only import draft.
 
 **Tools in the first build** (#17), each acting as the member whose message is being answered:
 
@@ -361,7 +370,7 @@ The call is the one the member names, then the thread's call, then the only open
 
 **Confirm** calls the same service as the form, which checks everything again, so a stale draft gets the service's usual error and nothing changes. In a channel thread, drafts and replies about them go only to their member, as ephemeral messages in the thread. Catalog drafts open the web import preview, from Slack too, and an import from a draft only adds, even if a matching item appeared meanwhile. Once a new place is imported, a member can ask again to propose it.
 
-**Data sent.** The conversation, the call's meal, time, and roles offered, and what tools return, with members as pseudonyms. Names inside members' messages or item names go out as written. No preferences, vetoes, ratings, hints, notes, emails, Slack IDs, or guest details are sent, except the member's own preferences and ratings through the private-only tools above, when they ask.
+**Data sent.** The conversation, the call's meal, time, and roles offered, and what tools return, with members as pseudonyms. Names inside members' messages or item names go out as written. No preferences, vetoes, ratings, hints, notes, emails, Slack IDs, or guest details are sent, except the member's own personal data through the private-only tools above, when they ask.
 
 **Cost cap.** The cap is in US dollars per calendar month in the household's time zone, $5 by default. Before each model call, Dinnerbell reserves the call's input plus `max_tokens` of output at the model's prices, and refuses the call if that would pass the cap. Afterward, it stores the model, the member, token counts (cache reads and writes included), and the cost at that call's prices. Admin shows usage per member.
 
@@ -840,4 +849,4 @@ The table is in build order. M0 through M2 are the minimum for the household to 
 | [0006](adr/0006-test-instance.md) | Test in a second instance of the same image, not a second channel |
 | [0007](adr/0007-seeded-weighted-ranking.md) | Seeded, weighted random ranking among places that pass every filter |
 | [0008](adr/0008-feedback-informed-ranking.md) | Ratings move the rater's own score, and the household sees a hint |
-| [0009](adr/0009-optional-assistant.md) | An optional assistant drafts through the domain API, and a member confirms (proposed) |
+| [0009](adr/0009-optional-assistant.md) | An optional assistant drafts through the domain API, and a member confirms |
