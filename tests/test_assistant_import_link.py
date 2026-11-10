@@ -1,0 +1,258 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+"""The link a Slack Confirm gives to a catalog draft's import (spec 6.14, **Drafts**):
+``draft_import_url`` signs the draft and its member, and ``GET /catalog/import/draft`` shows
+that member the add-only preview and changes nothing. Anyone else, a tampered or expired link,
+or the assistant turned off gets the same 404."""
+
+from __future__ import annotations
+
+import asyncio
+import re
+from dataclasses import dataclass, replace
+from datetime import timedelta
+from typing import Any
+from urllib.parse import parse_qs, urlencode, urlsplit
+
+import httpx
+import pytest
+from fastapi.testclient import TestClient
+
+from dinnerbell.config import Settings
+from dinnerbell.db.models import AssistantDraftRow, CatalogItemRow
+from dinnerbell.db.repositories import MemberRepository
+from dinnerbell.domain.assistant import AssistantSettings, web_key
+from dinnerbell.domain.members import Member, Role
+from dinnerbell.services import catalog as catalog_service
+from dinnerbell.services.assistant import admin, drafts
+from dinnerbell.services.assistant.drafts import CatalogReady
+from dinnerbell.services.assistant.runtime import AssistantConfig
+from dinnerbell.services.database import open_database
+from dinnerbell.services.errors import NotFound
+from dinnerbell.services.household import current_household
+from dinnerbell.web.routes.catalog import DRAFT_LINK_LIFETIME, _draft_link_signer, draft_import_url
+from tests.conftest import BASE_URL, invite, page, sign_in
+from tests.support.clock import FakeClock
+from tests.support.fake_oidc import FakeProvider
+from tests.support.web import submit
+from tests.test_admin import sign_in_as
+from tests.test_auth_flow import rows
+
+KEY = "sk-ant-test-not-a-real-key"
+DRAFTED = (
+    "version: 1\nrestaurants:\n  - name: Noodle Bar\n    cuisine: [Chinese]\n    notes: Changed by the draft\n"
+    "  - name: Dumpling House\n    cuisine: [Chinese]\n"
+)
+NOODLE_BAR = "version: 1\nrestaurants:\n  - name: Noodle Bar\n    cuisine: [Chinese]\n"
+pytestmark = [pytest.mark.parametrize("settings_overrides", [{"anthropic_api_key": KEY}])]
+
+
+@dataclass(frozen=True)
+class Drafted:
+    draft_id: int
+    member_id: int
+    url: str
+    content: str
+
+
+def run(settings: Settings, work: Any) -> Any:
+    """Run ``work(db, admin)`` against the app's database, as the bootstrap admin."""
+
+    async def go() -> Any:
+        database = open_database(settings.async_database_url)
+        try:
+            async with database.sessionmaker() as db:
+                household = await current_household(db)
+                members = await MemberRepository(db).list(household.id)
+                alex = next(m for m in members if m.email == settings.admin_email)
+                return await work(db, alex)
+        finally:
+            await database.close()
+
+    return asyncio.run(go())
+
+
+def confirmed(settings: Settings, clock: FakeClock, *, then_add: bool = True) -> Drafted:
+    """Alex drafts Noodle Bar and Dumpling House with the assistant on, Noodle Bar then appears in
+    the catalog, and Alex confirms in Slack: the link Slack would show."""
+    config = AssistantConfig.from_settings(settings)
+
+    async def work(db: Any, alex: Member) -> Drafted:
+        await admin.update_assistant(db, config, alex, AssistantSettings(enabled=True), now=clock())
+        draft = await drafts.draft_catalog_items(db, alex, web_key(alex.id), DRAFTED, now=clock())
+        if then_add:
+            await catalog_service.apply_import(db, alex.household_id, alex, NOODLE_BAR, now=clock())
+        ready = await drafts.confirm_draft(db, clock, config, alex, draft.id)
+        assert isinstance(ready, CatalogReady)
+        return Drafted(draft.id, alex.id, draft_import_url(settings, clock, draft.id, alex.id), ready.content)
+
+    result: Drafted = run(settings, work)
+    return result
+
+
+def switch_off(settings: Settings, clock: FakeClock) -> None:
+    async def work(db: Any, alex: Member) -> None:
+        values = AssistantSettings(enabled=False)
+        await admin.update_assistant(db, AssistantConfig.from_settings(settings), alex, values, now=clock())
+
+    run(settings, work)
+
+
+def path(url: str) -> str:
+    parts = urlsplit(url)
+    return f"{parts.path}?{parts.query}"
+
+
+def token_in(response: httpx.Response) -> str | None:
+    match = re.search(r'name="token" value="([^"]+)"', response.text)
+    return match.group(1) if match else None
+
+
+@pytest.mark.flag("assistant", on=True)
+def test_the_link_is_built_from_the_base_url_and_signs_the_draft_and_member(
+    migrated: Settings, clock: FakeClock
+) -> None:
+    url = draft_import_url(migrated, clock, 12, 34)
+    assert url.startswith(f"{migrated.base_url}/catalog/import/draft?t=")
+    (token,) = parse_qs(urlsplit(url).query)["t"]
+    assert _draft_link_signer(migrated, clock).loads(token) == {"draft": "12", "member": "34"}
+    clock.now += DRAFT_LINK_LIFETIME + timedelta(seconds=1)
+    assert _draft_link_signer(migrated, clock).loads(token) is None
+
+
+@pytest.mark.flag("assistant", on=True)
+def test_the_drafts_member_gets_the_add_only_preview_and_apply_only_adds(
+    client: TestClient, provider: FakeProvider, migrated: Settings, clock: FakeClock
+) -> None:
+    sign_in(client, provider)
+    drafted = confirmed(migrated, clock)
+    response = client.get(path(drafted.url))
+    assert response.status_code == 200
+    text = page(response)
+    assert 'name="add_only" value="1"' in text and "only adds new items" in text
+    assert "Dumpling House" in text and "Changed by the draft" in text  # the file, shown as it is
+    token = token_in(response)
+    assert token
+    before = {row.name: row.notes for row in rows(migrated, CatalogItemRow)}
+    assert before["Noodle Bar"] is None and "Dumpling House" not in before  # the GET saved nothing
+    applied = submit(client, "/catalog/import/apply", {"content": drafted.content, "token": token, "add_only": "1"})
+    assert applied.status_code == 303
+    assert applied.headers["location"].startswith("/catalog?notice=imported&created=1&updated=0")
+    after = {row.name: row.notes for row in rows(migrated, CatalogItemRow)}
+    assert after["Noodle Bar"] is None and "Dumpling House" in after
+
+
+@pytest.mark.flag("assistant", on=True)
+def test_an_apply_without_the_add_only_mark_still_only_adds(
+    client: TestClient, provider: FakeProvider, migrated: Settings, clock: FakeClock
+) -> None:
+    """A browser that drops the hidden ``add_only`` field: the signed token still marks it."""
+    sign_in(client, provider)
+    drafted = confirmed(migrated, clock)
+    token = token_in(client.get(path(drafted.url)))
+    applied = submit(client, "/catalog/import/apply", {"content": drafted.content, "token": token})
+    assert applied.status_code == 303
+    assert {row.name: row.notes for row in rows(migrated, CatalogItemRow)}["Noodle Bar"] is None
+
+
+@pytest.mark.flag("assistant", on=True)
+def test_signed_out_or_someone_else_gets_404(
+    client: TestClient, provider: FakeProvider, migrated: Settings, clock: FakeClock
+) -> None:
+    drafted = confirmed(migrated, clock)
+    assert client.get(path(drafted.url)).status_code == 404  # signed out
+    sign_in(client, provider)
+    assert invite(client, "kim@example.com", "Kim").status_code == 303
+    sign_in_as(client, provider, "kim", "kim@example.com")
+    assert client.get(path(drafted.url)).status_code == 404
+    assert "Dumpling House" not in {row.name for row in rows(migrated, CatalogItemRow)}
+
+
+@pytest.mark.flag("assistant", on=True)
+def test_a_tampered_expired_or_unconfirmed_link_gets_404(
+    client: TestClient, provider: FakeProvider, migrated: Settings, clock: FakeClock
+) -> None:
+    sign_in(client, provider)
+    drafted = confirmed(migrated, clock)
+    (token,) = parse_qs(urlsplit(drafted.url).query)["t"]
+    body, mac = token.split(".")
+    signer = _draft_link_signer(migrated, clock)
+    another = signer.dumps({"draft": str(drafted.draft_id + 1), "member": str(drafted.member_id)})
+    for bad in (
+        f"{body}.{mac[:-2]}xx",  # a forged signature
+        f"{body[:-2]}xx.{mac}",  # a changed body
+        "",
+        "x" * 2000,
+        signer.dumps({"draft": "none", "member": str(drafted.member_id)}),
+        signer.dumps({"draft": str(drafted.draft_id), "member": str(drafted.member_id + 1)}),
+        another,  # no such draft
+    ):
+        assert client.get(f"/catalog/import/draft?{urlencode({'t': bad})}").status_code == 404, bad
+    assert client.get("/catalog/import/draft").status_code == 404
+    clock.now += DRAFT_LINK_LIFETIME + timedelta(seconds=1)
+    assert client.get(path(drafted.url)).status_code == 404
+
+
+@pytest.mark.flag("assistant", on=True)
+def test_with_the_assistant_turned_off_the_link_gets_404(
+    client: TestClient, provider: FakeProvider, migrated: Settings, clock: FakeClock
+) -> None:
+    sign_in(client, provider)
+    drafted = confirmed(migrated, clock)
+    assert client.get(path(drafted.url)).status_code == 200
+    switch_off(migrated, clock)
+    assert client.get(path(drafted.url)).status_code == 404
+
+
+@pytest.mark.flag("assistant", on=True)
+def test_only_a_confirmed_catalog_draft_of_the_members_is_ready(
+    client: TestClient, migrated: Settings, clock: FakeClock
+) -> None:
+    config = AssistantConfig.from_settings(migrated)
+
+    async def work(db: Any, alex: Member) -> None:
+        await admin.update_assistant(db, config, alex, AssistantSettings(enabled=True), now=clock())
+        draft = await drafts.draft_catalog_items(db, alex, web_key(alex.id), DRAFTED, now=clock())
+        with pytest.raises(NotFound):  # still waiting for Confirm
+            await drafts.ready_for_import(db, config, alex, draft.id)
+        await drafts.confirm_draft(db, clock, config, alex, draft.id)
+        ready = await drafts.ready_for_import(db, config, alex, draft.id)
+        assert ready.add_only and ready.member_id == alex.id and ready.content == drafted_content(ready)
+        with pytest.raises(NotFound):
+            await drafts.ready_for_import(db, AssistantConfig(key_set=True, flag_on=False), alex, draft.id)
+        with pytest.raises(NotFound):
+            await drafts.ready_for_import(db, config, alex, draft.id + 1)
+        with pytest.raises(NotFound):  # a guest's, or an inactive member's, never is
+            await drafts.ready_for_import(db, config, replace(alex, role=Role.GUEST), draft.id)
+        with pytest.raises(NotFound):  # someone else's
+            await drafts.ready_for_import(db, config, replace(alex, id=alex.id + 100), draft.id)
+
+    run(migrated, work)
+    [row] = rows(migrated, AssistantDraftRow)
+    assert row.used_at is not None
+
+
+def drafted_content(ready: CatalogReady) -> str:
+    assert "Dumpling House" in ready.content
+    return ready.content
+
+
+def test_the_app_builds_slacks_import_link_from_the_base_url(migrated: Settings, clock: FakeClock) -> None:
+    """``app_factory`` gives Slack ``draft_import_url`` for the configured base URL."""
+    from dinnerbell import app_factory
+    from dinnerbell.services.health import SlackState
+
+    configured = migrated.model_copy(
+        update={
+            "slack_bot_token": migrated.secret_key,
+            "slack_app_token": migrated.secret_key,
+            "slack_channel": "C0DINNER",
+        }
+    )
+    helper = app_factory._assistant(configured, object(), clock)  # type: ignore[arg-type]
+    assert helper is not None
+    conn = app_factory._slack(configured, None, clock, SlackState(), None, app_factory.BoltSocket, helper)  # type: ignore[arg-type]
+    assert conn is not None and conn.assistant is not None
+    url = conn.assistant.import_link(5, 6)
+    assert url.startswith(f"{BASE_URL}/catalog/import/draft?t=")
+    (token,) = parse_qs(urlsplit(url).query)["t"]
+    assert _draft_link_signer(configured, clock).loads(token) == {"draft": "5", "member": "6"}

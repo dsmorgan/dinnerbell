@@ -158,6 +158,15 @@ MAKE_MEMBER = "make_member"
 """**Make member** on the admin's message about a guest who joined. Its value is the guest's ID."""
 REMOVE_GUEST = "remove_guest"
 """**Remove** on the admin's message about a guest who joined. Its value is the guest's ID."""
+DRAFT_CONFIRM = "draft_confirm"
+"""**Confirm** on one of the assistant's draft cards (spec 6.14, **Drafts**): an ephemeral in a
+channel thread, or a message in the member's DM. Its value is a ``draft_value``. The service checks
+that the draft is the tapper's, so the value is only a candidate."""
+DRAFT_CANCEL = "draft_cancel"
+"""**Cancel** on a draft card. Its value is a ``draft_value``."""
+DRAFT_ACTIONS = frozenset({DRAFT_CONFIRM, DRAFT_CANCEL})
+DRAFT_IMPORT_LINK = "link_draft_import"
+"""**Review the import**, the URL button a catalog draft's Confirm leaves on its card."""
 LINK_PREFIX = "link_"
 """URL buttons. Slack still sends their clicks, which the app acknowledges and ignores."""
 LINK_PATTERN = re.compile(r"^link_[a-z_]{1,40}$")
@@ -179,6 +188,7 @@ BREAK_TIE_VIEW = "break_tie_modal"
 
 MAX_ID = 2**63 - 1
 _DIGITS = re.compile(r"^[0-9]{1,19}$")
+_DRAFT = re.compile(r"[1-9][0-9]{0,18}")
 _PAIR = re.compile(r"^([0-9]{1,19}):([0-9]{1,19})$")
 _MENU = re.compile(r"(cancel|close|move):([1-9][0-9]{0,18}):([1-9][0-9]{0,18})")
 _WINDOW = re.compile(r"(respond|vote):([1-9][0-9]{0,18}):([1-9][0-9]{0,18})")
@@ -214,6 +224,18 @@ def event_value(event_id: int) -> str:
 def parse_event(value: object) -> int:
     if not isinstance(value, str) or not _DIGITS.fullmatch(value):
         raise BadValue("not an event id")
+    return _row_id(value)
+
+
+def draft_value(draft_id: int) -> str:
+    """A draft card button's value: the draft's ID, and nothing else."""
+    return str(draft_id)
+
+
+def parse_draft(value: object) -> int:
+    """A draft ID, exactly as ``draft_value`` writes it: digits with no leading zero."""
+    if not isinstance(value, str) or not _DRAFT.fullmatch(value):
+        raise BadValue("not a draft value")
     return _row_id(value)
 
 

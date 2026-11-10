@@ -24,6 +24,17 @@ author. Dinnerbell's first reply in a channel thread says it sees only messages 
 When the root is a Dinnerbell post, its call is the conversation's default call. A reply that
 carries drafts goes only to its member: in a channel thread, as an ephemeral.
 
+**Drafts** come as a card each after the reply, in its thread: an ephemeral in a channel
+thread, and an ordinary message in a DM. A card has the draft's title, what **Confirm** does, and
+**Confirm** and **Cancel**, whose value is the draft's ID only (``ids.draft_value``).
+``Interactions`` takes the tap (acknowledged at once, then a tracked task, after its workspace,
+channel, and member checks) and hands it to ``draft_tap``, which calls ``confirm_draft`` or
+``cancel_draft`` as the tapper: the service checks that the draft is theirs. The card is then
+replaced with what happened, through the tap's ``response_url`` for an ephemeral and with
+``chat.update`` in a DM, so a result never shows in the channel. A catalog draft's Confirm leaves
+**Review the import**, a link Dinnerbell builds from its own base URL (``import_link``) to the
+web's add-only import preview: the one clickable link the assistant's messages have.
+
 **Replies** are plain text: the model's text is escaped, so it can't make a mention, a channel
 ping, or a link, and every URL and bare domain in it is defanged (``hxxps[:]//evil[.]example``), so
 Slack can't turn one into a link either. It's cut to Slack's length. A member has one message
@@ -33,6 +44,7 @@ Dinnerbell says once, in the new one's thread, that it's still on the last one.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import unicodedata
@@ -43,15 +55,38 @@ from typing import Any
 from slack_bolt.async_app import AsyncApp
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from dinnerbell.channels.slack import ids
 from dinnerbell.channels.slack.api import SlackApi, SlackUnavailable
-from dinnerbell.channels.slack.blocks import ELLIPSIS, MAX_FALLBACK, clip_mrkdwn, escape
+from dinnerbell.channels.slack.blocks import (
+    ELLIPSIS,
+    MAX_FALLBACK,
+    Block,
+    Mrkdwn,
+    actions,
+    button,
+    clip_mrkdwn,
+    escape,
+    safe_url,
+    section,
+)
 from dinnerbell.channels.slack.ids import is_channel_id
+from dinnerbell.channels.slack.interactions import ASSISTANT_OFF, SHOWN_ERRORS, Source, Tap, posted_offer_reply
 from dinnerbell.domain.assistant import InvalidConversationKey, slack_key
+from dinnerbell.domain.events import IllegalTransition, friendly
 from dinnerbell.domain.members import Member
 from dinnerbell.domain.notifications import MessageRef, PermanentDeliveryError
 from dinnerbell.logs import member_id_var
-from dinnerbell.services import outbox, slack_members
+from dinnerbell.services import activity, outbox, slack_members
 from dinnerbell.services.assistant.conversation import FAILED, Assistant, Reply, converse
+from dinnerbell.services.assistant.drafts import (
+    USED,
+    CatalogReady,
+    Confirmed,
+    DraftView,
+    OfferConfirmed,
+    cancel_draft,
+    confirm_draft,
+)
 from dinnerbell.services.assistant.runtime import available
 from dinnerbell.services.errors import Forbidden
 
@@ -64,12 +99,22 @@ REMEMBERED = 2048
 """How many messages, and channel threads replied in, are remembered; the oldest go first."""
 STILL_ON_IT = "I'm still on your last message. Send this one again once I've answered."
 TEXT_ONLY = "I can read only text messages."
-DRAFTS_SOON = "Confirming drafts in Slack is coming soon. Until then, nothing changes."
 MAX_DRAFT_TITLE = 150
+MAX_DRAFT_LINE = 300
+IF_CONFIRMED = "If you confirm:"
+CANCELLED = "Cancelled."
+PROPOSED = "Proposed. It's in the vote now."
+REVIEW_IMPORT = "Review the import"
+IMPORT_READY = (
+    "The import preview is ready on the web. It only adds new items, and nothing is saved until you import them there."
+)
 SLACK_TS = re.compile(r"\d{1,12}\.\d{1,8}")
 _ENTITY = re.compile(r"<([^<>]*)>")
-_PING = re.compile(r"@(here|channel|everyone)", re.IGNORECASE)
-"""Whatever follows: a word right after it (``@hereVIII``) mustn't keep a ping whole."""
+_PING = re.compile(r"@(here|channel|everyone)(?![^\W_])", re.IGNORECASE)
+"""A ping as Slack reads one: the exact word, followed by anything but a letter or digit, or by
+nothing. So ``@hereford`` and ``sam@channelx`` stay as they are, while ``@here.``, ``@here_``, and
+``@here`` before a combining mark are broken anyway. It runs after NFKC, so a fullwidth at sign is caught,
+and ``@hereⅧ`` reads as ``@hereVIII``, which Slack doesn't ping."""
 _SPACES = re.compile(r"[ \t]{2,}")
 WORD_JOINER = "\u2060"
 _HTTP = re.compile(r"\bhttp(s?)(?=:)", re.IGNORECASE)
@@ -227,14 +272,38 @@ def defang(text: str) -> str:
 
 
 def reply_text(reply: Reply) -> str:
-    """The reply's text for Slack (``safe_reply``), with a line for each draft it made. Draft
-    cards with **Confirm** and **Cancel** come in a later change; until then a note says so."""
-    if not reply.drafts:
-        return safe_reply(reply.text)
-    lines = "\n".join(f"• {safe_reply(draft.title, MAX_DRAFT_TITLE)}" for draft in reply.drafts)
-    note = f"{lines}\n_{DRAFTS_SOON}_"
-    body = safe_reply(reply.text, max(1, MAX_REPLY - len(note) - 2))
-    return f"{body}\n\n{note}" if body else note
+    """The reply's text for Slack (``safe_reply``). Its drafts come after it, a card each
+    (``draft_card``)."""
+    return safe_reply(reply.text)
+
+
+def draft_card(draft: DraftView) -> dict[str, Any]:
+    """A draft's card: its title and what **Confirm** does, through ``safe_reply`` as the model's
+    words are, then **Confirm** and **Cancel**, whose value is the draft's ID and nothing else."""
+    title = safe_reply(draft.title, MAX_DRAFT_TITLE) or ELLIPSIS
+    lines = [f"• {safe_reply(line, MAX_DRAFT_LINE)}" for line in draft.confirm_lines]
+    text = "\n".join([f"*{title}*", *([IF_CONFIRMED, *lines] if lines else [])])
+    value = ids.draft_value(draft.id)
+    buttons = actions(
+        button("Confirm", ids.DRAFT_CONFIRM, value, style="primary"),
+        button("Cancel", ids.DRAFT_CANCEL, value),
+        block_id=f"draft_{draft.id}",
+    )
+    return {"text": title, "blocks": [section(text), buttons]}
+
+
+def result_card(text: str, *blocks: Block) -> dict[str, Any]:
+    """What a draft card becomes once tapped: ``text``, mrkdwn that's safe already, and no buttons
+    but a link's."""
+    return {"text": text, "blocks": [section(text), *blocks]}
+
+
+def confirmed_text(done: Confirmed) -> str:
+    """What a Confirm did, for its card: the same words as the form's reply. Escaped, as item
+    names are what people typed."""
+    if isinstance(done, OfferConfirmed):
+        return escape(posted_offer_reply(done.posted))
+    return PROPOSED
 
 
 def safe_reply(text: str, limit: int = MAX_REPLY) -> str:
@@ -285,10 +354,16 @@ class _Bounded:
             del self._items[next(iter(self._items))]
 
 
+ImportLink = Callable[[int, int], str]
+"""The web link to a confirmed catalog draft's import preview, from a draft ID and its member's,
+built from the configured base URL (the composition root passes the web's ``draft_import_url``)."""
+
+
 class SlackAssistant:
-    """DMs and mentions, for ``SlackConnection``. ``spawn`` runs work as a tracked task (the
-    interactions' own, so shutdown waits for it), and ``team_id`` is the workspace the bot
-    token belongs to, None until the first check."""
+    """DMs and mentions, and the buttons on draft cards, for ``SlackConnection``. ``spawn`` runs
+    work as a tracked task (the interactions' own, so shutdown waits for it), ``team_id`` is the
+    workspace the bot token belongs to, None until the first check, and ``import_link`` makes a
+    catalog draft's **Review the import** link."""
 
     def __init__(
         self,
@@ -299,8 +374,10 @@ class SlackAssistant:
         channel_id: str,
         team_id: Callable[[], str | None],
         spawn: Callable[[Coroutine[Any, Any, None]], None],
+        import_link: ImportLink,
     ) -> None:
         self.api = api
+        self.import_link = import_link
         self.assistant = assistant
         self.sessionmaker = sessionmaker
         self.channel_id = channel_id
@@ -316,6 +393,11 @@ class SlackAssistant:
         """Members with a message being answered, in any conversation: one at a time each."""
         self.told: set[int] = set()
         """Of those, the ones already told ``STILL_ON_IT``, so a burst gets one notice."""
+        self.draft_lock = asyncio.Lock()
+        """Draft taps, one at a time, so a double tap's second finds the first's result."""
+        self.settled = _Bounded()
+        """Drafts confirmed or cancelled from a card since start, by member and draft ID: a
+        second tap on one leaves the card showing what the first did."""
 
     def register(self, app: AsyncApp) -> None:
         async def message(body: dict[str, Any], event: dict[str, Any]) -> None:
@@ -421,13 +503,19 @@ class SlackAssistant:
         if first and self.bot_user_id:
             note = mention_only_line(self.bot_user_id)
             room = MAX_REPLY - len(note) - 2
-            body = f"{clip_mrkdwn(body, room) if len(body) > room else body}\n\n{note}"
-        if reply.drafts and not incoming.private:
+            body = f"{clip_mrkdwn(body, room) if len(body) > room else body}\n\n{note}".lstrip()
+        cards = [draft_card(draft) for draft in reply.drafts]
+        if cards and not incoming.private:
             # Drafts, and the reply about them, go only to their member (spec 6.14).
-            await self._ephemeral(incoming, member, body)
+            if body and await self._ephemeral(incoming, member, body):
+                self.replied.add(key)
+            for card in cards:
+                await self._ephemeral(incoming, member, card["text"], card["blocks"])
             return
-        if await self._post(incoming, member, body) and not incoming.private:
+        if (body or not cards) and await self._post(incoming, member, body) and not incoming.private:
             self.replied.add(key)
+        for card in cards:
+            await self._post(incoming, member, card["text"], card["blocks"])
 
     async def _call_id(self, member: Member, incoming: Incoming) -> int | None:
         """The call a thread's root post is about, when the root is a Dinnerbell post such as a
@@ -455,13 +543,14 @@ class SlackAssistant:
             return Reply(FAILED)
         return reply
 
-    async def _post(self, incoming: Incoming, member: Member, text: str) -> bool:
-        """Post ``text`` in the message's thread, already safe for Slack. False if Slack refused.
-        Nothing unfurls: neither links nor media."""
+    async def _post(self, incoming: Incoming, member: Member, text: str, blocks: list[Block] | None = None) -> bool:
+        """Post ``text`` in the message's thread, already safe for Slack, with a draft card's
+        ``blocks``. False if Slack refused. Nothing unfurls: neither links nor media."""
+        message: dict[str, Any] = {"text": text or ELLIPSIS}
+        if blocks:
+            message["blocks"] = blocks
         try:
-            await self.api.post(
-                incoming.channel, {"text": text or ELLIPSIS}, thread_ts=incoming.root, unfurl_media=False
-            )
+            await self.api.post(incoming.channel, message, thread_ts=incoming.root, unfurl_media=False)
         except SLACK_ERRORS as exc:
             log.warning("slack assistant reply failed", extra={"error": str(exc), "member_id": member.id})
             return False
@@ -475,12 +564,81 @@ class SlackAssistant:
             return
         await self._ephemeral(incoming, member, STILL_ON_IT)
 
-    async def _ephemeral(self, incoming: Incoming, member: Member, text: str) -> None:
-        """Post ``text``, already safe, in the message's thread, for its author's eyes only."""
+    async def _ephemeral(
+        self, incoming: Incoming, member: Member, text: str, blocks: list[Block] | None = None
+    ) -> bool:
+        """Post ``text``, already safe, in the message's thread, for its author's eyes only, with
+        a draft card's ``blocks``. False if Slack refused."""
         try:
-            await self.api.ephemeral(incoming.channel, incoming.user, text or ELLIPSIS, thread_ts=incoming.root)
+            await self.api.ephemeral(
+                incoming.channel, incoming.user, text or ELLIPSIS, blocks or None, thread_ts=incoming.root
+            )
         except SLACK_ERRORS as exc:
             log.warning("slack assistant reply failed", extra={"error": str(exc), "member_id": member.id})
+            return False
+        return True
+
+    # Draft cards -------------------------------------------------------------------------------
+
+    async def draft_tap(self, member: Member, source: Source, action_id: str, value: object, tap: Tap) -> Mrkdwn | None:
+        """**Confirm** or **Cancel** on a draft card, for ``Interactions``, which checked the
+        workspace, the channel or DM, and that the tapper is an active member. The service checks
+        that the draft is theirs, waiting, and unexpired, and its refusal replaces the card word
+        for word. While the assistant isn't available, the card stays and the tapper is told."""
+        draft_id = ids.parse_draft(value)
+        if source.home or source.channel_id is None:
+            raise ids.BadValue("draft cards are drawn only in messages")
+        if source.channel_id == self.channel_id and not tap.ephemeral:
+            raise ids.BadValue("a draft card in the channel is only ever an ephemeral")
+        async with self.draft_lock, self.sessionmaker() as db:
+            if not await available(db, self.assistant.config, member):
+                return Mrkdwn(ASSISTANT_OFF)
+            settled = f"{member.id}:{draft_id}"
+            refusal: Exception | None = None
+            try:
+                if action_id == ids.DRAFT_CONFIRM:
+                    done = await confirm_draft(db, self.assistant.clock, self.assistant.config, member, draft_id)
+                    card = self._confirmed_card(done, draft_id, member)
+                else:
+                    await cancel_draft(db, self.assistant.clock, member, draft_id)
+                    card = result_card(CANCELLED)
+                self.settled.add(settled)
+            except SHOWN_ERRORS as exc:
+                refusal = exc
+            except IllegalTransition as exc:
+                refusal = friendly(exc)
+        if refusal is not None:
+            if str(refusal) == USED and settled in self.settled:
+                return None  # a double tap: the card shows what the first tap did
+            activity.refused(refusal, str(refusal), member, action=action_id)
+            card = result_card(escape(str(refusal)))
+        return await self._replace_card(source, tap, card, member)
+
+    def _confirmed_card(self, done: Confirmed, draft_id: int, member: Member) -> dict[str, Any]:
+        if not isinstance(done, CatalogReady):
+            return result_card(confirmed_text(done))
+        url = safe_url(self.import_link(draft_id, member.id))
+        if url is None:  # pragma: no cover - the web builds it from the base URL, which is checked
+            raise RuntimeError("the import link isn't a usable URL")
+        review = button(REVIEW_IMPORT, ids.DRAFT_IMPORT_LINK, url=url, style="primary")
+        return result_card(f"{IMPORT_READY} <{url}|{REVIEW_IMPORT}>", actions(review, block_id=f"draft_{draft_id}"))
+
+    async def _replace_card(self, source: Source, tap: Tap, card: dict[str, Any], member: Member) -> Mrkdwn | None:
+        """Replace the tapped card with ``card``: an ephemeral through the tap's ``response_url``,
+        a DM card with ``chat.update``. If Slack won't, its text goes back to ``Interactions``,
+        which tells only the tapper. Nothing here ever posts in the channel for everyone."""
+        try:
+            if source.channel_id == self.channel_id:
+                if tap.response_url is not None:
+                    await self.api.replace_original(tap.response_url, card)
+                    return None
+            elif source.channel_id is not None and tap.message_ts is not None:
+                await self.api.update(MessageRef(source.channel_id, tap.message_ts), card)
+                return None
+        except SLACK_ERRORS as exc:
+            extra = {"error": str(exc), "member_id": member.id}
+            log.info("slack draft card not replaced; saying it instead", extra=extra)
+        return Mrkdwn(card["text"])
 
     # App Home ----------------------------------------------------------------------------------
 

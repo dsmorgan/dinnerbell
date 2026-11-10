@@ -175,6 +175,8 @@ from dinnerbell.services.stats import MemberStats
 log = logging.getLogger(__name__)
 
 DEFAULT_COMMAND = "/dinnerbell"
+ASSISTANT_OFF = "The assistant is turned off."
+"""What a draft card's button says without the assistant (spec 6.14): nothing changes."""
 SHOWN_ERRORS = (EventRuleViolation, InvalidResponse, InvalidFeedback, InvalidMeal, NotFound, Forbidden)
 SLACK_ERRORS = (SlackUnavailable, PermanentDeliveryError)
 UNKNOWN_USER = (
@@ -400,6 +402,9 @@ class Interactions:
         """Per (Slack user, event), while a tap holds or waits for it; see ``_card_lock``."""
         self.home_hint: Callable[[AsyncSession, Member], Awaitable[str | None]] | None = None
         """App Home's line about the optional assistant, when one is built (``SlackAssistant``)."""
+        self.draft_tap: Callable[[Member, Source, str, object, Tap], Awaitable[Done]] | None = None
+        """**Confirm** and **Cancel** on the assistant's draft cards, when it's built
+        (``SlackAssistant.draft_tap``). Without it, a draft button says the assistant is off."""
 
     @property
     def any_time(self) -> bool:
@@ -936,6 +941,10 @@ class Interactions:
             raise EventRuleViolation(GUESTS_DONT, code="guests_dont")
         if action_id in ids.GUEST_ACTIONS:
             return await self._guest_tap(member, source, action_id, value, tap)
+        if action_id in ids.DRAFT_ACTIONS:
+            if self.draft_tap is None:
+                return ASSISTANT_OFF
+            return await self.draft_tap(member, source, action_id, value, tap)
         if action_id == ids.INVITE_GUEST:
             return await self._open_invite(member, source, value, trigger)
         if action_id == ids.AWAY:

@@ -42,10 +42,18 @@ async def link(house: House, name: str, slack_id: str | None) -> None:
     await house.refresh(name)
 
 
+def fake_import_link(draft_id: int, member_id: int) -> str:
+    """A catalog draft's import link, shaped as the web's but unsigned: for tests that only look."""
+    return f"{BASE_URL}/catalog/import/draft?t=draft-{draft_id}-member-{member_id}"
+
+
 def connection(
     house: House, fake: FakeSlack, *, team_id: str | None = TEAM, state: SlackState | None = None, **options: Any
 ) -> SlackConnection:
-    """``options`` go to ``SlackConnection``, such as ``command`` and ``instance_label``."""
+    """``options`` go to ``SlackConnection``, such as ``command`` and ``instance_label``. With
+    the assistant, ``import_link`` defaults to ``fake_import_link``."""
+    if options.get("assistant") is not None:
+        options.setdefault("import_link", fake_import_link)
     conn = SlackConnection(
         bot_token=BOT_TOKEN,
         app_token=APP_TOKEN,

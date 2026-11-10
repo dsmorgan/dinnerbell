@@ -485,3 +485,26 @@ async def cancel_draft(db: AsyncSession, clock: Clock, member: Member, draft_id:
         await _use(db, draft, member, now)
         await db.commit()
     log.info("assistant draft cancelled", extra={"member_id": member.id, "draft_id": draft.id})
+
+
+async def ready_for_import(db: AsyncSession, config: AssistantConfig, member: Member, draft_id: int) -> CatalogReady:
+    """The import preview for ``member``'s catalog draft that Confirm used, re-planned add-only
+    against the catalog now: for the web link a Slack Confirm gives (``CatalogReady``'s import,
+    reached by a GET). Only Confirm makes that link, so a used draft here is a confirmed one.
+    Anything else raises NotFound, the same for each: someone else's draft, one waiting or gone,
+    another kind, a guest or inactive member, or the assistant not available."""
+    repo = AssistantRepository(db)
+    draft = await repo.draft(member.household_id, draft_id) if member.is_member else None
+    if draft is None or draft.member_id != member.id or draft.kind is not DraftKind.CATALOG or draft.used_at is None:
+        raise NotFound(NO_SUCH_DRAFT)
+    if not await available(db, config, member):
+        raise NotFound(NO_SUCH_DRAFT)
+    content = str(draft.payload["content"])
+    plan = await catalog_service.preview_import(db, member.household_id, content, add_only=True)
+    return CatalogReady(
+        content=content,
+        plan=plan,
+        sha256=catalog_service.content_digest(content),
+        fingerprint=plan.fingerprint(),
+        member_id=member.id,
+    )

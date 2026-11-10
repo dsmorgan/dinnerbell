@@ -24,7 +24,6 @@ from dinnerbell.app_factory import create_app
 from dinnerbell.channels.slack import assistant as slack_assistant
 from dinnerbell.channels.slack.assistant import (
     DOTS,
-    DRAFTS_SOON,
     MAX_REPLY,
     STILL_ON_IT,
     TEXT_ONLY,
@@ -453,11 +452,12 @@ async def test_a_reply_with_drafts_in_the_channel_goes_only_to_its_author(
     root = next_ts()
     await slack.mention("Sam", f"<@{BOT_USER}> propose Thai", ts=root)
     assert posts(slack) == []
-    (sent,) = [c.args for c in slack.fake.of("chat.postEphemeral")]
-    assert (sent["channel"], sent["user"], sent["thread_ts"]) == (CHANNEL, "U02SAM", root)
-    assert sent["text"].startswith("Here's a draft for tonight.")
-    assert "• Siam Garden" in sent["text"] and "• evil[.]example" in sent["text"]
-    assert DRAFTS_SOON in sent["text"]
+    sent, *cards = [c.args for c in slack.fake.of("chat.postEphemeral")]
+    for each in (sent, *cards):
+        assert (each["channel"], each["user"], each["thread_ts"]) == (CHANNEL, "U02SAM", root)
+    assert sent["text"].startswith("Here's a draft for tonight.") and sent.get("blocks") is None
+    assert [card["text"] for card in cards] == ["Siam Garden", "evil[.]example"]
+    assert all(card["blocks"] for card in cards)
 
 
 @pytest.mark.flag("assistant", on=True)
@@ -467,14 +467,15 @@ async def test_a_reply_with_drafts_in_a_dm_is_a_normal_reply(
     await switch_on(house, helper)
     fake_drafts(monkeypatch, "Siam Garden")
     await slack.dm("Sam", "Propose Thai")
-    (reply,) = posts(slack)
-    assert "• Siam Garden" in reply["text"] and DRAFTS_SOON in reply["text"]
+    reply, card = posts(slack)
+    assert reply["text"] == "Here's a draft for tonight." and reply.get("blocks") is None
+    assert card["text"] == "Siam Garden" and card["blocks"] and card["thread_ts"] == reply["thread_ts"]
     assert slack.fake.of("chat.postEphemeral") == []
 
 
-def test_reply_text_without_body_is_only_the_drafts() -> None:
+def test_reply_text_is_only_the_reply_and_the_drafts_get_cards() -> None:
     reply = Reply("", (DraftView(1, "offer", "Tacos", ()),))
-    assert reply_text(reply) == f"• Tacos\n_{DRAFTS_SOON}_"
+    assert reply_text(reply) == ""
 
 
 def _call_post_ts(slack: Slack) -> str:
@@ -661,6 +662,9 @@ PIECES = [
     "\uff20here",  # a fullwidth @here
     "@here",
     "@Channel",
+    "@hereford",  # a word that starts like a ping: Slack doesn't ping it
+    "sam@channelx",
+    "@everyone_",  # an underscore isn't a letter or digit: broken
     "<!channel>",
     "<@U02SAM>",
     "&lt;",
@@ -674,7 +678,8 @@ PIECES = [
     "https://",
 ]
 _LOOSE_AMP = re.compile(r"&(?!amp;|lt;|gt;)")
-_BARE_PING = re.compile(r"@(here|channel|everyone)", re.IGNORECASE)
+_BARE_PING = re.compile(r"@(here|channel|everyone)(?![^\W_])", re.IGNORECASE)
+"""A ping as Slack reads one: the exact word, not followed by a letter or digit."""
 
 
 @pytest.mark.parametrize("seed", range(20))
@@ -718,6 +723,29 @@ def test_emoji_keep_their_joiners_but_lose_every_tag(raw: str, kept: str) -> Non
 )
 def test_ip_addresses_with_any_dot_are_defanged(raw: str) -> None:
     assert defang(raw) == "127[.]0[.]0[.]1"
+
+
+@pytest.mark.parametrize(
+    ("raw", "safe"),
+    [
+        ("@here", f"@{WORD_JOINER}here"),
+        ("@Channel!", f"@{WORD_JOINER}Channel!"),
+        ("ping @everyone.", f"ping @{WORD_JOINER}everyone."),
+        ("@here_now", f"@{WORD_JOINER}here_now"),
+        ("@here\u0301", "@her\u00e9"),  # NFKC first: then it isn't @here at all
+        ("\uff20here", f"@{WORD_JOINER}here"),  # a fullwidth at sign, after NFKC
+        ("@hereford", "@hereford"),
+        ("@here2", "@here2"),
+        ("@here\u2167", "@hereVIII"),  # a Roman numeral, which NFKC spells out
+        ("@channelx and @everyones", "@channelx and @everyones"),
+        ("sam@channelx.example", "sam@channelx[.]example"),
+        ("@hereé", "@hereé"),
+    ],
+)
+def test_only_the_exact_ping_tokens_are_broken(raw: str, safe: str) -> None:
+    """Slack pings ``@here``, ``@channel``, and ``@everyone`` only when no letter or digit
+    follows. Those are always broken, and a word that only starts like one is left alone."""
+    assert safe_reply(raw) == safe
 
 
 def test_safe_reply_strips_format_characters_before_breaking_pings() -> None:
@@ -1170,6 +1198,44 @@ def test_a_failed_startup_closes_everything_it_opened(
         pass
     state = client.app.state  # type: ignore[attr-defined]
     assert state.slack._stopping and state.slack._task.cancelled()  # Slack started, then stopped
+    assert state.dinnerbell.oidc._http.is_closed
+    assert closed == ["anthropic", "database"]
+
+
+def test_a_close_that_fails_at_shutdown_still_closes_the_rest(
+    tmp_path: Path, clock: FakeClock, provider: FakeProvider, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Anthropic's client fails to close: the scheduler and Slack stopped before it, and the HTTP
+    client and the database still close after it, and the failure isn't swallowed."""
+    from dinnerbell import app_factory
+
+    closed: list[str] = []
+
+    class Client(FakeModel):
+        async def close(self) -> None:
+            closed.append("anthropic")
+            raise RuntimeError("close failed")
+
+    real_open = app_factory.open_database
+
+    def recording_open(url: str) -> Any:
+        database = real_open(url)
+        real_close = database.close
+
+        async def close() -> None:
+            closed.append("database")
+            await real_close()
+
+        object.__setattr__(database, "close", close)
+        return database
+
+    monkeypatch.setattr(app_factory, "_anthropic", lambda settings: Client())
+    monkeypatch.setattr(app_factory, "open_database", recording_open)
+    client = _app_client(tmp_path, clock, provider, anthropic_api_key=KEY)
+    with pytest.raises(RuntimeError, match="close failed"), client:
+        pass
+    state = client.app.state  # type: ignore[attr-defined]
+    assert state.slack._stopping  # and the leak check fails the test if the scheduler kept running
     assert state.dinnerbell.oidc._http.is_closed
     assert closed == ["anthropic", "database"]
 
