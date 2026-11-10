@@ -23,7 +23,7 @@ reminder. DMs are private to their member. A channel thread is shared: each mess
 author. Dinnerbell's first reply in a channel thread says it sees only messages that mention it.
 
 **Replies** are plain text: the model's text is escaped, so it can't make a mention, a channel
-ping, or a link, and every URL and bare domain in it is defanged (``hxxps://evil[.]example``), so
+ping, or a link, and every URL and bare domain in it is defanged (``hxxps[:]//evil[.]example``), so
 Slack can't turn one into a link either. It's cut to Slack's length. A member has one message
 answered at a time, across all their conversations: while one is, a new one isn't sent, and
 Dinnerbell says once, in the new one's thread, that it's still on the last one.
@@ -64,7 +64,8 @@ STILL_ON_IT = "I'm still on your last message. Send this one again once I've ans
 TEXT_ONLY = "I can read only text messages."
 SLACK_TS = re.compile(r"\d{1,12}\.\d{1,8}")
 _ENTITY = re.compile(r"<([^<>]*)>")
-_PING = re.compile(r"@(here|channel|everyone)\b", re.IGNORECASE)
+_PING = re.compile(r"@(here|channel|everyone)", re.IGNORECASE)
+"""Whatever follows: a word right after it (``@hereVIII``) mustn't keep a ping whole."""
 _SPACES = re.compile(r"[ \t]{2,}")
 WORD_JOINER = "\u2060"
 _HTTP = re.compile(r"\bhttp(s?)(?=:)", re.IGNORECASE)
@@ -75,7 +76,13 @@ DOTS = frozenset(".\uff0e\u3002\uff61")
 """A dot, and the full-width and ideographic dots that domain names also accept as one."""
 ABBREVIATIONS = ("e.g.", "i.e.", "a.m.", "p.m.", "u.s.", "vs.", "etc.")
 """Whole tokens, in any case, whose dots stay as they are. Every other dot before a letter goes."""
-_IP = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}\b")
+_IP = re.compile(r"\b\d{1,3}(?:[.\u3002]\d{1,3}){3}\b")
+"""An IPv4 address, with dots or ideographic dots (what NFKC leaves of the other variants)."""
+ZWJ = "\u200d"
+BLACK_FLAG = "\U0001f3f4"
+TAGS = range(0xE0020, 0xE0080)
+"""Tag characters, which spell a subdivision flag after ``BLACK_FLAG``."""
+SKIN_TONES = range(0x1F3FB, 0x1F400)
 
 
 def mention_only_line(bot_user_id: str) -> str:
@@ -156,11 +163,35 @@ def _kept_dots(text: str) -> set[int]:
     return kept
 
 
+def _emoji(char: str) -> bool:
+    """An emoji, near enough: a symbol (``So``) or a skin-tone modifier."""
+    return unicodedata.category(char) == "So" or ord(char) in SKIN_TONES
+
+
 def without_format_characters(text: str) -> str:
     """``text`` without Unicode format characters (category ``Cf``): soft hyphens, zero-width
     spaces and joiners, word joiners, byte order marks, and bidi controls, which can hide a
-    domain's dot from any check."""
-    return "".join(char for char in text if unicodedata.category(char) != "Cf")
+    domain's dot from any check. Two kinds stay, since neither can sit next to a dot: a zero-width
+    joiner between two emoji (the one in 🧑‍🍳), and the tag characters of a flag sequence that
+    starts with ``BLACK_FLAG``."""
+    out: list[str] = []
+    in_flag = False
+    for index, char in enumerate(text):
+        if unicodedata.category(char) != "Cf":
+            in_flag = char == BLACK_FLAG
+            out.append(char)
+            continue
+        if ord(char) in TAGS and in_flag:
+            out.append(char)
+            continue
+        in_flag = False
+        if char == ZWJ and index + 1 < len(text) and _emoji(text[index + 1]):
+            before = len(out) - 1
+            while before >= 0 and unicodedata.category(out[before]).startswith("M"):
+                before -= 1  # a variation selector, as in 👁️‍🗨️
+            if before >= 0 and _emoji(out[before]):
+                out.append(char)
+    return "".join(out)
 
 
 def defang_dots(text: str) -> str:
@@ -184,7 +215,10 @@ def defang(text: str) -> str:
     """``text`` with every URL and bare domain made unlinkable, without needing to recognize
     one. Format characters go first (``without_format_characters``), then the text is
     NFKC-normalized, as IDNA maps a hostname, so ``ⓔⓧⓐⓜⓟⓛⓔ``, fullwidth letters, and
-    ligatures such as ``ﬁ`` read as the ASCII letters a hostname parser sees. Then ``http`` and
+    ligatures such as ``ﬁ`` read as the ASCII letters a hostname parser sees. NFKC changes some
+    text a member sees, and that's accepted: ``½`` becomes 1, a fraction slash, and 2, ``…`` three dots, fullwidth
+    text ASCII, and a letter with a separate accent one precomposed letter; bidi marks such as
+    the right-to-left mark are gone with the other format characters. Then ``http`` and
     ``https`` become ``hxxp`` and ``hxxps``; ``://``, and ``mailto:`` and the like, get
     ``[:]``; ``www.`` and each dot of an IP address become ``[.]``; and so does every dot before
     a letter (``defang_dots``). Slack links none of them."""
@@ -193,7 +227,7 @@ def defang(text: str) -> str:
     text = _SCHEME.sub("[:]", text)
     text = _BARE_SCHEME.sub(lambda m: f"{m.group(1)}[:]", text)
     text = _WWW.sub(lambda m: f"{m.group(0)[:3]}[.]", text)
-    text = _IP.sub(lambda m: m.group(0).replace(".", "[.]"), text)
+    text = _IP.sub(lambda m: re.sub(r"[.\u3002]", "[.]", m.group(0)), text)
     return defang_dots(text)
 
 
