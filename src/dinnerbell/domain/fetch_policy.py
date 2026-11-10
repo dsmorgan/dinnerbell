@@ -25,6 +25,11 @@ _CGNAT = ip_network("100.64.0.0/10")
 _NAT64 = ip_network("64:ff9b::/96")
 """The well-known NAT64 prefix (RFC 6052): the last 32 bits are the IPv4 address behind it."""
 
+_NUMERIC_LABEL = re.compile(r"[0-9]+|0x[0-9a-f]*")
+"""WHATWG's "ends in a number": a last label like this makes a browser read the host as IPv4."""
+_IDNA_DEVIATIONS = frozenset("\u00df\u03c2\u200c\u200d")
+"""ß, final sigma, ZWNJ, and ZWJ: IDNA 2003 maps them away and IDNA 2008 keeps them, so the
+standard library's codec would look up a different site from the one a browser opens."""
 _LABEL = re.compile(r"[a-z0-9_](?:[a-z0-9_-]{0,61}[a-z0-9_])?")
 _INTERNAL_SUFFIXES = ("localhost", "local", "localdomain", "internal", "home.arpa", "lan", "invalid")
 """Names that never belong to a public site (RFC 6761, RFC 6762, RFC 8375, and common LAN use)."""
@@ -38,6 +43,7 @@ class FetchFailure(StrEnum):
     USERINFO = "userinfo"
     PORT = "port"
     HOST = "host"
+    IDNA = "idna"
     ADDRESS = "address"
     DNS = "dns"
     REDIRECT = "redirect"
@@ -56,9 +62,10 @@ _MESSAGES = {
     FetchFailure.USERINFO: "Dinnerbell doesn't read links with a user name or password in them.",
     FetchFailure.PORT: "Dinnerbell reads only links on the standard HTTPS port.",
     FetchFailure.HOST: "That link doesn't name a public website.",
+    FetchFailure.IDNA: "Dinnerbell can't read web addresses with ß, ς, or invisible joining characters in the name.",
     FetchFailure.ADDRESS: "That link doesn't lead to a public website.",
     FetchFailure.DNS: "Dinnerbell couldn't find that website.",
-    FetchFailure.REDIRECT: "That page redirected somewhere Dinnerbell couldn't follow.",
+    FetchFailure.REDIRECT: "That link redirects somewhere Dinnerbell won't follow.",
     FetchFailure.REDIRECT_LOOP: "That page redirects in a loop.",
     FetchFailure.TOO_MANY_REDIRECTS: "That page redirects too many times.",
     FetchFailure.STATUS: "That website didn't return the page.",
@@ -70,10 +77,15 @@ _MESSAGES = {
 
 
 class FetchError(Exception):
-    """A refused or failed fetch. ``message`` is safe to show the member; it never names an address."""
+    """A refused or failed fetch. ``message`` is safe to show the member; it never names an address.
 
-    def __init__(self, reason: FetchFailure) -> None:
+    ``detail`` is the underlying reason when ``reason`` summarizes it, such as why a redirect's
+    target was refused. Logs record it; members see only ``message``.
+    """
+
+    def __init__(self, reason: FetchFailure, detail: FetchFailure | None = None) -> None:
         self.reason = reason
+        self.detail = detail
         self.message = _MESSAGES[reason]
         super().__init__(self.message)
 
@@ -196,16 +208,21 @@ def redirect_target(current: Target, location: str) -> Target:
 
 
 def _unsafe_character(char: str) -> bool:
-    return char.isspace() or unicodedata.category(char).startswith("C")
+    """Whitespace and control or format characters, except the joiners, which the host check names."""
+    return char.isspace() or (unicodedata.category(char).startswith("C") and char not in _IDNA_DEVIATIONS)
 
 
 def _normalize_hostname(hostname: str) -> str:
     """Lowercase ASCII with no trailing dot, or ``FetchError`` for a name no public site has.
 
-    Non-ASCII names are IDNA-encoded with the standard library's codec. Names with one label, or
-    whose last label is a number (``127.1``, ``2130706433``), are refused: resolvers read those
-    as IPv4 addresses or search-domain names, never as public sites.
+    Non-ASCII names are IDNA-encoded with the standard library's codec, which is IDNA 2003, so
+    names with the characters IDNA 2003 and 2008 treat differently are refused. Names with one
+    label, or whose last label is a decimal or hex number (``127.1``, ``2130706433``,
+    ``1.1.1.0x1``), are refused: browsers and resolvers read those as IPv4 addresses or
+    search-domain names, never as public sites.
     """
+    if _IDNA_DEVIATIONS & set(hostname):
+        raise FetchError(FetchFailure.IDNA)
     try:
         name = hostname.encode("idna").decode("ascii").lower()
     except UnicodeError:
@@ -216,7 +233,7 @@ def _normalize_hostname(hostname: str) -> str:
         len(name) > MAX_HOST_LENGTH
         or len(labels) < 2
         or not all(_LABEL.fullmatch(label) for label in labels)
-        or labels[-1].isdigit()
+        or _NUMERIC_LABEL.fullmatch(labels[-1])
         or any(name == suffix or name.endswith(f".{suffix}") for suffix in _INTERNAL_SUFFIXES)
     ):
         raise FetchError(FetchFailure.HOST)
