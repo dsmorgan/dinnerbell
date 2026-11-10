@@ -30,6 +30,7 @@ from datetime import UTC, date, datetime, timedelta
 from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import httpx
 import pytest
@@ -45,7 +46,7 @@ from dinnerbell.config import Settings
 from dinnerbell.db.assistant import AssistantRepository
 from dinnerbell.db.catalog import CatalogRepository, ItemValues
 from dinnerbell.db.meals import household_settings
-from dinnerbell.db.models import AssistantDraftRow, AssistantUsageRow, Base, HouseholdRow
+from dinnerbell.db.models import AssistantConversationRow, AssistantDraftRow, AssistantUsageRow, Base, HouseholdRow
 from dinnerbell.db.repositories import HouseholdRepository, MemberRepository
 from dinnerbell.domain import events as domain_events
 from dinnerbell.domain.assistant import (
@@ -68,7 +69,7 @@ from dinnerbell.domain.members import Member
 from dinnerbell.domain.preferences import Stance, TargetType
 from dinnerbell.domain.schedule import PROPOSAL_COUNT_KEY, TEMPERATURE_KEY
 from dinnerbell.services import call_admin, calls, feedback, guests, lifecycle, meals
-from dinnerbell.services.assistant import admin, candidates, conversation, drafts, tools
+from dinnerbell.services.assistant import admin, candidates, conversation, drafts, menu_links, tools
 from dinnerbell.services.assistant.client import ModelCallFailed, ModelReply
 from dinnerbell.services.assistant.conversation import (
     AT_CAP,
@@ -1262,8 +1263,58 @@ async def test_messages_at_once_never_pass_the_cap_together(house: House, helper
     assert gate.totals and max(gate.totals) <= cap
     rows = await usage_rows(house)
     assert {r.state for r in rows} == {"settled"} and sum(r.cost_micros for r in rows) <= cap
-    assert len(rows) == len(gate.totals) and gate.drafting  # every call made was settled, links included
-    assert AT_CAP in replies or any("cap" in str(r.content) for r in results(gate).values())
+    assert len(rows) == len(gate.totals)  # every call made was settled, drafting calls included
+    assert AT_CAP in replies or any(r.content == AT_CAP for r in results(gate).values())
+
+
+@pytest.mark.flag("assistant", on=True)
+@pytest.mark.parametrize("room", ["just enough for the drafting call", "a micro-dollar short"])
+async def test_a_links_drafting_call_is_reserved_under_the_cap_like_any_other(
+    house: House, helper: Assistant, fetch: Fetch, room: str
+) -> None:
+    """Attack: send a menu link when the month has room for the message's own calls but not
+    for reading a page, hoping the drafting call slips past the cap. Must hold: before the
+    fetch, Dinnerbell checks the cap against the drafting call for a full page; with room for
+    it, the drafting call is reserved under the cap, its reservation counted before it runs;
+    a micro-dollar short, nothing is fetched or drafted, the model is told the cap is reached,
+    and the message's next call still fits."""
+    await switch(house, helper, enabled=True, cap_dollars=1)
+    cap = 1_000_000
+    worst = menu_links.drafting_request(MODEL, "x" * menu_links.MAX_PAGE_BYTES, kind=None, cut=True)
+    page_room = reservation_micros(MODEL, payload_bytes=request_bytes(worst), max_tokens=worst["max_tokens"])
+    first_cost = cost_micros(COSTLY)
+    after_first = page_room if room == "just enough for the drafting call" else page_room - 1
+    async with house.sessionmaker() as db:
+        db.add(spent(house, cap - after_first - first_cost, "2026-10"))
+        await db.commit()
+    seen: list[int] = []
+
+    class Counts(Attacker):
+        async def create(self, request: Mapping[str, Any], *, time_left: float) -> ModelReply:
+            if "tools" not in request:
+                async with house.sessionmaker() as db:
+                    seen.append(await AssistantRepository(db).month_total(house.household.id, "2026-10"))
+            return await super().create(request, time_left=time_left)
+
+    counts = Counts(
+        script=[
+            costly(tool_call("draft_catalog_from_link", {"url": MENU_LINK, "kind": ""}, call_id="toolu_link")),
+            costly(answer("OK")),
+        ]
+    )
+    reply = await say(house, replace(helper, client=counts), "Sam", f"Add {MENU_LINK}")
+    assert reply.text == "OK"  # the message goes on either way
+    link = results(counts)["toolu_link"]
+    if room == "just enough for the drafting call":
+        [drafting] = counts.drafting
+        reserved = reservation_micros(MODEL, payload_bytes=request_bytes(drafting), max_tokens=drafting["max_tokens"])
+        assert not link.is_error and fetch.asked == [MENU_LINK]
+        assert seen == [cap - after_first + reserved] and seen[0] <= cap  # reserved first, under the cap
+    else:
+        assert link == ToolResult(AT_CAP, is_error=True)
+        assert fetch.asked == [] and counts.drafting == [] and seen == []
+    rows = await usage_rows(house)
+    assert {r.state for r in rows} == {"settled"} and sum(r.cost_micros for r in rows) <= cap
 
 
 @pytest.mark.flag("assistant", on=True)
@@ -1930,3 +1981,136 @@ async def test_a_message_out_of_time_reads_no_more_links(
     assert reply == Reply(OUT_OF_TIME) and fetch.asked == [] and slow.drafting == []
     assert await draft_rows(house) == []
     assert [r.state for r in await usage_rows(house)] == ["settled"]
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_mentions_in_two_messages_at_once_keep_pointing_at_the_right_member(
+    house: House, helper: Assistant
+) -> None:
+    """Attack: two members mention different housemates in one channel thread at the same
+    moment, so each message labels its own mention "Member 2" against an empty thread. Must
+    hold: once both are kept, the stored map gives each member one label, and each stored
+    message's mention names the housemate its author meant, never the other's."""
+    slack = await wire(house, assistant=helper)
+    assert slack.conn.assistant is not None
+    both = asyncio.Event()
+
+    class Together(Attacker):
+        async def create(self, request: Mapping[str, Any], *, time_left: float) -> ModelReply:
+            self.requests.append(copy.deepcopy(dict(request)))
+            if len(self.requests) == 2:
+                both.set()
+            await both.wait()  # neither answers until both have read the empty thread
+            return answer("Noted.")
+
+    together = replace(helper, client=Together())
+    thread = slack_key("C0HOUSE", "1790000000.000900")
+    meant = {"Sam": "Lee", "Kim": "Alex"}
+
+    async def ask(who: str) -> Reply | None:
+        member = house[who]
+        words = await slack.conn.assistant._naming(member, f"Can <@{SLACK_IDS[meant[who]]}> cook?")
+        async with house.sessionmaker() as db:
+            return await converse(db, together, member, thread, private=False, text=words)
+
+    await asyncio.wait_for(asyncio.gather(ask("Sam"), ask("Kim")), 10)
+    async with house.sessionmaker() as db:
+        [row] = await db.scalars(select(AssistantConversationRow))
+    member_of = {f"Member {number}": int(member_id) for member_id, number in row.pseudonyms.items()}
+    assert sorted(row.pseudonyms.values()) == [1, 2, 3, 4]
+    asked = [t for t in row.transcript if t["role"] == "user"]
+    assert len(asked) == 2
+    for turn in asked:
+        mention = re.fullmatch(r"Can @(Member \d) cook\?", turn["text"])
+        assert mention is not None, turn
+        author = next(n for n, m in house.people.items() if m.id == member_of[turn["author"]])
+        assert member_of[mention.group(1)] == house[meant[author]].id, (author, turn)
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_a_fetch_still_running_at_the_deadline_is_cut_off(house: House, helper: Assistant) -> None:
+    """Attack: a menu link whose server, or whose text extraction, never finishes, let through
+    with a moment of the message left. Must hold: the fetch and its extraction get only that
+    moment, so the message can't run past its deadline on a page."""
+    started = asyncio.Event()
+
+    async def never(url: str) -> FetchedPage:
+        started.set()
+        await asyncio.Event().wait()  # neither the page nor its text ever comes
+        raise AssertionError("unreachable")
+
+    async with house.sessionmaker() as db:
+        links = conversation._LinkCalls(
+            db,
+            replace(helper, fetch=never),
+            house["Sam"],
+            ZoneInfo("America/Chicago"),
+            house.clock() + timedelta(microseconds=1),
+        )
+        with pytest.raises(tools.ToolRefusal, match=OUT_OF_TIME):
+            await asyncio.wait_for(links.fetch(MENU_LINK), 10)
+        assert started.is_set()
+        house.clock.advance(timedelta(microseconds=1))
+        with pytest.raises(tools.ToolRefusal, match=OUT_OF_TIME):  # none left: never started
+            await links.fetch(MENU_LINK)
+
+
+@pytest.mark.flag("assistant", on=True)
+@pytest.mark.parametrize("left", ["a moment", "none"])
+async def test_a_tool_gets_only_the_time_the_message_has_left(
+    house: House, helper: Assistant, model: Attacker, monkeypatch: pytest.MonkeyPatch, left: str
+) -> None:
+    """Attack: the model's tool call reaches a lookup that never finishes, or comes back after
+    the time is up. Must hold: the tool is cut off at the deadline, or never runs, and the
+    reply says the message ran out of time, with no further model call."""
+    looked: list[Member] = []
+
+    async def hangs(db: Any, actor: Member) -> Any:
+        looked.append(actor)
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(tools.catalog_service, "catalog", hangs)
+    deadline = house.clock() + timedelta(seconds=MESSAGE_SECONDS)
+
+    class Spends(Attacker):
+        async def create(self, request: Mapping[str, Any], *, time_left: float) -> ModelReply:
+            reply = await super().create(request, time_left=time_left)
+            house.clock.now = deadline - (timedelta(microseconds=1) if left == "a moment" else timedelta())
+            return reply
+
+    spends = Spends(script=[tool_call(LOOKUP, {"name": "", "tag": ""})])
+    reply = await asyncio.wait_for(say(house, replace(helper, client=spends), "Sam", "What's there?"), 10)
+    assert reply == Reply(OUT_OF_TIME) and len(spends.requests) == 1
+    if left == "none":
+        assert looked == []
+
+
+@pytest.mark.flag("assistant", on=True)
+@pytest.mark.parametrize("when", ["before the cancel lands", "after it"])
+async def test_a_cleanup_that_fails_during_a_cancel_is_logged_and_the_cancel_goes_on(
+    house: House, helper: Assistant, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, when: str
+) -> None:
+    """Attack: cancel a message just as its settle starts, and make the settle fail. Must hold:
+    the message still ends as cancelled, not with the database's error, and the error is
+    retrieved and logged by type, so it's never lost or left unretrieved."""
+    task: asyncio.Task[Reply] | None = None
+
+    async def settle(self: AssistantRepository, *args: Any, **kwargs: Any) -> None:
+        assert task is not None
+        task.cancel()
+        if when == "after it":
+            await asyncio.sleep(0)  # the cancel reaches the message first
+        raise RuntimeError("database is locked: SELECT ... WHERE id = 'secret'")
+
+    monkeypatch.setattr(AssistantRepository, "settle", settle)
+    task = asyncio.ensure_future(say(house, helper, "Sam", "Hello"))
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(task, 10)
+    import gc
+
+    gc.collect()
+    await asyncio.sleep(0)
+    [failed] = [r for r in caplog.records if r.getMessage() == "assistant cleanup failed while cancelled"]
+    assert failed.levelname == "ERROR" and getattr(failed, "error", None) == "RuntimeError"
+    assert not any("never retrieved" in r.getMessage() for r in caplog.records)
+    assert all("secret" not in r.getMessage() for r in caplog.records)

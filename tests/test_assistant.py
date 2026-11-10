@@ -564,17 +564,27 @@ class TestAssistantOn:
         assert await conversations(house) == []
 
     async def test_a_call_still_running_at_the_deadline_is_cut_off_and_stays_reserved(
-        self, house: House, helper: Assistant, caplog: pytest.LogCaptureFixture
+        self, house: House, helper: Assistant, caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         await switch(house, helper)
         started = asyncio.Event()
+        deadline = house.clock() + timedelta(seconds=MESSAGE_SECONDS)
+        real = AssistantRepository.reserve
+        reserved = 0
+
+        async def late(self: AssistantRepository, *args: Any, **kwargs: Any) -> int:
+            nonlocal reserved
+            reserved += 1
+            if reserved == 2:  # the second call starts with a moment of the message left
+                house.clock.now = deadline - timedelta(microseconds=1)
+            return await real(self, *args, **kwargs)
+
+        monkeypatch.setattr(AssistantRepository, "reserve", late)
 
         class Hangs(FakeModel):
             async def create(self, request: Any, *, time_left: float) -> Any:
                 if not self.requests:
-                    reply = await super().create(request, time_left=time_left)
-                    house.clock.advance(timedelta(seconds=MESSAGE_SECONDS) - timedelta(microseconds=1))
-                    return reply
+                    return await super().create(request, time_left=time_left)
                 self.time_left.append(time_left)
                 started.set()
                 await asyncio.Event().wait()  # never answers: only the deadline ends it
