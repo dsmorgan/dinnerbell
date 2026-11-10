@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import logging
 import re
+import unicodedata
 from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from typing import Any
@@ -70,11 +71,10 @@ _HTTP = re.compile(r"\bhttp(s?)(?=:)", re.IGNORECASE)
 _SCHEME = re.compile(r":(?=//)")
 _BARE_SCHEME = re.compile(r"\b(mailto|tel|sms|slack):", re.IGNORECASE)
 _WWW = re.compile(r"\bwww[.\uff0e\u3002\uff61]", re.IGNORECASE)
-_DOT = re.compile(r"(?<=[^\W_])[.\uff0e\u3002\uff61](?=[^\W\d_])(?![A-Za-z](?:\W|$))")
-"""A dot, or a full-width or ideographic one, between a letter or digit and a letter, wherever it
-is: in a domain, whatever markup or punctuation is around it. Not before a lone ASCII letter (the
-``g`` of ``e.g.``, the ``S`` of ``U.S.``): no domain ends in one, since every top-level domain has
-two letters or more. A dot before a digit or a space (``$3.50``, ``Done. Next``) stays."""
+DOTS = frozenset(".\uff0e\u3002\uff61")
+"""A dot, and the full-width and ideographic dots that domain names also accept as one."""
+ABBREVIATIONS = ("e.g.", "i.e.", "a.m.", "p.m.", "u.s.", "vs.", "etc.")
+"""Whole tokens, in any case, whose dots stay as they are. Every other dot before a letter goes."""
 _IP = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}\b")
 
 
@@ -122,17 +122,77 @@ def readable(text: str, bot_user_id: str | None) -> str:
     return "\n".join(_SPACES.sub(" ", line).strip() for line in plain.splitlines()).strip()
 
 
+def _is_letter(char: str) -> bool:
+    return unicodedata.category(char).startswith("L")
+
+
+def _is_mark(char: str) -> bool:
+    return unicodedata.category(char).startswith("M")
+
+
+def _next_unmarked(text: str, start: int) -> int:
+    """The index of the first character at or after ``start`` that isn't a combining mark."""
+    while start < len(text) and _is_mark(text[start]):
+        start += 1
+    return start
+
+
+def _kept_dots(text: str) -> set[int]:
+    """The indexes of the dots in ``ABBREVIATIONS`` that stand as whole tokens: no letter or
+    digit before them, and none after (combining marks skipped)."""
+    kept: set[int] = set()
+    for abbreviation in ABBREVIATIONS:
+        size = len(abbreviation)
+        for start in range(len(text) - size + 1):
+            if text[start : start + size].lower() != abbreviation:
+                continue
+            before = text[start - 1] if start else ""
+            after = _next_unmarked(text, start + size)
+            if before and (before.isalnum() or _is_mark(before)):
+                continue
+            if after < len(text) and text[after].isalnum():
+                continue
+            kept.update(start + n for n, char in enumerate(abbreviation) if char == ".")
+    return kept
+
+
+def without_format_characters(text: str) -> str:
+    """``text`` without Unicode format characters (category ``Cf``): soft hyphens, zero-width
+    spaces and joiners, word joiners, byte order marks, and bidi controls, which can hide a
+    domain's dot from any check."""
+    return "".join(char for char in text if unicodedata.category(char) != "Cf")
+
+
+def defang_dots(text: str) -> str:
+    """Every dot-like character (``DOTS``) whose next character that isn't a combining mark is a
+    letter, in any script, becomes ``[.]``, whatever comes before it, except the dots of
+    ``ABBREVIATIONS``. A hand-written scan, not a pattern: ``$3.50`` and ``Done. Next`` keep
+    their dots, and ``Done.Next`` doesn't."""
+    kept = _kept_dots(text)
+    out: list[str] = []
+    for index, char in enumerate(text):
+        if char in DOTS and index not in kept:
+            following = _next_unmarked(text, index + 1)
+            if following < len(text) and _is_letter(text[following]):
+                out.append("[.]")
+                continue
+        out.append(char)
+    return "".join(out)
+
+
 def defang(text: str) -> str:
     """``text`` with every URL and bare domain made unlinkable, without needing to recognize
-    one: ``http`` and ``https`` become ``hxxp`` and ``hxxps``; ``://``, and ``mailto:`` and the
-    like, get ``[:]``; and ``www.``, every ``_DOT``, and each dot of an IP address become
-    ``[.]``. Slack links none of them."""
+    one. Format characters go first (``without_format_characters``). Then ``http`` and
+    ``https`` become ``hxxp`` and ``hxxps``; ``://``, and ``mailto:`` and the like, get
+    ``[:]``; ``www.`` and each dot of an IP address become ``[.]``; and so does every dot before
+    a letter (``defang_dots``). Slack links none of them."""
+    text = without_format_characters(text)
     text = _HTTP.sub(lambda m: f"hxxp{m.group(1).lower()}", text)
     text = _SCHEME.sub("[:]", text)
     text = _BARE_SCHEME.sub(lambda m: f"{m.group(1)}[:]", text)
     text = _WWW.sub(lambda m: f"{m.group(0)[:3]}[.]", text)
-    text = _DOT.sub("[.]", text)
-    return _IP.sub(lambda m: m.group(0).replace(".", "[.]"), text)
+    text = _IP.sub(lambda m: m.group(0).replace(".", "[.]"), text)
+    return defang_dots(text)
 
 
 def safe_reply(text: str, limit: int = MAX_REPLY) -> str:
