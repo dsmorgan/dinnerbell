@@ -1,0 +1,33 @@
+{#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
+{% extends "base.html" %}
+{% block title %}Assistant{% endblock %}
+{% block content %}
+{% include "_admin_tabs.html" %}
+<h1>Assistant</h1>
+{% if notice %}<p class="alert ok" role="status">{{ notice }}</p>{% endif %}
+{% if error %}<p class="alert error" role="alert">{{ error }}</p>{% endif %}
+<p class="small muted">The assistant answers members' questions in plain language, using Anthropic's {{ model }} model. It acts only as the member it's answering, never with admin rights, and changes nothing by itself. Dinnerbell sends Anthropic the conversation and what the assistant looks up, with members shown as "Member 1", "Member 2", and so on: never names, emails, preferences, vetoes, or ratings.</p>
+<form method="post" action="/admin/assistant" class="stack">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <fieldset class="card">
+    <legend><h2>Settings</h2></legend>
+    <label class="check"><input type="checkbox" name="enabled"{% if values['enabled'] %} checked{% endif %}> Turn on the assistant</label>
+    <label class="field"><span>Monthly cap (US dollars)</span><input type="number" inputmode="numeric" min="{{ limits['cap'][0] }}" max="{{ limits['cap'][1] }}" name="cap_dollars" value="{{ values['cap_dollars'] }}" aria-describedby="cap-help" required></label>
+    <p class="small muted" id="cap-help">The most the household spends on the assistant in a calendar month, from ${{ limits['cap'][0] }} to ${{ limits['cap'][1] }}. Dinnerbell sets aside each request's most it could cost before sending it, so spending never passes the cap. At the cap, the assistant is unavailable until next month, and everything else works.</p>
+    <label class="field"><span>Conversation hours</span><input type="number" inputmode="numeric" min="{{ limits['hours'][0] }}" max="{{ limits['hours'][1] }}" name="conversation_hours" value="{{ values['conversation_hours'] }}" aria-describedby="hours-help" required></label>
+    <p class="small muted" id="hours-help">How long Dinnerbell keeps a conversation after its last message, so follow-ups such as "something cheaper" work: 0 to {{ limits['hours'][1] }} hours (a week). At 0, each message stands alone. Lowering it deletes older conversations at once.</p>
+  </fieldset>
+  <button type="submit" class="button primary block">Save assistant settings</button>
+</form>
+<section class="card" aria-labelledby="usage-title">
+  <h2 id="usage-title">Usage in {{ month }}</h2>
+  <p>{{ spent }} of {{ cap }} this month.</p>
+  {% if by_member %}
+  <dl class="counts">
+    {% for name, amount in by_member %}<div><dt>{{ name }}</dt><dd>{{ amount }}</dd></div>{% endfor %}
+  </dl>
+  {% else %}
+  <p class="small muted">Nobody has used the assistant this month.</p>
+  {% endif %}
+</section>
+{% endblock %}

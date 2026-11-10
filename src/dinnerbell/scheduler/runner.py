@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from dinnerbell.domain.notifications import Channel
 from dinnerbell.logs import start_unit
 from dinnerbell.services import announcements, auth, backups, lifecycle, outbox, recap, stuck
+from dinnerbell.services.assistant import retention
 from dinnerbell.services.clock import Clock
 from dinnerbell.services.health import HEARTBEAT_INTERVAL, SchedulerState
 
@@ -37,6 +38,8 @@ CANCEL_UNWIND_SECONDS = 1.0
 CALL_TICK_INTERVAL = timedelta(seconds=30)
 """How often calls are opened and advanced. One idempotent job, not one job per deadline: the
 database is the schedule, so a restart or downtime catches up on the next tick."""
+CONVERSATION_PURGE_INTERVAL = timedelta(minutes=5)
+"""How often idle assistant conversations are deleted: Conversation hours, to within minutes."""
 DRAIN_INTERVAL = timedelta(seconds=5)
 """How often the outbox is drained between ticks, so a tap in Slack shows up within seconds."""
 
@@ -120,6 +123,18 @@ async def purge_sessions(ctx: JobContext) -> None:
         refusals = await auth.prune_refusals(db, now=ctx.clock())
     if refusals:
         log.info("old sign-in refusals removed", extra={"count": refusals})
+
+
+async def purge_conversations(ctx: JobContext) -> None:
+    """Delete assistant conversations past Admin's Conversation hours (ADR 0009). Runs whether
+    or not the assistant is on, so turning it off never keeps a conversation longer."""
+    try:
+        removed = await retention.purge_idle_conversations(ctx.sessionmaker, ctx.clock())
+    except Exception:
+        log.exception("assistant conversation purge failed")
+        return
+    if removed:
+        log.info("idle assistant conversations removed", extra={"count": removed})
 
 
 async def call_tick(ctx: JobContext) -> None:
@@ -209,6 +224,13 @@ def build_scheduler(ctx: JobContext) -> AsyncIOScheduler:
     )
     scheduler.add_job(
         _tracked(purge_sessions), IntervalTrigger(hours=1), args=[ctx], id="purge_sessions", next_run_time=start
+    )
+    scheduler.add_job(
+        _tracked(purge_conversations),
+        IntervalTrigger(seconds=CONVERSATION_PURGE_INTERVAL.total_seconds()),
+        args=[ctx],
+        id="purge_conversations",
+        next_run_time=start,
     )
     scheduler.add_job(
         _tracked(call_tick),

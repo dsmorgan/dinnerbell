@@ -292,14 +292,20 @@ def test_a_secret_in_the_environment_still_works_with_a_warning(
     assert "env-secret-key" not in caplog.text
 
 
-def test_all_four_secrets_from_the_environment_start_without_a_secrets_directory(
+def test_every_secret_from_the_environment_starts_without_a_secrets_directory(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
 ) -> None:
     """The default layout (0.9.1): compose.yaml mounts nothing at /run/secrets, and .env holds the
-    four secrets. Dinnerbell starts and only warns, once per secret, without a value."""
+    secrets, the assistant's key among them. Dinnerbell starts and only warns, once per secret,
+    without a value."""
     from dinnerbell import config
 
-    set_env(monkeypatch, DINNERBELL_SLACK_BOT_TOKEN="xoxb-env-only", DINNERBELL_SLACK_APP_TOKEN="xapp-env-only")
+    set_env(
+        monkeypatch,
+        DINNERBELL_SLACK_BOT_TOKEN="xoxb-env-only",
+        DINNERBELL_SLACK_APP_TOKEN="xapp-env-only",
+        DINNERBELL_ANTHROPIC_API_KEY="sk-ant-env-only",
+    )
     monkeypatch.setattr(config, "SECRETS_DIR", tmp_path / "absent")
     with caplog.at_level("WARNING", logger="dinnerbell.config"):
         settings = load_settings()
@@ -612,3 +618,33 @@ def test_serve_logs_one_warning_for_unknown_names(
     assert len(messages) == 1
     assert "DINNERBELL_TRUSTED_PROXY" in messages[0]
     assert "10.9.8.7" not in caplog.text
+
+
+# The assistant (ADR 0009) -------------------------------------------------------------------------
+
+
+def test_the_assistant_is_off_by_default_on_sonnet(monkeypatch: pytest.MonkeyPatch) -> None:
+    set_env(monkeypatch)
+    settings = load_settings()
+    assert settings.anthropic_api_key is None
+    assert settings.assistant_model == "claude-sonnet-5-5"
+
+
+def test_a_model_without_prices_stops_startup(monkeypatch: pytest.MonkeyPatch) -> None:
+    message = error_for(monkeypatch, DINNERBELL_ASSISTANT_MODEL="claude-sonnet-5")
+    assert "DINNERBELL_ASSISTANT_MODEL: must be one of claude-haiku-5-5, claude-opus-5-5, claude-sonnet-5-5" in message
+    set_env(monkeypatch, DINNERBELL_ASSISTANT_MODEL="claude-haiku-5-5")
+    assert load_settings().assistant_model == "claude-haiku-5-5"
+
+
+def test_the_anthropic_key_can_come_from_a_secret_file(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    directory = secrets_from_files(
+        monkeypatch, tmp_path, **SECRET_FILES, DINNERBELL_ANTHROPIC_API_KEY="sk-ant-from-a-file\n"
+    )
+    with caplog.at_level("WARNING", logger="dinnerbell.config"):
+        settings = load_settings(directory)
+    assert settings.anthropic_api_key is not None
+    assert settings.anthropic_api_key.get_secret_value() == "sk-ant-from-a-file"
+    assert "ANTHROPIC" not in caplog.text and "sk-ant" not in repr(settings)

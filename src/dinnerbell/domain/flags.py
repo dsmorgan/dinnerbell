@@ -24,7 +24,16 @@ class Flag:
     """The release that added the flag, such as ``0.6.0``."""
 
 
-_DEFINED: tuple[Flag, ...] = ()
+ASSISTANT = "assistant"
+
+_DEFINED: tuple[Flag, ...] = (
+    Flag(
+        ASSISTANT,
+        "The optional assistant (ADR 0009): Admin's Assistant settings, its cost cap, and its "
+        "conversations. It also needs DINNERBELL_ANTHROPIC_API_KEY.",
+        "0.16.0",
+    ),
+)
 
 FLAGS: Mapping[str, Flag] = MappingProxyType({flag.name: flag for flag in _DEFINED})
 """Every flag the code knows, by name."""

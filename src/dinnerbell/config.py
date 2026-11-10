@@ -22,6 +22,7 @@ from sqlalchemy.exc import ArgumentError
 
 from dinnerbell import __version__
 from dinnerbell.domain import flags
+from dinnerbell.domain.assistant import DEFAULT_MODEL, PRICE_TABLE
 from dinnerbell.domain.members import InvalidMemberInput, normalize_email
 
 ENV_PREFIX = "DINNERBELL_"
@@ -29,8 +30,10 @@ SECRETS_DIR = Path("/run/secrets")
 # The settings that may live in files under /run/secrets, one file per setting, named like the
 # variable, when compose.secrets.yaml mounts them. Otherwise they come from the environment (.env),
 # with a warning. Keep in step with compose.secrets.yaml and SECRETS in deploy/dinnerbell-test
-# (scripts/check-compose.sh checks both).
-SECRET_FIELDS = ("secret_key", "slack_bot_token", "slack_app_token", "oidc_client_secret")
+# (scripts/check-compose.sh checks both). The Anthropic key is the exception: compose.secrets.yaml
+# doesn't mount it, because every file it lists must exist, and the key is optional
+# (docs/configuration.md says how to mount it).
+SECRET_FIELDS = ("secret_key", "slack_bot_token", "slack_app_token", "oidc_client_secret", "anthropic_api_key")
 FILES_HELP = 'See "Keep secrets in files" in docs/setup.md.'
 log = logging.getLogger(__name__)
 
@@ -60,6 +63,12 @@ LEGACY_WARNINGS = {
         "podman-compose passes it to podman on the command line, where other local users can see "
         "it in `ps`. To keep it off, put it in the file secrets/DINNERBELL_OIDC_CLIENT_SECRET instead and "
         "start with compose.secrets.yaml. " + FILES_HELP
+    ),
+    "anthropic_api_key": (
+        "DINNERBELL_ANTHROPIC_API_KEY is set in the environment (the env file). That works, but "
+        "podman-compose passes it to podman on the command line, where other local users can see "
+        "it in `ps`. To keep it off, put it in the file secrets/DINNERBELL_ANTHROPIC_API_KEY and mount "
+        'it at /run/secrets with a compose override: see "The assistant" in docs/configuration.md.'
     ),
 }
 MIN_SECRET_KEY_LENGTH = 32
@@ -164,6 +173,9 @@ class Settings(BaseSettings):
     slack_command: str = Field(default="/dinnerbell", pattern=r"^/[a-z0-9_-]{1,31}$")
     instance_label: str = Field(default="", max_length=16, pattern=r"^[A-Za-z0-9 -]*$")
     features: Annotated[frozenset[str], NoDecode] = frozenset()
+    anthropic_api_key: SecretStr | None = None
+    """The optional assistant's key (ADR 0009). Without it the assistant stays off."""
+    assistant_model: str = DEFAULT_MODEL
     timezone: str = "America/New_York"
     seed_file: Path | None = None
     log_level: LogLevel = "INFO"
@@ -282,6 +294,14 @@ class Settings(BaseSettings):
             return flags.check(value)
         except flags.UnknownFlag as exc:
             raise ValueError(f"{exc}; src/dinnerbell/domain/flags.py lists the known flags") from None
+
+    @field_validator("assistant_model")
+    @classmethod
+    def _check_assistant_model(cls, value: str) -> str:
+        # The cost cap needs the model's prices, so a model the table doesn't price can't run.
+        if value not in PRICE_TABLE:
+            raise ValueError(f"must be one of {', '.join(sorted(PRICE_TABLE))}, the models Dinnerbell has prices for")
+        return value
 
     @field_validator("instance_label")
     @classmethod
@@ -402,7 +422,7 @@ def _environment_differs(name: str, file_text: str) -> bool:
 
 
 def _read_secret_files(directory: Path, warnings: list[str] | None = None) -> dict[str, str]:
-    """Read the four secrets from ``directory``, one file each, named like the variable.
+    """Read the secrets from ``directory``, one file each, named like the variable.
 
     A file that's missing or empty counts as absent, so without /run/secrets every secret comes from
     the environment. Compose can't skip a secret, so an install that keeps secrets in files but

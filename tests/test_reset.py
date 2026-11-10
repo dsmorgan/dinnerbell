@@ -26,6 +26,8 @@ from dinnerbell import main as cli
 from dinnerbell.config import Settings
 from dinnerbell.db.events import EVENT_ROWS
 from dinnerbell.db.models import (
+    AssistantConversationRow,
+    AssistantUsageRow,
     Base,
     InvitationRow,
     MemberRow,
@@ -118,6 +120,34 @@ async def lived_in(house: House) -> int:
                 household_id=household_id, member_id=kim, content_hash="1" * 64, file_id="F2", uploaded_at=now
             )
         )
+        db.add(
+            AssistantUsageRow(
+                household_id=household_id,
+                member_id=kim,
+                model="claude-sonnet-5-5",
+                month="2026-10",
+                input_tokens=10,
+                output_tokens=5,
+                cache_read_tokens=0,
+                cache_write_tokens=0,
+                cost_micros=70,
+                state="settled",
+                created_at=now,
+                updated_at=now,
+            )
+        )
+        db.add(
+            AssistantConversationRow(
+                household_id=household_id,
+                key=f"web:{kim}",
+                private=True,
+                owner_member_id=kim,
+                pseudonyms={str(kim): 1},
+                transcript=[{"role": "user", "text": "Tacos?", "author": "Member 1"}],
+                created_at=now,
+                last_message_at=now,
+            )
+        )
         expires = now + timedelta(days=30)
         db.add(
             SessionRow(
@@ -158,6 +188,7 @@ EXPECTED_KEEP = {
     "stance_edit",
     "slack_badge_file",
     "slack_badge_composite",
+    "assistant_usage",
 }
 EXPECTED_CLEAR = {
     "event",
@@ -172,6 +203,7 @@ EXPECTED_CLEAR = {
     "outbox",
     "contribution",
     "badge_award",
+    "assistant_conversation",
 }
 
 
@@ -380,9 +412,10 @@ async def test_the_preview_counts_by_table(house: House) -> None:
     lines = found.lines()
     assert lines[0] == "Household: Home"
     assert lines[1].startswith(
-        "Deletes: assignment 0, badge_award 0, contribution 0, event 1, feedback 0, invitation 0,"
+        "Deletes: assignment 0, assistant_conversation 0, badge_award 0, contribution 0, event 1, feedback 0, "
+        "invitation 0,"
     )
-    assert lines[2].startswith("Keeps: audit ")
+    assert lines[2].startswith("Keeps: assistant_usage 0, audit ")
     assert lines[4] == "Days off kept: dinner on 2026-10-22"
     assert found.posts_again == ()  # it stays called off
 
@@ -536,10 +569,11 @@ def test_the_command_backs_up_then_resets_production(production: Path, capsys: p
     out = capsys.readouterr().out
     assert f"Database: {production}" in out and "Household: Home" in out
     assert re.search(
-        r"Deletes: assignment \d+, badge_award \d+, contribution \d+, event 1, feedback 0, invitation 0, meal_log 1,",
+        r"Deletes: assignment \d+, assistant_conversation 0, badge_award \d+, contribution \d+, event 1, feedback 0, "
+        r"invitation 0, meal_log 1,",
         out,
     )
-    assert "Keeps: audit " in out and "catalog_item 3," in out and "member 4," in out
+    assert "Keeps: assistant_usage 0, audit " in out and "catalog_item 3," in out and "member 4," in out
     assert "Reset the history." in out
 
     (backup,) = backups_in(production)

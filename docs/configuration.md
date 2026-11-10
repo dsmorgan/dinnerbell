@@ -45,13 +45,45 @@ These settings are optional:
 | `DINNERBELL_DATABASE_URL` | `sqlite:////data/dinnerbell.db` | The SQLite database. Keep it under `/data`, the container's only writable volume. Backups go to `backups/` next to the database file. |
 | `DINNERBELL_OIDC_SCOPES` | `openid email profile` | Scopes requested at sign-in. They must include `openid` and `email`. |
 | `DINNERBELL_INSTANCE_LABEL` | None | Marks every page, Slack message, App Home, `/healthz`, and the logs, such as `TEST` on a [test instance](test-instance.md). Up to 16 letters, digits, spaces, or hyphens. Leave it empty in production. |
+| `DINNERBELL_ANTHROPIC_API_KEY` | None | The Anthropic API key for the optional assistant. Without it, the assistant stays off and nothing changes. A secret. See [The assistant](#the-assistant). |
+| `DINNERBELL_ASSISTANT_MODEL` | `claude-sonnet-5-5` | The model the assistant uses: `claude-sonnet-5-5`, `claude-opus-5-5`, or `claude-haiku-5-5`. Dinnerbell refuses to start on any other, because the monthly cap needs the model's prices. |
 | `DINNERBELL_FEATURES` | None | Comma-separated feature flags to turn on. Dinnerbell refuses to start on an unknown name; the list is in `src/dinnerbell/domain/flags.py`. A flag that a release retired is ignored, with a warning in the log at startup, so remove it from this list when you see one. |
 
 The container image sets `DINNERBELL_BUILD` on builds from `main`. Don't add it to `.env`: even an empty line replaces the image's value.
 
 Dinnerbell warns at start about a `DINNERBELL_` variable it doesn't know, which is most likely a typo. The warning names the variable, never its value.
 
-To keep the four secrets out of `.env`, see [Keep secrets in files](setup.md#keep-secrets-in-files).
+To keep the four required and Slack secrets out of `.env`, see [Keep secrets in files](setup.md#keep-secrets-in-files). The Anthropic key works the same way, with one more step: see [The assistant](#the-assistant).
+
+## The assistant
+
+The assistant answers members' questions in plain language ([ADR 0009](adr/0009-optional-assistant.md)). It's optional, and it works only when all three of these are set:
+
+- `DINNERBELL_ANTHROPIC_API_KEY`, the key for your Anthropic account. Anthropic bills that account for what the assistant uses.
+- The `assistant` flag in `DINNERBELL_FEATURES`. The flag hides the assistant while it's being built, even with a key set.
+- **Turn on the assistant** on Admin > **Assistant**. The tab shows only with the key and the flag.
+
+Otherwise, nothing changes: no page, tab, or reply mentions the assistant, and Dinnerbell sends Anthropic nothing.
+
+On Admin > **Assistant**, the admin also sets the household's **Monthly cap**, $1 to $100 in US dollars a calendar month in the household's time zone ($5 by default), and **Conversation hours**, how long Dinnerbell keeps a conversation after its last message, 0 to 168 (24 by default). Before each request to Anthropic, Dinnerbell sets aside the most that request could cost and refuses it if that would pass the cap, so spending never does; the page shows this month's usage in total and for each member. Every change there is in the audit log.
+
+Dinnerbell sends Anthropic the conversation and what the assistant looks up, with members as "Member 1", "Member 2", and so on. It never sends names, emails, Slack IDs, preferences, vetoes, ratings, or notes, except what a member writes in their own message. Your Anthropic API terms govern how long Anthropic keeps requests.
+
+`compose.secrets.yaml` doesn't mount the key, because every file it lists must exist and the key is optional. To keep the key in a file, create `secrets/DINNERBELL_ANTHROPIC_API_KEY` the way [Keep secrets in files](setup.md#keep-secrets-in-files) describes, and add a `compose.override.yaml` next to `compose.yaml`:
+
+```yaml
+services:
+  dinnerbell:
+    secrets:
+      - DINNERBELL_ANTHROPIC_API_KEY
+secrets:
+  DINNERBELL_ANTHROPIC_API_KEY:
+    file: ./secrets/DINNERBELL_ANTHROPIC_API_KEY
+```
+
+Then add `-f compose.override.yaml` last to every command that already names `compose.secrets.yaml`.
+
+`dinnerbell scrub-test` turns the assistant off and deletes every conversation, so a test copy never sends production's conversations.
 
 ## The sign-in rate limit
 

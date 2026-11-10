@@ -126,6 +126,11 @@ QUIET_LOGGERS = (
     "aiosqlite",
     "httpx",
     "httpcore",
+    # httpx2 is the HTTP library of Anthropic's SDK (the assistant, ADR 0009), and the SDK's own
+    # logger prints request options at DEBUG.
+    "httpx2",
+    "httpcore2",
+    "anthropic",
     "apscheduler",
     "alembic",
     "multipart",

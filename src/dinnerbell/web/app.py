@@ -35,6 +35,7 @@ from dinnerbell.web.ratelimit import SlidingWindowLimiter
 from dinnerbell.web.render import error_page, is_htmx
 from dinnerbell.web.routes import (
     admin,
+    assistant,
     auth,
     catalog,
     events,
@@ -89,6 +90,7 @@ def build_app(settings: Settings, lifespan: Lifespan) -> FastAPI:
         pages.router,
         auth.router,
         admin.router,
+        assistant.router,
         catalog.router,
         preferences.router,
         preferences.admin_router,

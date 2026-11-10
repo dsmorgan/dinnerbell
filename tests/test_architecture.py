@@ -175,3 +175,29 @@ def test_tag_rename_and_merge_require_an_admin_in_the_web_layer(client: TestClie
     assert set(found) == admin_only
     for route in found.values():
         assert require_admin_csrf in {dep.call for dep in route.dependant.dependencies}, route.path
+
+
+def test_only_the_anthropic_client_imports_the_sdk() -> None:
+    """Every model call goes through ``ModelClient``, so tests can swap it for the fake and the
+    reservation always comes first (ADR 0009)."""
+    importers = sorted(
+        str(path.relative_to(PACKAGE))
+        for path in PACKAGE.rglob("*.py")
+        if any(module.split(".")[0] in {"anthropic", "httpx2"} for module in imports(path))
+    )
+    assert importers == ["services/assistant/anthropic_client.py"]
+
+
+def test_assistant_tools_never_act_as_an_admin() -> None:
+    """Every tool runs as ``tool_actor``: a member's role, never an admin's (spec 6.14, **Scope**).
+    No tool code checks for an admin, calls an admin-only use case, or names ``ActingAs.ADMIN``."""
+    source = (PACKAGE / "services" / "assistant" / "tools.py").read_text()
+    for forbidden in ("ActingAs", "require_admin", "is_admin", "Role.ADMIN"):
+        assert forbidden not in source, forbidden
+    assert "replace(member, role=Role.MEMBER)" in source
+
+
+def test_the_assistant_layers_import_nothing_from_web_or_channels() -> None:
+    for path in (PACKAGE / "services" / "assistant").rglob("*.py"):
+        for module in imports(path):
+            assert not module.startswith(("dinnerbell.web", "dinnerbell.channels", "dinnerbell.scheduler")), path
