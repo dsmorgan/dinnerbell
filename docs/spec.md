@@ -313,9 +313,9 @@ Requirements use "must" for version 1 and "should" for items that can slip to a 
 
 The assistant (FR-51, [ADR 0009](adr/0009-optional-assistant.md)) is optional and changes nothing until a member confirms a draft.
 
-**Turning it on.** It needs `DINNERBELL_ANTHROPIC_API_KEY`, the `assistant` flag, and Admin's **Assistant** switch, which is audited and shows only with the key and flag. DMs also need the assistant variant of the Slack manifest (section 10). `dinnerbell scrub-test` turns the switch off and deletes conversations.
+**Turning it on.** It needs `DINNERBELL_ANTHROPIC_API_KEY`, the `assistant` flag, and Admin's **Assistant** switch, which is audited and shows only with the key and flag. DMs also need the assistant variant of the Slack manifest (section 10). While any of them is missing, Dinnerbell ignores DMs and mentions. `dinnerbell scrub-test` turns the switch off and deletes conversations.
 
-**Who.** Active members only. A message from a guest, an inactive member, or someone not linked to a member gets no reply and is neither stored nor sent. So is a mention outside the household channel, and Dinnerbell ignores bot messages and message edits and deletions (any `bot_id` or `subtype`).
+**Who.** Active members only. A message from a guest, an inactive member, or someone not linked to a member gets no reply and is neither stored nor sent. The same goes for a mention outside the household channel, and Dinnerbell ignores bot messages and message edits and deletions (any `bot_id` or `subtype`).
 
 **Conversations.** A conversation is the web's **Assistant** page (one per member, with **Start over**), or a Slack thread, keyed by channel and thread root:
 
@@ -792,7 +792,7 @@ dinnerbell/
 | M3 Offers and guests | Offers with capacity, cooking offers replacing the call, guests with dietary needs, lunch defaults, ad-hoc calls, schedule changes by any member, feedback collection | Lunch offers and guest dinners work without workarounds |
 | M4 Contributions and badges | Contribution counting, badges, channel announcements, Stats page, monthly recap | First badges awarded |
 | M7 Feedback-informed ranking | ADR 0008 and its implementation (FR-55). Existing households start with **Feedback** at 0, and the admin sets it to 2 when ready to let ratings move scores. | Proposals reflect "Hated it" and "Loved it" with reasons that say so |
-| M6 Assistant | Optional assistant (ADR 0009): conversations on the web, in DMs, and in channel threads; drafted proposals and offers through the domain API; catalog drafts from a description or menu link, through the import preview | "Find us something new" in a channel thread yields a draft whose **Confirm** adds a filtered proposal, and a menu link opens an import preview |
+| M6 Assistant | Optional assistant (ADR 0009): conversations on the web, in DMs, and in channel threads; drafted proposals and offers through the domain API; catalog drafts from a description or menu link, through the import preview | "Find us something new" in a channel thread during voting yields a draft whose **Confirm** adds a filtered proposal, and a menu link opens an import preview |
 | M5 Calendar hints | Secret iCal URL polling, busy hints on the roster | Hints show for members who opted in |
 | Backlog | Discord adapter, web push, multi-household, recipes | |
 
