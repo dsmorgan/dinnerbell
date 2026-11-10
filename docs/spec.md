@@ -303,7 +303,7 @@ Requirements use "must" for version 1 and "should" for items that can slip to a 
 | ID | Requirement | Phase |
 |---|---|---|
 | FR-50 | Each member may paste a Google Calendar secret iCal URL. The app polls it read-only and shows "busy at usual dinner time" as a hint on the call roster. Never writes to any calendar. | Calendar |
-| FR-51 | **Optional assistant** ([ADR 0009](adr/0009-optional-assistant.md), proposed). A member can ask the assistant in natural language: "something we haven't had in a month that works for everyone in," or "tacos at 7, I'll cook." The assistant drafts proposals, offers, and catalog items through the same domain API, never bypasses filters, and changes nothing until the member confirms. See [6.14](#614-assistant). | Assistant |
+| FR-51 | **Optional assistant** ([ADR 0009](adr/0009-optional-assistant.md), proposed). A member can ask the assistant in natural language: "something we haven't had in a month that works for everyone in," or "tacos at 7, I'll cook." The assistant acts as the member through the same domain API, never with admin rights, never bypasses filters, and changes nothing until the member confirms. The first build drafts proposals, offers, and catalog items. See [6.14](#614-assistant). | Assistant |
 | FR-52 | A Discord adapter implements the channel interface. | Channels |
 | FR-53 | Web push for Home Screen web apps as an optional additional channel. | Channels |
 | FR-54 | Multiple households per deployment. | Multi-tenant |
@@ -311,7 +311,7 @@ Requirements use "must" for version 1 and "should" for items that can slip to a 
 
 ### 6.14 Assistant
 
-The assistant (FR-51, [ADR 0009](adr/0009-optional-assistant.md)) is optional and changes nothing until a member confirms a draft.
+The assistant (FR-51, [ADR 0009](adr/0009-optional-assistant.md)) is optional, acts only as the member it's answering without admin rights, and changes nothing until that member confirms a draft.
 
 **Turning it on.** It needs `DINNERBELL_ANTHROPIC_API_KEY`, the `assistant` flag, and Admin's **Assistant** switch, which is audited and shows only with the key and flag. DMs also need the assistant variant of the Slack manifest (section 10). While any of them is missing, Dinnerbell ignores DMs and mentions. `dinnerbell scrub-test` turns the switch off and deletes conversations.
 
@@ -327,7 +327,24 @@ The web page and DMs are private to the member; the admin doesn't see them. In a
 
 **History.** Kept for Admin's **Conversation hours**, 0 to 168 (default 24) after the last message, then deleted, including when the admin lowers the setting. It covers Dinnerbell's copy only; Slack keeps its thread, and backups taken meanwhile keep their copy until they're deleted. At 0, each message stands alone, and a follow-up's reply says Dinnerbell can't see earlier messages. History is stored in pseudonym form, with each conversation's pseudonym map fixed and only added to. The history sent to the model has a size limit, dropping the oldest turns first.
 
-**Tools,** each acting as the member whose message is being answered:
+**Scope.** The assistant can do what the member can, through the same services, and never what only an admin can. Every tool passes the services the member with admin rights removed, so an admin using the assistant gets a member's permissions, and no service's admin path is ever taken. Tests check that no tool reaches `require_admin` or an `/admin` route.
+
+- **Never tools:**
+  - Members and guests: inviting, deactivating, promoting, linking, removing, and editing another member's preferences.
+  - Household settings: ranking weights, temperature, Feedback, the channel, the deadline, joining, the Admin schedule page and its resets, and the assistant's own switch, cap, and Conversation hours.
+  - Badges, contribution counts, and their resets.
+  - Merging and renaming tags.
+  - Call overrides (FR-6): extending, shortening, locking, cancelling, re-running, and skipping calls as an admin, and correcting a meal's place after it's done.
+- **Any conversation, including a channel thread:** call actions the member takes in public anyway. These are answering in, out, or maybe; voting; suggesting; proposing; offering and taking back an offer; inviting a guest and answering for them; taking or giving up a role; joining late; starting an ad-hoc call (FR-3); logging a meal; and adding or editing catalog items.
+- **Private conversations only** (the web page and DMs):
+  - Coordinating: assigning roles, locking a pick, breaking a tie, changing the plan, handing off, marking done, and calling off a call (FR-56).
+  - The member's own preferences, vetoes, ratings and feedback, and going away.
+  
+  Only these tools send the member's own preferences or ratings, and only when they ask. Nobody else's ever go.
+
+Each tool beyond the first build is a follow-up issue under ADR 0009. A catalog edit drafts a before-and-after diff for **Confirm**, separate from the add-only import draft.
+
+**Tools in the first build** (#17), each acting as the member whose message is being answered:
 
 - **Find candidates**, for a voting call only. It runs ranking's hard filters, optionally narrowed by days since eaten, cuisine, or mode, and returns candidates in name order. Their reasons come only from variety, novelty, suggestions, the default mode, volunteer fit, and meal fit. It never returns what the filters removed. Before voting, the assistant says to ask once voting opens.
 - **Look up catalog items** by name or tag: name, kind, tags, modes, and meals.
@@ -344,7 +361,7 @@ The call is the one the member names, then the thread's call, then the only open
 
 **Confirm** calls the same service as the form, which checks everything again, so a stale draft gets the service's usual error and nothing changes. In a channel thread, drafts and replies about them go only to their member, as ephemeral messages in the thread. Catalog drafts open the web import preview, from Slack too, and an import from a draft only adds, even if a matching item appeared meanwhile. Once a new place is imported, a member can ask again to propose it.
 
-**Data sent.** The conversation, the call's meal, time, and roles offered, and what tools return, with members as pseudonyms. Names inside members' messages or item names go out as written. No preferences, vetoes, ratings, hints, notes, emails, Slack IDs, or guest details are sent.
+**Data sent.** The conversation, the call's meal, time, and roles offered, and what tools return, with members as pseudonyms. Names inside members' messages or item names go out as written. No preferences, vetoes, ratings, hints, notes, emails, Slack IDs, or guest details are sent, except the member's own preferences and ratings through the private-only tools above, when they ask.
 
 **Cost cap.** The cap is in US dollars per calendar month in the household's time zone, $5 by default. Before each model call, Dinnerbell reserves the call's input plus `max_tokens` of output at the model's prices, and refuses the call if that would pass the cap. Afterward, it stores the model, the member, token counts (cache reads and writes included), and the cost at that call's prices. Admin shows usage per member.
 
