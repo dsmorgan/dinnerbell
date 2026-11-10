@@ -225,9 +225,12 @@ def draft_id(result: ToolResult) -> int:
     return int(result.content.split()[1])
 
 
-async def confirm(house: House, who: str, draft: int) -> Any:
+CONFIGURED = AssistantConfig(key_set=True, flag_on=True)
+
+
+async def confirm(house: House, who: str, draft: int, config: AssistantConfig = CONFIGURED) -> Any:
     async with house.sessionmaker() as db:
-        return await drafts.confirm_draft(db, house.clock, house[who], draft)
+        return await drafts.confirm_draft(db, house.clock, config, house[who], draft)
 
 
 async def cancel(house: House, who: str, draft: int) -> None:
@@ -317,7 +320,10 @@ async def test_candidates_pass_every_filter_in_name_order(house: House, helper: 
     await to_voting(house)
     data = await found(house)
     listed = names(data)
-    assert listed == sorted(listed, key=str.casefold)
+    meal = [c["name"] for c in data["candidates"] if c["for_this_meal"]]
+    others = [c["name"] for c in data["candidates"] if not c["for_this_meal"]]
+    assert listed == meal + others  # the call's meal first, then other meals, each in name order
+    assert meal == sorted(meal, key=str.casefold) and others == ["Brunch Barn"]
     for never in ("Banned Burger", "Old Favorite", "Curry Leaf"):  # a veto, the repeat window, and taken
         assert never not in listed, never
     assert {"Pho Corner", "Veg Garden", "Brunch Barn", "Pasta Night", "Sam's Tacos"} <= set(listed)
@@ -340,14 +346,34 @@ async def test_candidates_pass_every_filter_in_name_order(house: House, helper: 
 
 
 @pytest.mark.flag("assistant", on=True)
+async def test_the_cap_keeps_the_calls_meal_ahead_of_other_meals(house: House, helper: Assistant) -> None:
+    for n in range(30):
+        await house.add_item(f"Aaa Brunch {n:02}", Mode.PICKUP, cuisine="Brunch", meals=frozenset({Meal.BREAKFAST}))
+    await to_voting(house)
+    data = await found(house)
+    assert data["more"] is True and len(data["candidates"]) == 25
+    assert "Pho Corner" in names(data)  # a dinner place, though 30 breakfast places sort before it
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_a_call_past_voting_says_so_rather_than_to_wait(house: House, helper: Assistant) -> None:
+    event_id = await to_voting(house)
+    await act(house, calls.cancel_call, house["Alex"], event_id)
+    result = await tool(house, "find_candidates", NO_FILTERS | {"slot": "dinner"})
+    assert result == ToolResult(candidates.CALL_ENDED, is_error=True)
+
+
+@pytest.mark.flag("assistant", on=True)
 async def test_a_guests_need_rules_out_everything_that_misses_it(house: House, helper: Assistant) -> None:
+    await house.add_item("Tofu Hut", Mode.PICKUP, cuisine="Japanese", tags=("Vegetarian",))
     event_id = await open_dinner(house, "Sam", "Kim")
     await house.legacy_guests(event_id, "Kim", 1, frozenset({house.tags["Vegetarian"].id}))
     await act(house, calls.offer_role, house["Alex"], event_id, RoleOffer.PICKUP, True)
     house.clock.now = RESPOND_BY
     await house.tick()
     assert (await house.event(event_id)).state is EventState.VOTING
-    assert set(names(await found(house))) <= {"Veg Garden"}
+    assert "Veg Garden" in await proposals(house, event_id)  # Sam likes it, so ranking drew it
+    assert names(await found(house)) == ["Tofu Hut"]
 
 
 @pytest.mark.flag("assistant", on=True)
@@ -538,13 +564,18 @@ async def test_a_draft_for_an_earlier_run_gets_the_services_stale_error(house: H
 
 
 @pytest.mark.flag("assistant", on=True)
-async def test_confirm_needs_the_switch_on(house: House, helper: Assistant) -> None:
+async def test_confirm_needs_the_key_the_flag_and_the_switch(house: House, helper: Assistant) -> None:
     await to_voting(house)
     draft = draft_id(await tool(house, "draft_proposal", propose("Pho Corner")))
+    for config in (AssistantConfig(key_set=False, flag_on=True), AssistantConfig(key_set=True, flag_on=False)):
+        with pytest.raises(DraftUnavailable, match=TURNED_OFF):
+            await confirm(house, "Sam", draft, config)
     async with house.sessionmaker() as db:
         await admin.update_assistant(db, helper.config, house["Alex"], AssistantSettings(), now=house.clock())
     with pytest.raises(DraftUnavailable, match=TURNED_OFF):
         await confirm(house, "Sam", draft)
+    [row] = await draft_rows(house)
+    assert row.used_at is None
     await cancel(house, "Sam", draft)  # Cancel still works
 
 
@@ -565,6 +596,8 @@ async def test_a_cooking_offer_with_no_call_yet_keeps_the_days_call_from_opening
 ) -> None:
     draft, lines = await offer_draft(house, "Sam", offer("Sam's Tacos", "cook"))
     assert lines == ("It keeps today's dinner call from opening while your offer is on.", "You'll cook it.")
+    [row] = await draft_rows(house)
+    assert row.title == "Offer to cook Sam's Tacos, dinner today at 6:30 PM"
     confirmed = await confirm(house, "Sam", draft)
     assert isinstance(confirmed, OfferConfirmed) and confirmed.posted.path is OfferPath.NEW
     house.clock.now = OPENS
@@ -573,6 +606,73 @@ async def test_a_cooking_offer_with_no_call_yet_keeps_the_days_call_from_opening
 
     async with house.sessionmaker() as db:
         assert await EventRepository(db).call_for(house.household.id, Slot.DINNER, DAY) is None
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_a_cooking_offer_for_a_slot_with_no_schedule_says_no_call_can_start(
+    house: House, helper: Assistant
+) -> None:
+    _, lines = await offer_draft(house, "Sam", offer("Sam's Tacos", "cook", slot="lunch", day="tomorrow"))
+    assert lines[0] == "No one can start a lunch call for tomorrow while your offer is on."
+    _, later = await offer_draft(house, "Sam", offer("Sam's Tacos", "cook", at="23:00"))
+    assert later[0] == "It keeps today's dinner call from opening while your offer is on."
+    house.clock.now = RESPOND_BY  # today's dinner call can't open any more
+    _, past = await offer_draft(house, "Sam", offer("Sam's Tacos", "cook", at="23:30"))
+    assert past[0] == "No one can start a dinner call for today while your offer is on."
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_an_offer_draft_made_before_midnight_confirms_after_it(house: House, helper: Assistant) -> None:
+    from datetime import UTC, datetime
+
+    house.clock.now = datetime(2026, 10, 23, 4, 50, tzinfo=UTC)  # 11:50 PM in Chicago
+    draft, lines = await offer_draft(house, "Lee", offer("Siam Garden", "pickup", slot="lunch", day="tomorrow"))
+    assert lines[0] == "It's posted as an offer of its own."
+    house.clock.advance(timedelta(minutes=15))  # "tomorrow" is today now
+    assert isinstance(await confirm(house, "Lee", draft), OfferConfirmed)
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_an_offer_takes_over_the_places_pick_in_another_mode_and_says_so(house: House, helper: Assistant) -> None:
+    event_id = await to_voting(house)
+    curry = (await proposals(house, event_id))["Curry Leaf"]
+    assert (curry.mode, curry.proposed_by) == ("pickup", None)  # ranking's pick
+    draft, lines = await offer_draft(house, "Sam", offer("Curry Leaf", "delivery", at="19:00"))
+    assert lines[0] == "It changes today's dinner pick Curry Leaf from pickup to delivery, and its votes stay."
+    [row] = await draft_rows(house)
+    assert row.title == "Offer to order Curry Leaf for today's dinner call"
+    confirmed = await confirm(house, "Sam", draft)
+    assert isinstance(confirmed, OfferConfirmed) and confirmed.posted.path is OfferPath.ATTACH
+    after = (await proposals(house, event_id))["Curry Leaf"]
+    assert (after.id, after.mode, after.proposed_by) == (curry.id, "delivery", house["Sam"].id)
+    # The same place in the same mode, or someone else's pick of it, is refused as the service does.
+    same = await tool(house, "draft_offer", offer("Curry Leaf", "delivery"))
+    assert same.is_error and "Curry Leaf is already a proposal (delivery)" in same.content
+    others = await tool(house, "draft_offer", offer("Curry Leaf", "pickup"), who="Kim")
+    assert others.is_error and "already a proposal" in others.content
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_an_offer_whose_pick_was_taken_meanwhile_is_stale(house: House, helper: Assistant) -> None:
+    event_id = await to_voting(house)
+    draft, _ = await offer_draft(house, "Sam", offer("Pho Corner", "pickup"))
+    pho = draft_id(await tool(house, "draft_proposal", propose("Pho Corner"), who="Kim"))
+    await confirm(house, "Kim", pho)
+    with pytest.raises(EventRuleViolation, match="already a proposal"):
+        await confirm(house, "Sam", draft)
+    assert (await proposals(house, event_id))["Pho Corner"].proposed_by == house["Kim"].id
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_draft_ids_are_never_reused_after_the_purge(house: House, helper: Assistant) -> None:
+    old = draft_id(await tool(house, "draft_offer", offer("Siam Garden", "pickup", day="tomorrow")))
+    house.clock.advance(timedelta(minutes=DRAFT_MINUTES))
+    assert await retention.purge_expired_drafts(house.sessionmaker, house.clock()) == 1
+    assert await draft_rows(house) == []
+    new = draft_id(await tool(house, "draft_offer", offer("Siam Garden", "pickup", day="tomorrow")))
+    assert new > old
+    with pytest.raises(NotFound):
+        await confirm(house, "Sam", old)
 
 
 @pytest.mark.flag("assistant", on=True)

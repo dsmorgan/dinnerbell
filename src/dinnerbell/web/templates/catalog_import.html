@@ -1,5 +1,5 @@
 {#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
-{#- Expects: content, plan (None before a preview), token (set when the plan can be applied), notice. -#}
+{#- Expects: content, plan (None before a preview), token (set when the plan can be applied), notice, add_only (an assistant draft's import, which only adds). -#}
 {% extends "base.html" %}
 {% block title %}Import a catalog{% endblock %}
 {% block content %}
@@ -76,6 +76,8 @@
 <form method="post" action="/catalog/import/preview" enctype="multipart/form-data" class="card stack">
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
   {% if token %}<input type="hidden" name="token" value="{{ token }}">{% endif %}
+  {% if add_only %}<input type="hidden" name="add_only" value="1">
+  <p class="small">This import comes from an assistant draft, so it only adds new items. Items the catalog has stay as they are.</p>{% endif %}
   <label class="field">
     <span>Paste the file</span>
     <textarea name="content" rows="14" class="code" spellcheck="false" autocapitalize="none" autocomplete="off">

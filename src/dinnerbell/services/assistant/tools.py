@@ -263,6 +263,7 @@ async def find_candidates_tool(ctx: ToolContext, raw: Mapping[str, Any]) -> str:
             "name": c.item.name,
             "kind": (ItemKind.HOME if Mode.COOK in c.modes else ItemKind.RESTAURANT).value,
             "modes": [m.value for m in c.modes],
+            "for_this_meal": c.for_meal,
             "reasons": list(c.reasons),
         }
         for c in found.found
@@ -281,13 +282,15 @@ async def find_candidates_tool(ctx: ToolContext, raw: Mapping[str, Any]) -> str:
 FIND_CANDIDATES = Tool(
     name="find_candidates",
     description=(
-        "Find what the household could propose for a call that's voting: the places and home meals that pass "
-        "every filter for everyone who's in, in name order, with short reasons, and the call's meal, day, state, "
-        "meal time, and the roles someone offered. Call this before draft_proposal, and whenever the member asks "
-        "what fits, what's new, or what they haven't had in a while. Before voting opens it returns an error: "
-        "tell the member to ask again once voting opens. Narrow with not_eaten_in_days (0 for any), cuisine "
-        "(text a cuisine contains, or an empty string), and mode (cook, pickup, delivery, or an empty string). "
-        "It never says why something is missing, and you mustn't guess."
+        "Find what the household could propose for a call that's voting: the places and home meals that "
+        "pass every filter for everyone who's in, at most 25. Those for the call's meal come first, then "
+        "those usually had at other meals (for_this_meal false), each in name order, with short reasons. "
+        "It also gives the call's meal, day, state, meal time, and the roles someone offered. Call this "
+        "before draft_proposal, and whenever the member asks what fits, what's new, or what they haven't "
+        "had in a while. Before voting opens it returns an error: tell the member to ask again once voting "
+        "opens. Narrow with not_eaten_in_days (0 for any), cuisine (text a cuisine contains, or an empty "
+        "string), and mode (cook, pickup, delivery, or an empty string). It never says why something is "
+        "missing, and you mustn't guess."
     ),
     input_schema={
         "type": "object",
