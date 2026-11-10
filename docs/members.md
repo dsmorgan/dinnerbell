@@ -1,6 +1,6 @@
 # Members and guests
 
-Admins manage the household on **Admin** > **Members**. This page explains guests, joining from the channel, and the related controls. To link members' Slack accounts, see [Link everyone's Slack account](setup.md#link-everyones-slack-account).
+Admins manage the household on **Admin** > **Members**. This page explains guests, joining from the channel, and the related controls, and how members use the [Assistant page](#the-assistant-page). To link members' Slack accounts, see [Link everyone's Slack account](setup.md#link-everyones-slack-account).
 
 ## Guests
 
@@ -32,3 +32,18 @@ These controls are on **Admin** > **Members**:
 - **Remove** signs a guest out and stops them from joining again until you select **Add back**.
 
 Joining needs no extra scopes for a public channel. A private channel needs `groups:read`.
+
+## The Assistant page
+
+When the household's assistant is on ([The assistant](configuration.md#the-assistant)), each member and admin has an **Assistant** link in the menu. Guests and deactivated members don't, and the page answers only the member who's signed in.
+
+1. Select **Assistant**.
+2. In **Message**, ask in plain words, such as "something we haven't had in a month" or "tacos at 7, I'll cook," and select **Send**. The reply appears under your message.
+3. When the assistant drafts something, such as a proposal, an offer, or new catalog items, a card shows what **Confirm** will do. Select **Confirm** to do it, or **Cancel** to drop it. Nothing changes until you confirm.
+   - A proposal or offer runs through the same checks as the form on **Today**, so a draft that no longer fits shows why on its card, and nothing changes.
+   - New catalog items open the import preview, which only adds: items the catalog has stay as they are. Select **Apply** there to add them.
+   - A draft lasts 30 minutes, and only you can confirm it, once.
+
+The conversation is private: other members and the admin don't see it. Dinnerbell keeps it for the household's **Conversation hours** after your last message, so follow-ups such as "something cheaper" work. At 0 hours, nothing is kept: each message stands alone, and the page shows only your latest message and its answer. To clear the conversation sooner, select **Start over**, which also cancels its waiting drafts.
+
+Replies are plain text. Links in them aren't clickable, so a page the assistant read can't slip you a link to tap.

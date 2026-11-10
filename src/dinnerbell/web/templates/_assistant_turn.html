@@ -1,0 +1,6 @@
+{#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
+{#- Expects: t, a Shown (mine, text). The text is plain: autoescaped, never Markdown, never linked (ADR 0009). -#}
+<div class="turn {{ 'turn-mine' if t.mine else 'turn-reply' }}">
+  <p class="turn-who small">{{ "You" if t.mine else "Assistant" }}</p>
+  <p class="turn-text">{{ t.text }}</p>
+</div>

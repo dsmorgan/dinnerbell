@@ -36,6 +36,7 @@ from dinnerbell.web.render import error_page, is_htmx
 from dinnerbell.web.routes import (
     admin,
     assistant,
+    assistant_page,
     auth,
     catalog,
     events,
@@ -91,6 +92,7 @@ def build_app(settings: Settings, lifespan: Lifespan) -> FastAPI:
         auth.router,
         admin.router,
         assistant.router,
+        assistant_page.router,
         catalog.router,
         preferences.router,
         preferences.admin_router,

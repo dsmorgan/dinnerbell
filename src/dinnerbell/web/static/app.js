@@ -258,6 +258,25 @@
     }
   });
 
+  // A form marked data-reset-on-success, such as the Assistant page's message box, empties once
+  // HTMX has its answer (a 2xx), and keeps the text when it failed, so nothing typed is lost.
+  // Focus goes back to its first field for the next message.
+  document.addEventListener("htmx:afterRequest", function (event) {
+    var elt = event.detail && event.detail.elt;
+    var xhr = event.detail && event.detail.xhr;
+    if (!(elt instanceof HTMLFormElement) || !elt.hasAttribute("data-reset-on-success")) {
+      return;
+    }
+    if (!xhr || xhr.status < 200 || xhr.status >= 300) {
+      return;
+    }
+    elt.reset();
+    var field = elt.querySelector("textarea, input:not([type=hidden])");
+    if (field) {
+      field.focus();
+    }
+  });
+
   // Calls still in progress (scheduled, collecting, voting, or decided) carry data-poll, the URL
   // of their card. Refresh them now and then, so a page left open shows the call opening,
   // voting, the decision, and Mark done at meal time. Skip a card while someone is using it: an

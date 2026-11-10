@@ -396,12 +396,21 @@ form.htmx-request .segment span { animation: pending-cursor 0s 150ms forwards; }
   .topbar .nav { order: 1; flex: 0 1 auto; justify-content: flex-end; margin-left: auto; }
   .topbar .signout { order: 2; margin-left: 0; }
 }
+/* An admin with the Assistant link (ADR 0009) has eight links, which fit beside the brand and Sign
+   out only from 60rem; until then the links keep their own row. */
+@media (min-width: 54rem) and (max-width: 59.99rem) {
+  .topbar:has(.nav > a:nth-child(8)) .nav { order: 3; flex: 1 0 100%; justify-content: space-between; margin-left: 0; }
+  .topbar:has(.nav > a:nth-child(8)) .signout { order: 0; margin-left: auto; }
+}
 /* A page that scrolls to an anchor, such as #meal-12 after a save, stops below the sticky top bar
    (#153): its three rows on phones, two from 36rem, one from 54rem, plus the test instance's
    banner. */
 :root { --topbar-height: calc(env(safe-area-inset-top) + 11rem); }
 @media (min-width: 36rem) { :root { --topbar-height: calc(env(safe-area-inset-top) + 8rem); } }
 @media (min-width: 54rem) { :root { --topbar-height: calc(env(safe-area-inset-top) + 5rem); } }
+@media (min-width: 54rem) and (max-width: 59.99rem) {
+  :root:has(.topbar .nav > a:nth-child(8)) { --topbar-height: calc(env(safe-area-inset-top) + 8rem); }
+}
 :root:has(.instance-banner) { --banner-height: 1.75rem; }
 html { scroll-padding-top: calc(var(--topbar-height) + var(--banner-height, 0px)); }
 
@@ -768,3 +777,37 @@ fieldset.card > .button.block { margin-bottom: 0; }
   .badge-tw { opacity: 1; transform: none; }
   .badge-sheen { opacity: 0; }
 }
+
+/* ---- The Assistant page (ADR 0009) -------------------------------------------------------- */
+
+/* The conversation reads like a chat: your messages sit right on the soft accent, the
+   assistant's sit left on the surface. Text is plain and keeps its line breaks; a long URL wraps
+   rather than widening the page. Draft cards are ordinary cards between them. */
+.assistant-log { display: flex; flex-direction: column; gap: 0.6rem; margin: 0.75rem 0 1rem; }
+.assistant-log:has(> *) + .assistant-empty { display: none; }
+.turn { max-width: min(34rem, 88%); padding: 0.55rem 0.8rem; border-radius: var(--radius-card); }
+.turn p { margin: 0; }
+.turn-who { font-weight: 600; margin-bottom: 0.15rem; }
+.turn-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.turn-mine { align-self: flex-end; background: var(--accent-soft); color: var(--accent-soft-text); border-bottom-right-radius: 4px; }
+.turn-reply { align-self: flex-start; background: var(--surface); border: 1px solid var(--line); border-bottom-left-radius: 4px; }
+.turn-reply .turn-who { color: var(--muted); }
+
+.draft { margin: 0; border-left: 4px solid var(--accent); }
+.draft-done { border-left-color: var(--line); }
+.draft .alert { margin-bottom: 0.6rem; }
+.draft-done .alert { margin: 0; }
+/* A result's link takes the alert's color, which keeps 4.5:1 on its tint in both themes. */
+.draft .alert a, .assistant-outcome a { color: inherit; font-weight: 600; }
+.draft-label { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; margin-bottom: 0.4rem; }
+.draft-title { font-size: 1.05rem; margin: 0 0 0.4rem; overflow-wrap: anywhere; }
+.draft-will { margin-bottom: 0.2rem; }
+.draft-lines { margin: 0 0 0.8rem; padding-left: 1.2rem; }
+.draft-lines li + li { margin-top: 0.2rem; }
+.draft .button-row { margin-bottom: 0; }
+
+.assistant-form .button-row { align-items: center; margin-bottom: 0; }
+.assistant-form .button-row p { margin: 0; }
+/* Shown only while HTMX sends the message: HTMX marks the form with htmx-request. */
+.assistant-thinking { display: none; }
+.assistant-form.htmx-request .assistant-thinking { display: block; }

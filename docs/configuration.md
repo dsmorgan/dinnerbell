@@ -65,6 +65,10 @@ The assistant answers members' questions in plain language ([ADR 0009](adr/0009-
 
 Otherwise, nothing changes: no page, tab, or reply mentions the assistant, and Dinnerbell sends Anthropic nothing.
 
+### Use it on the web
+
+While the assistant answers a member, their menu has an **Assistant** link to their own private conversation, with **Confirm** and **Cancel** on each draft and **Start over**. Otherwise the link is hidden and the page doesn't exist. See [The Assistant page](members.md#the-assistant-page).
+
 ### Talk to it in Slack
 
 Members talk to the assistant in their direct message with Dinnerbell, or by mentioning @Dinnerbell in the household channel. Dinnerbell replies in the message's thread. Its App Home shows a line saying so while the assistant answers that member. For Slack to deliver those messages, the app needs the assistant variant of its manifest: `deploy/slack-app-manifest.assistant.yaml`. It's the default manifest plus a writable **Messages** tab, the `im:history` and `app_mentions:read` scopes, and the `message.im` and `app_mention` events. Apply it before you turn on **Turn on the assistant**: App Home tells members they can message Dinnerbell as soon as the switch is on.

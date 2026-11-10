@@ -12,7 +12,7 @@ from starlette.responses import Response
 from dinnerbell.config import is_test_instance
 from dinnerbell.domain.fun import Scene, scene
 from dinnerbell.domain.members import ColorMode
-from dinnerbell.services.assistant.runtime import AssistantConfig
+from dinnerbell.services.assistant.runtime import AssistantConfig, available
 from dinnerbell.services.household import current_household
 from dinnerbell.services.stuck import StuckCall, for_admin
 from dinnerbell.web import filters
@@ -49,12 +49,31 @@ def _stuck_calls(request: Request) -> list[StuckCall]:
     principal = getattr(request.state, "principal", None)
     if principal is None or not principal.member.is_admin:
         return []
-    whole_page = "true" in (request.headers.get("HX-Boosted"), request.headers.get("HX-History-Restore-Request"))
-    fragment = is_htmx(request) and not whole_page
-    if not request.url.path.startswith("/admin") or fragment:
+    if not request.url.path.startswith("/admin") or not _whole_page(request):
         return []
     context = app_context(request)
     return for_admin(principal.member, context.scheduler_state.current_stuck(context.clock()))
+
+
+def _whole_page(request: Request) -> bool:
+    """Whether the response is a whole page: not an HTMX fragment, though a boosted form and
+    HTMX's history restore (Back or Forward) get a whole page."""
+    boosted = "true" in (request.headers.get("HX-Boosted"), request.headers.get("HX-History-Restore-Request"))
+    return boosted or not is_htmx(request)
+
+
+async def _assistant_link(request: Request) -> bool:
+    """Whether the nav links the **Assistant** page: only when the assistant answers this viewer
+    (the key, the flag, Admin's switch, and an active member who isn't a guest; ADR 0009). It
+    reads the switch, so only a whole page asks, and only with the key and flag set."""
+    principal = getattr(request.state, "principal", None)
+    if principal is None or not principal.member.is_member or not _whole_page(request):
+        return False
+    config = AssistantConfig.from_settings(app_context(request).settings)
+    if not config.configured:
+        return False
+    async with app_context(request).sessionmaker() as db:
+        return await available(db, config, principal.member)
 
 
 def _fun_scene(request: Request) -> Scene | None:
@@ -92,6 +111,8 @@ async def render(
         "color_mode": _color_mode(request),
         # Admin > Assistant shows only with the operator's key and flag (ADR 0009).
         "assistant_admin": AssistantConfig.from_settings(settings).configured,
+        # The member's Assistant page shows only when the assistant answers them (ADR 0009).
+        "assistant_link": await _assistant_link(request),
     }
     return TEMPLATES.TemplateResponse(request, template, base | (context or {}), status_code=status_code)
 
