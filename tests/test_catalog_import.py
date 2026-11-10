@@ -15,7 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from dinnerbell.config import Settings
 from dinnerbell.db.catalog import CatalogRepository
-from dinnerbell.db.models import AuditRow, CatalogItemRow, TagRow
+from dinnerbell.db.models import AuditRow, CatalogItemRow, SessionRow, TagRow
 from dinnerbell.domain.catalog_file import MAX_FILE_BYTES
 from dinnerbell.services import catalog as catalog_service
 from dinnerbell.services.bootstrap import bootstrap
@@ -352,3 +352,89 @@ def test_preview_of_an_impossible_date_or_number_is_an_error_page(
     assert response.status_code == 400
     assert "date or a number" in page(response)
     assert token_in(response) is None
+
+
+# Add-only imports, from an assistant's catalog draft (spec 6.14) --------------------------------------
+
+DRAFTED = (
+    "version: 1\nrestaurants:\n  - name: Siam Garden\n    cuisine: [Thai]\n    notes: Changed by a draft\n"
+    "  - name: Noodle Bar\n    cuisine: [Chinese]\n"
+)
+
+
+def add_only_preview(client: TestClient, content: str) -> httpx.Response:
+    return submit(client, "/catalog/import/preview", {"content": content, "add_only": "1"})
+
+
+def notes(settings: Settings) -> dict[str, str | None]:
+    return {i.name: i.notes for i in rows(settings, CatalogItemRow)}
+
+
+def signed(client: TestClient, token: str) -> dict[str, str | None]:
+    from dinnerbell.web.routes.catalog import _preview_signer
+
+    found = _preview_signer(client.app.state.dinnerbell).loads(token)  # type: ignore[attr-defined]
+    assert found is not None
+    return found
+
+
+def test_an_add_only_preview_and_apply_leave_existing_items_alone(
+    client: TestClient, provider: FakeProvider, migrated: Settings
+) -> None:
+    sign_in(client, provider)
+    assert add_item(client, "Siam Garden").status_code == 303
+    response = add_only_preview(client, DRAFTED)
+    text = page(response)
+    assert 'name="add_only" value="1"' in text and "only adds new items" in text
+    token = token_in(response)
+    assert token and signed(client, token)["add_only"] == "true"
+    applied = submit(client, "/catalog/import/apply", {"content": DRAFTED, "token": token, "add_only": "1"})
+    assert applied.headers["location"] == "/catalog?notice=imported&created=1&updated=0&tags_created=1"
+    assert notes(migrated) == {"Siam Garden": None, "Noodle Bar": None}
+
+
+def test_a_matching_item_that_appears_after_the_draft_is_never_updated(
+    client: TestClient, provider: FakeProvider, migrated: Settings
+) -> None:
+    from dinnerbell.domain.catalog_import import ImportPlan
+    from dinnerbell.services.assistant.drafts import CatalogReady
+    from dinnerbell.web.routes.catalog import draft_import_token
+
+    sign_in(client, provider)
+    [member_id] = {i.member_id for i in rows(migrated, SessionRow)}
+    # The draft's preview, before Siam Garden is in the catalog: both entries would be added.
+    first = add_only_preview(client, DRAFTED)
+    sha = catalog_service.content_digest(DRAFTED)
+    fingerprint = signed(client, token_in(first) or "")["plan"] or ""
+    token = draft_import_token(
+        client.app.state.dinnerbell,  # type: ignore[attr-defined]
+        CatalogReady(DRAFTED, ImportPlan(), sha, fingerprint, member_id),
+    )
+    assert add_item(client, "Siam Garden").status_code == 303
+    # Apply with the draft's token alone: the plan changed, and the new preview is add-only too.
+    changed = submit(client, "/catalog/import/apply", {"content": DRAFTED, "token": token})
+    assert changed.status_code == 409
+    again = token_in(changed)
+    assert again and signed(client, again)["add_only"] == "true"
+    assert 'name="add_only" value="1"' in page(changed)
+    # An expired or broken token on an add-only page re-previews add-only.
+    stale = submit(client, "/catalog/import/apply", {"content": DRAFTED, "token": "nope", "add_only": "1"})
+    assert stale.status_code == 409 and signed(client, token_in(stale) or "")["add_only"] == "true"
+    # Preview again from the page stays add-only.
+    assert signed(client, token_in(add_only_preview(client, DRAFTED)) or "")["add_only"] == "true"
+    applied = submit(client, "/catalog/import/apply", {"content": DRAFTED, "token": again})
+    assert applied.status_code == 303
+    assert notes(migrated) == {"Siam Garden": None, "Noodle Bar": None}
+
+
+def test_a_token_without_the_mark_imports_as_always(
+    client: TestClient, provider: FakeProvider, migrated: Settings
+) -> None:
+    sign_in(client, provider)
+    assert add_item(client, "Siam Garden").status_code == 303
+    response = preview(client, DRAFTED)
+    token = token_in(response)
+    assert token and "add_only" not in signed(client, token)
+    assert 'name="add_only"' not in page(response)
+    assert apply(client, DRAFTED, token).status_code == 303
+    assert notes(migrated)["Siam Garden"] == "Changed by a draft"

@@ -3,7 +3,9 @@
 
 A row per change the assistant drafted for a member: a proposal, an offer, or catalog items,
 with what **Confirm** does. A draft lasts 30 minutes and is confirmed at most once; the
-scheduler deletes it once it expires. The table starts empty, and nothing writes it unless the
+scheduler deletes it once it expires. IDs are AUTOINCREMENT, as for ``event`` (0007) and
+``badge_award`` (0024), so a purge that empties the table never lets an old Confirm button reach
+a new draft. The table starts empty, and nothing writes it unless the
 assistant is on. The downgrade drops it, losing drafts still waiting for Confirm.
 
 Revision ID: 0032_assistant_drafts
@@ -51,6 +53,7 @@ def upgrade() -> None:
             ["member_id"], ["member.id"], name=op.f("fk_assistant_draft_member_id_member"), ondelete="CASCADE"
         ),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_assistant_draft")),
+        sqlite_autoincrement=True,
     )
     op.create_index("ix_assistant_draft_household_expires", "assistant_draft", ["household_id", "expires_at"])
     op.create_index(op.f("ix_assistant_draft_member_id"), "assistant_draft", ["member_id"])

@@ -25,10 +25,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from dinnerbell.db.assistant import AssistantRepository
 from dinnerbell.db.catalog import CatalogRepository
 from dinnerbell.db.engine import write_transaction
-from dinnerbell.db.events import EventRepository, ResponseRepository
+from dinnerbell.db.events import EventRepository
 from dinnerbell.db.meals import household_settings
 from dinnerbell.db.repositories import HouseholdRepository
-from dinnerbell.domain.assistant import assistant_settings
 from dinnerbell.domain.assistant_drafts import (
     DRAFT_MINUTES,
     MAX_OPEN_DRAFTS,
@@ -36,6 +35,7 @@ from dinnerbell.domain.assistant_drafts import (
     DraftKind,
     Narrowing,
     OfferOutcome,
+    OfferPlan,
     catalog_lines,
     clean_catalog,
     day_words,
@@ -44,7 +44,7 @@ from dinnerbell.domain.assistant_drafts import (
     offer_outcome,
     proposal_lines,
 )
-from dinnerbell.domain.catalog import Mode, kind_for, name_key
+from dinnerbell.domain.catalog import CatalogItem, Mode, kind_for, name_key
 from dinnerbell.domain.catalog_file import parse_catalog
 from dinnerbell.domain.catalog_import import ImportPlan
 from dinnerbell.domain.events import (
@@ -53,6 +53,7 @@ from dinnerbell.domain.events import (
     EventRuleViolation,
     EventState,
     Proposal,
+    ProposalSource,
     can_do,
     check_can_join_late,
     check_cook_list,
@@ -63,10 +64,12 @@ from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.members import Member
 from dinnerbell.domain.offers import OfferPath, check_capacity, offer_time
 from dinnerbell.domain.schedule import slot_schedule
-from dinnerbell.services import calls, offers
+from dinnerbell.services import calls, offers, picks
 from dinnerbell.services import catalog as catalog_service
 from dinnerbell.services.assistant.acting import ToolRefusal, tool_actor
 from dinnerbell.services.assistant.candidates import Labeler, find_candidates
+from dinnerbell.services.assistant.runtime import AssistantConfig, available
+from dinnerbell.services.call_context import load
 from dinnerbell.services.clock import Clock
 from dinnerbell.services.errors import Forbidden, NotFound
 from dinnerbell.services.offers import OfferInput, Posted
@@ -78,6 +81,7 @@ NO_SUCH_DRAFT = "That draft is gone. Ask the assistant again."
 USED = "That draft was already confirmed or cancelled."
 EXPIRED = "That draft expired. Ask the assistant again for a new one."
 TURNED_OFF = "The assistant is turned off, so its drafts can't be confirmed."
+"""Also while the operator's key or flag is missing: the member can't tell those apart."""
 TOO_MANY = f"The member has {MAX_OPEN_DRAFTS} drafts waiting already. Ask them to confirm or cancel those first."
 NOT_A_CANDIDATE = (
     "That isn't one of this call's candidates in that mode. Call find_candidates, and draft only "
@@ -206,6 +210,45 @@ class OfferRequest:
     capacity: int
 
 
+async def _offer_plan(
+    db: AsyncSession,
+    actor: Member,
+    call: Event | None,
+    item: CatalogItem,
+    request: OfferRequest,
+    *,
+    today: date,
+    zone: ZoneInfo,
+    now: datetime,
+    drafting: bool,
+) -> OfferPlan:
+    """What posting the offer will do, by ``post_offer``'s own rules (FR-5). For a join, it
+    checks the place's pick as ``offers._attach`` does: refused, with the service's words, when
+    the call has it in the same mode or someone else added it, and otherwise taken over in the
+    offer's mode. ``drafting`` adds the refusal ``_attach`` gives a voter who isn't in; Confirm
+    leaves that to the service."""
+    outcome = offer_outcome(call, request.mode)
+    if call is None or outcome is not OfferOutcome.JOIN:
+        schedule = slot_schedule(await household_settings(db, actor.household_id), request.slot)
+        deadline = schedule.opens_at(request.day, zone) + schedule.response_window
+        scheduled = schedule.enabled and (request.day > today or now < deadline)
+        if call is None:
+            return OfferPlan(outcome, scheduled=scheduled)
+        return OfferPlan(outcome, call.id, call.run, call.state, scheduled=scheduled)
+    ctx = await load(db, call)
+    mine = ctx.response_of(actor.id)
+    if drafting and call.state is EventState.VOTING and (mine is None or not mine.is_in):
+        raise ToolRefusal(
+            f"Voting has started on that {request.slot.value} call and the member isn't in it, so an offer "
+            "can't join it."
+        )
+    candidate = Proposal(0, call.id, request.mode, 0, ProposalSource.MEMBER, item_id=item.id, proposed_by=actor.id)
+    existing = picks.picked(ctx, candidate)
+    if existing is not None and (existing.mode is request.mode or existing.proposed_by not in (None, actor.id)):
+        raise picks.already_a_pick(ctx, existing)
+    return OfferPlan(outcome, call.id, call.run, call.state, takes_over=existing.mode if existing else None)
+
+
 async def draft_offer(db: AsyncSession, actor: Member, key: str, request: OfferRequest, *, now: datetime) -> Draft:
     """An offer of an existing catalog item, never free text, checked now as ``post_offer``
     would check it, with what it will do to the slot's call that day (FR-5)."""
@@ -225,19 +268,9 @@ async def draft_offer(db: AsyncSession, actor: Member, key: str, request: OfferR
     moment = offer_time(request.day, at, zone=zone, today=today, now=now)
     capacity = check_capacity(request.capacity)
     call = await EventRepository(db).call_for(actor.household_id, request.slot, request.day)
-    outcome = offer_outcome(call, request.mode)
-    if outcome is OfferOutcome.JOIN and call is not None and call.state is EventState.VOTING:
-        mine = next(
-            (r for r in await ResponseRepository(db).for_event(actor.household_id, call.id) if r.member_id == actor.id),
-            None,
-        )
-        if mine is None or not mine.is_in:
-            raise ToolRefusal(
-                f"Voting has started on that {request.slot.value} call and the member isn't in it, so an offer "
-                "can't join it."
-            )
+    plan = await _offer_plan(db, actor, call, item, request, today=today, zone=zone, now=now, drafting=True)
     when = day_words(request.day, today)
-    lines = offer_lines(outcome, slot=request.slot, when=when, state=call.state if call else None, mode=request.mode)
+    lines = offer_lines(plan, slot=request.slot, when=when, mode=request.mode, item=item.name)
     local = moment.astimezone(zone)
     payload = {
         "item_id": item.id,
@@ -246,10 +279,13 @@ async def draft_offer(db: AsyncSession, actor: Member, key: str, request: OfferR
         "day": request.day.isoformat(),
         "at": f"{local:%H:%M}",
         "capacity": capacity,
-        "outcome": outcome.value,
+        "plan": plan.to_json(),
     }
-    clock = f"{local:%I:%M %p}".lstrip("0")
-    title = f"Offer to {request.mode.verb} {item.name}, {request.slot.value} {when} at {clock}"
+    if plan.outcome is OfferOutcome.JOIN:  # a pick on the call: its time and servings are the call's
+        title = f"Offer to {request.mode.verb} {item.name} for {when}'s {request.slot.value} call"
+    else:
+        clock = f"{local:%I:%M %p}".lstrip("0")
+        title = f"Offer to {request.mode.verb} {item.name}, {request.slot.value} {when} at {clock}"
     return await _store(db, actor, key, DraftKind.OFFER, payload, title, lines, event=call, now=now)
 
 
@@ -339,15 +375,18 @@ async def _use(db: AsyncSession, draft: Draft, member: Member, now: datetime) ->
         raise DraftUnavailable(USED)  # pragma: no cover - use_draft found it unusable
 
 
-async def confirm_draft(db: AsyncSession, clock: Clock, member: Member, draft_id: int) -> Confirmed:
+async def confirm_draft(
+    db: AsyncSession, clock: Clock, config: AssistantConfig, member: Member, draft_id: int
+) -> Confirmed:
     """**Confirm** on ``member``'s draft: use it, and run the service the form or button runs,
     as ``tool_actor(member)``, in one transaction. A refusal from the service comes through
     unchanged and leaves the draft unused. Raises NotFound for a draft that isn't the member's,
-    and ``DraftUnavailable`` for one used, expired, or with the assistant turned off."""
+    and ``DraftUnavailable`` for one used or expired, or while the assistant isn't available:
+    the key, the flag, and Admin's switch must all be set (``runtime.available``)."""
     now = clock()
     draft = await _mine(db, member, draft_id)
     _check_usable(draft, now)
-    if not assistant_settings(await household_settings(db, member.household_id)).enabled:
+    if not await available(db, config, member):
         raise DraftUnavailable(TURNED_OFF)
     actor = tool_actor(member)
     if draft.kind is DraftKind.PROPOSAL:
@@ -389,18 +428,19 @@ async def _confirm_offer(db: AsyncSession, actor: Member, draft: Draft, now: dat
         capacity=int(payload["capacity"]),
         item_id=int(payload["item_id"]),
     )
-    promised = OfferOutcome(str(payload["outcome"]))
+    promised = OfferPlan.from_json(payload["plan"])
+    request = OfferRequest("", mode, data.slot, data.day, data.at, data.capacity)
 
     async def expect(call: Event | None, path: OfferPath) -> None:
-        """Still what the card said, word for word, on the same run of the same call; then use
-        the draft. A call that moved from answers to voting reads differently, so it's stale too."""
-        now_outcome = offer_outcome(call, mode)
-        same_call = (call.id, call.run) == (draft.event_id, draft.run) if call is not None else draft.event_id is None
-        today, _ = await _today(db, actor.household_id, now)
-        line = offer_lines(
-            now_outcome, slot=data.slot, when=day_words(data.day, today), state=call.state if call else None, mode=mode
-        )[0]
-        if now_outcome is not promised or not same_call or line != draft.lines[0]:
+        """Still what the card said: the same outcome on the same run of the same call, in the
+        same state, taking over the same pick. Then use the draft."""
+        today, zone = await _today(db, actor.household_id, now)
+        item = await CatalogRepository(db).item(actor.household_id, int(payload["item_id"]))
+        if item is None:  # pragma: no cover - post_offer refused it already
+            raise NotFound(NO_SUCH_DRAFT)
+        plan = await _offer_plan(db, actor, call, item, request, today=today, zone=zone, now=now, drafting=False)
+        if not promised.same(plan):
+            line = offer_lines(plan, slot=data.slot, when=day_words(data.day, today), mode=mode, item=item.name)[0]
             raise EventRuleViolation(
                 f"That changed since the draft. Now: {line} Ask the assistant for a new draft.", code="stale_draft"
             )

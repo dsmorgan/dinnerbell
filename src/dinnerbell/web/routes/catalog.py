@@ -36,6 +36,7 @@ from dinnerbell.domain.catalog_import import ImportPlan
 from dinnerbell.domain.pages import page_of
 from dinnerbell.services import catalog as catalog_service
 from dinnerbell.services import feedback as feedback_service
+from dinnerbell.services.assistant.drafts import CatalogReady
 from dinnerbell.services.variety import household_today
 from dinnerbell.web.auth import AdminCSRFChecked, Context, CSRFChecked, Database, Principal, SignedIn
 from dinnerbell.web.context import AppContext, app_context
@@ -482,6 +483,35 @@ def _normalized(text: str) -> str:
     return text.replace("\r\n", "\n").replace("\r", "\n")
 
 
+ADD_ONLY = "true"
+"""The signed preview token's add-only mark (``"add_only": "true"``)."""
+
+
+def _preview_token(context: AppContext, *, sha: str, fingerprint: str, member_id: int, add_only: bool) -> str:
+    """The signed proof of which file and plan the person previewed. ``add_only`` marks an
+    import from an assistant's catalog draft (spec 6.14): apply re-plans it add-only, so it never
+    changes an item the catalog has. A token without the mark imports as it always has."""
+    payload: dict[str, str | None] = {"sha": sha, "plan": fingerprint, "member": str(member_id)}
+    if add_only:
+        payload["add_only"] = ADD_ONLY
+    return _preview_signer(context).dumps(payload)
+
+
+def draft_import_token(context: AppContext, ready: CatalogReady) -> str:
+    """The preview token for an assistant's catalog draft, from its Confirm: the one place a
+    draft's token is made, always add-only."""
+    return _preview_token(
+        context, sha=ready.sha256, fingerprint=ready.fingerprint, member_id=ready.member_id, add_only=True
+    )
+
+
+async def draft_import_page(
+    request: Request, context: AppContext, principal: Principal, ready: CatalogReady
+) -> Response:
+    """The import preview for an assistant's catalog draft, for the entry point Confirm opens."""
+    return await _import_page(request, context, principal, content=ready.content, plan=ready.plan, add_only=True)
+
+
 async def _import_page(
     request: Request,
     context: AppContext,
@@ -491,16 +521,18 @@ async def _import_page(
     plan: ImportPlan | None = None,
     notice: str | None = None,
     status_code: int = 200,
+    add_only: bool = False,
 ) -> Response:
     token = None
     if plan is not None and plan.ok and plan.has_changes:
-        token = _preview_signer(context).dumps(
-            {
-                "sha": catalog_service.content_digest(content),
-                "plan": plan.fingerprint(),
-                "member": str(principal.member.id),
-            }
-        )
+        sha, fingerprint = catalog_service.content_digest(content), plan.fingerprint()
+        if add_only:
+            ready = CatalogReady(content, plan, sha, fingerprint, principal.member.id)
+            token = draft_import_token(context, ready)
+        else:
+            token = _preview_token(
+                context, sha=sha, fingerprint=fingerprint, member_id=principal.member.id, add_only=False
+            )
     return await render(
         request,
         "catalog_import.html",
@@ -509,6 +541,7 @@ async def _import_page(
             "plan": plan,
             "token": token,
             "notice": notice,
+            "add_only": add_only,
             "sorted_modes": sorted_modes,
             "max_megabytes": MAX_FILE_BYTES // 1_000_000,
             "max_file_bytes": MAX_FILE_BYTES,
@@ -531,6 +564,9 @@ class ImportPost:
     content: str
     upload: bytes | None
     token: str
+    add_only: bool = False
+    """The page was an assistant draft's add-only preview. Only ever narrows an import: without
+    it, the form is the ordinary import, which any member may use."""
 
 
 async def import_post(request: Request, principal: SignedIn) -> AsyncIterator[ImportPost]:
@@ -544,6 +580,7 @@ async def import_post(request: Request, principal: SignedIn) -> AsyncIterator[Im
     form = await request.form(max_files=1, max_fields=8, max_part_size=IMPORT_PART_BYTES)
     try:
         content, token, upload = form.get("content"), form.get("token"), form.get("upload")
+        add_only = form.get("add_only") == "1"
         data = None
         if isinstance(upload, StarletteUploadFile) and upload.filename:
             data = await upload.read(MAX_FILE_BYTES + 1)
@@ -551,6 +588,7 @@ async def import_post(request: Request, principal: SignedIn) -> AsyncIterator[Im
             content=_normalized(content) if isinstance(content, str) else "",
             upload=data,
             token=token if isinstance(token, str) and len(token) <= 1000 else "",
+            add_only=add_only,
         )
     finally:
         await form.close()
@@ -578,9 +616,15 @@ async def preview_import(
             content = ""
     elif not content.strip():
         return await _import_page(request, context, principal, notice="Paste a catalog file or choose one to upload.")
-    plan = await catalog_service.preview_import(db, principal.household.id, source)
+    plan = await catalog_service.preview_import(db, principal.household.id, source, add_only=form.add_only)
     return await _import_page(
-        request, context, principal, content=content, plan=plan, status_code=200 if plan.ok else 400
+        request,
+        context,
+        principal,
+        content=content,
+        plan=plan,
+        status_code=200 if plan.ok else 400,
+        add_only=form.add_only,
     )
 
 
@@ -590,19 +634,22 @@ async def apply_import(
 ) -> Response:
     """Apply what the person previewed. The browser re-sends the file; the signed token proves
     which file and plan they saw. The import is re-planned against the current catalog and
-    refused if the outcome would differ from the preview."""
+    refused if the outcome would differ from the preview. An add-only token, or an add-only page
+    whose token expired, re-plans and re-previews add-only, so a draft's import never changes an
+    item the catalog has."""
     content = form.content
     signed = _preview_signer(context).loads(form.token)
+    add_only = form.add_only or (signed is not None and signed.get("add_only") == ADD_ONLY)
     seen = (
         signed is not None
         and signed.get("member") == str(principal.member.id)
         and signed.get("sha") == catalog_service.content_digest(content)
     )
     if signed is None or not seen:
-        plan = await catalog_service.preview_import(db, principal.household.id, content)
+        plan = await catalog_service.preview_import(db, principal.household.id, content, add_only=add_only)
         notice = "The file changed or the preview expired. Check this preview, then apply again."
         return await _import_page(
-            request, context, principal, content=content, plan=plan, notice=notice, status_code=409
+            request, context, principal, content=content, plan=plan, notice=notice, status_code=409, add_only=add_only
         )
     try:
         plan = await catalog_service.apply_import(
@@ -612,12 +659,22 @@ async def apply_import(
             content,
             now=context.clock(),
             expected_fingerprint=signed.get("plan"),
+            add_only=add_only,
         )
     except catalog_service.ImportRejected as exc:
-        return await _import_page(request, context, principal, content=content, plan=exc.plan, status_code=400)
+        return await _import_page(
+            request, context, principal, content=content, plan=exc.plan, status_code=400, add_only=add_only
+        )
     except catalog_service.ImportChanged as exc:
         return await _import_page(
-            request, context, principal, content=content, plan=exc.plan, notice=str(exc), status_code=409
+            request,
+            context,
+            principal,
+            content=content,
+            plan=exc.plan,
+            notice=str(exc),
+            status_code=409,
+            add_only=add_only,
         )
     summary = plan.summary()
     return local_redirect(

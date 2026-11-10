@@ -736,12 +736,14 @@ class AssistantDraftRow(Base):
     ``expires_at``; ``used_at`` is set by a Confirm or a Cancel. ``event_id`` and ``run`` are the
     call it was made against, where there is one: a plain column, so discarding a call never
     waits on a draft, and a draft whose call is gone gets the service's own refusal. The
-    scheduler deletes drafts once they expire."""
+    scheduler deletes drafts once they expire. IDs are AUTOINCREMENT, never reused once the
+    purge empties the table, so an old Slack card or web tab can never confirm a newer draft."""
 
     __tablename__ = "assistant_draft"
     __table_args__ = (
         CheckConstraint("kind IN ('proposal', 'offer', 'catalog')", name="kind"),
         Index("ix_assistant_draft_household_expires", "household_id", "expires_at"),
+        {"sqlite_autoincrement": True},
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

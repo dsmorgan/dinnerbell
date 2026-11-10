@@ -130,18 +130,71 @@ def offer_outcome(call: Event | None, mode: Mode) -> OfferOutcome:
     return OfferOutcome.ALONE
 
 
-def offer_lines(
-    outcome: OfferOutcome, *, slot: Slot, when: str, state: EventState | None, mode: Mode
-) -> tuple[str, ...]:
+@dataclass(frozen=True, slots=True)
+class OfferPlan:
+    """What an offer will do, as Confirm checks it again (``offers.post_offer``'s ``expect``):
+    the outcome, the call's ID, run, and state, and, for a join that takes over the place's
+    pick in another mode (``offers._attach``), that pick's mode. ``scheduled`` says whether the
+    slot has a standing call that day, for a hold."""
+
+    outcome: OfferOutcome
+    call_id: int | None = None
+    run: int | None = None
+    state: EventState | None = None
+    takes_over: Mode | None = None
+    scheduled: bool = True
+
+    def to_json(self) -> dict[str, Any]:
+        return {
+            "outcome": self.outcome.value,
+            "call_id": self.call_id,
+            "run": self.run,
+            "state": self.state.value if self.state else None,
+            "takes_over": self.takes_over.value if self.takes_over else None,
+            "scheduled": self.scheduled,
+        }
+
+    @classmethod
+    def from_json(cls, raw: Mapping[str, Any]) -> OfferPlan:
+        state, takes_over = raw.get("state"), raw.get("takes_over")
+        return cls(
+            outcome=OfferOutcome(str(raw["outcome"])),
+            call_id=raw.get("call_id"),
+            run=raw.get("run"),
+            state=EventState(str(state)) if state else None,
+            takes_over=Mode(str(takes_over)) if takes_over else None,
+            scheduled=bool(raw.get("scheduled", True)),
+        )
+
+    def same(self, other: OfferPlan) -> bool:
+        """Whether ``other`` does what this one said, ignoring ``scheduled``, which only words
+        a hold and can't change while it holds."""
+        return (self.outcome, self.call_id, self.run, self.state, self.takes_over) == (
+            other.outcome,
+            other.call_id,
+            other.run,
+            other.state,
+            other.takes_over,
+        )
+
+
+def offer_lines(plan: OfferPlan, *, slot: Slot, when: str, mode: Mode, item: str) -> tuple[str, ...]:
     """What confirming an offer does, one of four (spec 6.14, **Drafts**), then the role the
-    offerer takes. ``when`` is the day in words; ``state`` is the call's, for a join."""
-    if outcome is OfferOutcome.JOIN:
-        stage = "voting" if state is EventState.VOTING else "collecting answers"
+    offerer takes. ``when`` is the day in words, and ``item`` the item's name."""
+    if plan.outcome is OfferOutcome.JOIN and plan.takes_over is not None:
+        first = (
+            f"It changes {when}'s {slot.value} pick {item} from {plan.takes_over.label.lower()} to "
+            f"{mode.label.lower()}, and its votes stay."
+        )
+    elif plan.outcome is OfferOutcome.JOIN:
+        stage = "voting" if plan.state is EventState.VOTING else "collecting answers"
         first = f"It joins {when}'s {slot.value} call, which is {stage}, as a pick, and you're in."
-    elif outcome is OfferOutcome.REPLACE:
+    elif plan.outcome is OfferOutcome.REPLACE:
         first = f"It replaces {when}'s scheduled {slot.value} call, which won't open."
-    elif outcome is OfferOutcome.HOLD:
+    elif plan.outcome is OfferOutcome.HOLD and plan.scheduled:
         first = f"It keeps {when}'s {slot.value} call from opening while your offer is on."
+    elif plan.outcome is OfferOutcome.HOLD:
+        first = f"No one can start a {slot.value} call for {when} while your offer is on."
     else:
         first = "It's posted as an offer of its own."
     return (first, f"You'll {DOING[mode]}.")

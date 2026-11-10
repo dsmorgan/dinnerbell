@@ -55,6 +55,9 @@ NOT_VOTING = (
     "That call isn't voting yet, and candidates come only once voting opens. "
     "Tell the member to ask again then. Don't guess at what will fit."
 )
+CALL_ENDED = (
+    "That call is past voting, so there's nothing to propose for it. Say so, and don't guess at what would have fit."
+)
 NO_OPEN_CALL = "No call is open for answers or votes right now. Say so, and don't guess at one."
 STATE_WORDS = {EventState.COLLECTING: "collecting answers", EventState.VOTING: "voting"}
 ROLE_WORDS = (("cook", RoleOffer.COOK), ("pick up", RoleOffer.PICKUP), ("order", RoleOffer.ORDER))
@@ -149,16 +152,19 @@ def as_proposer(ctx: CallContext, actor: Member, now: datetime) -> CallContext:
 class Candidates:
     ctx: CallContext
     found: tuple[Candidate, ...]
-    """In name order."""
+    """The call's meal first, then other meals, each in name order."""
 
 
 async def find_candidates(
     db: AsyncSession, actor: Member, event: Event, narrowing: Narrowing, *, label: Labeler, now: datetime
 ) -> Candidates:
     """The candidates for ``event`` that ``actor`` could propose, narrowed by ``narrowing``.
-    Read-only. Raises ``ToolRefusal`` unless the call is voting."""
+    Read-only. Raises ``ToolRefusal`` unless the call is voting: one text for a call that
+    hasn't reached voting, another for one past it. Candidates for the call's meal come first,
+    then those usually had at other meals, each group in name order."""
     if event.kind is not EventKind.CALL or event.state is not EventState.VOTING:
-        raise ToolRefusal(NOT_VOTING)
+        early = event.state in {EventState.SCHEDULED, EventState.COLLECTING}
+        raise ToolRefusal(NOT_VOTING if early else CALL_ENDED)
     ctx = await load(db, event)
     if ctx.event.state is not EventState.VOTING:  # pragma: no cover - read again just now
         raise ToolRefusal(NOT_VOTING)
@@ -181,5 +187,5 @@ async def find_candidates(
         for item, modes in pairs.values():
             reasons = candidate_reasons(item, modes, clean, for_meal=for_meal)
             found.append(Candidate(item=item, modes=modes, reasons=reasons, for_meal=for_meal))
-    found.sort(key=lambda c: (name_key(c.item.name), c.item.id))
+    found.sort(key=lambda c: (not c.for_meal, name_key(c.item.name), c.item.id))
     return Candidates(ctx=ctx, found=tuple(found))
