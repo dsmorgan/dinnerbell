@@ -24,7 +24,7 @@ from dinnerbell.db.repositories import MemberRepository
 from dinnerbell.domain.assistant import AssistantSettings, web_key
 from dinnerbell.domain.members import Member, Role
 from dinnerbell.services import catalog as catalog_service
-from dinnerbell.services.assistant import admin, drafts, retention
+from dinnerbell.services.assistant import admin, drafts, history, retention
 from dinnerbell.services.assistant.drafts import CatalogReady
 from dinnerbell.services.assistant.runtime import AssistantConfig
 from dinnerbell.services.database import open_database
@@ -233,7 +233,36 @@ def test_only_a_confirmed_catalog_draft_of_the_members_is_ready(
 
     run(migrated, work)
     [row] = rows(migrated, AssistantDraftRow)
-    assert row.used_at is not None
+    assert row.used_at is not None and row.confirmed_at == row.used_at
+
+
+@pytest.mark.flag("assistant", on=True)
+def test_a_cancelled_catalog_draft_never_opens_the_import_even_with_a_signed_link(
+    client: TestClient, provider: FakeProvider, migrated: Settings, clock: FakeClock
+) -> None:
+    """``used_at`` is set by Cancel and by **Start over** as by Confirm. Only ``confirmed_at``
+    opens the import preview, so a link that names a cancelled draft, signed and fresh, is a 404
+    like any other, and its import changes nothing."""
+    sign_in(client, provider)
+    config = AssistantConfig.from_settings(migrated)
+
+    async def work(db: Any, alex: Member) -> tuple[int, int]:
+        await admin.update_assistant(db, config, alex, AssistantSettings(enabled=True), now=clock())
+        cancelled = await drafts.draft_catalog_items(db, alex, web_key(alex.id), DRAFTED, now=clock())
+        await drafts.cancel_draft(db, clock, alex, cancelled.id)
+        started_over = await drafts.draft_catalog_items(db, alex, web_key(alex.id), NOODLE_BAR, now=clock())
+        assert await history.start_over(db, config, alex, clock()) == 1
+        for draft_id in (cancelled.id, started_over.id):
+            with pytest.raises(NotFound):
+                await drafts.ready_for_import(db, config, alex, draft_id, now=clock())
+        return cancelled.id, alex.id
+
+    draft_id, member_id = run(migrated, work)
+    for used in (draft_id, draft_id + 1):
+        assert client.get(path(draft_import_url(migrated, clock, used, member_id))).status_code == 404
+    drafts_now = rows(migrated, AssistantDraftRow)
+    assert {(r.used_at is not None, r.confirmed_at) for r in drafts_now} == {(True, None)}
+    assert {r.name for r in rows(migrated, CatalogItemRow)}.isdisjoint({"Noodle Bar", "Dumpling House"})
 
 
 def drafted_content(ready: CatalogReady) -> str:

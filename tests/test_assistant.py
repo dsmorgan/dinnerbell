@@ -16,6 +16,7 @@ import pytest
 from sqlalchemy import select
 
 from dinnerbell.config import Settings
+from dinnerbell.db.assistant import AssistantRepository
 from dinnerbell.db.models import AssistantConversationRow, AssistantUsageRow
 from dinnerbell.db.repositories import MemberRepository
 from dinnerbell.domain.assistant import (
@@ -40,6 +41,8 @@ from dinnerbell.services.assistant.conversation import (
     AT_CAP,
     FAILED,
     MAX_MODEL_CALLS,
+    MESSAGE_SECONDS,
+    OUT_OF_TIME,
     REFUSED,
     TOO_LONG_ANSWER,
     TOO_LONG_MESSAGE,
@@ -55,6 +58,7 @@ from dinnerbell.services.assistant.runtime import AssistantConfig, available
 from dinnerbell.services.database import Database, open_database
 from dinnerbell.services.errors import Forbidden, NotFound
 from dinnerbell.services.preferences import set_my_preference
+from dinnerbell.web.routes.assistant_page import SEND_TIMEOUT_MS
 from tests.support.calls import House, furnish, make_house
 from tests.support.clock import FakeClock
 from tests.support.fake_model import FakeModel, answer, failure, stopped, tool_call, usage
@@ -144,6 +148,10 @@ async def test_a_private_only_tool_is_offered_only_in_private(monkeypatch: pytes
     monkeypatch.setattr(tools, "TOOLS", (tools.LOOK_UP_CATALOG_ITEMS, private))
     assert [t.name for t in tools.tools_for(True)] == [LOOKUP, "my_preferences"]
     assert [t.name for t in tools.tools_for(False)] == [LOOKUP]
+
+
+def test_the_deadline_comes_before_the_web_page_gives_up() -> None:
+    assert MESSAGE_SECONDS * 1000 < SEND_TIMEOUT_MS
 
 
 @pytest.mark.flag("assistant", on=True)
@@ -315,9 +323,9 @@ class TestAssistantOn:
         await switch(house, helper)
 
         class TurnsOff(FakeModel):
-            async def create(self, request: Any) -> Any:
+            async def create(self, request: Any, *, time_left: float) -> Any:
                 await switch(house, helper, enabled=False)
-                return await super().create(request)
+                return await super().create(request, time_left=time_left)
 
         off = TurnsOff(script=[_lookup("", "")])
         reply = await ask(house, replace(helper, client=off), "Sam", "Everything?")
@@ -363,7 +371,7 @@ class TestAssistantOn:
         kim = house["Kim"]
 
         class Swaps(FakeModel):
-            async def create(self, request: Any) -> Any:
+            async def create(self, request: Any, *, time_left: float) -> Any:
                 # While Sam waits, the key becomes a private conversation of Kim's.
                 async with house.sessionmaker() as db:
                     from dinnerbell.db.assistant import AssistantRepository
@@ -379,7 +387,7 @@ class TestAssistantOn:
                     )
                     await AssistantRepository(db).save_conversation(house.household.id, taken, house.clock())
                     await db.commit()
-                return await super().create(request)
+                return await super().create(request, time_left=time_left)
 
         reply = await ask(house, replace(helper, client=Swaps()), "Sam", "Sam's question", key=thread, private=False)
         assert reply == Reply("OK")
@@ -420,7 +428,7 @@ class TestAssistantOn:
         ]
 
         class Real(FakeModel):
-            async def create(self, request: Any) -> Any:
+            async def create(self, request: Any, *, time_left: float) -> Any:
                 self.requests.append(json.loads(json.dumps(request)))
                 return to_reply(messages[len(self.requests) - 1], requested=request["model"])
 
@@ -452,9 +460,9 @@ class TestAssistantOn:
         changes = iter([{"enabled": False}, {"conversation_hours": 0}])
 
         class Changes(FakeModel):
-            async def create(self, request: Any) -> Any:
+            async def create(self, request: Any, *, time_left: float) -> Any:
                 await switch(house, helper, **next(changes))  # the admin saves while the model answers
-                return await super().create(request)
+                return await super().create(request, time_left=time_left)
 
         changing = replace(helper, client=Changes())
         await ask(house, changing, "Sam", "First")  # switched off meanwhile: nothing kept
@@ -473,7 +481,7 @@ class TestAssistantOn:
         kim = house["Kim"]
 
         class Swaps(FakeModel):
-            async def create(self, request: Any) -> Any:
+            async def create(self, request: Any, *, time_left: float) -> Any:
                 async with house.sessionmaker() as db:
                     from dinnerbell.db.assistant import AssistantRepository
                     from dinnerbell.domain.assistant import Conversation, Pseudonyms
@@ -481,7 +489,7 @@ class TestAssistantOn:
                     taken = Conversation(thread, True, kim.id, Pseudonyms({kim.id: 1}), (), house.clock())
                     await AssistantRepository(db).save_conversation(house.household.id, taken, house.clock())
                     await db.commit()
-                return await super().create(request)
+                return await super().create(request, time_left=time_left)
 
         await ask(house, replace(helper, client=Swaps()), "Sam", "Hi", key=thread, private=False)
         [row] = await conversations(house)
@@ -519,7 +527,7 @@ class TestAssistantOn:
         started = asyncio.Event()
 
         class Hangs(FakeModel):
-            async def create(self, request: Any) -> Any:
+            async def create(self, request: Any, *, time_left: float) -> Any:
                 started.set()
                 await asyncio.Event().wait()  # until cancelled
 
@@ -534,6 +542,67 @@ class TestAssistantOn:
             r.levelname == "ERROR" and r.getMessage() == "assistant model call cancelled" for r in caplog.records
         )
 
+    async def test_each_call_gets_what_is_left_of_the_message_and_none_starts_after_it(
+        self, house: House, helper: Assistant
+    ) -> None:
+        """A message has ``MESSAGE_SECONDS`` in all, not six calls' worth: each call is given
+        what's left, and once it's gone the next call is never reserved or made. Nothing of the
+        message is kept, and every call made stays settled."""
+        await switch(house, helper)
+
+        class Slow(FakeModel):
+            async def create(self, request: Any, *, time_left: float) -> Any:
+                reply = await super().create(request, time_left=time_left)
+                house.clock.advance(timedelta(seconds=30))  # each call takes half a minute
+                return reply
+
+        slow = Slow(script=[_lookup("", "")] * MAX_MODEL_CALLS)
+        assert await ask(house, replace(helper, client=slow), "Sam", "Hello") == Reply(OUT_OF_TIME)
+        assert slow.time_left == [100.0, 70.0, 40.0, 10.0]
+        rows = await usage_rows(house)
+        assert len(rows) == 4 and {r.state for r in rows} == {"settled"}
+        assert await conversations(house) == []
+
+    async def test_a_call_still_running_at_the_deadline_is_cut_off_and_stays_reserved(
+        self, house: House, helper: Assistant, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        await switch(house, helper)
+        started = asyncio.Event()
+
+        class Hangs(FakeModel):
+            async def create(self, request: Any, *, time_left: float) -> Any:
+                if not self.requests:
+                    reply = await super().create(request, time_left=time_left)
+                    house.clock.advance(timedelta(seconds=MESSAGE_SECONDS) - timedelta(microseconds=1))
+                    return reply
+                self.time_left.append(time_left)
+                started.set()
+                await asyncio.Event().wait()  # never answers: only the deadline ends it
+                raise AssertionError("unreachable")
+
+        hangs = Hangs(script=[_lookup("", "")])
+        reply = await asyncio.wait_for(ask(house, replace(helper, client=hangs), "Sam", "Hello"), 10)
+        assert started.is_set() and hangs.time_left == [100.0, 0.000001]
+        assert reply == Reply(OUT_OF_TIME)
+        first, cut = await usage_rows(house)
+        assert first.state == cut.state == "settled" and cut.cost_micros > 0 and cut.input_tokens == 0
+        assert await conversations(house) == []
+        assert any(r.getMessage() == "assistant model call ran out of time" for r in caplog.records)
+
+    async def test_a_reservation_that_waited_past_the_deadline_is_released_uncalled(
+        self, house: House, helper: Assistant, model: FakeModel, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        await switch(house, helper)
+        real = AssistantRepository.reserve
+
+        async def slow_lock(self: AssistantRepository, *args: Any, **kwargs: Any) -> int:
+            house.clock.advance(timedelta(seconds=MESSAGE_SECONDS))  # as if it waited for the write lock
+            return await real(self, *args, **kwargs)
+
+        monkeypatch.setattr(AssistantRepository, "reserve", slow_lock)
+        assert await ask(house, helper, "Sam", "Hello") == Reply(OUT_OF_TIME)
+        assert model.requests == [] and await usage_rows(house) == []
+
     async def test_two_messages_at_once_with_room_for_one_reservation(self, house: House, helper: Assistant) -> None:
         await switch(house, helper, cap_dollars=1)
         request = build_request(
@@ -544,9 +613,9 @@ class TestAssistantOn:
         release = asyncio.Event()
 
         class Waits(FakeModel):
-            async def create(self, request: Any) -> Any:
+            async def create(self, request: Any, *, time_left: float) -> Any:
                 await release.wait()  # holds its reservation until the other message is done
-                return await super().create(request)
+                return await super().create(request, time_left=time_left)
 
         held = replace(helper, client=Waits())
 
@@ -567,7 +636,7 @@ class TestAssistantOn:
         both = asyncio.Event()
 
         class Together(FakeModel):
-            async def create(self, request: Any) -> Any:
+            async def create(self, request: Any, *, time_left: float) -> Any:
                 self.requests.append(request)
                 if len(self.requests) == 2:
                     both.set()

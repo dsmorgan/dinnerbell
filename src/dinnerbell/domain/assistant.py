@@ -342,17 +342,19 @@ class Pseudonyms:
             merged = merged.with_member(member_id)
         return merged
 
-    def relabel(self, text: str, target: Pseudonyms) -> str:
+    def relabel(self, text: str, target: Pseudonyms, *, unknown: str | None = "a member") -> str:
         """``text`` written with this map's labels, rewritten with ``target``'s, in one pass, so
         a label that moved can't be rewritten twice. A label this map doesn't hold, such as one
-        the model invented or quoted, becomes "a member", so it can never later show a real
-        person's name."""
+        the model invented or quoted, becomes ``unknown``, "a member" by default, so it can never
+        later show a real person's name. None keeps it as written, as a member's own words are."""
         by_number = {number: member_id for member_id, number in self.numbers.items()}
 
         def swap(match: re.Match[str]) -> str:
             member_id = by_number.get(int(match.group(1)))
             label = target.label(member_id) if member_id is not None else None
-            return label or "a member"
+            if label is None and unknown is None:
+                return match.group(0)
+            return label or unknown or "a member"
 
         return _LABEL.sub(swap, text)
 

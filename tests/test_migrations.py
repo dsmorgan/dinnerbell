@@ -2528,3 +2528,30 @@ def test_0032_adds_the_assistant_drafts_table_and_downgrade_drops_it(settings: S
         assert set(inspect(engine).get_table_names()) >= M6_TABLES
     finally:
         engine.dispose()
+
+
+def test_0033_marks_no_earlier_draft_confirmed_and_downgrade_drops_it(settings: Settings) -> None:
+    """Up adds ``assistant_draft.confirmed_at``, empty for every draft saved before it, so none
+    of them opens an import link. Down drops it and changes no row."""
+    _upgrade_to(settings, "0032_assistant_drafts")
+    _populate_calls(settings)
+    _execute(
+        settings,
+        "INSERT INTO assistant_draft (household_id, member_id, conversation_key, kind, payload, title, lines, "
+        "created_at, expires_at, used_at) SELECT household_id, id, 'web:' || id, 'catalog', '{}', 'Add', '[]', "
+        ":t, :t, :t FROM member",
+    )
+    engine = create_sync_engine(settings.sync_database_url)
+    try:
+        with engine.connect() as c:
+            before = [tuple(r) for r in c.execute(text("SELECT * FROM assistant_draft ORDER BY id"))]
+        assert before
+        _upgrade_to(settings, "0033_assistant_draft_confirmed")
+        with engine.connect() as c:
+            after = [tuple(r) for r in c.execute(text("SELECT * FROM assistant_draft ORDER BY id"))]
+        assert [row[:-1] for row in after] == before and {row[-1] for row in after} == {None}
+        _downgrade_to(settings, "0032_assistant_drafts")
+        with engine.connect() as c:
+            assert [tuple(r) for r in c.execute(text("SELECT * FROM assistant_draft ORDER BY id"))] == before
+    finally:
+        engine.dispose()

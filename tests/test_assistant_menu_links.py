@@ -548,10 +548,10 @@ async def test_at_the_cap_it_refuses_before_fetching(
     house: House, helper: Assistant, model: FakeModel, fetch: FakeFetch
 ) -> None:
     class SpendsFirst(FakeModel):
-        async def create(self, request: Any) -> Any:
+        async def create(self, request: Any, *, time_left: float) -> Any:
             if not self.requests:
                 await spend_to_cap(house)
-            return await super().create(request)
+            return await super().create(request, time_left=time_left)
 
     spends = SpendsFirst(script=[tool_call("draft_catalog_from_link", link())])
     reply = await ask(house, replace(helper, client=spends))
@@ -652,12 +652,12 @@ async def test_the_switch_turned_off_meanwhile_stops_the_drafting_call(
     house: House, helper: Assistant, fetch: FakeFetch
 ) -> None:
     class TurnsOff(FakeModel):
-        async def create(self, request: Any) -> Any:
+        async def create(self, request: Any, *, time_left: float) -> Any:
             async with house.sessionmaker() as db:
                 await admin.update_assistant(
                     db, helper.config, house["Alex"], AssistantSettings(enabled=False), now=house.clock()
                 )
-            return await super().create(request)
+            return await super().create(request, time_left=time_left)
 
     turns_off = TurnsOff(script=[tool_call("draft_catalog_from_link", link())])
     reply = await ask(house, replace(helper, client=turns_off))
@@ -788,10 +788,10 @@ async def test_before_the_fetch_the_cap_is_checked_for_a_full_page(
     assert room + first + reserved("") <= 5_000_000
 
     class SpendsFirst(FakeModel):
-        async def create(self, request: Any) -> Any:
+        async def create(self, request: Any, *, time_left: float) -> Any:
             if not self.requests:
                 await spend_to_cap(house, room)
-            return await super().create(request)
+            return await super().create(request, time_left=time_left)
 
     spends = SpendsFirst(script=[tool_call("draft_catalog_from_link", link()), answer("At the cap.")])
     reply = await ask(house, replace(helper, client=spends))

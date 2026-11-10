@@ -733,7 +733,8 @@ class AssistantDraftRow(Base):
     """A change the assistant drafted for one member (spec 6.14, **Drafts**): a proposal, an
     offer, or catalog items. ``payload`` holds what the service needs; ``title`` and ``lines``
     say what **Confirm** does, as the member saw it. Only ``member_id`` confirms it, once, before
-    ``expires_at``; ``used_at`` is set by a Confirm or a Cancel. ``event_id`` and ``run`` are the
+    ``expires_at``; ``used_at`` is set by a Confirm or a Cancel, and ``confirmed_at`` by a Confirm
+    only. ``event_id`` and ``run`` are the
     call it was made against, where there is one: a plain column, so discarding a call never
     waits on a draft, and a draft whose call is gone gets the service's own refusal. The
     scheduler deletes drafts once they expire. IDs are AUTOINCREMENT, never reused once the
@@ -759,3 +760,4 @@ class AssistantDraftRow(Base):
     created_at: Mapped[datetime] = mapped_column(UTCDateTime())
     expires_at: Mapped[datetime] = mapped_column(UTCDateTime())
     used_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    confirmed_at: Mapped[datetime | None] = mapped_column(UTCDateTime())

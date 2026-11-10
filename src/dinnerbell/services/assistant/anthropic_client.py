@@ -35,10 +35,14 @@ class AnthropicModelClient:
             api_key=api_key.get_secret_value(), max_retries=0, timeout=TIMEOUT_SECONDS, http_client=http_client
         )
 
-    async def create(self, request: Mapping[str, Any]) -> ModelReply:
+    async def create(self, request: Mapping[str, Any], *, time_left: float) -> ModelReply:
+        """``time_left`` bounds each connection and read of this request, as ``TIMEOUT_SECONDS``
+        does, but never past the message's deadline. The SDK's timeout bounds each phase, not
+        the whole stream: ``conversation`` cancels the call when the deadline passes."""
         opened = False
         try:
-            async with self._client.beta.messages.stream(**request) as stream:
+            limit = max(0.0, min(time_left, TIMEOUT_SECONDS))
+            async with self._client.beta.messages.stream(**request, timeout=limit) as stream:
                 opened = True  # from here the request is running, and may bill
                 message = await stream.get_final_message()
         except anthropic.APIStatusError as exc:

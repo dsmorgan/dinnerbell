@@ -45,13 +45,16 @@ def stopped(reason: str, *blocks: Mapping[str, Any]) -> ModelReply:
 @dataclass
 class FakeModel:
     """Answers each request with the next item of ``script`` (a reply, or an exception to
-    raise), then with ``answer("OK")``."""
+    raise), then with ``answer("OK")``. ``time_left`` records each call's ``time_left``: the
+    seconds the message had left."""
 
     script: list[ModelReply | Exception] = field(default_factory=list)
     requests: list[dict[str, Any]] = field(default_factory=list)
+    time_left: list[float] = field(default_factory=list)
 
-    async def create(self, request: Mapping[str, Any]) -> ModelReply:
+    async def create(self, request: Mapping[str, Any], *, time_left: float) -> ModelReply:
         self.requests.append(copy.deepcopy(dict(request)))
+        self.time_left.append(time_left)
         if not self.script:
             return answer("OK")
         step = self.script.pop(0)

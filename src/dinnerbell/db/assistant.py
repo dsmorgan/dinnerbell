@@ -44,6 +44,7 @@ def _draft(row: AssistantDraftRow) -> Draft:
         event_id=row.event_id,
         run=row.run,
         used_at=row.used_at,
+        confirmed_at=row.confirmed_at,
     )
 
 
@@ -242,12 +243,22 @@ class AssistantRepository:
         return int(found or 0)
 
     async def use_draft(
-        self, household_id: int, draft_id: int, member_id: int, now: datetime, *, keep_until: datetime | None = None
+        self,
+        household_id: int,
+        draft_id: int,
+        member_id: int,
+        now: datetime,
+        *,
+        confirmed: bool = False,
+        keep_until: datetime | None = None,
     ) -> bool:
-        """Mark the draft used, if it's ``member_id``'s, unused, and unexpired. Returns whether it
-        was: of two at once, only the first finds it unused, since SQLite has one writer.
-        ``keep_until`` moves its expiry, so the purge keeps a used draft that long."""
+        """Mark the draft used, if it's ``member_id``'s, unused, and unexpired, and confirmed too
+        when ``confirmed`` (a Cancel isn't). Returns whether it was: of two at once, only the first
+        finds it unused, since SQLite has one writer. ``keep_until`` moves its expiry, so the
+        purge keeps a used draft that long."""
         values: dict[str, datetime] = {"used_at": now}
+        if confirmed:
+            values["confirmed_at"] = now
         if keep_until is not None:
             values["expires_at"] = keep_until
         result = await self._session.execute(

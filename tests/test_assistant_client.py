@@ -15,7 +15,12 @@ from anthropic.types.beta import BetaMessage
 from pydantic import SecretStr
 
 from dinnerbell.domain.assistant import TokenUsage
-from dinnerbell.services.assistant.anthropic_client import AnthropicModelClient, echoed_content, to_reply
+from dinnerbell.services.assistant.anthropic_client import (
+    TIMEOUT_SECONDS,
+    AnthropicModelClient,
+    echoed_content,
+    to_reply,
+)
 from dinnerbell.services.assistant.client import ModelCallFailed
 from dinnerbell.services.assistant.conversation import build_request
 from dinnerbell.services.assistant.tools import TOOLS
@@ -95,10 +100,11 @@ async def test_it_streams_the_request_once_with_the_fallback_beta() -> None:
         )
 
     client = client_for(handler)
-    reply = await client.create(REQUEST)
+    reply = await client.create(REQUEST, time_left=42.0)
     await client.close()
     [sent] = seen
     assert sent.url.path == "/v1/messages"
+    assert sent.extensions["timeout"]["read"] == 42.0  # the message's deadline, left for this call
     assert KEY in sent.headers.get("x-api-key", "") + sent.headers.get("authorization", "")
     assert "server-side-fallback-2026-07-01" in sent.headers["anthropic-beta"]
     body = json.loads(sent.content)
@@ -138,7 +144,7 @@ async def test_a_mid_stream_fallback_reports_each_attempt_and_echoes_the_partial
             )
         )
 
-    reply = await client_for(handler).create(REQUEST)
+    reply = await client_for(handler).create(REQUEST, time_left=TIMEOUT_SECONDS)
     assert reply.content == ({"type": "text", "text": "Taco Spot is "}, {"type": "text", "text": "open late."})
     assert reply.usage == (
         TokenUsage("claude-sonnet-5-5", 7, 2),  # names no model: the costlier of the two, here the requested
@@ -225,7 +231,7 @@ async def test_an_error_answer_is_billed_only_when_it_may_have_run(status: int, 
         return httpx2.Response(status, json=body, headers={"request-id": "req_test_123"})
 
     with pytest.raises(ModelCallFailed) as failed:
-        await client_for(handler).create(REQUEST)
+        await client_for(handler).create(REQUEST, time_left=TIMEOUT_SECONDS)
     assert failed.value.maybe_billed is billed
     assert failed.value.status == status and failed.value.request_id == "req_test_123"
     assert failed.value.log_fields()["anthropic_request_id"] == "req_test_123"
@@ -241,7 +247,7 @@ async def test_an_error_mid_stream_may_have_been_billed() -> None:
         return streamed(broken)
 
     with pytest.raises(ModelCallFailed) as failed:
-        await client_for(handler).create(REQUEST)
+        await client_for(handler).create(REQUEST, time_left=TIMEOUT_SECONDS)
     assert failed.value.maybe_billed is True
 
 
@@ -250,7 +256,7 @@ async def test_a_dropped_connection_may_have_been_billed() -> None:
         raise httpx2.ConnectError("gone", request=request)
 
     with pytest.raises(ModelCallFailed) as failed:
-        await client_for(handler).create(REQUEST)
+        await client_for(handler).create(REQUEST, time_left=TIMEOUT_SECONDS)
     assert failed.value.maybe_billed is True and failed.value.error_type == "APIConnectionError"
 
 
@@ -266,5 +272,19 @@ async def test_a_reply_that_cant_be_read_may_have_been_billed(monkeypatch: pytes
         return streamed(sse([], start_usage={"input_tokens": 1, "output_tokens": 1}, end_usage={"output_tokens": 1}))
 
     with pytest.raises(ModelCallFailed) as failed:
-        await client_for(handler).create(REQUEST)
+        await client_for(handler).create(REQUEST, time_left=TIMEOUT_SECONDS)
     assert failed.value.maybe_billed is True and failed.value.error_type == "unreadable reply"
+
+
+async def test_a_calls_timeout_never_passes_the_clients_own() -> None:
+    seen: list[httpx2.Request] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        seen.append(request)
+        usage = {"input_tokens": 1, "output_tokens": 1}
+        return streamed(sse([{"type": "text", "text": "Hi."}], start_usage=usage, end_usage={"output_tokens": 1}))
+
+    client = client_for(handler)
+    await client.create(REQUEST, time_left=TIMEOUT_SECONDS * 10)
+    await client.close()
+    assert [r.extensions["timeout"]["read"] for r in seen] == [TIMEOUT_SECONDS]
