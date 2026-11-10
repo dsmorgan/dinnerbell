@@ -369,6 +369,24 @@ class OutboxRepository:
             return None  # no message, or one NullChannel only pretended to post
         return MessageRef(channel_id=found[0], message_id=found[1])
 
+    async def event_for_message(self, household_id: int, ref: MessageRef) -> int | None:
+        """The event whose delivered post landed at ``ref``, or None: not a Dinnerbell post, a
+        post about no event, or one detached from a discarded call."""
+        found: int | None = await self._session.scalar(
+            select(OutboxRow.event_id)
+            .where(
+                OutboxRow.household_id == household_id,
+                OutboxRow.ref_channel == ref.channel_id,
+                OutboxRow.ref_message == ref.message_id,
+                OutboxRow.kind.not_in(UPDATE_KINDS),
+                OutboxRow.delivered_at.is_not(None),
+                OutboxRow.event_id.is_not(None),
+            )
+            .order_by(OutboxRow.id.desc())
+            .limit(1)
+        )
+        return found
+
     async def backlog(self) -> tuple[int, int]:
         """(rows waiting for delivery, rows that failed for good)."""
         waiting = await self._session.scalar(select(func.count()).select_from(OutboxRow).where(_pending()))
