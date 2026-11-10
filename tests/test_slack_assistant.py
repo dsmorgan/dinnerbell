@@ -479,7 +479,7 @@ def test_normal_text_keeps_its_dots(text: str) -> None:
 
 ACUTE = "\u0301"  # a combining mark
 BYPASSES = [
-    (f"evil{ACUTE}.example", f"evil{ACUTE}[.]example"),
+    (f"evil{ACUTE}.example", "evi\u013a[.]example"),  # NFKC composes the mark onto its letter
     ("evil\u200b.example", "evil[.]example"),  # a zero-width space before the dot
     ("evil.\u00adexample", "evil[.]example"),  # a soft hyphen after it
     (f"evil.{ACUTE}example", f"evil[.]{ACUTE}example"),  # a mark after the dot
@@ -493,6 +493,11 @@ BYPASSES = [
     ("e.g.evil", "e[.]g[.]evil"),  # not a whole token, so not kept
     ("xe.g. tacos", "xe[.]g. tacos"),
     (f"e.g.{ACUTE}evil", f"e[.]g[.]{ACUTE}evil"),
+    ("evil.\u24d4\u24e7\u24d0\u24dc\u24df\u24db\u24d4", "evil[.]example"),  # enclosed alphanumerics
+    ("evil.\uff45\uff58\uff41\uff4d\uff50\uff4c\uff45", "evil[.]example"),  # fullwidth letters
+    ("evil.\ufb01sh", "evil[.]fish"),  # the fi ligature
+    ("evil.\u2102om", "evil[.]Com"),  # a letterlike symbol
+    ("\uff48\uff54\uff54\uff50\uff53\uff1a\uff0f\uff0fevil\uff0eexample", "hxxps[:]//evil[.]example"),
 ]
 
 
@@ -549,6 +554,15 @@ def test_no_reply_keeps_a_dot_before_a_letter(seed: int) -> None:
         "*",
         "/",
         ":",
+        "\u24d4",  # So: an enclosed letter
+        "\u2167",  # Nl: a Roman numeral
+        "\u00b2",  # No: a superscript digit
+        "\u2460",  # No: a circled digit
+        "\uff45",  # a fullwidth letter
+        "\uff11",  # a fullwidth digit
+        "\ufb01",  # the fi ligature
+        "\u2102",  # a letterlike symbol
+        "\uff1a\uff0f\uff0f",  # a fullwidth ://
         "e.g.",
         "U.S.",
         "www.",
@@ -558,8 +572,9 @@ def test_no_reply_keeps_a_dot_before_a_letter(seed: int) -> None:
     for _ in range(200):
         text = "".join(rng.choice(pieces) for _ in range(rng.randint(1, 40)))
         out = defang(text)
-        assert not _dot_before_a_letter(out), (text, out)
-        assert "://" not in out
+        folded = unicodedata.normalize("NFKC", out)
+        assert not _dot_before_a_letter(folded), (text, out)
+        assert "://" not in folded
         assert not any(unicodedata.category(c) == "Cf" for c in out)
 
 

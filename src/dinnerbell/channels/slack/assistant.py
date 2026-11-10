@@ -182,11 +182,13 @@ def defang_dots(text: str) -> str:
 
 def defang(text: str) -> str:
     """``text`` with every URL and bare domain made unlinkable, without needing to recognize
-    one. Format characters go first (``without_format_characters``). Then ``http`` and
+    one. Format characters go first (``without_format_characters``), then the text is
+    NFKC-normalized, as IDNA maps a hostname, so ``ⓔⓧⓐⓜⓟⓛⓔ``, fullwidth letters, and
+    ligatures such as ``ﬁ`` read as the ASCII letters a hostname parser sees. Then ``http`` and
     ``https`` become ``hxxp`` and ``hxxps``; ``://``, and ``mailto:`` and the like, get
     ``[:]``; ``www.`` and each dot of an IP address become ``[.]``; and so does every dot before
     a letter (``defang_dots``). Slack links none of them."""
-    text = without_format_characters(text)
+    text = without_format_characters(unicodedata.normalize("NFKC", without_format_characters(text)))
     text = _HTTP.sub(lambda m: f"hxxp{m.group(1).lower()}", text)
     text = _SCHEME.sub("[:]", text)
     text = _BARE_SCHEME.sub(lambda m: f"{m.group(1)}[:]", text)
