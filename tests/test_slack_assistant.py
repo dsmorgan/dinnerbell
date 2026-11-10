@@ -569,6 +569,8 @@ PIECES = [
     "\u2060",
     "\ufeff",
     "\u202e",
+    "\U0001f3f4\U000e0067\U000e0062\U000e007f",  # a flag's tags
+    "\U0001f9d1\u200d\U0001f373",  # an emoji joined by a ZWJ
     " ",
     "-",
     "_",
@@ -620,14 +622,17 @@ def test_no_reply_keeps_a_link_ping_or_markup(seed: int) -> None:
             assert "<" not in form and ">" not in form, (text, out)
             assert not _LOOSE_AMP.search(form), (text, out)
             assert not _BARE_PING.search(form), (text, out)
-        assert all(c == WORD_JOINER for c in out if unicodedata.category(c) == "Cf"), (text, out)
+        assert all(c in (WORD_JOINER, "\u200d") for c in out if unicodedata.category(c) == "Cf"), (text, out)
+        assert not any(0xE0000 <= ord(c) <= 0xE007F for c in out), (text, out)
 
 
 EMOJI = [
     ("\U0001f9d1\u200d\U0001f373", "\U0001f9d1\u200d\U0001f373"),  # cook
     ("\U0001f9d1\U0001f3fd\u200d\U0001f373", "\U0001f9d1\U0001f3fd\u200d\U0001f373"),  # with a skin tone
     ("\U0001f441\ufe0f\u200d\U0001f5e8\ufe0f", "\U0001f441\ufe0f\u200d\U0001f5e8\ufe0f"),  # a variation selector
-    ("\U0001f3f4\U000e0067\U000e0062\U000e0073\U000e0063\U000e0074\U000e007f",) * 2,  # Scotland's flag
+    ("\U0001f3f4\U000e0067\U000e0062\U000e0073\U000e0063\U000e0074\U000e007f", "\U0001f3f4"),  # a plain flag
+    ("\U0001f3f4\U000e0069\U000e0067\U000e006e\U000e006f\U000e0072\U000e0065\U000e007f", "\U0001f3f4"),  # any tags
+    ("\U000e0001\U000e0020hi", "hi"),  # the language tag and a space tag
     ("a\u200d\U0001f373", "a\U0001f373"),  # not between two emoji
     ("\U0001f373\u200d.evil", "\U0001f373[.]evil"),
     ("\U000e0067.evil", "[.]evil"),  # a tag outside a flag
@@ -635,7 +640,7 @@ EMOJI = [
 
 
 @pytest.mark.parametrize(("raw", "kept"), EMOJI)
-def test_emoji_sequences_keep_their_joiners_and_tags(raw: str, kept: str) -> None:
+def test_emoji_keep_their_joiners_but_lose_every_tag(raw: str, kept: str) -> None:
     assert defang(raw) == kept
 
 
