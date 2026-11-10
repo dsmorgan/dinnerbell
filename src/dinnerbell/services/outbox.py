@@ -89,6 +89,12 @@ async def picks_posts(db: AsyncSession, household_id: int, events: list[EventInf
     return found
 
 
+async def call_for_post(db: AsyncSession, household_id: int, ref: MessageRef) -> int | None:
+    """The call a delivered Dinnerbell post at ``ref`` is about, such as a call message or a
+    reminder, or None. The assistant uses it as a Slack thread's default call (spec 6.14)."""
+    return await OutboxRepository(db).event_for_message(household_id, ref)
+
+
 def retry_delay(attempts: int) -> timedelta:
     """30 s, 1 min, 2 min, ... doubling after each failed attempt, at most an hour."""
     delay: timedelta = FIRST_RETRY * 2 ** max(attempts - 1, 0)

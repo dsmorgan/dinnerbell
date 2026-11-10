@@ -21,6 +21,8 @@ top-level DM or mention starts one, and Dinnerbell replies in its thread. A ment
 roots at that thread's root, which is a Dinnerbell post when the thread is under a call or a
 reminder. DMs are private to their member. A channel thread is shared: each message acts as its
 author. Dinnerbell's first reply in a channel thread says it sees only messages that mention it.
+When the root is a Dinnerbell post, its call is the conversation's default call. A reply that
+carries drafts goes only to its member: in a channel thread, as an ephemeral.
 
 **Replies** are plain text: the model's text is escaped, so it can't make a mention, a channel
 ping, or a link, and every URL and bare domain in it is defanged (``hxxps[:]//evil[.]example``), so
@@ -46,10 +48,10 @@ from dinnerbell.channels.slack.blocks import ELLIPSIS, MAX_FALLBACK, clip_mrkdwn
 from dinnerbell.channels.slack.ids import is_channel_id
 from dinnerbell.domain.assistant import InvalidConversationKey, slack_key
 from dinnerbell.domain.members import Member
-from dinnerbell.domain.notifications import PermanentDeliveryError
+from dinnerbell.domain.notifications import MessageRef, PermanentDeliveryError
 from dinnerbell.logs import member_id_var
-from dinnerbell.services import slack_members
-from dinnerbell.services.assistant.conversation import FAILED, Assistant, converse
+from dinnerbell.services import outbox, slack_members
+from dinnerbell.services.assistant.conversation import FAILED, Assistant, Reply, converse
 from dinnerbell.services.assistant.runtime import available
 from dinnerbell.services.errors import Forbidden
 
@@ -62,6 +64,8 @@ REMEMBERED = 2048
 """How many messages, and channel threads replied in, are remembered; the oldest go first."""
 STILL_ON_IT = "I'm still on your last message. Send this one again once I've answered."
 TEXT_ONLY = "I can read only text messages."
+DRAFTS_SOON = "Confirming drafts in Slack is coming soon. Until then, nothing changes."
+MAX_DRAFT_TITLE = 150
 SLACK_TS = re.compile(r"\d{1,12}\.\d{1,8}")
 _ENTITY = re.compile(r"<([^<>]*)>")
 _PING = re.compile(r"@(here|channel|everyone)", re.IGNORECASE)
@@ -220,6 +224,17 @@ def defang(text: str) -> str:
     text = _WWW.sub(lambda m: f"{m.group(0)[:3]}[.]", text)
     text = _IP.sub(lambda m: re.sub(r"[.\u3002]", "[.]", m.group(0)), text)
     return defang_dots(text)
+
+
+def reply_text(reply: Reply) -> str:
+    """The reply's text for Slack (``safe_reply``), with a line for each draft it made. Draft
+    cards with **Confirm** and **Cancel** come in a later change; until then a note says so."""
+    if not reply.drafts:
+        return safe_reply(reply.text)
+    lines = "\n".join(f"• {safe_reply(draft.title, MAX_DRAFT_TITLE)}" for draft in reply.drafts)
+    note = f"{lines}\n_{DRAFTS_SOON}_"
+    body = safe_reply(reply.text, max(1, MAX_REPLY - len(note) - 2))
+    return f"{body}\n\n{note}" if body else note
 
 
 def safe_reply(text: str, limit: int = MAX_REPLY) -> str:
@@ -395,26 +410,41 @@ class SlackAssistant:
             return
         self.answering.add(member.id)
         try:
-            reply_text = await self._converse(member, key, incoming, text)
+            reply = await self._converse(member, key, incoming, text)
         finally:
             self.answering.discard(member.id)
             self.told.discard(member.id)
-        if reply_text is None:
+        if reply is None:
             return
-        body = safe_reply(reply_text)
+        body = reply_text(reply)
         first = not incoming.private and key not in self.replied
         if first and self.bot_user_id:
             note = mention_only_line(self.bot_user_id)
             room = MAX_REPLY - len(note) - 2
             body = f"{clip_mrkdwn(body, room) if len(body) > room else body}\n\n{note}"
+        if reply.drafts and not incoming.private:
+            # Drafts, and the reply about them, go only to their member (spec 6.14).
+            await self._ephemeral(incoming, member, body)
+            return
         if await self._post(incoming, member, body) and not incoming.private:
             self.replied.add(key)
 
-    async def _converse(self, member: Member, key: str, incoming: Incoming, text: str) -> str | None:
-        """``converse``'s reply text, or None when there's nothing to say."""
+    async def _call_id(self, member: Member, incoming: Incoming) -> int | None:
+        """The call a thread's root post is about, when the root is a Dinnerbell post such as a
+        call message or a reminder: the conversation's default call (spec 6.14)."""
+        if incoming.root == incoming.ts:
+            return None  # a top-level message is the member's own, not a Dinnerbell post
+        async with self.sessionmaker() as db:
+            return await outbox.call_for_post(db, member.household_id, MessageRef(incoming.channel, incoming.root))
+
+    async def _converse(self, member: Member, key: str, incoming: Incoming, text: str) -> Reply | None:
+        """``converse``'s reply, or None when there's nothing to say."""
         try:
+            call_id = await self._call_id(member, incoming)
             async with self.sessionmaker() as db:
-                reply = await converse(db, self.assistant, member, key, private=incoming.private, text=text)
+                reply = await converse(
+                    db, self.assistant, member, key, private=incoming.private, text=text, call_id=call_id
+                )
         except Forbidden:
             log.warning("slack message to the assistant refused: the conversation isn't theirs")
             return None
@@ -422,8 +452,8 @@ class SlackAssistant:
             return None
         except Exception:
             log.exception("the assistant broke answering a slack message")
-            return FAILED
-        return None if reply is None else reply.text
+            return Reply(FAILED)
+        return reply
 
     async def _post(self, incoming: Incoming, member: Member, text: str) -> bool:
         """Post ``text`` in the message's thread, already safe for Slack. False if Slack refused.
@@ -443,8 +473,12 @@ class SlackAssistant:
         if incoming.private:
             await self._post(incoming, member, STILL_ON_IT)
             return
+        await self._ephemeral(incoming, member, STILL_ON_IT)
+
+    async def _ephemeral(self, incoming: Incoming, member: Member, text: str) -> None:
+        """Post ``text``, already safe, in the message's thread, for its author's eyes only."""
         try:
-            await self.api.ephemeral(incoming.channel, incoming.user, STILL_ON_IT, thread_ts=incoming.root)
+            await self.api.ephemeral(incoming.channel, incoming.user, text or ELLIPSIS, thread_ts=incoming.root)
         except SLACK_ERRORS as exc:
             log.warning("slack assistant reply failed", extra={"error": str(exc), "member_id": member.id})
 

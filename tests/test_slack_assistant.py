@@ -24,6 +24,7 @@ from dinnerbell.app_factory import create_app
 from dinnerbell.channels.slack import assistant as slack_assistant
 from dinnerbell.channels.slack.assistant import (
     DOTS,
+    DRAFTS_SOON,
     MAX_REPLY,
     STILL_ON_IT,
     TEXT_ONLY,
@@ -32,6 +33,7 @@ from dinnerbell.channels.slack.assistant import (
     home_line,
     mention_only_line,
     readable,
+    reply_text,
     safe_reply,
 )
 from dinnerbell.config import Settings
@@ -43,11 +45,12 @@ from dinnerbell.domain.members import Role
 from dinnerbell.services.assistant import admin
 from dinnerbell.services.assistant.anthropic_client import AnthropicModelClient
 from dinnerbell.services.assistant.client import ModelReply
-from dinnerbell.services.assistant.conversation import FAILED, Assistant
+from dinnerbell.services.assistant.conversation import FAILED, Assistant, Reply
+from dinnerbell.services.assistant.drafts import DraftView
 from dinnerbell.services.assistant.runtime import AssistantConfig
 from dinnerbell.services.database import Database, open_database
 from tests.conftest import make_settings
-from tests.support.calls import OPENS, House, furnish, make_house
+from tests.support.calls import OPENS, House, dinner_id, furnish, make_house
 from tests.support.clock import FakeClock
 from tests.support.fake_model import FakeModel, answer
 from tests.support.fake_oidc import FakeProvider
@@ -393,7 +396,12 @@ async def test_a_mention_in_a_thread_joins_that_threads_conversation_as_its_auth
 
 @pytest.mark.flag("assistant", on=True)
 async def test_a_mention_under_a_call_post_roots_at_the_post(
-    settings: Settings, house: House, model: FakeModel, helper: Assistant, slack: Slack
+    settings: Settings,
+    house: House,
+    model: FakeModel,
+    helper: Assistant,
+    slack: Slack,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     await switch_on(house, helper)
     house.clock.now = OPENS
@@ -401,11 +409,72 @@ async def test_a_mention_under_a_call_post_roots_at_the_post(
     await slack.drain()
     call_ts = _call_post_ts(slack)
     slack.fake.clear()
+    seen_calls = record_call_ids(monkeypatch)
     await slack.mention("Lee", f"<@{BOT_USER}> who's cooking?", thread_ts=call_ts)
     (reply,) = posts(slack)
     assert (reply["channel"], reply["thread_ts"]) == (CHANNEL, call_ts)
     (row,) = await conversations(house)
     assert row.key == f"slack:{CHANNEL}:{call_ts}"
+    assert seen_calls == [await dinner_id(house)]  # the post's call is the default call
+
+    other = next_ts()
+    await slack.mention("Lee", f"<@{BOT_USER}> hi", ts=other)  # top-level: no call
+    await slack.mention("Lee", f"<@{BOT_USER}> and?", thread_ts=other)  # under a member's post: none
+    assert seen_calls[1:] == [None, None]
+
+
+def record_call_ids(monkeypatch: pytest.MonkeyPatch) -> list[int | None]:
+    """Each ``call_id`` the Slack adapter passes ``converse``, which still runs."""
+    seen: list[int | None] = []
+    real = slack_assistant.converse
+
+    async def recording(*args: Any, **kwargs: Any) -> Any:
+        seen.append(kwargs.get("call_id"))
+        return await real(*args, **kwargs)
+
+    monkeypatch.setattr(slack_assistant, "converse", recording)
+    return seen
+
+
+def fake_drafts(monkeypatch: pytest.MonkeyPatch, *titles: str) -> None:
+    async def drafting(*args: Any, **kwargs: Any) -> Reply:
+        drafts = tuple(DraftView(n, "proposal", title, ("Confirm adds it.",)) for n, title in enumerate(titles, 1))
+        return Reply("Here's a draft for tonight.", drafts)
+
+    monkeypatch.setattr(slack_assistant, "converse", drafting)
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_a_reply_with_drafts_in_the_channel_goes_only_to_its_author(
+    settings: Settings, house: House, helper: Assistant, slack: Slack, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await switch_on(house, helper)
+    fake_drafts(monkeypatch, "Siam Garden", "evil.example")
+    root = next_ts()
+    await slack.mention("Sam", f"<@{BOT_USER}> propose Thai", ts=root)
+    assert posts(slack) == []
+    (sent,) = [c.args for c in slack.fake.of("chat.postEphemeral")]
+    assert (sent["channel"], sent["user"], sent["thread_ts"]) == (CHANNEL, "U02SAM", root)
+    assert sent["text"].startswith("Here's a draft for tonight.")
+    assert "• Siam Garden" in sent["text"] and "• evil[.]example" in sent["text"]
+    assert DRAFTS_SOON in sent["text"]
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_a_reply_with_drafts_in_a_dm_is_a_normal_reply(
+    settings: Settings, house: House, helper: Assistant, slack: Slack, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await switch_on(house, helper)
+    fake_drafts(monkeypatch, "Siam Garden")
+    await slack.dm("Sam", "Propose Thai")
+    (reply,) = posts(slack)
+    assert "• Siam Garden" in reply["text"] and DRAFTS_SOON in reply["text"]
+    assert slack.fake.of("chat.postEphemeral") == []
+
+
+def test_reply_text_without_body_is_only_the_drafts() -> None:
+    reply = Reply("", (DraftView(1, "offer", "Tacos", ()),))
+    assert reply_text(reply) == f"• Tacos\n_{DRAFTS_SOON}_"
 
 
 def _call_post_ts(slack: Slack) -> str:
