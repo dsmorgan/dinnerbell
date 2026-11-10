@@ -42,11 +42,13 @@ from dinnerbell.domain.assistant import (
     reservation_micros,
     total_cost_micros,
 )
+from dinnerbell.domain.assistant_drafts import MAX_OPEN_DRAFTS
 from dinnerbell.domain.members import Member
 from dinnerbell.services.assistant.acting import ToolRefusal
 from dinnerbell.services.assistant.client import ModelCallFailed, ModelClient, ModelReply, with_fallback
+from dinnerbell.services.assistant.drafts import TOO_MANY as TOO_MANY_DRAFTS
 from dinnerbell.services.assistant.drafts import DraftView
-from dinnerbell.services.assistant.menu_links import MAX_LINK_DRAFTS, TOO_MANY_LINKS, PageFetcher
+from dinnerbell.services.assistant.menu_links import CAP_TOO_LOW, MAX_LINK_FETCHES, TOO_MANY_LINKS, PageFetcher
 from dinnerbell.services.assistant.prompt import system_prompt
 from dinnerbell.services.assistant.runtime import AssistantConfig, available
 from dinnerbell.services.assistant.tools import Tool, ToolSession, run_tool, tools_for
@@ -266,14 +268,23 @@ def _over_covered(reply: ModelReply, model: str, member: Member) -> bool:
 
 
 async def _check_room(db: AsyncSession, assistant: Assistant, member: Member, zone: ZoneInfo, reserved: int) -> None:
-    """Raise ``_Refused`` as ``_call`` would for a call reserving ``reserved``, reserving nothing."""
+    """Raise ``_Refused`` as ``_call`` would for a menu link's drafting call reserving
+    ``reserved``, reserving nothing, or ``ToolRefusal`` when the member has ``MAX_OPEN_DRAFTS``
+    waiting already. A reservation over the whole cap gets ``CAP_TOO_LOW``: next month wouldn't
+    help."""
     household_id = member.household_id
     async with write_transaction(db):
         settings = assistant_settings(await household_settings(db, household_id))
         if not settings.enabled:
             raise _Refused(TURNED_OFF)
+        repo = AssistantRepository(db)
+        if await repo.waiting_drafts(household_id, member.id, assistant.clock()) >= MAX_OPEN_DRAFTS:
+            raise ToolRefusal(TOO_MANY_DRAFTS)
+        if reserved > settings.cap_micros:
+            log.info("assistant cap below a menu link's reservation", extra={"member_id": member.id})
+            raise _Refused(CAP_TOO_LOW)
         month = month_key(assistant.clock(), zone)
-        if await AssistantRepository(db).month_total(household_id, month) + reserved > settings.cap_micros:
+        if await repo.month_total(household_id, month) + reserved > settings.cap_micros:
             log.info("assistant at its monthly cap", extra={"member_id": member.id})
             raise _Refused(AT_CAP)
 
@@ -281,14 +292,15 @@ async def _check_room(db: AsyncSession, assistant: Assistant, member: Member, zo
 @dataclass
 class _LinkCalls:
     """``menu_links.LinkCalls`` for one message: the fetch, and drafting calls through the same
-    reservations as the message's own, at most ``MAX_LINK_DRAFTS``. ``over`` records a drafting
-    call that overran, so the message makes no further calls."""
+    reservations as the message's own. ``fetched`` counts the links read toward
+    ``MAX_LINK_FETCHES``, whatever came of them; each makes at most one drafting call. ``over``
+    records a drafting call that overran, so the message makes no further calls."""
 
     db: AsyncSession
     assistant: Assistant
     member: Member
     zone: ZoneInfo
-    made: int = 0
+    fetched: int = 0
     over: bool = False
 
     @property
@@ -304,7 +316,7 @@ class _LinkCalls:
         )
 
     async def check_room(self, request: Mapping[str, Any]) -> None:
-        if self.made >= MAX_LINK_DRAFTS:
+        if self.fetched >= MAX_LINK_FETCHES:
             raise ToolRefusal(TOO_MANY_LINKS)
         if self.over:
             raise ToolRefusal(FAILED)
@@ -312,10 +324,10 @@ class _LinkCalls:
             await _check_room(self.db, self.assistant, self.member, self.zone, self._reserved(request))
         except _Refused as refused:
             raise ToolRefusal(refused.reply) from None
+        self.fetched += 1  # the fetch comes next, and counts whether it works or not
 
     async def call(self, request: Mapping[str, Any]) -> ModelReply:
-        """Counts toward ``MAX_LINK_DRAFTS``; ``draft_from_link`` calls ``check_room`` first."""
-        self.made += 1
+        """The drafting call for the link ``check_room`` let through."""
         try:
             reply, overran = await _call(self.db, self.assistant, self.member, self.zone, request)
         except _Refused as refused:
