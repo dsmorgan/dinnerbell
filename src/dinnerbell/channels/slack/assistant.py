@@ -48,7 +48,7 @@ import asyncio
 import logging
 import re
 import unicodedata
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable, Coroutine, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -78,7 +78,7 @@ from dinnerbell.domain.members import Member
 from dinnerbell.domain.notifications import MessageRef, PermanentDeliveryError
 from dinnerbell.logs import member_id_var
 from dinnerbell.services import activity, outbox, slack_members
-from dinnerbell.services.assistant.conversation import FAILED, Assistant, Reply, converse
+from dinnerbell.services.assistant.conversation import FAILED, Assistant, NamingText, Reply, converse
 from dinnerbell.services.assistant.drafts import (
     USED,
     CatalogReady,
@@ -148,21 +148,33 @@ def home_line(bot_user_id: str | None, channel_id: str) -> str:
     return f"Need ideas for a meal? Message Dinnerbell, or mention {bot} in <#{channel_id}>."
 
 
-def readable(text: str, bot_user_id: str | None) -> str:
-    """A Slack message as the plain text a member would type on the web. Dinnerbell's own
-    mention goes. Anyone else's mention becomes "@someone", a user group "@group", and a channel
-    "#channel", so no Slack ID or name leaves the house. A link reads as its label and address,
-    and ``&amp;``, ``&lt;``, and ``&gt;`` as the characters they stand for.
+_USER_MENTION = re.compile(r"<@([A-Z0-9]{1,20})(?:\|[^<>]*)?>")
+MAX_NAMED = 20
+"""The most members one message names by pseudonym; anyone past that is "@someone"."""
 
-    TODO(#17): map a mentioned member to the conversation's pseudonym ("Member 2"), so the
-    meaning survives and ``restore_names`` brings the name back. That needs the pseudonym map,
-    which ``services.assistant`` keeps."""
+
+def mentioned_users(text: str) -> list[str]:
+    """The Slack users ``text`` mentions, each once, in order, at most ``MAX_NAMED``."""
+    return list(dict.fromkeys(_USER_MENTION.findall(text)))[:MAX_NAMED]
+
+
+def readable(text: str, bot_user_id: str | None, name: Callable[[str], str | None] | None = None) -> str:
+    """A Slack message as the plain text a member would type on the web. Dinnerbell's own
+    mention goes. A mention ``name`` knows, which ``SlackAssistant`` gives for active members,
+    becomes "@" and the conversation's pseudonym ("@Member 2"), so the meaning survives and the
+    reply's ``restore_names`` brings the name back. Anyone else's mention becomes "@someone", a
+    user group "@group", and a channel "#channel", so no Slack ID or name leaves the house. A
+    link reads as its label and address, and ``&amp;``, ``&lt;``, and ``&gt;`` as the characters
+    they stand for."""
 
     def swap(match: re.Match[str]) -> str:
         inner = match.group(1)
         target, _, label = inner.partition("|")
         if target.startswith("@"):
-            return "" if target[1:] == bot_user_id else "@someone"
+            if target[1:] == bot_user_id:
+                return ""
+            named = name(target[1:]) if name is not None else None
+            return f"@{named}" if named else "@someone"
         if target.startswith("#"):
             return "#channel"
         if target.startswith("!"):
@@ -513,7 +525,7 @@ class SlackAssistant:
             return
         self.answering.add(member.id)
         try:
-            reply = await self._converse(member, key, incoming, text)
+            reply = await self._converse(member, key, incoming, await self._naming(member, incoming.text))
         finally:
             self.answering.discard(member.id)
             self.told.discard(member.id)
@@ -539,6 +551,20 @@ class SlackAssistant:
         for card in cards:
             await self._post(incoming, member, card["text"], card["blocks"])
 
+    async def _naming(self, member: Member, text: str) -> NamingText:
+        """``text`` as ``readable`` writes it, with each active member it mentions named by the
+        conversation's pseudonym, which ``converse`` gives when it has the map."""
+        members: Mapping[str, int] = {}
+        if mentioned_users(text):
+            async with self.sessionmaker() as db:
+                found = await slack_members.active_members_by_slack_user(db, member.household_id)
+            members = {user: found[user] for user in mentioned_users(text) if user in found}
+
+        def write(label: Callable[[int], str]) -> str:
+            return readable(text, self.bot_user_id, lambda user: label(members[user]) if user in members else None)
+
+        return write
+
     async def _call_id(self, member: Member, incoming: Incoming) -> int | None:
         """The call a thread's root post is about, when the root is a Dinnerbell post such as a
         call message or a reminder: the conversation's default call (spec 6.14)."""
@@ -547,7 +573,7 @@ class SlackAssistant:
         async with self.sessionmaker() as db:
             return await outbox.call_for_post(db, member.household_id, MessageRef(incoming.channel, incoming.root))
 
-    async def _converse(self, member: Member, key: str, incoming: Incoming, text: str) -> Reply | None:
+    async def _converse(self, member: Member, key: str, incoming: Incoming, text: NamingText) -> Reply | None:
         """``converse``'s reply, or None when there's nothing to say."""
         try:
             call_id = await self._call_id(member, incoming)

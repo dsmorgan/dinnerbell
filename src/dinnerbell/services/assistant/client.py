@@ -67,7 +67,9 @@ class ModelCallFailed(Exception):
 
 
 class ModelClient(Protocol):
-    async def create(self, request: Mapping[str, Any]) -> ModelReply:
+    async def create(self, request: Mapping[str, Any], *, time_left: float) -> ModelReply:
         """Send ``request``, the Messages API's keyword arguments. Raise ``ModelCallFailed``
-        instead of any client error, and never retry: each request has its own reservation."""
+        instead of any client error, and never retry: each request has its own reservation.
+        ``time_left`` is the seconds left of the message's deadline (``conversation``), which
+        also cancels the call when they run out."""
         ...

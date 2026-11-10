@@ -84,6 +84,9 @@ class Draft:
     event_id: int | None = None
     run: int | None = None
     used_at: datetime | None = None
+    """When a Confirm or a Cancel used it."""
+    confirmed_at: datetime | None = None
+    """When a Confirm used it; None for a draft cancelled, or still waiting."""
 
     def expired(self, now: datetime) -> bool:
         return now >= self.expires_at

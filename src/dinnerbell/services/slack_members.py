@@ -40,6 +40,13 @@ async def member_for_slack_user(db: AsyncSession, slack_user_id: str) -> Member 
     return await MemberRepository(db).by_slack_user_id(household.id, slack_user_id)
 
 
+async def active_members_by_slack_user(db: AsyncSession, household_id: int) -> dict[str, int]:
+    """Slack user ID to member ID, for each active member or admin who has one: no guest, and
+    no deactivated member. For the assistant, which names only these by pseudonym."""
+    members = await MemberRepository(db).list(household_id)
+    return {m.slack_user_id: m.id for m in members if m.slack_user_id and m.is_member}
+
+
 async def slack_directory(db: AsyncSession, household_id: int) -> dict[int, str]:
     """Member ID to Slack user ID, for every member who has one, active or not."""
     members = await MemberRepository(db).list(household_id)

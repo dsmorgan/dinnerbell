@@ -247,6 +247,8 @@ def test_an_exchange_saved_onto_a_newer_map_keeps_labels_and_relabels_its_text()
         "Member 3 asked Member 1; a member isn't anyone."
     )
     assert sent.onto(Pseudonyms()) == sent
+    # A member's own words, with a mention made into a label, keep whatever else they wrote.
+    assert sent.relabel("Ask @Member 2, not Member 9.", merged, unknown=None) == "Ask @Member 3, not Member 9."
 
 
 def test_names_come_back_only_for_labels_the_conversation_gave() -> None:

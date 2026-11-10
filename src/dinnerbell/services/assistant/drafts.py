@@ -387,12 +387,22 @@ def _check_usable(draft: Draft, now: datetime) -> None:
 
 
 async def _use(
-    db: AsyncSession, draft: Draft, member: Member, now: datetime, *, keep_until: datetime | None = None
+    db: AsyncSession,
+    draft: Draft,
+    member: Member,
+    now: datetime,
+    *,
+    confirmed: bool = True,
+    keep_until: datetime | None = None,
 ) -> None:
-    """Use the draft in the caller's write transaction, or raise why it can't be. ``keep_until``
-    keeps it past its 30 minutes, as a confirmed catalog draft is kept for its import link."""
+    """Use the draft in the caller's write transaction, or raise why it can't be: a Confirm, or
+    a Cancel with ``confirmed`` False. ``keep_until`` keeps it past its 30 minutes, as a
+    confirmed catalog draft is kept for its import link."""
     repo = AssistantRepository(db)
-    if not await repo.use_draft(member.household_id, draft.id, member.id, now, keep_until=keep_until):
+    used = await repo.use_draft(
+        member.household_id, draft.id, member.id, now, confirmed=confirmed, keep_until=keep_until
+    )
+    if not used:
         latest = await AssistantRepository(db).draft(member.household_id, draft.id)
         if latest is None:  # pragma: no cover - deleted between the read and the write
             raise NotFound(NO_SUCH_DRAFT)
@@ -507,7 +517,7 @@ async def cancel_draft(db: AsyncSession, clock: Clock, member: Member, draft_id:
     draft = await _mine(db, member, draft_id)
     _check_usable(draft, now)
     async with write_transaction(db):
-        await _use(db, draft, member, now)
+        await _use(db, draft, member, now, confirmed=False)
         await db.commit()
     log.info("assistant draft cancelled", extra={"member_id": member.id, "draft_id": draft.id})
 
@@ -517,13 +527,16 @@ async def ready_for_import(
 ) -> CatalogReady:
     """The import preview for ``member``'s catalog draft that Confirm used, re-planned add-only
     against the catalog now: for the web link a Slack Confirm gives (``CatalogReady``'s import,
-    reached by a GET). Only Confirm makes that link, so a used draft here is a confirmed one.
-    Anything else raises NotFound, the same for each: someone else's draft, one waiting or gone,
-    another kind, a guest or inactive member, the assistant not available, or kept past
-    ``IMPORT_LINK_LIFETIME`` (the purge may not have run yet)."""
+    reached by a GET). Only a confirmed draft opens it: a draft its member cancelled, or **Start
+    over** cancelled, never does, whatever link names it. Anything else raises NotFound, the same
+    for each: someone else's draft, one waiting, cancelled, or gone, another kind, a guest or
+    inactive member, the assistant not available, or kept past ``IMPORT_LINK_LIFETIME`` (the
+    purge may not have run yet)."""
     repo = AssistantRepository(db)
     draft = await repo.draft(member.household_id, draft_id) if member.is_member else None
-    if draft is None or draft.member_id != member.id or draft.kind is not DraftKind.CATALOG or draft.used_at is None:
+    if draft is None or draft.member_id != member.id or draft.kind is not DraftKind.CATALOG:
+        raise NotFound(NO_SUCH_DRAFT)
+    if draft.used_at is None or draft.confirmed_at is None:
         raise NotFound(NO_SUCH_DRAFT)
     if draft.expired(now):
         raise NotFound(NO_SUCH_DRAFT)

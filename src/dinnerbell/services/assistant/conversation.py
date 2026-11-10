@@ -7,6 +7,11 @@ month's spending plus reservations would pass the household's cap; after the cal
 the reservation to what the API reported, cache tokens included. Nothing waits on the model
 while holding the write lock.
 
+A message has ``MESSAGE_SECONDS`` in all, under the web page's wait for a reply, so a member who
+gives up and sends it again isn't charged for an answer still running. Each model call gets what
+time is left, and is cancelled when it runs out; its reservation stays spent, since it may have
+run. Once the time is up, the message makes no further calls, and nothing of it is kept.
+
 What goes out is the system prompt, the conversation in pseudonym form ("Member 1"), and what
 tools return. Names come back only in the reply text the member sees. A menu link's drafting
 call (``menu_links``) is reserved and settled the same way, and sends only the page's text.
@@ -17,8 +22,9 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import Awaitable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -67,6 +73,9 @@ MAX_HISTORY_BYTES = 24_000
 MAX_STORED_BYTES = 4 * MAX_HISTORY_BYTES
 MAX_MESSAGE_CHARS = 4_000
 EFFORT = "medium"
+MESSAGE_SECONDS = 100.0
+"""The most one message runs, its model calls, tools, and menu links together: under the
+120 seconds the web page waits (``web.routes.assistant_page.SEND_TIMEOUT_MS``)."""
 
 AT_CAP = (
     "The assistant has reached this month's spending limit, so it's unavailable until next month. "
@@ -79,6 +88,13 @@ TOO_LONG_ANSWER = "That needed a longer answer than I can give. Try asking for l
 TOO_MANY_STEPS = "I couldn't finish that in a few steps. Try asking for one thing at a time."
 TOO_LONG_MESSAGE = f"That message is too long for me. Keep it under {MAX_MESSAGE_CHARS:,} characters."
 NO_ANSWER = "I don't have an answer for that."
+OUT_OF_TIME = "I ran out of time on that one. Try asking for less at once."
+
+
+NamingText = Callable[[Callable[[int], str]], str]
+"""A message that names members, such as a Slack message's mentions: given the conversation's
+labeler (a member ID to their pseudonym, "Member 2", added to the map if they're new), its text
+with each member named by label. So the meaning survives, and no Slack ID or name is sent."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -176,13 +192,17 @@ async def _call(
     zone: ZoneInfo,
     request: Mapping[str, Any],
     *,
+    deadline: datetime,
     earlier_output_tokens: int = 0,
 ) -> tuple[ModelReply, bool]:
     """Reserve, call, and settle one request. Returns the reply, and whether it overran: cost
     more than the reservation, or billed a model the table doesn't price. Either way its cost is
     recorded as it was, and the message makes no further calls. Raises ``_Refused`` when the
-    call can't run. ``earlier_output_tokens`` is what this message's earlier calls wrote: their
-    thinking goes back in this request as signed blocks and bills as input."""
+    call can't run, including ``OUT_OF_TIME`` once the message's ``deadline`` passes, before
+    the call or during it. ``earlier_output_tokens`` is what this message's earlier calls wrote:
+    their thinking goes back in this request as signed blocks and bills as input."""
+    if _seconds_left(assistant, deadline) <= 0:
+        raise _Refused(OUT_OF_TIME)
     household_id = member.household_id
     model = str(request["model"])
     reserved = reservation_micros(
@@ -215,12 +235,22 @@ async def _call(
             await repo.release(household_id, usage_id)
             await db.commit()
 
+    left = _seconds_left(assistant, deadline)  # the reservation may have waited for the lock
+    if left <= 0:
+        await _shielded(release())
+        raise _Refused(OUT_OF_TIME)
     try:
-        reply = await assistant.client.create(request)
+        async with asyncio.timeout(left):
+            reply = await assistant.client.create(request, time_left=left)
     except ModelCallFailed as exc:
         log.warning("assistant model call failed", extra={"member_id": member.id, **exc.log_fields()})
         await _shielded(keep_reservation() if exc.maybe_billed else release())
         raise _Refused(FAILED) from None
+    except TimeoutError:
+        # Cut off at the deadline: the request may be running still, so it stays reserved.
+        log.warning("assistant model call ran out of time", extra={"member_id": member.id})
+        await _shielded(keep_reservation())
+        raise _Refused(OUT_OF_TIME) from None
     except asyncio.CancelledError:
         # The request may be running still, so it stays reserved; log first, then settle shielded.
         log.error("assistant model call cancelled", extra={"member_id": member.id})
@@ -253,6 +283,10 @@ async def _call(
         )
         over = True
     return reply, over
+
+
+def _seconds_left(assistant: Assistant, deadline: datetime) -> float:
+    return (deadline - assistant.clock()).total_seconds()
 
 
 def _over_covered(reply: ModelReply, model: str, member: Member) -> bool:
@@ -300,6 +334,7 @@ class _LinkCalls:
     assistant: Assistant
     member: Member
     zone: ZoneInfo
+    deadline: datetime
     fetched: int = 0
     over: bool = False
 
@@ -320,6 +355,8 @@ class _LinkCalls:
             raise ToolRefusal(TOO_MANY_LINKS)
         if self.over:
             raise ToolRefusal(FAILED)
+        if _seconds_left(self.assistant, self.deadline) <= 0:
+            raise ToolRefusal(OUT_OF_TIME)
         try:
             await _check_room(self.db, self.assistant, self.member, self.zone, self._reserved(request))
         except _Refused as refused:
@@ -329,7 +366,9 @@ class _LinkCalls:
     async def call(self, request: Mapping[str, Any]) -> ModelReply:
         """The drafting call for the link ``check_room`` let through."""
         try:
-            reply, overran = await _call(self.db, self.assistant, self.member, self.zone, request)
+            reply, overran = await _call(
+                self.db, self.assistant, self.member, self.zone, request, deadline=self.deadline
+            )
         except _Refused as refused:
             raise ToolRefusal(refused.reply) from None
         self.over = _over_covered(reply, str(request["model"]), self.member) or overran or self.over
@@ -372,7 +411,8 @@ async def _keep(
         if latest is not None and latest.expired(now, hours):
             latest = None
         pseudonyms = sent.onto(latest.pseudonyms if latest else Pseudonyms())
-        asked = Turn(asked.role, asked.text, pseudonyms.label(member.id))
+        # The member's own words keep their labels' meaning, as mentions put them there.
+        asked = Turn(asked.role, sent.relabel(asked.text, pseudonyms, unknown=None), pseudonyms.label(member.id))
         answered = Turn(answered.role, sent.relabel(answered.text, pseudonyms))
         history = latest.turns if latest else ()
         kept = Conversation(
@@ -403,20 +443,24 @@ async def _run_loop(
     private: bool,
     keeps_history: bool,
     session: ToolSession,
+    deadline: datetime,
 ) -> tuple[str, bool]:
     """The model and tool loop. Returns the reply text, and whether the model answered (so the
-    exchange is worth keeping) rather than Dinnerbell replying for it."""
+    exchange is worth keeping) rather than Dinnerbell replying for it. Every call stops at
+    ``deadline``."""
     tools = tools_for(private)
     written = 0  # output tokens of this message's calls so far
     over = False  # a call billed more attempts than its reservation covered
-    links = _LinkCalls(db, assistant, member, zone)
+    links = _LinkCalls(db, assistant, member, zone, deadline)
     session.links = links
     for _ in range(MAX_MODEL_CALLS):
         if over or links.over:
             return FAILED, False  # refuse further calls in this message
         request = build_request(assistant.config.model, tools, messages, keeps_history=keeps_history)
         try:
-            reply, overran = await _call(db, assistant, member, zone, request, earlier_output_tokens=written)
+            reply, overran = await _call(
+                db, assistant, member, zone, request, deadline=deadline, earlier_output_tokens=written
+            )
         except _Refused as refused:
             return refused.reply, False
         written += sum(part.output_tokens for part in reply.usage)
@@ -459,28 +503,25 @@ async def converse(
     key: str,
     *,
     private: bool,
-    text: str,
+    text: str | NamingText,
     call_id: int | None = None,
 ) -> Reply | None:
     """Answer ``member``'s ``text`` in the conversation ``key`` (``domain.assistant.web_key`` or
     ``slack_key``). ``private`` is True for the web page and DMs, False for a channel thread.
     ``call_id`` is the conversation's call, for a Slack thread rooted under a Dinnerbell post
-    about one: the call tools use when the member names none (spec 6.14).
+    about one: the call tools use when the member names none (spec 6.14). ``text`` is the
+    message, or a ``NamingText`` that writes it with the conversation's pseudonyms.
 
     Returns None, storing and sending nothing, when the assistant doesn't answer this member
     (``available``) or the message is empty. Raises Forbidden for a private conversation that
     isn't the member's. Otherwise the reply is the model's answer with members' names put back,
-    or a short message from Dinnerbell: at the cap, unavailable until next month; on a refusal
-    or a failure, a line saying so. The exchange is kept for Admin's Conversation hours, in
-    pseudonym form, unless that's 0 or the model didn't answer."""
+    or a short message from Dinnerbell: at the cap, unavailable until next month; on a refusal,
+    a failure, or ``MESSAGE_SECONDS`` passing, a line saying so. The exchange is kept for
+    Admin's Conversation hours, in pseudonym form, unless that's 0 or the model didn't answer."""
+    deadline = assistant.clock() + timedelta(seconds=MESSAGE_SECONDS)
     if not await available(db, assistant.config, member):
         return None
     check_key(key, private=private, member_id=member.id)
-    text = text.strip()
-    if not text:
-        return None
-    if len(text) > MAX_MESSAGE_CHARS:
-        return Reply(TOO_LONG_MESSAGE)
     household = await HouseholdRepository(db).get(member.household_id)
     if household is None:  # pragma: no cover - members cascade with their household
         raise NotFound("No such household.")
@@ -492,12 +533,18 @@ async def converse(
             raise Forbidden("That conversation belongs to someone else.")
         if stored.expired(assistant.clock(), hours):
             stored = None  # past Conversation hours: never sent, and replaced below
-    pseudonyms = (stored.pseudonyms if stored else Pseudonyms()).with_member(member.id)
-    current = Turn("user", text, pseudonyms.label(member.id))
+    session = ToolSession(
+        key=key, pseudonyms=(stored.pseudonyms if stored else Pseudonyms()).with_member(member.id), call_id=call_id
+    )
+    asked = (text if isinstance(text, str) else text(session.label)).strip()
+    if not asked:
+        return None
+    if len(asked) > MAX_MESSAGE_CHARS:
+        return Reply(TOO_LONG_MESSAGE)
+    current = Turn("user", asked, session.pseudonyms.label(member.id))
     history = stored.turns if stored else ()
     sent = recent_turns(history, MAX_HISTORY_BYTES - current.size)
     zone = ZoneInfo(household.timezone)
-    session = ToolSession(key=key, pseudonyms=pseudonyms, call_id=call_id)
     answer, answered = await _run_loop(
         db,
         assistant,
@@ -507,6 +554,7 @@ async def converse(
         private=private,
         keeps_history=hours > 0,
         session=session,
+        deadline=deadline,
     )
     pseudonyms = session.pseudonyms  # with anyone the tools named
     if answered:

@@ -812,10 +812,28 @@ async def test_a_long_reply_is_cut_to_slacks_limit(
 async def test_other_peoples_mentions_never_leave_the_house(
     settings: Settings, house: House, model: FakeModel, helper: Assistant, slack: Slack
 ) -> None:
+    """A mentioned member goes out as the conversation's pseudonym and comes back by name in the
+    reply; anyone who isn't an active member, a group, or a channel goes out as a placeholder."""
     await switch_on(house, helper)
-    await slack.dm("Sam", "Can <@U03KIM> cook? Ask <!subteam^S01|@cooks> in <#C0DINNER|dinnerbell>, <!here>")
-    assert user_texts(model) == ["Can @someone cook? Ask @group in #channel, @here"]
-    assert "U03KIM" not in model.sent and "Kim" not in model.sent
+    async with house.sessionmaker() as db:  # Lee leaves: a deactivated member is "@someone" too
+        await MemberRepository(db).update(house.household.id, house["Lee"].id, house.clock(), active=False)
+        await db.commit()
+    model.script = [answer("Member 2 can cook, and Member 1 can ask.")]
+    await slack.dm(
+        "Sam",
+        "Can <@U03KIM> cook? Not <@U04LEE> or <@U99NOBODY>. Ask <!subteam^S01|@cooks> in "
+        "<#C0DINNER|dinnerbell>, <!here>, and <@U03KIM|kim> again, me <@U02SAM>",
+    )
+    assert user_texts(model) == [
+        "Can @Member 2 cook? Not @someone or @someone. Ask @group in #channel, @here, and @Member 2 again, me @Member 1"
+    ]
+    for secret in ("U03KIM", "U04LEE", "U99NOBODY", "U02SAM", "Kim", "Lee", '"Sam"', "kim"):
+        assert secret not in model.sent, secret
+    (reply,) = posts(slack)
+    assert reply["text"] == "Kim can cook, and Sam can ask."
+    [row] = await conversations(house)
+    assert row.transcript[0]["text"].startswith("Can @Member 2 cook?")  # stored as sent
+    assert row.pseudonyms == {str(house["Sam"].id): 1, str(house["Kim"].id): 2}
 
 
 class Slow(FakeModel):
@@ -826,10 +844,10 @@ class Slow(FakeModel):
         self.gate = asyncio.Event()
         self.started = 0
 
-    async def create(self, request: Mapping[str, Any]) -> ModelReply:
+    async def create(self, request: Mapping[str, Any], *, time_left: float) -> ModelReply:
         self.started += 1
         await self.gate.wait()
-        return await super().create(request)
+        return await super().create(request, time_left=time_left)
 
 
 def slow_model(slack: Slack) -> Slow:
