@@ -7,6 +7,7 @@ or the assistant turned off gets the same 404."""
 from __future__ import annotations
 
 import asyncio
+import html
 import re
 from dataclasses import dataclass, replace
 from datetime import timedelta
@@ -33,6 +34,7 @@ from dinnerbell.web.routes.catalog import DRAFT_LINK_LIFETIME, _draft_link_signe
 from tests.conftest import BASE_URL, invite, page, sign_in
 from tests.support.clock import FakeClock
 from tests.support.fake_oidc import FakeProvider
+from tests.support.links import MENU_LINK, link_draft
 from tests.support.web import submit
 from tests.test_admin import sign_in_as
 from tests.test_auth_flow import rows
@@ -302,3 +304,33 @@ def test_a_confirmed_catalog_draft_is_kept_for_its_link(
     assert purge(migrated, clock) == 1
     assert client.get(path(url)).status_code == 404
     assert rows(migrated, AssistantDraftRow) == []
+
+
+@pytest.mark.flag("assistant", on=True)
+def test_a_link_drafts_import_link_shows_only_what_dinnerbell_kept(
+    client: TestClient, provider: FakeProvider, migrated: Settings, clock: FakeClock
+) -> None:
+    """A menu link's draft, confirmed in Slack: the link opens its add-only preview, with the
+    member's link and none of the page's, and Apply adds it."""
+    sign_in(client, provider)
+    config = AssistantConfig.from_settings(migrated)
+
+    async def work(db: Any, alex: Member) -> str:
+        await admin.update_assistant(db, config, alex, AssistantSettings(enabled=True), now=clock())
+        drafted = await link_draft(db, alex, now=clock())
+        assert isinstance(await drafts.confirm_draft(db, clock, config, alex, drafted.view.id), CatalogReady)
+        return draft_import_url(migrated, clock, drafted.view.id, alex.id)
+
+    url: str = run(migrated, work)
+    response = client.get(path(url))
+    assert response.status_code == 200
+    text = page(response)
+    assert "Basil House" in text and MENU_LINK in text
+    assert "pay.example.net" not in text and "Pay ahead" not in text
+    token = token_in(response)
+    content = re.search(r'<textarea name="content"[^>]*>\n?(.*?)</textarea>', response.text, re.S)
+    assert token and content
+    applied = submit(client, "/catalog/import/apply", {"content": html.unescape(content.group(1)), "token": token})
+    assert applied.status_code == 303 and applied.headers["location"].startswith("/catalog?notice=imported&created=1")
+    basil = next(row for row in rows(migrated, CatalogItemRow) if row.name == "Basil House")
+    assert basil.url == MENU_LINK and basil.order_url is None and basil.notes is None
