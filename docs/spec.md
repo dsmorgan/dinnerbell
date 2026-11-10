@@ -303,7 +303,7 @@ Requirements use "must" for version 1 and "should" for items that can slip to a 
 | ID | Requirement | Phase |
 |---|---|---|
 | FR-50 | Each member may paste a Google Calendar secret iCal URL. The app polls it read-only and shows "busy at usual dinner time" as a hint on the call roster. Never writes to any calendar. | Calendar |
-| FR-51 | A member can ask the assistant in natural language: "something we haven't had in a month that works for everyone in," or "tacos at 7, I'll cook." The assistant turns requests into proposals and offers through the same domain API and never bypasses filters. | Assistant |
+| FR-51 | **Optional assistant** ([ADR 0009](adr/0009-optional-assistant.md), proposed). A member can ask the assistant in natural language: "something we haven't had in a month that works for everyone in," or "tacos at 7, I'll cook." The assistant turns requests into proposals and offers through the same domain API and never bypasses filters. | Assistant |
 | FR-52 | A Discord adapter implements the channel interface. | Channels |
 | FR-53 | Web push for Home Screen web apps as an optional additional channel. | Channels |
 | FR-54 | Multiple households per deployment. | Multi-tenant |
@@ -782,4 +782,5 @@ The table is in build order. M0 through M2 are the minimum for the household to 
 | [0006](adr/0006-test-instance.md) | Test in a second instance of the same image, not a second channel |
 | [0007](adr/0007-seeded-weighted-ranking.md) | Seeded, weighted random ranking among places that pass every filter |
 | [0008](adr/0008-feedback-informed-ranking.md) | Ratings move the rater's own score, and the household sees a hint |
+| [0009](adr/0009-optional-assistant.md) | An optional assistant drafts through the domain API, and a member confirms (proposed) |
 | [0007](adr/0007-seeded-weighted-ranking.md) | Ranking draws at random among the places that pass every filter, weighted by score, from an explicit seed |
