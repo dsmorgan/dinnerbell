@@ -545,6 +545,7 @@ async def _import_page(
             "sorted_modes": sorted_modes,
             "max_megabytes": MAX_FILE_BYTES // 1_000_000,
             "max_file_bytes": MAX_FILE_BYTES,
+            "nav_path": "/catalog",  # also when a draft's Confirm renders it from /assistant
         },
         status_code=status_code,
     )

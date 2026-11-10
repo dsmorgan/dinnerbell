@@ -390,6 +390,17 @@ form.htmx-request .segment span { animation: pending-cursor 0s 150ms forwards; }
   .topbar .nav:has(> a:nth-child(7)) { grid-template-columns: repeat(4, auto); }
   .topbar .nav:has(> a:nth-child(6)) a { justify-self: start; }
 }
+/* The Assistant link (ADR 0009) makes seven links for a member, which fit one row from about
+   36.5rem, and eight for an admin, which fit from 42rem. Until then they keep two even rows of
+   four, so the last link is never left alone on a row of its own. */
+@media (min-width: 36rem) and (max-width: 37.49rem) {
+  .topbar .nav:has(> a:nth-child(7)) { display: grid; grid-template-columns: repeat(4, auto); justify-content: space-between; }
+  .topbar .nav:has(> a:nth-child(7)) a { justify-self: start; }
+}
+@media (min-width: 37.5rem) and (max-width: 41.99rem) {
+  .topbar .nav:has(> a:nth-child(8)) { display: grid; grid-template-columns: repeat(4, auto); justify-content: space-between; }
+  .topbar .nav:has(> a:nth-child(8)) a { justify-self: start; }
+}
 /* Brand, links, and Sign out share one row only where all seven links fit beside the brand;
    narrower, Sign out wrapped onto a row of its own (#153). */
 @media (min-width: 54rem) {
@@ -404,10 +415,17 @@ form.htmx-request .segment span { animation: pending-cursor 0s 150ms forwards; }
 }
 /* A page that scrolls to an anchor, such as #meal-12 after a save, stops below the sticky top bar
    (#153): its three rows on phones, two from 36rem, one from 54rem, plus the test instance's
-   banner. */
+   banner. Seven links keep three rows until 37.5rem, eight until 42rem, and eight keep two until
+   60rem. */
 :root { --topbar-height: calc(env(safe-area-inset-top) + 11rem); }
 @media (min-width: 36rem) { :root { --topbar-height: calc(env(safe-area-inset-top) + 8rem); } }
 @media (min-width: 54rem) { :root { --topbar-height: calc(env(safe-area-inset-top) + 5rem); } }
+@media (min-width: 36rem) and (max-width: 37.49rem) {
+  :root:has(.topbar .nav > a:nth-child(7)) { --topbar-height: calc(env(safe-area-inset-top) + 11rem); }
+}
+@media (min-width: 37.5rem) and (max-width: 41.99rem) {
+  :root:has(.topbar .nav > a:nth-child(8)) { --topbar-height: calc(env(safe-area-inset-top) + 11rem); }
+}
 @media (min-width: 54rem) and (max-width: 59.99rem) {
   :root:has(.topbar .nav > a:nth-child(8)) { --topbar-height: calc(env(safe-area-inset-top) + 8rem); }
 }

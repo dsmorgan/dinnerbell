@@ -317,7 +317,7 @@ The assistant (FR-51, [ADR 0009](adr/0009-optional-assistant.md)) is optional, a
 
 **Who.** Active members only. A message from a guest, an inactive member, or someone not linked to a member gets no reply and is neither stored nor sent. The same goes for a mention outside the household channel, and Dinnerbell ignores bot messages and message edits and deletions (any `bot_id` or `subtype`).
 
-**Conversations.** A conversation is the web's **Assistant** page (one per member, with **Start over**), or a Slack thread, keyed by channel and thread root:
+**Conversations.** A conversation is the web's **Assistant** page (one per member, with **Start over**, which deletes it and cancels its waiting drafts), or a Slack thread, keyed by channel and thread root:
 
 - A top-level DM to Dinnerbell, or a top-level mention in the household channel, starts a conversation, and Dinnerbell replies in its thread.
 - A mention in the thread under a Dinnerbell post, such as a call or a reminder, starts one rooted there, and that post's call is the default call.

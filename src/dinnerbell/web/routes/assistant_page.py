@@ -28,7 +28,7 @@ from dinnerbell.domain.offers import OfferPath
 from dinnerbell.services import activity
 from dinnerbell.services.assistant import drafts
 from dinnerbell.services.assistant import history as web_history
-from dinnerbell.services.assistant.conversation import Assistant, Reply, converse
+from dinnerbell.services.assistant.conversation import MAX_MESSAGE_CHARS, Assistant, Reply, converse
 from dinnerbell.services.assistant.drafts import (
     CatalogReady,
     DraftUnavailable,
@@ -36,7 +36,7 @@ from dinnerbell.services.assistant.drafts import (
     OfferConfirmed,
     ProposalConfirmed,
 )
-from dinnerbell.services.assistant.history import Shown, WebConversation
+from dinnerbell.services.assistant.history import NOT_HERE, Shown, WebConversation
 from dinnerbell.services.assistant.runtime import available
 from dinnerbell.services.errors import Forbidden, NotFound
 from dinnerbell.services.variety import household_today
@@ -49,13 +49,13 @@ from dinnerbell.web.routes.catalog import draft_import_page
 
 router = APIRouter(prefix="/assistant")
 
-MAX_FORM_CHARS = 10_000
-"""The message field's limit. The service refuses anything over its own, smaller limit with a
-reply that says so; this only keeps a stray huge field from reaching it."""
+MAX_FORM_CHARS = 20_000
+"""The message field's limit on the server: well above the service's ``MAX_MESSAGE_CHARS``, even
+with each line break sent as CRLF, so a long message gets the service's reply saying so, not a
+bare 400. The textarea's ``maxlength`` is the service's limit."""
 SEND_TIMEOUT_MS = 120_000
 """How long the page waits for a reply. A message can take several model calls, well past the
 15 seconds base.html gives every other request."""
-NOT_HERE = "That page doesn't exist."
 NOTICES = {"cleared": "Started over. The conversation is gone, and its drafts are cancelled."}
 SERVICE_REFUSALS = (EventRuleViolation, InvalidResponse, Forbidden)
 
@@ -115,7 +115,7 @@ async def _page(
         "notice": notice,
         "outcome": outcome,
         "send_timeout": SEND_TIMEOUT_MS,
-        "max_chars": MAX_FORM_CHARS,
+        "max_chars": MAX_MESSAGE_CHARS,
     }
     return await render(request, "assistant.html", page, status_code=status_code)
 
@@ -148,7 +148,9 @@ async def send(
     text = _normalized(message).strip()
     before = await web_history.web_conversation(db, assistant.config, member, context.clock())
     reply = await converse(db, assistant, member, web_key(member.id), private=True, text=text)
-    if reply is None:  # an empty message, or the assistant turned off just now
+    if reply is None:
+        if text:  # turned off just now: a 404, as every route here is, so the box keeps the text
+            raise NotFound(NOT_HERE)
         return Response(status_code=204) if is_htmx(request) else local_redirect("/assistant")
     exchange = (Shown(True, text), Shown(False, reply.text))
     if is_htmx(request):

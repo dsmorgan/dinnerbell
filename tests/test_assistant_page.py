@@ -27,6 +27,7 @@ from dinnerbell.services.assistant import drafts
 from dinnerbell.services.assistant.conversation import FAILED
 from dinnerbell.services.assistant.drafts import EXPIRED, NO_SUCH_DRAFT, USED, OfferConfirmed, ProposalConfirmed
 from dinnerbell.services.offers import Posted
+from dinnerbell.web.routes import assistant_page
 from tests.conftest import BASE_URL, csrf_from, invite, page, sign_in
 from tests.support.clock import FakeClock
 from tests.support.fake_model import FakeModel, answer, failure, tool_call, usage
@@ -307,6 +308,25 @@ def test_the_cores_messages_show_as_they_are_and_arent_kept(
     assert rows(migrated, AssistantConversationRow) == []
     long = send(client, "x" * 4_001, **HX)
     assert "That message is too long for me." in page(long)
+    # Line breaks arrive as CRLF; well past the service's limit, the reply still says so.
+    longer = send(client, "line\r\n" * 2_500, **HX)
+    assert longer.status_code == 200 and "That message is too long for me." in page(longer)
+    assert 'maxlength="4000"' in client.get("/assistant").text
+
+
+@pytest.mark.flag("assistant", on=True)
+def test_turned_off_while_sending_is_a_404_so_the_text_stays(
+    client: TestClient, provider: FakeProvider, model: FakeModel, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    furnish(client, provider)
+    as_who(client, provider, "kim")
+
+    async def switched_off(*_args: Any, **_kwargs: Any) -> None:
+        return None  # what converse returns once the switch is off
+
+    monkeypatch.setattr(assistant_page, "converse", switched_off)
+    assert send(client, "Hello", **HX).status_code == 404
+    assert send(client, "Hello").status_code == 404
 
 
 @pytest.mark.flag("assistant", on=True)
@@ -577,6 +597,8 @@ def test_a_catalog_confirm_opens_an_add_only_preview_that_never_updates_a_match(
     assert preview.status_code == 200
     shown = page(preview)
     assert "This import comes from an assistant draft, so it only adds new items." in shown
+    assert '<a href="/catalog" aria-current="page">Catalog</a>' in shown  # the nav says Catalog
+    assert 'aria-current="page">Assistant' not in shown
     assert "Add 1 item" in shown and "Leave 1 matching item" in shown and "Update" not in shown
     content = re.search(r'<textarea name="content"[^>]*>\n?(.*?)</textarea>', shown, re.S)
     token = re.search(r'name="token" value="([^"]+)"', preview.text)
