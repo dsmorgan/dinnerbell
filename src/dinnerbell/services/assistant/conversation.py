@@ -8,7 +8,8 @@ the reservation to what the API reported, cache tokens included. Nothing waits o
 while holding the write lock.
 
 What goes out is the system prompt, the conversation in pseudonym form ("Member 1"), and what
-tools return. Names come back only in the reply text the member sees.
+tools return. Names come back only in the reply text the member sees. A menu link's drafting
+call (``menu_links``) is reserved and settled the same way, and sends only the page's text.
 """
 
 from __future__ import annotations
@@ -28,7 +29,6 @@ from dinnerbell.db.engine import write_transaction
 from dinnerbell.db.meals import household_settings
 from dinnerbell.db.repositories import HouseholdRepository, MemberRepository
 from dinnerbell.domain.assistant import (
-    PRICE_TABLE,
     Conversation,
     Pseudonyms,
     TokenUsage,
@@ -43,13 +43,16 @@ from dinnerbell.domain.assistant import (
     total_cost_micros,
 )
 from dinnerbell.domain.members import Member
-from dinnerbell.services.assistant.client import ModelCallFailed, ModelClient, ModelReply
+from dinnerbell.services.assistant.acting import ToolRefusal
+from dinnerbell.services.assistant.client import ModelCallFailed, ModelClient, ModelReply, with_fallback
 from dinnerbell.services.assistant.drafts import DraftView
+from dinnerbell.services.assistant.menu_links import MAX_LINK_DRAFTS, TOO_MANY_LINKS, PageFetcher
 from dinnerbell.services.assistant.prompt import system_prompt
 from dinnerbell.services.assistant.runtime import AssistantConfig, available
 from dinnerbell.services.assistant.tools import Tool, ToolSession, run_tool, tools_for
 from dinnerbell.services.clock import Clock
 from dinnerbell.services.errors import Forbidden, NotFound
+from dinnerbell.services.safe_fetch import FetchedPage, fetch_page
 
 log = logging.getLogger(__name__)
 
@@ -62,8 +65,6 @@ MAX_HISTORY_BYTES = 24_000
 MAX_STORED_BYTES = 4 * MAX_HISTORY_BYTES
 MAX_MESSAGE_CHARS = 4_000
 EFFORT = "medium"
-FALLBACK_BETA = "server-side-fallback-2026-07-01"
-"""Anthropic's server-side refusal fallback, in its ``"default"`` form (Claude API only)."""
 
 AT_CAP = (
     "The assistant has reached this month's spending limit, so it's unavailable until next month. "
@@ -85,6 +86,8 @@ class Assistant:
     config: AssistantConfig
     client: ModelClient
     clock: Clock
+    fetch: PageFetcher = fetch_page
+    """Fetches a menu link's page. Tests pass a fake; nothing else does."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -139,11 +142,7 @@ def build_request(
     }
     if tools:
         request["tools"] = [tool.definition() for tool in tools]
-    card = PRICE_TABLE.get(model)
-    if card is not None and card.falls_back_to:
-        request["fallbacks"] = "default"
-        request["betas"] = [FALLBACK_BETA]
-    return request
+    return with_fallback(request)
 
 
 def request_bytes(request: Mapping[str, Any]) -> int:
@@ -266,6 +265,65 @@ def _over_covered(reply: ModelReply, model: str, member: Member) -> bool:
     return True
 
 
+async def _check_room(db: AsyncSession, assistant: Assistant, member: Member, zone: ZoneInfo, reserved: int) -> None:
+    """Raise ``_Refused`` as ``_call`` would for a call reserving ``reserved``, reserving nothing."""
+    household_id = member.household_id
+    async with write_transaction(db):
+        settings = assistant_settings(await household_settings(db, household_id))
+        if not settings.enabled:
+            raise _Refused(TURNED_OFF)
+        month = month_key(assistant.clock(), zone)
+        if await AssistantRepository(db).month_total(household_id, month) + reserved > settings.cap_micros:
+            log.info("assistant at its monthly cap", extra={"member_id": member.id})
+            raise _Refused(AT_CAP)
+
+
+@dataclass
+class _LinkCalls:
+    """``menu_links.LinkCalls`` for one message: the fetch, and drafting calls through the same
+    reservations as the message's own, at most ``MAX_LINK_DRAFTS``. ``over`` records a drafting
+    call that overran, so the message makes no further calls."""
+
+    db: AsyncSession
+    assistant: Assistant
+    member: Member
+    zone: ZoneInfo
+    made: int = 0
+    over: bool = False
+
+    @property
+    def model(self) -> str:
+        return self.assistant.config.model
+
+    async def fetch(self, url: str) -> FetchedPage:
+        return await self.assistant.fetch(url)
+
+    def _reserved(self, request: Mapping[str, Any]) -> int:
+        return reservation_micros(
+            str(request["model"]), payload_bytes=request_bytes(request), max_tokens=int(request["max_tokens"])
+        )
+
+    async def check_room(self, request: Mapping[str, Any]) -> None:
+        if self.made >= MAX_LINK_DRAFTS:
+            raise ToolRefusal(TOO_MANY_LINKS)
+        if self.over:
+            raise ToolRefusal(FAILED)
+        try:
+            await _check_room(self.db, self.assistant, self.member, self.zone, self._reserved(request))
+        except _Refused as refused:
+            raise ToolRefusal(refused.reply) from None
+
+    async def call(self, request: Mapping[str, Any]) -> ModelReply:
+        """Counts toward ``MAX_LINK_DRAFTS``; ``draft_from_link`` calls ``check_room`` first."""
+        self.made += 1
+        try:
+            reply, overran = await _call(self.db, self.assistant, self.member, self.zone, request)
+        except _Refused as refused:
+            raise ToolRefusal(refused.reply) from None
+        self.over = _over_covered(reply, str(request["model"]), self.member) or overran or self.over
+        return reply
+
+
 async def _keep(
     db: AsyncSession,
     assistant: Assistant,
@@ -339,8 +397,10 @@ async def _run_loop(
     tools = tools_for(private)
     written = 0  # output tokens of this message's calls so far
     over = False  # a call billed more attempts than its reservation covered
+    links = _LinkCalls(db, assistant, member, zone)
+    session.links = links
     for _ in range(MAX_MODEL_CALLS):
-        if over:
+        if over or links.over:
             return FAILED, False  # refuse further calls in this message
         request = build_request(assistant.config.model, tools, messages, keeps_history=keeps_history)
         try:

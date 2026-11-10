@@ -13,7 +13,20 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from dinnerbell.domain.assistant import TokenUsage
+from dinnerbell.domain.assistant import PRICE_TABLE, TokenUsage
+
+FALLBACK_BETA = "server-side-fallback-2026-07-01"
+"""Anthropic's server-side refusal fallback, in its ``"default"`` form (Claude API only)."""
+
+
+def with_fallback(request: dict[str, Any]) -> dict[str, Any]:
+    """``request`` with the server-side refusal fallback when its model has one. The reservation
+    covers each model the fallback can run on (``domain.assistant.reservation_micros``)."""
+    card = PRICE_TABLE.get(str(request["model"]))
+    if card is not None and card.falls_back_to:
+        request["fallbacks"] = "default"
+        request["betas"] = [FALLBACK_BETA]
+    return request
 
 
 @dataclass(frozen=True, slots=True)

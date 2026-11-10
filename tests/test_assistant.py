@@ -204,6 +204,7 @@ class TestAssistantOn:
             "draft_proposal",
             "draft_offer",
             "draft_catalog_items",
+            "draft_catalog_from_link",
         ]
         for tool in request["tools"]:
             assert tool["strict"] is True

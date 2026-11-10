@@ -31,6 +31,7 @@ from dinnerbell.db.repositories import HouseholdRepository
 from dinnerbell.domain.assistant_drafts import (
     DRAFT_MINUTES,
     MAX_OPEN_DRAFTS,
+    CleanCatalog,
     Draft,
     DraftKind,
     Narrowing,
@@ -45,7 +46,7 @@ from dinnerbell.domain.assistant_drafts import (
     proposal_lines,
 )
 from dinnerbell.domain.catalog import CatalogItem, Mode, kind_for, name_key
-from dinnerbell.domain.catalog_file import parse_catalog
+from dinnerbell.domain.catalog_file import ParsedCatalog, parse_catalog
 from dinnerbell.domain.catalog_import import ImportPlan
 from dinnerbell.domain.events import (
     MODE_OFFER,
@@ -300,18 +301,35 @@ async def draft_catalog_items(db: AsyncSession, actor: Member, key: str, text: s
     if parsed.errors:
         shown = "; ".join(str(e) for e in parsed.errors[:MAX_ERRORS_SHOWN])
         raise ToolRefusal(f"That isn't a valid catalog file: {shown}. Fix it and try again.")
+    draft, _ = await draft_parsed_catalog(db, actor, key, parsed, now=now)
+    return draft
+
+
+LINK_NOT_IMPORTABLE = "The items read from that page can't be imported. Add them on the Catalog page instead."
+
+
+async def draft_parsed_catalog(
+    db: AsyncSession, actor: Member, key: str, parsed: ParsedCatalog, *, now: datetime, from_page: bool = False
+) -> tuple[Draft, CleanCatalog]:
+    """A catalog draft of ``parsed``, which has no errors: entries the catalog has are dropped
+    and listed, and ``cooks`` and ``active`` are stripped. ``from_page`` is True for entries a
+    drafting call read from a web page: then a file the import refuses gets a fixed refusal,
+    because the import's errors quote the file, and the page wrote it."""
     items = await CatalogRepository(db).items(actor.household_id)
     clean = clean_catalog(parsed, items)
     if not clean.added:
         raise ToolRefusal(f"The catalog has all of those already: {', '.join(clean.dropped)}. Nothing to add.")
     plan = await catalog_service.preview_import(db, actor.household_id, clean.text, add_only=True)
     if not plan.ok:
+        if from_page:
+            raise ToolRefusal(LINK_NOT_IMPORTABLE)
         shown = "; ".join(str(e) for e in plan.errors[:MAX_ERRORS_SHOWN])
         raise ToolRefusal(f"That file can't be imported: {shown}. Fix it and try again.")
     count = len(clean.added)
     title = f"Add {count} {'item' if count == 1 else 'items'} to the catalog"
     payload = {"content": clean.text, "added": list(clean.added), "dropped": list(clean.dropped)}
-    return await _store(db, actor, key, DraftKind.CATALOG, payload, title, catalog_lines(clean), event=None, now=now)
+    lines = catalog_lines(clean)
+    return await _store(db, actor, key, DraftKind.CATALOG, payload, title, lines, event=None, now=now), clean
 
 
 async def waiting(db: AsyncSession, member: Member, key: str, now: datetime) -> list[DraftView]:
