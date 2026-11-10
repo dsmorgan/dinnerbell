@@ -34,6 +34,7 @@ from dinnerbell.domain.assistant import (
     TokenUsage,
     Turn,
     assistant_settings,
+    attempts_covered,
     check_key,
     known_model,
     month_key,
@@ -231,6 +232,18 @@ async def _call(
     return reply
 
 
+def _over_covered(reply: ModelReply, model: str, member: Member) -> bool:
+    """Whether the API billed more attempts than the reservation covered. The cost is recorded
+    as it was; the message makes no further calls."""
+    if len(reply.usage) <= attempts_covered(model):
+        return False
+    log.error(
+        "assistant call billed more attempts than reserved",
+        extra={"member_id": member.id, "attempts": len(reply.usage), "covered": attempts_covered(model)},
+    )
+    return True
+
+
 async def _keep(
     db: AsyncSession,
     assistant: Assistant,
@@ -255,6 +268,10 @@ async def _keep(
             return
         now = assistant.clock()
         latest = await repo.conversation(household_id, key)
+        if latest is not None and (latest.private != private or (private and latest.owner_member_id != member.id)):
+            # Changed hands since ``converse`` checked: never merge into someone else's conversation.
+            log.warning("assistant exchange not kept: the conversation changed hands", extra={"member_id": member.id})
+            return
         if latest is not None and latest.expired(now, hours):
             latest = None
         pseudonyms = sent.onto(latest.pseudonyms if latest else Pseudonyms())
@@ -293,13 +310,17 @@ async def _run_loop(
     exchange is worth keeping) rather than Dinnerbell replying for it."""
     tools = tools_for(private)
     written = 0  # output tokens of this message's calls so far
+    over = False  # a call billed more attempts than its reservation covered
     for _ in range(MAX_MODEL_CALLS):
+        if over:
+            return FAILED, False  # refuse further calls in this message
         request = build_request(assistant.config.model, tools, messages, keeps_history=keeps_history)
         try:
             reply = await _call(db, assistant, member, zone, request, earlier_output_tokens=written)
         except _Refused as refused:
             return refused.reply, False
         written += sum(part.output_tokens for part in reply.usage)
+        over = _over_covered(reply, str(request["model"]), member)
         # Check why it stopped before running any tool: a refusal or a cut-off can leave a
         # tool call half-written.
         if reply.stop_reason == "refusal":

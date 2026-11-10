@@ -260,8 +260,9 @@ def reservation_micros(model: str, *, payload_bytes: int, max_tokens: int, extra
     earlier calls, which goes back as signed blocks and bills as input. Every input token is
     priced at the higher of the input and cache-write prices, and ``max_tokens`` of output
     (thinking included) at the output price. A model with a server-side fallback can run the
-    request again on a fallback model, or a sticky conversation can run it there instead, so a
-    second attempt is bounded at the highest prices among its fallback models."""
+    request again on each of its fallback models in turn, each one billing, or a sticky
+    conversation can run it there instead, so each possible hop adds an attempt at the highest
+    prices among those models (``attempts_covered``)."""
     input_tokens = payload_bytes + OVERHEAD_TOKENS + extra_input_tokens
     card = PRICE_TABLE.get(model)
     if card is None:
@@ -269,8 +270,15 @@ def reservation_micros(model: str, *, payload_bytes: int, max_tokens: int, extra
     bound = _attempt_bound(card.prices_for(input_tokens), input_tokens, max_tokens)
     fallback = fallback_prices(card)
     if fallback is not None:
-        bound += _attempt_bound(fallback, input_tokens, max_tokens)
+        bound += len(card.falls_back_to) * _attempt_bound(fallback, input_tokens, max_tokens)
     return bound
+
+
+def attempts_covered(model: str) -> int:
+    """How many billed attempts one reservation for ``model`` covers: the model itself, and one
+    hop to each model its fallback can run on."""
+    card = PRICE_TABLE.get(model)
+    return 1 + (len(card.falls_back_to) if card is not None else 0)
 
 
 def month_key(now: datetime, zone: tzinfo) -> str:
