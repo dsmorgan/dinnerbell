@@ -533,6 +533,20 @@ async def _run_loop(
     return TOO_MANY_STEPS, False
 
 
+def _theirs(stored: Conversation, member: Member, *, private: bool) -> bool:
+    """Whether ``member`` may add to ``stored``: it's as private as the new message, and a
+    private one is their own."""
+    return stored.private == private and (not private or stored.owner_member_id == member.id)
+
+
+async def may_converse(db: AsyncSession, member: Member, key: str, *, private: bool) -> bool:
+    """Whether ``converse`` would take ``member``'s message in ``key`` rather than raise
+    Forbidden, as of now. Slack asks first, so a refused message shows no working indicator;
+    ``converse`` checks again itself."""
+    stored = await AssistantRepository(db).conversation(member.household_id, key)
+    return stored is None or _theirs(stored, member, private=private)
+
+
 async def converse(
     db: AsyncSession,
     assistant: Assistant,
@@ -566,7 +580,7 @@ async def converse(
     repo = AssistantRepository(db)
     stored = await repo.conversation(household.id, key)
     if stored is not None:
-        if stored.private != private or (private and stored.owner_member_id != member.id):
+        if not _theirs(stored, member, private=private):
             raise Forbidden("That conversation belongs to someone else.")
         if stored.expired(assistant.clock(), hours):
             stored = None  # past Conversation hours: never sent, and replaced below

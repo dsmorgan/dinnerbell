@@ -83,7 +83,14 @@ from dinnerbell.domain.members import Member
 from dinnerbell.domain.notifications import MessageRef, PermanentDeliveryError
 from dinnerbell.logs import member_id_var
 from dinnerbell.services import activity, outbox, slack_members
-from dinnerbell.services.assistant.conversation import FAILED, Assistant, NamingText, Reply, converse
+from dinnerbell.services.assistant.conversation import (
+    FAILED,
+    Assistant,
+    NamingText,
+    Reply,
+    converse,
+    may_converse,
+)
 from dinnerbell.services.assistant.drafts import (
     USED,
     CatalogReady,
@@ -433,7 +440,7 @@ class SlackAssistant:
         """Of those, the ones already told ``STILL_ON_IT``, so a burst gets one notice."""
         self.draft_lock = asyncio.Lock()
         """Draft taps, one at a time, so a double tap's second finds the first's result."""
-        self.indicators = Indicators(api)
+        self.indicators = Indicators(api, assistant.clock)
         """The working indicator each answered message shows until its reply (``working``)."""
         self.settled = _Bounded()
         """Drafts confirmed or cancelled from a card since start, by member and draft ID: a
@@ -525,6 +532,10 @@ class SlackAssistant:
         text = readable(incoming.text, self.bot_user_id)
         if not text:
             return
+        if not await self._theirs(member, key, incoming):
+            return
+        # Nothing awaits from here to adding the member to ``answering``, so two of their
+        # messages can't both get past this check.
         if member.id in self.answering:
             if member.id not in self.told:
                 self.told.add(member.id)
@@ -541,12 +552,21 @@ class SlackAssistant:
             if reply is not None:
                 await self._deliver(incoming, member, key, reply)
         except asyncio.CancelledError:
-            working.cancel()
+            await working.cancel()
             raise
         except Exception:
             await working.stop()
             raise
         await working.stop()
+
+    async def _theirs(self, member: Member, key: str, incoming: Incoming) -> bool:
+        """Whether ``member`` may add to the conversation ``key``, checked before the working
+        indicator shows. ``converse`` checks again."""
+        async with self.sessionmaker() as db:
+            if await may_converse(db, member, key, private=incoming.private):
+                return True
+        log.warning("slack message to the assistant refused: the conversation isn't theirs")
+        return False
 
     async def _deliver(self, incoming: Incoming, member: Member, key: str, reply: Reply) -> None:
         """Post ``reply`` and its draft cards in the message's thread: publicly, or only to the

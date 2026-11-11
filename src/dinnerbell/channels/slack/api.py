@@ -77,10 +77,6 @@ PERMANENT = frozenset(
         "invalid_charset",
         "invalid_post_type",
         "missing_post_type",
-        # The method doesn't work in this conversation, or for this app.
-        "method_not_supported_for_channel_type",
-        "no_permission",
-        "access_denied",
     }
 )
 RATE_LIMITED = frozenset({"ratelimited", "rate_limited"})
@@ -104,7 +100,13 @@ method only, so they don't."""
 
 class SlackUnavailable(ChannelUnavailable):
     """A Slack call failed in a way that may work later. Safe to log. The drainer ends its pass
-    on it, so an outage costs one timeout per drain, not one per row."""
+    on it, so an outage costs one timeout per drain, not one per row. ``code`` is Slack's error
+    code when Slack answered, such as ``no_permission`` or ``http_503``, and None when it didn't:
+    a timeout or a transport error, after which the call may still have taken effect."""
+
+    def __init__(self, message: str, *, code: str | None = None) -> None:
+        super().__init__(message)
+        self.code = code
 
 
 BLOCK_ERRORS = frozenset({"invalid_blocks", "invalid_blocks_format", "invalid_arguments"})
@@ -120,16 +122,16 @@ class SlackAuthError(SlackUnavailable):
     """Slack refused the token. ``code`` is Slack's error code, such as ``invalid_auth``."""
 
     def __init__(self, message: str, *, code: str) -> None:
-        super().__init__(message)
-        self.code = code
+        super().__init__(message, code=code)
+        self.code: str = code
 
 
 class SlackRateLimited(SlackUnavailable):
     """Slack asked the app to slow down. ``retry_after`` is how long it asked to wait, in
     seconds, which the outbox drainer honors (docs/channels.md)."""
 
-    def __init__(self, message: str, *, retry_after: float) -> None:
-        super().__init__(message)
+    def __init__(self, message: str, *, retry_after: float, code: str = "ratelimited") -> None:
+        super().__init__(message, code=code)
         self.retry_after = retry_after
 
 
@@ -184,12 +186,14 @@ def translate(method: str, exc: BaseException) -> Exception:
         if code in RATE_LIMITED or status == 429:
             wait = _retry_after(exc)
             seconds = int(wait.total_seconds())
-            return SlackRateLimited(f"Slack rate-limited {method}; retry after {seconds}s", retry_after=seconds)
+            return SlackRateLimited(
+                f"Slack rate-limited {method}; retry after {seconds}s", retry_after=seconds, code=code
+            )
         if code in PERMANENT:
             return PermanentDeliveryError(f"Slack {method} failed: {code}", code=code, detail=error_detail(exc))
         if code in AUTH:
             return SlackAuthError(f"Slack {method} failed: {code}", code=code)
-        return SlackUnavailable(f"Slack {method} failed: {code}")
+        return SlackUnavailable(f"Slack {method} failed: {code}", code=code)
     if isinstance(exc, asyncio.TimeoutError | TimeoutError):
         return SlackUnavailable(f"Slack {method} timed out")
     return SlackUnavailable(f"Slack {method} failed: {type(exc).__name__}")
@@ -336,7 +340,7 @@ class SlackApi:
         if response.status_code != 200:
             code = _webhook_code(response.body, response.status_code)
             if response.status_code >= 500:
-                raise SlackUnavailable(f"Slack response_url failed: {code}")
+                raise SlackUnavailable(f"Slack response_url failed: {code}", code=code)
             raise PermanentDeliveryError(f"Slack response_url failed: {code}")
 
     async def open_view(self, trigger_id: str, view: dict[str, Any]) -> None:
