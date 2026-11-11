@@ -112,7 +112,7 @@ async def test_it_streams_the_request_once_with_the_fallback_beta() -> None:
     body = json.loads(sent.content)
     assert body["stream"] is True and body["fallbacks"] == "default"
     assert body["thinking"] == {"type": "adaptive"} and body["output_config"] == {"effort": "medium"}
-    assert body["tools"][0]["strict"] is True and "betas" not in body
+    assert "strict" not in body["tools"][0] and "betas" not in body
     assert reply.content == ({"type": "text", "text": "Hello."},)
     assert reply.stop_reason == "end_turn"
     assert reply.usage == (TokenUsage("claude-sonnet-5-5", 10, 5, cache_read_tokens=3, cache_write_tokens=2),)
