@@ -491,6 +491,111 @@ async def test_two_answers_in_one_thread_clear_the_status_only_after_the_last(sl
     assert slack.conn.assistant.indicators.threads == {}
 
 
+def held_model(slack: Slack) -> Held:
+    held = Held()
+    assert slack.conn.assistant is not None
+    object.__setattr__(slack.conn.assistant.assistant, "client", held)
+    return held
+
+
+async def a_few_turns() -> None:
+    """Let every task that can run do so, to show a call isn't made while it's held up."""
+    for _ in range(50):
+        await asyncio.sleep(0)
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_the_last_clear_waits_for_a_status_set_again_before_it(slack: Slack) -> None:
+    held = held_model(slack)
+    root = next_ts()
+    await send(slack.conn.app, "events_api", mention_event("U02SAM", f"<@{BOT_USER}> hi", ts=root))
+    await until(lambda: len(held.held) == 1)
+    await send(slack.conn.app, "events_api", mention_event("U03KIM", f"<@{BOT_USER}> me too", thread_ts=root))
+    await until(lambda: len(held.held) == 2 and len(slack.fake.of(SET_STATUS)) == 2)
+    resetting = slack.fake.gates[SET_STATUS] = asyncio.Event()  # Sam's set-again hangs
+    held.held[0].set()
+    await until(lambda: len(slack.fake.of(SET_STATUS)) == 3)
+    held.held[1].set()
+    await until(lambda: len(slack.fake.of("chat.postMessage")) == 2)
+    await a_few_turns()
+    assert len(slack.fake.of(SET_STATUS)) == 3  # Kim's clear waits for it
+    resetting.set()
+    await slack.conn.interactions.settle()
+    statuses = [call for call in steps(slack) if call[0] == SET_STATUS]
+    assert statuses == [status_set(CHANNEL, root)] * 3 + [status_cleared(CHANNEL, root)]
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_a_message_that_starts_during_the_last_clear_keeps_its_status(slack: Slack) -> None:
+    held = held_model(slack)
+    root = next_ts()
+    await send(slack.conn.app, "events_api", mention_event("U02SAM", f"<@{BOT_USER}> hi", ts=root))
+    await until(lambda: len(held.held) == 1 and len(slack.fake.of(SET_STATUS)) == 1)
+    assert slack.conn.assistant is not None
+    threads = slack.conn.assistant.indicators.threads
+    thread = threads[(CHANNEL, root)]
+    clearing = slack.fake.gates[SET_STATUS] = asyncio.Event()  # Sam's clear hangs
+    held.held[0].set()
+    await until(lambda: len(slack.fake.of(SET_STATUS)) == 2)
+    await send(slack.conn.app, "events_api", mention_event("U03KIM", f"<@{BOT_USER}> me too", thread_ts=root))
+    await until(lambda: len(held.held) == 2)
+    await a_few_turns()
+    assert threads[(CHANNEL, root)] is thread and thread.active == 1  # Kim joined the thread's entry
+    assert len(slack.fake.of(SET_STATUS)) == 2  # and waits to set the status until the clear is done
+    clearing.set()
+    await until(lambda: len(slack.fake.of(SET_STATUS)) == 3)
+    held.held[1].set()
+    await slack.conn.interactions.settle()
+    statuses = [call for call in steps(slack) if call[0] == SET_STATUS]
+    assert statuses == [status_set(CHANNEL, root), status_cleared(CHANNEL, root)] * 2
+    assert threads == {}
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_a_second_cancel_doesnt_stop_the_clear(slack: Slack) -> None:
+    slow = slow_model(slack)
+    root = next_ts()
+    await send(slack.conn.app, "events_api", message_event("U02SAM", "First", channel=SAM_DM, ts=root))
+    await until(lambda: slow.started == 1 and bool(slack.fake.of(SET_STATUS)))
+    clearing = slack.fake.gates[SET_STATUS] = asyncio.Event()  # the clear after the cancel hangs
+    cancel_answers(slack)
+    await until(lambda: len(slack.fake.of(SET_STATUS)) == 2)
+    cancel_answers(slack)  # again, while the clear is in flight
+    await slack.conn.interactions.settle()
+    assert slack.conn.interactions.tasks == set()
+    clearing.set()
+    await until(lambda: not working._clearing)
+    assert steps(slack) == [status_set(SAM_DM, root), status_cleared(SAM_DM, root)]
+    assert slack.conn.assistant is not None and slack.conn.assistant.indicators.threads == {}  # it finished
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_a_cancel_stops_waiting_for_a_hung_clear_after_cancel_seconds(
+    slack: Slack, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.INFO, logger="dinnerbell.channels.slack.working")
+    monkeypatch.setattr(working, "STEP_SECONDS", 60.0)  # so only CANCEL_SECONDS can end the wait
+    monkeypatch.setattr(working, "CANCEL_SECONDS", 0.05)
+    slow = slow_model(slack)
+    await send(slack.conn.app, "events_api", message_event("U02SAM", "First", channel=SAM_DM))
+    await until(lambda: slow.started == 1 and bool(slack.fake.of(SET_STATUS)))
+    slack.fake.gates[SET_STATUS] = asyncio.Event()  # never set: Slack doesn't answer the clear
+    tasks = set(slack.conn.interactions.tasks)
+    cancel_answers(slack)
+    done, _ = await asyncio.wait(tasks, timeout=10)
+    assert done == tasks
+    assert "slack working indicator not cleared in time after a cancel" in caplog.text
+
+
+@pytest.mark.flag("assistant", on=True)
+@pytest.mark.parametrize("code", ["channel_not_found", "invalid_arguments"])
+async def test_a_status_slack_answered_with_a_permanent_error_isnt_cleared(slack: Slack, code: str) -> None:
+    slack.fake.fail(SET_STATUS, Failure(code))  # PermanentDeliveryError: Slack answered, so it isn't showing
+    slack.fake.fail("reactions.add", Failure("message_not_found"))  # the same for the reaction
+    await slack.dm("Sam", "Hi")
+    assert methods(slack) == [SET_STATUS, "reactions.add", "chat.postMessage"]  # nothing to clear
+
+
 @pytest.mark.flag("assistant", on=True)
 async def test_a_message_in_someone_elses_conversation_gets_no_indicator(house: House, slack: Slack) -> None:
     root = next_ts()
