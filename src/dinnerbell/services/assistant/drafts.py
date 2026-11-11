@@ -10,7 +10,7 @@ everything again, so a stale draft gets the service's own error and nothing chan
 
 A call action's draft (#251) comes from ``call_drafts``, which says what Confirm does and runs
 its use case; ``store_action`` stores it. So does a draft of the member's own data (#253), from
-``own_drafts``.
+``own_drafts``, and a coordinating draft (#252), from ``coordinating``.
 
 A catalog draft's Confirm opens the web import preview, which only adds: the import re-plans
 with ``add_only``, so an item that appeared meanwhile is left alone.
@@ -34,6 +34,7 @@ from dinnerbell.db.meals import household_settings
 from dinnerbell.db.repositories import HouseholdRepository
 from dinnerbell.domain.assistant_drafts import (
     CALL_ACTIONS,
+    COORDINATING,
     DRAFT_MINUTES,
     MAX_OPEN_DRAFTS,
     OWN_DATA,
@@ -73,7 +74,7 @@ from dinnerbell.domain.offers import OfferPath, check_capacity, offer_time
 from dinnerbell.domain.schedule import slot_schedule
 from dinnerbell.services import calls, lifecycle, offers, picks
 from dinnerbell.services import catalog as catalog_service
-from dinnerbell.services.assistant import call_drafts, own_drafts
+from dinnerbell.services.assistant import call_drafts, coordinating, own_drafts
 from dinnerbell.services.assistant.acting import ToolRefusal, tool_actor
 from dinnerbell.services.assistant.call_drafts import ActionConfirmed, DraftSpec
 from dinnerbell.services.assistant.candidates import Labeler, as_proposer, find_candidates
@@ -464,6 +465,13 @@ async def confirm_draft(
             await _use(db, draft, actor, now)
 
         return await own_drafts.confirm(db, actor, draft, now=now, use=use)
+    if draft.kind in COORDINATING:
+        today, _ = await _today(db, actor.household_id, now)
+
+        async def use_it() -> None:
+            await _use(db, draft, actor, now)
+
+        return await coordinating.confirm(db, actor, draft, today=today, now=now, use=use_it)
     return await _confirm_catalog(db, actor, draft, now)
 
 

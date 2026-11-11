@@ -70,6 +70,16 @@ CONFIGURED = AssistantConfig(key_set=True, flag_on=True)
 NEXT_DAY = DONE_AT + timedelta(hours=16)
 """Noon the day after the dinner, in the household's time zone: the dinner was last night."""
 TODAY = date(2026, 10, 23)
+COORDINATING_TOOLS = {
+    "look_up_coordinating",
+    "draft_decide",
+    "draft_shuffle",
+    "draft_plan",
+    "draft_hand_off",
+    "draft_mark_done",
+    "draft_call_off",
+}
+"""Private only too, from #252: ``tests.test_assistant_coordinating`` covers them."""
 OWN_TOOLS = {"look_up_my_preferences", "draft_preference", "look_up_my_feedback", "draft_feedback", "draft_away"}
 PRIVACY = (
     "Only you see your rating and what went wrong. The household sees a summary of everyone's, never who said what."
@@ -301,7 +311,8 @@ async def test_veto_mushrooms_drafts_a_preference_change_and_confirm_saves_it_on
 async def test_exactly_the_own_data_tools_are_private_only() -> None:
     """A new tool that reads or changes the member's own data must be private-only, and the
     tests below cover each one, from the registry."""
-    assert {t.name for t in tools.TOOLS if t.private_only} == OWN_TOOLS == set(SAMPLES)
+    own = {t.name for t in tools.TOOLS if t.private_only} - COORDINATING_TOOLS
+    assert own == OWN_TOOLS == set(SAMPLES)
     assert {t.name for t in tools.tools_for(False)}.isdisjoint(OWN_TOOLS)
     assert {t.name for t in tools.tools_for(True)} >= OWN_TOOLS
 

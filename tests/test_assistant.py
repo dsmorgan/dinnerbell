@@ -228,6 +228,13 @@ class TestAssistantOn:
             "look_up_my_feedback",
             "draft_feedback",
             "draft_away",
+            "look_up_coordinating",
+            "draft_decide",
+            "draft_shuffle",
+            "draft_plan",
+            "draft_hand_off",
+            "draft_mark_done",
+            "draft_call_off",
         ]
         for tool in request["tools"]:
             assert tool["strict"] is True
