@@ -163,6 +163,29 @@ async def test_permanent_errors(code: str) -> None:
 async def test_transient_errors(failure: Failure, kind: type[Exception], message: str) -> None:
     error = await post_fails(failure)
     assert type(error) is kind and str(error) == message
+    assert isinstance(error, SlackUnavailable)
+    assert error.code == (failure.error or (f"http_{failure.status}" if failure.raises is None else None))
+
+
+@pytest.mark.parametrize("code", ["no_permission", "access_denied", "method_not_supported_for_channel_type"])
+async def test_the_working_indicators_refusals_stay_retryable_for_every_other_call(code: str) -> None:
+    """The indicator reads these codes from ``SlackUnavailable.code``; a delivery that gets one
+    still retries, as before #265."""
+    error = await post_fails(Failure(code))
+    assert type(error) is SlackUnavailable and error.code == code
+    assert str(error) == f"Slack chat.postMessage failed: {code}"
+
+
+async def test_the_drainer_retries_a_no_permission_refusal(house: House) -> None:
+    slack = await wire(house)
+    house.clock.now = OPENS
+    await house.tick()
+    slack.fake.fail("chat.postMessage", Failure("no_permission"))
+    result = await slack.drain()
+    assert (result.retrying, result.failed) == (1, 0)
+    (row,) = await house.outbox()
+    house.clock.now = row.available_at
+    assert (await slack.drain()).delivered == 1
 
 
 async def test_the_drainer_retries_rate_limits_and_closes_permanent_failures(house: House) -> None:
