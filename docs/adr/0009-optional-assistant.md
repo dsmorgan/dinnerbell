@@ -33,6 +33,8 @@ The first build has #17's tools: find candidates (a new read-only use case over 
 
 **Minimal data, no names.** Dinnerbell sends the conversation, the call's basics, and what tools return. Members appear as "Member 1", "Member 2", and so on, fixed for each conversation; Dinnerbell puts names back only for display. No preferences, vetoes, ratings, notes, emails, Slack IDs, or stored guest details leave the house, except the member's own, in a private conversation, when they ask. Candidates come in name order, without hints, "favorite" sentences, or what the filters removed.
 
+Amended 2026-11-11 (#264, owner's decision): the meal-history tool may also send each item's household hint (ADR 0008), the same text every member sees. No per-member ratings are sent.
+
 **A monthly cost cap.** Each household has a cap in US dollars, $5 a month by default, set in Admin. Dinnerbell reserves each model call's worst case first, so spending never passes it; Admin shows usage per member. At the cap, the assistant is unavailable until next month, and everything else works.
 
 **Fetched pages and catalog text are data, never instructions.** A menu link is fetched only over HTTPS from a public address. A drafting call with no tools reads the page. Injection can't widen what the assistant can do: tools act as the member, and every change waits for their **Confirm**.

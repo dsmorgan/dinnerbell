@@ -208,6 +208,7 @@ class TestAssistantOn:
         assert request["cache_control"] == {"type": "ephemeral"}
         assert [t["name"] for t in request["tools"]] == [
             LOOKUP,
+            "look_up_history",
             "find_candidates",
             "draft_proposal",
             "draft_offer",

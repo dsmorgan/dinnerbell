@@ -89,7 +89,7 @@ On Admin > **Assistant**, the admin also sets the household's **Monthly cap**, $
 
 The cap is kept in the database, so it covers one installation: production and a [test instance](test-instance.md) each have their own cap and usage. As a backstop, also set a monthly spend limit on the key's workspace in the Anthropic Console, and give the test instance its own key, so its spending shows apart and a limit on one doesn't stop the other.
 
-Dinnerbell sends Anthropic the conversation and what the assistant looks up, with members as "Member 1", "Member 2", and so on. It never sends names, emails, Slack IDs, preferences, vetoes, ratings, or notes, except what a member writes in their own message. Your Anthropic API terms govern how long Anthropic keeps requests.
+Dinnerbell sends Anthropic the conversation and what the assistant looks up, with members as "Member 1", "Member 2", and so on. It never sends names, emails, Slack IDs, preferences, vetoes, anyone's ratings, or notes, except what a member writes in their own message. To answer questions about what the household has eaten, it sends each item's household hint, such as "Well liked", the same words every member sees on Catalog. Your Anthropic API terms govern how long Anthropic keeps requests.
 
 `compose.secrets.yaml` doesn't mount the key, because every file it lists must exist and the key is optional. To keep the key in a file, create `secrets/DINNERBELL_ANTHROPIC_API_KEY` the way [Keep secrets in files](setup.md#keep-secrets-in-files) describes, and add a `compose.override.yaml` next to `compose.yaml`:
 
