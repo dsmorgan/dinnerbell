@@ -266,10 +266,6 @@
   {#- The coordinator's context line after a shuffle (FR-61): plain words, a name and no more. -#}
   {% if v.info.shuffle_note %}<p class="small muted shuffle-note">{{ v.info.shuffle_note }}</p>{% endif %}
   {% if v.can.break_tie %}<p class="small">Tied for the most votes. As {{ "coordinator" if principal.member.id == e.coordinator_id else "an admin" }}, you can choose one of the tied proposals.</p>{% endif %}
-  {% if v.can.shuffle %}
-  <div class="button-row">{{ act(e.id, base ~ "/shuffle", labels.SHUFFLE, "button quiet", {"run": e.run}, confirm=labels.web_confirm(labels.SHUFFLE_TITLE, labels.SHUFFLE_EFFECT)) }}
-    <span class="small muted">{{ v.shuffles_left }} left</span></div>
-  {% endif %}
   <ol class="proposals">
     {% for p in v.proposals %}
     <li class="proposal">
@@ -315,6 +311,15 @@
     </li>
     {% endfor %}
   </ol>
+  {#- Shuffle sits under the list, where Slack puts it (#267): bordered, so it reads as a button,
+      but without Vote's fill. The coordinator and admins see it while a shuffle is left. -#}
+  {% if v.can.shuffle %}
+  <div class="button-row shuffle-row" role="group" aria-label="Coordinator actions for the proposals">
+    <span class="coordinator-label">Coordinator</span>
+    {{ act(e.id, base ~ "/shuffle", labels.SHUFFLE, "button small", {"run": e.run}, confirm=labels.web_confirm(labels.SHUFFLE_TITLE, labels.SHUFFLE_EFFECT)) }}
+    <span class="small muted">{{ v.shuffles_left }} left</span>
+  </div>
+  {% endif %}
   {% if v.can.propose %}
   <details class="details-form">
     <summary class="small">Add a proposal</summary>
