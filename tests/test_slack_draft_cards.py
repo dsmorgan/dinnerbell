@@ -723,7 +723,7 @@ async def test_the_mention_only_line_reaches_each_member_once_and_then_the_threa
     await slack.mention("Kim", f"<@{BOT_USER}> propose", ts=root)
     await slack.mention("Kim", f"<@{BOT_USER}> and again", thread_ts=root)
     await slack.mention("Lee", f"<@{BOT_USER}> me too", thread_ts=root)
-    bodies = [(e["user"], note in e["text"]) for e in ephemerals(slack) if not e.get("blocks")]
+    bodies = [(e["user"], note in e["text"]) for e in ephemerals(slack) if e["blocks"][0]["type"] == "markdown"]
     assert bodies == [("U03KIM", True), ("U03KIM", False), ("U04LEE", True)]  # once to each
     assert posts(slack) == []
     plain = Reply("Taqueria, then.")

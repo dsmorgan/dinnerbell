@@ -1,6 +1,10 @@
 {#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
-{#- Expects: t, a Shown (mine, text). The text is plain: autoescaped, never Markdown, never linked (ADR 0009). -#}
+{#- Expects: t, a Shown (mine, text). The member's text is plain. A reply shows a small, safe subset of Markdown (web/reply_markdown.py): escaped first, never linked, never HTML (ADR 0009, #284). -#}
 <div class="turn {{ 'turn-mine' if t.mine else 'turn-reply' }}">
   <p class="turn-who small">{{ "You" if t.mine else "Assistant" }}</p>
+  {%- if t.mine %}
   <p class="turn-text">{{ t.text }}</p>
+  {%- else %}
+  <div class="turn-text turn-markdown">{{ t.text | reply_markdown }}</div>
+  {%- endif %}
 </div>

@@ -32,7 +32,7 @@ from dinnerbell.channels.slack.assistant import (
     home_line,
     mention_only_line,
     readable,
-    reply_text,
+    reply_message,
     safe_reply,
 )
 from dinnerbell.config import Settings
@@ -455,7 +455,10 @@ async def test_a_reply_with_drafts_in_the_channel_goes_only_to_its_author(
     sent, *cards = [c.args for c in slack.fake.of("chat.postEphemeral")]
     for each in (sent, *cards):
         assert (each["channel"], each["user"], each["thread_ts"]) == (CHANNEL, "U02SAM", root)
-    assert sent["text"].startswith("Here's a draft for tonight.") and sent.get("blocks") is None
+    assert sent["text"].startswith("Here's a draft for tonight.")
+    shown, note = sent["blocks"]
+    assert shown == {"type": "markdown", "text": "Here's a draft for tonight."}
+    assert note["type"] == "context" and "mention <@" in note["elements"][0]["text"]
     assert [card["text"] for card in cards] == ["Siam Garden", "evil[.]example"]
     assert all(card["blocks"] for card in cards)
 
@@ -468,14 +471,32 @@ async def test_a_reply_with_drafts_in_a_dm_is_a_normal_reply(
     fake_drafts(monkeypatch, "Siam Garden")
     await slack.dm("Sam", "Propose Thai")
     reply, card = posts(slack)
-    assert reply["text"] == "Here's a draft for tonight." and reply.get("blocks") is None
+    assert reply["text"] == "Here's a draft for tonight."
+    assert reply["blocks"] == [{"type": "markdown", "text": "Here's a draft for tonight."}]
     assert card["text"] == "Siam Garden" and card["blocks"] and card["thread_ts"] == reply["thread_ts"]
     assert slack.fake.of("chat.postEphemeral") == []
 
 
-def test_reply_text_is_only_the_reply_and_the_drafts_get_cards() -> None:
-    reply = Reply("", (DraftView(1, "offer", "Tacos", ()),))
-    assert reply_text(reply) == ""
+def test_a_reply_with_only_drafts_has_no_text_and_no_blocks() -> None:
+    assert reply_message("") == ("", [])
+
+
+@pytest.mark.parametrize(
+    ("text", "notified", "shown"),
+    [
+        ("**Tag**\n- fast food", "**Tag**\n- fast food", "**Tag**\n- fast food"),
+        (
+            "[see](https://evil.example)",
+            "[see](hxxps[:]//evil[.]example)",
+            "\\[see\\](hxxps\\[:\\]//evil\\[.\\]example)",
+        ),
+        ("<!channel> & @here", "&lt;!channel&gt; &amp; @\u2060here", "\u2039!channel> \\& @\u2060here"),
+    ],
+)
+def test_a_reply_is_a_markdown_block_with_a_mrkdwn_copy_for_notifications(text: str, notified: str, shown: str) -> None:
+    """#284: the block renders the model's Markdown, escaped as a streamed reply is, so no link,
+    mention, or ping forms; the text, only in notifications, is mrkdwn as before."""
+    assert reply_message(text) == (notified, [{"type": "markdown", "text": shown}])
 
 
 def _call_post_ts(slack: Slack) -> str:

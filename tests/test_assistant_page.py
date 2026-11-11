@@ -269,7 +269,7 @@ def test_a_message_gets_a_reply_with_htmx_and_history_survives_a_reload(
     model.script = [answer("Try Siam Garden.")]
     send(client, "Something cheaper?", **HX)
     reloaded = page(client.get("/assistant"))
-    turns = re.findall(r'<p class="turn-text">(.*?)</p>', reloaded, re.S)
+    turns = re.findall(r'class="turn-text[^"]*">(?:<p>)?(.*?)</p>', reloaded, re.S)
     assert turns == [
         "What Thai places do we have?",
         "Siam Garden is open tonight, Kim.",
@@ -693,8 +693,9 @@ def test_reply_text_is_escaped_and_never_linked(client: TestClient, provider: Fa
         assert "<script>alert" not in raw and "<b>bold</b>" not in raw and "<i>my</i>" not in raw
         assert "&lt;script&gt;alert(&#34;hi&#34;)&lt;/script&gt;" in raw or "&lt;script&gt;alert(&quot;hi&quot;)" in raw
         assert 'href="https://evil.example' not in raw and 'href="https://mine.example' not in raw
-        assert "<strong>strong</strong>" not in raw
+        assert "**strong**" not in raw and "<strong>strong</strong>" in raw  # the reply's Markdown shows (#284)
         assert "[the menu](https://evil.example/menu)" in page(response)
+        assert "<i>my</i>" not in raw and "&lt;i&gt;my&lt;/i&gt;" in raw  # the member's own text stays plain
 
 
 @pytest.mark.flag("assistant", on=True)
