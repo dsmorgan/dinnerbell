@@ -28,6 +28,7 @@ from dinnerbell.domain.offers import OfferPath
 from dinnerbell.services import activity
 from dinnerbell.services.assistant import drafts
 from dinnerbell.services.assistant import history as web_history
+from dinnerbell.services.assistant.call_drafts import ActionConfirmed
 from dinnerbell.services.assistant.conversation import MAX_MESSAGE_CHARS, Assistant, Reply, converse
 from dinnerbell.services.assistant.drafts import (
     CatalogReady,
@@ -177,7 +178,12 @@ async def start_over(request: Request, principal: CSRFChecked, context: Context,
 # Draft cards ------------------------------------------------------------------------------------
 
 
-def _confirmed(principal: Principal, context: AppContext, result: ProposalConfirmed | OfferConfirmed) -> Outcome:
+def _confirmed(
+    principal: Principal, context: AppContext, result: ProposalConfirmed | OfferConfirmed | ActionConfirmed
+) -> Outcome:
+    if isinstance(result, ActionConfirmed):
+        label = "Open the offer" if result.offer else "Open the call"
+        return Outcome(result.text, True, (f"/events/{result.event_id}", label))
     if isinstance(result, ProposalConfirmed):
         link = (f"/events/{result.event_id}", "Open the call")
         return Outcome("Confirmed. Your proposal is on the call.", True, link)

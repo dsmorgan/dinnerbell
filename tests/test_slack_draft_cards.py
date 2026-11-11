@@ -326,6 +326,25 @@ async def test_confirm_in_a_channel_thread_stays_ephemeral(house: House, model: 
 
 
 @pytest.mark.flag("assistant", on=True)
+async def test_a_call_action_in_a_channel_thread_confirms_only_for_its_member(
+    house: House, model: FakeModel, slack: Slack
+) -> None:
+    """#251: "put me down for pickup" from Lee, who isn't in, while voting. The card and its
+    result go to Lee alone, and Confirm joins Lee late and offers the role."""
+    event_id = await to_voting(house)
+    role = {"slot": "", "day": "", "role": "pickup", "offer": True}
+    card = await thread_card(slack, model, "Lee", "draft_role", role)
+    assert card_text(card).startswith("*Offer to pick up for today's dinner call*")
+    await tap_thread(slack, "Lee", ids.DRAFT_CONFIRM, card)
+    [result] = replaced(slack)
+    assert result["response_type"] == "ephemeral"
+    assert result["text"] == "Confirmed. You're down to pick up for today's dinner call."
+    assert posts(slack) == [] and ephemerals(slack) == []
+    mine = (await house.context(event_id)).response_of(house["Lee"].id)
+    assert mine is not None and mine.late and RoleOffer.PICKUP in mine.offers
+
+
+@pytest.mark.flag("assistant", on=True)
 async def test_when_slack_wont_replace_a_thread_card_only_the_tapper_is_told(
     house: House, model: FakeModel, slack: Slack
 ) -> None:

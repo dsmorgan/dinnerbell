@@ -26,6 +26,7 @@ from dinnerbell.domain.events import EventRuleViolation, EventState, IllegalTran
 from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.offers import OfferPath
 from dinnerbell.services.assistant import drafts
+from dinnerbell.services.assistant.call_drafts import ActionConfirmed
 from dinnerbell.services.assistant.conversation import FAILED
 from dinnerbell.services.assistant.drafts import EXPIRED, NO_SUCH_DRAFT, USED, OfferConfirmed, ProposalConfirmed
 from dinnerbell.services.database import open_database
@@ -563,6 +564,8 @@ def test_a_refusal_from_the_service_shows_as_it_is_and_keeps_the_card(
             OfferConfirmed(Posted(OfferPath.REPLACE, 7, Slot.DINNER, date(2026, 10, 23), "Siam Garden")),
             "replaces that day's scheduled dinner call",
         ),
+        (ActionConfirmed(7, "Confirmed. You're in for today's dinner call."), "You're in for today's dinner call."),
+        (ActionConfirmed(7, "Confirmed. Your offer is called off.", offer=True), "Open the offer"),
     ],
 )
 def test_each_confirmed_result_says_what_happened_and_links_it(

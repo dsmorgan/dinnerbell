@@ -1192,8 +1192,10 @@ def test_0013_lets_calls_and_meals_be_breakfast_and_downgrade_refuses_while_any_
     assert cli.main(["migrate"]) == 0
     after = _snapshot(settings)
     assert _calls_before_late_join(settings) == before["rows"] and after["indexes"] == before["indexes"]
-    # 0024 rebuilds badge_award with AUTOINCREMENT, which adds its own (empty) high-water mark.
-    assert _event_foreign_keys(settings) == fks and _sequences(settings) == sequences | {"badge_award": 0}
+    # 0024 rebuilds badge_award with AUTOINCREMENT, and 0034 rebuilds assistant_draft, which each
+    # add their own (empty) high-water mark.
+    marks = {"badge_award": 0, "assistant_draft": 0}
+    assert _event_foreign_keys(settings) == fks and _sequences(settings) == sequences | marks
     assert "AUTOINCREMENT" in _event_sql(settings)
     assert _slot_checks(settings) == [
         "CONSTRAINT ck_event_slot CHECK (slot IN ('breakfast', 'lunch', 'dinner'))",
@@ -2555,3 +2557,46 @@ def test_0033_marks_no_earlier_draft_confirmed_and_downgrade_drops_it(settings: 
             assert [tuple(r) for r in c.execute(text("SELECT * FROM assistant_draft ORDER BY id"))] == before
     finally:
         engine.dispose()
+
+
+DRAFT_INSERT = (
+    "INSERT INTO assistant_draft (household_id, member_id, conversation_key, kind, payload, title, lines, "
+    "created_at, expires_at) SELECT household_id, id, 'web:' || id, :kind, '{}', 'Draft', '[]', :t, :t FROM member"
+)
+
+
+def _drafts(settings: Settings) -> tuple[str, list[tuple[object, ...]]]:
+    engine = create_sync_engine(settings.sync_database_url)
+    try:
+        with engine.connect() as c:
+            sql = c.execute(text("SELECT sql FROM sqlite_master WHERE name = 'assistant_draft'")).scalar_one()
+            return sql, [tuple(r) for r in c.execute(text("SELECT * FROM assistant_draft ORDER BY id"))]
+    finally:
+        engine.dispose()
+
+
+def test_0034_lets_drafts_hold_call_actions_keeps_every_row_and_never_reuses_an_id(settings: Settings) -> None:
+    """Up widens ``assistant_draft.kind`` to the call actions (#251), keeping every draft and the
+    AUTOINCREMENT high-water mark: a draft deleted before the upgrade never gives its ID to a new
+    one. Down deletes the call-action drafts, which the old check can't store, and keeps the rest."""
+    _upgrade_to(settings, "0033_assistant_draft_confirmed")
+    _populate_calls(settings)
+    _execute(settings, DRAFT_INSERT.replace(":kind", "'catalog'"))
+    sql, before = _drafts(settings)
+    assert before and "'answer'" not in sql
+    with pytest.raises(IntegrityError):
+        _execute(settings, DRAFT_INSERT.replace(":kind", "'answer'"))
+    newest = max(int(str(row[0])) for row in before)
+    _execute(settings, f"DELETE FROM assistant_draft WHERE id = {newest}")  # noqa: S608 - an integer
+
+    _upgrade_to(settings, "0034_assistant_call_actions")
+    sql, after = _drafts(settings)
+    assert "AUTOINCREMENT" in sql and after == before[:-1]
+    for kind in ("answer", "vote", "suggestion", "role", "offer_off", "guest", "guest_answer", "call"):
+        _execute(settings, DRAFT_INSERT.replace(":kind", f"'{kind}'"))
+    _, added = _drafts(settings)
+    assert min(int(str(row[0])) for row in added[len(after) :]) == newest + 1
+
+    _downgrade_to(settings, "0033_assistant_draft_confirmed")
+    sql, down = _drafts(settings)
+    assert "AUTOINCREMENT" in sql and "'answer'" not in sql and down == after

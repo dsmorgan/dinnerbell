@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The assistant's drafts and candidates (ADR 0009, spec 6.14, **Tools** and **Drafts**).
 
-A draft is a change the assistant prepared for one member: a proposal, an offer, or new catalog
-items. It says what **Confirm** will do, in lines worked out here with the same rules the
-services apply, and lasts ``DRAFT_MINUTES``. Only its member confirms it, at most once.
+A draft is a change the assistant prepared for one member: a proposal, an offer, new catalog
+items, or one of the call actions a member takes in public anyway (#251): an answer, a vote, a
+suggestion, a role, or taking back an offer. It says what **Confirm** will do, in lines worked
+out here with the same rules the services apply, and lasts ``DRAFT_MINUTES``. Only its member confirms it, at most once.
 
 Candidates are what ranking's hard filters let through for a voting call. Their reasons come
 from a snapshot with no preferences, no hints, and pseudonyms in place of names
@@ -29,7 +30,7 @@ from dinnerbell.domain.catalog_file import (
     RestaurantEntry,
     TagSection,
 )
-from dinnerbell.domain.events import Event, EventState
+from dinnerbell.domain.events import Event, EventState, RoleOffer, Status
 from dinnerbell.domain.fetch_policy import FetchError, Target, parse_target
 from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.offers import OfferPath, offer_path
@@ -58,6 +59,15 @@ class DraftKind(StrEnum):
     PROPOSAL = "proposal"
     OFFER = "offer"
     CATALOG = "catalog"
+    ANSWER = "answer"
+    VOTE = "vote"
+    SUGGESTION = "suggestion"
+    ROLE = "role"
+    OFFER_OFF = "offer_off"
+
+
+CALL_ACTIONS = frozenset({DraftKind.ANSWER, DraftKind.VOTE, DraftKind.SUGGESTION, DraftKind.ROLE, DraftKind.OFFER_OFF})
+"""The call actions (#251): each confirms through one call use case, on the draft's call."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,6 +78,11 @@ class Draft:
     - offer: ``item_id``, ``mode``, ``slot``, ``day``, ``at`` (``HH:MM``), ``capacity``,
       ``outcome``
     - catalog: ``content`` (the cleaned catalog file) and ``dropped`` (names left out)
+    - answer: ``status``, and ``join_late`` for an In while voting
+    - vote: ``proposal_id``, ``vote`` (False takes it back), and ``join_late``
+    - suggestion: ``item_id``
+    - role: ``role``, ``offered`` (False gives it up), and ``join_late``
+    - offer_off: nothing; the offer is ``event_id``
 
     ``event_id`` and ``run`` are the call the draft was made against, where there is one."""
 
@@ -212,6 +227,109 @@ def offer_lines(plan: OfferPlan, *, slot: Slot, when: str, mode: Mode, item: str
     else:
         first = "It's posted as an offer of its own."
     return (first, f"You'll {DOING[mode]}.")
+
+
+# What Confirm does for a call action (#251) -----------------------------------------------------
+
+ROLE_DOING = {RoleOffer.COOK: "cook", RoleOffer.PICKUP: "pick up", RoleOffer.ORDER: "order"}
+"""What a role offer says the member will do, as the call's roster words it."""
+LATE_VOTE_WAITS = "Your votes show, and count once the coordinator says so."
+LATE_VOTE_COUNTS = "Your votes count, since answers closed early on your maybe."
+
+
+def _late(when: str, slot: Slot, vote_counts: bool) -> tuple[str, str]:
+    return (f"You'll join {when}'s {slot.value} call late.", LATE_VOTE_COUNTS if vote_counts else LATE_VOTE_WAITS)
+
+
+def answer_lines(
+    status: Status,
+    *,
+    slot: Slot,
+    when: str,
+    join_late: bool = False,
+    vote_counts: bool = False,
+    usual_offers: bool = False,
+    withdraws_roles: bool = False,
+    coordinating: bool = False,
+) -> tuple[str, ...]:
+    """What confirming an answer does: ``calls.respond``, or ``calls.join_late`` for an In
+    while voting (``join_late``), whose votes count at once only for a maybe the early close
+    turned out (``vote_counts``). ``usual_offers``: answering In turns on the offers set on
+    Preferences (``with_usual_offers``). ``withdraws_roles`` and ``coordinating``: an Out
+    withdraws the member's role offers, and ends their coordinating (``drops_coordinating``)."""
+    if join_late:
+        lines = list(_late(when, slot, vote_counts))
+    else:
+        word = {Status.IN: "in for", Status.OUT: "out of", Status.MAYBE: "a maybe for"}[status]
+        lines = [f"You'll be {word} {when}'s {slot.value} call."]
+    if usual_offers:
+        lines.append("Your usual offers from Preferences turn on.")
+    if withdraws_roles:
+        lines.append("Your role offers are withdrawn.")
+    if coordinating:
+        lines.append("You'll stop coordinating it.")
+    return tuple(lines)
+
+
+def vote_lines(
+    name: str, mode: Mode, *, vote: bool, join_late: bool = False, vote_counts: bool = True
+) -> tuple[str, ...]:
+    """What confirming a vote does (``calls.vote``, ``calls.unvote``): someone who isn't in joins
+    late first, as **I'm in (late)** and vote does; a late joiner's vote counts only once the
+    coordinator says so, unless ``vote_counts``."""
+    pick = f"{name} ({mode.label.lower()})"
+    if not vote:
+        return (f"It takes back your vote for {pick}.",)
+    lines = [f"It adds your vote for {pick}."]
+    if join_late:
+        lines.append("You'll join the call late first.")
+    if not vote_counts:
+        lines.append(LATE_VOTE_WAITS)
+    return tuple(lines)
+
+
+def suggestion_lines(name: str, *, slot: Slot, when: str, counts_in: bool) -> tuple[str, ...]:
+    """What confirming a suggestion does (``calls.save_details``): it joins the member's
+    suggestions, and their eating times, note, and other suggestions stay. Details counts in
+    someone who hasn't answered (``counts_in``)."""
+    lines = [
+        f"It adds {name} to your suggestions for {when}'s {slot.value} call.",
+        "Your eating times, note, and other suggestions stay as they are.",
+    ]
+    if counts_in:
+        lines.append("You'll be in, as saving Details does.")
+    return tuple(lines)
+
+
+def role_lines(
+    role: RoleOffer,
+    *,
+    offered: bool,
+    slot: Slot,
+    when: str,
+    join_late: bool = False,
+    vote_counts: bool = False,
+    counts_in: bool = False,
+) -> tuple[str, ...]:
+    """What confirming a role does (``calls.offer_role``): offering one counts in someone who
+    isn't (``counts_in``), unless they said maybe; while voting, someone who isn't in joins
+    late first (``join_late``, ``calls.join_late``)."""
+    doing = ROLE_DOING[role]
+    if not offered:
+        return (f"You'll no longer be down to {doing} for {when}'s {slot.value} call.",)
+    lines = [*_late(when, slot, vote_counts)] if join_late else []
+    lines.append(f"You'll be down to {doing} for {when}'s {slot.value} call.")
+    if counts_in:
+        lines.append("You'll be in.")
+    return tuple(lines)
+
+
+def offer_off_lines(*, item: str, slot: Slot, when: str) -> tuple[str, ...]:
+    """What confirming taking back an offer does (``calls.cancel_call``, as its offerer)."""
+    return (
+        f"It calls off your offer of {item} for {when}'s {slot.value}.",
+        "Dinnerbell tells everyone who joined it.",
+    )
 
 
 # Candidates --------------------------------------------------------------------------------------
