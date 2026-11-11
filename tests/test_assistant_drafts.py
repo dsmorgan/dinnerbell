@@ -409,7 +409,10 @@ async def test_reasons_carry_no_hint_favorite_or_name(house: House, helper: Assi
     reasons = [r for c in result["candidates"] for r in c["reasons"]]
     pho = next(c for c in result["candidates"] if c["name"] == "Pho Corner")
     assert "Suggested by Member 2." in pho["reasons"]  # Kim asks, so she's Member 1
-    sent = model.sent
+    # The tool definitions are the registry's own text, which names a "veto" level (#253); the
+    # rest of every request is checked for what's the house's.
+    assert all(r["tools"] == [t.definition() for t in tools.tools_for(True)] for r in model.requests)
+    sent = model.sent_data
     for secret in ("Mixed reviews", "recently late", "favorite", "Sam", "Kim", "Alex", "Lee", "@example.com"):
         assert secret not in json.dumps(reasons), secret
     for secret in ("Mixed reviews", "favorite", '"Sam"', "Kim", "Alex", "Lee", "@example.com", '"veto"'):

@@ -182,6 +182,8 @@ def _confirmed(
     principal: Principal, context: AppContext, result: ProposalConfirmed | OfferConfirmed | ActionConfirmed
 ) -> Outcome:
     if isinstance(result, ActionConfirmed):
+        if result.event_id is None:  # the member's own data (#253): no call to open
+            return Outcome(result.text, True, result.link)
         label = "Open the offer" if result.offer else "Open the call"
         return Outcome(result.text, True, (f"/events/{result.event_id}", label))
     if isinstance(result, ProposalConfirmed):

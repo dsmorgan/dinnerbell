@@ -223,6 +223,11 @@ class TestAssistantOn:
             "draft_invite_guest",
             "draft_guest_answer",
             "draft_call",
+            "look_up_my_preferences",
+            "draft_preference",
+            "look_up_my_feedback",
+            "draft_feedback",
+            "draft_away",
         ]
         for tool in request["tools"]:
             assert tool["strict"] is True

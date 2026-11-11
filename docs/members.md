@@ -42,7 +42,8 @@ When the household's assistant is on ([The assistant](configuration.md#the-assis
 3. When the assistant drafts something, a card shows what **Confirm** will do. Select **Confirm** to do it, or **Cancel** to drop it. Nothing changes until you confirm. The assistant can draft:
    - A proposal, an offer of a catalog item, or new catalog items.
    - What you'd do on a call yourself: answer in, out, or maybe, join late, vote or take back a vote, suggest a catalog item, take or give up a role, take back an offer you made, invite a guest or answer for one you invited, or start a call. Ask for several at once, such as "I'm in, put me down for pickup, and vote for the noodle place", and you get a card for each.
-   - Each one runs through the same checks as the buttons on **Today**, so a draft that no longer fits shows why on its card, and nothing changes.
+   - On the Assistant page and in your direct messages with Dinnerbell only, never in a channel thread: your own levels on **Preferences**, such as "Veto mushrooms"; feedback on a meal you ate, such as "Rate last night's dinner: hated it, it was cold"; and your away days, such as "I'm away Thursday through Saturday." Ask "What do I veto?" or "Did I rate Tuesday's dinner?" and it looks up your own. Feedback replaces what you gave on that meal before, as the feedback form does, and the card says what it replaces.
+   - Each one runs through the same checks as the buttons on **Today**, **Preferences**, and the feedback form, so a draft that no longer fits shows why on its card, and nothing changes. A draft of your own levels, feedback, or away days also stops if you changed them elsewhere after it was drafted: ask again for a new one.
    - New catalog items open the import preview, which only adds: items the catalog has stay as they are. Select **Apply** there to add them.
    - A draft lasts 30 minutes, and only you can confirm it, once.
 
@@ -50,4 +51,4 @@ The conversation is private: other members and the admin don't see it. Dinnerbel
 
 Replies are plain text. Links in them aren't clickable, so a page the assistant read can't slip you a link to tap.
 
-To answer questions about what the household has eaten, such as "When did we last have Thai?", the assistant sees the meal log without who ate, and each item's household hint, such as "Well liked", the same words you see on **Catalog**. It never sees anyone's own ratings or notes.
+To answer questions about what the household has eaten, such as "When did we last have Thai?", the assistant sees the meal log without who ate, and each item's household hint, such as "Well liked", the same words you see on **Catalog**. It never sees anyone else's preferences, ratings, or notes. It sees your own levels, ratings, feedback, and away days only when you ask about them, on this page or in a direct message, never in a channel thread, and with them nothing about anyone else, such as who else ate a meal or who cooked it.

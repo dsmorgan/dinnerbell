@@ -111,11 +111,13 @@ class DraftSpec:
 @dataclass(frozen=True, slots=True)
 class ActionConfirmed:
     """What a confirmed call action did: ``text`` for the member, and the call or offer it
-    changed, for a link."""
+    changed, for a link. A change to the member's own data (#253, ``own_drafts``) has no call:
+    ``event_id`` is None, and ``link`` is where to see it, as (path, label)."""
 
-    event_id: int
+    event_id: int | None
     text: str
     offer: bool = False
+    link: tuple[str, str] | None = None
 
 
 def _call_words(event: Event, today: date) -> tuple[str, str]:

@@ -466,6 +466,26 @@ def test_an_offer_draft_card_confirms_with_htmx(
 
 
 @pytest.mark.flag("assistant", on=True)
+def test_a_preference_draft_confirms_with_htmx_and_links_to_preferences(
+    client: TestClient, provider: FakeProvider, model: FakeModel, migrated: Settings
+) -> None:
+    """#253: the member's own data has no call, so the card links to Preferences instead."""
+    furnish(client, provider)
+    as_who(client, provider, "kim")
+    level = {"what": "", "name": "Siam Garden", "level": "2"}
+    model.script = [tool_call("draft_preference", level), answer("Here's a draft.")]
+    fragment = page(send(client, "I love Siam Garden", **HX))
+    [draft] = draft_ids(fragment)
+    assert "Set Siam Garden to +2" in fragment
+    assert "Your level for the restaurant Siam Garden on Preferences goes from 0 to +2." in fragment
+    confirmed = htmx(client, f"/assistant/drafts/{draft}/confirm", {})
+    assert confirmed.status_code == 200
+    card = page(confirmed)
+    assert "Confirmed. Your level for Siam Garden is +2 now." in card and 'href="/preferences">Open Preferences' in card
+    assert 'value="2" checked' in page(client.get("/preferences"))
+
+
+@pytest.mark.flag("assistant", on=True)
 def test_cancel_works_with_and_without_htmx(
     client: TestClient, provider: FakeProvider, model: FakeModel, migrated: Settings
 ) -> None:

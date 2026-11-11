@@ -9,7 +9,8 @@ a double Confirm can't post twice and a refusal leaves the draft as it was. The 
 everything again, so a stale draft gets the service's own error and nothing changes.
 
 A call action's draft (#251) comes from ``call_drafts``, which says what Confirm does and runs
-its use case; ``store_action`` stores it.
+its use case; ``store_action`` stores it. So does a draft of the member's own data (#253), from
+``own_drafts``.
 
 A catalog draft's Confirm opens the web import preview, which only adds: the import re-plans
 with ``add_only``, so an item that appeared meanwhile is left alone.
@@ -35,6 +36,7 @@ from dinnerbell.domain.assistant_drafts import (
     CALL_ACTIONS,
     DRAFT_MINUTES,
     MAX_OPEN_DRAFTS,
+    OWN_DATA,
     CleanCatalog,
     Draft,
     DraftKind,
@@ -71,7 +73,7 @@ from dinnerbell.domain.offers import OfferPath, check_capacity, offer_time
 from dinnerbell.domain.schedule import slot_schedule
 from dinnerbell.services import calls, lifecycle, offers, picks
 from dinnerbell.services import catalog as catalog_service
-from dinnerbell.services.assistant import call_drafts
+from dinnerbell.services.assistant import call_drafts, own_drafts
 from dinnerbell.services.assistant.acting import ToolRefusal, tool_actor
 from dinnerbell.services.assistant.call_drafts import ActionConfirmed, DraftSpec
 from dinnerbell.services.assistant.candidates import Labeler, as_proposer, find_candidates
@@ -313,7 +315,8 @@ async def draft_offer(db: AsyncSession, actor: Member, key: str, request: OfferR
 
 
 async def store_action(db: AsyncSession, actor: Member, key: str, spec: DraftSpec, *, now: datetime) -> Draft:
-    """Store a call action ``call_drafts`` drafted and checked, against its call."""
+    """Store a call action ``call_drafts`` drafted and checked, against its call, or a draft of
+    the member's own data from ``own_drafts``, which has none."""
     payload = dict(spec.payload)
     return await _store(db, actor, key, spec.kind, payload, spec.title, spec.lines, event=spec.event, now=now)
 
@@ -455,6 +458,12 @@ async def confirm_draft(
         return await _confirm_offer(db, actor, draft, now)
     if draft.kind in CALL_ACTIONS:
         return await _confirm_action(db, actor, draft, now, instance_label=config.instance_label)
+    if draft.kind in OWN_DATA:
+
+        async def use() -> None:
+            await _use(db, draft, actor, now)
+
+        return await own_drafts.confirm(db, actor, draft, now=now, use=use)
     return await _confirm_catalog(db, actor, draft, now)
 
 

@@ -2,9 +2,10 @@
 """The assistant's drafts and candidates (ADR 0009, spec 6.14, **Tools** and **Drafts**).
 
 A draft is a change the assistant prepared for one member: a proposal, an offer, new catalog
-items, or one of the call actions a member takes in public anyway (#251): an answer, a vote, a
+items, one of the call actions a member takes in public anyway (#251): an answer, a vote, a
 suggestion, a role, taking back an offer, inviting a guest or answering for one, or starting a
-call. It says what **Confirm** will do, in lines worked
+call, or a change to the member's own data, in private only (#253): a level on Preferences,
+feedback on a meal, or away days. It says what **Confirm** will do, in lines worked
 out here with the same rules the services apply, and lasts ``DRAFT_MINUTES``. Only its member confirms it, at most once.
 
 Candidates are what ranking's hard filters let through for a voting call. Their reasons come
@@ -68,6 +69,9 @@ class DraftKind(StrEnum):
     GUEST = "guest"
     GUEST_ANSWER = "guest_answer"
     CALL = "call"
+    PREFERENCE = "preference"
+    FEEDBACK = "feedback"
+    AWAY = "away"
 
 
 CALL_ACTIONS = frozenset(
@@ -84,6 +88,10 @@ CALL_ACTIONS = frozenset(
 )
 """The call actions (#251): each confirms through one call use case, on the draft's call, or
 for ``CALL``, the slot and day it starts."""
+
+OWN_DATA = frozenset({DraftKind.PREFERENCE, DraftKind.FEEDBACK, DraftKind.AWAY})
+"""The member's own data (#253): drafted only in a private conversation, and each confirms
+through the use case the Preferences page or the feedback form calls."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,6 +111,12 @@ class Draft:
       Confirm picks the saved guest by that name, or a new one
     - guest_answer: ``guest_id``, ``name``, and ``status`` or ``role`` with ``offered``
     - call: ``slot`` and ``day``; ``event_id`` is the called-off call it starts again, if any
+    - preference: ``target_type``, ``target_id``, ``name``, ``level``, and ``before``, the
+      level it changes
+    - feedback: ``meal_id``, ``item_id``, the answers (``rating``, ``issues``, ``issue_note``,
+      ``cook_thanks``, ``cook_note``), and ``before``, when the member's feedback it replaces
+      was saved, or None
+    - away: ``first`` and ``last``, or ``clear``, and ``before``, the window it changes, or None
 
     ``event_id`` and ``run`` are the call the draft was made against, where there is one."""
 
