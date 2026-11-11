@@ -9,7 +9,7 @@ response; no function takes another member's response.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from datetime import UTC, date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
@@ -126,11 +126,20 @@ def _target(event: Event) -> str:
 
 
 async def start_call(
-    db: AsyncSession, actor: Member, slot: Slot, day: date, *, now: datetime, instance_label: str = ""
+    db: AsyncSession,
+    actor: Member,
+    slot: Slot,
+    day: date,
+    *,
+    now: datetime,
+    instance_label: str = "",
+    expect: Callable[[], Awaitable[None]] | None = None,
 ) -> Event:
     """An ad-hoc call. For today it opens now; for a later day, at the slot's usual time.
     ``instance_label`` is ``DINNERBELL_INSTANCE_LABEL``: on a test instance (#60), a called-off
-    call starts again even after the usual meal time plus two hours."""
+    call starts again even after the usual meal time plus two hours. ``expect``, from an
+    assistant's draft (spec 6.14), runs first under the write lock and uses the draft in the same
+    transaction, as ``offers.post_offer``'s does."""
     restart_any_time = is_test_instance(instance_label)
     if not actor.active:
         raise EventRuleViolation("Only active members can start a call.", code="inactive")
@@ -146,6 +155,8 @@ async def start_call(
         # Under the write lock, so a cooking offer posted at the same moment (FR-5) either sees
         # this call or keeps it from starting.
         async with write_transaction(db):
+            if expect is not None:
+                await expect()
             event = await lifecycle.create_call(
                 db, household, slot, day, opens_at=opens_at, actor=actor, now=now, restart_any_time=restart_any_time
             )

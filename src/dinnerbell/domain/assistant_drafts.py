@@ -3,7 +3,8 @@
 
 A draft is a change the assistant prepared for one member: a proposal, an offer, new catalog
 items, or one of the call actions a member takes in public anyway (#251): an answer, a vote, a
-suggestion, a role, or taking back an offer. It says what **Confirm** will do, in lines worked
+suggestion, a role, taking back an offer, inviting a guest or answering for one, or starting a
+call. It says what **Confirm** will do, in lines worked
 out here with the same rules the services apply, and lasts ``DRAFT_MINUTES``. Only its member confirms it, at most once.
 
 Candidates are what ranking's hard filters let through for a voting call. Their reasons come
@@ -64,10 +65,25 @@ class DraftKind(StrEnum):
     SUGGESTION = "suggestion"
     ROLE = "role"
     OFFER_OFF = "offer_off"
+    GUEST = "guest"
+    GUEST_ANSWER = "guest_answer"
+    CALL = "call"
 
 
-CALL_ACTIONS = frozenset({DraftKind.ANSWER, DraftKind.VOTE, DraftKind.SUGGESTION, DraftKind.ROLE, DraftKind.OFFER_OFF})
-"""The call actions (#251): each confirms through one call use case, on the draft's call."""
+CALL_ACTIONS = frozenset(
+    {
+        DraftKind.ANSWER,
+        DraftKind.VOTE,
+        DraftKind.SUGGESTION,
+        DraftKind.ROLE,
+        DraftKind.OFFER_OFF,
+        DraftKind.GUEST,
+        DraftKind.GUEST_ANSWER,
+        DraftKind.CALL,
+    }
+)
+"""The call actions (#251): each confirms through one call use case, on the draft's call, or
+for ``CALL``, the slot and day it starts."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,6 +99,10 @@ class Draft:
     - suggestion: ``item_id``
     - role: ``role``, ``offered`` (False gives it up), and ``join_late``
     - offer_off: nothing; the offer is ``event_id``
+    - guest: ``guest_id`` (a saved guest) or None (a new one), ``name`` as the member wrote it,
+      and ``needs`` (dietary tag IDs, for a new guest)
+    - guest_answer: ``guest_id``, ``name``, and ``status`` or ``role`` with ``offered``
+    - call: ``slot`` and ``day``; ``event_id`` is the called-off call it starts again, if any
 
     ``event_id`` and ``run`` are the call the draft was made against, where there is one."""
 
@@ -330,6 +350,66 @@ def offer_off_lines(*, item: str, slot: Slot, when: str) -> tuple[str, ...]:
         f"It calls off your offer of {item} for {when}'s {slot.value}.",
         "Dinnerbell tells everyone who joined it.",
     )
+
+
+def invite_lines(
+    name: str, *, saved: bool, registered: bool, needs: Iterable[str], slot: Slot, when: str
+) -> tuple[str, ...]:
+    """What confirming a guest's invitation does (``guests.invite``): a guest with Slack is told
+    and answers themselves; one without is in at once, and the inviter answers for them. A new
+    guest (not ``saved``) is saved first, with ``needs``, the dietary tags the member named."""
+    call = f"{when}'s {slot.value} call"
+    if registered:
+        return (f"It invites {name} to {call}. They're told, and answer themselves.",)
+    first = (
+        f"It invites {name} to {call}, and they're in."
+        if saved
+        else (f"It saves {name} as a new guest and invites them to {call}, and they're in.")
+    )
+    lines = [first, "You answer for them from now on."]
+    named = list(needs)
+    if named and not saved:
+        lines.append(f"Their dietary needs: {_list(named)}.")
+    return tuple(lines)
+
+
+def guest_answer_lines(
+    name: str,
+    *,
+    status: Status | None,
+    role: RoleOffer | None,
+    offered: bool,
+    withdraws_roles: bool,
+    slot: Slot,
+    when: str,
+) -> tuple[str, ...]:
+    """What confirming an answer for a guest does (``guests.answer_for``): in or out, or a role
+    offered or withdrawn for them, which counts them in. An out withdraws their role offers."""
+    call = f"{when}'s {slot.value} call"
+    if status is Status.OUT:
+        return (
+            f"{name} will be out of {call}.",
+            *(["Roles offered for them are withdrawn."] if withdraws_roles else []),
+        )
+    if status is not None:
+        return (f"{name} will be in for {call}.",)
+    doing = ROLE_DOING[role or RoleOffer.COOK]
+    if not offered:
+        return (f"{name} will no longer be down to {doing} for {call}.",)
+    return (f"{name} will be down to {doing} for {call}, and in.",)
+
+
+def call_lines(*, slot: Slot, when: str, now: bool, restart: bool) -> tuple[str, ...]:
+    """What confirming an ad-hoc call does (``calls.start_call``, FR-3): today's opens now; a
+    later day's opens at that day's usual time; a called-off call starts again as a new run.
+    Whoever starts it may call it off until it's decided (``check_can_cancel``)."""
+    if restart:
+        first = f"It starts the called-off {slot.value} call for {when} again."
+    elif now:
+        first = f"It starts {when}'s {slot.value} call now, and Dinnerbell posts it."
+    else:
+        first = f"It starts a {slot.value} call for {when}, which opens at the usual time."
+    return (first, "You'll be its starter, so you can call it off until it's decided.")
 
 
 # Candidates --------------------------------------------------------------------------------------

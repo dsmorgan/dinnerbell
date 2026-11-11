@@ -16,12 +16,13 @@ from datetime import date, time, timedelta
 from typing import Any
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from dinnerbell.config import Settings
-from dinnerbell.db.models import AssistantDraftRow
+from dinnerbell.db.events import EventRepository
+from dinnerbell.db.models import AssistantDraftRow, TagRow
 from dinnerbell.domain.assistant import AssistantSettings, Pseudonyms, slack_key, web_key
-from dinnerbell.domain.catalog import Mode
+from dinnerbell.domain.catalog import Mode, TagKind
 from dinnerbell.domain.events import (
     STALE_CALL,
     Details,
@@ -30,9 +31,10 @@ from dinnerbell.domain.events import (
     RoleOffer,
     Status,
 )
+from dinnerbell.domain.guests import GuestInput
 from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.members import Member
-from dinnerbell.services import calls, offers
+from dinnerbell.services import calls, guests, offers
 from dinnerbell.services.assistant import admin, call_drafts, drafts, tools
 from dinnerbell.services.assistant.call_drafts import ActionConfirmed
 from dinnerbell.services.assistant.conversation import Assistant, converse
@@ -40,7 +42,7 @@ from dinnerbell.services.assistant.drafts import USED, DraftUnavailable
 from dinnerbell.services.assistant.runtime import AssistantConfig
 from dinnerbell.services.assistant.tools import ToolResult, ToolSession
 from dinnerbell.services.database import Database, open_database
-from dinnerbell.services.errors import NotFound
+from dinnerbell.services.errors import Forbidden, NotFound
 from dinnerbell.services.offers import OfferInput
 from tests.support.calls import OPENS, RESPOND_BY, House, dinner_id, furnish, make_house, nobody_coordinates
 from tests.support.clock import FakeClock
@@ -613,3 +615,245 @@ async def test_a_free_text_pick_reads_as_a_members_idea_and_takes_a_vote_by_its_
     assert f"Take back your vote for {IDEA.lower()} (cook)" in by_name.content
     stranger = await tool(house, "draft_vote", vote_args(pick=idea.id + 1000), who="Kim")
     assert stranger == ToolResult(call_drafts.NO_SUCH_PROPOSAL, is_error=True)
+# Guests (part 2) --------------------------------------------------------------------------------
+
+
+def invite_args(name: str, *needs: str) -> dict[str, Any]:
+    return CALL | {"name": name, "needs": list(needs)}
+
+
+def guest_args(name: str, *, answer: str = "", role: str = "", offer: bool = True) -> dict[str, Any]:
+    return CALL | {"name": name, "answer": answer, "role": role, "offer": offer}
+
+
+async def test_inviting_a_new_guest_saves_them_with_the_needs_the_member_named(
+    house: House, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await house.tag("Vegetarian", TagKind.DIETARY)
+    event_id = await open_dinner(house, "Kim")
+    draft = draft_id(await tool(house, "draft_invite_guest", invite_args("Pat", "vegetarian"), who="Kim"))
+    assert await lines(house, draft) == [
+        "It saves Pat as a new guest and invites them to today's dinner call, and they're in.",
+        "You answer for them from now on.",
+        "Their dietary needs: Vegetarian.",
+    ]
+    assert [m.display_name for m in (await house.context(event_id)).members.values() if m.is_guest] == []
+    called: list[str] = []
+    real = guests.invite
+
+    async def spied(*args: Any, **kwargs: Any) -> Any:
+        called.append("invite")
+        return await real(*args, **kwargs)
+
+    monkeypatch.setattr(guests, "invite", spied)
+    assert await confirm(house, "Kim", draft) == ActionConfirmed(
+        event_id, "Confirmed. Pat is invited to today's dinner call."
+    )
+    assert called == ["invite"]
+    ctx = await house.context(event_id)
+    [pat] = [m for m in ctx.members.values() if m.is_guest]
+    assert pat.display_name == "Pat" and ctx.invitations[pat.id] == house["Kim"].id
+    assert pat.dietary_needs == frozenset({house.tags["Vegetarian"].id})
+    mine = ctx.response_of(pat.id)
+    assert mine is not None and mine.is_in
+
+
+async def test_a_saved_guest_is_invited_by_name_and_refusals_follow_the_service(house: House) -> None:
+    await house.tag("Vegetarian", TagKind.DIETARY)
+    async with house.sessionmaker() as db:
+        await guests.add_guest(db, house["Alex"], GuestInput("Robin"), now=house.clock())
+    event_id = await open_dinner(house, "Kim", "Sam")
+    await act(house, calls.offer_role, house["Sam"], event_id, RoleOffer.PICKUP, True)
+    saved = draft_id(await tool(house, "draft_invite_guest", invite_args("robin"), who="Kim"))
+    assert await lines(house, saved) == [
+        "It invites robin to today's dinner call, and they're in.",
+        "You answer for them from now on.",
+    ]
+    with_needs = await tool(house, "draft_invite_guest", invite_args("Robin", "Vegetarian"), who="Kim")
+    assert with_needs.is_error and "new guest only" in with_needs.content
+    unknown = await tool(house, "draft_invite_guest", invite_args("Pat", "Paleo"), who="Kim")
+    assert unknown == ToolResult("Dietary needs are the household's dietary tags: Vegetarian.", is_error=True)
+    await confirm(house, "Kim", saved)
+    again = await tool(house, "draft_invite_guest", invite_args("Robin"), who="Sam")
+    assert again == ToolResult(call_drafts.NOTHING_TO_DO, is_error=True)
+    house.clock.now = RESPOND_BY
+    await house.tick()
+    closed = await tool(house, "draft_invite_guest", invite_args("Pat"), who="Kim")
+    assert closed == ToolResult("Invite guests while answers are open.", is_error=True)
+
+
+async def test_only_the_inviter_answers_for_a_guest_through_the_assistant(house: House) -> None:
+    event_id = await open_dinner(house, "Kim")
+    await act(house, guests.invite, house["Kim"], event_id, new_guest=GuestInput("Pat"))
+    out = draft_id(await tool(house, "draft_guest_answer", guest_args("pat", answer="out"), who="Kim"))
+    assert await lines(house, out) == ["pat will be out of today's dinner call."]
+    for who in ("Sam", "Alex"):  # an admin may on the web, but never through the assistant
+        refused = await tool(house, "draft_guest_answer", guest_args("Pat", answer="out"), who=who)
+        assert refused == ToolResult(
+            "Only whoever invited them, or an admin, answers for a guest without Slack.", is_error=True
+        )
+    missing = await tool(house, "draft_guest_answer", guest_args("Quinn", answer="in"), who="Kim")
+    assert missing == ToolResult(call_drafts.NO_SUCH_GUEST, is_error=True)
+    both = await tool(house, "draft_guest_answer", guest_args("Pat", answer="in", role="cook"), who="Kim")
+    assert both.is_error and "not both" in both.content
+    same = await tool(house, "draft_guest_answer", guest_args("Pat", answer="in"), who="Kim")
+    assert same == ToolResult(call_drafts.NOTHING_TO_DO, is_error=True)
+    role = draft_id(await tool(house, "draft_guest_answer", guest_args("Pat", role="pickup"), who="Kim"))
+    assert await lines(house, role) == ["Pat will be down to pick up for today's dinner call, and in."]
+    await confirm(house, "Kim", role)
+    assert await confirm(house, "Kim", out) == ActionConfirmed(
+        event_id, "Confirmed. pat's answer for today's dinner call is saved."
+    )
+    ctx = await house.context(event_id)
+    [pat] = [m for m in ctx.members.values() if m.is_guest]
+    answer = ctx.response_of(pat.id)
+    assert answer is not None and answer.status is Status.OUT and not answer.offers
+
+
+async def test_alexs_forged_answer_for_kims_guest_is_refused_at_confirm(house: House) -> None:
+    """A draft can only be made by its member's own tools, but Confirm still acts as
+    ``tool_actor``: a draft for Alex that answers for Kim's guest gets the service's refusal."""
+    event_id = await open_dinner(house, "Kim")
+    await act(house, guests.invite, house["Kim"], event_id, new_guest=GuestInput("Pat"))
+    async with house.sessionmaker() as db:
+        event = await house.event(event_id)
+        spec = await call_drafts.guest_answer(
+            db,
+            tools.tool_actor(house["Kim"]),
+            event,
+            "Pat",
+            status=Status.OUT,
+            offered_role=None,
+            offered=True,
+            today=DAY,
+            now=house.clock(),
+        )
+        alexs = await drafts.store_action(db, house["Alex"], web_key(house["Alex"].id), spec, now=house.clock())
+    with pytest.raises(Forbidden):
+        await confirm(house, "Alex", alexs.id)
+
+
+# Ad-hoc calls (part 2) --------------------------------------------------------------------------
+
+
+def call_args(slot: str, day: str) -> dict[str, Any]:
+    return {"slot": slot, "day": day}
+
+
+async def test_starting_a_call_drafts_then_starts_it_through_start_call(
+    house: House, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    house.clock.now = OPENS
+    draft = draft_id(await tool(house, "draft_call", call_args("lunch", "tomorrow"), who="Kim"))
+    assert await lines(house, draft) == [
+        "It starts a lunch call for tomorrow, which opens at the usual time.",
+        "You'll be its starter, so you can call it off until it's decided.",
+    ]
+    async with house.sessionmaker() as db:
+        assert await EventRepository(db).call_for(house.household.id, Slot.LUNCH, DAY + timedelta(days=1)) is None
+    called = spy(monkeypatch, "start_call")
+    done = await confirm(house, "Kim", draft)
+    assert called == ["start_call"]
+    assert isinstance(done, ActionConfirmed) and done.text == "Confirmed. The lunch call for tomorrow is started."
+    event = await house.event(done.event_id)
+    assert (event.slot, event.day, event.created_by) == (Slot.LUNCH, DAY + timedelta(days=1), house["Kim"].id)
+    with pytest.raises(DraftUnavailable, match=USED):
+        await confirm(house, "Kim", draft)
+    again = await tool(house, "draft_call", call_args("lunch", "tomorrow"))
+    assert again == ToolResult("There's already a lunch call for that day.", is_error=True)
+
+
+async def test_a_call_someone_started_meanwhile_leaves_the_draft_unused(house: House) -> None:
+    house.clock.now = OPENS
+    draft = draft_id(await tool(house, "draft_call", call_args("breakfast", "tomorrow"), who="Kim"))
+    await act(house, calls.start_call, house["Sam"], Slot.BREAKFAST, DAY + timedelta(days=1))
+    with pytest.raises(EventRuleViolation, match="already a breakfast call"):
+        await confirm(house, "Kim", draft)
+    [row] = await rows(house)
+    assert row.used_at is None
+
+
+async def test_a_called_off_call_starts_again_on_its_run(house: House) -> None:
+    event_id = await open_dinner(house, "Kim")
+    await act(house, calls.cancel_call, house["Alex"], event_id)
+    draft = draft_id(await tool(house, "draft_call", call_args("dinner", "today"), who="Kim"))
+    assert (await lines(house, draft))[0] == "It starts the called-off dinner call for today again."
+    await act(house, calls.restart_call, house["Sam"], event_id)
+    await act(house, calls.cancel_call, house["Sam"], event_id)  # a newer run, called off too
+    with pytest.raises(EventRuleViolation, match=STALE_CALL):
+        await confirm(house, "Kim", draft)
+    fresh = draft_id(await tool(house, "draft_call", call_args("dinner", "today"), who="Kim"))
+    await confirm(house, "Kim", fresh)
+    assert (await house.event(event_id)).state is EventState.COLLECTING
+
+
+async def test_a_call_is_refused_as_start_call_would_refuse_it_without_naming_a_cook(house: House) -> None:
+    house.clock.now = OPENS
+    cook = OfferInput(
+        slot=Slot.DINNER,
+        day=DAY + timedelta(days=2),
+        mode=Mode.COOK,
+        at=time(18, 30),
+        capacity=3,
+        item_id=house.items["Sam's Tacos"].id,
+    )
+    await act(house, offers.post_offer, house["Sam"], cook)
+    held = await tool(house, "draft_call", call_args("dinner", (DAY + timedelta(days=2)).isoformat()), who="Kim")
+    assert held == ToolResult(call_drafts.COOKING_OFFER, is_error=True) and "Sam" not in held.content
+    past = await tool(house, "draft_call", call_args("lunch", "2026-10-21"))
+    assert past == ToolResult("You can start a call for today or a later day.", is_error=True)
+    far = await tool(house, "draft_call", call_args("lunch", "2026-11-22"))
+    assert far == ToolResult("You can start a call up to 7 days ahead.", is_error=True)
+    assert await rows(house) == []
+
+
+async def test_the_lines_for_each_guest_answer_and_call_say_what_confirm_does() -> None:
+    from dinnerbell.domain.assistant_drafts import call_lines, guest_answer_lines, invite_lines
+
+    common: dict[str, Any] = {"slot": Slot.DINNER, "when": "today"}
+    assert invite_lines("Pat", saved=True, registered=True, needs=(), **common) == (
+        "It invites Pat to today's dinner call. They're told, and answer themselves.",
+    )
+    answers: dict[str, Any] = {"role": None, "offered": True, "withdraws_roles": False, **common}
+    assert guest_answer_lines("Pat", status=Status.IN, **answers) == ("Pat will be in for today's dinner call.",)
+    out = guest_answer_lines("Pat", status=Status.OUT, **(answers | {"withdraws_roles": True}))
+    assert out == ("Pat will be out of today's dinner call.", "Roles offered for them are withdrawn.")
+    given_up = guest_answer_lines("Pat", status=None, **(answers | {"role": RoleOffer.ORDER, "offered": False}))
+    assert given_up == ("Pat will no longer be down to order for today's dinner call.",)
+    assert (
+        call_lines(now=True, restart=False, **common)[0]
+        == "It starts today's dinner call now, and Dinnerbell posts it."
+    )
+
+
+async def test_guest_input_errors_go_back_to_the_model(house: House) -> None:
+    await open_dinner(house, "Kim")
+    empty = await tool(house, "draft_invite_guest", invite_args("  "), who="Kim")
+    assert empty == ToolResult("name is the guest's name, as the member wrote it.", is_error=True)
+    many = await tool(house, "draft_invite_guest", invite_args("Pat", *"abcdef"), who="Kim")
+    assert many == ToolResult("needs is a list of at most 5 strings.", is_error=True)
+    long = await tool(house, "draft_invite_guest", invite_args("Pat", "x" * 81), who="Kim")
+    assert long == ToolResult("Each of needs is at most 80 characters.", is_error=True)
+
+
+async def test_two_saved_guests_with_one_name_are_left_to_the_call_page(house: House) -> None:
+    async with house.sessionmaker() as db:
+        for _ in range(2):
+            await guests.add_guest(db, house["Alex"], GuestInput("Robin"), now=house.clock())
+    await open_dinner(house, "Kim")
+    assert await tool(house, "draft_invite_guest", invite_args("Robin"), who="Kim") == ToolResult(
+        call_drafts.SAME_NAME, is_error=True
+    )
+
+
+async def test_a_dietary_tag_deleted_before_confirm_shows_on_the_card(house: House) -> None:
+    vegetarian = await house.tag("Vegetarian", TagKind.DIETARY)
+    await open_dinner(house, "Kim")
+    draft = draft_id(await tool(house, "draft_invite_guest", invite_args("Pat", "Vegetarian"), who="Kim"))
+    async with house.sessionmaker() as db:
+        await db.execute(delete(TagRow).where(TagRow.id == vegetarian.id))
+        await db.commit()
+    with pytest.raises(EventRuleViolation, match="Dietary needs must be dietary tags"):
+        await confirm(house, "Kim", draft)
+    [row] = await rows(house)
+    assert row.used_at is None

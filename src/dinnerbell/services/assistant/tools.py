@@ -12,7 +12,8 @@ The first build's tools work in any conversation: look up catalog items, find ca
 draft a proposal, an offer, or catalog items, from a catalog file or from a menu link
 (``menu_links``). So does looking up the meal log (``meal_history``, #264). The call actions
 (#251, ``call_drafts``) do too: look up a call, and draft an answer, a vote, a suggestion, a
-role, or taking back an offer. A draft changes nothing until its member confirms it
+role, taking back an offer, inviting a guest or answering for one, or starting a call. A draft
+changes nothing until its member confirms it
 (``drafts.confirm_draft``).
 """
 
@@ -34,7 +35,7 @@ from dinnerbell.domain.assistant_drafts import Narrowing
 from dinnerbell.domain.catalog import MODE_ORDER, InvalidCatalogInput, ItemKind, Meal, Mode, name_key
 from dinnerbell.domain.events import EventRuleViolation, EventState, InvalidResponse, RoleOffer, Status
 from dinnerbell.domain.meals import Slot
-from dinnerbell.domain.members import Member
+from dinnerbell.domain.members import InvalidMemberInput, Member
 from dinnerbell.domain.offers import DEFAULT_CAPACITY
 from dinnerbell.services import catalog as catalog_service
 from dinnerbell.services.assistant import call_drafts, drafts
@@ -845,6 +846,141 @@ DRAFT_TAKE_BACK_OFFER = Tool(
 )
 
 
+MAX_NEEDS = 5
+GUEST_ANSWERS = {"": None, "in": Status.IN, "out": Status.OUT}
+GUEST_ROLES = {"": None, **ROLE_NAMES}
+
+
+def _names(raw: Mapping[str, Any], name: str) -> list[str]:
+    value = raw.get(name)
+    if not isinstance(value, list) or len(value) > MAX_NEEDS or not all(isinstance(v, str) for v in value):
+        raise ToolInputError(f"{name} is a list of at most {MAX_NEEDS} strings.")
+    if any(len(v) > MAX_QUERY_LENGTH for v in value):
+        raise ToolInputError(f"Each of {name} is at most {MAX_QUERY_LENGTH} characters.")
+    return [v.strip() for v in value if v.strip()]
+
+
+async def draft_invite_guest_tool(ctx: ToolContext, raw: Mapping[str, Any]) -> str:
+    _fields(raw, "slot", "day", "name", "needs")
+    today = await _today(ctx)
+    event = await _call(ctx, raw, today)
+    name = _text(raw, "name")
+    if not name:
+        raise ToolInputError("name is the guest's name, as the member wrote it.")
+    spec = await call_drafts.invite_guest(ctx.db, ctx.actor, event, name, _names(raw, "needs"), today=today)
+    return await _keep_action(ctx, spec)
+
+
+DRAFT_INVITE_GUEST = Tool(
+    name="draft_invite_guest",
+    description=(
+        "Draft inviting a guest to a call while answers are open: the household's saved guest with that exact "
+        "name, or a new guest. Use the name exactly as the member wrote it; never make one up. A new guest can "
+        "have dietary needs the member named, from the household's dietary tags. A guest without Slack is in at "
+        "once, and the member answers for them. Dinnerbell shows the member the draft with Confirm and Cancel, "
+        "and nothing changes until they confirm."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            **CALL_PROPERTIES,
+            "name": {"type": "string", "description": "The guest's name, as the member wrote it."},
+            "needs": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "A new guest's dietary needs the member named, such as vegetarian. Empty for none.",
+            },
+        },
+        "required": ["slot", "day", "name", "needs"],
+        "additionalProperties": False,
+    },
+    run=draft_invite_guest_tool,
+)
+
+
+async def draft_guest_answer_tool(ctx: ToolContext, raw: Mapping[str, Any]) -> str:
+    _fields(raw, "slot", "day", "name", "answer", "role", "offer")
+    today = await _today(ctx)
+    event = await _call(ctx, raw, today)
+    status = GUEST_ANSWERS[_enum(raw, "answer", list(GUEST_ANSWERS))]
+    chosen = GUEST_ROLES[_enum(raw, "role", list(GUEST_ROLES))]
+    if (status is None) == (chosen is None):
+        raise ToolInputError("Send an answer or a role, not both: the other is an empty string.")
+    spec = await call_drafts.guest_answer(
+        ctx.db,
+        ctx.actor,
+        event,
+        _text(raw, "name"),
+        status=status,
+        offered_role=chosen,
+        offered=_flag(raw, "offer"),
+        today=today,
+        now=ctx.now,
+    )
+    return await _keep_action(ctx, spec)
+
+
+DRAFT_GUEST_ANSWER = Tool(
+    name="draft_guest_answer",
+    description=(
+        "Draft an answer for a guest the member invited who isn't on Slack: in or out, or a role (cook, pickup, "
+        "or order) taken or given up for them. Use the guest's name as the member wrote it. Only the member who "
+        "invited a guest answers for them. Dinnerbell shows the member the draft with Confirm and Cancel, and "
+        "nothing changes until they confirm."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            **CALL_PROPERTIES,
+            "name": {"type": "string", "description": "The guest's name, as the member wrote it."},
+            "answer": {
+                "type": "string",
+                "enum": list(GUEST_ANSWERS),
+                "description": "in or out, or an empty string when this is a role.",
+            },
+            "role": {
+                "type": "string",
+                "enum": list(GUEST_ROLES),
+                "description": "A role for the guest, or an empty string when this is an answer.",
+            },
+            "offer": {"type": "boolean", "description": "For a role: true to take it, false to give it up."},
+        },
+        "required": ["slot", "day", "name", "answer", "role", "offer"],
+        "additionalProperties": False,
+    },
+    run=draft_guest_answer_tool,
+)
+
+
+async def draft_call_tool(ctx: ToolContext, raw: Mapping[str, Any]) -> str:
+    _fields(raw, "slot", "day")
+    today = await _today(ctx)
+    slot = Slot(_enum(raw, "slot", [s.value for s in Slot]))
+    day = _day(raw, "day", today, required=True) or today
+    return await _keep_action(ctx, await call_drafts.start_call(ctx.db, ctx.actor, slot, day, today=today, now=ctx.now))
+
+
+DRAFT_CALL = Tool(
+    name="draft_call",
+    description=(
+        "Draft starting a call for a meal on a day, today or up to a week ahead, when the member wants one that "
+        "isn't scheduled, or starting a called-off one again. Today's opens at once; a later day's opens at the "
+        "usual time. Dinnerbell shows the member the draft with Confirm and Cancel, and nothing changes until "
+        "they confirm."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "slot": {"type": "string", "enum": [s.value for s in Slot], "description": "The meal."},
+            "day": {"type": "string", "description": "today, tomorrow, or YYYY-MM-DD."},
+        },
+        "required": ["slot", "day"],
+        "additionalProperties": False,
+    },
+    run=draft_call_tool,
+)
+
+
 TOOLS: tuple[Tool, ...] = (
     LOOK_UP_CATALOG_ITEMS,
     LOOK_UP_HISTORY,
@@ -859,6 +995,9 @@ TOOLS: tuple[Tool, ...] = (
     DRAFT_SUGGESTION,
     DRAFT_ROLE,
     DRAFT_TAKE_BACK_OFFER,
+    DRAFT_INVITE_GUEST,
+    DRAFT_GUEST_ANSWER,
+    DRAFT_CALL,
 )
 """Every tool, in the order requests list them. Later tools come in follow-up issues."""
 
@@ -867,7 +1006,15 @@ def tools_for(private: bool) -> tuple[Tool, ...]:
     return tuple(tool for tool in TOOLS if private or not tool.private_only)
 
 
-REFUSALS = (ToolRefusal, Forbidden, NotFound, EventRuleViolation, InvalidResponse, InvalidCatalogInput)
+REFUSALS = (
+    ToolRefusal,
+    Forbidden,
+    NotFound,
+    EventRuleViolation,
+    InvalidResponse,
+    InvalidCatalogInput,
+    InvalidMemberInput,
+)
 """Refusals whose message is safe to send back: written for the person, or for the model."""
 
 

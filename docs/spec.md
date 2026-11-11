@@ -378,6 +378,9 @@ Only private-only tools send the member's own personal data, and only when the m
 - **Draft a suggestion** of an active catalog item while answers are open (`save_details`), keeping the member's eating times, note, and other suggestions. A suggestion has no filter: ranking weighs it, and the vote's filters still apply.
 - **Draft a role**, cook, pickup, or order, or giving one up (`offer_role`). While voting, someone who isn't in joins late first.
 - **Draft taking back an offer**, the member's own only (`cancel_call`, as its offerer).
+- **Draft inviting a guest** while answers are open (`guests.invite`): the household's saved guest with exactly the name the member wrote, or a new guest with the dietary tags the member named. The model sends the name as the member wrote it and gets only that back, never a guest's stored needs, and it can't list anyone's guests.
+- **Draft an answer for a guest**, in or out, or a role taken or given up for them (`guests.answer_for`): only for a guest without Slack whom the member invited. An admin answering for someone else's guest is an override, never a tool.
+- **Draft an ad-hoc call** (`calls.start_call`, FR-3) for today or up to a week ahead, or starting a called-off one again. A cooking offer that stands in for that call gets a fixed refusal that names nobody.
 
 A message that asks for several changes gets a draft for each, and each confirms on its own, in any order.
 
@@ -392,6 +395,9 @@ The call is the one the member names, then the thread's call, then the only open
 - **A suggestion:** add it, keeping the rest of the member's Details, and count them in if they hadn't answered.
 - **A role:** take it, counting them in, joining late first while voting, in the same use case, so a refusal undoes the late join too; or give it up.
 - **Taking back an offer:** call it off, and tell everyone who joined it.
+- **Inviting a guest:** a guest with Slack is told and answers themselves; one without is in at once, and the member answers for them from then on; a new guest is saved first, with their dietary needs.
+- **An answer for a guest:** in or out, withdrawing their role offers on an out, or a role for them, which counts them in.
+- **An ad-hoc call:** today's opens now and posts; a later day's opens at the usual time; a called-off one starts again. The member is its starter. Confirm runs `start_call`, which uses the draft under its own write lock.
 
 **Confirm** on a call action runs on the call and run it was drafted against: a draft for an earlier run of a call gets the service's stale-call refusal.
 
