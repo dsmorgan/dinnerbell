@@ -68,10 +68,7 @@ from dinnerbell.services.assistant.acting import ToolRefusal
 from dinnerbell.services.call_context import CallContext, load
 from dinnerbell.services.errors import NotFound
 
-NO_SUCH_PROPOSAL = (
-    "That isn't one of this call's proposals in that mode. Call look_up_call for its proposals, and use a name "
-    "and mode it returns."
-)
+NO_SUCH_PROPOSAL = "That isn't one of this call's picks. Call look_up_call, and send a pick it returns."
 NO_SUCH_ITEM = "The catalog has no active item by that name. Look it up with look_up_catalog_items."
 NO_OPEN_OFFER = "The member has no open offer for that. Say so."
 NOTHING_TO_DO = "That's how it is already, so there's nothing to draft. Say so."
@@ -149,15 +146,37 @@ async def answer(
 # Votes -------------------------------------------------------------------------------------------
 
 
-def _pick(ctx: CallContext, name: str, mode: Mode | None) -> Proposal:
-    found = [
-        p
-        for p in ctx.picks
-        if name_key(cc.item_info(ctx, p).name) == name_key(name) and (mode is None or p.mode is mode)
-    ]
+FREE_TEXT_PICK = "a member's own idea"
+"""How a pick typed as free text reads to the model, by its ``pick`` handle: its text is what a
+member wrote, and can carry anything, such as someone's name."""
+
+
+def pick_name(ctx: CallContext, pick: Proposal) -> str:
+    """A pick as the model may see it: its catalog item's name, or ``FREE_TEXT_PICK``."""
+    if pick.item_id is not None and pick.item_id in ctx.items:
+        return ctx.items[pick.item_id].name
+    return FREE_TEXT_PICK
+
+
+def _pick(ctx: CallContext, handle: int, name: str, mode: Mode | None) -> tuple[Proposal, str]:
+    """The pick ``handle`` names (``look_up_call``'s ``pick``), or else the one pick with that
+    name and mode, with how the draft names it: the name the member gave for a free-text pick
+    found by name, since those are their own words, and ``FREE_TEXT_PICK`` otherwise."""
+    if handle:
+        found = [p for p in ctx.picks if p.id == handle]
+    else:
+        found = [
+            p
+            for p in ctx.picks
+            if name_key(cc.item_info(ctx, p).name) == name_key(name) and (mode is None or p.mode is mode)
+        ]
     if len(found) != 1:
         raise ToolRefusal(NO_SUCH_PROPOSAL)
-    return found[0]
+    pick = found[0]
+    shown = pick_name(ctx, pick)
+    if shown == FREE_TEXT_PICK and not handle:
+        shown = " ".join(name.split())
+    return pick, shown
 
 
 async def vote(
@@ -167,22 +186,26 @@ async def vote(
     name: str,
     mode: Mode | None,
     *,
+    handle: int = 0,
     voting: bool,
     today: date,
     now: datetime,
 ) -> DraftSpec:
     """A vote for one of the call's picks (``calls.vote``), or taking it back (``calls.unvote``).
     Someone who isn't in joins late first, as the button that asks them does (``join_late``);
-    a coordinator who isn't in votes without joining, as they always could."""
+    a coordinator who isn't in votes without joining, as they always could. A call that isn't
+    voting gets ``check_can_vote``'s refusal before any pick is looked up, so it never says
+    which picks a call has."""
     ctx = await load(db, event)
     event = ctx.event
     mine = ctx.response_of(actor.id)
-    pick = _pick(ctx, name, mode)
-    item = cc.item_info(ctx, pick).name
+    if event.state is not EventState.VOTING:
+        check_can_vote(event, actor, mine)
+    pick, item = _pick(ctx, handle, name, mode)
     voted = actor.id in ctx.votes.get(pick.id, [])
     seen, join_late = mine, False
     already_in = (mine is not None and mine.is_in) or (actor.active and is_coordinator(event, actor))
-    if voting and not already_in and event.state is EventState.VOTING:
+    if voting and not already_in:
         seen = _joined(ctx, actor, mine, now)
         join_late = seen is not None
     check_can_vote(event, actor, seen)
@@ -244,7 +267,8 @@ async def role(
     db: AsyncSession, actor: Member, event: Event, offered_role: RoleOffer, *, offered: bool, today: date, now: datetime
 ) -> DraftSpec:
     """Offering a role, or giving it up (``calls.offer_role``). While voting, someone who isn't in
-    joins late first (``calls.join_late``), as a late joiner may then offer one."""
+    joins late first, in the same use case (``offer_role``'s ``join_late``), as a late joiner may
+    then offer one."""
     ctx = await load(db, event)
     event = ctx.event
     mine = ctx.response_of(actor.id)
@@ -312,10 +336,8 @@ async def confirm(db: AsyncSession, actor: Member, draft: Draft, *, today: date,
     """Run the use case ``draft`` stands for, as ``actor``, who is ``tool_actor`` of its member.
     The caller holds the write lock and used the draft in it; the use case locks the call in
     the same transaction and commits both, or rolls both back. A draft for another run of the
-    call gets ``check_run``'s refusal first, as a stale Slack card does.
-
-    A role that joins late first commits the late join, with the draft's use, before it offers
-    the role: if the call closes in between, the member stays joined, and the card says why."""
+    call gets ``check_run``'s refusal first, as a stale Slack card does. A role that joins late
+    first does so inside ``offer_role``'s lock, so a refusal rolls back the late join too."""
     if draft.event_id is None:  # pragma: no cover - every call action names its call
         raise NotFound(cc.NO_SUCH_CALL)
     event = await EventRepository(db).get(actor.household_id, draft.event_id)
@@ -327,8 +349,9 @@ async def confirm(db: AsyncSession, actor: Member, draft: Draft, *, today: date,
     if draft.kind is DraftKind.ANSWER:
         status = Status(str(payload["status"]))
         if payload.get("join_late"):
-            await calls.join_late(db, actor, event.id, run=run, now=now)
-            return ActionConfirmed(event.id, f"Confirmed. You joined {when}'s {slot} call late.")
+            if await calls.join_late(db, actor, event.id, run=run, now=now):
+                return ActionConfirmed(event.id, f"Confirmed. You joined {when}'s {slot} call late.")
+            return ActionConfirmed(event.id, f"You're in {when}'s {slot} call already, so nothing changed.")
         await calls.respond(db, actor, event.id, status, run=run, now=now)
         word = {Status.IN: "in for", Status.OUT: "out of", Status.MAYBE: "a maybe for"}[status]
         return ActionConfirmed(event.id, f"Confirmed. You're {word} {when}'s {slot} call.")
@@ -346,9 +369,8 @@ async def confirm(db: AsyncSession, actor: Member, draft: Draft, *, today: date,
         return ActionConfirmed(event.id, f"Confirmed. {payload['name']} is one of your suggestions.")
     if draft.kind is DraftKind.ROLE:
         chosen, offered = RoleOffer(str(payload["role"])), bool(payload["offered"])
-        if payload.get("join_late"):
-            await calls.join_late(db, actor, event.id, run=run, now=now)
-        await calls.offer_role(db, actor, event.id, chosen, offered, run=run, now=now)
+        late = bool(payload.get("join_late"))
+        await calls.offer_role(db, actor, event.id, chosen, offered, join_late=late, run=run, now=now)
         doing = ROLE_DOING[chosen]
         done = f"You're down to {doing}" if offered else f"You're no longer down to {doing}"
         return ActionConfirmed(event.id, f"Confirmed. {done} for {when}'s {slot} call.")
