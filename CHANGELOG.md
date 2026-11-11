@@ -35,6 +35,7 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ### Changed
 
+- **Enter sends a message on the Assistant page** (#285). On a keyboard, Enter sends what's in the message box, as **Send** does, and Shift+Enter starts a new line. Enter that picks an input method's candidate doesn't send. On a touchscreen, Enter still starts a new line, and **Send** sends.
 - **Shuffle proposals is easier to find on the web** (#267). On Today and the call page, the button now sits under the proposal list, where Slack puts it, with its "N left" note, and has a border so it reads as a button, while **Vote** still stands out. Who sees it is unchanged: the coordinator and admins, while a shuffle is left.
 
 ### Fixed

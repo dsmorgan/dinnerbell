@@ -298,6 +298,11 @@ def test_without_javascript_a_kept_exchange_redirects_and_shows_on_the_page(
     assert 'method="post" action="/assistant"' in shown and '"timeout": 120000' in shown
     assert 'hx-disabled-elt="find button"' in shown and "data-reset-on-success" in shown
     assert '<label class="field">\n      <span>Message</span>\n      <textarea name="message"' in shown
+    # Enter sends from a keyboard, and the help line says so (#285).
+    assert "data-enter-sends" in shown and "Enter sends and Shift+Enter starts a new line" in shown
+    script = client.get("/static/app.js").text
+    assert '"data-enter-sends"' in script and "requestSubmit" in script and "isComposing" in script
+    assert "event.shiftKey" in script and "(pointer: coarse)" in script
 
 
 @pytest.mark.flag("assistant", on=True)

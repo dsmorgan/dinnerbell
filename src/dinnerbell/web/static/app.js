@@ -294,6 +294,34 @@
     field.focus();
   });
 
+  // A text box marked data-enter-sends, such as the Assistant page's message box, sends its form
+  // on Enter, as its submit button does (requestSubmit, so HTMX and the form's checks apply), and
+  // Shift+Enter starts a new line. Enter does nothing more while the box is empty or the form is
+  // sending (hx-disabled-elt disables the button). Enter that picks an input method's candidate
+  // (isComposing, or key code 229 in Safari) stays the input method's. On a touchscreen there's
+  // no Shift key to start a line with, so Enter starts one there and the button sends.
+  var ENTER_SENDS = "data-enter-sends";
+  var touchscreen = window.matchMedia && window.matchMedia("(hover: none) and (pointer: coarse)");
+
+  document.addEventListener("keydown", function (event) {
+    var field = event.target;
+    if (event.key !== "Enter" || event.shiftKey || event.altKey || event.isComposing || event.keyCode === 229) {
+      return;
+    }
+    if (!(field instanceof HTMLTextAreaElement) || !field.hasAttribute(ENTER_SENDS) || !field.form) {
+      return;
+    }
+    if (touchscreen && touchscreen.matches) {
+      return;
+    }
+    event.preventDefault();
+    var send = field.form.querySelector("button[type=submit]");
+    if (!field.value.trim() || (send && send.disabled)) {
+      return;
+    }
+    field.form.requestSubmit(send || undefined);
+  });
+
   // Calls still in progress (scheduled, collecting, voting, or decided) carry data-poll, the URL
   // of their card. Refresh them now and then, so a page left open shows the call opening,
   // voting, the decision, and Mark done at meal time. Skip a card while someone is using it: an
