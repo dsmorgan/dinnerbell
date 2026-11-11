@@ -503,27 +503,40 @@ jobs:
   compose:
     name: compose
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # uv for the podman-compose fallback below, and for check-compose.sh, which runs
+      # `dinnerbell config check` from this checkout in place of the image.
+      - name: Read the uv version from the Containerfile
+        id: uv
+        run: |
+          version=$(sed -n 's|^FROM ghcr\.io/astral-sh/uv:\([0-9][0-9.]*\)@sha256:.*|\1|p' Containerfile)
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error file=Containerfile::Can't read the uv version from the FROM ghcr.io/astral-sh/uv line."
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version: ${{ steps.uv.outputs.version }}
+          python-version: "3.12"
+          enable-cache: auto
       # Ubuntu 24.04 ships podman-compose 1.0.6, the oldest version the docs support. Its merge
-      # and .env rules differ from Docker's, so the checks run against both.
-      # The runner's apt sources point at azure.archive.ubuntu.com first. When that mirror can't be
-      # reached, every package fails with it, so the second try uses only archive.ubuntu.com and
-      # security.ubuntu.com, Ubuntu's own servers.
+      # and .env rules differ from Docker's, so the checks run against both. When the runner can't
+      # reach Ubuntu's servers (on 2026-11-11 its DNS failed for every ubuntu.com host for hours),
+      # the same version comes from PyPI, with the dependency versions Ubuntu 24.04 ships. Each apt
+      # run is capped, so a server that hangs leaves time for the rest of the job.
       - name: Install podman-compose
         run: |
-          apt_opts=(-q -o Acquire::Retries=2 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20)
-          install() { sudo apt-get "${apt_opts[@]}" update && sudo apt-get "${apt_opts[@]}" install -y podman-compose; }
-          if ! install; then
-            echo "::warning::The runner's apt mirror failed; trying archive.ubuntu.com instead."
-            printf '%s\n' http://archive.ubuntu.com/ubuntu/ http://security.ubuntu.com/ubuntu/ |
-              sudo tee /etc/apt/apt-mirrors.txt >/dev/null
-            sudo find /etc/apt -name '*.list' -o -name '*.sources' -o -name apt-mirrors.txt |
-              xargs -r sudo sed -i 's|azure\.archive\.ubuntu\.com|archive.ubuntu.com|g'
-            install
+          apt_opts=(-q -o Acquire::Retries=1 -o Acquire::http::Timeout=15 -o Acquire::https::Timeout=15)
+          if ! { sudo timeout 120 apt-get "${apt_opts[@]}" update &&
+            sudo timeout 120 apt-get "${apt_opts[@]}" install -y podman-compose; }; then
+            echo "::warning::apt couldn't install podman-compose; installing 1.0.6 from PyPI instead."
+            uv tool install --python 3.12 podman-compose==1.0.6 --with python-dotenv==1.0.1 --with pyyaml==6.0.1
+            uv tool dir --bin >> "$GITHUB_PATH"
           fi
       - name: Shellcheck
         run: shellcheck deploy/dinnerbell-test deploy/check-secrets scripts/check-compose.sh scripts/build-bundle.sh
@@ -549,21 +562,6 @@ jobs:
           cmp "$RUNNER_TEMP"/bundle-1/dinnerbell-*.tar.gz "$RUNNER_TEMP"/bundle-2/dinnerbell-*.tar.gz
           (cd "$RUNNER_TEMP/bundle-1" && sha256sum --check --strict ./*.sha256)
           tar --list --verbose --gzip --file "$RUNNER_TEMP"/bundle-1/dinnerbell-*.tar.gz
-      # check-compose.sh runs `dinnerbell config check` from this checkout in place of the image.
-      - name: Read the uv version from the Containerfile
-        id: uv
-        run: |
-          version=$(sed -n 's|^FROM ghcr\.io/astral-sh/uv:\([0-9][0-9.]*\)@sha256:.*|\1|p' Containerfile)
-          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            echo "::error file=Containerfile::Can't read the uv version from the FROM ghcr.io/astral-sh/uv line."
-            exit 1
-          fi
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
-        with:
-          version: ${{ steps.uv.outputs.version }}
-          python-version: "3.12"
-          enable-cache: auto
       - name: Install
         run: uv sync --locked
       # Renders both instances from the example env files, checks volume names, tags, and ports,

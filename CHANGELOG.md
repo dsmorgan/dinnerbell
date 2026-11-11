@@ -39,7 +39,7 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ### Fixed
 
-- CI only: when the runner's apt mirror (`azure.archive.ubuntu.com`) can't be reached, the `compose` job installs podman-compose from `archive.ubuntu.com` and `security.ubuntu.com` instead (#281). On 2026-11-11 the Azure mirror failed for hours, and `publish`, which waits for `compose`, couldn't run.
+- CI only: when the runner can't install podman-compose with apt, the `compose` job installs the same version, 1.0.6, from PyPI with the dependency versions Ubuntu 24.04 ships (#281). On 2026-11-11 the runners' DNS failed for every `ubuntu.com` host for hours, and `publish`, which waits for `compose`, couldn't run. Each apt run is capped at 2 minutes, and the job's limit is 15 minutes.
 
 ### Upgrade notes
 
