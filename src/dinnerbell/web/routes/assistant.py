@@ -82,7 +82,9 @@ async def _page(
         "cap": f"${view.settings.cap_dollars}",
         "by_member": [(usage.name, format_dollars(usage.micros)) for usage in view.by_member],
         "cap_below_one_call": view.cap_below_one_call,
+        "cap_below_any_call": view.cap_below_any_call,
         "least_call": format_dollars(view.least_call_micros),
+        "least_channel_call": format_dollars(view.least_channel_call_micros),
         "least_cap": f"${-(-view.least_call_micros // 1_000_000)}",
         "limits": {
             "cap": (MIN_CAP_DOLLARS, MAX_CAP_DOLLARS),

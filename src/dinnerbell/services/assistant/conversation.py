@@ -174,12 +174,17 @@ def build_request(
     return with_fallback(request)
 
 
-def least_private_call_micros(model: str) -> int:
-    """What the smallest private message's first call reserves with ``model``: an empty message,
-    no history, and every tool a private conversation offers, by ``_call``'s own reservation. A
-    cap below it can't answer any private message (``CAP_BELOW_ONE_CALL``)."""
-    request = build_request(model, tools_for(True), _messages((), Turn("user", "", "Member 1")), keeps_history=True)
+def least_call_micros(model: str, *, private: bool) -> int:
+    """What the smallest message's first call reserves with ``model``: an empty message, no
+    history, and every tool a private conversation, or a channel thread, offers, by ``_call``'s own
+    reservation. A cap below it can't answer any such message (``CAP_BELOW_ONE_CALL``)."""
+    request = build_request(model, tools_for(private), _messages((), Turn("user", "", "Member 1")), keeps_history=True)
     return reservation_micros(model, payload_bytes=request_bytes(request), max_tokens=int(request["max_tokens"]))
+
+
+def least_private_call_micros(model: str) -> int:
+    """``least_call_micros`` for a private message: the larger, since it offers more tools."""
+    return least_call_micros(model, private=True)
 
 
 def request_bytes(request: Mapping[str, Any]) -> int:

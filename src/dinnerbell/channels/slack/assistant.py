@@ -64,6 +64,7 @@ from dinnerbell.channels.slack.api import SlackApi, SlackUnavailable
 from dinnerbell.channels.slack.blocks import (
     ELLIPSIS,
     MAX_FALLBACK,
+    MAX_SECTION,
     Block,
     Mrkdwn,
     actions,
@@ -115,6 +116,10 @@ STILL_ON_IT = "I'm still on your last message. Send this one again once I've ans
 TEXT_ONLY = "I can read only text messages."
 MAX_DRAFT_TITLE = 150
 MAX_DRAFT_LINE = 300
+WHOLE_LINES = frozenset({"item_edit"})
+"""Draft kinds whose lines show the values Confirm saves, such as a catalog edit's new link: each
+line shows whole, up to a section's limit, with the value Confirm saves first, and a long card
+runs over several sections instead of being clipped (#254)."""
 IF_CONFIRMED = "If you confirm:"
 CANCELLED = "Cancelled."
 PROPOSED = "Proposed. It's in the vote now."
@@ -312,15 +317,20 @@ def draft_card(draft: DraftView) -> dict[str, Any]:
     """A draft's card: its title and what **Confirm** does, through ``safe_reply`` as the model's
     words are, then **Confirm** and **Cancel**, whose value is the draft's ID and nothing else."""
     title = safe_reply(draft.title, MAX_DRAFT_TITLE) or ELLIPSIS
-    lines = [f"• {safe_reply(line, MAX_DRAFT_LINE)}" for line in draft.confirm_lines]
-    text = "\n".join([f"*{title}*", *([IF_CONFIRMED, *lines] if lines else [])])
+    most = MAX_SECTION - 50 if draft.kind in WHOLE_LINES else MAX_DRAFT_LINE
+    lines = [f"• {safe_reply(line, most)}" for line in draft.confirm_lines]
+    sections: list[list[str]] = [[f"*{title}*", *([IF_CONFIRMED] if lines else [])]]
+    for line in lines:
+        if len("\n".join([*sections[-1], line])) > MAX_SECTION:
+            sections.append([])
+        sections[-1].append(line)
     value = ids.draft_value(draft.id)
     buttons = actions(
         button("Confirm", ids.DRAFT_CONFIRM, value, style="primary"),
         button("Cancel", ids.DRAFT_CANCEL, value),
         block_id=f"draft_{draft.id}",
     )
-    return {"text": title, "blocks": [section(text), buttons]}
+    return {"text": title, "blocks": [*(section("\n".join(part)) for part in sections), buttons]}
 
 
 def result_card(text: str, *blocks: Block) -> dict[str, Any]:

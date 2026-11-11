@@ -23,7 +23,7 @@ from dinnerbell.domain.assistant import (
     settings_to_json,
 )
 from dinnerbell.domain.members import Member
-from dinnerbell.services.assistant.conversation import least_private_call_micros
+from dinnerbell.services.assistant.conversation import least_call_micros, least_private_call_micros
 from dinnerbell.services.assistant.runtime import AssistantConfig
 from dinnerbell.services.common import audit, require_admin
 from dinnerbell.services.errors import NotFound
@@ -52,10 +52,17 @@ class AssistantAdmin:
     least_call_micros: int = 0
     """What the smallest private message's first call reserves with the configured model
     (``conversation.least_private_call_micros``). A cap below it answers no private message."""
+    least_channel_call_micros: int = 0
+    """The same for a message in a channel thread, which offers fewer tools. A cap below it
+    answers no message at all."""
 
     @property
     def cap_below_one_call(self) -> bool:
         return self.least_call_micros > self.settings.cap_micros
+
+    @property
+    def cap_below_any_call(self) -> bool:
+        return self.least_channel_call_micros > self.settings.cap_micros
 
 
 def _require(config: AssistantConfig, actor: Member) -> None:
@@ -81,6 +88,7 @@ async def assistant_admin(db: AsyncSession, config: AssistantConfig, actor: Memb
             for member_id, micros in await repo.by_member(household.id, month)
         ),
         least_call_micros=least_private_call_micros(config.model),
+        least_channel_call_micros=least_call_micros(config.model, private=False),
     )
 
 

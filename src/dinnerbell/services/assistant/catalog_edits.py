@@ -107,6 +107,7 @@ NEW_MEAL = "To log a new meal, send meal 0 with its day, slot, and name, and who
 ITEM_CHANGED = "That item changed since the draft, so nothing changed. Ask the assistant for a new draft."
 MEAL_CHANGED = "That meal changed since the draft, so nothing changed. Ask the assistant for a new draft."
 _LABEL = re.compile(r"Member (\d{1,6})")
+HELD = ("url", "order_url", "notes")
 
 
 def _stale(message: str) -> EventRuleViolation:
@@ -240,6 +241,8 @@ async def edit_item(
     members = await _members(db, actor)
     cooks = set(item.cook_ids) - removing(labels, change.remove_cooks, item.cook_ids, NOT_A_COOK)
     cooks |= adding(labels, change.add_cooks, members)
+    if change.servings and "servings" in change.clear:
+        raise ToolRefusal(BOTH.format(field="servings"))
     servings = None if "servings" in change.clear else (change.servings or item.default_servings)
     data = ItemInput(
         kind=item.kind,
@@ -260,9 +263,12 @@ async def edit_item(
     if same is not None and same.id != item.id:
         raise CatalogRuleViolation(f"A {item.kind.label.lower()} named {clean.name} already exists.")
     before, after = item_snapshot(item), clean_snapshot(clean)
-    if not changed_fields(before, after):
+    # A held field the member set gets a line even when it's the value it has, so a guess at
+    # notes or a link the model never read can't learn whether it matched from a refusal.
+    sent = {f for f in HELD if getattr(change, f).strip() or f in change.clear}
+    if not changed_fields(before, after) and not sent:
         raise ToolRefusal(NOTHING_TO_DO)
-    lines = edit_lines(before, after, {t.id: t.name for t in tags})
+    lines = edit_lines(before, after, {t.id: t.name for t in tags}, sent=sent)
     payload = {"item_id": item.id, "before": before, "after": after}
     return DraftSpec(DraftKind.ITEM_EDIT, payload, f"Edit {plain(item.name)}", lines, None)
 
@@ -333,29 +339,42 @@ def _who(members: Mapping[int, Member], member_id: int, label: Labeler) -> str:
     return "a guest" if member.is_guest else label(member_id)
 
 
-async def my_meals(db: AsyncSession, actor: Member, name: str, *, label: Labeler, today: date) -> dict[str, Any]:
+PEOPLE_IN_PRIVATE = (
+    "Who ate shows only in a direct message with Dinnerbell or on the Assistant page. To change who ate, the "
+    "member names them by mentioning them."
+)
+"""What a lookup in a channel thread says instead of who ate: its reply posts for everyone, and a
+label it gave would join the thread's shared pseudonyms."""
+
+
+async def my_meals(
+    db: AsyncSession, actor: Member, name: str, *, private: bool, label: Labeler, today: date
+) -> dict[str, Any]:
     """The meals the member logged, which History lets them edit or delete, newest first, whose
-    item's name contains ``name``: each meal's number, day, meal, item, whether it came from a
-    call, and who ate, by label. Never anyone's feedback or notes."""
+    item's name contains ``name``: each meal's number, day, meal, item, whether its place is the
+    call's (``meals.call_place``), and, in a private conversation, who ate, by label. In a channel
+    thread, no one who ate gets a label, and the reply can't name them. Never anyone's feedback."""
     key = name_key(name)
     mine = [
         m
         for m in await MealLogRepository(db).logged_by(actor.household_id, actor.id)
         if can_change(actor, m) and key in name_key(m.item_name)
     ]
-    members = await _members(db, actor)
-    listed = [
-        {
+    members = await _members(db, actor) if private else {}
+    listed: list[dict[str, Any]] = []
+    for m in mine[:MAX_MEALS]:
+        shown: dict[str, Any] = {
             "meal": m.id,
             "day": m.day.isoformat(),
             "slot": m.slot.value,
             "name": m.item_name,
-            "from_a_call": m.event_id is not None,
-            "people": [_who(members, p.id, label) for p in m.participants],
+            "from_a_call": await meal_service.call_place(db, actor, m) is not None,
         }
-        for m in mine[:MAX_MEALS]
-    ]
-    return {"today": today.isoformat(), "meals": listed, "more": len(mine) > MAX_MEALS}
+        if private:
+            shown["people"] = [_who(members, p.id, label) for p in m.participants]
+        listed.append(shown)
+    found: dict[str, Any] = {"today": today.isoformat(), "meals": listed, "more": len(mine) > MAX_MEALS}
+    return found if private else found | {"people": PEOPLE_IN_PRIVATE}
 
 
 async def log_meal(

@@ -1494,6 +1494,9 @@ CLEARABLE = ["url", "order_url", "notes", "servings"]
 ON_CATALOG = {"": None, "off": False, "back": True}
 MAX_LIST = 10
 MAX_NOTES_CHARS = 1_000
+MAX_EDIT_LINK = 500
+"""The longest link a catalog edit takes: its card shows the new link whole, in Slack too, and a
+longer one goes on the Catalog page."""
 LABELS = "By label, such as Member 2."
 KEEP = "Empty keeps it."
 ITEM_FIELDS = ("name", "kind")
@@ -1571,8 +1574,8 @@ async def draft_catalog_edit_tool(ctx: ToolContext, raw: Mapping[str, Any]) -> s
         remove_tags=_strings(raw, "remove_tags"),
         add_cooks=_strings(raw, "add_cooks"),
         remove_cooks=_strings(raw, "remove_cooks"),
-        url=_long(raw, "url", MAX_LINK_CHARS),
-        order_url=_long(raw, "order_url", MAX_LINK_CHARS),
+        url=_long(raw, "url", MAX_EDIT_LINK),
+        order_url=_long(raw, "order_url", MAX_EDIT_LINK),
         notes=_long(raw, "notes", MAX_NOTES_CHARS),
         servings=_whole(raw, "servings", 0, 100),
         clear=_choices(raw, "clear", CLEARABLE),
@@ -1637,7 +1640,9 @@ def _meal_day(raw: Mapping[str, Any], name: str, today: date) -> date | None:
 async def look_up_my_meals_tool(ctx: ToolContext, raw: Mapping[str, Any]) -> str:
     _fields(raw, "name")
     today = await _today(ctx)
-    found = await catalog_edits.my_meals(ctx.db, ctx.actor, _text(raw, "name"), label=ctx.session.label, today=today)
+    found = await catalog_edits.my_meals(
+        ctx.db, ctx.actor, _text(raw, "name"), private=ctx.private, label=ctx.session.label, today=today
+    )
     return json.dumps(found, ensure_ascii=False)
 
 
@@ -1645,7 +1650,8 @@ LOOK_UP_MY_MEALS = Tool(
     name="look_up_my_meals",
     description=(
         "Look up the meals the member logged in History, the ones they can edit or delete, newest first: each "
-        "meal's number, day, slot, name, from_a_call (its place can't change), and people who ate, as labels."
+        "meal's number, day, slot, name, from_a_call (its place can't change), and, in private, people who ate, "
+        "as labels."
     ),
     input_schema={
         "type": "object",

@@ -87,8 +87,21 @@ def _list(names: Iterable[str]) -> str:
     return f"{', '.join(shown[:-1])}, and {shown[-1]}"
 
 
-def _quoted(value: object) -> str:
-    return "none" if value is None else f"“{plain(str(value))}”"
+BREAK = " ↵ "
+"""What a line break in a quoted value reads as: a value can't start a line of its own on the card,
+such as a bullet that says nothing else changes."""
+OLD_SHOWN = 80
+"""The most characters of a value as it is now that a line shows. The new value comes first and
+in full, so a card clipped for Slack loses only the old one's end."""
+
+
+def _quoted(value: object, most: int | None = None) -> str:
+    if value is None:
+        return "none"
+    text = BREAK.join(part.strip() for part in plain(str(value)).splitlines())
+    if most is not None and len(text) > most:
+        text = text[:most].rstrip() + "…"
+    return f"“{text}”"
 
 
 def _modes(values: Iterable[str]) -> str:
@@ -103,27 +116,36 @@ def _changes(added: list[str], removed: list[str]) -> str:
 
 def held_value(before: Mapping[str, Any]) -> Callable[[str], str]:
     """How the card writes each ``held`` field: as it is now, from the draft's ``before``."""
-    return lambda field: _quoted(before.get(field)) if field in HELD_FIELDS else NOT_SHOWN
+    return lambda field: _quoted(before.get(field), OLD_SHOWN) if field in HELD_FIELDS else NOT_SHOWN
 
 
-def edit_lines(before: Mapping[str, Any], after: Mapping[str, Any], tag_names: Mapping[int, str]) -> tuple[str, ...]:
-    """What confirming a catalog edit does: a line for each changed field, from what it is to
-    what it becomes, then that nothing else changes. ``tag_names`` names the household's tags."""
+def edit_lines(
+    before: Mapping[str, Any],
+    after: Mapping[str, Any],
+    tag_names: Mapping[int, str],
+    *,
+    sent: Iterable[str] = (),
+) -> tuple[str, ...]:
+    """What confirming a catalog edit does: a line for each changed field, what it becomes first,
+    in full, then what it was, then that nothing else changes. ``tag_names`` names the household's
+    tags. ``sent`` names the held fields the member asked to set: each gets a line even when the
+    value is the one it has, so whether a guess matched it never shows to the model."""
     lines: list[str] = []
+    shown = [key for key in EDIT_FIELDS if key in changed_fields(before, after) or key in set(sent) & HELD_FIELDS]
 
     def tag(tag_id: int) -> str:
         return plain(tag_names.get(tag_id, "a tag"))
 
-    for key in changed_fields(before, after):
+    for key in shown:
         label = EDIT_FIELDS[key]
         old: Any = before.get(key)
         new: Any = after.get(key)
         if key == "name":
-            lines.append(f"{label}: {plain(str(old))} → {plain(str(new))}.")
+            lines.append(f"{label}: {_quoted(new)} (was {_quoted(old, OLD_SHOWN)}).")
         elif key == "modes":
-            lines.append(f"{label}: {_modes(old or [])} → {_modes(new or [])}.")
+            lines.append(f"{label}: {_modes(new or [])} (was {_modes(old or [])}).")
         elif key == "meals":
-            lines.append(f"{label}: {meal_words(Meal(m) for m in old or [])} → {meal_words(Meal(m) for m in new)}.")
+            lines.append(f"{label}: {meal_words(Meal(m) for m in new)} (was {meal_words(Meal(m) for m in old or [])}).")
         elif key in {"tag_ids", "cook_ids"}:
             was, now = {int(i) for i in old or []}, {int(i) for i in new or []}
             if key == "tag_ids":
@@ -132,9 +154,9 @@ def edit_lines(before: Mapping[str, Any], after: Mapping[str, Any], tag_names: M
                 came, gone = [person(i) for i in sorted(now - was)], [person(i) for i in sorted(was - now)]
             lines.append(f"{label}: {_changes(came, gone)}.")
         elif key in HELD_FIELDS:
-            lines.append(f"{label}: {held(key)} → {_quoted(new)}.")
+            lines.append(f"{label}: {_quoted(new)} (was {held(key)}).")
         else:
-            lines.append(f"{label}: {old if old is not None else 'none'} → {new if new is not None else 'none'}.")
+            lines.append(f"{label}: {new if new is not None else 'none'} (was {old if old is not None else 'none'}).")
     return (*lines, UNCHANGED)
 
 
