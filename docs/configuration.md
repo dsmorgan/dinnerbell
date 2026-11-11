@@ -71,7 +71,7 @@ While the assistant answers a member, their menu has an **Assistant** link to th
 
 ### Talk to it in Slack
 
-Members talk to the assistant in their direct message with Dinnerbell, or by mentioning @Dinnerbell in the household channel. Dinnerbell replies in the message's thread. Its App Home shows a line saying so while the assistant answers that member. For Slack to deliver those messages, the app needs the assistant variant of its manifest: `deploy/slack-app-manifest.assistant.yaml`. It's the default manifest plus a writable **Messages** tab, the `im:history` and `app_mentions:read` scopes, and the `message.im` and `app_mention` events. Apply it before you turn on **Turn on the assistant**: App Home tells members they can message Dinnerbell as soon as the switch is on.
+Members talk to the assistant in their direct message with Dinnerbell, or by mentioning @Dinnerbell in the household channel. Dinnerbell replies in the message's thread. Its App Home shows a line saying so while the assistant answers that member. For Slack to deliver those messages, the app needs the assistant variant of its manifest: `deploy/slack-app-manifest.assistant.yaml`. It's the default manifest plus a writable **Messages** tab, the `im:history`, `app_mentions:read`, and `reactions:write` scopes, and the `message.im` and `app_mention` events. Apply it before you turn on **Turn on the assistant**: App Home tells members they can message Dinnerbell as soon as the switch is on.
 
 1. At [api.slack.com/apps](https://api.slack.com/apps), open the Dinnerbell app and select **App Manifest**.
 2. Paste the contents of `deploy/slack-app-manifest.assistant.yaml`, set your hostname in `redirect_urls` again, and select **Save Changes**.
@@ -80,6 +80,8 @@ Members talk to the assistant in their direct message with Dinnerbell, or by men
 To turn the assistant off for good, paste `deploy/slack-app-manifest.yaml` again and reinstall. Until you do, Dinnerbell ignores DMs and mentions while the assistant is off, and Slack shows members a Messages tab they can type in that gets no answers.
 
 Dinnerbell reads only direct messages to it and messages that mention it, and only their text: a direct message with a file gets "I can read only text messages." It answers one message per member at a time, and active members only: a guest, a deactivated member, or someone not linked to a member gets no reply, and their message is neither stored nor sent. A direct message thread is private to its member. A channel thread is shared: everyone sees it, and each message acts as the member who wrote it.
+
+While Dinnerbell works on a message, the thread shows "Dinnerbell is thinking…" with a few rotating lines, such as "Checking the catalog…". Where Slack won't show that status, Dinnerbell reacts to the member's message with :hourglass_flowing_sand: instead, which is what `reactions:write` is for. Either one goes once the reply posts or the answer fails. A message Dinnerbell ignores, or one that gets "I'm still on your last message", shows neither. If the indicator fails, the reply still comes; Dinnerbell logs only the Slack error code.
 
 Replies can't mention anyone or ping the channel, and they hold no links: Dinnerbell writes any address the assistant gives in a form Slack doesn't link, such as `hxxps[:]//example[.]com`.
 

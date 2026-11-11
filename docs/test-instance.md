@@ -33,7 +33,7 @@ Use the same workspace as production.
 
 Never reuse production's tokens: Socket Mode delivers each event to one connection, so two instances on one app split button taps between them.
 
-To try the optional assistant on test, paste `deploy/slack-app-manifest.assistant.test.yaml` instead, or paste it later under **App Manifest** and reinstall the test app. It's the test manifest plus a writable **Messages** tab, the `im:history` and `app_mentions:read` scopes, and the `message.im` and `app_mention` events. See [The assistant](configuration.md#talk-to-it-in-slack).
+To try the optional assistant on test, paste `deploy/slack-app-manifest.assistant.test.yaml` instead, or paste it later under **App Manifest** and reinstall the test app. It's the test manifest plus a writable **Messages** tab, the `im:history`, `app_mentions:read`, and `reactions:write` scopes, and the `message.im` and `app_mention` events. See [The assistant](configuration.md#talk-to-it-in-slack).
 
 ## Write .env.test
 

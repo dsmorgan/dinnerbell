@@ -1098,14 +1098,14 @@ def _manifest(name: str) -> dict[str, Any]:
         ("slack-app-manifest.test.yaml", "slack-app-manifest.assistant.test.yaml"),
     ],
 )
-def test_each_assistant_manifest_is_its_default_plus_exactly_dms_and_mentions(default: str, variant: str) -> None:
+def test_each_assistant_manifest_is_its_default_plus_the_assistants_additions(default: str, variant: str) -> None:
     expected = _manifest(default)
     assert expected["features"]["app_home"]["messages_tab_read_only_enabled"] is True
     expected["features"]["app_home"]["messages_tab_read_only_enabled"] = False
-    expected["oauth_config"]["scopes"]["bot"] += ["im:history", "app_mentions:read"]
+    expected["oauth_config"]["scopes"]["bot"] += ["im:history", "app_mentions:read", "reactions:write"]
     expected["settings"]["event_subscriptions"]["bot_events"] += ["message.im", "app_mention"]
     assert _manifest(variant) == expected
-    for scope in ("im:history", "app_mentions:read"):
+    for scope in ("im:history", "app_mentions:read", "reactions:write"):
         assert scope not in _manifest(default)["oauth_config"]["scopes"]["bot"]
 
 
