@@ -26,7 +26,7 @@ import asyncio
 import contextlib
 import logging
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Literal
 
@@ -68,13 +68,18 @@ def answered(error: Exception) -> bool:
 
 @dataclass
 class _Thread:
-    """The indicators in one thread."""
+    """The indicators in one thread. It stays in ``Indicators.threads`` until its last
+    message's clear is done, so a message that starts meanwhile joins it."""
 
     active: int = 0
     """Messages in the thread being answered now."""
     statuses: int = 0
     """Messages whose status may be showing, or may have been until a reply: when it isn't 0,
     the last message to finish clears the thread's status."""
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    """Held across every call that sets or clears the thread's status, so they land in the
+    order they're decided: a status set again for a message still running can't land after
+    the last one's clear, and a new message's status can't land before an old clear."""
 
 
 class Indicators:
@@ -128,15 +133,16 @@ class Working:
     async def _show(self) -> None:
         api = self.indicators.api
         if self.indicators.allowed("status", self.private):
-            self.thread.statuses += 1  # may be showing from the moment the call starts
-            error = await self._attempt(
-                "assistant.threads.setStatus",
-                lambda: api.set_status(self.channel, self.thread_ts, STATUS, LOADING_MESSAGES),
-            )
+            async with self.thread.lock:
+                self.thread.statuses += 1  # may be showing from the moment the call starts
+                error = await self._attempt(
+                    "assistant.threads.setStatus",
+                    lambda: api.set_status(self.channel, self.thread_ts, STATUS, LOADING_MESSAGES),
+                )
+                if error is not None and answered(error):
+                    self.thread.statuses -= 1
             if error is None:
                 return
-            if answered(error):
-                self.thread.statuses -= 1
             self._remember("status", error)
         if self.indicators.allowed("reaction", self.private):
             self.reaction = True
@@ -184,20 +190,22 @@ class Working:
         if not self._left:
             self._left = True
             thread.active -= 1
-            if thread.active == 0 and self.indicators.threads.get((self.channel, self.thread_ts)) is thread:
-                del self.indicators.threads[(self.channel, self.thread_ts)]
-        if thread.statuses:
-            if thread.active == 0:
-                await self._attempt(
-                    "assistant.threads.setStatus", lambda: api.set_status(self.channel, self.thread_ts, "")
-                )
-                thread.statuses = 0
-            elif self.indicators.allowed("status", self.private):
-                # This reply cleared the status for the whole thread; another is still coming.
-                await self._attempt(
-                    "assistant.threads.setStatus",
-                    lambda: api.set_status(self.channel, self.thread_ts, STATUS, LOADING_MESSAGES),
-                )
+        async with thread.lock:  # who's still active is read under the lock, after any call before
+            if thread.statuses:
+                if thread.active == 0:
+                    await self._attempt(
+                        "assistant.threads.setStatus", lambda: api.set_status(self.channel, self.thread_ts, "")
+                    )
+                    thread.statuses = 0
+                elif self.indicators.allowed("status", self.private):
+                    # This reply cleared the status for the whole thread; another is still coming.
+                    await self._attempt(
+                        "assistant.threads.setStatus",
+                        lambda: api.set_status(self.channel, self.thread_ts, STATUS, LOADING_MESSAGES),
+                    )
+            key = (self.channel, self.thread_ts)
+            if thread.active == 0 and self.indicators.threads.get(key) is thread:
+                del self.indicators.threads[key]  # only now: a message that started meanwhile kept it
         for _ in range(2):  # once more if Slack fails, so the reaction isn't stranded
             if not self.reaction:
                 break
