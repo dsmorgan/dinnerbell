@@ -36,6 +36,7 @@ from dinnerbell.domain.feedback import (
     NOT_A_PARTICIPANT,
     OWN_COOKING,
     FeedbackInput,
+    InvalidFeedback,
     PlaceIssue,
     Rating,
 )
@@ -906,3 +907,32 @@ async def test_the_meals_listed_are_only_those_the_member_ate(house: House) -> N
         result = await tool(house, "look_up_my_feedback", {"name": ""}, who=who)
         assert not result.is_error, result.content
         assert [m["meal"] for m in json.loads(result.content)["meals"]] == expected, who
+
+
+@pytest.mark.flag("assistant", on=True)
+@pytest.mark.parametrize("raced", [NotFound("No such meal."), InvalidFeedback(NOT_A_PARTICIPANT)])
+async def test_a_meal_changed_during_the_lookup_drops_out_and_the_filter_still_guards(
+    house: House, monkeypatch: pytest.MonkeyPatch, raced: Exception
+) -> None:
+    """A meal deleted, or edited to leave Kim out, between the lookup's read and its form drops
+    out of the list rather than failing the whole lookup. The participants filter is still the
+    guard: the form is asked only about meals Kim ate, never Lee's."""
+    dinner_id = await dinner(house)
+    lunch = MealInput(TODAY, Slot.LUNCH, house.items["Taqueria"].id, frozenset({house["Kim"].id}))
+    lunch_id = (await act(house, meals.log_meal, house["Kim"], lunch, today=TODAY)).id
+    lees = MealInput(TODAY - timedelta(days=2), Slot.DINNER, house.items["Taqueria"].id, frozenset({house["Lee"].id}))
+    lees_id = (await act(house, meals.log_meal, house["Lee"], lees, today=TODAY)).id
+    asked: list[int] = []
+    real_form = own_drafts.feedback_service.form
+
+    async def racing(db: Any, actor: Member, meal_id: int, **kwargs: Any) -> Any:
+        asked.append(meal_id)
+        if meal_id == lunch_id:
+            raise raced
+        return await real_form(db, actor, meal_id, **kwargs)
+
+    monkeypatch.setattr(own_drafts.feedback_service, "form", racing)
+    result = await tool(house, "look_up_my_feedback", {"name": ""})
+    assert not result.is_error, result.content
+    assert [m["meal"] for m in json.loads(result.content)["meals"]] == [dinner_id]
+    assert sorted(asked) == sorted([dinner_id, lunch_id]) and lees_id not in asked
