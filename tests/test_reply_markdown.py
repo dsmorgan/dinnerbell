@@ -36,6 +36,7 @@ def html(text: str) -> str:
         ("5. five\n6. six", '<ol start="5"><li>five</li><li>six</li></ol>'),
         ("- a\n1. b", "<ul><li>a</li></ul><ol><li>b</li></ol>"),
         ("## Places ##\ntext", "<p><strong>Places</strong></p><p>text</p>"),
+        ("# C#\n# a ###  \n# ###", "<p><strong>C#</strong></p><p><strong>a</strong></p>"),
         (
             "__bold__ *it* _it_ ~~gone~~ `x*y*`",
             "<p><strong>bold</strong> <em>it</em> <em>it</em> <del>gone</del> <code>x*y*</code></p>",
@@ -98,6 +99,14 @@ def test_a_long_line_shows_as_text_without_running_long(line: str) -> None:
     started = time.monotonic()
     assert html(line + "\n" + line) == f"<p>{escape(line.strip())}<br>{escape(line.strip())}</p>"
     assert time.monotonic() - started < 2
+
+
+def test_a_heading_with_a_long_gap_is_quick() -> None:
+    """Fifty headings of nearly ``MAX_STYLED`` characters, mostly spaces, the shape a heading
+    pattern with a trailer backtracks on."""
+    started = time.monotonic()
+    shown = html("\n".join(["# a" + " " * 1_990 + "b"] * 50))
+    assert time.monotonic() - started < 2 and shown.count("<strong>") == 50
 
 
 def test_a_backslashed_backtick_opens_no_code() -> None:

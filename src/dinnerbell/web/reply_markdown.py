@@ -20,7 +20,7 @@ from markupsafe import Markup, escape
 
 _BULLET = re.compile(r"^\s{0,3}[-*+•]\s+(\S.*)$")
 _NUMBERED = re.compile(r"^\s{0,3}(\d{1,9})[.)]\s+(\S.*)$")
-_HEADING = re.compile(r"^\s{0,3}#{1,6}\s+(.*?)(?:\s+#+)?\s*$")
+_HEADING = re.compile(r"^\s{0,3}#{1,6}\s+(\S.*)$")
 _FENCE = re.compile(r"^\s{0,3}(`{3,}|~{3,})")
 _RULE = re.compile(r"^\s{0,3}([-*_])(?:\s*\1){2,}\s*$")
 
@@ -112,7 +112,12 @@ def _blocks(lines: list[str]) -> Iterator[str]:
             yield "<hr>"
         elif heading:
             yield from flush()
-            yield f"<p><strong>{inline(heading.group(1))}</strong></p>"
+            words = heading.group(1).rstrip()
+            trailer = words.rstrip("#")  # a closing run of #, after a space, isn't part of the heading
+            if trailer != words and (not trailer or trailer[-1].isspace()):
+                words = trailer.rstrip()
+            if words:
+                yield f"<p><strong>{inline(words)}</strong></p>"
         elif bullet or numbered:
             wanted = "ul" if bullet else "ol"
             if kind != wanted:
