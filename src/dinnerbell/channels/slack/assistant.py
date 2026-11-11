@@ -40,6 +40,10 @@ ping, or a link, and every URL and bare domain in it is defanged (``hxxps[:]//ev
 Slack can't turn one into a link either. It's cut to Slack's length. A member has one message
 answered at a time, across all their conversations: while one is, a new one isn't sent, and
 Dinnerbell says once, in the new one's thread, that it's still on the last one.
+
+**While it works**, a message being answered shows Dinnerbell's status in its thread, or a
+reaction on it where Slack won't show one, until the reply posts (``working``). A message
+Dinnerbell ignores, or one it says it's still on the last for, gets neither.
 """
 
 from __future__ import annotations
@@ -72,6 +76,7 @@ from dinnerbell.channels.slack.blocks import (
 )
 from dinnerbell.channels.slack.ids import is_channel_id
 from dinnerbell.channels.slack.interactions import ASSISTANT_OFF, SHOWN_ERRORS, Source, Tap, posted_offer_reply
+from dinnerbell.channels.slack.working import Indicators
 from dinnerbell.domain.assistant import InvalidConversationKey, slack_key
 from dinnerbell.domain.events import IllegalTransition, friendly
 from dinnerbell.domain.members import Member
@@ -428,6 +433,8 @@ class SlackAssistant:
         """Of those, the ones already told ``STILL_ON_IT``, so a burst gets one notice."""
         self.draft_lock = asyncio.Lock()
         """Draft taps, one at a time, so a double tap's second finds the first's result."""
+        self.indicators = Indicators(api)
+        """The working indicator each answered message shows until its reply (``working``)."""
         self.settled = _Bounded()
         """Drafts confirmed or cancelled from a card since start, by member and draft ID: a
         second tap on one leaves the card showing what the first did."""
@@ -524,13 +531,26 @@ class SlackAssistant:
                 await self._busy(incoming, member)
             return
         self.answering.add(member.id)
+        working = self.indicators.start(incoming.channel, incoming.root, incoming.ts, private=incoming.private)
         try:
-            reply = await self._converse(member, key, incoming, await self._naming(member, incoming.text))
-        finally:
-            self.answering.discard(member.id)
-            self.told.discard(member.id)
-        if reply is None:
-            return
+            try:
+                reply = await self._converse(member, key, incoming, await self._naming(member, incoming.text))
+            finally:
+                self.answering.discard(member.id)
+                self.told.discard(member.id)
+            if reply is not None:
+                await self._deliver(incoming, member, key, reply)
+        except asyncio.CancelledError:
+            working.cancel()
+            raise
+        except Exception:
+            await working.stop()
+            raise
+        await working.stop()
+
+    async def _deliver(self, incoming: Incoming, member: Member, key: str, reply: Reply) -> None:
+        """Post ``reply`` and its draft cards in the message's thread: publicly, or only to the
+        member when it carries drafts in a channel thread."""
         body = reply_text(reply)
         cards = [draft_card(draft) for draft in reply.drafts]
         private = bool(cards) and not incoming.private  # drafts, and the reply on them, go only to their member

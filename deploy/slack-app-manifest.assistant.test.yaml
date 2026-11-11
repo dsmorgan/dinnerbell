@@ -3,10 +3,11 @@
 #
 # Apply this in place of slack-app-manifest.test.yaml only when you turn the
 # assistant on (DINNERBELL_ANTHROPIC_API_KEY and the assistant flag). It is
-# slack-app-manifest.test.yaml plus a writable Messages tab, the im:history and
-# app_mentions:read scopes, and the message.im and app_mention events, so
-# members can message Dinnerbell and mention it in the channel. Paste it under
-# App Manifest, then reinstall the app. See "The assistant" in
+# slack-app-manifest.test.yaml plus a writable Messages tab, the im:history,
+# app_mentions:read, and reactions:write scopes, and the message.im and
+# app_mention events, so members can message Dinnerbell, mention it in the
+# channel, and see that it's working on an answer. Paste it under App
+# Manifest, then reinstall the app. See "The assistant" in
 # docs/configuration.md.
 #
 # Create this as a second app in the same workspace as production. The two
@@ -58,6 +59,7 @@ oauth_config:
       - commands            # the /dinnerbell-test slash command
       - im:history          # read members' direct messages to Dinnerbell (the assistant)
       - app_mentions:read   # read messages that mention Dinnerbell (the assistant)
+      - reactions:write     # mark a message being answered where Slack shows no status (the assistant)
     user:
       # Sign in with Slack (OpenID Connect) for the web app.
       - openid

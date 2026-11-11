@@ -77,6 +77,10 @@ PERMANENT = frozenset(
         "invalid_charset",
         "invalid_post_type",
         "missing_post_type",
+        # The method doesn't work in this conversation, or for this app.
+        "method_not_supported_for_channel_type",
+        "no_permission",
+        "access_denied",
     }
 )
 RATE_LIMITED = frozenset({"ratelimited", "rate_limited"})
@@ -285,6 +289,41 @@ class SlackApi:
                 channel=channel, user=user, text=text, blocks=blocks, thread_ts=thread_ts
             ),
         )
+
+    async def set_status(
+        self, channel: str, thread_ts: str, status: str, loading_messages: list[str] | None = None
+    ) -> None:
+        """Show ``status`` under the thread's last message, as "Dinnerbell <status>", rotating
+        through ``loading_messages`` (``assistant.threads.setStatus``, with ``chat:write``). An
+        empty ``status`` clears it; so does a reply, and Slack drops it after 2 minutes."""
+        await self._call(
+            "assistant.threads.setStatus",
+            lambda: self.client.assistant_threads_setStatus(
+                channel_id=channel, thread_ts=thread_ts, status=status, loading_messages=loading_messages
+            ),
+        )
+
+    async def add_reaction(self, channel: str, ts: str, name: str) -> None:
+        """React to a message with the emoji ``name``. Needs ``reactions:write``. A reaction
+        that's there already counts as added."""
+        try:
+            await self.client.reactions_add(channel=channel, timestamp=ts, name=name)
+        except SlackApiError as exc:
+            if error_code(exc) != "already_reacted":
+                self._raise("reactions.add", exc)
+        except TRANSPORT_ERRORS as exc:
+            self._raise("reactions.add", exc)
+
+    async def remove_reaction(self, channel: str, ts: str, name: str) -> None:
+        """Take Dinnerbell's reaction ``name`` off a message. One that's gone already counts
+        as removed."""
+        try:
+            await self.client.reactions_remove(channel=channel, timestamp=ts, name=name)
+        except SlackApiError as exc:
+            if error_code(exc) != "no_reaction":
+                self._raise("reactions.remove", exc)
+        except TRANSPORT_ERRORS as exc:
+            self._raise("reactions.remove", exc)
 
     async def replace_original(self, response_url: str, message: dict[str, Any]) -> None:
         """Replace the message a person tapped, through the tap's ``response_url``. Only ever

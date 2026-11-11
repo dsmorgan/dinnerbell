@@ -183,6 +183,8 @@ class FakeSlack(AsyncWebClient):
                 return {"channel": args["channel"], "ts": args["ts"]}
             case "chat.postEphemeral":
                 return {"message_ts": f"{next(self._ephemeral_ts)}.000200"}
+            case "assistant.threads.setStatus" | "reactions.add" | "reactions.remove":
+                return {}
             case "views.open" | "views.publish":
                 check_view(args["view"] if isinstance(args["view"], dict) else {})
                 return {"view": {"id": "V1"}}
