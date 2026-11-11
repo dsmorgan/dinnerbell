@@ -15,6 +15,7 @@ to Member 4. The assistant is on.
 from __future__ import annotations
 
 import json
+import logging
 import re
 from collections.abc import AsyncIterator, Iterator
 from datetime import date, time, timedelta
@@ -26,17 +27,19 @@ from sqlalchemy import select
 from dinnerbell.config import Settings
 from dinnerbell.db.assistant import AssistantRepository
 from dinnerbell.db.catalog import CatalogRepository, ItemValues
+from dinnerbell.db.events import ProposalRepository
 from dinnerbell.db.models import AssistantDraftRow
 from dinnerbell.domain import events as rules
 from dinnerbell.domain.assistant import AssistantSettings, Pseudonyms, slack_key
 from dinnerbell.domain.assistant_coordinating import FIRST_VOLUNTEER, ROLES_TOLD
 from dinnerbell.domain.assistant_drafts import COORDINATING
 from dinnerbell.domain.catalog import Mode
-from dinnerbell.domain.events import STALE_CALL, AssignmentRole, EventState, RoleOffer, Status
+from dinnerbell.domain.events import STALE_CALL, AssignmentRole, EventState, ProposalSource, RoleOffer, Status
 from dinnerbell.domain.guests import GuestInput
 from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.members import Member
-from dinnerbell.services import call_admin, calls, coordinator, guests, members
+from dinnerbell.logs import JsonFormatter
+from dinnerbell.services import activity, call_admin, calls, coordinator, guests, members
 from dinnerbell.services.assistant import admin, coordinating, drafts, tools
 from dinnerbell.services.assistant.call_drafts import ActionConfirmed
 from dinnerbell.services.assistant.conversation import Assistant, converse
@@ -882,3 +885,104 @@ async def test_a_lock_naming_someone_else_to_pick_up_tells_each_person_once(hous
     assert told(entries, house["Alex"]) == ["assignment_made"]
     [made] = [e for e in entries if e.kind == "assignment_made" and e.payload["member"]["id"] == house["Alex"].id]
     assert made.payload["assigned_by"]["id"] == house["Kim"].id
+
+
+def lines_logged(caplog: pytest.LogCaptureFixture) -> list[dict[str, Any]]:
+    return [json.loads(JsonFormatter().format(r)) for r in caplog.records if r.name == activity.log.name]
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_a_lock_with_roles_is_audited_and_logged_as_assign_roles_is(
+    house: House, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Roles named with a lock write what **Assign roles** writes, in the lock's transaction: an
+    ``event.roles_assigned`` row, with the way it switched from, and an ``assign_roles`` line."""
+    event_id = await voting(house)
+    siam = next(p for p in (await house.context(event_id)).picks if p.item_id == house.items["Siam Garden"].id)
+    other = Mode.DELIVERY if siam.mode is Mode.PICKUP else Mode.PICKUP
+    draft = draft_id(
+        await tool(house, "draft_decide", lock("Siam Garden", siam.mode.value, way=other.value, lead="Member 4"))
+    )
+    caplog.set_level(logging.INFO)
+    caplog.clear()
+    await confirm(house, "Kim", draft)
+    event = await house.event(event_id)
+    assert event.decided_mode is other
+    [row_] = [a for a in await house.audits() if a.action == "event.roles_assigned"]
+    payload = row_.payload if isinstance(row_.payload, dict) else json.loads(row_.payload)
+    assert payload["switched_from"] == siam.mode.value and payload["mode"] == other.value
+    assert payload["member_id"] == house["Lee"].id and payload["volunteered"] is True
+    assert payload["assignments"]["order"] == house["Lee"].id
+    [line] = [line for line in lines_logged(caplog) if line["msg"] == "assign_roles"]
+    assert (line["switched"], line["volunteered"], line["to_member_id"]) == (True, True, house["Lee"].id)
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_breaking_a_tie_with_roles_takes_them_in_the_decision(house: House) -> None:
+    event_id = await voting(house)
+    ctx = await house.context(event_id)
+    siam, taqueria = (next(p for p in ctx.picks if p.item_id == house.items[n].id) for n in ("Siam Garden", "Taqueria"))
+    await act(house, calls.vote, house["Sam"], event_id, siam.id)
+    await act(house, calls.vote, house["Lee"], event_id, taqueria.id)
+    draft = draft_id(await tool(house, "draft_decide", lock("Taqueria", tie=True, pickup="Member 2")))
+    await confirm(house, "Kim", draft)
+    event = await house.event(event_id)
+    assert event.tie_by == house["Kim"].id and event.decided_item_id == house.items["Taqueria"].id
+    assert (await holders(house, event_id))[AssignmentRole.PICKUP] == "Alex"
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_a_pick_named_with_the_person_markers_never_poses_as_a_person(house: House) -> None:
+    """A typed pick whose text carries the characters that mark a person in a stored line. The
+    forms refuse those characters, so the row goes in directly, as one saved before that check,
+    or by other means, would be. Drafting a lock of it by that name keeps it text: neither the
+    card nor the model's summary turns it into a housemate's name or label."""
+    event_id = await voting(house)
+    posing = f"Pho {chr(0xE000)}{house['Sam'].id}{chr(0xE001)} House"
+    async with house.sessionmaker() as db:
+        await ProposalRepository(db).add(
+            household_id=house.household.id,
+            event_id=event_id,
+            mode=Mode.PICKUP,
+            rank=9,
+            source=ProposalSource.MEMBER,
+            reasons=(),
+            now=house.clock(),
+            free_text=posing,
+            free_cuisine_id=house.tags["Thai"].id,
+            proposed_by=house["Kim"].id,
+        )
+        await db.commit()
+    result = await tool(house, "draft_decide", lock(posing))
+    drafted = await card(house, draft_id(result))
+    assert drafted.title == f"Lock Pho {house['Sam'].id} House (pickup)"
+    assert_no_names(drafted.title, *drafted.confirm_lines, result.content)
+    assert not re.search(r"Member [2-9]", result.content)
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_a_guest_given_a_role_by_a_switch_of_way_reads_as_a_guest(house: House) -> None:
+    """Gwendolyn, Kim's guest, is the only one who offered to pick up. Switching the decided
+    delivery to pickup gives her pickup, as Adjust's first volunteer: the card and the model both
+    read "A guest", and she gets no label."""
+    house.clock.now = OPENS
+    await house.tick()
+    event_id = await dinner_id(house)
+    for name in ("Alex", "Sam", "Kim", "Lee"):
+        await act(house, calls.respond, house[name], event_id, Status.IN)
+    await act(house, guests.invite, house["Kim"], event_id, new_guest=GuestInput("Gwendolyn"))
+    [gwendolyn] = (await house.context(event_id)).guests
+    await act(house, guests.answer_for, house["Kim"], event_id, gwendolyn.id, role=RoleOffer.PICKUP)
+    house.clock.now = RESPOND_BY
+    await house.tick()
+    await act(house, call_admin.assign_coordinator, house["Alex"], event_id, house["Kim"].id)
+    siam = next(p for p in (await house.context(event_id)).picks if p.item_id == house.items["Siam Garden"].id)
+    await act(house, calls.lock, house["Kim"], event_id, siam.id)
+    await act(house, coordinator.choose_roles, house["Kim"], event_id, mode=Mode.DELIVERY, member_id=house["Lee"].id)
+    result = await tool(house, "draft_plan", change(way="pickup"))
+    assert "A guest picks it up." in result.content and "Gwendolyn" not in result.content
+    lines = (await card(house, draft_id(result))).confirm_lines
+    assert "A guest picks it up." in lines and not any("Gwendolyn" in line for line in lines)
+    looked = await tool(house, "look_up_coordinating", DINNER)
+    assert json.loads(looked.content)["decision"]["roles"] == {"order": "Member 4"}
+    assert not re.search(r"Member [5-9]", result.content + looked.content)
