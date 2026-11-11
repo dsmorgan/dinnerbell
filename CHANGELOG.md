@@ -39,7 +39,7 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ### Fixed
 
-- CI only: when the runner can't install podman-compose with apt, the `compose` job installs the same version, 1.0.6, from PyPI with the dependency versions Ubuntu 24.04 ships (#281). On 2026-11-11 the runners' DNS failed for every `ubuntu.com` host for hours, and `publish`, which waits for `compose`, couldn't run. Each apt run is capped at 2 minutes, and the job's limit is 15 minutes.
+- CI only: when the runner can't install podman-compose with apt, the `compose` job installs the same version, 1.0.6, from PyPI, without Ubuntu's patches but with the python-dotenv and PyYAML versions Ubuntu 24.04 ships (#281). A new step fails the job if podman-compose 1.0.6 isn't on the PATH, since `scripts/check-compose.sh` skips it when it's missing. On 2026-11-11 the runners' DNS failed for every `ubuntu.com` host for hours, and `publish`, which waits for `compose`, couldn't run. Each apt run is capped at 2 minutes, and the job's limit is 15 minutes.
 
 ### Upgrade notes
 
