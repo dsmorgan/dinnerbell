@@ -149,8 +149,8 @@ def answer_args(word: str) -> dict[str, Any]:
     return CALL | {"answer": word}
 
 
-def vote_args(name: str, *, vote: bool = True, mode: str = "") -> dict[str, Any]:
-    return CALL | {"name": name, "mode": mode, "vote": vote}
+def vote_args(name: str = "", *, vote: bool = True, mode: str = "", pick: int = 0) -> dict[str, Any]:
+    return CALL | {"pick": pick, "name": name, "mode": mode, "vote": vote}
 
 
 def role_args(role: str, *, offer: bool = True) -> dict[str, Any]:
@@ -220,7 +220,7 @@ async def test_im_in_pickup_and_a_vote_make_one_draft_each_and_each_confirm_runs
     assert called == ["vote"]
     await confirm(house, "Lee", role_draft)
     await confirm(house, "Lee", answer_draft)
-    assert called == ["vote", "join_late", "offer_role", "join_late"]
+    assert called == ["vote", "offer_role", "join_late"]
     ctx = await house.context(event_id)
     mine = ctx.response_of(lee.id)
     assert mine is not None and mine.is_in and mine.late and RoleOffer.PICKUP in mine.offers
@@ -350,8 +350,9 @@ async def test_votes_and_taking_them_back(house: House, monkeypatch: pytest.Monk
 
 async def test_a_vote_is_refused_when_the_service_would_refuse_it(house: House) -> None:
     event_id = await open_dinner(house, "Sam", "Lee")
-    early = await tool(house, "draft_vote", vote_args("Siam Garden"), who="Sam")
-    assert early == ToolResult(call_drafts.NO_SUCH_PROPOSAL, is_error=True)  # no picks while collecting
+    for name in ("Siam Garden", "Nowhere"):  # the same either way: nothing says which picks exist
+        early = await tool(house, "draft_vote", vote_args(name), who="Sam")
+        assert early == ToolResult("Voting is closed.", is_error=True)
     await act(house, calls.respond, house["Kim"], event_id, Status.OUT)
     house.clock.now = RESPOND_BY
     await house.tick()
@@ -375,6 +376,9 @@ async def test_a_suggestion_keeps_the_rest_of_the_members_details(house: House) 
         note="Running late",
     )
     await act(house, calls.save_details, house["Kim"], event_id, details)
+    sams = Details(eat_until=time(20, 0), suggestion_item_ids=(house.items["Sam's Tacos"].id,), note="Sam's note")
+    await act(house, calls.save_details, house["Sam"], event_id, sams)
+    sam_before = (await house.context(event_id)).response_of(house["Sam"].id)
     draft = draft_id(await tool(house, "draft_suggestion", CALL | {"name": "siam garden"}, who="Kim"))
     assert await lines(house, draft) == [
         "It adds Siam Garden to your suggestions for today's dinner call.",
@@ -388,6 +392,9 @@ async def test_a_suggestion_keeps_the_rest_of_the_members_details(house: House) 
     assert mine is not None and mine.eat_from == time(18, 0) and mine.note == "Running late"
     theirs = {(s.item_id, s.free_text) for s in ctx.suggestions if s.member_id == house["Kim"].id}
     assert theirs == {(house.items["Taqueria"].id, None), (None, "Noodle Bar"), (house.items["Siam Garden"].id, None)}
+    sam_rows = {(s.item_id, s.free_text) for s in ctx.suggestions if s.member_id == house["Sam"].id}
+    assert sam_rows == {(house.items["Sam's Tacos"].id, None)}
+    assert ctx.response_of(house["Sam"].id) == sam_before
     lee = draft_id(await tool(house, "draft_suggestion", CALL | {"name": "Taqueria"}))
     assert (await lines(house, lee))[-1] == "You'll be in, as saving Details does."
 
@@ -444,24 +451,39 @@ async def test_a_role_or_a_suggestion_is_refused_while_voting_as_the_service_wou
     assert await rows(house) == []
 
 
-async def test_a_role_that_joins_late_keeps_the_late_join_if_the_role_is_refused(
+async def test_a_role_that_joins_late_rolls_the_late_join_back_if_the_role_is_refused(
     house: House, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The late join commits with the draft's use; a refusal of the role after it leaves the
-    member joined, and the draft used, as ``call_drafts.confirm`` says."""
+    """``offer_role`` joins late and offers the role under one lock, so a refusal after the late
+    join undoes it, leaves the draft waiting, and sends nothing; the draft confirms later."""
     event_id = await to_voting(house)
     draft = draft_id(await tool(house, "draft_role", role_args("pickup")))
+    before = await house.outbox()
+    real = calls.check_can_offer_role
 
-    async def refused(*args: Any, **kwargs: Any) -> None:
+    def refused(*args: Any, **kwargs: Any) -> None:
         raise EventRuleViolation("Responses are closed for this call.", code="responses_closed")
 
-    monkeypatch.setattr(calls, "offer_role", refused)
+    monkeypatch.setattr(calls, "check_can_offer_role", refused)
     with pytest.raises(EventRuleViolation):
         await confirm(house, "Lee", draft)
-    mine = (await house.context(event_id)).response_of(house["Lee"].id)
-    assert mine is not None and mine.late and RoleOffer.PICKUP not in mine.offers
+    assert (await house.context(event_id)).response_of(house["Lee"].id) is None
+    assert await house.outbox() == before
     [row] = await rows(house)
-    assert row.used_at is not None
+    assert row.used_at is None
+    monkeypatch.setattr(calls, "check_can_offer_role", real)
+    await confirm(house, "Lee", draft)
+    mine = (await house.context(event_id)).response_of(house["Lee"].id)
+    assert mine is not None and mine.late and RoleOffer.PICKUP in mine.offers
+
+
+async def test_a_late_join_already_made_another_way_isnt_reported_as_new(house: House) -> None:
+    event_id = await to_voting(house)
+    joining = draft_id(await tool(house, "draft_answer", answer_args("in")))
+    await act(house, calls.join_late, house["Lee"], event_id)
+    assert await confirm(house, "Lee", joining) == ActionConfirmed(
+        event_id, "You're in today's dinner call already, so nothing changed."
+    )
 
 
 # Taking back an offer ---------------------------------------------------------------------------
@@ -549,5 +571,45 @@ async def open_dinner_tomorrow(house: House) -> str:
 
 async def test_bad_flags_are_input_errors(house: House) -> None:
     await to_voting(house)
-    result = await tool(house, "draft_vote", CALL | {"name": "Siam Garden", "mode": "", "vote": "yes"}, who="Sam")
+    result = await tool(
+        house, "draft_vote", CALL | {"pick": 0, "name": "Siam Garden", "mode": "", "vote": "yes"}, who="Sam"
+    )
     assert result == ToolResult("vote is true or false.", is_error=True)
+
+
+async def test_look_up_call_lists_only_the_members_own_suggestions(house: House) -> None:
+    event_id = await open_dinner(house)
+    await act(
+        house, calls.save_details, house["Kim"], event_id, Details(suggestion_item_ids=(house.items["Taqueria"].id,))
+    )
+    await act(
+        house, calls.save_details, house["Sam"], event_id, Details(suggestion_item_ids=(house.items["Siam Garden"].id,))
+    )
+    found = json.loads((await tool(house, "look_up_call", CALL, who="Sam")).content)
+    assert found["you"]["suggestions"] == ["Siam Garden"]
+    lee = json.loads((await tool(house, "look_up_call", CALL)).content)
+    assert lee["you"]["suggestions"] == []
+
+
+IDEA = "Grandma Rosa's lasagna"
+
+
+async def test_a_free_text_pick_reads_as_a_members_idea_and_takes_a_vote_by_its_number(house: House) -> None:
+    event_id = await to_voting(house)
+    mexican = next(t for t in (await house.context(event_id)).tags.values() if t.name == "Mexican")
+    idea = await act(
+        house, calls.add_proposal, house["Sam"], event_id, Mode.COOK, free_text=IDEA, cuisine_id=mexican.id
+    )
+    result = await tool(house, "look_up_call", CALL, who="Kim")
+    assert IDEA not in result.content and "Grandma" not in result.content
+    picks = json.loads(result.content)["picks"]
+    assert {"pick": idea.id, "name": call_drafts.FREE_TEXT_PICK, "mode": "cook", "you_voted": False} in picks
+    by_number = await tool(house, "draft_vote", vote_args(pick=idea.id), who="Kim")
+    assert not by_number.is_error and "Grandma" not in by_number.content
+    assert "Vote for a member's own idea (cook)" in by_number.content
+    await confirm(house, "Kim", draft_id(by_number))
+    assert house["Kim"].id in (await house.context(event_id)).votes[idea.id]
+    by_name = await tool(house, "draft_vote", vote_args(IDEA.lower(), vote=False), who="Kim")  # the member's own words
+    assert f"Take back your vote for {IDEA.lower()} (cook)" in by_name.content
+    stranger = await tool(house, "draft_vote", vote_args(pick=idea.id + 1000), who="Kim")
+    assert stranger == ToolResult(call_drafts.NO_SUCH_PROPOSAL, is_error=True)

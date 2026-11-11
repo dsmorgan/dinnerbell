@@ -240,13 +240,19 @@ async def offer_role(
     role: RoleOffer,
     offered: bool,
     *,
+    join_late: bool = False,
     run: int | None = None,
     now: datetime,
 ) -> None:
+    """Offer ``role``, or withdraw it. While voting, someone who isn't in joins late first when
+    ``join_late`` says they agreed to (#76), as ``vote`` does, under the same lock: a refusal
+    rolls the late join back with everything else."""
     async with locked_event(db, actor.household_id, event_id, now) as event:
         await guest_rules.gate(db, event, actor, GuestAction.OFFER_ROLE)
         check_run(event, run)
         ctx = await load(db, event)
+        if join_late and offered:
+            ctx = await _in_or_join_late(db, ctx, actor, join_late=True, coordinator_ok=False, now=now)
         check_can_offer_role(event, actor, ctx.response_of(actor.id), invited=await _invited(db, event, actor))
         new = with_offer(ctx.response_of(actor.id), actor.id, role, offered, now)
         if new is None:

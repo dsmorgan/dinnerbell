@@ -372,9 +372,9 @@ Only private-only tools send the member's own personal data, and only when the m
 
 **Call action tools** (#251), in any conversation, each acting as the member whose message is being answered and checking now what its service would refuse, with the service's own words:
 
-- **Look up a call:** its basics (as **Data sent**), the member's own answer, whether they joined late, their role offers and suggestions, and, once voting opens, its picks by name and mode, with whether the member votes for each. Never anyone else's answer or vote, or a tally.
+- **Look up a call:** its basics (as **Data sent**), the member's own answer, whether they joined late, their role offers and suggestions, and, once voting opens, its picks, each with a number, its item's name, its mode, and whether the member votes for each. A pick a member typed as free text reads as "a member's own idea", since its text can carry anything. Never anyone else's answer, vote, or suggestions, or a tally.
 - **Draft an answer:** in, out, or maybe while answers are open (`respond`); in while voting is joining late (`join_late`).
-- **Draft a vote** for one of the call's picks, or taking it back (`vote`, `unvote`). Someone who isn't in joins late first, as the button that asks them does.
+- **Draft a vote** for one of the call's picks, by its number or by a name the member gave, or taking it back (`vote`, `unvote`). A call that isn't voting is refused before any pick is looked up, so the refusal doesn't say which picks exist. Someone who isn't in joins late first, as the button that asks them does.
 - **Draft a suggestion** of an active catalog item while answers are open (`save_details`), keeping the member's eating times, note, and other suggestions. A suggestion has no filter: ranking weighs it, and the vote's filters still apply.
 - **Draft a role**, cook, pickup, or order, or giving one up (`offer_role`). While voting, someone who isn't in joins late first.
 - **Draft taking back an offer**, the member's own only (`cancel_call`, as its offerer).
@@ -390,7 +390,7 @@ The call is the one the member names, then the thread's call, then the only open
 - **An answer:** in, out, or a maybe, or join late, with whose votes count; an In turns on the member's usual offers, and an Out withdraws their role offers and ends their coordinating.
 - **A vote:** add it or take it back, joining late first, and whether a late joiner's vote counts yet.
 - **A suggestion:** add it, keeping the rest of the member's Details, and count them in if they hadn't answered.
-- **A role:** take it, counting them in, joining late first while voting; or give it up. A late join commits first, so if the call closes before the role, the member stays joined and the card says why.
+- **A role:** take it, counting them in, joining late first while voting, in the same use case, so a refusal undoes the late join too; or give it up.
 - **Taking back an offer:** call it off, and tell everyone who joined it.
 
 **Confirm** on a call action runs on the call and run it was drafted against: a draft for an earlier run of a call gets the service's stale-call refusal.

@@ -44,7 +44,7 @@ from dinnerbell.services.assistant.candidates import CallRef, call_basics, find_
 from dinnerbell.services.assistant.drafts import DraftView, OfferRequest
 from dinnerbell.services.assistant.meal_history import HistoryQuery, Order, eaten_items
 from dinnerbell.services.assistant.menu_links import NOT_HERE, LinkCalls, draft_from_link
-from dinnerbell.services.call_context import item_info, load
+from dinnerbell.services.call_context import load
 from dinnerbell.services.errors import Forbidden, NotFound
 from dinnerbell.services.variety import household_today
 
@@ -641,7 +641,8 @@ async def look_up_call_tool(ctx: ToolContext, raw: Mapping[str, Any]) -> str:
     if loaded.event.state not in {EventState.SCHEDULED, EventState.COLLECTING}:
         found["picks"] = [
             {
-                "name": item_info(loaded, p).name,
+                "pick": p.id,
+                "name": call_drafts.pick_name(loaded, p),
                 "mode": p.mode.value,
                 "you_voted": ctx.actor.id in loaded.votes.get(p.id, []),
             }
@@ -655,7 +656,8 @@ LOOK_UP_CALL = Tool(
     description=(
         "Look up a call: its meal, day, state, meal time, and the roles someone offered; the member's own answer "
         "(in, out, maybe, or none), whether they joined late, the roles they offered, and their suggestions; and, "
-        "once voting opens, its picks by name and mode, with whether the member votes for each. Call this before "
+        "once voting opens, its picks, each with a number for draft_vote, a name (a pick a member typed reads as "
+        "a member's own idea), a mode, and whether the member votes for each. Call this before "
         "draft_vote, and whenever the member asks where they stand. It never says how anyone else answered or voted."
     ),
     input_schema={
@@ -701,7 +703,7 @@ DRAFT_ANSWER = Tool(
 
 
 async def draft_vote_tool(ctx: ToolContext, raw: Mapping[str, Any]) -> str:
-    _fields(raw, "slot", "day", "name", "mode", "vote")
+    _fields(raw, "slot", "day", "pick", "name", "mode", "vote")
     today = await _today(ctx)
     event = await _call(ctx, raw, today)
     mode = _enum(raw, "mode", ["", *(m.value for m in MODE_ORDER)])
@@ -711,6 +713,7 @@ async def draft_vote_tool(ctx: ToolContext, raw: Mapping[str, Any]) -> str:
         event,
         _text(raw, "name"),
         Mode(mode) if mode else None,
+        handle=_whole(raw, "pick", 0, 2**62),
         voting=_flag(raw, "vote"),
         today=today,
         now=ctx.now,
@@ -721,15 +724,17 @@ async def draft_vote_tool(ctx: ToolContext, raw: Mapping[str, Any]) -> str:
 DRAFT_VOTE = Tool(
     name="draft_vote",
     description=(
-        "Draft the member's vote for one of a voting call's picks, or taking their vote back. Use a pick's name and "
-        "mode exactly as look_up_call returned them. Someone who isn't in joins late first; the draft says so. "
+        "Draft the member's vote for one of a voting call's picks, or taking their vote back. Send the pick's "
+        "number from look_up_call, or 0 with a name and mode the member gave. Someone who isn't in joins late "
+        "first; the draft says so. "
         "Dinnerbell shows the member the draft with Confirm and Cancel, and nothing changes until they confirm."
     ),
     input_schema={
         "type": "object",
         "properties": {
             **CALL_PROPERTIES,
-            "name": {"type": "string", "description": "The pick's name, as look_up_call returned it."},
+            "pick": {"type": "integer", "description": "The pick's number from look_up_call, or 0 to use name."},
+            "name": {"type": "string", "description": "With pick 0, the pick's name. An empty string otherwise."},
             "mode": {
                 "type": "string",
                 "enum": ["", *(m.value for m in MODE_ORDER)],
@@ -737,7 +742,7 @@ DRAFT_VOTE = Tool(
             },
             "vote": {"type": "boolean", "description": "true to vote for it, false to take the vote back."},
         },
-        "required": ["slot", "day", "name", "mode", "vote"],
+        "required": ["slot", "day", "pick", "name", "mode", "vote"],
         "additionalProperties": False,
     },
     run=draft_vote_tool,

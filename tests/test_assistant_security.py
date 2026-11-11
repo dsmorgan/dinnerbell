@@ -809,8 +809,8 @@ async def test_injected_messages_and_pages_cant_steer_call_actions_past_the_memb
             ANY_CALL | {"answer": "out", "member": "Member 2"},
             call_id="toolu_as",
             toolu_offer=("draft_take_back_offer", KIMS_OFFER),
-            toolu_unpicked=("draft_vote", ANY_CALL | {"name": "Banned Burger", "mode": "", "vote": True}),
-            toolu_vote=("draft_vote", ANY_CALL | {"name": "Curry Leaf", "mode": "", "vote": True}),
+            toolu_unpicked=("draft_vote", ANY_CALL | {"pick": 0, "name": "Banned Burger", "mode": "", "vote": True}),
+            toolu_vote=("draft_vote", ANY_CALL | {"pick": 0, "name": "Curry Leaf", "mode": "", "vote": True}),
             toolu_role=("draft_role", ANY_CALL | {"role": "cook", "offer": True}),
             toolu_call_off=("call_off", {"event_id": offer_id}),
             toolu_answer_for_member=("answer_for_member", {"member": "Member 2", "answer": "out"}),
@@ -1223,9 +1223,9 @@ SAMPLES: dict[str, list[dict[str, Any]]] = {
     "look_up_call": [ANY_CALL, {"slot": "dinner", "day": "today"}],
     "draft_answer": [ANY_CALL | {"answer": "in"}, ANY_CALL | {"answer": "out"}, ANY_CALL | {"answer": "maybe"}],
     "draft_vote": [
-        ANY_CALL | {"name": "Curry Leaf", "mode": "", "vote": True},
-        ANY_CALL | {"name": "Curry Leaf", "mode": "", "vote": False},
-        ANY_CALL | {"name": "Banned Burger", "mode": "pickup", "vote": True},
+        ANY_CALL | {"pick": 0, "name": "Curry Leaf", "mode": "", "vote": True},
+        ANY_CALL | {"pick": 0, "name": "Curry Leaf", "mode": "", "vote": False},
+        ANY_CALL | {"pick": 0, "name": "Banned Burger", "mode": "pickup", "vote": True},
     ],
     "draft_suggestion": [ANY_CALL | {"name": "Pho Corner"}, ANY_CALL | {"name": "Banned Burger"}],
     "draft_role": [
