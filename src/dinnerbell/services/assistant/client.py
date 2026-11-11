@@ -46,9 +46,9 @@ class ModelCallFailed(Exception):
     error that means it ran nothing; otherwise (a timeout, a dropped connection, a gateway
     error, a reply that couldn't be read) the request may have run and been billed, and its
     reservation stands. ``status``, ``error_type``, ``request_id``, and ``detail`` are for the
-    log. ``detail`` is the API's own error type and message, on one line and clipped: it names
-    what was wrong, such as a field of the request, and could quote part of one, but never the
-    key."""
+    log. ``detail`` is the API's own error type and message with anything quoted dropped, on
+    one line and clipped: it names what was wrong, such as a field of the request, without the
+    values an error can quote."""
 
     def __init__(
         self,

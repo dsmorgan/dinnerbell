@@ -5,6 +5,7 @@ module that imports ``anthropic`` (tests/test_architecture.py checks)."""
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -78,14 +79,23 @@ class AnthropicModelClient:
 MAX_DETAIL_CHARS = 300
 
 
+_QUOTE = re.compile("['\"`\u2018\u2019\u201c\u201d]")
+"""Where a quoted value may start: an error message can quote part of the request."""
+
+
 def error_detail(body: object) -> str:
-    """The API's error type and message from an error answer's body, on one line and clipped, so
-    the log says why a request was refused, such as which field a 400 names."""
+    """The API's error type and message from an error answer's body, so the log says why a
+    request was refused, such as which field a 400 names. It stops at the first quote mark,
+    since an error can quote a value from the request, such as a member's words, and a quoted
+    value can hold quote marks of its own; then the text is put on one line and clipped."""
     error = body.get("error", body) if isinstance(body, dict) else None
     if not isinstance(error, dict):
         return ""
     kind, message = error.get("type"), error.get("message")
     text = ": ".join(str(part) for part in (kind, message) if isinstance(part, str) and part)
+    cut = _QUOTE.search(text)
+    if cut is not None:
+        text = text[: cut.start()].rstrip() + " …"
     return " ".join(text.split())[:MAX_DETAIL_CHARS]
 
 
