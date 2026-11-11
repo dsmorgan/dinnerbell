@@ -33,6 +33,7 @@ from dinnerbell.channels.slack.working import STATUS
 from dinnerbell.config import Settings
 from dinnerbell.db.models import AssistantConversationRow
 from dinnerbell.domain.assistant import AssistantSettings, web_key
+from dinnerbell.domain.catalog import Mode
 from dinnerbell.services.assistant import admin
 from dinnerbell.services.assistant.client import ModelEvents, ModelReply
 from dinnerbell.services.assistant.conversation import (
@@ -53,7 +54,7 @@ from dinnerbell.services.database import Database, open_database
 from tests.support.calls import House, furnish, make_house
 from tests.support.clock import FakeClock
 from tests.support.fake_model import FakeModel, answer, stopped
-from tests.support.fake_slack import BOT_USER, CHANNEL, TEAM, Failure, message_event, next_ts, send
+from tests.support.fake_slack import BOT_USER, CHANNEL, Failure, message_event, next_ts, send
 from tests.support.slack import Slack, wire
 from tests.test_assistant_security import (
     FRAGMENTS,
@@ -61,6 +62,7 @@ from tests.test_assistant_security import (
     assert_slack_safe,
     hostile_texts,
     markdown_visible,
+    offer,
 )
 
 pytestmark = pytest.mark.anyio
@@ -423,36 +425,50 @@ async def test_a_short_reply_is_posted_as_before(model: FakeModel, slack: Slack)
 
 
 @pytest.mark.flag("assistant", on=True)
-async def test_a_channel_thread_streams_to_the_thread_with_the_note_under_it(model: FakeModel, slack: Slack) -> None:
-    model.script = [answer(LONG), answer(LONG)]
+async def test_a_long_channel_thread_reply_is_posted_once_as_before(model: FakeModel, slack: Slack) -> None:
+    """Only DMs stream: a channel thread's reply could turn out to carry drafts, which only the
+    member who asked may see."""
+    model.script = [answer(LONG)]
     root = next_ts()
     await slack.mention("Sam", f"<@{BOT_USER}> where can we get noodles?", ts=root)
-    (start,) = slack.fake.of("chat.startStream")
-    assert (start.args["channel"], start.args["thread_ts"]) == (CHANNEL, root)
-    assert (start.args["recipient_user_id"], start.args["recipient_team_id"]) == ("U02SAM", TEAM)
-    (stop,) = slack.fake.of("chat.stopStream")
-    assert stop.args["blocks"] == [
-        {"type": "context", "elements": [{"type": "mrkdwn", "text": mention_only_line(BOT_USER)}]}
-    ]
-    await slack.mention("Kim", f"<@{BOT_USER}> and rice?", thread_ts=root)
-    assert "blocks" not in slack.fake.of("chat.stopStream")[-1].args  # the note comes once
-    assert streams(slack) == [safe_markdown(LONG)] * 2
+    assert slack.fake.of(*STREAMING) == []
+    (posted,) = posts(slack)
+    assert posted["thread_ts"] == root and posted["text"].startswith(safe_reply(LONG))
+    assert posted["text"].endswith(mention_only_line(BOT_USER))
 
 
 @pytest.mark.flag("assistant", on=True)
-async def test_a_channel_reply_with_drafts_never_streams(slack: Slack, monkeypatch: pytest.MonkeyPatch) -> None:
-    drafted = Reply(LONG, (DraftView(1, "proposal", "A noodle place", ("Adds it.",)),))
+async def test_a_channel_thread_call_that_writes_then_drafts_shows_nothing_in_public(
+    house: House, model: FakeModel, slack: Slack
+) -> None:
+    """Security: the first call writes a long preface, then drafts. Must hold: nothing reaches
+    the thread for everyone before, or instead of, the ephemeral reply and card."""
+    await house.add_item("Noodle Bar", Mode.PICKUP, cuisine="Thai")
+    preface = "\n".join(f"I'll draft your offer of the noodle place, line {n}, for tomorrow." for n in range(4))
+    model.script = [
+        stopped(
+            "tool_use",
+            {"type": "text", "text": preface},
+            {"type": "tool_use", "id": "toolu_1", "name": "draft_offer", "input": offer("Noodle Bar", "pickup")},
+        ),
+        answer(LONG),
+    ]
+    await slack.mention("Sam", f"<@{BOT_USER}> offer noodles")
+    public = [c for c in slack.fake.calls if c.method in ("chat.postMessage", "chat.update", *STREAMING)]
+    assert public == []
+    reply, card = slack.fake.of("chat.postEphemeral")
+    assert reply.args["user"] == card.args["user"] == "U02SAM"
+    assert reply.args["text"].startswith(safe_reply(LONG)) and card.args["blocks"]
 
-    async def converse(*args: Any, stream: Any = None, **kwargs: Any) -> Reply:
-        stream.call_started(0)
-        stream.call_started(1)  # the final call starts with a draft made: this reply is the member's
-        stream.lines(LONG)
-        return drafted
 
-    monkeypatch.setattr(slack_assistant, "converse", converse)
-    await slack.mention("Sam", f"<@{BOT_USER}> propose noodles")
-    assert slack.fake.of(*STREAMING) == [] and posts(slack) == []
-    assert len(slack.fake.of("chat.postEphemeral")) == 2  # the reply and its card, as before
+def test_a_stream_is_only_ever_a_dms() -> None:
+    channel = slack_assistant.Incoming("U02SAM", CHANNEL, "1.1", "1.1", "hi", private=False)
+
+    async def resume() -> None:
+        pass
+
+    with pytest.raises(ValueError, match="only a DM"):
+        slack_assistant.SlackStream(object(), channel, resume=resume)  # type: ignore[arg-type]
 
 
 @pytest.mark.flag("assistant", on=True)

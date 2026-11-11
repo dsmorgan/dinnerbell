@@ -294,28 +294,13 @@ class SlackApi:
             ),
         )
 
-    async def start_stream(
-        self,
-        channel: str,
-        thread_ts: str,
-        markdown_text: str,
-        *,
-        recipient_user: str | None = None,
-        recipient_team: str | None = None,
-    ) -> str:
-        """Start a message in the thread that grows as it's written (``chat.startStream``, with
-        ``chat:write``), and return its ``ts``. ``markdown_text`` is standard Markdown, not
-        mrkdwn. A channel thread needs the member it's for and their workspace. Links and media
-        never unfurl in a stream."""
+    async def start_stream(self, channel: str, thread_ts: str, markdown_text: str) -> str:
+        """Start a message in a DM's thread that grows as it's written (``chat.startStream``,
+        with ``chat:write``), and return its ``ts``. ``markdown_text`` is standard Markdown, not
+        mrkdwn. Links and media never unfurl in a stream."""
         response = await self._call(
             "chat.startStream",
-            lambda: self.client.chat_startStream(
-                channel=channel,
-                thread_ts=thread_ts,
-                markdown_text=markdown_text,
-                recipient_user_id=recipient_user,
-                recipient_team_id=recipient_team,
-            ),
+            lambda: self.client.chat_startStream(channel=channel, thread_ts=thread_ts, markdown_text=markdown_text),
         )
         ts = response.get("ts")
         if not isinstance(ts, str):
@@ -329,16 +314,11 @@ class SlackApi:
             lambda: self.client.chat_appendStream(channel=channel, ts=ts, markdown_text=markdown_text),
         )
 
-    async def stop_stream(
-        self, channel: str, ts: str, markdown_text: str | None = None, blocks: list[dict[str, Any]] | None = None
-    ) -> None:
-        """Finish the stream ``ts`` (``chat.stopStream``), with the last of its text and
-        ``blocks`` under it."""
+    async def stop_stream(self, channel: str, ts: str, markdown_text: str | None = None) -> None:
+        """Finish the stream ``ts`` (``chat.stopStream``), with the last of its text."""
         await self._call(
             "chat.stopStream",
-            lambda: self.client.chat_stopStream(
-                channel=channel, ts=ts, markdown_text=markdown_text or None, blocks=blocks or None
-            ),
+            lambda: self.client.chat_stopStream(channel=channel, ts=ts, markdown_text=markdown_text or None),
         )
 
     async def set_status(
