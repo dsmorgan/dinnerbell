@@ -19,11 +19,13 @@ from fastapi.testclient import TestClient
 
 from dinnerbell.config import Settings
 from dinnerbell.db.catalog import CatalogRepository
-from dinnerbell.db.repositories import MemberRepository
+from dinnerbell.db.meals import household_settings
+from dinnerbell.db.repositories import HouseholdRepository, MemberRepository
 from dinnerbell.domain.catalog import Mode
 from dinnerbell.domain.feedback import FeedbackInput, PlaceIssue, Rating
 from dinnerbell.domain.meals import MealInput, Slot
 from dinnerbell.domain.members import Member
+from dinnerbell.domain.schedule import FEEDBACK_KEY, feedback_cap
 from dinnerbell.services import feedback, meals
 from dinnerbell.services.assistant import tools
 from dinnerbell.services.assistant.tools import MAX_ITEMS, ToolResult
@@ -217,6 +219,47 @@ async def test_the_hint_is_the_catalogs_and_needs_two_recent_raters(house: House
         assert await feedback.item_hints(db, house["Sam"], today=DAY + timedelta(days=120)) == {}
 
 
+async def test_the_hint_covers_every_rating_whatever_the_dates_asked(house: House) -> None:
+    """The dates narrow the counts, never the hint: it's the household's, from all its ratings,
+    as on the catalog, even in a window that leaves out the rated meal."""
+    await eat(house, "Siam Garden", DAY - timedelta(days=20))
+    rated = await eat(house, "Siam Garden", DAY - timedelta(days=5), "Sam", "Kim")
+    await rate(house, "Sam", rated, Rating.LIKED)
+    await rate(house, "Kim", rated, Rating.LOVED)
+    await eat(house, "Siam Garden", DAY - timedelta(days=1))
+    everything = by_name(await history(house))["Siam Garden"]
+    assert (everything["times_eaten"], everything["hint"]) == (3, "Well liked")
+    windows = {
+        "only the latest meal, after the rated one": ({"since": "2026-10-21"}, 1, "2026-10-21"),
+        "only the oldest meal": ({"until": "2026-10-10"}, 1, "2026-10-02"),
+        "only the rated meal": ({"since": "2026-10-17", "until": "2026-10-17"}, 1, "2026-10-17"),
+    }
+    for name, (dates, times, last) in windows.items():
+        item = by_name(await history(house, **dates))["Siam Garden"]
+        assert (item["times_eaten"], item["last_eaten"], item["hint"]) == (times, last, everything["hint"]), name
+
+
+async def set_feedback(house: House, cap: int) -> None:
+    async with house.sessionmaker() as db:
+        stored = await household_settings(db, house.household.id)
+        await HouseholdRepository(db).update_settings(house.household.id, stored | {FEEDBACK_KEY: cap})
+        await db.commit()
+
+
+async def test_hints_show_with_feedback_off_as_on_the_catalog(house: House) -> None:
+    """Admin's Feedback setting stops ratings moving scores (ADR 0008), not the hint everyone
+    sees, so the tool gives the hint at Feedback 0 too."""
+    meal = await eat(house, "Siam Garden", DAY - timedelta(days=1), "Sam", "Kim")
+    await rate(house, "Sam", meal, Rating.LIKED)
+    await rate(house, "Kim", meal, Rating.LOVED)
+    await set_feedback(house, 0)
+    async with house.sessionmaker() as db:
+        assert feedback_cap(await household_settings(db, house.household.id)) == 0
+        shown = await feedback.item_hints(db, house["Sam"], today=DAY)
+    assert shown == {house.items["Siam Garden"].id: "Well liked"}
+    assert by_name(await history(house))["Siam Garden"]["hint"] == "Well liked"
+
+
 def on_the_database(settings: Settings, work: Any) -> Any:
     async def go() -> Any:
         database = open_database(settings.async_database_url)
@@ -236,14 +279,17 @@ def catalog_hint(client: TestClient, item_id: int) -> str | None:
     return html.unescape(match.group(1).strip()) if match else None
 
 
+@pytest.mark.parametrize("cap", [2, 0])
 def test_hints_match_what_the_catalog_page_shows(
     client: TestClient,
     provider: FakeProvider,
     household: dict[str, int],  # noqa: F811 - the fixture imported above
     migrated: Settings,
     clock: FakeClock,
+    cap: int,
 ) -> None:
-    """The same data, through the web forms: the tool's hint for each item is the catalog's."""
+    """The same data, through the web forms: the tool's hint for each item is the catalog's, at
+    Admin's Feedback 2 (the default) and 0 (off)."""
     log(client, household["siam"], [household["admin"], household["kim"]])
     log(client, household["tacos"], [household["admin"], household["kim"]])
     siam, tacos = meal_id(migrated, household["siam"]), meal_id(migrated, household["tacos"])
@@ -253,6 +299,13 @@ def test_hints_match_what_the_catalog_page_shows(
     give(client, siam, rating="hated", place_issues=["late"])
     client.cookies.clear()
     sign_in(client, provider)
+
+    async def feedback_at(db: Any, admin: Member) -> None:
+        stored = await household_settings(db, admin.household_id)
+        await HouseholdRepository(db).update_settings(admin.household_id, stored | {FEEDBACK_KEY: cap})
+        await db.commit()
+
+    on_the_database(migrated, feedback_at)
 
     async def look(db: Any, admin: Member) -> dict[str, Any]:
         result = await tools.run_tool(HISTORY, ANY, db=db, member=admin, private=False, now=clock())
