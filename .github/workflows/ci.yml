@@ -510,10 +510,21 @@ jobs:
           persist-credentials: false
       # Ubuntu 24.04 ships podman-compose 1.0.6, the oldest version the docs support. Its merge
       # and .env rules differ from Docker's, so the checks run against both.
+      # The runner's apt sources point at azure.archive.ubuntu.com first. When that mirror can't be
+      # reached, every package fails with it, so the second try uses only archive.ubuntu.com and
+      # security.ubuntu.com, Ubuntu's own servers.
       - name: Install podman-compose
         run: |
-          sudo apt-get update -q
-          sudo apt-get install -y -q podman-compose
+          apt_opts=(-q -o Acquire::Retries=2 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20)
+          install() { sudo apt-get "${apt_opts[@]}" update && sudo apt-get "${apt_opts[@]}" install -y podman-compose; }
+          if ! install; then
+            echo "::warning::The runner's apt mirror failed; trying archive.ubuntu.com instead."
+            printf '%s\n' http://archive.ubuntu.com/ubuntu/ http://security.ubuntu.com/ubuntu/ |
+              sudo tee /etc/apt/apt-mirrors.txt >/dev/null
+            sudo find /etc/apt -name '*.list' -o -name '*.sources' -o -name apt-mirrors.txt |
+              xargs -r sudo sed -i 's|azure\.archive\.ubuntu\.com|archive.ubuntu.com|g'
+            install
+          fi
       - name: Shellcheck
         run: shellcheck deploy/dinnerbell-test deploy/check-secrets scripts/check-compose.sh scripts/build-bundle.sh
       # The optional boot units ("Start at boot" in docs/setup.md). verify exits 0 on an unknown key,
