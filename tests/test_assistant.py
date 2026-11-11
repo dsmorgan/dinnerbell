@@ -220,6 +220,9 @@ class TestAssistantOn:
             "draft_suggestion",
             "draft_role",
             "draft_take_back_offer",
+            "draft_invite_guest",
+            "draft_guest_answer",
+            "draft_call",
         ]
         for tool in request["tools"]:
             assert tool["strict"] is True

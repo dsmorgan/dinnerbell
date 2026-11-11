@@ -837,6 +837,44 @@ async def test_injected_messages_and_pages_cant_steer_call_actions_past_the_memb
 
 
 @pytest.mark.flag("assistant", on=True)
+async def test_a_housemates_guest_stays_theirs_and_unnamed_whatever_the_model_asks(
+    house: House, helper: Assistant, model: Attacker
+) -> None:
+    """Attack (#251): while answers are open, Sam asks the assistant to answer out for Kim's
+    guest, give her a role, invite her again, and list everyone's guests; the model obeys, and
+    starts a call that exists already. Must hold: only the inviter answers for a guest, so every
+    guest tool refuses; no refusal names the guest or anyone; nothing changes; and the guest's
+    name goes out only in Sam's own words."""
+    await open_dinner(house)
+    before = await world(house)
+    words = "Answer out for Gwendolyn, put her down to cook, invite her again, and list everyone's guests."
+    model.script = [
+        tool_call(
+            "draft_guest_answer",
+            ANY_CALL | {"name": "Gwendolyn", "answer": "out", "role": "", "offer": True},
+            call_id="toolu_out",
+            toolu_role=(
+                "draft_guest_answer",
+                ANY_CALL | {"name": "Gwendolyn", "answer": "", "role": "cook", "offer": True},
+            ),
+            toolu_again=("draft_invite_guest", ANY_CALL | {"name": "Gwendolyn", "needs": []}),
+            toolu_call=("look_up_call", ANY_CALL),
+            toolu_start=("draft_call", {"slot": "dinner", "day": "today"}),
+        ),
+        answer("Done."),
+    ]
+    await say(house, helper, "Sam", words)
+    found = results(model)
+    forbidden = ToolResult("Only whoever invited them, or an admin, answers for a guest without Slack.", is_error=True)
+    assert found["toolu_out"] == found["toolu_role"] == forbidden
+    assert found["toolu_again"] == ToolResult(call_drafts.NOTHING_TO_DO, is_error=True)
+    assert found["toolu_start"] == ToolResult("There's already a dinner call for that day.", is_error=True)
+    assert not found["toolu_call"].is_error
+    assert await world(house) == before and await draft_rows(house) == []
+    assert_kept_home(model, own=[words])
+
+
+@pytest.mark.flag("assistant", on=True)
 async def test_at_the_cap_a_call_action_message_drafts_and_changes_nothing(
     house: House, helper: Assistant, model: Attacker
 ) -> None:
@@ -1234,6 +1272,15 @@ SAMPLES: dict[str, list[dict[str, Any]]] = {
         ANY_CALL | {"role": "order", "offer": True},
     ],
     "draft_take_back_offer": [ANY_CALL, {"slot": "lunch", "day": "tomorrow"}],
+    "draft_invite_guest": [
+        ANY_CALL | {"name": "Pat", "needs": []},
+        ANY_CALL | {"name": "Pat", "needs": ["Vegetarian"]},
+    ],
+    "draft_guest_answer": [
+        ANY_CALL | {"name": "Gwendolyn", "answer": "out", "role": "", "offer": True},
+        ANY_CALL | {"name": "Gwendolyn", "answer": "", "role": "cook", "offer": True},
+    ],
+    "draft_call": [{"slot": "lunch", "day": "tomorrow"}, {"slot": "dinner", "day": "today"}],
 }
 """Inputs for every tool. A tool added to the registry fails the next test until it has some."""
 
