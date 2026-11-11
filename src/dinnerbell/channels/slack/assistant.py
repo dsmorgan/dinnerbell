@@ -529,28 +529,30 @@ class _Stop:
 
 
 class SlackStream:
-    """A ``services.assistant.streaming.ReplyStream`` into the message's thread (#266): the
-    reply grows in Slack as the model writes it, through ``chat.startStream``,
-    ``chat.appendStream``, and ``chat.stopStream``, in ``markdown_text`` from ``MarkdownLines``.
+    """A ``services.assistant.streaming.ReplyStream`` into a DM's thread (#266): the reply grows
+    in Slack as the model writes it, through ``chat.startStream``, ``chat.appendStream``, and
+    ``chat.stopStream``, in ``markdown_text`` from ``MarkdownLines``.
+
+    Only DMs stream. In a channel thread, a call can write text and then make a draft, and a
+    reply with drafts goes only to its member; text streamed before the draft would already be
+    public. So a channel thread's reply is posted once, as before.
 
     The model's events call its methods synchronously; one worker task makes the Slack calls in
     order, so a slow call never holds up the model, and text that arrives meanwhile goes in the
     next append. A call that streams nothing, because it's short or ends in a tool call first,
     leaves the reply to be posted as before. Slack refusing anything, or not answering in
     ``STREAM_STEP_SECONDS``, ends the streaming; ``finish`` then says what's still unseen, for
-    an ordinary reply. A reply that would go only to its member, in a channel thread with drafts,
-    never streams: ``call_started`` learns of the drafts before the final call."""
+    an ordinary reply."""
 
-    def __init__(
-        self, api: SlackApi, incoming: Incoming, *, team_id: str | None, resume: Callable[[], Awaitable[None]]
-    ) -> None:
+    def __init__(self, api: SlackApi, incoming: Incoming, *, resume: Callable[[], Awaitable[None]]) -> None:
+        if not incoming.private:
+            raise ValueError("only a DM's reply streams")
         self.api = api
         self.incoming = incoming
-        self.team_id = team_id
         self.resume = resume
         """Shows the working status again after a streamed message that wasn't the reply."""
         self.enabled = False
-        """Whether the current model call may stream."""
+        """Whether a model call has started, so its text may stream."""
         self.markdown = MarkdownLines()
         self.ts: str | None = None
         """The streamed message, once Slack started it."""
@@ -563,7 +565,7 @@ class SlackStream:
     # ReplyStream ---------------------------------------------------------------------------------
 
     def call_started(self, drafts: int) -> None:
-        self.enabled = self.incoming.private or drafts == 0
+        self.enabled = True  # a DM's reply and its cards are the member's own, drafts or not
 
     def lines(self, text: str) -> None:
         if not self.enabled or self.failed:
@@ -588,7 +590,7 @@ class SlackStream:
         while self._queue:
             item = self._queue.pop(0)
             if isinstance(item, _Stop):
-                await self._close(None, None)
+                await self._close()
                 await self.resume()
                 self.markdown, self.ts, self.shown, self.failed = MarkdownLines(), None, 0, False
                 continue
@@ -601,17 +603,10 @@ class SlackStream:
 
     async def _send(self, text: str) -> bool:
         incoming = self.incoming
-        channel_thread = not incoming.private
         try:
             async with asyncio.timeout(STREAM_STEP_SECONDS):
                 if self.ts is None:
-                    self.ts = await self.api.start_stream(
-                        incoming.channel,
-                        incoming.root,
-                        text,
-                        recipient_user=incoming.user if channel_thread else None,
-                        recipient_team=self.team_id if channel_thread else None,
-                    )
+                    self.ts = await self.api.start_stream(incoming.channel, incoming.root, text)
                 else:
                     await self.api.append_stream(incoming.channel, self.ts, text)
         except Exception as exc:
@@ -620,13 +615,13 @@ class SlackStream:
             return False
         return True
 
-    async def _close(self, text: str | None, blocks: list[Block] | None) -> bool:
-        """Stop the streamed message, if there is one, with ``text`` and ``blocks`` last."""
+    async def _close(self, text: str | None = None) -> bool:
+        """Stop the streamed message, if there is one, with ``text`` last."""
         if self.ts is None:
             return True
         try:
             async with asyncio.timeout(STREAM_STEP_SECONDS):
-                await self.api.stop_stream(self.incoming.channel, self.ts, text, blocks)
+                await self.api.stop_stream(self.incoming.channel, self.ts, text)
         except Exception as exc:
             _stream_failed("chat.stopStream", exc)
             return False
@@ -645,17 +640,17 @@ class SlackStream:
 
     # The end -------------------------------------------------------------------------------------
 
-    async def finish(self, reply: str, blocks: list[Block] | None) -> str | None:
-        """End the stream with the rest of ``reply``, the finished reply's text, and ``blocks``
-        under it. Returns None when the member has seen it all, or else what they haven't,
-        for an ordinary reply: all of it when nothing streamed. When ``reply`` isn't how the
-        shown text goes on, as when the model ran out of time, it comes after a blank line."""
+    async def finish(self, reply: str) -> str | None:
+        """End the stream with the rest of ``reply``, the finished reply's text. Returns None
+        when the member has seen it all, or else what they haven't, for an ordinary reply: all
+        of it when nothing streamed. When ``reply`` isn't how the shown text goes on, as when
+        the model ran out of time, it comes after a blank line."""
         await self._drain()
         if self.ts is None:
             return reply
         reply = reply.strip()
         if self.failed:
-            await self._close(None, None)
+            await self._close()
             return self._unseen(reply)
         raw = self.markdown.raw.lstrip()  # the reply is stripped, and so is what's streamed
         if reply.startswith(raw):
@@ -664,10 +659,10 @@ class SlackStream:
             rest = self.markdown.finish()
             extra = safe_markdown_text(STREAM_SEPARATOR + reply.strip())
             if self.markdown.size + len(rest) + len(extra) > self.markdown.limit:
-                await self._close(rest, None)
+                await self._close(rest)
                 return reply  # no room left in the message: Dinnerbell's line comes on its own
             rest += extra
-        if await self._close(rest, blocks):
+        if await self._close(rest):
             return None
         return self._unseen(reply)
 
@@ -679,7 +674,7 @@ class SlackStream:
     async def abandon(self) -> None:
         """End any streamed message as it is, when there's no reply to finish it with."""
         await self._drain()
-        await self._close(None, None)
+        await self._close()
 
     def cancel(self) -> None:
         """Stop the worker, when the answer is cancelled. Slack finalizes an unstopped stream
@@ -841,7 +836,7 @@ class SlackAssistant:
             return
         self.answering.add(member.id)
         working = self.indicators.start(incoming.channel, incoming.root, incoming.ts, private=incoming.private)
-        stream = SlackStream(self.api, incoming, team_id=self.team_id(), resume=working.resume)
+        stream = SlackStream(self.api, incoming, resume=working.resume) if incoming.private else None
         try:
             try:
                 naming = await self._naming(member, incoming.text)
@@ -851,10 +846,11 @@ class SlackAssistant:
                 self.told.discard(member.id)
             if reply is not None:
                 await self._deliver(incoming, member, key, reply, stream)
-            else:
+            elif stream is not None:
                 await stream.abandon()
         except asyncio.CancelledError:
-            stream.cancel()
+            if stream is not None:
+                stream.cancel()
             await working.cancel()
             raise
         except Exception:
@@ -875,25 +871,20 @@ class SlackAssistant:
         self, incoming: Incoming, member: Member, key: str, reply: Reply, stream: SlackStream | None = None
     ) -> None:
         """Post ``reply`` and its draft cards in the message's thread: publicly, or only to the
-        member when it carries drafts in a channel thread. When ``stream`` showed some of it,
-        the stream ends with the rest, and only what the member hasn't seen is posted."""
+        member when it carries drafts in a channel thread. When ``stream``, a DM's, showed some
+        of it, the stream ends with the rest, and only what the member hasn't seen is posted."""
         body = reply_text(reply)
         cards = [draft_card(draft) for draft in reply.drafts]
         private = bool(cards) and not incoming.private  # drafts, and the reply on them, go only to their member
         noted = f"{key}:{incoming.user}"
         first = not incoming.private and key not in self.replied and not (private and noted in self.noted)
-        if stream is not None and not private:
-            under = [context(mention_only_line(self.bot_user_id))] if first and self.bot_user_id else None
-            unseen = await stream.finish(reply.text, under)
+        if stream is not None:  # a DM's: no note, and its cards are ordinary messages
+            unseen = await stream.finish(reply.text)
             if unseen is None or (stream.ts is not None and not unseen):
-                if not incoming.private:
-                    self.replied.add(key)  # the note came with the streamed message
                 for card in cards:
                     await self._post(incoming, member, card["text"], card["blocks"])
                 return
             body = safe_reply(unseen)
-        elif stream is not None:
-            await stream.abandon()
         if first and self.bot_user_id:
             note = mention_only_line(self.bot_user_id)
             room = MAX_REPLY - len(note) - 2
