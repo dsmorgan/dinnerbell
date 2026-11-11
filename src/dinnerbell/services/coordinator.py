@@ -45,6 +45,7 @@ from dinnerbell.domain.events import (
     EventRuleViolation,
     EventState,
     IllegalTransition,
+    NamedRoles,
     Proposal,
     ProposalSource,
     Window,
@@ -88,12 +89,20 @@ def _target(event_id: int) -> str:
 
 
 async def break_tie(
-    db: AsyncSession, actor: Member, event_id: int, proposal_id: int, *, run: int | None = None, now: datetime
+    db: AsyncSession,
+    actor: Member,
+    event_id: int,
+    proposal_id: int,
+    *,
+    run: int | None = None,
+    roles: NamedRoles | None = None,
+    now: datetime,
 ) -> None:
     """**Break the tie**: choose among the picks sharing the most votes, even without having voted
     (``check_can_break_tie``). It decides the call now, as a lock does, and the decision says who
     chose. A pick that isn't tied is refused; a vote that moved since the person looked changes
-    what's tied, so a stale choice can't decide a pick that is no longer in the tie."""
+    what's tied, so a stale choice can't decide a pick that is no longer in the tie. ``roles``,
+    from the assistant (#252), are the roles chosen with it, as in ``calls.lock``."""
     async with locked_event(db, actor.household_id, event_id, now) as event:
         await guest_rules.gate(db, event, actor, GuestAction.COORDINATE)
         check_run(event, run)
@@ -105,7 +114,7 @@ async def break_tie(
         activity.about(**activity.pick(ctx.items, proposal))
         if proposal.id not in cc.tied_ids(ctx):
             raise EventRuleViolation(NOT_TIED, code="not_tied")
-        await lifecycle.decide(db, event, now, locked=proposal, actor=actor, tie_chosen=True)
+        await lifecycle.decide(db, event, now, locked=proposal, actor=actor, tie_chosen=True, named=roles)
         activity.action(
             db,
             "break_tie",
@@ -313,8 +322,8 @@ async def move_decision_time(
 # Choose the mode and assign the roles (FR-61) ---------------------------------------------------
 
 
-NO_ONE_CHOSEN = "Pick who will {verb}."
-ROLE_VERB = {AssignmentRole.COOK: "cook it", AssignmentRole.ORDER: "order it", AssignmentRole.PICKUP: "pick it up"}
+NO_ONE_CHOSEN = lifecycle.NO_ONE_CHOSEN
+ROLE_VERB = lifecycle.ROLE_VERB
 
 
 @dataclass(frozen=True, slots=True)

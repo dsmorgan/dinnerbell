@@ -19,6 +19,7 @@ with ``add_only``, so an item that appeared meanwhile is left alone.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from typing import Any
@@ -31,7 +32,8 @@ from dinnerbell.db.catalog import CatalogRepository
 from dinnerbell.db.engine import write_transaction
 from dinnerbell.db.events import EventRepository
 from dinnerbell.db.meals import household_settings
-from dinnerbell.db.repositories import HouseholdRepository
+from dinnerbell.db.repositories import HouseholdRepository, MemberRepository
+from dinnerbell.domain.assistant_coordinating import with_people
 from dinnerbell.domain.assistant_drafts import (
     CALL_ACTIONS,
     COORDINATING,
@@ -127,14 +129,38 @@ class DraftView:
     confirm_lines: tuple[str, ...]
 
 
-def view(draft: Draft) -> DraftView:
-    return DraftView(id=draft.id, kind=draft.kind.value, title=draft.title, confirm_lines=draft.lines)
+FORMER_MEMBER = "a former member"
 
 
-def summary(draft: Draft, label: str) -> str:
-    """What a draft tool tells the model: the draft's ID and what Confirm does, not its payload."""
+def view(draft: Draft, names: Mapping[int, str] | None = None) -> DraftView:
+    """``draft`` for its member's card. A coordinating draft (#252) names people by ``names``,
+    the household's member IDs to their names: only its member sees the card, in a private
+    conversation, and it never goes to the model."""
+    if draft.kind not in COORDINATING:
+        return DraftView(id=draft.id, kind=draft.kind.value, title=draft.title, confirm_lines=draft.lines)
+    known = names or {}
+
+    def name(member_id: int) -> str:
+        return known.get(member_id) or FORMER_MEMBER
+
+    lines = tuple(with_people(line, name) for line in draft.lines)
+    return DraftView(id=draft.id, kind=draft.kind.value, title=with_people(draft.title, name), confirm_lines=lines)
+
+
+async def names(db: AsyncSession, household_id: int) -> dict[int, str]:
+    """The household's member IDs to their names, for ``view``."""
+    return {m.id: m.display_name for m in await MemberRepository(db).list(household_id)}
+
+
+def summary(draft: Draft, label: str, labeler: Callable[[int], str] | None = None) -> str:
+    """What a draft tool tells the model: the draft's ID and what Confirm does, not its payload.
+    A coordinating draft names people by ``labeler``, the conversation's labels."""
+    title, lines = draft.title, draft.lines
+    if draft.kind in COORDINATING:
+        to_label = labeler or (lambda _: "a member")
+        title, lines = with_people(title, to_label), tuple(with_people(line, to_label) for line in lines)
     return (
-        f"Draft {draft.id} is waiting for {label} to confirm: {draft.title}. Confirm will: {' '.join(draft.lines)} "
+        f"Draft {draft.id} is waiting for {label} to confirm: {title}. Confirm will: {' '.join(lines)} "
         f"Dinnerbell shows the member Confirm and Cancel on it for {DRAFT_MINUTES} minutes. "
         "Nothing has changed yet, so don't say it's done."
     )
@@ -364,7 +390,9 @@ async def draft_parsed_catalog(
 async def waiting(db: AsyncSession, member: Member, key: str, now: datetime) -> list[DraftView]:
     """``member``'s drafts in the conversation ``key`` that still wait for Confirm, oldest first,
     for an entry point that draws the conversation again."""
-    return [view(d) for d in await AssistantRepository(db).drafts_waiting(member.household_id, member.id, key, now)]
+    found = await AssistantRepository(db).drafts_waiting(member.household_id, member.id, key, now)
+    known = await names(db, member.household_id) if any(d.kind in COORDINATING for d in found) else {}
+    return [view(d, known) for d in found]
 
 
 # Confirm and Cancel -----------------------------------------------------------------------------

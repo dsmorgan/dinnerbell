@@ -35,7 +35,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from dinnerbell.config import is_test_instance
 from dinnerbell.db.repositories import HouseholdRepository
 from dinnerbell.domain.assistant import Pseudonyms, web_key
-from dinnerbell.domain.assistant_drafts import Narrowing
+from dinnerbell.domain.assistant_drafts import COORDINATING, Narrowing
 from dinnerbell.domain.catalog import MODE_ORDER, InvalidCatalogInput, ItemKind, Meal, Mode, name_key
 from dinnerbell.domain.events import EventRuleViolation, EventState, InvalidResponse, RoleOffer, Status
 from dinnerbell.domain.feedback import COOK_NOTE_MAX, ISSUE_NOTE_MAX, FeedbackInput, InvalidFeedback, PlaceIssue, Rating
@@ -431,9 +431,12 @@ FIND_CANDIDATES = Tool(
 )
 
 
-def _keep(ctx: ToolContext, draft: Any) -> str:
-    ctx.session.drafts.append(drafts.view(draft))
-    return drafts.summary(draft, ctx.session.label(ctx.actor.id))
+async def _keep(ctx: ToolContext, draft: Any) -> str:
+    """The draft's card for its member, and its summary for the model: a coordinating card names
+    people, and the summary gives the model their labels (#252)."""
+    known = await drafts.names(ctx.db, ctx.actor.household_id) if draft.kind in COORDINATING else {}
+    ctx.session.drafts.append(drafts.view(draft, known))
+    return drafts.summary(draft, ctx.session.label(ctx.actor.id), ctx.session.label)
 
 
 async def draft_proposal_tool(ctx: ToolContext, raw: Mapping[str, Any]) -> str:
@@ -445,7 +448,7 @@ async def draft_proposal_tool(ctx: ToolContext, raw: Mapping[str, Any]) -> str:
     draft = await drafts.draft_proposal(
         ctx.db, ctx.actor, ctx.session.key, event, name, mode, label=ctx.session.label, now=ctx.now
     )
-    return _keep(ctx, draft)
+    return await _keep(ctx, draft)
 
 
 DRAFT_PROPOSAL = Tool(
@@ -491,7 +494,7 @@ async def draft_offer_tool(ctx: ToolContext, raw: Mapping[str, Any]) -> str:
         at=at,
         capacity=spare or DEFAULT_CAPACITY,
     )
-    return _keep(ctx, await drafts.draft_offer(ctx.db, ctx.actor, ctx.session.key, request, now=ctx.now))
+    return await _keep(ctx, await drafts.draft_offer(ctx.db, ctx.actor, ctx.session.key, request, now=ctx.now))
 
 
 DRAFT_OFFER = Tool(
@@ -533,7 +536,7 @@ async def draft_catalog_items_tool(ctx: ToolContext, raw: Mapping[str, Any]) -> 
         raise ToolInputError("catalog_file is the catalog file's text.")
     if len(text) > MAX_CATALOG_CHARS:
         raise ToolInputError(f"catalog_file is at most {MAX_CATALOG_CHARS:,} characters. Draft fewer items at once.")
-    return _keep(ctx, await drafts.draft_catalog_items(ctx.db, ctx.actor, ctx.session.key, text, now=ctx.now))
+    return await _keep(ctx, await drafts.draft_catalog_items(ctx.db, ctx.actor, ctx.session.key, text, now=ctx.now))
 
 
 DRAFT_CATALOG_ITEMS = Tool(
@@ -680,7 +683,7 @@ LOOK_UP_CALL = Tool(
 
 
 async def _keep_action(ctx: ToolContext, spec: DraftSpec) -> str:
-    return _keep(ctx, await drafts.store_action(ctx.db, ctx.actor, ctx.session.key, spec, now=ctx.now))
+    return await _keep(ctx, await drafts.store_action(ctx.db, ctx.actor, ctx.session.key, spec, now=ctx.now))
 
 
 async def draft_answer_tool(ctx: ToolContext, raw: Mapping[str, Any]) -> str:

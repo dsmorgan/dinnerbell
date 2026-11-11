@@ -4,13 +4,15 @@ deciding a pick (a lock or a tie broken), shuffling the picks, changing the plan
 does, handing off coordinating, marking the meal done, and calling off a call (FR-56).
 
 The services work out what changes with their own rules; these say it in the words the call page
-and Slack's **Adjust** use. A person is named only by the label the caller passes, such as
-"Member 2", or "you": never a name, so the lines can go back to the model.
+and Slack's **Adjust** use. A person goes in a line as ``person`` of their member ID, never a name:
+the card shows its member the person's name (``with_people``), and the model reads the label the
+conversation gives them, such as "Member 2". So a stored title or line holds neither.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+import re
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import time
 
@@ -23,6 +25,28 @@ ROLE_DOES = {AssignmentRole.COOK: "cooks it", AssignmentRole.ORDER: "orders it",
 ROLES_TOLD = "Whoever you assign is told, and so is whoever no longer has the role."
 AFTER_THE_MEAL = "It's past the meal time, so it corrects the record and messages nobody."
 FIRST_VOLUNTEER = "A role you didn't name goes to whoever offered first, as the decision does."
+
+
+_OPEN, _CLOSE = "\ue000", "\ue001"
+"""Private-use characters that mark a person in a stored line: no name or label is stored."""
+_PERSON = re.compile(f"{_OPEN}(\\d{{1,12}}){_CLOSE}")
+
+
+def person(member_id: int) -> str:
+    """A person in a stored title or line, by member ID, for ``with_people`` to write out."""
+    return f"{_OPEN}{member_id}{_CLOSE}"
+
+
+def with_people(text: str, name: Callable[[int], str]) -> str:
+    """``text`` with each ``person`` written as ``name`` gives them: their name on their owner's
+    card, or their label for the model."""
+    return _PERSON.sub(lambda match: name(int(match.group(1))), text)
+
+
+def plain(text: str) -> str:
+    """Text that came from a member or the catalog, such as a call-off reason or a place's name,
+    with the marker characters taken out, so it can never pose as a person."""
+    return text.replace(_OPEN, "").replace(_CLOSE, "")
 
 
 def clock(at: time) -> str:
@@ -62,8 +86,9 @@ def decide_lines(
     roles: Mapping[AssignmentRole, str] | None = None,
 ) -> tuple[str, ...]:
     """What deciding a pick does: ``calls.lock``, or ``coordinator.break_tie`` when ``tie``, which
-    the decision says the coordinator chose. With ``way`` or ``roles``, **Assign roles** runs next
-    (``coordinator.choose_roles``), switching to ``way`` and naming who does each role."""
+    the decision says the coordinator chose. With ``way`` or ``roles``, the decision takes them in
+    the same transaction (``lifecycle.decide``'s ``named``), switching to ``way`` and naming who
+    does each role, so a refusal decides nothing."""
     pick = pick_words(name, mode)
     if tie:
         lines = [
@@ -74,12 +99,12 @@ def decide_lines(
     else:
         lines = [f"It locks {pick}: {when}'s {slot.value} call is decided on it now, and voting ends."]
     if way is not None or roles:
-        lines.append("Then it assigns the roles, as Assign roles does:")
+        lines.append("It assigns the roles with it, as Assign roles does, so nobody is asked to choose:")
         if way is not None:
             lines.append(f"It's {way.label.lower()} instead.")
         lines += role_lines(roles or {})
         lines.append(FIRST_VOLUNTEER)
-        lines.append("If the roles can't be assigned then, the call stays decided and you can assign them after.")
+        lines.append("If the roles can't be assigned, nothing is locked.")
     return tuple(lines)
 
 

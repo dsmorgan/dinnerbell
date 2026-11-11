@@ -24,6 +24,8 @@ import pytest
 from sqlalchemy import select
 
 from dinnerbell.config import Settings
+from dinnerbell.db.assistant import AssistantRepository
+from dinnerbell.db.catalog import CatalogRepository, ItemValues
 from dinnerbell.db.models import AssistantDraftRow
 from dinnerbell.domain import events as rules
 from dinnerbell.domain.assistant import AssistantSettings, Pseudonyms, slack_key
@@ -42,6 +44,7 @@ from dinnerbell.services.assistant.prompt import SYSTEM_PROMPT
 from dinnerbell.services.assistant.runtime import AssistantConfig
 from dinnerbell.services.assistant.tools import PRIVATE_ONLY, ToolContext, ToolResult, ToolSession
 from dinnerbell.services.database import Database, open_database
+from dinnerbell.services.errors import NotFound
 from tests.support.calls import MEAL, OPENS, RESPOND_BY, House, dinner_id, furnish, make_house
 from tests.support.clock import FakeClock
 from tests.support.fake_model import FakeModel, answer, tool_call
@@ -193,6 +196,14 @@ async def rows(house: House) -> list[AssistantDraftRow]:
         return list(await db.scalars(select(AssistantDraftRow).order_by(AssistantDraftRow.id)))
 
 
+async def card(house: House, draft: int, who: str = "Kim") -> drafts.DraftView:
+    """The draft's card, as its member's conversation draws it."""
+    async with house.sessionmaker() as db:
+        waiting = await drafts.waiting(db, house[who], DM, house.clock())
+    [found] = [v for v in waiting if v.id == draft]
+    return found
+
+
 async def confirm(house: House, who: str | Member, draft: int) -> Any:
     member = house[who] if isinstance(who, str) else who
     async with house.sessionmaker() as db:
@@ -229,10 +240,11 @@ def assert_no_names(*texts: str) -> None:
 async def test_lock_the_taco_place_member_2_picks_it_up_in_a_dm_drafts_then_confirm_decides(
     house: House, helper: Assistant, model: FakeModel
 ) -> None:
-    """In her DM, Kim says "lock the taco place, Sam picks it up", with Sam mentioned, so the
-    model reads Member 2. It looks the call up, drafts a lock with Member 2 picking up, and
-    changes nothing; Confirm locks Taqueria through ``calls.lock`` and assigns the roles through
-    ``choose_roles``. Nobody's name goes to the model, and the card names nobody."""
+    """In her DM, Kim says "lock the taco place, @Sam picks it up", so the model reads Member 2.
+    It looks the call up and drafts a lock with Member 2 picking up, which changes nothing. Kim's
+    card names Sam; the model reads Member 2. Confirm locks Taqueria through ``calls.lock`` with
+    the roles in the same transaction, so Sam hears once that he picks it up. Nobody's name goes
+    to the model, then or in the next message, after the card and Confirm named Sam."""
     event_id = await voting(house)
     kim, sam = house["Kim"], house["Sam"]
     model.script = [
@@ -256,29 +268,41 @@ async def test_lock_the_taco_place_member_2_picks_it_up_in_a_dm_drafts_then_conf
     ]
     assert {p["name"] for p in looked["picks"]} == {"Siam Garden", "Taqueria"}
     assert all(p["tied"] is False for p in looked["picks"]) and looked["guests_in"] == 0
+    summary = model.requests[2]["messages"][-1]["content"][0]["content"]
+    assert "Member 2 picks it up." in summary
     [card] = reply.drafts
     assert (card.kind, card.title) == ("decide", "Lock Taqueria (pickup)")
     assert card.confirm_lines == (
         "It locks Taqueria (pickup): today's dinner call is decided on it now, and voting ends.",
-        "Then it assigns the roles, as Assign roles does:",
-        "Member 2 picks it up.",
+        "It assigns the roles with it, as Assign roles does, so nobody is asked to choose:",
+        "Sam picks it up.",
         FIRST_VOLUNTEER,
-        "If the roles can't be assigned then, the call stays decided and you can assign them after.",
+        "If the roles can't be assigned, nothing is locked.",
     )
+    stored = await row(house, card.id)
+    assert_no_names(stored.title, *stored.lines)  # stored by member ID, never a name or a label
+    assert not any("Member" in line for line in stored.lines)
     assert (await house.event(event_id)).state is EventState.VOTING  # nothing until Confirm
-    sent = json.dumps([r["messages"] for r in model.requests])
-    assert_no_names(sent)
+    assert_no_names(json.dumps([r["messages"] for r in model.requests]))
 
+    before = len(await house.outbox())
     done = await confirm(house, "Kim", card.id)
-    assert done == ActionConfirmed(
-        event_id, "Confirmed. Today's dinner call is decided on Taqueria. The roles are assigned."
-    )
+    assert done == ActionConfirmed(event_id, "Confirmed. Today's dinner call is decided on Taqueria. Sam picks it up.")
     event = await house.event(event_id)
     assert event.state is EventState.DECIDED and event.decided_item_id == house.items["Taqueria"].id
+    assert event.roles_due_at is None
     assert (await holders(house, event_id))[AssignmentRole.PICKUP] == "Sam"
-    assert [a.action for a in await house.audits()][-1] == "event.roles_assigned"
+    decided = [a for a in await house.audits() if a.action == "event.decided"]
+    assert decided[-1].payload["roles_named"] is True
+    assert told((await house.outbox())[before:], sam) == ["assignment_made"]  # once, never made then ended
     with pytest.raises(drafts.DraftUnavailable):
         await confirm(house, "Kim", card.id)
+
+    model.script = [answer("You're welcome.")]
+    model.requests.clear()
+    async with house.sessionmaker() as db:
+        await converse(db, helper, kim, DM, private=True, text="thanks")
+    assert_no_names(json.dumps(model.requests))
 
 
 @pytest.mark.flag("assistant", on=True)
@@ -445,18 +469,23 @@ async def test_the_plan_changes_as_adjust_changes_it(house: House) -> None:
     meal = (await house.event(event_id)).meal_time
     assert meal is not None and meal == MEAL + timedelta(minutes=30)
 
-    draft = draft_id(await tool(house, "draft_plan", change(place="Siam Garden", way="delivery", lead="Member 4")))
-    assert list((await row(house, draft)).lines)[:3] == [
+    already = await tool(house, "draft_plan", change(place="Siam Garden", way="delivery", lead="Member 4"))
+    assert already == ToolResult(coordinating.ALREADY.format(label="Member 4", does="orders it"), is_error=True)
+    drafted = await tool(house, "draft_plan", change(place="Siam Garden", way="delivery", lead="Member 3"))
+    draft = draft_id(drafted)
+    assert "Member 3 orders it." in drafted.content  # the model reads the label
+    assert list((await card(house, draft)).confirm_lines)[:3] == [
         "The place changes from Taqueria to Siam Garden. People keep their roles if the new way has them.",
         "It switches from pickup to delivery.",
-        "Member 4 orders it.",
+        "Sam orders it.",  # the card names him to Kim
     ]
     await confirm(house, "Kim", draft)
     event = await house.event(event_id)
     assert (event.decided_item_id, event.decided_mode) == (house.items["Siam Garden"].id, Mode.DELIVERY)
-    assert await holders(house, event_id) == {AssignmentRole.ORDER: "Lee"}
+    assert await holders(house, event_id) == {AssignmentRole.ORDER: "Sam"}
 
     draft = draft_id(await tool(house, "draft_plan", change(way="pickup", pickup="Member 2")))
+    assert "Alex picks it up." in (await card(house, draft)).confirm_lines
     await confirm(house, "Kim", draft)
     assert (await holders(house, event_id))[AssignmentRole.PICKUP] == "Alex"
     bad = await tool(house, "draft_plan", change(lead="Lee"))
@@ -483,9 +512,9 @@ async def test_hand_off_mark_done_and_call_off_run_their_use_cases(house: House)
     off = draft_id(await tool(house, "draft_call_off", DINNER | {"reason": "  Rain,\n sorry "}))
     assert '"Rain, sorry"' in " ".join((await row(house, off)).lines)
     handing = draft_id(await tool(house, "draft_hand_off", DINNER | {"to": "Member 3"}))
-    assert (await row(house, handing)).title == "Hand off coordinating today's dinner to Member 3"
+    assert (await card(house, handing)).title == "Hand off coordinating today's dinner to Sam"
     assert await confirm(house, "Kim", handing) == ActionConfirmed(
-        event_id, "Confirmed. You handed off coordinating today's dinner."
+        event_id, "Confirmed. Sam coordinates today's dinner now."
     )
     assert (await house.event(event_id)).coordinator_id == house["Sam"].id
     assert await confirm(house, "Kim", done) == ActionConfirmed(event_id, "Confirmed. Today's dinner is done.")
@@ -587,9 +616,10 @@ async def test_a_label_never_targets_a_guest_and_the_service_refuses_the_rest(ho
 
 
 @pytest.mark.flag("assistant", on=True)
-async def test_results_cards_and_confirms_carry_no_names(house: House) -> None:
-    """Every coordinating tool's result, each draft's title and lines, and each Confirm's text
-    name nobody, the guest included: people are labels, a guest is "a guest" or a count."""
+async def test_results_and_stored_drafts_carry_no_names_and_cards_show_them(house: House) -> None:
+    """Every coordinating tool's result, and each stored title and line, name nobody, the guest
+    included: the model reads labels, a guest is "a guest" or a count, and a stored line marks a
+    person by member ID. The cards and Confirm's results, which only Kim sees, name people."""
     event_id = await voting(house, guest=True)
     said = [
         await tool(house, "look_up_coordinating", DINNER),
@@ -615,17 +645,101 @@ async def test_results_cards_and_confirms_carry_no_names(house: House) -> None:
     assert not any(r.is_error for r in said), said
     texts = [v for r in said for v in strings(json.loads(r.content) if r.content.startswith("{") else r.content)]
     texts += [t for r in await rows(house) for t in (r.title, *r.lines)]
-    texts += [d.text for d in done]
     assert_no_names(*texts)
+    assert done[0].text == "Confirmed. Today's dinner call is decided on Taqueria. Lee orders it. Sam picks it up."
 
 
 @pytest.mark.flag("assistant", on=True)
-async def test_a_cook_list_refusal_names_the_label_not_the_person(house: House) -> None:
-    """``check_assignee``'s own refusal names the person; the model gets their label instead."""
+@pytest.mark.parametrize("way", ["cook", ""])
+async def test_a_cook_list_refusal_names_the_label_not_the_person(house: House, way: str) -> None:
+    """``check_assignee``'s own refusal names the person; the model gets their label instead, with
+    the way given or, for a place with one way, worked out as Adjust works it out."""
     await decided(house)
-    refused = await tool(house, "draft_plan", change(place="Sam's Tacos", way="cook", lead="Member 4"))
-    assert refused == ToolResult("Sam's Tacos has a cook list, and Member 4 isn't on it.", is_error=True)
-    assert "Lee" not in refused.content
+    refused = await tool(house, "draft_plan", change(place="Sam's Tacos", way=way, lead="Member 2"))
+    assert refused == ToolResult("Sam's Tacos has a cook list, and Member 2 isn't on it.", is_error=True)
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_the_services_own_cook_list_refusal_is_relabeled_too(
+    house: House, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Behind the assistant's own check, Adjust's ``check_assignee`` names the person. Its refusal
+    reaches the model only written with the label."""
+    await decided(house)
+    monkeypatch.setattr(coordinating, "_can_do", lambda *args: None)
+    refused = await tool(house, "draft_plan", change(place="Sam's Tacos", lead="Member 2"))
+    assert refused == ToolResult("Sam's Tacos has a cook list, and Member 2 isn't on it.", is_error=True)
+
+
+async def cooks_only(house: House, item: str, *cooks: str) -> None:
+    """Give ``item`` a cook list of ``cooks``, as an admin's edit would."""
+    found = house.items[item]
+    values = ItemValues(
+        kind=found.kind,
+        name=found.name,
+        modes=found.modes,
+        meals=found.meals,
+        tag_ids=found.tag_ids,
+        cook_ids=frozenset(house[c].id for c in cooks),
+        url=found.url,
+        order_url=None,
+        notes=None,
+        default_servings=None,
+        active=True,
+    )
+    async with house.sessionmaker() as db:
+        await CatalogRepository(db).update_item(house.household.id, found.id, values, house.clock())
+        await db.commit()
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_a_cook_list_refusal_at_confirm_names_nobody(house: House) -> None:
+    """A cook list added between the draft and Confirm: Adjust refuses, naming the person; the
+    card says someone named isn't on it, and the draft stays unused."""
+    await house.add_item("Pasta Bake", Mode.COOK, cuisine="Italian")
+    event_id = await decided(house)
+    draft = draft_id(await tool(house, "draft_plan", change(place="Pasta Bake", lead="Member 2")))
+    await cooks_only(house, "Pasta Bake", "Sam")
+    with pytest.raises(rules.EventRuleViolation) as refused:
+        await confirm(house, "Kim", draft)
+    assert str(refused.value) == coordinating.COOK_LIST_AT_CONFIRM
+    assert (await row(house, draft)).used_at is None
+    assert (await house.event(event_id)).decided_item_id == house.items["Taqueria"].id
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_a_plan_partly_saved_says_why_the_rest_wasnt_naming_nobody(
+    house: House, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The meal time saves, then the roles are refused with a refusal that names someone: the
+    result says it's partly done, and names nobody."""
+    event_id = await decided(house)
+    draft = draft_id(await tool(house, "draft_plan", change(meal_time="19:00", pickup="Member 2")))
+
+    async def refuses(*args: Any, **kwargs: Any) -> None:
+        raise rules.EventRuleViolation("Taqueria has a cook list, and Lee isn't on it.", code="cook_list")
+
+    monkeypatch.setattr(coordinator, "choose_roles", refuses)
+    done = await confirm(house, "Kim", draft)
+    assert done == ActionConfirmed(
+        event_id,
+        f"Partly confirmed: some of the plan changed, but not all. {coordinating.COOK_LIST_AT_CONFIRM}",
+    )
+    assert (await house.event(event_id)).meal_time == MEAL + timedelta(minutes=30)
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_naming_who_has_the_role_already_is_refused_not_carded(house: House) -> None:
+    """Adjust drops a person named for the role they have, so a card saying it gives it to them
+    would say what Confirm doesn't do: the draft is refused instead."""
+    await decided(house)
+    for args, label, does in (
+        (change(pickup="Member 3"), "Member 3", "picks it up"),
+        (change(lead="Member 4"), "Member 4", "orders it"),
+    ):
+        refused = await tool(house, "draft_plan", args)
+        assert refused == ToolResult(coordinating.ALREADY.format(label=label, does=does), is_error=True)
+    assert await rows(house) == []
 
 
 @pytest.mark.flag("assistant", on=True)
@@ -666,3 +780,105 @@ async def test_with_two_calls_of_hers_open_the_assistant_asks_which(house: House
     assert "lunch on 2026-10-23 (tomorrow, scheduled)" in asked.content
     off = await tool(house, "draft_call_off", {"slot": "", "day": "tomorrow", "reason": ""})
     assert not off.is_error, off.content
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_a_lock_whose_named_roles_are_refused_locks_nothing(house: House) -> None:
+    """The lock and its named roles are one transaction: Lee, named to order, is deactivated
+    before Confirm, so the refusal rolls back the lock and the draft's use, and nobody is told
+    anything."""
+    event_id = await voting(house)
+    draft = draft_id(await tool(house, "draft_decide", lock(lead="Member 4")))
+    await act(house, members.set_member_active, house["Alex"], house["Lee"].id, False)
+    before = await house.kinds()
+    with pytest.raises(NotFound, match="No such member"):
+        await confirm(house, "Kim", draft)
+    assert (await house.event(event_id)).state is EventState.VOTING
+    assert (await row(house, draft)).used_at is None
+    assert await house.kinds() == before
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_a_hand_off_by_anyone_but_the_coordinator_says_so_before_reading_a_label(house: House) -> None:
+    """Sam isn't the coordinator: a label nobody has and one somebody has get the same refusal,
+    the coordinator's, so the refusal never says which labels exist."""
+    await voting(house)
+    for to in ("Member 9", "Member 1"):
+        refused = await tool(house, "draft_hand_off", DINNER | {"to": to}, who="Sam")
+        assert refused == ToolResult("Only the coordinator can hand off coordinating.", is_error=True), to
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_confirm_uses_the_draft_before_it_checks_the_run_or_runs_the_use_case(
+    house: House, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A Confirm that loses the race for the draft hears it's used, even on a stale run, and the
+    use case never runs."""
+    event_id = await decided(house)
+    house.clock.now = MEAL
+    draft = draft_id(await tool(house, "draft_mark_done", DINNER))
+    await act(house, call_admin.rerun, house["Alex"], event_id)  # a stale run, too
+    ran: list[str] = []
+
+    async def done(*args: Any, **kwargs: Any) -> None:
+        ran.append("mark_done")
+
+    monkeypatch.setattr(calls, "mark_done", done)
+
+    async def used() -> None:
+        raise drafts.DraftUnavailable(drafts.USED)
+
+    async with house.sessionmaker() as db:
+        found = await AssistantRepository(db).draft(house.household.id, draft)
+        assert found is not None
+        with pytest.raises(drafts.DraftUnavailable, match="already confirmed"):
+            await coordinating.confirm(
+                db, tools.tool_actor(house["Kim"]), found, today=date(2026, 10, 22), now=house.clock(), use=used
+            )
+    assert ran == []
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_someone_to_pick_up_a_one_way_place_that_isnt_pickup_is_refused(house: House) -> None:
+    """With no way given, the way is the place's only one, as Adjust takes it: a home meal has
+    nobody to pick up, so naming one is refused rather than dropped from the card."""
+    await decided(house)
+    refused = await tool(house, "draft_plan", change(place="Sam's Tacos", pickup="Member 2"))
+    assert refused == ToolResult(coordinating.NO_PICKUP, is_error=True)
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_a_switch_of_way_names_on_the_card_who_adjust_gives_the_role(house: House) -> None:
+    """Siam Garden is decided for pickup; switching to delivery names nobody, and Adjust gives
+    ordering to its first volunteer, Lee: the card says so, as the service will do it."""
+    event_id = await voting(house)
+    siam = next(p for p in (await house.context(event_id)).picks if p.item_id == house.items["Siam Garden"].id)
+    await act(house, calls.lock, house["Kim"], event_id, siam.id)
+    await act(house, coordinator.choose_roles, house["Kim"], event_id, mode=Mode.PICKUP, member_id=house["Sam"].id)
+    drafted = await tool(house, "draft_plan", change(way="delivery"))
+    lines = (await card(house, draft_id(drafted))).confirm_lines
+    assert "It switches from pickup to delivery." in lines and "Lee orders it." in lines
+    await confirm(house, "Kim", draft_id(drafted))
+    assert await holders(house, event_id) == {AssignmentRole.ORDER: "Lee"}
+
+
+def told(entries: list[Any], member: Member) -> list[str]:
+    """The kinds of the messages to ``member`` among ``entries``."""
+    return [e.kind for e in entries if e.payload.get("member", {}).get("id") == member.id]
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_a_lock_naming_someone_else_to_pick_up_tells_each_person_once(house: House) -> None:
+    """Sam offered to pick up, and Kim's lock names Alex instead. The decision takes Alex at once:
+    Sam, never assigned, hears nothing about a role, and Alex hears once that the coordinator gave
+    him pickup, not a message to Sam and then another taking it back."""
+    event_id = await voting(house)
+    draft = draft_id(await tool(house, "draft_decide", lock(pickup="Member 2")))
+    before = len(await house.outbox())
+    await confirm(house, "Kim", draft)
+    assert (await holders(house, event_id))[AssignmentRole.PICKUP] == "Alex"
+    entries = (await house.outbox())[before:]
+    assert told(entries, house["Sam"]) == []
+    assert told(entries, house["Alex"]) == ["assignment_made"]
+    [made] = [e for e in entries if e.kind == "assignment_made" and e.payload["member"]["id"] == house["Alex"].id]
+    assert made.payload["assigned_by"]["id"] == house["Kim"].id
