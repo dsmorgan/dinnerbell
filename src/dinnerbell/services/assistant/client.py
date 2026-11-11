@@ -45,17 +45,26 @@ class ModelCallFailed(Exception):
     """The call returned no reply. ``maybe_billed`` is False only when the API answered with an
     error that means it ran nothing; otherwise (a timeout, a dropped connection, a gateway
     error, a reply that couldn't be read) the request may have run and been billed, and its
-    reservation stands. ``status``, ``error_type``, and ``request_id`` are for the log: none is
-    secret."""
+    reservation stands. ``status``, ``error_type``, ``request_id``, and ``detail`` are for the
+    log. ``detail`` is the API's own error type and message, on one line and clipped: it names
+    what was wrong, such as a field of the request, and could quote part of one, but never the
+    key."""
 
     def __init__(
-        self, *, maybe_billed: bool, status: int | None = None, error_type: str = "", request_id: str | None = None
+        self,
+        *,
+        maybe_billed: bool,
+        status: int | None = None,
+        error_type: str = "",
+        request_id: str | None = None,
+        detail: str = "",
     ) -> None:
         super().__init__("the model call failed")
         self.maybe_billed = maybe_billed
         self.status = status
         self.error_type = error_type
         self.request_id = request_id
+        self.detail = detail
 
     def log_fields(self) -> dict[str, object]:
         return {
@@ -63,6 +72,7 @@ class ModelCallFailed(Exception):
             "status": self.status,
             "error_type": self.error_type,
             "anthropic_request_id": self.request_id,
+            "detail": self.detail,
         }
 
 

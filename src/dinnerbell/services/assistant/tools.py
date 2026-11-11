@@ -114,6 +114,15 @@ class ToolContext:
     session: ToolSession
 
 
+MAX_STRICT_TOOLS = 20
+"""The most tools with ``strict: true`` the Messages API takes in one request; more is a 400.
+It also caps optional parameters (``MAX_STRICT_OPTIONAL``) and union-typed ones
+(``MAX_STRICT_UNIONS``) across a request's strict schemas. tests/test_assistant.py checks every
+tool set against all three."""
+MAX_STRICT_OPTIONAL = 24
+MAX_STRICT_UNIONS = 16
+
+
 class ToolInputError(ToolRefusal):
     """The model sent input the tool can't use. The message goes back to the model."""
 
@@ -127,12 +136,15 @@ class Tool:
     private_only: bool = False
 
     def definition(self) -> dict[str, Any]:
-        """The tool as the Messages API takes it. Strict, so the model's input matches the schema."""
+        """The tool as the Messages API takes it. A tool every conversation is offered is strict,
+        so the model's input matches the schema. A private-only tool isn't, because a request
+        takes at most ``MAX_STRICT_TOOLS`` strict tools; every tool checks its own input either
+        way, so a strict schema only saves the model a retry."""
         return {
             "name": self.name,
             "description": self.description,
             "input_schema": dict(self.input_schema),
-            "strict": True,
+            "strict": not self.private_only,
         }
 
 

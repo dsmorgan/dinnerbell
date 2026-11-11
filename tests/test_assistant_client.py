@@ -19,6 +19,7 @@ from dinnerbell.services.assistant.anthropic_client import (
     TIMEOUT_SECONDS,
     AnthropicModelClient,
     echoed_content,
+    error_detail,
     to_reply,
 )
 from dinnerbell.services.assistant.client import ModelCallFailed
@@ -236,7 +237,25 @@ async def test_an_error_answer_is_billed_only_when_it_may_have_run(status: int, 
     assert failed.value.maybe_billed is billed
     assert failed.value.status == status and failed.value.request_id == "req_test_123"
     assert failed.value.log_fields()["anthropic_request_id"] == "req_test_123"
+    assert failed.value.log_fields()["detail"] == "x: no"  # why, such as the field a 400 names
     assert calls == [1]  # never retried
+
+
+@pytest.mark.parametrize(
+    ("body", "detail"),
+    [
+        (
+            {"type": "error", "error": {"type": "invalid_request_error", "message": "tools: too\n many"}},
+            "invalid_request_error: tools: too many",
+        ),
+        ({"error": {"message": "m" * 400}}, "m" * 300),
+        ({"error": "flat"}, ""),
+        ("not json", ""),
+        (None, ""),
+    ],
+)
+def test_the_error_detail_is_one_clipped_line(body: object, detail: str) -> None:
+    assert error_detail(body) == detail
 
 
 async def test_an_error_mid_stream_may_have_been_billed() -> None:
