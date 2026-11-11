@@ -585,7 +585,10 @@ async def converse(
         if stored.expired(assistant.clock(), hours):
             stored = None  # past Conversation hours: never sent, and replaced below
     session = ToolSession(
-        key=key, pseudonyms=(stored.pseudonyms if stored else Pseudonyms()).with_member(member.id), call_id=call_id
+        key=key,
+        pseudonyms=(stored.pseudonyms if stored else Pseudonyms()).with_member(member.id),
+        call_id=call_id,
+        instance_label=assistant.config.instance_label,
     )
     asked = (text if isinstance(text, str) else text(session.label)).strip()
     if not asked:

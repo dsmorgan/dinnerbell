@@ -15,11 +15,15 @@ from dinnerbell.domain.members import Member
 
 @dataclass(frozen=True, slots=True)
 class AssistantConfig:
-    """What the operator set: the key (only whether there is one) and the flag, and the model."""
+    """What the operator set: the key (only whether there is one) and the flag, the model, and
+    the instance's label."""
 
     key_set: bool
     flag_on: bool
     model: str = assistant.DEFAULT_MODEL
+    instance_label: str = ""
+    """``DINNERBELL_INSTANCE_LABEL``: on a test instance, an ad-hoc call's draft and Confirm lift
+    the restart's too-late rule, as the web and Slack do (#60)."""
 
     @property
     def configured(self) -> bool:
@@ -32,6 +36,7 @@ class AssistantConfig:
             key_set=settings.anthropic_api_key is not None,
             flag_on=flags.enabled(settings, flags.ASSISTANT),
             model=settings.assistant_model,
+            instance_label=settings.instance_label,
         )
 
 

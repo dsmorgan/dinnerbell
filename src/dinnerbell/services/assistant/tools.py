@@ -29,6 +29,7 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from dinnerbell.config import is_test_instance
 from dinnerbell.db.repositories import HouseholdRepository
 from dinnerbell.domain.assistant import Pseudonyms, web_key
 from dinnerbell.domain.assistant_drafts import Narrowing
@@ -79,6 +80,8 @@ class ToolSession:
     links: LinkCalls | None = None
     """The fetch and the drafting call for menu links, from ``converse``. None outside a
     message, where ``draft_catalog_from_link`` refuses."""
+    instance_label: str = ""
+    """``AssistantConfig.instance_label``, for ``draft_call``'s restart rule (#60)."""
 
     def label(self, member_id: int) -> str:
         self.pseudonyms = self.pseudonyms.with_member(member_id)
@@ -957,7 +960,9 @@ async def draft_call_tool(ctx: ToolContext, raw: Mapping[str, Any]) -> str:
     today = await _today(ctx)
     slot = Slot(_enum(raw, "slot", [s.value for s in Slot]))
     day = _day(raw, "day", today, required=True) or today
-    return await _keep_action(ctx, await call_drafts.start_call(ctx.db, ctx.actor, slot, day, today=today, now=ctx.now))
+    any_time = is_test_instance(ctx.session.instance_label)
+    spec = await call_drafts.start_call(ctx.db, ctx.actor, slot, day, today=today, now=ctx.now, any_time=any_time)
+    return await _keep_action(ctx, spec)
 
 
 DRAFT_CALL = Tool(
