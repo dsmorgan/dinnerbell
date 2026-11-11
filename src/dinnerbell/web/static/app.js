@@ -295,9 +295,10 @@
   });
 
   // A text box marked data-enter-sends, such as the Assistant page's message box, sends its form
-  // on Enter, as its submit button does (requestSubmit, so HTMX and the form's checks apply), and
-  // Shift+Enter starts a new line. Enter does nothing more while the box is empty or the form is
-  // sending (hx-disabled-elt disables the button). Enter that picks an input method's candidate
+  // on Enter, as its submit button does (requestSubmit, so HTMX and the form's checks apply).
+  // Shift+Enter starts a new line, and Enter with Ctrl, Cmd, or Alt does what it always did.
+  // Enter does nothing more while the box is empty or the form is sending (hx-disabled-elt
+  // disables the button). Enter that picks an input method's candidate
   // (isComposing, or key code 229 in Safari) stays the input method's. On a touchscreen there's
   // no Shift key to start a line with, so Enter starts one there and the button sends.
   var ENTER_SENDS = "data-enter-sends";
@@ -305,7 +306,10 @@
 
   document.addEventListener("keydown", function (event) {
     var field = event.target;
-    if (event.key !== "Enter" || event.shiftKey || event.altKey || event.isComposing || event.keyCode === 229) {
+    if (event.key !== "Enter" || event.shiftKey || event.altKey || event.ctrlKey || event.metaKey) {
+      return;
+    }
+    if (event.isComposing || event.keyCode === 229) {
       return;
     }
     if (!(field instanceof HTMLTextAreaElement) || !field.hasAttribute(ENTER_SENDS) || !field.form) {
