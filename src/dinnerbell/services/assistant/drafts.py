@@ -10,7 +10,8 @@ everything again, so a stale draft gets the service's own error and nothing chan
 
 A call action's draft (#251) comes from ``call_drafts``, which says what Confirm does and runs
 its use case; ``store_action`` stores it. So does a draft of the member's own data (#253), from
-``own_drafts``, and a coordinating draft (#252), from ``coordinating``.
+``own_drafts``, a coordinating draft (#252), from ``coordinating``, and a catalog edit or a
+meal-log draft (#254), from ``catalog_edits``.
 
 A catalog draft's Confirm opens the web import preview, which only adds: the import re-plans
 with ``add_only``, so an item that appeared meanwhile is left alone.
@@ -33,12 +34,15 @@ from dinnerbell.db.engine import write_transaction
 from dinnerbell.db.events import EventRepository
 from dinnerbell.db.meals import household_settings
 from dinnerbell.db.repositories import HouseholdRepository, MemberRepository
-from dinnerbell.domain.assistant_coordinating import with_people
+from dinnerbell.domain.assistant_catalog import NOT_SHOWN, held_value
+from dinnerbell.domain.assistant_coordinating import with_held, with_people
 from dinnerbell.domain.assistant_drafts import (
     CALL_ACTIONS,
+    CATALOG_AND_MEALS,
     COORDINATING,
     DRAFT_MINUTES,
     MAX_OPEN_DRAFTS,
+    NAMES_PEOPLE,
     OWN_DATA,
     CleanCatalog,
     Draft,
@@ -76,7 +80,7 @@ from dinnerbell.domain.offers import OfferPath, check_capacity, offer_time
 from dinnerbell.domain.schedule import slot_schedule
 from dinnerbell.services import calls, lifecycle, offers, picks
 from dinnerbell.services import catalog as catalog_service
-from dinnerbell.services.assistant import call_drafts, coordinating, own_drafts
+from dinnerbell.services.assistant import call_drafts, catalog_edits, coordinating, own_drafts
 from dinnerbell.services.assistant.acting import ToolRefusal, tool_actor
 from dinnerbell.services.assistant.call_drafts import ActionConfirmed, DraftSpec
 from dinnerbell.services.assistant.candidates import Labeler, as_proposer, find_candidates
@@ -133,18 +137,24 @@ FORMER_MEMBER = "a former member"
 
 
 def view(draft: Draft, names: Mapping[int, str] | None = None) -> DraftView:
-    """``draft`` for its member's card. A coordinating draft (#252) names people by ``names``,
-    the household's member IDs to their names: only its member sees the card, in a private
-    conversation, and it never goes to the model."""
-    if draft.kind not in COORDINATING:
+    """``draft`` for its member's card. A coordinating draft (#252), a catalog edit, or a meal-log
+    draft (#254) names people by ``names``, the household's member IDs to their names: only its
+    member sees the card, and it never goes to the model. A catalog edit's card also shows the
+    item's link, order link, and notes as they were, which the model never reads."""
+    if draft.kind not in NAMES_PEOPLE:
         return DraftView(id=draft.id, kind=draft.kind.value, title=draft.title, confirm_lines=draft.lines)
     known = names or {}
+    before = draft.payload.get("before") if draft.kind is DraftKind.ITEM_EDIT else None
+    shown = held_value(before if isinstance(before, Mapping) else {})
 
     def name(member_id: int) -> str:
         return known.get(member_id) or FORMER_MEMBER
 
-    lines = tuple(with_people(line, name) for line in draft.lines)
-    return DraftView(id=draft.id, kind=draft.kind.value, title=with_people(draft.title, name), confirm_lines=lines)
+    def card(text: str) -> str:
+        return with_held(with_people(text, name), shown)
+
+    lines = tuple(card(line) for line in draft.lines)
+    return DraftView(id=draft.id, kind=draft.kind.value, title=card(draft.title), confirm_lines=lines)
 
 
 async def names(db: AsyncSession, household_id: int) -> dict[int, str]:
@@ -154,11 +164,16 @@ async def names(db: AsyncSession, household_id: int) -> dict[int, str]:
 
 def summary(draft: Draft, label: str, labeler: Callable[[int], str] | None = None) -> str:
     """What a draft tool tells the model: the draft's ID and what Confirm does, not its payload.
-    A coordinating draft names people by ``labeler``, the conversation's labels."""
+    A draft that names people names them by ``labeler``, the conversation's labels, and a held
+    value reads as not shown."""
     title, lines = draft.title, draft.lines
-    if draft.kind in COORDINATING:
+    if draft.kind in NAMES_PEOPLE:
         to_label = labeler or (lambda _: "a member")
-        title, lines = with_people(title, to_label), tuple(with_people(line, to_label) for line in lines)
+
+        def told(text: str) -> str:
+            return with_held(with_people(text, to_label), lambda _: NOT_SHOWN)
+
+        title, lines = told(title), tuple(told(line) for line in lines)
     return (
         f"Draft {draft.id} is waiting for {label} to confirm: {title}. Confirm will: {' '.join(lines)} "
         f"Dinnerbell shows the member Confirm and Cancel on it for {DRAFT_MINUTES} minutes. "
@@ -391,7 +406,7 @@ async def waiting(db: AsyncSession, member: Member, key: str, now: datetime) -> 
     """``member``'s drafts in the conversation ``key`` that still wait for Confirm, oldest first,
     for an entry point that draws the conversation again."""
     found = await AssistantRepository(db).drafts_waiting(member.household_id, member.id, key, now)
-    known = await names(db, member.household_id) if any(d.kind in COORDINATING for d in found) else {}
+    known = await names(db, member.household_id) if any(d.kind in NAMES_PEOPLE for d in found) else {}
     return [view(d, known) for d in found]
 
 
@@ -500,6 +515,13 @@ async def confirm_draft(
             await _use(db, draft, actor, now)
 
         return await coordinating.confirm(db, actor, draft, today=today, now=now, use=use_it)
+    if draft.kind in CATALOG_AND_MEALS:
+        today, _ = await _today(db, actor.household_id, now)
+
+        async def use_now() -> None:
+            await _use(db, draft, actor, now)
+
+        return await catalog_edits.confirm(db, actor, draft, today=today, now=now, use=use_now)
     return await _confirm_catalog(db, actor, draft, now)
 
 

@@ -235,6 +235,9 @@ class TestAssistantOn:
             "draft_hand_off",
             "draft_mark_done",
             "draft_call_off",
+            "draft_catalog_edit",
+            "look_up_my_meals",
+            "draft_meal",
         ]
         for tool in request["tools"]:
             assert tool["strict"] is True

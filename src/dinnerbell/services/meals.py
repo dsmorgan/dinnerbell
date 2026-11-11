@@ -14,6 +14,7 @@ just changed.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import date, datetime
 
@@ -44,6 +45,9 @@ from dinnerbell.domain.members import Member
 from dinnerbell.domain.pages import Page, page_of
 from dinnerbell.services.common import audit, require_member
 from dinnerbell.services.errors import Forbidden, NotFound
+
+Expect = Callable[[], Awaitable[None]]
+ONLY_YOURS = "You can change only meals you logged. Ask the admin to fix this one."
 
 MEALS_PER_PAGE = 20
 """History's page size: a few weeks of dinners, short enough to scroll on a phone."""
@@ -165,7 +169,7 @@ async def log_meal(db: AsyncSession, actor: Member, data: MealInput, *, today: d
 async def _changeable(db: AsyncSession, actor: Member, meal_id: int) -> MealLog:
     meal = await get_meal(db, actor, meal_id)
     if not can_change(actor, meal):
-        raise Forbidden("You can change only meals you logged. Ask the admin to fix this one.")
+        raise Forbidden(ONLY_YOURS)
     return meal
 
 
@@ -199,12 +203,24 @@ async def call_place(db: AsyncSession, actor: Member, meal: MealLog) -> CallPlac
 
 
 async def update_meal(
-    db: AsyncSession, actor: Member, meal_id: int, data: MealInput, *, today: date, now: datetime, shown: str = ""
+    db: AsyncSession,
+    actor: Member,
+    meal_id: int,
+    data: MealInput,
+    *,
+    today: date,
+    now: datetime,
+    shown: str = "",
+    expect: Expect | None = None,
 ) -> MealLog:
     """Save an edit. ``shown`` is the ``form_stamp`` the form showed. It holds the write lock from
     reading the meal to saving, the one lock ``locked_event`` also takes first, so a correction of
-    the place (#220) can't commit between the check and the write."""
+    the place (#220) can't commit between the check and the write. ``expect`` runs first under
+    the lock, and its writes commit with the edit or roll back with a refusal: the assistant's
+    **Confirm** uses its draft there (#254)."""
     async with write_transaction(db):
+        if expect is not None:
+            await expect()
         existing = await _changeable(db, actor, meal_id)
         _check_shown(existing, shown)
         if data.item_id != existing.item_id and await _call_of(db, existing) is not None:
@@ -230,9 +246,13 @@ async def update_meal(
     return await get_meal(db, actor, meal_id)
 
 
-async def delete_meal(db: AsyncSession, actor: Member, meal_id: int, *, now: datetime, shown: str = "") -> None:
-    """Delete a meal. ``shown`` and the lock are as in ``update_meal``."""
+async def delete_meal(
+    db: AsyncSession, actor: Member, meal_id: int, *, now: datetime, shown: str = "", expect: Expect | None = None
+) -> None:
+    """Delete a meal. ``shown``, ``expect``, and the lock are as in ``update_meal``."""
     async with write_transaction(db):
+        if expect is not None:
+            await expect()
         meal = await _changeable(db, actor, meal_id)
         _check_shown(meal, shown)
         await MealLogRepository(db).delete(actor.household_id, meal_id)

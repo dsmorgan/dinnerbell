@@ -2658,3 +2658,34 @@ def test_0036_lets_drafts_hold_coordinating_keeps_every_row_and_never_reuses_an_
     _downgrade_to(settings, "0035_assistant_own_data")
     sql, down = _drafts(settings)
     assert "AUTOINCREMENT" in sql and "'decide'" not in sql and down == after
+
+
+def test_0037_lets_drafts_hold_catalog_edits_and_meals_keeps_every_row_and_never_reuses_an_id(
+    settings: Settings,
+) -> None:
+    """Up widens ``assistant_draft.kind`` to catalog edits and the meal log (#254), keeping every
+    draft, coordinating included, and the AUTOINCREMENT high-water mark. Down deletes the new
+    kinds' drafts, which the old check can't store, and keeps the rest."""
+    _upgrade_to(settings, "0036_assistant_coordinating")
+    _populate_calls(settings)
+    _execute(settings, DRAFT_INSERT.replace(":kind", "'catalog'"), DRAFT_INSERT.replace(":kind", "'decide'"))
+    sql, before = _drafts(settings)
+    assert before and "'item_edit'" not in sql
+    with pytest.raises(IntegrityError):
+        _execute(settings, DRAFT_INSERT.replace(":kind", "'item_edit'"))
+    newest = max(int(str(row[0])) for row in before)
+    _execute(settings, f"DELETE FROM assistant_draft WHERE id = {newest}")  # noqa: S608 - an integer
+
+    _upgrade_to(settings, "0037_assistant_catalog_edits")
+    sql, after = _drafts(settings)
+    assert "AUTOINCREMENT" in sql and after == before[:-1]
+    for kind in ("item_edit", "item_active", "meal_log", "meal_edit", "meal_delete"):
+        _execute(settings, DRAFT_INSERT.replace(":kind", f"'{kind}'"))
+    _, added = _drafts(settings)
+    assert min(int(str(row[0])) for row in added[len(after) :]) == newest + 1
+    with pytest.raises(IntegrityError):
+        _execute(settings, DRAFT_INSERT.replace(":kind", "'item'"))
+
+    _downgrade_to(settings, "0036_assistant_coordinating")
+    sql, down = _drafts(settings)
+    assert "AUTOINCREMENT" in sql and "'item_edit'" not in sql and down == after
