@@ -39,8 +39,10 @@ When the household's assistant is on ([The assistant](configuration.md#the-assis
 
 1. Select **Assistant**.
 2. In **Message**, ask in plain words, such as "something we haven't had in a month" or "tacos at 7, I'll cook," and select **Send**. The reply appears under your message.
-3. When the assistant drafts something, such as a proposal, an offer, or new catalog items, a card shows what **Confirm** will do. Select **Confirm** to do it, or **Cancel** to drop it. Nothing changes until you confirm.
-   - A proposal or offer runs through the same checks as the form on **Today**, so a draft that no longer fits shows why on its card, and nothing changes.
+3. When the assistant drafts something, a card shows what **Confirm** will do. Select **Confirm** to do it, or **Cancel** to drop it. Nothing changes until you confirm. The assistant can draft:
+   - A proposal, an offer of a catalog item, or new catalog items.
+   - What you'd do on a call yourself: answer in, out, or maybe, join late, vote or take back a vote, suggest a catalog item, take or give up a role, or take back an offer you made. Ask for several at once, such as "I'm in, put me down for pickup, and vote for the noodle place", and you get a card for each.
+   - Each one runs through the same checks as the buttons on **Today**, so a draft that no longer fits shows why on its card, and nothing changes.
    - New catalog items open the import preview, which only adds: items the catalog has stay as they are. Select **Apply** there to add them.
    - A draft lasts 30 minutes, and only you can confirm it, once.
 

@@ -10,8 +10,10 @@ A tool returns text for the model: data, never instructions (the system prompt s
 tool marked ``private_only`` is offered only in a private conversation (the web page, a DM).
 The first build's tools work in any conversation: look up catalog items, find candidates, and
 draft a proposal, an offer, or catalog items, from a catalog file or from a menu link
-(``menu_links``). So does looking up the meal log (``meal_history``, #264). A draft changes
-nothing until its member confirms it (``drafts.confirm_draft``).
+(``menu_links``). So does looking up the meal log (``meal_history``, #264). The call actions
+(#251, ``call_drafts``) do too: look up a call, and draft an answer, a vote, a suggestion, a
+role, or taking back an offer. A draft changes nothing until its member confirms it
+(``drafts.confirm_draft``).
 """
 
 from __future__ import annotations
@@ -30,17 +32,19 @@ from dinnerbell.db.repositories import HouseholdRepository
 from dinnerbell.domain.assistant import Pseudonyms, web_key
 from dinnerbell.domain.assistant_drafts import Narrowing
 from dinnerbell.domain.catalog import MODE_ORDER, InvalidCatalogInput, ItemKind, Meal, Mode, name_key
-from dinnerbell.domain.events import EventRuleViolation, InvalidResponse
+from dinnerbell.domain.events import EventRuleViolation, EventState, InvalidResponse, RoleOffer, Status
 from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.members import Member
 from dinnerbell.domain.offers import DEFAULT_CAPACITY
 from dinnerbell.services import catalog as catalog_service
-from dinnerbell.services.assistant import drafts
+from dinnerbell.services.assistant import call_drafts, drafts
 from dinnerbell.services.assistant.acting import ToolRefusal, tool_actor
+from dinnerbell.services.assistant.call_drafts import DraftSpec
 from dinnerbell.services.assistant.candidates import CallRef, call_basics, find_candidates, resolve_call
 from dinnerbell.services.assistant.drafts import DraftView, OfferRequest
 from dinnerbell.services.assistant.meal_history import HistoryQuery, Order, eaten_items
 from dinnerbell.services.assistant.menu_links import NOT_HERE, LinkCalls, draft_from_link
+from dinnerbell.services.call_context import item_info, load
 from dinnerbell.services.errors import Forbidden, NotFound
 from dinnerbell.services.variety import household_today
 
@@ -601,6 +605,241 @@ DRAFT_CATALOG_FROM_LINK = Tool(
 )
 
 
+# Call actions (#251) -----------------------------------------------------------------------------
+
+
+def _flag(raw: Mapping[str, Any], name: str) -> bool:
+    value = raw.get(name)
+    if not isinstance(value, bool):
+        raise ToolInputError(f"{name} is true or false.")
+    return value
+
+
+ANSWER_WORDS = {"in": Status.IN, "out": Status.OUT, "maybe": Status.MAYBE}
+ROLE_NAMES = {"cook": RoleOffer.COOK, "pickup": RoleOffer.PICKUP, "order": RoleOffer.ORDER}
+
+
+async def look_up_call_tool(ctx: ToolContext, raw: Mapping[str, Any]) -> str:
+    """A call's basics, the member's own answer, and, once voting opens, its picks with whether
+    the member votes for each. Nobody else's answer, vote, or name, and no tallies."""
+    _fields(raw, "slot", "day")
+    today = await _today(ctx)
+    loaded = await load(ctx.db, await _call(ctx, raw, today))
+    mine = loaded.response_of(ctx.actor.id)
+    suggested = [
+        loaded.items[s.item_id].name
+        for s in loaded.suggestions
+        if s.member_id == ctx.actor.id and s.item_id is not None and s.item_id in loaded.items
+    ]
+    you = {
+        "answer": mine.status.value if mine is not None else "none",
+        "late": bool(mine and mine.late),
+        "roles": [name for name, role in ROLE_NAMES.items() if mine is not None and role in mine.offers],
+        "suggestions": suggested,
+    }
+    found: dict[str, Any] = {"call": call_basics(loaded, today), "you": you}
+    if loaded.event.state not in {EventState.SCHEDULED, EventState.COLLECTING}:
+        found["picks"] = [
+            {
+                "name": item_info(loaded, p).name,
+                "mode": p.mode.value,
+                "you_voted": ctx.actor.id in loaded.votes.get(p.id, []),
+            }
+            for p in loaded.picks
+        ]
+    return json.dumps(found, ensure_ascii=False)
+
+
+LOOK_UP_CALL = Tool(
+    name="look_up_call",
+    description=(
+        "Look up a call: its meal, day, state, meal time, and the roles someone offered; the member's own answer "
+        "(in, out, maybe, or none), whether they joined late, the roles they offered, and their suggestions; and, "
+        "once voting opens, its picks by name and mode, with whether the member votes for each. Call this before "
+        "draft_vote, and whenever the member asks where they stand. It never says how anyone else answered or voted."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": dict(CALL_PROPERTIES),
+        "required": ["slot", "day"],
+        "additionalProperties": False,
+    },
+    run=look_up_call_tool,
+)
+
+
+async def _keep_action(ctx: ToolContext, spec: DraftSpec) -> str:
+    return _keep(ctx, await drafts.store_action(ctx.db, ctx.actor, ctx.session.key, spec, now=ctx.now))
+
+
+async def draft_answer_tool(ctx: ToolContext, raw: Mapping[str, Any]) -> str:
+    _fields(raw, "slot", "day", "answer")
+    today = await _today(ctx)
+    event = await _call(ctx, raw, today)
+    status = ANSWER_WORDS[_enum(raw, "answer", list(ANSWER_WORDS))]
+    return await _keep_action(ctx, await call_drafts.answer(ctx.db, ctx.actor, event, status, today=today, now=ctx.now))
+
+
+DRAFT_ANSWER = Tool(
+    name="draft_answer",
+    description=(
+        "Draft the member's answer to a call: in, out, or maybe, while answers are open. While the call is voting, "
+        "in means joining late; out and maybe aren't possible then. Dinnerbell shows the member the draft with "
+        "Confirm and Cancel, and nothing changes until they confirm. Returns the draft's ID and what Confirm does."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            **CALL_PROPERTIES,
+            "answer": {"type": "string", "enum": list(ANSWER_WORDS), "description": "The member's answer."},
+        },
+        "required": ["slot", "day", "answer"],
+        "additionalProperties": False,
+    },
+    run=draft_answer_tool,
+)
+
+
+async def draft_vote_tool(ctx: ToolContext, raw: Mapping[str, Any]) -> str:
+    _fields(raw, "slot", "day", "name", "mode", "vote")
+    today = await _today(ctx)
+    event = await _call(ctx, raw, today)
+    mode = _enum(raw, "mode", ["", *(m.value for m in MODE_ORDER)])
+    spec = await call_drafts.vote(
+        ctx.db,
+        ctx.actor,
+        event,
+        _text(raw, "name"),
+        Mode(mode) if mode else None,
+        voting=_flag(raw, "vote"),
+        today=today,
+        now=ctx.now,
+    )
+    return await _keep_action(ctx, spec)
+
+
+DRAFT_VOTE = Tool(
+    name="draft_vote",
+    description=(
+        "Draft the member's vote for one of a voting call's picks, or taking their vote back. Use a pick's name and "
+        "mode exactly as look_up_call returned them. Someone who isn't in joins late first; the draft says so. "
+        "Dinnerbell shows the member the draft with Confirm and Cancel, and nothing changes until they confirm."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            **CALL_PROPERTIES,
+            "name": {"type": "string", "description": "The pick's name, as look_up_call returned it."},
+            "mode": {
+                "type": "string",
+                "enum": ["", *(m.value for m in MODE_ORDER)],
+                "description": "The pick's mode, or an empty string when only one pick has that name.",
+            },
+            "vote": {"type": "boolean", "description": "true to vote for it, false to take the vote back."},
+        },
+        "required": ["slot", "day", "name", "mode", "vote"],
+        "additionalProperties": False,
+    },
+    run=draft_vote_tool,
+)
+
+
+async def draft_suggestion_tool(ctx: ToolContext, raw: Mapping[str, Any]) -> str:
+    _fields(raw, "slot", "day", "name")
+    today = await _today(ctx)
+    event = await _call(ctx, raw, today)
+    spec = await call_drafts.suggestion(ctx.db, ctx.actor, event, _text(raw, "name"), today=today, now=ctx.now)
+    return await _keep_action(ctx, spec)
+
+
+DRAFT_SUGGESTION = Tool(
+    name="draft_suggestion",
+    description=(
+        "Draft a suggestion for a call while answers are open: a catalog item the member would like, by its name "
+        "exactly as look_up_catalog_items returned it. A member suggests up to 3. Dinnerbell shows the member the "
+        "draft with Confirm and Cancel, and nothing changes until they confirm."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {**CALL_PROPERTIES, "name": {"type": "string", "description": "The catalog item's name."}},
+        "required": ["slot", "day", "name"],
+        "additionalProperties": False,
+    },
+    run=draft_suggestion_tool,
+)
+
+
+async def draft_role_tool(ctx: ToolContext, raw: Mapping[str, Any]) -> str:
+    _fields(raw, "slot", "day", "role", "offer")
+    today = await _today(ctx)
+    event = await _call(ctx, raw, today)
+    chosen = ROLE_NAMES[_enum(raw, "role", list(ROLE_NAMES))]
+    spec = await call_drafts.role(
+        ctx.db, ctx.actor, event, chosen, offered=_flag(raw, "offer"), today=today, now=ctx.now
+    )
+    return await _keep_action(ctx, spec)
+
+
+DRAFT_ROLE = Tool(
+    name="draft_role",
+    description=(
+        'Draft the member taking a role on a call, such as "put me down for pickup", or giving one up: cook, '
+        "pickup, or order. Taking one counts them in. While the call is voting, someone who isn't in joins late "
+        "first; the draft says so. Dinnerbell shows the member the draft with Confirm and Cancel, and nothing "
+        "changes until they confirm."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            **CALL_PROPERTIES,
+            "role": {"type": "string", "enum": list(ROLE_NAMES), "description": "The role."},
+            "offer": {"type": "boolean", "description": "true to take the role, false to give it up."},
+        },
+        "required": ["slot", "day", "role", "offer"],
+        "additionalProperties": False,
+    },
+    run=draft_role_tool,
+)
+
+
+async def draft_take_back_offer_tool(ctx: ToolContext, raw: Mapping[str, Any]) -> str:
+    _fields(raw, "slot", "day")
+    today = await _today(ctx)
+    slot = _enum(raw, "slot", CALL_SLOTS)
+    offer = await call_drafts.own_offer(
+        ctx.db, ctx.actor, Slot(slot) if slot else None, _day(raw, "day", today, required=False), today=today
+    )
+    return await _keep_action(ctx, await call_drafts.offer_off(ctx.db, ctx.actor, offer, today=today))
+
+
+DRAFT_TAKE_BACK_OFFER = Tool(
+    name="draft_take_back_offer",
+    description=(
+        "Draft taking back an offer the member made, which calls it off. Only the member's own offers. With "
+        "several open, it says which and you ask. Dinnerbell shows the member the draft with Confirm and Cancel, "
+        "and nothing changes until they confirm."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "slot": {
+                "type": "string",
+                "enum": CALL_SLOTS,
+                "description": "The offer's meal, or an empty string for the member's only open offer.",
+            },
+            "day": {
+                "type": "string",
+                "description": "The offer's day: today, tomorrow, or YYYY-MM-DD. An empty string for today with a "
+                "slot, or for any day without one.",
+            },
+        },
+        "required": ["slot", "day"],
+        "additionalProperties": False,
+    },
+    run=draft_take_back_offer_tool,
+)
+
+
 TOOLS: tuple[Tool, ...] = (
     LOOK_UP_CATALOG_ITEMS,
     LOOK_UP_HISTORY,
@@ -609,6 +848,12 @@ TOOLS: tuple[Tool, ...] = (
     DRAFT_OFFER,
     DRAFT_CATALOG_ITEMS,
     DRAFT_CATALOG_FROM_LINK,
+    LOOK_UP_CALL,
+    DRAFT_ANSWER,
+    DRAFT_VOTE,
+    DRAFT_SUGGESTION,
+    DRAFT_ROLE,
+    DRAFT_TAKE_BACK_OFFER,
 )
 """Every tool, in the order requests list them. Later tools come in follow-up issues."""
 

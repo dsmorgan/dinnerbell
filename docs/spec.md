@@ -370,12 +370,30 @@ Only private-only tools send the member's own personal data, and only when the m
 
 - **Look up meal history** (#264), in any conversation: the meal log counted per catalog item, with each item's name, kind, cuisines, tags, whether it's still in the catalog, times eaten, and last day eaten, narrowed by name, tag, kind, and dates (both ends included), most often or most recently eaten first, at most 25 items. Each item carries its household hint (FR-49) from the code Catalog uses, under the same thresholds, or none. It never returns who ate, cooked, ordered, picked up, or logged a meal, pseudonyms, anyone's rating or issues, notes, or links.
 
+**Call action tools** (#251), in any conversation, each acting as the member whose message is being answered and checking now what its service would refuse, with the service's own words:
+
+- **Look up a call:** its basics (as **Data sent**), the member's own answer, whether they joined late, their role offers and suggestions, and, once voting opens, its picks by name and mode, with whether the member votes for each. Never anyone else's answer or vote, or a tally.
+- **Draft an answer:** in, out, or maybe while answers are open (`respond`); in while voting is joining late (`join_late`).
+- **Draft a vote** for one of the call's picks, or taking it back (`vote`, `unvote`). Someone who isn't in joins late first, as the button that asks them does.
+- **Draft a suggestion** of an active catalog item while answers are open (`save_details`), keeping the member's eating times, note, and other suggestions. A suggestion has no filter: ranking weighs it, and the vote's filters still apply.
+- **Draft a role**, cook, pickup, or order, or giving one up (`offer_role`). While voting, someone who isn't in joins late first.
+- **Draft taking back an offer**, the member's own only (`cancel_call`, as its offerer).
+
+A message that asks for several changes gets a draft for each, and each confirms on its own, in any order.
+
 The call is the one the member names, then the thread's call, then the only open one. With several open, the assistant asks.
 
 **Drafts.** Dinnerbell stores a draft for 30 minutes, for its member only, and confirms it at most once. The draft says what **Confirm** does:
 
 - **A proposal:** join late, or volunteer for the role the mode needs.
 - **An offer:** join a collecting or voting call as a pick, replace a scheduled call (a cooking offer), keep the day's call from opening (a cooking offer with no call yet), or stand alone.
+- **An answer:** in, out, or a maybe, or join late, with whose votes count; an In turns on the member's usual offers, and an Out withdraws their role offers and ends their coordinating.
+- **A vote:** add it or take it back, joining late first, and whether a late joiner's vote counts yet.
+- **A suggestion:** add it, keeping the rest of the member's Details, and count them in if they hadn't answered.
+- **A role:** take it, counting them in, joining late first while voting; or give it up. A late join commits first, so if the call closes before the role, the member stays joined and the card says why.
+- **Taking back an offer:** call it off, and tell everyone who joined it.
+
+**Confirm** on a call action runs on the call and run it was drafted against: a draft for an earlier run of a call gets the service's stale-call refusal.
 
 **Confirm** calls the same service as the form, which checks everything again, so a stale draft gets the service's usual error and nothing changes. In a channel thread, drafts and replies about them go only to their member, as ephemeral messages in the thread. Catalog drafts open the web import preview, from Slack too, and an import from a draft only adds, even if a matching item appeared meanwhile. In Slack, **Confirm** gives a link to that preview, which only the draft's member can open, signed in on the web; a confirmed catalog draft is kept for 24 hours for its import link, and the link works that long. Once a new place is imported, a member can ask again to propose it.
 
@@ -696,7 +714,7 @@ Every table carries `household_id`. Timestamps are UTC; the household time zone 
 | audit | actor, action, target, payload, created_at |
 | assistant_usage | member (nullable: kept after a member is deleted), model, month (the household's calendar month, such as 2026-11), input, output, cache read, and cache write tokens, cost_micros (micro-dollars), state (reserved, settled): one row per model call, for the cost cap (6.14) |
 | assistant_conversation | key (`web:<member>` or `slack:<channel>:<thread_ts>`, unique), private, owner member (set only when private), pseudonyms (JSON: member ID to number), transcript (JSON, in pseudonym form), last_message_at |
-| assistant_draft | member, conversation key, kind (proposal, offer, catalog), payload (JSON: what the service needs), event and run (the call it was made against, where there is one; no foreign key), title and lines (what **Confirm** does), created_at, expires_at (30 minutes later), used_at (set by Confirm or Cancel): deleted once expired (6.14) |
+| assistant_draft | member, conversation key, kind (proposal, offer, catalog, and the call actions: answer, vote, suggestion, role, offer_off, guest, guest_answer, call), payload (JSON: what the service needs), event and run (the call it was made against, where there is one; no foreign key), title and lines (what **Confirm** does), created_at, expires_at (30 minutes later), used_at (set by Confirm or Cancel): deleted once expired (6.14) |
 
 ### 13.4 Channel interface
 

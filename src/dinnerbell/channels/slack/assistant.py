@@ -83,6 +83,7 @@ from dinnerbell.domain.members import Member
 from dinnerbell.domain.notifications import MessageRef, PermanentDeliveryError
 from dinnerbell.logs import member_id_var
 from dinnerbell.services import activity, outbox, slack_members
+from dinnerbell.services.assistant.call_drafts import ActionConfirmed
 from dinnerbell.services.assistant.conversation import (
     FAILED,
     Assistant,
@@ -344,6 +345,8 @@ def confirmed_text(done: Confirmed) -> str:
     become a link."""
     if isinstance(done, OfferConfirmed):
         return safe_reply(posted_offer_reply(done.posted))
+    if isinstance(done, ActionConfirmed):
+        return safe_reply(done.text)
     return PROPOSED
 
 

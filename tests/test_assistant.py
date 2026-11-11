@@ -214,6 +214,12 @@ class TestAssistantOn:
             "draft_offer",
             "draft_catalog_items",
             "draft_catalog_from_link",
+            "look_up_call",
+            "draft_answer",
+            "draft_vote",
+            "draft_suggestion",
+            "draft_role",
+            "draft_take_back_offer",
         ]
         for tool in request["tools"]:
             assert tool["strict"] is True

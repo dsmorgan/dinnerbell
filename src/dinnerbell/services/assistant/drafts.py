@@ -8,6 +8,9 @@ draft and runs the same service as the form, as ``tool_actor(member)``, in one t
 a double Confirm can't post twice and a refusal leaves the draft as it was. The service checks
 everything again, so a stale draft gets the service's own error and nothing changes.
 
+A call action's draft (#251) comes from ``call_drafts``, which says what Confirm does and runs
+its use case; ``store_action`` stores it.
+
 A catalog draft's Confirm opens the web import preview, which only adds: the import re-plans
 with ``add_only``, so an item that appeared meanwhile is left alone.
 """
@@ -29,6 +32,7 @@ from dinnerbell.db.events import EventRepository
 from dinnerbell.db.meals import household_settings
 from dinnerbell.db.repositories import HouseholdRepository
 from dinnerbell.domain.assistant_drafts import (
+    CALL_ACTIONS,
     DRAFT_MINUTES,
     MAX_OPEN_DRAFTS,
     CleanCatalog,
@@ -67,7 +71,9 @@ from dinnerbell.domain.offers import OfferPath, check_capacity, offer_time
 from dinnerbell.domain.schedule import slot_schedule
 from dinnerbell.services import calls, lifecycle, offers, picks
 from dinnerbell.services import catalog as catalog_service
+from dinnerbell.services.assistant import call_drafts
 from dinnerbell.services.assistant.acting import ToolRefusal, tool_actor
+from dinnerbell.services.assistant.call_drafts import ActionConfirmed, DraftSpec
 from dinnerbell.services.assistant.candidates import Labeler, as_proposer, find_candidates
 from dinnerbell.services.assistant.runtime import AssistantConfig, available
 from dinnerbell.services.call_context import load
@@ -306,6 +312,12 @@ async def draft_offer(db: AsyncSession, actor: Member, key: str, request: OfferR
     return await _store(db, actor, key, DraftKind.OFFER, payload, title, lines, event=call, now=now)
 
 
+async def store_action(db: AsyncSession, actor: Member, key: str, spec: DraftSpec, *, now: datetime) -> Draft:
+    """Store a call action ``call_drafts`` drafted and checked, against its call."""
+    payload = dict(spec.payload)
+    return await _store(db, actor, key, spec.kind, payload, spec.title, spec.lines, event=spec.event, now=now)
+
+
 async def draft_catalog_items(db: AsyncSession, actor: Member, key: str, text: str, *, now: datetime) -> Draft:
     """New catalog items from ``text``, in the catalog file format. Entries naming an item the
     catalog has are dropped and listed, and ``cooks`` and ``active`` are stripped; the draft
@@ -379,7 +391,7 @@ class CatalogReady:
     add_only: bool = True
 
 
-Confirmed = ProposalConfirmed | OfferConfirmed | CatalogReady
+Confirmed = ProposalConfirmed | OfferConfirmed | CatalogReady | ActionConfirmed
 
 
 async def _mine(db: AsyncSession, member: Member, draft_id: int) -> Draft:
@@ -441,7 +453,18 @@ async def confirm_draft(
         return await _confirm_proposal(db, actor, draft, now)
     if draft.kind is DraftKind.OFFER:
         return await _confirm_offer(db, actor, draft, now)
+    if draft.kind in CALL_ACTIONS:
+        return await _confirm_action(db, actor, draft, now)
     return await _confirm_catalog(db, actor, draft, now)
+
+
+async def _confirm_action(db: AsyncSession, actor: Member, draft: Draft, now: datetime) -> ActionConfirmed:
+    today, _ = await _today(db, actor.household_id, now)
+    async with write_transaction(db):
+        await _use(db, draft, actor, now)
+        # The use case locks the call in this transaction, then commits the draft's use with its
+        # change, or rolls both back (``call_drafts.confirm``).
+        return await call_drafts.confirm(db, actor, draft, today=today, now=now)
 
 
 async def _confirm_proposal(db: AsyncSession, actor: Member, draft: Draft, now: datetime) -> ProposalConfirmed:
