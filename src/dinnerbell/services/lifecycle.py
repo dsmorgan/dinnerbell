@@ -812,6 +812,8 @@ async def decide(
         winner, tie, tie_by = found, chosen.tie, chosen.by
     item = ctx.items[winner.item_id] if winner.item_id is not None else await catalog_free_text(db, ctx, winner, now)
     unasked: frozenset[int] = frozenset()
+    locked_mode = winner.mode
+    offered: dict[AssignmentRole, tuple[int, ...]] = {}
     if named is not None and locked is not None:
         mode, named_holders = named_roles(ctx, item, winner.mode, named)
         if mode is not winner.mode:
@@ -865,6 +867,8 @@ async def decide(
         "roles_pending": asking,
     }
     await audit(db, event.household_id, actor if locked else None, "event.decided", _target(event), payload, now)
+    if named is not None and locked is not None and actor is not None:  # as Assign roles writes them
+        await _roles_chosen(db, decided, actor, item, roles, locked_mode, offered, now=now)
 
 
 def _days_since(event: Event, eaten: dict[int, date], proposal: Proposal) -> int | None:
@@ -872,6 +876,51 @@ def _days_since(event: Event, eaten: dict[int, date], proposal: Proposal) -> int
     if it never has (FR-16's least recently eaten rule)."""
     last = eaten.get(proposal.item_id) if proposal.item_id is not None else None
     return None if last is None else max((event.day - last).days, 0)
+
+
+async def _roles_chosen(
+    db: AsyncSession,
+    event: Event,
+    actor: Member,
+    item: CatalogItem,
+    roles: dict[AssignmentRole, int],
+    was: Mode,
+    offered: dict[AssignmentRole, tuple[int, ...]],
+    *,
+    now: datetime,
+) -> None:
+    """The audit row and log line ``coordinator.choose_roles`` writes, for roles chosen with a
+    lock (#252): ``event.roles_assigned`` and ``assign_roles``, with the way it switched from."""
+    mode = event.decided_mode or was
+    lead_role = LEAD_ROLE[mode]
+    lead = roles.get(lead_role)
+    payload: dict[str, object] = {
+        "role": lead_role.value,
+        "member_id": lead,
+        "mode": mode.value,
+        "switched_from": was.value if mode is not was else None,
+        "volunteered": lead in offered.get(lead_role, ()),
+        "assignments": {role.value: who for role, who in roles.items() if role in WORK_ROLES},
+        "dropped": [],
+    }
+    await audit(db, event.household_id, actor, "event.roles_assigned", _target(event), payload, now)
+    ctx = await load(db, event)
+    lead_member = ctx.members.get(lead) if lead is not None else None
+    activity.action(
+        db,
+        "assign_roles",
+        event,
+        actor,
+        role=lead_role.value,
+        to_member_id=lead,
+        to_member=lead_member.display_name if lead_member is not None else None,
+        pickup_member_id=roles.get(AssignmentRole.PICKUP),
+        switched=mode is not was,
+        volunteered=lead in offered.get(lead_role, ()),
+        item=item,
+        item_id=item.id,
+        mode=mode,
+    )
 
 
 async def _announce_decision(

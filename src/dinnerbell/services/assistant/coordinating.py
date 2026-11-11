@@ -198,14 +198,23 @@ def _can_do(ctx: CallContext, item: CatalogItem, mode: Mode, who: int, label: st
     check_assignee(ctx, item, mode, who)
 
 
-def _named(mode: Mode, lead: int | None, pickup: int | None) -> dict[AssignmentRole, str]:
+A_GUEST = "A guest"
+"""How a card and the model both read a guest with a role: guests have no label (ADR 0009)."""
+
+
+def _named(ctx: CallContext, mode: Mode, lead: int | None, pickup: int | None) -> dict[AssignmentRole, str]:
     """Who does each role a card names, as ``person`` marks: the card shows their names, and the
-    model their labels."""
+    model their labels. A guest can offer a role and be its first volunteer, as a switch of way
+    can give one: a guest reads as ``A_GUEST`` on both, never by name or label."""
+
+    def who(member_id: int) -> str:
+        return A_GUEST if ctx.is_guest(member_id) else person(member_id)
+
     named: dict[AssignmentRole, str] = {}
     if lead is not None:
-        named[LEAD_ROLE[mode]] = person(lead)
+        named[LEAD_ROLE[mode]] = who(lead)
     if pickup is not None and mode is Mode.PICKUP:
-        named[AssignmentRole.PICKUP] = person(pickup)
+        named[AssignmentRole.PICKUP] = who(pickup)
     return named
 
 
@@ -341,7 +350,7 @@ async def decide(
                 _can_do(ctx, item, chosen, who, label(who))
         lifecycle.named_roles(ctx, item, pick.mode, NamedRoles(chosen, lead, pickup))  # as the lock checks
         way = chosen if chosen is not pick.mode else None
-        named = _named(chosen, lead, pickup)
+        named = _named(ctx, chosen, lead, pickup)
         payload |= {"way": way.value if way else None, "lead": lead, "pickup": pickup}
     lines = decide_lines(shown, pick.mode, tie=tie, slot=slot, when=when, way=way, roles=named)
     return DraftSpec(DraftKind.DECIDE, payload, decide_title(shown, pick.mode, tie=tie), lines, event)
@@ -514,7 +523,7 @@ async def plan(
     # The card names whoever the save gives a role, as Adjust works it out: someone named, or for a
     # switch of way the first volunteer for a role nobody was named for.
     final = switched[1] if switched else opened.mode
-    named = _named(final, changes.assignee_id, changes.pickup_id)
+    named = _named(ctx, final, changes.assignee_id, changes.pickup_id)
     change = PlanChange(meal_time=meal, place=place, way=switched, roles=named)
     when, slot = _words(event, today)
     lines = plan_lines(change, ahead=cc.before_the_meal(event, now))
