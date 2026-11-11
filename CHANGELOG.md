@@ -37,6 +37,10 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 - **Shuffle proposals is easier to find on the web** (#267). On Today and the call page, the button now sits under the proposal list, where Slack puts it, with its "N left" note, and has a border so it reads as a button, while **Vote** still stands out. Who sees it is unchanged: the coordinator and admins, while a shuffle is left.
 
+### Fixed
+
+- CI only: when the runner's apt mirror (`azure.archive.ubuntu.com`) can't be reached, the `compose` job installs podman-compose from `archive.ubuntu.com` and `security.ubuntu.com` instead (#281). On 2026-11-11 the Azure mirror failed for hours, and `publish`, which waits for `compose`, couldn't run.
+
 ### Upgrade notes
 
 - **Migration 0031** adds two empty tables, `assistant_usage` and `assistant_conversation`. It changes no existing row, and nothing reads the tables unless the assistant is configured. A downgrade to 0.15.0 drops them, with any usage and conversations in them.
