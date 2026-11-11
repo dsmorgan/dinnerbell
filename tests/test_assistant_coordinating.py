@@ -986,3 +986,20 @@ async def test_a_guest_given_a_role_by_a_switch_of_way_reads_as_a_guest(house: H
     looked = await tool(house, "look_up_coordinating", DINNER)
     assert json.loads(looked.content)["decision"]["roles"] == {"order": "Member 4"}
     assert not re.search(r"Member [5-9]", result.content + looked.content)
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_a_plain_lock_writes_no_roles_assigned_row_or_line(
+    house: House, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A lock with no roles named, as the web and Slack make it, writes the decision's audit row
+    alone: no ``event.roles_assigned`` row and no ``assign_roles`` line, which only roles chosen
+    with it write."""
+    event_id = await voting(house)
+    taqueria = next(p for p in (await house.context(event_id)).picks if p.item_id == house.items["Taqueria"].id)
+    caplog.set_level(logging.INFO)
+    caplog.clear()
+    await act(house, calls.lock, house["Kim"], event_id, taqueria.id)
+    actions = [a.action for a in await house.audits()]
+    assert "event.decided" in actions and "event.roles_assigned" not in actions
+    assert [line["msg"] for line in lines_logged(caplog) if line["msg"] == "assign_roles"] == []
