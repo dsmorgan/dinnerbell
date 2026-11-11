@@ -183,7 +183,7 @@ def pick_name(ctx: CallContext, pick: Proposal) -> str:
     return FREE_TEXT_PICK
 
 
-def _pick(ctx: CallContext, handle: int, name: str, mode: Mode | None) -> tuple[Proposal, str]:
+def find_pick(ctx: CallContext, handle: int, name: str, mode: Mode | None) -> tuple[Proposal, str]:
     """The pick ``handle`` names (``look_up_call``'s ``pick``), or else the one pick with that
     name and mode, with how the draft names it: the name the member gave for a free-text pick
     found by name, since those are their own words, and ``FREE_TEXT_PICK`` otherwise."""
@@ -226,7 +226,7 @@ async def vote(
     mine = ctx.response_of(actor.id)
     if event.state is not EventState.VOTING:
         check_can_vote(event, actor, mine)
-    pick, item = _pick(ctx, handle, name, mode)
+    pick, item = find_pick(ctx, handle, name, mode)
     voted = actor.id in ctx.votes.get(pick.id, [])
     seen, join_late = mine, False
     already_in = (mine is not None and mine.is_in) or (actor.active and is_coordinator(event, actor))

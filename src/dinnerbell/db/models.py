@@ -745,7 +745,8 @@ class AssistantDraftRow(Base):
     __table_args__ = (
         CheckConstraint(
             "kind IN ('proposal', 'offer', 'catalog', 'answer', 'vote', 'suggestion', 'role', 'offer_off', "
-            "'guest', 'guest_answer', 'call', 'preference', 'feedback', 'away')",
+            "'guest', 'guest_answer', 'call', 'preference', 'feedback', 'away', 'decide', 'shuffle', 'plan', "
+            "'hand_off', 'mark_done', 'call_off')",
             name="kind",
         ),
         Index("ix_assistant_draft_household_expires", "household_id", "expires_at"),

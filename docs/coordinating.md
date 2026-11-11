@@ -26,6 +26,10 @@ The pick is random, but reproducible: the same run of a call, with the same peop
 
 Guests don't coordinate. A guest can answer, offer to cook, pick up, or order, and be assigned those roles. See [What guests can't do](#what-guests-cant-do).
 
+## Coordinate through the assistant
+
+When the household's assistant is on, you can also ask it to coordinate a call for you, in a direct message with Dinnerbell or on the web's **Assistant** page, never in a channel thread: lock a pick, break a tie, shuffle the picks, change the plan as **Adjust** does, hand off coordinating, mark the meal done, or call the call off. Each request is a draft that says what **Confirm** does, and nothing changes until you confirm it. **Confirm** runs the same checks as the buttons in the tables below, so only the coordinator can, and an admin who isn't the coordinator is refused there too. See [The Assistant page](members.md#the-assistant-page).
+
 ## What you can do at each stage
 
 A call moves through three stages: answers, the vote, and the decision. The decision stays open after the meal until someone taps **Mark done**, or until two hours after the meal time, when Dinnerbell marks it done.

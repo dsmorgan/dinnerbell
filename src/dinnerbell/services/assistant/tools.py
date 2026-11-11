@@ -14,8 +14,10 @@ draft a proposal, an offer, or catalog items, from a catalog file or from a menu
 (#251, ``call_drafts``) do too: look up a call, and draft an answer, a vote, a suggestion, a
 role, taking back an offer, inviting a guest or answering for one, or starting a call. The
 member's own data (#253, ``own_drafts``) is private only: look up their levels on Preferences,
-away days, and feedback, and draft a level, feedback on a meal they ate, or away days. A draft
-changes nothing until its member confirms it (``drafts.confirm_draft``).
+away days, and feedback, and draft a level, feedback on a meal they ate, or away days. So is
+coordinating (#252, ``coordinating``): look up a call the member coordinates, and draft deciding
+a pick, a shuffle, a change of plan, a hand-off, marking done, or calling off. A draft changes
+nothing until its member confirms it (``drafts.confirm_draft``).
 """
 
 from __future__ import annotations
@@ -42,7 +44,7 @@ from dinnerbell.domain.members import InvalidMemberInput, Member
 from dinnerbell.domain.offers import DEFAULT_CAPACITY
 from dinnerbell.domain.preferences import LEVELS, InvalidPreference, Stance
 from dinnerbell.services import catalog as catalog_service
-from dinnerbell.services.assistant import call_drafts, drafts, own_drafts
+from dinnerbell.services.assistant import call_drafts, coordinating, drafts, own_drafts
 from dinnerbell.services.assistant.acting import ToolRefusal, tool_actor
 from dinnerbell.services.assistant.call_drafts import DraftSpec
 from dinnerbell.services.assistant.candidates import CallRef, call_basics, find_candidates, resolve_call
@@ -1211,6 +1213,265 @@ DRAFT_AWAY = Tool(
 )
 
 
+# Coordinating, in private only (#252) -----------------------------------------------------------
+
+COORDINATOR = "The call's coordinator's only; the service refuses anyone else. "
+WAYS = ["", *(m.value for m in MODE_ORDER)]
+WHO = "A label such as Member 2, from look_up_coordinating or the conversation, or an empty string."
+MAX_REASON = 280
+"""Twice a call-off reason's 140 characters: ``clean_cancel_note`` cuts it to those."""
+
+
+async def _coordinated(ctx: ToolContext, raw: Mapping[str, Any], today: date) -> Any:
+    slot = _enum(raw, "slot", CALL_SLOTS)
+    ref = CallRef(slot=Slot(slot) if slot else None, day=_day(raw, "day", today, required=False))
+    return await coordinating.coordinated_call(ctx.db, ctx.actor, ref, default_call_id=ctx.session.call_id, today=today)
+
+
+def _who(raw: Mapping[str, Any], name: str) -> str:
+    return _text(raw, name)
+
+
+def _way(raw: Mapping[str, Any], name: str = "way") -> Mode | None:
+    way = _enum(raw, name, WAYS)
+    return Mode(way) if way else None
+
+
+async def look_up_coordinating_tool(ctx: ToolContext, raw: Mapping[str, Any]) -> str:
+    _private(ctx)
+    _fields(raw, "slot", "day")
+    today = await _today(ctx)
+    event = await _coordinated(ctx, raw, today)
+    found = await coordinating.look_up(ctx.db, ctx.actor, event, label=ctx.session.label, today=today)
+    return json.dumps(found, ensure_ascii=False)
+
+
+LOOK_UP_COORDINATING = Tool(
+    name="look_up_coordinating",
+    description=(
+        COORDINATOR + "Look up a call the member coordinates: who's in, as labels, with the roles each offered; "
+        "guests_in; while voting, each pick's number, name, mode, and whether it's tied, and shuffles_left; once "
+        "decided, the decision: name, mode, ways the place allows, meal_time, who has each role, and whether you "
+        "wait on the coordinator to choose roles. Never anyone's vote or a tally. Call it before the other "
+        "coordinating drafts."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": dict(CALL_PROPERTIES),
+        "required": ["slot", "day"],
+        "additionalProperties": False,
+    },
+    run=look_up_coordinating_tool,
+    private_only=True,
+)
+
+
+async def draft_decide_tool(ctx: ToolContext, raw: Mapping[str, Any]) -> str:
+    _private(ctx)
+    _fields(raw, "slot", "day", "pick", "name", "mode", "break_tie", "way", "lead", "pickup")
+    today = await _today(ctx)
+    event = await _coordinated(ctx, raw, today)
+    mode = _way(raw, "mode")
+    roles = coordinating.Roles(way=_way(raw), lead=_who(raw, "lead"), pickup=_who(raw, "pickup"))
+    spec = await coordinating.decide(
+        ctx.db,
+        ctx.actor,
+        event,
+        handle=_whole(raw, "pick", 0, 2**62),
+        name=_text(raw, "name"),
+        mode=mode,
+        tie=_flag(raw, "break_tie"),
+        roles=roles,
+        labels=ctx.session.pseudonyms,
+        label=ctx.session.label,
+        today=today,
+    )
+    return await _keep_action(ctx, spec)
+
+
+DRAFT_DECIDE = Tool(
+    name="draft_decide",
+    description=(
+        COORDINATOR + 'Draft deciding a voting call on one pick now, such as "lock the taco place": a lock, or with '
+        "break_tie, breaking a tie between tied picks. Send the pick's number from look_up_coordinating, or 0 with "
+        "a name and mode. Optionally assign its roles too: way, lead (who cooks or orders), and pickup (who picks "
+        "up), each by label; empty for the first volunteer." + CONFIRMS
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            **CALL_PROPERTIES,
+            "pick": {"type": "integer", "description": "The pick's number, or 0 to use name."},
+            "name": {"type": "string", "description": "With pick 0, the pick's name. Otherwise empty."},
+            "mode": {"type": "string", "enum": WAYS, "description": "The pick's mode, or empty."},
+            "break_tie": {"type": "boolean", "description": "true to break a tie, false to lock."},
+            "way": {"type": "string", "enum": WAYS, "description": "Switch the way, or empty to keep it."},
+            "lead": {"type": "string", "description": WHO},
+            "pickup": {"type": "string", "description": WHO},
+        },
+        "required": ["slot", "day", "pick", "name", "mode", "break_tie", "way", "lead", "pickup"],
+        "additionalProperties": False,
+    },
+    run=draft_decide_tool,
+    private_only=True,
+)
+
+
+async def draft_shuffle_tool(ctx: ToolContext, raw: Mapping[str, Any]) -> str:
+    _private(ctx)
+    _fields(raw, "slot", "day")
+    today = await _today(ctx)
+    event = await _coordinated(ctx, raw, today)
+    return await _keep_action(ctx, await coordinating.shuffle(ctx.db, ctx.actor, event, today=today))
+
+
+DRAFT_SHUFFLE = Tool(
+    name="draft_shuffle",
+    description=COORDINATOR + "Draft shuffling a voting call's picks, at most 3 times a call." + CONFIRMS,
+    input_schema={
+        "type": "object",
+        "properties": dict(CALL_PROPERTIES),
+        "required": ["slot", "day"],
+        "additionalProperties": False,
+    },
+    run=draft_shuffle_tool,
+    private_only=True,
+)
+
+
+async def draft_plan_tool(ctx: ToolContext, raw: Mapping[str, Any]) -> str:
+    _private(ctx)
+    _fields(raw, "slot", "day", "meal_time", "place", "way", "lead", "pickup")
+    today = await _today(ctx)
+    event = await _coordinated(ctx, raw, today)
+    at_text = _text(raw, "meal_time")
+    at: time | None = None
+    if at_text:
+        if not _TIME.fullmatch(at_text):
+            raise ToolInputError("meal_time is HH:MM on a 24-hour clock, such as 19:00, or an empty string.")
+        try:
+            at = time.fromisoformat(at_text.zfill(5))
+        except ValueError:
+            raise ToolInputError("meal_time is HH:MM on a 24-hour clock, such as 19:00, or an empty string.") from None
+    request = coordinating.PlanRequest(
+        meal_time=at, place=_text(raw, "place"), way=_way(raw), lead=_who(raw, "lead"), pickup=_who(raw, "pickup")
+    )
+    spec = await coordinating.plan(
+        ctx.db,
+        ctx.actor,
+        event,
+        request,
+        labels=ctx.session.pseudonyms,
+        label=ctx.session.label,
+        today=today,
+        now=ctx.now,
+    )
+    return await _keep_action(ctx, spec)
+
+
+DRAFT_PLAN = Tool(
+    name="draft_plan",
+    description=(
+        COORDINATOR + "Draft changing a decided call's plan, as Adjust does: the meal time, the place (a catalog "
+        "name), the way (cook, pickup, delivery), and who does each role by label: lead cooks or orders, pickup "
+        "picks up. Empty strings leave a part as it is." + CONFIRMS
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            **CALL_PROPERTIES,
+            "meal_time": {"type": "string", "description": "HH:MM on a 24-hour clock, or empty."},
+            "place": {"type": "string", "description": "A catalog item's name, or empty."},
+            "way": {"type": "string", "enum": WAYS, "description": "The way, or empty."},
+            "lead": {"type": "string", "description": WHO},
+            "pickup": {"type": "string", "description": WHO},
+        },
+        "required": ["slot", "day", "meal_time", "place", "way", "lead", "pickup"],
+        "additionalProperties": False,
+    },
+    run=draft_plan_tool,
+    private_only=True,
+)
+
+
+async def draft_hand_off_tool(ctx: ToolContext, raw: Mapping[str, Any]) -> str:
+    _private(ctx)
+    _fields(raw, "slot", "day", "to")
+    today = await _today(ctx)
+    event = await _coordinated(ctx, raw, today)
+    spec = await coordinating.hand_off(
+        ctx.db, ctx.actor, event, _who(raw, "to"), labels=ctx.session.pseudonyms, label=ctx.session.label, today=today
+    )
+    return await _keep_action(ctx, spec)
+
+
+DRAFT_HAND_OFF = Tool(
+    name="draft_hand_off",
+    description=COORDINATOR + "Draft handing off coordinating a call to another member, by label." + CONFIRMS,
+    input_schema={
+        "type": "object",
+        "properties": {**CALL_PROPERTIES, "to": {"type": "string", "description": "A label such as Member 2."}},
+        "required": ["slot", "day", "to"],
+        "additionalProperties": False,
+    },
+    run=draft_hand_off_tool,
+    private_only=True,
+)
+
+
+async def draft_mark_done_tool(ctx: ToolContext, raw: Mapping[str, Any]) -> str:
+    _private(ctx)
+    _fields(raw, "slot", "day")
+    today = await _today(ctx)
+    event = await _coordinated(ctx, raw, today)
+    return await _keep_action(ctx, await coordinating.mark_done(ctx.db, ctx.actor, event, today=today, now=ctx.now))
+
+
+DRAFT_MARK_DONE = Tool(
+    name="draft_mark_done",
+    description="Draft marking a decided meal done, from its meal time on." + CONFIRMS,
+    input_schema={
+        "type": "object",
+        "properties": dict(CALL_PROPERTIES),
+        "required": ["slot", "day"],
+        "additionalProperties": False,
+    },
+    run=draft_mark_done_tool,
+    private_only=True,
+)
+
+
+async def draft_call_off_tool(ctx: ToolContext, raw: Mapping[str, Any]) -> str:
+    _private(ctx)
+    _fields(raw, "slot", "day", "reason")
+    today = await _today(ctx)
+    event = await _coordinated(ctx, raw, today)
+    reason = raw.get("reason")
+    if not isinstance(reason, str) or len(reason) > MAX_REASON:
+        raise ToolInputError("reason is the member's own words, at most 140 characters, or an empty string.")
+    return await _keep_action(ctx, await coordinating.call_off(ctx.db, ctx.actor, event, reason, today=today))
+
+
+DRAFT_CALL_OFF = Tool(
+    name="draft_call_off",
+    description=(
+        "Draft calling off a call: the coordinator's, or an ad-hoc call's starter until it's decided. Everyone in "
+        "it is told." + CONFIRMS
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            **CALL_PROPERTIES,
+            "reason": {"type": "string", "description": "The member's own reason, or empty."},
+        },
+        "required": ["slot", "day", "reason"],
+        "additionalProperties": False,
+    },
+    run=draft_call_off_tool,
+    private_only=True,
+)
+
+
 TOOLS: tuple[Tool, ...] = (
     LOOK_UP_CATALOG_ITEMS,
     LOOK_UP_HISTORY,
@@ -1233,6 +1494,13 @@ TOOLS: tuple[Tool, ...] = (
     LOOK_UP_MY_FEEDBACK,
     DRAFT_FEEDBACK,
     DRAFT_AWAY,
+    LOOK_UP_COORDINATING,
+    DRAFT_DECIDE,
+    DRAFT_SHUFFLE,
+    DRAFT_PLAN,
+    DRAFT_HAND_OFF,
+    DRAFT_MARK_DONE,
+    DRAFT_CALL_OFF,
 )
 """Every tool, in the order requests list them. Later tools come in follow-up issues."""
 

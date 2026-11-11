@@ -1,0 +1,668 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+"""Coordinating through the assistant (#252, spec 6.14, **Tools** and **Drafts**), in private
+conversations only: look up the call, lock a pick or break a tie, shuffle, change the plan as
+**Adjust** does, hand off, mark done, and call off. Each is a draft, and each **Confirm** runs the
+use case the call page or Slack's button runs, as the member with a member's role, so the
+services' own checks decide who may: an admin who isn't the coordinator is refused.
+
+The household is the usual one (``tests.support.calls.furnish``): Alex (the admin), Sam, Kim, and
+Lee (whose usual settings offer to order). Alex, Sam, Kim, and Lee answer In for dinner, Sam
+offers to pick up, and Kim coordinates. Ranking proposes Siam Garden and Taqueria. In Kim's
+conversation, Kim is Member 1, and the lookup labels Alex, Sam, and Lee, in that order, Member 2
+to Member 4. The assistant is on.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+from collections.abc import AsyncIterator, Iterator
+from datetime import date, time, timedelta
+from typing import Any
+
+import pytest
+from sqlalchemy import select
+
+from dinnerbell.config import Settings
+from dinnerbell.db.models import AssistantDraftRow
+from dinnerbell.domain import events as rules
+from dinnerbell.domain.assistant import AssistantSettings, Pseudonyms, slack_key
+from dinnerbell.domain.assistant_coordinating import FIRST_VOLUNTEER, ROLES_TOLD
+from dinnerbell.domain.assistant_drafts import COORDINATING
+from dinnerbell.domain.catalog import Mode
+from dinnerbell.domain.events import STALE_CALL, AssignmentRole, EventState, RoleOffer, Status
+from dinnerbell.domain.guests import GuestInput
+from dinnerbell.domain.meals import Slot
+from dinnerbell.domain.members import Member
+from dinnerbell.services import call_admin, calls, coordinator, guests, members
+from dinnerbell.services.assistant import admin, coordinating, drafts, tools
+from dinnerbell.services.assistant.call_drafts import ActionConfirmed
+from dinnerbell.services.assistant.conversation import Assistant, converse
+from dinnerbell.services.assistant.prompt import SYSTEM_PROMPT
+from dinnerbell.services.assistant.runtime import AssistantConfig
+from dinnerbell.services.assistant.tools import PRIVATE_ONLY, ToolContext, ToolResult, ToolSession
+from dinnerbell.services.database import Database, open_database
+from tests.support.calls import MEAL, OPENS, RESPOND_BY, House, dinner_id, furnish, make_house
+from tests.support.clock import FakeClock
+from tests.support.fake_model import FakeModel, answer, tool_call
+
+pytestmark = pytest.mark.anyio
+
+CONFIGURED = AssistantConfig(key_set=True, flag_on=True)
+DINNER = {"slot": "dinner", "day": "today"}
+NAMES = ("Alex", "Sam", "Kim", "Lee", "Gwendolyn")
+DM = slack_key("D0KIM", "1790000000.000100")
+THREAD = slack_key("C0HOUSE", "1790000000.000200")
+NO_ROLES = {"way": "", "lead": "", "pickup": ""}
+COORDINATING_TOOLS = {
+    "look_up_coordinating",
+    "draft_decide",
+    "draft_shuffle",
+    "draft_plan",
+    "draft_hand_off",
+    "draft_mark_done",
+    "draft_call_off",
+}
+
+
+def lock(name: str = "Taqueria", mode: str = "pickup", *, tie: bool = False, **roles: str) -> dict[str, Any]:
+    return DINNER | {"pick": 0, "name": name, "mode": mode, "break_tie": tie} | NO_ROLES | roles
+
+
+def change(**parts: str) -> dict[str, Any]:
+    return DINNER | {"meal_time": "", "place": "", "way": "", "lead": "", "pickup": ""} | parts
+
+
+SAMPLES: dict[str, dict[str, Any]] = {
+    "look_up_coordinating": DINNER,
+    "draft_decide": lock(),
+    "draft_shuffle": DINNER,
+    "draft_plan": change(meal_time="19:00"),
+    "draft_hand_off": DINNER | {"to": "Member 2"},
+    "draft_mark_done": DINNER,
+    "draft_call_off": DINNER | {"reason": ""},
+}
+
+
+@pytest.fixture
+def settings_overrides() -> dict[str, Any]:
+    return {"anthropic_api_key": "sk-ant-test-not-a-real-key"}
+
+
+@pytest.fixture
+async def database(migrated: Settings) -> AsyncIterator[Database]:
+    database = open_database(migrated.async_database_url)
+    yield database
+    await database.close()
+
+
+@pytest.fixture
+async def house(database: Database, clock: FakeClock, migrated: Settings) -> AsyncIterator[House]:
+    house = await furnish(await make_house(database.sessionmaker, clock, migrated.admin_email))
+    yield house
+    await house.close()
+
+
+@pytest.fixture(autouse=True)
+async def switched_on(house: House) -> None:
+    async with house.sessionmaker() as db:
+        await admin.update_assistant(db, CONFIGURED, house["Alex"], AssistantSettings(enabled=True), now=house.clock())
+
+
+@pytest.fixture
+def model() -> FakeModel:
+    return FakeModel()
+
+
+@pytest.fixture
+async def helper(settings: Settings, model: FakeModel, house: House) -> Assistant:
+    return Assistant(AssistantConfig.from_settings(settings), model, house.clock)
+
+
+async def act(house: House, use_case: Any, *args: Any, **kwargs: Any) -> Any:
+    async with house.sessionmaker() as db:
+        return await use_case(db, *args, now=house.clock(), **kwargs)
+
+
+async def voting(house: House, *, guest: bool = False) -> int:
+    """Alex, Sam, Kim, and Lee are in; Sam offers to pick up; it's voting, and Kim coordinates.
+    With ``guest``, Kim brings Gwendolyn, a new guest without Slack, who's in."""
+    house.clock.now = OPENS
+    await house.tick()
+    event_id = await dinner_id(house)
+    for name in ("Alex", "Sam", "Kim", "Lee"):
+        await act(house, calls.respond, house[name], event_id, Status.IN)
+    await act(house, calls.offer_role, house["Sam"], event_id, RoleOffer.PICKUP, True)
+    if guest:
+        await act(house, guests.invite, house["Kim"], event_id, new_guest=GuestInput("Gwendolyn"))
+    house.clock.now = RESPOND_BY
+    await house.tick()
+    assert (await house.event(event_id)).state is EventState.VOTING
+    await act(house, call_admin.assign_coordinator, house["Alex"], event_id, house["Kim"].id)
+    return event_id
+
+
+async def decided(house: House) -> int:
+    """As ``voting``, then Kim locks Taqueria (pickup): Sam picks up, and Lee orders."""
+    event_id = await voting(house)
+    taqueria = next(p for p in (await house.context(event_id)).picks if p.item_id == house.items["Taqueria"].id)
+    await act(house, calls.lock, house["Kim"], event_id, taqueria.id)
+    assert (await house.event(event_id)).state is EventState.DECIDED
+    return event_id
+
+
+def kims(house: House) -> Pseudonyms:
+    """Kim's conversation as the lookup leaves it: Kim, then Alex, Sam, and Lee."""
+    return Pseudonyms({house[n].id: number for number, n in enumerate(("Kim", "Alex", "Sam", "Lee"), start=1)})
+
+
+async def tool(
+    house: House,
+    name: str,
+    args: dict[str, Any],
+    *,
+    who: str = "Kim",
+    private: bool = True,
+    labels: Pseudonyms | None = None,
+) -> ToolResult:
+    member = house[who]
+    pseudonyms = (
+        labels if labels is not None else (kims(house) if who == "Kim" else Pseudonyms().with_member(member.id))
+    )
+    session = ToolSession(key=DM, pseudonyms=pseudonyms)
+    async with house.sessionmaker() as db:
+        return await tools.run_tool(
+            name, args, db=db, member=member, private=private, now=house.clock(), session=session
+        )
+
+
+def draft_id(result: ToolResult) -> int:
+    assert not result.is_error, result.content
+    return int(result.content.split()[1])
+
+
+async def row(house: House, draft: int) -> AssistantDraftRow:
+    async with house.sessionmaker() as db:
+        found = await db.get(AssistantDraftRow, draft)
+    assert found is not None
+    return found
+
+
+async def rows(house: House) -> list[AssistantDraftRow]:
+    async with house.sessionmaker() as db:
+        return list(await db.scalars(select(AssistantDraftRow).order_by(AssistantDraftRow.id)))
+
+
+async def confirm(house: House, who: str | Member, draft: int) -> Any:
+    member = house[who] if isinstance(who, str) else who
+    async with house.sessionmaker() as db:
+        return await drafts.confirm_draft(db, house.clock, CONFIGURED, member, draft)
+
+
+async def holders(house: House, event_id: int) -> dict[AssignmentRole, str]:
+    ctx = await house.context(event_id)
+    return {a.role: ctx.name(a.member_id) for a in ctx.assignments if a.role is not AssignmentRole.COORDINATOR}
+
+
+def strings(value: Any) -> Iterator[str]:
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            yield str(key)
+            yield from strings(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from strings(item)
+
+
+def assert_no_names(*texts: str) -> None:
+    for text in texts:
+        for name in NAMES:
+            assert not re.search(rf"\b{name}\b", text), (name, text)
+
+
+# Done when ---------------------------------------------------------------------------------------
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_lock_the_taco_place_member_2_picks_it_up_in_a_dm_drafts_then_confirm_decides(
+    house: House, helper: Assistant, model: FakeModel
+) -> None:
+    """In her DM, Kim says "lock the taco place, Sam picks it up", with Sam mentioned, so the
+    model reads Member 2. It looks the call up, drafts a lock with Member 2 picking up, and
+    changes nothing; Confirm locks Taqueria through ``calls.lock`` and assigns the roles through
+    ``choose_roles``. Nobody's name goes to the model, and the card names nobody."""
+    event_id = await voting(house)
+    kim, sam = house["Kim"], house["Sam"]
+    model.script = [
+        tool_call("look_up_coordinating", {"slot": "", "day": ""}, call_id="toolu_look"),
+        tool_call("draft_decide", lock(pickup="Member 2") | {"slot": "", "day": ""}, call_id="toolu_lock"),
+        answer("Here's the lock: Member 2 picks it up."),
+    ]
+
+    def mentions(label: Any) -> str:
+        return f"lock the taco place, {label(sam.id)} picks it up"
+
+    async with house.sessionmaker() as db:
+        reply = await converse(db, helper, kim, DM, private=True, text=mentions)
+    assert reply is not None and reply.text == "Here's the lock: Sam picks it up."
+    looked = json.loads(model.requests[1]["messages"][-1]["content"][0]["content"])
+    assert looked["in"] == [
+        {"who": "Member 1", "offers": []},
+        {"who": "Member 2", "offers": ["pickup"]},
+        {"who": "Member 3", "offers": []},
+        {"who": "Member 4", "offers": ["order"]},
+    ]
+    assert {p["name"] for p in looked["picks"]} == {"Siam Garden", "Taqueria"}
+    assert all(p["tied"] is False for p in looked["picks"]) and looked["guests_in"] == 0
+    [card] = reply.drafts
+    assert (card.kind, card.title) == ("decide", "Lock Taqueria (pickup)")
+    assert card.confirm_lines == (
+        "It locks Taqueria (pickup): today's dinner call is decided on it now, and voting ends.",
+        "Then it assigns the roles, as Assign roles does:",
+        "Member 2 picks it up.",
+        FIRST_VOLUNTEER,
+        "If the roles can't be assigned then, the call stays decided and you can assign them after.",
+    )
+    assert (await house.event(event_id)).state is EventState.VOTING  # nothing until Confirm
+    sent = json.dumps([r["messages"] for r in model.requests])
+    assert_no_names(sent)
+
+    done = await confirm(house, "Kim", card.id)
+    assert done == ActionConfirmed(
+        event_id, "Confirmed. Today's dinner call is decided on Taqueria. The roles are assigned."
+    )
+    event = await house.event(event_id)
+    assert event.state is EventState.DECIDED and event.decided_item_id == house.items["Taqueria"].id
+    assert (await holders(house, event_id))[AssignmentRole.PICKUP] == "Sam"
+    assert [a.action for a in await house.audits()][-1] == "event.roles_assigned"
+    with pytest.raises(drafts.DraftUnavailable):
+        await confirm(house, "Kim", card.id)
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_the_same_request_in_a_channel_thread_is_refused_with_a_pointer_to_the_dm(
+    house: House, helper: Assistant, model: FakeModel
+) -> None:
+    """In a channel thread the coordinating tools aren't offered: the model's calls are refused,
+    nothing is drafted, and the prompt says to ask in a direct message."""
+    event_id = await voting(house)
+    kim = house["Kim"]
+    model.script = [
+        tool_call(
+            "draft_decide",
+            lock(pickup="Member 2"),
+            call_id="toolu_0",
+            **{f"toolu_{name}": (name, SAMPLES[name]) for name in sorted(COORDINATING_TOOLS)},
+        ),
+        answer("Ask me in a DM."),
+    ]
+    async with house.sessionmaker() as db:
+        reply = await converse(db, helper, kim, THREAD, private=False, text="lock the taco place, Member 2 picks it up")
+    assert reply is not None and reply.drafts == ()
+    assert {t["name"] for t in model.requests[0]["tools"]}.isdisjoint(COORDINATING_TOOLS)
+    for block in model.requests[1]["messages"][-1]["content"]:
+        assert block["is_error"] and "There's no tool named" in block["content"]
+    assert await rows(house) == []
+    assert (await house.event(event_id)).state is EventState.VOTING
+    assert "In a shared thread, tell \nthe member" not in SYSTEM_PROMPT
+    assert "In a shared thread, tell the member to ask in a direct message with Dinnerbell instead." in SYSTEM_PROMPT
+
+
+async def test_exactly_these_tools_are_coordinating_and_private_only() -> None:
+    by_name = {t.name: t for t in tools.TOOLS}
+    assert set(by_name) >= COORDINATING_TOOLS and set(SAMPLES) == COORDINATING_TOOLS
+    assert all(by_name[n].private_only for n in COORDINATING_TOOLS)
+    assert {t.name for t in tools.tools_for(False)}.isdisjoint(COORDINATING_TOOLS)
+    assert {t.name for t in tools.tools_for(True)} >= COORDINATING_TOOLS
+    assert {k.value for k in COORDINATING} == {"decide", "shuffle", "plan", "hand_off", "mark_done", "call_off"}
+
+
+@pytest.mark.flag("assistant", on=True)
+@pytest.mark.parametrize("name", sorted(COORDINATING_TOOLS))
+async def test_each_coordinating_tool_refuses_in_a_channel_thread(house: House, name: str) -> None:
+    """In a channel thread the tool isn't there at all; called some other way, it refuses by
+    itself, pointing to a direct message. In private it runs."""
+    await voting(house)
+    result = await tool(house, name, SAMPLES[name], private=False)
+    assert result == ToolResult(f"There's no tool named {name!r} here.", is_error=True)
+    run = next(t for t in tools.TOOLS if t.name == name).run
+    async with house.sessionmaker() as db:
+        ctx = ToolContext(db, tools.tool_actor(house["Kim"]), False, house.clock(), ToolSession(key=THREAD))
+        with pytest.raises(tools.ToolRefusal) as refused:
+            await run(ctx, SAMPLES[name])
+    assert str(refused.value) == PRIVATE_ONLY and "direct message" in PRIVATE_ONLY
+    assert await tool(house, name, SAMPLES[name]) != result  # in private, it runs
+    assert all(r.kind != "catalog" for r in await rows(house))
+
+
+# Who may ----------------------------------------------------------------------------------------
+
+VOTING_TRIES = {
+    "look_up_coordinating": DINNER,
+    "draft_decide": lock(),
+    "draft_shuffle": DINNER,
+    "draft_hand_off": DINNER | {"to": "Member 2"},
+    "draft_call_off": DINNER | {"reason": "Rain"},
+}
+DECIDED_TRIES = {
+    "look_up_coordinating": DINNER,
+    "draft_plan": change(meal_time="19:00"),
+    "draft_hand_off": DINNER | {"to": "Member 2"},
+    "draft_mark_done": DINNER,
+    "draft_call_off": DINNER | {"reason": ""},
+}
+"""Before the meal time: only an admin may mark it done that early, an admin's override."""
+
+
+@pytest.mark.flag("assistant", on=True)
+@pytest.mark.parametrize("stage", ["voting", "decided"])
+async def test_an_admin_who_isnt_the_coordinator_is_refused_as_a_member_is(house: House, stage: str) -> None:
+    """Alex, an admin who isn't the coordinator, gets exactly the refusal Sam, a member, gets, from
+    every coordinating tool, though Alex's own role would pass each check; Kim, the coordinator,
+    gets a draft or a lookup. Nothing is drafted for Alex or Sam."""
+    event_id = await (voting(house) if stage == "voting" else decided(house))
+    tries = VOTING_TRIES if stage == "voting" else DECIDED_TRIES
+    event, alex = await house.event(event_id), house["Alex"]
+    if stage == "voting":  # Alex's own admin role would pass each check the tools refuse him by
+        rules.check_can_lock(event, alex)
+        rules.check_can_shuffle(event, alex)
+        assert rules.check_can_cancel(event, alex) is rules.ActingAs.ADMIN
+    else:
+        rules.check_can_manage_decision(event, alex)
+        rules.check_can_mark_done(event, alex, None, now=house.clock())
+    for name, args in tries.items():
+        as_admin = await tool(house, name, args, who="Alex")
+        as_member = await tool(house, name, args, who="Sam")
+        assert as_admin.is_error and as_admin == as_member, (name, as_admin, as_member)
+        assert "/admin" not in as_admin.content
+        as_coordinator = await tool(house, name, args)
+        if name == "draft_mark_done":  # the coordinator waits for the meal time, as any member does
+            assert as_coordinator == ToolResult("You can mark the meal done once it's meal time.", is_error=True)
+        else:
+            assert not as_coordinator.is_error, (name, as_coordinator)
+    assert {r.member_id for r in await rows(house)} == {house["Kim"].id}
+
+
+# Each draft, and what Confirm runs ---------------------------------------------------------------
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_breaking_a_tie_chooses_a_tied_pick_and_refuses_one_that_isnt(house: House) -> None:
+    event_id = await voting(house)
+    ctx = await house.context(event_id)
+    siam, taqueria = (next(p for p in ctx.picks if p.item_id == house.items[n].id) for n in ("Siam Garden", "Taqueria"))
+    await act(house, calls.vote, house["Sam"], event_id, siam.id)
+    await act(house, calls.vote, house["Lee"], event_id, taqueria.id)
+    looked = json.loads((await tool(house, "look_up_coordinating", DINNER)).content)
+    assert {p["name"]: p["tied"] for p in looked["picks"]} == {"Siam Garden": True, "Taqueria": True}
+    assert "votes" not in json.dumps(looked) and "Member" not in json.dumps(looked["picks"])
+    await act(house, calls.unvote, house["Lee"], event_id, taqueria.id)
+    refused = await tool(house, "draft_decide", lock("Taqueria", tie=True))
+    assert refused == ToolResult(coordinator.NOT_TIED, is_error=True)
+    await act(house, calls.vote, house["Lee"], event_id, taqueria.id)
+    draft = draft_id(await tool(house, "draft_decide", lock("Siam Garden", tie=True)))
+    assert (await row(house, draft)).title == "Break the tie with Siam Garden (pickup)"
+    done = await confirm(house, "Kim", draft)
+    assert done == ActionConfirmed(event_id, "Confirmed. Today's dinner call is decided on Siam Garden.")
+    event = await house.event(event_id)
+    assert event.decided_item_id == house.items["Siam Garden"].id and event.tie_by == house["Kim"].id
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_a_shuffle_redraws_through_the_service_and_one_made_meanwhile_is_refused(house: House) -> None:
+    for name in ("Noodle Bar", "Curry House", "Falafel Stop"):
+        await house.add_item(name, Mode.PICKUP, cuisine="Thai")
+    event_id = await voting(house)
+    draft = draft_id(await tool(house, "draft_shuffle", DINNER))
+    assert list((await row(house, draft)).lines)[-1] == "You'll have 2 shuffles left."
+    done = await confirm(house, "Kim", draft)
+    assert isinstance(done, ActionConfirmed) and done.text.endswith("2 shuffles left.")
+    assert (await house.event(event_id)).shuffles == 1
+    stale = draft_id(await tool(house, "draft_shuffle", DINNER))
+    await act(house, coordinator.shuffle, house["Kim"], event_id)
+    with pytest.raises(rules.EventRuleViolation, match="shuffled since the draft"):
+        await confirm(house, "Kim", stale)
+    assert (await row(house, stale)).used_at is None and (await house.event(event_id)).shuffles == 2
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_the_plan_changes_as_adjust_changes_it(house: House) -> None:
+    """The meal time, then the place and way with who orders, then who picks up: each a draft
+    whose Confirm runs ``coordinator.adjust``. The same meal time again is nothing to draft."""
+    event_id = await decided(house)
+    assert await tool(house, "draft_plan", change(meal_time="18:30")) == ToolResult(
+        coordinating.NOTHING_TO_DO, is_error=True
+    )
+    draft = draft_id(await tool(house, "draft_plan", change(meal_time="19:00")))
+    found = await row(house, draft)
+    assert found.title == "Change the plan for today's dinner"
+    assert list(found.lines) == ["The meal time moves from 6:30 PM to 7:00 PM.", ROLES_TOLD]
+    assert await confirm(house, "Kim", draft) == ActionConfirmed(
+        event_id, "Confirmed. The plan for today's dinner is changed."
+    )
+    meal = (await house.event(event_id)).meal_time
+    assert meal is not None and meal == MEAL + timedelta(minutes=30)
+
+    draft = draft_id(await tool(house, "draft_plan", change(place="Siam Garden", way="delivery", lead="Member 4")))
+    assert list((await row(house, draft)).lines)[:3] == [
+        "The place changes from Taqueria to Siam Garden. People keep their roles if the new way has them.",
+        "It switches from pickup to delivery.",
+        "Member 4 orders it.",
+    ]
+    await confirm(house, "Kim", draft)
+    event = await house.event(event_id)
+    assert (event.decided_item_id, event.decided_mode) == (house.items["Siam Garden"].id, Mode.DELIVERY)
+    assert await holders(house, event_id) == {AssignmentRole.ORDER: "Lee"}
+
+    draft = draft_id(await tool(house, "draft_plan", change(way="pickup", pickup="Member 2")))
+    await confirm(house, "Kim", draft)
+    assert (await holders(house, event_id))[AssignmentRole.PICKUP] == "Alex"
+    bad = await tool(house, "draft_plan", change(lead="Lee"))
+    assert bad == ToolResult(coordinating.LABEL_ONLY, is_error=True)
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_a_plan_changed_elsewhere_since_the_draft_is_never_written_over(house: House) -> None:
+    event_id = await decided(house)
+    draft = draft_id(await tool(house, "draft_plan", change(meal_time="19:00")))
+    await act(house, calls.set_meal_time, house["Kim"], event_id, time(18, 45))
+    with pytest.raises(rules.EventRuleViolation) as refused:
+        await confirm(house, "Kim", draft)
+    assert str(refused.value) == coordinating.CHANGED
+    assert (await row(house, draft)).used_at is None
+    assert (await house.event(event_id)).meal_time == MEAL + timedelta(minutes=15)
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_hand_off_mark_done_and_call_off_run_their_use_cases(house: House) -> None:
+    event_id = await decided(house)
+    house.clock.now = MEAL
+    done = draft_id(await tool(house, "draft_mark_done", DINNER))
+    off = draft_id(await tool(house, "draft_call_off", DINNER | {"reason": "  Rain,\n sorry "}))
+    assert '"Rain, sorry"' in " ".join((await row(house, off)).lines)
+    handing = draft_id(await tool(house, "draft_hand_off", DINNER | {"to": "Member 3"}))
+    assert (await row(house, handing)).title == "Hand off coordinating today's dinner to Member 3"
+    assert await confirm(house, "Kim", handing) == ActionConfirmed(
+        event_id, "Confirmed. You handed off coordinating today's dinner."
+    )
+    assert (await house.event(event_id)).coordinator_id == house["Sam"].id
+    assert await confirm(house, "Kim", done) == ActionConfirmed(event_id, "Confirmed. Today's dinner is done.")
+    assert (await house.event(event_id)).state is EventState.DONE
+    with pytest.raises(rules.EventRuleViolation, match="changed since the draft"):
+        await confirm(house, "Kim", off)  # it was decided when drafted
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_a_call_off_ends_the_call_with_the_members_reason(house: House) -> None:
+    event_id = await voting(house)
+    off = draft_id(await tool(house, "draft_call_off", DINNER | {"reason": "Rain, sorry"}))
+    assert await confirm(house, "Kim", off) == ActionConfirmed(
+        event_id, "Confirmed. Today's dinner call is called off."
+    )
+    event = await house.event(event_id)
+    assert event.state is EventState.CANCELLED and event.end_note == "Rain, sorry"
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_the_member_who_started_a_call_can_call_it_off_until_its_decided(house: House) -> None:
+    house.clock.now = OPENS
+    started = await act(house, calls.start_call, house["Sam"], Slot.LUNCH, date(2026, 10, 23))
+    off = draft_id(await tool(house, "draft_call_off", {"slot": "lunch", "day": "tomorrow", "reason": ""}, who="Sam"))
+    await confirm(house, "Sam", off)
+    assert (await house.event(started.id)).state is EventState.CANCELLED
+    refused = await tool(house, "draft_call_off", {"slot": "lunch", "day": "tomorrow", "reason": ""}, who="Lee")
+    assert refused.is_error
+
+
+# Stale runs --------------------------------------------------------------------------------------
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_a_draft_for_an_earlier_run_of_the_call_is_refused(house: House) -> None:
+    """Kim drafts marking the meal done; Alex re-runs the call, and it's decided again on the new
+    run before Kim confirms. ``mark_done`` takes no run, so the draft's own run check refuses it,
+    and the draft stays unused."""
+    event_id = await decided(house)
+    house.clock.now = MEAL
+    draft = draft_id(await tool(house, "draft_mark_done", DINNER))
+    off_draft = draft_id(await tool(house, "draft_call_off", DINNER | {"reason": ""}))
+    await act(house, call_admin.rerun, house["Alex"], event_id)
+    rerun = await house.event(event_id)
+    assert rerun.state is EventState.COLLECTING
+    await act(house, calls.close_window, house["Kim"], event_id)
+    taqueria = next(p for p in (await house.context(event_id)).picks if p.item_id == house.items["Taqueria"].id)
+    await act(house, calls.lock, house["Alex"], event_id, taqueria.id)
+    again = await house.event(event_id)
+    assert again.state is EventState.DECIDED and again.run == rerun.run
+    for stale in (draft, off_draft):
+        with pytest.raises(rules.EventRuleViolation) as refused:
+            await confirm(house, "Kim", stale)
+        assert str(refused.value) == STALE_CALL
+        assert (await row(house, stale)).used_at is None
+    assert (await house.event(event_id)).state is EventState.DECIDED
+
+
+# Pseudonyms --------------------------------------------------------------------------------------
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_a_label_never_targets_a_guest_and_the_service_refuses_the_rest(house: House) -> None:
+    """Kim's map holds Gwendolyn, her guest, as Member 5, Mia, who never answered, as Member 6,
+    and Lee, deactivated since, as Member 4. A guest is no one a label names, even for a role the
+    service would let a guest do; the services refuse someone deactivated or not in, in their
+    words, which name nobody."""
+    await house.add_member("Mia")
+    event_id = await voting(house, guest=True)
+    [gwendolyn] = (await house.context(event_id)).guests
+    await act(house, members.set_member_active, house["Alex"], house["Lee"].id, False)
+    labels = Pseudonyms({**kims(house).numbers, gwendolyn.id: 5, house["Mia"].id: 6})
+
+    async def kim(name: str, args: dict[str, Any]) -> ToolResult:
+        return await tool(house, name, args, labels=labels)
+
+    guest = coordinating.NOT_A_LABEL.format(label="Member 5")
+    assert await kim("draft_decide", lock(pickup="Member 5")) == ToolResult(guest, is_error=True)
+    assert await kim("draft_hand_off", DINNER | {"to": "Member 5"}) == ToolResult(guest, is_error=True)
+    nobody = coordinating.NOT_A_LABEL.format(label="Member 9")
+    assert await kim("draft_decide", lock(pickup="Member 9")) == ToolResult(nobody, is_error=True)
+    assert await kim("draft_decide", lock(pickup="Member 4")) == ToolResult("No such member.", is_error=True)
+    assert await kim("draft_hand_off", DINNER | {"to": "Member 4"}) == ToolResult(
+        "Choose another active member.", is_error=True
+    )
+    assert await kim("draft_decide", lock(pickup="Member 6")) == ToolResult("Pick someone who's in.", is_error=True)
+    assert await rows(house) == []
+    taqueria = next(p for p in (await house.context(event_id)).picks if p.item_id == house.items["Taqueria"].id)
+    await act(house, calls.lock, house["Kim"], event_id, taqueria.id)
+    assert await kim("draft_hand_off", DINNER | {"to": "Member 6"}) == ToolResult(
+        rules.COORDINATOR_NOT_IN, is_error=True
+    )
+    assert await kim("draft_plan", change(pickup="Member 5")) == ToolResult(guest, is_error=True)
+    assert await kim("draft_plan", change(pickup="Member 6")) == ToolResult("Pick someone who's in.", is_error=True)
+    assert await rows(house) == []
+
+
+# No names ----------------------------------------------------------------------------------------
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_results_cards_and_confirms_carry_no_names(house: House) -> None:
+    """Every coordinating tool's result, each draft's title and lines, and each Confirm's text
+    name nobody, the guest included: people are labels, a guest is "a guest" or a count."""
+    event_id = await voting(house, guest=True)
+    said = [
+        await tool(house, "look_up_coordinating", DINNER),
+        await tool(house, "draft_decide", lock(pickup="Member 3", lead="Member 4")),
+        await tool(house, "draft_shuffle", DINNER),
+        await tool(house, "draft_hand_off", DINNER | {"to": "Member 2"}),
+        await tool(house, "draft_call_off", DINNER | {"reason": ""}),
+    ]
+    looked = json.loads(said[0].content)
+    assert looked["guests_in"] == 1 and len(looked["in"]) == 4
+    done = [await confirm(house, "Kim", draft_id(said[1]))]
+    assert (await holders(house, event_id)) == {AssignmentRole.ORDER: "Lee", AssignmentRole.PICKUP: "Sam"}
+    said += [
+        await tool(house, "look_up_coordinating", DINNER),
+        await tool(house, "draft_plan", change(meal_time="19:15", pickup="Member 2")),
+    ]
+    done.append(await confirm(house, "Kim", draft_id(said[-1])))
+    house.clock.now = MEAL + timedelta(minutes=45)
+    said.append(await tool(house, "draft_mark_done", DINNER))
+    done.append(await confirm(house, "Kim", draft_id(said[-1])))
+    decision = json.loads(said[5].content)["decision"]
+    assert decision["roles"] == {"order": "Member 4", "pickup": "Member 3"}
+    assert not any(r.is_error for r in said), said
+    texts = [v for r in said for v in strings(json.loads(r.content) if r.content.startswith("{") else r.content)]
+    texts += [t for r in await rows(house) for t in (r.title, *r.lines)]
+    texts += [d.text for d in done]
+    assert_no_names(*texts)
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_a_cook_list_refusal_names_the_label_not_the_person(house: House) -> None:
+    """``check_assignee``'s own refusal names the person; the model gets their label instead."""
+    await decided(house)
+    refused = await tool(house, "draft_plan", change(place="Sam's Tacos", way="cook", lead="Member 4"))
+    assert refused == ToolResult("Sam's Tacos has a cook list, and Member 4 isn't on it.", is_error=True)
+    assert "Lee" not in refused.content
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_refusals_the_model_can_act_on(house: House) -> None:
+    """Input the tools can't use says what to send instead, and names nobody."""
+    event_id = await voting(house)
+    assert await tool(house, "draft_decide", lock("Taqueria", way="", pickup="Member 3") | {"way": "delivery"}) == (
+        ToolResult("Taqueria isn't available by delivery.", is_error=True)
+    )
+    assert await tool(house, "draft_decide", lock("Siam Garden", way="delivery", pickup="Member 3")) == ToolResult(
+        coordinating.NO_PICKUP, is_error=True
+    )
+    assert await tool(house, "draft_hand_off", DINNER | {"to": ""}) == ToolResult(
+        coordinating.LABEL_ONLY, is_error=True
+    )
+    assert await tool(house, "look_up_coordinating", {"slot": "lunch", "day": ""}) == ToolResult(
+        "There's no lunch call on 2026-10-22 (today).", is_error=True
+    )
+    taqueria = next(p for p in (await house.context(event_id)).picks if p.item_id == house.items["Taqueria"].id)
+    await act(house, calls.lock, house["Kim"], event_id, taqueria.id)
+    assert await tool(house, "draft_plan", change(way="delivery", pickup="Member 3")) == ToolResult(
+        coordinating.NO_PICKUP, is_error=True
+    )
+    assert await tool(house, "draft_plan", change(place="Nowhere")) == ToolResult(
+        coordinating.NO_SUCH_PLACE, is_error=True
+    )
+    assert await tool(house, "draft_plan", change(place="Taqueria", way="delivery")) == ToolResult(
+        "Taqueria isn't available by delivery.", is_error=True
+    )
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_with_two_calls_of_hers_open_the_assistant_asks_which(house: House) -> None:
+    await voting(house)
+    await act(house, calls.start_call, house["Kim"], Slot.LUNCH, date(2026, 10, 23))
+    asked = await tool(house, "look_up_coordinating", {"slot": "", "day": ""})
+    assert asked.is_error and asked.content.startswith("The member has several open calls: dinner on 2026-10-22")
+    assert "lunch on 2026-10-23 (tomorrow, scheduled)" in asked.content
+    off = await tool(house, "draft_call_off", {"slot": "", "day": "tomorrow", "reason": ""})
+    assert not off.is_error, off.content

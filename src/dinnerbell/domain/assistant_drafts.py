@@ -72,6 +72,12 @@ class DraftKind(StrEnum):
     PREFERENCE = "preference"
     FEEDBACK = "feedback"
     AWAY = "away"
+    DECIDE = "decide"
+    SHUFFLE = "shuffle"
+    PLAN = "plan"
+    HAND_OFF = "hand_off"
+    MARK_DONE = "mark_done"
+    CALL_OFF = "call_off"
 
 
 CALL_ACTIONS = frozenset(
@@ -92,6 +98,19 @@ for ``CALL``, the slot and day it starts."""
 OWN_DATA = frozenset({DraftKind.PREFERENCE, DraftKind.FEEDBACK, DraftKind.AWAY})
 """The member's own data (#253): drafted only in a private conversation, and each confirms
 through the use case the Preferences page or the feedback form calls."""
+
+COORDINATING = frozenset(
+    {
+        DraftKind.DECIDE,
+        DraftKind.SHUFFLE,
+        DraftKind.PLAN,
+        DraftKind.HAND_OFF,
+        DraftKind.MARK_DONE,
+        DraftKind.CALL_OFF,
+    }
+)
+"""Coordinating (#252): drafted only in a private conversation, and each confirms through the
+use case the call page or Slack's button runs, whose own checks say who may."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,6 +136,13 @@ class Draft:
       ``cook_thanks``, ``cook_note``), and ``before``, when the member's feedback it replaces
       was saved, or None
     - away: ``first`` and ``last``, or ``clear``, and ``before``, the window it changes, or None
+    - decide: ``proposal_id``, ``name``, ``mode``, ``tie`` (break the tie rather than lock), and
+      for **Assign roles** after it, ``way``, ``lead``, and ``pickup`` (member IDs), or None
+    - shuffle: ``shuffles``, how many the call had
+    - plan: ``wanted`` and ``opened``, **Adjust**'s two ``Adjustment``s as JSON
+    - hand_off: ``to``, the member ID
+    - mark_done: ``state``, the call's state
+    - call_off: ``note``, the reason or None, and ``state``, the call's state
 
     ``event_id`` and ``run`` are the call the draft was made against, where there is one."""
 
