@@ -32,6 +32,7 @@ from dinnerbell.channels.slack.assistant import (
 from dinnerbell.channels.slack.working import STATUS
 from dinnerbell.config import Settings
 from dinnerbell.db.models import AssistantConversationRow
+from dinnerbell.db.repositories import MemberRepository
 from dinnerbell.domain.assistant import AssistantSettings, web_key
 from dinnerbell.domain.catalog import Mode
 from dinnerbell.services.assistant import admin
@@ -708,3 +709,254 @@ def test_the_prompt_asks_for_no_text_before_a_tool_call() -> None:
 def test_the_hostile_alphabet_reaches_every_tricky_category() -> None:
     categories = {unicodedata.category(char) for part in ALPHABET for char in part}
     assert {"Cf", "Mn", "Zs", "Zl", "So", "Lo"} <= categories
+
+
+# SlackStream's state across model calls ---------------------------------------------------------
+
+
+class SlowSlack:
+    """A stand-in for ``SlackApi``'s stream calls. Each call named in ``held`` waits for its
+    event, as a slow Slack would; ``messages`` keeps each stream's text, by ``ts``."""
+
+    def __init__(self) -> None:
+        self.held: dict[str, asyncio.Event] = {}
+        self.messages: dict[str, str] = {}
+        self.calls: list[str] = []
+        self._ts = 0
+
+    async def _wait(self, method: str) -> None:
+        self.calls.append(method)
+        gate = self.held.get(method)
+        if gate is not None:
+            await gate.wait()
+
+    async def start_stream(self, channel: str, thread_ts: str, markdown_text: str) -> str:
+        await self._wait("start")
+        self._ts += 1
+        ts = f"{self._ts}.000300"
+        self.messages[ts] = markdown_text
+        return ts
+
+    async def append_stream(self, channel: str, ts: str, markdown_text: str) -> None:
+        await self._wait("append")
+        self.messages[ts] += markdown_text
+
+    async def stop_stream(self, channel: str, ts: str, markdown_text: str | None = None) -> None:
+        await self._wait("stop")
+        self.messages[ts] += markdown_text or ""
+
+
+def dm_stream(api: SlowSlack, resume: Any = None) -> slack_assistant.SlackStream:
+    incoming = slack_assistant.Incoming("U02SAM", SAM_DM, "1.1", "1.1", "hi", private=True)
+
+    async def resumed() -> None:
+        pass
+
+    return slack_assistant.SlackStream(api, incoming, resume=resume or resumed)  # type: ignore[arg-type]
+
+
+async def turns(count: int = 20) -> None:
+    for _ in range(count):
+        await asyncio.sleep(0)
+
+
+FIRST_CALL = "Let me check the menu, which you can see at example."
+SECOND_CALL = "com/x is where the menu is.\nIt does pickup."
+
+
+async def test_a_tool_round_while_the_stream_is_starting_keeps_the_calls_apart() -> None:
+    """A tool round that comes while the first call's stream is still starting must end it:
+    the second call's text never joins the first's, so "example." and "com/x" are never
+    defanged apart and shown together as a link."""
+    api = SlowSlack()
+    starting = api.held["start"] = asyncio.Event()
+    stream = dm_stream(api)
+    stream.call_started(0)
+    stream.lines(FIRST_CALL)
+    await turns()  # the worker is waiting for chat.startStream
+    stream.tool_round()
+    stream.call_started(0)
+    stream.lines(SECOND_CALL.split("\n")[0])
+    starting.set()
+    unseen = await stream.finish(SECOND_CALL)
+    for text in api.messages.values():
+        assert "example.com" not in markdown_visible(text)  # a real dot: shown as a link
+        assert_markdown_safe(text)
+    assert list(api.messages.values()) == [safe_markdown(FIRST_CALL), safe_markdown(SECOND_CALL)]
+    assert unseen is None
+
+
+async def test_a_slow_resume_never_feeds_the_next_call_into_the_last_message() -> None:
+    """Showing the status again is slow; the second call's text meanwhile goes to its own
+    message, and the reply isn't shown twice."""
+    api = SlowSlack()
+    resuming = asyncio.Event()
+
+    async def resume() -> None:
+        await resuming.wait()
+
+    stream = dm_stream(api, resume)
+    stream.call_started(0)
+    stream.lines(FIRST_CALL)
+    await turns()
+    stream.tool_round()
+    await turns()  # the first message is stopped, and the status is being shown again
+    stream.call_started(0)
+    stream.lines(SECOND_CALL.split("\n")[0])
+    resuming.set()
+    unseen = await stream.finish(SECOND_CALL)
+    assert list(api.messages.values()) == [safe_markdown(FIRST_CALL), safe_markdown(SECOND_CALL)]
+    assert unseen is None
+
+
+async def test_a_slow_stop_never_feeds_the_next_call_into_the_last_message() -> None:
+    api = SlowSlack()
+    stopping = api.held["stop"] = asyncio.Event()
+    stream = dm_stream(api)
+    stream.call_started(0)
+    stream.lines(FIRST_CALL)
+    await turns()
+    stream.tool_round()
+    await turns()  # chat.stopStream is slow
+    stream.call_started(0)
+    stream.lines(SECOND_CALL.split("\n")[0])
+    stopping.set()
+    unseen = await stream.finish(SECOND_CALL)
+    assert list(api.messages.values()) == [safe_markdown(FIRST_CALL), safe_markdown(SECOND_CALL)]
+    assert unseen is None
+
+
+async def test_a_call_that_streams_nothing_after_a_tool_round_leaves_the_reply_to_post() -> None:
+    api = SlowSlack()
+    api.held["start"] = asyncio.Event()
+    stream = dm_stream(api)
+    stream.call_started(0)
+    stream.lines(FIRST_CALL)
+    await turns()
+    stream.tool_round()
+    stream.call_started(0)  # the final call is short: held, never streamed
+    api.held["start"].set()
+    assert await stream.finish("Short.") == "Short."
+    assert list(api.messages.values()) == [safe_markdown(FIRST_CALL)]
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_a_hostile_display_name_streams_restored_and_defanged(
+    house: House, model: FakeModel, slack: Slack
+) -> None:
+    """The names ``converse`` puts back as lines stream are members' real names, and a name is
+    text like any other: its link, ping, and Markdown link are defanged."""
+    hostile_name = "Kim https://evil.example <!channel> [x](https://evil.example)"
+    async with house.sessionmaker() as db:
+        await MemberRepository(db).update(house.household.id, house["Kim"].id, house.clock(), display_name=hostile_name)
+        await db.commit()
+    text = LONG + "\nMember 2 can cook tonight.\nAsk Member 2 first."
+    model.script = [answer(text)]
+    await slack.dm("Sam", "Can <@U03KIM> cook?")
+    (shown,) = streams(slack)
+    assert shown == safe_markdown(text.replace("Member 2", hostile_name))
+    assert "Member 2" not in shown  # put back, line by line
+    assert_markdown_safe(shown)
+
+
+async def test_a_stuck_worker_holds_up_the_end_only_so_long(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(slack_assistant, "STREAM_DRAIN_SECONDS", 0.05)
+    api = SlowSlack()
+    never = asyncio.Event()
+
+    async def resume() -> None:
+        await never.wait()  # stuck outside any one Slack call's bound
+
+    stream = dm_stream(api, resume)
+    stream.call_started(0)
+    stream.lines(FIRST_CALL)
+    stream.tool_round()
+    stream.call_started(0)
+    stream.lines(SECOND_CALL.split("\n")[0])
+    assert await asyncio.wait_for(stream.finish(SECOND_CALL), 5) == SECOND_CALL  # nothing of it shown
+
+
+async def test_a_slack_call_that_hangs_is_cut_off_and_the_reply_posted(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(slack_assistant, "STREAM_STEP_SECONDS", 0.01)
+    api = SlowSlack()
+    api.held["start"] = asyncio.Event()  # never set
+    stream = dm_stream(api)
+    stream.call_started(0)
+    stream.lines(SECOND_CALL.split("\n")[0])
+    assert await asyncio.wait_for(stream.finish(SECOND_CALL), 2) == SECOND_CALL  # well before the drain's bound
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_a_cancelled_answer_cancels_the_streams_worker(slack: Slack, monkeypatch: pytest.MonkeyPatch) -> None:
+    made: list[slack_assistant.SlackStream] = []
+    real = slack_assistant.SlackStream
+
+    def recording(*args: Any, **kwargs: Any) -> slack_assistant.SlackStream:
+        made.append(real(*args, **kwargs))
+        return made[-1]
+
+    monkeypatch.setattr(slack_assistant, "SlackStream", recording)
+    slack.fake.gates["chat.appendStream"] = asyncio.Event()  # Slack never answers the append
+    held = asyncio.Event()
+
+    class Hangs(FakeModel):
+        async def create(self, request: Mapping[str, Any], *, time_left: float, events: Any = None) -> ModelReply:
+            await self.write(answer(LONG), events)
+            await held.wait()
+            return answer(LONG)
+
+    assert slack.conn.assistant is not None
+    object.__setattr__(slack.conn.assistant.assistant, "client", Hangs())
+    await send(slack.conn.app, "events_api", message_event("U02SAM", "Noodles?", channel=SAM_DM))
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + 10
+    while not slack.fake.of("chat.appendStream"):
+        assert loop.time() < deadline
+        await asyncio.sleep(0)
+    for task in list(slack.conn.interactions.tasks):
+        task.cancel()
+    await slack.conn.interactions.settle()
+    (stream,) = made
+    worker = stream._worker
+    assert worker is not None
+    await asyncio.wait([worker], timeout=5)
+    assert worker.cancelled()  # no task left waiting on Slack
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_a_streamed_message_with_no_reply_is_stopped(slack: Slack, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def nothing(*args: Any, stream: Any = None, **kwargs: Any) -> None:
+        stream.call_started(0)
+        stream.lines(LONG.rsplit("\n", 1)[0])
+        await asyncio.sleep(0)
+        return
+
+    monkeypatch.setattr(slack_assistant, "converse", nothing)
+    await slack.dm("Sam", "Noodles?")
+    assert len(slack.fake.of("chat.startStream")) == 1
+    assert len(slack.fake.of("chat.stopStream")) == 1  # abandoned, not left streaming
+    assert posts(slack) == []
+
+
+async def test_a_listener_that_breaks_is_dropped_and_the_call_goes_on(caplog: pytest.LogCaptureFixture) -> None:
+    class Breaks(Heard):
+        def lines(self, text: str) -> None:
+            raise RuntimeError("boom")
+
+    out = Breaks()
+    events = CallText(out, lambda text: text)
+    await tell(events, [{"type": "text", "text": LONG}], random.Random(1))  # noqa: S311 - reproducible test data
+    events.tool_started()
+    assert out.tool_rounds == 0  # dropped after it broke
+    assert "assistant reply stream broke" in caplog.text
+
+
+async def test_text_after_a_calls_tool_call_is_never_shown() -> None:
+    heard = Heard()
+    events = CallText(heard, lambda text: text)
+    events.text_started()
+    events.text("Let me check.")
+    events.tool_started()
+    events.text_started()
+    events.text(LONG + "\n")  # more than enough to pass the hold, but this call is a tool round
+    assert heard.pieces == [] and heard.tool_rounds == 0
