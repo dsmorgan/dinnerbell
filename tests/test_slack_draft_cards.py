@@ -344,6 +344,58 @@ async def test_a_call_action_in_a_channel_thread_confirms_only_for_its_member(
     assert mine is not None and mine.late and RoleOffer.PICKUP in mine.offers
 
 
+DELIVERY_ONLY = {
+    "name": "Siam Garden",
+    "kind": "",
+    "catalog": "",
+    "new_name": "",
+    "modes": ["delivery"],
+    "meals": [],
+    "add_tags": [],
+    "remove_tags": [],
+    "add_cooks": [],
+    "remove_cooks": [],
+    "url": "",
+    "order_url": "",
+    "notes": "",
+    "servings": 0,
+    "clear": [],
+}
+LUNCH = {
+    "meal": 0,
+    "delete": False,
+    "day": "today",
+    "slot": "lunch",
+    "name": "Taqueria",
+    "kind": "",
+    "add_people": [],
+    "remove_people": [],
+}
+
+
+@pytest.mark.flag("assistant", on=True)
+@pytest.mark.parametrize(
+    ("tool", "args", "title", "confirmed"),
+    [
+        ("draft_catalog_edit", DELIVERY_ONLY, "*Edit Siam Garden*", "Confirmed. Siam Garden is updated."),
+        ("draft_meal", LUNCH, "*Log Taqueria for lunch, today*", "Confirmed. Taqueria is logged for lunch today."),
+    ],
+)
+async def test_a_catalog_edit_or_a_meal_in_a_channel_thread_is_the_askers_alone(
+    house: House, model: FakeModel, slack: Slack, tool: str, args: dict[str, Any], title: str, confirmed: str
+) -> None:
+    """#254: "mark Siam Garden as delivery only" or "log lunch" in the channel. The card and its
+    result go to Kim alone, as ephemerals in the thread, and nothing is posted for everyone."""
+    card = await thread_card(slack, model, "Kim", tool, args)
+    assert card_text(card).startswith(f"{title}\n{IF_CONFIRMED}\n• ")
+    await tap_thread(slack, "Kim", ids.DRAFT_CONFIRM, card)
+    [result] = replaced(slack)
+    assert result["response_type"] == "ephemeral" and result["text"] == confirmed
+    assert posts(slack) == [] and updated(slack) == [] and ephemerals(slack) == []
+    [row] = await draft_rows(house)
+    assert row.member_id == house["Kim"].id and row.used_at is not None
+
+
 @pytest.mark.flag("assistant", on=True)
 async def test_when_slack_wont_replace_a_thread_card_only_the_tapper_is_told(
     house: House, model: FakeModel, slack: Slack

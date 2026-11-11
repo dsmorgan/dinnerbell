@@ -5,7 +5,8 @@ A draft is a change the assistant prepared for one member: a proposal, an offer,
 items, one of the call actions a member takes in public anyway (#251): an answer, a vote, a
 suggestion, a role, taking back an offer, inviting a guest or answering for one, or starting a
 call, or a change to the member's own data, in private only (#253): a level on Preferences,
-feedback on a meal, or away days. It says what **Confirm** will do, in lines worked
+feedback on a meal, or away days; or, in any conversation, a catalog edit or a change to the meal
+log (#254). It says what **Confirm** will do, in lines worked
 out here with the same rules the services apply, and lasts ``DRAFT_MINUTES``. Only its member confirms it, at most once.
 
 Candidates are what ranking's hard filters let through for a voting call. Their reasons come
@@ -78,6 +79,11 @@ class DraftKind(StrEnum):
     HAND_OFF = "hand_off"
     MARK_DONE = "mark_done"
     CALL_OFF = "call_off"
+    ITEM_EDIT = "item_edit"
+    ITEM_ACTIVE = "item_active"
+    MEAL_LOG = "meal_log"
+    MEAL_EDIT = "meal_edit"
+    MEAL_DELETE = "meal_delete"
 
 
 CALL_ACTIONS = frozenset(
@@ -112,6 +118,16 @@ COORDINATING = frozenset(
 """Coordinating (#252): drafted only in a private conversation, and each confirms through the
 use case the call page or Slack's button runs, whose own checks say who may."""
 
+CATALOG_AND_MEALS = frozenset(
+    {DraftKind.ITEM_EDIT, DraftKind.ITEM_ACTIVE, DraftKind.MEAL_LOG, DraftKind.MEAL_EDIT, DraftKind.MEAL_DELETE}
+)
+"""Catalog edits and the meal log (#254), in any conversation: each confirms through the use case
+the Catalog item form or History's forms call."""
+
+NAMES_PEOPLE = COORDINATING | {DraftKind.ITEM_EDIT, DraftKind.MEAL_LOG, DraftKind.MEAL_EDIT, DraftKind.MEAL_DELETE}
+"""Kinds whose stored title and lines mark people by member ID (``assistant_coordinating.person``):
+the card names them, and the model reads their labels."""
+
 
 @dataclass(frozen=True, slots=True)
 class Draft:
@@ -143,6 +159,13 @@ class Draft:
     - hand_off: ``to``, the member ID
     - mark_done: ``state``, the call's state
     - call_off: ``note``, the reason or None, and ``state``, the call's state
+    - item_edit: ``item_id``, ``before`` (the item as drafted, ``item_snapshot``), and ``after``
+      (the fields **Confirm** saves)
+    - item_active: ``item_id``, ``active`` (what it becomes), and ``before``, the item as drafted
+    - meal_log: ``day``, ``slot``, ``item_id``, and ``people`` (member IDs)
+    - meal_edit: ``meal_id``, ``shown`` (the meal's ``form_stamp`` as drafted), ``day``, ``slot``,
+      ``item_id``, and ``people``
+    - meal_delete: ``meal_id`` and ``shown``
 
     ``event_id`` and ``run`` are the call the draft was made against, where there is one."""
 

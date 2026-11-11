@@ -43,10 +43,28 @@ def with_people(text: str, name: Callable[[int], str]) -> str:
     return _PERSON.sub(lambda match: name(int(match.group(1))), text)
 
 
+_HELD_OPEN, _HELD_CLOSE = "", ""
+"""Private-use characters that mark where a card shows a value the model never reads (#254)."""
+_HELD = re.compile(f"{_HELD_OPEN}([a-z_]{{1,20}}){_HELD_CLOSE}")
+
+
+def held(field: str) -> str:
+    """Where a stored line shows a catalog item's ``field`` as it is now, such as its notes: the
+    card writes the value out, and the model reads that it isn't shown (``with_held``)."""
+    return f"{_HELD_OPEN}{field}{_HELD_CLOSE}"
+
+
+def with_held(text: str, value: Callable[[str], str]) -> str:
+    """``text`` with each ``held`` field written as ``value`` gives it."""
+    return _HELD.sub(lambda match: value(match.group(1)), text)
+
+
 def plain(text: str) -> str:
     """Text that came from a member or the catalog, such as a call-off reason or a place's name,
-    with the marker characters taken out, so it can never pose as a person."""
-    return text.replace(_OPEN, "").replace(_CLOSE, "")
+    with the marker characters taken out, so it can never pose as a person or a held value."""
+    for marker in (_OPEN, _CLOSE, _HELD_OPEN, _HELD_CLOSE):
+        text = text.replace(marker, "")
+    return text
 
 
 def clock(at: time) -> str:

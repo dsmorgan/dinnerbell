@@ -806,16 +806,17 @@ async def test_before_the_fetch_the_cap_is_checked_for_a_full_page(
 
 @pytest.mark.flag("assistant", on=True)
 async def test_a_cap_below_one_drafting_call_says_so_instead_of_next_month(
-    house: House, helper: Assistant, model: FakeModel, fetch: FakeFetch
+    house: House, helper: Assistant, model: FakeModel, fetch: FakeFetch, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    # Only the link tool: every tool a conversation offers takes an Opus message's own
+    # reservation past the $1 cap (#254), and this test is about the drafting call's.
+    monkeypatch.setattr(tools, "TOOLS", (tools.DRAFT_CATALOG_FROM_LINK,))
     opus = replace(helper, config=replace(helper.config, model="claude-opus-5-5"))
     async with house.sessionmaker() as db:
         await admin.update_assistant(
             db, opus.config, house["Alex"], AssistantSettings(enabled=True, cap_dollars=1), now=house.clock()
         )
     model.script = [tool_call("draft_catalog_from_link", link()), answer("The cap is too low.")]
-    # In a channel thread: a private conversation also offers the member's own-data tools (#253),
-    # whose definitions take an Opus message's own reservation past the $1 cap.
     reply = await ask(house, opus, thread=slack_key("C0HOUSE", "1790000000.000100"))
     assert reply == Reply("The cap is too low.")
     [result] = results(model.requests[-1])

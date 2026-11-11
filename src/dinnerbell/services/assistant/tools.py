@@ -16,8 +16,11 @@ role, taking back an offer, inviting a guest or answering for one, or starting a
 member's own data (#253, ``own_drafts``) is private only: look up their levels on Preferences,
 away days, and feedback, and draft a level, feedback on a meal they ate, or away days. So is
 coordinating (#252, ``coordinating``): look up a call the member coordinates, and draft deciding
-a pick, a shuffle, a change of plan, a hand-off, marking done, or calling off. A draft changes
-nothing until its member confirms it (``drafts.confirm_draft``).
+a pick, a shuffle, a change of plan, a hand-off, marking done, or calling off. Catalog edits and
+the meal log (#254, ``catalog_edits``) work in any conversation: draft an edit of a catalog item,
+or taking one off the catalog or putting it back; look up the meals the member logged; and draft
+logging a meal, or editing or deleting one they logged. A draft changes nothing until its member
+confirms it (``drafts.confirm_draft``).
 """
 
 from __future__ import annotations
@@ -35,16 +38,24 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from dinnerbell.config import is_test_instance
 from dinnerbell.db.repositories import HouseholdRepository
 from dinnerbell.domain.assistant import Pseudonyms, web_key
-from dinnerbell.domain.assistant_drafts import COORDINATING, Narrowing
-from dinnerbell.domain.catalog import MODE_ORDER, InvalidCatalogInput, ItemKind, Meal, Mode, name_key
+from dinnerbell.domain.assistant_drafts import NAMES_PEOPLE, Narrowing
+from dinnerbell.domain.catalog import (
+    MODE_ORDER,
+    CatalogRuleViolation,
+    InvalidCatalogInput,
+    ItemKind,
+    Meal,
+    Mode,
+    name_key,
+)
 from dinnerbell.domain.events import EventRuleViolation, EventState, InvalidResponse, RoleOffer, Status
 from dinnerbell.domain.feedback import COOK_NOTE_MAX, ISSUE_NOTE_MAX, FeedbackInput, InvalidFeedback, PlaceIssue, Rating
-from dinnerbell.domain.meals import Slot
+from dinnerbell.domain.meals import InvalidMeal, Slot
 from dinnerbell.domain.members import InvalidMemberInput, Member
 from dinnerbell.domain.offers import DEFAULT_CAPACITY
 from dinnerbell.domain.preferences import LEVELS, InvalidPreference, Stance
 from dinnerbell.services import catalog as catalog_service
-from dinnerbell.services.assistant import call_drafts, coordinating, drafts, own_drafts
+from dinnerbell.services.assistant import call_drafts, catalog_edits, coordinating, drafts, own_drafts
 from dinnerbell.services.assistant.acting import ToolRefusal, tool_actor
 from dinnerbell.services.assistant.call_drafts import DraftSpec
 from dinnerbell.services.assistant.candidates import CallRef, call_basics, find_candidates, resolve_call
@@ -434,7 +445,7 @@ FIND_CANDIDATES = Tool(
 async def _keep(ctx: ToolContext, draft: Any) -> str:
     """The draft's card for its member, and its summary for the model: a coordinating card names
     people, and the summary gives the model their labels (#252)."""
-    known = await drafts.names(ctx.db, ctx.actor.household_id) if draft.kind in COORDINATING else {}
+    known = await drafts.names(ctx.db, ctx.actor.household_id) if draft.kind in NAMES_PEOPLE else {}
     ctx.session.drafts.append(drafts.view(draft, known))
     return drafts.summary(draft, ctx.session.label(ctx.actor.id), ctx.session.label)
 
@@ -1475,6 +1486,239 @@ DRAFT_CALL_OFF = Tool(
 )
 
 
+# Catalog edits and the meal log, in any conversation (#254) ---------------------------------------
+
+ITEM_KINDS = ["", ItemKind.RESTAURANT.value, ItemKind.HOME.value]
+MEAL_NAMES = [m.value for m in Meal]
+CLEARABLE = ["url", "order_url", "notes", "servings"]
+ON_CATALOG = {"": None, "off": False, "back": True}
+MAX_LIST = 10
+MAX_NOTES_CHARS = 1_000
+LABELS = "By label, such as Member 2."
+KEEP = "Empty keeps it."
+ITEM_FIELDS = ("name", "kind")
+ITEM_PROPERTIES: dict[str, Any] = {
+    "name": {"type": "string"},
+    "kind": {"type": "string", "enum": ITEM_KINDS, "description": "Empty for either."},
+}
+
+
+def _strings(raw: Mapping[str, Any], name: str) -> tuple[str, ...]:
+    value = raw.get(name)
+    if not isinstance(value, list) or len(value) > MAX_LIST or not all(isinstance(v, str) for v in value):
+        raise ToolInputError(f"{name} is a list of at most {MAX_LIST} strings.")
+    if any(len(v) > MAX_QUERY_LENGTH for v in value):
+        raise ToolInputError(f"Each of {name} is at most {MAX_QUERY_LENGTH} characters.")
+    return tuple(v.strip() for v in value if v.strip())
+
+
+def _choices(raw: Mapping[str, Any], name: str, allowed: list[str]) -> frozenset[str]:
+    chosen = _strings(raw, name)
+    if not set(chosen) <= set(allowed):
+        raise ToolInputError(f"{name} holds only {', '.join(allowed)}.")
+    return frozenset(chosen)
+
+
+def _long(raw: Mapping[str, Any], name: str, most: int) -> str:
+    value = raw.get(name)
+    if not isinstance(value, str) or len(value) > most:
+        raise ToolInputError(f"{name} is a string of at most {most:,} characters; empty to keep it.")
+    return value
+
+
+def _item_kind(raw: Mapping[str, Any]) -> ItemKind | None:
+    kind = _enum(raw, "kind", ITEM_KINDS)
+    return ItemKind(kind) if kind else None
+
+
+def _named(raw: Mapping[str, Any], what: str = "the item's name") -> str:
+    name = _text(raw, "name")
+    if not name:
+        raise ToolInputError(f"name is {what}, as look_up_catalog_items returns it.")
+    return name
+
+
+def _list_of(description: str = "", enum: list[str] | None = None) -> dict[str, Any]:
+    items: dict[str, Any] = {"type": "string", "enum": enum} if enum else {"type": "string"}
+    return {"type": "array", "items": items, **({"description": description} if description else {})}
+
+
+EDIT_FIELDS = (
+    *ITEM_FIELDS,
+    "catalog",
+    "new_name",
+    "modes",
+    "meals",
+    "add_tags",
+    "remove_tags",
+    "add_cooks",
+    "remove_cooks",
+    "url",
+    "order_url",
+    "notes",
+    "servings",
+    "clear",
+)
+
+
+async def draft_catalog_edit_tool(ctx: ToolContext, raw: Mapping[str, Any]) -> str:
+    _fields(raw, *EDIT_FIELDS)
+    change = catalog_edits.ItemEdit(
+        name=_text(raw, "new_name"),
+        modes=frozenset(Mode(m) for m in _choices(raw, "modes", [Mode.PICKUP.value, Mode.DELIVERY.value])),
+        meals=frozenset(Meal(m) for m in _choices(raw, "meals", MEAL_NAMES)),
+        add_tags=_strings(raw, "add_tags"),
+        remove_tags=_strings(raw, "remove_tags"),
+        add_cooks=_strings(raw, "add_cooks"),
+        remove_cooks=_strings(raw, "remove_cooks"),
+        url=_long(raw, "url", MAX_LINK_CHARS),
+        order_url=_long(raw, "order_url", MAX_LINK_CHARS),
+        notes=_long(raw, "notes", MAX_NOTES_CHARS),
+        servings=_whole(raw, "servings", 0, 100),
+        clear=_choices(raw, "clear", CLEARABLE),
+    )
+    on = ON_CATALOG[_enum(raw, "catalog", list(ON_CATALOG))]
+    name, kind = _named(raw), _item_kind(raw)
+    if on is None:
+        spec = await catalog_edits.edit_item(ctx.db, ctx.actor, name, kind, change, labels=ctx.session.pseudonyms)
+    elif change != catalog_edits.ItemEdit():
+        raise ToolInputError(catalog_edits.ACTIVE_ALONE)
+    else:
+        spec = await catalog_edits.item_active(ctx.db, ctx.actor, name, kind, active=on)
+    return await _keep_action(ctx, spec)
+
+
+DRAFT_CATALOG_EDIT = Tool(
+    name="draft_catalog_edit",
+    description=(
+        "Draft editing a catalog item, such as making it delivery only, or taking it off the catalog or putting "
+        "it back. Send only what changes; empty keeps the rest. The card shows each change." + CONFIRMS
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            **ITEM_PROPERTIES,
+            "catalog": {
+                "type": "string",
+                "enum": list(ON_CATALOG),
+                "description": "off hides it and keeps its history; back undoes that. Then send no other change.",
+            },
+            "new_name": {"type": "string"},
+            "modes": _list_of("A restaurant's ways, replacing them.", [Mode.PICKUP.value, Mode.DELIVERY.value]),
+            "meals": _list_of("Replacing them.", MEAL_NAMES),
+            "add_tags": _list_of(),
+            "remove_tags": _list_of(),
+            "add_cooks": _list_of(LABELS),
+            "remove_cooks": _list_of(LABELS),
+            "url": {"type": "string"},
+            "order_url": {"type": "string"},
+            "notes": {"type": "string", "description": "Replacing them."},
+            "servings": {"type": "integer", "description": "0 keeps them."},
+            "clear": _list_of("What to remove.", CLEARABLE),
+        },
+        "required": list(EDIT_FIELDS),
+        "additionalProperties": False,
+    },
+    run=draft_catalog_edit_tool,
+)
+
+MEAL_DAY = "today, yesterday, or YYYY-MM-DD"
+
+
+def _meal_day(raw: Mapping[str, Any], name: str, today: date) -> date | None:
+    if _text(raw, name).lower() == "yesterday":
+        return today - timedelta(days=1)
+    try:
+        return _day(raw, name, today, required=False)
+    except ToolInputError:
+        raise ToolInputError(f"{name} is {MEAL_DAY}.") from None
+
+
+async def look_up_my_meals_tool(ctx: ToolContext, raw: Mapping[str, Any]) -> str:
+    _fields(raw, "name")
+    today = await _today(ctx)
+    found = await catalog_edits.my_meals(ctx.db, ctx.actor, _text(raw, "name"), label=ctx.session.label, today=today)
+    return json.dumps(found, ensure_ascii=False)
+
+
+LOOK_UP_MY_MEALS = Tool(
+    name="look_up_my_meals",
+    description=(
+        "Look up the meals the member logged in History, the ones they can edit or delete, newest first: each "
+        "meal's number, day, slot, name, from_a_call (its place can't change), and people who ate, as labels."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {"name": {"type": "string", "description": "Text the name contains, or empty."}},
+        "required": ["name"],
+        "additionalProperties": False,
+    },
+    run=look_up_my_meals_tool,
+)
+
+MEAL_FIELDS = ("meal", "delete", "day", "slot", *ITEM_FIELDS, "add_people", "remove_people")
+
+
+async def draft_meal_tool(ctx: ToolContext, raw: Mapping[str, Any]) -> str:
+    _fields(raw, *MEAL_FIELDS)
+    today = await _today(ctx)
+    meal, delete = _whole(raw, "meal", 0, 2**62), _flag(raw, "delete")
+    slot = _enum(raw, "slot", CALL_SLOTS)
+    change = catalog_edits.MealChange(
+        day=_meal_day(raw, "day", today),
+        slot=Slot(slot) if slot else None,
+        name=_text(raw, "name"),
+        kind=_item_kind(raw),
+        add_people=_strings(raw, "add_people"),
+        remove_people=_strings(raw, "remove_people"),
+    )
+    labels = ctx.session.pseudonyms
+    if meal:
+        spec = await catalog_edits.change_meal(
+            ctx.db, ctx.actor, meal, change, delete=delete, labels=labels, today=today
+        )
+    else:
+        if delete or change.remove_people or change.day is None or change.slot is None or not change.name:
+            raise ToolInputError(catalog_edits.NEW_MEAL)
+        spec = await catalog_edits.log_meal(
+            ctx.db,
+            ctx.actor,
+            change.name,
+            change.kind,
+            slot=change.slot,
+            day=change.day,
+            people=change.add_people,
+            labels=labels,
+            today=today,
+        )
+    return await _keep_action(ctx, spec)
+
+
+DRAFT_MEAL = Tool(
+    name="draft_meal",
+    description=(
+        "Draft logging a meal had without a call, such as takeout last night, in History; or editing or deleting "
+        "one from look_up_my_meals. Send only what changes; empty keeps the rest." + CONFIRMS
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "meal": {"type": "integer", "description": "The meal's number, or 0 to log a new one."},
+            "delete": {"type": "boolean", "description": "true deletes it; then send no changes."},
+            "day": {"type": "string", "description": f"{MEAL_DAY}."},
+            "slot": {"type": "string", "enum": CALL_SLOTS},
+            "name": {"type": "string", "description": "A catalog item."},
+            "kind": ITEM_PROPERTIES["kind"],
+            "add_people": _list_of(f"Who ate. {LABELS} A new meal without any is the member's alone."),
+            "remove_people": _list_of(LABELS),
+        },
+        "required": list(MEAL_FIELDS),
+        "additionalProperties": False,
+    },
+    run=draft_meal_tool,
+)
+
+
 TOOLS: tuple[Tool, ...] = (
     LOOK_UP_CATALOG_ITEMS,
     LOOK_UP_HISTORY,
@@ -1504,6 +1748,9 @@ TOOLS: tuple[Tool, ...] = (
     DRAFT_HAND_OFF,
     DRAFT_MARK_DONE,
     DRAFT_CALL_OFF,
+    DRAFT_CATALOG_EDIT,
+    LOOK_UP_MY_MEALS,
+    DRAFT_MEAL,
 )
 """Every tool, in the order requests list them. Later tools come in follow-up issues."""
 
@@ -1522,6 +1769,8 @@ REFUSALS = (
     InvalidMemberInput,
     InvalidFeedback,
     InvalidPreference,
+    CatalogRuleViolation,
+    InvalidMeal,
 )
 """Refusals whose message is safe to send back: written for the person, or for the model."""
 

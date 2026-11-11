@@ -84,6 +84,15 @@ class MealLogRepository:
         rows = await self._session.execute(query.offset(offset).limit(limit))
         return [_meal(row, name) for row, name in rows]
 
+    async def logged_by(self, household_id: int, member_id: int) -> list[MealLog]:
+        """The meals ``member_id`` logged, newest first, in ``newest``'s order."""
+        query = (
+            self._select(household_id)
+            .where(MealLogRow.logged_by == member_id)
+            .order_by(MealLogRow.date.desc(), _day_rank.desc(), MealLogRow.id.desc())
+        )
+        return [_meal(row, name) for row, name in await self._session.execute(query)]
+
     async def newer_than(self, household_id: int, meal: MealLog) -> int:
         """How many of the household's meals ``newest`` lists before ``meal``."""
         rank = OF_THE_DAY[meal.slot]
