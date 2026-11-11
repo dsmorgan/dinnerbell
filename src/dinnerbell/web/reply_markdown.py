@@ -24,15 +24,21 @@ _HEADING = re.compile(r"^\s{0,3}#{1,6}\s+(.*?)(?:\s+#+)?\s*$")
 _FENCE = re.compile(r"^\s{0,3}(`{3,}|~{3,})")
 _RULE = re.compile(r"^\s{0,3}([-*_])(?:\s*\1){2,}\s*$")
 
-_CODE = re.compile(r"(`+)(.+?)\1", re.S)
+MAX_STYLED = 2000
+"""A longer line shows as plain text: every pattern here looks at one line, so this bounds the
+work a reply the model wrote can make, however it's built (a run of backticks, of markers, of
+spaces), on each load of the page that keeps it."""
+
+_CODE = re.compile(r"(?<![\\`])(`+)(?!`)(.{1,500}?)(?<!`)\1(?!`)")
 _ESCAPED = re.compile(r"\\([\\`*_~#+\-.!\[\]()>|])")
+# Each span is at most 500 characters, so a marker that never closes costs a bounded look ahead.
 _INLINE = (
-    (re.compile(r"\*\*\*(?=\S)(.+?)(?<=\S)\*\*\*"), "<strong><em>", "</em></strong>"),
-    (re.compile(r"\*\*(?=\S)(.+?)(?<=\S)\*\*"), "<strong>", "</strong>"),
-    (re.compile(r"(?<!\w)__(?=\S)(.+?)(?<=\S)__(?!\w)"), "<strong>", "</strong>"),
-    (re.compile(r"~~(?=\S)(.+?)(?<=\S)~~"), "<del>", "</del>"),
-    (re.compile(r"(?<![\w*])\*(?=[^\s*])(.+?)(?<=[^\s*])\*(?![\w*])"), "<em>", "</em>"),
-    (re.compile(r"(?<!\w)_(?=[^\s_])(.+?)(?<=[^\s_])_(?!\w)"), "<em>", "</em>"),
+    (re.compile(r"\*\*\*(?=\S)(.{1,500}?)(?<=\S)\*\*\*"), "<strong><em>", "</em></strong>"),
+    (re.compile(r"\*\*(?=\S)(.{1,500}?)(?<=\S)\*\*"), "<strong>", "</strong>"),
+    (re.compile(r"(?<!\w)__(?=\S)(.{1,500}?)(?<=\S)__(?!\w)"), "<strong>", "</strong>"),
+    (re.compile(r"~~(?=\S)(.{1,500}?)(?<=\S)~~"), "<del>", "</del>"),
+    (re.compile(r"(?<![\w*])\*(?=[^\s*])(.{1,500}?)(?<=[^\s*])\*(?![\w*])"), "<em>", "</em>"),
+    (re.compile(r"(?<!\w)_(?=[^\s_])(.{1,500}?)(?<=[^\s_])_(?!\w)"), "<em>", "</em>"),
 )
 
 
@@ -47,7 +53,10 @@ def _styled(text: str) -> str:
 
 
 def inline(text: str) -> str:
-    """One line or paragraph as HTML: code spans as they are, the rest through ``_styled``."""
+    """One line as HTML: code spans as they are, the rest through ``_styled``. A line longer
+    than ``MAX_STYLED`` is only escaped."""
+    if len(text) > MAX_STYLED:
+        return str(escape(text))
     parts: list[str] = []
     start = 0
     for match in _CODE.finditer(text):
@@ -91,6 +100,11 @@ def _blocks(lines: list[str]) -> Iterator[str]:
             continue
         if not line.strip():
             yield from flush()
+            continue
+        if len(line) > MAX_STYLED:  # plain text, matched against nothing
+            if items:
+                yield from flush()
+            paragraph.append(line)
             continue
         bullet, numbered, heading = _BULLET.match(line), _NUMBERED.match(line), _HEADING.match(line)
         if _RULE.match(line) and not bullet:
