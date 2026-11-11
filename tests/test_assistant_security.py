@@ -2536,6 +2536,15 @@ HTML_ATTACKS = (
     "{{ 7*7 }} {% if true %}x{% endif %} &lt;b&gt; &amp;",
     "javascript:alert(1) data:text/html,<b>x</b>",
 )
+FORMATTING = {"p", "br", "ul", "ol", "li", "strong", "em", "del", "code", "pre", "hr"}
+"""The tags a reply's Markdown may add (#284, ``web/reply_markdown.py``), never with an attribute."""
+
+
+def unformatted(tags: list[tuple[str, tuple[str, ...]]]) -> list[tuple[str, tuple[str, ...]]]:
+    """``tags`` without the reply's formatting, which may come only bare."""
+    return [tag for tag in tags if not (tag[0] in FORMATTING and tag[1] == ())]
+
+
 WEB_NAMES = ("<b>Bold</b> Bistro", '"><img src=x onerror=alert(1)> Diner', "<script>x</script> Cafe")
 
 
@@ -2543,8 +2552,9 @@ WEB_NAMES = ("<b>Bold</b> Bistro", '"><img src=x onerror=alert(1)> Diner', "<scr
 def test_web_replies_and_cards_never_render_html(web: TestClient, model: Attacker) -> None:
     """Attack: the model answers with HTML, Markdown links, and template syntax, and drafts
     offers of items whose names are HTML. Must hold: each exchange the page adds has exactly
-    the elements and attributes of a plain one, no attribute carries the attacker's link, and
-    the text shows as written, with a reload the same."""
+    the elements and attributes of a plain one, apart from the bare formatting tags a reply's
+    Markdown may add (#284), no attribute carries the attacker's link, and the text shows as
+    written, less Markdown's markers, with a reload the same."""
     assert web.post("/admin/assistant", data=SETTINGS_ON | {"csrf_token": csrf_from(web)}).status_code == 303
     for name in ("Plain Place", *WEB_NAMES):
         assert web_add_item(web, name).status_code == 303, name
@@ -2562,14 +2572,15 @@ def test_web_replies_and_cards_never_render_html(web: TestClient, model: Attacke
     for n, words in enumerate(HTML_ATTACKS):
         name = WEB_NAMES[n % len(WEB_NAMES)]
         shown = ask(name, words)
-        assert shown.tags == plain.tags, words
+        assert unformatted(shown.tags) == unformatted(plain.tags), words
         assert not any(attacked(value) for value in shown.values), words
         text = "".join(shown.text)
-        assert words.replace("\n", " ") in " ".join(text.split()) or words in text, words
+        written = words.replace("**", "")
+        assert written.replace("\n", " ") in " ".join(text.split()) or written in text, words
         assert name in text
     reloaded = Structure(web.get("/assistant").text)
     assert not any(attacked(value) for value in reloaded.values)
-    assert {tag for tag, _ in reloaded.tags} <= plain_page  # the kept exchanges add no kind of element
+    assert {tag for tag, _ in unformatted(reloaded.tags)} <= plain_page  # the kept exchanges add no kind of element
 
 
 def attacked(value: str) -> bool:

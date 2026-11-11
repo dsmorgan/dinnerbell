@@ -226,10 +226,10 @@ async def test_the_status_clears_when_the_reply_is_refused(slack: Slack) -> None
 async def test_the_status_clears_when_answering_breaks_after_converse(
     slack: Slack, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    def broken(reply: Reply) -> str:
+    def broken(text: str) -> tuple[str, list[dict[str, str]]]:
         raise RuntimeError("boom")
 
-    monkeypatch.setattr(slack_assistant, "reply_text", broken)
+    monkeypatch.setattr(slack_assistant, "reply_message", broken)
     root = next_ts()
     await slack.dm("Sam", "Hi", ts=root)
     assert steps(slack) == [status_set(SAM_DM, root), status_cleared(SAM_DM, root)]

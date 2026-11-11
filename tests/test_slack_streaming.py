@@ -1011,11 +1011,11 @@ async def test_a_reply_that_breaks_after_streaming_still_stops_the_stream(
         await asyncio.sleep(0)
         return Reply(LONG)
 
-    def broken(reply: Reply) -> str:
+    async def broken(self: Any, reply: str) -> str | None:
         raise RuntimeError("boom")
 
     monkeypatch.setattr(slack_assistant, "converse", streaming)
-    monkeypatch.setattr(slack_assistant, "reply_text", broken)
+    monkeypatch.setattr(slack_assistant.SlackStream, "finish", broken)
     await slack.dm("Sam", "Noodles?")
     assert len(slack.fake.of("chat.startStream")) == 1
     assert len(slack.fake.of("chat.stopStream")) == 1  # stopped, not left streaming for 10 minutes

@@ -11,6 +11,7 @@ from jinja2 import Environment
 
 from dinnerbell.domain import labels
 from dinnerbell.services.badge_art import badge_name, badge_svg
+from dinnerbell.web.reply_markdown import reply_markdown
 
 
 def clock(moment: datetime | None, timezone: str) -> str:
@@ -56,6 +57,13 @@ def elapsed(value: timedelta) -> str:
 
 def register(env: Environment) -> None:
     env.filters.update(
-        clock=clock, wall=wall, hhmm=hhmm, local_hhmm=local_hhmm, local_date=local_date, day=day, elapsed=elapsed
+        clock=clock,
+        wall=wall,
+        hhmm=hhmm,
+        local_hhmm=local_hhmm,
+        local_date=local_date,
+        day=day,
+        elapsed=elapsed,
+        reply_markdown=reply_markdown,
     )
     env.globals.update(badge_svg=badge_svg, badge_name=badge_name, labels=labels)

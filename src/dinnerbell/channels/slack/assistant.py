@@ -307,10 +307,13 @@ def defang(text: str) -> str:
     return defang_dots(text)
 
 
-def reply_text(reply: Reply) -> str:
-    """The reply's text for Slack (``safe_reply``). Its drafts come after it, a card each
-    (``draft_card``)."""
-    return safe_reply(reply.text)
+def reply_message(text: str) -> tuple[str, list[Block]]:
+    """The model's ``text`` as a posted message (#284): its ``text``, mrkdwn through
+    ``safe_reply``, which Slack shows only in notifications, and a ``markdown`` block through
+    ``safe_markdown``, which renders the model's Markdown, escaped as a streamed reply is. No
+    blocks when nothing is left to show."""
+    shown = safe_markdown(text)
+    return safe_reply(text), ([{"type": "markdown", "text": shown}] if shown else [])
 
 
 def draft_card(draft: DraftView) -> dict[str, Any]:
@@ -958,7 +961,7 @@ class SlackAssistant:
         """Post ``reply`` and its draft cards in the message's thread: publicly, or only to the
         member when it carries drafts in a channel thread. When ``stream``, a DM's, showed some
         of it, the stream ends with the rest, and only what the member hasn't seen is posted."""
-        body = reply_text(reply)
+        shown = reply.text
         cards = [draft_card(draft) for draft in reply.drafts]
         private = bool(cards) and not incoming.private  # drafts, and the reply on them, go only to their member
         noted = f"{key}:{incoming.user}"
@@ -969,18 +972,20 @@ class SlackAssistant:
                 for card in cards:
                     await self._post(incoming, member, card["text"], card["blocks"])
                 return
-            body = safe_reply(unseen)
+            shown = unseen
+        body, blocks = reply_message(shown)
         if first and self.bot_user_id:
             note = mention_only_line(self.bot_user_id)
             room = MAX_REPLY - len(note) - 2
             body = f"{clip_mrkdwn(body, room) if len(body) > room else body}\n\n{note}".lstrip()
+            blocks = [*blocks, context(note)]
         if private:  # spec 6.14
-            if body and await self._ephemeral(incoming, member, body) and first:
+            if body and await self._ephemeral(incoming, member, body, blocks) and first:
                 self.noted.add(noted)  # this member has seen the note; the thread hasn't yet
             for card in cards:
                 await self._ephemeral(incoming, member, card["text"], card["blocks"])
             return
-        if (body or not cards) and await self._post(incoming, member, body) and not incoming.private:
+        if (body or not cards) and await self._post(incoming, member, body, blocks) and not incoming.private:
             self.replied.add(key)
         for card in cards:
             await self._post(incoming, member, card["text"], card["blocks"])

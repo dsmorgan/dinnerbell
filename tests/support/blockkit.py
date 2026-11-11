@@ -134,6 +134,8 @@ def check_blocks(blocks: Any, surface: str = "message") -> None:
     assert isinstance(blocks, list) and blocks, "blocks must be a non-empty list"
     assert len(blocks) <= MAX_BLOCKS[surface], f"{len(blocks)} blocks on a {surface}"
     block_ids: set[str] = set()
+    markdown = sum(len(block["text"]) for block in blocks if block.get("type") == "markdown")
+    assert markdown <= 12000, f"{markdown} characters of markdown blocks"  # Slack's limit per payload
     for index, block in enumerate(blocks):
         where = f"block {index} ({block.get('type')})"
         if "block_id" in block:
@@ -176,6 +178,10 @@ def check_blocks(blocks: Any, surface: str = "message") -> None:
             check_image(block, where)
         elif kind == "divider":
             pass
+        elif kind == "markdown":  # standard Markdown; Dinnerbell escapes it so no "<" opens anything
+            assert surface == "message", f"{where}: markdown blocks only in messages"
+            assert set(block) == {"type", "text"} and isinstance(block["text"], str) and block["text"], where
+            assert "<" not in block["text"], f"{where}: an unescaped <"
         else:
             raise AssertionError(f"{where}: unexpected block type")
 
