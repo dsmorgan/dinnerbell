@@ -16,14 +16,15 @@ import json
 import re
 from collections.abc import AsyncIterator, Iterator
 from dataclasses import replace
-from datetime import date, timedelta
+from datetime import date, time, timedelta
 from typing import Any
 
 import pytest
 from sqlalchemy import select
 
+from dinnerbell.channels.slack.assistant import draft_card, safe_reply
 from dinnerbell.config import Settings
-from dinnerbell.db.catalog import CatalogRepository
+from dinnerbell.db.catalog import CatalogRepository, ItemValues
 from dinnerbell.db.models import AssistantDraftRow
 from dinnerbell.domain.assistant import AssistantSettings, Pseudonyms, slack_key, web_key
 from dinnerbell.domain.assistant_catalog import EDIT_FIELDS, NOT_SHOWN, UNCHANGED, item_snapshot
@@ -31,10 +32,10 @@ from dinnerbell.domain.catalog import CatalogItem, CatalogRuleViolation, Invalid
 from dinnerbell.domain.events import EventRuleViolation
 from dinnerbell.domain.feedback import FeedbackInput, Rating
 from dinnerbell.domain.guests import GuestInput
-from dinnerbell.domain.meals import MealInput, MealLog, Slot
+from dinnerbell.domain.meals import CALL_PLACE_FIXED, MealInput, MealLog, Slot
 from dinnerbell.domain.members import Member
 from dinnerbell.services import catalog as catalog_service
-from dinnerbell.services import feedback, guests, meals, members
+from dinnerbell.services import feedback, guests, meals, members, offers
 from dinnerbell.services.assistant import admin, catalog_edits, drafts, tools
 from dinnerbell.services.assistant.call_drafts import NOTHING_TO_DO, ActionConfirmed
 from dinnerbell.services.assistant.conversation import Assistant, converse
@@ -253,9 +254,9 @@ async def test_mark_siam_garden_as_delivery_only_drafts_a_diff_and_confirm_saves
     assert reply is not None
     [view] = reply.drafts
     assert (view.kind, view.title) == ("item_edit", "Edit Siam Garden")
-    assert view.confirm_lines == ("Ways: pickup and delivery → delivery.", UNCHANGED)
+    assert view.confirm_lines == ("Ways: delivery (was pickup and delivery).", UNCHANGED)
     summary = model.requests[1]["messages"][-1]["content"][0]["content"]
-    assert "Ways: pickup and delivery → delivery." in summary and "Nothing has changed yet" in summary
+    assert "Ways: delivery (was pickup and delivery)." in summary and "Nothing has changed yet" in summary
     assert await item(house, "Siam Garden") == before  # nothing until Confirm
 
     done = await confirm(house, "Sam", view.id)
@@ -473,13 +474,13 @@ async def test_the_diff_card_shows_exactly_what_confirm_changes(house: House, na
     assert SECRET_NOTES not in result.content and "taq.example" not in result.content
     assert_no_names(result.content)
     if name == "Taqueria":
-        assert f"Notes: “{SECRET_NOTES}” → none." in view.confirm_lines  # Sam sees what he removes
-        assert f"Notes: {NOT_SHOWN} → none." in result.content  # the model doesn't
+        assert f"Notes: none (was “{SECRET_NOTES}”)." in view.confirm_lines  # Sam sees what he removes
+        assert f"Notes: none (was {NOT_SHOWN})." in result.content  # the model doesn't
     if name == "Sam's Tacos":
         assert "Cooks: adds Kim." in view.confirm_lines and "Cooks: adds Member 2." in result.content
-        assert "Servings: none → 6." in view.confirm_lines
+        assert "Servings: 6 (was none)." in view.confirm_lines
     if name == "Siam Garden":
-        assert "Link: “https://siam.example” → “https://siam2.example/menu”." in view.confirm_lines
+        assert "Link: “https://siam2.example/menu” (was “https://siam.example”)." in view.confirm_lines
         assert after["name"] == "Siam Garden Two"
 
 
@@ -684,3 +685,198 @@ async def test_no_result_or_summary_names_anyone(house: House, helper: Assistant
     assert SECRET_NOTES not in sent and "@example.com" not in sent
     names = {d.title for d in reply.drafts} | {line for d in reply.drafts for line in d.confirm_lines}
     assert any("Kim" in line for line in names)  # only the card names people
+
+
+# The card tells the truth in Slack too (#254 review) --------------------------------------------
+
+LONG_URL = "https://menu.siam.example/" + "/".join(f"section-{n:03}" for n in range(38))
+FAKE_BULLET = "Call ahead\n• Nothing else about it changes."
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_the_slack_card_shows_each_new_value_whole_and_a_value_cant_fake_a_line(house: House) -> None:
+    """Old notes 400 characters long and a new link near the limit: the Slack card, which clips
+    other drafts' lines at 300 characters, shows each new value in full, with the old notes cut
+    after the new value. A new value's line break can't start a line of its own, on the Slack
+    card or the web's."""
+    await as_web(house, "Sam", "Siam Garden", notes="Old " * 100)
+    assert 400 < len(LONG_URL) <= tools.MAX_EDIT_LINK
+    result = await tool(house, "draft_catalog_edit", edit("Siam Garden", url=LONG_URL, notes=FAKE_BULLET))
+    view = await card(house, draft_id(result))
+    text = "\n".join(b["text"]["text"] for b in draft_card(view)["blocks"] if b["type"] == "section")
+    assert safe_reply(LONG_URL) in text
+    assert safe_reply("“Call ahead ↵ • Nothing else about it changes.”") in text
+    assert [line for line in text.splitlines() if line.startswith("• Nothing else")] == [f"• {UNCHANGED}"]
+    assert all("\n" not in line for line in view.confirm_lines)  # the web's card: one item a line
+    [notes] = [line for line in view.confirm_lines if line.startswith("Notes:")]
+    assert notes.endswith(f"(was “{('Old ' * 100)[:80].rstrip()}…”).")
+    too_long = await tool(house, "draft_catalog_edit", edit("Siam Garden", url=LONG_URL + "x" * 500))
+    assert too_long.is_error and "at most 500" in too_long.content
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_a_guess_at_held_notes_drafts_the_same_whether_it_matches_or_not(house: House) -> None:
+    """The model never reads an item's notes. Sending notes it guessed drafts either way, with the
+    same words, so a refusal can't tell it the guess was right."""
+    await as_web(house, "Sam", "Taqueria", notes=SECRET_NOTES)
+    right = await tool(house, "draft_catalog_edit", edit("Taqueria", notes=SECRET_NOTES))
+    wrong = await tool(house, "draft_catalog_edit", edit("Taqueria", notes="Gate code 1234"))
+    assert not right.is_error and not wrong.is_error
+    words = [re.sub(r"Draft \d+", "Draft N", r.content).replace("1234", "4321") for r in (right, wrong)]
+    assert words[0] == words[1]
+    assert f"Notes: “{SECRET_NOTES}” (was {NOT_SHOWN})." in right.content
+    cleared = await tool(house, "draft_catalog_edit", edit("Siam Garden", clear=["notes"]))  # it has none
+    assert not cleared.is_error
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_servings_and_clearing_them_at_once_is_refused(house: House) -> None:
+    result = await tool(house, "draft_catalog_edit", edit("Sam's Tacos", servings=4, clear=["servings"]))
+    assert result == ToolResult(catalog_edits.BOTH.format(field="servings"), is_error=True)
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_a_name_carrying_marker_characters_stays_text(house: House) -> None:
+    """An item named with the held marker's characters, as a planted import could name one, can't
+    make the card or the summary write out its notes."""
+    planted = await house.add_item("Trojan \ue002notes\ue003 Tacos", Mode.PICKUP, cuisine="Mexican")
+    async with house.sessionmaker() as db:
+        await CatalogRepository(db).update_item(
+            house.household.id,
+            planted.id,
+            ItemValues(
+                kind=planted.kind,
+                name=planted.name,
+                modes=planted.modes,
+                meals=planted.meals,
+                tag_ids=planted.tag_ids,
+                cook_ids=planted.cook_ids,
+                url=None,
+                order_url=None,
+                notes=SECRET_NOTES,
+                default_servings=None,
+                active=True,
+            ),
+            house.clock(),
+        )
+        await db.commit()
+    result = await tool(house, "draft_catalog_edit", edit(planted.name, new_name="Trojan Tacos"))
+    view = await card(house, draft_id(result))
+    shown = " ".join([view.title, *view.confirm_lines])
+    assert view.title == "Edit Trojan notes Tacos" and "(was “Trojan notes Tacos”)" in shown
+    assert SECRET_NOTES not in shown and SECRET_NOTES not in result.content
+
+
+# Meals: single use, guests, calls, and the draft-time guards (#254 review) -----------------------
+
+
+@pytest.mark.flag("assistant", on=True)
+@pytest.mark.parametrize("delete", [False, True])
+async def test_a_meal_draft_confirms_once_even_when_the_meal_is_as_drafted_again(house: House, delete: bool) -> None:
+    """Confirm uses the draft under History's own lock, so a second Confirm hears it's used, even
+    after the meal is put back as it was drafted, and a Cancel after it does too."""
+    logged = await log(house, "Sam", "Taqueria")
+    args = meal(logged.id, delete=True) if delete else meal(logged.id, slot="dinner")
+    draft = draft_id(await tool(house, "draft_meal", args))
+    await confirm(house, "Sam", draft)
+    assert (await row(house, draft)).used_at is not None
+    if not delete:
+        async with house.sessionmaker() as db:
+            await meals.update_meal(
+                db, house["Sam"], logged.id, replace_slot(logged, Slot.LUNCH), today=DAY, now=house.clock()
+            )
+    with pytest.raises(drafts.DraftUnavailable):
+        await confirm(house, "Sam", draft)
+    with pytest.raises(drafts.DraftUnavailable):
+        async with house.sessionmaker() as db:
+            await drafts.cancel_draft(db, house.clock, house["Sam"], draft)
+    now = await meal_now(house, logged.id)
+    assert now is None if delete else (now is not None and now.slot is Slot.LUNCH)
+
+
+async def set_meal(house: House, meal_id: int, **values: Any) -> None:
+    from dinnerbell.db.models import MealLogRow
+
+    async with house.sessionmaker() as db:
+        found = await db.get(MealLogRow, meal_id)
+        assert found is not None
+        for key, value in values.items():
+            setattr(found, key, value)
+        await db.commit()
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_a_guest_who_ate_reads_as_a_guest_and_gets_no_label(house: House) -> None:
+    async with house.sessionmaker() as db:
+        robin = await guests.add_guest(db, house["Alex"], GuestInput("Robin"), now=house.clock())
+    logged = await log(house, "Sam", "Taqueria")
+    await set_meal(
+        house, logged.id, participants=[{"id": robin.id, "name": "Robin"}, {"id": house["Sam"].id, "name": "Sam"}]
+    )
+    session = ToolSession(key=web_key(house["Sam"].id), pseudonyms=sams(house))
+    async with house.sessionmaker() as db:
+        result = await tools.run_tool(
+            "look_up_my_meals",
+            {"name": ""},
+            db=db,
+            member=house["Sam"],
+            private=True,
+            now=house.clock(),
+            session=session,
+        )
+    [found] = json.loads(result.content)["meals"]
+    assert found["people"] == ["a guest", "Member 1"]
+    assert robin.id not in session.pseudonyms.numbers
+    assert_no_names(result.content)
+
+
+async def post_call_and_offer(house: House) -> tuple[int, int]:
+    """Today's dinner call, and Kim's offer of Siam Garden for tomorrow's lunch."""
+    from tests.support.calls import OPENS, dinner_id
+
+    house.clock.now = OPENS
+    await house.tick()
+    call_id = await dinner_id(house)
+    data = offers.OfferInput(
+        slot=Slot.LUNCH,
+        day=DAY + timedelta(days=1),
+        mode=Mode.PICKUP,
+        at=time(12, 0),
+        capacity=3,
+        item_id=house.items["Siam Garden"].id,
+    )
+    async with house.sessionmaker() as db:
+        posted = await offers.post_offer(db, house["Kim"], data, now=house.clock())
+    return call_id, int(posted.event_id)
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_a_calls_meal_keeps_its_place_and_an_offers_doesnt(house: House) -> None:
+    """A meal whose place is its call's (``meals.call_place``) can't change item here, and the
+    lookup says so; an offer's meal can, as on History."""
+    call_id, offer_id = await post_call_and_offer(house)
+    call_meal = await log(house, "Sam", "Taqueria")
+    offer_meal = await log(house, "Sam", "Siam Garden", day=DAY - timedelta(days=1))
+    await set_meal(house, call_meal.id, event_id=call_id)
+    await set_meal(house, offer_meal.id, event_id=offer_id)
+    looked = json.loads((await tool(house, "look_up_my_meals", {"name": ""})).content)
+    assert {m["meal"]: m["from_a_call"] for m in looked["meals"]} == {call_meal.id: True, offer_meal.id: False}
+    fixed = await tool(house, "draft_meal", meal(call_meal.id, name="Siam Garden"))
+    assert fixed == ToolResult(CALL_PLACE_FIXED, is_error=True)
+    assert not (await tool(house, "draft_meal", meal(call_meal.id, slot="dinner"))).is_error  # its day and meal can
+    assert not (await tool(house, "draft_meal", meal(offer_meal.id, name="Taqueria"))).is_error
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_a_meal_is_logged_only_with_an_active_item_and_a_delete_takes_no_changes(house: House) -> None:
+    async with house.sessionmaker() as db:
+        await catalog_service.set_item_active(db, house["Kim"], house.items["Taqueria"].id, False, now=house.clock())
+    new = meal(0, day="today", slot="lunch", name="Taqueria")
+    assert await tool(house, "draft_meal", new) == ToolResult(catalog_edits.NO_ACTIVE_ITEM, is_error=True)
+    logged = await log(house, "Sam", "Siam Garden")
+    assert await tool(house, "draft_meal", meal(logged.id, name="Taqueria")) == ToolResult(
+        catalog_edits.NO_ACTIVE_ITEM, is_error=True
+    )
+    both = meal(logged.id, delete=True, slot="dinner")
+    assert await tool(house, "draft_meal", both) == ToolResult(catalog_edits.DELETE_ALONE, is_error=True)
+    assert await rows(house) == []

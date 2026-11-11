@@ -7,8 +7,9 @@ the real services. Slack is ``FakeSlack``; nothing reaches Slack or Anthropic.""
 from __future__ import annotations
 
 import asyncio
+import json
 from collections.abc import AsyncIterator, Callable
-from datetime import timedelta
+from datetime import date, timedelta
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
@@ -30,17 +31,19 @@ from dinnerbell.channels.slack.assistant import (
 )
 from dinnerbell.channels.slack.interactions import ASSISTANT_OFF, JOIN_OFFER, OUT_OF_DATE
 from dinnerbell.config import Settings
+from dinnerbell.db.assistant import AssistantRepository
 from dinnerbell.db.meals import household_settings
 from dinnerbell.db.models import AssistantDraftRow, ProposalRow
 from dinnerbell.db.repositories import HouseholdRepository
-from dinnerbell.domain.assistant import AssistantSettings
+from dinnerbell.domain.assistant import AssistantSettings, slack_key
 from dinnerbell.domain.catalog import Mode
 from dinnerbell.domain.events import EventRuleViolation, EventState, RoleOffer, Status
+from dinnerbell.domain.meals import MealInput, Slot
 from dinnerbell.domain.preferences import Stance, TargetType
 from dinnerbell.domain.schedule import PROPOSAL_COUNT_KEY, TEMPERATURE_KEY
-from dinnerbell.services import calls
+from dinnerbell.services import calls, meals
 from dinnerbell.services import catalog as catalog_service
-from dinnerbell.services.assistant import admin, drafts
+from dinnerbell.services.assistant import admin, catalog_edits, drafts
 from dinnerbell.services.assistant.conversation import Assistant, Reply
 from dinnerbell.services.assistant.drafts import EXPIRED, NO_SUCH_DRAFT, USED, DraftView
 from dinnerbell.services.assistant.runtime import AssistantConfig
@@ -58,6 +61,7 @@ pytestmark = pytest.mark.anyio
 KEY = "sk-ant-test-not-a-real-key"
 SAM_DM, LEE_DM = "D02SAM", "D04LEE"
 CARD_TS = "1790000999.000100"
+DAY = date(2026, 10, 22)
 CATALOG = """version: 1
 restaurants:
   - name: Noodle Bar
@@ -394,6 +398,43 @@ async def test_a_catalog_edit_or_a_meal_in_a_channel_thread_is_the_askers_alone(
     assert posts(slack) == [] and updated(slack) == [] and ephemerals(slack) == []
     [row] = await draft_rows(house)
     assert row.member_id == house["Kim"].id and row.used_at is not None
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_a_meal_lookup_in_a_channel_thread_names_no_eater_and_labels_nobody(
+    house: House, model: FakeModel, slack: Slack
+) -> None:
+    """#254: "what meals did I log?" in the channel posts its reply for everyone, since it has no
+    card. So the lookup leaves out who ate: the model can't name them, even by label, and the
+    thread's shared pseudonyms gain nobody. In a DM, the same lookup gives who ate, by label."""
+    eaten = MealInput(
+        DAY, Slot.LUNCH, house.items["Taqueria"].id, frozenset({house[n].id for n in ("Kim", "Sam", "Lee")})
+    )
+    async with house.sessionmaker() as db:
+        await meals.log_meal(db, house["Kim"], eaten, today=DAY, now=house.clock())
+    model.script = [
+        tool_call("look_up_my_meals", {"name": ""}),
+        answer("You logged Taqueria for lunch with Member 2 and Member 3."),
+    ]
+    root = next_ts()
+    await slack.mention("Kim", f"<@{BOT_USER}> what meals did I log?", ts=root)
+    [reply] = posts(slack)
+    assert ephemerals(slack) == []
+    for name in ("Sam", "Lee"):
+        assert name not in reply["text"]
+    [result] = model.requests[-1]["messages"][-1]["content"]
+    looked = json.loads(result["content"])
+    assert "people" not in looked["meals"][0] and looked["people"] == catalog_edits.PEOPLE_IN_PRIVATE
+    async with house.sessionmaker() as db:
+        thread = await AssistantRepository(db).conversation(house.household.id, slack_key(CHANNEL, root))
+    assert thread is not None and set(thread.pseudonyms.numbers) == {house["Kim"].id}
+
+    slack.fake.clear()
+    model.script = [tool_call("look_up_my_meals", {"name": ""}), answer("With Member 2 and Member 3.")]
+    model.requests.clear()
+    await slack.dm("Kim", "what meals did I log?")
+    [result] = model.requests[-1]["messages"][-1]["content"]
+    assert json.loads(result["content"])["meals"][0]["people"] == ["Member 1", "Member 2", "Member 3"]
 
 
 @pytest.mark.flag("assistant", on=True)

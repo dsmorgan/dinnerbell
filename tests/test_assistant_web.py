@@ -122,16 +122,18 @@ class TestAdminAssistant:
     [{"anthropic_api_key": "sk-ant-test-not-a-real-key", "assistant_model": "claude-opus-5-5"}],
 )
 @pytest.mark.flag("assistant", on=True)
-def test_a_cap_below_one_private_message_saves_and_says_so(
+def test_a_cap_below_one_message_saves_and_says_so(
     client: TestClient, provider: FakeProvider, migrated: Settings
 ) -> None:
-    """#253: with Opus, one private message's worst case is more than $1. The $1 cap still saves,
-    and the page says it's too low, from the reservation code itself, and the least cap that works."""
+    """#253, #254: with Opus, every message's worst case is more than $1, a channel thread's included.
+    The $1 cap still saves, and the page says it's too low for any message, from the reservation
+    code itself, and the least cap that works."""
     from dinnerbell.domain.assistant import format_dollars
-    from dinnerbell.services.assistant.conversation import least_private_call_micros
+    from dinnerbell.services.assistant.conversation import least_call_micros, least_private_call_micros
 
     least = least_private_call_micros("claude-opus-5-5")
-    assert 1_000_000 < least < 2_000_000
+    channel = least_call_micros("claude-opus-5-5", private=False)
+    assert 1_000_000 < channel < least < 2_000_000  # since #254, a channel thread's too
     sign_in(client, provider)
     assert 'id="cap-low"' not in page(client.get("/admin/assistant"))  # $5 by default
     assert save(client, FORM | {"cap_dollars": "1"}).status_code == 303
@@ -140,10 +142,28 @@ def test_a_cap_below_one_private_message_saves_and_says_so(
     shown = " ".join(page(client.get("/admin/assistant")).split())
     assert 'id="cap-low"' in shown
     assert (
-        f"With claude-opus-5-5, one private message can cost up to {format_dollars(least)}, more than the monthly "
-        "cap, so the assistant can't answer messages on the Assistant page or in direct messages. A cap of $2 covers "
-        "the smallest message; long conversations and requests that use several tools need more. Or ask the "
-        "operator for a cheaper model."
+        f"With claude-opus-5-5, one message can cost up to {format_dollars(channel)} in a channel thread and "
+        f"{format_dollars(least)} on the Assistant page or in a direct message, more than the monthly cap, so the "
+        "assistant can't answer any message. A cap of $2 covers the smallest message; long conversations and "
+        "requests that use several tools need more. Or ask the operator for a cheaper model."
     ) in shown
+    assert "one private message can cost" not in shown
     assert save(client, FORM | {"cap_dollars": "2"}).status_code == 303
     assert 'id="cap-low"' not in page(client.get("/admin/assistant"))
+
+
+def test_the_cap_alert_says_which_messages_it_stops() -> None:
+    """A cap between a channel thread's smallest message and a private one's stops only private
+    messages, and the page says so; one below both stops every message."""
+    from dinnerbell.domain.assistant import AssistantSettings
+    from dinnerbell.services.assistant.admin import AssistantAdmin
+
+    def view(cap: int) -> AssistantAdmin:
+        settings = AssistantSettings(enabled=True, cap_dollars=cap)
+        return AssistantAdmin(
+            settings, "2026-10", 0, (), least_call_micros=2_500_000, least_channel_call_micros=1_500_000
+        )
+
+    assert (view(2).cap_below_one_call, view(2).cap_below_any_call) == (True, False)
+    assert (view(1).cap_below_one_call, view(1).cap_below_any_call) == (True, True)
+    assert (view(3).cap_below_one_call, view(3).cap_below_any_call) == (False, False)

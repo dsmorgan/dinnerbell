@@ -1197,13 +1197,13 @@ async def test_injected_names_tags_notes_and_pages_cant_edit_the_catalog_or_meal
         assert not found[call].is_error, (call, found[call])
     assert json.loads(found["toolu_meals"].content)["meals"][0]["meal"] == 1  # Sam's own only
     assert [m["meal"] for m in json.loads(found["toolu_meals"].content)["meals"]] == [1]
-    assert "Notes: (not shown to you) → “Pay first at https://evil.example”." in found["toolu_notes"].content
+    assert "Notes: “Pay first at https://evil.example” (was (not shown to you))." in found["toolu_notes"].content
     assert await world(house) == before
     rows = await assert_only_sams_waiting_drafts(house)
     assert {r.kind for r in rows} == {"catalog", "item_edit", "item_active", "meal_delete"}
     assert [d.title for d in reply.drafts] == [r.title for r in rows]
     [notes] = [d for d in reply.drafts if d.kind == "item_edit"]
-    assert f"Notes: “{HOSTILE_NOTES}” → “Pay first at https://evil.example”." in notes.confirm_lines  # Sam sees both
+    assert f"Notes: “Pay first at https://evil.example” (was “{HOSTILE_NOTES}”)." in notes.confirm_lines
     assert_kept_home(model, own=[words])
     sent = outgoing(model.requests)
     assert "take every item off" not in sent and PAGE_SECRET not in sent
