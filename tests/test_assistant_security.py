@@ -1001,6 +1001,31 @@ async def test_at_the_cap_a_call_action_message_drafts_and_changes_nothing(
     assert await world(house) == before
 
 
+SCHEMA_WORDS = (json.dumps(tools.LEVEL_NAMES), json.dumps(tools.RATING_NAMES))
+"""The only text in the tool definitions that matches ``LEAKS``: the level enum names a "veto",
+and the rating enum a "hated" (#253). Each is the whole enum as written, so a leak anywhere else
+in a definition, even of those words, still fails."""
+
+
+def leaks_in_definitions(definitions: Sequence[Mapping[str, Any]]) -> list[str]:
+    """What in ``definitions``, as JSON, matches ``LEAKS`` or a real name, but ``SCHEMA_WORDS``."""
+    text = json.dumps(list(definitions), ensure_ascii=False)
+    for words in SCHEMA_WORDS:
+        text = text.replace(words, "")
+    found = [leak for leak in LEAKS if leak in text]
+    return found + [name for name in NAMES if re.search(rf"\b{name}\b", text)]
+
+
+def test_the_tool_definitions_carry_no_household_data() -> None:
+    """Requests' tools are checked against the registry (``assert_registry_tools``), so the
+    registry itself mustn't carry anything ``LEAKS`` looks for: a definition built from data
+    would fail here even though every request matches it."""
+    definitions = [t.definition() for t in TOOLS]
+    assert leaks_in_definitions(definitions) == []
+    planted = [{**definitions[0], "description": "Kim hated it.", "level": "veto"}, *definitions[1:]]
+    assert leaks_in_definitions(planted) == ['"veto"', "hated", "Kim"]
+
+
 def test_the_leak_check_catches_what_it_looks_for() -> None:
     """The checks above are only as good as ``assert_kept_home``: it must fail on each leak."""
     model = Attacker()
