@@ -22,7 +22,7 @@ from sqlalchemy import select
 
 from dinnerbell.config import Settings
 from dinnerbell.db.models import AssistantDraftRow, AssistantUsageRow, ProposalRow
-from dinnerbell.domain.assistant import AssistantSettings, Pseudonyms, TokenUsage, cost_micros, web_key
+from dinnerbell.domain.assistant import AssistantSettings, Pseudonyms, TokenUsage, cost_micros, slack_key, web_key
 from dinnerbell.domain.assistant_drafts import MAX_LINK_ITEMS, MAX_OPEN_DRAFTS, entry_link, from_link
 from dinnerbell.domain.catalog import ItemKind, Mode
 from dinnerbell.domain.catalog_file import parse_catalog
@@ -145,10 +145,14 @@ async def helper(settings: Settings, model: FakeModel, fetch: FakeFetch, house: 
     return helper
 
 
-async def ask(house: House, helper: Assistant, text: str = f"Add this place: {LINK}", who: str = "Sam") -> Reply:
+async def ask(
+    house: House, helper: Assistant, text: str = f"Add this place: {LINK}", who: str = "Sam", *, thread: str = ""
+) -> Reply:
+    """``who`` asks on the web, or in the channel thread ``thread``."""
     member = house[who]
+    key, private = (thread, False) if thread else (web_key(member.id), True)
     async with house.sessionmaker() as db:
-        reply = await converse(db, helper, member, web_key(member.id), private=True, text=text)
+        reply = await converse(db, helper, member, key, private=private, text=text)
     assert reply is not None
     return reply
 
@@ -810,7 +814,9 @@ async def test_a_cap_below_one_drafting_call_says_so_instead_of_next_month(
             db, opus.config, house["Alex"], AssistantSettings(enabled=True, cap_dollars=1), now=house.clock()
         )
     model.script = [tool_call("draft_catalog_from_link", link()), answer("The cap is too low.")]
-    reply = await ask(house, opus)
+    # In a channel thread: a private conversation also offers the member's own-data tools (#253),
+    # whose definitions take an Opus message's own reservation past the $1 cap.
+    reply = await ask(house, opus, thread=slack_key("C0HOUSE", "1790000000.000100"))
     assert reply == Reply("The cap is too low.")
     [result] = results(model.requests[-1])
     assert result["is_error"] and result["content"] == CAP_TOO_LOW

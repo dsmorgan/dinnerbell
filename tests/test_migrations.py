@@ -2600,3 +2600,32 @@ def test_0034_lets_drafts_hold_call_actions_keeps_every_row_and_never_reuses_an_
     _downgrade_to(settings, "0033_assistant_draft_confirmed")
     sql, down = _drafts(settings)
     assert "AUTOINCREMENT" in sql and "'answer'" not in sql and down == after
+
+
+def test_0035_lets_drafts_hold_own_data_keeps_every_row_and_never_reuses_an_id(settings: Settings) -> None:
+    """Up widens ``assistant_draft.kind`` to the member's own data (#253), keeping every draft,
+    call actions included, and the AUTOINCREMENT high-water mark. Down deletes the own-data
+    drafts, which the old check can't store, and keeps the rest."""
+    _upgrade_to(settings, "0034_assistant_call_actions")
+    _populate_calls(settings)
+    _execute(settings, DRAFT_INSERT.replace(":kind", "'catalog'"), DRAFT_INSERT.replace(":kind", "'vote'"))
+    sql, before = _drafts(settings)
+    assert before and "'preference'" not in sql
+    with pytest.raises(IntegrityError):
+        _execute(settings, DRAFT_INSERT.replace(":kind", "'preference'"))
+    newest = max(int(str(row[0])) for row in before)
+    _execute(settings, f"DELETE FROM assistant_draft WHERE id = {newest}")  # noqa: S608 - an integer
+
+    _upgrade_to(settings, "0035_assistant_own_data")
+    sql, after = _drafts(settings)
+    assert "AUTOINCREMENT" in sql and after == before[:-1]
+    for kind in ("preference", "feedback", "away"):
+        _execute(settings, DRAFT_INSERT.replace(":kind", f"'{kind}'"))
+    _, added = _drafts(settings)
+    assert min(int(str(row[0])) for row in added[len(after) :]) == newest + 1
+    with pytest.raises(IntegrityError):
+        _execute(settings, DRAFT_INSERT.replace(":kind", "'stance'"))
+
+    _downgrade_to(settings, "0034_assistant_call_actions")
+    sql, down = _drafts(settings)
+    assert "AUTOINCREMENT" in sql and "'preference'" not in sql and down == after

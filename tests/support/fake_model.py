@@ -67,6 +67,12 @@ class FakeModel:
         """Every request so far as one JSON string, for checking what left the house."""
         return json.dumps(self.requests, ensure_ascii=False)
 
+    @property
+    def sent_data(self) -> str:
+        """``sent`` without the tool definitions, the registry's own text, which names what tools
+        take, such as a "veto" level (#253). A test that scans this checks the definitions apart."""
+        return json.dumps([{k: v for k, v in r.items() if k != "tools"} for r in self.requests], ensure_ascii=False)
+
 
 def failure(*, maybe_billed: bool) -> ModelCallFailed:
     return ModelCallFailed(maybe_billed=maybe_billed)

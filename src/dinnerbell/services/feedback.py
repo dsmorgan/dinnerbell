@@ -14,7 +14,7 @@ or a note, so no log line or audit row can say who gave which.
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable
+from collections.abc import Awaitable, Callable, Iterable
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 
@@ -183,18 +183,29 @@ async def form_for_event(db: AsyncSession, actor: Member, event_id: int, *, run:
     return await form(db, actor, await meal_for_event(db, actor, event_id, run=run), now=now)
 
 
-async def give(db: AsyncSession, actor: Member, meal_id: int, data: FeedbackInput, *, now: datetime) -> Feedback | None:
+Expect = Callable[[Feedback | None, MealFacts], Awaitable[None]]
+"""What a caller checks under ``give``'s lock before it saves: the member's feedback on the meal
+as it is, and the meal. It raises to refuse, which saves nothing."""
+
+
+async def give(
+    db: AsyncSession, actor: Member, meal_id: int, data: FeedbackInput, *, now: datetime, expect: Expect | None = None
+) -> Feedback | None:
     """Save ``actor``'s feedback on ``meal_id``, replacing any they gave before. Empty feedback
     takes theirs back, and returns None. Raises InvalidFeedback or NotFound.
 
     It holds the write lock from reading the meal to saving, the one lock ``locked_event`` also
     takes first, so its snapshot can't miss a correction of the place (#220) that commits in
-    between, and two first saves at once can't both insert."""
+    between, and two first saves at once can't both insert. ``expect`` runs under that lock once
+    the member may give feedback, as the assistant's Confirm checks its draft is still what the
+    card said and uses it (#253); its writes commit with the feedback, or roll back with it."""
     repo = FeedbackRepository(db)
     async with write_transaction(db):
         meal = await _meal(db, actor, meal_id)
         facts = await meal_facts(db, actor.household_id, meal)
         check_can_give(actor, facts, await today_for(db, actor, now=now))
+        if expect is not None:
+            await expect(await repo.get(actor.household_id, meal_id, actor.id), facts)
         answers = clean(data, facts, actor.id)
         if answers.is_empty:
             removed = await repo.delete(actor.household_id, meal_id, actor.id)

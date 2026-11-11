@@ -67,13 +67,19 @@ class TestAdminAssistant:
         assert audit.payload["assistant_enabled"] == {"from": False, "to": True}
 
     def test_the_page_says_what_goes_to_anthropic(self, client: TestClient, provider: FakeProvider) -> None:
-        """The disclosure matches docs/configuration.md: no names or anyone's ratings, and the
-        household hints the meal-history tool sends (#264)."""
+        """The disclosure matches docs/configuration.md: no names or anyone's ratings, a member's
+        own data only when they ask in private (#253), and the household hints the meal-history
+        tool sends (#264)."""
         sign_in(client, provider)
         shown = " ".join(page(client.get("/admin/assistant")).split())
         assert (
             'with members shown as "Member 1", "Member 2", and so on: never names, emails, preferences, vetoes, '
             "or anyone's ratings."
+        ) in shown
+        assert (
+            "The one exception is a member's own preferences, vetoes, ratings, feedback, and away days, which it "
+            "sends only when that member asks about them in their own conversation, on the Assistant page or in a "
+            "direct message."
         ) in shown
         assert (
             "To answer questions about what the household has eaten, it sends each item's household hint, "

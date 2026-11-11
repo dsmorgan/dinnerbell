@@ -731,8 +731,9 @@ class AssistantConversationRow(Base):
 
 class AssistantDraftRow(Base):
     """A change the assistant drafted for one member (spec 6.14, **Drafts**): a proposal, an
-    offer, catalog items, or a call action (#251). ``payload`` holds what the service needs;
-    ``title`` and ``lines`` say what **Confirm** does, as the member saw it. Only ``member_id``
+    offer, catalog items, a call action (#251), or a change to the member's own data (#253).
+    ``payload`` holds what the service needs; ``title`` and ``lines`` say what **Confirm** does,
+    as the member saw it. Only ``member_id``
     confirms it, once, before ``expires_at``; ``used_at`` is set by a Confirm or a Cancel, and
     ``confirmed_at`` by a Confirm only. ``event_id`` and ``run`` are the call it was made
     against, where there is one: a plain column, so discarding a call never waits on a draft,
@@ -744,7 +745,7 @@ class AssistantDraftRow(Base):
     __table_args__ = (
         CheckConstraint(
             "kind IN ('proposal', 'offer', 'catalog', 'answer', 'vote', 'suggestion', 'role', 'offer_off', "
-            "'guest', 'guest_answer', 'call')",
+            "'guest', 'guest_answer', 'call', 'preference', 'feedback', 'away')",
             name="kind",
         ),
         Index("ix_assistant_draft_household_expires", "household_id", "expires_at"),

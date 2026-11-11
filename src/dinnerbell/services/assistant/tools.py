@@ -12,9 +12,10 @@ The first build's tools work in any conversation: look up catalog items, find ca
 draft a proposal, an offer, or catalog items, from a catalog file or from a menu link
 (``menu_links``). So does looking up the meal log (``meal_history``, #264). The call actions
 (#251, ``call_drafts``) do too: look up a call, and draft an answer, a vote, a suggestion, a
-role, taking back an offer, inviting a guest or answering for one, or starting a call. A draft
-changes nothing until its member confirms it
-(``drafts.confirm_draft``).
+role, taking back an offer, inviting a guest or answering for one, or starting a call. The
+member's own data (#253, ``own_drafts``) is private only: look up their levels on Preferences,
+away days, and feedback, and draft a level, feedback on a meal they ate, or away days. A draft
+changes nothing until its member confirms it (``drafts.confirm_draft``).
 """
 
 from __future__ import annotations
@@ -35,11 +36,13 @@ from dinnerbell.domain.assistant import Pseudonyms, web_key
 from dinnerbell.domain.assistant_drafts import Narrowing
 from dinnerbell.domain.catalog import MODE_ORDER, InvalidCatalogInput, ItemKind, Meal, Mode, name_key
 from dinnerbell.domain.events import EventRuleViolation, EventState, InvalidResponse, RoleOffer, Status
+from dinnerbell.domain.feedback import COOK_NOTE_MAX, ISSUE_NOTE_MAX, FeedbackInput, InvalidFeedback, PlaceIssue, Rating
 from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.members import InvalidMemberInput, Member
 from dinnerbell.domain.offers import DEFAULT_CAPACITY
+from dinnerbell.domain.preferences import LEVELS, InvalidPreference, Stance
 from dinnerbell.services import catalog as catalog_service
-from dinnerbell.services.assistant import call_drafts, drafts
+from dinnerbell.services.assistant import call_drafts, drafts, own_drafts
 from dinnerbell.services.assistant.acting import ToolRefusal, tool_actor
 from dinnerbell.services.assistant.call_drafts import DraftSpec
 from dinnerbell.services.assistant.candidates import CallRef, call_basics, find_candidates, resolve_call
@@ -986,6 +989,228 @@ DRAFT_CALL = Tool(
 )
 
 
+# The member's own data, in private only (#253) --------------------------------------------------
+
+PRIVATE_ONLY = (
+    "That works only in a private conversation: a direct message with Dinnerbell, or the Assistant page on the "
+    "web. Tell the member to ask there."
+)
+"""``run_tool`` offers a private-only tool nowhere else, so the model never sees this; it's the
+tool's own check, in case it's ever reached another way."""
+LEVEL_NAMES = list(LEVELS)
+RATING_NAMES = ["", *(r.value for r in Rating)]
+ISSUE_NAMES = [i.value for i in PlaceIssue]
+OWN = "The member's own only, and only when they ask. "
+CONFIRMS = " Nothing changes until the member confirms the draft."
+
+
+def _private(ctx: ToolContext) -> None:
+    if not ctx.private:
+        raise ToolRefusal(PRIVATE_ONLY)
+
+
+def _note(raw: Mapping[str, Any], name: str, most: int) -> str:
+    """A note the member wrote, or empty. As the feedback form takes up to twice ``most``, the
+    service refuses a longer note once it's trimmed, in its own words."""
+    value = raw.get(name)
+    if not isinstance(value, str):
+        raise ToolInputError(f"{name} must be a string; send an empty string for none.")
+    if len(value) > most * 2:
+        raise ToolInputError(f"{name} is at most {most} characters.")
+    return value
+
+
+async def look_up_my_preferences_tool(ctx: ToolContext, raw: Mapping[str, Any]) -> str:
+    _private(ctx)
+    _fields(raw, "name")
+    found = await own_drafts.my_levels(ctx.db, ctx.actor, _text(raw, "name"), today=await _today(ctx))
+    return json.dumps(found, ensure_ascii=False)
+
+
+LOOK_UP_MY_PREFERENCES = Tool(
+    name="look_up_my_preferences",
+    description=(
+        OWN + "Look up the member's levels on Preferences (veto, or -2 to 2; 0 is no opinion) for tags and catalog "
+        "items, and their away days (first, last, back: YYYY-MM-DD, or null). With a name, every tag and item whose "
+        "name contains it; with an empty string, only those they set. from_your_ratings: what their own ratings did "
+        "to their score, or null."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "name": {
+                "type": "string",
+                "description": "Text the name contains, or an empty string.",
+            }
+        },
+        "required": ["name"],
+        "additionalProperties": False,
+    },
+    run=look_up_my_preferences_tool,
+    private_only=True,
+)
+
+
+async def draft_preference_tool(ctx: ToolContext, raw: Mapping[str, Any]) -> str:
+    _private(ctx)
+    _fields(raw, "what", "name", "level")
+    what = _enum(raw, "what", list(own_drafts.WHAT))
+    name = _text(raw, "name")
+    level = Stance.parse(_enum(raw, "level", LEVEL_NAMES))
+    spec = await own_drafts.stance_draft(ctx.db, ctx.actor, what, name, level, today=await _today(ctx))
+    return await _keep_action(ctx, spec)
+
+
+DRAFT_PREFERENCE = Tool(
+    name="draft_preference",
+    description=(
+        OWN + 'Draft one of the member\'s levels on Preferences, such as "veto mushrooms": on a tag or catalog item, '
+        "by its name as look_up_my_preferences or look_up_catalog_items returned it." + CONFIRMS
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "what": {
+                "type": "string",
+                "enum": list(own_drafts.WHAT),
+                "description": "An empty string for whichever has that name.",
+            },
+            "name": {"type": "string", "description": "The name."},
+            "level": {"type": "string", "enum": LEVEL_NAMES, "description": "-2 dislike to 2 love."},
+        },
+        "required": ["what", "name", "level"],
+        "additionalProperties": False,
+    },
+    run=draft_preference_tool,
+    private_only=True,
+)
+
+
+async def look_up_my_feedback_tool(ctx: ToolContext, raw: Mapping[str, Any]) -> str:
+    _private(ctx)
+    _fields(raw, "name")
+    return json.dumps(await own_drafts.my_meals(ctx.db, ctx.actor, _text(raw, "name"), now=ctx.now), ensure_ascii=False)
+
+
+LOOK_UP_MY_FEEDBACK = Tool(
+    name="look_up_my_feedback",
+    description=(
+        OWN + "Look up meals the member ate that still take their feedback (open 7 days), newest first, each with "
+        "a meal number for draft_feedback, and yours: their feedback so far, or null. cook_to_thank is true for a "
+        "home meal someone else cooked. Call it before draft_feedback."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "name": {
+                "type": "string",
+                "description": "Text the name contains, or an empty string.",
+            }
+        },
+        "required": ["name"],
+        "additionalProperties": False,
+    },
+    run=look_up_my_feedback_tool,
+    private_only=True,
+)
+
+
+async def draft_feedback_tool(ctx: ToolContext, raw: Mapping[str, Any]) -> str:
+    _private(ctx)
+    _fields(raw, "meal", "rating", "went_wrong", "what_went_wrong", "thank_cook", "cook_note")
+    rating = _enum(raw, "rating", RATING_NAMES)
+    wrong = raw.get("went_wrong")
+    if not isinstance(wrong, list) or not all(isinstance(w, str) and w in ISSUE_NAMES for w in wrong):
+        raise ToolInputError(f"went_wrong is a list of {', '.join(ISSUE_NAMES)}; empty for none.")
+    data = FeedbackInput(
+        rating=Rating(rating) if rating else None,
+        place_issues=frozenset(PlaceIssue(w) for w in wrong),
+        issue_note=_note(raw, "what_went_wrong", ISSUE_NOTE_MAX) or None,
+        cook_thanks=_flag(raw, "thank_cook"),
+        cook_note=_note(raw, "cook_note", COOK_NOTE_MAX) or None,
+    )
+    meal = _whole(raw, "meal", 1, 2**62)
+    return await _keep_action(ctx, await own_drafts.feedback_draft(ctx.db, ctx.actor, meal, data, now=ctx.now))
+
+
+DRAFT_FEEDBACK = Tool(
+    name="draft_feedback",
+    description=(
+        OWN + "Draft the member's feedback on a meal from look_up_my_feedback, every part optional. It replaces "
+        "theirs, so keep what they didn't change from yours; all empty takes it back." + CONFIRMS
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "meal": {"type": "integer", "description": "The meal's number from look_up_my_feedback."},
+            "rating": {
+                "type": "string",
+                "enum": RATING_NAMES,
+                "description": "An empty string for none.",
+            },
+            "went_wrong": {
+                "type": "array",
+                "items": {"type": "string", "enum": ISSUE_NAMES},
+                "description": "A restaurant's problems.",
+            },
+            "what_went_wrong": {
+                "type": "string",
+                "description": f"For other, the member's words, at most {ISSUE_NOTE_MAX} characters, or empty.",
+            },
+            "thank_cook": {"type": "boolean", "description": "Only with cook_to_thank."},
+            "cook_note": {
+                "type": "string",
+                "description": f"With thank_cook, the member's words, at most {COOK_NOTE_MAX} characters, or empty.",
+            },
+        },
+        "required": ["meal", "rating", "went_wrong", "what_went_wrong", "thank_cook", "cook_note"],
+        "additionalProperties": False,
+    },
+    run=draft_feedback_tool,
+    private_only=True,
+)
+
+
+async def draft_away_tool(ctx: ToolContext, raw: Mapping[str, Any]) -> str:
+    _private(ctx)
+    _fields(raw, "first", "last", "clear")
+    today = await _today(ctx)
+    clear = _flag(raw, "clear")
+    first = _day(raw, "first", today, required=not clear)
+    last = _day(raw, "last", today, required=not clear)
+    if clear and (first or last):
+        raise ToolInputError("To clear the away days, send empty strings for first and last.")
+    spec = await own_drafts.away_draft(ctx.db, ctx.actor, first, last, clear=clear, today=today)
+    return await _keep_action(ctx, spec)
+
+
+DRAFT_AWAY = Tool(
+    name="draft_away",
+    description=(
+        OWN + "Draft the member's away days, first and last day included, replacing theirs; calls then answer them "
+        'Out. Or clear them, as "I\'m back" does.' + CONFIRMS
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "first": {
+                "type": "string",
+                "description": "today, tomorrow, or YYYY-MM-DD; empty to clear.",
+            },
+            "last": {
+                "type": "string",
+                "description": "today, tomorrow, or YYYY-MM-DD; empty to clear.",
+            },
+            "clear": {"type": "boolean", "description": "true to clear them."},
+        },
+        "required": ["first", "last", "clear"],
+        "additionalProperties": False,
+    },
+    run=draft_away_tool,
+    private_only=True,
+)
+
+
 TOOLS: tuple[Tool, ...] = (
     LOOK_UP_CATALOG_ITEMS,
     LOOK_UP_HISTORY,
@@ -1003,6 +1228,11 @@ TOOLS: tuple[Tool, ...] = (
     DRAFT_INVITE_GUEST,
     DRAFT_GUEST_ANSWER,
     DRAFT_CALL,
+    LOOK_UP_MY_PREFERENCES,
+    DRAFT_PREFERENCE,
+    LOOK_UP_MY_FEEDBACK,
+    DRAFT_FEEDBACK,
+    DRAFT_AWAY,
 )
 """Every tool, in the order requests list them. Later tools come in follow-up issues."""
 
@@ -1019,6 +1249,8 @@ REFUSALS = (
     InvalidResponse,
     InvalidCatalogInput,
     InvalidMemberInput,
+    InvalidFeedback,
+    InvalidPreference,
 )
 """Refusals whose message is safe to send back: written for the person, or for the model."""
 
