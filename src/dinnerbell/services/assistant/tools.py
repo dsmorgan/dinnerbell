@@ -207,7 +207,7 @@ async def look_up_history(ctx: ToolContext, raw: Mapping[str, Any]) -> str:
     )
     if query.since and query.until and query.since > query.until:
         raise ToolInputError("since is on or before until.")
-    found = await eaten_items(ctx.db, ctx.actor, query, today=today)
+    found = await eaten_items(ctx.db, ctx.actor, query, today=today, limit=MAX_ITEMS)
     listed = [
         {
             "name": e.item.name,
@@ -219,9 +219,9 @@ async def look_up_history(ctx: ToolContext, raw: Mapping[str, Any]) -> str:
             "last_eaten": e.last.isoformat(),
             "hint": e.hint,
         }
-        for e in found[:MAX_ITEMS]
+        for e in found.items
     ]
-    return json.dumps({"today": today.isoformat(), "items": listed, "more": len(found) > MAX_ITEMS}, ensure_ascii=False)
+    return json.dumps({"today": today.isoformat(), "items": listed, "more": found.more}, ensure_ascii=False)
 
 
 LOOK_UP_HISTORY = Tool(
@@ -257,13 +257,13 @@ LOOK_UP_HISTORY = Tool(
             },
             "since": {
                 "type": "string",
-                "description": "Count only meals on or after this day: today or YYYY-MM-DD. An empty string for "
-                "no start.",
+                "description": "Count only meals on or after this day: today, tomorrow, or YYYY-MM-DD. "
+                "An empty string for no start.",
             },
             "until": {
                 "type": "string",
-                "description": "Count only meals on or before this day: today or YYYY-MM-DD. An empty string for "
-                "no end.",
+                "description": "Count only meals on or before this day: today, tomorrow, or YYYY-MM-DD. "
+                "An empty string for no end.",
             },
             "order": {
                 "type": "string",

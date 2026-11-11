@@ -47,3 +47,5 @@ When the household's assistant is on ([The assistant](configuration.md#the-assis
 The conversation is private: other members and the admin don't see it. Dinnerbell keeps it for the household's **Conversation hours** after your last message, so follow-ups such as "something cheaper" work. At 0 hours, nothing is kept: each message stands alone, and the page shows only your latest message and its answer. To clear the conversation sooner, select **Start over**, which also cancels its waiting drafts.
 
 Replies are plain text. Links in them aren't clickable, so a page the assistant read can't slip you a link to tap.
+
+To answer questions about what the household has eaten, such as "When did we last have Thai?", the assistant sees the meal log without who ate, and each item's household hint, such as "Well liked", the same words you see on **Catalog**. It never sees anyone's own ratings or notes.

@@ -66,6 +66,20 @@ class TestAdminAssistant:
         [audit] = [a for a in rows(migrated, AuditRow) if a.action == "household.assistant_updated"]
         assert audit.payload["assistant_enabled"] == {"from": False, "to": True}
 
+    def test_the_page_says_what_goes_to_anthropic(self, client: TestClient, provider: FakeProvider) -> None:
+        """The disclosure matches docs/configuration.md: no names or anyone's ratings, and the
+        household hints the meal-history tool sends (#264)."""
+        sign_in(client, provider)
+        shown = " ".join(page(client.get("/admin/assistant")).split())
+        assert (
+            'with members shown as "Member 1", "Member 2", and so on: never names, emails, preferences, vetoes, '
+            "or anyone's ratings."
+        ) in shown
+        assert (
+            "To answer questions about what the household has eaten, it sends each item's household hint, "
+            'such as "Well liked", the same words every member sees on Catalog.'
+        ) in shown
+
     @pytest.mark.parametrize(
         ("data", "message"),
         [

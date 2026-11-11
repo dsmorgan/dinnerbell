@@ -111,6 +111,19 @@ class MealLogRepository:
         found = (await self._session.execute(query)).first()
         return None if found is None else _meal(found[0], found[1])
 
+    async def eaten(self, household_id: int, start: date | None, end: date | None) -> dict[int, tuple[int, date]]:
+        """Each item eaten from ``start`` to ``end`` inclusive (None leaves that side open): its
+        number of meals and the day of its latest."""
+        query = select(MealLogRow.item_id, func.count(), func.max(MealLogRow.date)).where(
+            MealLogRow.household_id == household_id
+        )
+        if start is not None:
+            query = query.where(MealLogRow.date >= start)
+        if end is not None:
+            query = query.where(MealLogRow.date <= end)
+        rows = await self._session.execute(query.group_by(MealLogRow.item_id))
+        return {item_id: (int(times), last) for item_id, times, last in rows}
+
     async def last_eaten(self, household_id: int) -> dict[int, date]:
         rows = await self._session.execute(
             select(MealLogRow.item_id, func.max(MealLogRow.date))
