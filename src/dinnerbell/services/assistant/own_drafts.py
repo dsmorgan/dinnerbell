@@ -240,8 +240,13 @@ async def my_meals(db: AsyncSession, actor: Member, text: str, *, now: datetime)
     theirs = [m for m in meals if any(p.id == actor.id for p in m.participants) and key in name_key(m.item_name)]
     listed = []
     for meal in sorted(theirs, key=newest_first, reverse=True):
-        # The window and the participants above are ``check_can_give``'s, so the form opens for each.
-        form = await feedback_service.form(db, actor, meal.id, now=now)
+        # The window and the participants above are ``check_can_give``'s, so the form opens for
+        # each. A meal edited or deleted meanwhile, such as on History, drops out of the list
+        # rather than failing the whole lookup.
+        try:
+            form = await feedback_service.form(db, actor, meal.id, now=now)
+        except (InvalidFeedback, NotFound):
+            continue
         facts = form.facts
         listed.append(
             {

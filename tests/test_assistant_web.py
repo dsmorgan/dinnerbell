@@ -141,8 +141,9 @@ def test_a_cap_below_one_private_message_saves_and_says_so(
     assert 'id="cap-low"' in shown
     assert (
         f"With claude-opus-5-5, one private message can cost up to {format_dollars(least)}, more than the monthly "
-        "cap, so the assistant can't answer messages on the Assistant page or in direct messages. Set the cap to at "
-        "least $2, or ask the operator for a cheaper model."
+        "cap, so the assistant can't answer messages on the Assistant page or in direct messages. A cap of $2 covers "
+        "the smallest message; long conversations and requests that use several tools need more. Or ask the "
+        "operator for a cheaper model."
     ) in shown
     assert save(client, FORM | {"cap_dollars": "2"}).status_code == 303
     assert 'id="cap-low"' not in page(client.get("/admin/assistant"))
