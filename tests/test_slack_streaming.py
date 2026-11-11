@@ -960,3 +960,63 @@ async def test_text_after_a_calls_tool_call_is_never_shown() -> None:
     events.text_started()
     events.text(LONG + "\n")  # more than enough to pass the hold, but this call is a tool round
     assert heard.pieces == [] and heard.tool_rounds == 0
+
+
+async def test_a_stop_that_hangs_is_cut_off_and_the_rest_posted(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(slack_assistant, "STREAM_STEP_SECONDS", 0.05)
+    api = SlowSlack()
+    api.held["stop"] = asyncio.Event()  # never set: Slack doesn't answer chat.stopStream
+    stream = dm_stream(api)
+    stream.call_started(0)
+    stream.lines(SECOND_CALL.split("\n")[0])
+    unseen = await asyncio.wait_for(stream.finish(SECOND_CALL), 2)
+    assert unseen == "It does pickup."  # only what the member hasn't seen
+    assert api.calls == ["start", "stop"]
+
+
+@pytest.mark.parametrize("mixup", ["after-stop", "another-call"])
+async def test_a_chunk_for_the_wrong_message_is_refused_and_the_reply_posted(
+    mixup: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The worker's invariants: a message gets no chunk after its stop, and a run of chunks is
+    one message's. Neither can happen through ``ReplyStream``; forced, nothing more is sent to
+    Slack, and the reply is posted instead."""
+    api = SlowSlack()
+    stream = dm_stream(api)
+    stream.call_started(0)
+    stream.lines(FIRST_CALL)
+    await stream._drain()
+    first = stream.current
+    assert first is not None and first.ts is not None
+    other = slack_assistant._Message(2)
+    if mixup == "after-stop":
+        first.stopped = True
+        stream._queue.append(slack_assistant._Text(first, "more", 1))
+    else:
+        stream._queue += [slack_assistant._Text(first, "\nmore", 1), slack_assistant._Text(other, "x", 1)]
+    stream._kick()
+    unseen = await stream.finish(FIRST_CALL + "\nand more")
+    assert unseen == "and more"  # posted; the first message has only what it had
+    assert api.calls == ["start", "stop"]
+    assert "slack assistant stream broke" in caplog.text
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_a_reply_that_breaks_after_streaming_still_stops_the_stream(
+    slack: Slack, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    async def streaming(*args: Any, stream: Any = None, **kwargs: Any) -> Reply:
+        stream.call_started(0)
+        stream.lines(LONG.rsplit("\n", 1)[0])
+        await asyncio.sleep(0)
+        return Reply(LONG)
+
+    def broken(reply: Reply) -> str:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(slack_assistant, "converse", streaming)
+    monkeypatch.setattr(slack_assistant, "reply_text", broken)
+    await slack.dm("Sam", "Noodles?")
+    assert len(slack.fake.of("chat.startStream")) == 1
+    assert len(slack.fake.of("chat.stopStream")) == 1  # stopped, not left streaming for 10 minutes
+    assert "the assistant's slack message failed" in caplog.text
