@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
@@ -239,8 +239,9 @@ class TestAssistantOn:
             "look_up_my_meals",
             "draft_meal",
         ]
+        shared = {t.name for t in tools.tools_for(False)}
         for tool in request["tools"]:
-            assert tool["strict"] is True
+            assert tool["strict"] is (tool["name"] in shared)  # private-only tools check their own input
             assert tool["input_schema"]["additionalProperties"] is False
             assert set(tool["input_schema"]["required"]) == set(tool["input_schema"]["properties"])
             # Strict tool use takes no numeric or length bounds: the tools check those themselves.
@@ -825,6 +826,25 @@ class TestAssistantOn:
             )
         assert extra.is_error and long.is_error and not_object.is_error
 
+    @pytest.mark.parametrize("wrong", [7, None, [], {}, True, "x"])
+    async def test_a_tool_that_isnt_strict_refuses_input_of_the_wrong_type(self, house: House, wrong: object) -> None:
+        """Without ``strict``, the API doesn't hold the model to the schema, so each such tool
+        must turn input of the wrong type into an error for the model, not a crash. Each field is
+        broken in turn, with the others well typed, so none is used before it's checked."""
+        loose = [t for t in tools.tools_for(True) if not t.definition()["strict"]]
+        assert loose
+        for tool in loose:
+            fields = tool.input_schema["properties"]
+            typed = {name: _well_typed(spec) for name, spec in fields.items()}
+            for name, spec in fields.items():
+                if _fits(spec, wrong):
+                    continue
+                async with house.sessionmaker() as db:
+                    result = await tools.run_tool(
+                        tool.name, typed | {name: wrong}, db=db, member=house["Sam"], private=True, now=house.clock()
+                    )
+                assert result.is_error and "didn't work" not in result.content, (tool.name, name, result.content)
+
     async def test_a_tool_that_breaks_or_is_refused_tells_the_model(
         self, house: House, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -1125,3 +1145,65 @@ async def _spend(house: House, micros: int, *, month: str = "2026-10") -> None:
         else:
             row.cost_micros += micros
         await db.commit()
+
+
+def _schema_counts(schema: Mapping[str, Any]) -> tuple[int, int]:
+    """Optional and union-typed parameters in ``schema``, nested objects included, as the
+    Messages API counts them against a request's strict-tool limits."""
+    optional = unions = 0
+    required = set(schema.get("required", ()))
+    for name, spec in schema.get("properties", {}).items():
+        optional += name not in required
+        unions += "anyOf" in spec or isinstance(spec.get("type"), list)
+        for child in (spec, spec.get("items", {}), *spec.get("anyOf", ())):
+            more_optional, more_unions = _schema_counts(child)
+            optional, unions = optional + more_optional, unions + more_unions
+    return optional, unions
+
+
+@pytest.mark.parametrize("private", [True, False])
+def test_every_tool_set_fits_the_apis_strict_tool_limits(private: bool) -> None:
+    """A request over these limits is a 400 for every message, which the fake model can't show:
+    each tool set the assistant sends stays within them."""
+    strict = [d for d in (t.definition() for t in tools.tools_for(private)) if d["strict"]]
+    counts = [_schema_counts(d["input_schema"]) for d in strict]
+    assert len(strict) <= tools.MAX_STRICT_TOOLS
+    assert sum(o for o, _ in counts) <= tools.MAX_STRICT_OPTIONAL
+    assert sum(u for _, u in counts) <= tools.MAX_STRICT_UNIONS
+
+
+def test_the_schema_counter_sees_optional_and_union_parameters() -> None:
+    schema = {
+        "type": "object",
+        "properties": {
+            "a": {"type": "string"},
+            "b": {"type": ["string", "null"]},
+            "c": {
+                "type": "array",
+                "items": {"type": "object", "properties": {"d": {"anyOf": [{}, {}]}}, "required": []},
+            },
+        },
+        "required": ["a"],
+    }
+    assert _schema_counts(schema) == (3, 2)
+
+
+def _well_typed(spec: Mapping[str, Any]) -> object:
+    """A value of the type ``spec`` names, not necessarily one the tool accepts."""
+    if "enum" in spec:
+        return spec["enum"][0]
+    kind = spec.get("type")
+    kind = kind[0] if isinstance(kind, list) else kind
+    return {"string": "", "integer": 0, "number": 0, "boolean": False, "array": [], "null": None}.get(kind, {})
+
+
+def _fits(spec: Mapping[str, Any], value: object) -> bool:
+    """Whether ``value`` already has a type ``spec`` allows, so it isn't a wrong one."""
+    kinds = spec.get("type")
+    kinds = kinds if isinstance(kinds, list) else [kinds]
+    python = {"string": str, "integer": int, "number": (int, float), "boolean": bool, "array": list, "object": dict}
+    if value is None:
+        return "null" in kinds
+    if isinstance(value, bool):
+        return "boolean" in kinds
+    return any(isinstance(value, python[k]) for k in kinds if k in python)

@@ -59,6 +59,7 @@ class AnthropicModelClient:
                 status=exc.status_code,
                 error_type=type(exc).__name__,
                 request_id=exc.request_id,
+                detail=error_detail(exc.body),
             ) from None
         except anthropic.APIError as exc:
             # A timeout, a dropped connection, or a reply the SDK couldn't read: it may have run.
@@ -72,6 +73,20 @@ class AnthropicModelClient:
 
     async def close(self) -> None:
         await self._client.close()
+
+
+MAX_DETAIL_CHARS = 300
+
+
+def error_detail(body: object) -> str:
+    """The API's error type and message from an error answer's body, on one line and clipped, so
+    the log says why a request was refused, such as which field a 400 names."""
+    error = body.get("error", body) if isinstance(body, dict) else None
+    if not isinstance(error, dict):
+        return ""
+    kind, message = error.get("type"), error.get("message")
+    text = ": ".join(str(part) for part in (kind, message) if isinstance(part, str) and part)
+    return " ".join(text.split())[:MAX_DETAIL_CHARS]
 
 
 def _report(events: ModelEvents | None, event: Any) -> ModelEvents | None:
