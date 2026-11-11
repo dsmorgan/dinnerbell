@@ -980,7 +980,12 @@ class SlackAssistant:
             body = f"{clip_mrkdwn(body, room) if len(body) > room else body}\n\n{note}".lstrip()
             blocks = [*blocks, context(note)]
         if private:  # spec 6.14
-            if body and await self._ephemeral(incoming, member, body, blocks) and first:
+            # Slack documents the markdown block for messages; should an ephemeral refuse it,
+            # the reply still goes, as its mrkdwn text.
+            told = body and (
+                await self._ephemeral(incoming, member, body, blocks) or await self._ephemeral(incoming, member, body)
+            )
+            if told and first:
                 self.noted.add(noted)  # this member has seen the note; the thread hasn't yet
             for card in cards:
                 await self._ephemeral(incoming, member, card["text"], card["blocks"])

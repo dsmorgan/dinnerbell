@@ -464,6 +464,22 @@ async def test_a_reply_with_drafts_in_the_channel_goes_only_to_its_author(
 
 
 @pytest.mark.flag("assistant", on=True)
+async def test_an_ephemeral_reply_slack_refuses_with_blocks_goes_as_text(
+    settings: Settings, house: House, helper: Assistant, slack: Slack, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#284: should Slack refuse a markdown block in an ephemeral, the reply still goes, as its
+    mrkdwn text, with the mention-only note."""
+    await switch_on(house, helper)
+    fake_drafts(monkeypatch, "Siam Garden")
+    slack.fake.fail("chat.postEphemeral", Failure("invalid_blocks"))
+    await slack.mention("Sam", f"<@{BOT_USER}> propose Thai", ts=next_ts())
+    refused, sent, card = [c.args for c in slack.fake.of("chat.postEphemeral")]
+    assert refused["blocks"][0]["type"] == "markdown" and "blocks" not in sent
+    assert sent["text"].startswith("Here's a draft for tonight.") and "mention <@" in sent["text"]
+    assert card["text"] == "Siam Garden"
+
+
+@pytest.mark.flag("assistant", on=True)
 async def test_a_reply_with_drafts_in_a_dm_is_a_normal_reply(
     settings: Settings, house: House, helper: Assistant, slack: Slack, monkeypatch: pytest.MonkeyPatch
 ) -> None:

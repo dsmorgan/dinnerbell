@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import re
+import time
 
 import pytest
+from markupsafe import escape
 
 from dinnerbell.web.reply_markdown import reply_markdown
 
@@ -77,6 +79,29 @@ def test_nothing_but_the_renderers_tags_comes_out(text: str) -> None:
         assert tag[1] in ALLOWED_TAGS, out
         assert tag[2] == "" or re.fullmatch(r' start="\d+"', tag[2]), out
     assert "<a" not in out and "<img" not in out and "<script" not in out
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "a" + "`" * 50_000,
+        "**a " * 12_500,
+        "_a " * 16_000,
+        "#" + " " * 50_000 + "x",
+        "- " + "-  " * 16_000 + "x",
+        "~~a " * 12_500,
+    ],
+)
+def test_a_long_line_shows_as_text_without_running_long(line: str) -> None:
+    """A reply the model wrote can be built to make a pattern backtrack; each line's work is
+    bounded by ``MAX_STYLED``. The bound is loose: it catches cubic work, not a slow machine."""
+    started = time.monotonic()
+    assert html(line + "\n" + line) == f"<p>{escape(line.strip())}<br>{escape(line.strip())}</p>"
+    assert time.monotonic() - started < 2
+
+
+def test_a_backslashed_backtick_opens_no_code() -> None:
+    assert html("\\`x\\` and ``a ` b``") == "<p>&#96;x&#96; and <code>a ` b</code></p>"
 
 
 def test_an_entity_the_model_wrote_stays_text() -> None:
