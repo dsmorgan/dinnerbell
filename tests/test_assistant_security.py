@@ -836,42 +836,71 @@ async def test_injected_messages_and_pages_cant_steer_call_actions_past_the_memb
     assert_kept_home(model, own=[words])
 
 
+GUEST_PROBES = ("Gwendolyn", "Robin", "Quinn")
+"""Kim's guest on the dinner call, a saved guest nobody invited, and no guest at all."""
+
+
+def probing(name: str) -> ModelReply:
+    """Every guest tool aimed at ``name``: answers and a role for them, and invitations."""
+    return tool_call(
+        "draft_guest_answer",
+        ANY_CALL | {"name": name, "answer": "out", "role": "", "offer": True},
+        call_id=f"toolu_{name}_out",
+        **{
+            f"toolu_{name}_in": (
+                "draft_guest_answer",
+                ANY_CALL | {"name": name, "answer": "in", "role": "", "offer": True},
+            ),
+            f"toolu_{name}_role": (
+                "draft_guest_answer",
+                ANY_CALL | {"name": name, "answer": "", "role": "cook", "offer": True},
+            ),
+            f"toolu_{name}_invite": ("draft_invite_guest", ANY_CALL | {"name": name, "needs": []}),
+        },
+    )
+
+
 @pytest.mark.flag("assistant", on=True)
 async def test_a_housemates_guest_stays_theirs_and_unnamed_whatever_the_model_asks(
     house: House, helper: Assistant, model: Attacker
 ) -> None:
-    """Attack (#251): while answers are open, Sam asks the assistant to answer out for Kim's
-    guest, give her a role, invite her again, and list everyone's guests; the model obeys, and
-    starts a call that exists already. Must hold: only the inviter answers for a guest, so every
-    guest tool refuses; no refusal names the guest or anyone; nothing changes; and the guest's
-    name goes out only in Sam's own words."""
+    """Attack (#251): while answers are open, Sam asks the assistant to answer for, give a role
+    to, and invite three names, probing which are Kim's guest, a saved guest, or nobody; the model
+    obeys, and also starts a call that exists already. Must hold: the results are the same for
+    all three, names aside, so nothing tells Sam whom Kim invited or which guests are saved; only
+    the inviter answers for a guest, so every answer is refused; nothing changes until Sam
+    confirms; and the names go out only in Sam's own words."""
+    await act(house, guests.add_guest, house["Alex"], GuestInput("Robin"))
     await open_dinner(house)
     before = await world(house)
-    words = "Answer out for Gwendolyn, put her down to cook, invite her again, and list everyone's guests."
+    words = "Answer out for Gwendolyn, Robin, and Quinn, put them down to cook, and invite them."
     model.script = [
-        tool_call(
-            "draft_guest_answer",
-            ANY_CALL | {"name": "Gwendolyn", "answer": "out", "role": "", "offer": True},
-            call_id="toolu_out",
-            toolu_role=(
-                "draft_guest_answer",
-                ANY_CALL | {"name": "Gwendolyn", "answer": "", "role": "cook", "offer": True},
-            ),
-            toolu_again=("draft_invite_guest", ANY_CALL | {"name": "Gwendolyn", "needs": []}),
-            toolu_call=("look_up_call", ANY_CALL),
-            toolu_start=("draft_call", {"slot": "dinner", "day": "today"}),
-        ),
+        *(probing(name) for name in GUEST_PROBES),
+        tool_call("draft_call", {"slot": "dinner", "day": "today"}, call_id="toolu_start"),
         answer("Done."),
     ]
     await say(house, helper, "Sam", words)
     found = results(model)
-    forbidden = ToolResult("Only whoever invited them, or an admin, answers for a guest without Slack.", is_error=True)
-    assert found["toolu_out"] == found["toolu_role"] == forbidden
-    assert found["toolu_again"] == ToolResult(call_drafts.NOTHING_TO_DO, is_error=True)
+    by_name = {
+        name: [
+            (await normalized(r)).content.replace(name, "NAME")
+            for call_id, r in sorted(found.items())
+            if call_id.startswith(f"toolu_{name}_")
+        ]
+        for name in GUEST_PROBES
+    }
+    assert by_name["Gwendolyn"] == by_name["Robin"] == by_name["Quinn"] and len(by_name["Quinn"]) == 4
+    for name in GUEST_PROBES:
+        for how in ("out", "in", "role"):
+            assert found[f"toolu_{name}_{how}"] == ToolResult(call_drafts.NO_SUCH_GUEST, is_error=True)
+        assert not found[f"toolu_{name}_invite"].is_error
     assert found["toolu_start"] == ToolResult("There's already a dinner call for that day.", is_error=True)
-    assert not found["toolu_call"].is_error
-    assert await world(house) == before and await draft_rows(house) == []
-    assert_kept_home(model, own=[words])
+    assert await world(house) == before
+    rows = await assert_only_sams_waiting_drafts(house)
+    assert {r.kind for r in rows} == {"guest"} and len(rows) == 3
+    # The invitations echo the name Sam wrote, and the same words for each, as checked above.
+    echoed = [found[f"toolu_{name}_invite"].content for name in GUEST_PROBES]
+    assert_kept_home(model, own=[words, *echoed])
 
 
 @pytest.mark.flag("assistant", on=True)

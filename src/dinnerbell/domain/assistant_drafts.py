@@ -99,8 +99,8 @@ class Draft:
     - suggestion: ``item_id``
     - role: ``role``, ``offered`` (False gives it up), and ``join_late``
     - offer_off: nothing; the offer is ``event_id``
-    - guest: ``guest_id`` (a saved guest) or None (a new one), ``name`` as the member wrote it,
-      and ``needs`` (dietary tag IDs, for a new guest)
+    - guest: ``name`` as the member wrote it, and ``needs`` (dietary tag IDs, for a new guest);
+      Confirm picks the saved guest by that name, or a new one
     - guest_answer: ``guest_id``, ``name``, and ``status`` or ``role`` with ``offered``
     - call: ``slot`` and ``day``; ``event_id`` is the called-off call it starts again, if any
 
@@ -352,24 +352,19 @@ def offer_off_lines(*, item: str, slot: Slot, when: str) -> tuple[str, ...]:
     )
 
 
-def invite_lines(
-    name: str, *, saved: bool, registered: bool, needs: Iterable[str], slot: Slot, when: str
-) -> tuple[str, ...]:
-    """What confirming a guest's invitation does (``guests.invite``): a guest with Slack is told
-    and answers themselves; one without is in at once, and the inviter answers for them. A new
-    guest (not ``saved``) is saved first, with ``needs``, the dietary tags the member named."""
-    call = f"{when}'s {slot.value} call"
-    if registered:
-        return (f"It invites {name} to {call}. They're told, and answer themselves.",)
-    first = (
-        f"It invites {name} to {call}, and they're in."
-        if saved
-        else (f"It saves {name} as a new guest and invites them to {call}, and they're in.")
-    )
-    lines = [first, "You answer for them from now on."]
+def invite_lines(name: str, *, needs: Iterable[str], slot: Slot, when: str) -> tuple[str, ...]:
+    """What confirming a guest's invitation does (``guests.invite``), the same whether the
+    household has a saved guest by that name, and whether they have Slack: the household's saved
+    guest by that name, or else a new guest, saved first with ``needs``, the dietary tags the
+    member named. A guest with Slack is told and answers themselves; one without is in at once,
+    and the inviter answers for them."""
     named = list(needs)
-    if named and not saved:
-        lines.append(f"Their dietary needs: {_list(named)}.")
+    saved = "If no saved guest has that name, Dinnerbell saves them as a new guest"
+    lines = [
+        f"It invites {name} to {when}'s {slot.value} call.",
+        f"{saved}, with these dietary needs: {_list(named)}. A saved guest keeps their own." if named else f"{saved}.",
+        "A guest on Slack is told and answers themselves; anyone else is in at once, and you answer for them.",
+    ]
     return tuple(lines)
 
 

@@ -454,18 +454,22 @@ async def confirm_draft(
     if draft.kind is DraftKind.OFFER:
         return await _confirm_offer(db, actor, draft, now)
     if draft.kind in CALL_ACTIONS:
-        return await _confirm_action(db, actor, draft, now)
+        return await _confirm_action(db, actor, draft, now, instance_label=config.instance_label)
     return await _confirm_catalog(db, actor, draft, now)
 
 
-async def _confirm_action(db: AsyncSession, actor: Member, draft: Draft, now: datetime) -> ActionConfirmed:
+async def _confirm_action(
+    db: AsyncSession, actor: Member, draft: Draft, now: datetime, *, instance_label: str
+) -> ActionConfirmed:
     today, _ = await _today(db, actor.household_id, now)
     if draft.kind is DraftKind.CALL:  # ``start_call`` takes the write lock itself, and uses the draft in it
 
         async def use() -> None:
             await _use(db, draft, actor, now)
 
-        return await call_drafts.confirm_call(db, actor, draft, today=today, now=now, use=use)
+        return await call_drafts.confirm_call(
+            db, actor, draft, today=today, now=now, use=use, instance_label=instance_label
+        )
     async with write_transaction(db):
         await _use(db, draft, actor, now)
         # The use case locks the call in this transaction, then commits the draft's use with its

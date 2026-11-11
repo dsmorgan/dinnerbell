@@ -78,16 +78,20 @@ from dinnerbell.services import calls, lifecycle
 from dinnerbell.services import guests as guest_service
 from dinnerbell.services.assistant.acting import ToolRefusal
 from dinnerbell.services.call_context import CallContext, load
-from dinnerbell.services.errors import Forbidden, NotFound
+from dinnerbell.services.errors import NotFound
 
 NO_SUCH_PROPOSAL = "That isn't one of this call's picks. Call look_up_call, and send a pick it returns."
 NO_SUCH_ITEM = "The catalog has no active item by that name. Look it up with look_up_catalog_items."
 NO_OPEN_OFFER = "The member has no open offer for that. Say so."
 NOTHING_TO_DO = "That's how it is already, so there's nothing to draft. Say so."
-NO_SUCH_GUEST = (
-    "That isn't a guest on this call. Use the guest's name exactly as the member wrote it, and don't guess at others."
+NO_SUCH_GUEST = "The member has no guest by that name on this call to answer for. Say so, and don't guess at others."
+TWO_OF_YOURS = (
+    "The member invited more than one guest by that name to this call. Ask them to answer for those guests on "
+    "the call's page."
 )
-SAME_NAME = "More than one saved guest has that name. Ask the member to invite them on the call's page."
+"""Only about the member's own guests, so it tells the model nothing about anyone else's."""
+SAME_NAME = "More than one saved guest has that name, so invite them on the call's page."
+"""Shown on the card at Confirm, never to the model."""
 COOKING_OFFER = "A cooking offer stands in for that call, so there's no call to start. Say so."
 """Not ``check_no_cooking_offer``'s words, which name the cook."""
 
@@ -367,36 +371,31 @@ async def _needs(db: AsyncSession, actor: Member, names: Sequence[str]) -> dict[
 async def invite_guest(
     db: AsyncSession, actor: Member, event: Event, name: str, needs: Sequence[str], *, today: date
 ) -> DraftSpec:
-    """Inviting a guest while answers are open (``guests.invite``): the household's saved guest
-    with exactly that name, or a new one, with the dietary needs the member named. The model
-    sends the name as the member wrote it, and gets back only that."""
+    """Inviting a guest by the name the member wrote, while answers are open (``guests.invite``).
+    The draft is the same whether the household has a saved guest by that name, and whether one
+    is invited already or has Slack: the model must not learn who housemates invited. Only a
+    guest the member invited themselves gets ``NOTHING_TO_DO``. Confirm picks the saved guest
+    or a new one (``confirm``), and the card shows the service's refusal, such as a guest
+    someone else invited already."""
     ctx = await load(db, event)
     event = ctx.event
     check_can_invite(event, actor)
     typed = " ".join(name.split())
-    saved = [g for g in await guest_service.saved_guests(db, actor) if g.display_name.casefold() == typed.casefold()]
-    if len(saved) > 1:
-        raise ToolRefusal(SAME_NAME)
-    guest = saved[0] if saved else None
-    if guest is not None and needs:
-        raise ToolRefusal("Dietary needs are for a new guest only. Draft the invitation without them.")
     named = await _needs(db, actor, needs)
-    if guest is None:
-        dietary = [t.id for t in await CatalogRepository(db).tags(actor.household_id) if t.kind is TagKind.DIETARY]
-        check_guest_input(GuestInput(typed, frozenset(named)), dietary_tag_ids=dietary)
-    elif guest.id in ctx.invitations:
+    dietary = [t.id for t in await CatalogRepository(db).tags(actor.household_id) if t.kind is TagKind.DIETARY]
+    check_guest_input(GuestInput(typed, frozenset(named)), dietary_tag_ids=dietary)
+    mine = [g for g in _invited_by(ctx, actor) if g.display_name.casefold() == typed.casefold()]
+    if mine:
         raise ToolRefusal(NOTHING_TO_DO)
     when, slot = _call_words(event, today)
-    lines = invite_lines(
-        typed,
-        saved=guest is not None,
-        registered=guest is not None and guest.is_registered_guest,
-        needs=named.values(),
-        slot=event.slot,
-        when=when,
-    )
-    payload = {"guest_id": guest.id if guest else None, "name": typed, "needs": sorted(named)}
+    lines = invite_lines(typed, needs=named.values(), slot=event.slot, when=when)
+    payload = {"name": typed, "needs": sorted(named)}
     return DraftSpec(DraftKind.GUEST, payload, f"Invite {typed} to {when}'s {slot} call", lines, event)
+
+
+def _invited_by(ctx: CallContext, actor: Member) -> list[Member]:
+    """The guests ``actor`` invited to ``ctx``'s call."""
+    return [g for g in ctx.members.values() if g.is_guest and ctx.invitations.get(g.id, -1) == actor.id]
 
 
 async def guest_answer(
@@ -417,14 +416,18 @@ async def guest_answer(
     ctx = await load(db, event)
     event = ctx.event
     typed = " ".join(name.split())
+    # Only the member's own guests without Slack are candidates, so every other guest, a
+    # housemate's or one with Slack, looks the same as no guest at all.
     found = [
-        g for g in ctx.members.values() if g.id in ctx.invitations and g.display_name.casefold() == typed.casefold()
+        g
+        for g in _invited_by(ctx, actor)
+        if can_answer_for(g, actor, ctx.invitations[g.id]) and g.display_name.casefold() == typed.casefold()
     ]
-    if len(found) != 1:
+    if not found:
         raise ToolRefusal(NO_SUCH_GUEST)
+    if len(found) > 1:
+        raise ToolRefusal(TWO_OF_YOURS)
     guest = found[0]
-    if not can_answer_for(guest, actor, ctx.invitations[guest.id]):
-        raise Forbidden("Only whoever invited them, or an admin, answers for a guest without Slack.")
     check_can_respond(event, guest, invited=True)
     current = ctx.response_of(guest.id)
     if status is not None:
@@ -461,15 +464,16 @@ async def guest_answer(
 
 
 async def start_call(
-    db: AsyncSession, actor: Member, slot: Slot, day: date, *, today: date, now: datetime
+    db: AsyncSession, actor: Member, slot: Slot, day: date, *, today: date, now: datetime, any_time: bool = False
 ) -> DraftSpec:
     """An ad-hoc call for ``slot`` on ``day`` (``calls.start_call``), or the called-off one
-    started again, by ``start_call``'s rules."""
+    started again, by ``start_call``'s rules. ``any_time``, on a test instance (#60), lifts the
+    too-late rule for a restart, as ``start_call``'s ``instance_label`` does."""
     check_ad_hoc_day(day, today)
     existing = await EventRepository(db).call_for(actor.household_id, slot, day)
     if existing is not None:
         ctx = await load(db, existing)
-        check_restart(ctx.event, today, now=now, too_late_after=ctx.too_late_for(today))
+        check_restart(ctx.event, today, now=now, too_late_after=ctx.too_late_for(today), any_time=any_time)
     try:
         await lifecycle.check_no_cooking_offer(db, actor.household_id, slot, day)
     except lifecycle.OfferedInstead:
@@ -482,22 +486,36 @@ async def start_call(
 
 
 async def confirm_call(
-    db: AsyncSession, actor: Member, draft: Draft, *, today: date, now: datetime, use: Callable[[], Awaitable[None]]
+    db: AsyncSession,
+    actor: Member,
+    draft: Draft,
+    *,
+    today: date,
+    now: datetime,
+    use: Callable[[], Awaitable[None]],
+    instance_label: str = "",
 ) -> ActionConfirmed:
     """**Confirm** on an ad-hoc call: ``calls.start_call``, which takes the write lock itself and
-    runs ``use``, after checking a called-off call's run, in its transaction before it starts the
-    call. A call someone started meanwhile gets its refusal, and the draft stays unused."""
+    runs ``use`` in its transaction before it starts the call, after checking the call is still
+    what the card said: a called-off call's run, or, for a new call, that none exists now, so a
+    card that says it starts a call never restarts one someone started and called off meanwhile.
+    A refusal leaves the draft unused. ``instance_label`` is ``start_call``'s, from the config."""
     slot, day = Slot(str(draft.payload["slot"])), date.fromisoformat(str(draft.payload["day"]))
 
     async def expect() -> None:
+        events = EventRepository(db)
         if draft.event_id is not None:
-            event = await EventRepository(db).get(actor.household_id, draft.event_id)
+            event = await events.get(actor.household_id, draft.event_id)
             if event is None:
                 raise NotFound(cc.NO_SUCH_CALL)
             check_run(event, draft.run)
+        elif await events.call_for(actor.household_id, slot, day) is not None:
+            raise EventRuleViolation(
+                f"There's a {slot.value} call for that day now. Ask the assistant for a new draft.", code="stale_draft"
+            )
         await use()
 
-    event = await calls.start_call(db, actor, slot, day, now=now, expect=expect)
+    event = await calls.start_call(db, actor, slot, day, now=now, expect=expect, instance_label=instance_label)
     return ActionConfirmed(event.id, f"Confirmed. The {slot.value} call for {day_words(day, today)} is started.")
 
 
@@ -550,15 +568,19 @@ async def confirm(db: AsyncSession, actor: Member, draft: Draft, *, today: date,
         await calls.cancel_call(db, actor, event.id, run=run, now=now)
         return ActionConfirmed(event.id, "Confirmed. Your offer is called off.", offer=True)
     if draft.kind is DraftKind.GUEST:
-        guest_id, name = payload.get("guest_id"), str(payload["name"])
+        name = str(payload["name"])
         needs = frozenset(int(n) for n in payload.get("needs", []))
+        saved = [g for g in await guest_service.saved_guests(db, actor) if g.display_name.casefold() == name.casefold()]
+        if len(saved) > 1:
+            raise EventRuleViolation(SAME_NAME, code="same_name")
+        guest_id = saved[0].id if saved else None
         new_guest = None if guest_id is not None else GuestInput(name, needs)
         try:
             await guest_service.invite(
                 db,
                 actor,
                 event.id,
-                guest_id=int(guest_id) if guest_id is not None else None,
+                guest_id=guest_id,
                 new_guest=new_guest,
                 run=run,
                 now=now,
