@@ -757,10 +757,13 @@ async def test_a_card_slack_refuses_is_logged_and_the_rest_still_go(
         return Reply("Two drafts.", (DraftView(1, "proposal", "One", ()), DraftView(2, "offer", "Two", ())))
 
     monkeypatch.setattr(slack_assistant, "converse", drafting)
-    slack.fake.fail("chat.postEphemeral", Failure("msg_too_long"), Failure("invalid_blocks"))
+    refused = (Failure("msg_too_long"), Failure("msg_too_long"), Failure("invalid_blocks"))
+    slack.fake.fail("chat.postEphemeral", *refused)
     await slack.mention("Kim", f"<@{BOT_USER}> draft two")
-    body, one, two = ephemerals(slack)  # each tried, though the first two were refused
-    assert body["text"].startswith("Two drafts.") and (one["text"], two["text"]) == ("One", "Two")
+    body, again, one, two = ephemerals(slack)  # each tried, though the body (twice) and One were refused
+    assert body["text"].startswith("Two drafts.") and body["blocks"][0]["type"] == "markdown"
+    assert again["text"] == body["text"] and "blocks" not in again  # then as text alone (#284)
+    assert (one["text"], two["text"]) == ("One", "Two")
     assert slack.conn.assistant is not None and len(slack.conn.assistant.replied) == 0
 
 
