@@ -40,7 +40,7 @@ from sqlalchemy import delete, select, text, update
 
 from dinnerbell.app_factory import create_app
 from dinnerbell.channels.slack import ids
-from dinnerbell.channels.slack.assistant import WORD_JOINER, SlackAssistant, draft_card, safe_reply
+from dinnerbell.channels.slack.assistant import WORD_JOINER, SlackAssistant, _kept_dots, draft_card, safe_reply
 from dinnerbell.channels.slack.interactions import ASSISTANT_OFF
 from dinnerbell.config import Settings
 from dinnerbell.db.assistant import AssistantRepository
@@ -270,14 +270,14 @@ class Attacker(FakeModel):
     pages: list[ModelReply | Exception] = field(default_factory=list)
     drafting: list[dict[str, Any]] = field(default_factory=list)
 
-    async def create(self, request: Mapping[str, Any], *, time_left: float) -> ModelReply:
+    async def create(self, request: Mapping[str, Any], *, time_left: float, events: Any = None) -> ModelReply:
         if "tools" not in request and str(request.get("system", "")).startswith(DRAFTING):
             self.drafting.append(copy.deepcopy(dict(request)))
             step = self.pages.pop(0) if self.pages else answer(HOSTILE_DRAFT)
             if isinstance(step, Exception):
                 raise step
             return step
-        return await super().create(request, time_left=time_left)
+        return await super().create(request, time_left=time_left, events=events)
 
 
 @pytest.fixture
@@ -2021,6 +2021,43 @@ def assert_slack_safe(out: str, limit: int | None = None) -> None:
         assert len(out) <= limit
 
 
+MARKDOWN_SYNTAX = frozenset("[]&<")
+"""What ``markdown_text`` must never get unescaped: link and image brackets, entities, and the
+``<`` an autolink, mention, ``<!channel>``, or HTML needs (``escape_markdown``)."""
+
+
+def markdown_visible(out: str) -> str:
+    """``markdown_text`` as a member reads it, after Slack's backslash escapes, checking that no
+    syntax character is left unescaped."""
+    seen: list[str] = []
+    at = 0
+    while at < len(out):
+        char = out[at]
+        if char == "\\" and at + 1 < len(out):
+            seen.append(out[at + 1])
+            at += 2
+            continue
+        assert char not in MARKDOWN_SYNTAX, out
+        seen.append(char)
+        at += 1
+    return "".join(seen)
+
+
+def assert_markdown_safe(out: str, limit: int | None = None, *, abbreviations: bool = False) -> None:
+    """``out``, a reply's ``markdown_text`` or any piece of it, can't mention anyone, ping a
+    channel, or link anywhere: no unescaped ``[``, ``]``, ``&``, or ``<`` (``markdown_visible``),
+    and what the member reads passes ``assert_slack_safe``, defanged brackets and all. A ``>``
+    may stay: without ``<`` it opens nothing. With ``abbreviations``, the dots the pipeline keeps
+    in a whole-token abbreviation such as "e.g." don't count as a dot before a letter."""
+    visible = markdown_visible(out).replace(">", " ")
+    if abbreviations:  # the dots of "e.g." and the like stay, as a whole token (``ABBREVIATIONS``)
+        kept = _kept_dots(visible)
+        visible = "".join("_" if at in kept else char for at, char in enumerate(visible))
+    assert_slack_safe(visible)
+    if limit is not None:
+        assert len(out) <= limit
+
+
 @pytest.mark.parametrize("seed", range(4))
 def test_safe_reply_never_pings_mentions_or_links_whatever_the_model_writes(seed: int) -> None:
     """Attack: the model writes any mix of mentions, pings, links, schemes, lookalike domains,
@@ -2058,7 +2095,9 @@ async def test_slack_replies_and_cards_never_ping_or_link_end_to_end(
     for name in HOSTILE_NAMES:
         await house.add_item(name, Mode.PICKUP, cuisine="Thai")
     slack = await wire(house, assistant=helper)
-    for n, words in enumerate(hostile_texts(99, 10)):  # one draft each, up to the ten a member may have waiting
+    lines = hostile_texts(99, 40)
+    replies = ["\n".join(lines[n * 4 : n * 4 + 4]) for n in range(10)]  # lines enough that a DM's reply streams
+    for n, words in enumerate(replies):  # one draft each, up to the ten a member may have waiting
         drafted = [("draft_offer", offer(HOSTILE_NAMES[n % len(HOSTILE_NAMES)], "pickup", day="tomorrow"))]
         model.script = [tool_call(*drafted[0], call_id=f"toolu_{n}"), answer(words)]
         if n % 2:
@@ -2066,7 +2105,16 @@ async def test_slack_replies_and_cards_never_ping_or_link_end_to_end(
         else:
             await slack.mention("Sam", f"<@{bot_user(slack)}> offer something {n}")
     sent = [c.args for c in slack.fake.calls if c.method in ("chat.postMessage", "chat.postEphemeral")]
-    assert len(sent) == 20  # a reply and a card for each
+    streams = slack.fake.of("chat.startStream")
+    assert streams, "some replies are long enough to stream"
+    assert len(sent) + len(streams) == 20  # a reply and a card for each
+    for chunk in (c.args.get("markdown_text") for c in slack.fake.of(*STREAMING)):
+        if chunk:
+            assert_markdown_safe(chunk)  # each piece as it appears, not only the whole
+    for stop in slack.fake.of("chat.stopStream"):
+        for block in stop.args.get("blocks") or ():
+            for element in block.get("elements", ()):
+                assert_slack_safe(element["text"].replace(f"<@{bot_user(slack)}>", ""))
     for message in sent:
         assert_slack_safe(message["text"].replace(f"<@{bot_user(slack)}>", ""))
         for block in message.get("blocks") or ():
@@ -2076,6 +2124,9 @@ async def test_slack_replies_and_cards_never_ping_or_link_end_to_end(
                 assert {ids.parse_draft(e["value"]) > 0 for e in block["elements"]} == {True}
     rows = await draft_rows(house)
     assert any(r.title.startswith("Offer to pick up <!channel>") for r in rows)  # stored as named
+
+
+STREAMING = ("chat.startStream", "chat.appendStream", "chat.stopStream")
 
 
 def bot_user(slack: Slack) -> str:

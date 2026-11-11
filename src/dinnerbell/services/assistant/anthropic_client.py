@@ -13,7 +13,7 @@ from anthropic.types.beta import BetaMessage
 from pydantic import SecretStr
 
 from dinnerbell.domain.assistant import PRICE_TABLE, TokenUsage, costlier
-from dinnerbell.services.assistant.client import ModelCallFailed, ModelReply
+from dinnerbell.services.assistant.client import ModelCallFailed, ModelEvents, ModelReply
 
 log = logging.getLogger(__name__)
 
@@ -35,15 +35,22 @@ class AnthropicModelClient:
             api_key=api_key.get_secret_value(), max_retries=0, timeout=TIMEOUT_SECONDS, http_client=http_client
         )
 
-    async def create(self, request: Mapping[str, Any], *, time_left: float) -> ModelReply:
+    async def create(
+        self, request: Mapping[str, Any], *, time_left: float, events: ModelEvents | None = None
+    ) -> ModelReply:
         """``time_left`` bounds each connection and read of this request, as ``TIMEOUT_SECONDS``
         does, but never past the message's deadline. The SDK's timeout bounds each phase, not
-        the whole stream: ``conversation`` cancels the call when the deadline passes."""
+        the whole stream: ``conversation`` cancels the call when the deadline passes. With
+        ``events``, each text block, text delta, and tool call is reported as it arrives."""
         opened = False
         try:
             limit = max(0.0, min(time_left, TIMEOUT_SECONDS))
             async with self._client.beta.messages.stream(**request, timeout=limit) as stream:
                 opened = True  # from here the request is running, and may bill
+                if events is not None:
+                    hearing: ModelEvents | None = events
+                    async for event in stream:
+                        hearing = _report(hearing, event)
                 message = await stream.get_final_message()
         except anthropic.APIStatusError as exc:
             # An error answer before the stream opened ran nothing, unless the status says it may have.
@@ -65,6 +72,26 @@ class AnthropicModelClient:
 
     async def close(self) -> None:
         await self._client.close()
+
+
+def _report(events: ModelEvents | None, event: Any) -> ModelEvents | None:
+    """Tell ``events`` about one stream event. If it raises, it hears nothing more of this
+    call, and the call goes on: the reply never depends on who's listening."""
+    if events is None:
+        return None
+    try:
+        if event.type == "content_block_start":
+            kind = event.content_block.type
+            if kind == "text":
+                events.text_started()
+            elif kind == "tool_use":
+                events.tool_started()
+        elif event.type == "content_block_delta" and event.delta.type == "text_delta":
+            events.text(event.delta.text)
+    except Exception:
+        log.exception("assistant reply listener broke; the reply goes on without it")
+        return None
+    return events
 
 
 def echoed_content(blocks: Sequence[dict[str, object]]) -> list[dict[str, object]]:

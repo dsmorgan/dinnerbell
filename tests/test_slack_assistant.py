@@ -844,10 +844,10 @@ class Slow(FakeModel):
         self.gate = asyncio.Event()
         self.started = 0
 
-    async def create(self, request: Mapping[str, Any], *, time_left: float) -> ModelReply:
+    async def create(self, request: Mapping[str, Any], *, time_left: float, events: Any = None) -> ModelReply:
         self.started += 1
         await self.gate.wait()
-        return await super().create(request, time_left=time_left)
+        return await super().create(request, time_left=time_left, events=events)
 
 
 def slow_model(slack: Slack) -> Slow:

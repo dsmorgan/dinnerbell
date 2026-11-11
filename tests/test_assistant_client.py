@@ -22,7 +22,8 @@ from dinnerbell.services.assistant.anthropic_client import (
     to_reply,
 )
 from dinnerbell.services.assistant.client import ModelCallFailed
-from dinnerbell.services.assistant.conversation import build_request
+from dinnerbell.services.assistant.conversation import _reply_text, build_request
+from dinnerbell.services.assistant.streaming import CallText
 from dinnerbell.services.assistant.tools import TOOLS
 
 pytestmark = pytest.mark.anyio
@@ -288,3 +289,84 @@ async def test_a_calls_timeout_never_passes_the_clients_own() -> None:
     await client.create(REQUEST, time_left=TIMEOUT_SECONDS * 10)
     await client.close()
     assert [r.extensions["timeout"]["read"] for r in seen] == [TIMEOUT_SECONDS]
+
+
+# Events, for a reply streamed into Slack (#266) ---------------------------------------------------
+
+
+class Heard:
+    """A ``ReplyStream`` that keeps what ``CallText`` passes on."""
+
+    def __init__(self) -> None:
+        self.pieces: list[str] = []
+        self.tool_rounds = 0
+        self.calls: list[int] = []
+
+    def call_started(self, drafts: int) -> None:
+        self.calls.append(drafts)
+
+    def lines(self, text: str) -> None:
+        self.pieces.append(text)
+
+    def tool_round(self) -> None:
+        self.tool_rounds += 1
+
+
+FALLBACK_USAGE = {
+    "output_tokens": 9,
+    "iterations": [
+        {"type": "message", "input_tokens": 7, "output_tokens": 2},
+        {"type": "fallback_message", "model": "claude-sonnet-5", "input_tokens": 7, "output_tokens": 9},
+    ],
+}
+
+
+async def test_a_mid_stream_fallback_streams_the_same_text_as_the_reply() -> None:
+    """The declined model's text and the fallback model's both stay in the reply
+    (``echoed_content``), joined as the reply joins text blocks: what's streamed is the same."""
+    declined = "\n".join(f"Line {n} from the first model, about noodle bowls." for n in range(4)) + "\nand "
+    blocks = [
+        {"type": "thinking", "thinking": "", "signature": "sig-declined"},
+        {"type": "text", "text": declined},
+        {"type": "fallback", "from": {"model": "claude-sonnet-5-5"}, "to": {"model": "claude-sonnet-5"}},
+        {"type": "text", "text": "the rest\nfrom the fallback model, with more lines.\nDone."},
+    ]
+    body = sse(blocks, start_usage={"input_tokens": 7, "output_tokens": 1}, end_usage=FALLBACK_USAGE)
+    heard = Heard()
+    events = CallText(heard, lambda text: text)
+    reply = await client_for(lambda request: streamed(body)).create(REQUEST, time_left=TIMEOUT_SECONDS, events=events)
+    whole = _reply_text(reply.content)
+    shown = "".join(heard.pieces)
+    assert shown and whole.startswith(shown)  # all of it a prefix of the reply, the hop included
+    assert "the rest" in shown  # it went on across the hop
+    assert heard.tool_rounds == 0
+
+
+async def test_a_tool_call_after_held_text_says_so_and_before_it_says_nothing() -> None:
+    long = "\n".join(f"Let me look that up, line {n}, with enough words to pass the hold." for n in range(4))
+    for text, rounds in (("Let me check.", 0), (long, 1)):
+        blocks = [{"type": "text", "text": text}, {"type": "tool_use", "id": "toolu_1", "name": "find", "input": {}}]
+        body = sse(blocks, start_usage={"input_tokens": 7, "output_tokens": 1}, end_usage={"output_tokens": 3})
+        heard = Heard()
+        await client_for(lambda request, body=body: streamed(body)).create(
+            REQUEST, time_left=TIMEOUT_SECONDS, events=CallText(heard, lambda text: text)
+        )
+        assert heard.tool_rounds == rounds
+        assert bool(heard.pieces) == bool(rounds)  # a short preface is never shown
+
+
+async def test_a_listener_that_breaks_never_breaks_the_call(caplog: pytest.LogCaptureFixture) -> None:
+    class Broken:
+        def text_started(self) -> None:
+            raise RuntimeError("boom")
+
+        def text(self, delta: str) -> None:
+            raise AssertionError("never called again")
+
+        def tool_started(self) -> None:
+            raise AssertionError("never called again")
+
+    body = sse([{"type": "text", "text": "Hello."}], start_usage={"input_tokens": 1}, end_usage={"output_tokens": 1})
+    reply = await client_for(lambda request: streamed(body)).create(REQUEST, time_left=5.0, events=Broken())
+    assert reply.content == ({"type": "text", "text": "Hello."},)
+    assert "assistant reply listener broke" in caplog.text

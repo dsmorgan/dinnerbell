@@ -52,7 +52,7 @@ import asyncio
 import logging
 import re
 import unicodedata
-from collections.abc import Callable, Coroutine, Mapping
+from collections.abc import Awaitable, Callable, Coroutine, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -359,8 +359,121 @@ def safe_reply(text: str, limit: int = MAX_REPLY) -> str:
 
     A later change may add a Links line that Dinnerbell builds itself from the catalog URLs that
     tools returned; those would be the only clickable links in a reply."""
-    safe = _PING.sub(lambda m: f"@{WORD_JOINER}{m.group(1)}", escape(defang(text.strip())))
+    safe = safe_text(text.strip())
     return clip_mrkdwn(safe, limit) if len(safe) > limit else safe
+
+
+def _break_pings(text: str) -> str:
+    return _PING.sub(lambda m: f"@{WORD_JOINER}{m.group(1)}", text)
+
+
+def safe_text(text: str) -> str:
+    """``safe_reply`` without its strip and cut: the model's text defanged, escaped for mrkdwn,
+    and with its pings broken. Every step looks at one character and its neighbors, so it can
+    run on a piece of a reply cut between a character that isn't whitespace and whitespace
+    (``MarkdownLines``) with the same result as on the whole."""
+    return _break_pings(escape(defang(text)))
+
+
+LOOKALIKE_LT = "\u2039"
+"""What ``<`` becomes in ``markdown_text`` (U+2039, a single left-pointing angle quotation mark). Slack
+documents no escape for ``<`` there, and nothing says how it reads an entity, so no ``<``
+reaches it: without one, no autolink, mention, ``<!channel>``, or HTML can open."""
+MARKDOWN_ESCAPES = {"\\": "\\\\", "[": "\\[", "]": "\\]", "&": "\\&", "<": LOOKALIKE_LT}
+"""Standard Markdown's link syntax needs ``[``, an autolink or mention needs ``<``, and an
+entity needs ``&``; a backslash is escaped first, so the model can't undo an escape. Slack
+documents the backslash escapes for ``markdown_text``'s Markdown."""
+_MARKDOWN_ESCAPE = re.compile(r"[\\\[\]&<]")
+
+
+def escape_markdown(text: str) -> str:
+    """``text`` for Slack's ``markdown_text``, where ``escape``'s entities don't apply: no link,
+    image, reference, autolink, mention, or entity can form. Bold, lists, and code still render."""
+    return _MARKDOWN_ESCAPE.sub(lambda m: MARKDOWN_ESCAPES[m.group(0)], text)
+
+
+def safe_markdown_text(text: str) -> str:
+    """``safe_text`` for ``markdown_text``: the same defanging and broken pings, escaped with
+    ``escape_markdown`` instead of for mrkdwn. Like ``safe_text``, it runs piece by piece."""
+    return _break_pings(escape_markdown(defang(text)))
+
+
+def clip_markdown(text: str, limit: int) -> str:
+    """``markdown_text`` cut to ``limit`` with an ellipsis, without splitting a backslash
+    escape. ``text`` starts at an escape's start, as each of ``MarkdownLines``' pieces does."""
+    if len(text) <= limit:
+        return text
+    end = 0
+    while end < len(text):
+        step = 2 if text[end] == "\\" else 1
+        if end + step > limit - 1:
+            break
+        end += step
+    return text[:end] + ELLIPSIS
+
+
+def safe_markdown(text: str, limit: int = MAX_REPLY) -> str:
+    """The model's text ready for ``markdown_text``, all at once: what ``MarkdownLines`` gives
+    piece by piece, joined."""
+    return clip_markdown(safe_markdown_text(text.strip()), limit)
+
+
+class MarkdownLines:
+    """Turns a reply's text, fed in any pieces, into ``markdown_text`` chunks to stream. Only
+    whole lines go out: each cut falls just before the whitespace that ends a line, never in a
+    URL, mention, or word, and the whitespace before a cut waits until text follows it, as the
+    whole reply's strip would drop it. So the chunks, joined, are exactly ``safe_markdown`` of
+    the whole text, cut at ``limit`` the same way, and each went through the whole pipeline."""
+
+    def __init__(self, limit: int = MAX_REPLY) -> None:
+        self.limit = limit
+        self.raw = ""
+        """Everything fed so far."""
+        self.cut = 0
+        """``raw[:cut]`` has gone out as chunks."""
+        self.size = 0
+        """Characters of ``markdown_text`` given out."""
+        self.full = False
+        """The limit was reached: nothing more goes out."""
+        self._held = ""
+        """A chunk that would fill the limit exactly, waiting to see whether more text follows."""
+
+    def feed(self, text: str, *, whole_lines: bool = False) -> str:
+        """Take more of the reply; return the chunk ready to stream, or an empty string. With
+        ``whole_lines``, ``text`` ends where a line does, just before its whitespace, as
+        ``CallText`` sends it, so all of it can go at once."""
+        self.raw += text
+        if whole_lines:
+            return self._take(len(self.raw.rstrip()), final=False)
+        last = self.raw.rfind("\n")
+        if last < self.cut:
+            return ""
+        return self._take(len(self.raw[:last].rstrip()), final=False)
+
+    def finish(self) -> str:
+        """The reply is complete: return the rest, without its trailing whitespace."""
+        return self._take(len(self.raw.rstrip()), final=True)
+
+    def _take(self, end: int, *, final: bool) -> str:
+        if self.full:
+            return ""
+        start = self.cut
+        if start == 0:
+            start = len(self.raw) - len(self.raw.lstrip())  # the reply's leading whitespace never goes
+        chunk = self._held
+        if end > start:
+            self.cut = end
+            chunk += safe_markdown_text(self.raw[start:end])
+        self._held = ""
+        room = self.limit - self.size
+        if len(chunk) > room:  # the whole reply is cut in this chunk, where safe_markdown cuts it
+            self.full = True
+            chunk = clip_markdown(chunk, room)
+        elif len(chunk) == room and chunk and not final:
+            self._held = chunk  # exactly full: only the end says whether it's cut
+            return ""
+        self.size += len(chunk)
+        return chunk
 
 
 @dataclass(frozen=True, slots=True)
@@ -396,6 +509,188 @@ class _Bounded:
         self._items[item] = None
         while len(self._items) > REMEMBERED:
             del self._items[next(iter(self._items))]
+
+
+STREAM_STEP_SECONDS = 10.0
+"""The longest one ``chat.startStream``, ``chat.appendStream``, or ``chat.stopStream`` may take."""
+STREAM_SEPARATOR = "\n\n"
+"""What comes between shown text and Dinnerbell's own line, when the reply turns out to be one."""
+
+
+@dataclass(frozen=True, slots=True)
+class _Text:
+    markdown: str
+    raw_end: int
+    """``MarkdownLines.cut`` once this chunk is out: how much of the raw text it covers."""
+
+
+class _Stop:
+    """The streamed message isn't the reply: the call that wrote it calls tools."""
+
+
+class SlackStream:
+    """A ``services.assistant.streaming.ReplyStream`` into the message's thread (#266): the
+    reply grows in Slack as the model writes it, through ``chat.startStream``,
+    ``chat.appendStream``, and ``chat.stopStream``, in ``markdown_text`` from ``MarkdownLines``.
+
+    The model's events call its methods synchronously; one worker task makes the Slack calls in
+    order, so a slow call never holds up the model, and text that arrives meanwhile goes in the
+    next append. A call that streams nothing, because it's short or ends in a tool call first,
+    leaves the reply to be posted as before. Slack refusing anything, or not answering in
+    ``STREAM_STEP_SECONDS``, ends the streaming; ``finish`` then says what's still unseen, for
+    an ordinary reply. A reply that would go only to its member, in a channel thread with drafts,
+    never streams: ``call_started`` learns of the drafts before the final call."""
+
+    def __init__(
+        self, api: SlackApi, incoming: Incoming, *, team_id: str | None, resume: Callable[[], Awaitable[None]]
+    ) -> None:
+        self.api = api
+        self.incoming = incoming
+        self.team_id = team_id
+        self.resume = resume
+        """Shows the working status again after a streamed message that wasn't the reply."""
+        self.enabled = False
+        """Whether the current model call may stream."""
+        self.markdown = MarkdownLines()
+        self.ts: str | None = None
+        """The streamed message, once Slack started it."""
+        self.shown = 0
+        """``markdown.raw[:shown]`` is in Slack."""
+        self.failed = False
+        self._queue: list[_Text | _Stop] = []
+        self._worker: asyncio.Task[None] | None = None
+
+    # ReplyStream ---------------------------------------------------------------------------------
+
+    def call_started(self, drafts: int) -> None:
+        self.enabled = self.incoming.private or drafts == 0
+
+    def lines(self, text: str) -> None:
+        if not self.enabled or self.failed:
+            return
+        chunk = self.markdown.feed(text, whole_lines=True)
+        if chunk:
+            self._queue.append(_Text(chunk, self.markdown.cut))
+            self._kick()
+
+    def tool_round(self) -> None:
+        if self.enabled and (self.ts is not None or self._queue):
+            self._queue.append(_Stop())
+            self._kick()
+
+    # The worker ----------------------------------------------------------------------------------
+
+    def _kick(self) -> None:
+        if self._worker is None or self._worker.done():
+            self._worker = asyncio.create_task(self._work())
+
+    async def _work(self) -> None:
+        while self._queue:
+            item = self._queue.pop(0)
+            if isinstance(item, _Stop):
+                await self._close(None, None)
+                await self.resume()
+                self.markdown, self.ts, self.shown, self.failed = MarkdownLines(), None, 0, False
+                continue
+            text, end = item.markdown, item.raw_end
+            while self._queue and isinstance(more := self._queue[0], _Text):
+                self._queue.pop(0)
+                text, end = text + more.markdown, more.raw_end
+            if not self.failed and await self._send(text):
+                self.shown = end
+
+    async def _send(self, text: str) -> bool:
+        incoming = self.incoming
+        channel_thread = not incoming.private
+        try:
+            async with asyncio.timeout(STREAM_STEP_SECONDS):
+                if self.ts is None:
+                    self.ts = await self.api.start_stream(
+                        incoming.channel,
+                        incoming.root,
+                        text,
+                        recipient_user=incoming.user if channel_thread else None,
+                        recipient_team=self.team_id if channel_thread else None,
+                    )
+                else:
+                    await self.api.append_stream(incoming.channel, self.ts, text)
+        except Exception as exc:
+            self.failed = True
+            _stream_failed("chat.startStream" if self.ts is None else "chat.appendStream", exc)
+            return False
+        return True
+
+    async def _close(self, text: str | None, blocks: list[Block] | None) -> bool:
+        """Stop the streamed message, if there is one, with ``text`` and ``blocks`` last."""
+        if self.ts is None:
+            return True
+        try:
+            async with asyncio.timeout(STREAM_STEP_SECONDS):
+                await self.api.stop_stream(self.incoming.channel, self.ts, text, blocks)
+        except Exception as exc:
+            _stream_failed("chat.stopStream", exc)
+            return False
+        return True
+
+    async def _drain(self) -> None:
+        worker = self._worker
+        if worker is None:
+            return
+        try:
+            await asyncio.wait_for(asyncio.shield(worker), STREAM_STEP_SECONDS * 3)
+        except TimeoutError:
+            worker.cancel()
+            self.failed = True
+            log.info("slack assistant stream gave up waiting for slack")
+
+    # The end -------------------------------------------------------------------------------------
+
+    async def finish(self, reply: str, blocks: list[Block] | None) -> str | None:
+        """End the stream with the rest of ``reply``, the finished reply's text, and ``blocks``
+        under it. Returns None when the member has seen it all, or else what they haven't,
+        for an ordinary reply: all of it when nothing streamed. When ``reply`` isn't how the
+        shown text goes on, as when the model ran out of time, it comes after a blank line."""
+        await self._drain()
+        if self.ts is None:
+            return reply
+        reply = reply.strip()
+        if self.failed:
+            await self._close(None, None)
+            return self._unseen(reply)
+        raw = self.markdown.raw.lstrip()  # the reply is stripped, and so is what's streamed
+        if reply.startswith(raw):
+            rest = self.markdown.feed(reply[len(raw) :]) + self.markdown.finish()
+        else:
+            rest = self.markdown.finish()
+            extra = safe_markdown_text(STREAM_SEPARATOR + reply.strip())
+            if self.markdown.size + len(rest) + len(extra) > self.markdown.limit:
+                await self._close(rest, None)
+                return reply  # no room left in the message: Dinnerbell's line comes on its own
+            rest += extra
+        if await self._close(rest, blocks):
+            return None
+        return self._unseen(reply)
+
+    def _unseen(self, reply: str) -> str:
+        """What of ``reply`` isn't in Slack, given ``markdown.raw[:shown]`` is."""
+        seen = self.markdown.raw[: self.shown].lstrip()
+        return reply[len(seen) :].strip() if reply.startswith(seen) else reply
+
+    async def abandon(self) -> None:
+        """End any streamed message as it is, when there's no reply to finish it with."""
+        await self._drain()
+        await self._close(None, None)
+
+    def cancel(self) -> None:
+        """Stop the worker, when the answer is cancelled. Slack finalizes an unstopped stream
+        itself after 10 minutes."""
+        if self._worker is not None:
+            self._worker.cancel()
+
+
+def _stream_failed(method: str, exc: Exception) -> None:
+    extra = {"slack_method": method, "error": type(exc).__name__, "slack_error": getattr(exc, "code", None)}
+    log.info("slack assistant stream call failed; posting instead", extra=extra)
 
 
 ImportLink = Callable[[int, int], str]
@@ -546,15 +841,20 @@ class SlackAssistant:
             return
         self.answering.add(member.id)
         working = self.indicators.start(incoming.channel, incoming.root, incoming.ts, private=incoming.private)
+        stream = SlackStream(self.api, incoming, team_id=self.team_id(), resume=working.resume)
         try:
             try:
-                reply = await self._converse(member, key, incoming, await self._naming(member, incoming.text))
+                naming = await self._naming(member, incoming.text)
+                reply = await self._converse(member, key, incoming, naming, stream)
             finally:
                 self.answering.discard(member.id)
                 self.told.discard(member.id)
             if reply is not None:
-                await self._deliver(incoming, member, key, reply)
+                await self._deliver(incoming, member, key, reply, stream)
+            else:
+                await stream.abandon()
         except asyncio.CancelledError:
+            stream.cancel()
             await working.cancel()
             raise
         except Exception:
@@ -571,14 +871,29 @@ class SlackAssistant:
         log.warning("slack message to the assistant refused: the conversation isn't theirs")
         return False
 
-    async def _deliver(self, incoming: Incoming, member: Member, key: str, reply: Reply) -> None:
+    async def _deliver(
+        self, incoming: Incoming, member: Member, key: str, reply: Reply, stream: SlackStream | None = None
+    ) -> None:
         """Post ``reply`` and its draft cards in the message's thread: publicly, or only to the
-        member when it carries drafts in a channel thread."""
+        member when it carries drafts in a channel thread. When ``stream`` showed some of it,
+        the stream ends with the rest, and only what the member hasn't seen is posted."""
         body = reply_text(reply)
         cards = [draft_card(draft) for draft in reply.drafts]
         private = bool(cards) and not incoming.private  # drafts, and the reply on them, go only to their member
         noted = f"{key}:{incoming.user}"
         first = not incoming.private and key not in self.replied and not (private and noted in self.noted)
+        if stream is not None and not private:
+            under = [context(mention_only_line(self.bot_user_id))] if first and self.bot_user_id else None
+            unseen = await stream.finish(reply.text, under)
+            if unseen is None or (stream.ts is not None and not unseen):
+                if not incoming.private:
+                    self.replied.add(key)  # the note came with the streamed message
+                for card in cards:
+                    await self._post(incoming, member, card["text"], card["blocks"])
+                return
+            body = safe_reply(unseen)
+        elif stream is not None:
+            await stream.abandon()
         if first and self.bot_user_id:
             note = mention_only_line(self.bot_user_id)
             room = MAX_REPLY - len(note) - 2
@@ -616,13 +931,23 @@ class SlackAssistant:
         async with self.sessionmaker() as db:
             return await outbox.call_for_post(db, member.household_id, MessageRef(incoming.channel, incoming.root))
 
-    async def _converse(self, member: Member, key: str, incoming: Incoming, text: NamingText) -> Reply | None:
-        """``converse``'s reply, or None when there's nothing to say."""
+    async def _converse(
+        self, member: Member, key: str, incoming: Incoming, text: NamingText, stream: SlackStream | None = None
+    ) -> Reply | None:
+        """``converse``'s reply, or None when there's nothing to say. ``stream`` shows the reply
+        while it's written."""
         try:
             call_id = await self._call_id(member, incoming)
             async with self.sessionmaker() as db:
                 reply = await converse(
-                    db, self.assistant, member, key, private=incoming.private, text=text, call_id=call_id
+                    db,
+                    self.assistant,
+                    member,
+                    key,
+                    private=incoming.private,
+                    text=text,
+                    call_id=call_id,
+                    stream=stream,
                 )
         except Forbidden:
             log.warning("slack message to the assistant refused: the conversation isn't theirs")

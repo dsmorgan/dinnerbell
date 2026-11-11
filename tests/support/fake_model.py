@@ -4,6 +4,7 @@ and answers from a script. It never reaches the network; no test calls Anthropic
 
 from __future__ import annotations
 
+import asyncio
 import copy
 import json
 from collections.abc import Mapping
@@ -11,7 +12,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from dinnerbell.domain.assistant import TokenUsage
-from dinnerbell.services.assistant.client import ModelCallFailed, ModelReply
+from dinnerbell.services.assistant.client import ModelCallFailed, ModelEvents, ModelReply
 
 MODEL = "claude-sonnet-5-5"
 
@@ -51,16 +52,38 @@ class FakeModel:
     script: list[ModelReply | Exception] = field(default_factory=list)
     requests: list[dict[str, Any]] = field(default_factory=list)
     time_left: list[float] = field(default_factory=list)
+    delta: int = 5
+    """How many characters of text each ``text`` event carries, when the caller listens."""
 
-    async def create(self, request: Mapping[str, Any], *, time_left: float) -> ModelReply:
+    async def create(
+        self, request: Mapping[str, Any], *, time_left: float, events: ModelEvents | None = None
+    ) -> ModelReply:
         self.requests.append(copy.deepcopy(dict(request)))
         self.time_left.append(time_left)
         if not self.script:
-            return answer("OK")
-        step = self.script.pop(0)
-        if isinstance(step, Exception):
-            raise step
-        return step
+            reply = answer("OK")
+        else:
+            step = self.script.pop(0)
+            if isinstance(step, Exception):
+                raise step
+            reply = step
+        if events is not None:
+            await self.write(reply, events)
+        return reply
+
+    async def write(self, reply: ModelReply, events: ModelEvents) -> None:
+        """Tell ``events`` about ``reply`` as a stream would: each text block in ``delta``-sized
+        pieces, and each tool call as it starts. A fallback block, as in a real stream, says
+        nothing. Yields between pieces, as a stream does."""
+        for block in reply.content:
+            if block.get("type") == "text":
+                events.text_started()
+                text = str(block.get("text", ""))
+                for start in range(0, len(text), self.delta):
+                    events.text(text[start : start + self.delta])
+                    await asyncio.sleep(0)
+            elif block.get("type") == "tool_use":
+                events.tool_started()
 
     @property
     def sent(self) -> str:

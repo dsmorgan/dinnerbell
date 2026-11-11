@@ -151,6 +151,19 @@ class Working:
                 self.reaction = not answered(error)
                 self._remember("reaction", error)
 
+    async def resume(self) -> None:
+        """Show the status again, as when a streamed message turned out not to be the reply:
+        any message in the thread clears it. Best effort and bounded, as every call is."""
+        if not self.indicators.allowed("status", self.private):
+            return
+        api = self.indicators.api
+        async with self.thread.lock:
+            self.thread.statuses += 1
+            await self._attempt(
+                "assistant.threads.setStatus",
+                lambda: api.set_status(self.channel, self.thread_ts, STATUS, LOADING_MESSAGES),
+            )
+
     async def stop(self) -> None:
         """Wait for the indicator to finish showing, which ``STEP_SECONDS`` bounds, then clear
         what it showed. A reply clears a status already, but an ephemeral or a failed post

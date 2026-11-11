@@ -116,10 +116,10 @@ class Slow(FakeModel):
         self.gate = asyncio.Event()
         self.started = 0
 
-    async def create(self, request: Mapping[str, Any], *, time_left: float) -> ModelReply:
+    async def create(self, request: Mapping[str, Any], *, time_left: float, events: Any = None) -> ModelReply:
         self.started += 1
         await self.gate.wait()
-        return await super().create(request, time_left=time_left)
+        return await super().create(request, time_left=time_left, events=events)
 
 
 def slow_model(slack: Slack) -> Slow:
@@ -460,11 +460,11 @@ class Held(FakeModel):
         super().__init__()
         self.held: list[asyncio.Event] = []
 
-    async def create(self, request: Mapping[str, Any], *, time_left: float) -> ModelReply:
+    async def create(self, request: Mapping[str, Any], *, time_left: float, events: Any = None) -> ModelReply:
         gate = asyncio.Event()
         self.held.append(gate)
         await gate.wait()
-        return await super().create(request, time_left=time_left)
+        return await super().create(request, time_left=time_left, events=events)
 
 
 @pytest.mark.flag("assistant", on=True)

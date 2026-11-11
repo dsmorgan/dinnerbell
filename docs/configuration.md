@@ -83,7 +83,7 @@ Dinnerbell reads only direct messages to it and messages that mention it, and on
 
 While Dinnerbell works on a message, the thread shows "Dinnerbell is thinking…" with a few rotating lines, such as "Checking the catalog…". Where Slack won't show that status, Dinnerbell reacts to the member's message with :hourglass_flowing_sand: instead, which is what `reactions:write` is for. Either one goes once the reply posts or the answer fails. A message Dinnerbell ignores, or one that gets "I'm still on your last message", shows neither. If the indicator fails, the reply still comes; Dinnerbell logs only the Slack error code.
 
-Replies can't mention anyone or ping the channel, and they hold no links: Dinnerbell writes any address the assistant gives in a form Slack doesn't link, such as `hxxps[:]//example[.]com`.
+Replies can't mention anyone or ping the channel, and they hold no links: Dinnerbell writes any address the assistant gives in a form Slack doesn't link, such as `hxxps[:]//example[.]com`. A longer reply appears line by line as the assistant writes it, in the same thread; a short one arrives whole. A streamed reply can show bold, lists, and code, and any `<` in it shows as `‹`. If Slack won't stream, the reply is posted as before. Streaming needs no new scope: it uses `chat:write`.
 
 Each draft the assistant makes comes as a card with **Confirm** and **Cancel**: in a channel thread, only the member who asked sees it. A catalog draft's **Confirm** gives a **Review the import** link, the one link Dinnerbell builds itself, from `DINNERBELL_BASE_URL`, to the web's add-only import preview. It works only for that member, signed in, for 24 hours; Dinnerbell keeps a confirmed catalog draft that long for it.
 
