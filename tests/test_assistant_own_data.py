@@ -14,10 +14,12 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import AsyncIterator, Iterator
+from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import pytest
+from sqlalchemy import select
 
 from dinnerbell.config import Settings
 from dinnerbell.db.feedback import FeedbackRepository
@@ -37,13 +39,20 @@ from dinnerbell.domain.feedback import (
     PlaceIssue,
     Rating,
 )
+from dinnerbell.domain.meals import MealInput, Slot
 from dinnerbell.domain.members import Member
 from dinnerbell.domain.preferences import MINUS, Stance, TargetType
-from dinnerbell.services import away, feedback, preferences
+from dinnerbell.services import away, coordinator, feedback, meals, preferences
 from dinnerbell.services.assistant import admin, call_drafts, drafts, own_drafts, tools
 from dinnerbell.services.assistant.call_drafts import ActionConfirmed
-from dinnerbell.services.assistant.conversation import AT_CAP, Assistant, converse
-from dinnerbell.services.assistant.drafts import DraftUnavailable
+from dinnerbell.services.assistant.conversation import (
+    AT_CAP,
+    CAP_BELOW_ONE_CALL,
+    Assistant,
+    converse,
+    least_private_call_micros,
+)
+from dinnerbell.services.assistant.drafts import USED, DraftUnavailable
 from dinnerbell.services.assistant.prompt import SYSTEM_PROMPT, system_prompt
 from dinnerbell.services.assistant.runtime import AssistantConfig
 from dinnerbell.services.assistant.tools import ToolContext, ToolResult, ToolSession
@@ -818,3 +827,82 @@ async def test_lookups_read_back_her_own_feedback_and_away_days_and_clearing_und
         "Your away days, from today through tomorrow, end now.",
         "Calls still taking answers ask you again.",
     ]
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_a_cap_below_one_private_call_says_so_truthfully_and_spends_nothing(
+    house: House, helper: Assistant, model: FakeModel
+) -> None:
+    """With Opus, one private message's worst case is more than a $1 cap. That isn't the month's
+    cap reached: nothing was spent, and next month won't help, so the member hears to ask an
+    admin to raise it, and nothing is reserved or sent."""
+    opus = replace(helper, config=replace(helper.config, model="claude-opus-5-5"))
+    assert least_private_call_micros("claude-opus-5-5") > 1_000_000
+    async with house.sessionmaker() as db:
+        await admin.update_assistant(
+            db, CONFIGURED, house["Alex"], AssistantSettings(enabled=True, cap_dollars=1), now=house.clock()
+        )
+    kim = house["Kim"]
+    async with house.sessionmaker() as db:
+        reply = await converse(db, opus, kim, web_key(kim.id), private=True, text="Veto mushrooms")
+        usage = list(await db.scalars(select(AssistantUsageRow)))
+    assert reply is not None and reply.text == CAP_BELOW_ONE_CALL and reply.text != AT_CAP
+    assert model.requests == [] and usage == []
+    async with house.sessionmaker() as db:
+        view = await admin.assistant_admin(db, CONFIGURED, house["Alex"], now=house.clock())
+    assert view.least_call_micros == least_private_call_micros("claude-sonnet-5-5")  # the configured model's
+    assert not view.cap_below_one_call
+
+
+@pytest.mark.flag("assistant", on=True)
+@pytest.mark.parametrize("kind", ["preference", "feedback", "away"])
+async def test_a_double_tapped_confirm_hears_the_draft_is_used(
+    house: House, monkeypatch: pytest.MonkeyPatch, kind: str
+) -> None:
+    """Two Confirms at once both pass the early check; the second, under the lock after the
+    first commits, must say the draft is used, not that what it changes changed since."""
+    meal_id = await dinner(house)
+    args = {
+        "preference": ("draft_preference", {"what": "", "name": "Mushrooms", "level": "veto"}),
+        "feedback": ("draft_feedback", NO_FEEDBACK | {"meal": meal_id, "rating": "hated"}),
+        "away": ("draft_away", {"first": "tomorrow", "last": "2026-10-26", "clear": False}),
+    }[kind]
+    row = draft_id(await tool(house, *args))
+    await confirm(house, "Kim", row)
+    monkeypatch.setattr(drafts, "_check_usable", lambda draft, now: None)  # as if it raced the first
+    with pytest.raises(DraftUnavailable, match=re.escape(USED)):
+        await confirm(house, "Kim", row)
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_feedback_drafted_before_the_place_was_corrected_is_refused(house: House) -> None:
+    """#220: the admin corrects last night's place after Kim drafts feedback on it. Her draft was
+    about the old place, so Confirm refuses, and nothing is saved on the new one."""
+    meal_id = await dinner(house)
+    row = draft_id(await tool(house, "draft_feedback", NO_FEEDBACK | {"meal": meal_id, "rating": "hated"}))
+    event_id = next(m.event_id for m in await house.meals() if m.id == meal_id)
+    siam, taqueria = house.items["Siam Garden"].id, house.items["Taqueria"].id
+    await act(
+        house,
+        coordinator.correct_place,
+        house["Alex"],
+        event_id,
+        item_id=taqueria,
+        mode=Mode.PICKUP,
+        opened_item_id=siam,
+    )
+    with pytest.raises(EventRuleViolation, match=re.escape(own_drafts.FEEDBACK_CHANGED)):
+        await confirm(house, "Kim", row)
+    assert await mine(house, "Kim", meal_id) is None
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_the_meals_listed_are_only_those_the_member_ate(house: House) -> None:
+    """Lee didn't eat last night's dinner, and only Lee ate today's lunch: each sees only theirs."""
+    dinner_id = await dinner(house)
+    lunch = MealInput(TODAY, Slot.LUNCH, house.items["Taqueria"].id, frozenset({house["Lee"].id}))
+    logged = await act(house, meals.log_meal, house["Lee"], lunch, today=TODAY)
+    for who, expected in (("Kim", [dinner_id]), ("Lee", [logged.id])):
+        result = await tool(house, "look_up_my_feedback", {"name": ""}, who=who)
+        assert not result.is_error, result.content
+        assert [m["meal"] for m in json.loads(result.content)["meals"]] == expected, who

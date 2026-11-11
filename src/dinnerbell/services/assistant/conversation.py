@@ -84,6 +84,13 @@ AT_CAP = (
     "The assistant has reached this month's spending limit, so it's unavailable until next month. "
     "Everything else in Dinnerbell works as usual."
 )
+CAP_BELOW_ONE_CALL = (
+    "The assistant's monthly spending limit is too low for this model to answer a request this size, so waiting "
+    "until next month won't help. Ask an admin to raise the cap on Admin > Assistant. Everything else in "
+    "Dinnerbell works as usual."
+)
+"""When one call's reservation is more than the household's whole cap, as with a $1 cap and a
+model whose worst case is more: ``AT_CAP`` would be false, since nothing was spent."""
 TURNED_OFF = "The assistant was just turned off."
 FAILED = "The assistant couldn't answer just now. Try again in a minute."
 REFUSED = "I can't help with that one."
@@ -166,6 +173,14 @@ def build_request(
     return with_fallback(request)
 
 
+def least_private_call_micros(model: str) -> int:
+    """What the smallest private message's first call reserves with ``model``: an empty message,
+    no history, and every tool a private conversation offers, by ``_call``'s own reservation. A
+    cap below it can't answer any private message (``CAP_BELOW_ONE_CALL``)."""
+    request = build_request(model, tools_for(True), _messages((), Turn("user", "", "Member 1")), keeps_history=True)
+    return reservation_micros(model, payload_bytes=request_bytes(request), max_tokens=int(request["max_tokens"]))
+
+
 def request_bytes(request: Mapping[str, Any]) -> int:
     """The request's length as compact UTF-8 JSON: at least as many bytes as its text has tokens."""
     return len(json.dumps(request, ensure_ascii=False, separators=(",", ":")).encode())
@@ -235,6 +250,9 @@ async def _call(
         settings = assistant_settings(await household_settings(db, household_id))
         if not settings.enabled:
             raise _Refused(TURNED_OFF)
+        if reserved > settings.cap_micros:
+            log.info("assistant cap below one call", extra={"member_id": member.id})
+            raise _Refused(CAP_BELOW_ONE_CALL)
         now = assistant.clock()
         month = month_key(now, zone)
         if await repo.month_total(household_id, month) + reserved > settings.cap_micros:

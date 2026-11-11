@@ -240,10 +240,8 @@ async def my_meals(db: AsyncSession, actor: Member, text: str, *, now: datetime)
     theirs = [m for m in meals if any(p.id == actor.id for p in m.participants) and key in name_key(m.item_name)]
     listed = []
     for meal in sorted(theirs, key=newest_first, reverse=True):
-        try:
-            form = await feedback_service.form(db, actor, meal.id, now=now)
-        except InvalidFeedback:  # pragma: no cover - the window and the participants are checked above
-            continue
+        # The window and the participants above are ``check_can_give``'s, so the form opens for each.
+        form = await feedback_service.form(db, actor, meal.id, now=now)
         facts = form.facts
         listed.append(
             {
@@ -298,9 +296,9 @@ async def feedback_draft(
 async def _confirm_feedback(
     db: AsyncSession, actor: Member, draft: Draft, *, now: datetime, use: Use
 ) -> ActionConfirmed:
-    """``feedback.give``, which takes the write lock itself. Under it, ``expect`` checks the
-    meal is the same item and the member's feedback on it is the one the draft replaces, then
-    uses the draft, so both commit with the feedback or neither does."""
+    """``feedback.give``, which takes the write lock itself. Under it, ``expect`` uses the draft,
+    then checks the meal is the same item and the member's feedback on it is the one the draft
+    replaces, so the draft's use commits with the feedback or neither does."""
     payload = draft.payload
     meal_id = int(payload["meal_id"])
     rating = payload.get("rating")
@@ -314,10 +312,10 @@ async def _confirm_feedback(
     named: list[str] = []
 
     async def expect(mine: Feedback | None, facts: MealFacts) -> None:
+        await use()  # first, so a second Confirm hears the draft is used, not that it's stale
         if facts.item_id != int(payload["item_id"]) or _stamp(mine) != payload.get("before"):
             raise _stale(FEEDBACK_CHANGED)
         named.append(facts.item_name)
-        await use()
 
     try:
         saved = await feedback_service.give(db, actor, meal_id, data, now=now, expect=expect)
