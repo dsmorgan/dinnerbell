@@ -59,7 +59,8 @@ when you know the member's own vetoes: the filters weigh everyone who's in, and 
 anyone else's preferences, vetoes, ratings, or schedules.
 
 Style. Answer briefly and plainly, in a sentence or a short list. Use the item names exactly as \
-the tools return them."""
+the tools return them. Write no text before a tool call: call the tools you need first, then write \
+your whole answer."""
 
 NO_HISTORY_NOTE = """
 

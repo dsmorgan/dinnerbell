@@ -54,12 +54,13 @@ from dinnerbell.domain.assistant import (
 from dinnerbell.domain.assistant_drafts import MAX_OPEN_DRAFTS
 from dinnerbell.domain.members import Member
 from dinnerbell.services.assistant.acting import ToolRefusal
-from dinnerbell.services.assistant.client import ModelCallFailed, ModelClient, ModelReply, with_fallback
+from dinnerbell.services.assistant.client import ModelCallFailed, ModelClient, ModelEvents, ModelReply, with_fallback
 from dinnerbell.services.assistant.drafts import TOO_MANY as TOO_MANY_DRAFTS
 from dinnerbell.services.assistant.drafts import DraftView
 from dinnerbell.services.assistant.menu_links import CAP_TOO_LOW, MAX_LINK_FETCHES, TOO_MANY_LINKS, PageFetcher
 from dinnerbell.services.assistant.prompt import system_prompt
 from dinnerbell.services.assistant.runtime import AssistantConfig, available
+from dinnerbell.services.assistant.streaming import CallText, ReplyStream
 from dinnerbell.services.assistant.tools import Tool, ToolSession, run_tool, tools_for
 from dinnerbell.services.clock import Clock
 from dinnerbell.services.errors import Forbidden, NotFound
@@ -228,13 +229,15 @@ async def _call(
     *,
     deadline: datetime,
     earlier_output_tokens: int = 0,
+    events: ModelEvents | None = None,
 ) -> tuple[ModelReply, bool]:
     """Reserve, call, and settle one request. Returns the reply, and whether it overran: cost
     more than the reservation, or billed a model the table doesn't price. Either way its cost is
     recorded as it was, and the message makes no further calls. Raises ``_Refused`` when the
     call can't run, including ``OUT_OF_TIME`` once the message's ``deadline`` passes, before
     the call or during it. ``earlier_output_tokens`` is what this message's earlier calls wrote:
-    their thinking goes back in this request as signed blocks and bills as input."""
+    their thinking goes back in this request as signed blocks and bills as input. ``events``
+    hears the reply's text as it's written, for Slack; it changes nothing about the call."""
     if _seconds_left(assistant, deadline) <= 0:
         raise _Refused(OUT_OF_TIME)
     household_id = member.household_id
@@ -278,7 +281,10 @@ async def _call(
         raise _Refused(OUT_OF_TIME)
     try:
         async with asyncio.timeout(left):
-            reply = await assistant.client.create(request, time_left=left)
+            if events is None:
+                reply = await assistant.client.create(request, time_left=left)
+            else:
+                reply = await assistant.client.create(request, time_left=left, events=events)
     except ModelCallFailed as exc:
         log.warning("assistant model call failed", extra={"member_id": member.id, **exc.log_fields()})
         await _shielded(keep_reservation() if exc.maybe_billed else release())
@@ -491,10 +497,13 @@ async def _run_loop(
     keeps_history: bool,
     session: ToolSession,
     deadline: datetime,
+    stream: ReplyStream | None = None,
+    names: Mapping[int, str] | None = None,
 ) -> tuple[str, bool]:
     """The model and tool loop. Returns the reply text, and whether the model answered (so the
     exchange is worth keeping) rather than Dinnerbell replying for it. Every call stops at
-    ``deadline``."""
+    ``deadline``. With ``stream``, each call's text also goes there as it's written, with
+    ``names`` put back (``streaming``)."""
     tools = tools_for(private)
     written = 0  # output tokens of this message's calls so far
     over = False  # a call billed more attempts than its reservation covered
@@ -504,9 +513,13 @@ async def _run_loop(
         if over or links.over:
             return FAILED, False  # refuse further calls in this message
         request = build_request(assistant.config.model, tools, messages, keeps_history=keeps_history)
+        events = None
+        if stream is not None:
+            events = CallText(stream, lambda text: session.pseudonyms.restore_names(text, names or {}))
+            events.started(len(session.drafts))
         try:
             reply, overran = await _call(
-                db, assistant, member, zone, request, deadline=deadline, earlier_output_tokens=written
+                db, assistant, member, zone, request, deadline=deadline, earlier_output_tokens=written, events=events
             )
         except _Refused as refused:
             return refused.reply, False
@@ -551,6 +564,10 @@ async def _run_loop(
     return TOO_MANY_STEPS, False
 
 
+async def _names(db: AsyncSession, household_id: int) -> dict[int, str]:
+    return {m.id: m.display_name for m in await MemberRepository(db).list(household_id)}
+
+
 def _theirs(stored: Conversation, member: Member, *, private: bool) -> bool:
     """Whether ``member`` may add to ``stored``: it's as private as the new message, and a
     private one is their own."""
@@ -574,6 +591,7 @@ async def converse(
     private: bool,
     text: str | NamingText,
     call_id: int | None = None,
+    stream: ReplyStream | None = None,
 ) -> Reply | None:
     """Answer ``member``'s ``text`` in the conversation ``key`` (``domain.assistant.web_key`` or
     ``slack_key``). ``private`` is True for the web page and DMs, False for a channel thread.
@@ -586,7 +604,11 @@ async def converse(
     isn't the member's. Otherwise the reply is the model's answer with members' names put back,
     or a short message from Dinnerbell: at the cap, unavailable until next month; on a refusal,
     a failure, or ``MESSAGE_SECONDS`` passing, a line saying so. The exchange is kept for
-    Admin's Conversation hours, in pseudonym form, unless that's 0 or the model didn't answer."""
+    Admin's Conversation hours, in pseudonym form, unless that's 0 or the model didn't answer.
+
+    ``stream``, for Slack, gets the reply's text as the model writes it (``streaming``). The
+    reply and what's kept are the same either way; members' names are read once, before the
+    first call, so the shown text and the reply put back the same ones."""
     deadline = assistant.clock() + timedelta(seconds=MESSAGE_SECONDS)
     if not await available(db, assistant.config, member):
         return None
@@ -617,6 +639,7 @@ async def converse(
     history = stored.turns if stored else ()
     sent = recent_turns(history, MAX_HISTORY_BYTES - current.size)
     zone = ZoneInfo(household.timezone)
+    names = await _names(db, household.id) if stream is not None else None
     answer, answered = await _run_loop(
         db,
         assistant,
@@ -627,10 +650,13 @@ async def converse(
         keeps_history=hours > 0,
         session=session,
         deadline=deadline,
+        stream=stream,
+        names=names,
     )
     pseudonyms = session.pseudonyms  # with anyone the tools named
     if answered:
         await _keep(db, assistant, member, key, private, pseudonyms, current, Turn("assistant", answer))
-    names = {m.id: m.display_name for m in await MemberRepository(db).list(household.id)}
+    if names is None:
+        names = await _names(db, household.id)
     log.info("assistant replied", extra={"member_id": member.id, "answered": answered, "drafts": len(session.drafts)})
     return Reply(pseudonyms.restore_names(answer, names), tuple(session.drafts))

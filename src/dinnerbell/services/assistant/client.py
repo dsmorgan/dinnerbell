@@ -66,10 +66,32 @@ class ModelCallFailed(Exception):
         }
 
 
+class ModelEvents(Protocol):
+    """What a model call reports as the model writes, for a reply shown while it's written
+    (``services.assistant.streaming``). Each method is synchronous and must not raise; a
+    client that calls one ignores anything it raises. The reply ``create`` returns is the same
+    either way."""
+
+    def text_started(self) -> None:
+        """A text block starts."""
+        ...
+
+    def text(self, delta: str) -> None:
+        """More of the current text block."""
+        ...
+
+    def tool_started(self) -> None:
+        """A tool call starts: this call is a tool round, not the final answer."""
+        ...
+
+
 class ModelClient(Protocol):
-    async def create(self, request: Mapping[str, Any], *, time_left: float) -> ModelReply:
+    async def create(
+        self, request: Mapping[str, Any], *, time_left: float, events: ModelEvents | None = None
+    ) -> ModelReply:
         """Send ``request``, the Messages API's keyword arguments. Raise ``ModelCallFailed``
         instead of any client error, and never retry: each request has its own reservation.
         ``time_left`` is the seconds left of the message's deadline (``conversation``), which
-        also cancels the call when they run out."""
+        also cancels the call when they run out. ``events``, when given, hears the reply's
+        text as it's written; ``conversation`` passes it only to show a reply in Slack."""
         ...
