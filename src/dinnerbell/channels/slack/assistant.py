@@ -553,6 +553,10 @@ class _Stop:
     message: _Message
 
 
+class StreamMixup(RuntimeError):
+    """A bug: a chunk was queued for a message it doesn't belong to. Nothing more is sent."""
+
+
 class SlackStream:
     """A ``services.assistant.streaming.ReplyStream`` into a DM's thread (#266): the reply grows
     in Slack as the model writes it, through ``chat.startStream``, ``chat.appendStream``, and
@@ -638,11 +642,19 @@ class SlackStream:
                     await self._close(message)
                     await self.resume()
                 continue
+            # Each message's chunks come in a run that ends with its _Stop, as only a new call or a
+            # tool round ends a message, and both queue the _Stop then and there. So a chunk never
+            # follows its message's stop, and a run never holds another message's chunk. Either
+            # would mean two calls' text in one message; refuse before sending anything.
+            if message.stopped:
+                raise StreamMixup("a chunk after its message's stop")
             text, end = item.markdown, item.raw_end
-            while self._queue and isinstance(more := self._queue[0], _Text) and more.message is message:
+            while self._queue and isinstance(more := self._queue[0], _Text):
+                if more.message is not message:
+                    raise StreamMixup("another call's chunk in a message's run")
                 self._queue.pop(0)
                 text, end = text + more.markdown, more.raw_end
-            if message.failed or message.stopped:
+            if message.failed:
                 continue
             if await self._send(message, text):
                 message.shown = end
@@ -681,9 +693,13 @@ class SlackStream:
             await asyncio.wait_for(asyncio.shield(worker), STREAM_DRAIN_SECONDS)
         except TimeoutError:
             worker.cancel()
-            if self.current is not None:
-                self.current.failed = True
             log.info("slack assistant stream gave up waiting for slack")
+        except Exception:
+            log.exception("slack assistant stream broke; posting instead")
+        else:
+            return
+        if self.current is not None:
+            self.current.failed = True  # what's unseen is posted
 
     # The end -------------------------------------------------------------------------------------
 
@@ -723,11 +739,15 @@ class SlackStream:
         return reply[len(seen) :].strip() if reply.startswith(seen) else reply
 
     async def abandon(self) -> None:
-        """End any streamed message as it is, when there's no reply to finish it with."""
-        await self._drain()
-        message, self.current = self.current, None
-        if message is not None:
-            await self._close(message)
+        """End any streamed message as it is, when there's no reply to finish it with, or the
+        answer broke. Bounded as ``finish`` is, and never raises: it's best effort."""
+        try:
+            await self._drain()
+            message, self.current = self.current, None
+            if message is not None:
+                await self._close(message)
+        except Exception as exc:
+            log.warning("slack assistant stream not stopped", extra={"error": type(exc).__name__})
 
     def cancel(self) -> None:
         """Stop the worker, when the answer is cancelled. Slack finalizes an unstopped stream
@@ -907,6 +927,8 @@ class SlackAssistant:
             await working.cancel()
             raise
         except Exception:
+            if stream is not None:
+                await stream.abandon()  # stop any message left streaming, so it doesn't wait 10 minutes
             await working.stop()
             raise
         await working.stop()
