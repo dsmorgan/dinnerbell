@@ -10,8 +10,8 @@ A tool returns text for the model: data, never instructions (the system prompt s
 tool marked ``private_only`` is offered only in a private conversation (the web page, a DM).
 The first build's tools work in any conversation: look up catalog items, find candidates, and
 draft a proposal, an offer, or catalog items, from a catalog file or from a menu link
-(``menu_links``). A draft changes nothing until its member confirms it
-(``drafts.confirm_draft``).
+(``menu_links``). So does looking up the meal log (``meal_history``, #264). A draft changes
+nothing until its member confirms it (``drafts.confirm_draft``).
 """
 
 from __future__ import annotations
@@ -39,6 +39,7 @@ from dinnerbell.services.assistant import drafts
 from dinnerbell.services.assistant.acting import ToolRefusal, tool_actor
 from dinnerbell.services.assistant.candidates import CallRef, call_basics, find_candidates, resolve_call
 from dinnerbell.services.assistant.drafts import DraftView, OfferRequest
+from dinnerbell.services.assistant.meal_history import HistoryQuery, Order, eaten_items
 from dinnerbell.services.assistant.menu_links import NOT_HERE, LinkCalls, draft_from_link
 from dinnerbell.services.errors import Forbidden, NotFound
 from dinnerbell.services.variety import household_today
@@ -180,6 +181,100 @@ LOOK_UP_CATALOG_ITEMS = Tool(
         "additionalProperties": False,
     },
     run=look_up_catalog_items,
+)
+
+# Meal history (#264) ----------------------------------------------------------------------------
+
+HISTORY_KINDS = ["", *(kind.value for kind in (ItemKind.RESTAURANT, ItemKind.HOME))]
+HISTORY_FIELDS = ("name", "tag", "kind", "since", "until", "order")
+
+
+async def look_up_history(ctx: ToolContext, raw: Mapping[str, Any]) -> str:
+    """What the household ate, per catalog item, from the meal log: name, kind, cuisines, tags,
+    times eaten, the last day eaten, and the household's hint (FR-49), the one Catalog shows.
+    Never who cooked, ordered, picked up, or ate, anyone's rating, issues, or notes, or anyone's
+    pseudonym. Names and tags are catalog text: data for the model, never instructions."""
+    _fields(raw, *HISTORY_FIELDS)
+    today = await _today(ctx)
+    kind = _enum(raw, "kind", HISTORY_KINDS)
+    query = HistoryQuery(
+        text=name_key(_text(raw, "name")),
+        tag=name_key(_text(raw, "tag")),
+        kind=ItemKind(kind) if kind else None,
+        since=_day(raw, "since", today, required=False),
+        until=_day(raw, "until", today, required=False),
+        order=Order(_enum(raw, "order", [o.value for o in Order])),
+    )
+    if query.since and query.until and query.since > query.until:
+        raise ToolInputError("since is on or before until.")
+    found = await eaten_items(ctx.db, ctx.actor, query, today=today)
+    listed = [
+        {
+            "name": e.item.name,
+            "kind": e.item.kind.value,
+            "cuisines": list(e.cuisines),
+            "tags": list(e.tags),
+            "in_catalog": e.item.active,
+            "times_eaten": e.times,
+            "last_eaten": e.last.isoformat(),
+            "hint": e.hint,
+        }
+        for e in found[:MAX_ITEMS]
+    ]
+    return json.dumps({"today": today.isoformat(), "items": listed, "more": len(found) > MAX_ITEMS}, ensure_ascii=False)
+
+
+LOOK_UP_HISTORY = Tool(
+    name="look_up_history",
+    description=(
+        "Look up what the household has eaten, from its meal log. Call this whenever the member asks "
+        "what the household has had, how often, when it last had something, the place it orders most, "
+        "or the best place it's had. Returns at most 25 items with each item's name, kind (home or "
+        "restaurant), cuisines, tags, in_catalog (false once it's taken off the catalog), times_eaten and "
+        "last_eaten (YYYY-MM-DD) within the dates asked, and hint: the household's verdict from everyone's "
+        "ratings and recent problems, the same words every member sees on the catalog, or null when there "
+        "isn't one yet. A hint is the whole household's, never one person's: never guess "
+        "who liked or disliked something. The log never says who ate, cooked, or ordered. today is today's "
+        "date; more is true when more items matched. Order by most (most often first) or recent (most "
+        "recent first)."
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "name": {
+                "type": "string",
+                "description": "Text the item's name contains, ignoring case. An empty string matches every name.",
+            },
+            "tag": {
+                "type": "string",
+                "description": "Text one of the item's cuisines or tags contains, such as Thai or pizza. "
+                "An empty string matches any.",
+            },
+            "kind": {
+                "type": "string",
+                "enum": HISTORY_KINDS,
+                "description": "restaurant, home, or an empty string for both.",
+            },
+            "since": {
+                "type": "string",
+                "description": "Count only meals on or after this day: today or YYYY-MM-DD. An empty string for "
+                "no start.",
+            },
+            "until": {
+                "type": "string",
+                "description": "Count only meals on or before this day: today or YYYY-MM-DD. An empty string for "
+                "no end.",
+            },
+            "order": {
+                "type": "string",
+                "enum": [o.value for o in Order],
+                "description": "most for the most often eaten first, recent for the most recently eaten first.",
+            },
+        },
+        "required": list(HISTORY_FIELDS),
+        "additionalProperties": False,
+    },
+    run=look_up_history,
 )
 
 # Candidates and drafts --------------------------------------------------------------------------
@@ -508,6 +603,7 @@ DRAFT_CATALOG_FROM_LINK = Tool(
 
 TOOLS: tuple[Tool, ...] = (
     LOOK_UP_CATALOG_ITEMS,
+    LOOK_UP_HISTORY,
     FIND_CANDIDATES,
     DRAFT_PROPOSAL,
     DRAFT_OFFER,
