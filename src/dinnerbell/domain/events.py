@@ -819,6 +819,17 @@ def way_unsettled(proposal: Proposal, item_modes: Iterable[Mode]) -> bool:
     return bool(takeout_ways(item_modes)) and not proposal.mode_chosen
 
 
+@dataclass(frozen=True, slots=True)
+class NamedRoles:
+    """Who the coordinator names for the roles as they lock a pick or break a tie (#252): the way
+    (``mode``, None for the pick's), who cooks or orders (``lead``), and who picks up (``pickup``),
+    each None for the first volunteer, as **Assign roles** takes them."""
+
+    mode: Mode | None = None
+    lead: int | None = None
+    pickup: int | None = None
+
+
 def assign_roles(
     mode: Mode, coverage: Coverage, cook_list: frozenset[int], coordinator_id: int | None
 ) -> dict[AssignmentRole, int]:

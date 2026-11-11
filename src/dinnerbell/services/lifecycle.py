@@ -31,12 +31,15 @@ from dinnerbell.domain.events import (
     LEAD_ROLE,
     MAX_PROPOSALS,
     MIN_HEAD_COUNT,
+    MODE_ROLES,
+    WORK_ROLES,
     AssignmentRole,
     Coverage,
     EndReason,
     Event,
     EventRuleViolation,
     EventState,
+    NamedRoles,
     Proposal,
     ProposalSource,
     ProposalTally,
@@ -45,6 +48,7 @@ from dinnerbell.domain.events import (
     Window,
     assign_roles,
     call_ends_at,
+    can_do,
     check_restart,
     check_run,
     check_window_change,
@@ -707,6 +711,41 @@ async def catalog_free_text(db: AsyncSession, ctx: CallContext, proposal: Propos
     return item
 
 
+NO_ONE_CHOSEN = "Pick who will {verb}."
+ROLE_VERB = {AssignmentRole.COOK: "cook it", AssignmentRole.ORDER: "order it", AssignmentRole.PICKUP: "pick it up"}
+COOK_LIST_NAMED = "{item} has a cook list, and someone you named isn't on it."
+"""Names nobody: only the assistant names roles with a lock, and its model never sees a name."""
+
+
+def named_roles(
+    ctx: CallContext, item: CatalogItem, mode: Mode, named: NamedRoles
+) -> tuple[Mode, dict[AssignmentRole, int]]:
+    """The way and who does each of its roles, as the coordinator named them with a lock (#252),
+    checked as **Assign roles** checks them: a way the place allows, each person named an active
+    member or guest who's in and able to do it (FR-17), and someone for every role the way needs,
+    the first volunteer where nobody was named. ``pickup`` counts only for a pickup."""
+    way = named.mode or mode
+    if way not in item.modes:
+        raise EventRuleViolation(f"{item.name} isn't available by {way.label.lower()}.", code="unavailable")
+    pickup = named.pickup if way is Mode.PICKUP else None
+    for who in (named.lead, pickup):
+        if who is None:
+            continue
+        target = ctx.members.get(who)
+        if target is None or not target.active:
+            raise NotFound("No such member.")
+        response = ctx.response_of(who)
+        if response is None or not response.is_in:
+            raise EventRuleViolation("Pick someone who's in.", code="not_in")
+        if not can_do(item, way, who):
+            raise EventRuleViolation(COOK_LIST_NAMED.format(item=item.name), code="cook_list")
+    roles = default_roles(way, ctx.coverage, item.cook_ids, lead=named.lead, pickup=pickup)
+    for role in MODE_ROLES[way]:
+        if role not in roles:
+            raise EventRuleViolation(NO_ONE_CHOSEN.format(verb=ROLE_VERB[role]), code="no_one_chosen")
+    return way, {role: who for role, who in roles.items() if role in WORK_ROLES}
+
+
 async def decide(
     db: AsyncSession,
     event: Event,
@@ -715,10 +754,15 @@ async def decide(
     locked: Proposal | None = None,
     actor: Member | None = None,
     tie_chosen: bool = False,
+    named: NamedRoles | None = None,
 ) -> None:
     """FR-15 and FR-16: decide the call, by ``locked`` or by the vote, and assign roles.
     ``tie_chosen`` says ``locked`` is the coordinator's choice among tied picks (#87), not a lock.
     Abandons the call when no proposal can be covered (spec 5.4).
+
+    ``named``, with ``locked``, is the roles the coordinator chose with it (#252), checked as
+    **Assign roles** checks them (``named_roles``): the decision takes them at once, so nobody is
+    asked to choose and one set of messages goes out, and a refusal decides nothing.
 
     When the winning pick's roles have no clear owner, or its way of getting it is still open (a
     place with pickup and delivery whose way nobody set during the vote, #178), and someone
@@ -767,11 +811,25 @@ async def decide(
             return
         winner, tie, tie_by = found, chosen.tie, chosen.by
     item = ctx.items[winner.item_id] if winner.item_id is not None else await catalog_free_text(db, ctx, winner, now)
-    roles = assign_roles(winner.mode, ctx.coverage, item.cook_ids, event.coordinator_id)
-    coordinator_member = ctx.members.get(event.coordinator_id) if event.coordinator_id is not None else None
-    # The coordinator chooses when the roles have no clear owner, or the way is still open (#178).
-    unsettled = roles_unclear(winner.mode, ctx.coverage, item.cook_ids) or way_unsettled(winner, item.modes)
-    asking = coordinator_member is not None and coordinator_member.active and unsettled
+    unasked: frozenset[int] = frozenset()
+    if named is not None and locked is not None:
+        mode, named_holders = named_roles(ctx, item, winner.mode, named)
+        if mode is not winner.mode:
+            await ProposalRepository(db).set_mode(event.household_id, winner.id, mode)
+            winner = replace(winner, mode=mode, mode_chosen=True)
+        roles = dict(named_holders)
+        if event.coordinator_id is not None:
+            roles[AssignmentRole.COORDINATOR] = event.coordinator_id
+        offered = {role: ctx.coverage.volunteers(mode, role, item.cook_ids) for role in named_holders}
+        by = actor.id if actor is not None else None
+        unasked = frozenset(who for role, who in named_holders.items() if who not in offered[role] and who != by)
+        asking = False
+    else:
+        roles = assign_roles(winner.mode, ctx.coverage, item.cook_ids, event.coordinator_id)
+        coordinator_member = ctx.members.get(event.coordinator_id) if event.coordinator_id is not None else None
+        # The coordinator chooses when the roles have no clear owner, or the way is still open (#178).
+        unsettled = roles_unclear(winner.mode, ctx.coverage, item.cook_ids) or way_unsettled(winner, item.modes)
+        asking = coordinator_member is not None and coordinator_member.active and unsettled
     # The choice never outlasts the time to choose, nor the meal itself.
     due = min(now + timedelta(minutes=roles_choice_minutes(ctx.settings)), meal) if asking else None
     if asking:  # the role waits for the coordinator's choice
@@ -791,9 +849,13 @@ async def decide(
     decided = await EventRepository(db).save(decided, now)
     repo = AssignmentRepository(db)
     assigned = [await repo.assign(event.household_id, event.id, role, who, now) for role, who in roles.items()]
-    await _announce_decision(db, decided, assigned_ids=[a.id for a in assigned], now=now, asking=asking)
+    assigner = actor if unasked else None
+    await _announce_decision(
+        db, decided, assigned_ids=[a.id for a in assigned], now=now, asking=asking, unasked=unasked, by=assigner
+    )
     payload = {
         "how": "tie_break" if tie_chosen else "locked" if locked else "vote",
+        "roles_named": named is not None and locked is not None,
         "proposal_id": winner.id,
         "item_id": item.id,
         "mode": winner.mode.value,
@@ -813,7 +875,14 @@ def _days_since(event: Event, eaten: dict[int, date], proposal: Proposal) -> int
 
 
 async def _announce_decision(
-    db: AsyncSession, event: Event, *, assigned_ids: list[int], now: datetime, asking: bool = False
+    db: AsyncSession,
+    event: Event,
+    *,
+    assigned_ids: list[int],
+    now: datetime,
+    asking: bool = False,
+    unasked: frozenset[int] = frozenset(),
+    by: Member | None = None,
 ) -> None:
     ctx = await load(db, event)
     decision = cc.decision_info(ctx)
@@ -825,7 +894,11 @@ async def _announce_decision(
             first.setdefault(a.member_id, a.id)
     if asking:  # the coordinator's message below says they coordinate
         first.pop(event.coordinator_id or 0, None)
-    dms = [cc.assignment_made(ctx, member_id, assignment_id, decision) for member_id, assignment_id in first.items()]
+    assigner = ctx.person(by.id) if by is not None else None
+    dms = [
+        cc.assignment_made(ctx, member_id, assignment_id, decision, assigner if member_id in unasked else None)
+        for member_id, assignment_id in first.items()
+    ]
     ask = cc.roles_to_choose(ctx, decision, event.roles_due_at) if asking and event.roles_due_at else None
     await publish(db, ctx, note.DecisionMade(cc.event_info(ctx), decision, cc.locked_by(ctx)), *dms, now=now)
     if ask is not None:

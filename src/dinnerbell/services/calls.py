@@ -53,6 +53,7 @@ from dinnerbell.domain.events import (
     EventState,
     IllegalTransition,
     JoinLateFirst,
+    NamedRoles,
     Proposal,
     ProposalSource,
     Response,
@@ -715,10 +716,19 @@ async def _votes_changed(db: AsyncSession, event: Event, now: datetime) -> None:
 
 
 async def lock(
-    db: AsyncSession, actor: Member, event_id: int, proposal_id: int, *, run: int | None = None, now: datetime
+    db: AsyncSession,
+    actor: Member,
+    event_id: int,
+    proposal_id: int,
+    *,
+    run: int | None = None,
+    roles: NamedRoles | None = None,
+    now: datetime,
 ) -> None:
     """FR-15: the coordinator, or an admin, decides the call now. ``run``, when given, is the run
-    the actor saw (``check_run``). Audited (SEC-9)."""
+    the actor saw (``check_run``). ``roles``, from the assistant (#252), are the way and who does
+    the roles, chosen with the lock: the decision takes them in the same transaction, checked as
+    **Assign roles** checks them, so a refusal locks nothing. Audited (SEC-9)."""
     async with locked_event(db, actor.household_id, event_id, now) as event:
         await guest_rules.gate(db, event, actor, GuestAction.COORDINATE)
         check_run(event, run)
@@ -726,7 +736,7 @@ async def lock(
         ctx = await load(db, event)
         proposal = _proposal_in(ctx, proposal_id)
         activity.about(**activity.pick(ctx.items, proposal))
-        await lifecycle.decide(db, event, now, locked=proposal, actor=actor)
+        await lifecycle.decide(db, event, now, locked=proposal, actor=actor, named=roles)
         activity.action(db, "lock", event, actor, after=EventState.DECIDED, **activity.pick(ctx.items, proposal))
 
 

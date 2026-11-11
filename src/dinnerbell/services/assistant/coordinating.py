@@ -19,7 +19,10 @@ member at draft time from the conversation's pseudonym map, never a guest, and t
 refuses anyone it would, such as someone deactivated or not in. ``look_up`` gives the coordinator
 what the call page shows them that the tools need: who's in, by label, with the roles they offered,
 how many guests are in, which picks are tied, and the decision. Never anyone's maybe or out, vote,
-or tally. Nothing here returns a name, and no title or line on a card holds one.
+or tally. Nothing the model reads holds a name: a refusal that would name someone, such as a cook
+list's, is written again with the label. A stored title or line marks each person by member ID
+(``person``): the card, which only the member sees, shows their name, and the model's summary
+their label (``drafts.view`` and ``drafts.summary``).
 """
 
 from __future__ import annotations
@@ -35,14 +38,18 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from dinnerbell.db.catalog import CatalogRepository
 from dinnerbell.db.engine import write_transaction
 from dinnerbell.db.events import EventRepository
+from dinnerbell.db.repositories import MemberRepository
 from dinnerbell.domain.assistant import Pseudonyms
 from dinnerbell.domain.assistant_coordinating import (
+    ROLE_DOES,
     PlanChange,
     call_off_lines,
     decide_lines,
     decide_title,
     done_lines,
     hand_off_lines,
+    person,
+    plain,
     plan_lines,
     plan_title,
     shuffle_lines,
@@ -52,13 +59,13 @@ from dinnerbell.domain.catalog import MODE_ORDER, CatalogItem, Mode, name_key
 from dinnerbell.domain.events import (
     LEAD_ROLE,
     MAX_SHUFFLES,
-    MODE_ROLES,
     OPEN_STATES,
     AssignmentRole,
     Event,
     EventKind,
     EventRuleViolation,
     EventState,
+    NamedRoles,
     RoleOffer,
     can_do,
     check_can_adjust,
@@ -70,13 +77,12 @@ from dinnerbell.domain.events import (
     check_handoff,
     check_run,
     clean_cancel_note,
-    default_roles,
     is_coordinator,
 )
 from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.members import Member
 from dinnerbell.services import call_context as cc
-from dinnerbell.services import calls, coordinator
+from dinnerbell.services import calls, coordinator, lifecycle
 from dinnerbell.services.assistant.acting import ToolRefusal
 from dinnerbell.services.assistant.call_drafts import NOTHING_TO_DO, ActionConfirmed, DraftSpec, find_pick, pick_name
 from dinnerbell.services.assistant.candidates import CallRef, call_basics
@@ -112,6 +118,8 @@ NO_SUCH_PLACE = (
 TWO_PLACES = "A restaurant and a home meal share that name. Send the way too: cook for the home meal."
 OFFER_NOT_A_CALL = "That's an offer, not a call. Use draft_take_back_offer for the member's own offer."
 CHANGED = "The call changed since the draft. Ask the assistant for a new draft."
+COOK_LIST_AT_CONFIRM = "Someone you named isn't on that home meal's cook list now. Ask the assistant again."
+ALREADY = "{label} already {does}, so there's nothing to change. Leave it empty, or name someone else."
 OFFER_WORDS = {RoleOffer.COOK: "cook", RoleOffer.PICKUP: "pickup", RoleOffer.ORDER: "order"}
 _LABEL = re.compile(r"Member (\d{1,6})")
 
@@ -164,7 +172,7 @@ async def coordinated_call(
     raise ToolRefusal(f"The member has several open calls: {listed}. Ask which, then call again with its slot and day.")
 
 
-def person(ctx: CallContext, labels: Pseudonyms, label: str) -> int | None:
+def resolve(ctx: CallContext, labels: Pseudonyms, label: str) -> int | None:
     """The member ``label`` names in this conversation, such as "Member 2", or None for an empty
     string. Only a household member the conversation's map holds: a label nobody has, or a guest's,
     gets ``NOT_A_LABEL``. The service decides the rest, such as someone deactivated or not in."""
@@ -190,14 +198,35 @@ def _can_do(ctx: CallContext, item: CatalogItem, mode: Mode, who: int, label: st
     check_assignee(ctx, item, mode, who)
 
 
-def _named(mode: Mode, lead: int | None, pickup: int | None, label: Labeler) -> dict[AssignmentRole, str]:
-    """The roles the member named someone for, by label."""
+def _named(mode: Mode, lead: int | None, pickup: int | None) -> dict[AssignmentRole, str]:
+    """Who does each role a card names, as ``person`` marks: the card shows their names, and the
+    model their labels."""
     named: dict[AssignmentRole, str] = {}
     if lead is not None:
-        named[LEAD_ROLE[mode]] = label(lead)
-    if pickup is not None:
-        named[AssignmentRole.PICKUP] = label(pickup)
+        named[LEAD_ROLE[mode]] = person(lead)
+    if pickup is not None and mode is Mode.PICKUP:
+        named[AssignmentRole.PICKUP] = person(pickup)
     return named
+
+
+def _relabeled(exc: EventRuleViolation | NotFound, by_part: Mapping[str, str]) -> EventRuleViolation | NotFound:
+    """A refusal for the model that names nobody: ``check_assignee``'s cook-list refusal names the
+    person, so it's written again with their label, from ``by_part``, Adjust's part (``assignee``
+    or ``pickup``) to the label of whoever the member named there."""
+    if getattr(exc, "code", None) != "cook_list":
+        return exc
+    who = by_part.get(getattr(exc, "part", ""), "") or "someone you named"
+    item = str(exc).split(" has a cook list,", 1)[0]
+    return EventRuleViolation(f"{plain(item)} has a cook list, and {who} isn't on it.", code="cook_list")
+
+
+def _way_there(item: CatalogItem, current: Mode | None) -> Mode | None:
+    """The way Adjust takes to a place when nobody names one, as ``coordinator._way_there`` does:
+    its only way, or the way the call has now if the place allows it. None when Adjust will ask."""
+    ways = [m for m in MODE_ORDER if m in item.modes]
+    if len(ways) == 1:
+        return ways[0]
+    return current if current in ways else None
 
 
 def _holder(ctx: CallContext, member_id: int, label: Labeler) -> str:
@@ -282,8 +311,8 @@ async def decide(
 ) -> DraftSpec:
     """Lock a pick (``calls.lock``) or break a tie with it (``coordinator.break_tie``), checked as
     each checks, the coordinator's say first, so nobody else learns which picks exist. With
-    ``roles``, **Assign roles** runs after (``coordinator.choose_roles``): each person named must
-    be able to do it, and each role the way needs must have someone."""
+    ``roles``, the decision takes them in the same transaction (``lifecycle.named_roles``): each
+    person named must be able to do it, and each role the way needs must have someone."""
     ctx = await load(db, event)
     event = ctx.event
     if tie:
@@ -293,6 +322,7 @@ async def decide(
     pick, shown = find_pick(ctx, handle, name, mode)
     if tie and pick.id not in cc.tied_ids(ctx):
         raise EventRuleViolation(coordinator.NOT_TIED, code="not_tied")
+    shown = plain(shown)
     when, slot = _words(event, today)
     payload: dict[str, Any] = {"proposal_id": pick.id, "name": shown, "mode": pick.mode.value, "tie": tie}
     named: dict[AssignmentRole, str] = {}
@@ -303,30 +333,18 @@ async def decide(
             raise ToolRefusal(NOT_A_CATALOG_PICK)
         chosen = roles.way or pick.mode
         check_mode(item, chosen)
-        lead, pickup = person(ctx, labels, roles.lead), person(ctx, labels, roles.pickup)
+        lead, pickup = resolve(ctx, labels, roles.lead), resolve(ctx, labels, roles.pickup)
         if pickup is not None and chosen is not Mode.PICKUP:
             raise ToolRefusal(NO_PICKUP)
-        _check_roles(ctx, item, chosen, lead, pickup, label)
+        for who in (lead, pickup):  # with labels: the decision's own check names nobody, but less exactly
+            if who is not None:
+                _can_do(ctx, item, chosen, who, label(who))
+        lifecycle.named_roles(ctx, item, pick.mode, NamedRoles(chosen, lead, pickup))  # as the lock checks
         way = chosen if chosen is not pick.mode else None
-        named = _named(chosen, lead, pickup, label)
-        payload |= {"way": way.value if way else None, "lead": lead, "pickup": pickup, "item_id": item.id}
+        named = _named(chosen, lead, pickup)
+        payload |= {"way": way.value if way else None, "lead": lead, "pickup": pickup}
     lines = decide_lines(shown, pick.mode, tie=tie, slot=slot, when=when, way=way, roles=named)
     return DraftSpec(DraftKind.DECIDE, payload, decide_title(shown, pick.mode, tie=tie), lines, event)
-
-
-def _check_roles(
-    ctx: CallContext, item: CatalogItem, mode: Mode, lead: int | None, pickup: int | None, label: Labeler
-) -> None:
-    """As ``choose_roles`` checks: whoever is named can do it, and each role ``mode`` needs has
-    someone, named or the first volunteer."""
-    for who in (lead, pickup):
-        if who is not None:
-            _can_do(ctx, item, mode, who, label(who))
-    found = default_roles(mode, ctx.coverage, item.cook_ids, lead=lead, pickup=pickup)
-    for role in MODE_ROLES[mode]:
-        if role not in found:
-            verb = coordinator.ROLE_VERB[role]
-            raise EventRuleViolation(coordinator.NO_ONE_CHOSEN.format(verb=verb), code="no_one_chosen")
 
 
 # Shuffle (FR-61) --------------------------------------------------------------------------------
@@ -452,11 +470,21 @@ async def plan(
     item = await _place(db, actor, request.place, request.way)
     if item is not None and item.id == current.id:
         item = None  # the place it has: another way is a switch of way, as Adjust does it
-    lead, pickup = person(ctx, labels, request.lead), person(ctx, labels, request.pickup)
+    lead, pickup = resolve(ctx, labels, request.lead), resolve(ctx, labels, request.pickup)
     there = item or current
-    way = request.way or (opened.mode if opened.mode in there.modes else None)
-    if pickup is not None and way is not Mode.PICKUP:
+    way = request.way or _way_there(there, opened.mode)
+    if pickup is not None and way is not None and way is not Mode.PICKUP:
         raise ToolRefusal(NO_PICKUP)
+    # Adjust names someone only when they differ from who has the role now, so naming the same
+    # person again would change nothing that the card says it changes.
+    for who, holder, role in ((lead, opened.assignee_id, LEAD_ROLE[opened.mode]), (pickup, opened.pickup_id, None)):
+        if who is not None and who == holder:
+            does = ROLE_DOES[role or AssignmentRole.PICKUP]
+            raise ToolRefusal(ALREADY.format(label=label(who), does=does))
+    by_part = {
+        "assignee": label(lead) if lead is not None else "",
+        "pickup": label(pickup) if pickup is not None else "",
+    }
     for who in (lead, pickup):
         if who is not None and way is not None:
             _can_do(ctx, there, way, who, label(who))
@@ -470,7 +498,10 @@ async def plan(
         )
     else:
         wanted = Adjustment(meal_time=request.meal_time, assignee_id=lead, mode=request.way, pickup_id=pickup)
-    changes = await coordinator.plan_adjustment(db, actor, event.id, wanted, opened=opened, run=event.run)
+    try:
+        changes = await coordinator.plan_adjustment(db, actor, event.id, wanted, opened=opened, run=event.run)
+    except (EventRuleViolation, NotFound) as exc:
+        raise _relabeled(exc, by_part) from None
     if changes.empty:
         raise ToolRefusal(NOTHING_TO_DO)
     meal = (opened.meal_time, changes.meal_time) if changes.meal_time and opened.meal_time else None
@@ -480,7 +511,10 @@ async def plan(
         switched = (opened.mode, new_way) if new_way is not None and new_way is not opened.mode else None
     else:
         switched = (opened.mode, changes.mode) if changes.mode is not None else None
-    named = _named(switched[1] if switched else opened.mode, lead, pickup, label)
+    # The card names whoever the save gives a role, as Adjust works it out: someone named, or for a
+    # switch of way the first volunteer for a role nobody was named for.
+    final = switched[1] if switched else opened.mode
+    named = _named(final, changes.assignee_id, changes.pickup_id)
     change = PlanChange(meal_time=meal, place=place, way=switched, roles=named)
     when, slot = _words(event, today)
     lines = plan_lines(change, ahead=cc.before_the_meal(event, now))
@@ -501,12 +535,12 @@ async def hand_off(
     event = ctx.event
     if not is_coordinator(event, actor):
         check_handoff(event, actor, actor)  # its refusal for anyone but the coordinator, before the label
-    target = person(ctx, labels, to)
+    target = resolve(ctx, labels, to)
     if target is None:
         raise ToolRefusal(LABEL_ONLY)
     handoff_target(ctx, actor, target)
     when, slot = _words(event, today)
-    shown = label(target)
+    shown = person(target)
     lines = hand_off_lines(shown, slot=slot, when=when, decided=event.state is EventState.DECIDED)
     title = f"Hand off coordinating {when}'s {slot.value} to {shown}"
     return DraftSpec(DraftKind.HAND_OFF, {"to": target}, title, lines, event)
@@ -558,8 +592,37 @@ def _plan_changed(exc: EventRuleViolation | NotFound) -> EventRuleViolation | No
     if code == "plan_changed":
         return _stale()
     if code == "cook_list":
-        return EventRuleViolation("Someone you named isn't on that home meal's cook list.", code="cook_list")
+        return EventRuleViolation(COOK_LIST_AT_CONFIRM, code="cook_list")
     return exc
+
+
+async def _name(db: AsyncSession, actor: Member, member_id: int) -> str:
+    """A person's name for their coordinator's Confirm result, which only the coordinator sees and
+    never goes to the model."""
+    found = await MemberRepository(db).get(actor.household_id, member_id)
+    return found.display_name if found is not None else "a former member"
+
+
+async def _decided_text(db: AsyncSession, actor: Member, draft: Draft, when: str, slot: Slot) -> str:
+    payload = draft.payload
+    text = f"Confirmed. {when.capitalize()}'s {slot.value} call is decided on {payload['name']}."
+    lead, pickup, way = payload.get("lead"), payload.get("pickup"), payload.get("way")
+    mode = Mode(str(way or payload["mode"]))
+    for who, role in ((lead, LEAD_ROLE[mode]), (pickup, AssignmentRole.PICKUP)):
+        if who is not None:
+            text += f" {await _name(db, actor, int(who))} {ROLE_DOES[role]}."
+    return text
+
+
+def _roles_named(payload: Mapping[str, Any]) -> NamedRoles | None:
+    if "lead" not in payload:
+        return None
+    way, lead, pickup = payload.get("way"), payload.get("lead"), payload.get("pickup")
+    return NamedRoles(
+        Mode(str(way)) if way else None,
+        int(lead) if lead is not None else None,
+        int(pickup) if pickup is not None else None,
+    )
 
 
 async def confirm(
@@ -569,7 +632,8 @@ async def confirm(
     use case the call page or Slack's button runs. Under the write lock it uses the draft first,
     so a second Confirm hears it's used, then checks the call's run and what the draft expects,
     then runs the use case, which commits the draft's use with its change, or rolls both back.
-    The use case checks everything again, the coordinator's say included."""
+    The use case checks everything again, the coordinator's say included. A decision takes the
+    roles named with it in the same transaction (``lifecycle.decide``'s ``named``)."""
     payload = draft.payload
     async with write_transaction(db):
         await use()
@@ -580,68 +644,41 @@ async def confirm(
         when, slot = _words(event, today)
         run = draft.run
         if draft.kind is DraftKind.DECIDE:
-            proposal_id, tie = int(payload["proposal_id"]), bool(payload["tie"])
-            if tie:
-                await coordinator.break_tie(db, actor, event.id, proposal_id, run=run, now=now)
-            else:
-                await calls.lock(db, actor, event.id, proposal_id, run=run, now=now)
-            decided = f"Confirmed. {when.capitalize()}'s {slot.value} call is decided on {payload['name']}."
-        elif draft.kind is DraftKind.SHUFFLE:
+            proposal_id, roles = int(payload["proposal_id"]), _roles_named(payload)
+            try:
+                if payload["tie"]:
+                    await coordinator.break_tie(db, actor, event.id, proposal_id, run=run, roles=roles, now=now)
+                else:
+                    await calls.lock(db, actor, event.id, proposal_id, run=run, roles=roles, now=now)
+            except (EventRuleViolation, NotFound) as exc:
+                raise _plan_changed(exc) from None
+            return ActionConfirmed(event.id, await _decided_text(db, actor, draft, when, slot))
+        if draft.kind is DraftKind.SHUFFLE:
             if event.shuffles != int(payload["shuffles"]):
                 raise _stale("The picks were shuffled since the draft. Look at them again first.")
             done = await coordinator.shuffle(db, actor, event.id, run=run, now=now)
             left = "1 shuffle" if done.shuffles_left == 1 else f"{done.shuffles_left} shuffles"
             return ActionConfirmed(event.id, f"Confirmed. {done.replaced} picks replaced; {left} left.")
-        elif draft.kind is DraftKind.PLAN:
+        if draft.kind is DraftKind.PLAN:
             wanted, opened = adjustment_from(payload["wanted"]), adjustment_from(payload["opened"])
             try:
                 await coordinator.adjust(db, actor, event.id, wanted, opened=opened, run=run or 0, now=now)
             except PartlyAdjusted as exc:
-                return ActionConfirmed(event.id, f"Partly confirmed: some of the plan changed, but not all. {exc}")
+                why = _plan_changed(exc)
+                return ActionConfirmed(event.id, f"Partly confirmed: some of the plan changed, but not all. {why}")
             except (EventRuleViolation, NotFound) as exc:
                 raise _plan_changed(exc) from None
             return ActionConfirmed(event.id, f"Confirmed. The plan for {when}'s {slot.value} is changed.")
-        elif draft.kind is DraftKind.HAND_OFF:
-            await calls.hand_off(db, actor, event.id, int(payload["to"]), run=run, now=now)
-            return ActionConfirmed(event.id, f"Confirmed. You handed off coordinating {when}'s {slot.value}.")
-        elif draft.kind is DraftKind.MARK_DONE:
-            if event.state.value != payload["state"]:
-                raise _stale()
+        if draft.kind is DraftKind.HAND_OFF:
+            to = int(payload["to"])
+            await calls.hand_off(db, actor, event.id, to, run=run, now=now)
+            name = await _name(db, actor, to)
+            return ActionConfirmed(event.id, f"Confirmed. {name} coordinates {when}'s {slot.value} now.")
+        if event.state.value != payload["state"]:
+            raise _stale()
+        if draft.kind is DraftKind.MARK_DONE:
             await calls.mark_done(db, actor, event.id, now=now)
             return ActionConfirmed(event.id, f"Confirmed. {when.capitalize()}'s {slot.value} is done.")
-        else:
-            if event.state.value != payload["state"]:
-                raise _stale()
-            note = payload.get("note")
-            await calls.cancel_call(db, actor, event.id, note=str(note) if note else None, run=run, now=now)
-            return ActionConfirmed(event.id, f"Confirmed. {when.capitalize()}'s {slot.value} call is called off.")
-    return await _assign_after(db, actor, draft, decided, now=now)
-
-
-async def _assign_after(
-    db: AsyncSession, actor: Member, draft: Draft, decided: str, *, now: datetime
-) -> ActionConfirmed:
-    """**Assign roles** after a lock that named them (``coordinator.choose_roles``), in its own
-    transaction: the lock stands whatever happens. Only on the place and way it locked."""
-    payload = draft.payload
-    event_id = draft.event_id or 0
-    if payload.get("item_id") is None:
-        return ActionConfirmed(event_id, decided)
-    way = payload.get("way")
-    lead, pickup = payload.get("lead"), payload.get("pickup")
-    try:
-        await coordinator.choose_roles(
-            db,
-            actor,
-            event_id,
-            mode=Mode(str(way)) if way else None,
-            member_id=int(lead) if lead is not None else None,
-            pickup_id=int(pickup) if pickup is not None else None,
-            run=draft.run,
-            as_coordinator=True,
-            expect=coordinator.still_showing(int(payload["item_id"]), Mode(str(payload["mode"]))),
-            now=now,
-        )
-    except (EventRuleViolation, NotFound) as exc:
-        return ActionConfirmed(event_id, f"{decided} The roles weren't assigned: {_plan_changed(exc)}")
-    return ActionConfirmed(event_id, f"{decided} The roles are assigned.")
+        note = payload.get("note")
+        await calls.cancel_call(db, actor, event.id, note=str(note) if note else None, run=run, now=now)
+        return ActionConfirmed(event.id, f"Confirmed. {when.capitalize()}'s {slot.value} call is called off.")
