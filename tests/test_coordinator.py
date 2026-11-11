@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import replace
 from datetime import date, time, timedelta
@@ -1271,11 +1272,24 @@ def web_voting(admin: TestClient, provider: FakeProvider, clock: FakeClock, migr
     return event_id
 
 
+def _assert_shuffle_under_the_list(html: str, event_id: int) -> None:
+    """Shuffle sits under the proposal list and above Add a proposal, as in Slack (#267): a bordered
+    button, not a quiet one, with its "N left" note beside it."""
+    row = re.search(r'<div class="button-row shuffle-row".*?</div>', html, re.S)
+    assert row, "no Shuffle row"
+    assert html.index("</ol>", html.index('<ol class="proposals">')) < row.start() < html.index("Add a proposal")
+    assert f'action="/events/{event_id}/shuffle"' in row[0] and 'class="button small">Shuffle proposals<' in row[0]
+    assert "left</span>" in row[0] and "quiet" not in row[0] and "primary" not in row[0]
+    assert html.count(">Shuffle proposals<") == 1
+
+
 def test_web_shuffle(admin: TestClient, provider: FakeProvider, clock: FakeClock, migrated: Settings) -> None:
     event_id = web_voting(admin, provider, clock, migrated)
     before = proposal_ids(migrated)
     html = page(admin.get(f"/events/{event_id}"))
     assert f'action="/events/{event_id}/shuffle"' in html and "Shuffle proposals" in html and "3 left" in html
+    for where in (f"/events/{event_id}", "/"):  # the call page and Today
+        _assert_shuffle_under_the_list(page(admin.get(where)), event_id)
 
     assert submit(admin, f"/events/{event_id}/shuffle", {}).status_code == 400  # it names the run
     stale = submit(admin, f"/events/{event_id}/shuffle", {"run": "9"})

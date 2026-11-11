@@ -968,7 +968,7 @@ def test_web_vote_card_puts_vote_first_and_the_coordinators_row_below(
     assert 'hx-confirm="' in card[card.rindex("<form", 0, lock) : lock]  # still confirmed
     assert "primary" not in card[card.index("coordinator-row") :]
     html = page(admin.get(f"/events/{event_id}"))
-    assert 'class="button quiet">Shuffle proposals<' in html
+    assert 'class="button small">Shuffle proposals<' in html
 
     assert submit(admin, way, {"mode": "pickup", "run": "1"}).status_code == 303
     card = _proposal_card(page(admin.get(f"/events/{event_id}")), pho)

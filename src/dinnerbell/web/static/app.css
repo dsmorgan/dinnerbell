@@ -644,7 +644,7 @@ ins { color: var(--ok); text-decoration: none; }
 /* The check is for the eye; the button already says it's pressed, so screen readers skip it. A
    browser without alternative text for content keeps the first line. */
 .button.primary.choice[aria-pressed="true"]::before { content: "\2713\00a0"; content: "\2713\00a0" / ""; }
-/* Quiet (#212): the coordinator's and admins' overrides, and Shuffle, so everyone's Vote stands out.
+/* Quiet (#212): the coordinator's and admins' overrides, so everyone's Vote stands out.
    Smaller and muted, with no border until hovered or focused, and still a 40 px tap target. A
    chosen way is the accent fill, like any choice. */
 .button.quiet { min-height: 40px; padding: 0 0.65rem; border-color: transparent; background: transparent; color: var(--muted); font-size: 0.85rem; font-weight: 500; }
@@ -654,6 +654,9 @@ ins { color: var(--ok); text-decoration: none; }
    one control, Break the tie, and Lock this. */
 .coordinator-row { display: flex; flex-wrap: wrap; align-items: center; gap: 0.25rem 0.4rem; margin-top: 0.5rem; padding-top: 0.4rem; border-top: 1px solid var(--hair); }
 .coordinator-label { margin-right: 0.2rem; color: var(--muted); font-size: 0.8rem; }
+/* Shuffle proposals under the list (#267): an ordinary bordered button, so it reads as one, beside
+   its "N left" note. Vote still stands out, with the fill. */
+.shuffle-row { align-items: center; }
 /* The pair clips its ways to its corners, so a chosen way's fill meets the pair's edge. */
 .way-pair { display: inline-flex; border: 1px solid var(--line); border-radius: var(--radius-input); overflow: hidden; }
 .way-pair > form { display: flex; }
