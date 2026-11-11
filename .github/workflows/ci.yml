@@ -540,7 +540,8 @@ jobs:
           fi
       # check-compose.sh skips podman-compose when it isn't on PATH, so a failed install fails here.
       - name: Check podman-compose
-        run: podman-compose version | grep -F 'podman-compose version: 1.0.6'
+        run: |
+          podman-compose version | grep -F 'podman-compose version: 1.0.6'
       - name: Shellcheck
         run: shellcheck deploy/dinnerbell-test deploy/check-secrets scripts/check-compose.sh scripts/build-bundle.sh
       # The optional boot units ("Start at boot" in docs/setup.md). verify exits 0 on an unknown key,
