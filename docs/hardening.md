@@ -1,6 +1,6 @@
 # Harden your install
 
-Dinnerbell faces the internet from your home network, so treat the host and your GitHub account as part of the app. This checklist assumes a working install from [setup.md](setup.md). It lists what you set up yourself, and what the repository's CI checks for you.
+Dinnerbell faces the internet from your home network, so treat the host and your GitHub account as part of the app. This checklist assumes a working install from [setup.md](setup.md) or [install.md](install.md). It lists what you set up yourself, and what the repository's CI checks for you.
 
 ## Secure your GitHub account
 
@@ -15,7 +15,7 @@ GitHub sends a scheduled workflow's failure notice to the person who last change
 ## Harden the host
 
 - **Run rootless podman under a dedicated user.** Create a user that owns nothing else, such as `dinnerbell`, give it subordinate UID and GID ranges in `/etc/subuid` and `/etc/subgid`, and run `loginctl enable-linger dinnerbell` so that its containers keep running after you log out. Install and run Dinnerbell as that user.
-- **Lock down `.env`.** It holds the secret key and the Slack tokens.
+- **Lock down `.env`.** It holds the secret key and the Slack tokens, and maybe the Anthropic key. `dinnerbell init` writes it with mode 600; check that it still is.
 
   ```sh
   chown dinnerbell: .env
@@ -23,8 +23,8 @@ GitHub sends a scheduled workflow's failure notice to the person who last change
   ```
 
 - **Keep backups off the container volume.** The nightly backups live next to the database, so losing the volume loses both. Copy `/data/backups/` to another disk or host, as in [Back up](setup.md#back-up).
-- **Pin a release.** Run a specific `X.Y.Z` image tag, never `latest` or `main`, and don't use `podman auto-update`, which follows moving tags. Upgrade on purpose, after you read the upgrade notes. After you pull, [verify the image](setup.md#verify-an-image) by the digest the host holds, and consider pinning `image:` to that digest in `compose.override.yaml`. With secrets in files, compose reads that file only when you [name it with `-f`](setup.md#run-compose-with-secret-files). The test instance follows the moving `main` tag, so it never runs a verified release.
-- **Bind only to the interface Newt reaches.** Set `DINNERBELL_BIND` in `.env` to that interface's address, never `0.0.0.0`, so that your reverse proxy is the only way in. To confirm, run `ss -ltn | grep 8013` and check the listening address.
+- **Pin a release.** Run a specific `X.Y.Z` image tag, never `latest` or `main`, and don't use `podman auto-update`, which follows moving tags. Upgrade on purpose, after you read the upgrade notes. After you pull, [verify the image](setup.md#verify-an-image) by the digest the host holds, and consider pinning `image:` to that digest in `compose.override.yaml`. With secrets in files, compose reads that file only when you [name it with `-f`](setup.md#run-compose-with-secret-files). In a clone, the test instance follows the moving `main` tag by default, which is never a verified release.
+- **Bind only to the interface your reverse proxy reaches.** Keep the default `DINNERBELL_BIND`, `127.0.0.1`, when the proxy (for Pangolin, Newt) runs on this host; otherwise set it to that interface's address. Never use `0.0.0.0`: the proxy must be the only way in. To confirm, run `ss -ltn | grep -E ':801[34]'` and check the listening addresses.
 - **Keep the compose hardening flags.** `compose.yaml` runs the container with `read_only`, `cap_drop: ALL`, `no-new-privileges`, a size-capped `/tmp`, a process limit, a memory limit, and rotated logs. Don't remove them in `compose.override.yaml`.
 
 ## Monitor it

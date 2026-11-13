@@ -34,7 +34,7 @@ You need:
 
 4. Create the Slack app. In your household's Slack workspace, create a channel such as `#dinnerbell`. At [api.slack.com/apps](https://api.slack.com/apps), select **Create New App** > **From a manifest**, paste `deploy/slack-app-manifest.yaml`, and replace `dinnerbell.example.com` with your hostname. Create an app-level token with the `connections:write` scope, install the app, and invite it to the channel with `/invite @Dinnerbell`. [Sections 1 to 7 of the setup guide](https://github.com/dsmorgan/dinnerbell/blob/main/docs/setup.md#1-create-the-slack-workspace-and-channel) show each screen.
 
-5. Write `.env` with `dinnerbell init`. It asks for your hostname, admin email, time zone, household name, and the Slack app's values, with a hint for each, and hides secrets as you type or paste them. It generates the secret key, writes `.env` with mode 600, and checks it. To skip a Slack value, press Enter, and fill it in `.env` later.
+5. Write `.env` with `dinnerbell init`. It asks for your hostname, admin email, time zone, household name, and the Slack app's values, and hides secrets as you type. It generates the secret key, writes `.env` with mode 600, and checks it. To skip a Slack value, press Enter and fill it in `.env` later.
 
    ```sh
    podman run --rm -it --userns keep-id --user "$(id -u):$(id -g)" -v "$PWD:/out:z" \
@@ -43,7 +43,7 @@ You need:
 
    With Docker: `docker run --rm -it --user "$(id -u):$(id -g)" -v "$PWD:/out:z" "ghcr.io/dsmorgan/dinnerbell:$VERSION" init --output /out/.env`
 
-6. Point your reverse proxy or tunnel at port 8013 on this host, with the proxy's own sign-in turned off: Dinnerbell signs people in itself. Compose publishes the port on `127.0.0.1`. If the proxy runs on another host or in a container network, set `DINNERBELL_BIND` in `.env` to this host's LAN address. For Pangolin, see [section 8](https://github.com/dsmorgan/dinnerbell/blob/main/docs/setup.md#8-expose-dinnerbell-through-your-reverse-proxy).
+6. Point your reverse proxy or tunnel at port 8013 on this host, with the proxy's own sign-in turned off: Dinnerbell signs people in itself. Compose publishes the port on `127.0.0.1`; if the proxy runs on another host or in a container network, set `DINNERBELL_BIND` in `.env` to this host's LAN address. For Pangolin, see [section 8](https://github.com/dsmorgan/dinnerbell/blob/main/docs/setup.md#8-expose-dinnerbell-through-your-reverse-proxy).
 
 7. Start Dinnerbell.
 
@@ -53,14 +53,14 @@ You need:
 
    With Docker: `docker compose up -d`
 
-8. Open your URL, select **Sign in with Slack**, and add your household on **Admin** > **Members**. Once the bot connects, `https://<your hostname>/healthz` shows `"slack":"connected"`. Next, [onboard your family](https://github.com/dsmorgan/dinnerbell/blob/main/docs/setup.md#11-onboard-family-members) and [load the catalog](https://github.com/dsmorgan/dinnerbell/blob/main/docs/setup.md#12-load-the-catalog).
+8. Open your URL, select **Sign in with Slack**, and add your household on **Admin** > **Members**. Once the bot connects, `https://<your hostname>/healthz` shows `"slack":"connected"`. Then [onboard your family](https://github.com/dsmorgan/dinnerbell/blob/main/docs/setup.md#11-onboard-family-members) and [load the catalog](https://github.com/dsmorgan/dinnerbell/blob/main/docs/setup.md#12-load-the-catalog).
 
 ## Upgrade
 
 1. Read the **Upgrade notes** of every release between yours and the new one. They say when `.env` needs a new setting.
 2. [Back up now](https://github.com/dsmorgan/dinnerbell/blob/main/docs/setup.md#back-up-now).
-3. In the directory that holds `dinnerbell`, download and check the new bundle as in steps 1 and 2, then extract it over the old one. It replaces the bundle's files, including `compose.yaml`, which names the new image, and keeps `.env`, `secrets/`, and `compose.override.yaml`. Keep your own changes in `compose.override.yaml`, never in the bundle's files.
-4. Pull the new image and recreate the service. If you pinned a digest in `compose.override.yaml`, update or remove the pin first, or the upgrade keeps the old image.
+3. In the directory that holds `dinnerbell`, download and check the new bundle as in steps 1 and 2, then extract it over the old one. That replaces the bundle's files, including `compose.yaml`, which names the new image, and leaves `.env`, `.env.test`, `secrets/`, `secrets-test/`, and `compose.override.yaml` alone. Keep your own changes in `compose.override.yaml`, never in the bundle's files.
+4. Pull the new image and recreate the service. If you pinned a digest in `compose.override.yaml`, update or remove the pin first, or you keep the old image.
 
    ```sh
    cd dinnerbell && podman-compose pull && podman-compose down && podman-compose up -d
@@ -68,7 +68,7 @@ You need:
 
    With Docker: `cd dinnerbell && docker compose pull && docker compose down && docker compose up -d`
 
-   With secrets in files, name the compose files in each command. If you have a `compose.override.yaml`, add `-f compose.override.yaml` after them; see [Run compose with secret files](https://github.com/dsmorgan/dinnerbell/blob/main/docs/setup.md#run-compose-with-secret-files).
+   With secrets in files, name the compose files in each command, and add `-f compose.override.yaml` after them if you have one; see [Run compose with secret files](https://github.com/dsmorgan/dinnerbell/blob/main/docs/setup.md#run-compose-with-secret-files).
 
    ```sh
    cd dinnerbell
@@ -82,7 +82,8 @@ You need:
 ## Options
 
 - **Other settings:** see the [configuration reference](https://github.com/dsmorgan/dinnerbell/blob/main/docs/configuration.md).
-- **Secrets in files:** to keep the four secrets out of `.env`, see [Keep secrets in files](https://github.com/dsmorgan/dinnerbell/blob/main/docs/setup.md#keep-secrets-in-files). After that, every compose command needs `-f compose.yaml -f compose.secrets.yaml`, including the upgrade commands.
+- **Secrets in files:** to keep the secrets out of `.env`, see [Keep secrets in files](https://github.com/dsmorgan/dinnerbell/blob/main/docs/setup.md#keep-secrets-in-files). After that, every compose command needs `-f compose.yaml -f compose.secrets.yaml`, including the upgrade commands.
 - **Start at boot:** with podman, Dinnerbell stays down after a reboot until you start it. The bundle's `deploy/dinnerbell.service` starts it at boot; rootful Docker needs nothing. See [Start at boot](https://github.com/dsmorgan/dinnerbell/blob/main/docs/setup.md#start-at-boot).
-- **Test instance:** run step 5 with `init --test --output /out/.env.test`. It writes the test settings and refuses production's secrets from `.env`. Start test with `deploy/dinnerbell-test up -d`, on port 8014; the bundle's script runs the bundle's version. See [Run a test instance](https://github.com/dsmorgan/dinnerbell/blob/main/docs/test-instance.md).
+- **Assistant:** to turn on the optional Anthropic assistant, see [The assistant](https://github.com/dsmorgan/dinnerbell/blob/main/docs/configuration.md#the-assistant).
+- **Test instance:** run step 5 with `init --test --output /out/.env.test`. It writes the test settings and refuses production's secrets from `.env`. Start test with `deploy/dinnerbell-test up -d`, on port 8014; the bundle's script runs the bundle's release. See [Run a test instance](https://github.com/dsmorgan/dinnerbell/blob/main/docs/test-instance.md).
 - **Switch to a git clone, or from one:** see [Switch between a clone and the bundle](https://github.com/dsmorgan/dinnerbell/blob/main/docs/switch-install.md#switch-between-a-clone-and-the-bundle).

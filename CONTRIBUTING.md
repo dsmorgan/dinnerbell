@@ -33,7 +33,7 @@ uv run pytest
 
 ## Before you open a pull request
 
-Run the same checks CI runs:
+Run the checks CI runs:
 
 ```sh
 uv run ruff check .
@@ -43,7 +43,9 @@ uv run pytest -n auto --cov
 docker build -f Containerfile -t dinnerbell .
 ```
 
-If you change `compose.yaml`, `compose.secrets.yaml`, `deploy/`, or an env example, also run `scripts/check-compose.sh` (it needs Docker and jq, and checks podman-compose too when it's installed) and `shellcheck deploy/dinnerbell-test deploy/check-secrets scripts/check-compose.sh`.
+CI also runs `pip-audit` on the locked dependencies.
+
+If you change `compose.yaml`, `compose.secrets.yaml`, `deploy/`, `scripts/build-bundle.sh`, or an env example, also run `scripts/check-compose.sh` (it needs Docker and jq, and checks podman-compose too when it's installed) and `shellcheck deploy/dinnerbell-test deploy/check-secrets scripts/check-compose.sh scripts/build-bundle.sh`.
 
 ## Write tests that stay fast and parallel
 
@@ -69,8 +71,7 @@ Releases follow [Semantic Versioning](https://semver.org/), and [CHANGELOG.md](C
    - `version` in `pyproject.toml`, then run `uv lock` to update the version recorded in `uv.lock`.
    - The default tag in `compose.yaml`: `${DINNERBELL_TAG:-X.Y.Z}`. Production checks out the release tag, so its `compose.yaml` always names the matching image.
    - `CHANGELOG.md`: retitle `[Unreleased]` to `[X.Y.Z] - YYYY-MM-DD`, check that it has **Upgrade notes**, add a new empty `[Unreleased]` section above it, add the link `[X.Y.Z]: https://github.com/dsmorgan/dinnerbell/releases/tag/vX.Y.Z` at the bottom, and point `[Unreleased]` at `https://github.com/dsmorgan/dinnerbell/compare/vX.Y.Z...HEAD`.
-2. Merge it once CI passes. If the `Containerfile` pins a Debian package from security updates, check first that
-   it still installs: a tag builds without cache, so a version Debian has replaced fails the release.
+2. Merge it once CI passes. If the `Containerfile` pins a Debian package from security updates, check first that it still installs: a tag builds without cache, so a version Debian has replaced fails the release.
 3. Tag the release commit on `main`, and push the tag. Check that `git log -1` shows the release commit before you tag. CI builds, scans, publishes, and attests the image.
 
    ```sh

@@ -38,7 +38,7 @@ Slack shows the art as PNGs. `badge_art.png_for(key, tier)` draws `standalone_sv
 
 `services/badge_files.py` uploads a tier's PNG the first time a message or view needs it (`files.upload`, shared nowhere), and stores the Slack file ID and a SHA-256 of the PNG in the `slack_badge_file` table. Restarts reuse the IDs. Art that draws differently hashes differently, so it uploads again; a `resvg-py` upgrade that changes the drawing uploads every tier again. Two requests for the same new tier share one upload. Old files are never deleted from Slack.
 
-`BadgeFiles` takes the art from an `ArtSource` (badge key and tier to PNG bytes). `png_for` is the only source, and another source needs no change to the upload or the cache.
+`BadgeFiles` takes the art from an `ArtSource` (badge key and tier to PNG bytes). `png_for` is the only source; another source needs no change to the upload or the cache.
 
 ### Prewarm
 
@@ -54,7 +54,7 @@ The badge announcement, the monthly recap, and **Your badges** on App Home refer
 - A member with three or fewer gets a thumbnail row for each badge.
 - Each member is laid out on their own, so one post can mix the two. The text-only post names 6 badges and counts the rest ("and 2 more badges").
 - A post stays within Slack's 50 blocks: 3 are fixed, and each of at most 10 members takes at most 3, so it never passes 33.
-- The monthly recap gives every member the compact layout, whatever their count: a line naming up to `messages.RECAP_ICONS` (10) badges, plain beside their icon or tagged without one, then one context block of their icons. More than 10 are counted ("and 2 more badges"), so each member takes 2 blocks and the recap never passes 26 blocks with the instance label. With no art for any badge, it is the text it was before art: one block, 6 badges a member with tier marks.
+- The monthly recap gives every member the compact layout, whatever their count: a line naming up to `messages.RECAP_ICONS` (10) badges, plain beside their icon or tagged without one, then one context block of their icons. More than 10 are counted ("and 2 more badges"), so each member takes 2 blocks and the recap never passes 26 blocks with the instance label. With no art for any badge, it falls back to one text block naming up to 6 badges a member, with tier marks.
 - `messages.art_wanted` lists the art a post asks `BadgeFiles` for: every badge of a badge post, and the badges the recap names. The recap uses the same upload, timeout, cooldown, retry, and forget rules as a badge post, below.
 - When Home shows a badge's icon in the "Next" line, it leaves the tier emoji off the name.
 
