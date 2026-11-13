@@ -29,7 +29,7 @@ Keep the directory name `dinnerbell`, and run every command in this guide as the
 ## 1. Create the Slack workspace and channel
 
 1. At [slack.com/get-started](https://slack.com/get-started), create a workspace for your household. The free plan is enough: its 90-day history and 10-app limits don't matter, because Dinnerbell keeps its own records and is the only app.
-2. Create a public channel named `#dinnerbell`. A private channel works too, but then the app also needs the `groups:read` bot scope, which you add in Slack's manifest editor, to check that the bot is in the channel.
+2. Create a public channel named `#dinnerbell`. A private channel works too, but then the app also needs the `groups:read` bot scope, which you add in Slack's manifest editor, to check that the bot is in the channel and to read who's in it.
 
 ## 2. Create the Slack app
 
@@ -543,6 +543,7 @@ These sections moved to their own pages:
 - <a id="copy-the-catalog-between-production-and-test"></a>[Copy the catalog between production and test](catalog-format.md#copy-the-catalog-to-another-instance)
 - <a id="verify-that-no-secret-is-on-a-command-line"></a>[Verify that no secret is on a command line](hardening.md#verify-that-no-secret-is-on-a-command-line)
 - <a id="switch-between-a-clone-and-the-bundle"></a>[Switch between a clone and the bundle](switch-install.md#switch-between-a-clone-and-the-bundle)
+- <a id="switch-a-source-built-install-to-the-prebuilt-image"></a>[Switch a source-built install to the prebuilt image](https://github.com/dsmorgan/dinnerbell/blob/v0.16.0/docs/switch-install.md#switch-a-source-built-install-to-the-prebuilt-image) (before 0.2.0 only; kept in 0.16.0's docs)
 - <a id="build-from-source"></a>[Build from source](switch-install.md#build-from-source)
 - <a id="resource-and-log-limits"></a>[Resource and log limits](configuration.md#resource-and-log-limits)
 - <a id="read-the-logs"></a>[Read the logs](troubleshooting.md#read-the-logs)
