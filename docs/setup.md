@@ -201,10 +201,22 @@ A link you set or clear by hand stays as you left it. To hand a member back to a
 
 ## 12. Load the catalog
 
-The catalog is your list of restaurants and home meals. Start from [seed/example.yaml](../seed/example.yaml); [catalog-format.md](catalog-format.md) describes the format.
+The catalog is your list of restaurants and home meals. [catalog-format.md](catalog-format.md) describes the file, and [seed/catalog.schema.json](../seed/catalog.schema.json) is its JSON Schema.
+
+The fastest way to write your first catalog is with an AI assistant. Give it the schema, [seed/example.yaml](../seed/example.yaml) as a model, and a source:
+
+- **Your email:** an assistant connected to your mailbox, such as Claude with Gmail, can find delivery-app and restaurant receipts and list where you order from, and whether you pick up or get delivery.
+- **Local files:** an agent such as Claude Code can read exported order history or notes on your machine.
+- **A list you write:** one place or home meal per line, with whatever you know about it.
+
+Ask for a catalog file that validates against the schema. It doesn't need to be perfect: the import preview catches errors, and you can edit items afterward. Whatever you give the assistant goes to its provider.
+
+To load it:
 
 1. Invite everyone first (section 11), so the import can match cooks to members.
-2. On the **Catalog** page, paste or upload your file, check the preview, and apply it.
+2. On the **Catalog** page, paste or upload the file, check the preview, and apply it.
+
+Once Dinnerbell's own [assistant](configuration.md#the-assistant) is on, members can also ask it to draft items from a restaurant's menu link.
 
 To import a file on first start instead, see [Load a catalog on first start](configuration.md#load-a-catalog-on-first-start).
 
@@ -531,7 +543,6 @@ These sections moved to their own pages:
 - <a id="copy-the-catalog-between-production-and-test"></a>[Copy the catalog between production and test](catalog-format.md#copy-the-catalog-to-another-instance)
 - <a id="verify-that-no-secret-is-on-a-command-line"></a>[Verify that no secret is on a command line](hardening.md#verify-that-no-secret-is-on-a-command-line)
 - <a id="switch-between-a-clone-and-the-bundle"></a>[Switch between a clone and the bundle](switch-install.md#switch-between-a-clone-and-the-bundle)
-- <a id="switch-a-source-built-install-to-the-prebuilt-image"></a>[Switch a source-built install to the prebuilt image](switch-install.md#switch-a-source-built-install-to-the-prebuilt-image)
 - <a id="build-from-source"></a>[Build from source](switch-install.md#build-from-source)
 - <a id="resource-and-log-limits"></a>[Resource and log limits](configuration.md#resource-and-log-limits)
 - <a id="read-the-logs"></a>[Read the logs](troubleshooting.md#read-the-logs)

@@ -6,7 +6,7 @@ Keep the install in a directory named `dinnerbell`, and run every command as the
 
 ## Switch between a clone and the bundle
 
-A git clone and the [release bundle](install.md) run the same release the same way. Bundles start at 0.10.0, so to move a clone to the bundle, first [upgrade](setup.md#upgrade) it to 0.10.0 or later. If the clone runs `main` or an image you built, first [switch to the prebuilt image](#switch-a-source-built-install-to-the-prebuilt-image).
+A git clone and the [release bundle](install.md) run the same release the same way. If the clone runs `main` or an image you built, first [upgrade](setup.md#upgrade) it to a release at least as new: an older image refuses a database that a newer one migrated.
 
 1. [Back up now](setup.md#back-up-now).
 2. In the old install, stop production and, if it runs, the test instance.
@@ -63,44 +63,3 @@ podman-compose -f compose.yaml -f compose.build.yaml up -d --build
 ```
 
 Pass both `-f` options to every later compose command. With secrets in files, also add `-f compose.secrets.yaml`, and `-f compose.override.yaml` last if you have one. The image, `localhost/dinnerbell:dev`, has no attestations and isn't a release, so use it for development, not production.
-
-## Switch a source-built install to the prebuilt image
-
-Before 0.2.0, `compose.yaml` built the image on your host. This one-time switch keeps your data, because the volume name stays `dinnerbell-data`.
-
-1. From your clone, note the data volume's name and the commit you run. The undo steps need both.
-
-   ```sh
-   podman volume ls
-   git rev-parse --short HEAD
-   ```
-
-2. [Back up now](setup.md#back-up-now). Note the file name, and copy the backup off the host.
-3. If `git status` shows local changes to `compose.yaml`, move them to `compose.override.yaml`, which git ignores, then run `git checkout compose.yaml`.
-4. Check out the release.
-
-   ```sh
-   git fetch --tags
-   git checkout v0.2.0
-   ```
-
-5. Pull and [verify](setup.md#verify-an-image) the image, and recreate the service.
-
-   ```sh
-   podman-compose pull
-   podman-compose down && podman-compose up -d
-   ```
-
-6. Run `podman volume ls` again, and check that there's no new Dinnerbell volume.
-7. Sign in, and check that your members, catalog, and history are there, and that the footer shows `0.2.0`.
-
-Keep the image you built, `localhost/dinnerbell`, until 0.2.0 has run for a week. Then remove it with `podman image rm localhost/dinnerbell`.
-
-If Dinnerbell starts empty, run `podman-compose down`, and start it again from the original directory as the original user. Your data is still in the old volume.
-
-To undo the switch:
-
-1. Stop the service: `podman-compose down`.
-2. Check out the commit you noted in step 1: `git checkout <commit>`.
-3. Restore the backup from step 2 with the command in step 4 of [Roll back](setup.md#roll-back).
-4. Rebuild and start the old version: `podman-compose up -d --build`.

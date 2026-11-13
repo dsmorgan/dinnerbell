@@ -100,9 +100,8 @@ Dinnerbell opens the connection to Slack, so Slack never needs to reach your hos
 | A Slack workspace where you can create apps | Calls, buttons, reminders, and sign-in happen in Slack | A new workspace for the household; the free plan is enough |
 | An HTTPS hostname that phones can reach | The web app, and the Sign in with Slack redirect, which must land on HTTPS | Any reverse proxy or tunnel with TLS: Pangolin, Cloudflare Tunnel, Tailscale Funnel, or Caddy or Traefik on a public IP |
 | Household members in Slack | Each adult answers calls in Slack and signs in to the web app with Slack | Another OpenID Connect provider, such as Google, for sign-in; Slack still carries the calls |
-| A test instance | Rehearse releases on a second copy ([test-instance.md](docs/test-instance.md)) | Optional |
 
-You don't need a calendar, an LLM, or an email server. One install serves one household of a handful of adults. Dinnerbell backs up its database every night inside its data volume; you copy the backups off the host.
+You don't need a calendar or an email server. The [assistant](docs/configuration.md#the-assistant) is optional and needs an Anthropic API key. One install serves one household of a handful of adults. Dinnerbell backs up its database every night inside its data volume; you copy the backups off the host.
 
 ## Run it
 
