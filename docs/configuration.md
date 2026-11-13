@@ -17,7 +17,7 @@ These settings are required:
 | Setting | Meaning |
 |---|---|
 | `DINNERBELL_BASE_URL` | The public URL people open, exactly as they type it: the same scheme and host, no explicit `:443`, and no path. It must use `https`, except `http://localhost` or `http://127.0.0.1` for local testing. Any mismatch makes every form fail with "Cross-origin request refused". The sign-in redirect URL is this value plus `/auth/callback`. |
-| `DINNERBELL_SECRET_KEY` | Signs cookies and CSRF tokens. Dinnerbell refuses a key that is shorter than 32 characters, has fewer than 8 distinct characters, or contains placeholder text such as `REPLACE-ME`. Changing it invalidates open sign-in pages and import previews, not sessions. A secret. |
+| `DINNERBELL_SECRET_KEY` | Signs cookies and CSRF tokens. Dinnerbell refuses a key that is shorter than 32 characters, has fewer than 8 distinct characters, or contains placeholder text such as `REPLACE-ME`. Changing it invalidates open forms, sign-in pages, import previews, and the assistant's **Review the import** links, but not sessions. A secret. |
 | `DINNERBELL_ADMIN_EMAIL` | The first admin. On every start, if no member has this email, Dinnerbell invites it as an admin, so changing it later adds another admin. |
 | `DINNERBELL_OIDC_ISSUER` | The sign-in provider, such as `https://slack.com`. It must publish `/.well-known/openid-configuration`. |
 | `DINNERBELL_OIDC_CLIENT_ID` | The provider's client ID. |
@@ -45,55 +45,63 @@ These settings are optional:
 | `DINNERBELL_DATABASE_URL` | `sqlite:////data/dinnerbell.db` | The SQLite database. Keep it under `/data`, the container's only writable volume. Backups go to `backups/` next to the database file. |
 | `DINNERBELL_OIDC_SCOPES` | `openid email profile` | Scopes requested at sign-in. They must include `openid` and `email`. |
 | `DINNERBELL_INSTANCE_LABEL` | None | Marks every page, Slack message, App Home, `/healthz`, and the logs, such as `TEST` on a [test instance](test-instance.md). Up to 16 letters, digits, spaces, or hyphens. Leave it empty in production. |
-| `DINNERBELL_ANTHROPIC_API_KEY` | None | The Anthropic API key for the optional assistant. Without it, the assistant stays off and nothing changes. A secret. See [The assistant](#the-assistant). |
-| `DINNERBELL_ASSISTANT_MODEL` | `claude-sonnet-5-5` | The model the assistant uses: `claude-sonnet-5-5`, `claude-opus-5-5`, or `claude-haiku-5-5`. Dinnerbell refuses to start on any other, because the monthly cap needs the model's prices. |
-| `DINNERBELL_FEATURES` | None | Comma-separated feature flags to turn on. Dinnerbell refuses to start on an unknown name; the list is in `src/dinnerbell/domain/flags.py`. A flag that a release retired is ignored, with a warning in the log at startup, so remove it from this list when you see one. |
+| `DINNERBELL_ANTHROPIC_API_KEY` | None | The Anthropic API key for the optional assistant. Without it, the assistant stays off. A secret. See [The assistant](#the-assistant). |
+| `DINNERBELL_ASSISTANT_MODEL` | `claude-sonnet-5-5` | The assistant's model: `claude-sonnet-5-5`, `claude-opus-5-5`, or `claude-haiku-5-5`. Dinnerbell refuses to start on any other, because the monthly cap needs the model's prices. |
+| `DINNERBELL_FEATURES` | None | Comma-separated feature flags to turn on, such as `assistant`. Dinnerbell refuses to start on an unknown name; `src/dinnerbell/domain/flags.py` lists them. A flag that a release retired is ignored, with a warning at startup; remove it when you see one. |
 
 The container image sets `DINNERBELL_BUILD` on builds from `main`. Don't add it to `.env`: even an empty line replaces the image's value.
 
-Dinnerbell warns at start about a `DINNERBELL_` variable it doesn't know, which is most likely a typo. The warning names the variable, never its value.
+Dinnerbell warns at start about a `DINNERBELL_` variable it doesn't know, most likely a typo. The warning names the variable, never its value.
 
-To keep the four required and Slack secrets out of `.env`, see [Keep secrets in files](setup.md#keep-secrets-in-files). The Anthropic key works the same way, with one more step: see [The assistant](#the-assistant).
+To keep the secrets out of `.env`, see [Keep secrets in files](setup.md#keep-secrets-in-files). The Anthropic key needs one more step: see [Keep the key in a file](#keep-the-key-in-a-file).
 
 ## The assistant
 
-The assistant answers members' questions in plain language ([ADR 0009](adr/0009-optional-assistant.md)). It's optional, and it works only when all three of these are set:
+The assistant answers members' questions in plain language and drafts changes for them to confirm ([ADR 0009](adr/0009-optional-assistant.md)). It's optional, and works only when all three of these are set:
 
 - `DINNERBELL_ANTHROPIC_API_KEY`, the key for your Anthropic account. Anthropic bills that account for what the assistant uses.
 - The `assistant` flag in `DINNERBELL_FEATURES`. The flag hides the assistant while it's being built, even with a key set.
-- **Turn on the assistant** on Admin > **Assistant**. The tab shows only with the key and the flag.
+- **Turn on the assistant** on **Admin** > **Assistant**. The tab shows only with the key and the flag.
 
 Otherwise, nothing changes: no page, tab, or reply mentions the assistant, and Dinnerbell sends Anthropic nothing.
 
 ### Use it on the web
 
-While the assistant answers a member, their menu has an **Assistant** link to their own private conversation, with **Confirm** and **Cancel** on each draft and **Start over**. Otherwise the link is hidden and the page doesn't exist. See [The Assistant page](members.md#the-assistant-page).
+While the assistant is on, each active member's menu has an **Assistant** link to their own private conversation, with **Confirm** and **Cancel** on each draft and **Start over**. Guests get none, and with the assistant off, the page doesn't exist. See [The Assistant page](members.md#the-assistant-page).
 
 ### Talk to it in Slack
 
-Members talk to the assistant in their direct message with Dinnerbell, or by mentioning @Dinnerbell in the household channel. Dinnerbell replies in the message's thread. Its App Home shows a line saying so while the assistant answers that member. For Slack to deliver those messages, the app needs the assistant variant of its manifest: `deploy/slack-app-manifest.assistant.yaml`. It's the default manifest plus a writable **Messages** tab, the `im:history`, `app_mentions:read`, and `reactions:write` scopes, and the `message.im` and `app_mention` events. Apply it before you turn on **Turn on the assistant**: App Home tells members they can message Dinnerbell as soon as the switch is on.
+Members message Dinnerbell directly, or mention @Dinnerbell in the household channel, and Dinnerbell replies in that message's thread. For Slack to deliver those messages, the app needs the assistant manifest, `deploy/slack-app-manifest.assistant.yaml`: the default manifest plus a writable **Messages** tab, the `im:history`, `app_mentions:read`, and `reactions:write` scopes, and the `message.im` and `app_mention` events. Apply it before you turn on **Turn on the assistant**, because App Home tells members they can message Dinnerbell as soon as the switch is on.
 
 1. At [api.slack.com/apps](https://api.slack.com/apps), open the Dinnerbell app and select **App Manifest**.
 2. Paste the contents of `deploy/slack-app-manifest.assistant.yaml`, set your hostname in `redirect_urls` again, and select **Save Changes**.
 3. Select **Install App** > **Reinstall to Workspace**, and approve the new scopes. The bot token stays the same.
 
-To turn the assistant off for good, paste `deploy/slack-app-manifest.yaml` again and reinstall. Until you do, Dinnerbell ignores DMs and mentions while the assistant is off, and Slack shows members a Messages tab they can type in that gets no answers.
+To turn the assistant off for good, paste `deploy/slack-app-manifest.yaml` again and reinstall. Until you do, Slack shows members a **Messages** tab where their messages get no answer.
 
-Dinnerbell reads only direct messages to it and messages that mention it, and only their text: a direct message with a file gets "I can read only text messages." It answers one message per member at a time, and active members only: a guest, a deactivated member, or someone not linked to a member gets no reply, and their message is neither stored nor sent. A direct message thread is private to its member. A channel thread is shared: everyone sees it, and each message acts as the member who wrote it.
+Dinnerbell reads only the text of direct messages to it and of messages that mention it; a direct message with a file gets "I can read only text messages." It answers active members only, one message at a time each. A guest, a deactivated member, or someone not linked to a member gets no reply, and their message is neither stored nor sent. A direct message thread is private to its member. A channel thread is shared: everyone sees it, and each message acts as the member who wrote it.
 
-While Dinnerbell works on a message, the thread shows "Dinnerbell is thinking…" with a few rotating lines, such as "Checking the catalog…". Where Slack won't show that status, Dinnerbell reacts to the member's message with :hourglass_flowing_sand: instead, which is what `reactions:write` is for. Either one goes once the reply posts or the answer fails. A message Dinnerbell ignores, or one that gets "I'm still on your last message", shows neither. If the indicator fails, the reply still comes; Dinnerbell logs only the Slack error code.
+While Dinnerbell works on a message, the thread shows "Dinnerbell is thinking…". Where Slack won't show that status, Dinnerbell reacts to the message with :hourglass_flowing_sand: instead, which is what `reactions:write` is for. If the indicator fails, the reply still comes.
 
-Replies can't mention anyone or ping the channel, and they hold no links: Dinnerbell writes any address the assistant gives in a form Slack doesn't link, such as `hxxps[:]//example[.]com`. In a direct message, a longer reply appears line by line as the assistant writes it; a short one arrives whole, and a channel thread's replies arrive whole too. A streamed reply can show bold, lists, and code, and any `<` in it shows as `‹`. If Slack won't stream, the reply is posted as before. Streaming needs no new scope: it uses `chat:write`.
+Replies can't mention anyone or ping the channel, and hold no links: Dinnerbell writes any address in a form Slack doesn't link, such as `hxxps[:]//example[.]com`. In a direct message, a longer reply streams in line by line; other replies arrive whole. Streaming uses `chat:write`, so it needs no new scope.
 
-Each draft the assistant makes comes as a card with **Confirm** and **Cancel**: in a channel thread, only the member who asked sees it. A catalog draft's **Confirm** gives a **Review the import** link, the one link Dinnerbell builds itself, from `DINNERBELL_BASE_URL`, to the web's add-only import preview. It works only for that member, signed in, for 24 hours; Dinnerbell keeps a confirmed catalog draft that long for it.
+Each draft comes as a card with **Confirm** and **Cancel**; in a channel thread, only the member who asked sees it. A catalog draft's **Confirm** gives a **Review the import** link to the web's add-only import preview, the one link Dinnerbell builds itself, from `DINNERBELL_BASE_URL`. It works only for that member, signed in, for 24 hours.
 
-On Admin > **Assistant**, the admin also sets the household's **Monthly cap**, $1 to $100 in US dollars a calendar month in the household's time zone ($5 by default), and **Conversation hours**, how long Dinnerbell keeps a conversation after its last message, 0 to 168 (24 by default). Before each request to Anthropic, Dinnerbell sets aside the most that request could cost and refuses it if that would pass the cap, so spending never does; the page shows this month's usage in total and for each member. A cap too low for even one request, such as $1 with `claude-opus-5-5`, is allowed, but the page says so and names the least cap that covers the smallest message, which long conversations outgrow, and members hear that the cap is too low, not that it's reached. Every change there is in the audit log.
+### Set the cap
 
-The cap is kept in the database, so it covers one installation: production and a [test instance](test-instance.md) each have their own cap and usage. As a backstop, also set a monthly spend limit on the key's workspace in the Anthropic Console, and give the test instance its own key, so its spending shows apart and a limit on one doesn't stop the other.
+On **Admin** > **Assistant**, set the household's **Monthly cap**, $1 to $100 a calendar month in the household's time zone ($5 by default), and **Conversation hours**, how long Dinnerbell keeps a conversation after its last message, 0 to 168 (24 by default). Before each request to Anthropic, Dinnerbell reserves the most that request could cost and refuses it if that would pass the cap, so spending never does. The page shows this month's usage in total and for each member. If the cap is too low for even one request, such as $1 with `claude-opus-5-5`, the page says so and names the smallest cap that covers a short message; long conversations need more. Every change there goes in the audit log.
 
-Dinnerbell sends Anthropic the conversation and what the assistant looks up, with members as "Member 1", "Member 2", and so on. It never sends names, emails, Slack IDs, preferences, vetoes, anyone's ratings, or notes, except what a member writes in their own message, and a member's own preferences, vetoes, ratings, feedback, and away days, which it sends only when that member asks about them in their own conversation, on the Assistant page or in a direct message (#253). To answer questions about what the household has eaten, it sends each item's household hint, such as "Well liked", the same words every member sees on Catalog. Your Anthropic API terms govern how long Anthropic keeps requests.
+The cap is kept in the database, so production and a [test instance](test-instance.md) each have their own cap and usage. As a backstop, also set a monthly spend limit on the key's workspace in the Anthropic Console, and give the test instance its own key, so its spending shows separately and one limit doesn't stop the other.
 
-`compose.secrets.yaml` doesn't mount the key, because every file it lists must exist and the key is optional. To keep the key in a file, create `secrets/DINNERBELL_ANTHROPIC_API_KEY` the way [Keep secrets in files](setup.md#keep-secrets-in-files) describes, and add a `compose.override.yaml` next to `compose.yaml`:
+### What Dinnerbell sends Anthropic
+
+Dinnerbell sends Anthropic the conversation and what the assistant looks up, with members shown as "Member 1", "Member 2", and so on. It never sends names, emails, Slack IDs, preferences, vetoes, anyone's ratings, or notes, except what a member writes in their own message. The one exception is a member's own preferences, vetoes, ratings, feedback, and away days, which it sends only when that member asks about them in their own conversation, on the Assistant page or in a direct message. To answer questions about what the household has eaten, it sends each item's household hint, such as "Well liked", the same words every member sees on Catalog. When a member gives it a menu or recipe link, Dinnerbell fetches the page and sends its text. Your Anthropic API terms govern how long Anthropic keeps requests.
+
+`dinnerbell scrub-test` turns the assistant off and deletes every conversation and draft, so a test copy never sends production's conversations or confirms production's drafts.
+
+### Keep the key in a file
+
+`compose.secrets.yaml` doesn't mount the key, because every file it lists must exist and the key is optional. To keep the key in a file, create `secrets/DINNERBELL_ANTHROPIC_API_KEY` as [Keep secrets in files](setup.md#keep-secrets-in-files) describes, and add a `compose.override.yaml` next to `compose.yaml`:
 
 ```yaml
 services:
@@ -107,15 +115,13 @@ secrets:
 
 Then add `-f compose.override.yaml` last to every command that already names `compose.secrets.yaml`.
 
-`dinnerbell scrub-test` turns the assistant off and deletes every conversation and draft, so a test copy never sends production's conversations or confirms production's drafts.
-
 ## The sign-in rate limit
 
 Dinnerbell allows 20 requests a minute to the sign-in pages under `/auth/` from each client address. A sign-in takes two requests, and a sign-out one. Past the limit, the page says "Too many sign-in attempts. Wait a minute and try again."
 
-Dinnerbell knows a client's address only from the connection, or from `X-Forwarded-For` when the connection comes from an address in `DINNERBELL_TRUSTED_PROXIES`. Behind a reverse proxy, every connection comes from the proxy, so without that setting all clients share one count. One client that signs in over and over, or a script that hits `/auth/`, then makes everyone wait up to a minute to sign in.
+Dinnerbell knows a client's address only from the connection, or from `X-Forwarded-For` when the connection comes from an address in `DINNERBELL_TRUSTED_PROXIES`. Behind a reverse proxy, every connection comes from the proxy, so without that setting all clients share one count, and one client or script that hits `/auth/` over and over makes everyone wait up to a minute to sign in.
 
-Under rootless podman, you usually can't set `DINNERBELL_TRUSTED_PROXIES`. Podman forwards each connection to a published port from the container network's gateway, such as `10.89.0.1`, whether it comes from your proxy or from another device that can reach the port. Trusting the gateway would let any device that reaches the port directly write its own `X-Forwarded-For` and choose its count. Leave the setting empty and accept the shared count. The exception is a proxy that runs in a container on Dinnerbell's network and connects to Dinnerbell directly: its connections come from that container's own address, which you can trust. Give that container a fixed address, or update the setting when its address changes.
+Under rootless podman, you usually can't set `DINNERBELL_TRUSTED_PROXIES`. Podman forwards each connection to a published port from the container network's gateway, such as `10.89.0.1`, whether it comes from your proxy or from another device. Trusting the gateway would let any device that reaches the port directly write its own `X-Forwarded-For` and choose its count, so leave the setting empty and accept the shared count. The exception is a proxy that runs in a container on Dinnerbell's network and connects to Dinnerbell directly: its connections come from that container's own address, which you can trust. Give that container a fixed address, or update the setting when its address changes.
 
 To see the address that Dinnerbell sees, set `DINNERBELL_LOG_LEVEL=DEBUG` and sign in: each request logs `peer_ip`, the connection's address, and `client_ip`, the address the rate limit counts. You can trust the proxy only when `peer_ip` is an address that nothing but the proxy connects from.
 
@@ -125,22 +131,21 @@ Compose, not Dinnerbell, reads this setting from `.env`:
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `DINNERBELL_BIND` | `127.0.0.1` | The host address to publish port 8013 on, for production and the test instance. The default works only when Newt runs on the same host, outside a container network. Otherwise, set the host's address on the interface Newt reaches, such as `192.168.1.20`. Avoid `0.0.0.0` unless a firewall limits who can reach the port. |
+| `DINNERBELL_BIND` | `127.0.0.1` | The host address to publish port 8013 on, for production and the test instance. The default works only when your reverse proxy (for Pangolin, Newt) runs on the same host, outside a container network. Otherwise, set the host's address on the interface the proxy reaches, such as `192.168.1.20`. Avoid `0.0.0.0` unless a firewall limits who can reach the port. |
 
 Don't set `DINNERBELL_TAG`, `DINNERBELL_PORT`, or `DINNERBELL_ENV_FILE` in `.env`. The defaults in `compose.yaml` are right for production, and `deploy/dinnerbell-test` refuses to run if `.env` sets them.
 
 ## Load a catalog on first start
 
-To start with a catalog already loaded, import a file on first start, before you start Dinnerbell for the first time:
+To have Dinnerbell import a catalog file the first time it starts, do this before that first start:
 
-1. Copy the example. Git ignores every file in `seed/` except the example and the schema.
+1. Write the file as `seed/my-catalog.yaml`, in the format [catalog-format.md](catalog-format.md) describes; a bundle has no `seed/` directory, so create it. In a clone, start from the example; git ignores every file in `seed/` except the example and the schema.
 
    ```sh
    cp seed/example.yaml seed/my-catalog.yaml
    ```
 
-2. Edit `seed/my-catalog.yaml`. The format is in [catalog-format.md](catalog-format.md).
-3. Create `compose.override.yaml` next to `compose.yaml` with this content, to mount the file read-only. Compose reads it automatically unless you pass `-f`, and git ignores it. With secrets in files, add `-f compose.override.yaml` last.
+2. Create `compose.override.yaml` next to `compose.yaml` with this content, to mount the file read-only. Compose reads it automatically unless you pass `-f`, and git ignores it. With secrets in files, add `-f compose.override.yaml` last.
 
    ```yaml
    services:
@@ -149,7 +154,7 @@ To start with a catalog already loaded, import a file on first start, before you
          - ./seed/my-catalog.yaml:/seed/catalog.yaml:ro
    ```
 
-4. In `.env`, add this line:
+3. In `.env`, add this line:
 
    ```sh
    DINNERBELL_SEED_FILE=/seed/catalog.yaml

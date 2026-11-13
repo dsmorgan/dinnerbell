@@ -1,16 +1,16 @@
 # Contributions and badges
 
-Dinnerbell counts what each person does to get a meal on the table, and awards a badge when a count reaches a tier. This page explains what counts, how badges are announced, and how to change the tiers. The rules are in [spec section 12](spec.md#12-metrics-and-badges).
+Dinnerbell counts what each person does to get a meal on the table, and awards a badge when a count reaches a tier. The rules are in [spec section 12](spec.md#12-metrics-and-badges).
 
 ## What counts
 
 A call or offer counts the moment it's done. Each person gets one count per kind for it:
 
-- **Cooked, picked up, ordered, coordinated:** whoever the meal assigned, guests included, except that guests no longer coordinate. What a guest coordinated before that stays counted. Ordering counts on a pickup too, apart from picking it up, so one person who does both gets both counts. Pickup meals done before Dinnerbell gave pickup an orderer keep the counts they had. If the coordinator switches a pickup to delivery, whoever was picking up gets no pickup count.
+- **Cooked, picked up, ordered, coordinated:** whoever the meal assigned, guests included. Guests no longer coordinate, but what a guest coordinated before stays counted. On a pickup, ordering and picking up count separately, so one person who does both gets both counts. Pickup meals done before pickup had an orderer keep the counts they had. If the coordinator switches a pickup to delivery, whoever was picking up gets no pickup count.
 - **At the table:** everyone who was in, including a late joiner who is taking part.
-- **Answered quickly:** any answer within 15 minutes of the call opening, but not an Out your away days gave.
-- **Ideas:** the person whose proposal won; the person whose proposal was new to the household; and the person who added a catalog item the first time it was chosen. If the coordinator changed the place after the decision, these go by the place they ate at: whoever proposed it, if it was a proposal, and whoever added it to the catalog. A new name typed in for the change earns nobody an idea count.
-- **Hosting:** the member who invited a guest who was in, or brought guests to an offer. A head count of guests saved on a call before #240 counts too.
+- **Answered quickly:** any answer within 15 minutes of a call opening, but not a late join or an Out your away days gave.
+- **Ideas:** the person whose proposal won (**Bright Idea**), and again if it was a place or cuisine new to the household (**Explorer**); and the person who added a catalog item, the first time a call chose it (**Scout**). If the coordinator changed the place after the decision, these go by the place they ate at: whoever proposed it, if it was a proposal, and whoever added it to the catalog. A new name typed in for the change earns nobody an idea count.
+- **Hosting:** the member who invited a guest who was in, or brought guests to an offer. A head count of guests saved by an earlier version counts too.
 - **Leaving the choice to others (Gambler):** on a call with at least three proposals, a member who was in, not as a late joiner, and whose votes, when the call was done, were for every proposal or for none. Voting for none counts even when nobody voted. Votes you took back don't count, and offers have no proposals to vote on.
 - **Feedback:** the first time you give feedback on a meal. Changing it, or taking it back and giving it again, doesn't count again.
 
@@ -20,9 +20,9 @@ A guest without Slack, whom the inviting member answers for, earns no badges, be
 
 A call counts once, even if two people tap **Mark done** together. Called-off and discarded calls, and meals logged by hand, count for nothing.
 
-When an admin corrects who cooked, picked up, or ordered after the meal is done, the count moves to the person who has the role now. They earn the badges it reaches, announced as usual, and the person who lost it loses each tier their counts no longer reach on the current counts, even a tier they first earned at a lower count before an admin raised it. A tier their counts never reached on the raised count stays, as it does when an admin raises one. A pending badge taken back is never announced, and the den never celebrates it. One already announced leaves Stats, App Home, the household's newest badges, and future recaps, and a badge post or recap that's still waiting to go out to Slack leaves it out. A post Slack already has stays. See [Coordinating](coordinating.md#what-an-admin-can-do-beyond-that).
+When an admin corrects who cooked, picked up, or ordered after the meal is done, the count moves to the person who has the role now. They earn the badges it reaches, announced as usual. The person who lost it loses each tier their counts reached before the correction and no longer reach, even a tier first earned at a lower count before an admin raised it. A tier their counts didn't reach even before the correction stays, as it does when an admin raises a count. A badge taken back before it was announced never is, and the den never celebrates it. One already announced leaves Stats, App Home, the household's newest badges, and future recaps, and a badge post or recap still waiting to go out leaves it out. A post Slack already has stays. See [Coordinating](coordinating.md#what-an-admin-can-do-beyond-that).
 
-When an admin corrects the place after the meal is done (#220), the meal's counts follow the same way, with its badges. Cooked, picked up, and ordered follow the roles the new way has, so a way without a role takes that count away. The idea counts go by the corrected place: whoever proposed it, if it was a proposal, and whether it was new to the household, against the meals before this one. Adding to the catalog counts once per item: if another call also chose the old place, whoever added it keeps the count, and it moves to that call. Other meals keep the counts they have, even if the correction changes how new their place was: **Explorer** says what was new when a meal was counted, and a correction shouldn't cost someone a badge for a meal it didn't touch. A new name typed in for the correction earns nobody an idea count. The counts match the place and roles the corrected meal has, so correcting back restores them, except that a role the other way dropped goes to whoever offered first, until an admin names someone else.
+When an admin corrects the place after the meal is done, the meal's counts and badges follow the same way. Cooked, picked up, and ordered follow the roles the new way has, so a way without a role takes that count away. The idea counts go by the corrected place: whoever proposed it, if it was a proposal, and whether it was new to the household before this meal. Adding to the catalog counts once per item: if another call also chose the old place, whoever added it keeps the count, now for that call. Other meals keep their counts, even if the correction changes how new their place was, so a correction never costs someone a badge for a meal it didn't touch. A new name typed in for the correction earns nobody an idea count. Correcting back restores the counts, except that a role the other way dropped goes to whoever offered first, until an admin names someone else.
 
 ## Badges and tiers
 
@@ -30,9 +30,9 @@ Each of the 13 badges has five tiers, **First**, **Bronze**, **Silver**, **Gold*
 
 | Ladder | Counts | Badges |
 |---|---|---|
-| Frequent | 1, 10, 50, 100, 200 | Full Table, Early Bird, Chef, Food Critic, Quarterback, Gambler, Road Runner, Order Up |
+| Frequent | 1, 10, 50, 100, 200 | Chef, Road Runner, Order Up, Quarterback, Full Table, Early Bird, Food Critic, Gambler |
 | Occasional | 1, 5, 20, 50, 100 | Bright Idea, Good Host |
-| Rare | 1, 3, 10, 25, 50 | On a Roll, Scout, Explorer |
+| Rare | 1, 3, 10, 25, 50 | Scout, Explorer, On a Roll |
 
 Each person earns a badge tier once, unless an admin's correction takes it back (see [What counts](#what-counts)). **On a Roll** counts weeks in a run, Monday to Sunday in your time zone, with at least one meal cooked, picked up, or ordered. A run survives one missed week, which doesn't count toward it; two missed weeks in a row end it.
 
@@ -73,7 +73,7 @@ On the first day of each month, from 9 a.m. household time, Dinnerbell posts the
 
 The badges are in the same order as in badge posts. When Slack has the badge art, each member gets a line naming up to 10 badges and a row of their icons beneath it, and any more are counted ("and 2 more badges"). Without the art, such as when the Slack app lacks the `files:write` scope, the recap names up to 6 badges per member as text, with tier marks.
 
-- The recap posts once a month, however often Dinnerbell restarts. If Dinnerbell was down on the first, it posts on the next start, up to the seventh; after that, the month is skipped.
+- The recap posts once a month, however often Dinnerbell restarts. If Dinnerbell was down on the first, it posts once it's back, up to the seventh; after that, the month is skipped.
 - A month with no meals posts nothing.
 - Like badge posts, a recap that waits more than 24 hours for Slack is lost.
 - If the household time zone isn't valid, the recap stays off, and Dinnerbell logs a warning.

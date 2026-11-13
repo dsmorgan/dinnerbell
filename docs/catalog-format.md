@@ -1,15 +1,16 @@
 # Catalog format
 
-The catalog is the household's list of things to eat: restaurants and home meals, each tagged by cuisine and anything else that matters for choosing. This page defines the catalog file that Dinnerbell imports and exports. Anything that writes this format, whether a person, a script, or a chatbot, can feed the catalog.
+The catalog is the household's list of things to eat: restaurants and home meals, each tagged by cuisine and anything else that matters for choosing. This page defines the catalog file that Dinnerbell imports and exports. A person, a script, or an AI assistant can write it.
 
 ## Ways to add to the catalog
 
 Any member can add to the catalog:
 
 - **In the app.** The **Catalog** page has a form to add one item at a time.
-- **Bulk import.** Paste or upload a catalog file on the **Catalog** page. Dinnerbell validates it, previews what it creates and changes, and applies it only after you confirm.
+- **Bulk import.** On the **Catalog** page, select **Import a catalog file**, and paste or upload a file. Dinnerbell validates it, previews what it creates and changes, and applies it only after you confirm.
 - **On first start.** If `DINNERBELL_SEED_FILE` points to a catalog file, Dinnerbell imports it on first start, while the catalog is empty. See [Load a catalog on first start](configuration.md#load-a-catalog-on-first-start).
-- **With a chatbot.** Give a chatbot this page and your notes, such as "we get Thai from Siam Garden on Main, pickup or DoorDash", and ask for a catalog file. Import the result; the preview catches mistakes.
+- **With an AI assistant.** Give it this page, the [schema](#validate-a-file), and your notes, such as "we get Thai from Siam Garden on Main, pickup or DoorDash", and ask for a catalog file. Import the result; the preview catches mistakes. [Load the catalog](setup.md#12-load-the-catalog) suggests other sources.
+- **With Dinnerbell's assistant.** When the [assistant](configuration.md#the-assistant) is on, ask it to draft items from a menu or recipe link. **Confirm** opens the import preview.
 - **From another instance.** Export the catalog from one Dinnerbell and import it into another, such as from production into a test instance. See [Export the catalog](#export-the-catalog).
 
 ## Example
@@ -94,7 +95,7 @@ A complete starter file is in [seed/example.yaml](../seed/example.yaml).
 | `cuisine` | Yes | One or more cuisine tags. |
 | `tags` | No | Any other tags. |
 | `meals` | No | Same as for restaurants. Default: `[lunch, dinner]`. |
-| `servings` | No | Typical number of servings one batch makes. Used to warn before over-inviting. |
+| `servings` | No | Typical number of servings one batch makes, from 1 to 99. The **Catalog** page shows it. |
 | `cooks` | No | Email addresses of active members who can make it. Emails that don't match an active member are reported in the preview and skipped. |
 | `url` | No | Recipe link. |
 | `notes` | No | Free text up to 500 characters. |
@@ -135,7 +136,7 @@ An export imports cleanly:
 - **Nothing personal is exported:** no members, emails, Slack IDs, preferences, vetoes, meal history, or audit records.
 - **Import's limits apply.** Import refuses files over 1 MB or with more than 50,000 values, about 2,000 items. If an export passes either limit, the command warns you; split the file and import each part.
 
-Importing an export into the catalog it came from previews as "The catalog already matches this file." Importing it into another catalog adds missing items and tags, updates items that match by name, and deletes nothing. Dinnerbell 0.5.0 and earlier refuse an export's `meals` field, so copy a catalog only to an instance on the same release or later.
+Importing an export into the catalog it came from previews as "The catalog already matches this file." Importing it into another catalog adds missing items and tags, updates items that match by name, and deletes nothing.
 
 ### Copy the catalog to another instance
 
@@ -165,7 +166,7 @@ A tag with a different kind in each instance, such as `vegetarian` as a protein 
 
 ## Validate a file
 
-The JSON Schema for this format is [seed/catalog.schema.json](../seed/catalog.schema.json). Editors with YAML language support validate against it when the file starts with:
+The JSON Schema for this format is [seed/catalog.schema.json](../seed/catalog.schema.json). Editors with YAML language support validate against it when the file starts with this line, with the path pointing at the schema:
 
 ```yaml
 # yaml-language-server: $schema=./catalog.schema.json

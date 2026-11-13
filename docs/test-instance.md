@@ -33,11 +33,11 @@ Use the same workspace as production.
 
 Never reuse production's tokens: Socket Mode delivers each event to one connection, so two instances on one app split button taps between them.
 
-To try the optional assistant on test, paste `deploy/slack-app-manifest.assistant.test.yaml` instead, or paste it later under **App Manifest** and reinstall the test app. It's the test manifest plus a writable **Messages** tab, the `im:history`, `app_mentions:read`, and `reactions:write` scopes, and the `message.im` and `app_mention` events. See [The assistant](configuration.md#talk-to-it-in-slack).
+To try the optional assistant on test, paste `deploy/slack-app-manifest.assistant.test.yaml` instead, or paste it later under **App Manifest** and reinstall the test app. It adds what the production assistant manifest adds; see [Talk to it in Slack](configuration.md#talk-to-it-in-slack). Give test its own Anthropic key, as [Set the cap](configuration.md#set-the-cap) explains.
 
 ## Write .env.test
 
-`dinnerbell init --test` writes `.env.test` from your answers: the test app's values, the test hostname, and production's team ID. It generates a new secret key, sets the `TEST` label, the `/dinnerbell-test` command, and the household name `Test`, and refuses production's secrets, client ID, and URL from the `.env` next to it. From your install's directory, replacing `X.Y.Z` with the release production runs (0.10.0 or later), run:
+`dinnerbell init --test` writes `.env.test` from your answers: the test hostname, the workspace's team ID, and the test app's values. It generates a new secret key, sets the `TEST` label and the `/dinnerbell-test` command, suggests the household name `Test`, and refuses production's secrets, client ID, and URL from the `.env` next to it. From your install's directory, replacing `X.Y.Z` with the release production runs, run:
 
 ```sh
 podman run --rm -it --userns keep-id --user "$(id -u):$(id -g)" -v "$PWD:/out:z" \
@@ -74,7 +74,7 @@ deploy/dinnerbell-test down
 - To check test, look for the TEST banner in the browser, or `"instance":"TEST"` from `curl -s http://<DINNERBELL_BIND>:8014/healthz`. Test is usually stopped, so don't give it an always-on monitor.
 - A new test instance starts with an empty database and invites `DINNERBELL_ADMIN_EMAIL`. Add test members on **Admin** > **Members**, or [copy production's data](#copy-production-data-into-test).
 
-Always run test through `deploy/dinnerbell-test`, never through `podman-compose` directly. The script sets the project, volume, env file, tag, and port together; setting only some of them by hand mixes the instances, such as test's label and Slack app on production's database. Before any command that can start test, the script checks `.env.test` and test's secret files with `dinnerbell config check`, and refuses anything that would mix test and production, naming the reason. `deploy/dinnerbell-test --help` lists every check and variable.
+Always run test through `deploy/dinnerbell-test`, never through `podman-compose` directly. The script sets the project, volume, env file, tag, and port together; setting only some of them by hand mixes the instances, such as test's label and Slack app on production's database. Before any command that can start test, it checks `.env.test` and test's secret files with `dinnerbell config check`, and refuses anything that would mix test and production, naming the reason. `deploy/dinnerbell-test --help` lists every check and variable.
 
 To change what the script uses, set a variable in front of a command, such as `DINNERBELL_TAG=X.Y.Z deploy/dinnerbell-test up -d` to rehearse a release. Never `export` these variables: production's compose commands in the same shell would read them too.
 
@@ -131,7 +131,7 @@ A copy of production's data tests migrations and features against real history. 
    deploy/dinnerbell-test up -d
    ```
 
-`scrub-test` runs only while `DINNERBELL_INSTANCE_LABEL` is set. It deactivates and unlinks every member you didn't keep, turns off every slot, ends open calls silently, empties the outbox, marks unannounced badges and the last monthly recap as done, and deletes all feedback on meals. It keeps the meal log, catalog, and preferences. It migrates the database first, so run it with the tag you start next: an older release refuses a database that a newer one migrated.
+`scrub-test` runs only while `DINNERBELL_INSTANCE_LABEL` is set. It deactivates and unlinks every member you didn't keep, strips guests of their names, emails, Slack links, and dietary needs, turns off every slot, ends open calls silently, empties the outbox, marks unannounced badges and the last monthly recap as done, deletes all feedback on meals, and turns the assistant off and deletes its conversations and drafts. It keeps the meal log, catalog, and preferences. It migrates the database first, so run it with the tag you start next: an older release refuses a database that a newer one migrated.
 
 To rehearse a scheduled call after a scrub, turn a slot on on the **Schedule** page, or start a call with `/dinnerbell-test call`.
 
@@ -152,7 +152,7 @@ On test, you can also start a called-off call again at any time that day, on the
 Use this checklist for every release: it runs the exact release on a fresh copy of production's data. Replace `X.Y.Z` with the new release, and note the release production runs now.
 
 1. Read the release's **Upgrade notes** in [CHANGELOG.md](../CHANGELOG.md).
-2. Check out the new release, so the rehearsal uses its `compose.yaml` and `deploy/dinnerbell-test`. Production keeps running its current container until step 10.
+2. Check out the new release, so the rehearsal uses its `compose.yaml` and `deploy/dinnerbell-test`. In a bundle, download, check, and extract the new bundle instead, as in step 3 of the [bundle upgrade](install.md#upgrade). Production keeps running its current container until step 10.
 
    ```sh
    git fetch --tags
@@ -189,7 +189,7 @@ Use this checklist for every release: it runs the exact release on a fresh copy 
 11. Check production's footer and `/healthz`.
 12. Stop test: `deploy/dinnerbell-test down`.
 
-If the rehearsal fails, stop test, and check out the release production runs; production hasn't changed. If production misbehaves after step 10, [roll back](setup.md#roll-back) with the newest pre-upgrade backup. If the host reboots during the rehearsal with `dinnerbell-test.service` enabled, test restarts on its default tag, so start again from step 5.
+If the rehearsal fails, stop test, and check out (or extract) the release production runs; production hasn't changed. If production misbehaves after step 10, [roll back](setup.md#roll-back) with the newest pre-upgrade backup. If the host reboots during the rehearsal with `dinnerbell-test.service` enabled, test restarts on its default tag, so start again from step 5.
 
 ## Troubleshoot the test instance
 

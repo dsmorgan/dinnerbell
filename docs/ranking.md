@@ -2,7 +2,7 @@
 
 When answers close on a call, Dinnerbell proposes places to vote on: 3, unless an admin changed it. It rules out everything that doesn't work for tonight, scores what's left, adds places someone suggested, and draws the rest at random. A better score makes a place more likely, but it doesn't always win.
 
-This page explains the rules and how to tune them. The precise rules are in [spec section 7](spec.md#7-ranking), and the reasoning is in [ADR 0007](adr/0007-seeded-weighted-ranking.md) and, for ratings, [ADR 0008](adr/0008-feedback-informed-ranking.md).
+The precise rules are in [spec section 7](spec.md#7-ranking), and the reasoning is in [ADR 0007](adr/0007-seeded-weighted-ranking.md) and, for ratings, [ADR 0008](adr/0008-feedback-informed-ranking.md).
 
 ## What can never be picked
 
@@ -52,7 +52,7 @@ The change halves every 3 months, counted from the meal, unless you rate it agai
 
 - **Your edit wins.** Setting a score for a place on **Preferences**, even back to 0, replaces what your earlier ratings of it said. A rating after that counts again.
 - **See where you stand.** **Preferences** shows you, and an admin who opens your preferences, what your ratings make your score, such as "From your ratings: about +1".
-- **Off by default after an upgrade.** The admin's **Feedback** setting turns this on (see [Tune the ranking](#tune-the-ranking)).
+- **The admin sets how far ratings count** with **Feedback** (see [Tune the ranking](#tune-the-ranking)).
 
 ### The household's hint
 
@@ -68,11 +68,11 @@ A verdict needs ratings from two people, each from roughly the last 3 months, an
 
 Each call has its own draw, so two calls with the same people and catalog can propose different places. Dinnerbell seeds the draw from the call itself, so the same call always gets the same proposals. If an admin re-runs a call, or someone starts a called-off call again, that's a new run, and it draws again.
 
-Proposals are listed in the order they were drawn, suggestions first. The order matters only when a vote ties. Ties go to the choice of the coordinator or an admin, who can break a tie while voting, then the coordinator's vote, then an admin's vote when nobody coordinates, then the place you ate at longest ago (never counts as longest), and only then to the one drawn first. The decision says which rule decided it.
+Proposals are listed in the order they were drawn, suggestions first. The order matters only when a vote ties. A tie goes, in order, to the coordinator's or an admin's choice with **Break the tie**, then the coordinator's vote, then the most admins' votes when nobody coordinates, then the place you ate at longest ago (never counts as longest), and only then to the one drawn first. The decision says which rule decided it.
 
 ## Shuffling the proposals
 
-If the proposals don't appeal, the coordinator can tap **Shuffle proposals** while voting, or an admin can at any time. A shuffle draws again with the call's next seed, so it's as reproducible as the first draw. Each call allows 3 shuffles.
+If the proposals don't appeal, the coordinator or an admin can tap **Shuffle proposals** while voting. A shuffle draws again with the call's next seed, so it's as reproducible as the first draw. Each call allows 3 shuffles.
 
 - **Nobody has voted yet:** every drawn proposal is replaced.
 - **Someone has voted:** only proposals with no votes are replaced. A vote that doesn't count yet, such as a late joiner's, still keeps its proposal, because it is someone's choice.
@@ -125,8 +125,8 @@ An admin changes these on the **Ranking** tab of **Admin**. Changes apply from t
   | 3 | A point better is about 1.4 times as likely | 63% | 38% |
 
   The last two columns are for the worked example. If the same places keep winning, raise it. If the proposals feel too random, lower it.
-- **Feedback** limits how far each rating pulls a person's score: 0 (off), 1, or 2. At 2, the default for a new household, **Loved it** pulls toward +2; at 1, toward +1, so ratings move a score by at most a point. A household that existed before the setting did starts at 0; set it to 2 when you're ready to let ratings move scores. Hints show at every setting.
+- **Feedback** limits how far each rating pulls a person's score: 0 (off), 1, or 2. At 2, the default for a new household, **Loved it** pulls toward +2; at 1, toward +1, so ratings move a score by at most a point. A household from before the setting existed starts at 0; set it to 2 when you're ready to let ratings move scores. Hints show at every setting.
 
-**Reset to defaults**, below the form, puts every setting on the tab back to what a new household starts with: the default weights in [What makes a place more likely](#what-makes-a-place-more-likely), Randomness 1, Feedback 2, 3 proposals, a 7-day variety window, and 15 minutes to choose roles. Open it, select **Reset ranking**, then confirm. It leaves call times, skipped days, and badge counts alone, and writes an audit row, as a save does. A household from before **Feedback** existed starts at 0, so a reset turns ratings on.
+**Reset to defaults**, below the form, puts every setting on the tab back to what a new household starts with: the default weights in [What makes a place more likely](#what-makes-a-place-more-likely), Randomness 1, Feedback 2, 3 proposals, a 7-day variety window, and 15 minutes to choose roles. Open it, select **Reset ranking**, then confirm. It leaves call times, skipped days, and badge counts alone, and writes an audit row, as a save does. If **Feedback** was 0, the reset turns ratings on.
 
 Vetoes, guests' needs, coverage, and the variety window hold at every setting.

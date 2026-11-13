@@ -45,7 +45,7 @@ features:
 
 oauth_config:
   redirect_urls:
-    # Used by Sign in with Slack. Edit the hostname before you paste.
+    # Used by Sign in with Slack. Change the hostname after you paste (see above).
     - https://dinnerbell-test.example.com/auth/callback
   scopes:
     bot:
