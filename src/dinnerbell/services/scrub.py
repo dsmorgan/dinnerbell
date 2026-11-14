@@ -14,6 +14,8 @@ Run it with test stopped, after restoring the backup. In one transaction it:
 - deletes all feedback on meals, which says how each member rated them (FR-49), and the counts and badges
   that come from it, so test, where testers act as other people, never holds production's feedback or
   counts;
+- deletes the places each call showed (#290), which only a shuffle of a call being voted on
+  reads, and every open call has ended;
 - marks badges earned but not yet announced as quiet, and the last monthly recap as posted, so a
   restored copy never tells the test channel what production hadn't yet (M4);
 - turns off Admin's Assistant switch and deletes every assistant conversation (ADR 0009), so
@@ -47,7 +49,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from dinnerbell.config import is_test_instance
 from dinnerbell.db.contributions import BadgeRepository, ContributionRepository
 from dinnerbell.db.engine import write_transaction
-from dinnerbell.db.events import EventRepository
+from dinnerbell.db.events import EventRepository, ShownPlaceRepository
 from dinnerbell.db.feedback import FeedbackRepository
 from dinnerbell.db.meals import household_settings
 from dinnerbell.db.outbox import OutboxRepository
@@ -179,6 +181,7 @@ class ScrubSummary:
     assistant_turned_off: bool = False
     conversations_deleted: int = 0
     drafts_deleted: int = 0
+    shown_places_deleted: int = 0
 
     def lines(self) -> list[str]:
         return [
@@ -193,6 +196,7 @@ class ScrubSummary:
             f"Guests made anonymous: {self.guests_scrubbed}",
             f"Audit rows about guests redacted: {self.audit_rows_redacted}",
             f"Badges not yet announced, now quiet: {self.badges_quieted}",
+            f"Places shown on calls, forgotten: {self.shown_places_deleted}",
             *self._assistant_lines(),
         ]
 
@@ -310,6 +314,7 @@ async def _scrub(db: AsyncSession, *, instance_label: str, keep: Iterable[str], 
     redacted += await AuditRepository(db).redact_about(household.id, GUEST_SLACK_AUDIT, about_guests, scrubbed)
     pending, rows = await OutboxRepository(db).clear(household.id)
     feedback_deleted = await FeedbackRepository(db).clear(household.id)
+    shown_deleted = await ShownPlaceRepository(db).clear(household.id)  # every call's ended, so they're spent
     forgotten = await forget_for_test(db, household.id)
     # So test never holds production's feedback or counts: the counts, and the badges that come from them.
     await ContributionRepository(db).clear_feedback(household.id)
@@ -337,6 +342,7 @@ async def _scrub(db: AsyncSession, *, instance_label: str, keep: Iterable[str], 
         assistant_turned_off=forgotten.was_on,
         conversations_deleted=forgotten.conversations,
         drafts_deleted=forgotten.drafts,
+        shown_places_deleted=shown_deleted,
     )
     summary_payload = {"kept_member_ids": sorted(kept_ids), "instance_label": instance_label} | asdict(summary)
     target = f"household:{household.id}"

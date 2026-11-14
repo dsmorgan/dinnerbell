@@ -27,6 +27,7 @@ M4_TABLES = {"contribution", "badge_award", "slack_badge_file", "slack_badge_com
 M7_TABLES = {"stance_edit"}
 M6_TABLES = {"assistant_usage", "assistant_conversation"}
 M6_DRAFT_TABLES = {"assistant_draft"}
+SHUFFLE_TABLES = {"shown_place"}
 
 
 def test_migrates_an_empty_database(settings: Settings) -> None:
@@ -36,6 +37,7 @@ def test_migrates_an_empty_database(settings: Settings) -> None:
     try:
         inspector = inspect(engine)
         everything = M0_TABLES | M1_TABLES | M2_TABLES | M3_TABLES | M4_TABLES | M6_TABLES | M6_DRAFT_TABLES | M7_TABLES
+        everything |= SHUFFLE_TABLES
         assert set(inspector.get_table_names()) == everything | {"alembic_version"}
         for table in everything - {"household"}:
             assert "household_id" in {c["name"] for c in inspector.get_columns(table)}, table
@@ -462,7 +464,7 @@ def _snapshot(settings: Settings) -> dict[str, object]:
                 text(
                     "SELECT name, sql FROM sqlite_master WHERE type = 'index' AND sql IS NOT NULL "
                     "AND tbl_name NOT IN ('contribution', 'badge_award', 'slack_badge_file', 'slack_badge_composite', "
-                    "'stance_edit', 'assistant_usage', 'assistant_conversation', 'assistant_draft') "
+                    "'stance_edit', 'assistant_usage', 'assistant_conversation', 'assistant_draft', 'shown_place') "
                     "ORDER BY name"
                 )
             ).all()
@@ -1416,6 +1418,7 @@ def _rows_outside_m4(settings: Settings) -> dict[str, list[object]]:
                     "assistant_usage",
                     "assistant_conversation",
                     "assistant_draft",
+                    "shown_place",
                     "stance_edit",
                     "alembic_version",
                 }
@@ -2689,3 +2692,32 @@ def test_0037_lets_drafts_hold_catalog_edits_and_meals_keeps_every_row_and_never
     _downgrade_to(settings, "0036_assistant_coordinating")
     sql, down = _drafts(settings)
     assert "AUTOINCREMENT" in sql and "'item_edit'" not in sql and down == after
+
+
+SHOWN_INSERT = "INSERT INTO shown_place (household_id, event_id, run, item_id, shuffle) VALUES (1, 2, 2, 1, :n)"
+
+
+def test_0038_adds_the_shown_places_table_and_downgrade_drops_it(settings: Settings) -> None:
+    """Up adds ``shown_place`` (#290), empty, with one row per place a call's run showed, and
+    changes no other row. Down drops it, with what it held, and gives back the 0037 rows."""
+    _upgrade_to(settings, "0037_assistant_catalog_edits")
+    _populate_calls(settings)
+    before = _snapshot(settings)
+    engine = create_engine(settings.sync_database_url)
+    try:
+        assert not SHUFFLE_TABLES & set(inspect(engine).get_table_names())
+        _upgrade_to(settings, "0038_shown_places")
+        assert set(inspect(engine).get_table_names()) >= SHUFFLE_TABLES
+        with engine.connect() as c:
+            assert c.execute(text("SELECT count(*) FROM shown_place")).scalar_one() == 0
+        assert _snapshot(settings) == before
+        _execute(settings, SHOWN_INSERT.replace(":n", "0"))
+        with pytest.raises(IntegrityError):  # a place once per run
+            _execute(settings, SHOWN_INSERT.replace(":n", "1"))
+        _execute(settings, SHOWN_INSERT.replace(":n", "1").replace("2, 2, 1", "2, 3, 1"))  # the next run's own
+
+        _downgrade_to(settings, "0037_assistant_catalog_edits")
+        assert not SHUFFLE_TABLES & set(inspect(engine).get_table_names())
+        assert _snapshot(settings) == before
+    finally:
+        engine.dispose()

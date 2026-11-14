@@ -1282,6 +1282,16 @@ def shuffle_candidates(
     return [p for p in ranked if not anyone_voted or not votes.get(p.id)]
 
 
+def ranked_places(proposals: Iterable[Proposal]) -> frozenset[int]:
+    """The catalog places of the ranked picks, the ones ranking drew rather than a member or an
+    offer: what a shuffle records as shown (FR-61, #290). Free-text picks have no place."""
+    return frozenset(
+        p.item_id
+        for p in proposals
+        if p.item_id is not None and p.source is ProposalSource.SYSTEM and p.proposed_by is None
+    )
+
+
 def check_can_offer_role(event: Event, actor: Member, mine: Response | None, *, invited: bool = False) -> None:
     """FR-8 and #76: role offers go with answering, while answers are open; a late joiner who's
     taking part can still offer one while voting, as part of their late answer."""

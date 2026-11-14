@@ -19,11 +19,12 @@ from dinnerbell.config import Settings, is_test_instance
 from dinnerbell.db.events import EVENT_ROWS
 from dinnerbell.db.models import BadgeAwardRow, Base, ContributionRow, EventRow, FeedbackRow, OutboxRow
 from dinnerbell.domain import notifications as n
+from dinnerbell.domain.catalog import Mode
 from dinnerbell.domain.events import EventRuleViolation, EventState, RoleOffer, Status, Step
 from dinnerbell.domain.feedback import FeedbackInput, Rating
 from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.notifications import DeliveryResult, MessageRef
-from dinnerbell.services import calls, discard, event_views, feedback, lifecycle
+from dinnerbell.services import calls, coordinator, discard, event_views, feedback, lifecycle
 from dinnerbell.services.database import Database, open_database
 from dinnerbell.services.errors import Forbidden, NotFound
 from tests.support.calls import (
@@ -216,6 +217,29 @@ async def test_discarding_a_done_call_deletes_its_feedback(house: House) -> None
         assert await db.scalar(select(func.count()).select_from(ContributionRow)) == 0
         awarded = list(await db.scalars(select(BadgeAwardRow)))
     assert awarded and {a.event_id for a in awarded} == {None}
+
+
+async def test_discarding_a_call_deletes_the_places_it_showed(house: House) -> None:
+    """The places a shuffle recorded as shown (#290) go with the call, and the preview counts them."""
+    for number in range(4):
+        await house.add_item(f"Place {number}", Mode.PICKUP, cuisine="Thai")
+    house.clock.now = OPENS
+    await house.tick()
+    event_id = await dinner_id(house)
+    for name in ("Alex", "Sam"):
+        await act(house, calls.respond, house[name], event_id, Status.IN)
+    await act(house, calls.offer_role, house["Alex"], event_id, RoleOffer.PICKUP, True)
+    await act(house, calls.claim_coordinator, house["Sam"], event_id)
+    house.clock.now = RESPOND_BY
+    await house.tick()
+    await act(house, coordinator.shuffle, house["Sam"], event_id)
+    preview = await act_no_clock(house, discard.preview, house.household.id, event_id)
+    assert preview.rows["shown_place"] == 3 and "shown_place 3" in preview.lines()[2]
+
+    summary = await throw_away(house, event_id)
+
+    assert summary.rows["shown_place"] == 3 and "shown_place 3" in summary.lines()[1]
+    assert (await leftovers(house, event_id))["shown_place"] == 0
 
 
 async def act_no_clock(house: House, use_case: Any, *args: Any) -> Any:

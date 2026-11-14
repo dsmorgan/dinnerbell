@@ -224,7 +224,7 @@ To import a file on first start instead, see [Load a catalog on first start](con
 
 While you try Dinnerbell out, it records test calls, votes, meals, and feedback. Before the household relies on it, run `dinnerbell reset-history` once, on production, so History and stats start clean.
 
-The reset deletes every call and everything in it (answers, suggestions, proposals, votes, decisions, assignments, and guest invitations), the meal log, feedback on meals, contributions and the badges earned from them, assistant conversations and drafts, and the Slack notification queue, sent and unsent. It keeps the catalog, members and roles, Slack links, preferences and vetoes, the schedule and settings, sign-ins, the assistant's monthly spending, and the audit log.
+The reset deletes every call and everything in it (answers, suggestions, proposals and the places they showed, votes, decisions, assignments, and guest invitations), the meal log, feedback on meals, contributions and the badges earned from them, assistant conversations and drafts, and the Slack notification queue, sent and unsent. It keeps the catalog, members and roles, Slack links, preferences and vetoes, the schedule and settings, sign-ins, the assistant's monthly spending, and the audit log.
 
 1. Call off every open call: on its card or in Slack, select **Call it off**. The reset refuses while a call is scheduled, taking answers, voting, or decided. Calling off a call someone else scheduled for a later day sends them a direct message, so tell them first.
 2. [Back up now](#back-up-now), and copy the backup off the host.

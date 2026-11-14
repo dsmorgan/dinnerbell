@@ -71,6 +71,7 @@ CLEAR: Final = frozenset(
         "response",  # ... and everything in them (``db.events.EVENT_ROWS``)
         "suggestion",
         "proposal",
+        "shown_place",  # the places each call showed, so a shuffle draws new ones (#290)
         "vote",
         "assignment",
         "invitation",  # which guests were invited to which call (#38)
