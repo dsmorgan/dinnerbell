@@ -17,7 +17,7 @@ import math
 import random
 from collections import Counter
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import StrEnum
 
 from dinnerbell.domain.catalog import DEFAULT_MEALS, MODE_ORDER, Meal, Mode, meal_words
@@ -114,6 +114,9 @@ class RankingSnapshot:
     seed: int = 0
     """Seeds the draw: ``ranking_seed`` of the call and run, so a call always ranks the same and
     a restart draws again (#78)."""
+    top_up: bool = True
+    """False leaves out the top-up (step 8), so a shuffle can draw every shown place for the
+    meal before one for another meal (``redraw``, #290)."""
     hints: Mapping[int, str] = field(default_factory=dict)
     """The household's hint for each item, such as "Mixed reviews · recently late" (FR-55). It's
     the first reason on a proposal and never changes a score."""
@@ -288,7 +291,7 @@ def rank(snapshot: RankingSnapshot) -> list[Ranked]:
     guaranteed = max(limit - 1, 0)  # step 5: suggestions can't fill the whole vote
     rng = random.Random(snapshot.seed)  # noqa: S311 - a reproducible draw, not a secret
     picks: list[_Scored] = []
-    for for_meal in (True, False):  # step 8: the top-up, drawn after every pick for the meal
+    for for_meal in (True, False) if snapshot.top_up else (True,):  # step 8: the top-up, after the meal's
         if len(picks) >= limit:
             break
         pool = _scored(snapshot, for_meal=for_meal)
@@ -299,6 +302,25 @@ def rank(snapshot: RankingSnapshot) -> list[Ranked]:
         drawn = {ranked.item_id for _, ranked in picks}
         _draw([entry for entry in pool if entry[1].item_id not in drawn], picks, limit, snapshot.temperature, rng)
     return [ranked for _, ranked in picks]
+
+
+def redraw(snapshot: RankingSnapshot, shown: Mapping[int, int]) -> list[Ranked]:
+    """A shuffle's draw (FR-61, #290): up to ``snapshot.limit`` places, never one in
+    ``snapshot.taken``, and none in ``shown`` while unseen places fill the slots. ``shown`` is
+    each place the run has shown, to the shuffle count when it was last shown. Short of unseen
+    places, shown ones come back a count at a time, oldest first, so the places just drawn away
+    come back last. Places for the meal come first, shown or not; the top-up for other meals
+    follows in the same order. Each step is ``rank`` with the same seed, leaving out what's
+    drawn so far."""
+    picks: list[Ranked] = []
+    for top_up in (False, True):
+        for count in (None, *sorted(set(shown.values()))):
+            if len(picks) >= snapshot.limit:
+                return picks
+            hidden = frozenset(item for item, last in shown.items() if count is None or last > count)
+            taken = snapshot.taken | hidden | frozenset(r.item_id for r in picks)
+            picks += rank(replace(snapshot, limit=snapshot.limit - len(picks), taken=taken, top_up=top_up))
+    return picks
 
 
 # Reasons (step 9) ------------------------------------------------------------------------------

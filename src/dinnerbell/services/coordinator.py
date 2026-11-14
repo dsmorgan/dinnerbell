@@ -20,7 +20,7 @@ from typing import Any
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dinnerbell.db.catalog import CatalogRepository
-from dinnerbell.db.events import AssignmentRepository, EventRepository, ProposalRepository
+from dinnerbell.db.events import AssignmentRepository, EventRepository, ProposalRepository, ShownPlaceRepository
 from dinnerbell.db.feedback import FeedbackRepository
 from dinnerbell.db.meals import MealLogRepository
 from dinnerbell.domain import notifications as note
@@ -61,12 +61,13 @@ from dinnerbell.domain.events import (
     check_run,
     default_roles,
     friendly,
+    ranked_places,
     takeout_ways,
 )
 from dinnerbell.domain.guests import GuestAction
 from dinnerbell.domain.meals import MealLog
 from dinnerbell.domain.members import Member
-from dinnerbell.domain.ranking import rank
+from dinnerbell.domain.ranking import redraw
 from dinnerbell.services import activity, contributions, lifecycle, picks
 from dinnerbell.services import call_context as cc
 from dinnerbell.services import guests as guest_rules
@@ -143,10 +144,13 @@ async def shuffle(db: AsyncSession, actor: Member, event_id: int, *, run: int | 
     With nobody having voted, every ranked pick is redrawn; otherwise those with no votes at all.
     Picks a member added, an offer made, or someone suggested stay, and so does every pick with a
     vote. The redraw holds to every hard filter ranking does, and to one pick per place (#77), as
-    it is the same ranking. It leaves out the places just drawn away, unless nothing else fits.
-    A shuffle that would change nothing is refused and isn't counted. The proposals message
-    says who shuffled and how many were replaced, and a note goes in the call's thread. Audited
-    as ``event.shuffled``; logged as ``shuffle`` with the counts."""
+    it is the same ranking. It draws places the run hasn't shown yet (``ShownPlaceRepository``,
+    #290); short of them, shown places come back, those shown longest ago first, so the places
+    just drawn away come back last (``domain.ranking.redraw``). A place just drawn away that
+    comes back keeps its row and isn't counted as replaced. A shuffle that would change nothing
+    is refused and isn't counted, and records nothing. The proposals message says who shuffled
+    and how many were replaced, and a note goes in the call's thread. Audited as
+    ``event.shuffled``; logged as ``shuffle`` with the counts."""
     async with locked_event(db, actor.household_id, event_id, now) as event:
         await guest_rules.gate(db, event, actor, GuestAction.COORDINATE)
         check_run(event, run)
@@ -158,20 +162,19 @@ async def shuffle(db: AsyncSession, actor: Member, event_id: int, *, run: int | 
         voted = any(ctx.votes.get(p.id) for p in ctx.proposals)
         out_items = frozenset(p.item_id for p in out if p.item_id is not None)
         kept_items = frozenset(p.item_id for p in ctx.proposals if p.item_id is not None) - out_items
+        # The picks on show now were last shown at this count; the history leaves them out (#290).
+        history = ShownPlaceRepository(db)
+        await history.mark(actor.household_id, event.id, event.run, ranked_places(ctx.proposals), event.shuffles)
+        shown = await history.for_run(actor.household_id, event.id, event.run)
         group = await group_preferences(db, actor.household_id, ctx.veto_people)
         number = event.shuffles + 1
-        base = await lifecycle.ranking_snapshot(db, ctx, group, taken=kept_items | out_items, shuffle=number)
-        fresh = rank(replace(base, limit=len(out)))
+        base = await lifecycle.ranking_snapshot(db, ctx, group, taken=kept_items, shuffle=number)
+        drawn = redraw(replace(base, limit=len(out)), shown)
+        # A place just drawn away that comes back keeps its row; every other place is a new one.
+        retained = frozenset(r.item_id for r in drawn) & out_items
+        fresh = [r for r in drawn if r.item_id not in retained]
         if not fresh:
             raise EventRuleViolation(NOTHING_ELSE_FITS, code="nothing_else_fits")
-        # Short of places, the rest come from those just drawn away, redrawn with the same seed.
-        fresh_items = frozenset(r.item_id for r in fresh)
-        back = (
-            rank(replace(base, limit=len(out) - len(fresh), taken=kept_items | fresh_items))
-            if len(fresh) < len(out)
-            else []
-        )
-        retained = frozenset(r.item_id for r in back)
         dropped = [p for p in out if p.item_id not in retained]
         repo = ProposalRepository(db)
         slots = sorted(p.rank for p in dropped)

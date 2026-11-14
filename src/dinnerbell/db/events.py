@@ -12,6 +12,7 @@ from datetime import date, datetime
 from typing import Any
 
 from sqlalchemy import delete, func, select, update
+from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dinnerbell.db.models import (
@@ -25,6 +26,7 @@ from dinnerbell.db.models import (
     MealLogRow,
     ProposalRow,
     ResponseRow,
+    ShownPlaceRow,
     SuggestionRow,
     VoteRow,
 )
@@ -61,6 +63,7 @@ EVENT_ROWS: tuple[
         | InvitationRow
         | ContributionRow
         | MealLogRow
+        | ShownPlaceRow
     ],
     ...,
 ] = (
@@ -72,6 +75,7 @@ EVENT_ROWS: tuple[
     InvitationRow,
     ContributionRow,
     MealLogRow,
+    ShownPlaceRow,
 )
 """Every table whose rows belong to one event, by ``event_id``, children before parents (a vote
 before its proposal). Discarding a call (``EventRepository.discard``) deletes their rows; the
@@ -881,3 +885,36 @@ class InvitationRepository:
             )
         )
         return int(getattr(result, "rowcount", 0) or 0) > 0
+
+
+class ShownPlaceRepository:
+    """The catalog places a call's run has shown as ranked picks (#290, FR-61)."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self._session = session
+
+    async def for_run(self, household_id: int, event_id: int, run: int) -> dict[int, int]:
+        """Each place the run has shown, by item ID, to the shuffle count when it was last shown."""
+        rows = await self._session.execute(
+            select(ShownPlaceRow.item_id, ShownPlaceRow.shuffle).where(
+                ShownPlaceRow.household_id == household_id,
+                ShownPlaceRow.event_id == event_id,
+                ShownPlaceRow.run == run,
+            )
+        )
+        return {int(item_id): int(shuffle) for item_id, shuffle in rows}
+
+    async def mark(self, household_id: int, event_id: int, run: int, item_ids: Iterable[int], shuffle: int) -> None:
+        """Record ``item_ids`` as shown at shuffle count ``shuffle``, which replaces an earlier one."""
+        for item_id in sorted(set(item_ids)):
+            statement = (
+                insert(ShownPlaceRow)
+                .values(household_id=household_id, event_id=event_id, run=run, item_id=item_id, shuffle=shuffle)
+                .on_conflict_do_update(index_elements=["event_id", "run", "item_id"], set_={"shuffle": shuffle})
+            )
+            await self._session.execute(statement)
+
+    async def clear(self, household_id: int) -> int:
+        """Delete every one of the household's rows; returns how many there were."""
+        result = await self._session.execute(delete(ShownPlaceRow).where(ShownPlaceRow.household_id == household_id))
+        return int(getattr(result, "rowcount", 0) or 0)

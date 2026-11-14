@@ -23,7 +23,7 @@ from dinnerbell.channels.slack.blocks import Directory
 from dinnerbell.channels.slack.interactions import NOBODY_IN
 from dinnerbell.channels.slack.messages import RenderContext, render
 from dinnerbell.config import Settings
-from dinnerbell.db.events import ResponseRepository
+from dinnerbell.db.events import ResponseRepository, ShownPlaceRepository
 from dinnerbell.db.meals import MealLogRepository, household_settings
 from dinnerbell.db.models import AssignmentRow, AuditRow, EventRow
 from dinnerbell.db.repositories import HouseholdRepository, MemberRepository
@@ -1149,6 +1149,87 @@ async def test_the_places_just_drawn_away_come_back_only_when_nothing_else_fits(
     after = await house.context(event_id)
     assert (result.replaced, len(after.proposals)) == (1, 3)
     assert unpicked in names(after) and len(set(names(after)) & set(names(before))) == 2
+
+
+async def shown(house: House, event_id: int, run: int = 1) -> dict[str, int]:
+    """The places the run has shown, by name, to the shuffle count when each was last shown."""
+    async with house.sessionmaker() as db:
+        found = await ShownPlaceRepository(db).for_run(house.household.id, event_id, run)
+    by_id = {item.id: name for name, item in house.items.items()}
+    return {by_id[item_id]: count for item_id, count in found.items()}
+
+
+async def test_three_shuffles_never_bring_back_a_place_while_unseen_ones_fit(house: House) -> None:
+    """Fourteen places can be fetched: the first draw and three shuffles show twelve, each once (#290)."""
+    await stock(house, 12)
+    event_id = await to_voting(house, "Sam")
+    draws = [names(await house.context(event_id))]
+    for _ in range(MAX_SHUFFLES):
+        assert (await shuffle(house, "Alex", event_id)).replaced == 3
+        draws.append(names(await house.context(event_id)))
+    every = [place for draw in draws for place in draw]
+    assert len(every) == len(set(every)) == 12
+    assert await shown(house, event_id) == {place: n for n, draw in enumerate(draws[:-1]) for place in draw}
+
+
+async def test_short_of_unseen_places_the_oldest_shown_come_back_first_and_the_last_drawn_away_last(
+    house: House,
+) -> None:
+    """Seven places can be fetched. The first shuffle shows three new ones; the second has one
+    new place left, so two of the first draw's come back, never the three it draws away. The
+    third has none new: the first draw's last place, then two of the first shuffle's."""
+    await stock(house, 5)
+    event_id = await to_voting(house, "Sam")
+    first = set(names(await house.context(event_id)))
+    await shuffle(house, "Alex", event_id)
+    second = set(names(await house.context(event_id)))
+    assert second.isdisjoint(first)
+    unseen = {"Siam Garden", "Taqueria", *(f"Place {n}" for n in range(5))} - first - second
+
+    result = await shuffle(house, "Alex", event_id)
+    third = set(names(await house.context(event_id)))
+    assert result.replaced == 3  # a place from an earlier draw is a new pick
+    assert unseen < third and len(third & first) == 2 and third.isdisjoint(second)
+
+    result = await shuffle(house, "Alex", event_id)
+    fourth = set(names(await house.context(event_id)))
+    assert result.replaced == 3
+    assert first - third < fourth and len(fourth & second) == 2 and fourth.isdisjoint(third)
+
+
+async def test_a_voted_pick_stays_through_every_shuffle_and_is_never_drawn_twice(house: House) -> None:
+    await stock(house, 12)
+    event_id = await to_voting(house, "Sam")
+    voted = min((await house.context(event_id)).proposals, key=lambda p: p.rank)
+    await vote(house, "Sam", event_id, voted.id)
+    others: list[str] = []
+    for _ in range(MAX_SHUFFLES):
+        await shuffle(house, "Alex", event_id)
+        ctx = await house.context(event_id)
+        assert voted.id in {p.id for p in ctx.proposals} and len(names(ctx)) == len(set(names(ctx))) == 3
+        others += [cc.item_info(ctx, p).name for p in ctx.proposals if p.id != voted.id]
+    assert len(others) == len(set(others)) == 6
+
+
+async def test_a_rerun_starts_the_shown_places_afresh(house: House) -> None:
+    """Four places can be fetched. After a re-run, a shuffle has the one place this run hasn't
+    shown, whatever the run before showed."""
+    from dinnerbell.services import call_admin
+
+    await stock(house, 2)
+    event_id = await to_voting(house, "Sam")
+    await shuffle(house, "Alex", event_id)
+    assert len(await shown(house, event_id)) == 3
+    await act(house, call_admin.rerun, house["Alex"], event_id)
+    house.clock.now = (await house.event(event_id)).respond_deadline
+    await house.tick()
+    ctx = await house.context(event_id)
+    assert (ctx.event.state, ctx.event.run, ctx.event.shuffles) == (EventState.VOTING, 2, 0)
+    assert await shown(house, event_id, run=2) == {}
+    unpicked = ({"Siam Garden", "Taqueria", "Place 0", "Place 1"} - set(names(ctx))).pop()
+    result = await shuffle(house, "Alex", event_id, run=2)
+    assert result.replaced == 1 and unpicked in names(await house.context(event_id))
+    assert set(await shown(house, event_id, run=2)) == set(names(ctx))
 
 
 async def test_who_may_shuffle(house: House) -> None:

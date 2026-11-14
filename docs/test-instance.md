@@ -131,7 +131,7 @@ A copy of production's data tests migrations and features against real history. 
    deploy/dinnerbell-test up -d
    ```
 
-`scrub-test` runs only while `DINNERBELL_INSTANCE_LABEL` is set. It deactivates and unlinks every member you didn't keep, strips guests of their names, emails, Slack links, and dietary needs, turns off every slot, ends open calls silently, empties the outbox, marks unannounced badges and the last monthly recap as done, deletes all feedback on meals, and turns the assistant off and deletes its conversations and drafts. It keeps the meal log, catalog, and preferences. It migrates the database first, so run it with the tag you start next: an older release refuses a database that a newer one migrated.
+`scrub-test` runs only while `DINNERBELL_INSTANCE_LABEL` is set. It deactivates and unlinks every member you didn't keep, strips guests of their names, emails, Slack links, and dietary needs, turns off every slot, ends open calls silently, empties the outbox, marks unannounced badges and the last monthly recap as done, deletes all feedback on meals and the places calls have shown, and turns the assistant off and deletes its conversations and drafts. It keeps the meal log, catalog, and preferences. It migrates the database first, so run it with the tag you start next: an older release refuses a database that a newer one migrated.
 
 To rehearse a scheduled call after a scrub, turn a slot on on the **Schedule** page, or start a call with `/dinnerbell-test call`.
 

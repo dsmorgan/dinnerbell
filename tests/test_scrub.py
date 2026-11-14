@@ -30,6 +30,7 @@ from dinnerbell.db.models import (
     MemberRow,
     OutboxRow,
     SessionRow,
+    ShownPlaceRow,
 )
 from dinnerbell.db.outbox import OutboxRepository
 from dinnerbell.db.repositories import MemberRepository, SessionRepository
@@ -235,6 +236,27 @@ async def test_scrub_deletes_all_feedback_and_counts_it(house: House) -> None:
     assert [m.id for m in await house.meals()] == [meal.id]
     (row,) = await house.audits("instance.")
     assert row.payload["feedback_deleted"] == 1 and "hated" not in str(row.payload)
+
+
+async def test_scrub_deletes_the_places_calls_showed(house: House) -> None:
+    """Every open call ends, so the places shuffles recorded as shown (#290) are spent: they go."""
+    event_id = await dinner_id(house)
+    async with house.sessionmaker() as db:
+        for item in ("Taqueria", "Siam Garden"):
+            db.add(
+                ShownPlaceRow(
+                    household_id=house.household.id, event_id=event_id, run=1, item_id=house.items[item].id, shuffle=0
+                )
+            )
+        await db.commit()
+
+    summary = await scrub(house)
+
+    assert summary.shown_places_deleted == 2 and "Places shown on calls, forgotten: 2" in summary.lines()
+    async with house.sessionmaker() as db:
+        assert list(await db.scalars(select(ShownPlaceRow))) == []
+    (row,) = await house.audits("instance.")
+    assert row.payload["shown_places_deleted"] == 2
 
 
 async def test_a_second_run_changes_nothing(house: House) -> None:

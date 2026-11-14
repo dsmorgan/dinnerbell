@@ -5,6 +5,7 @@ M3: feedback on meals, offers (an event's ``capacity``), guests (a member's ``gu
 and the ``invitation`` table, #38), and the meals each catalog item is for (#72). M4: contributions and badge awards.
 M7: ``stance_edit``, so a stance set on Preferences wins over earlier ratings (FR-55).
 M6: the optional assistant's ``assistant_usage`` and ``assistant_conversation`` (ADR 0009).
+``shown_place``: the places a call has shown, so a shuffle draws new ones (#290).
 
 Every table carries ``household_id`` (the household table's own key is that ID).
 Changing a model requires a new Alembic revision; see CLAUDE.md.
@@ -450,6 +451,23 @@ class VoteRow(Base):
     proposal_id: Mapped[int] = mapped_column(ForeignKey("proposal.id", ondelete="CASCADE"))
     member_id: Mapped[int] = mapped_column(ForeignKey("member.id", ondelete="CASCADE"))
     created_at: Mapped[datetime] = mapped_column(UTCDateTime())
+
+
+class ShownPlaceRow(Base):
+    """A catalog place a call's run has shown as a ranked pick (#290), so a shuffle draws places
+    not shown yet (FR-61). ``shuffle`` is the shuffle count when it was last shown, 0 for the
+    first draw. A shuffle records the ranked picks it's about to redraw, and the rows of an
+    earlier run are never read: a re-run or restart starts with none."""
+
+    __tablename__ = "shown_place"
+    __table_args__ = (UniqueConstraint("event_id", "run", "item_id"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    household_id: Mapped[int] = mapped_column(ForeignKey("household.id", ondelete="CASCADE"))
+    event_id: Mapped[int] = mapped_column(ForeignKey("event.id", ondelete="CASCADE"))
+    run: Mapped[int] = mapped_column(Integer)
+    item_id: Mapped[int] = mapped_column(ForeignKey("catalog_item.id", ondelete="RESTRICT"), index=True)
+    shuffle: Mapped[int] = mapped_column(Integer)
 
 
 class AssignmentRow(Base):

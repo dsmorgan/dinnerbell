@@ -34,6 +34,7 @@ from dinnerbell.db.models import (
     MemberRow,
     PreferenceRow,
     SessionRow,
+    ShownPlaceRow,
     SlackBadgeCompositeRow,
     SlackBadgeFileRow,
     StanceEditRow,
@@ -164,6 +165,7 @@ async def lived_in(house: House) -> int:
                 expires_at=now + timedelta(minutes=30),
             )
         )
+        db.add(ShownPlaceRow(household_id=household_id, event_id=event_id, run=1, item_id=tacos, shuffle=0))
         expires = now + timedelta(days=30)
         db.add(
             SessionRow(
@@ -211,6 +213,7 @@ EXPECTED_CLEAR = {
     "response",
     "suggestion",
     "proposal",
+    "shown_place",
     "vote",
     "assignment",
     "invitation",
