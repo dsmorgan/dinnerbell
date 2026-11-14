@@ -6,6 +6,10 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ## [Unreleased]
 
+### Security
+
+- **opentelemetry-api 1.45.2** fixes CVE-2026-126360. FastAPI and Anthropic's SDK depend on the package; Dinnerbell doesn't configure OpenTelemetry. The `pip-audit` CI check blocks every pull request until the image has the fix.
+
 ### Changed
 
 - **The docs are shorter and match 0.16.0.** Setup suggests writing the first catalog with an AI assistant from your email, local order history, or a list, pointed at `seed/catalog.schema.json`. The catalog import matches cooks to members added on **Admin** > **Members**; they don't need to have signed in. Switching between a clone and the bundle now moves `DINNERBELL_ANTHROPIC_API_KEY`, and the pre-0.2.0 switch to the prebuilt image is gone. The README no longer lists a test instance as something you need.
