@@ -6,9 +6,11 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-11-14
+
 ### Security
 
-- **opentelemetry-api 1.45.2** fixes CVE-2026-126360. FastAPI and Anthropic's SDK depend on the package; Dinnerbell doesn't configure OpenTelemetry. The `pip-audit` CI check blocks every pull request until the image has the fix.
+- **opentelemetry-api 1.45.2** fixes CVE-2026-126360. FastAPI and Anthropic's SDK depend on the package; Dinnerbell doesn't configure OpenTelemetry. The 0.16.0 image has 1.45.1.
 
 ### Changed
 
@@ -708,7 +710,8 @@ The source-built version, never published as an image. It covers milestones M0 t
 - **M1:** the catalog with file import, preferences and vetoes, meal history, and the members admin page.
 - **M2:** dinner calls in Slack: the scheduled call, reminders, ranked proposals and votes, the decision, assignments, the abandon path, admin overrides, App Home, and `/dinnerbell call`.
 
-[Unreleased]: https://github.com/dsmorgan/dinnerbell/compare/v0.16.0...HEAD
+[Unreleased]: https://github.com/dsmorgan/dinnerbell/compare/v0.17.0...HEAD
+[0.17.0]: https://github.com/dsmorgan/dinnerbell/releases/tag/v0.17.0
 [0.16.0]: https://github.com/dsmorgan/dinnerbell/releases/tag/v0.16.0
 [0.15.0]: https://github.com/dsmorgan/dinnerbell/releases/tag/v0.15.0
 [0.14.0]: https://github.com/dsmorgan/dinnerbell/releases/tag/v0.14.0
