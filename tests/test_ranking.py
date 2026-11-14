@@ -32,6 +32,7 @@ from dinnerbell.domain.ranking import (
     join_names,
     rank,
     ranking_seed,
+    redraw,
 )
 from dinnerbell.domain.schedule import Weights
 
@@ -730,3 +731,55 @@ def test_no_weight_overflows_or_vanishes() -> None:
     assert all(ids(rank(replace(snap, seed=seed)))[0] == 1 for seed in range(20))
     hot = replace(snap, temperature=3.0)
     assert len(rank(hot)) == 3
+
+
+# A shuffle's redraw (FR-61, #290) ------------------------------------------------------------------
+
+LUNCH_ONLY = frozenset({Meal.LUNCH})
+
+
+def drawn(snap: RankingSnapshot, shown: dict[int, int]) -> list[int]:
+    return [r.item_id for r in redraw(snap, shown)]
+
+
+def test_a_redraw_takes_unseen_places_for_the_meal_first() -> None:
+    """(a) Unseen places for the meal fill the slots: none shown comes back, nor a top-up."""
+    places = [item(n, f"P{n}") for n in range(1, 6)] + [item(9, "Lunch", meals=LUNCH_ONLY)]
+    assert sorted(drawn(snapshot(*places, limit=2), {1: 0, 2: 1, 3: 1})) == [4, 5]
+
+
+def test_a_redraw_takes_unseen_places_for_another_meal_before_any_shown_place() -> None:
+    """(b) Short of unseen places for the meal, the top-up of unseen places for other meals
+    comes before any place shown already, so nothing is refused while an unseen place fits."""
+    places = [item(n, f"P{n}") for n in range(1, 5)] + [item(n, f"L{n}", meals=LUNCH_ONLY) for n in (8, 9)]
+    picks = redraw(snapshot(*places, limit=3), {1: 0, 2: 0, 3: 1})
+    assert picks[0].item_id == 4 and sorted(r.item_id for r in picks[1:]) == [8, 9]
+    assert [r.for_meal for r in picks] == [True, False, False]
+
+
+def test_a_redraw_brings_back_the_oldest_shown_first_the_meals_before_its_others() -> None:
+    """(c) With nothing unseen left, shown places come back a count at a time, oldest first,
+    and within a count, its places for the meal before those for other meals."""
+    places = [item(1, "P1"), item(2, "P2"), item(3, "P3"), item(7, "L7", meals=LUNCH_ONLY), item(8, "P8")]
+    shown = {7: 0, 1: 0, 2: 1, 3: 1, 8: 2}
+    assert drawn(snapshot(*places, limit=1), shown) == [1]
+    assert drawn(snapshot(*places, limit=2), shown) == [1, 7]
+    assert sorted(drawn(snapshot(*places, limit=4), shown)) == [1, 2, 3, 7]
+
+
+def test_a_redraw_brings_back_the_places_just_drawn_away_last_of_all() -> None:
+    """(d) The places just drawn away have the newest count: they come back only once every
+    other place, for any meal, is drawn."""
+    places = [item(1, "Just 1"), item(2, "Just 2"), item(3, "Old"), item(9, "Lunch", meals=LUNCH_ONLY)]
+    shown = {1: 2, 2: 2, 3: 0}
+    assert sorted(drawn(snapshot(*places, limit=2), shown)) == [3, 9]
+    picks = drawn(snapshot(*places, limit=3), shown)
+    assert sorted(picks[:2]) == [3, 9] and picks[2] in {1, 2}
+    assert drawn(snapshot(*places, limit=3, taken=frozenset({1, 2, 3, 9})), shown) == []
+
+
+def test_a_redraw_never_draws_a_place_twice_or_one_taken() -> None:
+    places = [item(n, f"P{n}") for n in range(1, 7)]
+    picks = drawn(snapshot(*places, limit=6, taken=frozenset({6})), {1: 0, 2: 1, 3: 2})
+    assert sorted(picks) == [1, 2, 3, 4, 5] and len(picks) == len(set(picks))
+    assert sorted(picks[:2]) == [4, 5] and picks[2:] == [1, 2, 3]

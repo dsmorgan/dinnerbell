@@ -66,6 +66,7 @@ from dinnerbell.domain.members import Capabilities, Member, Role
 from dinnerbell.domain.notifications import from_payload
 from dinnerbell.domain.preferences import Stance, TargetType
 from dinnerbell.domain.ranking import rank, ranking_seed
+from dinnerbell.domain.schedule import TEMPERATURE_KEY
 from dinnerbell.logs import JsonFormatter
 from dinnerbell.services import activity, calls, coordinator, event_views, lifecycle, offers
 from dinnerbell.services import call_context as cc
@@ -1022,12 +1023,12 @@ async def test_a_shuffle_never_duplicates_a_place_over_all_its_shuffles(house: H
 async def test_a_shuffle_holds_to_every_hard_filter(house: House) -> None:
     """Kim vetoes Thai and is in; nobody offered to cook; Breakfast Burrito is for breakfast; and
     Delivery Only can't be fetched. None of them is ever drawn, whichever shuffle it is."""
-    await stock(house, 9)  # Siam Garden and Place 0 are Thai
+    await stock(house, 14)  # Siam Garden, Place 0, and Place 9 are Thai; the rest last all three shuffles
     await house.add_item("Casserole", Mode.COOK, cuisine="Home")
     await house.add_item("Breakfast Burrito", Mode.PICKUP, cuisine="Mexican", meals=frozenset({Meal.BREAKFAST}))
     await act(house, set_my_preference, house["Kim"], TargetType.TAG, house.tags["Thai"].id, Stance(veto=True))
     event_id = await to_voting(house, "Sam", "Kim")
-    thai = {house.items[n].id for n in ("Siam Garden", "Place 0")}
+    thai = {house.items[n].id for n in ("Siam Garden", "Place 0", "Place 9")}
     forbidden = thai | {house.items["Casserole"].id, house.items["Breakfast Burrito"].id}
     assert not forbidden & {p.item_id for p in (await house.context(event_id)).proposals}
     for _ in range(MAX_SHUFFLES):
@@ -1197,18 +1198,70 @@ async def test_short_of_unseen_places_the_oldest_shown_come_back_first_and_the_l
     assert first - third < fourth and len(fourth & second) == 2 and fourth.isdisjoint(third)
 
 
-async def test_a_voted_pick_stays_through_every_shuffle_and_is_never_drawn_twice(house: House) -> None:
-    await stock(house, 12)
+async def like(house: House, who: str, score: int, *places: str) -> None:
+    for place in places:
+        await act(house, set_my_preference, house[who], TargetType.ITEM, house.items[place].id, Stance(score=score))
+
+
+async def in_score_order(house: House) -> None:
+    """Randomness 0: each draw takes the best scores left, so which places come back is certain."""
+    async with house.sessionmaker() as db:
+        stored = await household_settings(db, house.household.id)
+        await HouseholdRepository(db).update_settings(house.household.id, stored | {TEMPERATURE_KEY: 0})
+        await db.commit()
+
+
+async def test_a_voted_pick_stays_and_a_place_from_two_draws_ago_stays_out(house: House) -> None:
+    """In score order, the first draw takes the three places Alex loves, and Sam votes for one.
+    The first shuffle draws the two Alex likes. The second must not bring back the loved ones,
+    the best places left once the liked ones are drawn away, while places nobody rated fit."""
+    await stock(house, 6)
+    await in_score_order(house)
+    await like(house, "Alex", 2, "Place 0", "Place 1", "Place 2")
+    await like(house, "Alex", 1, "Place 3", "Place 4")
     event_id = await to_voting(house, "Sam")
+    loved = set(names(await house.context(event_id)))
+    assert loved == {"Place 0", "Place 1", "Place 2"}
     voted = min((await house.context(event_id)).proposals, key=lambda p: p.rank)
     await vote(house, "Sam", event_id, voted.id)
-    others: list[str] = []
-    for _ in range(MAX_SHUFFLES):
-        await shuffle(house, "Alex", event_id)
-        ctx = await house.context(event_id)
-        assert voted.id in {p.id for p in ctx.proposals} and len(names(ctx)) == len(set(names(ctx))) == 3
-        others += [cc.item_info(ctx, p).name for p in ctx.proposals if p.id != voted.id]
-    assert len(others) == len(set(others)) == 6
+    name = cc.item_info(await house.context(event_id), voted).name
+
+    await shuffle(house, "Alex", event_id)
+    assert set(names(await house.context(event_id))) == {name, "Place 3", "Place 4"}
+    await shuffle(house, "Alex", event_id)
+    ctx = await house.context(event_id)
+    assert voted.id in {p.id for p in ctx.proposals}
+    assert set(names(ctx)) - {name} <= {"Siam Garden", "Taqueria", "Place 5"}  # nobody rated these
+
+
+async def lunch_places(house: House, count: int) -> None:
+    for n in range(count):
+        await house.add_item(f"Lunch {n}", Mode.PICKUP, cuisine=CUISINES[n], meals=frozenset({Meal.LUNCH}))
+
+
+async def test_an_unseen_place_for_another_meal_comes_before_one_just_drawn_away(house: House) -> None:
+    """Three places for dinner, all drawn first, and three for lunch only: the shuffle draws
+    the lunch places, as a top-up, rather than give the dinner ones back or refuse."""
+    await stock(house, 1)  # Siam Garden, Taqueria, Place 0
+    await lunch_places(house, 3)
+    event_id = await to_voting(house, "Sam")
+    before = set(names(await house.context(event_id)))
+    assert before == {"Siam Garden", "Taqueria", "Place 0"}
+    result = await shuffle(house, "Alex", event_id)
+    assert result.replaced == 3
+    assert set(names(await house.context(event_id))) == {"Lunch 0", "Lunch 1", "Lunch 2"}
+
+
+async def test_the_unseen_dinner_place_comes_first_then_the_unseen_lunch_ones(house: House) -> None:
+    await stock(house, 2)  # four places for dinner
+    await lunch_places(house, 3)
+    event_id = await to_voting(house, "Sam")
+    before = set(names(await house.context(event_id)))
+    unseen = ({"Siam Garden", "Taqueria", "Place 0", "Place 1"} - before).pop()
+    result = await shuffle(house, "Alex", event_id)
+    after = names(await house.context(event_id))
+    assert result.replaced == 3 and after[0] == unseen
+    assert set(after[1:]) < {"Lunch 0", "Lunch 1", "Lunch 2"}
 
 
 async def test_a_rerun_starts_the_shown_places_afresh(house: House) -> None:
