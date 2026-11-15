@@ -31,13 +31,11 @@ The first build has #17's tools: find candidates (a new read-only use case over 
 
 **Active members only.** Guests can't propose, vote, or offer. A message from anyone else gets no reply and is neither stored nor sent.
 
-**Minimal data.** Dinnerbell sends the conversation, the call's basics, and what tools return. Members appear as "Member 1", "Member 2", and so on, fixed for each conversation; Dinnerbell puts names back only for display. No preferences, vetoes, ratings, notes, emails, Slack IDs, or stored guest details leave the house, except the member's own, in a private conversation, when they ask. Candidates come in name order, without hints, "favorite" sentences, or what the filters removed.
+**Minimal data.** Dinnerbell sends the conversation, the call's basics, and what tools return. Members appear as "Member 1", "Member 2", and so on, fixed for each conversation, and tools take only these labels. Dinnerbell puts names back for display, and the roster (amended below) pairs each label with a name. No preferences, vetoes, ratings, notes, emails, Slack IDs, or stored guest details leave the house, except the member's own, in a private conversation, when they ask. Candidates come in name order, without hints, "favorite" sentences, or what the filters removed.
 
 Amended 2026-11-11 (#264, owner's decision): the meal-history tool may also send each item's household hint (ADR 0008), the same text every member sees. No per-member ratings are sent.
 
-Amended 2026-11-15 (#277, owner's decision): each request also sends the roster, each active member's display name and label ("Member 2: David"), so the model can match "Dave" to David. Tools still take labels, and the model asks when a name fits two people. Guests and deactivated members are never listed. History stays in label form.
-
-Amended 2026-11-15 (#278, owner's decision): the member's own data includes their dietary needs and **I can usually**, sent only privately, like their ratings. Admin > Assistant's disclosure names dietary needs, which can reveal health or religion.
+Amended 2026-11-15 (owner's decisions): for #277, each request sends the roster, every active member's display name and label ("Member 2: David"), rebuilt per request, so the model can match "Dave" to David. Every active member gets a label up front. Guests and deactivated members are never listed, so a guest's label and an unknown one still get the same refusal. History stays in label form. For #278, the member's own data, read and drafted, includes their dietary needs and **I can usually**. Admin > Assistant's disclosure names display names and dietary needs, which can reveal health or religion.
 
 **A monthly cost cap.** Each household has a cap in US dollars, $5 a month by default, set in Admin. Dinnerbell reserves each model call's worst case first, so spending never passes it; Admin shows usage per member. At the cap, the assistant is unavailable until next month, and everything else works.
 
@@ -49,7 +47,7 @@ Amended 2026-11-15 (#278, owner's decision): the member's own data includes thei
 - **Confirm makes mistakes cheap:** a misread request costs a tap on **Cancel**.
 - **Member parity, minus admin.** One rule, the member's own permissions without admin, covers every future tool, so adding one needs no new ADR. Admin changes affect the whole household, so they stay on Admin's pages.
 - **Shared threads can't widen anyone's permissions:** each message carries only its author's, and only a draft's member can confirm it. Coordinating and personal data stay private, so a housemate can't steer a coordinator's request and nobody's stance appears in public.
-- **First names only, no preferences** but the member's own, privately. The model needs the menu, and enough of the people to know who "Dave" is. Candidates only while voting, when the filters are fixed, keep FR-29: asking before and after a housemate answers reveals nothing.
+- **Display names, no preferences** but the member's own, privately. The model needs the menu, and enough of the people to know who "Dave" is. Candidates only while voting, when the filters are fixed, keep FR-29: asking before and after a housemate answers reveals nothing.
 - **A switch, not a permanent flag:** ADR 0006 flags are temporary, and staying optional is a household choice.
 - **Sonnet 5.5** handles multi-step tool use well, at about $0.03 for a fresh request.
 
