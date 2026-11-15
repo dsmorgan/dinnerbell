@@ -1,12 +1,13 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The member's own data through the assistant (#253, spec 6.14, **Tools** and **Drafts**): their
-levels on Preferences, feedback on meals they ate, and away days, in private conversations only.
+levels on Preferences, feedback on meals they ate, away days, and dietary needs and **I can
+usually** (#278), in private conversations only.
 Each is a draft, and each **Confirm** runs the use case the Preferences page or the feedback form
 runs, as the member, never the admin's path to someone else's (#181).
 
 The household is the usual one (``tests.support.calls.furnish``): Alex (the admin), Sam, Kim,
 and Lee. Sam cooks Pasta Bake, a home meal, for a dinner Alex, Sam, and Kim eat; Siam Garden is
-a restaurant. The assistant is on.
+a restaurant. Vegetarian and Gluten free are the household's dietary tags. The assistant is on.
 """
 
 from __future__ import annotations
@@ -19,16 +20,17 @@ from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from dinnerbell.config import Settings
 from dinnerbell.db.feedback import FeedbackRepository
-from dinnerbell.db.models import AssistantDraftRow, AssistantUsageRow
+from dinnerbell.db.models import AssistantDraftRow, AssistantUsageRow, TagRow
+from dinnerbell.domain import assistant_own as own_drafts_words
 from dinnerbell.domain.assistant import AssistantSettings, Pseudonyms, slack_key, web_key
 from dinnerbell.domain.assistant_drafts import OWN_DATA
 from dinnerbell.domain.away import check_away
 from dinnerbell.domain.catalog import Mode, TagKind
-from dinnerbell.domain.events import EventRuleViolation
+from dinnerbell.domain.events import EventRuleViolation, EventState, Status
 from dinnerbell.domain.feedback import (
     CLOSED,
     ISSUE_NOTE_TOO_LONG,
@@ -41,9 +43,9 @@ from dinnerbell.domain.feedback import (
     Rating,
 )
 from dinnerbell.domain.meals import MealInput, Slot
-from dinnerbell.domain.members import Member
+from dinnerbell.domain.members import Capabilities, Member
 from dinnerbell.domain.preferences import MINUS, Stance, TargetType
-from dinnerbell.services import away, coordinator, feedback, meals, preferences
+from dinnerbell.services import away, calls, coordinator, feedback, guests, meals, preferences
 from dinnerbell.services.assistant import admin, call_drafts, drafts, own_drafts, tools
 from dinnerbell.services.assistant.call_drafts import ActionConfirmed
 from dinnerbell.services.assistant.conversation import (
@@ -59,7 +61,7 @@ from dinnerbell.services.assistant.runtime import AssistantConfig
 from dinnerbell.services.assistant.tools import ToolContext, ToolResult, ToolSession
 from dinnerbell.services.database import Database, open_database
 from dinnerbell.services.errors import NotFound
-from tests.support.calls import DONE_AT, House, furnish, make_house
+from tests.support.calls import DONE_AT, OPENS, RESPOND_BY, House, dinner_id, furnish, make_house
 from tests.support.clock import FakeClock
 from tests.support.fake_model import FakeModel, answer, tool_call
 from tests.support.feedback import done_dinner
@@ -80,7 +82,15 @@ COORDINATING_TOOLS = {
     "draft_call_off",
 }
 """Private only too, from #252: ``tests.test_assistant_coordinating`` covers them."""
-OWN_TOOLS = {"look_up_my_preferences", "draft_preference", "look_up_my_feedback", "draft_feedback", "draft_away"}
+OWN_TOOLS = {
+    "look_up_my_preferences",
+    "draft_preference",
+    "look_up_my_feedback",
+    "draft_feedback",
+    "draft_away",
+    "draft_dietary_needs",
+    "draft_can_usually",
+}
 PRIVACY = (
     "Only you see your rating and what went wrong. The household sees a summary of everyone's, never who said what."
 )
@@ -92,6 +102,8 @@ SAMPLES: dict[str, dict[str, Any]] = {
     "look_up_my_feedback": {"name": ""},
     "draft_feedback": NO_FEEDBACK | {"meal": 1, "rating": "liked"},
     "draft_away": {"first": "tomorrow", "last": "2026-10-26", "clear": False},
+    "draft_dietary_needs": {"add": ["vegetarian"], "remove": []},
+    "draft_can_usually": {"cook": "on", "pick_up": "", "order": ""},
 }
 
 
@@ -112,6 +124,8 @@ async def house(database: Database, clock: FakeClock, migrated: Settings) -> Asy
     house = await furnish(await make_house(database.sessionmaker, clock, migrated.admin_email))
     await house.add_item("Pasta Bake", Mode.COOK, cuisine="Italian", cooks=("Sam",))
     await house.tag("Mushrooms", TagKind.OTHER)
+    await house.tag("Vegetarian", TagKind.DIETARY)
+    await house.tag("Gluten free", TagKind.DIETARY)
     yield house
     await house.close()
 
@@ -743,7 +757,8 @@ async def test_an_admin_gets_a_members_path_and_never_the_admin_edits_member_one
     for module, names in (
         (preferences, ("member_for_admin", "member_preferences", "member_stance", "set_member_preference")),
         (away, ("set_member_away", "clear_member_away", "member_for_admin")),
-        (preferences, ("require_admin",)),
+        (preferences, ("update_member_settings", "require_admin")),
+        (guests, ("set_member_needs", "member_for_admin")),
     ):
         for name in names:
             real = getattr(module, name)
@@ -758,14 +773,16 @@ async def test_an_admin_gets_a_members_path_and_never_the_admin_edits_member_one
     assert not any(r.is_error for r in said), said
     confirmed = []
     async with house.sessionmaker() as db:
-        rows = [await db.get(AssistantDraftRow, n) for n in (1, 2, 3)]
+        rows = list(await db.scalars(select(AssistantDraftRow).order_by(AssistantDraftRow.id)))
+    assert {row.kind for row in rows} == OWN_DATA
     for row in rows:
-        assert row is not None and row.kind in OWN_DATA
         confirmed.append(await confirm(house, "Alex", row.id))
     assert reached == []
     shown = " ".join([*(r.content for r in said), *(str(c) for c in confirmed)])
     assert "/admin" not in shown
     assert await level(house, "Alex", TargetType.ITEM, "Siam Garden") == Stance(veto=True)
+    alex = await house.refresh("Alex")
+    assert alex.dietary_needs == {house.tags["Vegetarian"].id} and alex.capabilities.can_cook
 
 
 # The cap -----------------------------------------------------------------------------------------
@@ -867,7 +884,7 @@ async def test_a_cap_below_one_private_call_says_so_truthfully_and_spends_nothin
 
 
 @pytest.mark.flag("assistant", on=True)
-@pytest.mark.parametrize("kind", ["preference", "feedback", "away"])
+@pytest.mark.parametrize("kind", ["preference", "feedback", "away", "needs", "can_usually"])
 async def test_a_double_tapped_confirm_hears_the_draft_is_used(
     house: House, monkeypatch: pytest.MonkeyPatch, kind: str
 ) -> None:
@@ -878,6 +895,8 @@ async def test_a_double_tapped_confirm_hears_the_draft_is_used(
         "preference": ("draft_preference", {"what": "", "name": "Mushrooms", "level": "veto"}),
         "feedback": ("draft_feedback", NO_FEEDBACK | {"meal": meal_id, "rating": "hated"}),
         "away": ("draft_away", {"first": "tomorrow", "last": "2026-10-26", "clear": False}),
+        "needs": ("draft_dietary_needs", SAMPLES["draft_dietary_needs"]),
+        "can_usually": ("draft_can_usually", SAMPLES["draft_can_usually"]),
     }[kind]
     row = draft_id(await tool(house, *args))
     await confirm(house, "Kim", row)
@@ -947,3 +966,269 @@ async def test_a_meal_changed_during_the_lookup_drops_out_and_the_filter_still_g
     assert not result.is_error, result.content
     assert [m["meal"] for m in json.loads(result.content)["meals"]] == [dinner_id]
     assert sorted(asked) == sorted([dinner_id, lunch_id]) and lees_id not in asked
+
+
+# Dietary needs and I can usually (#278) -----------------------------------------------------------
+
+NO_CHANGE = {"cook": "", "pick_up": "", "order": ""}
+
+
+async def save_settings(house: House, who: str, caps: Capabilities, *, mute: bool = False) -> None:
+    """``who`` saves the **You** form on Preferences."""
+    settings = preferences.MySettings(capabilities=caps, mute_dm_reminders=mute, feedback_reminder=False)
+    await act(house, preferences.update_my_settings, house[who], settings)
+
+
+async def save_needs(house: House, who: str, *names: str) -> None:
+    """``who`` saves **Your dietary needs** on Preferences."""
+    await act(house, guests.set_my_needs, house[who], frozenset(house.tags[n].id for n in names))
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_turn_off_pick_up_drafts_a_card_and_confirm_saves_it_through_the_preferences_form(
+    house: House, helper: Assistant, model: FakeModel, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Done when (#278): "Turn off pick up for me" drafts a card; Confirm runs
+    ``update_my_settings``, the use case Preferences' **You** form runs, never the admin's, and
+    keeps her reminders as they are."""
+    await save_settings(house, "Kim", Capabilities(can_pickup=True, can_order=True), mute=True)
+    kim = house["Kim"]
+    model.script = [tool_call("draft_can_usually", NO_CHANGE | {"pick_up": "off"}), answer("Drafted.")]
+    async with house.sessionmaker() as db:
+        reply = await converse(db, helper, kim, web_key(kim.id), private=True, text="Turn off pick up for me")
+    assert reply is not None
+    [card] = reply.drafts
+    assert (card.kind, card.title) == ("can_usually", "Turn off Pick up")
+    assert card.confirm_lines == (
+        'On Preferences, "I can usually" goes from Pick up and Order to Order.',
+        "When you answer In on a call, these turn on your offers to cook, pick up, or order. You can turn any off "
+        "for that call.",
+    )
+    assert (await house.refresh("Kim")).capabilities == Capabilities(can_pickup=True, can_order=True)
+
+    async def never(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("the admin's path to someone else's settings")
+
+    monkeypatch.setattr(preferences, "update_member_settings", never)
+    monkeypatch.setattr(preferences, "member_for_admin", never)
+    done = await confirm(house, "Kim", card.id)
+    assert done == ActionConfirmed(
+        None, 'Confirmed. On Preferences, "I can usually" is Order now.', link=own_drafts.PREFERENCES
+    )
+    kim = await house.refresh("Kim")
+    assert kim.capabilities == Capabilities(can_order=True) and kim.mute_dm_reminders
+    assert (await house.refresh("Sam")).capabilities == Capabilities()
+    with pytest.raises(DraftUnavailable):
+        await confirm(house, "Kim", card.id)  # once only
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_add_vegetarian_drafts_needs_and_confirm_saves_them_through_save_needs(
+    house: House, helper: Assistant, model: FakeModel, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ "Add vegetarian to my needs" drafts the needs by the dietary tag's name; Confirm runs
+    ``guests.set_my_needs``, what **Save needs** runs, never the admin's ``set_member_needs``."""
+    kim = house["Kim"]
+    model.script = [tool_call("draft_dietary_needs", {"add": ["vegetarian"], "remove": []}), answer("Drafted.")]
+    async with house.sessionmaker() as db:
+        reply = await converse(db, helper, kim, web_key(kim.id), private=True, text="Add vegetarian to my needs")
+    assert reply is not None
+    [card] = reply.drafts
+    assert (card.kind, card.title) == ("needs", "Add Vegetarian to your dietary needs")
+    assert card.confirm_lines == (
+        "Your dietary needs on Preferences go from none to Vegetarian.",
+        "Every meal you're in or maybe for fits these, as a guest's needs do. Only the needs show, never whose.",
+    )
+    assert (await house.refresh("Kim")).dietary_needs == frozenset()
+
+    async def never(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("the admin's path to someone else's needs")
+
+    monkeypatch.setattr(guests, "set_member_needs", never)
+    done = await confirm(house, "Kim", card.id)
+    assert done == ActionConfirmed(
+        None, "Confirmed. Your dietary needs are Vegetarian now.", link=own_drafts.NEEDS_PAGE
+    )
+    assert (await house.refresh("Kim")).dietary_needs == {house.tags["Vegetarian"].id}
+    assert (await house.refresh("Sam")).dietary_needs == frozenset()
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_taking_needs_off_says_what_they_become_and_none_left_says_so(house: House) -> None:
+    await save_needs(house, "Kim", "Vegetarian", "Gluten free")
+    one = await tool(house, "draft_dietary_needs", {"add": [], "remove": ["Gluten Free"]})
+    row = await draft(house, draft_id(one))
+    assert row.title == "Take Gluten free off your dietary needs"
+    assert row.lines[0] == "Your dietary needs on Preferences go from Gluten free and Vegetarian to Vegetarian."
+    both = await tool(house, "draft_dietary_needs", {"add": [], "remove": ["Gluten free", "Vegetarian"]})
+    row = await draft(house, draft_id(both))
+    assert row.lines == [
+        "Your dietary needs on Preferences go from Gluten free and Vegetarian to none.",
+        own_drafts_words.NO_NEEDS_LINE,
+    ]
+    assert await confirm(house, "Kim", row.id) == ActionConfirmed(
+        None, "Confirmed. You have no dietary needs now.", link=own_drafts.NEEDS_PAGE
+    )
+    swap = await tool(house, "draft_dietary_needs", {"add": ["Vegetarian"], "remove": ["Gluten free"]})
+    assert (await draft(house, draft_id(swap))).title == "Add Vegetarian to your dietary needs"  # only that changes
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_the_lookup_reads_back_her_own_needs_and_can_usually_never_anyone_elses(house: House) -> None:
+    """Sam needs Vegetarian and usually cooks and picks up; Kim needs Gluten free and orders. Each
+    reads back only their own, with the household's dietary tags, which every member sees on
+    Preferences."""
+    await save_needs(house, "Sam", "Vegetarian")
+    await save_settings(house, "Sam", Capabilities(can_cook=True, can_pickup=True))
+    await save_needs(house, "Kim", "Gluten free")
+    await save_settings(house, "Kim", Capabilities(can_order=True))
+    for name in ("", "veg", "zzz"):
+        found = json.loads((await tool(house, "look_up_my_preferences", {"name": name})).content)
+        assert found["dietary_needs"] == ["Gluten free"]
+        assert found["dietary_tags"] == ["Gluten free", "Vegetarian"]
+        assert found["can_usually"] == {"cook": False, "pick_up": False, "order": True}
+    sams = json.loads((await tool(house, "look_up_my_preferences", {"name": ""}, who="Sam")).content)
+    assert sams["dietary_needs"] == ["Vegetarian"]
+    assert sams["can_usually"] == {"cook": True, "pick_up": True, "order": False}
+    for sample in (
+        SAMPLES["draft_dietary_needs"],
+        {"add": [], "remove": ["Gluten free"]},
+        NO_CHANGE | {"cook": "on"},
+    ):
+        name = "draft_can_usually" if "cook" in sample else "draft_dietary_needs"
+        said = await tool(house, name, sample)
+        row = await draft(house, draft_id(said))
+        assert row.member_id == house["Kim"].id
+        for text in (said.content, row.title, *row.lines):
+            assert "Sam" not in text and "Pick up" not in text.replace("cook, pick up, or order", "")
+    assert (await house.refresh("Sam")).dietary_needs == {house.tags["Vegetarian"].id}
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_needs_refusals_match_what_preferences_allows(house: House) -> None:
+    """Preferences lets a member pick only the household's dietary tags, up to five, and never
+    while a call they're in is voting. The draft refuses the same, in the service's words, and
+    never makes a tag."""
+    tags_before = set(house.tags)
+    async with house.sessionmaker() as db:
+        before = {t.name for t in await guests.dietary_tags(db, house["Kim"])}
+    for missing in ("Paleo", "Mushrooms"):  # no such tag, and a tag that isn't dietary
+        refused = await tool(house, "draft_dietary_needs", {"add": [missing], "remove": []})
+        assert refused == ToolResult(
+            own_drafts.NO_SUCH_NEED.format(name=missing, known="Gluten free, Vegetarian"), is_error=True
+        )
+    async with house.sessionmaker() as db:
+        assert {t.name for t in await guests.dietary_tags(db, house["Kim"])} == before
+    assert set(house.tags) == tags_before
+    assert await tool(house, "draft_dietary_needs", {"add": [], "remove": ["Vegetarian"]}) == ToolResult(
+        call_drafts.NOTHING_TO_DO, is_error=True
+    )
+    assert await tool(house, "draft_dietary_needs", {"add": ["Vegetarian"], "remove": ["vegetarian"]}) == ToolResult(
+        own_drafts.ADD_AND_REMOVE, is_error=True
+    )
+    for name in ("Vegan", "Halal", "Kosher", "Nut free"):
+        await house.tag(name, TagKind.DIETARY)
+    six = ["Vegetarian", "Gluten free", "Vegan", "Halal", "Kosher"]
+    await save_needs(house, "Kim", *six)
+    assert await tool(house, "draft_dietary_needs", {"add": ["Nut free"], "remove": []}) == ToolResult(
+        "Pick up to 5 dietary needs.", is_error=True
+    )
+    bad = await tool(house, "draft_dietary_needs", {"add": "Vegan", "remove": []})
+    assert bad.is_error and "list of at most 5 strings" in bad.content
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_needs_while_a_call_she_is_in_votes_get_save_needs_words(house: House) -> None:
+    await answer_in(house)
+    await vote(house)
+    refused = await tool(house, "draft_dietary_needs", SAMPLES["draft_dietary_needs"])
+    assert refused == ToolResult(
+        "A call you're in is voting now, and its proposals already fit your needs as they were. Change them once "
+        "it's decided.",
+        is_error=True,
+    )
+
+
+async def answer_in(house: House) -> None:
+    """The dinner on Oct 22 opens, and everyone answers In; answers close in 10 minutes."""
+    house.clock.now = OPENS
+    await house.tick()
+    event_id = await dinner_id(house)
+    for name in ("Alex", "Sam", "Kim", "Lee"):
+        await act(house, calls.respond, house[name], event_id, Status.IN)
+    house.clock.now = RESPOND_BY - timedelta(minutes=10)
+
+
+async def vote(house: House) -> None:
+    house.clock.now = RESPOND_BY
+    await house.tick()
+    assert (await house.event(await dinner_id(house))).state is EventState.VOTING
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_a_household_with_no_dietary_tags_has_no_needs_to_draft(house: House) -> None:
+    """Preferences hides **Your dietary needs** then, and the assistant has none to draft."""
+    async with house.sessionmaker() as db:
+        await db.execute(update(TagRow).where(TagRow.kind == TagKind.DIETARY.value).values(kind=TagKind.OTHER.value))
+        await db.commit()
+    refused = await tool(house, "draft_dietary_needs", SAMPLES["draft_dietary_needs"])
+    assert refused == ToolResult(own_drafts.NO_DIETARY_TAGS, is_error=True)
+    found = json.loads((await tool(house, "look_up_my_preferences", {"name": ""})).content)
+    assert found["dietary_needs"] == [] and found["dietary_tags"] == []
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_can_usually_refusals(house: House) -> None:
+    assert await tool(house, "draft_can_usually", NO_CHANGE) == ToolResult(call_drafts.NOTHING_TO_DO, is_error=True)
+    assert await tool(house, "draft_can_usually", NO_CHANGE | {"order": "off"}) == ToolResult(
+        call_drafts.NOTHING_TO_DO, is_error=True
+    )
+    bad = await tool(house, "draft_can_usually", NO_CHANGE | {"cook": True})
+    assert bad.is_error and bad.content == "cook is one of '', 'on', 'off'."
+    extra = await tool(house, "draft_can_usually", NO_CHANGE | {"mute_dm_reminders": "on"})
+    assert extra.is_error and extra.content == "Send exactly these fields: cook, pick_up, order."
+    several = await draft(
+        house, draft_id(await tool(house, "draft_can_usually", {"cook": "on", "pick_up": "on", "order": ""}))
+    )
+    assert several.title == "Turn on Cook, turn on Pick up"
+    assert several.lines[0] == 'On Preferences, "I can usually" goes from nothing to Cook and Pick up.'
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_needs_saved_on_preferences_since_the_draft_are_kept(house: House) -> None:
+    row = draft_id(await tool(house, "draft_dietary_needs", SAMPLES["draft_dietary_needs"]))
+    await save_needs(house, "Kim", "Gluten free")
+    with pytest.raises(EventRuleViolation, match=re.escape(own_drafts.NEEDS_CHANGED)):
+        await confirm(house, "Kim", row)
+    assert (await house.refresh("Kim")).dietary_needs == {house.tags["Gluten free"].id}
+    assert (await draft(house, row)).used_at is None
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_can_usually_saved_on_preferences_since_the_draft_is_kept_and_reminders_never_stale_it(
+    house: House,
+) -> None:
+    """Cook saved on Preferences after the draft makes it stale. A reminder saved meanwhile
+    doesn't, and Confirm keeps it, since it saves the reminders as they are then."""
+    row = draft_id(await tool(house, "draft_can_usually", NO_CHANGE | {"order": "on"}))
+    await save_settings(house, "Kim", Capabilities(can_cook=True))
+    with pytest.raises(EventRuleViolation, match=re.escape(own_drafts.CAN_USUALLY_CHANGED)):
+        await confirm(house, "Kim", row)
+    assert (await house.refresh("Kim")).capabilities == Capabilities(can_cook=True)
+    assert (await draft(house, row)).used_at is None
+    row = draft_id(await tool(house, "draft_can_usually", NO_CHANGE | {"order": "on"}))
+    await save_settings(house, "Kim", Capabilities(can_cook=True), mute=True)
+    await confirm(house, "Kim", row)
+    kim = await house.refresh("Kim")
+    assert kim.capabilities == Capabilities(can_cook=True, can_order=True) and kim.mute_dm_reminders
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_a_call_voting_since_the_needs_draft_gets_save_needs_words_and_nothing_changes(house: House) -> None:
+    await answer_in(house)
+    row = draft_id(await tool(house, "draft_dietary_needs", SAMPLES["draft_dietary_needs"]))
+    await vote(house)
+    with pytest.raises(EventRuleViolation, match="A call you're in is voting now"):
+        await confirm(house, "Kim", row)
+    assert (await house.refresh("Kim")).dietary_needs == frozenset()
+    assert (await draft(house, row)).used_at is None

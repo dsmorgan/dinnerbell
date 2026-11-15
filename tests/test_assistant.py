@@ -228,6 +228,8 @@ class TestAssistantOn:
             "look_up_my_feedback",
             "draft_feedback",
             "draft_away",
+            "draft_dietary_needs",
+            "draft_can_usually",
             "look_up_coordinating",
             "draft_decide",
             "draft_shuffle",

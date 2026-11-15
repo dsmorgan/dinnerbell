@@ -6,6 +6,14 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ## [Unreleased]
 
+### Added
+
+- **The assistant drafts a member's own dietary needs and I can usually, in private only, behind the same flag** (#278, [ADR 0009](docs/adr/0009-optional-assistant.md), amended). On the Assistant page or in a direct message with Dinnerbell, never in a channel thread, a member can ask "Add vegetarian to my needs" or "Turn off pick up for me" and get a draft for each. **Confirm** runs what **Save needs** and **Save** on **Preferences** run, as the member with a member's permissions, even for an admin, and keeps their reminders as they are. Dietary needs are the household's dietary tags, the only ones Preferences lets a member pick, so the assistant refuses any other name and never makes a tag; it also refuses what Preferences would, in its words, such as a sixth need or a change while a call the member is in is voting. If the member changes either elsewhere first, Confirm says so and changes nothing. **Look up my preferences** now also returns the member's own needs, as tag names, with the household's dietary tags, and whether they usually cook, pick up, and order. Only that member's own go to Anthropic, only when they ask, and never anyone else's. Dietary needs can reveal health or religion, and Admin > Assistant says they're sent.
+
+### Upgrade notes
+
+- **Migration 0039** rebuilds `assistant_draft` so its `kind` accepts drafts of a member's dietary needs and **I can usually** (#278), keeping every draft and its IDs. A downgrade to 0038 deletes those drafts still waiting for Confirm.
+
 ## [0.17.0] - 2026-11-14
 
 ### Security

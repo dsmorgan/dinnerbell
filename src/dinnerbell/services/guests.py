@@ -328,10 +328,15 @@ async def set_member_needs(
     return await _set_needs(db, actor, member, needs, "member.needs_updated", now=now)
 
 
-async def _set_needs(
-    db: AsyncSession, actor: Member, member: Member, needs: frozenset[int], action: str, *, now: datetime
-) -> Member:
-    """``actor`` sets ``member``'s dietary needs, who may be themselves."""
+async def check_my_needs(db: AsyncSession, actor: Member, needs: frozenset[int]) -> None:
+    """What ``set_my_needs`` would refuse, in its words, without saving: for the assistant's
+    draft of the member's own needs (#278). Raises InvalidMemberInput or EventRuleViolation."""
+    if not actor.active:
+        raise Forbidden("Sign in again.")
+    await _check_needs(db, actor, actor, needs)
+
+
+async def _check_needs(db: AsyncSession, actor: Member, member: Member, needs: frozenset[int]) -> None:
     check_dietary_needs(needs, dietary_tag_ids=await _dietary_tag_ids(db, member.household_id))
     # The picks of a call that's voting passed everyone's needs as they were (FR-29); a change
     # now would rule them out after the fact, as a member's guests' needs can't change then.
@@ -351,6 +356,13 @@ async def _set_needs(
                 "were. Change them once it's decided.",
                 code="voting_needs",
             )
+
+
+async def _set_needs(
+    db: AsyncSession, actor: Member, member: Member, needs: frozenset[int], action: str, *, now: datetime
+) -> Member:
+    """``actor`` sets ``member``'s dietary needs, who may be themselves."""
+    await _check_needs(db, actor, member, needs)
     updated = await MemberRepository(db).update(member.household_id, member.id, now, dietary_needs=needs)
     payload = {"dietary_needs": sorted(needs)}
     await audit(db, member.household_id, actor, action, f"member:{member.id}", payload, now)
