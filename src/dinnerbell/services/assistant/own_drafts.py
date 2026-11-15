@@ -1,26 +1,30 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """The member's own data, in private only (#253, spec 6.14, **Tools** and **Drafts**): their
-levels on Preferences (vetoes and scores), their feedback on meals they ate, and their away days.
+levels on Preferences (vetoes and scores), their feedback on meals they ate, their away days,
+and their dietary needs and **I can usually** (#278).
 
 ``tools`` offers these only in a private conversation, the web page or a DM, never a channel
 thread (``private_only``). They're the only tools that send the member's own preferences,
-ratings, feedback, or away days to Anthropic, and only when the member asks.
+ratings, feedback, away days, dietary needs, or **I can usually** to Anthropic, and only when
+the member asks. Dietary needs can reveal health or religion (ADR 0009, amended for #278).
 
 Everything here reads and writes through the ``my_`` use cases the Preferences page and the
-feedback form call, as the acting member, never through the ``member_`` ones an admin uses on
-Admin > Members (#181). So nothing here reads another member's rows: no one else's levels,
-ratings, or notes, not who else ate a meal or who cooked it, and not the household's hints,
-which go out only through meal history (#264). A level's ``from_your_ratings`` is what the
-member's own ratings did to their own score, as Preferences shows only them.
+feedback form call, ``guests.set_my_needs`` for dietary needs included, as the acting member,
+never through the ``member_`` ones an admin uses on Admin > Members (#181). So nothing here
+reads another member's rows: no one else's levels, ratings, notes, needs, or capabilities, not
+who else ate a meal or who cooked it, and not the household's hints, which go out only through
+meal history (#264). A level's ``from_your_ratings`` is what the member's own ratings did to
+their own score, as Preferences shows only them.
 
 Each draft records what it changes as it was. **Confirm** refuses when that changed since, under
 the write lock, before it runs the use case, which checks everything again: a level set on
-Preferences meanwhile, feedback given or changed meanwhile, or away days changed meanwhile.
+Preferences meanwhile, feedback given or changed meanwhile, or away days, dietary needs, or
+**I can usually** changed meanwhile.
 """
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any
@@ -33,18 +37,25 @@ from dinnerbell.db.meals import MealLogRepository
 from dinnerbell.db.repositories import MemberRepository
 from dinnerbell.domain.assistant_drafts import Draft, DraftKind
 from dinnerbell.domain.assistant_own import (
+    and_words,
     away_lines,
     away_title,
+    can_usually_flags,
+    can_usually_lines,
+    can_usually_title,
+    can_usually_words,
     feedback_lines,
     feedback_title,
     level_label,
+    needs_lines,
+    needs_title,
     span_words,
     stance_lines,
     stance_title,
     when_words,
 )
 from dinnerbell.domain.away import Away, check_away
-from dinnerbell.domain.catalog import ItemKind, name_key
+from dinnerbell.domain.catalog import ItemKind, Tag, TagKind, name_key
 from dinnerbell.domain.events import EventRuleViolation
 from dinnerbell.domain.feedback import (
     FEEDBACK_DAYS,
@@ -57,10 +68,11 @@ from dinnerbell.domain.feedback import (
     clean,
 )
 from dinnerbell.domain.meals import newest_first
-from dinnerbell.domain.members import Member
+from dinnerbell.domain.members import Capabilities, InvalidMemberInput, Member
 from dinnerbell.domain.preferences import InvalidPreference, Stance, TargetType
 from dinnerbell.services import away as away_service
 from dinnerbell.services import feedback as feedback_service
+from dinnerbell.services import guests as guest_service
 from dinnerbell.services import preferences as preference_service
 from dinnerbell.services.assistant.acting import ToolRefusal, tool_actor
 from dinnerbell.services.assistant.call_drafts import NOTHING_TO_DO, ActionConfirmed, DraftSpec
@@ -85,8 +97,17 @@ FEEDBACK_CHANGED = (
     "Your feedback on that meal, or the meal, changed since the draft. Ask the assistant for a new draft."
 )
 AWAY_CHANGED = "Your away days changed since the draft. Ask the assistant for a new draft."
+NO_SUCH_NEED = (
+    "{name} isn't one of the household's dietary tags, the only needs Preferences lets the member pick: {known}. "
+    "Use a name exactly as look_up_my_preferences returns it in dietary_tags."
+)
+NO_DIETARY_TAGS = "The household has no dietary tags, so Preferences has no dietary needs to pick. Say so."
+ADD_AND_REMOVE = "Name each dietary need once, to add or to take off."
+NEEDS_CHANGED = "Your dietary needs changed since the draft. Ask the assistant for a new draft."
+CAN_USUALLY_CHANGED = 'Your "I can usually" changed since the draft. Ask the assistant for a new draft.'
 PREFERENCES = ("/preferences", "Open Preferences")
 AWAY_PAGE = ("/preferences#away", "Open Preferences")
+NEEDS_PAGE = ("/preferences#dietary-needs", "Open Preferences")
 
 Use = Callable[[], Awaitable[None]]
 
@@ -101,7 +122,8 @@ def _stale(message: str) -> EventRuleViolation:
 async def my_levels(db: AsyncSession, actor: Member, text: str, *, today: date) -> dict[str, Any]:
     """The member's own levels, from ``preferences.my_preferences``: with ``text``, every tag
     and item whose name contains it, at any level; without, those the member set, and items
-    their own ratings move. Then their away days."""
+    their own ratings move. Then their away days, their dietary needs with the household's
+    dietary tags they pick from, as Preferences lists them, and **I can usually** (#278)."""
     mine = await preference_service.my_preferences(db, actor, today=today)
     key = name_key(text)
     tags = [
@@ -125,13 +147,22 @@ async def my_levels(db: AsyncSession, actor: Member, text: str, *, today: date) 
     me = await _fresh(db, actor)
     window = me.away_now(today)
     away = None if window is None else _away_json(window)
+    dietary = _dietary(mine.tags)
     return {
         "today": today.isoformat(),
         "tags": tags[:MAX_LISTED],
         "items": items[:MAX_LISTED],
-        "more": len(tags) > MAX_LISTED or len(items) > MAX_LISTED,
+        "more": len(tags) > MAX_LISTED or len(items) > MAX_LISTED or len(dietary) > MAX_LISTED,
         "away": away,
+        "dietary_needs": [t.name for t in dietary if t.id in me.dietary_needs],
+        "dietary_tags": [t.name for t in dietary[:MAX_LISTED]],
+        "can_usually": can_usually_flags(me.capabilities),
     }
+
+
+def _dietary(tags: Sequence[Tag]) -> list[Tag]:
+    """The household's dietary tags, by name: the needs Preferences lets a member pick."""
+    return sorted((t for t in tags if t.kind is TagKind.DIETARY), key=lambda t: (t.key, t.id))
 
 
 def _listed(key: str, name: str, *, set_by_member: bool) -> bool:
@@ -398,6 +429,111 @@ async def _confirm_away(db: AsyncSession, actor: Member, draft: Draft, *, now: d
     return ActionConfirmed(None, text, link=AWAY_PAGE)
 
 
+# Dietary needs and I can usually (FR-8, FR-29, #278) --------------------------------------------
+
+
+async def needs_draft(db: AsyncSession, actor: Member, add: Sequence[str], remove: Sequence[str]) -> DraftSpec:
+    """Adding or taking off dietary needs (``guests.set_my_needs``), by the names of the
+    household's dietary tags: the only needs **Save needs** on Preferences takes, so a name that
+    isn't one is refused, never made a tag. Checked as ``set_my_needs`` checks it, in its words:
+    at most five, and no change while a call the member is in is voting."""
+    me = await _fresh(db, actor)
+    dietary = await guest_service.dietary_tags(db, me)
+    tags = _dietary(dietary)
+    if not tags:
+        raise ToolRefusal(NO_DIETARY_TAGS)
+    by_key = {t.key: t for t in tags}
+
+    def named(names: Sequence[str]) -> set[int]:
+        found = set()
+        for name in names:
+            tag = by_key.get(name_key(name))
+            if tag is None:
+                raise ToolRefusal(NO_SUCH_NEED.format(name=name, known=", ".join(t.name for t in tags)))
+            found.add(tag.id)
+        return found
+
+    adding, removing = named(add), named(remove)
+    if adding & removing:
+        raise ToolRefusal(ADD_AND_REMOVE)
+    before = me.dietary_needs
+    after = frozenset((before | adding) - removing)
+    if after == before:
+        raise ToolRefusal(NOTHING_TO_DO)
+    await guest_service.check_my_needs(db, me, after)
+    added = [t.name for t in tags if t.id in after - before]
+    removed = [t.name for t in tags if t.id in before - after]
+    lines = needs_lines(before=_names(tags, before), after=_names(tags, after))
+    payload = {"needs": sorted(after), "before": sorted(before)}
+    return DraftSpec(DraftKind.NEEDS, payload, needs_title(added, removed), lines, None)
+
+
+def _names(tags: Sequence[Tag], ids: frozenset[int]) -> list[str]:
+    return [t.name for t in tags if t.id in ids]
+
+
+async def _confirm_needs(db: AsyncSession, actor: Member, draft: Draft, *, now: datetime, use: Use) -> ActionConfirmed:
+    """``set_my_needs`` under the write lock, once the member's needs are still the ones the
+    card said it changes."""
+    payload = draft.payload
+    needs = frozenset(int(n) for n in payload["needs"])
+    async with write_transaction(db):
+        await use()
+        me = await _fresh(db, actor)
+        if sorted(me.dietary_needs) != payload["before"]:
+            raise _stale(NEEDS_CHANGED)
+        try:
+            await guest_service.set_my_needs(db, me, needs, now=now)
+        except InvalidMemberInput as exc:  # such as a dietary tag deleted since: the card shows it
+            raise EventRuleViolation(str(exc), code="invalid_needs") from None
+        names = _names(_dietary(await guest_service.dietary_tags(db, me)), needs)
+        await db.commit()  # the draft's use, whatever the use case committed
+    if not names:
+        return ActionConfirmed(None, "Confirmed. You have no dietary needs now.", link=NEEDS_PAGE)
+    return ActionConfirmed(None, f"Confirmed. Your dietary needs are {and_words(names, '')} now.", link=NEEDS_PAGE)
+
+
+def _capabilities(flags: Mapping[str, object]) -> Capabilities:
+    return Capabilities(can_cook=bool(flags["cook"]), can_pickup=bool(flags["pick_up"]), can_order=bool(flags["order"]))
+
+
+async def can_usually_draft(db: AsyncSession, actor: Member, changes: Mapping[str, bool | None]) -> DraftSpec:
+    """Turning **I can usually**'s Cook, Pick up, or Order on or off (``update_my_settings``).
+    ``changes`` maps ``cook``, ``pick_up``, and ``order`` to what each becomes, or None to keep
+    it. The member's reminders, which the same form saves, stay as they are."""
+    me = await _fresh(db, actor)
+    before = can_usually_flags(me.capabilities)
+    after = {name: before[name] if changes.get(name) is None else bool(changes[name]) for name in before}
+    if after == before:
+        raise ToolRefusal(NOTHING_TO_DO)
+    was, now = _capabilities(before), _capabilities(after)
+    payload = {"after": after, "before": before}
+    return DraftSpec(
+        DraftKind.CAN_USUALLY, payload, can_usually_title(was, now), can_usually_lines(before=was, after=now), None
+    )
+
+
+async def _confirm_can_usually(
+    db: AsyncSession, actor: Member, draft: Draft, *, now: datetime, use: Use
+) -> ActionConfirmed:
+    """``update_my_settings`` under the write lock, once **I can usually** is still what the card
+    said it changes, with the reminders as they are then, so a reminder saved meanwhile stays."""
+    payload = draft.payload
+    after = _capabilities(payload["after"])
+    async with write_transaction(db):
+        await use()
+        me = await _fresh(db, actor)
+        if can_usually_flags(me.capabilities) != payload["before"]:
+            raise _stale(CAN_USUALLY_CHANGED)
+        settings = preference_service.MySettings(
+            capabilities=after, mute_dm_reminders=me.mute_dm_reminders, feedback_reminder=me.feedback_reminder
+        )
+        await preference_service.update_my_settings(db, me, settings, now=now)
+        await db.commit()  # the draft's use, whatever the use case committed
+    text = f'Confirmed. On Preferences, "I can usually" is {can_usually_words(after)} now.'
+    return ActionConfirmed(None, text, link=PREFERENCES)
+
+
 # Confirm -----------------------------------------------------------------------------------------
 
 
@@ -409,4 +545,8 @@ async def confirm(db: AsyncSession, actor: Member, draft: Draft, *, now: datetim
         return await _confirm_stance(db, actor, draft, now=now, use=use)
     if draft.kind is DraftKind.FEEDBACK:
         return await _confirm_feedback(db, actor, draft, now=now, use=use)
+    if draft.kind is DraftKind.NEEDS:
+        return await _confirm_needs(db, actor, draft, now=now, use=use)
+    if draft.kind is DraftKind.CAN_USUALLY:
+        return await _confirm_can_usually(db, actor, draft, now=now, use=use)
     return await _confirm_away(db, actor, draft, now=now, use=use)

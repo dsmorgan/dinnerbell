@@ -5,8 +5,8 @@ A draft is a change the assistant prepared for one member: a proposal, an offer,
 items, one of the call actions a member takes in public anyway (#251): an answer, a vote, a
 suggestion, a role, taking back an offer, inviting a guest or answering for one, or starting a
 call, or a change to the member's own data, in private only (#253): a level on Preferences,
-feedback on a meal, or away days; or, in any conversation, a catalog edit or a change to the meal
-log (#254). It says what **Confirm** will do, in lines worked
+feedback on a meal, away days, dietary needs, or **I can usually** (#278); or, in any
+conversation, a catalog edit or a change to the meal log (#254). It says what **Confirm** will do, in lines worked
 out here with the same rules the services apply, and lasts ``DRAFT_MINUTES``. Only its member confirms it, at most once.
 
 Candidates are what ranking's hard filters let through for a voting call. Their reasons come
@@ -73,6 +73,8 @@ class DraftKind(StrEnum):
     PREFERENCE = "preference"
     FEEDBACK = "feedback"
     AWAY = "away"
+    NEEDS = "needs"
+    CAN_USUALLY = "can_usually"
     DECIDE = "decide"
     SHUFFLE = "shuffle"
     PLAN = "plan"
@@ -101,8 +103,8 @@ CALL_ACTIONS = frozenset(
 """The call actions (#251): each confirms through one call use case, on the draft's call, or
 for ``CALL``, the slot and day it starts."""
 
-OWN_DATA = frozenset({DraftKind.PREFERENCE, DraftKind.FEEDBACK, DraftKind.AWAY})
-"""The member's own data (#253): drafted only in a private conversation, and each confirms
+OWN_DATA = frozenset({DraftKind.PREFERENCE, DraftKind.FEEDBACK, DraftKind.AWAY, DraftKind.NEEDS, DraftKind.CAN_USUALLY})
+"""The member's own data (#253, #278): drafted only in a private conversation, and each confirms
 through the use case the Preferences page or the feedback form calls."""
 
 COORDINATING = frozenset(
@@ -152,6 +154,9 @@ class Draft:
       ``cook_thanks``, ``cook_note``), and ``before``, when the member's feedback it replaces
       was saved, or None
     - away: ``first`` and ``last``, or ``clear``, and ``before``, the window it changes, or None
+    - needs: ``needs`` (dietary tag IDs, what they become) and ``before``, the IDs they change
+    - can_usually: ``after`` and ``before``, **I can usually** as ``cook``, ``pick_up``, and
+      ``order`` flags
     - decide: ``proposal_id``, ``name``, ``mode``, ``tie`` (break the tie rather than lock), and
       for **Assign roles** after it, ``way``, ``lead``, and ``pickup`` (member IDs), or None
     - shuffle: ``shuffles``, how many the call had

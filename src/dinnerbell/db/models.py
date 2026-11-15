@@ -766,7 +766,7 @@ class AssistantDraftRow(Base):
             "kind IN ('proposal', 'offer', 'catalog', 'answer', 'vote', 'suggestion', 'role', 'offer_off', "
             "'guest', 'guest_answer', 'call', 'preference', 'feedback', 'away', 'decide', 'shuffle', 'plan', "
             "'hand_off', 'mark_done', 'call_off', 'item_edit', 'item_active', 'meal_log', 'meal_edit', "
-            "'meal_delete')",
+            "'meal_delete', 'needs', 'can_usually')",
             name="kind",
         ),
         Index("ix_assistant_draft_household_expires", "household_id", "expires_at"),

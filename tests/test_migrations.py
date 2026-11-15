@@ -2721,3 +2721,34 @@ def test_0038_adds_the_shown_places_table_and_downgrade_drops_it(settings: Setti
         assert _snapshot(settings) == before
     finally:
         engine.dispose()
+
+
+def test_0039_lets_drafts_hold_needs_and_can_usually_keeps_every_row_and_never_reuses_an_id(
+    settings: Settings,
+) -> None:
+    """Up widens ``assistant_draft.kind`` to the member's dietary needs and **I can usually**
+    (#278), keeping every draft and the AUTOINCREMENT high-water mark. Down deletes the new kinds'
+    drafts, which the old check can't store, and keeps the rest."""
+    _upgrade_to(settings, "0038_shown_places")
+    _populate_calls(settings)
+    _execute(settings, DRAFT_INSERT.replace(":kind", "'away'"), DRAFT_INSERT.replace(":kind", "'meal_log'"))
+    sql, before = _drafts(settings)
+    assert before and "'needs'" not in sql
+    with pytest.raises(IntegrityError):
+        _execute(settings, DRAFT_INSERT.replace(":kind", "'needs'"))
+    newest = max(int(str(row[0])) for row in before)
+    _execute(settings, f"DELETE FROM assistant_draft WHERE id = {newest}")  # noqa: S608 - an integer
+
+    _upgrade_to(settings, "0039_assistant_needs")
+    sql, after = _drafts(settings)
+    assert "AUTOINCREMENT" in sql and after == before[:-1]
+    for kind in ("needs", "can_usually"):
+        _execute(settings, DRAFT_INSERT.replace(":kind", f"'{kind}'"))
+    _, added = _drafts(settings)
+    assert min(int(str(row[0])) for row in added[len(after) :]) == newest + 1
+    with pytest.raises(IntegrityError):
+        _execute(settings, DRAFT_INSERT.replace(":kind", "'capabilities'"))
+
+    _downgrade_to(settings, "0038_shown_places")
+    sql, down = _drafts(settings)
+    assert "AUTOINCREMENT" in sql and "'needs'" not in sql and down == after

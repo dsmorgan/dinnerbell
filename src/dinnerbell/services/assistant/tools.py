@@ -14,7 +14,8 @@ draft a proposal, an offer, or catalog items, from a catalog file or from a menu
 (#251, ``call_drafts``) do too: look up a call, and draft an answer, a vote, a suggestion, a
 role, taking back an offer, inviting a guest or answering for one, or starting a call. The
 member's own data (#253, ``own_drafts``) is private only: look up their levels on Preferences,
-away days, and feedback, and draft a level, feedback on a meal they ate, or away days. So is
+away days, dietary needs, **I can usually** (#278), and feedback, and draft a level, feedback on a
+meal they ate, away days, dietary needs, or **I can usually**. So is
 coordinating (#252, ``coordinating``): look up a call the member coordinates, and draft deciding
 a pick, a shuffle, a change of plan, a hand-off, marking done, or calling off. Catalog edits and
 the meal log (#254, ``catalog_edits``) work in any conversation: draft an edit of a catalog item,
@@ -1050,7 +1051,8 @@ LOOK_UP_MY_PREFERENCES = Tool(
         OWN + "Look up the member's levels on Preferences (veto, or -2 to 2; 0 is no opinion) for tags and catalog "
         "items, and their away days (first, last, back: YYYY-MM-DD, or null). With a name, every tag and item whose "
         "name contains it; with an empty string, only those they set. from_your_ratings: what their own ratings did "
-        "to their score, or null."
+        "to their score, or null. Also their dietary_needs, the household's dietary_tags they pick from, and "
+        "can_usually: whether they usually cook, pick up, and order."
     ),
     input_schema={
         "type": "object",
@@ -1224,6 +1226,64 @@ DRAFT_AWAY = Tool(
         "additionalProperties": False,
     },
     run=draft_away_tool,
+    private_only=True,
+)
+
+
+async def draft_dietary_needs_tool(ctx: ToolContext, raw: Mapping[str, Any]) -> str:
+    _private(ctx)
+    _fields(raw, "add", "remove")
+    add, remove = _names(raw, "add"), _names(raw, "remove")
+    return await _keep_action(ctx, await own_drafts.needs_draft(ctx.db, ctx.actor, add, remove))
+
+
+DRAFT_DIETARY_NEEDS = Tool(
+    name="draft_dietary_needs",
+    description=(
+        OWN + "Draft adding dietary needs to the member's, or taking some off, by the names of the household's "
+        "dietary tags, as look_up_my_preferences returns them in dietary_tags. Every meal they're in or maybe for "
+        "then fits their needs. A name that isn't a dietary tag can't be a need." + CONFIRMS
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {
+            "add": {"type": "array", "items": {"type": "string"}, "description": "Needs to add. Empty for none."},
+            "remove": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "Needs to take off. Empty for none.",
+            },
+        },
+        "required": ["add", "remove"],
+        "additionalProperties": False,
+    },
+    run=draft_dietary_needs_tool,
+    private_only=True,
+)
+CAN_USUALLY_CHANGES = {"": None, "on": True, "off": False}
+
+
+async def draft_can_usually_tool(ctx: ToolContext, raw: Mapping[str, Any]) -> str:
+    _private(ctx)
+    _fields(raw, "cook", "pick_up", "order")
+    changes = {name: CAN_USUALLY_CHANGES[_enum(raw, name, list(CAN_USUALLY_CHANGES))] for name in raw}
+    return await _keep_action(ctx, await own_drafts.can_usually_draft(ctx.db, ctx.actor, changes))
+
+
+CAN_USUALLY_PROPERTY = {"type": "string", "enum": list(CAN_USUALLY_CHANGES), "description": "on, off, or empty."}
+DRAFT_CAN_USUALLY = Tool(
+    name="draft_can_usually",
+    description=(
+        OWN + 'Draft the member\'s "I can usually" on Preferences: whether they usually cook, pick up, and order. '
+        "Answering In on a call turns on those offers for it." + CONFIRMS
+    ),
+    input_schema={
+        "type": "object",
+        "properties": {"cook": CAN_USUALLY_PROPERTY, "pick_up": CAN_USUALLY_PROPERTY, "order": CAN_USUALLY_PROPERTY},
+        "required": ["cook", "pick_up", "order"],
+        "additionalProperties": False,
+    },
+    run=draft_can_usually_tool,
     private_only=True,
 )
 
@@ -1748,6 +1808,8 @@ TOOLS: tuple[Tool, ...] = (
     LOOK_UP_MY_FEEDBACK,
     DRAFT_FEEDBACK,
     DRAFT_AWAY,
+    DRAFT_DIETARY_NEEDS,
+    DRAFT_CAN_USUALLY,
     LOOK_UP_COORDINATING,
     DRAFT_DECIDE,
     DRAFT_SHUFFLE,

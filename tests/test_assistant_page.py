@@ -491,6 +491,52 @@ def test_a_preference_draft_confirms_with_htmx_and_links_to_preferences(
 
 
 @pytest.mark.flag("assistant", on=True)
+def test_turn_off_pick_up_drafts_a_card_and_confirm_changes_it_on_preferences(
+    client: TestClient, provider: FakeProvider, model: FakeModel, migrated: Settings
+) -> None:
+    """#278, done when: "Turn off pick up for me" drafts a card, and Confirm changes the setting
+    on Preferences, keeping the reminder Kim set there."""
+    furnish(client, provider)
+    as_who(client, provider, "kim")
+    saved = submit(client, "/preferences/settings", {"can_pickup": "on", "can_order": "on", "feedback_reminder": "on"})
+    assert saved.status_code == 303
+    assert 'name="can_pickup" checked' in page(client.get("/preferences"))
+    model.script = [tool_call("draft_can_usually", {"cook": "", "pick_up": "off", "order": ""}), answer("Drafted.")]
+    fragment = page(send(client, "Turn off pick up for me", **HX))
+    [draft] = draft_ids(fragment)
+    assert "Turn off Pick up" in fragment
+    assert 'On Preferences, "I can usually" goes from Pick up and Order to Order.' in fragment
+    assert 'name="can_pickup" checked' in page(client.get("/preferences"))  # nothing until Confirm
+    confirmed = htmx(client, f"/assistant/drafts/{draft}/confirm", {})
+    assert confirmed.status_code == 200
+    card = page(confirmed)
+    assert 'Confirmed. On Preferences, "I can usually" is Order now.' in card
+    assert 'href="/preferences">Open Preferences' in card
+    shown = page(client.get("/preferences"))
+    assert 'name="can_pickup" checked' not in shown and 'name="can_order" checked' in shown
+    assert 'name="feedback_reminder" checked' in shown
+
+
+@pytest.mark.flag("assistant", on=True)
+def test_a_needs_draft_confirms_and_links_to_the_needs_on_preferences(
+    client: TestClient, provider: FakeProvider, model: FakeModel, migrated: Settings
+) -> None:
+    """#278: "Add vegetarian to my needs" picks the household's dietary tag, as the chips on
+    Preferences do, and Confirm checks it there."""
+    furnish(client, provider)
+    assert add_item(client, "Veg Garden", new_tags="Vegetarian", new_tags_kind="dietary").status_code == 303
+    as_who(client, provider, "kim")
+    model.script = [tool_call("draft_dietary_needs", {"add": ["vegetarian"], "remove": []}), answer("Drafted.")]
+    fragment = page(send(client, "Add vegetarian to my needs", **HX))
+    [draft] = draft_ids(fragment)
+    assert "Add Vegetarian to your dietary needs" in fragment
+    card = page(htmx(client, f"/assistant/drafts/{draft}/confirm", {}))
+    assert "Confirmed. Your dietary needs are Vegetarian now." in card
+    assert 'href="/preferences#dietary-needs">Open Preferences' in card
+    assert re.search(r'name="needs" value="\d+" checked><span>Vegetarian', page(client.get("/preferences")))
+
+
+@pytest.mark.flag("assistant", on=True)
 def test_cancel_works_with_and_without_htmx(
     client: TestClient, provider: FakeProvider, model: FakeModel, migrated: Settings
 ) -> None:

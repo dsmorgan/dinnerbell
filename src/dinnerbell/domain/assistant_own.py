@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """What **Confirm** does on the assistant's drafts of the member's own data (#253, spec 6.14,
-**Drafts**): a level on Preferences, feedback on a meal they ate, and their away days.
+**Drafts**): a level on Preferences, feedback on a meal they ate, their away days, and their
+dietary needs and **I can usually** (#278).
 
 The services work out the before and after with the use cases' own rules; these say it in the
 words the Preferences page and the feedback form use. Each line is about the member alone:
@@ -9,12 +10,14 @@ never who else ate, who cooked, or what anyone else said.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import date, timedelta
 
 from dinnerbell.domain.assistant_drafts import day_words
 from dinnerbell.domain.away import Away
 from dinnerbell.domain.feedback import FeedbackInput, PlaceIssue
 from dinnerbell.domain.meals import Slot
+from dinnerbell.domain.members import Capabilities
 from dinnerbell.domain.preferences import LEVEL_LABELS, Stance
 
 
@@ -141,3 +144,64 @@ def away_lines(*, away: Away | None, before: Away | None, today: date) -> tuple[
     if before is not None:
         lines.append(f"It replaces your away days {span_words(before, today)}.")
     return tuple(lines)
+
+
+# Dietary needs and I can usually (FR-8, FR-29) ---------------------------------------------------
+
+NEEDS_LINE = "Every meal you're in or maybe for fits these, as a guest's needs do. Only the needs show, never whose."
+"""Preferences' own line under **Your dietary needs**."""
+NO_NEEDS_LINE = "Meals you're in or maybe for no longer have to fit any dietary need of yours."
+CAN_USUALLY_LINE = (
+    "When you answer In on a call, these turn on your offers to cook, pick up, or order. You can turn any off "
+    "for that call."
+)
+"""Preferences' own line under **I can usually**."""
+CAN_USUALLY = (("cook", "Cook"), ("pick_up", "Pick up"), ("order", "Order"))
+"""**I can usually**'s checkboxes, in Preferences' order: the name the assistant's tools use, and
+the label Preferences shows."""
+
+
+def and_words(names: Sequence[str], empty: str) -> str:
+    """Names in a list, such as "Vegan", "Vegan and Kosher", or "Vegan, Kosher, and Halal"."""
+    if not names:
+        return empty
+    return " and ".join(names) if len(names) <= 2 else f"{', '.join(names[:-1])}, and {names[-1]}"
+
+
+def needs_title(added: Sequence[str], removed: Sequence[str]) -> str:
+    if added and not removed:
+        return f"Add {and_words(added, '')} to your dietary needs"
+    if removed and not added:
+        return f"Take {and_words(removed, '')} off your dietary needs"
+    return "Change your dietary needs"
+
+
+def needs_lines(*, before: Sequence[str], after: Sequence[str]) -> tuple[str, ...]:
+    """What saving dietary needs does (``guests.set_my_needs``), by the tags' names."""
+    change = f"Your dietary needs on Preferences go from {and_words(before, 'none')} to {and_words(after, 'none')}."
+    return (change, NEEDS_LINE if after else NO_NEEDS_LINE)
+
+
+def can_usually_flags(capabilities: Capabilities) -> dict[str, bool]:
+    """**I can usually** under the names the assistant's tools use."""
+    return {"cook": capabilities.can_cook, "pick_up": capabilities.can_pickup, "order": capabilities.can_order}
+
+
+def can_usually_words(capabilities: Capabilities) -> str:
+    flags = can_usually_flags(capabilities)
+    return and_words([label for name, label in CAN_USUALLY if flags[name]], "nothing")
+
+
+def can_usually_title(before: Capabilities, after: Capabilities) -> str:
+    was, now = can_usually_flags(before), can_usually_flags(after)
+    parts = [f"turn {'on' if now[name] else 'off'} {label}" for name, label in CAN_USUALLY if was[name] != now[name]]
+    title = ", ".join(parts)
+    return title[:1].upper() + title[1:]
+
+
+def can_usually_lines(*, before: Capabilities, after: Capabilities) -> tuple[str, ...]:
+    """What saving **I can usually** does (``preferences.update_my_settings``)."""
+    return (
+        f'On Preferences, "I can usually" goes from {can_usually_words(before)} to {can_usually_words(after)}.',
+        CAN_USUALLY_LINE,
+    )

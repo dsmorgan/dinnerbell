@@ -68,8 +68,8 @@ class TestAdminAssistant:
 
     def test_the_page_says_what_goes_to_anthropic(self, client: TestClient, provider: FakeProvider) -> None:
         """The disclosure matches docs/configuration.md: no names or anyone's ratings, a member's
-        own data only when they ask in private (#253), and the household hints the meal-history
-        tool sends (#264)."""
+        own data only when they ask in private (#253), dietary needs named (#278), and the household
+        hints the meal-history tool sends (#264)."""
         sign_in(client, provider)
         shown = " ".join(page(client.get("/admin/assistant")).split())
         assert (
@@ -77,9 +77,10 @@ class TestAdminAssistant:
             "or anyone's ratings."
         ) in shown
         assert (
-            "The one exception is a member's own preferences, vetoes, ratings, feedback, and away days, which it "
-            "sends only when that member asks about them in their own conversation, on the Assistant page or in a "
-            "direct message."
+            "The one exception is a member's own preferences, vetoes, dietary needs, what they can usually do "
+            "(cook, pick up, or order), ratings, feedback, and away days, which it sends only when that member asks "
+            "about them in their own conversation, on the Assistant page or in a direct message. Dietary needs can "
+            "reveal health or religion."
         ) in shown
         assert (
             "To answer questions about what the household has eaten, it sends each item's household hint, "
