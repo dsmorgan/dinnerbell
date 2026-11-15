@@ -340,8 +340,8 @@ def _who(members: Mapping[int, Member], member_id: int, label: Labeler) -> str:
 
 
 PEOPLE_IN_PRIVATE = (
-    "Who ate shows only in a direct message with Dinnerbell or on the Assistant page. To change who ate, the "
-    "member names them by mentioning them."
+    "Who ate shows only in a direct message with Dinnerbell or on the Assistant page. To change who ate, name "
+    "them by their labels from the roster."
 )
 """What a lookup in a channel thread says instead of who ate: its reply posts for everyone, and a
 label it gave would join the thread's shared pseudonyms."""
