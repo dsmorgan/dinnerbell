@@ -14,6 +14,10 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 - **The assistant matches a name you type to the right member** (#277, [ADR 0009](docs/adr/0009-optional-assistant.md) as amended). On the web's **Assistant** page and in Slack, you can name people as you say them, such as "hand off dinner to Theo" for a member listed as Theodore, without a mention. Every request to Anthropic now carries the household's roster: each active member's display name with their label in the conversation, such as "Member 2: Theodore". The model matches the name to a label, gives tools only labels, and asks which one you mean when a name could fit two members. Guests and deactivated members are never on the roster, and a label nobody has still gets the same refusal as a guest's, so nothing says whether a name is a guest's. Emails, Slack IDs, and everything else ADR 0009 keeps home still stay home. Dinnerbell still writes only labels into a stored conversation, but a member's own words and the assistant's replies keep any name as written until Conversation hours delete them. The roster is rebuilt for each message, so a rename shows at once, and every active member gets a label when a conversation starts. Admin > **Assistant** says that display names are sent, and the smallest message it prices for the cap now includes the household's roster.
 
+### Fixed
+
+- **The assistant's tools no longer tell the model to send an empty string where one can't work** (#283). Input of the wrong type for a name, day, or label a tool must have, such as a new guest's name or the member to hand off to, came back with "send an empty string for any"; now it says only that the field must be a string. Fields an empty string fills, such as a search or a part of a plan to keep, still say so.
+
 ### Upgrade notes
 
 - **Migration 0039** rebuilds `assistant_draft` so its `kind` accepts drafts of a member's dietary needs and **I can usually** (#278), keeping every draft and its IDs. A downgrade to 0038 deletes those drafts still waiting for Confirm.
