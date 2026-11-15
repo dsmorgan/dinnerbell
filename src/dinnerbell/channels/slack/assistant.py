@@ -12,7 +12,7 @@ task. Dinnerbell ignores, with no reply and nothing stored or sent:
   from another workspace;
 - a Slack user who isn't an active member: a guest, a deactivated member, or someone no member
   is linked to;
-- everything, while the assistant isn't available (Admin's switch is off).
+- everything, while the assistant isn't available (no key, or Admin's switch is off).
 
 A DM with a file, or with no text, gets ``TEXT_ONLY`` and is sent nowhere.
 
