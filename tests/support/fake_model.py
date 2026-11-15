@@ -7,12 +7,14 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
 from dinnerbell.domain.assistant import TokenUsage
 from dinnerbell.services.assistant.client import ModelCallFailed, ModelEvents, ModelReply
+from dinnerbell.services.assistant.prompt import ROSTER_HEADING
 
 MODEL = "claude-sonnet-5-5"
 
@@ -87,14 +89,47 @@ class FakeModel:
 
     @property
     def sent(self) -> str:
-        """Every request so far as one JSON string, for checking what left the house."""
-        return json.dumps(self.requests, ensure_ascii=False)
+        """Every request so far as one JSON string, for checking what left the house, without the
+        roster, the one place members' names go on purpose (#277): ``rosters`` has those."""
+        return json.dumps([without_roster(r) for r in self.requests], ensure_ascii=False)
 
     @property
     def sent_data(self) -> str:
         """``sent`` without the tool definitions, the registry's own text, which names what tools
         take, such as a "veto" level (#253). A test that scans this checks the definitions apart."""
-        return json.dumps([{k: v for k, v in r.items() if k != "tools"} for r in self.requests], ensure_ascii=False)
+        return json.dumps(
+            [{k: v for k, v in without_roster(r).items() if k != "tools"} for r in self.requests], ensure_ascii=False
+        )
+
+    @property
+    def rosters(self) -> list[list[tuple[str, str]]]:
+        """Each conversation request's roster, as ``(label, name)`` pairs."""
+        return [roster_in(r) for r in self.requests]
+
+
+def roster_in(request: Mapping[str, Any]) -> list[tuple[str, str]]:
+    """The roster block of a conversation request (``build_request``), as ``(label, name)``
+    pairs, checking its form: the heading, then one ``Member N: "name"`` line per member."""
+    fixed, roster = request["system"]
+    assert fixed["type"] == roster["type"] == "text"
+    heading, *lines = roster["text"].split("\n")
+    assert heading == ROSTER_HEADING
+    pairs = []
+    for line in lines:
+        label, _, quoted = line.partition(": ")
+        assert re.fullmatch(r"Member [1-9]\d*", label), line
+        pairs.append((label, json.loads(quoted)))
+    return pairs
+
+
+def without_roster(request: Mapping[str, Any]) -> dict[str, Any]:
+    """``request`` with its roster block dropped: a conversation request's system prompt is the
+    fixed block alone. A menu link's drafting call, whose system prompt is one string, is as it was."""
+    system = request.get("system")
+    if not isinstance(system, list):
+        return dict(request)
+    roster_in(request)  # it has the roster's form, so nothing else hides there
+    return {**request, "system": system[:1]}
 
 
 def failure(*, maybe_billed: bool) -> ModelCallFailed:

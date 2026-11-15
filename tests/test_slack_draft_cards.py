@@ -405,8 +405,9 @@ async def test_a_meal_lookup_in_a_channel_thread_names_no_eater_and_labels_nobod
     house: House, model: FakeModel, slack: Slack
 ) -> None:
     """#254: "what meals did I log?" in the channel posts its reply for everyone, since it has no
-    card. So the lookup leaves out who ate: the model can't name them, even by label, and the
-    thread's shared pseudonyms gain nobody. In a DM, the same lookup gives who ate, by label."""
+    card. So the lookup leaves out who ate: the model can't tell who did, even by label, and the
+    thread's shared pseudonyms hold only the roster's active members (#277), the same whoever
+    ate. In a DM, the same lookup gives who ate, by label."""
     eaten = MealInput(
         DAY, Slot.LUNCH, house.items["Taqueria"].id, frozenset({house[n].id for n in ("Kim", "Sam", "Lee")})
     )
@@ -414,7 +415,7 @@ async def test_a_meal_lookup_in_a_channel_thread_names_no_eater_and_labels_nobod
         await meals.log_meal(db, house["Kim"], eaten, today=DAY, now=house.clock())
     model.script = [
         tool_call("look_up_my_meals", {"name": ""}),
-        answer("You logged Taqueria for lunch with Member 2 and Member 3."),
+        answer("You logged Taqueria for lunch."),
     ]
     root = next_ts()
     await slack.mention("Kim", f"<@{BOT_USER}> what meals did I log?", ts=root)
@@ -427,14 +428,18 @@ async def test_a_meal_lookup_in_a_channel_thread_names_no_eater_and_labels_nobod
     assert "people" not in looked["meals"][0] and looked["people"] == catalog_edits.PEOPLE_IN_PRIVATE
     async with house.sessionmaker() as db:
         thread = await AssistantRepository(db).conversation(house.household.id, slack_key(CHANNEL, root))
-    assert thread is not None and set(thread.pseudonyms.numbers) == {house["Kim"].id}
+    everyone = {house[n].id for n in ("Alex", "Sam", "Kim", "Lee")}
+    assert thread is not None and set(thread.pseudonyms.numbers) == everyone
+    assert [label for label, _ in model.rosters[0]] == ["Member 1", "Member 2", "Member 3", "Member 4"]
 
     slack.fake.clear()
-    model.script = [tool_call("look_up_my_meals", {"name": ""}), answer("With Member 2 and Member 3.")]
+    model.script = [tool_call("look_up_my_meals", {"name": ""}), answer("With Member 3 and Member 4.")]
     model.requests.clear()
     await slack.dm("Kim", "what meals did I log?")
     [result] = model.requests[-1]["messages"][-1]["content"]
-    assert json.loads(result["content"])["meals"][0]["people"] == ["Member 1", "Member 2", "Member 3"]
+    # Kim is Member 1, then the roster labels Alex, Sam, and Lee by ID; who ate comes in name order.
+    assert json.loads(result["content"])["meals"][0]["people"] == ["Member 1", "Member 4", "Member 3"]
+    assert posts(slack)[-1]["text"] == "With Sam and Lee."
 
 
 @pytest.mark.flag("assistant", on=True)

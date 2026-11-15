@@ -401,14 +401,15 @@ async def test_candidates_before_voting_are_refused_the_same_before_and_after_a_
 @pytest.mark.flag("assistant", on=True)
 async def test_reasons_carry_no_hint_favorite_or_name(house: House, helper: Assistant, model: FakeModel) -> None:
     await to_voting(house)
-    model.script = [tool_call("find_candidates", NO_FILTERS), answer("Member 2 suggested Pho Corner.")]
+    model.script = [tool_call("find_candidates", NO_FILTERS), answer("Member 3 suggested Pho Corner.")]
     async with house.sessionmaker() as db:
         reply = await converse(db, helper, house["Kim"], web_key(house["Kim"].id), private=True, text="What fits?")
     assert reply is not None and reply.text == "Sam suggested Pho Corner."
     result = json.loads(model.requests[-1]["messages"][-1]["content"][0]["content"])
     reasons = [r for c in result["candidates"] for r in c["reasons"]]
     pho = next(c for c in result["candidates"] if c["name"] == "Pho Corner")
-    assert "Suggested by Member 2." in pho["reasons"]  # Kim asks, so she's Member 1
+    # Kim asks, so she's Member 1; then the roster labels Alex and Sam by ID (#277).
+    assert "Suggested by Member 3." in pho["reasons"]
     # The tool definitions are the registry's own text, which names a "veto" level (#253); the
     # rest of every request is checked for what's the house's.
     assert all(r["tools"] == [t.definition() for t in tools.tools_for(True)] for r in model.requests)

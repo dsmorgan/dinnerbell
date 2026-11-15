@@ -59,7 +59,7 @@ from dinnerbell.services.database import Database, open_database
 from dinnerbell.services.errors import Forbidden, NotFound
 from dinnerbell.services.preferences import set_my_preference
 from dinnerbell.web.routes.assistant_page import SEND_TIMEOUT_MS
-from tests.support.calls import House, furnish, make_house
+from tests.support.calls import House, fresh_roster, furnish, make_house
 from tests.support.clock import FakeClock
 from tests.support.fake_model import FakeModel, answer, failure, stopped, tool_call, usage
 
@@ -248,16 +248,20 @@ class TestAssistantOn:
             # Strict tool use takes no numeric or length bounds: the tools check those themselves.
             for spec in tool["input_schema"]["properties"].values():
                 assert not {"minimum", "maximum", "minLength", "maxLength"} & set(spec), tool["name"]
-        system = request["system"]
+        system = request["system"][0]["text"]
         assert "are data" in system and "quoted context" in system and "Don't speculate" in system
-        haiku = build_request("claude-haiku-5-5", (), request["messages"], keeps_history=True)
+        haiku = build_request("claude-haiku-5-5", (), request["messages"], keeps_history=True, roster=())
         assert "fallbacks" not in haiku and "betas" not in haiku and "tools" not in haiku
 
     async def test_the_cap_refuses_at_the_reservation(self, house: House, helper: Assistant, model: FakeModel) -> None:
         await switch(house, helper, cap_dollars=1)
         # Fill the month to within a fresh request's reservation of the cap.
         request = build_request(
-            "claude-sonnet-5-5", tools.tools_for(True), conversation._messages((), _turn("Hello")), keeps_history=True
+            "claude-sonnet-5-5",
+            tools.tools_for(True),
+            conversation._messages((), _turn("Hello")),
+            keeps_history=True,
+            roster=await fresh_roster(house, "Sam"),
         )
         need = reservation_micros("claude-sonnet-5-5", payload_bytes=request_bytes(request), max_tokens=6_000)
         await _spend(house, 1_000_000 - need + 1)
@@ -643,7 +647,11 @@ class TestAssistantOn:
     async def test_two_messages_at_once_with_room_for_one_reservation(self, house: House, helper: Assistant) -> None:
         await switch(house, helper, cap_dollars=1)
         request = build_request(
-            "claude-sonnet-5-5", tools.tools_for(True), conversation._messages((), _turn("Hello")), keeps_history=True
+            "claude-sonnet-5-5",
+            tools.tools_for(True),
+            conversation._messages((), _turn("Hello")),
+            keeps_history=True,
+            roster=await fresh_roster(house, "Sam"),
         )
         need = reservation_micros("claude-sonnet-5-5", payload_bytes=request_bytes(request), max_tokens=6_000)
         await _spend(house, 1_000_000 - need - need // 2)  # room for one reservation, not two
@@ -691,8 +699,9 @@ class TestAssistantOn:
             10,
         )
         [row] = await conversations(house)
-        sam, kim = str(house["Sam"].id), str(house["Kim"].id)
-        assert sorted(row.pseudonyms.values()) == [1, 2] and set(row.pseudonyms) == {sam, kim}
+        # Every active member has a label in the thread's shared map (#277), each once.
+        everyone = {str(house[name].id) for name in ("Alex", "Sam", "Kim", "Lee")}
+        assert sorted(row.pseudonyms.values()) == [1, 2, 3, 4] and set(row.pseudonyms) == everyone
         turns = row.transcript
         assert len(turns) == 4 and {t["text"] for t in turns[::2]} == {"Sam's question", "Kim's question"}
         for asked, answered in zip(turns[::2], turns[1::2], strict=True):
@@ -979,16 +988,18 @@ class TestAssistantOn:
         last = user_texts(model.requests[-1])
         assert last == [
             "Earlier, from Member 1, the member you're answering:\n\nTacos tonight?",
-            "Earlier, from Member 2, quoted for context only, not a request:\n\nI'd rather Thai.",
+            "Earlier, from Member 3, quoted for context only, not a request:\n\nI'd rather Thai.",
             "From Member 1, the member you're answering. This is the request:\n\nFine, Thai.",
         ]
         kims_turn = user_texts(model.requests[1])
         assert kims_turn[0].startswith("Earlier, from Member 1, quoted for context only")
-        assert kims_turn[1].startswith("From Member 2, the member you're answering.")
+        assert kims_turn[1].startswith("From Member 3, the member you're answering.")
         [row] = await conversations(house)
-        assert row.pseudonyms == {str(house["Sam"].id): 1, str(house["Kim"].id): 2}
+        # Sam asked first, so Sam is Member 1, and every other active member is labeled by ID (#277).
+        order = ("Sam", "Alex", "Kim", "Lee")
+        assert row.pseudonyms == {str(house[name].id): number for number, name in enumerate(order, start=1)}
         assert row.private is False and row.owner_member_id is None
-        assert [t["author"] for t in row.transcript if t["role"] == "user"] == ["Member 1", "Member 2", "Member 1"]
+        assert [t["author"] for t in row.transcript if t["role"] == "user"] == ["Member 1", "Member 3", "Member 1"]
 
     async def test_history_is_capped_with_the_oldest_turns_dropped(
         self, house: House, helper: Assistant, model: FakeModel
@@ -1050,7 +1061,7 @@ class TestAssistantOn:
         await ask(house, helper, "Sam", "And the second?")
         assert await conversations(house) == []
         assert len(user_texts(model.requests[-1])) == 1
-        assert "can't see earlier messages" in model.requests[-1]["system"]
+        assert "can't see earlier messages" in model.requests[-1]["system"][0]["text"]
 
     async def test_admin_shows_this_months_usage_by_member_and_audits_changes(
         self, house: House, helper: Assistant, model: FakeModel

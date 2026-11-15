@@ -19,6 +19,7 @@ from dinnerbell.db.events import EventRepository, ResponseRepository
 from dinnerbell.db.models import AuditRow, MealLogRow, MemberRow, ProposalRow
 from dinnerbell.db.outbox import OutboxEntry, OutboxRepository
 from dinnerbell.db.repositories import MemberRepository, to_member
+from dinnerbell.domain.assistant import Pseudonyms
 from dinnerbell.domain.catalog import DEFAULT_MEALS, CatalogItem, ItemKind, Meal, Mode, Tag, TagKind
 from dinnerbell.domain.events import Event, Response, Status
 from dinnerbell.domain.household import Household
@@ -26,6 +27,7 @@ from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.members import Capabilities, Member, Role
 from dinnerbell.domain.notifications import DeliveryResult, MessageRef, Notification
 from dinnerbell.services import call_admin, lifecycle, outbox
+from dinnerbell.services.assistant.conversation import Roster, roster_of, with_roster
 from dinnerbell.services.bootstrap import bootstrap
 from dinnerbell.services.call_context import CallContext, load
 from tests.support.clock import FakeClock
@@ -266,3 +268,16 @@ async def nobody_coordinates(house: House, event_id: int) -> None:
     a vote with nobody coordinating, which is what a call with no member in gets."""
     async with house.sessionmaker() as db:
         await call_admin.assign_coordinator(db, house["Alex"], event_id, None, now=house.clock())
+
+
+async def fresh_roster(house: House, who: str) -> Roster:
+    """The roster a new conversation of ``who``'s sends (#277): them as Member 1, then every other
+    active member by ID, as ``converse`` labels them."""
+    async with house.sessionmaker() as db:
+        members = await MemberRepository(db).list(house.household.id)
+    return roster_of(with_roster(Pseudonyms().with_member(house[who].id), members), members)
+
+
+async def household_members(house: House) -> list[Member]:
+    async with house.sessionmaker() as db:
+        return await MemberRepository(db).list(house.household.id)
