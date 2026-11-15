@@ -25,6 +25,7 @@ from sqlalchemy import select, update
 from dinnerbell.config import Settings
 from dinnerbell.db.feedback import FeedbackRepository
 from dinnerbell.db.models import AssistantDraftRow, AssistantUsageRow, TagRow
+from dinnerbell.db.repositories import MemberRepository
 from dinnerbell.domain import assistant_own as own_drafts_words
 from dinnerbell.domain.assistant import AssistantSettings, Pseudonyms, slack_key, web_key
 from dinnerbell.domain.assistant_drafts import OWN_DATA
@@ -1232,3 +1233,26 @@ async def test_a_call_voting_since_the_needs_draft_gets_save_needs_words_and_not
         await confirm(house, "Kim", row)
     assert (await house.refresh("Kim")).dietary_needs == frozenset()
     assert (await draft(house, row)).used_at is None
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_a_need_that_is_no_longer_a_dietary_tag_is_dropped_not_refused(house: House) -> None:
+    """Kim's stored needs hold a tag that isn't dietary and an ID no tag has, as a tag merge can
+    leave behind. Preferences shows neither and drops both on Save; so does the draft, instead
+    of failing ``set_my_needs``' check on every draft. Confirm's stale check still compares the
+    needs as stored."""
+    stale = frozenset({house.tags["Mushrooms"].id, 9_999})
+    async with house.sessionmaker() as db:
+        await MemberRepository(db).update(house.household.id, house["Kim"].id, house.clock(), dietary_needs=stale)
+        await db.commit()
+    found = json.loads((await tool(house, "look_up_my_preferences", {"name": ""})).content)
+    assert found["dietary_needs"] == []
+    assert await tool(house, "draft_dietary_needs", {"add": [], "remove": []}) == ToolResult(
+        call_drafts.NOTHING_TO_DO, is_error=True
+    )
+    row = await draft(house, draft_id(await tool(house, "draft_dietary_needs", SAMPLES["draft_dietary_needs"])))
+    assert row.title == "Add Vegetarian to your dietary needs"
+    assert row.lines[0] == "Your dietary needs on Preferences go from none to Vegetarian."
+    assert row.payload == {"needs": [house.tags["Vegetarian"].id], "before": sorted(stale)}
+    await confirm(house, "Kim", row.id)
+    assert (await house.refresh("Kim")).dietary_needs == {house.tags["Vegetarian"].id}
