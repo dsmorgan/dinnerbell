@@ -109,7 +109,6 @@ def token_in(response: httpx.Response) -> str | None:
     return match.group(1) if match else None
 
 
-@pytest.mark.flag("assistant", on=True)
 def test_the_link_is_built_from_the_base_url_and_signs_the_draft_and_member(
     migrated: Settings, clock: FakeClock
 ) -> None:
@@ -121,7 +120,6 @@ def test_the_link_is_built_from_the_base_url_and_signs_the_draft_and_member(
     assert _draft_link_signer(migrated, clock).loads(token) is None
 
 
-@pytest.mark.flag("assistant", on=True)
 def test_the_drafts_member_gets_the_add_only_preview_and_apply_only_adds(
     client: TestClient, provider: FakeProvider, migrated: Settings, clock: FakeClock
 ) -> None:
@@ -144,7 +142,6 @@ def test_the_drafts_member_gets_the_add_only_preview_and_apply_only_adds(
     assert after["Noodle Bar"] is None and "Dumpling House" in after
 
 
-@pytest.mark.flag("assistant", on=True)
 def test_an_apply_without_the_add_only_mark_still_only_adds(
     client: TestClient, provider: FakeProvider, migrated: Settings, clock: FakeClock
 ) -> None:
@@ -157,7 +154,6 @@ def test_an_apply_without_the_add_only_mark_still_only_adds(
     assert {row.name: row.notes for row in rows(migrated, CatalogItemRow)}["Noodle Bar"] is None
 
 
-@pytest.mark.flag("assistant", on=True)
 def test_signed_out_or_someone_else_gets_404(
     client: TestClient, provider: FakeProvider, migrated: Settings, clock: FakeClock
 ) -> None:
@@ -170,7 +166,6 @@ def test_signed_out_or_someone_else_gets_404(
     assert "Dumpling House" not in {row.name for row in rows(migrated, CatalogItemRow)}
 
 
-@pytest.mark.flag("assistant", on=True)
 def test_a_tampered_expired_or_unconfirmed_link_gets_404(
     client: TestClient, provider: FakeProvider, migrated: Settings, clock: FakeClock
 ) -> None:
@@ -195,7 +190,6 @@ def test_a_tampered_expired_or_unconfirmed_link_gets_404(
     assert client.get(path(drafted.url)).status_code == 404
 
 
-@pytest.mark.flag("assistant", on=True)
 def test_with_the_assistant_turned_off_the_link_gets_404(
     client: TestClient, provider: FakeProvider, migrated: Settings, clock: FakeClock
 ) -> None:
@@ -206,7 +200,6 @@ def test_with_the_assistant_turned_off_the_link_gets_404(
     assert client.get(path(drafted.url)).status_code == 404
 
 
-@pytest.mark.flag("assistant", on=True)
 def test_only_a_confirmed_catalog_draft_of_the_members_is_ready(
     client: TestClient, migrated: Settings, clock: FakeClock
 ) -> None:
@@ -221,7 +214,7 @@ def test_only_a_confirmed_catalog_draft_of_the_members_is_ready(
         ready = await drafts.ready_for_import(db, config, alex, draft.id, now=clock())
         assert ready.add_only and ready.member_id == alex.id and ready.content == drafted_content(ready)
         with pytest.raises(NotFound):
-            await drafts.ready_for_import(db, AssistantConfig(key_set=True, flag_on=False), alex, draft.id, now=clock())
+            await drafts.ready_for_import(db, AssistantConfig(key_set=False), alex, draft.id, now=clock())
         with pytest.raises(NotFound):
             await drafts.ready_for_import(db, config, alex, draft.id + 1, now=clock())
         with pytest.raises(NotFound):  # a guest's, or an inactive member's, never is
@@ -236,7 +229,6 @@ def test_only_a_confirmed_catalog_draft_of_the_members_is_ready(
     assert row.used_at is not None and row.confirmed_at == row.used_at
 
 
-@pytest.mark.flag("assistant", on=True)
 def test_a_cancelled_catalog_draft_never_opens_the_import_even_with_a_signed_link(
     client: TestClient, provider: FakeProvider, migrated: Settings, clock: FakeClock
 ) -> None:
@@ -304,7 +296,6 @@ def purge(settings: Settings, clock: FakeClock) -> int:
     return removed
 
 
-@pytest.mark.flag("assistant", on=True)
 def test_a_confirmed_catalog_draft_is_kept_for_its_link(
     client: TestClient, provider: FakeProvider, migrated: Settings, clock: FakeClock
 ) -> None:
@@ -335,7 +326,6 @@ def test_a_confirmed_catalog_draft_is_kept_for_its_link(
     assert rows(migrated, AssistantDraftRow) == []
 
 
-@pytest.mark.flag("assistant", on=True)
 def test_a_link_drafts_import_link_shows_only_what_dinnerbell_kept(
     client: TestClient, provider: FakeProvider, migrated: Settings, clock: FakeClock
 ) -> None:

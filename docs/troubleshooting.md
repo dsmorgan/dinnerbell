@@ -32,7 +32,7 @@ After you fix a setting, recreate the service: `podman-compose down && podman-co
 | `/healthz` shows `stuck_calls` above 0 | A call's next step, such as closing its answers, has failed for more than an hour. A restart doesn't help. | On **Admin**, a banner lists each stuck call. Call it off, or re-run a voting or decided call from its **Admin** menu. Report the `could not advance call` log line on the issue tracker. |
 | Badges show as text, and the log says `badge art not available` with `missing_scope` | The Slack app lacks `files:write`. | Paste the current manifest and reinstall the app (see [Upgrade](setup.md#upgrade)). |
 | Badges show as text, and the log says `slack refused badge art` | Slack refused the art. | Report the line, with its `slack_error`, on the issue tracker (#110). |
-| Members message or mention Dinnerbell and get no reply | The assistant is off, or the Slack app still has the default manifest, which doesn't deliver those messages. | Check the three conditions in [The assistant](configuration.md#the-assistant), and apply the assistant manifest as in [Talk to it in Slack](configuration.md#talk-to-it-in-slack). |
+| Members message or mention Dinnerbell and get no reply | The assistant is off, or the Slack app still has the default manifest, which doesn't deliver those messages. | Check the two conditions in [The assistant](configuration.md#the-assistant), and apply the assistant manifest as in [Talk to it in Slack](configuration.md#talk-to-it-in-slack). |
 
 ## Check /healthz
 

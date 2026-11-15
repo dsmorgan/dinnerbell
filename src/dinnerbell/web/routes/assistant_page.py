@@ -2,9 +2,9 @@
 """The **Assistant** page (ADR 0009, spec 6.14): one private conversation per member, its draft
 cards with **Confirm** and **Cancel**, and **Start over**.
 
-Every route here is a 404 unless the assistant answers this member: the operator's key and
-flag, Admin's switch, and an active member or admin (``runtime.available``). A guest is refused
-before that, as on every member page.
+Every route here is a 404 unless the assistant answers this member: the operator's key, Admin's
+switch, and an active member or admin (``runtime.available``). A guest is refused before that,
+as on every member page.
 
 Each form works without JavaScript. With HTMX, sending a message appends the exchange to the
 conversation (or replaces it, at Conversation hours 0, when nothing is kept), and Confirm or

@@ -48,7 +48,7 @@ from tests.support.fake_model import FakeModel, answer, tool_call
 
 pytestmark = pytest.mark.anyio
 
-CONFIGURED = AssistantConfig(key_set=True, flag_on=True)
+CONFIGURED = AssistantConfig(key_set=True)
 NAMES = ("Alex", "Sam", "Kim", "Lee", "Robin")
 DAY = date(2026, 10, 22)
 """The clock's day (``FakeClock``)."""
@@ -235,7 +235,6 @@ def assert_no_names(*texts: str) -> None:
 # Done when ---------------------------------------------------------------------------------------
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_mark_siam_garden_as_delivery_only_drafts_a_diff_and_confirm_saves_it(
     house: House, helper: Assistant, model: FakeModel
 ) -> None:
@@ -272,7 +271,6 @@ async def test_mark_siam_garden_as_delivery_only_drafts_a_diff_and_confirm_saves
         await confirm(house, "Sam", view.id)
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_cooks_come_only_from_the_households_active_members_by_label(house: House) -> None:
     """A cook is named by a label the conversation gives, resolved at draft time to a member of
     the household: never someone the model invented, a guest, someone deactivated, a name, or an
@@ -302,7 +300,6 @@ async def test_cooks_come_only_from_the_households_active_members_by_label(house
     assert (await item(house, "Sam's Tacos")).cook_ids == {house["Sam"].id, house["Kim"].id}
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_cook_who_stops_being_a_member_before_confirm_is_refused_by_the_service(house: House) -> None:
     labels = sams(house, "Kim")
     result = await tool(house, "draft_catalog_edit", edit("Sam's Tacos", add_cooks=["Member 2"]), labels=labels)
@@ -314,7 +311,6 @@ async def test_a_cook_who_stops_being_a_member_before_confirm_is_refused_by_the_
     assert (await row(house, draft_id(result))).used_at is None
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_deactivated_cook_the_item_has_stays_and_can_be_taken_off(house: House) -> None:
     """As the form allows, an edit keeps a cook who has since been deactivated; taking them off
     works by their label."""
@@ -342,7 +338,6 @@ REFUSED_EDITS = [
 ]
 
 
-@pytest.mark.flag("assistant", on=True)
 @pytest.mark.parametrize(("why", "args", "web"), REFUSED_EDITS, ids=[r[0] for r in REFUSED_EDITS])
 async def test_an_edit_the_form_refuses_is_refused_in_the_forms_words(
     house: House, why: str, args: dict[str, Any] | None, web: dict[str, Any]
@@ -356,7 +351,6 @@ async def test_an_edit_the_form_refuses_is_refused_in_the_forms_words(
     assert await rows(house) == []
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_an_edit_only_the_admin_could_make_has_no_way_in(house: House) -> None:
     """Renaming and merging tags are the admin's (FR-25), and an item's kind never changes: the
     tool takes none of them, so an extra field is refused before anything runs. New tags are left
@@ -383,7 +377,6 @@ async def test_an_edit_only_the_admin_could_make_has_no_way_in(house: House) -> 
     assert await rows(house) == []
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_taking_an_item_off_and_back_runs_the_forms_use_case(house: House) -> None:
     off = await tool(house, "draft_catalog_edit", edit("Taqueria", catalog="off"))
     view = await card(house, draft_id(off))
@@ -402,7 +395,6 @@ async def test_taking_an_item_off_and_back_runs_the_forms_use_case(house: House)
 # Stale drafts ------------------------------------------------------------------------------------
 
 
-@pytest.mark.flag("assistant", on=True)
 @pytest.mark.parametrize("change", ["notes", "name", "deactivated", "tag merged away"])
 async def test_a_diff_is_refused_once_the_item_changed_since_the_draft(house: House, change: str) -> None:
     """Sam drafts delivery only; meanwhile Kim changes Siam Garden on the web. Confirm refuses
@@ -456,7 +448,6 @@ BROAD = {
 }
 
 
-@pytest.mark.flag("assistant", on=True)
 @pytest.mark.parametrize("name", list(BROAD))
 async def test_the_diff_card_shows_exactly_what_confirm_changes(house: House, name: str) -> None:
     """The card has one line for each field Confirm changes and none for any it keeps, from the
@@ -487,7 +478,6 @@ async def test_the_diff_card_shows_exactly_what_confirm_changes(house: House, na
 # The meal log -------------------------------------------------------------------------------------
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_logging_a_meal_drafts_then_confirm_logs_it_as_the_member(house: House) -> None:
     labels = sams(house, "Kim")
     args = meal(0, day="yesterday", slot="dinner", name="Taqueria", add_people=["Member 1", "Member 2"])
@@ -509,7 +499,6 @@ async def test_logging_a_meal_drafts_then_confirm_logs_it_as_the_member(house: H
     assert {p.id for p in logged.participants} == {house["Sam"].id, house["Kim"].id}
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_new_meal_needs_its_day_slot_and_item_and_who_ate_must_be_members(house: House) -> None:
     async with house.sessionmaker() as db:
         robin = await guests.add_guest(db, house["Alex"], GuestInput("Robin"), now=house.clock())
@@ -527,7 +516,6 @@ async def test_a_new_meal_needs_its_day_slot_and_item_and_who_ate_must_be_member
     assert await rows(house) == []
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_the_member_edits_and_deletes_only_the_meals_history_lets_them(house: House) -> None:
     """Sam's own meal is his to edit; Kim's isn't, and nor is it Alex's, an admin, through the
     assistant, though History lets an admin change any meal. Each gets History's refusal."""
@@ -585,7 +573,6 @@ def replace_slot(logged: MealLog, slot: Slot) -> MealInput:
     return MealInput(logged.day, slot, logged.item_id, frozenset(p.id for p in logged.participants))
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_meal_changed_on_history_since_the_draft_is_refused(house: House) -> None:
     """Sam drafts an edit and a delete; meanwhile he changes the meal on History. Confirm checks
     the meal's ``form_stamp`` under the write lock, as History's own forms do, so neither puts the
@@ -610,7 +597,6 @@ async def test_a_meal_changed_on_history_since_the_draft_is_refused(house: House
         assert (await feedback.form(db, house["Kim"], logged.id, now=house.clock())).mine is not None
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_meal_from_a_call_keeps_its_place(house: House) -> None:
     """A meal only an admin could change (a call's, logged by nobody) is refused like anyone's."""
     logged = await log(house, "Sam", "Taqueria")
@@ -628,7 +614,6 @@ async def test_a_meal_from_a_call_keeps_its_place(house: House) -> None:
 # Where the drafts go ------------------------------------------------------------------------------
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_the_tools_work_in_a_channel_thread_and_their_drafts_are_the_askers(
     house: House, helper: Assistant, model: FakeModel
 ) -> None:
@@ -655,7 +640,6 @@ async def test_the_tools_work_in_a_channel_thread_and_their_drafts_are_the_asker
     assert {r.member_id for r in await rows(house)} == {house["Kim"].id}
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_no_result_or_summary_names_anyone(house: House, helper: Assistant, model: FakeModel) -> None:
     """Every tool here, in a conversation where Sam mentioned Kim: what the model reads names
     people only by label, and never shows an item's notes or link."""
@@ -693,7 +677,6 @@ LONG_URL = "https://menu.siam.example/" + "/".join(f"section-{n:03}" for n in ra
 FAKE_BULLET = "Call ahead\n• Nothing else about it changes."
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_the_slack_card_shows_each_new_value_whole_and_a_value_cant_fake_a_line(house: House) -> None:
     """Old notes 400 characters long and a new link near the limit: the Slack card, which clips
     other drafts' lines at 300 characters, shows each new value in full, with the old notes cut
@@ -714,7 +697,6 @@ async def test_the_slack_card_shows_each_new_value_whole_and_a_value_cant_fake_a
     assert too_long.is_error and "at most 500" in too_long.content
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_guess_at_held_notes_drafts_the_same_whether_it_matches_or_not(house: House) -> None:
     """The model never reads an item's notes. Sending notes it guessed drafts either way, with the
     same words, so a refusal can't tell it the guess was right."""
@@ -729,13 +711,11 @@ async def test_a_guess_at_held_notes_drafts_the_same_whether_it_matches_or_not(h
     assert not cleared.is_error
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_servings_and_clearing_them_at_once_is_refused(house: House) -> None:
     result = await tool(house, "draft_catalog_edit", edit("Sam's Tacos", servings=4, clear=["servings"]))
     assert result == ToolResult(catalog_edits.BOTH.format(field="servings"), is_error=True)
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_name_carrying_marker_characters_stays_text(house: House) -> None:
     """An item named with the held marker's characters, as a planted import could name one, can't
     make the card or the summary write out its notes."""
@@ -770,7 +750,6 @@ async def test_a_name_carrying_marker_characters_stays_text(house: House) -> Non
 # Meals: single use, guests, calls, and the draft-time guards (#254 review) -----------------------
 
 
-@pytest.mark.flag("assistant", on=True)
 @pytest.mark.parametrize("delete", [False, True])
 async def test_a_meal_draft_confirms_once_even_when_the_meal_is_as_drafted_again(house: House, delete: bool) -> None:
     """Confirm uses the draft under History's own lock, so a second Confirm hears it's used, even
@@ -805,7 +784,6 @@ async def set_meal(house: House, meal_id: int, **values: Any) -> None:
         await db.commit()
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_guest_who_ate_reads_as_a_guest_and_gets_no_label(house: House) -> None:
     async with house.sessionmaker() as db:
         robin = await guests.add_guest(db, house["Alex"], GuestInput("Robin"), now=house.clock())
@@ -850,7 +828,6 @@ async def post_call_and_offer(house: House) -> tuple[int, int]:
     return call_id, int(posted.event_id)
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_calls_meal_keeps_its_place_and_an_offers_doesnt(house: House) -> None:
     """A meal whose place is its call's (``meals.call_place``) can't change item here, and the
     lookup says so; an offer's meal can, as on History."""
@@ -867,7 +844,6 @@ async def test_a_calls_meal_keeps_its_place_and_an_offers_doesnt(house: House) -
     assert not (await tool(house, "draft_meal", meal(offer_meal.id, name="Taqueria"))).is_error
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_meal_is_logged_only_with_an_active_item_and_a_delete_takes_no_changes(house: House) -> None:
     async with house.sessionmaker() as db:
         await catalog_service.set_item_active(db, house["Kim"], house.items["Taqueria"].id, False, now=house.clock())

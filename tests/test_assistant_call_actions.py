@@ -52,7 +52,7 @@ from tests.support.fake_model import FakeModel, answer, tool_call
 pytestmark = pytest.mark.anyio
 
 DAY = date(2026, 10, 22)
-CONFIGURED = AssistantConfig(key_set=True, flag_on=True)
+CONFIGURED = AssistantConfig(key_set=True)
 CALL = {"slot": "", "day": ""}
 
 
@@ -185,7 +185,6 @@ def spy(monkeypatch: pytest.MonkeyPatch, *names: str) -> list[str]:
 # The issue's example ----------------------------------------------------------------------------
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_im_in_pickup_and_a_vote_make_one_draft_each_and_each_confirm_runs_its_use_case(
     house: House, helper: Assistant, model: FakeModel, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -238,7 +237,6 @@ async def test_im_in_pickup_and_a_vote_make_one_draft_each_and_each_confirm_runs
         await confirm(house, "Lee", vote_draft)
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_in_a_channel_thread_each_tool_works_and_the_drafts_are_the_askers(
     house: House, helper: Assistant, model: FakeModel
 ) -> None:
@@ -864,7 +862,7 @@ async def test_on_a_test_instance_a_late_restart_drafts_and_confirms_as_on_the_w
     on_test = draft_id(await tool(house, "draft_call", call_args("dinner", "today"), who="Kim", instance_label="test"))
     with pytest.raises(EventRuleViolation):
         await confirm(house, "Kim", on_test)  # a production config keeps the rule at Confirm too
-    await confirm(house, "Kim", on_test, AssistantConfig(key_set=True, flag_on=True, instance_label="test"))
+    await confirm(house, "Kim", on_test, AssistantConfig(key_set=True, instance_label="test"))
     assert (await house.event(event_id)).state is EventState.COLLECTING
 
 

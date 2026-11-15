@@ -64,8 +64,8 @@ def _whole_page(request: Request) -> bool:
 
 async def _assistant_link(request: Request) -> bool:
     """Whether the nav links the **Assistant** page: only when the assistant answers this viewer
-    (the key, the flag, Admin's switch, and an active member who isn't a guest; ADR 0009). It
-    reads the switch, so only a whole page asks, and only with the key and flag set."""
+    (the key, Admin's switch, and an active member who isn't a guest; ADR 0009). It reads the
+    switch, so only a whole page asks, and only with the key set."""
     principal = getattr(request.state, "principal", None)
     if principal is None or not principal.member.is_member or not _whole_page(request):
         return False
@@ -109,7 +109,7 @@ async def render(
         "stuck_calls": _stuck_calls(request),
         "fun": _fun_scene(request),
         "color_mode": _color_mode(request),
-        # Admin > Assistant shows only with the operator's key and flag (ADR 0009).
+        # Admin > Assistant shows only with the operator's key (ADR 0009).
         "assistant_admin": AssistantConfig.from_settings(settings).configured,
         # The member's Assistant page shows only when the assistant answers them (ADR 0009).
         "assistant_link": await _assistant_link(request),

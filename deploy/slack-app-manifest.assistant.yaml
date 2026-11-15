@@ -1,7 +1,7 @@
 # Dinnerbell Slack app manifest, with the optional assistant (ADR 0009).
 #
 # Apply this in place of slack-app-manifest.yaml only when you turn the
-# assistant on (DINNERBELL_ANTHROPIC_API_KEY and the assistant flag). It is
+# assistant on (set DINNERBELL_ANTHROPIC_API_KEY). It is
 # slack-app-manifest.yaml plus a writable Messages tab, the im:history,
 # app_mentions:read, and reactions:write scopes, and the message.im and
 # app_mention events, so members can message Dinnerbell, mention it in the

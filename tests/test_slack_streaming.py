@@ -400,7 +400,6 @@ async def transcript(house: House) -> list[dict[str, Any]]:
         return list(row.transcript)
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_long_dm_reply_streams_line_by_line(house: House, model: FakeModel, slack: Slack) -> None:
     model.script = [answer(LONG)]
     root = next_ts()
@@ -417,7 +416,6 @@ async def test_a_long_dm_reply_streams_line_by_line(house: House, model: FakeMod
     assert (await transcript(house))[-1]["text"] == LONG  # kept exactly as before
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_short_reply_is_posted_as_before(model: FakeModel, slack: Slack) -> None:
     model.script = [answer("Two places do noodles.")]
     await slack.dm("Sam", "Noodles?")
@@ -425,7 +423,6 @@ async def test_a_short_reply_is_posted_as_before(model: FakeModel, slack: Slack)
     assert [p["text"] for p in posts(slack)] == ["Two places do noodles."]
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_long_channel_thread_reply_is_posted_once_as_before(model: FakeModel, slack: Slack) -> None:
     """Only DMs stream: a channel thread's reply could turn out to carry drafts, which only the
     member who asked may see."""
@@ -438,7 +435,6 @@ async def test_a_long_channel_thread_reply_is_posted_once_as_before(model: FakeM
     assert posted["text"].endswith(mention_only_line(BOT_USER))
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_channel_thread_call_that_writes_then_drafts_shows_nothing_in_public(
     house: House, model: FakeModel, slack: Slack
 ) -> None:
@@ -472,7 +468,6 @@ def test_a_stream_is_only_ever_a_dms() -> None:
         slack_assistant.SlackStream(object(), channel, resume=resume)  # type: ignore[arg-type]
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_dm_reply_with_drafts_streams_then_posts_its_cards(
     model: FakeModel, slack: Slack, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -490,7 +485,6 @@ async def test_a_dm_reply_with_drafts_streams_then_posts_its_cards(
     assert posts(slack)[0]["blocks"]
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_tool_round_with_a_short_preface_shows_nothing_and_keeps_the_status(
     model: FakeModel, slack: Slack
 ) -> None:
@@ -506,7 +500,6 @@ async def test_a_tool_round_with_a_short_preface_shows_nothing_and_keeps_the_sta
     assert statuses == [STATUS, ""]
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_tool_round_after_streaming_began_stops_that_stream_and_shows_the_status_again(
     house: House, model: FakeModel, slack: Slack
 ) -> None:
@@ -530,7 +523,6 @@ async def test_a_tool_round_after_streaming_began_stops_that_stream_and_shows_th
     assert (await transcript(house))[-1]["text"] == final  # the reply, as before: not the preface
 
 
-@pytest.mark.flag("assistant", on=True)
 @pytest.mark.parametrize(("reason", "line"), [("refusal", REFUSED), ("max_tokens", TOO_LONG_ANSWER)])
 async def test_a_reply_that_ends_in_dinnerbells_own_line_stops_the_stream_with_it(
     model: FakeModel, slack: Slack, reason: str, line: str
@@ -553,7 +545,6 @@ class WritesThenTimesOut(FakeModel):
         raise TimeoutError
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_the_deadline_mid_stream_ends_it_with_the_out_of_time_line(slack: Slack) -> None:
     assert slack.conn.assistant is not None
     object.__setattr__(slack.conn.assistant.assistant, "client", WritesThenTimesOut())
@@ -564,7 +555,6 @@ async def test_the_deadline_mid_stream_ends_it_with_the_out_of_time_line(slack: 
     assert posts(slack) == []
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_reply_past_the_limit_is_cut_as_a_posted_one_is(model: FakeModel, slack: Slack) -> None:
     huge = "\n".join(f"Line {n} about the many noodle places in the catalog, one by one." for n in range(120))
     model.script = [answer(huge)]
@@ -573,7 +563,6 @@ async def test_a_reply_past_the_limit_is_cut_as_a_posted_one_is(model: FakeModel
     assert shown == safe_markdown(huge) and len(shown) == MAX_REPLY and shown.endswith(ELLIPSIS)
 
 
-@pytest.mark.flag("assistant", on=True)
 @pytest.mark.parametrize("error", ["ratelimited", "channel_not_found", "internal_error"])
 async def test_a_refused_start_posts_the_reply_as_before(model: FakeModel, slack: Slack, error: str) -> None:
     slack.fake.fail("chat.startStream", Failure(error))
@@ -583,7 +572,6 @@ async def test_a_refused_start_posts_the_reply_as_before(model: FakeModel, slack
     assert [p["text"] for p in posts(slack)] == [safe_reply(LONG)]
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_refused_append_posts_only_what_wasnt_shown(model: FakeModel, slack: Slack) -> None:
     slack.fake.fail("chat.appendStream", Failure("msg_too_long"))
     model.script = [answer(LONG)]
@@ -597,7 +585,6 @@ async def test_a_refused_append_posts_only_what_wasnt_shown(model: FakeModel, sl
     assert slack.fake.of("chat.stopStream")[0].args.get("markdown_text") is None
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_refused_stop_posts_only_what_wasnt_shown(model: FakeModel, slack: Slack) -> None:
     slack.fake.fail("chat.stopStream", Failure("message_not_in_streaming_state"))
     model.script = [answer(LONG)]
@@ -609,7 +596,6 @@ async def test_a_refused_stop_posts_only_what_wasnt_shown(model: FakeModel, slac
     assert_slack_safe(posted["text"])
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_failure_in_converse_after_streaming_ends_the_stream_with_the_failed_line(
     slack: Slack, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -626,7 +612,6 @@ async def test_a_failure_in_converse_after_streaming_ends_the_stream_with_the_fa
     assert posts(slack) == []
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_cancelled_answer_mid_stream_stops_cleanly(slack: Slack) -> None:
     held = asyncio.Event()
 
@@ -651,7 +636,6 @@ async def test_a_cancelled_answer_mid_stream_stops_cleanly(slack: Slack) -> None
     assert posts(slack) == []
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_busy_member_still_gets_the_notice_while_a_reply_streams(model: FakeModel, slack: Slack) -> None:
     held = asyncio.Event()
 
@@ -679,10 +663,7 @@ async def test_a_busy_member_still_gets_the_notice_while_a_reply_streams(model: 
     assert streams(slack) == [safe_markdown(LONG)]
 
 
-@pytest.mark.flag("assistant", on=True)
-async def test_the_web_never_listens_to_the_models_text(
-    settings: Settings, house: House, model: FakeModel, helper: Assistant
-) -> None:
+async def test_the_web_never_listens_to_the_models_text(house: House, model: FakeModel, helper: Assistant) -> None:
     """``converse`` without a stream calls the client exactly as before: no ``events``."""
     seen: list[object] = []
 
@@ -840,7 +821,6 @@ async def test_a_call_that_streams_nothing_after_a_tool_round_leaves_the_reply_t
     assert list(api.messages.values()) == [safe_markdown(FIRST_CALL)]
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_hostile_display_name_streams_restored_and_defanged(
     house: House, model: FakeModel, slack: Slack
 ) -> None:
@@ -886,7 +866,6 @@ async def test_a_slack_call_that_hangs_is_cut_off_and_the_reply_posted(monkeypat
     assert await asyncio.wait_for(stream.finish(SECOND_CALL), 2) == SECOND_CALL  # well before the drain's bound
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_cancelled_answer_cancels_the_streams_worker(slack: Slack, monkeypatch: pytest.MonkeyPatch) -> None:
     made: list[slack_assistant.SlackStream] = []
     real = slack_assistant.SlackStream
@@ -923,7 +902,6 @@ async def test_a_cancelled_answer_cancels_the_streams_worker(slack: Slack, monke
     assert worker.cancelled()  # no task left waiting on Slack
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_streamed_message_with_no_reply_is_stopped(slack: Slack, monkeypatch: pytest.MonkeyPatch) -> None:
     async def nothing(*args: Any, stream: Any = None, **kwargs: Any) -> None:
         stream.call_started(0)
@@ -1001,7 +979,6 @@ async def test_a_chunk_for_the_wrong_message_is_refused_and_the_reply_posted(
     assert "slack assistant stream broke" in caplog.text
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_reply_that_breaks_after_streaming_still_stops_the_stream(
     slack: Slack, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:

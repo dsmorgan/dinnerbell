@@ -144,7 +144,6 @@ async def nothing_happened(slack: Slack, model: FakeModel, house: House) -> None
 # Ignored ------------------------------------------------------------------------------------------
 
 
-@pytest.mark.flag("assistant", on=True)
 @pytest.mark.parametrize("settings_overrides", [{}])
 async def test_without_a_key_nothing_is_built_or_listened_for(
     settings: Settings, house: House, model: FakeModel
@@ -157,11 +156,7 @@ async def test_without_a_key_nothing_is_built_or_listened_for(
     await nothing_happened(slack, model, house)
 
 
-@pytest.mark.flag("assistant", on=False)
-async def test_with_the_flag_off_dms_and_mentions_are_ignored(
-    settings: Settings, house: House, model: FakeModel, slack: Slack
-) -> None:
-    assert settings.anthropic_api_key is not None
+async def test_with_the_switch_off_dms_and_mentions_are_ignored(house: House, model: FakeModel, slack: Slack) -> None:
     await slack.dm("Sam", "What Thai places do we have?")
     await slack.mention("Sam", f"<@{BOT_USER}> what's for dinner?")
     await slack.open_home("Sam")
@@ -169,18 +164,6 @@ async def test_with_the_flag_off_dms_and_mentions_are_ignored(
     assert "Message Dinnerbell" not in str(slack.last_home("Sam"))
 
 
-@pytest.mark.flag("assistant", on=True)
-async def test_with_the_switch_off_dms_and_mentions_are_ignored(
-    settings: Settings, house: House, model: FakeModel, slack: Slack
-) -> None:
-    await slack.dm("Sam", "What Thai places do we have?")
-    await slack.mention("Sam", f"<@{BOT_USER}> what's for dinner?")
-    await slack.open_home("Sam")
-    await nothing_happened(slack, model, house)
-    assert "Message Dinnerbell" not in str(slack.last_home("Sam"))
-
-
-@pytest.mark.flag("assistant", on=True)
 @pytest.mark.parametrize(
     "event",
     [
@@ -204,7 +187,7 @@ async def test_with_the_switch_off_dms_and_mentions_are_ignored(
     ],
 )
 async def test_dms_dinnerbell_never_answers(
-    settings: Settings, house: House, model: FakeModel, helper: Assistant, slack: Slack, event: dict[str, Any]
+    house: House, model: FakeModel, helper: Assistant, slack: Slack, event: dict[str, Any]
 ) -> None:
     await switch_on(house, helper)
     event = dict(event)
@@ -225,9 +208,8 @@ def seen(slack: Slack) -> Any:
     return slack.conn.assistant.seen
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_dm_of_only_the_mention_is_taken_but_sends_nothing(
-    settings: Settings, house: House, model: FakeModel, helper: Assistant, slack: Slack
+    house: House, model: FakeModel, helper: Assistant, slack: Slack
 ) -> None:
     await switch_on(house, helper)
     await slack.dm("Sam", f"<@{BOT_USER}>  ")
@@ -235,7 +217,6 @@ async def test_a_dm_of_only_the_mention_is_taken_but_sends_nothing(
     assert len(seen(slack)) == 1
 
 
-@pytest.mark.flag("assistant", on=True)
 @pytest.mark.parametrize(
     "event",
     [
@@ -246,7 +227,7 @@ async def test_a_dm_of_only_the_mention_is_taken_but_sends_nothing(
     ],
 )
 async def test_a_dm_without_text_gets_the_text_only_line_and_sends_nothing(
-    settings: Settings, house: House, model: FakeModel, helper: Assistant, slack: Slack, event: dict[str, Any]
+    house: House, model: FakeModel, helper: Assistant, slack: Slack, event: dict[str, Any]
 ) -> None:
     await switch_on(house, helper)
     payload = message_event("U02SAM", "", channel=SAM_DM)
@@ -259,10 +240,7 @@ async def test_a_dm_without_text_gets_the_text_only_line_and_sends_nothing(
     assert model.requests == [] and await conversations(house) == []
 
 
-@pytest.mark.flag("assistant", on=True)
-async def test_a_guests_file_gets_nothing(
-    settings: Settings, house: House, model: FakeModel, helper: Assistant, slack: Slack
-) -> None:
+async def test_a_guests_file_gets_nothing(house: House, model: FakeModel, helper: Assistant, slack: Slack) -> None:
     await switch_on(house, helper)
     async with house.sessionmaker() as db:
         await MemberRepository(db).update(
@@ -273,7 +251,6 @@ async def test_a_guests_file_gets_nothing(
     await nothing_happened(slack, model, house)
 
 
-@pytest.mark.flag("assistant", on=True)
 @pytest.mark.parametrize(
     "options",
     [
@@ -289,7 +266,7 @@ async def test_a_guests_file_gets_nothing(
     ],
 )
 async def test_mentions_dinnerbell_never_answers(
-    settings: Settings, house: House, model: FakeModel, helper: Assistant, slack: Slack, options: dict[str, Any]
+    house: House, model: FakeModel, helper: Assistant, slack: Slack, options: dict[str, Any]
 ) -> None:
     await switch_on(house, helper)
     options = dict(options)
@@ -310,10 +287,9 @@ async def test_mentions_dinnerbell_never_answers(
     assert len(seen(slack)) == 0
 
 
-@pytest.mark.flag("assistant", on=True)
 @pytest.mark.parametrize("who", ["guest", "inactive", "unlinked", "stranger"])
 async def test_only_active_members_get_an_answer(
-    settings: Settings, house: House, model: FakeModel, helper: Assistant, slack: Slack, who: str
+    house: House, model: FakeModel, helper: Assistant, slack: Slack, who: str
 ) -> None:
     await switch_on(house, helper)
     async with house.sessionmaker() as db:
@@ -337,9 +313,8 @@ async def test_only_active_members_get_an_answer(
 # Conversation keys -------------------------------------------------------------------------------
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_top_level_dm_starts_a_private_conversation_answered_in_its_thread(
-    settings: Settings, house: House, model: FakeModel, helper: Assistant, slack: Slack
+    house: House, model: FakeModel, helper: Assistant, slack: Slack
 ) -> None:
     await switch_on(house, helper)
     model.script = [answer("Siam Garden is Thai."), answer("It does pickup.")]
@@ -361,9 +336,8 @@ async def test_a_top_level_dm_starts_a_private_conversation_answered_in_its_thre
     assert len(await conversations(house)) == 2
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_top_level_mention_starts_a_shared_conversation_rooted_at_it(
-    settings: Settings, house: House, model: FakeModel, helper: Assistant, slack: Slack
+    house: House, model: FakeModel, helper: Assistant, slack: Slack
 ) -> None:
     await switch_on(house, helper)
     root = next_ts()
@@ -375,9 +349,8 @@ async def test_a_top_level_mention_starts_a_shared_conversation_rooted_at_it(
     assert user_texts(model) == ["what Thai places do we have?"]  # the mention is stripped
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_mention_in_a_thread_joins_that_threads_conversation_as_its_author(
-    settings: Settings, house: House, model: FakeModel, helper: Assistant, slack: Slack
+    house: House, model: FakeModel, helper: Assistant, slack: Slack
 ) -> None:
     await switch_on(house, helper)
     root = next_ts()
@@ -396,9 +369,7 @@ async def test_a_mention_in_a_thread_joins_that_threads_conversation_as_its_auth
     assert user_texts(model) == ["any Thai places?", "Something cheaper"]
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_mention_under_a_call_post_roots_at_the_post(
-    settings: Settings,
     house: House,
     model: FakeModel,
     helper: Assistant,
@@ -446,9 +417,8 @@ def fake_drafts(monkeypatch: pytest.MonkeyPatch, *titles: str) -> None:
     monkeypatch.setattr(slack_assistant, "converse", drafting)
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_reply_with_drafts_in_the_channel_goes_only_to_its_author(
-    settings: Settings, house: House, helper: Assistant, slack: Slack, monkeypatch: pytest.MonkeyPatch
+    house: House, helper: Assistant, slack: Slack, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     await switch_on(house, helper)
     fake_drafts(monkeypatch, "Siam Garden", "evil.example")
@@ -466,9 +436,8 @@ async def test_a_reply_with_drafts_in_the_channel_goes_only_to_its_author(
     assert all(card["blocks"] for card in cards)
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_an_ephemeral_reply_slack_refuses_with_blocks_goes_as_text(
-    settings: Settings, house: House, helper: Assistant, slack: Slack, monkeypatch: pytest.MonkeyPatch
+    house: House, helper: Assistant, slack: Slack, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """#284: should Slack refuse a markdown block in an ephemeral, the reply still goes, as its
     mrkdwn text, with the mention-only note."""
@@ -482,9 +451,8 @@ async def test_an_ephemeral_reply_slack_refuses_with_blocks_goes_as_text(
     assert card["text"] == "Siam Garden"
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_reply_with_drafts_in_a_dm_is_a_normal_reply(
-    settings: Settings, house: House, helper: Assistant, slack: Slack, monkeypatch: pytest.MonkeyPatch
+    house: House, helper: Assistant, slack: Slack, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     await switch_on(house, helper)
     fake_drafts(monkeypatch, "Siam Garden")
@@ -530,9 +498,8 @@ def _call_post_ts(slack: Slack) -> str:
 # Replies -----------------------------------------------------------------------------------------
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_model_text_cant_ping_mention_or_link(
-    settings: Settings, house: House, model: FakeModel, helper: Assistant, slack: Slack
+    house: House, model: FakeModel, helper: Assistant, slack: Slack
 ) -> None:
     await switch_on(house, helper)
     loud = "<!channel> <!here> @here @Everyone <@U02SAM> <#C0DINNER> <https://evil.example|Menu> & more"
@@ -793,9 +760,8 @@ def test_safe_reply_strips_format_characters_before_breaking_pings() -> None:
     assert reply == f"evil[.]example @{WORD_JOINER}here"
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_no_reply_carries_a_link_dm_or_channel(
-    settings: Settings, house: House, model: FakeModel, helper: Assistant, slack: Slack
+    house: House, model: FakeModel, helper: Assistant, slack: Slack
 ) -> None:
     await switch_on(house, helper)
     text = " ".join(raw for raw, _ in LINKS)
@@ -808,9 +774,8 @@ async def test_no_reply_carries_a_link_dm_or_channel(
         assert "http" not in reply["text"].lower().replace("hxxp", "")
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_url_the_member_typed_is_defanged_when_the_model_quotes_it(
-    settings: Settings, house: House, model: FakeModel, helper: Assistant, slack: Slack
+    house: House, model: FakeModel, helper: Assistant, slack: Slack
 ) -> None:
     await switch_on(house, helper)
     model.script = [answer('You said "see https://phish.example/pay".')]
@@ -820,9 +785,8 @@ async def test_a_url_the_member_typed_is_defanged_when_the_model_quotes_it(
     assert "hxxps[:]//phish[.]example/pay" in reply["text"] and "https://" not in reply["text"]
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_restored_name_that_looks_like_a_domain_is_defanged(
-    settings: Settings, house: House, model: FakeModel, helper: Assistant, slack: Slack
+    house: House, model: FakeModel, helper: Assistant, slack: Slack
 ) -> None:
     await switch_on(house, helper)
     async with house.sessionmaker() as db:
@@ -835,9 +799,8 @@ async def test_a_restored_name_that_looks_like_a_domain_is_defanged(
     assert reply["text"] == "sam[.]example, you're in."
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_long_reply_is_cut_to_slacks_limit(
-    settings: Settings, house: House, model: FakeModel, helper: Assistant, slack: Slack
+    house: House, model: FakeModel, helper: Assistant, slack: Slack
 ) -> None:
     await switch_on(house, helper)
     model.script = [answer("Tacos & " * 1_000)]
@@ -848,9 +811,8 @@ async def test_a_long_reply_is_cut_to_slacks_limit(
     assert "…" in reply["text"]
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_other_peoples_mentions_never_leave_the_house(
-    settings: Settings, house: House, model: FakeModel, helper: Assistant, slack: Slack
+    house: House, model: FakeModel, helper: Assistant, slack: Slack
 ) -> None:
     """A mentioned member goes out as the conversation's pseudonym and comes back by name in the
     reply; anyone who isn't an active member, a group, or a channel goes out as a placeholder."""
@@ -903,9 +865,8 @@ async def answering(slack: Slack) -> None:
     await _until(lambda: bool(slack.conn.assistant and slack.conn.assistant.answering))
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_member_has_one_answer_in_flight_across_conversations(
-    settings: Settings, house: House, helper: Assistant, slack: Slack
+    house: House, helper: Assistant, slack: Slack
 ) -> None:
     await switch_on(house, helper)
     slow = slow_model(slack)
@@ -930,9 +891,8 @@ async def test_a_member_has_one_answer_in_flight_across_conversations(
     assert posts(slack)[-1]["text"] == "OK"
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_in_the_channel_the_busy_notice_is_an_ephemeral_in_the_thread(
-    settings: Settings, house: House, helper: Assistant, slack: Slack
+    house: House, helper: Assistant, slack: Slack
 ) -> None:
     await switch_on(house, helper)
     slow = slow_model(slack)
@@ -956,10 +916,7 @@ async def test_in_the_channel_the_busy_notice_is_an_ephemeral_in_the_thread(
     await slack.conn.interactions.settle()
 
 
-@pytest.mark.flag("assistant", on=True)
-async def test_a_refused_busy_notice_is_logged(
-    settings: Settings, house: House, helper: Assistant, slack: Slack, caplog: Any
-) -> None:
+async def test_a_refused_busy_notice_is_logged(house: House, helper: Assistant, slack: Slack, caplog: Any) -> None:
     await switch_on(house, helper)
     slow = slow_model(slack)
     slack.fake.fail("chat.postEphemeral", Failure("not_in_channel"))
@@ -973,9 +930,8 @@ async def test_a_refused_busy_notice_is_logged(
     await slack.conn.interactions.settle()
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_anything_that_breaks_outside_converse_is_logged(
-    settings: Settings, house: House, helper: Assistant, slack: Slack, monkeypatch: pytest.MonkeyPatch, caplog: Any
+    house: House, helper: Assistant, slack: Slack, monkeypatch: pytest.MonkeyPatch, caplog: Any
 ) -> None:
     await switch_on(house, helper)
 
@@ -996,9 +952,8 @@ async def _until(check: Any) -> None:
         await asyncio.sleep(0)
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_message_delivered_twice_is_answered_once(
-    settings: Settings, house: House, model: FakeModel, helper: Assistant, slack: Slack
+    house: House, model: FakeModel, helper: Assistant, slack: Slack
 ) -> None:
     await switch_on(house, helper)
     payload = message_event("U02SAM", "What Thai places do we have?", channel=SAM_DM)
@@ -1009,9 +964,8 @@ async def test_a_message_delivered_twice_is_answered_once(
     assert len(model.requests) == 1 and len(posts(slack)) == 1
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_after_a_relink_the_new_member_cant_continue_the_old_members_dm(
-    settings: Settings, house: House, model: FakeModel, helper: Assistant, slack: Slack, caplog: Any
+    house: House, model: FakeModel, helper: Assistant, slack: Slack, caplog: Any
 ) -> None:
     await switch_on(house, helper)
     root = next_ts()
@@ -1032,9 +986,7 @@ async def nothing_happened_since(slack: Slack, model: FakeModel) -> None:
     assert model.requests == [] and posts(slack) == [] and slack.fake.of("chat.postEphemeral") == []
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_failure_in_converse_says_so(
-    settings: Settings,
     house: House,
     model: FakeModel,
     helper: Assistant,
@@ -1052,9 +1004,8 @@ async def test_a_failure_in_converse_says_so(
     assert reply["text"] == FAILED
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_refused_reply_is_logged_and_the_next_one_still_says_mention_only(
-    settings: Settings, house: House, model: FakeModel, helper: Assistant, slack: Slack, caplog: Any
+    house: House, model: FakeModel, helper: Assistant, slack: Slack, caplog: Any
 ) -> None:
     await switch_on(house, helper)
     slack.fake.fail("chat.postMessage", Failure("not_in_channel"))
@@ -1065,9 +1016,8 @@ async def test_a_refused_reply_is_logged_and_the_next_one_still_says_mention_onl
     assert posts(slack)[-1]["text"].endswith(mention_only_line(BOT_USER))
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_at_zero_conversation_hours_slack_replies_but_keeps_nothing(
-    settings: Settings, house: House, model: FakeModel, helper: Assistant, slack: Slack
+    house: House, model: FakeModel, helper: Assistant, slack: Slack
 ) -> None:
     await switch_on(house, helper, conversation_hours=0)
     await slack.dm("Sam", "Hi")
@@ -1077,9 +1027,8 @@ async def test_at_zero_conversation_hours_slack_replies_but_keeps_nothing(
 # App Home ----------------------------------------------------------------------------------------
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_app_home_says_members_can_message_or_mention_dinnerbell(
-    settings: Settings, house: House, helper: Assistant, slack: Slack
+    house: House, helper: Assistant, slack: Slack
 ) -> None:
     await switch_on(house, helper)
     await slack.open_home("Sam")
@@ -1204,9 +1153,8 @@ def test_the_app_takes_a_model_client_for_tests(tmp_path: Path, clock: FakeClock
         assert app.state.assistant.client is fake
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_channel_id_too_long_for_a_key_is_ignored(
-    settings: Settings, house: House, model: FakeModel, helper: Assistant, slack: Slack
+    house: House, model: FakeModel, helper: Assistant, slack: Slack
 ) -> None:
     await switch_on(house, helper)
     await slack.dm("Sam", "Hi", channel="D" + "2" * 24)
@@ -1316,9 +1264,8 @@ def test_a_failed_bootstrap_closes_the_database(
         pass  # the leak check fails the test if the database stays open
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_cancelling_an_answer_mid_converse_frees_the_member(
-    settings: Settings, house: House, helper: Assistant, slack: Slack
+    house: House, helper: Assistant, slack: Slack
 ) -> None:
     await switch_on(house, helper)
     slow = slow_model(slack)

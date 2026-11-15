@@ -60,7 +60,7 @@ pytestmark = pytest.mark.anyio
 LINK = "https://menu.example.com/basil-house/secret-menu-path?table=7"
 PATH = "secret-menu-path"
 PAGE = "Basil House. Thai kitchen. Open for lunch and dinner. Pad thai, green curry. Pickup or delivery."
-CONFIGURED = AssistantConfig(key_set=True, flag_on=True)
+CONFIGURED = AssistantConfig(key_set=True)
 
 DRAFTED = """version: 1
 tags:
@@ -255,7 +255,6 @@ def test_a_lone_entry_gets_the_link_given_and_never_an_order_link() -> None:
     assert from_link(parse_catalog("version: 1\n")).parsed.tags is None
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_draft_that_cant_be_checked_again_is_a_fixed_tool_error_and_isnt_logged(
     house: House, helper: Assistant, model: FakeModel, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -347,7 +346,6 @@ def test_only_text_blocks_count_they_join_with_nothing_and_a_fence_comes_off() -
 # Through converse ------------------------------------------------------------------------------
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_menu_page_becomes_a_catalog_draft_and_matches_are_dropped(
     house: House, helper: Assistant, model: FakeModel, fetch: FakeFetch
 ) -> None:
@@ -399,7 +397,6 @@ async def test_a_menu_page_becomes_a_catalog_draft_and_matches_are_dropped(
     assert usage_rows[1].cost_micros == cost_micros(drafting)
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_fetch_error_comes_back_as_its_member_safe_message(
     house: House, helper: Assistant, model: FakeModel, fetch: FakeFetch
 ) -> None:
@@ -417,7 +414,6 @@ async def test_a_fetch_error_comes_back_as_its_member_safe_message(
     assert await rows(house, AssistantDraftRow) == []
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_the_real_fetch_refuses_a_plain_http_link_before_any_connection(
     settings: Settings, house: House, model: FakeModel
 ) -> None:
@@ -450,7 +446,6 @@ restaurants:
 """
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_an_injected_page_stores_only_catalog_data_and_runs_no_tool(
     house: House, helper: Assistant, model: FakeModel, fetch: FakeFetch, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -494,7 +489,6 @@ restaurants:
     assert PATH not in logged and "Ignore previous" not in logged and "Basil House menu" not in logged
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_an_answer_that_isnt_a_catalog_file_is_a_tool_error_never_shown(
     house: House, helper: Assistant, model: FakeModel, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -510,7 +504,6 @@ async def test_an_answer_that_isnt_a_catalog_file_is_a_tool_error_never_shown(
     assert "kim@example.com" not in logged and PATH not in logged
 
 
-@pytest.mark.flag("assistant", on=True)
 @pytest.mark.parametrize(
     ("drafting", "error"),
     [
@@ -533,7 +526,6 @@ async def test_a_drafting_call_that_cant_be_used_is_a_tool_error(
     assert await rows(house, AssistantDraftRow) == []
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_page_with_no_text_makes_no_drafting_call(
     house: House, helper: Assistant, model: FakeModel, fetch: FakeFetch
 ) -> None:
@@ -547,7 +539,6 @@ async def test_a_page_with_no_text_makes_no_drafting_call(
 # Cost ------------------------------------------------------------------------------------------
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_at_the_cap_it_refuses_before_fetching(
     house: House, helper: Assistant, model: FakeModel, fetch: FakeFetch
 ) -> None:
@@ -563,7 +554,6 @@ async def test_at_the_cap_it_refuses_before_fetching(
     assert fetch.asked == [] and len(spends.requests) == 1
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_at_the_cap_after_the_fetch_it_refuses_before_calling(
     house: House, helper: Assistant, model: FakeModel, fetch: FakeFetch
 ) -> None:
@@ -575,7 +565,6 @@ async def test_at_the_cap_after_the_fetch_it_refuses_before_calling(
     assert [r.state for r in await rows(house, AssistantUsageRow)] == ["settled", "settled"]  # nothing reserved
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_long_page_is_cut_to_the_cap_and_the_model_is_told(
     house: House, helper: Assistant, model: FakeModel, fetch: FakeFetch
 ) -> None:
@@ -596,7 +585,6 @@ async def test_a_long_page_is_cut_to_the_cap_and_the_model_is_told(
     assert basil.entry.url == LINK  # a lone entry gets the page's link
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_page_the_fetch_cut_says_so_too(
     house: House, helper: Assistant, model: FakeModel, fetch: FakeFetch
 ) -> None:
@@ -611,7 +599,6 @@ async def test_a_page_the_fetch_cut_says_so_too(
     assert "read only the start of the page" in result["content"]
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_message_reads_at_most_two_links(
     house: House, helper: Assistant, model: FakeModel, fetch: FakeFetch
 ) -> None:
@@ -636,7 +623,6 @@ async def test_a_message_reads_at_most_two_links(
     assert fetch.asked == [LINK, other]
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_drafting_call_that_costs_more_than_its_reservation_ends_the_message(
     house: House, helper: Assistant, model: FakeModel, fetch: FakeFetch
 ) -> None:
@@ -651,7 +637,6 @@ async def test_a_drafting_call_that_costs_more_than_its_reservation_ends_the_mes
     assert fetch.asked == [LINK]  # the second link in the turn isn't read
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_the_switch_turned_off_meanwhile_stops_the_drafting_call(
     house: House, helper: Assistant, fetch: FakeFetch
 ) -> None:
@@ -668,7 +653,6 @@ async def test_the_switch_turned_off_meanwhile_stops_the_drafting_call(
     assert reply == Reply(TURNED_OFF) and fetch.asked == [] and len(turns_off.requests) == 1
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_page_with_more_entries_than_the_limit_keeps_the_first(
     house: House, helper: Assistant, model: FakeModel
 ) -> None:
@@ -715,7 +699,6 @@ def test_the_tool_offers_a_kind_and_the_system_prompt_says_pages_are_data() -> N
 ONE = "version: 1\nrestaurants:\n  - {name: Basil House, cuisine: [Thai]}\n"
 
 
-@pytest.mark.flag("assistant", on=True)
 @pytest.mark.parametrize(
     ("given", "final", "planted", "stored"),
     [
@@ -760,7 +743,6 @@ async def test_a_draft_keeps_no_link_the_page_gave(
     assert "pay.example.net" not in row.payload["content"] and "evil" not in row.payload["content"]
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_links_that_fail_to_fetch_count_toward_the_limit_too(
     house: House, helper: Assistant, model: FakeModel, fetch: FakeFetch
 ) -> None:
@@ -775,7 +757,6 @@ async def test_links_that_fail_to_fetch_count_toward_the_limit_too(
     assert fetch.asked == urls[:MAX_LINK_FETCHES] and len(model.requests) == 2
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_before_the_fetch_the_cap_is_checked_for_a_full_page(
     house: House, helper: Assistant, fetch: FakeFetch
 ) -> None:
@@ -804,7 +785,6 @@ async def test_before_the_fetch_the_cap_is_checked_for_a_full_page(
     assert fetch.asked == []
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_cap_below_one_drafting_call_says_so_instead_of_next_month(
     house: House, helper: Assistant, model: FakeModel, fetch: FakeFetch, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -824,7 +804,6 @@ async def test_a_cap_below_one_drafting_call_says_so_instead_of_next_month(
     assert fetch.asked == [] and model.requests[0]["model"] == "claude-opus-5-5"
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_fallback_that_continues_mid_line_still_parses(
     house: House, helper: Assistant, model: FakeModel
 ) -> None:
@@ -846,7 +825,6 @@ async def test_a_fallback_that_continues_mid_line_still_parses(
     assert row.payload["added"] == ["Basil House"]
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_with_the_draft_limit_reached_nothing_is_fetched_or_called(
     house: House, helper: Assistant, model: FakeModel, fetch: FakeFetch
 ) -> None:
@@ -869,7 +847,6 @@ async def test_with_the_draft_limit_reached_nothing_is_fetched_or_called(
     assert fetch.asked == [] and len(model.requests) == 2
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_confirmed_link_draft_is_kept_for_its_import_link(
     house: House, helper: Assistant, model: FakeModel
 ) -> None:

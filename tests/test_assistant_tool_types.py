@@ -77,7 +77,7 @@ async def house(database: Database, clock: FakeClock, migrated: Settings) -> Asy
     async with house.sessionmaker() as db:
         await admin.update_assistant(
             db,
-            AssistantConfig(key_set=True, flag_on=True),
+            AssistantConfig(key_set=True),
             house["Alex"],
             AssistantSettings(enabled=True),
             now=house.clock(),
