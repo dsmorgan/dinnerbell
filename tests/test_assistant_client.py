@@ -31,7 +31,11 @@ pytestmark = pytest.mark.anyio
 
 KEY = "sk-ant-test-not-a-real-key"
 REQUEST = build_request(
-    "claude-sonnet-5-5", TOOLS, [{"role": "user", "content": "From Member 1: hi"}], keeps_history=True
+    "claude-sonnet-5-5",
+    TOOLS,
+    [{"role": "user", "content": "From Member 1: hi"}],
+    keeps_history=True,
+    roster=(("Member 1", "Alex"),),
 )
 
 

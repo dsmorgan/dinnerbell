@@ -86,8 +86,8 @@ NO_ACTIVE_ITEM = "The catalog has no active item by that name. Look it up with l
 TWO_ITEMS = "A restaurant and a home meal share that name. Send kind too: restaurant or home."
 LABEL_ONLY = "Name each person by a label such as Member 2."
 NOT_SOMEONE = (
-    "{label} can't be named there. Name people only by labels the conversation gives, such as the member's own "
-    "or a Slack mention's, and only active members of the household."
+    "{label} can't be named there. Name people only by labels from the roster or the conversation, such as the "
+    "member's own or a Slack mention's, and only active members of the household."
 )
 """The same for a label nobody has, a guest's, and a deactivated member's: it names nobody."""
 NOT_A_COOK = "{label} isn't one of its cooks."

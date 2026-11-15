@@ -8,8 +8,8 @@ services' own checks decide who may: an admin who isn't the coordinator is refus
 The household is the usual one (``tests.support.calls.furnish``): Alex (the admin), Sam, Kim, and
 Lee (whose usual settings offer to order). Alex, Sam, Kim, and Lee answer In for dinner, Sam
 offers to pick up, and Kim coordinates. Ranking proposes Siam Garden and Taqueria. In Kim's
-conversation, Kim is Member 1, and the lookup labels Alex, Sam, and Lee, in that order, Member 2
-to Member 4. The assistant is on.
+conversation, Kim is Member 1, and the roster (#277) labels Alex, Sam, and Lee, in that order,
+Member 2 to Member 4. The assistant is on.
 """
 
 from __future__ import annotations
@@ -29,8 +29,9 @@ from dinnerbell.db.assistant import AssistantRepository
 from dinnerbell.db.catalog import CatalogRepository, ItemValues
 from dinnerbell.db.events import ProposalRepository
 from dinnerbell.db.models import AssistantDraftRow
+from dinnerbell.db.repositories import MemberRepository
 from dinnerbell.domain import events as rules
-from dinnerbell.domain.assistant import AssistantSettings, Pseudonyms, slack_key
+from dinnerbell.domain.assistant import AssistantSettings, Pseudonyms, slack_key, web_key
 from dinnerbell.domain.assistant_coordinating import FIRST_VOLUNTEER, ROLES_TOLD
 from dinnerbell.domain.assistant_drafts import COORDINATING
 from dinnerbell.domain.catalog import Mode
@@ -305,7 +306,58 @@ async def test_lock_the_taco_place_member_2_picks_it_up_in_a_dm_drafts_then_conf
     model.requests.clear()
     async with house.sessionmaker() as db:
         await converse(db, helper, kim, DM, private=True, text="thanks")
-    assert_no_names(json.dumps(model.requests))
+    assert_no_names(model.sent)  # names go only in the roster (#277), which holds the same labels
+    assert model.rosters == [[("Member 1", "Kim"), ("Member 2", "Sam"), ("Member 3", "Alex"), ("Member 4", "Lee")]]
+
+
+@pytest.mark.flag("assistant", on=True)
+async def test_a_typed_name_on_the_web_drafts_the_card_a_mention_in_a_dm_does(
+    house: House, helper: Assistant, model: FakeModel
+) -> None:
+    """#277: Lee goes by Bartholomew. On the web, Kim types "hand off dinner to Bart": there's no
+    mention, but the roster pairs each label with a display name, so the model can match Bart to
+    Bartholomew's label. In a DM, Kim mentions him instead. Both draft the same card, which names
+    him; the model reads only his label, which differs between the two conversations."""
+    event_id = await decided(house)
+    lee = house["Lee"]
+    async with house.sessionmaker() as db:
+        await MemberRepository(db).update(house.household.id, lee.id, house.clock(), display_name="Bartholomew")
+        await db.commit()
+    kim = house["Kim"]
+    model.script = [
+        tool_call("draft_hand_off", DINNER | {"to": "Member 4"}),  # Kim, then Alex, Sam, and Lee by ID
+        answer("Confirm, and Member 4 coordinates tonight."),
+    ]
+    async with house.sessionmaker() as db:
+        web = await converse(db, helper, kim, web_key(kim.id), private=True, text="Hand off dinner to Bart")
+    assert model.rosters[0] == [
+        ("Member 1", "Kim"),
+        ("Member 2", "Alex"),
+        ("Member 3", "Sam"),
+        ("Member 4", "Bartholomew"),
+    ]
+    assert "Bart" not in model.sent.replace("Hand off dinner to Bart", "")  # the roster aside, his name stays home
+
+    model.requests.clear()
+    model.script = [
+        tool_call("draft_hand_off", DINNER | {"to": "Member 2"}),  # the mention labels him first
+        answer("Confirm, and Member 2 coordinates tonight."),
+    ]
+
+    def mentions(label: Any) -> str:
+        return f"Hand off dinner to {label(lee.id)}"
+
+    async with house.sessionmaker() as db:
+        dm = await converse(db, helper, kim, DM, private=True, text=mentions)
+    assert model.rosters[0][1] == ("Member 2", "Bartholomew")
+    assert web is not None and dm is not None
+    assert web.text == dm.text == "Confirm, and Bartholomew coordinates tonight."
+    [on_web], [in_dm] = web.drafts, dm.drafts
+    assert (on_web.kind, on_web.title, on_web.confirm_lines) == (in_dm.kind, in_dm.title, in_dm.confirm_lines)
+    assert on_web.title == "Hand off coordinating today's dinner to Bartholomew"
+    assert await confirm(house, "Kim", on_web.id) == ActionConfirmed(
+        event_id, "Confirmed. Bartholomew coordinates today's dinner now."
+    )
 
 
 @pytest.mark.flag("assistant", on=True)

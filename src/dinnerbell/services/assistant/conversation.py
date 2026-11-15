@@ -15,9 +15,13 @@ the time is up, the message makes no further calls and runs no further tools, an
 is kept. Only the database work around them is outside the deadline: reading the conversation
 before the first call, settling a reservation, and the reply's few writes after the last.
 
-What goes out is the system prompt, the conversation in pseudonym form ("Member 1"), and what
-tools return. Names come back only in the reply text the member sees. A menu link's drafting
-call (``menu_links``) is reserved and settled the same way, and sends only the page's text.
+What goes out is the system prompt, the roster, the conversation in pseudonym form ("Member 1"),
+and what tools return. The roster (#277) is the one place members' names go: each active member's
+label and display name, rebuilt for every message from the household's members, so the model can
+match a name the member typed to a label. Guests and deactivated members are never on it. Tools
+still take labels, the stored conversation keeps them, and names come back in the reply text the
+member sees. A menu link's drafting call (``menu_links``) is reserved and settled the same way,
+and sends only the page's text.
 """
 
 from __future__ import annotations
@@ -58,7 +62,7 @@ from dinnerbell.services.assistant.client import ModelCallFailed, ModelClient, M
 from dinnerbell.services.assistant.drafts import TOO_MANY as TOO_MANY_DRAFTS
 from dinnerbell.services.assistant.drafts import DraftView
 from dinnerbell.services.assistant.menu_links import CAP_TOO_LOW, MAX_LINK_FETCHES, TOO_MANY_LINKS, PageFetcher
-from dinnerbell.services.assistant.prompt import system_prompt
+from dinnerbell.services.assistant.prompt import roster_text, system_prompt
 from dinnerbell.services.assistant.runtime import AssistantConfig, available
 from dinnerbell.services.assistant.streaming import CallText, ReplyStream
 from dinnerbell.services.assistant.tools import Tool, ToolSession, run_tool, tools_for
@@ -105,7 +109,30 @@ OUT_OF_TIME = "I ran out of time on that one. Try asking for less at once."
 NamingText = Callable[[Callable[[int], str]], str]
 """A message that names members, such as a Slack message's mentions: given the conversation's
 labeler (a member ID to their pseudonym, "Member 2", added to the map if they're new), its text
-with each member named by label. So the meaning survives, and no Slack ID or name is sent."""
+with each member named by label. So the meaning survives, and no Slack ID is sent."""
+
+Roster = Sequence[tuple[str, str]]
+"""Each active member's label in the conversation and display name, in label order (#277)."""
+
+
+def with_roster(pseudonyms: Pseudonyms, members: Sequence[Member]) -> Pseudonyms:
+    """``pseudonyms`` with a label for every active member of ``members`` who has none yet, in
+    member ID order, so the roster can name them all. Anyone labeled already keeps their label."""
+    for member in sorted(members, key=lambda m: m.id):
+        if member.is_member:
+            pseudonyms = pseudonyms.with_member(member.id)
+    return pseudonyms
+
+
+def roster_of(pseudonyms: Pseudonyms, members: Sequence[Member]) -> tuple[tuple[str, str], ...]:
+    """The roster: each active member of ``members`` whom ``pseudonyms`` labels, by label
+    number. Never a guest or a deactivated member, even one the map labels from before."""
+    found = [
+        (number, member.display_name)
+        for member in members
+        if member.is_member and (number := pseudonyms.numbers.get(member.id)) is not None
+    ]
+    return tuple((f"Member {number}", name) for number, name in sorted(found))
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,13 +184,25 @@ def _messages(history: Sequence[Turn], current: Turn) -> list[dict[str, Any]]:
 
 
 def build_request(
-    model: str, tools: Sequence[Tool], messages: Sequence[Mapping[str, Any]], *, keeps_history: bool
+    model: str,
+    tools: Sequence[Tool],
+    messages: Sequence[Mapping[str, Any]],
+    *,
+    keeps_history: bool,
+    roster: Roster,
 ) -> dict[str, Any]:
-    """One request, as the Messages API's keyword arguments: what's measured, reserved, and sent."""
+    """One request, as the Messages API's keyword arguments: what's measured, reserved, and sent.
+    The system prompt is two text blocks: the fixed prompt, then the roster. The roster comes
+    after, so the tools and the fixed prompt are the same bytes in every request, whatever the
+    household, and a cache breakpoint could go between them. With the one top-level breakpoint,
+    the cache serves a message's later calls, whose prefix, roster included, stays the same."""
     request: dict[str, Any] = {
         "model": model,
         "max_tokens": MAX_OUTPUT_TOKENS,
-        "system": system_prompt(keeps_history=keeps_history),
+        "system": [
+            {"type": "text", "text": system_prompt(keeps_history=keeps_history)},
+            {"type": "text", "text": roster_text(roster)},
+        ],
         "messages": list(messages),
         "thinking": {"type": "adaptive"},
         "output_config": {"effort": EFFORT},
@@ -174,17 +213,22 @@ def build_request(
     return with_fallback(request)
 
 
-def least_call_micros(model: str, *, private: bool) -> int:
+def least_call_micros(model: str, *, private: bool, members: Sequence[Member]) -> int:
     """What the smallest message's first call reserves with ``model``: an empty message, no
-    history, and every tool a private conversation, or a channel thread, offers, by ``_call``'s own
-    reservation. A cap below it can't answer any such message (``CAP_BELOW_ONE_CALL``)."""
-    request = build_request(model, tools_for(private), _messages((), Turn("user", "", "Member 1")), keeps_history=True)
+    history, the roster of ``members`` (the household's, as they are now), and every tool a
+    private conversation, or a channel thread, offers, by ``_call``'s own reservation. A cap below
+    it can't answer any such message (``CAP_BELOW_ONE_CALL``). A conversation's roster is never
+    shorter: it has the same names, and labels at least as high."""
+    roster = roster_of(with_roster(Pseudonyms(), members), members)
+    request = build_request(
+        model, tools_for(private), _messages((), Turn("user", "", "Member 1")), keeps_history=True, roster=roster
+    )
     return reservation_micros(model, payload_bytes=request_bytes(request), max_tokens=int(request["max_tokens"]))
 
 
-def least_private_call_micros(model: str) -> int:
+def least_private_call_micros(model: str, members: Sequence[Member]) -> int:
     """``least_call_micros`` for a private message: the larger, since it offers more tools."""
-    return least_call_micros(model, private=True)
+    return least_call_micros(model, private=True, members=members)
 
 
 def request_bytes(request: Mapping[str, Any]) -> int:
@@ -502,13 +546,14 @@ async def _run_loop(
     keeps_history: bool,
     session: ToolSession,
     deadline: datetime,
+    roster: Roster,
+    names: Mapping[int, str],
     stream: ReplyStream | None = None,
-    names: Mapping[int, str] | None = None,
 ) -> tuple[str, bool]:
     """The model and tool loop. Returns the reply text, and whether the model answered (so the
     exchange is worth keeping) rather than Dinnerbell replying for it. Every call stops at
-    ``deadline``. With ``stream``, each call's text also goes there as it's written, with
-    ``names`` put back (``streaming``)."""
+    ``deadline`` and sends ``roster``. With ``stream``, each call's text also goes there as it's
+    written, with ``names`` put back (``streaming``)."""
     tools = tools_for(private)
     written = 0  # output tokens of this message's calls so far
     over = False  # a call billed more attempts than its reservation covered
@@ -517,10 +562,10 @@ async def _run_loop(
     for _ in range(MAX_MODEL_CALLS):
         if over or links.over:
             return FAILED, False  # refuse further calls in this message
-        request = build_request(assistant.config.model, tools, messages, keeps_history=keeps_history)
+        request = build_request(assistant.config.model, tools, messages, keeps_history=keeps_history, roster=roster)
         events = None
         if stream is not None:
-            events = CallText(stream, lambda text: session.pseudonyms.restore_names(text, names or {}))
+            events = CallText(stream, lambda text: session.pseudonyms.restore_names(text, names))
             events.started(len(session.drafts))
         try:
             reply, overran = await _call(
@@ -569,10 +614,6 @@ async def _run_loop(
     return TOO_MANY_STEPS, False
 
 
-async def _names(db: AsyncSession, household_id: int) -> dict[int, str]:
-    return {m.id: m.display_name for m in await MemberRepository(db).list(household_id)}
-
-
 def _theirs(stored: Conversation, member: Member, *, private: bool) -> bool:
     """Whether ``member`` may add to ``stored``: it's as private as the new message, and a
     private one is their own."""
@@ -611,9 +652,13 @@ async def converse(
     a failure, or ``MESSAGE_SECONDS`` passing, a line saying so. The exchange is kept for
     Admin's Conversation hours, in pseudonym form, unless that's 0 or the model didn't answer.
 
+    Every active member of the household gets a label in the conversation's map before the
+    message is read, and each request carries the roster (``roster_of``), so the model can match
+    a name the member typed, such as "Theo", to a member's label (#277).
+
     ``stream``, for Slack, gets the reply's text as the model writes it (``streaming``). The
-    reply and what's kept are the same either way; members' names are read once, before the
-    first call, so the shown text and the reply put back the same ones."""
+    reply and what's kept are the same either way. Members are read once, before the first
+    call, so the roster, the shown text, and the reply put back the same names."""
     deadline = assistant.clock() + timedelta(seconds=MESSAGE_SECONDS)
     if not await available(db, assistant.config, member):
         return None
@@ -636,6 +681,10 @@ async def converse(
         instance_label=assistant.config.instance_label,
     )
     asked = (text if isinstance(text, str) else text(session.label)).strip()
+    # Labels go in the order members first appear: the member answered, then anyone their
+    # message mentions, then every other active member, for the roster.
+    members = await MemberRepository(db).list(household.id)
+    session.pseudonyms = with_roster(session.pseudonyms, members)
     if not asked:
         return None
     if len(asked) > MAX_MESSAGE_CHARS:
@@ -644,7 +693,7 @@ async def converse(
     history = stored.turns if stored else ()
     sent = recent_turns(history, MAX_HISTORY_BYTES - current.size)
     zone = ZoneInfo(household.timezone)
-    names = await _names(db, household.id) if stream is not None else None
+    names = {m.id: m.display_name for m in members}
     answer, answered = await _run_loop(
         db,
         assistant,
@@ -655,13 +704,12 @@ async def converse(
         keeps_history=hours > 0,
         session=session,
         deadline=deadline,
-        stream=stream,
+        roster=roster_of(session.pseudonyms, members),
         names=names,
+        stream=stream,
     )
     pseudonyms = session.pseudonyms  # with anyone the tools named
     if answered:
         await _keep(db, assistant, member, key, private, pseudonyms, current, Turn("assistant", answer))
-    if names is None:
-        names = await _names(db, household.id)
     log.info("assistant replied", extra={"member_id": member.id, "answered": answered, "drafts": len(session.drafts)})
     return Reply(pseudonyms.restore_names(answer, names), tuple(session.drafts))

@@ -102,8 +102,8 @@ ONLY_THE_COORDINATOR = (
     "Only a call's coordinator can look this up, and the member doesn't coordinate that call. Say so."
 )
 NOT_A_LABEL = (
-    "{label} isn't anyone this call can use. Call look_up_coordinating for who's in, and name people only by the "
-    "labels it returns, such as Member 2."
+    "{label} isn't anyone this call can use. Call look_up_coordinating for who's in, and name people only by "
+    "labels from it or the roster, such as Member 2."
 )
 """The same for a label nobody has and a guest's: the model never learns who the guests are."""
 LABEL_ONLY = "Name a person by a label such as Member 2, or send an empty string for nobody."

@@ -50,8 +50,9 @@ class AssistantAdmin:
     """Spent and reserved this month: what counts toward the cap."""
     by_member: tuple[MemberUsage, ...]
     least_call_micros: int = 0
-    """What the smallest private message's first call reserves with the configured model
-    (``conversation.least_private_call_micros``). A cap below it answers no private message."""
+    """What the smallest private message's first call reserves with the configured model and the
+    household's roster (``conversation.least_private_call_micros``). A cap below it answers no
+    private message."""
     least_channel_call_micros: int = 0
     """The same for a message in a channel thread, which offers fewer tools. A cap below it
     answers no message at all."""
@@ -78,7 +79,8 @@ async def assistant_admin(db: AsyncSession, config: AssistantConfig, actor: Memb
         raise NotFound("No such household.")
     month = month_key(now, ZoneInfo(household.timezone))
     repo = AssistantRepository(db)
-    names = {m.id: m.display_name for m in await MemberRepository(db).list(household.id)}
+    members = await MemberRepository(db).list(household.id)
+    names = {m.id: m.display_name for m in members}
     return AssistantAdmin(
         settings=assistant_settings(await household_settings(db, household.id)),
         month=month,
@@ -87,8 +89,8 @@ async def assistant_admin(db: AsyncSession, config: AssistantConfig, actor: Memb
             MemberUsage(names.get(member_id, FORMER_MEMBER) if member_id is not None else FORMER_MEMBER, micros)
             for member_id, micros in await repo.by_member(household.id, month)
         ),
-        least_call_micros=least_private_call_micros(config.model),
-        least_channel_call_micros=least_call_micros(config.model, private=False),
+        least_call_micros=least_private_call_micros(config.model, members),
+        least_channel_call_micros=least_call_micros(config.model, private=False, members=members),
     )
 
 

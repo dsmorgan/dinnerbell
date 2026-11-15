@@ -62,7 +62,7 @@ from dinnerbell.services.assistant.runtime import AssistantConfig
 from dinnerbell.services.assistant.tools import ToolContext, ToolResult, ToolSession
 from dinnerbell.services.database import Database, open_database
 from dinnerbell.services.errors import NotFound
-from tests.support.calls import DONE_AT, OPENS, RESPOND_BY, House, dinner_id, furnish, make_house
+from tests.support.calls import DONE_AT, OPENS, RESPOND_BY, House, dinner_id, furnish, household_members, make_house
 from tests.support.clock import FakeClock
 from tests.support.fake_model import FakeModel, answer, tool_call
 from tests.support.feedback import done_dinner
@@ -867,7 +867,7 @@ async def test_a_cap_below_one_private_call_says_so_truthfully_and_spends_nothin
     cap reached: nothing was spent, and next month won't help, so the member hears to ask an
     admin to raise it, and nothing is reserved or sent."""
     opus = replace(helper, config=replace(helper.config, model="claude-opus-5-5"))
-    assert least_private_call_micros("claude-opus-5-5") > 1_000_000
+    assert least_private_call_micros("claude-opus-5-5", await household_members(house)) > 1_000_000
     async with house.sessionmaker() as db:
         await admin.update_assistant(
             db, CONFIGURED, house["Alex"], AssistantSettings(enabled=True, cap_dollars=1), now=house.clock()
@@ -880,7 +880,8 @@ async def test_a_cap_below_one_private_call_says_so_truthfully_and_spends_nothin
     assert model.requests == [] and usage == []
     async with house.sessionmaker() as db:
         view = await admin.assistant_admin(db, CONFIGURED, house["Alex"], now=house.clock())
-    assert view.least_call_micros == least_private_call_micros("claude-sonnet-5-5")  # the configured model's
+    # The configured model's, with the household's roster.
+    assert view.least_call_micros == least_private_call_micros("claude-sonnet-5-5", await household_members(house))
     assert not view.cap_below_one_call
 
 

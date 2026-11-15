@@ -389,7 +389,10 @@ async def test_a_mention_in_a_thread_joins_that_threads_conversation_as_its_auth
     assert mention_only_line(BOT_USER) not in second["text"]  # only the first reply says it
     (row,) = await conversations(house)
     assert row.key == f"slack:{CHANNEL}:{root}"
-    assert row.pseudonyms == {str(house["Sam"].id): 1, str(house["Kim"].id): 2}  # each acts as its author
+    # Each acts as its author. Sam started it, so the roster labeled everyone else by ID then (#277).
+    order = ("Sam", "Alex", "Kim", "Lee")
+    assert row.pseudonyms == {str(house[name].id): number for number, name in enumerate(order, start=1)}
+    assert [t["author"] for t in row.transcript if t["role"] == "user"] == ["Member 1", "Member 3"]
     assert user_texts(model) == ["any Thai places?", "Something cheaper"]
 
 
@@ -870,7 +873,9 @@ async def test_other_peoples_mentions_never_leave_the_house(
     assert reply["text"] == "Kim can cook, and Sam can ask."
     [row] = await conversations(house)
     assert row.transcript[0]["text"].startswith("Can @Member 2 cook?")  # stored as sent
-    assert row.pseudonyms == {str(house["Sam"].id): 1, str(house["Kim"].id): 2}
+    # A mention keeps the label it first got; the roster labels every other active member, not Lee.
+    assert row.pseudonyms == {str(house["Sam"].id): 1, str(house["Kim"].id): 2, str(house["Alex"].id): 3}
+    assert model.rosters == [[("Member 1", "Sam"), ("Member 2", "Kim"), ("Member 3", "Alex")]]
 
 
 class Slow(FakeModel):

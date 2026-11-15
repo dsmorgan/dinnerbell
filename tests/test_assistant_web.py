@@ -67,14 +67,17 @@ class TestAdminAssistant:
         assert audit.payload["assistant_enabled"] == {"from": False, "to": True}
 
     def test_the_page_says_what_goes_to_anthropic(self, client: TestClient, provider: FakeProvider) -> None:
-        """The disclosure matches docs/configuration.md: no names or anyone's ratings, a member's
-        own data only when they ask in private (#253), dietary needs named (#278), and the household
-        hints the meal-history tool sends (#264)."""
+        """The disclosure matches docs/configuration.md: active members' display names with their
+        labels (#277), never a guest's, and no one's ratings, a member's own data only when they ask
+        in private (#253), dietary needs named (#278), and the household hints the meal-history
+        tool sends (#264)."""
         sign_in(client, provider)
         shown = " ".join(page(client.get("/admin/assistant")).split())
         assert (
-            'with members shown as "Member 1", "Member 2", and so on: never names, emails, preferences, vetoes, '
-            "or anyone's ratings."
+            'with members shown as "Member 1", "Member 2", and so on. Each request also lists every active '
+            'member\'s display name with their label, such as "Member 2: Theodore", so the assistant can tell who a '
+            "member means by a name they type. Guests and former members are never listed. It never sends emails, "
+            "Slack IDs, preferences, vetoes, or anyone's ratings."
         ) in shown
         assert (
             "The one exception is a member's own preferences, vetoes, dietary needs, what they can usually do "
@@ -129,13 +132,16 @@ def test_a_cap_below_one_message_saves_and_says_so(
     """#253, #254: with Opus, every message's worst case is more than $1, a channel thread's included.
     The $1 cap still saves, and the page says it's too low for any message, from the reservation
     code itself, and the least cap that works."""
+    from dinnerbell.db.models import MemberRow
+    from dinnerbell.db.repositories import to_member
     from dinnerbell.domain.assistant import format_dollars
     from dinnerbell.services.assistant.conversation import least_call_micros, least_private_call_micros
 
-    least = least_private_call_micros("claude-opus-5-5")
-    channel = least_call_micros("claude-opus-5-5", private=False)
-    assert 1_000_000 < channel < least < 2_000_000  # since #254, a channel thread's too
     sign_in(client, provider)
+    members = [to_member(row) for row in rows(migrated, MemberRow)]
+    least = least_private_call_micros("claude-opus-5-5", members)
+    channel = least_call_micros("claude-opus-5-5", private=False, members=members)
+    assert 1_000_000 < channel < least < 2_000_000  # since #254, a channel thread's too
     assert 'id="cap-low"' not in page(client.get("/admin/assistant"))  # $5 by default
     assert save(client, FORM | {"cap_dollars": "1"}).status_code == 303
     [household] = rows(migrated, HouseholdRow)
