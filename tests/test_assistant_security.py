@@ -340,6 +340,9 @@ class Attacker(FakeModel):
 
     pages: list[ModelReply | Exception] = field(default_factory=list)
     drafting: list[dict[str, Any]] = field(default_factory=list)
+    active: tuple[str, ...] = ("Alex", "Sam", "Kim", "Lee")
+    """The house's active members, whose names every roster must carry exactly (``ACTIVE``): a
+    test that changes who's active says so here. The ``model`` fixture checks every request."""
 
     async def create(self, request: Mapping[str, Any], *, time_left: float, events: Any = None) -> ModelReply:
         if "tools" not in request and str(request.get("system", "")).startswith(DRAFTING):
@@ -352,8 +355,12 @@ class Attacker(FakeModel):
 
 
 @pytest.fixture
-def model() -> Attacker:
-    return Attacker()
+def model() -> Iterator[Attacker]:
+    """The attacker, and after the test, every roster it was sent checked (``assert_roster_safe``),
+    in every scenario, whether or not the test calls ``assert_kept_home``."""
+    attacker = Attacker()
+    yield attacker
+    assert_roster_safe(attacker.requests, attacker.active)
 
 
 @dataclass
@@ -486,27 +493,32 @@ def assert_registry_tools(requests: Sequence[Mapping[str, Any]]) -> None:
 
 GUESTS = ("Gwendolyn", "Robin")
 """Kim's guest on the dinner call, and a saved guest some tests add: never on a roster."""
+ACTIVE = Attacker.active
+"""The usual house's active members: exactly the names its roster carries."""
 
 
-def assert_roster_safe(requests: Sequence[Mapping[str, Any]]) -> None:
+def assert_roster_safe(requests: Sequence[Mapping[str, Any]], active: Sequence[str] = ACTIVE) -> None:
     """Every conversation request's roster has its form (``roster_in``), each label once, and
-    only display names: nothing in ``LEAKS``, and no guest."""
+    exactly the display names of the house's ``active`` members: never a guest, a former member,
+    a near-miss of either, or anything in ``LEAKS``."""
     for request in requests:
         if not isinstance(request.get("system"), list):
             continue  # a drafting call: no roster
         roster = roster_in(request)
         assert len({label for label, _ in roster}) == len(roster)
-        for _, name in roster:
+        names = sorted(name for _, name in roster)
+        assert names == sorted(active), names
+        for name in names:
             assert name not in GUESTS, name
             assert not any(leak in name for leak in LEAKS), name
 
 
-def assert_kept_home(model: Attacker, *, own: Sequence[str] = ()) -> None:
+def assert_kept_home(model: Attacker, *, own: Sequence[str] = (), active: Sequence[str] = ACTIVE) -> None:
     """Nothing in ``LEAKS`` and no real name went out in any request, conversation or drafting,
     except inside ``own``, the words of the members being answered, and the roster's display names
-    of active members (``assert_roster_safe``)."""
+    of the ``active`` members (``assert_roster_safe``)."""
     assert_registry_tools([*model.requests, *model.drafting])
-    assert_roster_safe(model.requests)
+    assert_roster_safe(model.requests, active)
     sent = outgoing([*model.requests, *model.drafting])
     for words in own:
         sent = sent.replace(words, "")
@@ -1555,15 +1567,29 @@ def test_the_leak_check_catches_what_it_looks_for() -> None:
         assert_kept_home(model)
     # The roster is left out of the scan only because it must hold display names of members alone.
     fixed = {"type": "text", "text": "x"}
-    for roster in ([("Member 1", "Gwendolyn")], [("Member 1", "kim@example.com")], [("Member 1", "Kim")] * 2):
-        model.requests = [request | {"system": [fixed, {"type": "text", "text": roster_text(roster)}]}]
+    house_roster = [(f"Member {number}", name) for number, name in enumerate(ACTIVE, start=1)]
+
+    def with_roster(text: str) -> dict[str, Any]:
+        return request | {"system": [fixed, {"type": "text", "text": text}]}
+
+    for roster in (
+        [*house_roster, ("Member 5", "Gwendolyn")],  # a guest
+        [*house_roster, ("Member 5", "Gwendolyn ")],  # a near-miss of one
+        [*house_roster, ("Member 5", "Mia")],  # someone not active, such as a former member
+        house_roster[:3],  # an active member left out
+        [*house_roster[:3], ("Member 4", "kim@example.com")],
+        [*house_roster, house_roster[0]],  # a label twice
+    ):
+        model.requests = [with_roster(roster_text(roster))]
         with pytest.raises(AssertionError):
             assert_kept_home(model)
-    model.requests = [request | {"system": [fixed, {"type": "text", "text": "Kim vetoes Banned Burger."}]}]
+    model.requests = [with_roster("Kim vetoes Banned Burger.")]
     with pytest.raises(AssertionError):
         assert_kept_home(model)  # nothing but a roster hides in the roster's place
-    model.requests = [request | {"system": [fixed, {"type": "text", "text": roster_text([("Member 1", "Kim")])}]}]
+    model.requests = [with_roster(roster_text(house_roster))]
     assert_kept_home(model)
+    model.requests = [with_roster(roster_text(house_roster[:3]))]
+    assert_kept_home(model, active=ACTIVE[:3])  # a house where Lee has left
 
 
 # 2. Filter bypass, over generated households ----------------------------------------------------
@@ -1858,6 +1884,7 @@ async def test_fr29_while_answers_are_open_nothing_changes_when_a_housemate_answ
     conversation sends, is the same before and after, since candidates refuse until voting."""
     house = bare
     generated = await generate(house, seed)
+    model.active = ("Alex", *PEOPLE)  # the generated household's members, every one active
     asker = next(house[n] for n in ["Alex", *PEOPLE] if house[n].id in generated.in_people)
     housemate = house[generated.out[0]] if generated.out else None
     script = [
@@ -2767,6 +2794,7 @@ def test_web_replies_and_cards_never_render_html(web: TestClient, model: Attacke
     the elements and attributes of a plain one, apart from the bare formatting tags a reply's
     Markdown may add (#284), no attribute carries the attacker's link, and the text shows as
     written, less Markdown's markers, with a reload the same."""
+    model.active = ("admin",)  # the web client's household: its bootstrapped admin alone
     assert web.post("/admin/assistant", data=SETTINGS_ON | {"csrf_token": csrf_from(web)}).status_code == 303
     for name in ("Plain Place", *WEB_NAMES):
         assert web_add_item(web, name).status_code == 303, name
