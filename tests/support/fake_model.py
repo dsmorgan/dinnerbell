@@ -53,6 +53,9 @@ class FakeModel:
 
     script: list[ModelReply | Exception] = field(default_factory=list)
     requests: list[dict[str, Any]] = field(default_factory=list)
+    every_request: list[dict[str, Any]] = field(default_factory=list)
+    """Every request ``create`` took, as ``requests`` has them, kept even when a test clears or
+    replaces ``requests`` between messages: for checks that must see all of them."""
     time_left: list[float] = field(default_factory=list)
     delta: int = 5
     """How many characters of text each ``text`` event carries, when the caller listens."""
@@ -61,6 +64,7 @@ class FakeModel:
         self, request: Mapping[str, Any], *, time_left: float, events: ModelEvents | None = None
     ) -> ModelReply:
         self.requests.append(copy.deepcopy(dict(request)))
+        self.every_request.append(copy.deepcopy(dict(request)))
         self.time_left.append(time_left)
         if not self.script:
             reply = answer("OK")
