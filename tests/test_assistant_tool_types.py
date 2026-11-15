@@ -9,6 +9,11 @@ element of each list, and the refusal must name that field. A refusal on a later
 would name something else, so a field the baseline can't reach before a meaning check fails the
 test instead of passing it.
 
+The refusal's advice must match the field, too: for a text field the baseline accepts empty, it
+says an empty string works, and for one the baseline refuses empty, it says nothing about one.
+Whether a field is required can depend on another, such as a meal's name, which a new meal needs
+and an edit keeps when empty; the baseline decides.
+
 Sam asks, in a private conversation where Sam is Member 1, Alex Member 2, Kim Member 3, and Lee
 Member 4.
 """
@@ -227,11 +232,11 @@ BASELINES: dict[str, Baseline] = {
         voting, DINNER | {"pick": 0, "name": "Taqueria", "mode": "pickup", "break_tie": False} | NO_ROLES
     ),
     "draft_shuffle": Baseline(voting, DINNER),
-    "draft_plan": Baseline(decided, DINNER | {"meal_time": "19:00", "place": ""} | NO_ROLES),
+    "draft_plan": Baseline(decided, DINNER | {"meal_time": "19:00", "place": "Siam Garden"} | NO_ROLES),
     "draft_hand_off": Baseline(voting, DINNER | {"to": "Member 3"}),
     "draft_mark_done": Baseline(decided, DINNER),
     "draft_call_off": Baseline(voting, DINNER | {"reason": ""}),
-    "draft_catalog_edit": Baseline(nothing, NO_EDIT | {"name": "Taqueria", "notes": "Cash only."}),
+    "draft_catalog_edit": Baseline(nothing, NO_EDIT | {"name": "Taqueria", "meals": ["dinner"], "notes": "Cash only."}),
     "look_up_my_meals": Baseline(nothing, {"name": ""}),
     "draft_meal": Baseline(
         nothing,
@@ -283,16 +288,21 @@ def test_every_baseline_is_for_a_tool_and_has_exactly_its_fields() -> None:
 async def test_every_tool_refuses_input_of_the_wrong_type(house: House, tool: tools.Tool) -> None:
     """The baseline works, and breaking any one field, or one element of a list, is refused in
     words that name that field: an error for the model, never a crash or a refusal about
-    something else."""
+    something else. For a text field, the words suggest an empty string only when the tool
+    takes one there."""
     baseline = BASELINES[tool.name]
     made = await baseline.stage(house) or {}
     good = {name: made.get(name, value) for name, value in baseline.input.items()}
     accepted = await run(house, tool.name, good)
     assert not accepted.is_error, accepted.content
     for name, spec in tool.input_schema["properties"].items():
+        text = spec.get("type") == "string" and "enum" not in spec
+        empty_ok = text and not (await run(house, tool.name, good | {name: ""})).is_error
         for shown, wrong in breaks(spec, good[name]):
             result = await run(house, tool.name, good | {name: wrong})
             assert result.is_error and result.content.startswith(f"{name} "), (name, shown, result.content)
+            if text:
+                assert ("empty" in result.content) == empty_ok, (name, shown, empty_ok, result.content)
 
 
 def _fits(spec: Mapping[str, Any], value: object) -> bool:

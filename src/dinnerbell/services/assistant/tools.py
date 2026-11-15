@@ -144,10 +144,13 @@ class ToolResult:
     is_error: bool = False
 
 
-def _text(raw: Mapping[str, Any], name: str) -> str:
+def _text(raw: Mapping[str, Any], name: str, *, empty: bool = True) -> str:
+    """``empty`` is False when an empty string can't fill the field, so the advice for a value
+    of the wrong type doesn't suggest one; the use case refuses an empty one in its own words."""
     value = raw.get(name)
     if not isinstance(value, str):
-        raise ToolInputError(f"{name} must be a string; send an empty string for any.")
+        advice = "; send an empty string for any" if empty else ""
+        raise ToolInputError(f"{name} must be a string{advice}.")
     if len(value) > MAX_QUERY_LENGTH:
         raise ToolInputError(f"{name} is at most {MAX_QUERY_LENGTH} characters.")
     return value.strip()
@@ -327,7 +330,7 @@ def _whole(raw: Mapping[str, Any], name: str, low: int, high: int) -> int:
 
 def _day(raw: Mapping[str, Any], name: str, today: date, *, required: bool) -> date | None:
     """``today``, ``tomorrow``, or ``YYYY-MM-DD``; an empty string for none when allowed."""
-    value = _text(raw, name).lower()
+    value = _text(raw, name, empty=not required).lower()
     if not value:
         if required:
             raise ToolInputError(f"{name} is today, tomorrow, or a date such as 2026-11-12.")
@@ -457,7 +460,7 @@ async def draft_proposal_tool(ctx: ToolContext, raw: Mapping[str, Any]) -> str:
     today = await _today(ctx)
     event = await _call(ctx, raw, today)
     mode = Mode(_enum(raw, "mode", [m.value for m in MODE_ORDER]))
-    name = _text(raw, "name")
+    name = _text(raw, "name", empty=False)
     draft = await drafts.draft_proposal(
         ctx.db, ctx.actor, ctx.session.key, event, name, mode, label=ctx.session.label, now=ctx.now
     )
@@ -500,7 +503,7 @@ async def draft_offer_tool(ctx: ToolContext, raw: Mapping[str, Any]) -> str:
             raise ToolInputError("time is HH:MM on a 24-hour clock, such as 18:30, or an empty string.") from None
     spare = _whole(raw, "spare_servings", 0, 20)
     request = OfferRequest(
-        name=_text(raw, "name"),
+        name=_text(raw, "name", empty=False),
         mode=Mode(_enum(raw, "mode", [m.value for m in MODE_ORDER])),
         slot=Slot(_enum(raw, "slot", [s.value for s in Slot])),
         day=_day(raw, "day", today, required=True) or today,
@@ -732,13 +735,14 @@ async def draft_vote_tool(ctx: ToolContext, raw: Mapping[str, Any]) -> str:
     today = await _today(ctx)
     event = await _call(ctx, raw, today)
     mode = _enum(raw, "mode", ["", *(m.value for m in MODE_ORDER)])
+    handle = _whole(raw, "pick", 0, 2**62)
     spec = await call_drafts.vote(
         ctx.db,
         ctx.actor,
         event,
-        _text(raw, "name"),
+        _text(raw, "name", empty=bool(handle)),
         Mode(mode) if mode else None,
-        handle=_whole(raw, "pick", 0, 2**62),
+        handle=handle,
         voting=_flag(raw, "vote"),
         today=today,
         now=ctx.now,
@@ -778,7 +782,9 @@ async def draft_suggestion_tool(ctx: ToolContext, raw: Mapping[str, Any]) -> str
     _fields(raw, "slot", "day", "name")
     today = await _today(ctx)
     event = await _call(ctx, raw, today)
-    spec = await call_drafts.suggestion(ctx.db, ctx.actor, event, _text(raw, "name"), today=today, now=ctx.now)
+    spec = await call_drafts.suggestion(
+        ctx.db, ctx.actor, event, _text(raw, "name", empty=False), today=today, now=ctx.now
+    )
     return await _keep_action(ctx, spec)
 
 
@@ -888,7 +894,7 @@ async def draft_invite_guest_tool(ctx: ToolContext, raw: Mapping[str, Any]) -> s
     _fields(raw, "slot", "day", "name", "needs")
     today = await _today(ctx)
     event = await _call(ctx, raw, today)
-    name = _text(raw, "name")
+    name = _text(raw, "name", empty=False)
     if not name:
         raise ToolInputError("name is the guest's name, as the member wrote it.")
     spec = await call_drafts.invite_guest(ctx.db, ctx.actor, event, name, _names(raw, "needs"), today=today)
@@ -934,7 +940,7 @@ async def draft_guest_answer_tool(ctx: ToolContext, raw: Mapping[str, Any]) -> s
         ctx.db,
         ctx.actor,
         event,
-        _text(raw, "name"),
+        _text(raw, "name", empty=False),
         status=status,
         offered_role=chosen,
         offered=_flag(raw, "offer"),
@@ -1074,7 +1080,7 @@ async def draft_preference_tool(ctx: ToolContext, raw: Mapping[str, Any]) -> str
     _private(ctx)
     _fields(raw, "what", "name", "level")
     what = _enum(raw, "what", list(own_drafts.WHAT))
-    name = _text(raw, "name")
+    name = _text(raw, "name", empty=False)
     level = Stance.parse(_enum(raw, "level", LEVEL_NAMES))
     spec = await own_drafts.stance_draft(ctx.db, ctx.actor, what, name, level, today=await _today(ctx))
     return await _keep_action(ctx, spec)
@@ -1348,12 +1354,13 @@ async def draft_decide_tool(ctx: ToolContext, raw: Mapping[str, Any]) -> str:
     event = await _coordinated(ctx, raw, today)
     mode = _way(raw, "mode")
     roles = coordinating.Roles(way=_way(raw), lead=_who(raw, "lead"), pickup=_who(raw, "pickup"))
+    handle = _whole(raw, "pick", 0, 2**62)
     spec = await coordinating.decide(
         ctx.db,
         ctx.actor,
         event,
-        handle=_whole(raw, "pick", 0, 2**62),
-        name=_text(raw, "name"),
+        handle=handle,
+        name=_text(raw, "name", empty=bool(handle)),
         mode=mode,
         tie=_flag(raw, "break_tie"),
         roles=roles,
@@ -1475,7 +1482,13 @@ async def draft_hand_off_tool(ctx: ToolContext, raw: Mapping[str, Any]) -> str:
     today = await _today(ctx)
     event = await _coordinated(ctx, raw, today)
     spec = await coordinating.hand_off(
-        ctx.db, ctx.actor, event, _who(raw, "to"), labels=ctx.session.pseudonyms, label=ctx.session.label, today=today
+        ctx.db,
+        ctx.actor,
+        event,
+        _text(raw, "to", empty=False),
+        labels=ctx.session.pseudonyms,
+        label=ctx.session.label,
+        today=today,
     )
     return await _keep_action(ctx, spec)
 
@@ -1596,7 +1609,7 @@ def _item_kind(raw: Mapping[str, Any]) -> ItemKind | None:
 
 
 def _named(raw: Mapping[str, Any], what: str = "the item's name") -> str:
-    name = _text(raw, "name")
+    name = _text(raw, "name", empty=False)
     if not name:
         raise ToolInputError(f"name is {what}, as look_up_catalog_items returns it.")
     return name
@@ -1689,8 +1702,8 @@ DRAFT_CATALOG_EDIT = Tool(
 MEAL_DAY = "today, yesterday, or YYYY-MM-DD"
 
 
-def _meal_day(raw: Mapping[str, Any], name: str, today: date) -> date | None:
-    if _text(raw, name).lower() == "yesterday":
+def _meal_day(raw: Mapping[str, Any], name: str, today: date, *, empty: bool) -> date | None:
+    if _text(raw, name, empty=empty).lower() == "yesterday":
         return today - timedelta(days=1)
     try:
         return _day(raw, name, today, required=False)
@@ -1732,9 +1745,9 @@ async def draft_meal_tool(ctx: ToolContext, raw: Mapping[str, Any]) -> str:
     meal, delete = _whole(raw, "meal", 0, 2**62), _flag(raw, "delete")
     slot = _enum(raw, "slot", CALL_SLOTS)
     change = catalog_edits.MealChange(
-        day=_meal_day(raw, "day", today),
+        day=_meal_day(raw, "day", today, empty=bool(meal)),
         slot=Slot(slot) if slot else None,
-        name=_text(raw, "name"),
+        name=_text(raw, "name", empty=bool(meal)),
         kind=_item_kind(raw),
         add_people=_strings(raw, "add_people"),
         remove_people=_strings(raw, "remove_people"),
