@@ -130,7 +130,7 @@ class Tool:
     def definition(self) -> dict[str, Any]:
         """The tool as the Messages API takes it. Not strict: Anthropic compiles a request's strict
         schemas into one grammar, and this many tools make one too large, a 400 for every request.
-        Every tool checks its own input instead (tests/test_assistant.py breaks each field)."""
+        Every tool checks its own input instead (tests/test_assistant_tool_types.py breaks each field)."""
         return {
             "name": self.name,
             "description": self.description,

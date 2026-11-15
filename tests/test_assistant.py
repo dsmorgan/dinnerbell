@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator
 from dataclasses import replace
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
@@ -245,7 +245,8 @@ class TestAssistantOn:
             assert "strict" not in tool  # every tool checks its own input
             assert tool["input_schema"]["additionalProperties"] is False
             assert set(tool["input_schema"]["required"]) == set(tool["input_schema"]["properties"])
-            # Strict tool use takes no numeric or length bounds: the tools check those themselves.
+            # No tool is strict, so the API never enforces a schema's bounds: each tool checks its
+            # own (tests/test_assistant_tool_types.py), and the schemas state none, so no bound has two homes.
             for spec in tool["input_schema"]["properties"].values():
                 assert not {"minimum", "maximum", "minLength", "maxLength"} & set(spec), tool["name"]
         system = request["system"][0]["text"]
@@ -836,23 +837,6 @@ class TestAssistantOn:
             )
         assert extra.is_error and long.is_error and not_object.is_error
 
-    @pytest.mark.parametrize("wrong", [7, None, [], {}, True, "x"])
-    async def test_every_tool_refuses_input_of_the_wrong_type(self, house: House, wrong: object) -> None:
-        """No tool is strict, so the API doesn't hold the model to the schema: each tool must turn
-        input of the wrong type into an error for the model, not a crash. Each field is broken in
-        turn, with the others well typed, so none is used before it's checked."""
-        for tool in tools.tools_for(True):
-            fields = tool.input_schema["properties"]
-            typed = {name: _well_typed(spec) for name, spec in fields.items()}
-            for name, spec in fields.items():
-                if _fits(spec, wrong):
-                    continue
-                async with house.sessionmaker() as db:
-                    result = await tools.run_tool(
-                        tool.name, typed | {name: wrong}, db=db, member=house["Sam"], private=True, now=house.clock()
-                    )
-                assert result.is_error and "didn't work" not in result.content, (tool.name, name, result.content)
-
     async def test_a_tool_that_breaks_or_is_refused_tells_the_model(
         self, house: House, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -1155,24 +1139,3 @@ async def _spend(house: House, micros: int, *, month: str = "2026-10") -> None:
         else:
             row.cost_micros += micros
         await db.commit()
-
-
-def _well_typed(spec: Mapping[str, Any]) -> object:
-    """A value of the type ``spec`` names, not necessarily one the tool accepts."""
-    if "enum" in spec:
-        return spec["enum"][0]
-    kind = spec.get("type")
-    kind = kind[0] if isinstance(kind, list) else kind
-    return {"string": "", "integer": 0, "number": 0, "boolean": False, "array": [], "null": None}.get(kind, {})
-
-
-def _fits(spec: Mapping[str, Any], value: object) -> bool:
-    """Whether ``value`` already has a type ``spec`` allows, so it isn't a wrong one."""
-    kinds = spec.get("type")
-    kinds = kinds if isinstance(kinds, list) else [kinds]
-    python = {"string": str, "integer": int, "number": (int, float), "boolean": bool, "array": list, "object": dict}
-    if value is None:
-        return "null" in kinds
-    if isinstance(value, bool):
-        return "boolean" in kinds
-    return any(isinstance(value, python[k]) for k in kinds if k in python)
