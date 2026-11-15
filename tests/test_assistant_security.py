@@ -357,10 +357,11 @@ class Attacker(FakeModel):
 @pytest.fixture
 def model() -> Iterator[Attacker]:
     """The attacker, and after the test, every roster it was sent checked (``assert_roster_safe``),
-    in every scenario, whether or not the test calls ``assert_kept_home``."""
+    in every scenario, whether or not the test calls ``assert_kept_home``, and even when the test
+    cleared ``requests`` between messages (``every_request``)."""
     attacker = Attacker()
     yield attacker
-    assert_roster_safe(attacker.requests, attacker.active)
+    assert_roster_safe(attacker.every_request, attacker.active)
 
 
 @dataclass
@@ -2172,6 +2173,7 @@ async def test_an_admin_who_isnt_the_coordinator_gets_exactly_what_a_member_gets
         as_member = await every_tool_and_confirm(other, other_helper, other_model, "Lee", spies)
     finally:
         await other_db.close()
+    assert_roster_safe(other_model.every_request, other_model.active)  # the fixture checks only ``model``
     assert as_admin == as_member
     assert sum(1 for r in as_admin if isinstance(r, ToolResult)) == sum(len(s) for s in SAMPLES.values())
     assert any(isinstance(r, tuple) and r[0] == "proposal" for r in as_admin)  # Confirm ran, not only refused
