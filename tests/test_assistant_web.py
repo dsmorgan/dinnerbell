@@ -76,8 +76,9 @@ class TestAdminAssistant:
         assert (
             'with members shown as "Member 1", "Member 2", and so on. Each request also lists every active '
             'member\'s display name with their label, such as "Member 2: Theodore", so the assistant can tell who a '
-            "member means by a name they type. Guests and former members are never listed. It never sends emails, "
-            "Slack IDs, preferences, vetoes, or anyone's ratings."
+            "member means by a name they type. Guests and former members are never listed. A name someone types, or "
+            "the assistant writes in a reply, stays in the conversation as written until Conversation hours delete "
+            "it. It never sends emails, Slack IDs, preferences, vetoes, or anyone's ratings."
         ) in shown
         assert (
             "The one exception is a member's own preferences, vetoes, dietary needs, what they can usually do "
