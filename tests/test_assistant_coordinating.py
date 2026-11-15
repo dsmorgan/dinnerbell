@@ -55,7 +55,7 @@ from tests.support.fake_model import FakeModel, answer, tool_call
 
 pytestmark = pytest.mark.anyio
 
-CONFIGURED = AssistantConfig(key_set=True, flag_on=True)
+CONFIGURED = AssistantConfig(key_set=True)
 DINNER = {"slot": "dinner", "day": "today"}
 NAMES = ("Alex", "Sam", "Kim", "Lee", "Gwendolyn")
 DM = slack_key("D0KIM", "1790000000.000100")
@@ -240,7 +240,6 @@ def assert_no_names(*texts: str) -> None:
 # Done when ---------------------------------------------------------------------------------------
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_lock_the_taco_place_member_2_picks_it_up_in_a_dm_drafts_then_confirm_decides(
     house: House, helper: Assistant, model: FakeModel
 ) -> None:
@@ -310,7 +309,6 @@ async def test_lock_the_taco_place_member_2_picks_it_up_in_a_dm_drafts_then_conf
     assert model.rosters == [[("Member 1", "Kim"), ("Member 2", "Sam"), ("Member 3", "Alex"), ("Member 4", "Lee")]]
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_typed_name_on_the_web_drafts_the_card_a_mention_in_a_dm_does(
     house: House, helper: Assistant, model: FakeModel
 ) -> None:
@@ -360,7 +358,6 @@ async def test_a_typed_name_on_the_web_drafts_the_card_a_mention_in_a_dm_does(
     )
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_the_same_request_in_a_channel_thread_is_refused_with_a_pointer_to_the_dm(
     house: House, helper: Assistant, model: FakeModel
 ) -> None:
@@ -398,7 +395,6 @@ async def test_exactly_these_tools_are_coordinating_and_private_only() -> None:
     assert {k.value for k in COORDINATING} == {"decide", "shuffle", "plan", "hand_off", "mark_done", "call_off"}
 
 
-@pytest.mark.flag("assistant", on=True)
 @pytest.mark.parametrize("name", sorted(COORDINATING_TOOLS))
 async def test_each_coordinating_tool_refuses_in_a_channel_thread(house: House, name: str) -> None:
     """In a channel thread the tool isn't there at all; called some other way, it refuses by
@@ -435,7 +431,6 @@ DECIDED_TRIES = {
 """Before the meal time: only an admin may mark it done that early, an admin's override."""
 
 
-@pytest.mark.flag("assistant", on=True)
 @pytest.mark.parametrize("stage", ["voting", "decided"])
 async def test_an_admin_who_isnt_the_coordinator_is_refused_as_a_member_is(house: House, stage: str) -> None:
     """Alex, an admin who isn't the coordinator, gets exactly the refusal Sam, a member, gets, from
@@ -467,7 +462,6 @@ async def test_an_admin_who_isnt_the_coordinator_is_refused_as_a_member_is(house
 # Each draft, and what Confirm runs ---------------------------------------------------------------
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_breaking_a_tie_chooses_a_tied_pick_and_refuses_one_that_isnt(house: House) -> None:
     event_id = await voting(house)
     ctx = await house.context(event_id)
@@ -489,7 +483,6 @@ async def test_breaking_a_tie_chooses_a_tied_pick_and_refuses_one_that_isnt(hous
     assert event.decided_item_id == house.items["Siam Garden"].id and event.tie_by == house["Kim"].id
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_shuffle_redraws_through_the_service_and_one_made_meanwhile_is_refused(house: House) -> None:
     for name in ("Noodle Bar", "Curry House", "Falafel Stop"):
         await house.add_item(name, Mode.PICKUP, cuisine="Thai")
@@ -506,7 +499,6 @@ async def test_a_shuffle_redraws_through_the_service_and_one_made_meanwhile_is_r
     assert (await row(house, stale)).used_at is None and (await house.event(event_id)).shuffles == 2
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_the_plan_changes_as_adjust_changes_it(house: House) -> None:
     """The meal time, then the place and way with who orders, then who picks up: each a draft
     whose Confirm runs ``coordinator.adjust``. The same meal time again is nothing to draft."""
@@ -547,7 +539,6 @@ async def test_the_plan_changes_as_adjust_changes_it(house: House) -> None:
     assert bad == ToolResult(coordinating.LABEL_ONLY, is_error=True)
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_plan_changed_elsewhere_since_the_draft_is_never_written_over(house: House) -> None:
     event_id = await decided(house)
     draft = draft_id(await tool(house, "draft_plan", change(meal_time="19:00")))
@@ -559,7 +550,6 @@ async def test_a_plan_changed_elsewhere_since_the_draft_is_never_written_over(ho
     assert (await house.event(event_id)).meal_time == MEAL + timedelta(minutes=15)
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_hand_off_mark_done_and_call_off_run_their_use_cases(house: House) -> None:
     event_id = await decided(house)
     house.clock.now = MEAL
@@ -578,7 +568,6 @@ async def test_hand_off_mark_done_and_call_off_run_their_use_cases(house: House)
         await confirm(house, "Kim", off)  # it was decided when drafted
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_call_off_ends_the_call_with_the_members_reason(house: House) -> None:
     event_id = await voting(house)
     off = draft_id(await tool(house, "draft_call_off", DINNER | {"reason": "Rain, sorry"}))
@@ -589,7 +578,6 @@ async def test_a_call_off_ends_the_call_with_the_members_reason(house: House) ->
     assert event.state is EventState.CANCELLED and event.end_note == "Rain, sorry"
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_the_member_who_started_a_call_can_call_it_off_until_its_decided(house: House) -> None:
     house.clock.now = OPENS
     started = await act(house, calls.start_call, house["Sam"], Slot.LUNCH, date(2026, 10, 23))
@@ -603,7 +591,6 @@ async def test_the_member_who_started_a_call_can_call_it_off_until_its_decided(h
 # Stale runs --------------------------------------------------------------------------------------
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_draft_for_an_earlier_run_of_the_call_is_refused(house: House) -> None:
     """Kim drafts marking the meal done; Alex re-runs the call, and it's decided again on the new
     run before Kim confirms. ``mark_done`` takes no run, so the draft's own run check refuses it,
@@ -631,7 +618,6 @@ async def test_a_draft_for_an_earlier_run_of_the_call_is_refused(house: House) -
 # Pseudonyms --------------------------------------------------------------------------------------
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_label_never_targets_a_guest_and_the_service_refuses_the_rest(house: House) -> None:
     """Kim's map holds Gwendolyn, her guest, as Member 5, Mia, who never answered, as Member 6,
     and Lee, deactivated since, as Member 4. A guest is no one a label names, even for a role the
@@ -670,7 +656,6 @@ async def test_a_label_never_targets_a_guest_and_the_service_refuses_the_rest(ho
 # No names ----------------------------------------------------------------------------------------
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_results_and_stored_drafts_carry_no_names_and_cards_show_them(house: House) -> None:
     """Every coordinating tool's result, and each stored title and line, name nobody, the guest
     included: the model reads labels, a guest is "a guest" or a count, and a stored line marks a
@@ -704,7 +689,6 @@ async def test_results_and_stored_drafts_carry_no_names_and_cards_show_them(hous
     assert done[0].text == "Confirmed. Today's dinner call is decided on Taqueria. Lee orders it. Sam picks it up."
 
 
-@pytest.mark.flag("assistant", on=True)
 @pytest.mark.parametrize("way", ["cook", ""])
 async def test_a_cook_list_refusal_names_the_label_not_the_person(house: House, way: str) -> None:
     """``check_assignee``'s own refusal names the person; the model gets their label instead, with
@@ -714,7 +698,6 @@ async def test_a_cook_list_refusal_names_the_label_not_the_person(house: House, 
     assert refused == ToolResult("Sam's Tacos has a cook list, and Member 2 isn't on it.", is_error=True)
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_the_services_own_cook_list_refusal_is_relabeled_too(
     house: House, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -747,7 +730,6 @@ async def cooks_only(house: House, item: str, *cooks: str) -> None:
         await db.commit()
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_cook_list_refusal_at_confirm_names_nobody(house: House) -> None:
     """A cook list added between the draft and Confirm: Adjust refuses, naming the person; the
     card says someone named isn't on it, and the draft stays unused."""
@@ -762,7 +744,6 @@ async def test_a_cook_list_refusal_at_confirm_names_nobody(house: House) -> None
     assert (await house.event(event_id)).decided_item_id == house.items["Taqueria"].id
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_plan_partly_saved_says_why_the_rest_wasnt_naming_nobody(
     house: House, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -783,7 +764,6 @@ async def test_a_plan_partly_saved_says_why_the_rest_wasnt_naming_nobody(
     assert (await house.event(event_id)).meal_time == MEAL + timedelta(minutes=30)
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_naming_who_has_the_role_already_is_refused_not_carded(house: House) -> None:
     """Adjust drops a person named for the role they have, so a card saying it gives it to them
     would say what Confirm doesn't do: the draft is refused instead."""
@@ -797,7 +777,6 @@ async def test_naming_who_has_the_role_already_is_refused_not_carded(house: Hous
     assert await rows(house) == []
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_refusals_the_model_can_act_on(house: House) -> None:
     """Input the tools can't use says what to send instead, and names nobody."""
     event_id = await voting(house)
@@ -826,7 +805,6 @@ async def test_refusals_the_model_can_act_on(house: House) -> None:
     )
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_with_two_calls_of_hers_open_the_assistant_asks_which(house: House) -> None:
     await voting(house)
     await act(house, calls.start_call, house["Kim"], Slot.LUNCH, date(2026, 10, 23))
@@ -837,7 +815,6 @@ async def test_with_two_calls_of_hers_open_the_assistant_asks_which(house: House
     assert not off.is_error, off.content
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_lock_whose_named_roles_are_refused_locks_nothing(house: House) -> None:
     """The lock and its named roles are one transaction: Lee, named to order, is deactivated
     before Confirm, so the refusal rolls back the lock and the draft's use, and nobody is told
@@ -853,7 +830,6 @@ async def test_a_lock_whose_named_roles_are_refused_locks_nothing(house: House) 
     assert await house.kinds() == before
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_hand_off_by_anyone_but_the_coordinator_says_so_before_reading_a_label(house: House) -> None:
     """Sam isn't the coordinator: a label nobody has and one somebody has get the same refusal,
     the coordinator's, so the refusal never says which labels exist."""
@@ -863,7 +839,6 @@ async def test_a_hand_off_by_anyone_but_the_coordinator_says_so_before_reading_a
         assert refused == ToolResult("Only the coordinator can hand off coordinating.", is_error=True), to
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_confirm_uses_the_draft_before_it_checks_the_run_or_runs_the_use_case(
     house: House, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -893,7 +868,6 @@ async def test_confirm_uses_the_draft_before_it_checks_the_run_or_runs_the_use_c
     assert ran == []
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_someone_to_pick_up_a_one_way_place_that_isnt_pickup_is_refused(house: House) -> None:
     """With no way given, the way is the place's only one, as Adjust takes it: a home meal has
     nobody to pick up, so naming one is refused rather than dropped from the card."""
@@ -902,7 +876,6 @@ async def test_someone_to_pick_up_a_one_way_place_that_isnt_pickup_is_refused(ho
     assert refused == ToolResult(coordinating.NO_PICKUP, is_error=True)
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_switch_of_way_names_on_the_card_who_adjust_gives_the_role(house: House) -> None:
     """Siam Garden is decided for pickup; switching to delivery names nobody, and Adjust gives
     ordering to its first volunteer, Lee: the card says so, as the service will do it."""
@@ -922,7 +895,6 @@ def told(entries: list[Any], member: Member) -> list[str]:
     return [e.kind for e in entries if e.payload.get("member", {}).get("id") == member.id]
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_lock_naming_someone_else_to_pick_up_tells_each_person_once(house: House) -> None:
     """Sam offered to pick up, and Kim's lock names Alex instead. The decision takes Alex at once:
     Sam, never assigned, hears nothing about a role, and Alex hears once that the coordinator gave
@@ -943,7 +915,6 @@ def lines_logged(caplog: pytest.LogCaptureFixture) -> list[dict[str, Any]]:
     return [json.loads(JsonFormatter().format(r)) for r in caplog.records if r.name == activity.log.name]
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_lock_with_roles_is_audited_and_logged_as_assign_roles_is(
     house: House, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -969,7 +940,6 @@ async def test_a_lock_with_roles_is_audited_and_logged_as_assign_roles_is(
     assert (line["switched"], line["volunteered"], line["to_member_id"]) == (True, True, house["Lee"].id)
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_breaking_a_tie_with_roles_takes_them_in_the_decision(house: House) -> None:
     event_id = await voting(house)
     ctx = await house.context(event_id)
@@ -983,7 +953,6 @@ async def test_breaking_a_tie_with_roles_takes_them_in_the_decision(house: House
     assert (await holders(house, event_id))[AssignmentRole.PICKUP] == "Alex"
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_pick_named_with_the_person_markers_never_poses_as_a_person(house: House) -> None:
     """A typed pick whose text carries the characters that mark a person in a stored line. The
     forms refuse those characters, so the row goes in directly, as one saved before that check,
@@ -1012,7 +981,6 @@ async def test_a_pick_named_with_the_person_markers_never_poses_as_a_person(hous
     assert not re.search(r"Member [2-9]", result.content)
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_guest_given_a_role_by_a_switch_of_way_reads_as_a_guest(house: House) -> None:
     """Gwendolyn, Kim's guest, is the only one who offered to pick up. Switching the decided
     delivery to pickup gives her pickup, as Adjust's first volunteer: the card and the model both
@@ -1040,7 +1008,6 @@ async def test_a_guest_given_a_role_by_a_switch_of_way_reads_as_a_guest(house: H
     assert not re.search(r"Member [5-9]", result.content + looked.content)
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_plain_lock_writes_no_roles_assigned_row_or_line(
     house: House, caplog: pytest.LogCaptureFixture
 ) -> None:

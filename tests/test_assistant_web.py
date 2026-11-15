@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""Admin > Assistant on the web (ADR 0009): shown only with the key and the flag, admins only,
-every change audited, and this month's usage by member."""
+"""Admin > Assistant on the web (ADR 0009): shown only with the key, admins only, every
+change audited, and this month's usage by member."""
 
 from __future__ import annotations
 
@@ -23,18 +23,6 @@ def save(client: TestClient, data: dict[str, str]) -> Any:
     return client.post("/admin/assistant", data=data | {"csrf_token": csrf_from(client)})
 
 
-@pytest.mark.parametrize("settings_overrides", [{"anthropic_api_key": "sk-ant-test-not-a-real-key"}])
-@pytest.mark.flag("assistant", on=False)
-def test_with_the_flag_off_there_is_no_tab_and_no_page(
-    client: TestClient, provider: FakeProvider, settings: Settings
-) -> None:
-    sign_in(client, provider)
-    assert "/admin/assistant" not in client.get("/admin/members").text
-    assert client.get("/admin/assistant").status_code == 404
-    assert save(client, FORM).status_code == 404
-
-
-@pytest.mark.flag("assistant", on=True)
 def test_without_the_key_there_is_no_tab_and_no_page(
     client: TestClient, provider: FakeProvider, settings: Settings
 ) -> None:
@@ -45,7 +33,6 @@ def test_without_the_key_there_is_no_tab_and_no_page(
 
 
 @pytest.mark.parametrize("settings_overrides", [{"anthropic_api_key": "sk-ant-test-not-a-real-key"}])
-@pytest.mark.flag("assistant", on=True)
 class TestAdminAssistant:
     def test_the_admin_turns_it_on_and_the_change_is_audited(
         self, client: TestClient, provider: FakeProvider, migrated: Settings
@@ -126,7 +113,6 @@ class TestAdminAssistant:
     "settings_overrides",
     [{"anthropic_api_key": "sk-ant-test-not-a-real-key", "assistant_model": "claude-opus-5-5"}],
 )
-@pytest.mark.flag("assistant", on=True)
 def test_a_cap_below_one_message_saves_and_says_so(
     client: TestClient, provider: FakeProvider, migrated: Settings
 ) -> None:

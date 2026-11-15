@@ -69,7 +69,7 @@ from tests.support.feedback import done_dinner
 
 pytestmark = pytest.mark.anyio
 
-CONFIGURED = AssistantConfig(key_set=True, flag_on=True)
+CONFIGURED = AssistantConfig(key_set=True)
 NEXT_DAY = DONE_AT + timedelta(hours=16)
 """Noon the day after the dinner, in the household's time zone: the dinner was last night."""
 TODAY = date(2026, 10, 23)
@@ -216,7 +216,6 @@ def strings(value: Any) -> Iterator[str]:
 # Done when ---------------------------------------------------------------------------------------
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_rate_last_nights_dinner_drafts_feedback_and_confirm_saves_it_through_the_service(
     house: House, helper: Assistant, model: FakeModel, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -283,7 +282,6 @@ async def test_rate_last_nights_dinner_drafts_feedback_and_confirm_saves_it_thro
         await confirm(house, "Kim", card.id)  # once only
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_veto_mushrooms_drafts_a_preference_change_and_confirm_saves_it_on_preferences(
     house: House, helper: Assistant, model: FakeModel, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -332,7 +330,6 @@ async def test_exactly_the_own_data_tools_are_private_only() -> None:
     assert {t.name for t in tools.tools_for(True)} >= OWN_TOOLS
 
 
-@pytest.mark.flag("assistant", on=True)
 @pytest.mark.parametrize("name", sorted(OWN_TOOLS))
 async def test_each_own_data_tool_refuses_in_a_channel_thread(house: House, name: str) -> None:
     """In a channel thread the tool isn't there at all, so its own check never runs; called some
@@ -349,7 +346,6 @@ async def test_each_own_data_tool_refuses_in_a_channel_thread(house: House, name
     assert await tool(house, name, SAMPLES[name]) != result  # in private, it runs
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_channel_thread_never_offers_them_and_drafts_nothing(
     house: House, helper: Assistant, model: FakeModel
 ) -> None:
@@ -394,7 +390,6 @@ async def test_the_prompt_says_own_data_is_private_and_stays_the_same_for_everyo
 # Nobody else's data ------------------------------------------------------------------------------
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_results_never_carry_another_members_data(house: House) -> None:
     """Sam vetoes Taqueria, loves Siam Garden, and rates both of last night's meals with notes;
     Lee sets away days. Kim's own lookups and drafts say nothing of any of it: no name but the
@@ -468,7 +463,6 @@ async def test_results_never_carry_another_members_data(house: House) -> None:
         assert "Sam" not in card and "Alex" not in card and "AlexNoteSecret" not in card
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_level_read_back_is_the_members_own_and_says_what_their_ratings_did(house: House) -> None:
     """Kim's lookup gives her own level and what her own ratings did, from the code Preferences
     uses, never the household's hint."""
@@ -498,7 +492,6 @@ async def service_refusal(use_case: Any, *args: Any, **kwargs: Any) -> str:
     raise AssertionError("the service didn't refuse")
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_feedback_refusals_are_the_feedback_forms(house: House) -> None:
     """Each refusal is what ``feedback.give`` says for the same answers on the form."""
     home = await dinner(house, "Pasta Bake", Mode.COOK)
@@ -525,7 +518,6 @@ async def test_feedback_refusals_are_the_feedback_forms(house: House) -> None:
     )
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_an_issue_note_too_long_once_trimmed_gets_the_services_words(house: House) -> None:
     meal_id = await dinner(house)
     long = NO_FEEDBACK | {"meal": meal_id, "what_went_wrong": "z" * 201}
@@ -534,7 +526,6 @@ async def test_an_issue_note_too_long_once_trimmed_gets_the_services_words(house
     assert not (await tool(house, "draft_feedback", padded)).is_error  # trimmed, as the form does
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_away_refusals_are_the_preferences_pages(house: House) -> None:
     """Each refusal is what ``away.set_my_away`` says for the same days on Preferences."""
     for first, last in (("2026-10-25", "2026-10-24"), ("2026-10-01", "2026-10-02"), ("2026-10-22", "2027-10-22")):
@@ -556,7 +547,6 @@ async def test_away_refusals_are_the_preferences_pages(house: House) -> None:
     assert both.is_error and "empty strings" in both.content
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_level_nothing_has_or_two_things_have_is_refused(house: House) -> None:
     await house.tag("Siam Garden", TagKind.OTHER)  # a tag named as the restaurant is
     assert await tool(house, "draft_preference", {"what": "", "name": "Nowhere", "level": "1"}) == ToolResult(
@@ -579,7 +569,6 @@ async def test_a_level_nothing_has_or_two_things_have_is_refused(house: House) -
 # What Confirm does -------------------------------------------------------------------------------
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_feedback_that_replaces_or_takes_back_says_so(house: House) -> None:
     home = await dinner(house, "Pasta Bake", Mode.COOK)
     await act(house, feedback.give, house["Kim"], home, FeedbackInput(rating=Rating.LIKED))
@@ -603,7 +592,6 @@ async def test_feedback_that_replaces_or_takes_back_says_so(house: House) -> Non
     assert await mine(house, "Kim", home) is None
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_away_days_draft_set_replace_and_clear(house: House) -> None:
     house.clock.now = NEXT_DAY
     set_days = await tool(house, "draft_away", {"first": "tomorrow", "last": "2026-10-26", "clear": False})
@@ -643,7 +631,6 @@ async def test_away_days_draft_set_replace_and_clear(house: House) -> None:
         await confirm(house, "Kim", moved.id)  # drafted to replace the window that's gone now
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_level_on_an_item_her_ratings_move_says_the_level_wins(house: House) -> None:
     meal_id = await dinner(house)
     await act(house, feedback.give, house["Kim"], meal_id, FeedbackInput(rating=Rating.LOVED))
@@ -675,7 +662,6 @@ async def test_a_level_on_an_item_her_ratings_move_says_the_level_wins(house: Ho
 # Stale drafts ------------------------------------------------------------------------------------
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_feedback_given_since_the_draft_is_never_overwritten(house: House) -> None:
     """Kim drafts feedback, then gives some on the web; Confirm refuses, keeps the web's, and
     leaves the draft unused. The same once she's changed feedback she'd given before."""
@@ -696,7 +682,6 @@ async def test_feedback_given_since_the_draft_is_never_overwritten(house: House)
     assert await mine(house, "Kim", meal_id) == FeedbackInput(rating=Rating.LIKED)
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_feedback_that_closed_since_the_draft_gets_the_forms_words(house: House) -> None:
     """Drafted ten minutes before midnight on its last day (in the household's time zone), and
     confirmed five minutes after: the form's refusal, and nothing saved."""
@@ -711,7 +696,6 @@ async def test_feedback_that_closed_since_the_draft_gets_the_forms_words(house: 
         assert await FeedbackRepository(db).get(house.household.id, meal_id, house["Kim"].id) is None
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_level_set_on_preferences_since_the_draft_is_kept(house: House) -> None:
     row = draft_id(await tool(house, "draft_preference", {"what": "", "name": "Siam Garden", "level": "veto"}))
     item = house.items["Siam Garden"].id
@@ -722,7 +706,6 @@ async def test_a_level_set_on_preferences_since_the_draft_is_kept(house: House) 
     assert (await draft(house, row)).used_at is None
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_away_days_set_on_preferences_since_the_draft_are_kept(house: House) -> None:
     row = draft_id(await tool(house, "draft_away", {"first": "2026-10-24", "last": "2026-10-25", "clear": False}))
     await act(house, away.set_my_away, house["Kim"], date(2026, 10, 28), date(2026, 10, 29))
@@ -731,7 +714,6 @@ async def test_away_days_set_on_preferences_since_the_draft_are_kept(house: Hous
     assert (await house.refresh("Kim")).away == check_away(date(2026, 10, 28), date(2026, 10, 29), TODAY)
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_only_the_drafts_member_confirms_and_only_while_the_assistant_is_on(house: House) -> None:
     row = draft_id(await tool(house, "draft_preference", {"what": "", "name": "Mushrooms", "level": "veto"}))
     for who in ("Sam", "Alex"):
@@ -747,7 +729,6 @@ async def test_only_the_drafts_member_confirms_and_only_while_the_assistant_is_o
 # Admin stays admin's -----------------------------------------------------------------------------
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_an_admin_gets_a_members_path_and_never_the_admin_edits_member_one(
     house: House, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -789,7 +770,6 @@ async def test_an_admin_gets_a_members_path_and_never_the_admin_edits_member_one
 # The cap -----------------------------------------------------------------------------------------
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_at_the_cap_an_own_data_message_drafts_and_changes_nothing(
     house: House, helper: Assistant, model: FakeModel
 ) -> None:
@@ -834,7 +814,6 @@ async def test_at_the_cap_an_own_data_message_drafts_and_changes_nothing(
     assert (await house.refresh("Kim")).away is None
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_lookups_read_back_her_own_feedback_and_away_days_and_clearing_under_way_ends_them(
     house: House,
 ) -> None:
@@ -859,7 +838,6 @@ async def test_lookups_read_back_her_own_feedback_and_away_days_and_clearing_und
     ]
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_cap_below_one_private_call_says_so_truthfully_and_spends_nothing(
     house: House, helper: Assistant, model: FakeModel
 ) -> None:
@@ -885,7 +863,6 @@ async def test_a_cap_below_one_private_call_says_so_truthfully_and_spends_nothin
     assert not view.cap_below_one_call
 
 
-@pytest.mark.flag("assistant", on=True)
 @pytest.mark.parametrize("kind", ["preference", "feedback", "away", "needs", "can_usually"])
 async def test_a_double_tapped_confirm_hears_the_draft_is_used(
     house: House, monkeypatch: pytest.MonkeyPatch, kind: str
@@ -907,7 +884,6 @@ async def test_a_double_tapped_confirm_hears_the_draft_is_used(
         await confirm(house, "Kim", row)
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_feedback_drafted_before_the_place_was_corrected_is_refused(house: House) -> None:
     """#220: the admin corrects last night's place after Kim drafts feedback on it. Her draft was
     about the old place, so Confirm refuses, and nothing is saved on the new one."""
@@ -929,7 +905,6 @@ async def test_feedback_drafted_before_the_place_was_corrected_is_refused(house:
     assert await mine(house, "Kim", meal_id) is None
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_the_meals_listed_are_only_those_the_member_ate(house: House) -> None:
     """Lee didn't eat last night's dinner, and only Lee ate today's lunch: each sees only theirs."""
     dinner_id = await dinner(house)
@@ -941,7 +916,6 @@ async def test_the_meals_listed_are_only_those_the_member_ate(house: House) -> N
         assert [m["meal"] for m in json.loads(result.content)["meals"]] == expected, who
 
 
-@pytest.mark.flag("assistant", on=True)
 @pytest.mark.parametrize("raced", [NotFound("No such meal."), InvalidFeedback(NOT_A_PARTICIPANT)])
 async def test_a_meal_changed_during_the_lookup_drops_out_and_the_filter_still_guards(
     house: House, monkeypatch: pytest.MonkeyPatch, raced: Exception
@@ -986,7 +960,6 @@ async def save_needs(house: House, who: str, *names: str) -> None:
     await act(house, guests.set_my_needs, house[who], frozenset(house.tags[n].id for n in names))
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_turn_off_pick_up_drafts_a_card_and_confirm_saves_it_through_the_preferences_form(
     house: House, helper: Assistant, model: FakeModel, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1024,7 +997,6 @@ async def test_turn_off_pick_up_drafts_a_card_and_confirm_saves_it_through_the_p
         await confirm(house, "Kim", card.id)  # once only
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_add_vegetarian_drafts_needs_and_confirm_saves_them_through_save_needs(
     house: House, helper: Assistant, model: FakeModel, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1055,7 +1027,6 @@ async def test_add_vegetarian_drafts_needs_and_confirm_saves_them_through_save_n
     assert (await house.refresh("Sam")).dietary_needs == frozenset()
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_taking_needs_off_says_what_they_become_and_none_left_says_so(house: House) -> None:
     await save_needs(house, "Kim", "Vegetarian", "Gluten free")
     one = await tool(house, "draft_dietary_needs", {"add": [], "remove": ["Gluten Free"]})
@@ -1075,7 +1046,6 @@ async def test_taking_needs_off_says_what_they_become_and_none_left_says_so(hous
     assert (await draft(house, draft_id(swap))).title == "Add Vegetarian to your dietary needs"  # only that changes
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_the_lookup_reads_back_her_own_needs_and_can_usually_never_anyone_elses(house: House) -> None:
     """Sam needs Vegetarian and usually cooks and picks up; Kim needs Gluten free and orders. Each
     reads back only their own, with the household's dietary tags, which every member sees on
@@ -1106,7 +1076,6 @@ async def test_the_lookup_reads_back_her_own_needs_and_can_usually_never_anyone_
     assert (await house.refresh("Sam")).dietary_needs == {house.tags["Vegetarian"].id}
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_needs_refusals_match_what_preferences_allows(house: House) -> None:
     """Preferences lets a member pick only the household's dietary tags, up to five, and never
     while a call they're in is voting. The draft refuses the same, in the service's words, and
@@ -1139,7 +1108,6 @@ async def test_needs_refusals_match_what_preferences_allows(house: House) -> Non
     assert bad.is_error and "list of at most 5 strings" in bad.content
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_needs_while_a_call_she_is_in_votes_get_save_needs_words(house: House) -> None:
     await answer_in(house)
     await vote(house)
@@ -1167,7 +1135,6 @@ async def vote(house: House) -> None:
     assert (await house.event(await dinner_id(house))).state is EventState.VOTING
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_household_with_no_dietary_tags_has_no_needs_to_draft(house: House) -> None:
     """Preferences hides **Your dietary needs** then, and the assistant has none to draft."""
     async with house.sessionmaker() as db:
@@ -1179,7 +1146,6 @@ async def test_a_household_with_no_dietary_tags_has_no_needs_to_draft(house: Hou
     assert found["dietary_needs"] == [] and found["dietary_tags"] == []
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_can_usually_refusals(house: House) -> None:
     assert await tool(house, "draft_can_usually", NO_CHANGE) == ToolResult(call_drafts.NOTHING_TO_DO, is_error=True)
     assert await tool(house, "draft_can_usually", NO_CHANGE | {"order": "off"}) == ToolResult(
@@ -1196,7 +1162,6 @@ async def test_can_usually_refusals(house: House) -> None:
     assert several.lines[0] == 'On Preferences, "I can usually" goes from nothing to Cook and Pick up.'
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_needs_saved_on_preferences_since_the_draft_are_kept(house: House) -> None:
     row = draft_id(await tool(house, "draft_dietary_needs", SAMPLES["draft_dietary_needs"]))
     await save_needs(house, "Kim", "Gluten free")
@@ -1206,7 +1171,6 @@ async def test_needs_saved_on_preferences_since_the_draft_are_kept(house: House)
     assert (await draft(house, row)).used_at is None
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_can_usually_saved_on_preferences_since_the_draft_is_kept_and_reminders_never_stale_it(
     house: House,
 ) -> None:
@@ -1225,7 +1189,6 @@ async def test_can_usually_saved_on_preferences_since_the_draft_is_kept_and_remi
     assert kim.capabilities == Capabilities(can_cook=True, can_order=True) and kim.mute_dm_reminders
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_call_voting_since_the_needs_draft_gets_save_needs_words_and_nothing_changes(house: House) -> None:
     await answer_in(house)
     row = draft_id(await tool(house, "draft_dietary_needs", SAMPLES["draft_dietary_needs"]))
@@ -1236,7 +1199,6 @@ async def test_a_call_voting_since_the_needs_draft_gets_save_needs_words_and_not
     assert (await draft(house, row)).used_at is None
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_need_that_is_no_longer_a_dietary_tag_is_dropped_not_refused(house: House) -> None:
     """Kim's stored needs hold a tag that isn't dietary and an ID no tag has, as a tag merge can
     leave behind. Preferences shows neither and drops both on Save; so does the draft, instead

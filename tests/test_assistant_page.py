@@ -143,17 +143,6 @@ def closed(client: TestClient) -> None:
 # Gating ----------------------------------------------------------------------------------------
 
 
-@pytest.mark.flag("assistant", on=False)
-def test_with_the_flag_off_there_is_no_link_and_no_page(
-    client: TestClient, provider: FakeProvider, model: FakeModel
-) -> None:
-    furnish(client, provider, switch=False)
-    closed(client)
-    closed(as_who(client, provider, "kim"))
-    assert model.requests == []
-
-
-@pytest.mark.flag("assistant", on=True)
 @pytest.mark.parametrize("settings_overrides", [{}])
 def test_without_the_key_there_is_no_link_and_no_page(
     client: TestClient, provider: FakeProvider, settings: Settings
@@ -164,7 +153,6 @@ def test_without_the_key_there_is_no_link_and_no_page(
     closed(as_who(client, provider, "kim"))
 
 
-@pytest.mark.flag("assistant", on=True)
 def test_with_the_switch_off_there_is_no_link_and_no_page(
     client: TestClient, provider: FakeProvider, model: FakeModel
 ) -> None:
@@ -179,7 +167,6 @@ def test_with_the_switch_off_there_is_no_link_and_no_page(
     assert model.requests == []
 
 
-@pytest.mark.flag("assistant", on=True)
 def test_with_everything_set_members_and_admins_see_the_link(client: TestClient, provider: FakeProvider) -> None:
     furnish(client, provider)
     for who in ("admin", "kim"):
@@ -190,7 +177,6 @@ def test_with_everything_set_members_and_admins_see_the_link(client: TestClient,
         assert '<a href="/assistant" aria-current="page">Assistant</a>' in shown.text
 
 
-@pytest.mark.flag("assistant", on=True)
 def test_a_deactivated_member_is_signed_out_and_never_answered(
     client: TestClient, provider: FakeProvider, migrated: Settings, model: FakeModel
 ) -> None:
@@ -209,7 +195,6 @@ def test_a_deactivated_member_is_signed_out_and_never_answered(
     assert model.requests == [] and rows(migrated, AssistantConversationRow) == []
 
 
-@pytest.mark.flag("assistant", on=True)
 @pytest.mark.parametrize(
     "settings_overrides", [{"anthropic_api_key": KEY, "slack_team_id": SLACK_TEAM, "oidc_issuer": SLACK_ISSUER}]
 )
@@ -237,7 +222,6 @@ def test_a_guest_is_refused_and_never_answered(
     assert model.requests == [] and rows(migrated, AssistantConversationRow) == []
 
 
-@pytest.mark.flag("assistant", on=True)
 def test_sending_needs_the_csrf_token(client: TestClient, provider: FakeProvider, model: FakeModel) -> None:
     furnish(client, provider)
     as_who(client, provider, "kim")
@@ -249,7 +233,6 @@ def test_sending_needs_the_csrf_token(client: TestClient, provider: FakeProvider
 # Sending ---------------------------------------------------------------------------------------
 
 
-@pytest.mark.flag("assistant", on=True)
 def test_a_message_gets_a_reply_with_htmx_and_history_survives_a_reload(
     client: TestClient, provider: FakeProvider, model: FakeModel, migrated: Settings
 ) -> None:
@@ -283,7 +266,6 @@ def test_a_message_gets_a_reply_with_htmx_and_history_survives_a_reload(
     assert row.key == f"web:{member_id(migrated, 'Kim')}" and row.private
 
 
-@pytest.mark.flag("assistant", on=True)
 def test_without_javascript_a_kept_exchange_redirects_and_shows_on_the_page(
     client: TestClient, provider: FakeProvider, model: FakeModel
 ) -> None:
@@ -305,7 +287,6 @@ def test_without_javascript_a_kept_exchange_redirects_and_shows_on_the_page(
     assert "event.shiftKey" in script and "(pointer: coarse)" in script
 
 
-@pytest.mark.flag("assistant", on=True)
 def test_the_cores_messages_show_as_they_are_and_arent_kept(
     client: TestClient, provider: FakeProvider, model: FakeModel, migrated: Settings
 ) -> None:
@@ -325,7 +306,6 @@ def test_the_cores_messages_show_as_they_are_and_arent_kept(
     assert 'maxlength="4000"' in client.get("/assistant").text
 
 
-@pytest.mark.flag("assistant", on=True)
 def test_turned_off_while_sending_is_a_404_so_the_text_stays(
     client: TestClient, provider: FakeProvider, model: FakeModel, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -340,7 +320,6 @@ def test_turned_off_while_sending_is_a_404_so_the_text_stays(
     assert send(client, "Hello").status_code == 404
 
 
-@pytest.mark.flag("assistant", on=True)
 def test_at_the_cap_the_reply_says_so(client: TestClient, provider: FakeProvider, model: FakeModel) -> None:
     furnish(client, provider, cap_dollars="1")
     as_who(client, provider, "kim")
@@ -351,7 +330,6 @@ def test_at_the_cap_the_reply_says_so(client: TestClient, provider: FakeProvider
     assert len(model.requests) == 1
 
 
-@pytest.mark.flag("assistant", on=True)
 def test_an_empty_message_sends_nothing(client: TestClient, provider: FakeProvider, model: FakeModel) -> None:
     furnish(client, provider)
     as_who(client, provider, "kim")
@@ -361,7 +339,6 @@ def test_an_empty_message_sends_nothing(client: TestClient, provider: FakeProvid
     assert model.requests == []
 
 
-@pytest.mark.flag("assistant", on=True)
 def test_start_over_deletes_the_conversation_and_cancels_its_drafts(
     client: TestClient, provider: FakeProvider, model: FakeModel, migrated: Settings
 ) -> None:
@@ -380,7 +357,6 @@ def test_start_over_deletes_the_conversation_and_cancels_its_drafts(
     assert draft.used_at is not None
 
 
-@pytest.mark.flag("assistant", on=True)
 def test_one_member_never_sees_anothers_conversation(
     client: TestClient, provider: FakeProvider, model: FakeModel, migrated: Settings
 ) -> None:
@@ -408,7 +384,6 @@ def test_one_member_never_sees_anothers_conversation(
 # Conversation hours 0 --------------------------------------------------------------------------
 
 
-@pytest.mark.flag("assistant", on=True)
 def test_at_hours_zero_nothing_is_kept_and_only_the_latest_exchange_shows(
     client: TestClient, provider: FakeProvider, model: FakeModel, migrated: Settings
 ) -> None:
@@ -427,7 +402,6 @@ def test_at_hours_zero_nothing_is_kept_and_only_the_latest_exchange_shows(
     assert "Start over" not in page(client.get("/assistant"))
 
 
-@pytest.mark.flag("assistant", on=True)
 def test_at_hours_zero_waiting_drafts_stay_on_the_page(
     client: TestClient, provider: FakeProvider, model: FakeModel
 ) -> None:
@@ -443,7 +417,6 @@ def test_at_hours_zero_waiting_drafts_stay_on_the_page(
 # Draft cards -----------------------------------------------------------------------------------
 
 
-@pytest.mark.flag("assistant", on=True)
 def test_an_offer_draft_card_confirms_with_htmx(
     client: TestClient, provider: FakeProvider, model: FakeModel, migrated: Settings
 ) -> None:
@@ -470,7 +443,6 @@ def test_an_offer_draft_card_confirms_with_htmx(
     assert len(rows(migrated, EventRow)) == 1
 
 
-@pytest.mark.flag("assistant", on=True)
 def test_a_preference_draft_confirms_with_htmx_and_links_to_preferences(
     client: TestClient, provider: FakeProvider, model: FakeModel, migrated: Settings
 ) -> None:
@@ -490,7 +462,6 @@ def test_a_preference_draft_confirms_with_htmx_and_links_to_preferences(
     assert 'value="2" checked' in page(client.get("/preferences"))
 
 
-@pytest.mark.flag("assistant", on=True)
 def test_turn_off_pick_up_drafts_a_card_and_confirm_changes_it_on_preferences(
     client: TestClient, provider: FakeProvider, model: FakeModel, migrated: Settings
 ) -> None:
@@ -517,7 +488,6 @@ def test_turn_off_pick_up_drafts_a_card_and_confirm_changes_it_on_preferences(
     assert 'name="feedback_reminder" checked' in shown
 
 
-@pytest.mark.flag("assistant", on=True)
 def test_a_needs_draft_confirms_and_links_to_the_needs_on_preferences(
     client: TestClient, provider: FakeProvider, model: FakeModel, migrated: Settings
 ) -> None:
@@ -536,7 +506,6 @@ def test_a_needs_draft_confirms_and_links_to_the_needs_on_preferences(
     assert re.search(r'name="needs" value="\d+" checked><span>Vegetarian', page(client.get("/preferences")))
 
 
-@pytest.mark.flag("assistant", on=True)
 def test_cancel_works_with_and_without_htmx(
     client: TestClient, provider: FakeProvider, model: FakeModel, migrated: Settings
 ) -> None:
@@ -555,7 +524,6 @@ def test_cancel_works_with_and_without_htmx(
     assert again.status_code == 409 and USED in page(again)
 
 
-@pytest.mark.flag("assistant", on=True)
 def test_confirm_without_javascript_shows_the_result_on_the_page(
     client: TestClient, provider: FakeProvider, model: FakeModel, migrated: Settings
 ) -> None:
@@ -571,7 +539,6 @@ def test_confirm_without_javascript_shows_the_result_on_the_page(
     assert len(rows(migrated, EventRow)) == 1
 
 
-@pytest.mark.flag("assistant", on=True)
 def test_an_expired_draft_and_another_members_draft_are_not_found(
     client: TestClient, provider: FakeProvider, model: FakeModel, clock: FakeClock, migrated: Settings
 ) -> None:
@@ -595,7 +562,6 @@ def test_an_expired_draft_and_another_members_draft_are_not_found(
     assert client.post("/assistant/drafts/0/confirm", data={"csrf_token": csrf_from(client)}).status_code == 404
 
 
-@pytest.mark.flag("assistant", on=True)
 def test_a_refusal_from_the_service_shows_as_it_is_and_keeps_the_card(
     client: TestClient, provider: FakeProvider, model: FakeModel, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -622,7 +588,6 @@ def test_a_refusal_from_the_service_shows_as_it_is_and_keeps_the_card(
     assert htmx(client, f"/assistant/drafts/{draft}/confirm", {}).status_code == 409
 
 
-@pytest.mark.flag("assistant", on=True)
 @pytest.mark.parametrize(
     ("result", "said"),
     [
@@ -658,7 +623,6 @@ def test_each_confirmed_result_says_what_happened_and_links_it(
     assert said in card and 'href="/events/7"' in card
 
 
-@pytest.mark.flag("assistant", on=True)
 def test_a_catalog_confirm_opens_an_add_only_preview_that_never_updates_a_match(
     client: TestClient, provider: FakeProvider, model: FakeModel, migrated: Settings
 ) -> None:
@@ -689,7 +653,6 @@ def test_a_catalog_confirm_opens_an_add_only_preview_that_never_updates_a_match(
     assert "Lentil Soup" in items and items["Noodle Bar"].notes is None
 
 
-@pytest.mark.flag("assistant", on=True)
 def test_a_link_drafts_confirm_opens_its_preview_with_only_what_dinnerbell_kept(
     client: TestClient, provider: FakeProvider, migrated: Settings, clock: FakeClock
 ) -> None:
@@ -725,7 +688,6 @@ def test_a_link_drafts_confirm_opens_its_preview_with_only_what_dinnerbell_kept(
 # Escaping --------------------------------------------------------------------------------------
 
 
-@pytest.mark.flag("assistant", on=True)
 def test_reply_text_is_escaped_and_never_linked(client: TestClient, provider: FakeProvider, model: FakeModel) -> None:
     furnish(client, provider)
     as_who(client, provider, "kim")
@@ -744,7 +706,6 @@ def test_reply_text_is_escaped_and_never_linked(client: TestClient, provider: Fa
         assert "<i>my</i>" not in raw and "&lt;i&gt;my&lt;/i&gt;" in raw  # the member's own text stays plain
 
 
-@pytest.mark.flag("assistant", on=True)
 def test_draft_titles_and_lines_are_escaped(client: TestClient, provider: FakeProvider, model: FakeModel) -> None:
     furnish(client, provider)
     as_who(client, provider, "kim")

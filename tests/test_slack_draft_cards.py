@@ -276,7 +276,6 @@ def test_draft_values_must_be_exactly_what_dinnerbell_wrote(value: object) -> No
         ids.parse_draft(value)
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_tampered_value_is_refused_and_changes_nothing(house: House, model: FakeModel, slack: Slack) -> None:
     await to_voting(house)
     await thread_card(slack, model, "Kim", "draft_proposal", PROPOSE)
@@ -289,7 +288,6 @@ async def test_a_tampered_value_is_refused_and_changes_nothing(house: House, mod
 # Confirm and Cancel -------------------------------------------------------------------------------
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_confirm_on_a_dm_card_proposes_and_the_card_says_so(house: House, model: FakeModel, slack: Slack) -> None:
     event_id = await to_voting(house)
     card = await dm_card(slack, model, "Kim", "draft_proposal", PROPOSE)
@@ -305,7 +303,6 @@ async def test_confirm_on_a_dm_card_proposes_and_the_card_says_so(house: House, 
     assert posts(slack) == [] and replaced(slack) == []
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_confirm_on_a_dm_card_posts_the_offer(house: House, model: FakeModel, slack: Slack) -> None:
     card = await dm_card(slack, model, "Lee", "draft_offer", OFFER)
     assert card_text(card).startswith("*Offer to order Siam Garden, dinner tomorrow at 12:15 PM*")
@@ -317,7 +314,6 @@ async def test_confirm_on_a_dm_card_posts_the_offer(house: House, model: FakeMod
     assert row.used_at is not None
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_confirm_in_a_channel_thread_stays_ephemeral(house: House, model: FakeModel, slack: Slack) -> None:
     event_id = await to_voting(house)
     card = await thread_card(slack, model, "Kim", "draft_proposal", PROPOSE)
@@ -329,7 +325,6 @@ async def test_confirm_in_a_channel_thread_stays_ephemeral(house: House, model: 
     assert await pho_corner(house, event_id) is not None
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_call_action_in_a_channel_thread_confirms_only_for_its_member(
     house: House, model: FakeModel, slack: Slack
 ) -> None:
@@ -377,7 +372,6 @@ LUNCH = {
 }
 
 
-@pytest.mark.flag("assistant", on=True)
 @pytest.mark.parametrize(
     ("tool", "args", "title", "confirmed"),
     [
@@ -400,7 +394,6 @@ async def test_a_catalog_edit_or_a_meal_in_a_channel_thread_is_the_askers_alone(
     assert row.member_id == house["Kim"].id and row.used_at is not None
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_meal_lookup_in_a_channel_thread_names_no_eater_and_labels_nobody(
     house: House, model: FakeModel, slack: Slack
 ) -> None:
@@ -442,7 +435,6 @@ async def test_a_meal_lookup_in_a_channel_thread_names_no_eater_and_labels_nobod
     assert posts(slack)[-1]["text"] == "With Sam and Lee."
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_hostile_answer_in_a_channel_thread_still_gets_an_eater_free_meal_lookup(
     house: House, model: FakeModel, slack: Slack
 ) -> None:
@@ -474,7 +466,6 @@ async def test_a_hostile_answer_in_a_channel_thread_still_gets_an_eater_free_mea
     assert "<!channel>" not in reply["text"]  # the Slack pipeline still defangs what it says
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_when_slack_wont_replace_a_thread_card_only_the_tapper_is_told(
     house: House, model: FakeModel, slack: Slack
 ) -> None:
@@ -485,7 +476,6 @@ async def test_when_slack_wont_replace_a_thread_card_only_the_tapper_is_told(
     assert posts(slack) == [] and updated(slack) == []
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_thread_card_tapped_as_if_it_were_public_is_refused(
     house: House, model: FakeModel, slack: Slack
 ) -> None:
@@ -497,7 +487,6 @@ async def test_a_thread_card_tapped_as_if_it_were_public_is_refused(
     assert row.used_at is None
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_cancel_replaces_the_card_and_changes_nothing_else(house: House, model: FakeModel, slack: Slack) -> None:
     event_id = await to_voting(house)
     card = await thread_card(slack, model, "Kim", "draft_proposal", PROPOSE)
@@ -511,7 +500,6 @@ async def test_cancel_replaces_the_card_and_changes_nothing_else(house: House, m
     assert len(replaced(slack)) == 1 and await pho_corner(house, event_id) is None
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_double_tap_leaves_the_card_showing_the_first_result(
     house: House, model: FakeModel, slack: Slack, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -540,7 +528,6 @@ async def test_a_double_tap_leaves_the_card_showing_the_first_result(
     assert slack.ephemerals("Kim") == [] and await pho_corner(house, event_id) is not None
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_card_slack_wouldnt_replace_never_ignores_the_next_tap(
     house: House, model: FakeModel, slack: Slack
 ) -> None:
@@ -555,7 +542,6 @@ async def test_a_card_slack_wouldnt_replace_never_ignores_the_next_tap(
     assert replaced(slack)[-1]["text"] == USED
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_refusal_replaces_the_card_with_the_services_words(
     house: House, model: FakeModel, slack: Slack, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -571,7 +557,6 @@ async def test_a_refusal_replaces_the_card_with_the_services_words(
     assert replaced(slack)[-1]["text"] == shown  # the service's words, made safe as a reply is
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_stale_draft_gets_the_services_own_error_and_stays_waiting(
     house: House, model: FakeModel, slack: Slack
 ) -> None:
@@ -582,14 +567,13 @@ async def test_a_stale_draft_gets_the_services_own_error_and_stays_waiting(
     [row] = await draft_rows(house)
     async with house.sessionmaker() as db:
         with pytest.raises(EventRuleViolation) as refused:
-            await drafts.confirm_draft(db, house.clock, AssistantConfig(True, True), house["Kim"], row.id)
+            await drafts.confirm_draft(db, house.clock, AssistantConfig(True), house["Kim"], row.id)
     await tap_dm(slack, "Kim", ids.DRAFT_CONFIRM, card)
     assert updated(slack)[-1]["text"] == str(refused.value)
     [row] = await draft_rows(house)
     assert row.used_at is None and await pho_corner(house, event_id) is None
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_an_expired_draft_says_so(house: House, model: FakeModel, slack: Slack) -> None:
     await to_voting(house)
     card = await dm_card(slack, model, "Kim", "draft_proposal", PROPOSE)
@@ -598,7 +582,6 @@ async def test_an_expired_draft_says_so(house: House, model: FakeModel, slack: S
     assert updated(slack)[-1]["text"] == EXPIRED
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_draft_used_elsewhere_says_so(house: House, model: FakeModel, slack: Slack) -> None:
     await to_voting(house)
     card = await dm_card(slack, model, "Kim", "draft_proposal", PROPOSE)
@@ -609,7 +592,6 @@ async def test_a_draft_used_elsewhere_says_so(house: House, model: FakeModel, sl
     assert updated(slack)[-1]["text"] == USED
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_someone_elses_forwarded_or_replayed_card_does_nothing(
     house: House, model: FakeModel, slack: Slack
 ) -> None:
@@ -629,7 +611,6 @@ async def test_someone_elses_forwarded_or_replayed_card_does_nothing(
     assert replaced(slack)[-1]["text"] == PROPOSED
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_dm_card_tapped_in_someone_elses_dm_is_refused(house: House, model: FakeModel, slack: Slack) -> None:
     await to_voting(house)
     card = await dm_card(slack, model, "Kim", "draft_proposal", PROPOSE)
@@ -642,7 +623,6 @@ async def test_a_dm_card_tapped_in_someone_elses_dm_is_refused(house: House, mod
 # Who may tap, and when ----------------------------------------------------------------------------
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_with_the_switch_off_at_tap_time_nothing_changes(
     house: House, model: FakeModel, helper: Assistant, slack: Slack
 ) -> None:
@@ -656,7 +636,6 @@ async def test_with_the_switch_off_at_tap_time_nothing_changes(
     assert row.used_at is None and await pho_corner(house, event_id) is None
 
 
-@pytest.mark.flag("assistant", on=True)
 @pytest.mark.parametrize("settings_overrides", [{}])
 async def test_without_the_assistant_a_draft_button_says_its_off(settings: Settings, house: House) -> None:
     assert settings.anthropic_api_key is None
@@ -665,7 +644,6 @@ async def test_without_the_assistant_a_draft_button_says_its_off(settings: Setti
     assert slack.ephemerals("Kim") == [ASSISTANT_OFF] and replaced(slack) == []
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_someone_dinnerbell_doesnt_know_gets_the_usual_refusal(
     house: House, model: FakeModel, slack: Slack
 ) -> None:
@@ -678,7 +656,6 @@ async def test_someone_dinnerbell_doesnt_know_gets_the_usual_refusal(
     assert row.used_at is None
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_the_tap_is_acknowledged_before_any_work(
     house: House, model: FakeModel, slack: Slack, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -710,7 +687,6 @@ async def test_the_tap_is_acknowledged_before_any_work(
 # Catalog drafts -----------------------------------------------------------------------------------
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_catalog_confirm_links_the_add_only_import_from_the_base_url(
     settings: Settings, house: House, model: FakeModel, slack: Slack
 ) -> None:
@@ -738,7 +714,6 @@ async def test_a_catalog_confirm_links_the_add_only_import_from_the_base_url(
     assert "Siam Garden" in names and "Noodle Bar" not in names  # nothing is saved until the import
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_the_import_links_click_is_acknowledged_and_ignored(house: House, slack: Slack) -> None:
     await slack.click("Sam", ids.DRAFT_IMPORT_LINK, None, channel=SAM_DM)
     assert slack.fake.calls == []
@@ -747,7 +722,6 @@ async def test_the_import_links_click_is_acknowledged_and_ignored(house: House, 
 # The reply that carries the cards -----------------------------------------------------------------
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_the_mention_only_line_reaches_each_member_once_and_then_the_thread(
     house: House, slack: Slack, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -774,7 +748,6 @@ async def _returning(reply: Reply) -> Reply:
     return reply
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_reply_of_only_drafts_posts_only_the_cards(
     house: House, slack: Slack, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -786,7 +759,6 @@ async def test_a_reply_of_only_drafts_posts_only_the_cards(
     assert [p["text"] for p in posts(slack)] == ["Propose Pho Corner", "Offer"]
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_card_slack_refuses_is_logged_and_the_rest_still_go(
     house: House, slack: Slack, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -804,7 +776,6 @@ async def test_a_card_slack_refuses_is_logged_and_the_rest_still_go(
     assert slack.conn.assistant is not None and len(slack.conn.assistant.replied) == 0
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_result_slack_wont_put_on_the_card_goes_in_its_thread(
     house: House, model: FakeModel, slack: Slack
 ) -> None:
@@ -821,7 +792,6 @@ async def test_a_result_slack_wont_put_on_the_card_goes_in_its_thread(
     assert posts(slack) == [] and updated(slack) == []
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_link_that_cant_be_built_leaves_the_draft_waiting(house: House, model: FakeModel, slack: Slack) -> None:
     """The link comes first, so a draft is never used without one."""
     from dinnerbell.channels.slack.interactions import BROKEN

@@ -477,6 +477,24 @@ def test_the_cli_warns_once_about_retired_flags(
     assert message.endswith(": old_one")
 
 
+def test_the_retired_assistant_flag_starts_with_a_warning(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """``assistant`` retired in 0.18.0 (#294): an install that still lists it starts, warned."""
+    from dinnerbell import main as main_module
+    from dinnerbell.domain import flags
+
+    assert "assistant" in flags.RETIRED and "assistant" not in flags.FLAGS
+    set_env(monkeypatch, DINNERBELL_FEATURES="assistant")
+    assert load_settings().features == frozenset()
+    monkeypatch.setattr(main_module, "_command", lambda args, settings: 0)
+    monkeypatch.setattr(main_module, "configure_logging", lambda *args: None)  # keep caplog's handler
+    with caplog.at_level("WARNING", logger="dinnerbell.config"):
+        assert main_module.main(["migrate"]) == 0
+    (message,) = [r.getMessage() for r in caplog.records if "retired feature flags" in r.getMessage()]
+    assert message.endswith(": assistant")
+
+
 def test_a_symlink_to_a_good_file_works(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     directory = secrets_from_files(monkeypatch, tmp_path, **SECRET_FILES)
     target = tmp_path / "store" / "key"

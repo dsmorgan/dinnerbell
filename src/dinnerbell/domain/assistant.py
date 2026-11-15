@@ -92,9 +92,9 @@ def settings_to_json(values: AssistantSettings) -> dict[str, Any]:
 
 
 def available(*, configured: bool, switch_on: bool, member: Member) -> bool:
-    """Whether the assistant answers ``member``: the operator set the key and turned on the flag
-    (``configured``), the admin turned on Admin's **Assistant**, and ``member`` is an active
-    member or admin, not a guest. Anyone else gets no reply (spec 6.14, **Who**)."""
+    """Whether the assistant answers ``member``: the operator set the key (``configured``), the
+    admin turned on Admin's **Assistant**, and ``member`` is an active member or admin, not a
+    guest. Anyone else gets no reply (spec 6.14, **Who**)."""
     return configured and switch_on and member.is_member
 
 

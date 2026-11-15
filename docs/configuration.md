@@ -47,7 +47,7 @@ These settings are optional:
 | `DINNERBELL_INSTANCE_LABEL` | None | Marks every page, Slack message, App Home, `/healthz`, and the logs, such as `TEST` on a [test instance](test-instance.md). Up to 16 letters, digits, spaces, or hyphens. Leave it empty in production. |
 | `DINNERBELL_ANTHROPIC_API_KEY` | None | The Anthropic API key for the optional assistant. Without it, the assistant stays off. A secret. See [The assistant](#the-assistant). |
 | `DINNERBELL_ASSISTANT_MODEL` | `claude-sonnet-5-5` | The assistant's model: `claude-sonnet-5-5`, `claude-opus-5-5`, or `claude-haiku-5-5`. Dinnerbell refuses to start on any other, because the monthly cap needs the model's prices. |
-| `DINNERBELL_FEATURES` | None | Comma-separated feature flags to turn on, such as `assistant`. Dinnerbell refuses to start on an unknown name; `src/dinnerbell/domain/flags.py` lists them. A flag that a release retired is ignored, with a warning at startup; remove it when you see one. |
+| `DINNERBELL_FEATURES` | None | Comma-separated feature flags to turn on. None exists now: 0.18.0 retired `assistant`. Dinnerbell refuses to start on an unknown name; `src/dinnerbell/domain/flags.py` lists them. A flag that a release retired is ignored, with a warning at startup; remove it when you see one. |
 
 The container image sets `DINNERBELL_BUILD` on builds from `main`. Don't add it to `.env`: even an empty line replaces the image's value.
 
@@ -57,11 +57,10 @@ To keep the secrets out of `.env`, see [Keep secrets in files](setup.md#keep-sec
 
 ## The assistant
 
-The assistant answers members' questions in plain language and drafts changes for them to confirm ([ADR 0009](adr/0009-optional-assistant.md)). It's optional, and works only when all three of these are set:
+The assistant answers members' questions in plain language and drafts changes for them to confirm ([ADR 0009](adr/0009-optional-assistant.md)). It's optional, and works only when both of these are set:
 
 - `DINNERBELL_ANTHROPIC_API_KEY`, the key for your Anthropic account. Anthropic bills that account for what the assistant uses.
-- The `assistant` flag in `DINNERBELL_FEATURES`. The flag hides the assistant while it's being built, even with a key set.
-- **Turn on the assistant** on **Admin** > **Assistant**. The tab shows only with the key and the flag.
+- **Turn on the assistant** on **Admin** > **Assistant**. The tab shows only with the key.
 
 Otherwise, nothing changes: no page, tab, or reply mentions the assistant, and Dinnerbell sends Anthropic nothing.
 

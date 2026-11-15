@@ -15,7 +15,9 @@ A language model can't make guarantees, and a veto is a guarantee (ADR 0005). Ca
 
 ## Decision
 
-**Always optional.** The assistant works only when all three are set: the operator's `DINNERBELL_ANTHROPIC_API_KEY`, the `assistant` flag (ADR 0006), and **Assistant** in Admin, which is audited and shows only with the key and flag. Otherwise no entry point renders, and Dinnerbell ignores DMs and mentions. Nothing else depends on it, and the default Slack app is unchanged. The flag hides a half-built assistant even with a key set, and retires one release after it turns on in production.
+**Always optional.** The assistant works only when both are set: the operator's `DINNERBELL_ANTHROPIC_API_KEY` and **Assistant** in Admin, which is audited and shows only with the key. Otherwise no entry point renders, and Dinnerbell ignores DMs and mentions. Nothing else depends on it, and the default Slack app is unchanged.
+
+Retired 2026-11-15 (#294): the `assistant` flag (ADR 0006), which hid the half-built assistant even with a key set, was on in production from 0.16.0 and is removed in 0.18.0. A `DINNERBELL_FEATURES` that still names it starts with a warning.
 
 **Anthropic, through its Python SDK.** Anthropic's Messages API with client-side tools, through the official `anthropic` package (Apache-2.0). The default model is `claude-sonnet-5-5`; `DINNERBELL_ASSISTANT_MODEL` can name another in Dinnerbell's price table.
 

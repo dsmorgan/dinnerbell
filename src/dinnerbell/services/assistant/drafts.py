@@ -98,7 +98,7 @@ NO_SUCH_DRAFT = "That draft is gone. Ask the assistant again."
 USED = "That draft was already confirmed or cancelled."
 EXPIRED = "That draft expired. Ask the assistant again for a new one."
 TURNED_OFF = "The assistant is turned off, so its drafts can't be confirmed."
-"""Also while the operator's key or flag is missing: the member can't tell those apart."""
+"""Also while the operator's key is missing: the member can't tell that from the switch."""
 TOO_MANY = f"The member has {MAX_OPEN_DRAFTS} drafts waiting already. Ask them to confirm or cancel those first."
 NOT_A_CANDIDATE = (
     "That isn't one of this call's candidates in that mode. Call find_candidates, and draft only "
@@ -489,7 +489,7 @@ async def confirm_draft(
     as ``tool_actor(member)``, in one transaction. A refusal from the service comes through
     unchanged and leaves the draft unused. Raises NotFound for a draft that isn't the member's,
     and ``DraftUnavailable`` for one used or expired, or while the assistant isn't available:
-    the key, the flag, and Admin's switch must all be set (``runtime.available``)."""
+    the key and Admin's switch must both be set (``runtime.available``)."""
     now = clock()
     draft = await _mine(db, member, draft_id)
     _check_usable(draft, now)

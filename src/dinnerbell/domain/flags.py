@@ -24,21 +24,13 @@ class Flag:
     """The release that added the flag, such as ``0.6.0``."""
 
 
-ASSISTANT = "assistant"
-
-_DEFINED: tuple[Flag, ...] = (
-    Flag(
-        ASSISTANT,
-        "The optional assistant (ADR 0009): Admin's Assistant settings, its cost cap, and its "
-        "conversations. It also needs DINNERBELL_ANTHROPIC_API_KEY.",
-        "0.16.0",
-    ),
-)
+_DEFINED: tuple[Flag, ...] = ()
+"""None now: ``assistant`` retired in 0.18.0. Add a flag as ``Flag(name, description, added_in)``."""
 
 FLAGS: Mapping[str, Flag] = MappingProxyType({flag.name: flag for flag in _DEFINED})
 """Every flag the code knows, by name."""
 
-RETIRED: Mapping[str, str] = MappingProxyType({})
+RETIRED: Mapping[str, str] = MappingProxyType({"assistant": "0.18.0"})
 """Every flag removed from ``FLAGS``, by name, with the release that removed it, such as
 ``0.14.0``. ``DINNERBELL_FEATURES`` may still name one after an upgrade: it's ignored, and the CLI
 warns. Never take a name off this list, and never reuse one."""

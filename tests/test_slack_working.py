@@ -151,7 +151,6 @@ def replying(monkeypatch: pytest.MonkeyPatch, reply: Reply) -> None:
 # The status ---------------------------------------------------------------------------------------
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_dm_shows_the_status_while_its_answered_and_clears_it_after_the_reply(
     slack: Slack, model: FakeModel
 ) -> None:
@@ -165,7 +164,6 @@ async def test_a_dm_shows_the_status_while_its_answered_and_clears_it_after_the_
     assert last == status_cleared(SAM_DM, root)
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_mention_shows_the_status_in_its_thread(slack: Slack) -> None:
     root = next_ts()
     await slack.mention("Sam", f"<@{BOT_USER}> any ideas?", ts=root)
@@ -180,7 +178,6 @@ async def test_a_mention_shows_the_status_in_its_thread(slack: Slack) -> None:
     ]
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_the_status_shows_before_the_model_answers(slack: Slack) -> None:
     slow = slow_model(slack)
     root = next_ts()
@@ -192,7 +189,6 @@ async def test_the_status_shows_before_the_model_answers(slack: Slack) -> None:
     assert steps(slack)[-1] == status_cleared(SAM_DM, root)
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_the_status_clears_after_an_ephemeral_reply(slack: Slack, monkeypatch: pytest.MonkeyPatch) -> None:
     replying(monkeypatch, Reply("Here's a draft.", (DraftView(1, "proposal", "A noodle place", ("Adds it.",)),)))
     root = next_ts()
@@ -202,7 +198,6 @@ async def test_the_status_clears_after_an_ephemeral_reply(slack: Slack, monkeypa
 
 
 @pytest.mark.parametrize("reply", [FAILED, OUT_OF_TIME], ids=["error", "deadline"])
-@pytest.mark.flag("assistant", on=True)
 async def test_the_status_clears_after_an_error_or_the_deadline_line(
     slack: Slack, monkeypatch: pytest.MonkeyPatch, reply: str
 ) -> None:
@@ -214,7 +209,6 @@ async def test_the_status_clears_after_an_error_or_the_deadline_line(
     assert steps(slack)[-1] == status_cleared(SAM_DM, root)
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_the_status_clears_when_the_reply_is_refused(slack: Slack) -> None:
     slack.fake.fail("chat.postMessage", Failure("not_in_channel"))
     root = next_ts()
@@ -222,7 +216,6 @@ async def test_the_status_clears_when_the_reply_is_refused(slack: Slack) -> None
     assert steps(slack)[-1] == status_cleared(SAM_DM, root)
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_the_status_clears_when_answering_breaks_after_converse(
     slack: Slack, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -241,7 +234,6 @@ def cancel_answers(slack: Slack) -> None:
         task.cancel()
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_cancelled_answer_still_clears_the_status(slack: Slack) -> None:
     slow = slow_model(slack)
     root = next_ts()
@@ -252,7 +244,6 @@ async def test_a_cancelled_answer_still_clears_the_status(slack: Slack) -> None:
     assert steps(slack) == [status_set(SAM_DM, root), status_cleared(SAM_DM, root)]
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_cancelled_answer_still_takes_its_reaction_back(slack: Slack) -> None:
     slack.fake.fail(SET_STATUS, Failure("method_not_supported_for_channel_type"))
     slow = slow_model(slack)
@@ -265,7 +256,6 @@ async def test_a_cancelled_answer_still_takes_its_reaction_back(slack: Slack) ->
     assert steps(slack)[1:] == [reacted("reactions.add", CHANNEL, ts), reacted("reactions.remove", CHANNEL, ts)]
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_cancel_while_clearing_still_clears(slack: Slack) -> None:
     slow = slow_model(slack)
     root = next_ts()
@@ -284,7 +274,6 @@ async def test_a_cancel_while_clearing_still_clears(slack: Slack) -> None:
 
 
 @pytest.mark.parametrize("who", ["guest", "stranger"])
-@pytest.mark.flag("assistant", on=True)
 async def test_messages_dinnerbell_ignores_get_no_indicator(house: House, slack: Slack, who: str) -> None:
     if who == "guest":
         async with house.sessionmaker() as db:
@@ -298,7 +287,6 @@ async def test_messages_dinnerbell_ignores_get_no_indicator(house: House, slack:
     assert steps(slack) == []
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_with_the_switch_off_there_is_no_indicator(house: House, helper: Assistant, slack: Slack) -> None:
     async with house.sessionmaker() as db:
         await admin.update_assistant(
@@ -308,14 +296,12 @@ async def test_with_the_switch_off_there_is_no_indicator(house: House, helper: A
     assert steps(slack) == []
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_file_gets_the_text_only_line_and_no_indicator(slack: Slack) -> None:
     await slack.dm("Sam", "", subtype="file_share", files=[{"id": "F1"}])
     assert methods(slack) == ["chat.postMessage"]
     assert steps(slack)[0][1]["text"] == TEXT_ONLY
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_message_while_one_is_answered_gets_no_indicator(slack: Slack) -> None:
     slow = slow_model(slack)
     first = next_ts()
@@ -334,7 +320,6 @@ async def test_a_message_while_one_is_answered_gets_no_indicator(slack: Slack) -
 # The reaction ------------------------------------------------------------------------------------
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_where_slack_refuses_the_status_the_message_gets_a_reaction(slack: Slack) -> None:
     slack.fake.fail(SET_STATUS, Failure("method_not_supported_for_channel_type"))
     root = next_ts()
@@ -345,7 +330,6 @@ async def test_where_slack_refuses_the_status_the_message_gets_a_reaction(slack:
     assert steps(slack)[-1] == reacted("reactions.remove", CHANNEL, root)
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_refusal_is_remembered_for_its_kind_of_conversation(slack: Slack) -> None:
     slack.fake.fail(SET_STATUS, Failure("method_not_supported_for_channel_type"))
     await slack.mention("Sam", f"<@{BOT_USER}> any ideas?")
@@ -360,7 +344,6 @@ async def test_a_refusal_is_remembered_for_its_kind_of_conversation(slack: Slack
 
 
 @pytest.mark.parametrize("error", ["ratelimited", "internal_error"])
-@pytest.mark.flag("assistant", on=True)
 async def test_a_passing_failure_falls_back_once_and_tries_the_status_again_next_time(slack: Slack, error: str) -> None:
     slack.fake.fail(SET_STATUS, Failure(error))
     await slack.dm("Sam", "Hi")
@@ -370,7 +353,6 @@ async def test_a_passing_failure_falls_back_once_and_tries_the_status_again_next
     assert methods(slack) == [SET_STATUS, "chat.postMessage", SET_STATUS]
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_without_reactions_write_the_reply_still_posts_and_neither_is_tried_again(slack: Slack) -> None:
     slack.fake.fail(SET_STATUS, Failure("method_not_supported_for_channel_type"))
     slack.fake.fail("reactions.add", Failure("missing_scope"))
@@ -381,7 +363,6 @@ async def test_without_reactions_write_the_reply_still_posts_and_neither_is_trie
     assert methods(slack) == ["chat.postMessage"]
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_reaction_already_there_or_gone_counts_as_done(slack: Slack) -> None:
     slack.fake.fail(SET_STATUS, Failure("internal_error"))
     slack.fake.fail("reactions.add", Failure("already_reacted"))
@@ -390,7 +371,6 @@ async def test_a_reaction_already_there_or_gone_counts_as_done(slack: Slack) -> 
     assert methods(slack) == [SET_STATUS, "reactions.add", "chat.postMessage", "reactions.remove"]
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_slow_status_never_holds_up_the_reply(slack: Slack) -> None:
     held = slack.fake.gates[SET_STATUS] = asyncio.Event()  # Slack hasn't answered yet
     root = next_ts()
@@ -402,7 +382,6 @@ async def test_a_slow_status_never_holds_up_the_reply(slack: Slack) -> None:
     assert steps(slack)[-1] == status_cleared(SAM_DM, root)  # cleared once Slack answered
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_status_that_times_out_falls_back_and_is_cleared_too(
     slack: Slack, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -418,7 +397,6 @@ async def test_a_status_that_times_out_falls_back_and_is_cleared_too(
     assert methods(slack) == [SET_STATUS, "chat.postMessage", SET_STATUS]
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_status_lost_in_transit_falls_back_and_is_cleared_too(slack: Slack) -> None:
     slack.fake.fail(SET_STATUS, Failure(raises=aiohttp.ClientConnectionError("reset")))
     root = next_ts()
@@ -427,7 +405,6 @@ async def test_a_status_lost_in_transit_falls_back_and_is_cleared_too(slack: Sla
     assert steps(slack)[3] == status_cleared(SAM_DM, root)  # Slack may have set it before the error
 
 
-@pytest.mark.flag("assistant", on=True)
 @pytest.mark.parametrize("failures", [1, 2])
 async def test_a_failed_reaction_removal_is_tried_once_more(slack: Slack, failures: int) -> None:
     slack.fake.fail(SET_STATUS, Failure("method_not_supported_for_channel_type"))
@@ -437,7 +414,6 @@ async def test_a_failed_reaction_removal_is_tried_once_more(slack: Slack, failur
     assert methods(slack).count("reactions.remove") == 2  # and no more
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_refusal_is_forgotten_after_an_hour(house: House, slack: Slack) -> None:
     slack.fake.fail(SET_STATUS, Failure("method_not_supported_for_channel_type"))
     slack.fake.fail("reactions.add", Failure("missing_scope"))  # reactions:write not added yet
@@ -467,7 +443,6 @@ class Held(FakeModel):
         return await super().create(request, time_left=time_left, events=events)
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_two_answers_in_one_thread_clear_the_status_only_after_the_last(slack: Slack) -> None:
     held = Held()
     assert slack.conn.assistant is not None
@@ -504,7 +479,6 @@ async def a_few_turns() -> None:
         await asyncio.sleep(0)
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_the_last_clear_waits_for_a_status_set_again_before_it(slack: Slack) -> None:
     held = held_model(slack)
     root = next_ts()
@@ -525,7 +499,6 @@ async def test_the_last_clear_waits_for_a_status_set_again_before_it(slack: Slac
     assert statuses == [status_set(CHANNEL, root)] * 3 + [status_cleared(CHANNEL, root)]
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_message_that_starts_during_the_last_clear_keeps_its_status(slack: Slack) -> None:
     held = held_model(slack)
     root = next_ts()
@@ -551,7 +524,6 @@ async def test_a_message_that_starts_during_the_last_clear_keeps_its_status(slac
     assert threads == {}
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_second_cancel_doesnt_stop_the_clear(slack: Slack) -> None:
     slow = slow_model(slack)
     root = next_ts()
@@ -569,7 +541,6 @@ async def test_a_second_cancel_doesnt_stop_the_clear(slack: Slack) -> None:
     assert slack.conn.assistant is not None and slack.conn.assistant.indicators.threads == {}  # it finished
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_cancel_stops_waiting_for_a_hung_clear_after_cancel_seconds(
     slack: Slack, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -587,7 +558,6 @@ async def test_a_cancel_stops_waiting_for_a_hung_clear_after_cancel_seconds(
     assert "slack working indicator not cleared in time after a cancel" in caplog.text
 
 
-@pytest.mark.flag("assistant", on=True)
 @pytest.mark.parametrize("code", ["channel_not_found", "invalid_arguments"])
 async def test_a_status_slack_answered_with_a_permanent_error_isnt_cleared(slack: Slack, code: str) -> None:
     slack.fake.fail(SET_STATUS, Failure(code))  # PermanentDeliveryError: Slack answered, so it isn't showing
@@ -596,7 +566,6 @@ async def test_a_status_slack_answered_with_a_permanent_error_isnt_cleared(slack
     assert methods(slack) == [SET_STATUS, "reactions.add", "chat.postMessage"]  # nothing to clear
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_a_message_in_someone_elses_conversation_gets_no_indicator(house: House, slack: Slack) -> None:
     root = next_ts()
     await slack.dm("Sam", "Hi", ts=root)
@@ -610,7 +579,6 @@ async def test_a_message_in_someone_elses_conversation_gets_no_indicator(house: 
 # Logs --------------------------------------------------------------------------------------------
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_failures_are_logged_by_type_without_the_message(
     slack: Slack, caplog: pytest.LogCaptureFixture, house: House
 ) -> None:

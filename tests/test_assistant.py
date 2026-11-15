@@ -125,11 +125,8 @@ def user_texts(request: dict[str, Any]) -> list[str]:
     return [m["content"] for m in request["messages"] if m["role"] == "user" and isinstance(m["content"], str)]
 
 
-@pytest.mark.flag("assistant", on=False)
-async def test_with_the_flag_off_nothing_answers_or_shows(
-    settings: Settings, house: House, helper: Assistant, model: FakeModel
-) -> None:
-    assert settings.anthropic_api_key is not None
+async def test_without_the_key_nothing_answers_or_shows(house: House, helper: Assistant, model: FakeModel) -> None:
+    helper = replace(helper, config=replace(helper.config, key_set=False))
     assert not helper.config.configured
     async with house.sessionmaker() as db:
         assert not await available(db, helper.config, house["Sam"])
@@ -154,23 +151,18 @@ def test_the_deadline_comes_before_the_web_page_gives_up() -> None:
     assert MESSAGE_SECONDS * 1000 < SEND_TIMEOUT_MS
 
 
-@pytest.mark.flag("assistant", on=True)
 class TestAssistantOn:
-    async def test_availability_needs_the_key_the_flag_the_switch_and_a_member(
-        self, settings: Settings, house: House, helper: Assistant
-    ) -> None:
+    async def test_availability_needs_the_key_the_switch_and_a_member(self, house: House, helper: Assistant) -> None:
         assert helper.config.configured
         sam = house["Sam"]
         async with house.sessionmaker() as db:
             assert not await available(db, helper.config, sam)  # the switch starts off
         await switch(house, helper)
         no_key = replace(helper.config, key_set=False)
-        no_flag = replace(helper.config, flag_on=False)
         async with house.sessionmaker() as db:
             assert await available(db, helper.config, sam)
             assert await available(db, helper.config, house["Alex"])  # an admin, as a member
             assert not await available(db, no_key, sam)
-            assert not await available(db, no_flag, sam)
             assert not await available(db, helper.config, replace(sam, active=False))
             assert not await available(db, helper.config, replace(sam, role=Role.GUEST, email=None))
 

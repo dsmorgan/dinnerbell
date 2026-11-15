@@ -57,7 +57,7 @@ async def house(database: Database, clock: FakeClock, migrated: Settings) -> Asy
     house = await furnish(await make_house(database.sessionmaker, clock, migrated.admin_email))
     async with house.sessionmaker() as db:
         await admin.update_assistant(
-            db, AssistantConfig(key_set=True, flag_on=True), house["Alex"], AssistantSettings(enabled=True), now=clock()
+            db, AssistantConfig(key_set=True), house["Alex"], AssistantSettings(enabled=True), now=clock()
         )
     yield house
     await house.close()
@@ -97,7 +97,6 @@ async def stored(house: House) -> AssistantConversationRow:
     return row
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_every_call_sends_the_roster_of_active_members_and_never_a_guest_or_a_former_member(
     house: House, helper: Assistant, model: FakeModel
 ) -> None:
@@ -120,7 +119,6 @@ async def test_every_call_sends_the_roster_of_active_members_and_never_a_guest_o
     assert "Kim" not in json.dumps(row.transcript)
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_the_roster_is_rebuilt_for_each_message_and_labels_never_move(
     house: House, helper: Assistant, model: FakeModel
 ) -> None:
@@ -141,7 +139,6 @@ async def test_the_roster_is_rebuilt_for_each_message_and_labels_never_move(
     assert row.pseudonyms[str(house["Alex"].id)] == 2 and row.pseudonyms[str(house["Mia"].id)] == 5
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_whether_a_typed_name_is_a_guest_changes_nothing_that_goes_out(
     house: House, helper: Assistant, model: FakeModel
 ) -> None:
@@ -181,7 +178,6 @@ def test_the_prompt_says_to_match_names_ask_when_two_fit_and_answer_every_unknow
     assert system_prompt(keeps_history=True) == SYSTEM_PROMPT  # the fixed block has no household data
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_two_close_names_both_reach_the_model_so_it_can_ask(
     house: House, helper: Assistant, model: FakeModel
 ) -> None:
@@ -206,7 +202,6 @@ def test_a_display_name_stays_inside_its_quotes() -> None:
     assert json.loads(second.removeprefix("Member 2: ")) == hostile
 
 
-@pytest.mark.flag("assistant", on=True)
 async def test_the_least_call_admin_shows_counts_the_households_roster(house: House) -> None:
     """Admin > Assistant's smallest message (#253) includes the roster it sends, so a longer
     roster needs more room under the cap, a channel thread's message too."""

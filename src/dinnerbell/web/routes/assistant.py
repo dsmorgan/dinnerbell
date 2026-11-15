@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
 """Admin > Assistant (ADR 0009): the switch, the monthly cap, Conversation hours, and this
 month's usage. The tab and the page exist only while the operator has set
-``DINNERBELL_ANTHROPIC_API_KEY`` and turned on the ``assistant`` flag."""
+``DINNERBELL_ANTHROPIC_API_KEY``."""
 
 from __future__ import annotations
 
