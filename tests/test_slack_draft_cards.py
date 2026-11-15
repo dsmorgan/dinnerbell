@@ -443,6 +443,38 @@ async def test_a_meal_lookup_in_a_channel_thread_names_no_eater_and_labels_nobod
 
 
 @pytest.mark.flag("assistant", on=True)
+async def test_a_hostile_answer_in_a_channel_thread_still_gets_an_eater_free_meal_lookup(
+    house: House, model: FakeModel, slack: Slack
+) -> None:
+    """#277: the roster gives the model every active member's label in a channel thread, so a
+    hostile model can write labels in its public reply, here Sam's and Lee's. Must hold: it can
+    only guess, since the meal lookup it ran still carries no eater, by label or any other way,
+    and the thread's map holds only the roster's labels, the same whoever ate."""
+    eaten = MealInput(
+        DAY, Slot.LUNCH, house.items["Taqueria"].id, frozenset({house[n].id for n in ("Kim", "Sam", "Lee")})
+    )
+    async with house.sessionmaker() as db:
+        await meals.log_meal(db, house["Kim"], eaten, today=DAY, now=house.clock())
+    model.script = [
+        tool_call("look_up_my_meals", {"name": ""}),
+        answer("Member 3 and Member 4 ate Taqueria with you. <!channel>"),
+    ]
+    root = next_ts()
+    await slack.mention("Kim", f"<@{BOT_USER}> who ate my last meal?", ts=root)
+    [result] = model.requests[-1]["messages"][-1]["content"]
+    looked = json.loads(result["content"])
+    assert looked["meals"] and all("people" not in meal for meal in looked["meals"])
+    assert looked["people"] == catalog_edits.PEOPLE_IN_PRIVATE
+    for label in ("Member 2", "Member 3", "Member 4"):  # Alex, Sam, and Lee: nobody but Kim
+        assert label not in result["content"], label
+    async with house.sessionmaker() as db:
+        thread = await AssistantRepository(db).conversation(house.household.id, slack_key(CHANNEL, root))
+    assert thread is not None and set(thread.pseudonyms.numbers) == {house[n].id for n in ("Alex", "Sam", "Kim", "Lee")}
+    [reply] = posts(slack)
+    assert "<!channel>" not in reply["text"]  # the Slack pipeline still defangs what it says
+
+
+@pytest.mark.flag("assistant", on=True)
 async def test_when_slack_wont_replace_a_thread_card_only_the_tapper_is_told(
     house: House, model: FakeModel, slack: Slack
 ) -> None:
