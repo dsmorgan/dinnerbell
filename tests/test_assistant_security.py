@@ -112,6 +112,7 @@ from tests.support.calls import (
     House,
     dinner_id,
     fresh_roster,
+    household_members,
     make_house,
     nobody_coordinates,
 )
@@ -1107,9 +1108,13 @@ async def test_the_worst_case_reservation_counts_the_needs_and_can_usually_schem
     reserves less; and the least cap Admin computes grows with them too."""
     new = {"draft_dietary_needs", "draft_can_usually"}
     words = "Turn off pick up for me"
+    roster = await fresh_roster(house, "Sam")  # what Sam's first message sends (#277)
+    members = await household_members(house)
 
     def need(offered: Sequence[Any]) -> int:
-        first = build_request(MODEL, offered, conversation._messages((), turn(words)), keeps_history=True)
+        first = build_request(
+            MODEL, offered, conversation._messages((), turn(words)), keeps_history=True, roster=roster
+        )
         return reservation_micros(MODEL, payload_bytes=request_bytes(first), max_tokens=first["max_tokens"])
 
     private = tools.tools_for(True)
@@ -1117,9 +1122,9 @@ async def test_the_worst_case_reservation_counts_the_needs_and_can_usually_schem
     without = need([t for t in private if t.name not in new])
     full = need(private)
     assert need(tools.tools_for(False)) < without < full
-    least = conversation.least_private_call_micros(MODEL)
+    least = conversation.least_private_call_micros(MODEL, members)
     monkeypatch.setattr(tools, "TOOLS", tuple(t for t in tools.TOOLS if t.name not in new))
-    assert conversation.least_private_call_micros(MODEL) < least
+    assert conversation.least_private_call_micros(MODEL, members) < least
     monkeypatch.undo()
 
     await switch(house, helper, enabled=True, cap_dollars=1)
