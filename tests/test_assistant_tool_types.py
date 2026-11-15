@@ -32,11 +32,12 @@ from dinnerbell.domain.assistant import AssistantSettings, Pseudonyms, web_key
 from dinnerbell.domain.catalog import Mode, TagKind
 from dinnerbell.domain.events import EventState, RoleOffer, Status
 from dinnerbell.domain.guests import GuestInput
-from dinnerbell.domain.meals import Slot
-from dinnerbell.services import call_admin, calls, guests, offers
+from dinnerbell.domain.meals import MealInput, Slot
+from dinnerbell.services import call_admin, calls, guests, meals, offers
 from dinnerbell.services.assistant import admin, tools
 from dinnerbell.services.assistant.runtime import AssistantConfig
 from dinnerbell.services.assistant.tools import ToolResult, ToolSession
+from dinnerbell.services.away import set_my_away
 from dinnerbell.services.database import Database, open_database
 from tests.support.calls import MEAL, OPENS, RESPOND_BY, House, dinner_id, furnish, make_house
 from tests.support.clock import FakeClock
@@ -162,6 +163,37 @@ async def eaten(house: House) -> dict[str, Any]:
     return {"meal": meal.id}
 
 
+async def voting_with_pick(house: House) -> dict[str, Any]:
+    """As ``voting``; the baseline names Taqueria's pick by its number."""
+    await voting(house)
+    ctx = await house.context(await dinner_id(house))
+    return {"pick": next(p.id for p in ctx.picks if p.item_id == house.items["Taqueria"].id)}
+
+
+async def logged(house: House) -> dict[str, Any]:
+    """Sam logged Siam Garden for dinner two days ago, with Sam alone; the baseline names it."""
+    async with house.sessionmaker() as db:
+        meal = await meals.log_meal(
+            db,
+            house[ASKER],
+            MealInput(
+                house.clock().date() - timedelta(days=2),
+                Slot.DINNER,
+                house.items["Siam Garden"].id,
+                frozenset({house[ASKER].id}),
+            ),
+            today=house.clock().date(),
+            now=house.clock(),
+        )
+    return {"meal": meal.id}
+
+
+async def away(house: House) -> None:
+    """Sam is away tomorrow."""
+    tomorrow = house.clock().date() + timedelta(days=1)
+    await act(house, set_my_away, house[ASKER], tomorrow, tomorrow)
+
+
 async def with_dietary_tags(house: House) -> None:
     await house.tag("Vegetarian", TagKind.DIETARY)
 
@@ -169,10 +201,14 @@ async def with_dietary_tags(house: House) -> None:
 @dataclass(frozen=True)
 class Baseline:
     """Input the tool accepts once ``stage`` has run. A stage may return values for the fields
-    that depend on what it made, such as a meal's number; a tool without that field ignores it."""
+    that depend on what it made, such as a meal's number; a tool without that field ignores it.
+    A tool has more than one baseline when another field decides whether a text field may be
+    empty, such as a pick by number, whose name is then empty, or by name with pick 0."""
 
     stage: Callable[[House], Awaitable[Mapping[str, Any] | None]]
     input: Mapping[str, Any] = field(default_factory=dict)
+    label: str = ""
+    """Names a tool's second and later baselines in the test IDs."""
 
 
 CALL = {"slot": "", "day": ""}
@@ -193,63 +229,103 @@ NO_EDIT = {
     "servings": 0,
     "clear": [],
 }
-BASELINES: dict[str, Baseline] = {
-    "look_up_catalog_items": Baseline(nothing, {"name": "", "tag": ""}),
-    "look_up_history": Baseline(
-        nothing, {"name": "", "tag": "", "kind": "", "since": "", "until": "", "order": "most"}
+BASELINES: dict[str, tuple[Baseline, ...]] = {
+    "look_up_catalog_items": (Baseline(nothing, {"name": "", "tag": ""}),),
+    "look_up_history": (
+        Baseline(nothing, {"name": "", "tag": "", "kind": "", "since": "", "until": "", "order": "most"}),
     ),
-    "find_candidates": Baseline(voting, DINNER | {"not_eaten_in_days": 0, "cuisine": "", "mode": ""}),
-    "draft_proposal": Baseline(voting, DINNER | {"name": "Sam's Tacos", "mode": "cook"}),
-    "draft_offer": Baseline(
-        nothing,
-        {"name": "Taqueria", "mode": "pickup", "slot": "lunch", "day": "tomorrow", "time": "", "spare_servings": 0},
+    "find_candidates": (Baseline(voting, DINNER | {"not_eaten_in_days": 0, "cuisine": "", "mode": ""}),),
+    "draft_proposal": (Baseline(voting, DINNER | {"name": "Sam's Tacos", "mode": "cook"}),),
+    "draft_offer": (
+        Baseline(
+            nothing,
+            {"name": "Taqueria", "mode": "pickup", "slot": "lunch", "day": "tomorrow", "time": "", "spare_servings": 0},
+        ),
     ),
-    "draft_catalog_items": Baseline(nothing, {"catalog_file": CATALOG_FILE}),
-    "draft_catalog_from_link": Baseline(nothing, {"url": MENU_LINK, "kind": ""}),
-    "look_up_call": Baseline(answering, CALL),
-    "draft_answer": Baseline(answering, CALL | {"answer": "in"}),
-    "draft_vote": Baseline(voting, CALL | {"pick": 0, "name": "Taqueria", "mode": "pickup", "vote": True}),
-    "draft_suggestion": Baseline(answered, CALL | {"name": "Taqueria"}),
-    "draft_role": Baseline(answered, CALL | {"role": "pickup", "offer": True}),
-    "draft_take_back_offer": Baseline(offered, CALL),
-    "draft_invite_guest": Baseline(answered, CALL | {"name": "Gwendolyn", "needs": []}),
-    "draft_guest_answer": Baseline(
-        with_a_guest, CALL | {"name": "Gwendolyn", "answer": "out", "role": "", "offer": False}
+    "draft_catalog_items": (Baseline(nothing, {"catalog_file": CATALOG_FILE}),),
+    "draft_catalog_from_link": (Baseline(nothing, {"url": MENU_LINK, "kind": ""}),),
+    "look_up_call": (Baseline(answering, CALL),),
+    "draft_answer": (Baseline(answering, CALL | {"answer": "in"}),),
+    "draft_vote": (
+        Baseline(voting, CALL | {"pick": 0, "name": "Taqueria", "mode": "pickup", "vote": True}),
+        Baseline(voting_with_pick, CALL | {"pick": 0, "name": "", "mode": "", "vote": True}, "by_number"),
     ),
-    "draft_call": Baseline(nothing, {"slot": "lunch", "day": "tomorrow"}),
-    "look_up_my_preferences": Baseline(nothing, {"name": ""}),
-    "draft_preference": Baseline(nothing, {"what": "", "name": "Taqueria", "level": "veto"}),
-    "look_up_my_feedback": Baseline(eaten, {"name": ""}),
-    "draft_feedback": Baseline(
-        eaten,
-        {"meal": 0, "rating": "liked", "went_wrong": [], "what_went_wrong": "", "thank_cook": False, "cook_note": ""},
+    "draft_suggestion": (Baseline(answered, CALL | {"name": "Taqueria"}),),
+    "draft_role": (Baseline(answered, CALL | {"role": "pickup", "offer": True}),),
+    "draft_take_back_offer": (Baseline(offered, CALL),),
+    "draft_invite_guest": (Baseline(answered, CALL | {"name": "Gwendolyn", "needs": []}),),
+    "draft_guest_answer": (
+        Baseline(with_a_guest, CALL | {"name": "Gwendolyn", "answer": "out", "role": "", "offer": False}),
     ),
-    "draft_away": Baseline(nothing, {"first": "tomorrow", "last": "tomorrow", "clear": False}),
-    "draft_dietary_needs": Baseline(with_dietary_tags, {"add": ["Vegetarian"], "remove": []}),
-    "draft_can_usually": Baseline(nothing, {"cook": "on", "pick_up": "", "order": ""}),
-    "look_up_coordinating": Baseline(voting, DINNER),
-    "draft_decide": Baseline(
-        voting, DINNER | {"pick": 0, "name": "Taqueria", "mode": "pickup", "break_tie": False} | NO_ROLES
+    "draft_call": (Baseline(nothing, {"slot": "lunch", "day": "tomorrow"}),),
+    "look_up_my_preferences": (Baseline(nothing, {"name": ""}),),
+    "draft_preference": (Baseline(nothing, {"what": "", "name": "Taqueria", "level": "veto"}),),
+    "look_up_my_feedback": (Baseline(eaten, {"name": ""}),),
+    "draft_feedback": (
+        Baseline(
+            eaten,
+            {
+                "meal": 0,
+                "rating": "liked",
+                "went_wrong": [],
+                "what_went_wrong": "",
+                "thank_cook": False,
+                "cook_note": "",
+            },
+        ),
     ),
-    "draft_shuffle": Baseline(voting, DINNER),
-    "draft_plan": Baseline(decided, DINNER | {"meal_time": "19:00", "place": "Siam Garden"} | NO_ROLES),
-    "draft_hand_off": Baseline(voting, DINNER | {"to": "Member 3"}),
-    "draft_mark_done": Baseline(decided, DINNER),
-    "draft_call_off": Baseline(voting, DINNER | {"reason": ""}),
-    "draft_catalog_edit": Baseline(nothing, NO_EDIT | {"name": "Taqueria", "meals": ["dinner"], "notes": "Cash only."}),
-    "look_up_my_meals": Baseline(nothing, {"name": ""}),
-    "draft_meal": Baseline(
-        nothing,
-        {
-            "meal": 0,
-            "delete": False,
-            "day": "yesterday",
-            "slot": "dinner",
-            "name": "Taqueria",
-            "kind": "",
-            "add_people": [],
-            "remove_people": [],
-        },
+    "draft_away": (
+        Baseline(nothing, {"first": "tomorrow", "last": "tomorrow", "clear": False}),
+        Baseline(away, {"first": "", "last": "", "clear": True}, "clear"),
+    ),
+    "draft_dietary_needs": (Baseline(with_dietary_tags, {"add": ["Vegetarian"], "remove": []}),),
+    "draft_can_usually": (Baseline(nothing, {"cook": "on", "pick_up": "", "order": ""}),),
+    "look_up_coordinating": (Baseline(voting, DINNER),),
+    "draft_decide": (
+        Baseline(voting, DINNER | {"pick": 0, "name": "Taqueria", "mode": "pickup", "break_tie": False} | NO_ROLES),
+        Baseline(
+            voting_with_pick,
+            DINNER | {"pick": 0, "name": "", "mode": "", "break_tie": False} | NO_ROLES,
+            "by_number",
+        ),
+    ),
+    "draft_shuffle": (Baseline(voting, DINNER),),
+    "draft_plan": (Baseline(decided, DINNER | {"meal_time": "19:00", "place": "Siam Garden"} | NO_ROLES),),
+    "draft_hand_off": (Baseline(voting, DINNER | {"to": "Member 3"}),),
+    "draft_mark_done": (Baseline(decided, DINNER),),
+    "draft_call_off": (Baseline(voting, DINNER | {"reason": ""}),),
+    "draft_catalog_edit": (
+        Baseline(nothing, NO_EDIT | {"name": "Taqueria", "meals": ["dinner"], "notes": "Cash only."}),
+    ),
+    "look_up_my_meals": (Baseline(nothing, {"name": ""}),),
+    "draft_meal": (
+        Baseline(
+            nothing,
+            {
+                "meal": 0,
+                "delete": False,
+                "day": "yesterday",
+                "slot": "dinner",
+                "name": "Taqueria",
+                "kind": "",
+                "add_people": [],
+                "remove_people": [],
+            },
+        ),
+        Baseline(
+            logged,
+            {
+                "meal": 0,
+                "delete": False,
+                "day": "",
+                "slot": "",
+                "name": "",
+                "kind": "",
+                "add_people": ["Member 3"],
+                "remove_people": [],
+            },
+            "edit",
+        ),
     ),
 }
 
@@ -280,17 +356,26 @@ def test_every_baseline_is_for_a_tool_and_has_exactly_its_fields() -> None:
     """A tool added without a baseline fails the next test; this one fails on a stale baseline."""
     by_name = {t.name: t for t in tools.TOOLS}
     assert set(BASELINES) == set(by_name)
-    for name, baseline in BASELINES.items():
-        assert set(baseline.input) == set(by_name[name].input_schema["properties"]), name
+    for name, baselines in BASELINES.items():
+        for baseline in baselines:
+            assert set(baseline.input) == set(by_name[name].input_schema["properties"]), name
 
 
-@pytest.mark.parametrize("tool", tools.TOOLS, ids=lambda t: t.name)
-async def test_every_tool_refuses_input_of_the_wrong_type(house: House, tool: tools.Tool) -> None:
+CASES = [
+    pytest.param(tool, n, id=tool.name + (f"-{b.label}" if n else ""))
+    for tool in tools.TOOLS
+    for n, b in enumerate(BASELINES.get(tool.name, (Baseline(nothing),)))
+]
+"""Each tool's baselines. A tool without one still gets a case, which fails."""
+
+
+@pytest.mark.parametrize(("tool", "n"), CASES)
+async def test_every_tool_refuses_input_of_the_wrong_type(house: House, tool: tools.Tool, n: int) -> None:
     """The baseline works, and breaking any one field, or one element of a list, is refused in
     words that name that field: an error for the model, never a crash or a refusal about
     something else. For a text field, the words suggest an empty string only when the tool
     takes one there."""
-    baseline = BASELINES[tool.name]
+    baseline = BASELINES[tool.name][n]
     made = await baseline.stage(house) or {}
     good = {name: made.get(name, value) for name, value in baseline.input.items()}
     accepted = await run(house, tool.name, good)
