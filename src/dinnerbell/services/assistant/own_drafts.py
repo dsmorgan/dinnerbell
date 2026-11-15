@@ -457,13 +457,18 @@ async def needs_draft(db: AsyncSession, actor: Member, add: Sequence[str], remov
     if adding & removing:
         raise ToolRefusal(ADD_AND_REMOVE)
     before = me.dietary_needs
-    after = frozenset((before | adding) - removing)
-    if after == before:
+    # A stored ID that's no longer a dietary tag, such as one a tag merge left behind, shows
+    # nowhere and would fail ``set_my_needs``' check, so the draft drops it, as a Preferences
+    # save does, whose checkboxes list only live tags. Confirm's stale check uses ``before`` as
+    # stored.
+    live = before & {t.id for t in tags}
+    after = frozenset((live | adding) - removing)
+    if after == live:
         raise ToolRefusal(NOTHING_TO_DO)
     await guest_service.check_my_needs(db, me, after)
-    added = [t.name for t in tags if t.id in after - before]
-    removed = [t.name for t in tags if t.id in before - after]
-    lines = needs_lines(before=_names(tags, before), after=_names(tags, after))
+    added = [t.name for t in tags if t.id in after - live]
+    removed = [t.name for t in tags if t.id in live - after]
+    lines = needs_lines(before=_names(tags, live), after=_names(tags, after))
     payload = {"needs": sorted(after), "before": sorted(before)}
     return DraftSpec(DraftKind.NEEDS, payload, needs_title(added, removed), lines, None)
 
