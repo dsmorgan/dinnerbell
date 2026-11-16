@@ -2752,3 +2752,36 @@ def test_0039_lets_drafts_hold_needs_and_can_usually_keeps_every_row_and_never_r
     _downgrade_to(settings, "0038_shown_places")
     sql, down = _drafts(settings)
     assert "AUTOINCREMENT" in sql and "'needs'" not in sql and down == after
+
+
+def _needs(settings: Settings) -> dict[int, list[int]]:
+    engine = create_engine(settings.sync_database_url)
+    try:
+        with engine.connect() as c:
+            rows = c.execute(text("SELECT id, dietary_needs FROM member ORDER BY id")).all()
+    finally:
+        engine.dispose()
+    return {int(member_id): json.loads(needs) for member_id, needs in rows}
+
+
+def test_0040_keeps_only_dietary_needs_that_name_one_of_the_households_dietary_tags(settings: Settings) -> None:
+    """Up drops IDs a past tag merge left in members' dietary needs (#298): a removed tag, a tag
+    of another kind, and another household's dietary tag. It keeps the rest. Down changes nothing."""
+    _upgrade_to(settings, "0039_assistant_needs")
+    _populate_calls(settings)
+    _execute(
+        settings,
+        "INSERT INTO household (id, name, timezone, settings, created_at) VALUES (2, 'Other', 'UTC', '{}', :t)",
+        "INSERT INTO tag (id, household_id, kind, name, name_key, created_at) VALUES "
+        "(10, 1, 'dietary', 'Vegan', 'vegan', :t), (11, 1, 'cuisine', 'Lao', 'lao', :t), "
+        "(12, 2, 'dietary', 'Halal', 'halal', :t), (13, 1, 'dietary', 'Kosher', 'kosher', :t)",
+        "INSERT INTO member (id, household_id, display_name, email, role, can_cook, can_pickup, can_order, "
+        "mute_dm_reminders, feedback_reminder, active, slack_link_locked, created_at, updated_at) "
+        "VALUES (2, 1, 'Alex', 'alex@example.com', 'member', 0, 0, 0, 0, 0, 1, 0, :t, :t)",
+        "UPDATE member SET dietary_needs = '[99, 11, 10, 12]' WHERE id = 1",
+        "UPDATE member SET dietary_needs = '[13, 10]' WHERE id = 2",
+    )
+    _upgrade_to(settings, "0040_orphan_dietary_needs")
+    assert _needs(settings) == {1: [10], 2: [13, 10]}  # an untouched list keeps its order
+    _downgrade_to(settings, "0039_assistant_needs")
+    assert _needs(settings) == {1: [10], 2: [13, 10]}
