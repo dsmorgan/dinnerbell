@@ -15,7 +15,7 @@ from sqlalchemy import select, text
 
 from dinnerbell.config import Settings
 from dinnerbell.db.models import CatalogItemRow, MemberRow, ProposalRow, ResponseRow
-from dinnerbell.domain.catalog import Mode, TagKind
+from dinnerbell.domain.catalog import CatalogRuleViolation, Mode, TagKind
 from dinnerbell.domain.events import (
     COORDINATOR_NOT_IN,
     AssignmentRole,
@@ -880,6 +880,9 @@ async def test_tag_merges_repoint_members_own_dietary_needs_and_calls_honor_them
             household_id=other.id, display_name="Kim", dietary_needs=frozenset({plant.id}), now=house.clock()
         )
         await db.commit()
+        spicy = await house.tag("Spicy", TagKind.OTHER)
+        with pytest.raises(CatalogRuleViolation, match="Merge a dietary tag only into another dietary tag"):
+            await catalog_service.merge_tags(db, house["Alex"], plant.id, spicy.id, now=house.clock())
         await catalog_service.merge_tags(db, house["Alex"], plant.id, vegan.id, now=house.clock())
         after = {m.id: (await members.get(m.household_id, m.id)) for m in (guest, theirs)}
         stored = await db.scalar(select(MemberRow.dietary_needs).where(MemberRow.id == house["Alex"].id))
