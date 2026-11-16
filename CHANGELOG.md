@@ -17,12 +17,14 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ### Fixed
 
+- **Merging tags keeps members' and guests' own dietary needs** (#298). Merging a dietary tag moved items, preferences, meal history, and the needs of guests a member brings to the other tag, but not the dietary needs a member or guest set for themselves. Those went on naming the removed tag: calls stopped holding picks to the need, Preferences stopped showing it, and the next **Save needs** dropped it. A merge now moves those needs too. A dietary tag now merges only into another dietary tag, as a cuisine merges only into a cuisine, so a need never ends up on a tag Preferences can't show.
 - **The assistant's tools no longer tell the model to send an empty string where one can't work** (#283). Input of the wrong type for a name, day, or label a tool must have, such as a new guest's name or the member to hand off to, came back with "send an empty string for any"; now it says only that the field must be a string. Fields an empty string fills, such as a search or a part of a plan to keep, still say so.
 
 ### Upgrade notes
 
 - **Migration 0039** rebuilds `assistant_draft` so its `kind` accepts drafts of a member's dietary needs and **I can usually** (#278), keeping every draft and its IDs. A downgrade to 0038 deletes those drafts still waiting for Confirm.
 - **Remove `assistant` from `DINNERBELL_FEATURES`** (#294). Dinnerbell ignores it now and logs a warning at startup until you take it out of `.env`. An install with the key and the Admin switch on keeps its assistant. An install with the key but without the flag now shows Admin > **Assistant**, with the assistant off until an admin turns it on.
+- **Migration 0040** removes dietary needs that name no dietary tag of the member's household (#298), which tag merges before this release left behind. It can't tell which tag a lost need was merged into, so if your household ever merged dietary tags, ask members and guests to check **Dietary needs** on Preferences. A downgrade to 0039 changes nothing.
 - **The assistant starts sending members' display names** (#277). In a household with the assistant on, every request sends each active member's display name with their label from the first message after the upgrade. No admin action is needed, and nothing asks first. Admin > **Assistant** says so; to stop it, turn the assistant off there.
 
 ## [0.17.0] - 2026-11-14

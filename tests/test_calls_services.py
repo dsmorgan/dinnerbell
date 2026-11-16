@@ -14,8 +14,8 @@ import pytest
 from sqlalchemy import select, text
 
 from dinnerbell.config import Settings
-from dinnerbell.db.models import CatalogItemRow, ProposalRow, ResponseRow
-from dinnerbell.domain.catalog import Mode, TagKind
+from dinnerbell.db.models import CatalogItemRow, MemberRow, ProposalRow, ResponseRow
+from dinnerbell.domain.catalog import CatalogRuleViolation, Mode, TagKind
 from dinnerbell.domain.events import (
     COORDINATOR_NOT_IN,
     AssignmentRole,
@@ -35,7 +35,7 @@ from dinnerbell.domain.notifications import CallUpdated, from_payload
 from dinnerbell.domain.preferences import Stance, TargetType
 from dinnerbell.domain.ranking import RankingSnapshot, rank, ranking_seed
 from dinnerbell.domain.schedule import Weights
-from dinnerbell.services import call_admin, calls, coordinator, event_views, lifecycle
+from dinnerbell.services import call_admin, calls, coordinator, event_views, guests, lifecycle
 from dinnerbell.services import catalog as catalog_service
 from dinnerbell.services import schedule as schedule_service
 from dinnerbell.services.call_context import CallContext, locked_event
@@ -856,6 +856,27 @@ async def test_tag_merges_repoint_guest_needs_and_free_text_cuisines(house: Hous
         needs = list(await db.scalars(select(ResponseRow.guest_needs)))
         cuisine = await db.scalar(select(ProposalRow.free_cuisine_id).where(ProposalRow.free_text == "Pho"))
     assert needs == [[vegan.id], [vegan.id]] and cuisine == lao.id
+
+
+async def test_tag_merges_repoint_members_own_dietary_needs_and_calls_honor_them(house: House) -> None:
+    """#298: a member's own need named the merged tag; it now names the target, once, and a call
+    holds every pick to the target. A dietary tag merges only into another dietary tag."""
+    vegan = await house.tag("Vegan", TagKind.DIETARY)
+    plant = await house.tag("Plant based", TagKind.DIETARY)
+    spicy = await house.tag("Spicy", TagKind.OTHER)
+    async with house.sessionmaker() as db:
+        await guests.set_my_needs(db, house["Sam"], frozenset({plant.id}), now=house.clock())
+        await guests.set_my_needs(db, house["Alex"], frozenset({plant.id, vegan.id}), now=house.clock())
+        with pytest.raises(CatalogRuleViolation, match="Merge a dietary tag only into another dietary tag"):
+            await catalog_service.merge_tags(db, house["Alex"], plant.id, spicy.id, now=house.clock())
+        await catalog_service.merge_tags(db, house["Alex"], plant.id, vegan.id, now=house.clock())
+        stored = list(await db.scalars(select(MemberRow.dietary_needs).where(MemberRow.dietary_needs != "[]")))
+    assert (await house.refresh("Sam")).dietary_needs == {vegan.id}
+    assert (await house.refresh("Alex")).dietary_needs == {vegan.id}
+    assert stored == [[vegan.id], [vegan.id]]
+    event_id = await open_dinner(house)
+    await act(house, calls.respond, house["Sam"], event_id, Status.IN)
+    assert (await house.context(event_id)).guest_needs == {vegan.id}
 
 
 async def other_household_event(database: Database, clock: FakeClock) -> tuple[Member, int, int]:

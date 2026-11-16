@@ -368,6 +368,10 @@ def check_merge(source: Tag, target: Tag) -> None:
         raise CatalogRuleViolation(
             "Merge a cuisine only into another cuisine, so every item keeps a cuisine for variety tracking."
         )
+    if source.kind is TagKind.DIETARY and target.kind is not TagKind.DIETARY:
+        raise CatalogRuleViolation(
+            "Merge a dietary tag only into another dietary tag, so everyone's dietary needs still name one."
+        )
 
 
 class Status(StrEnum):

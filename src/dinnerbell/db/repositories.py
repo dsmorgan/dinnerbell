@@ -113,6 +113,16 @@ class MemberRepository:
         )
         return [to_member(row) for row in rows]
 
+    async def repoint_dietary_need(self, household_id: int, source_id: int, target_id: int) -> None:
+        """After a tag merge, members' and guests' own dietary needs that named ``source_id`` name
+        ``target_id`` (#298)."""
+        rows = select(MemberRow).where(MemberRow.household_id == household_id).execution_options(populate_existing=True)
+        for row in await self._session.scalars(rows):
+            needs = {int(t) for t in row.dietary_needs or []}
+            if source_id in needs:
+                row.dietary_needs = sorted((needs - {source_id}) | {target_id})
+        await self._session.flush()
+
     async def by_email(self, household_id: int, email: str) -> Member | None:
         row = await self._session.scalar(
             select(MemberRow).where(MemberRow.household_id == household_id, MemberRow.email == email)
