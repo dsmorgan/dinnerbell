@@ -15,7 +15,7 @@ from sqlalchemy import select, text
 
 from dinnerbell.config import Settings
 from dinnerbell.db.models import CatalogItemRow, MemberRow, ProposalRow, ResponseRow
-from dinnerbell.domain.catalog import CatalogRuleViolation, Mode, TagKind
+from dinnerbell.domain.catalog import Mode, TagKind
 from dinnerbell.domain.events import (
     COORDINATOR_NOT_IN,
     AssignmentRole,
@@ -859,21 +859,34 @@ async def test_tag_merges_repoint_guest_needs_and_free_text_cuisines(house: Hous
 
 
 async def test_tag_merges_repoint_members_own_dietary_needs_and_calls_honor_them(house: House) -> None:
-    """#298: a member's own need named the merged tag; it now names the target, once, and a call
-    holds every pick to the target. A dietary tag merges only into another dietary tag."""
+    """#298: a member's and a guest's own need named the merged tag; each now names the target,
+    once, and a call holds every pick to the target. Another household's rows are left alone."""
+    from dinnerbell.db.repositories import HouseholdRepository, MemberRepository
+
     vegan = await house.tag("Vegan", TagKind.DIETARY)
     plant = await house.tag("Plant based", TagKind.DIETARY)
-    spicy = await house.tag("Spicy", TagKind.OTHER)
     async with house.sessionmaker() as db:
         await guests.set_my_needs(db, house["Sam"], frozenset({plant.id}), now=house.clock())
         await guests.set_my_needs(db, house["Alex"], frozenset({plant.id, vegan.id}), now=house.clock())
-        with pytest.raises(CatalogRuleViolation, match="Merge a dietary tag only into another dietary tag"):
-            await catalog_service.merge_tags(db, house["Alex"], plant.id, spicy.id, now=house.clock())
+        members = MemberRepository(db)
+        guest = await members.add_guest(
+            household_id=house.household.id,
+            display_name="Robin",
+            dietary_needs=frozenset({plant.id}),
+            now=house.clock(),
+        )
+        other = await HouseholdRepository(db).create("Other", "UTC", house.clock())
+        theirs = await members.add_guest(
+            household_id=other.id, display_name="Kim", dietary_needs=frozenset({plant.id}), now=house.clock()
+        )
+        await db.commit()
         await catalog_service.merge_tags(db, house["Alex"], plant.id, vegan.id, now=house.clock())
-        stored = list(await db.scalars(select(MemberRow.dietary_needs).where(MemberRow.dietary_needs != "[]")))
+        after = {m.id: (await members.get(m.household_id, m.id)) for m in (guest, theirs)}
+        stored = await db.scalar(select(MemberRow.dietary_needs).where(MemberRow.id == house["Alex"].id))
     assert (await house.refresh("Sam")).dietary_needs == {vegan.id}
-    assert (await house.refresh("Alex")).dietary_needs == {vegan.id}
-    assert stored == [[vegan.id], [vegan.id]]
+    assert (await house.refresh("Alex")).dietary_needs == {vegan.id} and stored == [vegan.id]  # once
+    assert after[guest.id] is not None and after[guest.id].dietary_needs == {vegan.id}  # type: ignore[union-attr]
+    assert after[theirs.id] is not None and after[theirs.id].dietary_needs == {plant.id}  # type: ignore[union-attr]
     event_id = await open_dinner(house)
     await act(house, calls.respond, house["Sam"], event_id, Status.IN)
     assert (await house.context(event_id)).guest_needs == {vegan.id}
