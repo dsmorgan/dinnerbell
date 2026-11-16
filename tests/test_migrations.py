@@ -2783,10 +2783,12 @@ def test_0040_keeps_only_dietary_needs_that_name_one_of_the_households_dietary_t
         "INSERT INTO member (id, household_id, display_name, email, role, can_cook, can_pickup, can_order, "
         "mute_dm_reminders, feedback_reminder, active, slack_link_locked, created_at, updated_at, dietary_needs) "
         "VALUES (3, 1, 'Robin', NULL, 'guest', 0, 0, 0, 0, 0, 0, 0, :t, :t, 'null'), "
-        "(4, 1, 'Kim', NULL, 'guest', 0, 0, 0, 0, 0, 1, 0, :t, :t, '[10, \"x\"]')",
+        "(4, 1, 'Kim', NULL, 'guest', 0, 0, 0, 0, 0, 1, 0, :t, :t, '[10, \"x\"]'), "
+        "(5, 1, 'Lee', NULL, 'guest', 0, 0, 0, 0, 0, 1, 0, :t, :t, '[10, 10]'), "
+        "(6, 1, 'Max', NULL, 'guest', 0, 0, 0, 0, 0, 1, 0, :t, :t, '[10.0, [10]]')",
     )
     _upgrade_to(settings, "0040_orphan_dietary_needs")
-    expected = {1: [10], 2: [13, 10], 3: [], 4: [10]}  # an untouched list keeps its order
+    expected = {1: [10], 2: [13, 10], 3: [], 4: [10], 5: [10], 6: []}  # an untouched list keeps its order
     assert _needs(settings) == expected
     _downgrade_to(settings, "0039_assistant_needs")
     assert _needs(settings) == expected

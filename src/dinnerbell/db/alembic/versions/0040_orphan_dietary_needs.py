@@ -5,8 +5,9 @@ Before 0.18.0, merging two tags left members' and guests' own ``dietary_needs`` 
 removed tag, so calls stopped honoring the need and Preferences didn't show it. This keeps only
 the IDs of the household's dietary tags in each member's list. It can't tell which tag a lost
 need was merged into, and SQLite can give a new tag the ID of a removed one, so a lost need
-that a later tag reused stays as that tag. The CHANGELOG asks members to check their needs.
-A ``null`` or anything that isn't a list of IDs becomes an empty list.
+whose ID a later dietary tag of the same household reused stays, as that tag. The CHANGELOG
+asks members to check their needs. A ``null`` or a non-list becomes an empty list, and entries
+that aren't integer IDs are dropped.
 
 The downgrade changes nothing: the dropped IDs named no tag.
 
