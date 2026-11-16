@@ -4,7 +4,9 @@
 Before 0.18.0, merging two tags left members' and guests' own ``dietary_needs`` naming the
 removed tag, so calls stopped honoring the need and Preferences didn't show it. This keeps only
 the IDs of the household's dietary tags in each member's list. It can't tell which tag a lost
-need was merged into, so the CHANGELOG asks members to check their needs.
+need was merged into, and SQLite can give a new tag the ID of a removed one, so a lost need
+that a later tag reused stays as that tag. The CHANGELOG asks members to check their needs.
+A ``null`` or anything that isn't a list of IDs becomes an empty list.
 
 The downgrade changes nothing: the dropped IDs named no tag.
 
@@ -33,9 +35,10 @@ def upgrade() -> None:
         dietary.setdefault(int(household_id), set()).add(int(tag_id))
     members = bind.exec_driver_sql("SELECT id, household_id, dietary_needs FROM member").fetchall()
     for member_id, household_id, stored in members:
-        needs = [int(t) for t in json.loads(stored or "[]")]
+        found = json.loads(stored or "[]")
+        needs = [t for t in found if isinstance(t, int)] if isinstance(found, list) else []
         kept = sorted(set(needs) & dietary.get(int(household_id), set()))
-        if kept != sorted(set(needs)):
+        if not isinstance(found, list) or len(kept) != len(found):  # something dropped, or a duplicate
             bind.exec_driver_sql("UPDATE member SET dietary_needs = ? WHERE id = ?", (json.dumps(kept), member_id))
 
 

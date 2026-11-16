@@ -165,6 +165,13 @@ def test_check_merge() -> None:
         check_merge(THAI, THAI)
     with pytest.raises(CatalogRuleViolation, match="cuisine only into another cuisine"):
         check_merge(THAI, SPICY)
+    vegan, plant = Tag(5, 1, TagKind.DIETARY, "Vegan"), Tag(6, 1, TagKind.DIETARY, "Plant based")
+    check_merge(plant, vegan)
+    check_merge(SPICY, vegan)  # an other tag can become a dietary tag
+    with pytest.raises(CatalogRuleViolation, match="dietary tag only into another dietary tag"):
+        check_merge(vegan, SPICY)
+    with pytest.raises(CatalogRuleViolation, match="dietary tag only into another dietary tag"):
+        check_merge(vegan, THAI)
 
 
 def test_item_filter() -> None:

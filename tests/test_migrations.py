@@ -2780,8 +2780,13 @@ def test_0040_keeps_only_dietary_needs_that_name_one_of_the_households_dietary_t
         "VALUES (2, 1, 'Alex', 'alex@example.com', 'member', 0, 0, 0, 0, 0, 1, 0, :t, :t)",
         "UPDATE member SET dietary_needs = '[99, 11, 10, 12]' WHERE id = 1",
         "UPDATE member SET dietary_needs = '[13, 10]' WHERE id = 2",
+        "INSERT INTO member (id, household_id, display_name, email, role, can_cook, can_pickup, can_order, "
+        "mute_dm_reminders, feedback_reminder, active, slack_link_locked, created_at, updated_at, dietary_needs) "
+        "VALUES (3, 1, 'Robin', NULL, 'guest', 0, 0, 0, 0, 0, 0, 0, :t, :t, 'null'), "
+        "(4, 1, 'Kim', NULL, 'guest', 0, 0, 0, 0, 0, 1, 0, :t, :t, '[10, \"x\"]')",
     )
     _upgrade_to(settings, "0040_orphan_dietary_needs")
-    assert _needs(settings) == {1: [10], 2: [13, 10]}  # an untouched list keeps its order
+    expected = {1: [10], 2: [13, 10], 3: [], 4: [10]}  # an untouched list keeps its order
+    assert _needs(settings) == expected
     _downgrade_to(settings, "0039_assistant_needs")
-    assert _needs(settings) == {1: [10], 2: [13, 10]}
+    assert _needs(settings) == expected
