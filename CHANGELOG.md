@@ -6,6 +6,8 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ## [Unreleased]
 
+## [0.18.0] - 2026-11-15
+
 ### Added
 
 - **The assistant drafts a member's own dietary needs and I can usually, in private only** (#278, [ADR 0009](docs/adr/0009-optional-assistant.md), amended). On the Assistant page or in a direct message with Dinnerbell, never in a channel thread, a member can ask "Add vegetarian to my needs" or "Turn off pick up for me" and get a draft for each. **Confirm** runs what **Save needs** and **Save** on **Preferences** run, as the member with a member's permissions, even for an admin, and keeps their reminders as they are. Dietary needs are the household's dietary tags, the only ones Preferences lets a member pick, so the assistant refuses any other name and never makes a tag; it also refuses what Preferences would, in its words, such as a sixth need or a change while a call the member is in is voting. If the member changes either elsewhere first, Confirm says so and changes nothing. **Look up my preferences** now also returns the member's own needs, as tag names, with the household's dietary tags, and whether they usually cook, pick up, and order. Only that member's own go to Anthropic, only when they ask, and never anyone else's. Dietary needs can reveal health or religion, and Admin > Assistant says they're sent.
@@ -731,7 +733,8 @@ The source-built version, never published as an image. It covers milestones M0 t
 - **M1:** the catalog with file import, preferences and vetoes, meal history, and the members admin page.
 - **M2:** dinner calls in Slack: the scheduled call, reminders, ranked proposals and votes, the decision, assignments, the abandon path, admin overrides, App Home, and `/dinnerbell call`.
 
-[Unreleased]: https://github.com/dsmorgan/dinnerbell/compare/v0.17.0...HEAD
+[Unreleased]: https://github.com/dsmorgan/dinnerbell/compare/v0.18.0...HEAD
+[0.18.0]: https://github.com/dsmorgan/dinnerbell/releases/tag/v0.18.0
 [0.17.0]: https://github.com/dsmorgan/dinnerbell/releases/tag/v0.17.0
 [0.16.0]: https://github.com/dsmorgan/dinnerbell/releases/tag/v0.16.0
 [0.15.0]: https://github.com/dsmorgan/dinnerbell/releases/tag/v0.15.0
