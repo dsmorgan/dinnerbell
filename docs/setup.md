@@ -29,7 +29,7 @@ Keep the directory name `dinnerbell`, and run every command in this guide as the
 ## 1. Create the Slack workspace and channel
 
 1. At [slack.com/get-started](https://slack.com/get-started), create a workspace for your household. The free plan is enough: its 90-day history and 10-app limits don't matter, because Dinnerbell keeps its own records and is the only app.
-2. Create a public channel named `#dinnerbell`. A private channel works too, but then the app also needs the `groups:read` bot scope, which you add in Slack's manifest editor, to check that the bot is in the channel and to read who's in it.
+2. Create a public channel named `#dinnerbell-channel`, or any name that isn't the bot's, so that `#dinnerbell` and `@Dinnerbell` don't look alike in Slack. A private channel works too, but then the app also needs the `groups:read` bot scope, which you add in Slack's manifest editor, to check that the bot is in the channel and to read who's in it.
 
 ## 2. Create the Slack app
 
@@ -77,11 +77,11 @@ Under **Basic Information** > **App Credentials**, copy these values:
 
 1. Open your workspace in a browser. The address looks like `https://app.slack.com/client/T0123ABCDEF/...`.
 2. Copy the part that starts with `T`. This is `DINNERBELL_SLACK_TEAM_ID`. Slack sign-in requires it: Dinnerbell refuses sign-ins from any other workspace, so nobody outside yours can claim an invitation with a matching email.
-3. In `#dinnerbell`, select the channel name, and copy the channel ID at the bottom of the **About** tab. It starts with `C`. This is `DINNERBELL_SLACK_CHANNEL`. You can also copy it from the browser's address bar.
+3. In `#dinnerbell-channel`, select the channel name, and copy the channel ID at the bottom of the **About** tab. It starts with `C`. This is `DINNERBELL_SLACK_CHANNEL`. You can also copy it from the browser's address bar.
 
 ## 7. Invite the bot to the channel
 
-The bot posts only in channels it belongs to. In `#dinnerbell`, send `/invite @Dinnerbell`, and select **Add to Channel** if Slack asks.
+The bot posts only in channels it belongs to. In `#dinnerbell-channel`, send `/invite @Dinnerbell`, and select **Add to Channel** if Slack asks.
 
 If you start Dinnerbell before you invite the bot, `/healthz` reports Slack as `error` until you do. Dinnerbell checks again every minute, so you don't need to restart it.
 
@@ -177,7 +177,7 @@ Invite each person to the Slack workspace (**Invite people** in Slack) with the 
 > 1. Install Slack from the App Store.
 > 2. When Slack asks to send notifications, tap **Allow**.
 > 3. Open the invitation email from Slack and accept the invite to our workspace.
-> 4. In Slack, open the `#dinnerbell` channel.
+> 4. In Slack, open the `#dinnerbell-channel` channel.
 > 5. Tap the channel name, then tap **Notifications**.
 > 6. Choose **All new messages**.
 > 7. Optional: open `https://dinnerbell.example.com` in Safari, tap Share, then tap **Add to Home Screen**. This lets you open Dinnerbell like an app.

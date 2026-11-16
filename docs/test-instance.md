@@ -25,11 +25,11 @@ The instances share `compose.yaml`, the Slack workspace, and `DINNERBELL_BIND`. 
 
 Use the same workspace as production.
 
-1. Create a channel named `#dinnerbell-test`, which can be private, and invite only the people who test with you. Test mentions and messages only members of this channel.
+1. Create a channel named `#dinnerbell-test-channel`, which can be private, and invite only the people who test with you. Test mentions and messages only members of this channel.
 2. Create a second Slack app as in [section 2 of setup.md](setup.md#2-create-the-slack-app), but paste `deploy/slack-app-manifest.test.yaml`, and replace `dinnerbell-test.example.com` with your test hostname. For its icon, upload `deploy/slack-app-icon-test-1024.png`, which shows Dinnerbot, the test mascot.
 3. Create its app-level token, install it, and copy its bot token, client ID, and client secret, as in sections 3 to 5.
 4. Copy the test channel's ID, as in section 6.
-5. In `#dinnerbell-test`, invite the bot: `/invite @Dinnerbell Test`.
+5. In `#dinnerbell-test-channel`, invite the bot: `/invite @Dinnerbell Test`.
 
 Never reuse production's tokens: Socket Mode delivers each event to one connection, so two instances on one app split button taps between them.
 

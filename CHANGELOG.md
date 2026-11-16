@@ -6,6 +6,10 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ## [Unreleased]
 
+### Changed
+
+- **The setup docs suggest a channel named apart from the bot**, such as `#dinnerbell-channel`, so the channel and `@Dinnerbell` don't look alike in Slack. Dinnerbell finds the channel by its ID, so you can rename an existing channel in Slack without changing `.env` or restarting.
+
 ## [0.18.0] - 2026-11-15
 
 ### Added
