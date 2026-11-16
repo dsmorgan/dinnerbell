@@ -43,6 +43,11 @@ updates:
       day: monday
     cooldown:
       default-days: 7
+    # The image stays on Python 3.12, the version pyproject, ruff, and mypy target: moving to a
+    # newer Python is a decision of its own, not a weekly bump. New 3.12 digests still come.
+    ignore:
+      - dependency-name: python
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
     # No security group: GitHub publishes no advisories for container images, so Dependabot
     # never opens a security update here. Grype in CI and the nightly scan cover the image.
     groups:
