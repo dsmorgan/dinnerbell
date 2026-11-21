@@ -6,9 +6,17 @@ Every release lists **Upgrade notes**. Read them before you upgrade, and always 
 
 ## [Unreleased]
 
+## [0.18.1] - 2026-11-21
+
 ### Changed
 
+- **joserfc 1.8.0 checks sign-in tokens more strictly.** It rejects an ID token whose `exp` equals the current time, and `exp`, `nbf`, or `iat` values of NaN, Infinity, `true`, or `false`. Dinnerbell already allows 60 seconds of clock difference, so a valid sign-in isn't affected. fastapi 0.162.2 and pydantic 2.14.3 are patch releases.
+- **The image uses uv 0.13.8 and a newer Python 3.12 slim build.** The image still installs Debian's fixed zlib (#236): the new base doesn't have it yet.
 - **The setup docs suggest a channel named apart from the bot**, such as `#dinnerbell-channel`, so the channel and `@Dinnerbell` don't look alike in Slack. Dinnerbell finds the channel by its ID, so you can rename an existing channel in Slack without changing `.env` or restarting.
+
+### Upgrade notes
+
+- No migrations and no configuration changes. Back up and upgrade as usual.
 
 ## [0.18.0] - 2026-11-15
 
@@ -737,7 +745,8 @@ The source-built version, never published as an image. It covers milestones M0 t
 - **M1:** the catalog with file import, preferences and vetoes, meal history, and the members admin page.
 - **M2:** dinner calls in Slack: the scheduled call, reminders, ranked proposals and votes, the decision, assignments, the abandon path, admin overrides, App Home, and `/dinnerbell call`.
 
-[Unreleased]: https://github.com/dsmorgan/dinnerbell/compare/v0.18.0...HEAD
+[Unreleased]: https://github.com/dsmorgan/dinnerbell/compare/v0.18.1...HEAD
+[0.18.1]: https://github.com/dsmorgan/dinnerbell/releases/tag/v0.18.1
 [0.18.0]: https://github.com/dsmorgan/dinnerbell/releases/tag/v0.18.0
 [0.17.0]: https://github.com/dsmorgan/dinnerbell/releases/tag/v0.17.0
 [0.16.0]: https://github.com/dsmorgan/dinnerbell/releases/tag/v0.16.0
