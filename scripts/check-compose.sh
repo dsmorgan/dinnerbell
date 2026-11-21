@@ -20,10 +20,13 @@ set -eu
 CDPATH='' cd -- "$(dirname -- "$0")/.."
 
 SECRET_NAMES="DINNERBELL_SECRET_KEY DINNERBELL_SLACK_BOT_TOKEN DINNERBELL_SLACK_APP_TOKEN DINNERBELL_OIDC_CLIENT_SECRET"
+# The optional Anthropic key: ANTHROPIC in deploy/dinnerbell-test, mounted for test by
+# deploy/compose.test-anthropic.yaml when secrets-test/ holds it.
+ANTHROPIC=DINNERBELL_ANTHROPIC_API_KEY
 for file in .env .env.test secrets-test; do
     [ ! -e "$file" ] || { echo "check-compose: $file exists; run this in a clean checkout." >&2; exit 1; }
 done
-for name in $SECRET_NAMES; do
+for name in $SECRET_NAMES $ANTHROPIC; do
     [ ! -e "secrets/$name" ] || { echo "check-compose: secrets/$name exists; run this in a clean checkout." >&2; exit 1; }
 done
 stubs=$(mktemp -d)
@@ -31,7 +34,7 @@ cleanup() {
     chmod -R u+rwX secrets-test 2>/dev/null || true
     rm -f .env .env.test .env.test.moved
     rm -rf secrets-test "$stubs"
-    for name in $SECRET_NAMES; do rm -f "secrets/$name"; done
+    for name in $SECRET_NAMES $ANTHROPIC; do rm -f "secrets/$name"; done
 }
 trap cleanup EXIT
 mkdir secrets-test
@@ -192,6 +195,28 @@ expect "test with secrets-test/ files: the four secrets are files in secrets-tes
     jq -e --argjson names "$secrets_json" --arg dir /secrets-test/ "$secrets_filter" <<EOF
 $test_instance_files
 EOF
+# The Anthropic key is optional: deploy/compose.test-anthropic.yaml mounts secrets-test/'s file at
+# /run/secrets when it exists, with or without the four. Production's file in secrets/ never counts.
+anthropic_json='["DINNERBELL_ANTHROPIC_API_KEY"]'
+all_json='["DINNERBELL_SECRET_KEY","DINNERBELL_SLACK_BOT_TOKEN","DINNERBELL_SLACK_APP_TOKEN","DINNERBELL_OIDC_CLIENT_SECRET","DINNERBELL_ANTHROPIC_API_KEY"]'
+(umask 077 && printf 'sk-ant-production' >"secrets/$ANTHROPIC")
+test_instance_production_key=$(deploy/dinnerbell-test config --format json 2>/dev/null)
+: >"secrets-test/$ANTHROPIC"
+test_instance_key=$(deploy/dinnerbell-test config --format json 2>/dev/null)
+for name in $SECRET_NAMES; do : >"secrets-test/$name"; done
+test_instance_all=$(deploy/dinnerbell-test config --format json 2>/dev/null)
+rm -f secrets-test/* "secrets/$ANTHROPIC"
+expect "test with production's secrets/$ANTHROPIC only: no secret files" jq -e "$no_secrets_filter" <<EOF
+$test_instance_production_key
+EOF
+expect "test with secrets-test/$ANTHROPIC alone: only the key, from secrets-test/, at /run/secrets" \
+    jq -e --argjson names "$anthropic_json" --arg dir /secrets-test/ "$secrets_filter" <<EOF
+$test_instance_key
+EOF
+expect "test with secrets-test/$ANTHROPIC and the four: all five from secrets-test/, at /run/secrets" \
+    jq -e --argjson names "$all_json" --arg dir /secrets-test/ "$secrets_filter" <<EOF
+$test_instance_all
+EOF
 
 # Resource and log caps (docs/configuration.md, "Resource and log limits"): a process limit, a memory
 # limit, and rotated json-file logs, for production and for the test instance.
@@ -245,7 +270,8 @@ production_bot_token="xoxb-production-token-0123456789"
 test_client_secret=check-compose-test-client-secret
 test_bot_token=xoxb-check-compose-test
 test_app_token=xapp-check-compose-test
-test_secrets="$test_key $test_client_secret $test_bot_token $test_app_token
+test_anthropic_key=sk-ant-check-compose-test-key
+test_secrets="$test_key $test_client_secret $test_bot_token $test_app_token $test_anthropic_key
 $production_key $production_bot_token"
 # .env.test as the docs write it: no secrets in it.
 filled_env_test() {
@@ -298,12 +324,24 @@ prints_no_secret() {
     done
 }
 started_cleanly() { [ "$status" -eq 0 ] && checked && started && prints_no_secret; }
+# Nothing in the output says a secret is in the environment: the check drops those warnings, and
+# serve logs them.
+no_env_secret_warning() { ! said "is set in the environment"; }
+without_key_file() { ! logged "compose .*compose.test-anthropic.yaml" && ! said "Anthropic key from"; }
 started_with_files() {
-    started_cleanly && logged "compose .* -f compose.secrets.yaml .* -f deploy/compose.test-secrets.yaml "
+    started_cleanly && logged "compose .* -f compose.secrets.yaml .* -f deploy/compose.test-secrets.yaml " &&
+        without_key_file
 }
 started_from_env() {
     started_cleanly && ! logged "compose .*compose.secrets.yaml" && ! logged "compose .*compose.test-secrets.yaml" &&
-        [ "$(engine_options | grep -c -- ' -v ')" -eq 0 ] && said "secrets from .env.test"
+        [ "$(engine_options | grep -c -- ' -v ')" -eq 0 ] && said "secrets from .env.test" && without_key_file
+}
+without_four_files() { ! logged "compose .*compose.secrets.yaml" && ! logged "compose .*compose.test-secrets.yaml"; }
+# The key file mounted for the check and added to compose, last.
+started_with_key_file() {
+    started_cleanly && logged "compose .* -f deploy/compose.test-anthropic.yaml up -d\$" &&
+        has_option "-v $PWD/secrets-test/$ANTHROPIC:/run/secrets/$ANTHROPIC:ro" &&
+        said "Anthropic key from secrets-test/$ANTHROPIC" && no_env_secret_warning
 }
 refused() { [ "$status" -ne 0 ] && ! started && said "dinnerbell-test: " && prints_no_secret; }
 refused_naming() { refused && said "$1"; }
@@ -317,7 +355,8 @@ started_with_warning() { [ "$status" -eq 0 ] && started && said "predates dinner
 # The engine's options for the check, everything before the image, each with a space on both sides.
 engine_options() { printf '%s\n' "$log" | sed -n "s|^engine run \(.*\) $test_image config check.*| \1 |p"; }
 has_option() { engine_options | grep -qF -- " $1 "; }
-only_secret_mounts() { [ "$(engine_options | grep -o -- ' -v ' | wc -l)" -eq 4 ]; }
+mounts() { [ "$(engine_options | grep -o -- ' -v ' | wc -l)" -eq "$1" ]; }
+only_secret_mounts() { mounts 4; }
 no_secret_in_log() {
     for secret in $test_secrets; do
         ! printf '%s' "$log" | grep -qF -- "$secret" || return 1
@@ -337,6 +376,7 @@ rm -rf secrets-test
 env_test_with_secrets >.env.test
 start deploy/dinnerbell-test up -d
 check "secrets in .env.test and no secrets-test/: starts without compose.secrets.yaml or mounts" started_from_env
+check "secrets in .env.test: the check prints no warning about them; serve logs it" no_env_secret_warning
 mkdir secrets-test
 start deploy/dinnerbell-test up -d
 check "an empty secrets-test/ counts as no files" started_from_env
@@ -438,6 +478,63 @@ if [ "$(id -u)" -ne 0 ]; then
     check "a secret file the service user can't read: refused, naming the file" \
         refused_naming "Can't read the secret file"
 fi
+test_secret_files
+
+# Test's Anthropic key file: optional, mounted when it exists, with or without the four.
+test_key_file() { rm -rf "secrets-test/$ANTHROPIC"; (umask 077 && printf '%s' "$test_anthropic_key" >"secrets-test/$ANTHROPIC"); }
+test_key_file
+start deploy/dinnerbell-test up -d
+check "secrets-test/$ANTHROPIC and the four files: starts with all five mounted" started_with_key_file
+check "secrets-test/$ANTHROPIC and the four files: compose gets the four files' compose files too" \
+    logged "compose .* -f compose.secrets.yaml .* -f deploy/compose.test-secrets.yaml -f deploy/compose.test-anthropic.yaml "
+check "secrets-test/$ANTHROPIC and the four files: the check has five mounts" mounts 5
+check "secrets-test/$ANTHROPIC: no command line holds a secret value" no_secret_in_log
+for name in $SECRET_NAMES; do rm "secrets-test/$name"; done
+env_test_with_secrets >.env.test
+start deploy/dinnerbell-test up -d
+check "secrets-test/$ANTHROPIC alone, the four in .env.test: starts with only the key mounted" started_with_key_file
+check "secrets-test/$ANTHROPIC alone: compose gets no compose.secrets.yaml" without_four_files
+check "secrets-test/$ANTHROPIC alone: the check has one mount" mounts 1
+check "secrets-test/$ANTHROPIC alone: the four still need no files" said "secrets from .env.test, Anthropic key from"
+# The key in both .env.test and the file: they must agree, as for every secret.
+printf '%s=%s\n' "$ANTHROPIC" "$test_anthropic_key" >>.env.test
+start deploy/dinnerbell-test up -d
+check "the same key in .env.test and secrets-test/$ANTHROPIC starts" started_cleanly
+check "the same key in .env.test and secrets-test/$ANTHROPIC: the check prints no warning about it" \
+    no_env_secret_warning
+env_test_with_secrets >.env.test
+printf '%s=%s\n' "$ANTHROPIC" sk-ant-check-compose-other-key >>.env.test
+start deploy/dinnerbell-test up -d
+check "different keys in .env.test and secrets-test/$ANTHROPIC: refused by name" \
+    refused_naming "$ANTHROPIC is set in the environment (probably in .env) and in /"
+env_test_with_secrets >.env.test
+rm "secrets-test/$ANTHROPIC"
+mkdir "secrets-test/$ANTHROPIC"
+start deploy/dinnerbell-test up -d
+check "secrets-test/$ANTHROPIC is a directory: refused by name" refused_unchecked "secrets-test/$ANTHROPIC is a directory"
+rmdir "secrets-test/$ANTHROPIC"
+ln -s does-not-exist "secrets-test/$ANTHROPIC"
+start deploy/dinnerbell-test up -d
+check "secrets-test/$ANTHROPIC links to nothing: refused by name" \
+    refused_unchecked "secrets-test/$ANTHROPIC not found: it's a link to a file that doesn't exist"
+start deploy/dinnerbell-test down
+check "down needs no Anthropic key file" started_unchecked
+rm "secrets-test/$ANTHROPIC"
+# Production's key file is never read, compared, or mounted for test: the same key starts, and so
+# does a file this account can't read.
+(umask 077 && printf '%s' "$test_anthropic_key" >"secrets/$ANTHROPIC")
+test_key_file
+start deploy/dinnerbell-test up -d
+check "the same Anthropic key as production's secrets/$ANTHROPIC: not compared, test starts" started_with_key_file
+rm "secrets-test/$ANTHROPIC"
+if [ "$(id -u)" -ne 0 ]; then
+    chmod 000 "secrets/$ANTHROPIC"
+    start deploy/dinnerbell-test up -d
+    check "production's secrets/$ANTHROPIC, unreadable and no test file: test starts without it" started_from_env
+    chmod 600 "secrets/$ANTHROPIC"
+fi
+rm -f "secrets/$ANTHROPIC"
+filled_env_test >.env.test
 test_secret_files
 
 # Production's files, kept in secrets/ (never read by test's compose files, which replace the paths
@@ -627,10 +724,19 @@ if command -v podman-compose >/dev/null 2>&1; then
     # Made-up secrets in the files, to show that none reaches a podman command line.
     production_secret_files
     test_secret_files
+    test_key_file
     production=$($pc --dry-run -p dinnerbell up -d 2>&1) || true
     production_files=$($pc --dry-run -p dinnerbell -f compose.yaml -f compose.secrets.yaml up -d 2>&1) || true
     test_instance=$(DINNERBELL_COMPOSE="$pc --dry-run" DINNERBELL_ENGINE="$stubs/engine" \
         deploy/dinnerbell-test up -d 2>&1) || true
+    # The key file alone, with the four in .env.test.
+    for name in $SECRET_NAMES; do rm "secrets-test/$name"; done
+    env_test_with_secrets >.env.test
+    test_instance_key=$(DINNERBELL_COMPOSE="$pc --dry-run" DINNERBELL_ENGINE="$stubs/engine" \
+        deploy/dinnerbell-test up -d 2>&1) || true
+    filled_env_test >.env.test
+    test_secret_files
+    rm "secrets-test/$ANTHROPIC"
     # podman-compose 1.6.0 and later mount with --mount instead of -v.
     contains "production: volume dinnerbell_dinnerbell-data" "$production" \
         "dinnerbell_dinnerbell-data:/data" "source=dinnerbell_dinnerbell-data,destination=/data"
@@ -660,9 +766,13 @@ if command -v podman-compose >/dev/null 2>&1; then
         contains "test: secrets-test/$name mounted at /run/secrets/$name" "$test_instance" \
             "/secrets-test/$name:/run/secrets/$name:"
     done
+    contains "test: secrets-test/$ANTHROPIC mounted at /run/secrets/$ANTHROPIC with the four" "$test_instance" \
+        "/secrets-test/$ANTHROPIC:/run/secrets/$ANTHROPIC:"
+    contains "test: secrets-test/$ANTHROPIC mounted at /run/secrets/$ANTHROPIC alone" "$test_instance_key" \
+        "/secrets-test/$ANTHROPIC:/run/secrets/$ANTHROPIC:"
     leaked=no
     for secret in $test_secrets xapp-production production-client-secret; do
-        if printf '%s%s' "$production_files" "$test_instance" | grep -qF -- "$secret"; then leaked=yes; fi
+        if printf '%s%s%s' "$production_files" "$test_instance" "$test_instance_key" | grep -qF -- "$secret"; then leaked=yes; fi
     done
     if [ "$leaked" = no ]; then pass "no secret value in podman-compose's commands"; else fail "no secret value in podman-compose's commands"; fi
     if printf '%s' "$test_instance" | grep -qF "dinnerbell_dinnerbell-data"; then
@@ -745,6 +855,16 @@ for ignore in .containerignore .dockerignore; do
     done
 done
 
+echo "== install bundle"
+# The bundle must ship every compose file the test wrapper may pass, or test can't start from it.
+for file in compose.yaml compose.secrets.yaml deploy/compose.test*.yaml; do
+    expect "the bundle ships $file" grep -qxF "$file $file" scripts/build-bundle.sh
+    case "$file" in
+        compose.yaml) ;;
+        *) expect "deploy/dinnerbell-test requires $file in the clone" grep -qF "$file" deploy/dinnerbell-test ;;
+    esac
+done
+
 echo "== secret files in git"
 is_placeholder() { grep -qi replace "$1"; }
 is_not_placeholder() { ! is_placeholder "$1"; }
@@ -753,7 +873,7 @@ is_not_placeholder() { ! is_placeholder "$1"; }
 if command -v git >/dev/null 2>&1 && git rev-parse --git-dir >/dev/null 2>&1; then
     tracked=$(git ls-files secrets secrets-test | grep -v -e '^secrets/[A-Z_]*\.example$' -e '^secrets/README\.md$' || true)
     if [ -z "$tracked" ]; then pass "git tracks only placeholders in secrets/"; else fail "git tracks secret files: $tracked"; fi
-    for name in $SECRET_NAMES; do
+    for name in $SECRET_NAMES $ANTHROPIC; do
         expect "git ignores secrets/$name and secrets-test/$name" \
             test "$(git check-ignore "secrets/$name" "secrets-test/$name" | wc -l)" -eq 2
         expect "secrets/$name.example is a placeholder, not a value" is_placeholder "secrets/$name.example"

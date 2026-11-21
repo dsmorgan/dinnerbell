@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: AGPL-3.0-or-later
+# The test instance's Anthropic API key, applied only by deploy/dinnerbell-test, and only when
+# secrets-test/DINNERBELL_ANTHROPIC_API_KEY exists, with or without test's four other secret files.
+# The key is optional, so compose.secrets.yaml doesn't list it: every file a compose file lists must
+# exist. Production mounts its own key through a compose.override.yaml instead ("The assistant" in
+# docs/configuration.md). Compose resolves the path from the directory of compose.yaml, and the path
+# is set here, not through a variable, so nothing in .env can point test at production's file. Like
+# the other secret files, it's a read-only bind mount, so the file must belong to the container's
+# user (uid 10001), mode 600.
+services:
+  dinnerbell:
+    secrets:
+      - DINNERBELL_ANTHROPIC_API_KEY
+
+secrets:
+  DINNERBELL_ANTHROPIC_API_KEY:
+    file: ./secrets-test/DINNERBELL_ANTHROPIC_API_KEY

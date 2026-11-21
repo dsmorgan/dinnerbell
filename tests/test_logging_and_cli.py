@@ -266,6 +266,60 @@ def test_config_check_reads_secret_files_from_a_directory(
         assert REQUIRED[name] not in err
 
 
+def test_config_check_prints_no_warnings_that_serve_logs(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Secrets in the env file, an unknown setting, and a retired flag: `serve` logs a warning for
+    each on every start, so the check, which runs in the terminal before it, stays quiet about them.
+    Logging isn't configured there, so anything logged would reach the terminal."""
+    import io
+
+    text = _env_file_text(
+        DINNERBELL_ANTHROPIC_API_KEY="sk-ant-in-the-env-file",
+        DINNERBELL_FEATURES="assistant",
+        DINNERBELL_NO_SUCH_SETTING="x",
+    )
+    monkeypatch.setattr("sys.stdin", io.StringIO(text))
+    args = ["config", "check", "--env-file", "-", "--secrets-dir", str(tmp_path / "no-secrets")]
+    with caplog.at_level("DEBUG"):
+        assert cli.main(args) == 0
+    out, err = capsys.readouterr()
+    assert out == "Configuration is valid.\n"
+    assert err == ""
+    assert caplog.records == []
+
+
+def test_config_check_reads_the_anthropic_key_file_as_serve_does(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """deploy/dinnerbell-test mounts secrets-test/DINNERBELL_ANTHROPIC_API_KEY for the check when it
+    exists. With the env file, it must agree, as every secret must."""
+    import io
+
+    directory = tmp_path / "secrets-test"
+    directory.mkdir()
+    (directory / "DINNERBELL_ANTHROPIC_API_KEY").write_text("sk-ant-from-the-file")
+    args = ["config", "check", "--env-file", "-", "--secrets-dir", str(directory)]
+    for env_text in (_env_file_text(), _env_file_text(DINNERBELL_ANTHROPIC_API_KEY="sk-ant-from-the-file")):
+        monkeypatch.setattr("sys.stdin", io.StringIO(env_text))
+        with caplog.at_level("DEBUG"):
+            assert cli.main(args) == 0
+        assert capsys.readouterr() == ("Configuration is valid.\n", "")
+        assert caplog.records == []
+
+    monkeypatch.setattr("sys.stdin", io.StringIO(_env_file_text(DINNERBELL_ANTHROPIC_API_KEY="sk-ant-other")))
+    assert cli.main(args) == 2
+    err = capsys.readouterr().err
+    assert f"DINNERBELL_ANTHROPIC_API_KEY is set in the environment (probably in .env) and in {directory}" in err
+    assert "sk-ant" not in err
+
+
 def test_config_check_reports_an_unreadable_env_file(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     assert cli.main(["config", "check", "--env-file", str(tmp_path / "missing")]) == 2
     assert capsys.readouterr().err == "Can't read the env file (FileNotFoundError).\n"
@@ -366,3 +420,46 @@ def test_secret_warnings_are_logged_after_logging_is_configured(
     assert len(named) == 2  # REQUIRED sets the key and the client secret
     for value in REQUIRED.values():
         assert not any(value in e for e in events)
+
+
+def test_an_anthropic_key_file_alone_turns_the_assistant_key_on_without_a_warning(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """#279: the test instance mounts secrets-test/DINNERBELL_ANTHROPIC_API_KEY at /run/secrets.
+    With the key absent from the env file, the service has the key and logs no env-secret warning
+    for it."""
+    import logging
+
+    for key, value in REQUIRED.items():
+        monkeypatch.setenv(key, value)
+    monkeypatch.delenv("DINNERBELL_ANTHROPIC_API_KEY", raising=False)
+    directory = tmp_path / "run-secrets"
+    directory.mkdir()
+    (directory / "DINNERBELL_ANTHROPIC_API_KEY").write_text("sk-ant-from-the-file\n")
+    monkeypatch.setattr("dinnerbell.config.SECRETS_DIR", directory)
+    events: list[str] = []
+
+    class Recorder(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            events.append(record.getMessage())
+
+    seen: list[cli.Settings] = []
+
+    def command(args: object, settings: cli.Settings) -> int:
+        seen.append(settings)
+        return 0
+
+    logger = logging.getLogger("dinnerbell.config")
+    recorder = Recorder()
+    logger.addHandler(recorder)
+    monkeypatch.setattr(cli, "configure_logging", lambda *a, **k: None)
+    monkeypatch.setattr(cli, "_command", command)
+    try:
+        assert cli.main(["migrate"]) == 0
+    finally:
+        logger.removeHandler(recorder)
+    (settings,) = seen
+    assert settings.anthropic_api_key is not None
+    assert settings.anthropic_api_key.get_secret_value() == "sk-ant-from-the-file"
+    assert not any("ANTHROPIC" in e for e in events)
+    assert not any("sk-ant" in e for e in events)
