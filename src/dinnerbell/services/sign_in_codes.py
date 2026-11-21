@@ -20,13 +20,11 @@ Everything here answers NotFound while Admin's **Web app** switch is off.
 
 from __future__ import annotations
 
-import asyncio
 import hashlib
 import hmac
 import logging
 import secrets
 from collections import deque
-from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
@@ -175,43 +173,28 @@ async def redeem(
 
 # Wrong codes across every address --------------------------------------------------------------
 
-THROTTLE_THRESHOLD = 200
-THROTTLE_WINDOW = timedelta(hours=1)
-THROTTLE_STEP_SECONDS = 0.05
-"""Each wrong code past the threshold adds this much to the wait."""
-THROTTLE_MAX_SECONDS = 5.0
-MAX_SLEEPERS = 100
-"""At most this many attempts wait at once, from all addresses, to bound memory. Each address
-may have one waiting; past either limit, an attempt is refused at once (429) instead of waiting.
-One address can't fill the slots and lock everyone else out (ADR 0010: nothing locks out)."""
-Sleep = Callable[[float], Awaitable[None]]
+ALARM_THRESHOLD = 200
+ALARM_WINDOW = timedelta(hours=1)
 
 
-class CodeThrottle:
+class WrongCodes:
     """Wrong codes from every address in the last hour, in one-minute buckets (spec 6.15).
-    Past ``threshold`` of them, every code attempt waits a little longer than the last, up to
-    ``THROTTLE_MAX_SECONDS``. Nothing ever locks out: a member with the right code gets in,
-    only slower.
+    Past ``threshold`` of them, Dinnerbell logs a warning, once, and Admin > Web app says
+    someone may be guessing. Nothing slows down or locks out: the per-address limit on every
+    ``/auth/`` route already makes guessing a 49-bit code that lasts 15 minutes hopeless, and a
+    wait or a refusal shared by every address would let one person lock out the rest.
 
     It lives in memory, one per process, like the per-address limit in ``web.ratelimit``:
-    Dinnerbell runs one process, so memory sees every attempt, and a restart that forgets it
-    only lifts a delay. Writing each wrong code to the database would let anyone with a script
-    make SQLite write as fast as they can post. Sixty buckets at most, so memory is bounded."""
+    Dinnerbell runs one process, so memory sees every attempt, and a restart only forgets an
+    alarm. Writing each wrong code to the database would let anyone with a script make SQLite
+    write as fast as they can post. Sixty buckets at most, so memory is bounded."""
 
-    def __init__(
-        self, threshold: int = THROTTLE_THRESHOLD, sleep: Sleep = asyncio.sleep, max_sleepers: int = MAX_SLEEPERS
-    ) -> None:
+    def __init__(self, threshold: int = ALARM_THRESHOLD) -> None:
         self.threshold = threshold
-        self.sleep = sleep
-        self.max_sleepers = max_sleepers
-        self.sleeping = 0
-        """Attempts waiting right now."""
-        self._waiting: set[str] = set()
-        """The addresses with an attempt waiting right now."""
         self._buckets: deque[tuple[datetime, int]] = deque()
 
     def _prune(self, now: datetime) -> None:
-        while self._buckets and now - self._buckets[0][0] >= THROTTLE_WINDOW:
+        while self._buckets and now - self._buckets[0][0] >= ALARM_WINDOW:
             self._buckets.popleft()
 
     def failures(self, now: datetime) -> int:
@@ -219,50 +202,21 @@ class CodeThrottle:
         self._prune(now)
         return sum(count for _, count in self._buckets)
 
-    def busy(self, now: datetime) -> bool:
-        """Whether attempts are being slowed, for the notice on Admin > Web app."""
+    def alarming(self, now: datetime) -> bool:
+        """Whether there were over ``threshold`` in the last hour, for Admin > Web app."""
         return self.failures(now) > self.threshold
 
     def failed(self, now: datetime) -> None:
         """Count one wrong code."""
-        was_busy = self.busy(now)
+        was_alarming = self.alarming(now)
         minute = now.replace(second=0, microsecond=0)
         if self._buckets and self._buckets[-1][0] == minute:
             self._buckets[-1] = (minute, self._buckets[-1][1] + 1)
         else:
             self._buckets.append((minute, 1))
-        if not was_busy and self.busy(now):
+        if not was_alarming and self.alarming(now):
             log.warning(
-                "over %d wrong sign-in codes in an hour; slowing every code attempt",
+                "over %d wrong sign-in codes in an hour",
                 self.threshold,
                 extra={"failures": self.failures(now)},
             )
-
-    def delay(self, now: datetime) -> float:
-        """The seconds the next attempt waits: 0 up to the threshold, then growing."""
-        excess = self.failures(now) - self.threshold
-        return 0.0 if excess <= 0 else min(THROTTLE_MAX_SECONDS, THROTTLE_STEP_SECONDS * excess)
-
-    async def wait(self, now: datetime, address: str) -> bool:
-        """Wait out the delay before an attempt from ``address`` (the per-address limit's key) is
-        checked. Returns False, without waiting, when that address has an attempt waiting
-        already, or ``max_sleepers`` attempts are waiting in all: the caller refuses this one at
-        once.
-
-        The caller must hold no database connection while it waits, or a few waiting attempts
-        could take every connection in the pool."""
-        seconds = self.delay(now)
-        if not seconds:
-            return True
-        if address in self._waiting or self.sleeping >= self.max_sleepers:
-            log.info("refused a sign-in code attempt: one is waiting already", extra={"waiting": self.sleeping})
-            return False
-        self.sleeping += 1
-        self._waiting.add(address)
-        try:
-            log.debug("slowing a sign-in code attempt", extra={"delay_seconds": seconds})
-            await self.sleep(seconds)
-        finally:
-            self.sleeping -= 1
-            self._waiting.discard(address)
-        return True

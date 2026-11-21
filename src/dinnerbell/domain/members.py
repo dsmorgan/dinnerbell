@@ -168,6 +168,12 @@ class Member:
         return self.oidc_subject is not None
 
     @property
+    def code_only(self) -> bool:
+        """Active only through sign-in codes (spec 6.15): signed in, but never linked to an OIDC
+        subject, so their email can still change and a Slack account with it can claim them."""
+        return self.active and not self.is_linked and self.code_signed_in_at is not None
+
+    @property
     def status(self) -> MemberStatus:
         if not self.active:
             return MemberStatus.DEACTIVATED

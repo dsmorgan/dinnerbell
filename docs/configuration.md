@@ -17,7 +17,7 @@ These settings are required:
 | Setting | Meaning |
 |---|---|
 | `DINNERBELL_BASE_URL` | The public URL people open, exactly as they type it: the same scheme and host, no explicit `:443`, and no path. It must use `https`, except `http://localhost` or `http://127.0.0.1` for local testing. Any mismatch makes every form fail with "Cross-origin request refused". The sign-in redirect URL is this value plus `/auth/callback`. |
-| `DINNERBELL_SECRET_KEY` | Signs cookies and CSRF tokens. Dinnerbell refuses a key that is shorter than 32 characters, has fewer than 8 distinct characters, or contains placeholder text such as `REPLACE-ME`. Changing it invalidates open forms, sign-in pages, import previews, and the assistant's **Review the import** links, but not sessions. A secret. |
+| `DINNERBELL_SECRET_KEY` | Signs cookies and CSRF tokens. Dinnerbell refuses a key that is shorter than 32 characters, has fewer than 8 distinct characters, or contains placeholder text such as `REPLACE-ME`. Changing it invalidates open forms, sign-in pages, import previews, the assistant's **Review the import** links, and unused sign-in codes (spec 6.15), but not sessions. A secret. |
 | `DINNERBELL_ADMIN_EMAIL` | The first admin. On every start, if no member has this email, Dinnerbell invites it as an admin, so changing it later adds another admin. |
 | `DINNERBELL_OIDC_ISSUER` | The sign-in provider, such as `https://slack.com`. It must publish `/.well-known/openid-configuration`. |
 | `DINNERBELL_OIDC_CLIENT_ID` | The provider's client ID. |

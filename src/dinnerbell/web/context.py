@@ -15,7 +15,7 @@ from dinnerbell.config import Settings
 from dinnerbell.services.clock import Clock
 from dinnerbell.services.guests import JoinLimiter, SlackPeople
 from dinnerbell.services.health import SchedulerState, SlackState
-from dinnerbell.services.sign_in_codes import CodeThrottle
+from dinnerbell.services.sign_in_codes import WrongCodes
 from dinnerbell.web.oidc import OIDCClient
 from dinnerbell.web.signing import SignedPayload
 
@@ -54,7 +54,7 @@ class AppContext:
     """Who may join from the Slack channel (#38): set when Slack is connected."""
     join_limiter: JoinLimiter = field(default_factory=JoinLimiter)
     """Joins from Sign in with Slack, per Slack user (#38)."""
-    code_throttle: CodeThrottle = field(default_factory=CodeThrottle)
+    wrong_codes: WrongCodes = field(default_factory=WrongCodes)
     """Wrong sign-in codes from every address (spec 6.15)."""
 
 
