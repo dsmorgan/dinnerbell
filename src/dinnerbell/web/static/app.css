@@ -840,3 +840,10 @@ fieldset.card > .button.block { margin-bottom: 0; }
 /* Shown only while HTMX sends the message: HTMX marks the form with htmx-request. */
 .assistant-thinking { display: none; }
 .assistant-form.htmx-request .assistant-thinking { display: block; }
+
+/* Get the app (spec 6.15): the installed app shows .in-app, a browser shows .in-browser. */
+.in-app { display: none; }
+@media (display-mode: standalone) {
+  .in-app { display: block; }
+  .in-browser { display: none; }
+}

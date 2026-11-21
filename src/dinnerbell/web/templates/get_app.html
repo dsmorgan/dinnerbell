@@ -1,0 +1,34 @@
+{#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
+{% extends "base.html" %}
+{% block title %}Get the app{% endblock %}
+{% block content %}
+<h1>Get the app</h1>
+{#- Inside the installed app (display-mode standalone), app.css shows .in-app and hides
+    .in-browser, so no script decides what this page shows. -#}
+<section class="card stack in-app" id="installed" aria-labelledby="installed-heading">
+  <h2 id="installed-heading">You're in the app</h2>
+  <p>Dinnerbell is on your Home Screen. Open it from there.</p>
+  {#- Turn on notifications goes here (spec 6.15, "The installable app"): the tap iOS requires,
+      shown only inside the installed app. -#}
+</section>
+<section class="card stack in-browser" id="iphone" aria-labelledby="iphone-heading">
+  <h2 id="iphone-heading">iPhone and iPad</h2>
+  <ol>
+    <li>Open this page in Safari.</li>
+    <li>Tap <strong>Share</strong>, the square with an arrow pointing up.</li>
+    <li>Tap <strong>Add to Home Screen</strong>. You might need to tap <strong>More</strong> or scroll to find it.</li>
+    <li>Tap <strong>Add</strong>.</li>
+    <li>Open Dinnerbell from your Home Screen.</li>
+  </ol>
+</section>
+<section class="card stack in-browser" id="android" aria-labelledby="android-heading">
+  <h2 id="android-heading">Android</h2>
+  <ol>
+    <li>Open this page in Chrome.</li>
+    <li>Tap the menu, the three dots.</li>
+    <li>Tap <strong>Add to Home screen</strong>, then <strong>Install</strong>.</li>
+    <li>Open Dinnerbell from your Home screen.</li>
+  </ol>
+</section>
+<p class="small muted in-browser">The app on your Home Screen keeps its own sign-in, apart from the browser's.</p>
+{% endblock %}

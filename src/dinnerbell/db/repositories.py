@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from dinnerbell.db.models import AuditRow, HouseholdRow, MemberRow, SessionRow
 from dinnerbell.domain.away import Away
 from dinnerbell.domain.household import Household
-from dinnerbell.domain.members import Capabilities, ColorMode, Member, Role
+from dinnerbell.domain.members import Capabilities, ColorMode, Member, NotifyVia, Role
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,6 +54,7 @@ def to_member(row: MemberRow) -> Member:
         fun_mode=row.fun_mode,
         fun_seen_award=row.fun_seen_award,
         color_mode=ColorMode(row.color_mode),
+        notify_via=NotifyVia(row.notify_via) if row.notify_via else None,
         away=Away(row.away_first, row.away_last) if row.away_first and row.away_last else None,
     )
 

@@ -1,6 +1,6 @@
 # Members and guests
 
-Admins manage the household on **Admin** > **Members**. This page covers guests, joining from the channel, editing a member's preferences, and the [Assistant page](#the-assistant-page). To link members' Slack accounts, see [Link everyone's Slack account](setup.md#link-everyones-slack-account).
+Admins manage the household on **Admin** > **Members**. This page covers guests, joining from the channel, editing a member's preferences, the [web app](#the-web-app), and the [Assistant page](#the-assistant-page). To link members' Slack accounts, see [Link everyone's Slack account](setup.md#link-everyones-slack-account).
 
 ## Guests
 
@@ -12,10 +12,10 @@ A guest eats with the household when a member invites them to a call. Guests ans
 
 ## A member's preferences
 
-An admin can see and change any member's preferences. On **Admin** > **Members**, select **Preferences** on the member's row, or select **Edit** and then their preferences. You get the member's own **Preferences** page, with a banner that says "You're editing Kim's preferences", and every control on it: **I can usually**, reminders, dietary needs, **Away**, fun mode, light or dark, and each tag and item level. **Preferences** on your own row opens your own page.
+An admin can see and change any member's preferences. On **Admin** > **Members**, select **Preferences** on the member's row, or select **Edit** and then their preferences. You get the member's own **Preferences** page, with a banner that says "You're editing Kim's preferences", and every control on it: **I can usually**, reminders, dietary needs, **Away**, fun mode, light or dark, **Notifications** while the [web app](#the-web-app) is on, and each tag and item level. **Preferences** on your own row opens your own page.
 
 - Each change is saved as the member's, as if they had made it. The member isn't messaged, and their sign-in, sessions, and Slack link don't change.
-- Each change writes an audit row with you as the actor and the member as the target: `member.preference_set` for a level, with the level before and after; `member.settings_updated` for **I can usually** and reminders; `member.needs_updated` for dietary needs; `member.fun_mode_set` for fun mode; and `member.color_mode_set` for light or dark. A save that changes nothing writes no row. A member's own changes aren't audited, except dietary needs (`guest.needs_updated`) and away days.
+- Each change writes an audit row with you as the actor and the member as the target: `member.preference_set` for a level, with the level before and after; `member.settings_updated` for **I can usually** and reminders; `member.needs_updated` for dietary needs; `member.fun_mode_set` for fun mode; `member.color_mode_set` for light or dark; and `member.notify_via_set` for **Notifications**. A save that changes nothing writes no row. A member's own changes aren't audited, except dietary needs (`guest.needs_updated`) and away days.
 - Away days are audited whoever sets them: `member.away_set`, with the first and last day and where they were set (`preferences`, `call`, or `admin`), and `member.away_cleared`. Setting them answers the member Out on calls still taking answers on those days, unless they answered already.
 - Dietary needs can't change while a call the member is in is voting. Change them once it's decided.
 - Guests have no **Preferences** page. To change a guest's dietary needs, edit their row under **Guests**. Guests set their own fun mode and light, dark, or auto on their **Your dietary needs** page.
@@ -28,6 +28,18 @@ An admin can see and change any member's preferences. On **Admin** > **Members**
 - **Remove** signs a guest out and stops them from joining again until you select **Add back**.
 
 Joining needs no extra scopes for a public channel. A private channel needs `groups:read`.
+
+## The web app
+
+**Admin** > **Web app** has one switch, **Turn on the web app**, off by default ([ADR 0010](adr/0010-optional-web-app.md), spec [6.15](spec.md#615-web-app-and-push)). While it's off, nothing changes. Turning it on or off writes a `household.web_app_updated` audit row.
+
+While it's on:
+
+- Members can add Dinnerbell to their phone's Home Screen. **Get the app**, linked from the sign-in page, from **Preferences**, and from **Admin** > **Web app**, shows the steps for iPhone and Android.
+- **Preferences** has **Notifications**: **Slack**, **Web app**, or **Both**. A member linked to Slack starts on **Slack**. A member without a Slack link has only **Web app**, and moves to **Slack** once they're linked, unless they chose otherwise while linked before.
+- Slack skips direct messages, such as reminders, to members on **Web app**, instead of failing to send them. Channel posts still go to the channel.
+
+Push notifications and signing in with a code aren't built yet. Until they are, a member on **Web app** gets nothing outside the web pages, as a member without Slack does today. Turning the switch off keeps each member's choice for when it's on again.
 
 ## The Assistant page
 

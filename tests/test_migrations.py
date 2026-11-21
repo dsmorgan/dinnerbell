@@ -1447,7 +1447,7 @@ def test_0016_adds_contributions_and_badges_without_touching_a_row_and_downgrade
     after = _rows_outside_m4(settings)
     ours = {"household", "member", "response", "proposal"}
     assert {k: v for k, v in after.items() if k not in ours} == {k: v for k, v in before.items() if k not in ours}
-    assert [row[:-5] for row in after["member"]] == before["member"]  # 0022, 0023, 0027, and 0030 add five, last
+    assert [row[:-6] for row in after["member"]] == before["member"]  # 0022, 0023, 0027, 0030, 0041 add six, last
     assert [row[:-2] for row in after["response"]] == before["response"]  # 0025 and 0027 add two, last
     assert [row[:-1] for row in after["proposal"]] == before["proposal"]  # 0026 adds one, last
     (household,) = after["household"]
@@ -1509,7 +1509,7 @@ def test_0016_adds_contributions_and_badges_without_touching_a_row_and_downgrade
     assert {"contribution", "badge_award"} <= _tables(settings)
     again = _rows_outside_m4(settings)
     assert {k: v for k, v in again.items() if k not in ours} == {k: v for k, v in before.items() if k not in ours}
-    assert [row[:-5] for row in again["member"]] == before["member"]
+    assert [row[:-6] for row in again["member"]] == before["member"]
 
 
 # 0017: Slack badge art (#105) ------------------------------------------------------------------------
@@ -2792,3 +2792,56 @@ def test_0040_keeps_only_dietary_needs_that_name_one_of_the_households_dietary_t
     assert _needs(settings) == expected
     _downgrade_to(settings, "0039_assistant_needs")
     assert _needs(settings) == expected
+
+
+# 0041: Slack, the web app, or both (#138) ----------------------------------------------------------
+
+
+def _notify_via(settings: Settings) -> list[tuple[object, ...]]:
+    engine = create_sync_engine(settings.sync_database_url)
+    try:
+        with engine.connect() as c:
+            return [tuple(r) for r in c.execute(text("SELECT id, notify_via FROM member ORDER BY id"))]
+    finally:
+        engine.dispose()
+
+
+def test_0041_leaves_everyone_unchosen_refuses_other_values_and_downgrade_drops_it(settings: Settings) -> None:
+    """Up adds ``member.notify_via``, null for every member and guest already there and for anyone
+    added later, so each one's default still comes from their Slack link, and refuses a value
+    that isn't slack, web, or both. Down drops the column and changes no other row."""
+    _upgrade_to(settings, "0040_orphan_dietary_needs")
+    _populate_calls(settings)
+    _execute(
+        settings,
+        "INSERT INTO member (id, household_id, display_name, email, role, can_cook, can_pickup, can_order, "
+        "mute_dm_reminders, feedback_reminder, active, slack_link_locked, created_at, updated_at) "
+        "VALUES (2, 1, 'Pat', NULL, 'guest', 0, 0, 0, 0, 0, 1, 0, :t, :t)",
+    )
+    before = _rows_outside_m4(settings)
+
+    _upgrade_to(settings, "0041_notify_via")
+    assert _notify_via(settings) == [(1, None), (2, None)]
+    after = _rows_outside_m4(settings)
+    assert [row[:-1] for row in after["member"]] == before["member"]  # the new column is last
+    assert {k: v for k, v in after.items() if k != "member"} == {k: v for k, v in before.items() if k != "member"}
+    _execute(
+        settings,
+        "INSERT INTO member (id, household_id, display_name, email, role, can_cook, can_pickup, can_order, "
+        "mute_dm_reminders, feedback_reminder, active, slack_link_locked, created_at, updated_at) "
+        "VALUES (3, 1, 'Lee', 'lee@example.com', 'member', 0, 0, 0, 0, 0, 1, 0, :t, :t)",
+        "UPDATE member SET notify_via = 'web' WHERE id = 1",
+        "UPDATE member SET notify_via = 'both' WHERE id = 3",
+    )
+    assert _notify_via(settings) == [(1, "web"), (2, None), (3, "both")]
+    for value in ("Web", "push", ""):
+        with pytest.raises(IntegrityError, match="ck_member_notify_via"):
+            _execute(settings, f"UPDATE member SET notify_via = '{value}' WHERE id = 1")  # noqa: S608 - constants
+    _execute(settings, "DELETE FROM member WHERE id = 3")
+
+    _downgrade_to(settings, "0040_orphan_dietary_needs")
+    schema = _member_schema(settings)
+    assert "notify_via" not in schema and "ck_member_color_mode" in schema and "ck_member_role" in schema
+    assert _rows_outside_m4(settings) == before
+    _upgrade_to(settings, "0041_notify_via")
+    assert _notify_via(settings) == [(1, None), (2, None)]
