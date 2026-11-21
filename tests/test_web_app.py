@@ -108,9 +108,9 @@ def test_the_admin_turns_it_on_and_off_and_each_change_is_audited(admin: TestCli
     assert settings_page.status_code == 200
     assert 'name="on" value="on" aria-describedby="web-app-about">' in settings_page.text  # unchecked
     assert inline_code(settings_page.text)[1] == []
-    warning = page(settings_page).split('id="not-built-yet">', 1)[1].split("</p>", 1)[0]
-    assert "Push notifications and signing in with a code aren't built yet." in warning
-    assert "get no direct messages at all" in warning
+    assert 'id="not-built-yet"' not in settings_page.text  # push and code sign-in both exist now
+    note = page(settings_page).split('id="web-app-pushes">', 1)[1].split("</p>", 1)[0]
+    assert "get push notifications once they turn them on" in note and "sign in with a code" in note
     switch(admin, True)
     on = page(admin.get("/admin/web-app?notice=on"))
     assert "The web app is on." in on and 'value="on" aria-describedby="web-app-about" checked>' in on

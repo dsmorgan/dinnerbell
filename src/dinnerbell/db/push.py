@@ -244,10 +244,11 @@ class PushRepository:
 
     # The queue --------------------------------------------------------------------------------
 
-    async def due(self, limit: int, now: datetime) -> list[int]:
-        """IDs of pushes ready to send, oldest first: pending, past any retry delay, unclaimed."""
-        found = await self._session.scalars(
-            select(PushRow.id)
+    async def due(self, limit: int, now: datetime) -> list[tuple[int, int]]:
+        """(push ID, subscription ID) of pushes ready to send, oldest first: pending, past any
+        retry delay, and unclaimed."""
+        found = await self._session.execute(
+            select(PushRow.id, PushRow.subscription_id)
             .where(
                 _pending(),
                 PushRow.available_at <= now,
@@ -256,7 +257,7 @@ class PushRepository:
             .order_by(PushRow.id)
             .limit(limit)
         )
-        return list(found)
+        return [(int(push_id), int(subscription_id)) for push_id, subscription_id in found]
 
     async def claim(self, push_id: int, token: str, *, now: datetime, until: datetime) -> QueuedPush | None:
         """Claim a push for sending, as the outbox does: one conditional UPDATE, so only one
@@ -315,6 +316,13 @@ class PushRepository:
             .execution_options(synchronize_session=False)
         )
         return _rowcount(result) == 1
+
+    async def anything_to_purge(self, before: datetime) -> bool:
+        """Whether a push ended before ``before``: a read, so an idle install never writes."""
+        found = await self._session.scalar(
+            select(PushRow.id).where((PushRow.sent_at < before) | (PushRow.closed_at < before)).limit(1)
+        )
+        return found is not None
 
     async def purge(self, before: datetime) -> int:
         """Delete pushes that ended before ``before``: their outbox rows keep the record."""

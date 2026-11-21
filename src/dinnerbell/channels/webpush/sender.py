@@ -13,7 +13,7 @@ from email.utils import parsedate_to_datetime
 
 import httpx
 
-from dinnerbell.channels.webpush.encryption import encrypt
+from dinnerbell.channels.webpush.encryption import BadKeys, encrypt
 from dinnerbell.channels.webpush.vapid import VapidKeys
 from dinnerbell.domain.push import PushResponse, PushTarget, UndeliverableKeys, known_push_service
 from dinnerbell.services.clock import Clock
@@ -69,7 +69,7 @@ class WebPushSender:
             headers["Topic"] = topic
         try:
             body = encrypt(payload, target.p256dh, target.auth)
-        except ValueError:  # keys stored before they were checked on the curve, say
+        except BadKeys:  # keys stored before they were checked on the curve, say; never a payload error
             raise UndeliverableKeys(f"subscription {target.subscription_id} has keys that can't work") from None
         response = await self._http.post(target.endpoint, content=body, headers=headers, follow_redirects=False)
         return PushResponse(response.status_code, retry_after(response.headers.get("retry-after"), now))

@@ -71,9 +71,10 @@ async def subscribe(
     except push.InvalidSubscription as exc:
         # The host only, never the path, which identifies the device: so a push service
         # Dinnerbell doesn't know yet can be found and added to the allowlist.
-        extra = {"member_id": actor.id, "host": push.endpoint_host(endpoint), "reason": "keys"}
+        # An allowed host's endpoint refused for its keys logs no host at all.
+        extra: dict[str, object] = {"member_id": actor.id, "reason": "keys"}
         if str(exc) == push.NOT_A_PUSH_SERVICE:
-            extra["reason"] = "host"
+            extra |= {"reason": "host", "host": push.endpoint_host(endpoint)}
         log.info("push subscription refused", extra=extra)
         raise
     async with write_transaction(db):
@@ -115,8 +116,8 @@ HTTPS_SUBJECT = (
 
 
 async def check_base_url(db: AsyncSession, household_id: int, base_url: str) -> bool:
-    """At startup: warn when the web app is on and the base URL, the VAPID ``sub``, isn't
-    https. Returns whether it warned."""
+    """At startup, and when an admin turns the switch on: warn when the web app is on and the
+    base URL, the VAPID ``sub``, isn't https. Returns whether it warned."""
     if base_url.startswith("https://") or not await web_app_enabled(db, household_id):
         return False
     log.warning(HTTPS_SUBJECT)
@@ -183,11 +184,12 @@ async def drain(
     result = PushDrainResult()
     async with sessionmaker() as db:
         repo = PushRepository(db)
-        due = await repo.due(limit, clock())
+        waiting = await repo.due(limit, clock())
         await db.rollback()
-        for start in range(0, len(due), PARALLEL):
+        while waiting:
+            batch, waiting = _one_per_device(waiting)
             ready: list[_Ready] = []
-            for push_id in due[start : start + PARALLEL]:
+            for push_id, _ in batch:
                 prepared = await _prepare(db, push_id, clock, base_url, result)
                 if prepared is not None:
                     ready.append(prepared)
@@ -197,11 +199,30 @@ async def drain(
     return result
 
 
+def _one_per_device(waiting: list[tuple[int, int]]) -> tuple[list[tuple[int, int]], list[tuple[int, int]]]:
+    """The next batch: up to ``PARALLEL`` pushes, oldest first, at most one per device, so two
+    pushes to one device never go out together or out of order. Returns (batch, the rest)."""
+    batch: list[tuple[int, int]] = []
+    rest: list[tuple[int, int]] = []
+    devices: set[int] = set()
+    for push_id, subscription_id in waiting:
+        if len(batch) < PARALLEL and subscription_id not in devices:
+            batch.append((push_id, subscription_id))
+            devices.add(subscription_id)
+        else:
+            rest.append((push_id, subscription_id))
+    return batch, rest
+
+
 async def purge(sessionmaker: async_sessionmaker[AsyncSession], now: datetime) -> int:
     """Delete pushes that ended more than ``PURGE_AFTER`` ago. The scheduler runs this hourly,
-    whether or not anything is due; the outbox rows keep the record."""
+    whether or not anything is due; it reads first, so a household that never turned the web app
+    on gets no write. The outbox rows keep the record."""
     async with sessionmaker() as db:
-        removed = await PushRepository(db).purge(now - PURGE_AFTER)
+        repo = PushRepository(db)
+        if not await repo.anything_to_purge(now - PURGE_AFTER):
+            return 0
+        removed = await repo.purge(now - PURGE_AFTER)
         await db.commit()
     return removed
 
@@ -228,11 +249,10 @@ async def _guarded(
     except Exception as exc:
         await db.rollback()
         try:
-            if isinstance(exc, PayloadError):  # a row nothing can read won't read on a retry
-                await PushRepository(db).close(queued.id, token, clock(), f"undeliverable: {type(exc).__name__}")
-                await db.commit()
-                result.failed += 1
-                log.error("push undeliverable", extra=_about(queued))
+            if isinstance(exc, PayloadError | push.PushTooLarge):  # a retry would read the same row
+                if await _close(db, queued, token, clock, f"undeliverable: {type(exc).__name__}"):
+                    result.failed += 1
+                    log.error("push undeliverable", extra=_about(queued))
                 return
             await _retry(db, queued, token, clock, result, type(exc).__name__, timedelta(0))
         except Exception:
@@ -260,10 +280,9 @@ async def _prepare(
     async def check_and_build() -> None:
         reason = await _stale(db, queued, clock())
         if reason is not None:
-            await PushRepository(db).close(queued.id, token, clock(), reason)
-            await db.commit()
-            result.closed += 1
-            log.info("push closed", extra=_about(queued, note=reason))
+            if await _close(db, queued, token, clock, reason):
+                result.closed += 1
+                log.info("push closed", extra=_about(queued, note=reason))
             return
         notification = from_payload(queued.kind, queued.payload)
         at = clock()
@@ -321,15 +340,35 @@ async def _stale(db: AsyncSession, queued: QueuedPush, now: datetime) -> str | N
     return EXPIRED if now - queued.created_at > MAX_AGE else None
 
 
+def _lost(queued: QueuedPush) -> None:
+    """The row's claim ran out before it settled, and another drainer may hold it: this one
+    changes nothing more, so a stale claim never counts a strike or deletes a device twice."""
+    log.warning("push claim ran out before it settled", extra=_about(queued))
+
+
+async def _close(db: AsyncSession, queued: QueuedPush, token: str, clock: Clock, note: str) -> bool:
+    """Close the row unsent, committed. False, and nothing else may follow, if the claim ran out."""
+    closed = await PushRepository(db).close(queued.id, token, clock(), note)
+    await db.commit()
+    if not closed:
+        _lost(queued)
+    return closed
+
+
 async def _settle(
     db: AsyncSession, item: _Ready, answer: push.PushResponse | Exception, clock: Clock, result: PushDrainResult
 ) -> None:
     queued, token = item.queued, item.token
     if isinstance(answer, push.UndeliverableKeys):
-        await PushRepository(db).delete_subscription(queued.target.subscription_id)
-        await db.commit()
-        result.devices_deleted += 1
-        log.warning("push subscription had keys that can't work; deleted", extra=_about(queued))
+        if await _close(db, queued, token, clock, "failed: keys that can't work"):
+            await PushRepository(db).delete_subscription(queued.target.subscription_id)
+            await db.commit()
+            result.devices_deleted += 1
+            log.warning("push subscription had keys that can't work; deleted", extra=_about(queued))
+    elif isinstance(answer, push.PushTooLarge):
+        if await _close(db, queued, token, clock, "failed: too large"):  # the device is fine
+            result.failed += 1
+            log.error("push too large to send", extra=_about(queued))
     elif isinstance(answer, Exception):
         await _retry(db, queued, token, clock, result, type(answer).__name__, timedelta(0))
     else:
@@ -345,41 +384,56 @@ async def _answer(
     status = response.status
     found = push.outcome(status)
     if found is Outcome.SENT:
-        await repo.sent(queued.id, token, now)
+        if not await repo.sent(queued.id, token, now):
+            await db.commit()
+            _lost(queued)
+            return
         await repo.succeeded(subscription_id, now)
         await db.commit()
         result.sent += 1
         log.info("push sent", extra=_about(queued, status=status))
     elif found is Outcome.GONE:
-        await repo.delete_subscription(subscription_id)
-        await db.commit()
-        result.devices_deleted += 1
-        log.info("push subscription ended", extra=_about(queued, status=status))
+        if await _close(db, queued, token, clock, f"gone: {status}"):
+            await repo.delete_subscription(subscription_id)
+            await db.commit()
+            result.devices_deleted += 1
+            log.info("push subscription ended", extra=_about(queued, status=status))
     elif found is Outcome.REJECTED:
+        if not await _close(db, queued, token, clock, f"rejected: {status}"):
+            return
         strikes = await repo.rejected(subscription_id, now)
-        await repo.close(queued.id, token, now, f"rejected: {status}")
         if strikes >= push.AUTH_STRIKES:
             await repo.delete_subscription(subscription_id)
             result.devices_deleted += 1
         await db.commit()
         result.failed += 1
         log.warning("push rejected", extra=_about(queued, status=status, strikes=strikes))
-        async with write_transaction(db):
-            burst = await rejected_burst(db, queued.household_id, now)
-            await db.commit()
-        if burst:
-            log.error(
-                "push services are refusing Dinnerbell's signature; check the clock and the secret key",
-                extra={"household_id": queued.household_id, "status": status},
-            )
+        await _count_rejection(db, queued, status, now)
     elif found is Outcome.FAILED:
-        await repo.close(queued.id, token, now, f"failed: {status}")
-        await db.commit()
-        result.failed += 1
-        log.error("push failed", extra=_about(queued, status=status))
+        if await _close(db, queued, token, clock, f"failed: {status}"):
+            result.failed += 1
+            log.error("push failed", extra=_about(queued, status=status))
     else:
         asked = min(response.retry_after or 0.0, outbox.LONGEST_RETRY.total_seconds())
         await _retry(db, queued, token, clock, result, f"status {status}", timedelta(seconds=asked))
+
+
+async def _count_rejection(db: AsyncSession, queued: QueuedPush, status: int, now: datetime) -> None:
+    """Count a 401 or 403 toward the household's burst. The row is closed already, so a failure
+    here is logged as what it is, never as a retry."""
+    try:
+        async with write_transaction(db):
+            burst = await rejected_burst(db, queued.household_id, now)
+            await db.commit()
+    except Exception:
+        await db.rollback()
+        log.exception("push rejection not counted toward a burst", extra=_about(queued, status=status))
+        return
+    if burst:
+        log.error(
+            "push services are refusing Dinnerbell's signature; check the clock and the secret key",
+            extra={"household_id": queued.household_id, "status": status},
+        )
 
 
 async def _retry(
@@ -394,13 +448,15 @@ async def _retry(
     repo = PushRepository(db)
     now = clock()
     if queued.attempts >= MAX_ATTEMPTS:
-        await repo.close(queued.id, token, now, f"gave up: {error}")
-        await db.commit()
-        result.failed += 1
-        log.error("push gave up", extra=_about(queued, attempts=queued.attempts, error=error))
+        if await _close(db, queued, token, clock, f"gave up: {error}"):
+            result.failed += 1
+            log.error("push gave up", extra=_about(queued, attempts=queued.attempts, error=error))
         return
     wait = min(max(outbox.retry_delay(queued.attempts), asked), outbox.LONGEST_RETRY)
-    await repo.retry(queued.id, token, at=now + wait, note=error)
+    retried = await repo.retry(queued.id, token, at=now + wait, note=error)
     await db.commit()
+    if not retried:
+        _lost(queued)
+        return
     result.retrying += 1
     log.warning("push failed, will retry", extra=_about(queued, attempts=queued.attempts, error=error))

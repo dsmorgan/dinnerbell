@@ -705,6 +705,104 @@ async def test_ended_pushes_are_purged_after_a_week_even_with_nothing_due(house:
     assert await queued(house) == []
 
 
+@dataclass
+class StealsTheClaim(FakeSender):
+    """Answers after another drainer took the row over, as when this one outlived its lease."""
+
+    house: House | None = None
+
+    async def send(
+        self, target: PushTarget, payload: bytes, *, ttl: int, urgency: str, topic: str | None
+    ) -> PushResponse:
+        assert self.house is not None
+        async with self.house.sessionmaker() as db:
+            await db.execute(text("UPDATE push_queue SET claim_token = 'someone-else'"))
+            await db.commit()
+        return await super().send(target, payload, ttl=ttl, urgency=urgency, topic=topic)
+
+
+@pytest.mark.parametrize("status", [201, 404, 401, 413, 503])
+async def test_a_lost_claim_changes_nothing_when_its_answer_comes(house: House, status: int) -> None:
+    """A stale claim never counts a strike, deletes a device, or counts a send."""
+    kims = await one_push(house)
+    result = await drain(house, StealsTheClaim(answers=[status], house=house))
+    assert (result.sent, result.failed, result.retrying, result.devices_deleted) == (0, 0, 0, 0)
+    assert await devices(house) == [kims]
+    async with house.sessionmaker() as db:
+        device_row = await db.get(PushSubscriptionRow, kims)
+        row = (await db.scalars(select(PushRow))).one()
+    assert device_row is not None and (device_row.auth_failures, device_row.last_success_at) == (0, None)
+    assert (row.sent_at, row.closed_at, row.claim_token) == (None, None, "someone-else")
+
+
+async def test_a_burst_count_that_fails_is_logged_as_such_never_as_a_retry(
+    house: House, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    kims = await one_push(house)
+
+    async def broken(*_: object) -> bool:
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(push, "rejected_burst", broken)
+    caplog.set_level(logging.INFO, logger="dinnerbell.services.push")
+    result = await drain(house, FakeSender(answers=[401]))
+    assert (result.failed, result.retrying) == (1, 0)
+    assert await queued(house) == [("Kim", kims, "rejected: 401", False, True)]
+    messages = [r.getMessage() for r in caplog.records]
+    assert "push rejection not counted toward a burst" in messages and "push failed, will retry" not in messages
+
+
+async def test_a_push_too_large_closes_and_keeps_the_device(house: House) -> None:
+    kims = await one_push(house)
+    result = await drain(house, FakeSender(answers=[rules.PushTooLarge("a push holds at most 3993 bytes")]))
+    assert (result.failed, result.devices_deleted) == (1, 0) and await devices(house) == [kims]
+    assert await queued(house) == [("Kim", kims, "failed: too large", False, True)]
+
+
+@dataclass
+class PerDevice(FakeSender):
+    """Records how many pushes each device has in flight at once."""
+
+    in_flight: dict[int, int] = field(default_factory=dict)
+    most: dict[int, int] = field(default_factory=dict)
+    order: list[int] = field(default_factory=list)
+
+    async def send(
+        self, target: PushTarget, payload: bytes, *, ttl: int, urgency: str, topic: str | None
+    ) -> PushResponse:
+        sid = target.subscription_id
+        self.in_flight[sid] = self.in_flight.get(sid, 0) + 1
+        self.most[sid] = max(self.most.get(sid, 0), self.in_flight[sid])
+        await asyncio.sleep(0)
+        self.in_flight[sid] -= 1
+        self.order.append(sid)
+        return await super().send(target, payload, ttl=ttl, urgency=urgency, topic=topic)
+
+
+async def test_one_device_never_gets_two_pushes_at_once(house: House) -> None:
+    await switch(house, True)
+    kims = await device(house, "Kim")
+    lees = await device(house, "Lee")
+    event = await a_call(house)
+    kim, sam = who(house, "Kim", "Sam")
+    now = house.clock()
+    await enqueue(house, *(note.CoordinatingGiven(event, kim, sam, now + timedelta(seconds=n)) for n in range(3)))
+    await enqueue(house, note.ResponseReminder(event, who(house, "Lee")[0]))
+    sender = PerDevice()
+    assert (await drain(house, sender)).sent == 4
+    assert sender.most == {kims: 1, lees: 1}
+    # The first batch takes Kim's oldest and Lee's; Kim's other two go one batch each.
+    assert set(sender.order[:2]) == {kims, lees} and sender.order[2:] == [kims, kims]
+
+
+async def test_purge_only_reads_when_nothing_has_ended(house: House, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def never(*_: object) -> int:
+        raise AssertionError("an idle install must not write")
+
+    monkeypatch.setattr(PushRepository, "purge", never)
+    assert await push.purge(house.sessionmaker, house.clock()) == 0
+
+
 async def test_a_refused_subscription_logs_its_host_and_never_its_path(
     house: House, caplog: pytest.LogCaptureFixture
 ) -> None:
@@ -719,6 +817,14 @@ async def test_a_refused_subscription_logs_its_host_and_never_its_path(
     (line,) = [r for r in caplog.records if r.getMessage() == "push subscription refused"]
     assert (line.host, line.reason) == ("push.example.net", "host")  # type: ignore[attr-defined]
     assert "Zq9path" not in caplog.text
+    caplog.clear()
+    async with house.sessionmaker() as db:  # an allowed host, refused for its keys: no host at all
+        with pytest.raises(rules.InvalidSubscription):
+            await push.subscribe(
+                db, house["Kim"], await signed_in(house, "Kim"), endpoint("Kim"), "AAAA", AUTH, now=house.clock()
+            )
+    (line,) = [r for r in caplog.records if r.getMessage() == "push subscription refused"]
+    assert line.reason == "keys" and not hasattr(line, "host")  # type: ignore[attr-defined]
 
 
 async def test_startup_warns_when_the_web_app_is_on_without_https(
@@ -838,6 +944,7 @@ def test_get_the_app_offers_notifications_to_a_signed_in_member(admin: TestClien
     assert 'name="dinnerbell-push-key"' in today and "/static/push.js" in today
     assert inline_code(today)[1] == []
     js = admin.get("/static/push.js")
+    assert 'digest("SHA-256"' in js.text and "removeItem" in js.text  # stores a hash, cleared on failure
     assert js.status_code == 200 and "applicationServerKey" in js.text and "X-CSRF-Token" in js.text
 
 
@@ -849,6 +956,21 @@ def test_the_service_worker_keeps_its_policy_and_icon_line(admin: TestClient) ->
     assert worker.headers["content-security-policy"] == WORKER_CONTENT_SECURITY_POLICY
     assert WORKER_ICON in worker.text and "showNotification" in worker.text and "navigate" in worker.text
     assert "options.tag = note.tag" in worker.text  # a call's posts replace each other on the lock screen
+    assert "options.renotify = true" in worker.text  # and a replacement still alerts
+
+
+def test_turning_it_on_without_https_warns(admin: TestClient, caplog: pytest.LogCaptureFixture) -> None:
+    from dataclasses import replace as swap
+
+    context = admin.app.state.dinnerbell  # type: ignore[attr-defined]
+    admin_switch(admin, True)
+    assert push.HTTPS_SUBJECT not in caplog.text  # https: quiet
+    admin_switch(admin, False)
+    admin.app.state.dinnerbell = swap(  # type: ignore[attr-defined]
+        context, settings=context.settings.model_copy(update={"base_url": "http://localhost:8000"})
+    )
+    admin_switch(admin, True)
+    assert push.HTTPS_SUBJECT in caplog.text
 
 
 def test_admin_shows_devices_and_warns_after_a_burst_of_refusals(admin: TestClient, migrated: Settings) -> None:
@@ -856,7 +978,7 @@ def test_admin_shows_devices_and_warns_after_a_burst_of_refusals(admin: TestClie
     assert submit(admin, "/app/notifications", FORM).status_code == 204
     html = page(admin.get("/admin/web-app"))
     assert "1 device gets notifications." in html and 'id="push-rejected"' not in html
-    assert 'id="not-built-yet"' in html  # the owner removes it once both lanes land
+    assert 'id="not-built-yet"' not in html and 'id="web-app-pushes"' in html
     from sqlalchemy import create_engine
 
     engine = create_engine(migrated.sync_database_url)

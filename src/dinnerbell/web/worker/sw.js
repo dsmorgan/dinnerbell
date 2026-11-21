@@ -61,6 +61,7 @@
     };
     if (typeof note.tag === "string" && note.tag) {
       options.tag = note.tag;
+      options.renotify = true; // replacing an earlier one about the call still alerts
     }
     if (typeof note.lang === "string" && note.lang) {
       options.lang = note.lang;
