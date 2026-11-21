@@ -469,7 +469,7 @@ The call is the one the member names, then the thread's call, then the only open
 
 ### 6.15 Web app and push
 
-The web app with push notifications (FR-53, [ADR 0010](adr/0010-optional-web-app.md)) is optional, and an admin turns it on. Nothing here changes a household that leaves it off.
+The web app with push notifications (FR-53, [ADR 0010](adr/0010-optional-web-app.md)) is optional, and an admin turns it on. While it's off, members see no change and Slack delivery is unchanged; Admin shows a **Web app** tab.
 
 **The switch.** **Admin** > **Web app** has one switch, off by default; turning it on or off writes an audit row. While it's off, `/manifest.webmanifest`, `/sw.js`, the **Get the app** page, and the code sign-in pages answer 404, Preferences hides the channel choice, and no push rows are queued. Turning it off deletes every push subscription and the queued push rows; sessions and codes stay.
 
