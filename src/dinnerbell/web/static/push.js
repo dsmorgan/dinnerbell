@@ -106,31 +106,57 @@
   var SAVED = "dinnerbell-push-saved";
   var RESAVE_MS = 10 * 60 * 1000;
 
-  // What this session last sent, so browsing the app doesn't send it on every page. The CSRF
-  // token changes with the session, so a new sign-in always sends it again.
+  // What this session last sent, so browsing the app doesn't send it on every page: a SHA-256
+  // of the CSRF token and the endpoint, never either itself. The token changes with the
+  // session, so a new sign-in always sends it again.
   function stamp(subscription) {
-    return csrfToken() + " " + subscription.endpoint;
+    var text = new TextEncoder().encode(csrfToken() + " " + subscription.endpoint);
+    return window.crypto.subtle.digest("SHA-256", text).then(function (digest) {
+      return Array.prototype.map
+        .call(new Uint8Array(digest), function (b) {
+          return ("0" + b.toString(16)).slice(-2);
+        })
+        .join("");
+    });
+  }
+
+  function forget() {
+    try {
+      window.localStorage.removeItem(SAVED);
+    } catch (e) {
+      // nothing stored
+    }
   }
 
   function savedRecently(subscription) {
-    try {
-      var saved = JSON.parse(window.localStorage.getItem(SAVED) || "{}");
-      return saved.stamp === stamp(subscription) && Date.now() - saved.at < RESAVE_MS;
-    } catch (e) {
-      return false;
-    }
+    return stamp(subscription).then(function (hash) {
+      try {
+        var saved = JSON.parse(window.localStorage.getItem(SAVED) || "{}");
+        return saved.hash === hash && Date.now() - saved.at < RESAVE_MS;
+      } catch (e) {
+        return false;
+      }
+    });
   }
 
   function save(subscription) {
     var keys = subscription.toJSON().keys || {};
     var fields = { endpoint: subscription.endpoint, p256dh: keys.p256dh || "", auth: keys.auth || "" };
-    return post("/app/notifications", fields).then(function () {
-      try {
-        window.localStorage.setItem(SAVED, JSON.stringify({ stamp: stamp(subscription), at: Date.now() }));
-      } catch (e) {
-        // private browsing: it sends again next page
-      }
-    });
+    return post("/app/notifications", fields)
+      .then(function () {
+        return stamp(subscription);
+      })
+      .then(function (hash) {
+        try {
+          window.localStorage.setItem(SAVED, JSON.stringify({ hash: hash, at: Date.now() }));
+        } catch (e) {
+          // private browsing: it sends again next page
+        }
+      })
+      .catch(function (error) {
+        forget(); // so the next page sends it again
+        throw error;
+      });
   }
 
   // Every page but Get the app, inside the installed app: send an existing subscription again.
@@ -144,10 +170,12 @@
         return reg ? reg.pushManager.getSubscription() : null;
       })
       .then(function (subscription) {
-        if (subscription && sameKey(subscription.options.applicationServerKey) && !savedRecently(subscription)) {
-          return save(subscription);
+        if (!subscription || !sameKey(subscription.options.applicationServerKey)) {
+          return null;
         }
-        return null;
+        return savedRecently(subscription).then(function (recent) {
+          return recent ? null : save(subscription);
+        });
       })
       .catch(function () {
         // the next page tries again
@@ -222,6 +250,7 @@
         }
         var endpoint = subscription.endpoint;
         return post("/app/notifications/off", { endpoint: endpoint }).then(function () {
+          forget();
           return subscription.unsubscribe();
         });
       })

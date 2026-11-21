@@ -176,4 +176,6 @@ async def save_switch(
     not. Only that value turns it on; anything else is off."""
     turned_on = on == "on"
     await web_app.set_web_app(db, principal.member, turned_on, now=context.clock())
+    if turned_on:  # Apple refuses pushes without an https VAPID subject: say so now, not only at startup
+        await push.check_base_url(db, principal.member.household_id, context.settings.base_url)
     return RedirectResponse(f"/admin/web-app?notice={'on' if turned_on else 'off'}", status_code=303)

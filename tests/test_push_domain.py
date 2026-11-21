@@ -265,6 +265,7 @@ def test_a_push_names_the_meal_the_time_and_what_to_do_and_opens_the_call() -> N
         "lang": "en",
         "dir": "ltr",
         "tag": push.topic(1, 7, 2),  # a newer post about the call replaces it on the lock screen
+        "renotify": True,  # and still alerts
     }
     assert payload(note.ProposalsReady(EVENT, ()))["body"] == "Voting closes at 5:15 PM."
     assert payload(note.DecisionMade(EVENT, DECISION))["body"] == "Siam Garden, at 6:30 PM."
@@ -274,7 +275,8 @@ def test_a_push_names_the_meal_the_time_and_what_to_do_and_opens_the_call() -> N
     assert tomorrow["body"] == "Answer by Thursday 4:30 PM."
     joined = payload(note.GuestJoined(1, KIM, note.PersonInfo(9, "Pat"), "web"))
     assert joined["navigate"] == "https://dinnerbell.test/admin/members"
-    assert "tag" not in payload(note.ResponseReminder(EVENT, KIM))  # a device keeps every direct message
+    direct = payload(note.ResponseReminder(EVENT, KIM))
+    assert "tag" not in direct and "renotify" not in direct  # a device keeps every direct message
     moved = payload(note.PlaceChanged(EVENT, KIM, "Taqueria", DECISION, SAM, NOW, ended_roles=(AssignmentRole.COOK,)))
     assert (moved["title"], moved["body"]) == (
         "Dinner moved to Siam Garden",
@@ -519,3 +521,64 @@ def test_retry_after_is_seconds_or_a_date() -> None:
     assert sender.retry_after("Thu, 22 Oct 2026 20:02:00 GMT", NOW) == 120.0
     assert sender.retry_after("Thu, 22 Oct 2026 19:00:00 GMT", NOW) == 0.0
     assert sender.retry_after("soon", NOW) is None and sender.retry_after(None, NOW) is None
+
+
+def test_the_pure_curve_check_agrees_with_cryptography() -> None:
+    """``domain.push.on_p256`` uses plain integers; ``cryptography`` decides the same."""
+    from cryptography.hazmat.primitives import serialization
+
+    def library(point: bytes) -> bool:
+        try:
+            ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256R1(), point)
+        except ValueError:
+            return False
+        return True
+
+    valid = [encryption.b64decode(P256DH)] + [
+        ec.generate_private_key(ec.SECP256R1())
+        .public_key()
+        .public_bytes(serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint)
+        for _ in range(20)
+    ]
+    p = push.P256_P
+    good = valid[0]
+    x, y = good[1:33], good[33:]
+    invalid = [
+        b"\x04" + b"\x01" * 64,  # off the curve
+        good[:-1] + bytes([good[-1] ^ 1]),  # y nudged off it
+        b"\x04" + p.to_bytes(32, "big") + y,  # x not below p
+        b"\x04" + x + p.to_bytes(32, "big"),  # y not below p
+        b"\x03" + good[1:],  # not uncompressed
+        good[:64],
+        b"",
+    ]
+    for point in valid:
+        assert push.on_p256(point) and library(point)
+    for point in invalid:
+        assert not push.on_p256(point) and not library(point), point.hex()
+
+
+def test_bad_keys_and_a_large_payload_raise_different_errors() -> None:
+    with pytest.raises(encryption.BadKeys):
+        encryption.encrypt(b"{}", "not*base64", AUTH)
+    with pytest.raises(encryption.BadKeys):
+        encryption.encrypt(b"{}", vapid.b64url(b"\x04" + b"\x01" * 64), AUTH)
+    with pytest.raises(encryption.BadKeys):
+        encryption.encrypt(b"{}", P256DH, vapid.b64url(b"short"))
+    with pytest.raises(push.PushTooLarge):
+        encryption.encrypt(b"x" * (encryption.MAX_PLAINTEXT + 1), P256DH, AUTH)
+    assert not issubclass(push.PushTooLarge, encryption.BadKeys)
+
+
+async def test_only_bad_keys_become_undeliverable_in_the_sender() -> None:
+    client = sender.new_client(httpx.MockTransport(lambda request: httpx.Response(201)))
+    push_sender = sender.WebPushSender(
+        vapid.VapidKeys.from_secret(SECRET), "https://dinnerbell.test", client, FakeClock(NOW)
+    )
+    endpoint = "https://fcm.googleapis.com/fcm/send/abc"
+    with pytest.raises(push.UndeliverableKeys):
+        await push_sender.send(push.PushTarget(5, endpoint, "AAAA", AUTH), b"{}", ttl=60, urgency="normal", topic=None)
+    big = b"x" * (encryption.MAX_PLAINTEXT + 1)
+    with pytest.raises(push.PushTooLarge):
+        await push_sender.send(push.PushTarget(5, endpoint, P256DH, AUTH), big, ttl=60, urgency="normal", topic=None)
+    await client.aclose()

@@ -16,8 +16,6 @@ from typing import Protocol
 from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
-from cryptography.hazmat.primitives.asymmetric import ec
-
 from dinnerbell.domain import notifications as note
 from dinnerbell.domain.catalog import Mode
 from dinnerbell.domain.events import AssignmentRole, EventState
@@ -213,7 +211,8 @@ def check_subscription(endpoint: str, p256dh: str, auth: str) -> SubscriptionKey
         point, secret = _b64decode(p256dh), _b64decode(auth)
         if len(point) != 65 or point[0] != 4 or len(secret) != 16:
             raise ValueError("wrong length")
-        ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256R1(), point)  # refuses a point off the curve
+        if not on_p256(point):
+            raise ValueError("not a point on P-256")
     except ValueError:
         raise InvalidSubscription(BAD_KEYS) from None
     return SubscriptionKeys(endpoint, p256dh.rstrip("="), auth.rstrip("="))
@@ -228,6 +227,26 @@ def endpoint_host(endpoint: str) -> str:
         host = ""
     host = "".join(c for c in host if c.isascii() and c.isprintable())[:100]
     return host or "?"
+
+
+P256_P = 0xFFFFFFFF00000001000000000000000000000000FFFFFFFFFFFFFFFFFFFFFFFF
+P256_B = 0x5AC635D8AA3A93E7B3EBBD55769886BC651D06B0CC53B0F63BCE3C3E27D2604B
+"""P-256's field prime and curve constant b (SEC 2, FIPS 186-5); a is -3."""
+
+
+def on_p256(point: bytes) -> bool:
+    """Whether ``point`` is an uncompressed point on P-256: 0x04, then x and y below p, with
+    y² ≡ x³ - 3x + b (mod p). Plain integers, so the domain needs no crypto library."""
+    if len(point) != 65 or point[0] != 4:
+        return False
+    x, y = int.from_bytes(point[1:33], "big"), int.from_bytes(point[33:], "big")
+    if not (0 <= x < P256_P and 0 <= y < P256_P):
+        return False
+    return (y * y - (x * x * x - 3 * x + P256_B)) % P256_P == 0
+
+
+class PushTooLarge(ValueError):
+    """A payload too big for one record. The device is fine: close the push, keep the device."""
 
 
 class UndeliverableKeys(Exception):
@@ -280,7 +299,7 @@ class PushMessage:
         navigate = base_url.rstrip("/") + self.path
         body = self.body
         while True:
-            shown: dict[str, str] = {
+            shown: dict[str, str | bool] = {
                 "title": self.title,
                 "body": body,
                 "navigate": navigate,
@@ -289,6 +308,7 @@ class PushMessage:
             }
             if self.tag:
                 shown["tag"] = self.tag
+                shown["renotify"] = True  # replacing an earlier one still alerts
             encoded = json.dumps({"web_push": 8030, "notification": shown}, ensure_ascii=False, separators=(",", ":"))
             if len(encoded.encode()) <= MAX_PAYLOAD_BYTES or not body:
                 return encoded.encode()
