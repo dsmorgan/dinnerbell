@@ -27,7 +27,7 @@ from dinnerbell.domain.sign_in_codes import ALPHABET, CODE_LENGTH, display_code,
 from dinnerbell.services import sign_in_codes
 from dinnerbell.services.database import open_database
 from dinnerbell.services.errors import Forbidden, NotFound
-from dinnerbell.services.sign_in_codes import THROTTLE_MAX_SECONDS, CodeThrottle, new_code
+from dinnerbell.services.sign_in_codes import WrongCodes, new_code
 from dinnerbell.web.signing import derive_key
 from tests.conftest import BASE_URL, SECRET_KEY, invite, page, sign_in
 from tests.support.clock import FakeClock
@@ -162,52 +162,32 @@ def test_a_device_label_is_coarse(user_agent: str | None, label: str) -> None:
     assert not any(ch.isdigit() for ch in device_label(user_agent))
 
 
-def test_the_throttle_grows_past_200_wrong_codes_an_hour_and_never_locks_out(caplog: pytest.LogCaptureFixture) -> None:
+def test_past_200_wrong_codes_an_hour_logs_once_and_slows_nothing(caplog: pytest.LogCaptureFixture) -> None:
     clock = FakeClock()
-    throttle = CodeThrottle()
+    wrong = WrongCodes()
     for _ in range(200):
-        throttle.failed(clock())
-    assert (throttle.failures(clock()), throttle.delay(clock()), throttle.busy(clock())) == (200, 0.0, False)
-    assert not [r for r in caplog.records if "slowing" in r.getMessage()]
-    throttle.failed(clock())
-    first = throttle.delay(clock())
-    assert throttle.busy(clock()) and first > 0
-    assert [r.levelno for r in caplog.records if "wrong sign-in codes" in r.getMessage()] == [logging.WARNING]
-    for _ in range(20):
-        throttle.failed(clock())
-    assert throttle.delay(clock()) > first
+        wrong.failed(clock())
+    assert (wrong.failures(clock()), wrong.alarming(clock())) == (200, False)
+    assert not [r for r in caplog.records if "wrong sign-in codes" in r.getMessage()]
     for _ in range(1000):
-        throttle.failed(clock())
-    assert throttle.delay(clock()) == THROTTLE_MAX_SECONDS
-    assert [r.levelno for r in caplog.records if "wrong sign-in codes" in r.getMessage()] == [logging.WARNING]
+        wrong.failed(clock())
+    assert wrong.alarming(clock())
+    [warning] = [r for r in caplog.records if "wrong sign-in codes" in r.getMessage()]
+    assert warning.levelno == logging.WARNING and warning.__dict__["failures"] == 201  # counts only
+    assert not hasattr(wrong, "wait") and not hasattr(wrong, "delay")  # nothing waits or is refused
     clock.advance(timedelta(minutes=59))
-    assert throttle.busy(clock())
+    assert wrong.alarming(clock())
     clock.advance(timedelta(minutes=1))
-    assert (throttle.failures(clock()), throttle.delay(clock()), throttle.busy(clock())) == (0, 0.0, False)
+    assert (wrong.failures(clock()), wrong.alarming(clock())) == (0, False)
 
 
-def test_the_throttle_counts_a_sliding_hour_in_bounded_buckets() -> None:
+def test_wrong_codes_count_a_sliding_hour_in_bounded_buckets() -> None:
     clock = FakeClock()
-    throttle = CodeThrottle(threshold=2)
+    wrong = WrongCodes(threshold=2)
     for _ in range(90):
-        throttle.failed(clock())
+        wrong.failed(clock())
         clock.advance(timedelta(minutes=1))
-    assert throttle.failures(clock()) == 59 and len(throttle._buckets) == 59
-
-
-def test_the_throttle_waits_with_the_sleep_it_was_given() -> None:
-    slept: list[float] = []
-
-    async def sleep(seconds: float) -> None:
-        slept.append(seconds)
-
-    clock = FakeClock()
-    throttle = CodeThrottle(threshold=1, sleep=sleep)
-    asyncio.run(throttle.wait(clock(), "ip:192.0.2.1"))
-    throttle.failed(clock())
-    throttle.failed(clock())
-    asyncio.run(throttle.wait(clock(), "ip:192.0.2.1"))
-    assert slept == [throttle.delay(clock())] and slept[0] > 0
+    assert wrong.failures(clock()) == 59 and len(wrong._buckets) == 59
 
 
 # Off ---------------------------------------------------------------------------------------------
@@ -550,29 +530,23 @@ def test_wrong_codes_count_toward_the_per_address_limit(on: TestClient) -> None:
     assert limited.status_code == 429 and "Retry-After" in limited.headers
 
 
-def test_past_200_wrong_codes_an_hour_every_attempt_waits_and_the_admin_is_told(
+def test_past_200_wrong_codes_an_hour_the_admin_is_told_and_nobody_waits(
     on: TestClient, sam: int, clock: FakeClock
 ) -> None:
-    throttle: CodeThrottle = on.app.state.dinnerbell.code_throttle  # type: ignore[attr-defined]
-    slept: list[float] = []
-
-    async def sleep(seconds: float) -> None:
-        slept.append(seconds)
-
-    throttle.sleep = sleep
-    assert 'id="code-throttle"' not in on.get("/admin/web-app").text
+    wrong: WrongCodes = on.app.state.dinnerbell.wrong_codes  # type: ignore[attr-defined]
+    assert 'id="wrong-codes"' not in on.get("/admin/web-app").text
     for _ in range(200):
-        throttle.failed(clock())
+        wrong.failed(clock())
     code = admin_code(on, sam)
     phone = device(on)
     assert phone.post("/auth/code", data={"code": "ABCDE-FGHJK"}).status_code == 400
-    assert slept == []  # the 201st wrong code is the first past the threshold
-    notice = page(on.get("/admin/web-app")).split('id="code-throttle">', 1)[1].split("</p>", 1)[0]
-    assert "wrong sign-in codes" in notice
-    redeem(phone, code)  # slower, never locked out
-    assert len(slept) == 2 and slept[1] >= slept[0] > 0
+    assert wrong.failures(clock()) == 201
+    notice = page(on.get("/admin/web-app")).split('id="wrong-codes">', 1)[1].split("</p>", 1)[0]
+    assert "Someone may be guessing sign-in codes." in notice and "Nobody is slowed down or locked out." in notice
+    redeem(phone, code)  # a right code works at once
+    assert wrong.failures(clock()) == 201  # and isn't counted
     clock.advance(timedelta(hours=1))
-    assert 'id="code-throttle"' not in on.get("/admin/web-app").text
+    assert 'id="wrong-codes"' not in on.get("/admin/web-app").text
 
 
 # The sign-in page --------------------------------------------------------------------------------
@@ -755,24 +729,24 @@ def test_deactivating_a_member_deletes_their_code_even_if_theyre_back_soon(
     redeem(phone, admin_code(on, sam))  # a new code works
 
 
-def test_a_member_who_signed_in_only_with_a_code_shows_as_active_and_can_link_slack_later(
+def test_a_member_who_signed_in_only_with_a_code_shows_as_active_not_linked_and_can_link_slack_later(
     on: TestClient, provider: FakeProvider, sam: int, migrated: Settings, clock: FakeClock
 ) -> None:
     def badge() -> str:
         row = on.get("/admin/members").text.split(f'id="member-{sam}"', 1)[1].split("</li>", 1)[0]
-        return row.split('class="badge status-', 1)[1].split('"', 1)[0]
+        return row.split('class="badge status-', 1)[1].split("</span>", 1)[0]
 
-    assert badge() == "invited"
+    assert badge() == 'invited">Invited'
     redeem(device(on), admin_code(on, sam))
     stored = member(migrated, SAM[1])
     assert (stored.code_signed_in_at, stored.oidc_subject) == (clock.now, None)  # no OIDC link from a code
-    assert badge() == "active"
+    assert badge() == 'active">Active, not linked to Slack'
     edit = on.get(f"/admin/members/{sam}").text
     assert 'name="email"' in edit and "readonly" not in edit.split('name="email"', 1)[1].split(">", 1)[0]
     laptop = device(on, MAC_CHROME)
     assert sign_in(laptop, provider, claims={"sub": SAM[0], "email": SAM[1]}).status_code == 303
     assert member(migrated, SAM[1]).oidc_subject == SAM[0]  # claimed by verified email, as before
-    assert badge() == "active"
+    assert badge() == 'active">Active'
 
 
 def test_the_confirm_page_is_never_cached(on: TestClient, sam: int) -> None:
@@ -782,116 +756,14 @@ def test_the_confirm_page_is_never_cached(on: TestClient, sam: int) -> None:
     assert confirm.headers["referrer-policy"] == "same-origin"
 
 
-def test_the_throttle_lets_one_attempt_per_address_wait_and_bounds_the_total() -> None:
-    gate = asyncio.Event()
-
-    async def sleep(_seconds: float) -> None:
-        await gate.wait()
-
-    async def run() -> list[bool]:
-        clock = FakeClock()
-        throttle = CodeThrottle(threshold=0, sleep=sleep, max_sleepers=3)
-        throttle.failed(clock())
-        addresses = ("ip:192.0.2.1", "ip:192.0.2.2", "ip:192.0.2.3")
-        waiting = [asyncio.create_task(throttle.wait(clock(), a)) for a in addresses[:2]]
-        for _ in range(100):  # each task starts waiting at its first await
-            if throttle.sleeping == 2:
-                break
-            await asyncio.sleep(0)
-        same_address = await throttle.wait(clock(), addresses[0])
-        waiting.append(asyncio.create_task(throttle.wait(clock(), addresses[2])))  # another address waits
-        for _ in range(100):
-            if throttle.sleeping == 3:
-                break
-            await asyncio.sleep(0)
-        past_the_bound = await throttle.wait(clock(), "ip:192.0.2.4")
-        gate.set()
-        return [same_address, past_the_bound, *await asyncio.gather(*waiting), throttle.sleeping == 0]
-
-    assert asyncio.run(run()) == [False, False, True, True, True, True]
-
-
-def test_waiting_attempts_hold_no_connection_and_one_address_cant_lock_out_another(
-    on: TestClient, sam: int, clock: FakeClock, migrated: Settings
-) -> None:
-    """While throttled, attempts from four addresses, one signed in, wait without a database
-    connection, so a request that needs the database still runs. A second attempt from an
-    address already waiting gets 429 at once, with Retry-After; an attempt from another address
-    still waits, and a valid code then signs in."""
-    import httpx
-
-    from tests.conftest import csrf_from
-
-    context = on.app.state.dinnerbell  # type: ignore[attr-defined]
-    throttle: CodeThrottle = context.code_throttle
-    pool = context.sessionmaker.kw["bind"].sync_engine.pool
-    for _ in range(300):
-        throttle.failed(clock())
-    code = admin_code(on, sam)
-    token, cookie = csrf_from(on), on.cookies[SESSION_COOKIE]
-
-    async def burst() -> tuple[int, int, httpx.Response, httpx.Response, list[int], httpx.Response]:
-        gate = asyncio.Event()
-
-        async def sleep(_seconds: float) -> None:
-            await gate.wait()
-
-        throttle.sleep = sleep
-
-        def at(address: str) -> httpx.AsyncClient:
-            transport = httpx.ASGITransport(app=on.app, client=(address, 4321))
-            return httpx.AsyncClient(transport=transport, base_url=BASE_URL, headers={"Origin": BASE_URL})
-
-        clients = [at(f"192.0.2.{n}") for n in range(1, 6)]
-        try:
-            first, *others = clients[:4]
-            attempts = [
-                first.post(
-                    "/auth/code",
-                    data={"code": "ABCDE-FGHJK", "csrf_token": token},
-                    headers={"Cookie": f"{SESSION_COOKIE}={cookie}"},
-                ),
-                *(c.post("/auth/code/continue", data={"code": "ABCDE-FGHJK"}) for c in others),
-            ]
-            waiting = [asyncio.create_task(a) for a in attempts]
-            deadline = asyncio.get_running_loop().time() + 10
-            while throttle.sleeping < 4:
-                assert asyncio.get_running_loop().time() < deadline, "the attempts never started waiting"
-                await asyncio.sleep(0.01)
-            held = pool.checkedout()
-            refused = await asyncio.wait_for(others[0].post("/auth/code", data={"code": code}), 10)
-            health = await asyncio.wait_for(first.get("/healthz"), 10)
-            newcomer = asyncio.create_task(clients[4].post("/auth/code/continue", data={"code": code}))
-            while throttle.sleeping < 5:
-                assert asyncio.get_running_loop().time() < deadline, "the other address never started waiting"
-                await asyncio.sleep(0.01)
-            gate.set()
-            done = await asyncio.gather(*waiting)
-            signed_in = await asyncio.wait_for(newcomer, 10)
-        finally:
-            for c in clients:
-                await c.aclose()
-        return held, len(waiting), refused, health, [r.status_code for r in done], signed_in
-
-    held, waited, refused, health, statuses, signed_in = on.portal.call(burst)  # type: ignore[attr-defined]
-    assert waited == 4 and held == 0  # four waiting, and no connection checked out
-    assert refused.status_code == 429 and int(refused.headers["retry-after"]) >= 1
-    assert refused.text == "Too many sign-in attempts. Wait a minute and try again."
-    assert health.json()["database"] == "ok"
-    assert statuses == [400, 400, 400, 400]
-    assert (signed_in.status_code, signed_in.headers["location"]) == (303, "/")
-    assert len(sessions_of(migrated, sam)) == 1
-    assert throttle.failures(clock()) == 304  # the refused one isn't a wrong code
-
-
 def test_a_second_continue_from_the_device_the_first_signed_in_isnt_counted(
     on: TestClient, sam: int, clock: FakeClock
 ) -> None:
     """The first tap set the device's new session, so the second carries it without that
     session's CSRF token and is refused before the code is checked."""
-    throttle: CodeThrottle = on.app.state.dinnerbell.code_throttle  # type: ignore[attr-defined]
+    wrong: WrongCodes = on.app.state.dinnerbell.wrong_codes  # type: ignore[attr-defined]
     code = admin_code(on, sam)
     phone = redeem(device(on), code)
     again = phone.post("/auth/code/continue", data={"code": code})
     assert again.status_code == 403
-    assert throttle.failures(clock()) == 0
+    assert wrong.failures(clock()) == 0

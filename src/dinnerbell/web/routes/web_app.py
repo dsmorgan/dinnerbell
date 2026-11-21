@@ -132,8 +132,8 @@ async def admin_page(
 ) -> Response:
     on = await web_app.web_app_enabled(db, principal.member.household_id)
     # Over 200 wrong sign-in codes in the last hour, from every address (spec 6.15).
-    throttled = context.code_throttle.busy(context.clock())
-    page = {"on": on, "notice": NOTICES.get(notice), "code_throttle": throttled}
+    guessing = context.wrong_codes.alarming(context.clock())
+    page = {"on": on, "notice": NOTICES.get(notice), "wrong_codes": guessing}
     return await render(request, "admin_web_app.html", page)
 
 
