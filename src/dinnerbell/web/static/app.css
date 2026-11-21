@@ -858,3 +858,6 @@ fieldset.card > .button.block { margin-bottom: 0; }
 }
 /* With the web app on, a member's row has more buttons (spec 6.15): let them wrap on a phone. */
 .member-actions { flex-wrap: wrap; }
+/* Turn on notifications: push.js shows the card and one button at a time. */
+#notifications[hidden], .push-actions .button[hidden] { display: none; }
+.push-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; }

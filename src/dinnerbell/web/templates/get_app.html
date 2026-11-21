@@ -1,6 +1,9 @@
 {#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
 {% extends "base.html" %}
 {% block title %}Get the app{% endblock %}
+{% block scripts %}
+  <script src="/static/push.js?v={{ version|urlencode }}" defer></script>
+{% endblock %}
 {% block content %}
 <h1>Get the app</h1>
 {#- Inside the installed app (display-mode standalone), app.css shows .in-app and hides
@@ -8,9 +11,21 @@
 <section class="card stack in-app" id="installed" aria-labelledby="installed-heading">
   <h2 id="installed-heading">You're in the app</h2>
   <p>Dinnerbell is on your Home Screen. Open it from there.</p>
-  {#- Turn on notifications goes here (spec 6.15, "The installable app"): the tap iOS requires,
-      shown only inside the installed app. -#}
 </section>
+{#- Turn on notifications (spec 6.15, "The installable app"): the tap iOS requires. Hidden until
+    push.js finds push here: on iPhone and iPad only inside the installed app, elsewhere wherever
+    the browser has PushManager. Signed-in members only: guests never get pushes. -#}
+{% if principal and not principal.member.is_guest and vapid_key %}
+<section class="card stack" id="notifications" aria-labelledby="notifications-heading" data-key="{{ vapid_key }}" hidden>
+  <h2 id="notifications-heading">Notifications</h2>
+  <p id="push-state" role="status">Checking this device…</p>
+  <p class="push-actions">
+    <button type="button" class="button primary" id="push-on" hidden>Turn on notifications</button>
+    <button type="button" class="button" id="push-off" hidden>Turn off</button>
+  </p>
+  <p class="small muted">Dinnerbell sends notifications through your phone's push service, from Apple, Google, Mozilla, or Microsoft. It sees when your device gets one and how big it is, not what it says.</p>
+</section>
+{% endif %}
 <section class="card stack in-browser" id="iphone" aria-labelledby="iphone-heading">
   <h2 id="iphone-heading">iPhone and iPad</h2>
   <ol>

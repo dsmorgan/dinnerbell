@@ -118,7 +118,7 @@ async def announce_household(db: AsyncSession, household_id: int, *, now: dateti
         for group in sorted(by_call.values(), key=lambda g: min(a.id for a in g)):
             news, more = news_for(group, members)
             post = BadgesEarned(household_id, min(a.id for a in group), tuple(news), more)
-            await outbox.enqueue(household_id, None, post, now)
+            await outbox.enqueue_with_push(household_id, None, post, now)
             queued += 1
         await badges.mark_announced(household_id, [a.id for a in (*heard, *silent)], now)
         gone = [a.id for a in pending if a not in heard and a not in silent]
@@ -135,7 +135,7 @@ async def take_back(db: AsyncSession, household_id: int, revoked: Sequence[Award
     """Drop ``revoked`` from the household's badge posts and monthly recaps that are queued and
     not sent yet, in the caller's transaction (#193), as revision 0028 does for unregistered
     guests. A member left with no badge leaves the post, and a badge post left naming nobody is
-    closed unsent when a drainer reaches it (``outbox._overtaken``); a recap still goes, without
+    closed unsent when a drainer reaches it (``outbox.overtaken_by``); a recap still goes, without
     them. A post in a drainer's hands right now may still go out as it was; if that try fails,
     the retry doesn't. Returns how many posts changed.
 

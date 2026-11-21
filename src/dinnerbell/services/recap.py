@@ -84,7 +84,7 @@ async def recap_household(db: AsyncSession, household: Household, *, now: dateti
             return False
         recap = await build(db, household.id, month, zone)
         if recap is not None:
-            await OutboxRepository(db).enqueue(household.id, None, recap, now)
+            await OutboxRepository(db).enqueue_with_push(household.id, None, recap, now)
         await HouseholdRepository(db).update_settings(household.id, stored | {SETTINGS_KEY: month_key(month)})
         await db.commit()
     log.info("monthly recap queued" if recap else "monthly recap skipped: no meals", extra={"month": month_key(month)})

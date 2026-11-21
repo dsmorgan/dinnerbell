@@ -15,11 +15,13 @@ from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Form, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import PlainTextResponse, RedirectResponse
 from starlette.responses import Response
 
-from dinnerbell.services import web_app
-from dinnerbell.web.auth import AdminCSRFChecked, AdminPrincipal, Context, Database, MaybePrincipal
+from dinnerbell.domain.push import MAX_ENDPOINT_LENGTH, InvalidSubscription
+from dinnerbell.services import push, web_app
+from dinnerbell.web.auth import AdminCSRFChecked, AdminPrincipal, Context, CSRFChecked, Database, MaybePrincipal
+from dinnerbell.web.context import app_context
 from dinnerbell.web.render import render
 
 router = APIRouter()
@@ -120,7 +122,32 @@ async def get_the_app(request: Request, principal: MaybePrincipal, db: Database)
     """**Get the app**: the Add to Home Screen steps for iPhone and Android. Open signed out
     too, since a member without Slack installs the app before they can sign in."""
     await web_app.require_web_app(db, _household_id(principal))
-    return await render(request, "get_app.html")
+    return await render(request, "get_app.html", {"vapid_key": app_context(request).vapid_public_key})
+
+
+# Turn on notifications (spec 6.15) ---------------------------------------------------------------
+
+Endpoint = Annotated[str, Form(max_length=MAX_ENDPOINT_LENGTH)]
+Key = Annotated[str, Form(max_length=200)]
+
+
+@router.post("/app/notifications")
+async def turn_on(
+    principal: CSRFChecked, context: Context, db: Database, endpoint: Endpoint, p256dh: Key, auth: Key
+) -> Response:
+    """Save this device's push subscription, from push.js. 204, or 400 with what to do."""
+    try:
+        await push.subscribe(db, principal.member, endpoint, p256dh, auth, now=context.clock())
+    except InvalidSubscription as exc:
+        return PlainTextResponse(str(exc), status_code=400)
+    return Response(status_code=204)
+
+
+@router.post("/app/notifications/off")
+async def turn_off(principal: CSRFChecked, db: Database, endpoint: Endpoint) -> Response:
+    """Forget this device's push subscription: 204 whether or not Dinnerbell had it."""
+    await push.unsubscribe(db, principal.member, endpoint)
+    return Response(status_code=204)
 
 
 # Admin > Web app ---------------------------------------------------------------------------------
@@ -133,7 +160,8 @@ async def admin_page(
     on = await web_app.web_app_enabled(db, principal.member.household_id)
     # Over 200 wrong sign-in codes in the last hour, from every address (spec 6.15).
     guessing = context.wrong_codes.alarming(context.clock())
-    page = {"on": on, "notice": NOTICES.get(notice), "wrong_codes": guessing}
+    pushes = await push.status(db, principal.member.household_id, context.clock())
+    page = {"on": on, "notice": NOTICES.get(notice), "wrong_codes": guessing, "push": pushes}
     return await render(request, "admin_web_app.html", page)
 
 

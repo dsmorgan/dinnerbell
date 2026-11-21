@@ -41,7 +41,7 @@ While it's on:
 - Slack skips direct messages, such as reminders, to members on **Web app**, instead of failing to send them. Channel posts still go to the channel.
 - Members can [sign in with a code](#sign-in-with-a-code), and see and sign out their [devices](#devices).
 
-Push notifications aren't built yet. Until they are, a member on **Web app** gets no direct messages at all, as a member without Slack gets none today; Dinnerbell logs a warning for each one it skips for a member who isn't linked to Slack. Turning the switch off keeps each member's choice for when it's on again. It also keeps every session and sign-in code, but the code pages, **Devices**, and the buttons on **Admin** > **Members** disappear until it's on again.
+A member on **Web app** who hasn't turned notifications on anywhere gets no direct messages at all, as a member without Slack gets none today; Dinnerbell logs a warning for each one it skips for a member who isn't linked to Slack. Turning the switch off keeps each member's choice for when it's on again. It also keeps every session and sign-in code, but the code pages, **Devices**, and the buttons on **Admin** > **Members** disappear until it's on again. It deletes every device's notifications: each member turns them on again.
 
 ### Sign in with a code
 
@@ -83,6 +83,26 @@ Making a code writes a `member.sign_in_code_created` audit row, and signing in w
 
 - To sign a device out, such as a lost phone, select **Sign out** on its row. Signing out **This device** signs you out here.
 - An admin can sign a member out of every device: on **Admin** > **Members**, select **Sign out everywhere** on their row. It also deletes any code of theirs not used yet, so a lost phone's code can't sign in afterward. It writes a `member.signed_out_everywhere` audit row. To sign yourself out everywhere, use **Devices** on your own **Preferences**.
+
+### Turn notifications on or off
+
+A member on **Web app** or **Both** gets a push on each device where they turned notifications on: for each direct message Slack would send them, such as a reminder or "You're cooking", and for a call opening, voting opening, the decision, and a call off. **Mute direct-message reminders** on **Preferences** mutes reminder pushes too. A push names the meal, the time, and what to do, and a tap opens the call's page. Guests don't get pushes.
+
+On an iPhone or iPad (iOS 16.4 or later), notifications work only in the app on the Home Screen, not in Safari:
+
+1. Add Dinnerbell to the Home Screen, as **Get the app** shows, and open it from there.
+2. Sign in in the app, such as with a code (see [Sign in with a code](#sign-in-with-a-code)). It keeps its own sign-in, apart from Safari's.
+3. Open **Get the app**, and tap **Turn on notifications**.
+4. Tap **Allow**.
+
+On Android, in Chrome or in the installed app:
+
+1. Open **Get the app**, and tap **Turn on notifications**.
+2. Tap **Allow**.
+
+**Get the app** then says "Notifications are on for this device." To stop them, tap **Turn off** there. If it says notifications are blocked, allow them for Dinnerbell in the device's settings (on iPhone, **Settings** > **Notifications** > **Dinnerbell**), and open the page again.
+
+Each member can have up to 10 devices; turning on an eleventh drops the one turned on longest ago. Pushes go through the device's push service, from Apple, Google, Mozilla, or Microsoft, which sees when a device gets one and how big it is, but not what it says.
 
 ## The Assistant page
 

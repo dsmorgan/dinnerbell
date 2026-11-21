@@ -52,6 +52,7 @@ KEEP: Final = frozenset(
         "member",  # members, roles, what each can do, and Slack links; guests and their dietary needs too
         "session",  # who's signed in
         "sign_in_code",  # sign-in codes not used yet, like the sessions they open (spec 6.15)
+        "push_subscription",  # the devices that get web pushes (spec 6.15), like sessions
         "audit",  # the audit log, which records the reset itself
         "tag",  # the catalog ...
         "catalog_item",
@@ -79,6 +80,7 @@ CLEAR: Final = frozenset(
         "meal_log",  # what the household ate
         "feedback",  # and how it was
         "outbox",  # notifications, sent and unsent, and where each Slack message landed
+        "push_queue",  # each notification's web pushes, which go with its outbox row
         "assistant_conversation",  # conversations with the assistant, which talk about those calls
         "assistant_draft",  # the assistant's drafts waiting for Confirm, which name those calls
         "contribution",  # what each member did for those meals (M4) ...

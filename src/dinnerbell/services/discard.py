@@ -140,7 +140,7 @@ async def discard_call(
         due = now + LEASE if gone.in_flight else now
         for key in gone.message_keys:
             edit = note.CallDiscarded(info, key)
-            await outbox.enqueue(household_id, edit.event_id, edit, now, available_at=due)
+            await outbox.enqueue_with_push(household_id, edit.event_id, edit, now, available_at=due)
         pending, deleted, message_keys = gone.pending, gone.deleted, gone.message_keys
         summary = DiscardSummary(
             event_id=event.id,

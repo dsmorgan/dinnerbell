@@ -20,6 +20,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from dinnerbell.channels.base import Channel, NullChannel
 from dinnerbell.channels.slack.connection import BoltSocket, SlackConnection, SocketFactory
+from dinnerbell.channels.webpush.sender import WebPushSender, new_client
+from dinnerbell.channels.webpush.vapid import VapidKeys
 from dinnerbell.config import Settings
 from dinnerbell.scheduler.runner import CANCEL_UNWIND_SECONDS, JobContext, build_scheduler, stop_scheduler
 from dinnerbell.services import catalog as catalog_service
@@ -53,11 +55,13 @@ def create_app(
     slack_socket: SocketFactory = BoltSocket,
     prewarm_badge_art: bool = False,
     model_client: ModelClient | None = None,
+    push_transport: httpx.AsyncBaseTransport | None = None,
 ) -> FastAPI:
     """Build the app. ``oidc_transport`` lets tests route provider calls to a fake in-process;
-    ``slack_client`` and ``slack_socket`` do the same for Slack, and ``model_client`` for the
-    assistant's model, in place of Anthropic. ``prewarm_badge_art`` (the CLI sets it) uploads
-    the badge art to Slack in the background once connected (#112)."""
+    ``slack_client`` and ``slack_socket`` do the same for Slack, ``model_client`` for the
+    assistant's model, in place of Anthropic, and ``push_transport`` for the web push services.
+    ``prewarm_badge_art`` (the CLI sets it) uploads the badge art to Slack in the background
+    once connected (#112)."""
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -89,6 +93,9 @@ def create_app(
             app.state.assistant = assistant
             slack = _slack(settings, database.sessionmaker, clock, slack_state, slack_client, slack_socket, assistant)
             channel: Channel = slack.channel if slack else NullChannel()
+            vapid = VapidKeys.from_secret(secret)
+            push_http = new_client(push_transport)
+            stack.push_async_callback(push_http.aclose)
             app.state.dinnerbell = AppContext(
                 settings=settings,
                 clock=clock,
@@ -101,6 +108,7 @@ def create_app(
                 scheduler_state=state,
                 slack_state=slack_state,
                 slack_people=slack.people if slack else None,
+                vapid_public_key=vapid.public_key,
             )
             jobs = JobContext(
                 state=state,
@@ -110,6 +118,8 @@ def create_app(
                 backup_dir=settings.backup_dir,
                 sessionmaker=database.sessionmaker,
                 channel=channel,
+                push_sender=WebPushSender(vapid, settings.base_url, push_http, clock),
+                base_url=settings.base_url,
             )
             app.state.jobs = jobs
             app.state.slack = slack

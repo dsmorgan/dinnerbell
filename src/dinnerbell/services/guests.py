@@ -771,7 +771,7 @@ async def join(db: AsyncSession, person: SlackPerson, *, via: str, now: datetime
             for a in admins
         ]
         for dm in outbox_now:
-            await OutboxRepository(db).enqueue(household.id, None, dm, now)
+            await OutboxRepository(db).enqueue_with_push(household.id, None, dm, now)
         await db.commit()
     log.info("guest joined", extra={"member_id": guest.id})
     return Joined(guest, JoinedAs.GUEST)
@@ -810,7 +810,7 @@ async def ask_admins(
             slack_email=member.email or member.slack_email,
             member_is_admin=member.is_admin,
         )
-        await OutboxRepository(db).enqueue(household_id, None, notice, now)
+        await OutboxRepository(db).enqueue_with_push(household_id, None, notice, now)
 
 
 async def _refused(

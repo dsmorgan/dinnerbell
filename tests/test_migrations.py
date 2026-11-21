@@ -29,6 +29,7 @@ M6_TABLES = {"assistant_usage", "assistant_conversation"}
 M6_DRAFT_TABLES = {"assistant_draft"}
 SHUFFLE_TABLES = {"shown_place"}
 CODE_TABLES = {"sign_in_code"}
+PUSH_TABLES = {"push_subscription", "push_queue"}
 
 
 def test_migrates_an_empty_database(settings: Settings) -> None:
@@ -38,7 +39,7 @@ def test_migrates_an_empty_database(settings: Settings) -> None:
     try:
         inspector = inspect(engine)
         everything = M0_TABLES | M1_TABLES | M2_TABLES | M3_TABLES | M4_TABLES | M6_TABLES | M6_DRAFT_TABLES | M7_TABLES
-        everything |= SHUFFLE_TABLES | CODE_TABLES
+        everything |= SHUFFLE_TABLES | CODE_TABLES | PUSH_TABLES
         assert set(inspector.get_table_names()) == everything | {"alembic_version"}
         for table in everything - {"household"}:
             assert "household_id" in {c["name"] for c in inspector.get_columns(table)}, table
@@ -465,7 +466,8 @@ def _snapshot(settings: Settings) -> dict[str, object]:
                 text(
                     "SELECT name, sql FROM sqlite_master WHERE type = 'index' AND sql IS NOT NULL "
                     "AND tbl_name NOT IN ('contribution', 'badge_award', 'slack_badge_file', 'slack_badge_composite', "
-                    "'stance_edit', 'assistant_usage', 'assistant_conversation', 'assistant_draft', 'shown_place') "
+                    "'stance_edit', 'assistant_usage', 'assistant_conversation', 'assistant_draft', 'shown_place', "
+                    "'push_subscription', 'push_queue') "
                     "ORDER BY name"
                 )
             ).all()
@@ -1422,6 +1424,7 @@ def _rows_outside_m4(settings: Settings) -> dict[str, list[object]]:
                     "shown_place",
                     "stance_edit",
                     "sign_in_code",
+                    *PUSH_TABLES,
                     "alembic_version",
                 }
             }
@@ -2916,3 +2919,61 @@ def test_0042_names_and_labels_every_session_and_downgrade_drops_codes(settings:
     assert _rows_outside_m4(settings) == before
     _upgrade_to(settings, CODES_REVISION)
     assert [row[:-2] for row in _sessions(settings)] == sessions_before
+
+
+# 0043: web push (#138) -----------------------------------------------------------------------------
+
+PUSH_REVISION, BEFORE_PUSH = "0043_web_push", "0042_sign_in_codes"
+"""The push tables' revision and the one before it. If another revision lands first, renumber the
+file and change these two names; nothing else here names a revision."""
+
+
+def test_0043_adds_empty_push_tables_that_follow_their_rows_and_downgrade_drops_them(settings: Settings) -> None:
+    """Up adds ``push_subscription`` and ``push_queue``, empty, and touches no other row. A push
+    goes with its outbox row, its device, and its member; a device goes with its member. Down
+    drops both and changes no other row."""
+    _upgrade_to(settings, BEFORE_PUSH)
+    _populate_calls(settings)
+    _execute(
+        settings,
+        "INSERT INTO outbox (id, household_id, event_id, kind, payload, idempotency_key, created_at, updated_at, "
+        "available_at, attempts) VALUES (99, 1, NULL, 'guest_joined', '{}', 'join:9:admin1', :t, :t, :t, 0)",
+    )
+    before = _rows_outside_m4(settings)
+
+    _upgrade_to(settings, PUSH_REVISION)
+    assert _rows_outside_m4(settings) == before
+    engine = create_sync_engine(settings.sync_database_url)
+    try:
+        with engine.begin() as c:
+            c.execute(text("PRAGMA foreign_keys = ON"))
+            assert c.execute(text("SELECT count(*) FROM push_subscription")).scalar() == 0
+            c.execute(
+                text(
+                    "INSERT INTO push_subscription (id, household_id, member_id, endpoint, p256dh, auth, created_at) "
+                    "VALUES (1, 1, 1, 'https://fcm.googleapis.com/fcm/send/a', 'k', 'a', :t)"
+                ),
+                {"t": STAMP},
+            )
+            push = (
+                "INSERT INTO push_queue (household_id, outbox_id, subscription_id, member_id, created_at, "
+                "available_at, attempts) VALUES (1, 99, 1, 1, :t, :t, 0)"
+            )
+            c.execute(text(push), {"t": STAMP})
+            with pytest.raises(IntegrityError, match="UNIQUE"):
+                c.execute(text(push), {"t": STAMP})  # one push per outbox row and device
+            c.execute(text("DELETE FROM outbox WHERE id = 99"))
+            assert c.execute(text("SELECT count(*) FROM push_queue")).scalar() == 0
+            c.execute(text("DELETE FROM member WHERE id = 1"))
+            assert c.execute(text("SELECT count(*) FROM push_subscription")).scalar() == 0
+    finally:
+        engine.dispose()
+
+    _downgrade_to(settings, BEFORE_PUSH)
+    engine = create_sync_engine(settings.sync_database_url)
+    try:
+        names = set(inspect(engine).get_table_names())
+    finally:
+        engine.dispose()
+    assert not names & PUSH_TABLES
+    _upgrade_to(settings, PUSH_REVISION)

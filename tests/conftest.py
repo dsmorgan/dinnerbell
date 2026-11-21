@@ -66,6 +66,7 @@ SECRET_SHAPES = re.compile(
     r"|1234\.5678\.trigger"  # the test trigger_id, which opens a modal for that person
     r"|[?&](code|state)=|__Host-"  # an OIDC code or state, or a session cookie
     r"|subject-admin"  # the test OIDC subject
+    r"|fcm\.googleapis\.com|push\.apple\.com|push\.services\.mozilla\.com|notify\.windows\.com"  # a push endpoint
     rf"|{MEMBER_TEXT}"
 )
 """What no log line in the suite may contain (SEC-5, #75)."""
@@ -198,9 +199,19 @@ def migrated(settings: Settings, migrated_template: Path) -> Settings:
     return settings
 
 
+def no_push_service(request: httpx.Request) -> httpx.Response:
+    """The push services' transport in app tests: tests never reach the network."""
+    raise httpx.ConnectError("tests never reach a push service", request=request)
+
+
 @pytest.fixture
 def client(migrated: Settings, clock: FakeClock, provider: FakeProvider) -> Iterator[TestClient]:
-    app = create_app(migrated, clock=clock, oidc_transport=httpx.ASGITransport(app=provider.app))
+    app = create_app(
+        migrated,
+        clock=clock,
+        oidc_transport=httpx.ASGITransport(app=provider.app),
+        push_transport=httpx.MockTransport(no_push_service),
+    )
     with TestClient(app, base_url=BASE_URL, headers={"Origin": BASE_URL}, follow_redirects=False) as test_client:
         yield test_client
 

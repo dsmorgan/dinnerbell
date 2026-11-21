@@ -660,7 +660,7 @@ async def publish(db: AsyncSession, ctx: CallContext, *notifications: note.Notif
     """Write notifications to the outbox in the caller's transaction."""
     outbox = OutboxRepository(db)
     for notification in notifications:
-        await outbox.enqueue(ctx.event.household_id, ctx.event.id, notification, now)
+        await outbox.enqueue_with_push(ctx.event.household_id, ctx.event.id, notification, now)
 
 
 def before_the_meal(event: Event, now: datetime) -> bool:

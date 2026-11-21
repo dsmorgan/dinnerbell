@@ -144,8 +144,9 @@ async def test_build_scheduler_schedules_jobs(job_context: runner.JobContext) ->
         "purge_conversations",
         "call_tick",
         "drain_outbox",
+        "drain_push",
     }
-    for name, seconds in (("call_tick", 30), ("drain_outbox", 5)):
+    for name, seconds in (("call_tick", 30), ("drain_outbox", 5), ("drain_push", 5)):
         assert jobs[name].trigger.interval == timedelta(seconds=seconds)
         assert jobs[name].max_instances == 1  # a slow tick never overlaps the next one
         assert jobs[name].next_run_time - datetime.now(UTC) < timedelta(minutes=1)  # catch up at start

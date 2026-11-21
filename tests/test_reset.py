@@ -33,6 +33,8 @@ from dinnerbell.db.models import (
     InvitationRow,
     MemberRow,
     PreferenceRow,
+    PushRow,
+    PushSubscriptionRow,
     SessionRow,
     ShownPlaceRow,
     SignInCodeRow,
@@ -167,6 +169,29 @@ async def lived_in(house: House) -> int:
             )
         )
         db.add(ShownPlaceRow(household_id=household_id, event_id=event_id, run=1, item_id=tacos, shuffle=0))
+        device = PushSubscriptionRow(
+            household_id=household_id,
+            member_id=kim,
+            endpoint="https://fcm.googleapis.com/fcm/send/lived-in",
+            p256dh="k",
+            auth="a",
+            created_at=now,
+        )
+        db.add(device)
+        await db.flush()
+        outbox_id = await db.scalar(text("SELECT min(id) FROM outbox"))
+        db.add(
+            PushRow(
+                household_id=household_id,
+                outbox_id=outbox_id,
+                subscription_id=device.id,
+                member_id=kim,
+                created_at=now,
+                available_at=now,
+                attempts=1,
+                sent_at=now,
+            )
+        )
         expires = now + timedelta(days=30)
         db.add(
             SessionRow(
@@ -209,6 +234,7 @@ EXPECTED_KEEP = {
     "member",
     "session",
     "sign_in_code",
+    "push_subscription",
     "audit",
     "tag",
     "catalog_item",
@@ -232,6 +258,7 @@ EXPECTED_CLEAR = {
     "meal_log",
     "feedback",
     "outbox",
+    "push_queue",
     "contribution",
     "badge_award",
     "assistant_conversation",

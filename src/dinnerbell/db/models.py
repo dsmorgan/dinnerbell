@@ -588,6 +588,55 @@ class OutboxRow(Base):
     ref_message: Mapped[str | None] = mapped_column(String(64))
 
 
+class PushSubscriptionRow(Base):
+    """A device that gets web pushes (spec 6.15): the browser's push endpoint and keys, for one
+    member. The endpoint identifies the device, so logs name the row's ID, never the endpoint.
+    ``auth_failures`` counts the push service's 401 and 403 answers since ``auth_failed_at``,
+    within 24 hours; the third deletes the row."""
+
+    __tablename__ = "push_subscription"
+    __table_args__ = (UniqueConstraint("household_id", "endpoint"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    household_id: Mapped[int] = mapped_column(ForeignKey("household.id", ondelete="CASCADE"))
+    member_id: Mapped[int] = mapped_column(ForeignKey("member.id", ondelete="CASCADE"), index=True)
+    endpoint: Mapped[str] = mapped_column(String(1024))
+    p256dh: Mapped[str] = mapped_column(String(100))
+    auth: Mapped[str] = mapped_column(String(32))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime())
+    last_success_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    auth_failures: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    auth_failed_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+
+
+class PushRow(Base):
+    """One push to one device, queued in the transaction that queued its outbox row (spec 6.15,
+    "The push queue"). The outbox row holds the notification; ``outbox_id`` and the device are
+    the key, so a retried enqueue adds none. Claimed like the outbox, with ``claim_token`` and
+    ``claimed_until``. ``sent_at`` or ``closed_at`` ends it."""
+
+    __tablename__ = "push_queue"
+    __table_args__ = (
+        UniqueConstraint("outbox_id", "subscription_id"),
+        Index("ix_push_queue_pending", "closed_at", "sent_at", "available_at"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    household_id: Mapped[int] = mapped_column(ForeignKey("household.id", ondelete="CASCADE"), index=True)
+    outbox_id: Mapped[int] = mapped_column(ForeignKey("outbox.id", ondelete="CASCADE"))
+    subscription_id: Mapped[int] = mapped_column(ForeignKey("push_subscription.id", ondelete="CASCADE"), index=True)
+    member_id: Mapped[int] = mapped_column(ForeignKey("member.id", ondelete="CASCADE"))
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime())
+    available_at: Mapped[datetime] = mapped_column(UTCDateTime())
+    claim_token: Mapped[str | None] = mapped_column(String(32))
+    claimed_until: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    attempts: Mapped[int] = mapped_column(Integer, default=0)
+    last_error: Mapped[str | None] = mapped_column(String(200))
+    sent_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    closed_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
+    """Closed unsent: stale, expired, refused, or given up."""
+
+
 class FeedbackRow(Base):
     """One member's feedback on one meal (FR-45, FR-46). ``rating`` is the one rating of the
     meal, ``place_issues`` a JSON list of issue chips, and ``issue_note`` what went wrong for the
