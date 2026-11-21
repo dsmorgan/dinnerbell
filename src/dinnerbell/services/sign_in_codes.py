@@ -180,9 +180,10 @@ THROTTLE_WINDOW = timedelta(hours=1)
 THROTTLE_STEP_SECONDS = 0.05
 """Each wrong code past the threshold adds this much to the wait."""
 THROTTLE_MAX_SECONDS = 5.0
-MAX_SLEEPERS = 4
-"""At most this many attempts wait at once. Past that, an attempt is refused at once (429)
-instead of waiting, so a burst can't pile up requests."""
+MAX_SLEEPERS = 100
+"""At most this many attempts wait at once, from all addresses, to bound memory. Each address
+may have one waiting; past either limit, an attempt is refused at once (429) instead of waiting.
+One address can't fill the slots and lock everyone else out (ADR 0010: nothing locks out)."""
 Sleep = Callable[[float], Awaitable[None]]
 
 
@@ -205,6 +206,8 @@ class CodeThrottle:
         self.max_sleepers = max_sleepers
         self.sleeping = 0
         """Attempts waiting right now."""
+        self._waiting: set[str] = set()
+        """The addresses with an attempt waiting right now."""
         self._buckets: deque[tuple[datetime, int]] = deque()
 
     def _prune(self, now: datetime) -> None:
@@ -240,22 +243,26 @@ class CodeThrottle:
         excess = self.failures(now) - self.threshold
         return 0.0 if excess <= 0 else min(THROTTLE_MAX_SECONDS, THROTTLE_STEP_SECONDS * excess)
 
-    async def wait(self, now: datetime) -> bool:
-        """Wait out the delay before an attempt is checked. Returns False, without waiting, when
-        ``max_sleepers`` attempts are waiting already: the caller refuses this one at once.
+    async def wait(self, now: datetime, address: str) -> bool:
+        """Wait out the delay before an attempt from ``address`` (the per-address limit's key) is
+        checked. Returns False, without waiting, when that address has an attempt waiting
+        already, or ``max_sleepers`` attempts are waiting in all: the caller refuses this one at
+        once.
 
         The caller must hold no database connection while it waits, or a few waiting attempts
         could take every connection in the pool."""
         seconds = self.delay(now)
         if not seconds:
             return True
-        if self.sleeping >= self.max_sleepers:
-            log.info("refused a sign-in code attempt: too many waiting", extra={"waiting": self.sleeping})
+        if address in self._waiting or self.sleeping >= self.max_sleepers:
+            log.info("refused a sign-in code attempt: one is waiting already", extra={"waiting": self.sleeping})
             return False
         self.sleeping += 1
+        self._waiting.add(address)
         try:
             log.debug("slowing a sign-in code attempt", extra={"delay_seconds": seconds})
             await self.sleep(seconds)
         finally:
             self.sleeping -= 1
+            self._waiting.discard(address)
         return True
