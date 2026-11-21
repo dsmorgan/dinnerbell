@@ -13,12 +13,14 @@ from starlette.responses import Response
 
 from dinnerbell.domain.guests import GuestInput
 from dinnerbell.domain.members import Capabilities, InvalidMemberInput, Member, MemberRuleViolation, Role
+from dinnerbell.services import devices, sign_in_codes, web_app
 from dinnerbell.services import guests as guest_service
 from dinnerbell.services import members as member_service
 from dinnerbell.services.guests import SlackPerson
 from dinnerbell.web.auth import AdminCSRFChecked, AdminPrincipal, Context, Database, Principal
 from dinnerbell.web.context import AppContext
 from dinnerbell.web.forms import RowId, parse_id
+from dinnerbell.web.redirects import local_redirect
 from dinnerbell.web.render import is_htmx, render
 
 router = APIRouter(prefix="/admin")
@@ -31,6 +33,7 @@ NOTICES = {
     "slack_set": "Slack link saved.",
     "slack_cleared": "Slack link removed.",
     "slack_automatic": "Dinnerbell will link this member automatically again.",
+    "signed_out": "Signed out of every device.",
 }
 
 
@@ -103,6 +106,8 @@ async def _members_page(
         "slack_connected": context.slack_people is not None,
         "dietary_tags": await guest_service.dietary_tags(db, principal.member),
         "linkable": await guest_service.unlinked_members(db, principal.member),
+        # Sign-in codes and signing out devices, only while the web app is on (spec 6.15).
+        "codes_on": await web_app.web_app_enabled(db, principal.member.household_id),
     }
     return await render(request, "admin_members.html", page | extra, status_code=status_code)
 
@@ -223,8 +228,30 @@ async def _set_active(
             )
         return await _members_page(request, principal, context, db, status_code=409, error=str(exc))
     if is_htmx(request):
-        return await render(request, "_member_row.html", {"m": member, "me": principal.member})
+        codes_on = await web_app.web_app_enabled(db, principal.member.household_id)
+        return await render(request, "_member_row.html", {"m": member, "me": principal.member, "codes_on": codes_on})
     return RedirectResponse(f"/admin/members?notice={'reactivated' if active else 'deactivated'}", status_code=303)
+
+
+@router.post("/members/{member_id}/sign-in-code")
+async def create_sign_in_code(
+    request: Request, principal: AdminCSRFChecked, context: Context, db: Database, member_id: RowId
+) -> Response:
+    """A sign-in code for a member (spec 6.15), shown on this response only, never in a URL."""
+    try:
+        issued = await sign_in_codes.create_member_code(db, principal.member, member_id, now=context.clock())
+    except MemberRuleViolation as exc:
+        return await _members_page(request, principal, context, db, status_code=400, error=str(exc))
+    return await _members_page(request, principal, context, db, issued=issued)
+
+
+@router.post("/members/{member_id}/sign-out")
+async def sign_out_everywhere(
+    principal: AdminCSRFChecked, context: Context, db: Database, member_id: RowId
+) -> Response:
+    """Sign a member out of every device (spec 6.15). Audited."""
+    member = await devices.sign_out_everywhere(db, principal.member, member_id, now=context.clock())
+    return local_redirect("/admin/members?notice=signed_out#member-{}", member.id)
 
 
 # Guests (#38) ------------------------------------------------------------------------------------

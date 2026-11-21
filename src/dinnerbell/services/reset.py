@@ -51,6 +51,7 @@ KEEP: Final = frozenset(
         "household",  # its name, time zone, and settings: the schedule, ranking weights, variety window
         "member",  # members, roles, what each can do, and Slack links; guests and their dietary needs too
         "session",  # who's signed in
+        "sign_in_code",  # sign-in codes not used yet, like the sessions they open (spec 6.15)
         "audit",  # the audit log, which records the reset itself
         "tag",  # the catalog ...
         "catalog_item",

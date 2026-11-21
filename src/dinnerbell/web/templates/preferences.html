@@ -79,6 +79,7 @@
 </section>
 
 {% if web_app %}{% include "_notify_via.html" %}{% endif %}
+{% if devices is not none %}{% include "_devices.html" %}{% endif %}
 {% include "_fun_mode.html" %}
 {% include "_color_mode.html" %}
 

@@ -809,7 +809,8 @@ Every table carries `household_id`. Timestamps are UTC; the household time zone 
 | contribution | member, kind, day, event or meal (exactly one: a call for most kinds, a meal for feedback), item (added_item only), created_at. Unique per member, kind, and source, and per kind and item, so counting twice counts once. Deleted with its call or meal |
 | badge_award | member, badge_key, tier, event (cleared if the call is deleted), awarded_at, announcement (pending, announced, or skipped), announced_at. Unique per member, badge, and tier |
 | outbox | event, notification type, payload (JSON), idempotency_key, message_key, thread_key, available_at, claim_token, claimed_until, attempts, last_error, delivered_at, failed_at, and the delivered message's reference |
-| session | id, member, created_at, expires_at, last_seen |
+| session | id (the token's SHA-256 hash), member, created_at, expires_at, last_seen, public_id (random, what pages name it by, never the hash), device (a short label from the browser, such as "iPhone · Safari"; never the User-Agent) |
+| sign_in_code | member (one per member: a new code replaces the old), code_hash (SHA-256; never the code), created_by, created_at, expires_at (15 minutes later), used_at (6.15) |
 | audit | actor, action, target, payload, created_at |
 | assistant_usage | member (nullable: kept after a member is deleted), model, month (the household's calendar month, such as 2026-11), input, output, cache read, and cache write tokens, cost_micros (micro-dollars), state (reserved, settled): one row per model call, for the cost cap (6.14) |
 | assistant_conversation | key (`web:<member>` or `slack:<channel>:<thread_ts>`, unique), private, owner member (set only when private), pseudonyms (JSON: member ID to number), transcript (JSON, in pseudonym form), last_message_at |

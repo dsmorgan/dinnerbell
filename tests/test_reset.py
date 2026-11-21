@@ -35,6 +35,7 @@ from dinnerbell.db.models import (
     PreferenceRow,
     SessionRow,
     ShownPlaceRow,
+    SignInCodeRow,
     SlackBadgeCompositeRow,
     SlackBadgeFileRow,
     StanceEditRow,
@@ -172,6 +173,16 @@ async def lived_in(house: House) -> int:
                 id="a" * 64, household_id=household_id, member_id=kim, created_at=now, expires_at=expires, last_seen=now
             )
         )
+        db.add(
+            SignInCodeRow(
+                household_id=household_id,
+                member_id=kim,
+                code_hash="c" * 64,
+                created_by=kim,
+                created_at=now,
+                expires_at=now + timedelta(minutes=15),
+            )
+        )
         await db.commit()
     return event_id
 
@@ -197,6 +208,7 @@ EXPECTED_KEEP = {
     "household",
     "member",
     "session",
+    "sign_in_code",
     "audit",
     "tag",
     "catalog_item",

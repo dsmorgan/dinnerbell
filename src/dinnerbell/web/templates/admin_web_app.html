@@ -5,6 +5,7 @@
 {% include "_admin_tabs.html" %}
 <h1>Web app</h1>
 {% if notice %}<p class="alert ok" role="status">{{ notice }}</p>{% endif %}
+{% if code_throttle %}<p class="alert error" role="status" id="code-throttle"><strong>Someone may be guessing sign-in codes.</strong> Over 200 wrong sign-in codes were typed in the last hour, so every code sign-in now waits a few seconds. Nobody is locked out, and the wait ends an hour after the guessing stops. Codes you or members made still work.</p>{% endif %}
 <p class="small muted">The web app lets members add Dinnerbell to their phone's Home Screen and choose, on <strong>Preferences</strong>, whether Dinnerbell reaches them in Slack, the web app, or both. A member without a Slack account can only use the web app. While it's on, Slack skips direct messages to members who chose the web app, instead of failing to send them. Channel posts still go to the channel.</p>
 {#- Part 1 of #138 only: delete this warning once push notifications and code sign-in exist. -#}
 <p class="alert error" role="note" id="not-built-yet"><strong>Not finished yet.</strong> Push notifications and signing in with a code aren't built yet. Until they are, members on <strong>Web app</strong>, including every member without a Slack account, get no direct messages at all: no reminders, no roles, no hand-offs. Turn this on only to try it out.</p>

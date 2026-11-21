@@ -6,6 +6,7 @@ and the ``invitation`` table, #38), and the meals each catalog item is for (#72)
 M7: ``stance_edit``, so a stance set on Preferences wins over earlier ratings (FR-55).
 M6: the optional assistant's ``assistant_usage`` and ``assistant_conversation`` (ADR 0009).
 ``shown_place``: the places a call has shown, so a shuffle draws new ones (#290).
+``sign_in_code`` and each session's device: sign in with a code, and Devices (#138).
 
 Every table carries ``household_id`` (the household table's own key is that ID).
 Changing a model requires a new Alembic revision; see CLAUDE.md.
@@ -13,6 +14,7 @@ Changing a model requires a new Alembic revision; see CLAUDE.md.
 
 from __future__ import annotations
 
+import secrets
 from datetime import date, datetime, time
 from typing import Any
 
@@ -37,6 +39,16 @@ from sqlalchemy import (
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from dinnerbell.db.types import UTCDateTime
+from dinnerbell.domain.sessions import UNKNOWN_DEVICE
+
+PUBLIC_ID_BYTES = 16
+"""A session's public ID is this many random bytes, base64url: 22 characters."""
+
+
+def new_public_id() -> str:
+    """A session's public ID: random, from ``secrets``, and unrelated to its token."""
+    return secrets.token_urlsafe(PUBLIC_ID_BYTES)
+
 
 NAMING_CONVENTION = {
     "ix": "ix_%(column_0_label)s",
@@ -129,6 +141,29 @@ class SessionRow(Base):
     created_at: Mapped[datetime] = mapped_column(UTCDateTime())
     expires_at: Mapped[datetime] = mapped_column(UTCDateTime())
     last_seen: Mapped[datetime] = mapped_column(UTCDateTime())
+    public_id: Mapped[str] = mapped_column(String(32), unique=True, default=new_public_id)
+    """What a page names the session by, such as to sign it out (spec 6.15): random, and never
+    the token's hash, which is as good as the token to anyone who can make a cookie of it."""
+    device: Mapped[str] = mapped_column(String(40), default=UNKNOWN_DEVICE)
+    """A short label from the browser, such as "iPhone · Safari" (``domain.sessions.device_label``).
+    Never the User-Agent itself."""
+
+
+class SignInCodeRow(Base):
+    """A member's one-time sign-in code (spec 6.15). ``code_hash`` is the SHA-256 hex digest of
+    the code, never the code. One per member: a new code replaces the old one."""
+
+    __tablename__ = "sign_in_code"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    household_id: Mapped[int] = mapped_column(ForeignKey("household.id", ondelete="CASCADE"))
+    member_id: Mapped[int] = mapped_column(ForeignKey("member.id", ondelete="CASCADE"), unique=True)
+    code_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    created_by: Mapped[int | None] = mapped_column(ForeignKey("member.id", ondelete="SET NULL"))
+    """Who made it: the member, or the admin who made it for them."""
+    created_at: Mapped[datetime] = mapped_column(UTCDateTime())
+    expires_at: Mapped[datetime] = mapped_column(UTCDateTime())
+    used_at: Mapped[datetime | None] = mapped_column(UTCDateTime())
 
 
 class AuditRow(Base):

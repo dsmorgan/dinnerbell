@@ -128,6 +128,7 @@ async def _complete(
         slack_sign_in=context.settings.slack_sign_in,
         now=context.clock(),
         replaces_token=request.cookies.get(context.cookies.session),
+        user_agent=request.headers.get("user-agent"),
     )
     if isinstance(outcome, Refuse) and await _join(context, db, claims, outcome):
         # #38, option B: someone in the Dinnerbell channel joined as a guest; sign them in.
@@ -138,6 +139,7 @@ async def _complete(
             slack_sign_in=context.settings.slack_sign_in,
             now=context.clock(),
             replaces_token=request.cookies.get(context.cookies.session),
+            user_agent=request.headers.get("user-agent"),
         )
     if isinstance(outcome, Refuse):
         title, message = REFUSAL_MESSAGES[outcome.reason]

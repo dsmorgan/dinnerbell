@@ -46,6 +46,7 @@ from dinnerbell.web.routes import (
     pages,
     preferences,
     schedule,
+    sign_in_code,
     stats,
     web_app,
 )
@@ -91,6 +92,7 @@ def build_app(settings: Settings, lifespan: Lifespan) -> FastAPI:
         health.router,
         pages.router,
         auth.router,
+        sign_in_code.router,
         admin.router,
         assistant.router,
         assistant_page.router,

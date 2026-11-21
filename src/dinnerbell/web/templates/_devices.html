@@ -1,0 +1,35 @@
+{#- SPDX-License-Identifier: AGPL-3.0-or-later -#}
+{#- Devices and a sign-in code (spec 6.15), on the member's own Preferences while Admin's Web
+    app switch is on. A new code shows on the response that made it, and never again. -#}
+{% set tz = principal.household.timezone %}
+<section class="card stack" id="devices" aria-labelledby="devices-heading">
+  <h2 id="devices-heading">Devices</h2>
+  {% if devices_notice %}<p class="alert ok" role="status">That device is signed out.</p>{% endif %}
+  {% if issued %}
+  <div class="alert ok stack" role="status" id="issued-code">
+    <p>Your sign-in code: <span class="issued-code">{{ issued.code }}</span></p>
+    <p class="small">It works once, until {{ issued.expires_at|clock(tz) }}. On the other device, open Dinnerbell, tap <strong>Sign in with a code</strong>, and type it. This is the only time it's shown.</p>
+  </div>
+  {% endif %}
+  <form method="post" action="/preferences/sign-in-code" class="stack">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <p class="small muted">To sign in on a phone or in the installed app, get a code here and type it there. A new code replaces any you haven't used.</p>
+    <button type="submit" class="button">Get a sign-in code</button>
+  </form>
+  <ul class="members devices">
+    {% for d in devices %}
+    <li class="member" id="device-{{ d.public_id }}">
+      <div class="member-main">
+        <div class="member-name"><strong>{{ d.label }}</strong>{% if d.current %} <span class="badge accent">This device</span>{% endif %}</div>
+        <div class="muted small">Signed in {{ (d.signed_in|local_date(tz))|day }} · last seen {{ (d.last_seen|local_date(tz))|day }}, {{ d.last_seen|clock(tz) }}</div>
+      </div>
+      <div class="member-actions">
+        <form method="post" action="/preferences/devices/{{ d.public_id }}/sign-out" class="inline">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <button type="submit" class="button small">Sign out</button>
+        </form>
+      </div>
+    </li>
+    {% endfor %}
+  </ul>
+</section>

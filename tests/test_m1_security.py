@@ -53,8 +53,9 @@ def snapshot(settings: Settings) -> tuple[int, ...]:
 
 
 def test_every_m1_post_route_is_enumerated(client: TestClient) -> None:
-    # 14 from M1, feedback on a meal (M3), away days (#196), and Slack or the web app (#138)
-    assert len(m1_posts(client)) == 18
+    # 14 from M1, feedback on a meal (M3), away days (#196), Slack or the web app (#138), and a
+    # sign-in code and signing out a device (#138)
+    assert len(m1_posts(client)) == 20
 
 
 def test_every_m1_post_refuses_a_missing_or_wrong_csrf_token(client: TestClient, populated: Settings) -> None:

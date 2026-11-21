@@ -6,6 +6,12 @@
 <h1>Members</h1>
 {% if notice %}<p class="alert ok" role="status">{{ notice }}</p>{% endif %}
 {% if error %}<p class="alert error" role="alert">{{ error }}</p>{% endif %}
+{% if issued %}
+<div class="alert ok stack" role="status" id="issued-code">
+  <p>Sign-in code for {{ issued.member.display_name }}: <span class="issued-code">{{ issued.code }}</span></p>
+  <p class="small">It works once, until {{ issued.expires_at|clock(principal.household.timezone) }}. Give it to {{ issued.member.display_name }} in person or by text. On their device, they open Dinnerbell, tap <strong>Sign in with a code</strong>, and type it. This is the only time it's shown.</p>
+</div>
+{% endif %}
 {% if conflict %}
 <form method="post" action="/admin/guests/{{ conflict.id }}/promote" class="card inline-form">
   <input type="hidden" name="csrf_token" value="{{ csrf_token }}">

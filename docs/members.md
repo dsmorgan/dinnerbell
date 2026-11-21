@@ -26,6 +26,7 @@ An admin can see and change any member's preferences. On **Admin** > **Members**
 - **Add people from the channel** lists everyone in the channel who isn't in Dinnerbell, to add as a guest or a member.
 - If someone you invited by email joins as a guest because their Slack email differs, select **Link to member** on their guest row to move their Slack account to their membership. Anyone can take any name in Slack, so check the Slack account and email shown on the row. If that email isn't the member's, or they use a Slack guest account, you type the member's name to confirm. Admins aren't listed; an admin sets their own Slack member ID.
 - **Remove** signs a guest out and stops them from joining again until you select **Add back**.
+- While the [web app](#the-web-app) is on, each active member's row has **Sign-in code**, which makes a [code](#sign-in-with-a-code) for them, and each other member's row has **Sign out everywhere**, which signs them out of every [device](#devices).
 
 Joining needs no extra scopes for a public channel. A private channel needs `groups:read`.
 
@@ -38,8 +39,46 @@ While it's on:
 - Members can add Dinnerbell to their phone's Home Screen. **Get the app**, linked from the sign-in page, from **Preferences**, and from **Admin** > **Web app**, shows the steps for iPhone and Android.
 - **Preferences** has **Notifications**: **Slack**, **Web app**, or **Both**. A member linked to Slack starts on **Slack**. A member without a Slack link has only **Web app**, and moves to **Slack** once they're linked, unless they chose otherwise while linked before.
 - Slack skips direct messages, such as reminders, to members on **Web app**, instead of failing to send them. Channel posts still go to the channel.
+- Members can [sign in with a code](#sign-in-with-a-code), and see and sign out their [devices](#devices).
 
-Push notifications and signing in with a code aren't built yet, and **Admin** > **Web app** says so. Until they are, a member on **Web app** gets no direct messages at all, as a member without Slack gets none today; Dinnerbell logs a warning for each one it skips for a member who isn't linked to Slack. Turning the switch off keeps each member's choice for when it's on again.
+Push notifications aren't built yet. Until they are, a member on **Web app** gets no direct messages at all, as a member without Slack gets none today; Dinnerbell logs a warning for each one it skips for a member who isn't linked to Slack. Turning the switch off keeps each member's choice for when it's on again. It also keeps every session and sign-in code, but the code pages, **Devices**, and the buttons on **Admin** > **Members** disappear until it's on again.
+
+### Sign in with a code
+
+The app on your Home Screen keeps its own sign-in, apart from the browser's, and a Slack sign-in started there can finish in the browser instead. So inside the app, **Sign in with a code** is the first button on the sign-in page. A member without a Slack account signs in only this way.
+
+First, get a code:
+
+- **If you're signed in somewhere else**, such as with Slack on a laptop: open **Preferences**, and under **Devices**, select **Get a sign-in code**.
+- **If you aren't**, ask an admin. On **Admin** > **Members**, they select **Sign-in code** on your row, then give you the code in person or by text.
+
+A code is 10 characters, such as `K7M2Q-9XRTD`. It works once, for 15 minutes. Dinnerbell shows it only once, on the page that made it. A new code replaces any code you haven't used, whoever made it. Guests and deactivated members can't get one.
+
+On an iPhone or iPad:
+
+1. Open **Get the app** in Safari, and follow its steps to add Dinnerbell to your Home Screen.
+2. Open Dinnerbell from your Home Screen.
+3. Tap **Sign in with a code**.
+4. Type the code, and tap **Next**. Capitals, spaces, and the dash don't matter.
+5. Check that the page says "You're signing in as" and your name, then tap **Continue**.
+
+On Android:
+
+1. Open **Get the app** in Chrome, and follow its steps to install Dinnerbell.
+2. Open Dinnerbell from your Home screen.
+3. Tap **Sign in with a code**, type the code, and tap **Next**.
+4. Check your name, then tap **Continue**.
+
+The app stays signed in for 90 days after you last use it, as a Slack sign-in does. Signing in with a code on a device that was signed in as someone else signs that session out.
+
+Making a code writes a `member.sign_in_code_created` audit row, and signing in with one writes `member.signed_in_with_code`; neither holds the code. Each address can try 20 sign-ins a minute. If more than 200 wrong codes arrive in an hour from all addresses together, every code sign-in waits a few seconds longer than the last, Dinnerbell logs a warning, and **Admin** > **Web app** says someone may be guessing. Nobody is locked out, and the wait ends an hour after the wrong codes stop.
+
+### Devices
+
+**Preferences** > **Devices** lists each device you're signed in on, such as "iPhone · Safari", with when it signed in and when it was last seen. **This device** marks the one you're using. Devices that signed in before this list existed show "Unknown device".
+
+- To sign a device out, such as a lost phone, select **Sign out** on its row. Signing out **This device** signs you out here.
+- An admin can sign a member out of every device: on **Admin** > **Members**, select **Sign out everywhere** on their row. It writes a `member.signed_out_everywhere` audit row. To sign yourself out everywhere, use **Devices** on your own **Preferences**.
 
 ## The Assistant page
 

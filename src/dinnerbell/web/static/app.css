@@ -847,3 +847,14 @@ fieldset.card > .button.block { margin-bottom: 0; }
   .in-app { display: block; }
   .in-browser { display: none; }
 }
+
+/* Sign in (spec 6.15): inside the installed app, Sign in with a code comes first and is the primary button. */
+.signin-options { display: flex; flex-direction: column; }
+.code-input { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; letter-spacing: 0.08em; text-transform: uppercase; }
+.issued-code { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 1.5rem; font-weight: 700; letter-spacing: 0.08em; }
+@media (display-mode: standalone) {
+  .signin-options .signin-code { order: -1; background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+  .signin-options .signin-provider { background: var(--surface); border-color: var(--line); color: var(--text); }
+}
+/* With the web app on, a member's row has more buttons (spec 6.15): let them wrap on a phone. */
+.member-actions { flex-wrap: wrap; }

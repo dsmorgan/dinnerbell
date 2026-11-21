@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Annotated
 
-from fastapi import APIRouter, Form, Request
+from fastapi import APIRouter, Form, Path, Request
 from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.responses import Response
@@ -37,13 +37,22 @@ from dinnerbell.domain.members import (
     notify_choices,
 )
 from dinnerbell.domain.preferences import LEVEL_LABELS, LEVELS, NEUTRAL, InvalidPreference, Stance, TargetType
-from dinnerbell.services import activity, away, guests, web_app
+from dinnerbell.services import activity, away, devices, guests, sign_in_codes, web_app
 from dinnerbell.services import preferences as preference_service
 from dinnerbell.services.appearance import set_member_color_mode
 from dinnerbell.services.errors import NotFound
 from dinnerbell.services.fun import set_member_fun_mode
 from dinnerbell.services.variety import household_today
-from dinnerbell.web.auth import AdminCSRFChecked, AdminPrincipal, Context, CSRFChecked, Database, Principal, SignedIn
+from dinnerbell.web.auth import (
+    AdminCSRFChecked,
+    AdminPrincipal,
+    Context,
+    CSRFChecked,
+    Database,
+    Principal,
+    SignedIn,
+    clear_cookie_header,
+)
 from dinnerbell.web.context import AppContext
 from dinnerbell.web.forms import BadFormValue, RowId, checked, choice, iso_date, parse_id
 from dinnerbell.web.redirects import local_path, local_redirect
@@ -56,6 +65,7 @@ Checkbox = Annotated[str | None, Form()]
 Needs = Annotated[list[str] | None, Form()]
 Day = Annotated[str, Form(max_length=10)]
 Via = Annotated[str, Form(max_length=5)]
+PublicId = Annotated[str, Path(max_length=devices.MAX_PUBLIC_ID_LENGTH, pattern=r"^[A-Za-z0-9_-]+$")]
 NOTICES = {
     "settings": "Settings saved.",
     "saved": "Preference saved.",
@@ -159,9 +169,15 @@ async def _page(
     notice: str = "",
     error: str | None = None,
     status_code: int = 200,
+    issued: sign_in_codes.IssuedCode | None = None,
 ) -> Response:
     principal = whose.principal
     today = household_today(principal.household, context.clock())
+    # Devices and the member's own sign-in code (spec 6.15): on their own page, while the web
+    # app is on. An admin editing someone signs them out from Admin > Members instead.
+    signed_in = None
+    if not whose.admin and await web_app.web_app_enabled(db, principal.household.id):
+        signed_in = await devices.my_devices(db, principal.member, principal.session_hash, now=context.clock())
     mine = await whose.preferences(db, today)
     base = whose.base
     window = whose.member.away_now(today)
@@ -187,6 +203,9 @@ async def _page(
         "notify_member": whose.member,
         "notify_choices": [(c.value, NOTIFY_VIA_LABELS[c]) for c in notify_choices(whose.member)],
         "notify_saved": notice == "notify",
+        "devices": signed_in,
+        "devices_notice": notice == "signed_out",
+        "issued": issued,
         "error": error,
         "dietary_tags": await guests.dietary_tags(db, principal.member),
         "today": today,
@@ -351,6 +370,24 @@ async def save_notify_via(
     request: Request, principal: CSRFChecked, context: Context, db: Database, via: Via = ""
 ) -> Response:
     return await _save_notify_via(request, _own(principal), context, db, via)
+
+
+@router.post("/sign-in-code")
+async def create_sign_in_code(request: Request, principal: CSRFChecked, context: Context, db: Database) -> Response:
+    """A code to sign in another device (spec 6.15), shown on this response only, never in a URL."""
+    issued = await sign_in_codes.create_my_code(db, principal.member, now=context.clock())
+    return await _page(request, _own(principal), context, db, issued=issued)
+
+
+@router.post("/devices/{public_id}/sign-out")
+async def sign_out_device(principal: CSRFChecked, context: Context, db: Database, public_id: PublicId) -> Response:
+    """End one of the member's sessions. Ending this device's own signs it out here and now."""
+    current = await devices.sign_out_device(db, principal.member, public_id, principal.session_hash)
+    if current:
+        response = RedirectResponse("/", status_code=303)
+        response.headers.append("Set-Cookie", clear_cookie_header(context.cookies.session, context.settings))
+        return response
+    return RedirectResponse("/preferences?notice=signed_out#devices", status_code=303)
 
 
 @router.post("/stance")
