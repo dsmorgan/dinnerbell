@@ -94,6 +94,7 @@ def create_app(
                 clock=clock,
                 cookies=CookieNames.for_settings(settings),
                 csrf_key=derive_key(secret, "csrf"),
+                code_key=derive_key(secret, "sign-in-code"),
                 login_state=SignedPayload(derive_key(secret, "login-state"), LOGIN_STATE_LIFETIME, clock),
                 sessionmaker=database.sessionmaker,
                 oidc=_oidc_client(settings, http, clock),

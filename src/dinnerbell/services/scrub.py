@@ -54,6 +54,7 @@ from dinnerbell.db.feedback import FeedbackRepository
 from dinnerbell.db.meals import household_settings
 from dinnerbell.db.outbox import OutboxRepository
 from dinnerbell.db.repositories import AuditRepository, HouseholdRepository, MemberRepository, SessionRepository
+from dinnerbell.db.sign_in_codes import SignInCodeRepository
 from dinnerbell.db.types import UTCDateTime
 from dinnerbell.domain.badges import BADGES
 from dinnerbell.domain.contributions import Kind
@@ -250,6 +251,7 @@ async def _scrub(db: AsyncSession, *, instance_label: str, keep: Iterable[str], 
     kept_ids = {m.id for m in kept}
     deactivated = unlinked = guests = 0
     sessions = SessionRepository(db)
+    codes = SignInCodeRepository(db)
     for member in members:
         if member.id in kept_ids:
             continue
@@ -281,6 +283,7 @@ async def _scrub(db: AsyncSession, *, instance_label: str, keep: Iterable[str], 
         if changes:
             await members_repo.update(household.id, member.id, now, **changes)
         await sessions.delete_for_member(member.id)
+        await codes.delete_for_member(member.id)
 
     stored = await household_settings(db, household.id)
     slots = slot_schedules(stored)

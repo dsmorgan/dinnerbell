@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import hmac
 import logging
 import re
 from datetime import UTC, datetime, timedelta
@@ -27,7 +28,8 @@ from dinnerbell.services import sign_in_codes
 from dinnerbell.services.database import open_database
 from dinnerbell.services.errors import Forbidden, NotFound
 from dinnerbell.services.sign_in_codes import THROTTLE_MAX_SECONDS, CodeThrottle, new_code
-from tests.conftest import BASE_URL, invite, page, sign_in
+from dinnerbell.web.signing import derive_key
+from tests.conftest import BASE_URL, SECRET_KEY, invite, page, sign_in
 from tests.support.clock import FakeClock
 from tests.support.fake_oidc import FakeProvider
 from tests.support.pages import inline_code
@@ -46,6 +48,7 @@ MAC_CHROME = (
     "Chrome/131.0.0.0 Safari/537.36"
 )
 DIDNT_WORK = "That code didn't work."
+CODE_KEY = derive_key(SECRET_KEY, "sign-in-code")
 ISSUED = re.compile(r'class="issued-code">([A-Z0-9-]+)</span>')
 
 
@@ -259,7 +262,10 @@ def test_a_member_makes_their_own_code_and_it_shows_once(
     assert "This is the only time it's shown." in page(response)
     assert code not in on.get("/preferences").text  # never again
     [row] = codes(migrated)
-    assert row.code_hash == hashlib.sha256(normalize_code(code).encode()).hexdigest()  # type: ignore[union-attr]
+    plain = normalize_code(code)
+    assert plain is not None
+    assert row.code_hash == hmac.new(CODE_KEY, plain.encode(), hashlib.sha256).hexdigest()
+    assert row.code_hash != hashlib.sha256(plain.encode()).hexdigest()  # a bare hash would be searchable
     assert (row.member_id, row.created_by, row.used_at) == (sam, sam, None)
     assert row.expires_at == clock.now + timedelta(minutes=15)
     [made] = audits(migrated, "member.sign_in_code_created")
@@ -335,9 +341,11 @@ def test_only_an_admin_makes_a_code_for_someone_else(
                 assert sam_member is not None
                 guest = replace(sam_member, role=Role.GUEST, email=None)
                 with pytest.raises(Forbidden):
-                    await sign_in_codes.create_my_code(db, guest, now=datetime.now(UTC))
+                    await sign_in_codes.create_my_code(db, guest, key=CODE_KEY, now=datetime.now(UTC))
                 with pytest.raises(Forbidden):
-                    await sign_in_codes.create_member_code(db, sam_member, admin_id, now=datetime.now(UTC))
+                    await sign_in_codes.create_member_code(
+                        db, sam_member, admin_id, key=CODE_KEY, now=datetime.now(UTC)
+                    )
         finally:
             await database.close()
 
@@ -437,7 +445,7 @@ def test_a_guests_code_never_signs_in(on: TestClient, migrated: Settings, clock:
                 ),
                 {
                     "m": pat,
-                    "h": hashlib.sha256(code.encode()).hexdigest(),
+                    "h": sign_in_codes.hash_code(CODE_KEY, code),
                     "t": clock.now.replace(tzinfo=None).isoformat(sep=" "),
                     "e": (clock.now + timedelta(minutes=15)).replace(tzinfo=None).isoformat(sep=" "),
                 },
@@ -460,7 +468,9 @@ def test_two_continues_at_once_sign_in_only_one_device(on: TestClient, sam: int,
 
         async def tap() -> sign_in_codes.CodeSignIn | None:
             async with database.sessionmaker() as db:
-                return await sign_in_codes.redeem(db, code, now=now, replaces_token=None, user_agent=IPHONE)
+                return await sign_in_codes.redeem(
+                    db, code, key=CODE_KEY, now=now, replaces_token=None, user_agent=IPHONE
+                )
 
         try:
             return list(await asyncio.gather(*(tap() for _ in range(4))))
@@ -634,6 +644,7 @@ def test_an_admin_signs_a_member_out_of_every_device(
     laptop = device(on, MAC_CHROME)
     sign_in(laptop, provider, claims={"sub": SAM[0], "email": SAM[1]})
     redeem(device(on), admin_code(on, sam))
+    unused = admin_code(on, sam)  # a lost phone's code, not used yet
     assert len(sessions_of(migrated, sam)) == 2
     members = on.get("/admin/members").text
     assert f"/admin/members/{sam}/sign-out" in members and f"/admin/members/{admin_id}/sign-out" not in members
@@ -645,7 +656,14 @@ def test_an_admin_signs_a_member_out_of_every_device(
     assert "Signed out of every device." in page(on.get("/admin/members?notice=signed_out"))
     assert sessions_of(migrated, sam) == [] and 'href="/auth/login"' in laptop.get("/").text
     [audit] = audits(migrated, "member.signed_out_everywhere")
-    assert (audit.actor_member_id, audit.target, audit.payload) == (admin_id, f"member:{sam}", {"sessions": 2})
+    assert (audit.actor_member_id, audit.target, audit.payload) == (
+        admin_id,
+        f"member:{sam}",
+        {"sessions": 2, "codes": 1},
+    )
+    assert codes(migrated) == []
+    refused = device(on).post("/auth/code/continue", data={"code": unused})
+    assert refused.status_code == 400 and DIDNT_WORK in page(refused)
     assert submit(on, "/admin/members/9999/sign-out").status_code == 404
     sign_in_as(on, provider, *SAM)
     assert submit(on, f"/admin/members/{admin_id}/sign-out").status_code == 403
@@ -694,12 +712,159 @@ def test_services_refuse_while_off(migrated: Settings, client: TestClient) -> No
         try:
             async with database.sessionmaker() as db:
                 with pytest.raises(NotFound):
-                    await sign_in_codes.peek(db, "ABCDE-FGHJK", now=datetime.now(UTC))
+                    await sign_in_codes.peek(db, "ABCDE-FGHJK", key=CODE_KEY, now=datetime.now(UTC))
                 with pytest.raises(NotFound):
                     await sign_in_codes.redeem(
-                        db, "ABCDE-FGHJK", now=datetime.now(UTC), replaces_token=None, user_agent=None
+                        db, "ABCDE-FGHJK", key=CODE_KEY, now=datetime.now(UTC), replaces_token=None, user_agent=None
                     )
         finally:
             await database.close()
 
     asyncio.run(run())
+
+
+# Review fixes ------------------------------------------------------------------------------------
+
+
+def test_a_database_copy_alone_cant_check_a_code(on: TestClient, sam: int, migrated: Settings) -> None:
+    """The hash is keyed: without the secret key, a guess can't be checked against a row."""
+    code = admin_code(on, sam)
+    plain = normalize_code(code)
+    assert plain is not None
+    [row] = codes(migrated)
+    assert row.code_hash == sign_in_codes.hash_code(CODE_KEY, plain)
+    assert row.code_hash != sign_in_codes.hash_code(
+        derive_key("another-secret-key-long-enough-to-pass", "sign-in-code"), plain
+    )
+    assert row.code_hash != hashlib.sha256(plain.encode()).hexdigest()
+    assert CODE_KEY not in {derive_key(SECRET_KEY, purpose) for purpose in ("csrf", "login-state")}
+
+
+def test_deactivating_a_member_deletes_their_code_even_if_theyre_back_soon(
+    on: TestClient, sam: int, migrated: Settings, clock: FakeClock
+) -> None:
+    code = admin_code(on, sam)
+    assert submit(on, f"/admin/members/{sam}/deactivate").status_code == 303
+    assert codes(migrated) == []
+    clock.advance(timedelta(minutes=1))
+    assert submit(on, f"/admin/members/{sam}/reactivate").status_code == 303
+    phone = device(on)
+    for path in ("/auth/code", "/auth/code/continue"):
+        response = phone.post(path, data={"code": code})
+        assert response.status_code == 400 and DIDNT_WORK in page(response), path
+    redeem(phone, admin_code(on, sam))  # a new code works
+
+
+def test_a_member_who_signed_in_only_with_a_code_shows_as_active_and_can_link_slack_later(
+    on: TestClient, provider: FakeProvider, sam: int, migrated: Settings, clock: FakeClock
+) -> None:
+    def badge() -> str:
+        row = on.get("/admin/members").text.split(f'id="member-{sam}"', 1)[1].split("</li>", 1)[0]
+        return row.split('class="badge status-', 1)[1].split('"', 1)[0]
+
+    assert badge() == "invited"
+    redeem(device(on), admin_code(on, sam))
+    stored = member(migrated, SAM[1])
+    assert (stored.code_signed_in_at, stored.oidc_subject) == (clock.now, None)  # no OIDC link from a code
+    assert badge() == "active"
+    edit = on.get(f"/admin/members/{sam}").text
+    assert 'name="email"' in edit and "readonly" not in edit.split('name="email"', 1)[1].split(">", 1)[0]
+    laptop = device(on, MAC_CHROME)
+    assert sign_in(laptop, provider, claims={"sub": SAM[0], "email": SAM[1]}).status_code == 303
+    assert member(migrated, SAM[1]).oidc_subject == SAM[0]  # claimed by verified email, as before
+    assert badge() == "active"
+
+
+def test_the_confirm_page_is_never_cached(on: TestClient, sam: int) -> None:
+    code = admin_code(on, sam)
+    confirm = device(on).post("/auth/code", data={"code": code})
+    assert confirm.status_code == 200 and confirm.headers["cache-control"] == "no-store"
+    assert confirm.headers["referrer-policy"] == "same-origin"
+
+
+def test_the_throttle_lets_only_so_many_wait() -> None:
+    gate = asyncio.Event()
+
+    async def sleep(_seconds: float) -> None:
+        await gate.wait()
+
+    async def run() -> list[bool]:
+        clock = FakeClock()
+        throttle = CodeThrottle(threshold=0, sleep=sleep, max_sleepers=2)
+        throttle.failed(clock())
+        waiting = [asyncio.create_task(throttle.wait(clock())) for _ in range(2)]
+        for _ in range(100):  # each task starts waiting at its first await
+            if throttle.sleeping == 2:
+                break
+            await asyncio.sleep(0)
+        refused = await throttle.wait(clock())
+        gate.set()
+        return [refused, *await asyncio.gather(*waiting), throttle.sleeping == 0]
+
+    assert asyncio.run(run()) == [False, True, True, True]
+
+
+def test_waiting_attempts_hold_no_connection_and_a_burst_past_them_gets_429(
+    on: TestClient, clock: FakeClock, migrated: Settings
+) -> None:
+    """While throttled, a burst of code attempts, signed in or not, waits without a database
+    connection, so a request that needs the database still runs; past four waiting, the next is
+    refused at once with Retry-After."""
+    import httpx
+
+    from tests.conftest import csrf_from
+
+    context = on.app.state.dinnerbell  # type: ignore[attr-defined]
+    throttle: CodeThrottle = context.code_throttle
+    pool = context.sessionmaker.kw["bind"].sync_engine.pool
+    for _ in range(300):
+        throttle.failed(clock())
+    token, cookie = csrf_from(on), on.cookies[SESSION_COOKIE]
+
+    async def burst() -> tuple[int, int, httpx.Response, httpx.Response, list[int]]:
+        gate = asyncio.Event()
+
+        async def sleep(_seconds: float) -> None:
+            await gate.wait()
+
+        throttle.sleep = sleep
+        transport = httpx.ASGITransport(app=on.app)
+        async with httpx.AsyncClient(transport=transport, base_url=BASE_URL, headers={"Origin": BASE_URL}) as http:
+            signed_in = {"Cookie": f"{SESSION_COOKIE}={cookie}"}
+            attempts = [
+                http.post("/auth/code", data={"code": "ABCDE-FGHJK", "csrf_token": token}, headers=signed_in),
+                *(http.post(path, data={"code": "ABCDE-FGHJK"}) for path in ("/auth/code", "/auth/code/continue")),
+                http.post("/auth/code/continue", data={"code": "ABCDE-FGHJK"}),
+            ]
+            waiting = [asyncio.create_task(a) for a in attempts]
+            deadline = asyncio.get_running_loop().time() + 10
+            while throttle.sleeping < 4:
+                assert asyncio.get_running_loop().time() < deadline, "the attempts never started waiting"
+                await asyncio.sleep(0.01)
+            held = pool.checkedout()
+            refused = await asyncio.wait_for(http.post("/auth/code", data={"code": "ABCDE-FGHJK"}), 10)
+            health = await asyncio.wait_for(http.get("/healthz"), 10)
+            gate.set()
+            done = await asyncio.gather(*waiting)
+        return held, len(waiting), refused, health, [r.status_code for r in done]
+
+    held, waited, refused, health, statuses = on.portal.call(burst)  # type: ignore[attr-defined]
+    assert waited == 4 and held == 0  # four waiting, and no connection checked out
+    assert refused.status_code == 429 and int(refused.headers["retry-after"]) >= 1
+    assert refused.text == "Too many sign-in attempts. Wait a minute and try again."
+    assert health.json()["database"] == "ok"
+    assert statuses == [400, 400, 400, 400]
+    assert throttle.failures(clock()) == 304  # the refused one isn't a wrong code
+
+
+def test_a_second_continue_from_the_device_the_first_signed_in_isnt_counted(
+    on: TestClient, sam: int, clock: FakeClock
+) -> None:
+    """The first tap set the device's new session, so the second carries it without that
+    session's CSRF token and is refused before the code is checked."""
+    throttle: CodeThrottle = on.app.state.dinnerbell.code_throttle  # type: ignore[attr-defined]
+    code = admin_code(on, sam)
+    phone = redeem(device(on), code)
+    again = phone.post("/auth/code/continue", data={"code": code})
+    assert again.status_code == 403
+    assert throttle.failures(clock()) == 0

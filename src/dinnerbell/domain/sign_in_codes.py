@@ -4,7 +4,7 @@ text becomes a code.
 
 A code is 10 characters from an alphabet without look-alikes: no 0 or O, no 1, I, or L, and
 no U, so it reads aloud and types on a phone without guessing. It's valid for 15 minutes and
-used once. Dinnerbell stores only its SHA-256 hash (``services.sign_in_codes``).
+used once. Dinnerbell stores only its keyed hash (``services.sign_in_codes``).
 """
 
 from __future__ import annotations

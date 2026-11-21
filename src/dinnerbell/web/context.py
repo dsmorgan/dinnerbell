@@ -43,6 +43,8 @@ class AppContext:
     clock: Clock
     cookies: CookieNames
     csrf_key: bytes
+    code_key: bytes
+    """The key sign-in codes are hashed with (spec 6.15), apart from every other key."""
     login_state: SignedPayload
     sessionmaker: async_sessionmaker[AsyncSession]
     oidc: OIDCClient

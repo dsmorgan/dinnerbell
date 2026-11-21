@@ -375,7 +375,7 @@ async def save_notify_via(
 @router.post("/sign-in-code")
 async def create_sign_in_code(request: Request, principal: CSRFChecked, context: Context, db: Database) -> Response:
     """A code to sign in another device (spec 6.15), shown on this response only, never in a URL."""
-    issued = await sign_in_codes.create_my_code(db, principal.member, now=context.clock())
+    issued = await sign_in_codes.create_my_code(db, principal.member, key=context.code_key, now=context.clock())
     return await _page(request, _own(principal), context, db, issued=issued)
 
 

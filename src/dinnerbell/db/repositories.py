@@ -69,6 +69,7 @@ def to_member(row: MemberRow) -> Member:
         color_mode=ColorMode(row.color_mode),
         notify_via=NotifyVia(row.notify_via) if row.notify_via else None,
         away=Away(row.away_first, row.away_last) if row.away_first and row.away_last else None,
+        code_signed_in_at=row.code_signed_in_at,
     )
 
 

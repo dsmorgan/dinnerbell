@@ -239,7 +239,9 @@ async def create_sign_in_code(
 ) -> Response:
     """A sign-in code for a member (spec 6.15), shown on this response only, never in a URL."""
     try:
-        issued = await sign_in_codes.create_member_code(db, principal.member, member_id, now=context.clock())
+        issued = await sign_in_codes.create_member_code(
+            db, principal.member, member_id, key=context.code_key, now=context.clock()
+        )
     except MemberRuleViolation as exc:
         return await _members_page(request, principal, context, db, status_code=400, error=str(exc))
     return await _members_page(request, principal, context, db, issued=issued)

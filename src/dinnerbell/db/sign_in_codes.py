@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-or-later
-"""One-time sign-in codes (spec 6.15). Rows hold the code's SHA-256 hash, never the code."""
+"""One-time sign-in codes (spec 6.15). Rows hold the code's keyed hash, never the code."""
 
 from __future__ import annotations
 
@@ -80,6 +80,12 @@ class SignInCodeRepository:
         )
         found = result.first()
         return None if found is None else (int(found[0]), int(found[1]))
+
+    async def delete_for_member(self, member_id: int) -> int:
+        """Delete the member's code, used or not, such as when they're signed out everywhere or
+        deactivated. Returns how many (0 or 1)."""
+        result = await self._session.execute(delete(SignInCodeRow).where(SignInCodeRow.member_id == member_id))
+        return int(getattr(result, "rowcount", 0) or 0)
 
     async def delete_spent(self, now: datetime) -> int:
         """Delete every code that was used or has expired. Returns how many."""

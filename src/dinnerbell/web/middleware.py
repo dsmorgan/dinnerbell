@@ -52,6 +52,7 @@ SECURITY_HEADERS = {
     "Cross-Origin-Resource-Policy": "same-origin",
 }
 QUIET_PATHS = frozenset({"/healthz"})
+TOO_MANY_SIGN_INS = "Too many sign-in attempts. Wait a minute and try again."
 
 
 def _state(scope: Scope) -> dict[str, Any]:
@@ -197,7 +198,7 @@ class RateLimitMiddleware:
             if retry_after is not None:
                 log.warning("rate limit exceeded", extra={"path": scope["path"]})
                 response = PlainTextResponse(
-                    "Too many sign-in attempts. Wait a minute and try again.",
+                    TOO_MANY_SIGN_INS,
                     status_code=429,
                     headers={"Retry-After": str(int(retry_after) + 1)},
                 )

@@ -495,7 +495,7 @@ The web app with push notifications (FR-53, [ADR 0010](adr/0010-optional-web-app
 **Sign in with a code.**
 
 - An admin creates a code for any active member, admins included, on **Admin** > **Members**, and a signed-in member creates one for themselves on **Preferences**. Creating and redeeming a code both write audit rows. A new code replaces that member's unused one, whoever created it.
-- A code is 10 characters from an alphabet without look-alikes, valid for 15 minutes, used once, and stored as a SHA-256 hash.
+- A code is 10 characters from an alphabet without look-alikes, valid for 15 minutes, used once, and stored as a keyed hash: HMAC-SHA256 with a key derived from `DINNERBELL_SECRET_KEY` for codes alone, so a copy of the database can't be searched for codes. Changing the secret key ends every unused code. Signing a member out of every device, and deactivating them, deletes their unused code.
 - The member types the code on `/auth/code`, in a POST body, never the URL. The page shows "You're signing in as NAME", without using the code. **Continue** uses it in one conditional update, so two taps can't both win, checks the member is still active, and signs the device in. That replaces any session cookie the device had with a new ordinary session, which lasts 90 days and renews with use.
 - Wrong codes count against the per-address limit every `/auth/` route has. Past 200 failures in an hour across all addresses, each further attempt waits longer, and Dinnerbell logs it and tells the admin; nothing locks out. The `/auth/` form has no session to bind a CSRF token to, so the Origin check protects it.
 
@@ -789,7 +789,7 @@ Every table carries `household_id`. Timestamps are UTC; the household time zone 
 | Table | Key fields |
 |---|---|
 | household | name, timezone, settings (JSON: slots, weights, ranking temperature, Feedback (`feedback_cap`), variety window, badge thresholds, slack channel, and the assistant's switch, monthly cap, and Conversation hours) |
-| member | display name, email (members sign in with it; a guest never has one), slack_email (a joined guest's Slack email, never used to sign in), slack_guest_account, oidc_subject, slack_user_id, slack_link_locked, role (admin, member, guest), can_cook, can_pickup, can_order, mute_dm_reminders, feedback_reminder, fun_mode (FR-62, default on), color_mode (FR-64: auto, light, or dark; default auto), fun_seen_award (the newest badge award the den has flipped for), away_first and away_last (the away window, FR-63), dietary_needs (a guest's dietary tags), join_refused (an admin removed this guest), active |
+| member | display name, email (members sign in with it; a guest never has one), slack_email (a joined guest's Slack email, never used to sign in), slack_guest_account, oidc_subject, slack_user_id, slack_link_locked, role (admin, member, guest), can_cook, can_pickup, can_order, mute_dm_reminders, feedback_reminder, fun_mode (FR-62, default on), color_mode (FR-64: auto, light, or dark; default auto), fun_seen_award (the newest badge award the den has flipped for), away_first and away_last (the away window, FR-63), dietary_needs (a guest's dietary tags), join_refused (an admin removed this guest), code_signed_in_at (the last sign-in with a code, 6.15; such a member shows as active without an OIDC subject), active |
 | tag | kind (cuisine, protein, dietary, other), name |
 | catalog_item | kind (home, restaurant), name, notes, url, order_url, modes (cook, pickup, delivery), meals (bits: breakfast 1, lunch 2, dinner 4; 1 to 7, default 6), default_servings, created_by, active |
 | catalog_item_tag | item, tag |
@@ -810,7 +810,7 @@ Every table carries `household_id`. Timestamps are UTC; the household time zone 
 | badge_award | member, badge_key, tier, event (cleared if the call is deleted), awarded_at, announcement (pending, announced, or skipped), announced_at. Unique per member, badge, and tier |
 | outbox | event, notification type, payload (JSON), idempotency_key, message_key, thread_key, available_at, claim_token, claimed_until, attempts, last_error, delivered_at, failed_at, and the delivered message's reference |
 | session | id (the token's SHA-256 hash), member, created_at, expires_at, last_seen, public_id (random, what pages name it by, never the hash), device (a short label from the browser, such as "iPhone · Safari"; never the User-Agent) |
-| sign_in_code | member (one per member: a new code replaces the old), code_hash (SHA-256; never the code), created_by, created_at, expires_at (15 minutes later), used_at (6.15) |
+| sign_in_code | member (one per member: a new code replaces the old), code_hash (HMAC-SHA256 with a key from the secret key; never the code), created_by, created_at, expires_at (15 minutes later), used_at (6.15) |
 | audit | actor, action, target, payload, created_at |
 | assistant_usage | member (nullable: kept after a member is deleted), model, month (the household's calendar month, such as 2026-11), input, output, cache read, and cache write tokens, cost_micros (micro-dollars), state (reserved, settled): one row per model call, for the cost cap (6.14) |
 | assistant_conversation | key (`web:<member>` or `slack:<channel>:<thread_ts>`, unique), private, owner member (set only when private), pseudonyms (JSON: member ID to number), transcript (JSON, in pseudonym form), last_message_at |
