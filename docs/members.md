@@ -100,7 +100,7 @@ On Android, in Chrome or in the installed app:
 1. Open **Get the app**, and tap **Turn on notifications**.
 2. Tap **Allow**.
 
-**Get the app** then says "Notifications are on for this device." To stop them, tap **Turn off** there. If it says notifications are blocked, allow them for Dinnerbell in the device's settings (on iPhone, **Settings** > **Notifications** > **Dinnerbell**), and open the page again.
+**Get the app** then says "Notifications are on for this device." To stop them, tap **Turn off** there. Signing out of the app stops them on that device too; after signing in again, open **Get the app** and they turn back on by themselves. If someone else signs in on the device and turns notifications on, they get only their own. If it says notifications are blocked, allow them for Dinnerbell in the device's settings (on iPhone, **Settings** > **Notifications** > **Dinnerbell**), and open the page again.
 
 Each member can have up to 10 devices; turning on an eleventh drops the one turned on longest ago. Pushes go through the device's push service, from Apple, Google, Mozilla, or Microsoft, which sees when a device gets one and how big it is, but not what it says.
 

@@ -46,6 +46,8 @@ class QueuedPush:
     created_at: datetime
     attempts: int
     target: PushTarget
+    owner_id: int
+    """Who the device belongs to now. A push for anyone else never goes to it."""
 
 
 def _subscription(row: PushSubscriptionRow) -> Subscription:
@@ -116,16 +118,30 @@ class PushRepository:
 
     # Subscriptions ----------------------------------------------------------------------------
 
-    async def subscribe(self, household_id: int, member_id: int, keys: SubscriptionKeys, now: datetime) -> int:
-        """Store a device for ``member_id``, or update its keys and owner if the endpoint is known
-        (the device signed in as someone else since). Keeps the member to
-        ``push.MAX_SUBSCRIPTIONS`` by deleting their oldest. Returns the subscription's ID."""
+    async def subscribe(
+        self, household_id: int, member_id: int, session_id: str, keys: SubscriptionKeys, now: datetime
+    ) -> int:
+        """Store a device for ``member_id``, through the session ``session_id``, or update its
+        keys, session, and owner if the endpoint is known. A device that changes owner, such as
+        a shared phone signed in as someone else, loses every push still queued for the old
+        owner, so the new one never sees them. Keeps the member to ``push.MAX_SUBSCRIPTIONS``
+        by deleting their oldest. Returns the subscription's ID. Call in a write transaction."""
+        known = (
+            await self._session.execute(
+                select(PushSubscriptionRow.id, PushSubscriptionRow.member_id).where(
+                    PushSubscriptionRow.household_id == household_id, PushSubscriptionRow.endpoint == keys.endpoint
+                )
+            )
+        ).first()
+        if known is not None and known.member_id != member_id:
+            await self._session.execute(delete(PushRow).where(PushRow.subscription_id == known.id, _pending()))
         found: int = (
             await self._session.execute(
                 insert(PushSubscriptionRow)
                 .values(
                     household_id=household_id,
                     member_id=member_id,
+                    session_id=session_id,
                     endpoint=keys.endpoint,
                     p256dh=keys.p256dh,
                     auth=keys.auth,
@@ -134,7 +150,13 @@ class PushRepository:
                 )
                 .on_conflict_do_update(
                     index_elements=["household_id", "endpoint"],
-                    set_={"member_id": member_id, "p256dh": keys.p256dh, "auth": keys.auth, "auth_failures": 0},
+                    set_={
+                        "member_id": member_id,
+                        "session_id": session_id,
+                        "p256dh": keys.p256dh,
+                        "auth": keys.auth,
+                        "auth_failures": 0,
+                    },
                 )
                 .returning(PushSubscriptionRow.id)
             )
@@ -260,7 +282,16 @@ class PushRepository:
         row, kind, payload, event_id, device = found
         target = PushTarget(device.id, device.endpoint, device.p256dh, device.auth)
         return QueuedPush(
-            row.id, row.household_id, row.member_id, kind, dict(payload), event_id, row.created_at, row.attempts, target
+            row.id,
+            row.household_id,
+            row.member_id,
+            kind,
+            dict(payload),
+            event_id,
+            row.created_at,
+            row.attempts,
+            target,
+            device.member_id,
         )
 
     async def sent(self, push_id: int, token: str, now: datetime) -> bool:

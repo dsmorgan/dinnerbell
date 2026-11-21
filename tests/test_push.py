@@ -5,6 +5,7 @@ turning the switch off, and the pages. The rules themselves are in ``test_push_d
 
 from __future__ import annotations
 
+import hashlib
 import logging
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field, replace
@@ -19,14 +20,14 @@ from dinnerbell.config import Settings
 from dinnerbell.db.models import PushRow, PushSubscriptionRow
 from dinnerbell.db.outbox import OutboxRepository
 from dinnerbell.db.push import PushRepository, rejected_burst
-from dinnerbell.db.repositories import MemberRepository
+from dinnerbell.db.repositories import MemberRepository, SessionRepository
 from dinnerbell.domain import notifications as note
 from dinnerbell.domain import push as rules
 from dinnerbell.domain.events import EventState
 from dinnerbell.domain.meals import Slot
 from dinnerbell.domain.members import NotifyVia, Role
 from dinnerbell.domain.push import PushResponse, PushTarget
-from dinnerbell.services import outbox, push, web_app
+from dinnerbell.services import auth, outbox, push, web_app
 from dinnerbell.services.database import Database, open_database
 from dinnerbell.services.errors import Forbidden, NotFound
 from tests.conftest import BASE_URL, page, sign_in
@@ -65,9 +66,25 @@ def endpoint(name: str, n: int = 1) -> str:
     return f"https://fcm.googleapis.com/fcm/send/{name.lower()}-{n}"
 
 
-async def device(house: House, name: str, n: int = 1) -> int:
+async def signed_in(house: House, name: str, n: int = 1) -> str:
+    """A session for ``name`` on device ``n``: the ID is the token's hash, as sign-in stores it."""
+    session_id = hashlib.sha256(f"{name}-{n}".encode()).hexdigest()
     async with house.sessionmaker() as db:
-        return await push.subscribe(db, house[name], endpoint(name, n), P256DH, AUTH, now=house.clock())
+        if await SessionRepository(db).get(session_id) is None:
+            now = house.clock()
+            await SessionRepository(db).add(
+                token_hash=session_id, member=house[name], now=now, expires_at=now + timedelta(days=90)
+            )
+            await db.commit()
+    return session_id
+
+
+async def device(house: House, name: str, n: int = 1, *, as_: str | None = None) -> int:
+    """``name`` turns on notifications on device ``n``, signed in there as ``as_`` (``name``)."""
+    who = as_ or name
+    session_id = await signed_in(house, who, n)
+    async with house.sessionmaker() as db:
+        return await push.subscribe(db, house[who], session_id, endpoint(name, n), P256DH, AUTH, now=house.clock())
 
 
 def sql_time(moment: datetime) -> str:
@@ -164,9 +181,17 @@ async def test_a_device_needs_the_switch_and_a_member(house: House) -> None:
     guest = replace(house["Kim"], role=Role.GUEST, email=None)
     async with house.sessionmaker() as db:
         with pytest.raises(Forbidden, match="Guests"):
-            await push.subscribe(db, guest, endpoint("Pat"), P256DH, AUTH, now=house.clock())
+            await push.subscribe(db, guest, "0" * 64, endpoint("Pat"), P256DH, AUTH, now=house.clock())
         with pytest.raises(rules.InvalidSubscription):
-            await push.subscribe(db, house["Kim"], "https://dinnerbell.test/x", P256DH, AUTH, now=house.clock())
+            await push.subscribe(
+                db,
+                house["Kim"],
+                await signed_in(house, "Kim"),
+                "https://dinnerbell.test/x",
+                P256DH,
+                AUTH,
+                now=house.clock(),
+            )
         assert await push.unsubscribe(db, house["Kim"], endpoint("Kim"))
         assert not await push.unsubscribe(db, house["Kim"], endpoint("Kim"))
     assert await devices(house) == []
@@ -182,13 +207,65 @@ async def test_a_member_keeps_at_most_ten_devices_and_the_oldest_goes(house: Hou
     assert len(found) == rules.MAX_SUBSCRIPTIONS and first not in found
 
 
-async def test_a_device_that_signs_in_as_someone_else_moves_to_them(house: House) -> None:
+async def test_a_device_that_signs_in_as_someone_else_moves_to_them_without_the_old_pushes(house: House) -> None:
+    """A shared phone: Kim's pushes still waiting never reach Lee once Lee turns notifications
+    on there. Lee's own pushes queue as usual."""
     await switch(house, True)
     kims = await device(house, "Kim")
+    event = await a_call(house)
+    await enqueue(house, note.ResponseReminder(event, who(house, "Kim")[0]))
+    assert [name for name, *_ in await queued(house)] == ["Kim"]
+    assert await device(house, "Kim", as_="Lee") == kims  # the same endpoint, now Lee's
+    assert await queued(house) == []
     async with house.sessionmaker() as db:
-        moved = await push.subscribe(db, house["Lee"], endpoint("Kim"), P256DH, AUTH, now=house.clock())
-        assert moved == kims
         assert [s.id for s in await PushRepository(db).for_member(house.household.id, house["Lee"].id)] == [kims]
+    await enqueue(house, note.ResponseReminder(event, who(house, "Lee")[0]))
+    assert [name for name, *_ in await queued(house)] == ["Lee"]
+    sender = FakeSender()
+    assert (await drain(house, sender)).sent == 1 and len(sender.sent) == 1
+
+
+async def test_the_drainer_never_sends_a_push_to_someone_elses_device(house: House) -> None:
+    """Defense in depth: if the device changed owner without its queue being cleared, the
+    drainer still closes the old owner's push unsent."""
+    await switch(house, True)
+    await device(house, "Kim")
+    event = await a_call(house)
+    await enqueue(house, note.ResponseReminder(event, who(house, "Kim")[0]))
+    async with house.sessionmaker() as db:
+        await db.execute(text("UPDATE push_subscription SET member_id = :i"), {"i": house["Lee"].id})
+        await db.commit()
+    sender = FakeSender()
+    assert (await drain(house, sender)).closed == 1 and sender.sent == []
+    assert [e for _, _, e, *_ in await queued(house)] == [push.NOT_THEIR_DEVICE]
+
+
+@pytest.mark.parametrize("how", ["sign out", "deactivate", "expire"])
+async def test_ending_the_session_ends_the_devices_notifications(house: House, clock: FakeClock, how: str) -> None:
+    """Pushes follow the session that turned them on: a device nobody is signed in on gets none,
+    and what was queued for it goes too."""
+    await switch(house, True)
+    await device(house, "Kim", 1)
+    keep = await device(house, "Kim", 2)
+    event = await a_call(house)
+    await enqueue(house, note.CallOpened(event, who(house, "Kim")))
+    assert len(await queued(house)) == 2
+    async with house.sessionmaker() as db:
+        if how == "sign out":
+            await auth.sign_out(db, "Kim-1")  # the token whose hash ``signed_in`` stored
+        elif how == "deactivate":
+            await SessionRepository(db).delete_for_member(house["Kim"].id)
+            await db.commit()
+            keep = 0
+        else:
+            await db.execute(
+                text("UPDATE session SET expires_at = :t WHERE id = :i"),
+                {"t": sql_time(clock() - timedelta(seconds=1)), "i": await signed_in(house, "Kim", 1)},
+            )
+            await db.commit()
+            await auth.purge_expired_sessions(db, now=clock())
+    assert await devices(house) == ([keep] if keep else [])
+    assert [sid for _, sid, *_ in await queued(house)] == ([keep] if keep else [])
 
 
 # The queue --------------------------------------------------------------------------------------
@@ -592,6 +669,9 @@ def test_the_routes_need_the_switch_and_a_csrf_token(admin: TestClient, migrated
     bad = submit(admin, "/app/notifications", FORM | {"endpoint": "https://169.254.169.254/latest"})
     assert bad.status_code == 400 and "push service" in bad.text
     assert submit(admin, "/app/notifications/off", {"endpoint": FORM["endpoint"]}).status_code == 204
+    assert subscriptions(migrated) == []
+    assert submit(admin, "/app/notifications", FORM).status_code == 204
+    assert submit(admin, "/auth/logout").status_code in (302, 303)  # signing out ends the device's pushes
     assert subscriptions(migrated) == []
     signed_out = TestClient(admin.app, base_url=BASE_URL, headers={"Origin": BASE_URL}, follow_redirects=False)
     assert signed_out.post("/app/notifications", data=FORM).status_code in (303, 401, 403)

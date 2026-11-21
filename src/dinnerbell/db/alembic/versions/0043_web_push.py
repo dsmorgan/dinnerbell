@@ -2,9 +2,10 @@
 """Web push (#138, spec 6.15): ``push_subscription`` and ``push_queue``, both empty.
 
 ``push_subscription`` holds each device a member turned notifications on for: the browser's push
-endpoint and keys. ``push_queue`` holds one row per push to one device, queued with its outbox
-row and keyed by it and the device. Both start empty, and nothing else changes, so a household
-that never turns the web app on has two empty tables. A downgrade drops both; members turn
+endpoint and keys, and the session that turned them on, whose end deletes the device.
+``push_queue`` holds one row per push to one device, queued with its outbox row and keyed by it
+and the device. Both start empty, and nothing else changes, so a household that never turns the
+web app on has two empty tables. A downgrade drops both; members turn
 notifications on again after the next upgrade.
 
 Revision ID: 0043_web_push
@@ -33,6 +34,7 @@ def upgrade() -> None:
         sa.Column("id", sa.Integer(), nullable=False),
         sa.Column("household_id", sa.Integer(), nullable=False),
         sa.Column("member_id", sa.Integer(), nullable=False),
+        sa.Column("session_id", sa.String(length=64), nullable=False),
         sa.Column("endpoint", sa.String(length=1024), nullable=False),
         sa.Column("p256dh", sa.String(length=100), nullable=False),
         sa.Column("auth", sa.String(length=32), nullable=False),
@@ -49,10 +51,14 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(
             ["member_id"], ["member.id"], name=op.f("fk_push_subscription_member_id_member"), ondelete="CASCADE"
         ),
+        sa.ForeignKeyConstraint(
+            ["session_id"], ["session.id"], name=op.f("fk_push_subscription_session_id_session"), ondelete="CASCADE"
+        ),
         sa.PrimaryKeyConstraint("id", name=op.f("pk_push_subscription")),
         sa.UniqueConstraint("household_id", "endpoint", name=op.f("uq_push_subscription_household_id_endpoint")),
     )
     op.create_index(op.f("ix_push_subscription_member_id"), "push_subscription", ["member_id"], unique=False)
+    op.create_index(op.f("ix_push_subscription_session_id"), "push_subscription", ["session_id"], unique=False)
     op.create_table(
         "push_queue",
         sa.Column("id", sa.Integer(), nullable=False),
@@ -96,5 +102,6 @@ def downgrade() -> None:
     op.drop_index(op.f("ix_push_queue_subscription_id"), table_name="push_queue")
     op.drop_index(op.f("ix_push_queue_household_id"), table_name="push_queue")
     op.drop_table("push_queue")
+    op.drop_index(op.f("ix_push_subscription_session_id"), table_name="push_subscription")
     op.drop_index(op.f("ix_push_subscription_member_id"), table_name="push_subscription")
     op.drop_table("push_subscription")

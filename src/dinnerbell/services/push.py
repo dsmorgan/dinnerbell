@@ -47,21 +47,25 @@ SWITCHED_OFF = "skipped: the web app is off"
 NOT_WANTED = "skipped: the member doesn't get pushes now"
 EXPIRED = "expired: queued more than 24 hours ago, not sent late"
 UNKNOWN_SERVICE = "refused: not a known push service"
+NOT_THEIR_DEVICE = "skipped: the device belongs to someone else now"
 GUESTS_DONT = "Guests can't turn on notifications."
 
 
 # Devices ----------------------------------------------------------------------------------------
 
 
-async def subscribe(db: AsyncSession, actor: Member, endpoint: str, p256dh: str, auth: str, *, now: datetime) -> int:
-    """Turn on notifications for the actor's device (spec 6.15). NotFound while the switch is
-    off, Forbidden for a guest, and ``push.InvalidSubscription`` for an endpoint that isn't a
-    known push service's or keys that can't work. Returns the subscription's ID."""
+async def subscribe(
+    db: AsyncSession, actor: Member, session_id: str, endpoint: str, p256dh: str, auth: str, *, now: datetime
+) -> int:
+    """Turn on notifications for the actor's device (spec 6.15), through their session
+    ``session_id``: when the session ends, so do the device's notifications. NotFound while the
+    switch is off, Forbidden for a guest, and ``push.InvalidSubscription`` for an endpoint that
+    isn't a known push service's or keys that can't work. Returns the subscription's ID."""
     require_member(actor, GUESTS_DONT)
     await require_web_app(db, actor.household_id)
     keys = push.check_subscription(endpoint, p256dh, auth)
     async with write_transaction(db):
-        subscription_id = await PushRepository(db).subscribe(actor.household_id, actor.id, keys, now)
+        subscription_id = await PushRepository(db).subscribe(actor.household_id, actor.id, session_id, keys, now)
         await db.commit()
     log.info("push subscription saved", extra={"subscription_id": subscription_id, "member_id": actor.id})
     return subscription_id
@@ -163,6 +167,8 @@ async def _stale(db: AsyncSession, queued: QueuedPush, now: datetime) -> str | N
         return SWITCHED_OFF
     if not push.known_push_service(queued.target.endpoint):  # stored before the allowlist changed
         return UNKNOWN_SERVICE
+    if queued.owner_id != queued.member_id:  # signed in as someone else since it was queued
+        return NOT_THEIR_DEVICE
     member = await MemberRepository(db).get(queued.household_id, queued.member_id)
     if member is None or not push.wants_push(member, queued.kind):
         return NOT_WANTED
