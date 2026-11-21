@@ -18,7 +18,7 @@ from fastapi import APIRouter, Form, Request
 from fastapi.responses import PlainTextResponse, RedirectResponse
 from starlette.responses import Response
 
-from dinnerbell.domain.push import InvalidSubscription
+from dinnerbell.domain.push import BAD_KEYS, NOT_A_PUSH_SERVICE, InvalidSubscription
 from dinnerbell.services import push, web_app
 from dinnerbell.web.auth import AdminCSRFChecked, AdminPrincipal, Context, CSRFChecked, Database, MaybePrincipal
 from dinnerbell.web.render import render
@@ -139,7 +139,9 @@ async def turn_on(
     try:
         await push.subscribe(db, principal.member, principal.session_hash, endpoint, p256dh, auth, now=context.clock())
     except InvalidSubscription as exc:
-        return PlainTextResponse(str(exc), status_code=400)
+        # A fixed sentence, never the exception's own text (CodeQL py/stack-trace-exposure).
+        sentence = NOT_A_PUSH_SERVICE if str(exc) == NOT_A_PUSH_SERVICE else BAD_KEYS
+        return PlainTextResponse(sentence, status_code=400)
     return Response(status_code=204)
 
 
