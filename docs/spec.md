@@ -42,7 +42,7 @@ Dinnerbell moves the question to a scheduled time, collects participation and co
 - Cost tracking or bill splitting.
 - Writing to anyone's calendar.
 - Multiple households in one deployment. The data model carries a household ID so this is a migration later, not a rewrite.
-- A native iOS app or chat platforms other than Slack. The channel layer is an adapter so Discord and web push can follow.
+- A native iOS app or chat platforms other than Slack. The channel layer is an adapter, so Discord can follow. The optional web app with push notifications is FR-53.
 
 ### Success criteria
 
@@ -305,7 +305,7 @@ Requirements use "must" for version 1 and "should" for items that can slip to a 
 | FR-50 | Each member may paste a Google Calendar secret iCal URL. The app polls it read-only and shows "busy at usual dinner time" as a hint on the call roster. Never writes to any calendar. | Calendar |
 | FR-51 | **Optional assistant** ([ADR 0009](adr/0009-optional-assistant.md)). A member can ask the assistant in natural language: "something we haven't had in a month that works for everyone in," or "tacos at 7, I'll cook." The assistant acts as the member through the same domain API, never with admin rights, never bypasses filters, and changes nothing until the member confirms. The first build drafts proposals, offers, and catalog items. See [6.14](#614-assistant). | Assistant |
 | FR-52 | A Discord adapter implements the channel interface. | Channels |
-| FR-53 | Web push for Home Screen web apps as an optional additional channel. | Channels |
+| FR-53 | **Optional web app** ([ADR 0010](adr/0010-optional-web-app.md)). With the admin's switch on, a member installs Dinnerbell on their phone's Home Screen, signs in with a one-time code, and gets push notifications for what Slack would send them. Each member picks Slack, the web app, or both. | Channels |
 | FR-54 | Multiple households per deployment. | Multi-tenant |
 | FR-55 | **Feedback informs ranking** ([ADR 0008](adr/0008-feedback-informed-ranking.md)). *Your score:* each member's ratings of an item, in meal-date order, move an adjustment toward the rating's score (−2 to +2): three-quarters of the way for "Hated it" and "Didn't like it", halfway otherwise. It halves every 90 days from the meal's date, and only ratings set or changed after the member last set a stance on the item on Preferences count (`stance_edit`, kept even for a neutral stance, against `feedback.rating_saved_at`, which re-saving the same rating doesn't move). Their score for the item is their stated score plus the adjustment, within −2 to +2, used wherever ranking used the stated score, only while they're eating; logged meals count, and vetoes never change. The admin's **Feedback** setting, 0 (off), 1, or 2, limits how far each rating pulls: the rating's score is held within ±Feedback before the step, so 0 turns ratings off; new households start at 2, and households from before revision 0021 at 0. Preferences shows the member, and an admin who opens their preferences (#181), "From your ratings: about +1" or "With your ratings: about +0.5", to half a point, unless Feedback is 0. *The hint:* each rating weighs 0.5^(days since the meal / 90); with P, N, and F the weights of positive, negative, and "It was fine" ratings, a verdict needs two people whose own ratings weigh at least 0.5 each and P + N + F ≥ 1.5, then reads **Mixed reviews** if P ≥ 0.5 and N ≥ 0.5, else **Not well liked** if N ≥ a quarter of the total, else **Well liked** if P ≥ half. The most important issue checked in the last 90 days (wrong order, late, cold, other) adds "a recent wrong order", "recently late", "recently cold", or "a recent problem", or stands alone capitalized. The hint shows at any Feedback setting, on the catalog and as the first reason on a drawn pick, and never names anyone. | M7 |
 
@@ -917,7 +917,7 @@ dinnerbell/
 | M7 Feedback-informed ranking | ADR 0008 and its implementation (FR-55). Existing households start with **Feedback** at 0, and the admin sets it to 2 when ready to let ratings move scores. | Proposals reflect "Hated it" and "Loved it" with reasons that say so |
 | M6 Assistant | Optional assistant (ADR 0009): conversations on the web, in DMs, and in channel threads; drafted proposals and offers through the domain API; catalog drafts from a description or menu link, through the import preview | "Find us something new" in a channel thread during voting yields a draft whose **Confirm** adds a filtered proposal, and a menu link opens an import preview |
 | M5 Calendar hints | Secret iCal URL polling, busy hints on the roster | Hints show for members who opted in |
-| Backlog | Discord adapter, web push, multi-household, recipes | |
+| Backlog | Discord adapter, multi-household, recipes | |
 
 The table is in build order. M0 through M2 are the minimum for the household to switch over, and M3 and M4 followed within weeks. M7 is the last milestone before 1.0, which ships once daily changes settle down. M6 and then M5 come after 1.0. Each milestone is a set of pull requests with review before merge.
 
