@@ -21,13 +21,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from dinnerbell.db.engine import write_transaction
 from dinnerbell.db.meals import household_settings
+from dinnerbell.db.push import WEB_APP_SETTING
 from dinnerbell.db.repositories import HouseholdRepository, MemberRepository
 from dinnerbell.domain.members import Member, NotifyVia, check_notify_via
 from dinnerbell.services.common import audit, require_admin, require_member
 from dinnerbell.services.errors import NotFound
 from dinnerbell.services.preferences import member_for_admin
 
-WEB_APP_SETTING = "web_app"
 ADMINS_ONLY = "Only the household admin can turn the web app on or off."
 SWITCHED_OFF = "That page doesn't exist."
 """What a web app page or form answers while the switch is off: the same 404 as any page that
@@ -91,8 +91,10 @@ async def set_web_app(db: AsyncSession, actor: Member, on: bool, *, now: datetim
 async def switched_off(db: AsyncSession, household_id: int, *, now: datetime) -> None:
     """What turning the switch off does beyond saving it, in the caller's transaction (spec 6.15):
     delete the household's push subscriptions and its queued push rows, and keep sessions and
-    sign-in codes. Nothing stores either yet, so for now there is nothing to delete; the push
-    queue adds its deletes here. Members' choices stay, for when it's on again."""
+    sign-in codes. Members' choices stay, for when it's on again. The Slack outbox is untouched."""
+    from dinnerbell.services import push  # push reads the switch from this module
+
+    await push.switched_off(db, household_id)
 
 
 # Each member's choice ----------------------------------------------------------------------------

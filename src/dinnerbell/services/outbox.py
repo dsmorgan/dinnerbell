@@ -206,7 +206,7 @@ async def _deliver(
         result.superseded += 1
         log.info("notification closed", extra=_about(entry, note=SUPERSEDED))
         return True
-    overtaken = await _overtaken(db, notification)
+    overtaken = await overtaken_by(db, notification)
     if overtaken is not None:
         # Called off (or started again) since this row was queued, perhaps while a drainer held
         # it and the channel failed or held it: "You're cooking" must not follow "It's off".
@@ -310,14 +310,15 @@ async def _skipped(
     return member if member is not None and web_app.slack_skips(member) else None
 
 
-async def _overtaken(db: AsyncSession, notification: Notification) -> str | None:
+async def overtaken_by(db: AsyncSession, notification: Notification) -> str | None:
     """Why ``notification`` is no longer worth sending, or None. A row in ``CALL_OFF_SUPERSEDES``
     is overtaken when its call was called off or has started a newer run since it was queued; a
     row in ``STEP_BOUND``, also when the call has left the states its step is in. A
     ``CoordinatorPicked`` row, also when its member no longer coordinates. A ``BadgesEarned``
     row is overtaken once a correction took back every badge of every member it names
     (``announcements.take_back``), as revision 0028 deletes one: members counted in
-    ``more_people`` alone aren't a post."""
+    ``more_people`` alone aren't a post. The push drainer (``services.push``) drops a direct
+    message's push by the same rules."""
     if isinstance(notification, BadgesEarned):
         return None if notification.news else TAKEN_BACK
     if notification.kind not in CALL_OFF_SUPERSEDES and notification.kind not in STEP_BOUND:

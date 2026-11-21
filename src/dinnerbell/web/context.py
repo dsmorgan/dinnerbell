@@ -56,6 +56,8 @@ class AppContext:
     """Joins from Sign in with Slack, per Slack user (#38)."""
     wrong_codes: WrongCodes = field(default_factory=WrongCodes)
     """Wrong sign-in codes from every address (spec 6.15)."""
+    vapid_public_key: str = ""
+    """The web push public key, base64url, for **Turn on notifications** (spec 6.15)."""
 
 
 def app_context(request: Request) -> AppContext:

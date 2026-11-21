@@ -12,6 +12,7 @@ from sqlalchemy.dialects.sqlite import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from dinnerbell.db.models import OutboxRow
+from dinnerbell.db.push import queue_pushes
 from dinnerbell.domain.notifications import NULL_CHANNEL_ID, UPDATE_KINDS, MessageRef, Notification, to_payload
 
 
@@ -101,21 +102,23 @@ class OutboxRepository:
         now: datetime,
         *,
         available_at: datetime | None = None,
-    ) -> None:
+    ) -> int | None:
         """Add ``notification`` to the current transaction's outbox, due now or at
-        ``available_at``.
+        ``available_at``. Returns the new row's ID, or None when nothing was added.
 
         A key already stored is ignored, which makes every write idempotent. An update to a
         message replaces any undelivered, unclaimed update to the same message instead of
         queueing another: the latest state wins.
+
+        Use cases call ``enqueue_with_push``, which also queues the notification's pushes.
         """
         payload = to_payload(notification)
         if notification.is_update and await self._coalesce(household_id, notification, payload, now):
-            return
+            return None
         key = notification.idempotency_key
         if notification.is_update:
             key = f"{key}:{await self._update_count(household_id, notification) + 1}"
-        await self._session.execute(
+        added: int | None = await self._session.scalar(
             insert(OutboxRow)
             .values(
                 household_id=household_id,
@@ -131,7 +134,27 @@ class OutboxRepository:
                 attempts=0,
             )
             .on_conflict_do_nothing(index_elements=["household_id", "idempotency_key"])
+            .returning(OutboxRow.id)
         )
+        return added
+
+    async def enqueue_with_push(
+        self,
+        household_id: int,
+        event_id: int | None,
+        notification: Notification,
+        now: datetime,
+        *,
+        available_at: datetime | None = None,
+    ) -> int | None:
+        """``enqueue``, and, in the same transaction, one push row per device of each web-app
+        member the notification concerns, for the kinds that push (spec 6.15, ``domain.push``).
+        A retried enqueue, whose outbox row exists already, adds no pushes either. Every use case
+        queues notifications through this."""
+        added = await self.enqueue(household_id, event_id, notification, now, available_at=available_at)
+        if added is not None:
+            await queue_pushes(self._session, added, household_id, notification, now, available_at)
+        return added
 
     async def _coalesce(
         self, household_id: int, notification: Notification, payload: dict[str, Any], now: datetime

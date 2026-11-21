@@ -186,7 +186,7 @@ async def update_slot(
             path=SCHEDULE_PATH,
             kept_today_at=kept_today_at,
         )
-        await OutboxRepository(db).enqueue(household.id, None, announcement, now)
+        await OutboxRepository(db).enqueue_with_push(household.id, None, announcement, now)
         await db.commit()
     return True
 

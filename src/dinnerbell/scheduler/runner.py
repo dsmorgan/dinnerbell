@@ -21,8 +21,9 @@ from apscheduler.triggers.interval import IntervalTrigger
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from dinnerbell.domain.notifications import Channel
+from dinnerbell.domain.push import PushSender
 from dinnerbell.logs import start_unit
-from dinnerbell.services import announcements, auth, backups, lifecycle, outbox, recap, stuck
+from dinnerbell.services import announcements, auth, backups, lifecycle, outbox, push, recap, stuck
 from dinnerbell.services.assistant import retention
 from dinnerbell.services.clock import Clock
 from dinnerbell.services.health import HEARTBEAT_INTERVAL, SchedulerState
@@ -42,6 +43,8 @@ CONVERSATION_PURGE_INTERVAL = timedelta(minutes=5)
 """How often idle assistant conversations are deleted: Conversation hours, to within minutes."""
 DRAIN_INTERVAL = timedelta(seconds=5)
 """How often the outbox is drained between ticks, so a tap in Slack shows up within seconds."""
+PUSH_DRAIN_INTERVAL = timedelta(seconds=5)
+"""How often the push queue is drained (spec 6.15). Its own job, so neither queue waits on the other."""
 
 
 @dataclass(frozen=True)
@@ -60,6 +63,12 @@ class JobContext:
     """Throttles the log line for a call whose step keeps failing (#142)."""
     stuck_call_failures: lifecycle.FailureLog = field(default_factory=stuck.call_check_log)
     stuck_check_failures: lifecycle.FailureLog = field(default_factory=stuck.whole_check_log)
+    push_sender: PushSender | None = None
+    """Sends web pushes (spec 6.15). None leaves the push queue alone."""
+    base_url: str = ""
+    """What a push's link starts with: ``DINNERBELL_BASE_URL``."""
+    push_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    """One push drain at a time in this process; row claims cover other processes."""
 
 
 Job = Callable[[JobContext], Awaitable[None]]
@@ -187,6 +196,17 @@ async def drain_outbox(ctx: JobContext) -> None:
             log.exception("outbox drain failed")
 
 
+async def drain_push(ctx: JobContext) -> None:
+    """Send due web pushes. With the web app off, the queue is empty, so this reads one index."""
+    if ctx.push_sender is None or ctx.push_lock.locked():
+        return
+    async with ctx.push_lock:
+        try:
+            await push.drain(ctx.sessionmaker, ctx.push_sender, ctx.clock, ctx.base_url)
+        except Exception:
+            log.exception("push drain failed")
+
+
 async def stop_scheduler(
     scheduler: AsyncIOScheduler, ctx: JobContext, *, grace: float = SHUTDOWN_GRACE_SECONDS
 ) -> None:
@@ -252,6 +272,13 @@ def build_scheduler(ctx: JobContext) -> AsyncIOScheduler:
         IntervalTrigger(seconds=DRAIN_INTERVAL.total_seconds()),
         args=[ctx],
         id="drain_outbox",
+        next_run_time=start,
+    )
+    scheduler.add_job(
+        _tracked(drain_push),
+        IntervalTrigger(seconds=PUSH_DRAIN_INTERVAL.total_seconds()),
+        args=[ctx],
+        id="drain_push",
         next_run_time=start,
     )
     return scheduler

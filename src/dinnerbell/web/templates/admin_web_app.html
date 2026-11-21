@@ -18,5 +18,11 @@
 {% if on %}
 <p><a href="/app">Get the app</a> shows members how to add Dinnerbell to their Home Screen.</p>
 {% endif %}
-{#- The push queue's warning about rejected pushes goes here (spec 6.15, "The push queue"). -#}
+{#- The push queue's warning about rejected pushes (spec 6.15, "The push queue"). -#}
+{% if push.rejected_at %}
+<p class="alert error" role="alert" id="push-rejected"><strong>Push services are refusing notifications.</strong> On {{ push.rejected_at|local_date(principal.household.timezone)|day }} at {{ push.rejected_at|clock(principal.household.timezone) }}, Apple's, Google's, or another push service refused several of Dinnerbell's pushes as unauthorized. Check that the server's clock is right and that <code>DINNERBELL_SECRET_KEY</code> hasn't changed. Devices it keeps refusing are dropped, and their members tap <strong>Turn on notifications</strong> again.</p>
+{% endif %}
+{% if on %}
+<p class="small muted" id="push-devices">{{ push.devices }} {{ "device gets" if push.devices == 1 else "devices get" }} notifications{% if push.waiting %}, and {{ push.waiting }} {{ "push is" if push.waiting == 1 else "pushes are" }} waiting to go{% endif %}.</p>
+{% endif %}
 {% endblock %}

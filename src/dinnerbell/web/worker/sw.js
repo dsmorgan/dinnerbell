@@ -3,7 +3,8 @@
 // site, and only while Admin's Web app switch is on. Its own CSP lets it reach this origin only.
 //
 // It shows pushes on Android and on iOS before 18.4, which don't show a Declarative Web Push by
-// themselves, and opens a push's page when it's tapped. It has no fetch handler and uses no
+// themselves: the same {"web_push": 8030, "notification": {title, body, navigate}} payload, with
+// this site's icon. It opens a push's page when it's tapped. It has no fetch handler and uses no
 // cache: every page comes from the server, as in the browser.
 (function () {
   "use strict";
@@ -58,6 +59,12 @@
     };
     if (typeof note.tag === "string" && note.tag) {
       options.tag = note.tag;
+    }
+    if (typeof note.lang === "string" && note.lang) {
+      options.lang = note.lang;
+    }
+    if (note.dir === "ltr" || note.dir === "rtl" || note.dir === "auto") {
+      options.dir = note.dir;
     }
     event.waitUntil(self.registration.showNotification(title, options));
   });

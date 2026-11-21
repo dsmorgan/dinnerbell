@@ -116,6 +116,19 @@ Then add `-f compose.override.yaml` last to every command that already names `co
 
 The test instance doesn't read `compose.override.yaml`. It keeps its own key in `secrets-test/DINNERBELL_ANTHROPIC_API_KEY`, which `deploy/dinnerbell-test` mounts when the file exists: see [Secrets in files for test](test-instance.md#secrets-in-files-for-test).
 
+## Web push
+
+While **Admin** > **Web app** is on, Dinnerbell sends push notifications to the devices members turned them on for ([ADR 0010](adr/0010-optional-web-app.md), spec 6.15). It needs no setting of its own, but the host needs outbound HTTPS (port 443) to the push services:
+
+| Host | For |
+|---|---|
+| `fcm.googleapis.com` | Chrome, Edge on Android, and other Chromium browsers |
+| `updates.push.services.mozilla.com` | Firefox |
+| `*.push.apple.com`, such as `web.push.apple.com` | Safari on iPhone, iPad, and Mac |
+| `*.notify.windows.com` | Edge on Windows |
+
+Dinnerbell posts only to these hosts, so a browser can't point it anywhere else, and never follows a redirect. The push key comes from `DINNERBELL_SECRET_KEY`: changing the secret key ends every device's notifications, and each member taps **Turn on notifications** again. While the switch is off, Dinnerbell connects to none of these hosts.
+
 ## The sign-in rate limit
 
 Dinnerbell allows 20 requests a minute to the sign-in pages under `/auth/` from each client address. A sign-in takes two requests, and a sign-out one. Past the limit, the page says "Too many sign-in attempts. Wait a minute and try again."
